@@ -1,0 +1,10 @@
+#!/bin/sh
+# Format and apply safe lint fixes across the workspace, in place.
+#
+# `bin/lint` is the read-only gate CI runs; this is the writing counterpart you
+# run locally before committing.
+set -eu
+
+cd "$(dirname "$0")/.."
+
+exec bunx biome check --write "$@"

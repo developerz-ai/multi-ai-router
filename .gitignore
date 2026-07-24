@@ -1,0 +1,61 @@
+# Dependencies
+node_modules/
+.pnp/
+.pnp.js
+
+# Build output
+dist/
+build/
+apps/web/dist/
+*.tsbuildinfo
+
+# Environment — real secrets, never committed
+.env
+.env.*
+!.env.example
+
+# Database dumps. pg_dump output contains the encrypted credential and router-key
+# columns — ciphertext, but never worth committing.
+*.sql
+*.dump
+data/
+
+# Per-Account CLAUDE_CONFIG_DIR trees. These hold live Claude subscription
+# credentials in cleartext — the single most dangerous thing that could land in
+# a commit. See docs/idea/07-security.md.
+.claude-config/
+claude-config/
+
+# Test / coverage output
+coverage/
+.nyc_output/
+*.lcov
+
+# Cloned reference repos and scratch work. These are read-only research inputs
+# (upstream clients we reverse-engineer provider flows from) and MUST NEVER be
+# committed — wrong licenses, huge history, not ours.
+tmp/
+
+# Logs
+*.log
+logs/
+npm-debug.log*
+bun-debug.log*
+
+# Caches
+.cache/
+.vite/
+.turbo/
+
+# Local agent / tooling state — machine-specific, not part of the project
+.claude-task-master/
+
+# Editors
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db

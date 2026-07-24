@@ -1,0 +1,12 @@
+#!/bin/sh
+# Lint + format check (Biome) and type check (tsc), the same way CI runs them.
+set -eu
+
+cd "$(dirname "$0")/.."
+
+# Read-only: no --write. Use `bunx biome check --write .` to actually fix.
+bunx biome check .
+
+# Bun never type-checks at runtime and Biome does not either, so tsc is the only
+# thing enforcing the strict/no-`any` rule.
+bunx tsc --noEmit

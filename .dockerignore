@@ -1,0 +1,52 @@
+# Keep the build context small and cache-stable. Anything listed here either
+# gets rebuilt inside the image or must never enter it.
+
+# Rebuilt by `bun install` in the builder stage; a host copy would be the wrong
+# arch and would defeat the manifests-first layer cache.
+node_modules/
+**/node_modules/
+
+# Rebuilt by `bun run build`.
+#
+# NOTE: do not add a bare `build/` or `**/build/` here. Docker matches those
+# patterns against the FILE `bin/build` as well as against directories, which
+# silently drops the build script from the context — the image then fails with
+# `bin/build: No such file or directory` at `RUN bun run build`, which reads
+# like a missing-file bug rather than an ignore-rule bug. Our build output is
+# `dist/` anyway; there is no `build/` directory to exclude.
+dist/
+**/dist/
+.vite/
+
+# Never a build input — and .git would carry credentials from a CI checkout.
+.git/
+.gitignore
+.github/
+
+# Local scratch, docs, and editor/agent state: not build inputs.
+tmp/
+docs/
+.claude/
+.vscode/
+.idea/
+
+# Secrets. The container gets its config from env at run time, never baked in.
+.env
+.env.*
+
+# Local database dumps. `pg_dump` output from a dev instance holds every encrypted
+# upstream credential; baking one into a published image would be a leak.
+*.sql
+*.dump
+*.dump.gz
+
+# Per-Account CLAUDE_CONFIG_DIR trees, if anyone runs the router outside a
+# container and leaves them in the repo. These hold LIVE subscription credentials
+# in cleartext — not encrypted by ENCRYPTION_KEY — so they must never reach a
+# build context, let alone a published image.
+.claude-config/
+**/.claude-config/
+
+# Test/coverage output.
+coverage/
+*.log

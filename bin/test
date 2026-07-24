@@ -1,0 +1,18 @@
+#!/bin/sh
+# Run the test suite; any extra args are passed straight to `bun test`.
+set -eu
+
+cd "$(dirname "$0")/.."
+
+# Exclude tmp/ — the cloned upstream repos we read for provider research. They
+# ship thousands of their own tests that fail here (missing deps, DOM globals we
+# don't configure) and would drown ours. tmp/ is gitignored, but `bun test` does
+# not read .gitignore, so the exclusion has to be explicit.
+#
+# This is --path-ignore-patterns rather than a `bun test apps packages` filter
+# because positional args are treated as substring filters, not directories:
+# "apps" also matches tmp/opencode/packages/app/**, which is exactly the thing
+# being excluded.
+#
+# An explicit argument still works: `bin/test apps/api`, `bin/test --watch`.
+exec bun test --path-ignore-patterns='**/tmp/**' "$@"

@@ -1,0 +1,35 @@
+#!/usr/bin/env sh
+# Produce the deployable artifact layout the Dockerfile expects:
+#   dist/api/index.js  — the Hono server, bundled for the bun runtime
+#   dist/web/          — the Vite-built SPA, served as static assets by that server
+#
+# Per-package `build` scripts run `tsc --build`, which type-checks and emits
+# declarations into each package's own dist/. That is a *type* artifact, not a
+# runnable one — the image needs a single bundled entrypoint and the SPA in one
+# predictable place, which is what this assembles.
+set -eu
+
+cd "$(dirname "$0")/.."
+
+# Start clean: a stale dist/ silently shipping a previous build's SPA is the kind
+# of bug that only shows up in production.
+rm -rf dist
+mkdir -p dist/api dist/web
+
+# The API bundles to a single file. --target=bun keeps bun-native APIs intact
+# (node targets would rewrite them) and matches the runtime stage's entrypoint.
+bun build apps/api/src/main.ts --target=bun --outfile dist/api/index.js
+
+# Migrations are data, not code — `bun build` cannot bundle a directory of .sql
+# files, so they must be copied. The destination is not arbitrary: migrate.ts
+# resolves its folder as `../migrations` relative to `import.meta.url`, which is
+# `dist/api/index.js` once bundled — so `dist/migrations` is exactly what the
+# runtime looks for. Getting this wrong doesn't fail the build; it fails at boot
+# with "Can't find meta/_journal.json", and the router correctly refuses to
+# serve rather than starting on a half-migrated schema.
+cp -R packages/db/migrations dist/migrations
+
+# The SPA builds in place (apps/web/dist), then moves to the layout the image
+# serves from. Vite needs to run from its own package root to resolve its config.
+(cd apps/web && bun run build)
+cp -R apps/web/dist/. dist/web/

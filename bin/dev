@@ -1,0 +1,16 @@
+#!/bin/sh
+# Run the API (hot-reload) and the web SPA dev server side by side.
+set -eu
+
+cd "$(dirname "$0")/.."
+
+# Both children die with this script: trap the exits and kill the process group
+# so a Ctrl-C does not leave an orphaned vite holding the port.
+trap 'kill 0' EXIT INT TERM
+
+# main.ts, not index.ts — main.ts is the only module that boots (parses env,
+# runs migrations, opens the listener). app.ts is a side-effect-free factory.
+bun --watch apps/api/src/main.ts &
+bun run --cwd apps/web dev &
+
+wait

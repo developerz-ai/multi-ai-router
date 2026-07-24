@@ -1,0 +1,262 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# One CI run per ref. A force-push or a new commit on an open PR cancels the
+# in-flight run instead of queueing behind it — the older result is already
+# stale by definition.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Pinned once here so lint/typecheck/test/build all agree on a runtime. Bun
+  # minor releases change `bun test` and bundler behaviour often enough that
+  # `latest` would make CI non-reproducible; bump this deliberately, and keep it
+  # inside the `oven/bun:1` family the Dockerfile builds against so the image
+  # and CI never diverge on runtime semantics.
+  BUN_VERSION: "1.3.0"
+  # Biome/Vite colourise when they detect a TTY; Actions is not one, so force it
+  # for readable log output.
+  FORCE_COLOR: "1"
+
+# Default for every job: read-only. Jobs that push packages widen this locally.
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    runs-on: blacksmith-2vcpu-ubuntu-2404
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v5
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+      # `--frozen-lockfile` fails instead of silently rewriting bun.lock, so a
+      # PR that edits a package.json without committing the lockfile is caught
+      # here rather than producing a different dependency tree in the image.
+      - run: bun install --frozen-lockfile
+      # `biome check` is lint + format + import-sort in one pass. No `--write`:
+      # CI verifies, it never mutates the tree.
+      - run: bun run lint
+
+  typecheck:
+    runs-on: blacksmith-2vcpu-ubuntu-2404
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v5
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+      - run: bun install --frozen-lockfile
+      # Separate job from `lint` on purpose: Bun strips types at runtime and
+      # never type-checks, and Biome does not either. `tsc --noEmit` across the
+      # workspace projects (apps/api, apps/web, packages/*) is the ONLY thing in
+      # the pipeline that enforces the "strict, no `any`" rule from the spec.
+      - run: bun run typecheck
+
+  test:
+    runs-on: blacksmith-2vcpu-ubuntu-2404
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    # The integration half of the suite runs Drizzle migrations and the
+    # repository layer against a REAL Postgres, same major as production, rather
+    # than a mock or an in-process substitute. Migrations, transactions, JSONB
+    # and `ON CONFLICT` behaviour are exactly the things a fake would get wrong
+    # silently. Upstream providers stay mocked at the HTTP boundary — the DB is
+    # the only service container this repo needs.
+    services:
+      postgres:
+        # Pinned to the major the schema targets (spec §4), matching the
+        # `postgres` service in docker-compose.yml.
+        image: postgres:16
+        env:
+          POSTGRES_USER: router
+          POSTGRES_PASSWORD: router
+          POSTGRES_DB: router
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U router -d router"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+    env:
+      # Read by the same Zod-validated env loader the container uses, so a test
+      # run and a production boot resolve their connection the same way. Points
+      # at the mapped host port above, not a compose network alias — the service
+      # container is reachable on localhost from the job.
+      DATABASE_URL: postgres://router:router@localhost:5432/router
+    steps:
+      - uses: actions/checkout@v5
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+      - run: bun install --frozen-lockfile
+      # GitHub gates the job on the service's health check before any step runs,
+      # so no wait-for-postgres loop is needed here. Migrations are applied by the
+      # test bootstrap itself (idempotent, same code path as boot).
+      - run: bin/test
+
+  build:
+    runs-on: blacksmith-2vcpu-ubuntu-2404
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v5
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+      - run: bun install --frozen-lockfile
+      # Builds both halves of the artifact the image ships: the Hono API bundle
+      # (`bun build --target=bun`) and the SolidJS SPA (Vite), which the same
+      # process serves as static assets. Runs on PRs too — a broken Vite build
+      # or an unresolvable import must fail here, not inside the image job where
+      # only main-branch pushes would notice.
+      - run: bun run build
+
+  # Publish a multi-arch image on push to main, tagged with the short commit SHA
+  # (the immutable ref a deployment pins to) + a moving `main` tag. Gated on all
+  # four quality jobs so a commit that cannot lint, typecheck, test or build
+  # never ships an image. Semver + `latest` + GitHub release live in release.yml.
+  #
+  # Built on NATIVE per-arch runners in parallel (amd64 + arm64), each pushed by
+  # digest, then stitched into one manifest list by `merge`. Native arm64 instead
+  # of QEMU emulation: the SPA build and the dependency install are the slow part
+  # here, and both are pathologically slow under emulation.
+  image:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: [lint, typecheck, test, build]
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      # Only this job and `merge` touch GHCR; everything above stays read-only.
+      packages: write
+    strategy:
+      # One arch failing should not cancel the other — a partial result still
+      # tells you whether the break is arch-specific.
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux/amd64
+            runner: blacksmith-2vcpu-ubuntu-2404
+          - platform: linux/arm64
+            runner: blacksmith-2vcpu-ubuntu-2404-arm
+    steps:
+      # `linux/amd64` is not usable in an artifact name or a cache scope (the
+      # slash is illegal / ambiguous), so flatten it once to `linux-amd64`.
+      - name: prepare platform pair
+        run: |
+          platform="${{ matrix.platform }}"
+          echo "PLATFORM_PAIR=${platform//\//-}" >> "$GITHUB_ENV"
+      - uses: actions/checkout@v5
+        with:
+          # This workspace becomes the Docker build context (`context: .`).
+          # Without this, the checkout's credentials sit in .git/config and get
+          # shipped into the build.
+          persist-credentials: false
+      - uses: docker/setup-buildx-action@v3
+      - name: log in to ghcr
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      # Labels only here (OCI source/revision/created). Tags are applied once, by
+      # `merge`, to the manifest list — tagging a per-arch image would leave the
+      # tag pointing at whichever arch pushed last.
+      - name: image labels
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository }}
+      - name: build & push by digest
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: ${{ matrix.platform }}
+          labels: ${{ steps.meta.outputs.labels }}
+          # Cache scoped per platform pair: amd64 and arm64 layers are not
+          # interchangeable, and a shared scope makes the two matrix legs
+          # overwrite each other's cache on every run (thrash, never a hit).
+          cache-from: type=gha,scope=${{ env.PLATFORM_PAIR }}
+          cache-to: type=gha,mode=max,scope=${{ env.PLATFORM_PAIR }}
+          # push-by-digest: no tag is created, the image is addressable only as
+          # name@sha256:… . `merge` collects the digests into the manifest list.
+          outputs: type=image,name=ghcr.io/${{ github.repository }},push-by-digest=true,name-canonical=true,push=true
+      # The digest is passed between jobs as an artifact *filename* (empty file),
+      # which is the cheapest cross-job channel that survives `fail-fast: false`
+      # and needs no job outputs matrix gymnastics.
+      - name: export digest
+        run: |
+          mkdir -p "${{ runner.temp }}/digests"
+          digest="${{ steps.build.outputs.digest }}"
+          touch "${{ runner.temp }}/digests/${digest#sha256:}"
+      - name: upload digest
+        uses: actions/upload-artifact@v4
+        with:
+          name: digests-${{ env.PLATFORM_PAIR }}
+          path: ${{ runner.temp }}/digests/*
+          # A silently empty artifact would make `merge` push a manifest list
+          # with one (or zero) arches. Fail loudly instead.
+          if-no-files-found: error
+          retention-days: 1
+
+  # Stitch the per-arch digests into one multi-arch manifest under the real tags.
+  # Skipped automatically when `image` is skipped (PRs) or when any arch fails.
+  merge:
+    needs: [image]
+    runs-on: blacksmith-2vcpu-ubuntu-2404
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      # No checkout: this job only manipulates registry manifests.
+      - name: download digests
+        uses: actions/download-artifact@v4
+        with:
+          path: ${{ runner.temp }}/digests
+          pattern: digests-*
+          merge-multiple: true
+      - uses: docker/setup-buildx-action@v3
+      - name: log in to ghcr
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: derive image metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository }}
+          # bare short SHA (e.g. a1b2c3d) — the immutable ref deployments pin to
+          # — plus a moving `main` tag for "whatever is on main right now".
+          tags: |
+            type=sha,prefix=,format=short
+            type=raw,value=main
+      - name: create manifest list & push
+        working-directory: ${{ runner.temp }}/digests
+        run: |
+          # shellcheck disable=SC2046  # word-splitting is intentional: one -t per tag, one image ref per digest
+          docker buildx imagetools create \
+            $(jq -cr '.tags | map("-t " + .) | join(" ")' <<< "$DOCKER_METADATA_OUTPUT_JSON") \
+            $(printf 'ghcr.io/${{ github.repository }}@sha256:%s ' *)
+      # Cheap post-condition: prints the manifest list, so a run that pushed only
+      # one arch is visible in the log instead of being discovered at deploy time.
+      - name: inspect
+        run: |
+          docker buildx imagetools inspect \
+            "ghcr.io/${{ github.repository }}:${{ steps.meta.outputs.version }}"

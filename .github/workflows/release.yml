@@ -1,0 +1,184 @@
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+
+# `contents: write` is needed by the github_release job (it creates the release);
+# `packages: write` by the image jobs. Declared per job below as well — this
+# top-level block is the ceiling, not the grant.
+permissions:
+  contents: write
+  packages: write
+
+# Releases are never cancelled mid-flight: a half-pushed manifest list or a
+# release created without its image is worse than a queued run.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  # Native per-arch build (amd64 + arm64), each pushed by digest, then merged
+  # into one manifest list under the semver + :latest tags. Same shape as ci.yml;
+  # only the tag set and the runner sizes differ.
+  #
+  # BOTH arches run on 2-vCPU runners, deliberately: 2 vCPU is the size
+  # provisioned for this org. Requesting a larger size does NOT error — the job
+  # sits queued until the workflow times out, which looks like a hang rather
+  # than a misconfiguration. Do not "optimise" either leg up to 8 vCPU without
+  # first confirming that size is actually provisioned.
+  #
+  # A release build is cold (no warm gha cache on a fresh tag), so 2 vCPU makes
+  # it slow rather than broken — the generous timeout below absorbs that, and
+  # the gha layer cache (cache-from/to) keeps subsequent releases cheap.
+  build:
+    runs-on: ${{ matrix.runner }}
+    # Generous ceiling for both legs: a tag that changes bun.lock busts the
+    # cached install layer and forces a cold dependency + SPA build, and neither
+    # arch has more than 2 vCPU to throw at it.
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      # Let the other arch finish so an arch-specific break is identifiable.
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux/amd64
+            runner: blacksmith-2vcpu-ubuntu-2404
+          - platform: linux/arm64
+            runner: blacksmith-2vcpu-ubuntu-2404-arm
+    steps:
+      # `linux/amd64` → `linux-amd64`: slashes are illegal in artifact names and
+      # ambiguous in cache scopes.
+      - name: prepare platform pair
+        run: |
+          platform="${{ matrix.platform }}"
+          echo "PLATFORM_PAIR=${platform//\//-}" >> "$GITHUB_ENV"
+      - uses: actions/checkout@v5
+        with:
+          # Build context is `.`; keep the checkout token out of the build
+          # workspace (matches ci.yml's image job).
+          persist-credentials: false
+      - uses: docker/setup-buildx-action@v3
+      - name: log in to ghcr
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      # Labels only. Tags are applied once, by `merge`, to the manifest list.
+      - name: image labels
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+      - name: build & push by digest
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: ${{ matrix.platform }}
+          labels: ${{ steps.meta.outputs.labels }}
+          # Same gha cache scopes as ci.yml, so a release tag cut from a green
+          # main reuses the layers that main's build already warmed.
+          cache-from: type=gha,scope=${{ env.PLATFORM_PAIR }}
+          cache-to: type=gha,mode=max,scope=${{ env.PLATFORM_PAIR }}
+          outputs: type=image,name=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }},push-by-digest=true,name-canonical=true,push=true
+      - name: export digest
+        run: |
+          mkdir -p "${{ runner.temp }}/digests"
+          digest="${{ steps.build.outputs.digest }}"
+          touch "${{ runner.temp }}/digests/${digest#sha256:}"
+      - name: upload digest
+        uses: actions/upload-artifact@v4
+        with:
+          name: digests-${{ env.PLATFORM_PAIR }}
+          path: ${{ runner.temp }}/digests/*
+          # Never publish a "multi-arch" release that is secretly single-arch.
+          if-no-files-found: error
+          retention-days: 1
+
+  merge:
+    needs: [build]
+    runs-on: blacksmith-2vcpu-ubuntu-2404
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: download digests
+        uses: actions/download-artifact@v4
+        with:
+          path: ${{ runner.temp }}/digests
+          pattern: digests-*
+          merge-multiple: true
+      - uses: docker/setup-buildx-action@v3
+      - name: log in to ghcr
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: derive image metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          # v1.2.3 → tags: 1.2.3, 1.2, latest. The `latest` tag is suppressed for
+          # pre-releases (any tag containing a hyphen: v1.3.0-rc.1) so a release
+          # candidate never becomes the default pull for `docker compose up`.
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=raw,value=latest,enable=${{ !contains(github.ref_name, '-') }}
+      - name: create manifest list & push
+        working-directory: ${{ runner.temp }}/digests
+        run: |
+          # shellcheck disable=SC2046  # word-splitting is intentional: one -t per tag, one image ref per digest
+          docker buildx imagetools create \
+            $(jq -cr '.tags | map("-t " + .) | join(" ")' <<< "$DOCKER_METADATA_OUTPUT_JSON") \
+            $(printf '${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@sha256:%s ' *)
+      - name: inspect
+        run: |
+          docker buildx imagetools inspect \
+            "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.meta.outputs.version }}"
+
+  # Last, and only after `merge`: the release notes advertise an image tag, so
+  # the tag must already resolve when the release becomes visible.
+  github_release:
+    needs: [merge]
+    runs-on: blacksmith-2vcpu-ubuntu-2404
+    timeout-minutes: 10
+    permissions:
+      # The only job in this workflow that writes to the repo.
+      contents: write
+    steps:
+      - uses: actions/checkout@v5
+      - name: derive image version
+        id: ver
+        # Tag is vX.Y.Z; the published image tags drop the leading v
+        # (docker/metadata-action semver pattern), so strip it for the body —
+        # otherwise the notes point at ghcr...:vX.Y.Z, which does not exist.
+        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+      - name: create github release
+        uses: softprops/action-gh-release@v2
+        with:
+          # Auto-generated changelog from merged PRs since the previous tag.
+          generate_release_notes: true
+          # Pre-release tags (v1.3.0-rc.1) are marked as such, matching the
+          # `latest` suppression in `merge` above.
+          prerelease: ${{ contains(github.ref_name, '-') }}
+          body: |
+            Container images for this release are published to GitHub Container Registry:
+
+            ```
+            ghcr.io/${{ github.repository }}:${{ steps.ver.outputs.version }}
+            ```
+
+            See `README.md` for the quick start.

@@ -1,0 +1,222 @@
+# API Keys and Access
+
+Status: design only. No code exists yet. Everything here describes the intended base.
+
+## Two planes
+
+The router has exactly two credential spaces. They never overlap.
+
+| Plane | Who | Credential | Surface | Protects |
+|---|---|---|---|---|
+| **Admin plane** | the single operator, through a browser | session cookie, issued at login | `/api/admin/**` + the SPA | configuration: accounts, pools, keys, settings |
+| **Data plane** | clients and agents (Claude Code, Codex CLI, Cline, …) | router API key `mar_live_…` | `/v1/**` | inference traffic |
+
+A router API key **cannot** reach the admin plane, ever — not with a scope, not with a flag, not
+under any configuration. A session cookie is not accepted on `/v1/**`. Separate credential
+spaces, separate middleware, separate failure modes.
+
+## Admin authentication
+
+A single admin, credentials from env. No user table in v1.
+
+| Variable | Meaning |
+|---|---|
+| `ADMIN_USERNAME` | The one admin identity. Required. |
+| `ADMIN_PASSWORD` | Plaintext password in env. Hashed with argon2id **at boot**, never persisted in plaintext. The documented default. |
+| `ADMIN_PASSWORD_HASH` | A pre-computed argon2id hash, for operators who don't want a plaintext secret in a compose file or env store. |
+| `ADMIN_TOTP_SECRET` | **DEFERRED** |
+
+**Precedence:** when both are set, `ADMIN_PASSWORD_HASH` wins and `ADMIN_PASSWORD` is ignored.
+Exactly one of the two must be present or **boot fails** with a message naming the variable.
+
+**Why plaintext-in-env is the documented default:** the happy path has to be three env vars and
+`docker compose up -d`. Requiring a hash-generation step before the first login trades a real
+adoption cost for a marginal gain — the env store already holds `ENCRYPTION_KEY`, which is
+strictly more valuable than the admin password. Operators with an opinion about secrets in env
+get `ADMIN_PASSWORD_HASH`, and it takes precedence. Both paths converge on the same argon2id
+verification.
+
+### Session cookie
+
+| Property | Value | Why |
+|---|---|---|
+| `httpOnly` | always | no script can read it |
+| `SameSite` | `Strict` | no cross-site submission carries it |
+| `Secure` | always | HTTPS is assumed in front (reverse proxy) |
+| `Path` | `/` | SPA and API share an origin |
+| Lifetime | sliding, idle-expiring | **DEFERRED** on the exact window |
+
+### CSRF and throttling
+
+- A CSRF token is required on every **mutating** admin request (`POST`/`PATCH`/`DELETE`).
+  `SameSite=Strict` is the first line; the token is the second, because one is a browser
+  behavior and the other is an application invariant.
+- **Login attempt throttling** on the admin plane: per-IP and per-username, with backoff. A
+  single-admin surface with a password from env is the highest-value target in the deployment.
+- Login failures are indistinguishable to the caller — no "unknown user" vs "bad password".
+
+## Router API keys
+
+### Format
+
+```
+mar_live_<random>
+```
+
+| Part | Purpose |
+|---|---|
+| `mar_live_` | Fixed, greppable prefix. Makes a leaked key obvious in a log, a diff, or a secret scanner. |
+| `<random>` | Cryptographically secure random, URL-safe. **At least 160 bits** of entropy — brute force is not a threat model, accidental collision is not a possibility. |
+
+Every key has a required, human-chosen **name**: `sebastian-laptop`, `ci-agent-3`,
+`cline-desktop`. The name is how the operator finds the key later, and how usage is attributed
+in the dashboard.
+
+### Key visibility — encrypted, not hashed
+
+Router keys are **stored encrypted at rest and are retrievable at any time**. The admin UI can
+decrypt and re-display a key's full value on demand, as many times as the operator wants.
+
+**Why not hashed:** an operator running a fleet of agents has to be able to look a key up later.
+A hash-only store makes "which key did `ci-agent-3` get?" unanswerable, and forces a rotation —
+plus a redeploy of whatever holds it — every time someone loses one. That is a bad trade for a
+self-hosted, single-admin tool where the operator already holds every upstream credential in the
+same database.
+
+| Property | Choice |
+|---|---|
+| Storage | AES-256-GCM, the **same** `ENCRYPTION_KEY` that protects upstream credentials |
+| Retrievable | yes — decrypt-and-copy from the admin UI at any time, no rotation needed |
+| Hashed | no |
+| Shown once | no |
+| Returned by the data plane | never — only the admin plane, only to an authenticated session |
+| Logs | redacted always; the redactor is tested |
+
+**The trade-off, stated plainly:** `ENCRYPTION_KEY` now becomes the single secret protecting
+*both* your upstream credentials *and* every router key. Losing it loses everything; leaking it
+leaks everything. It is 32 bytes of base64, boot fails loudly if it is missing or short, and it
+belongs in a secret store rather than a committed `.env`. See [07-security.md](07-security.md).
+
+### Verification path
+
+Presented key → **indexed lookup by display prefix** → decrypt → **constant-time compare** →
+check `revoked`, `expires_at`, rate limit → resolve scope.
+
+The display prefix is a short leading slice of the key, stored in clear and indexed. It turns
+verification into one row fetch and one decrypt instead of a table scan, and it is also what the
+UI shows in lists (`mar_live_8f3c…`). It is too short to be useful to an attacker on its own.
+
+### Accepted in both dialects
+
+| Header | Style | Sent by |
+|---|---|---|
+| `Authorization: Bearer mar_live_…` | OpenAI | Codex CLI, Aider, OpenAI SDKs, most agents |
+| `x-api-key: mar_live_…` | Anthropic | Claude Code, Anthropic SDKs |
+
+Both are accepted on every data-plane route. **One key works for OpenAI-style and
+Anthropic-style clients** — the operator never has to know which dialect a tool speaks, and a
+single key can be pasted into any of them. If both headers are present and disagree, the
+request is rejected rather than silently preferring one.
+
+### Key scope
+
+Every key carries a **scope** — the set of Accounts it may reach — in one of three forms:
+`all`, one or more Pools, or an explicit Account list. It declares *what a key may use*, never
+*which account it gets*; the account is the router's choice. Full detail below in
+[Key scope — full vs. limited](#key-scope--full-vs-limited).
+
+### Per-key controls
+
+| Control | Type | Notes |
+|---|---|---|
+| `name` | string, required | human-chosen; unique per deployment |
+| Scope | `all` / pools / accounts | see above |
+| Rate limit | requests per window | enforced on the data plane, per key |
+| Expiry | timestamp, optional | a key past expiry is rejected exactly like a revoked one |
+| Revoked | flag | one-way |
+
+Per-key **spend budgets** are **DEFERRED**.
+
+### Lifecycle
+
+```
+created (named)  ──▶  active  ──▶  revoked  ──▶  purged
+                      │
+                      └─ value viewable and copyable at any time
+```
+
+| Transition | Semantics |
+|---|---|
+| created → active | Immediate. The key works on the next request. |
+| active | The value can be decrypted and re-copied from the admin UI whenever the operator needs it. Editing name, limits, or scope never changes the value. |
+| active → revoked | **Immediate** for new requests — the next one gets `401`. **In-flight requests finish**: the router does not tear down a stream mid-response, because a half-written response is worse than one extra completed call. Revocation is one-way; a revoked key is never reactivated. |
+| revoked → purged | 30 days after revocation (configurable), so historical usage stays joinable for a while. See [09-deployment.md](09-deployment.md). |
+
+Every mint, edit, and revocation writes an `AuditEvent`. Audit events never contain key
+material. A **key reveal** in the admin UI is itself an audited read.
+
+### What a key cannot do
+
+| Cannot | Because |
+|---|---|
+| Reach any admin route | Separate credential space. No scope grants it. |
+| See, list, or add Accounts | Configuration is admin-plane only. |
+| See an upstream credential | No endpoint returns one, on either plane. |
+| Choose its account | The client picks the model; the router picks the account. |
+| Reveal another key | Key reveal is an admin-plane action behind the session cookie. |
+| Exceed its scope | Filtering happens before policy; an out-of-scope account is never a candidate. |
+
+## Key scope — full vs. limited
+
+Scope is the access-control half of the product: pooling is what makes accounts *shareable*,
+scope is what makes them *shareable safely*. Three forms, all first-class — none is a degraded
+version of another.
+
+| Scope | Meaning | Typical use |
+|---|---|---|
+| `all` | Every `active` Account is a candidate. **Full scope.** | The operator's own laptop key — the trusted teammate. |
+| *pools* | Bound to one or more Pools. Candidates are the union, in the listed order, and each pool's own routing policy applies within that pool. | **The normal case.** One agent, one budget; or a primary pool with an overflow pool behind it. |
+| *accounts* | Pinned to an explicit list of Accounts, **ignoring pool membership entirely**. | "This CI agent may only ever burn the cheap OpenRouter key." "This contractor's key touches exactly one sub." |
+
+### How scope is enforced
+
+Scope is applied **at selection time**, not at mint time — so editing a pool, adding an account,
+or disabling one takes effect on the very next request, with no key change and no re-mint.
+
+| Rule | Statement |
+|---|---|
+| **Intersection, always** | The candidate set is the intersection of the pool's members and the key's scope. Both must admit an Account for it to be a candidate. |
+| **Never silently widened** | A key can never reach an Account outside its scope — not because the routing policy would prefer it, not because everything in scope is cooling down or exhausted, not because a pool gained a member. No setting relaxes this. |
+| **Empty set fails loudly** | A request whose scope resolves to zero candidates fails with a clear error naming the actual reason — "key `ci-agent-3` is scoped to 1 account, which is out of credits" — never a fallback to a broader set. Status code follows the cause; see [05-routing-and-failover.md](05-routing-and-failover.md). |
+| **Scope precedes policy** | Filtering runs before the policy, so a policy never sees an out-of-scope account to prefer in the first place. |
+
+An out-of-scope Account is not "deprioritized" — as far as that key is concerned it does not
+exist, including in `GET /v1/models`, which lists only the models reachable within the presenting
+key's scope.
+
+## Admin API route groups
+
+Paths and purpose only. Handler detail belongs in [01-architecture.md](01-architecture.md).
+
+| Group | Purpose |
+|---|---|
+| `/api/admin/auth/**` | login, logout, session probe, CSRF token |
+| `/api/admin/accounts/**` | upstream account CRUD, OAuth connect/reconnect + callback, health |
+| `/api/admin/pools/**` | pool CRUD, membership, policy, weights, priority order |
+| `/api/admin/keys/**` | list, create, reveal, edit limits and bindings, revoke |
+| `/api/admin/usage/**` | usage and cost queries by key, account, model, time |
+| `/api/admin/settings/**` | retention knobs, price table overrides, log level |
+
+Data-plane routes (`/v1/messages`, `/v1/chat/completions`, `/v1/responses`, `/v1/models`) are in
+[06-protocol-translation.md](06-protocol-translation.md). Operational endpoints (`/healthz`,
+`/readyz`, `/metrics`) are unauthenticated liveness surfaces and are covered in
+[08-observability.md](08-observability.md).
+
+## Read next
+
+| Doc | Covers |
+|---|---|
+| [02-domain-model.md](02-domain-model.md) | `ApiKey` fields, relations, state machine |
+| [05-routing-and-failover.md](05-routing-and-failover.md) | What the key's scope feeds into — filtering, policies, failover |
+| [07-security.md](07-security.md) | Encryption at rest, redaction, rate limits, threat framing |
+| [08-observability.md](08-observability.md) | Per-key usage, spend, error rate |

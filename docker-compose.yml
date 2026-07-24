@@ -1,0 +1,116 @@
+# multi-ai-router — the whole deployment. Two services, three env vars.
+# Copy .env.example to .env, fill in ENCRYPTION_KEY and the admin credentials,
+# then: docker compose up -d
+#
+# DATABASE_URL is supplied by this file (see the `router` service below), so the
+# only values you set by hand are ADMIN_USERNAME, ADMIN_PASSWORD and ENCRYPTION_KEY.
+# Full env reference: docs/idea/09-deployment.md
+
+services:
+  router:
+    image: ghcr.io/developerz-ai/multi-ai-router:latest
+    # Pin at least the minor in production (e.g. :1.2) — `latest` moves under you.
+
+    ports:
+      # Host:container. The admin plane lives on this same port, so publish it on
+      # 127.0.0.1 (or a private interface) and let a reverse proxy expose only what
+      # you mean to expose. See the "Reverse proxy" section in docs/idea/09-deployment.md.
+      - "8080:8080"
+
+    # Admin credentials + ENCRYPTION_KEY come from .env. Nothing secret belongs in
+    # this file.
+    env_file:
+      - .env
+
+    environment:
+      # Connection string for the bundled Postgres below. The credentials are
+      # internal-only: port 5432 is never published to the host, so this URL is
+      # reachable from the compose network and nowhere else.
+      #
+      # USING AN EXISTING / MANAGED POSTGRES: replace this one line with your own
+      # URL (e.g. postgres://user:pass@db.internal:5432/router?sslmode=require),
+      # then delete the `postgres` service, the `depends_on` block, and the
+      # `postgres-data` volume. Nothing else changes.
+      DATABASE_URL: postgres://router:router@postgres:5432/router
+
+    depends_on:
+      postgres:
+        # Not just "started": the router runs its migrations before it opens the
+        # listener, so a Postgres that is booting but not yet accepting connections
+        # would fail the boot outright. `service_healthy` waits for pg_isready.
+        condition: service_healthy
+
+    volumes:
+      # One CLAUDE_CONFIG_DIR per Claude subscription Account lives under here
+      # (spec §11). The Claude Agent SDK subprocess is launched with that directory
+      # in its environment, and the directory — not the router — owns the account's
+      # live credentials.
+      #
+      # THIS VOLUME IS SECRET MATERIAL. It holds usable subscription credentials in
+      # cleartext, managed by the `claude` CLI, which means it is NOT protected by
+      # ENCRYPTION_KEY the way the database is. Back it up encrypted, restrict it to
+      # the container's uid, and never ship it anywhere.
+      - claude-config:/data/claude
+
+    # Survive host reboots and crashes, but stay down after an explicit `docker compose stop`.
+    restart: unless-stopped
+
+    healthcheck:
+      # Liveness only — /healthz says the process is up. /readyz additionally checks the
+      # DB and that at least one account is healthy, which is deliberately NOT the
+      # container's health signal: zero healthy accounts is an operator problem, not a
+      # reason for Docker to restart a working process.
+      #
+      # `bun -e` rather than curl/wget: the runtime image is Debian slim and ships
+      # neither, and adding one just for a healthcheck is a needless layer + CVE surface.
+      # The `$$` is a literal `$` for the container — compose would otherwise try to
+      # interpolate `${process.env...}` from your shell at parse time and fail.
+      test:
+        [
+          "CMD",
+          "bun",
+          "-e",
+          "const r = await fetch(`http://127.0.0.1:$${process.env.PORT ?? 8080}/healthz`); process.exit(r.ok ? 0 : 1)",
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      # Migrations run at boot before the listener opens; don't count failures until then.
+      start_period: 20s
+
+  postgres:
+    # 16 is the floor the schema targets (spec §4). Pinned to a major, not `latest`:
+    # a major bump is a manual, dump-and-restore migration, never something a
+    # `docker compose pull` should do to you.
+    image: postgres:16
+
+    environment:
+      POSTGRES_USER: router
+      POSTGRES_PASSWORD: router
+      POSTGRES_DB: router
+
+    # No `ports:` on purpose. The database is only reachable from the compose
+    # network. If you publish it for debugging, change the password above and in
+    # the router's DATABASE_URL first.
+
+    volumes:
+      # All durable state: accounts, encrypted credentials, pools, keys, usage,
+      # audit. The container is disposable; this volume is not.
+      - postgres-data:/var/lib/postgresql/data
+
+    restart: unless-stopped
+
+    healthcheck:
+      # `pg_isready` is the cheap, official "accepting connections" probe. -U must
+      # match POSTGRES_USER or it reports a rejected connection as unhealthy.
+      test: ["CMD-SHELL", "pg_isready -U router -d router"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      # First boot has to initdb before it listens; without this, the early
+      # failures burn the retry budget and the router never starts.
+      start_period: 30s
+
+volumes:
+  postgres-data:
+  claude-config:
