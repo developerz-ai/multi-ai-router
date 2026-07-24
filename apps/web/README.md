@@ -30,10 +30,13 @@ apps/web/
 │   ├── lib/
 │   │   ├── routes.ts       lazy route table — one chunk per screen
 │   │   ├── query.ts        the TanStack Query client, configured once
+│   │   ├── api/            the only place that knows about fetch — see below
+│   │   ├── queries/        one hook module per resource + the query-key factory
 │   │   └── …               pure mappers and formatters
 │   ├── routes/             one default-exported component per screen
-│   ├── layout/             AppLayout: sidebar/drawer, skip link, theme toggle
-│   ├── components/         shared UI: Table, StatusDot, Icon, Skeleton, …
+│   │   └── <screen>/       that screen's tables and dialogs
+│   ├── layout/             AppLayout: sidebar/drawer, session guard, theme
+│   ├── components/         shared UI: Table, StatusDot, Modal, Button, …
 │   └── styles/             the only global CSS — see below
 └── test/unit/              bun:test, DOM-free
 ```
@@ -54,24 +57,58 @@ route cannot drift apart.
 
 ## Routes
 
-| Path | Screen | Notes |
+Every screen below renders live admin data. The two exceptions are marked in the UI itself, on the
+screen, not only here: the **Usage** figures are generated (there is no usage read API yet), and the
+four Settings sections listed as unbuilt have no endpoint behind them.
+
+| Path | Screen | What it shows |
 |---|---|---|
-| `/login` | Sign-in | Outside the shell — no nav to pages you cannot reach yet |
-| `/` | Overview | Fleet health; exhausted accounts banner |
-| `/accounts` | Accounts | Status, quota, reset, re-check |
-| `/pools` | Pools | Membership, policy, observed split |
-| `/keys` | Keys | Named, scoped, value viewable any time |
-| `/usage` | Usage | The headline surface — any dimension × any window |
-| `/settings` | Settings | Prices, retention, scheduled-task health |
+| `/login` | Sign-in | Outside the shell. Posts to `/api/admin/auth/login`; `?next=` returns you to the surface your session expired on |
+| `/` | Overview | Live account/pool/key counts, accounts-by-status, and a **red banner naming every `exhausted` account** |
+| `/accounts` | Accounts | Status, availability, credential kind, re-check per account and for all, add, disable, delete |
+| `/pools` | Pools | Membership, policy, overflow account, and how many members are routable *now* |
+| `/keys` | Keys | Named, scoped, mint, revoke, delete — and **reveal, any time, no shown-once flow** |
+| `/usage` | Usage | Any dimension × any window. **Placeholder figures**, banner-marked |
+| `/settings` | Settings | Live session and provider registry; prices, retention, task health and audit still unbuilt |
 | `*` | Not found | Inside the layout |
+
+## Server state
+
+Three layers, and the boundary between them is the point.
+
+| Layer | Owns |
+|---|---|
+| `lib/api/client.ts` | The only `fetch` in the app. Prefixes `/api/admin`, sets `credentials: "same-origin"`, puts `x-csrf-token` on **every** mutating method, and turns a non-2xx into an `ApiError` carrying the server's own sentence |
+| `lib/api/<resource>.ts` | One module per endpoint group, plus the wire types — declared here, never imported from `apps/api`. The shared *vocabulary* still comes from `@multi-ai-router/core` |
+| `lib/queries/<resource>.ts` | The TanStack hooks and their invalidation. Keys come from `queryKeys` in `lib/queries/query-keys.ts` and are never written inline |
+
+Three rules worth stating because they are easy to get wrong:
+
+- **A 401 anywhere is a session event, not a page error.** `client.ts` flips one `sessionLost`
+  signal; `AppLayout` has the only effect that reads it and routes to `/login?next=…`. No route
+  decides for itself what its own 401 means.
+- **`queryKeys.<resource>.root()` is a prefix of every key beneath it**, which is what makes
+  `invalidateQueries({ queryKey: root })` catch the filtered lists and the details too. A unit test
+  asserts the prefix relation.
+- **Invalidation crosses resources where the data does.** An account write invalidates pools,
+  because `PoolMemberView` embeds the account's label and status; an account or pool delete also
+  invalidates keys, because scope targets cascade.
+
+`QueryBoundary` renders the three states — `TableSkeleton`, `ErrorState` with a retry, content — and
+reads `query.data` **only** inside the success branch. `data` is backed by a Solid resource; reading
+it while pending suspends the nearest boundary and the skeleton never appears.
 
 ## Running it
 
 | Command | Effect |
 |---|---|
-| `bun run dev` | Vite on `:5173`, proxying `/v1` and `/admin` to the API on `:8080` |
+| `bun run dev` | Vite on `:5173`, proxying `/api`, `/v1`, `/healthz` and `/readyz` to the API on `:8080` |
 | `bun run build` | Vite build → `apps/web/dist` |
 | `bun run preview` | Serve the built bundle locally |
+
+The proxy prefixes are the ones the API actually mounts — `ADMIN_*_BASE_PATH` is `/api/admin/<group>`
+for every admin group, so `/api` covers all five. A prefix that is *nearly* right fails silently:
+the request lands on Vite's own 404 and reads as a broken API rather than a broken config.
 
 `bin/dev` at the repo root starts this and the API together. **The image is assembled by the root
 `bin/build`, which places the bundle at `dist/web/`** — building this package in isolation writes
@@ -207,7 +244,16 @@ bun test apps/web
 ```
 
 Deliberately DOM-free — pure mappers and formatters, with the clock injected (`describeReset(input,
-nowMs)`), never read inside.
+nowMs)`, `formatRelative(iso, nowMs)`), never read inside.
+
+| File | Asserts |
+|---|---|
+| `account-status`, `reset-countdown`, `theme` | The presentation rules: `exhausted` never gets a countdown, a status added to core has a presentation |
+| `routes` | The route table, and that `?next=` cannot redirect off this origin |
+| `api-client` | Every mutating method carries `x-csrf-token`; absent filters are dropped, not serialised |
+| `api-errors` | Both error shapes parse; a failure always renders as a sentence, never a bare status |
+| `query-keys` | Every key is prefixed by its resource root, and the roots are disjoint |
+| `format`, `usage` | Number and time formatting; the usage contract — attempts ≥ requests, percentiles do not sum |
 
 **Component tests are deferred, as a decision rather than an omission.** The house standard is
 `@solidjs/testing-library` + `bun test`, and it does work — it was built and verified at 33/33 in a
@@ -236,6 +282,42 @@ cover; the recipe above is the whole of it.
 | No fallback branches on an enum | The reset-source bug was a ternary whose `else` silently relabeled anything unrecognised as "estimated". Map enum values through an exhaustive `Record` so a new member fails the build instead |
 | tsc emit | A composite project may not set `noEmit`, so type-check declarations land in the gitignored `dist-types/`. Vite emits the real bundle |
 | Lazy routes | `lazy()` needs a **default** export. Screens in `routes/` and `AppLayout` export default for that reason; everything else in `src/` uses named exports |
+
+## What the API still owes this console
+
+Two gaps, both visible on screen rather than hidden — a console that quietly invents a number is
+worse than one that says it has none.
+
+**1. The usage read API.** Everything on `/usage`, and three of the six Overview tiles, is generated
+from a fixed seed in `src/lib/api/usage.ts`. That file is the whole of it: the types below are the
+contract the screens already render against, so landing the endpoint means replacing one function
+body with a `request()` call and flipping `placeholder` to `false`. No route, component or query key
+changes.
+
+```
+GET /api/admin/usage?window=today|7d|30d|lifetime
+GET /api/admin/usage?from=<iso>&to=<iso>              custom window
+→ UsageSummary { window, bucket: "hour"|"day", from, to,
+                 totals: UsageTotals, series: number[],
+                 byKey, byAccount, byPool, byModel: UsageBreakdownRow[] }
+```
+
+`UsageTotals` keeps three pairs apart, and they must never be pre-summed by the server:
+`requests` / `attempts` (a failover chain of three is one request and three attempts),
+`costMetered` / `costNotional` (a subscription account has no per-token price, only an
+attribution), and `tokensIn` / `cacheReadTokens` / `cacheWriteTokens` (total prompt size is the sum
+of all three).
+
+**2. Quota state on `AccountView`.** The Availability column is built on `ResetIndicator`, which
+already renders absolute time *and* countdown *and* a reported/estimated qualifier — but
+`AccountView` carries no quota window, so today it can only say "Needs top-up — no reset" for an
+`exhausted` account and "Unknown — will retry with backoff" for a `cooling_down` one. Both are true;
+neither is useful. Adding core's `QuotaWindowState` to the view fills the column with no UI change.
+
+**3. `lastCheckedAt` on `AccountView`.** `POST /accounts/:id/recheck` returns it, so the row can show
+it after a press — but nothing carries it on a cold load, so a fresh tab says "Not checked from this
+console" rather than inventing a time. CLAUDE.md asks for the last-checked timestamp to be *always*
+visible; that needs the field on the read.
 
 ## See also
 

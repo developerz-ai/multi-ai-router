@@ -1,0 +1,8 @@
+.revealError {
+  padding: var(--space-3);
+  border: 1px solid var(--danger);
+  border-radius: var(--radius-1);
+  background: color-mix(in srgb, var(--danger) 10%, var(--surface-raised));
+  font-size: var(--text-sm);
+  line-height: var(--line-snug);
+}

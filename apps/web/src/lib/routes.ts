@@ -22,6 +22,31 @@ export interface ConsoleRoute {
 
 export const LOGIN_PATH = "/login"
 
+/**
+ * Where to send an operator whose session just ended, carrying the surface they
+ * were on so signing back in returns them there.
+ *
+ * The login screen itself is never a destination — a redirect loop back to
+ * `/login?next=/login` is the bug this guard rules out.
+ */
+export function loginPathFor(pathname: string): string {
+  if (pathname === LOGIN_PATH || pathname === "/") return LOGIN_PATH
+  return `${LOGIN_PATH}?next=${encodeURIComponent(pathname)}`
+}
+
+/**
+ * Reads `?next=` back, refusing anything that is not a path on this origin.
+ * `//evil.example` is the case that matters: browsers treat a leading double
+ * slash as protocol-relative, so it is an off-origin redirect wearing a path's
+ * clothes. An open redirect on a login form is how a phished operator ends up
+ * authenticating somewhere else entirely.
+ */
+export function safeNextPath(value: string | string[] | undefined): string {
+  if (typeof value !== "string") return "/"
+  if (!value.startsWith("/") || value.startsWith("//")) return "/"
+  return value
+}
+
 /** Rendered outside the authed shell. */
 export const LoginScreen = lazy(() => import("../routes/LoginRoute"))
 

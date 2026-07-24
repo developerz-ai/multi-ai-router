@@ -1,0 +1,17 @@
+.root {
+  display: grid;
+  gap: var(--space-2);
+  justify-items: start;
+}
+
+.note {
+  display: grid;
+  gap: var(--space-1);
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+  line-height: var(--line-snug);
+}
+
+.line {
+  display: block;
+}

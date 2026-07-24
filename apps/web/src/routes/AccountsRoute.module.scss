@@ -1,0 +1,43 @@
+@use "../styles/breakpoints" as bp;
+@use "../styles/mixins" as *;
+
+// Filters wrap onto their own rows on a phone and sit side by side once there
+// is room. No fixed columns: a provider id is long and must not be truncated.
+.filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+}
+
+.filter {
+  display: grid;
+  gap: var(--space-1);
+  flex: 1 1 12rem;
+  min-width: 0;
+}
+
+.filterLabel {
+  @include eyebrow;
+
+  color: var(--text-muted);
+}
+
+.select {
+  @include tappable(2.125rem);
+
+  width: 100%;
+  padding: var(--space-2) var(--space-3);
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-1);
+  color: var(--text);
+  font-size: var(--text-sm);
+
+  @include bp.respond-to("sidebar") {
+    max-width: 16rem;
+  }
+}
+
+.select:hover {
+  border-color: var(--accent);
+}

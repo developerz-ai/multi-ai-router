@@ -1,0 +1,79 @@
+@use "../../styles/breakpoints" as bp;
+@use "../../styles/mixins" as *;
+
+.form {
+  display: grid;
+  gap: var(--space-4);
+}
+
+.pair {
+  display: grid;
+  gap: var(--space-4);
+
+  @include bp.respond-to("sidebar") {
+    grid-template-columns: 1fr 1fr;
+  }
+}
+
+.targets {
+  display: grid;
+  gap: var(--space-2);
+  padding: 0;
+  border: 0;
+}
+
+.legend {
+  @include eyebrow;
+
+  padding: 0;
+  color: var(--text-muted);
+}
+
+.list {
+  display: grid;
+  gap: var(--space-1);
+  max-height: 13rem;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: var(--space-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-1);
+  background: var(--surface-sunken);
+}
+
+.target {
+  @include tappable(2rem);
+
+  display: flex;
+  gap: var(--space-2);
+  align-items: center;
+  padding-inline: var(--space-2);
+  border-radius: var(--radius-1);
+  font-size: var(--text-sm);
+  cursor: pointer;
+}
+
+.target:hover {
+  background: var(--surface-raised);
+}
+
+.checkbox {
+  flex: none;
+  width: 1rem;
+  height: 1rem;
+  accent-color: var(--accent);
+}
+
+.empty {
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+}
+
+.error {
+  padding: var(--space-3);
+  border: 1px solid var(--danger);
+  border-radius: var(--radius-1);
+  background: color-mix(in srgb, var(--danger) 10%, var(--surface-overlay));
+  font-size: var(--text-sm);
+  line-height: var(--line-snug);
+}

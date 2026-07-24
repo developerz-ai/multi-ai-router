@@ -1,0 +1,37 @@
+@use "../../styles/mixins" as *;
+
+.identity {
+  display: grid;
+  gap: var(--space-1);
+  min-width: 9rem;
+}
+
+.name {
+  font-weight: var(--weight-medium);
+  overflow-wrap: anywhere;
+}
+
+// The stored display prefix, never the value. A screenshot of this table leaks
+// nothing — the value lives behind an audited reveal.
+.prefix {
+  @include tabular-figures;
+
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+  font-weight: var(--weight-normal);
+}
+
+.scope {
+  white-space: nowrap;
+}
+
+.muted {
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}

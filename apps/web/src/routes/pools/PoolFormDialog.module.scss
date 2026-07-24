@@ -1,0 +1,85 @@
+@use "../../styles/mixins" as *;
+
+.form {
+  display: grid;
+  gap: var(--space-4);
+}
+
+.members {
+  display: grid;
+  gap: var(--space-2);
+  padding: 0;
+  border: 0;
+}
+
+.legend {
+  @include eyebrow;
+
+  padding: 0;
+  color: var(--text-muted);
+}
+
+.list {
+  display: grid;
+  gap: var(--space-1);
+  max-height: 15rem;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: var(--space-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-1);
+  background: var(--surface-sunken);
+}
+
+.member {
+  min-width: 0;
+}
+
+.memberLabel {
+  @include tappable(2rem);
+
+  display: flex;
+  gap: var(--space-2);
+  align-items: center;
+  padding-inline: var(--space-2);
+  border-radius: var(--radius-1);
+  cursor: pointer;
+}
+
+.memberLabel:hover {
+  background: var(--surface-raised);
+}
+
+.checkbox {
+  flex: none;
+  width: 1rem;
+  height: 1rem;
+  accent-color: var(--accent);
+}
+
+.memberName {
+  min-width: 0;
+  font-size: var(--text-sm);
+  overflow-wrap: anywhere;
+}
+
+.memberProvider {
+  margin-inline-start: auto;
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+  white-space: nowrap;
+}
+
+.empty {
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+}
+
+.error {
+  padding: var(--space-3);
+  border: 1px solid var(--danger);
+  border-radius: var(--radius-1);
+  background: color-mix(in srgb, var(--danger) 10%, var(--surface-overlay));
+  font-size: var(--text-sm);
+  line-height: var(--line-snug);
+}

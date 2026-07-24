@@ -1,0 +1,54 @@
+@use "../styles/breakpoints" as bp;
+@use "../styles/mixins" as *;
+
+.section {
+  display: grid;
+  gap: var(--space-3);
+}
+
+.panel {
+  @include card;
+
+  display: grid;
+  gap: var(--space-3);
+  padding: var(--space-4);
+
+  @include bp.respond-to("sidebar") {
+    padding: var(--space-5);
+  }
+}
+
+.heading {
+  font-size: var(--text-lg);
+}
+
+.facts {
+  display: grid;
+  gap: var(--space-3);
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 12rem), 1fr));
+}
+
+.fact {
+  display: grid;
+  gap: var(--space-1);
+  min-width: 0;
+}
+
+.term {
+  @include eyebrow;
+
+  color: var(--text-muted);
+}
+
+.value {
+  margin: 0;
+  font-size: var(--text-sm);
+  overflow-wrap: anywhere;
+}
+
+.note {
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+  line-height: var(--line-snug);
+  text-wrap: pretty;
+}

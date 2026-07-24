@@ -193,9 +193,23 @@
 // width without this file reaching into `ThemeToggle`'s own rules.
 .navFooter {
   display: grid;
+  gap: var(--space-2);
+  justify-items: start;
   margin-block-start: auto;
   padding-block-start: var(--space-4);
   border-block-start: 1px solid var(--border);
+}
+
+// Who is signed in, stated rather than implied by an avatar. A single-admin
+// console still has two operators sharing one credential often enough that the
+// name is worth the line.
+.identity {
+  max-width: 100%;
+  padding-inline: var(--space-2);
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+  line-height: var(--line-snug);
+  overflow-wrap: anywhere;
 }
 
 // ---------- Main ----------

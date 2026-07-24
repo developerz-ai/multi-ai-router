@@ -1,0 +1,111 @@
+@use "../styles/breakpoints" as bp;
+@use "../styles/mixins" as *;
+
+.layer {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  display: flex;
+  // Mobile-first: the sheet sits at the bottom, within thumb reach. It centres
+  // once there is room, which is the only thing the breakpoint changes.
+  align-items: flex-end;
+  justify-content: center;
+
+  @include bp.respond-to("sidebar") {
+    align-items: center;
+    padding: var(--space-5);
+  }
+}
+
+.scrim {
+  position: absolute;
+  inset: 0;
+  background: var(--scrim);
+}
+
+.panel {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  width: 100%;
+  max-width: 34rem;
+  // Never taller than the viewport: the body scrolls, the header and footer
+  // stay put, so the confirm button is always reachable.
+  max-height: min(90dvh, 44rem);
+  padding: var(--space-4);
+  background: var(--surface-overlay);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-2) var(--radius-2) 0 0;
+  box-shadow: var(--shadow-2);
+
+  @include bp.respond-to("sidebar") {
+    padding: var(--space-5);
+    border-radius: var(--radius-2);
+  }
+}
+
+.header {
+  display: flex;
+  gap: var(--space-4);
+  align-items: flex-start;
+  justify-content: space-between;
+}
+
+.heading {
+  display: grid;
+  gap: var(--space-1);
+  min-width: 0;
+}
+
+.title {
+  font-size: var(--text-lg);
+}
+
+.description {
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+  line-height: var(--line-snug);
+  text-wrap: pretty;
+}
+
+.close {
+  @include tappable(2rem);
+
+  display: grid;
+  flex: none;
+  place-items: center;
+  min-width: var(--tap-target);
+  padding: 0;
+  background: none;
+  border: 0;
+  border-radius: var(--radius-1);
+  color: var(--text-muted);
+  cursor: pointer;
+
+  @include bp.respond-to-fine("sidebar") {
+    min-width: 2rem;
+  }
+}
+
+.close:hover {
+  background: var(--surface-sunken);
+  color: var(--text);
+}
+
+.body {
+  display: grid;
+  gap: var(--space-4);
+  overflow-y: auto;
+  // A scroll that runs out inside the dialog must not chain to the page behind.
+  overscroll-behavior: contain;
+}
+
+.footer {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  justify-content: flex-end;
+  padding-block-start: var(--space-4);
+  border-block-start: 1px solid var(--border);
+}

@@ -1,7 +1,12 @@
-// Auto-fit rather than fixed columns: one tile per row on a phone, four across
-// on a desktop, with no breakpoint of its own to keep in sync.
+// Auto-fit rather than fixed columns: one tile per row on a phone, several
+// across on a desktop, with no breakpoint of its own to keep in sync.
 .tiles {
   display: grid;
   gap: var(--space-3);
   grid-template-columns: repeat(auto-fit, minmax(min(100%, 11rem), 1fr));
+}
+
+.bannerLink {
+  display: inline-block;
+  white-space: nowrap;
 }

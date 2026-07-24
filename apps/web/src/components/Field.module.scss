@@ -1,0 +1,59 @@
+@use "../styles/mixins" as *;
+
+.field {
+  display: grid;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.label {
+  display: flex;
+  gap: var(--space-1);
+  align-items: baseline;
+  color: var(--text);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+}
+
+.required {
+  color: var(--danger);
+}
+
+.control {
+  @include tappable(2.125rem);
+
+  width: 100%;
+  padding: var(--space-2) var(--space-3);
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-1);
+  color: var(--text);
+  font-size: var(--text-sm);
+}
+
+.control:hover {
+  border-color: var(--accent);
+}
+
+.control:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+.control::placeholder {
+  color: var(--text-muted);
+}
+
+// The native arrow is kept: a hand-drawn one has to be re-tinted per scheme and
+// gains nothing. Only the padding is reserved so a long option does not collide
+// with it.
+.select {
+  padding-inline-end: var(--space-5);
+}
+
+.hint {
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+  line-height: var(--line-snug);
+  text-wrap: pretty;
+}

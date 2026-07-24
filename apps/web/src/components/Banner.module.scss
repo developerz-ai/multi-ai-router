@@ -1,0 +1,64 @@
+@use "../styles/breakpoints" as bp;
+
+.banner {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3) var(--space-4);
+  align-items: flex-start;
+  justify-content: space-between;
+  padding: var(--space-4);
+  border: 1px solid;
+  border-inline-start-width: var(--space-1);
+  border-radius: var(--radius-2);
+
+  @include bp.respond-to("sidebar") {
+    align-items: center;
+  }
+}
+
+.body {
+  display: grid;
+  gap: var(--space-1);
+  min-width: 0;
+}
+
+.title {
+  font-size: var(--text-md);
+  font-weight: var(--weight-semibold);
+  line-height: var(--line-snug);
+}
+
+.detail {
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+  line-height: var(--line-snug);
+}
+
+.action {
+  flex: none;
+}
+
+// The tint is deliberately faint and the edge carries the weight: a saturated
+// red block behind body text fails contrast in one scheme or the other.
+.danger {
+  border-color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 10%, var(--surface-raised));
+}
+
+.danger .title {
+  color: var(--danger);
+}
+
+.warn {
+  border-color: var(--warn);
+  background: color-mix(in srgb, var(--warn) 10%, var(--surface-raised));
+}
+
+.warn .title {
+  color: var(--warn);
+}
+
+.info {
+  border-color: var(--border);
+  background: var(--surface-raised);
+}

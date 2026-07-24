@@ -1,0 +1,42 @@
+@use "../styles/breakpoints" as bp;
+@use "../styles/mixins" as *;
+
+.root {
+  @include card;
+
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3) var(--space-4);
+  align-items: flex-start;
+  justify-content: space-between;
+  padding: var(--space-5) var(--space-4);
+  border-color: var(--danger);
+
+  @include bp.respond-to("sidebar") {
+    align-items: center;
+    padding: var(--space-5);
+  }
+}
+
+.body {
+  display: grid;
+  gap: var(--space-1);
+  min-width: 0;
+}
+
+.title {
+  color: var(--danger);
+  font-size: var(--text-md);
+  font-weight: var(--weight-semibold);
+  line-height: var(--line-snug);
+}
+
+// The server's sentence. Full width, wrapping — a 409 naming five keys is long
+// on purpose and must not be truncated to fit a row.
+.message {
+  max-width: 72ch;
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+  line-height: var(--line-snug);
+  text-wrap: pretty;
+}

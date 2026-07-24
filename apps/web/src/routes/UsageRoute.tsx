@@ -1,26 +1,150 @@
+import { createSignal, For, Show } from "solid-js"
+import { Banner } from "../components/Banner"
 import { PageHeader } from "../components/PageHeader"
-import { Placeholder } from "../components/Placeholder"
+import { QueryBoundary } from "../components/QueryBoundary"
+import { Sparkline } from "../components/Sparkline"
+import { StatTile } from "../components/StatTile"
+import { TableSkeleton } from "../components/TableSkeleton"
+import {
+  breakdownFor,
+  USAGE_DIMENSIONS,
+  USAGE_WINDOWS,
+  type UsageDimension,
+  type UsageWindow,
+  usageDimensionLabel,
+  usageWindowLabel,
+} from "../lib/api/usage"
+import { formatCost, formatCount, formatPercent } from "../lib/format"
+import { useUsageSummary } from "../lib/queries/usage"
+import styles from "./UsageRoute.module.scss"
+import { UsageBreakdown } from "./usage/UsageBreakdown"
 
+/**
+ * The headline surface: any dimension against any window, with the same measures
+ * in every cell.
+ *
+ * **The numbers on this screen are generated, not measured.** There is no usage
+ * read API yet; `lib/api/usage.ts` produces them from a fixed seed and every
+ * value carries `placeholder: true`, which is what raises the banner below. The
+ * layout, the measures and the query wiring are the real thing, so landing the
+ * endpoint is a one-file change.
+ */
 export default function UsageRoute() {
+  const [window, setWindow] = createSignal<UsageWindow>("7d")
+  const [dimension, setDimension] = createSignal<UsageDimension>("key")
+  const summary = useUsageSummary(window)
+
   return (
     <>
       <PageHeader
-        title="Usage"
+        actions={
+          // A real `<fieldset>` rather than `role="group"`: the grouping is
+          // native, so the `<legend>` names it for assistive tech without an
+          // `aria-label` that can drift from the visible wording.
+          <fieldset class={styles.windows}>
+            <legend class={styles.groupLabel}>Window</legend>
+            <For each={USAGE_WINDOWS}>
+              {(value) => (
+                <button
+                  aria-pressed={window() === value ? "true" : "false"}
+                  class={styles.window}
+                  onClick={() => setWindow(value)}
+                  type="button"
+                >
+                  {usageWindowLabel(value)}
+                </button>
+              )}
+            </For>
+          </fieldset>
+        }
         subtitle="Who burned what — answered without anyone writing a query."
+        title="Usage"
       />
-      <Placeholder
-        icon="usage"
-        summary="Any dimension against any window, with the same measures in every cell."
-        items={[
-          "Slice by key, account, pool, model or session",
-          "Windows: lifetime, today, 7d, 30d, custom from/to",
-          "Requests and upstream attempts as separate numbers, never one figure",
-          "Input tokens as the three-field sum, with cache read and cache creation broken out",
-          "Metered and notional cost as separate totals, never summed",
-          "Error rate, p50 / p95 latency, and router overhead beside it",
-          "Time series stacked by key or account, quota gauges, top-N leaderboards",
-        ]}
-      />
+
+      <QueryBoundary
+        errorTitle="Usage could not be loaded"
+        loading={<TableSkeleton label="Loading usage" rows={5} />}
+        query={summary}
+      >
+        {(data) => (
+          <>
+            <Show when={data.placeholder}>
+              <Banner title="These figures are placeholder data, not measurements" tone="warn">
+                The router has no usage read API yet. Everything on this screen is generated locally
+                from a fixed seed so the surface can be built and reviewed — no number here came
+                from a request the router served.
+              </Banner>
+            </Show>
+
+            <section aria-label="Headline figures" class={styles.tiles}>
+              <StatTile
+                label="Requests"
+                note={`Client-facing · ${usageWindowLabel(data.window).toLowerCase()}`}
+                value={formatCount(data.totals.requests)}
+              />
+              <StatTile
+                label="Upstream attempts"
+                note="Counted separately from requests"
+                value={formatCount(data.totals.attempts)}
+              />
+              <StatTile
+                label="Metered spend"
+                note={`Notional ${formatCost(data.totals.costNotional)}, shown apart`}
+                value={formatCost(data.totals.costMetered)}
+              />
+              <StatTile
+                label="Error rate"
+                note="Non-success share of attempts"
+                value={formatPercent(data.totals.errors, data.totals.attempts)}
+              />
+              <StatTile
+                label="Latency p95"
+                note={`p50 ${data.totals.latencyP50Ms} ms`}
+                value={`${data.totals.latencyP95Ms} ms`}
+              />
+              <StatTile
+                label="Router overhead p95"
+                note="Budgeted under 5 ms — a regression is a bug"
+                value={`${data.totals.routerOverheadP95Ms} ms`}
+              />
+            </section>
+
+            <section aria-label="Requests over time" class={styles.chart}>
+              <p class={styles.chartLabel}>
+                Requests per {data.bucket} · {usageWindowLabel(data.window)}
+              </p>
+              <Sparkline
+                height={72}
+                label={`Requests per ${data.bucket} across the window`}
+                points={data.series}
+                width={640}
+              />
+            </section>
+
+            <fieldset class={styles.dimensions}>
+              <legend class={styles.groupLabel}>Break down by</legend>
+              <For each={USAGE_DIMENSIONS}>
+                {(value) => (
+                  <button
+                    aria-pressed={dimension() === value ? "true" : "false"}
+                    class={styles.dimension}
+                    onClick={() => setDimension(value)}
+                    type="button"
+                  >
+                    {usageDimensionLabel(value)}
+                  </button>
+                )}
+              </For>
+            </fieldset>
+
+            <UsageBreakdown
+              bucket={data.bucket}
+              dimension={dimension()}
+              rows={breakdownFor(data, dimension())}
+            />
+          </>
+        )}
+      </QueryBoundary>
     </>
   )
 }

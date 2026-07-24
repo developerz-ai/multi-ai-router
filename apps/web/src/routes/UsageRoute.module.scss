@@ -1,0 +1,76 @@
+@use "../styles/mixins" as *;
+
+// Segmented controls. Two of them, one for the window and one for the
+// dimension, sharing a shape so the operator reads them as the same kind of
+// switch. They wrap rather than scroll: four short labels always fit at 320px.
+.windows,
+.dimensions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+  // A `<fieldset>` for the native grouping semantics, with its own chrome
+  // removed — the border below is the segmented control's, not the browser's.
+  min-width: 0;
+  margin: 0;
+  padding: var(--space-1);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-1);
+  background: var(--surface-raised);
+}
+
+// The group's name. Visible to assistive tech, folded away visually: the four
+// buttons say what they switch, and a second label above them is noise.
+.groupLabel {
+  @include visually-hidden;
+}
+
+.window,
+.dimension {
+  @include tappable(1.875rem);
+
+  padding-inline: var(--space-3);
+  background: none;
+  border: 0;
+  border-radius: var(--radius-1);
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+  cursor: pointer;
+  transition: background var(--duration-fast) var(--ease-out);
+}
+
+.window:hover,
+.dimension:hover {
+  background: var(--surface-sunken);
+  color: var(--text);
+}
+
+.window[aria-pressed="true"],
+.dimension[aria-pressed="true"] {
+  background: var(--accent);
+  color: var(--accent-contrast);
+  font-weight: var(--weight-medium);
+}
+
+.tiles {
+  display: grid;
+  gap: var(--space-3);
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 11rem), 1fr));
+}
+
+.chart {
+  @include card;
+
+  display: grid;
+  gap: var(--space-3);
+  padding: var(--space-4);
+  // The sparkline is drawn at a fixed intrinsic width and stretched; the
+  // container is what stops it widening the page on a phone.
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+}
+
+.chartLabel {
+  @include eyebrow;
+
+  color: var(--text-muted);
+}

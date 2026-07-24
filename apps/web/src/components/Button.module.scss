@@ -1,0 +1,112 @@
+@use "../styles/mixins" as *;
+
+.button {
+  @include tappable;
+
+  display: inline-flex;
+  gap: var(--space-2);
+  align-items: center;
+  justify-content: center;
+  padding-inline: var(--space-4);
+  border: 1px solid transparent;
+  border-radius: var(--radius-1);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+  line-height: var(--line-tight);
+  white-space: nowrap;
+  cursor: pointer;
+  transition:
+    background var(--duration-fast) var(--ease-out),
+    border-color var(--duration-fast) var(--ease-out),
+    color var(--duration-fast) var(--ease-out);
+}
+
+.button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+// ---------- Sizes ----------
+
+.md {
+  min-width: 2.75rem;
+}
+
+// Row actions in a dense table. Still a full tap target on touch — `tappable`
+// only tightens where the pointer is precise.
+.sm {
+  padding-inline: var(--space-3);
+  font-size: var(--text-xs);
+}
+
+// ---------- Tones ----------
+
+.primary {
+  background: var(--accent);
+  color: var(--accent-contrast);
+}
+
+.primary:hover:not(:disabled) {
+  border-color: var(--accent);
+  filter: brightness(1.08);
+}
+
+.neutral {
+  background: var(--surface-raised);
+  border-color: var(--border);
+  color: var(--text);
+}
+
+.neutral:hover:not(:disabled) {
+  background: var(--surface-overlay);
+  border-color: var(--border-strong);
+}
+
+.ghost {
+  background: transparent;
+  color: var(--text-muted);
+}
+
+.ghost:hover:not(:disabled) {
+  background: var(--surface-sunken);
+  color: var(--text);
+}
+
+// Destructive actions are outlined rather than filled: a solid red block reads
+// as an alert the operator must clear, not as a control they may choose.
+.danger {
+  background: transparent;
+  border-color: var(--danger);
+  color: var(--danger);
+}
+
+.danger:hover:not(:disabled) {
+  background: var(--danger);
+  color: var(--accent-contrast);
+}
+
+.spinner {
+  flex: none;
+  width: 0.75rem;
+  height: 0.75rem;
+  border: 2px solid currentcolor;
+  border-block-start-color: transparent;
+  border-radius: var(--radius-full);
+  animation: spin 0.7s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(1turn);
+  }
+}
+
+// The global reset clamps every animation under reduced motion, which would
+// freeze the spinner at an arbitrary angle. A steady ring reads as "working"
+// without implying rotation.
+@media (prefers-reduced-motion: reduce) {
+  .spinner {
+    border-block-start-color: currentcolor;
+    opacity: 0.5;
+  }
+}

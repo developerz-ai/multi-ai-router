@@ -1,0 +1,42 @@
+@use "../styles/breakpoints" as bp;
+@use "../styles/mixins" as *;
+
+.root {
+  @include card;
+
+  display: grid;
+  justify-items: center;
+  gap: var(--space-3);
+  padding: var(--space-6) var(--space-4);
+  text-align: center;
+
+  @include bp.respond-to("sidebar") {
+    padding: var(--space-7) var(--space-6);
+  }
+}
+
+.glyph {
+  display: grid;
+  place-items: center;
+  width: 2.5rem;
+  height: 2.5rem;
+  border-radius: var(--radius-2);
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.title {
+  font-size: var(--text-lg);
+}
+
+.description {
+  max-width: 48ch;
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+  line-height: var(--line-snug);
+  text-wrap: pretty;
+}
+
+.action {
+  margin-block-start: var(--space-2);
+}

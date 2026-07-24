@@ -1,0 +1,45 @@
+.consequences {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.consequence {
+  display: flex;
+  gap: var(--space-3);
+  align-items: baseline;
+  font-size: var(--text-sm);
+  line-height: var(--line-snug);
+}
+
+.marker {
+  flex: none;
+  width: var(--space-1);
+  height: var(--space-1);
+  border-radius: var(--radius-full);
+  background: var(--danger);
+  transform: translateY(-2px);
+}
+
+// The server's own words. Given the visual weight of a callout, not a footnote:
+// when a delete is refused, this text is the entire answer.
+.rejection {
+  display: grid;
+  gap: var(--space-1);
+  padding: var(--space-3);
+  border: 1px solid var(--danger);
+  border-radius: var(--radius-1);
+  background: color-mix(in srgb, var(--danger) 10%, var(--surface-overlay));
+}
+
+.rejectionTitle {
+  color: var(--danger);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-semibold);
+}
+
+.rejectionMessage {
+  color: var(--text);
+  font-size: var(--text-sm);
+  line-height: var(--line-snug);
+  text-wrap: pretty;
+}

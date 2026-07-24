@@ -1,10 +1,13 @@
-import { A, type RouteSectionProps, useLocation } from "@solidjs/router"
+import { A, type RouteSectionProps, useLocation, useNavigate } from "@solidjs/router"
 import { createEffect, createMemo, createSignal, For, on, Show } from "solid-js"
+import { Button } from "../components/Button"
 import { Icon } from "../components/Icon"
 import { ThemeToggle } from "../components/ThemeToggle"
+import { sessionLost } from "../lib/api/session"
 import { createFocusTrap } from "../lib/focus-trap"
 import { createMediaQuery, SIDEBAR_QUERY } from "../lib/media"
-import { CONSOLE_ROUTES } from "../lib/routes"
+import { useLogout, useSession } from "../lib/queries/session"
+import { CONSOLE_ROUTES, loginPathFor } from "../lib/routes"
 import { createScrollLock } from "../lib/scroll-lock"
 import styles from "./AppLayout.module.scss"
 
@@ -20,6 +23,29 @@ export default function AppLayout(props: RouteSectionProps) {
   const isSidebar = createMediaQuery(SIDEBAR_QUERY)
   const [drawerOpen, setDrawerOpen] = createSignal(false)
   const location = useLocation()
+  const navigate = useNavigate()
+
+  // Establishes the session for the whole console: it puts the CSRF token in
+  // place before any surface can mutate anything, and its 401 is what trips
+  // `sessionLost` on a cold load with no cookie.
+  const session = useSession()
+  const logout = useLogout()
+
+  /**
+   * **The single place a lost session becomes a redirect.** Any 401, from any
+   * endpoint, flips this signal inside the API client; routing from here means
+   * no route has to decide for itself whether its own 401 means "log in again",
+   * and no surface renders a page of error cards over a dead cookie.
+   */
+  createEffect(
+    on(sessionLost, (lost) => {
+      if (lost) navigate(loginPathFor(location.pathname), { replace: true })
+    }),
+  )
+
+  const signOut = () => {
+    logout.mutate(undefined, { onSuccess: () => navigate("/login", { replace: true }) })
+  }
 
   let navRef: HTMLElement | undefined
   let toggleRef: HTMLButtonElement | undefined
@@ -111,7 +137,16 @@ export default function AppLayout(props: RouteSectionProps) {
         </ul>
 
         <div class={styles.navFooter}>
+          {/* Guarded on `isSuccess`, not on `data`: in solid-query `data` is a
+              resource, and reading it while pending suspends the nearest
+              boundary — which here would take the whole nav with it. */}
+          <Show when={session.isSuccess}>
+            <span class={styles.identity}>Signed in as {session.data?.username}</span>
+          </Show>
           <ThemeToggle />
+          <Button busy={logout.isPending} onClick={signOut} size="sm" tone="ghost">
+            Sign out
+          </Button>
         </div>
       </nav>
 

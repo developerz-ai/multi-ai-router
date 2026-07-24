@@ -1,0 +1,27 @@
+.form {
+  display: grid;
+  gap: var(--space-4);
+}
+
+// What the registry says about the chosen provider, in its own words. Rendered
+// rather than paraphrased: the reason string is written next to the driver.
+.providerNote {
+  display: grid;
+  gap: var(--space-1);
+  padding: var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-1);
+  background: var(--surface-sunken);
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+  line-height: var(--line-snug);
+}
+
+.error {
+  padding: var(--space-3);
+  border: 1px solid var(--danger);
+  border-radius: var(--radius-1);
+  background: color-mix(in srgb, var(--danger) 10%, var(--surface-overlay));
+  font-size: var(--text-sm);
+  line-height: var(--line-snug);
+}

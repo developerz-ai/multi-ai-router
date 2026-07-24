@@ -1,0 +1,46 @@
+@use "../styles/breakpoints" as bp;
+@use "../styles/mixins" as *;
+
+.root {
+  display: grid;
+  gap: var(--space-2);
+  grid-template-areas:
+    "value"
+    "actions"
+    "status";
+
+  @include bp.respond-to("sidebar") {
+    grid-template-areas:
+      "value actions"
+      "status status";
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
+  }
+}
+
+.value {
+  @include tabular-figures;
+
+  grid-area: value;
+  padding: var(--space-3);
+  background: var(--surface-sunken);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-1);
+  font-size: var(--text-sm);
+  // A 40-character key must wrap rather than widen the dialog at 320px.
+  overflow-wrap: anywhere;
+  user-select: all;
+}
+
+.actions {
+  grid-area: actions;
+  justify-self: start;
+}
+
+.status {
+  grid-area: status;
+  min-height: 1rem;
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+  line-height: var(--line-snug);
+}

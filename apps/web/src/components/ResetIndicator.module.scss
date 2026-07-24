@@ -1,0 +1,26 @@
+.root {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1) var(--space-2);
+  align-items: baseline;
+}
+
+.text {
+  font-size: var(--text-sm);
+  white-space: nowrap;
+}
+
+// "Needs top-up" is not a countdown and must not read like one. It carries the
+// danger token and the weight of a status, because the thing it asks for is a
+// human with a credit card, not patience.
+.topUp {
+  color: var(--danger);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+}
+
+.absolute {
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+  white-space: nowrap;
+}
