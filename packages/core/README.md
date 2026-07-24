@@ -12,8 +12,11 @@ Shared errors, router-key format, and Zod schemas — the pure leaf every other 
 | Contract constants (`DEFAULT_ROUTING_POLICY`, key lengths) | Any I/O: no filesystem, no network, no clock, no `Date.now()` |
 
 `zod` is the only runtime dependency, `crypto.getRandomValues` the only platform API, and **nothing
-here imports `packages/db`, `apps/api`, or `apps/web`** — the arrow points in and never out. Env
-schema and boot validation belong here too, and are not written yet.
+here imports `packages/db`, `apps/api`, or `apps/web`** — the arrow points in and never out.
+
+Env validation deliberately lives in `apps/api/src/config/env.ts`, not here: the server is its only
+consumer, and the browser bundle has no business importing a schema describing `ENCRYPTION_KEY`. It
+moves here on the day a second consumer exists, and not before.
 
 ## Layout
 

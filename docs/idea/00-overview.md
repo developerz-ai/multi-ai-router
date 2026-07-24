@@ -1,6 +1,8 @@
 # multi-ai-router — Overview
 
-Status: design only. No code exists yet. Everything here describes the intended base.
+Status: the product boundary and the non-goals are settled and hold. What is *built* is in the
+[README's status table](../../README.md#-status) — in short, the admin API and same-dialect
+passthrough work; translation, the Agent-SDK path, and the console's screens do not.
 
 ## The problem
 

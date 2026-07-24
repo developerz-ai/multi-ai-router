@@ -1,6 +1,8 @@
 # Security
 
-Status: design only. Nothing here is implemented. Deployment-side settings live in
+Status: **implemented** — AES-256-GCM at rest, the tested log redactor, plane separation, admin
+session + CSRF, argon2id, and login throttling. **Not built:** per-key rate limiting, request rate
+limiting, and `/metrics` exposure controls. Deployment-side settings live in
 [09-deployment.md](09-deployment.md); key semantics in
 [04-api-keys-and-access.md](04-api-keys-and-access.md).
 

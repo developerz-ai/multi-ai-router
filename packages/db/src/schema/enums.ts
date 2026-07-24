@@ -3,7 +3,6 @@ import {
   KeyScope,
   ProviderId,
   ResetSource,
-  type RouterErrorCode,
   RoutingPolicy,
   UtilizationSource,
 } from "@multi-ai-router/core"
@@ -76,6 +75,9 @@ export const scheduledTaskOutcome = pgEnum("scheduled_task_outcome", [
   "partial",
 ])
 
-/** How an upstream attempt ended: success, or the `RouterError` code that ended it. */
-export const USAGE_OUTCOME_SUCCESS = "success"
-export type UsageOutcome = typeof USAGE_OUTCOME_SUCCESS | RouterErrorCode
+/**
+ * How an upstream attempt ended. Defined in `@multi-ai-router/core` — it is domain vocabulary the
+ * services reason about, not a storage detail — and re-exported here so `usageRecords.outcome` and
+ * the package barrel keep naming it from one place.
+ */
+export { USAGE_OUTCOME_SUCCESS, type UsageOutcome } from "@multi-ai-router/core"

@@ -32,7 +32,8 @@ src/
     <domain>.ts       one file per concern: accounts, quota-windows, pools,
                       api-keys, api-key-scope, sessions, usage-records,
                       usage-daily, audit-events, scheduled-task-runs, oauth-states
-  repositories/       one module per aggregate; all SQL lives here
+  repositories/       one module per aggregate; all SQL lives here:
+                      account, api-key, pool, audit, usage-record
 migrations/           generated SQL, committed, applied at boot
 test/unit/            schema-shape assertions, no database
 test/integration/     needs a live Postgres, skips cleanly without one
@@ -44,7 +45,7 @@ test/integration/     needs a live Postgres, skips cleanly without one
 |---|---|
 | `accounts` | One credential to one provider. Many per provider is the normal case |
 | `quota_windows` | One row per account per window: utilization, reset, and how trustworthy each is |
-| `pools` | A named set of accounts with a routing policy |
+| `pools` | A named set of accounts with a routing policy, plus an optional overflow account |
 | `pool_members` | Account ↔ pool membership, carrying that membership's weight and priority |
 | `api_keys` | Router-issued `mar_live_…` keys — encrypted, retrievable, never hashed |
 | `api_key_pools` / `api_key_accounts` | A key's scope targets |
@@ -64,6 +65,7 @@ Modeling decisions worth knowing:
 | `usage_daily` carries **no** foreign keys | Raw rows expire on the retention window; the rollup does not. A lifetime total has to outlive the key that earned it |
 | `cost_metered` and `cost_notional` are separate columns | A subscription is a flat fee, so its per-request cost is an attribution, not a charge. The docs forbid summing the two |
 | `sessions.account_id` is `ON DELETE SET NULL` | A binding is *invalidated*, never migrated: another account cannot resume an SDK session id. The FK is the backstop; the service clears `sdk_session_id` and lineage with it |
+| `pools.overflow_account_id` is `ON DELETE SET NULL`, while `pool_members` **cascades** | Deleting the overflow account must drop the pool's fallback, never the pool and every key bound to it. A `pool_members` row is the opposite case — it has no meaning without both ends |
 | Closed sets are `pgEnum`; open labels are `text` typed against core | An unknown `account_status` is a bug worth a migration to change. A new quota window kind or `RouterError` code is a core-only change |
 
 Enum values are built from `@multi-ai-router/core`'s Zod `.options`, so the Postgres type and the
@@ -71,12 +73,17 @@ validated domain type cannot drift.
 
 ## Migrations
 
+`bin/db` is the interface — it points at the dev database from `docker-compose.dev.yml`, so nothing
+here needs a `DATABASE_URL` exported by hand.
+
 | Step | Command / entry |
 |---|---|
-| Generate SQL after a schema change | `bun run db:generate` (drizzle-kit; needs `DATABASE_URL`) |
-| Verify the generated set | `bun run db:check` |
-| Apply | `runMigrations({ url })`, called at boot before the listener opens |
-| Apply by hand | `bun run migrate` |
+| Generate SQL after a schema change | `bin/db generate` (drizzle-kit; reads `src/schema` only, needs no database) |
+| Apply to the dev database | `bin/db migrate` |
+| Destroy and re-migrate the dev database | `bin/db reset` |
+| Interactive shell | `bin/db psql` |
+| Verify the generated set | `bun run --cwd packages/db db:check` |
+| Apply in production | `runMigrations({ url })`, called at boot before the listener opens |
 
 Generated SQL is committed. drizzle-kit never runs in the container.
 

@@ -163,6 +163,7 @@ function relaySuccess(
   at: AttemptClock,
 ): Response {
   const tokens = createTokenObserver()
+  let firstByteAt: number | undefined
   const settle = (streamed: boolean): void => {
     const counts = tokens.counts()
     ctx.runtime.health.endAttempt(servable.account.id, counts.tokensOut)
@@ -170,7 +171,7 @@ function relaySuccess(
       attemptRecord({
         ...ctx.runtime.attribution(attempt, servable),
         tokens: counts,
-        timing: ctx.runtime.timing(at.startedAt, at.started, at.upstreamMs),
+        timing: ctx.runtime.timing(at.startedAt, at.started, at.upstreamMs, firstByteAt),
         outcome: SUCCESS_OUTCOME,
         streamed,
         httpStatus: response.status,
@@ -180,6 +181,9 @@ function relaySuccess(
   }
 
   return relayResponse(response, {
+    onFirstByte: () => {
+      firstByteAt = ctx.runtime.clock.elapsed()
+    },
     onChunk: (chunk) => tokens.observe(chunk),
     onEnd: (bytes) => settle(bytes > 0),
     // A stream that broke after bytes were on the wire is a truncation, never a retry.

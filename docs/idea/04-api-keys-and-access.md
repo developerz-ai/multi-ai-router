@@ -1,6 +1,9 @@
 # API Keys and Access
 
-Status: design only. No code exists yet. Everything here describes the intended base.
+Status: **implemented**, except where a row says otherwise — the two planes, admin auth with CSRF
+and login throttling, key mint/reveal/revoke, both header styles, and scope enforced as an
+intersection all work. Per-key rate limits are stored but **not yet enforced**; `/api/admin/usage`
+and `/api/admin/settings` do not exist; OAuth connect/reconnect does not exist.
 
 ## Two planes
 
@@ -44,7 +47,7 @@ verification.
 | `SameSite` | `Strict` | no cross-site submission carries it |
 | `Secure` | always | HTTPS is assumed in front (reverse proxy) |
 | `Path` | `/` | SPA and API share an origin |
-| Lifetime | sliding, idle-expiring | **DEFERRED** on the exact window |
+| Lifetime | sliding idle window (`ADMIN_SESSION_IDLE_MINUTES`, default 480) under a hard absolute cap (`ADMIN_SESSION_ABSOLUTE_HOURS`, default 24) | Sliding alone means a stolen cookie is renewable forever by the thief; the cap turns "forever" into a bounded window. A session dies at whichever bound comes first |
 
 ### CSRF and throttling
 
@@ -53,6 +56,10 @@ verification.
   behavior and the other is an application invariant.
 - **Login attempt throttling** on the admin plane: per-IP and per-username, with backoff. A
   single-admin surface with a password from env is the highest-value target in the deployment.
+  Tunable, not constant — `ADMIN_LOGIN_MAX_ATTEMPTS`, `ADMIN_LOGIN_ATTEMPT_WINDOW_MINUTES`,
+  `ADMIN_LOGIN_LOCKOUT_MINUTES` ([09-deployment.md](09-deployment.md#environment-reference)).
+  The per-IP key is only as good as the IP, which is why `TRUST_PROXY` defaults to off: an
+  unvetted `X-Forwarded-For` is a throttle bypass.
 - Login failures are indistinguishable to the caller — no "unknown user" vs "bad password".
 
 ## Router API keys
@@ -131,7 +138,7 @@ Every key carries a **scope** — the set of Accounts it may reach — in one of
 |---|---|---|
 | `name` | string, required | human-chosen; unique per deployment |
 | Scope | `all` / pools / accounts | see above |
-| Rate limit | requests per window | enforced on the data plane, per key |
+| Rate limit | requests per window | Stored on the key and carried on the verified-key snapshot. **Not enforced yet** — the ceiling is configurable and currently advisory |
 | Expiry | timestamp, optional | a key past expiry is rejected exactly like a revoked one |
 | Revoked | flag | one-way |
 
@@ -154,6 +161,21 @@ created (named)  ──▶  active  ──▶  revoked  ──▶  purged
 
 Every mint, edit, and revocation writes an `AuditEvent`. Audit events never contain key
 material. A **key reveal** in the admin UI is itself an audited read.
+
+#### Reveal is `POST /api/admin/keys/:id/reveal`, not a `GET`
+
+Revealing a key is semantically a read and is audited as one, but it is **the only endpoint in the
+system that returns a live credential**, so it goes through the mutating-method path and carries a
+CSRF token like every other console action.
+
+| Reason | Detail |
+|---|---|
+| A `GET` that returns a secret is one `<img src="…/reveal">` away from being interesting | Cross-site requests cannot carry the CSRF token, and `SameSite=Strict` plus a required token is two independent barriers rather than one |
+| Secrets do not belong in a URL | Referrers, proxy logs, browser history, and shell history all record a path; none of them records a `POST` body |
+| The cost is nothing | The SPA already sends the token on every other mutation, so the stricter verb is a header it was sending anyway |
+
+There is still no shown-once flow and no rotate endpoint — the verb is about *how* the value is
+fetched, never about *whether* it can be fetched again. It always can.
 
 ### What a key cannot do
 
@@ -198,14 +220,15 @@ key's scope.
 
 Paths and purpose only. Handler detail belongs in [01-architecture.md](01-architecture.md).
 
-| Group | Purpose |
-|---|---|
-| `/api/admin/auth/**` | login, logout, session probe, CSRF token |
-| `/api/admin/accounts/**` | upstream account CRUD, OAuth connect/reconnect + callback, health |
-| `/api/admin/pools/**` | pool CRUD, membership, policy, weights, priority order |
-| `/api/admin/keys/**` | list, create, reveal, edit limits and bindings, revoke |
-| `/api/admin/usage/**` | usage and cost queries by key, account, model, time |
-| `/api/admin/settings/**` | retention knobs, price table overrides, log level |
+| Group | Purpose | Built |
+|---|---|---|
+| `/api/admin/auth/**` | login, logout, session probe, CSRF token | yes |
+| `/api/admin/accounts/**` | upstream account CRUD, health, re-check | CRUD + disable + re-check; the OAuth connect/reconnect + callback flows are not built |
+| `/api/admin/pools/**` | pool CRUD, membership, policy, weights, priority order, overflow account | yes |
+| `/api/admin/keys/**` | list, create, reveal, edit limits and bindings, revoke | yes |
+| `/api/admin/providers` | the static provider registry, so the console's account form is never a second copy of it | yes |
+| `/api/admin/usage/**` | usage and cost queries by key, account, model, time | no |
+| `/api/admin/settings/**` | retention knobs, price table overrides, log level | no |
 
 Data-plane routes (`/v1/messages`, `/v1/chat/completions`, `/v1/responses`, `/v1/models`) are in
 [06-protocol-translation.md](06-protocol-translation.md). Operational endpoints (`/healthz`,

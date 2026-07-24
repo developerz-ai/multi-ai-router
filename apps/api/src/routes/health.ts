@@ -8,8 +8,10 @@ import type { AppEnv } from "../types"
  * `GET /healthz` — the process is up and serving. Never touches the database: zero healthy
  *   accounts or an unreachable Postgres is an operator problem, not a reason for an
  *   orchestrator to restart a working process.
- * `GET /readyz` — the router can actually serve traffic: database reachable **and** at least
- *   one healthy Account. `503` with a short reason otherwise.
+ * `GET /readyz` — the database is reachable. `503` with a short reason otherwise.
+ *   The account pool is **reported** here but does not gate the answer: requiring a healthy
+ *   account would deadlock a fresh install, which has none and needs traffic routed to its
+ *   console in order to get one. See `services/health/readiness.ts`.
  *
  * docs/idea/08-observability.md#endpoints
  */

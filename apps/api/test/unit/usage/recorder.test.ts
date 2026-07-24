@@ -1,7 +1,14 @@
 import { describe, expect, test } from "bun:test"
 import {
+  CredentialDecryptError,
+  CreditsExhaustedError,
+  QuotaExhaustedError,
+} from "@multi-ai-router/core"
+import {
+  clientRequestIdFrom,
   correlationIdFrom,
   createUsageRecorder,
+  outcomeOf,
   toUsageRecordRow,
   type UsageRecord,
   type UsageWriter,
@@ -18,18 +25,23 @@ const AT = new Date("2026-01-01T12:00:00.000Z")
 function record(overrides: Partial<UsageRecord> = {}): UsageRecord {
   return {
     correlationId: "11111111-1111-4111-8111-111111111111",
+    clientRequestId: "req-42",
     attempt: 1,
     apiKeyId: "key-1",
     accountId: "acct-1",
+    poolId: "pool-1",
     provider: "anthropic-api",
     sessionKey: "session-1",
-    model: "claude-opus-5",
-    upstreamModel: "claude-opus-5",
+    model: "sonnet",
+    upstreamModel: "glm-4.7",
+    ingressDialect: "anthropic",
+    egressMode: "passthrough",
     tokensIn: 10,
     tokensOut: 20,
     cacheReadTokens: 5,
     cacheWriteTokens: 1,
     latencyMs: 120,
+    ttfbMs: 40,
     routerOverheadMs: 3,
     outcome: "success",
     streamed: true,
@@ -140,7 +152,7 @@ describe("persistence shape", () => {
     expect(row).toMatchObject({
       correlationId: "11111111-1111-4111-8111-111111111111",
       attempt: 1,
-      model: "claude-opus-5",
+      model: "sonnet",
       cacheReadTokens: 5,
       cacheWriteTokens: 1,
       routerOverheadMs: 3,
@@ -148,10 +160,65 @@ describe("persistence shape", () => {
     })
   })
 
-  test("replaces a request id the uuid column could not hold", () => {
+  test("drops nothing — every field on the record reaches a column", () => {
+    const row = toUsageRecordRow(record())
+
+    // Each of these was assembled on the request path and silently discarded by the mapping, so
+    // the record's own documentation described data that existed nowhere.
+    expect(row).toMatchObject({
+      clientRequestId: "req-42",
+      poolId: "pool-1",
+      upstreamModel: "glm-4.7",
+      ingressDialect: "anthropic",
+      egressMode: "passthrough",
+      ttfbMs: 40,
+      streamed: true,
+      httpStatus: 200,
+      errorClass: null,
+    })
+  })
+
+  test("the client's model and the aliased one stay separate facts", () => {
+    // "The client asked for sonnet, we sent glm-4.7." The alias map is mutable operator config, so
+    // re-deriving this later answers what we *would* send, never what we did.
+    const row = toUsageRecordRow(record())
+    expect(row.model).toBe("sonnet")
+    expect(row.upstreamModel).toBe("glm-4.7")
+  })
+
+  test("an unmeasured ttfb is null, never zero", () => {
+    expect(toUsageRecordRow(record({ ttfbMs: null })).ttfbMs).toBeNull()
+  })
+})
+
+describe("correlation id vs. the client's request id", () => {
+  test("a caller-supplied id never becomes the join key", () => {
+    // `requestId()` honors any `[A-Za-z0-9_.:-]{1,128}` the client sends. Two clients both sending
+    // `req-1` must not have their attempt chains merged, quite apart from the uuid column.
     expect(correlationIdFrom("req-42")).toMatch(/^[0-9a-f-]{36}$/)
-    expect(correlationIdFrom("11111111-1111-4111-8111-111111111111")).toBe(
-      "11111111-1111-4111-8111-111111111111",
-    )
+    expect(correlationIdFrom("req-42")).not.toBe(correlationIdFrom("req-42"))
+  })
+
+  test("the caller's id is kept instead of discarded", () => {
+    expect(clientRequestIdFrom("req-42")).toBe("req-42")
+  })
+
+  test("a router-minted id is the correlation id and nothing else", () => {
+    const minted = "11111111-1111-4111-8111-111111111111"
+    expect(correlationIdFrom(minted)).toBe(minted)
+    expect(clientRequestIdFrom(minted)).toBeNull()
+  })
+})
+
+describe("outcome of a thrown error", () => {
+  test("a router error reports under its own stable outcome", () => {
+    expect(outcomeOf(new QuotaExhaustedError("spent"))).toBe("quota_exhausted")
+    expect(outcomeOf(new CreditsExhaustedError("drained"))).toBe("credits_exhausted")
+    expect(outcomeOf(new CredentialDecryptError("bad key"))).toBe("credential_decrypt_failed")
+  })
+
+  test("an unclassified throw is a router fault, not an invented upstream timeout", () => {
+    expect(outcomeOf(new TypeError("undefined is not a function"))).toBe("router_error")
+    expect(outcomeOf("not an error at all")).toBe("router_error")
   })
 })

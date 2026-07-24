@@ -22,6 +22,20 @@
       "when": 1784923846602,
       "tag": "0002_free_goblin_queen",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1784926366318,
+      "tag": "0003_oval_proteus",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1784926870709,
+      "tag": "0004_wise_silver_sable",
+      "breakpoints": true
     }
   ]
 }

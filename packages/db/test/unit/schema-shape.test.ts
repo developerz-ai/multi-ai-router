@@ -88,12 +88,17 @@ const TABLE_COLUMNS: ReadonlyArray<{ table: Table; columns: readonly string[] }>
     columns: [
       "id",
       "correlationId",
+      "clientRequestId",
       "attempt",
       "apiKeyId",
       "accountId",
+      "poolId",
       "provider",
       "sessionKey",
       "model",
+      "upstreamModel",
+      "ingressDialect",
+      "egressMode",
       "tokensIn",
       "tokensOut",
       "cacheReadTokens",
@@ -101,7 +106,11 @@ const TABLE_COLUMNS: ReadonlyArray<{ table: Table; columns: readonly string[] }>
       "costEstimate",
       "costBasis",
       "latencyMs",
+      "ttfbMs",
       "routerOverheadMs",
+      "streamed",
+      "httpStatus",
+      "errorClass",
       "outcome",
       "createdAt",
     ],
@@ -113,6 +122,7 @@ const TABLE_COLUMNS: ReadonlyArray<{ table: Table; columns: readonly string[] }>
       "day",
       "apiKeyId",
       "accountId",
+      "poolId",
       "model",
       "requests",
       "attempts",
@@ -214,6 +224,42 @@ describe("usage records are one row per upstream attempt", () => {
 
   test("cost is nullable — an unknown model is never silently zero", () => {
     expect(schema.usageRecords.costEstimate.notNull).toBe(false)
+  })
+
+  test("the client's own request id is stored, and is not the join key", () => {
+    // Two different facts: `correlationId` is router-owned and joins the attempts of one request;
+    // `clientRequestId` is whatever the caller put in `x-request-id`, so it is neither unique nor
+    // trustworthy and can never be the uuid the join key needs to be.
+    expect(schema.usageRecords.clientRequestId.getSQLType()).toBe("text")
+    expect(schema.usageRecords.clientRequestId.notNull).toBe(false)
+  })
+
+  test("what the client asked for and what we sent are separate columns", () => {
+    expect(schema.usageRecords.model.notNull).toBe(true)
+    expect(schema.usageRecords.upstreamModel).toBeDefined()
+  })
+
+  test("ttfb is its own column — total latency cannot show an added-latency regression", () => {
+    expect(schema.usageRecords.ttfbMs.getSQLType()).toBe("integer")
+    // NULL means no byte was ever relayed. Zero would be a measurement nobody took.
+    expect(schema.usageRecords.ttfbMs.notNull).toBe(false)
+  })
+
+  test("the pool an account was selected from is recorded, not re-derived", () => {
+    // An account belongs to many pools and membership changes; the pool in play was a property of
+    // the presenting key's scope at request time, and no join recovers it afterwards.
+    expect(schema.usageRecords.poolId.getSQLType()).toBe("uuid")
+    expect(schema.usageRecords.poolId.notNull).toBe(false)
+  })
+
+  test("streamed is always known, so a streamed attempt is auditable as never retried", () => {
+    expect(schema.usageRecords.streamed.notNull).toBe(true)
+    expect(schema.usageRecords.streamed.hasDefault).toBe(true)
+  })
+
+  test("the upstream status and the thrown class name are both kept", () => {
+    expect(schema.usageRecords.httpStatus.notNull).toBe(false)
+    expect(schema.usageRecords.errorClass.notNull).toBe(false)
   })
 })
 

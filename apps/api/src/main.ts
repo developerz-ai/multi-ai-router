@@ -3,8 +3,8 @@ import { createApp } from "./app"
 import { createRuntime } from "./composition"
 import { type Env, EnvValidationError, parseEnv } from "./config/env"
 import { createLogger, type Logger } from "./logging/logger"
+import { createAccountProbe } from "./services/health/accountProbe"
 import { createDatabaseProbe } from "./services/health/databaseProbe"
-import { assumeHealthyAccounts } from "./services/health/readiness"
 
 /**
  * The only module that boots: it reads the environment, migrates, builds the app, and opens the
@@ -30,7 +30,9 @@ async function main(): Promise<void> {
     logger,
     probes: {
       database: createDatabaseProbe({ handle: database, log: logger }),
-      healthyAccounts: assumeHealthyAccounts,
+      // Reads the same warm state the request path reads, so the endpoint cannot
+      // disagree with the router about what is routable.
+      accounts: createAccountProbe({ catalog: runtime.catalog, health: runtime.health }),
     },
     admin: runtime.admin,
     dataPlane: {

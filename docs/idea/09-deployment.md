@@ -1,6 +1,8 @@
 # Deployment and Ops
 
-Status: design only. No code exists yet. Everything here describes the intended base.
+Status: the compose file, the image, boot-time migrations, and the full environment reference below
+are **implemented and shipped**. The janitor and every other periodic task are **not** — the
+retention windows below are validated configuration that nothing sweeps on yet.
 
 ## The promise
 
@@ -99,6 +101,23 @@ naming the offending variable — the process never starts half-configured.
 | `RETENTION_REVOKED_KEYS_DAYS` | no | `30` | How long a revoked/expired `ApiKey` row survives before purge. |
 | `RETENTION_OAUTH_STATE_MINUTES` | no | `10` | TTL for one-shot OAuth `state` + PKCE verifiers. |
 | `JANITOR_INTERVAL_MINUTES` | no | `60` | Base sweep interval; the janitor jitters around it. |
+| `ADMIN_SESSION_IDLE_MINUTES` | no | `480` | Sliding idle window, and the session cookie's `Max-Age`. Raising it leaves an abandoned browser a live credential for longer. |
+| `ADMIN_SESSION_ABSOLUTE_HOURS` | no | `24` | Hard ceiling on a session's total life regardless of activity. A purely sliding session is one a thief renews forever. |
+| `ADMIN_LOGIN_MAX_ATTEMPTS` | no | `5` | Failed logins per throttle key (per IP, per username) before it locks. |
+| `ADMIN_LOGIN_ATTEMPT_WINDOW_MINUTES` | no | `15` | Failures older than this stop counting toward the lock. |
+| `ADMIN_LOGIN_LOCKOUT_MINUTES` | no | `15` | How long a tripped throttle key stays locked. |
+| `CATALOG_REFRESH_SECONDS` | no | `30` | How long the warm routing catalog may lag a write made by **another replica**. A write by this replica refreshes it immediately, so this bounds only the multi-replica case. |
+| `KEY_CACHE_MAX` | no | `4096` | Verified router keys held in memory. The ceiling is memory, not correctness — an evicted key costs one indexed lookup. |
+| `KEY_CACHE_TTL_SECONDS` | no | `60` | How long a successful verification is reused. Revocation invalidates immediately, so this bounds staleness of a key's limits and scope, not of its revocation. |
+| `KEY_CACHE_NEGATIVE_TTL_SECONDS` | no | `5` | How long a failed lookup is remembered. Short on purpose: it stops a flood of bad keys becoming a flood of queries, and a just-minted key must start working quickly. |
+| `USAGE_QUEUE_MAX` | no | `10000` | `UsageRecord` rows queued before the writer sheds the oldest. Overflow degrades reporting, never traffic. |
+| `USAGE_BATCH_SIZE` | no | `200` | Rows per insert. Larger means fewer round trips and a bigger loss if the process dies mid-queue. |
+| `USAGE_FLUSH_INTERVAL_MS` | no | `1000` | Drain cadence. Raising it widens the window in which a crash loses unwritten usage rows; it never affects request latency. |
+
+The last two groups are the request path's own tunables: nothing there queries Postgres, so those
+values are what decide how quickly it learns about a change and how much memory it spends not
+having to. Defaults mirror the layer constants they override, so an unset variable and a variable
+set to its default behave identically.
 
 **Admin credential precedence:** when both are set, `ADMIN_PASSWORD_HASH` wins and
 `ADMIN_PASSWORD` is ignored. **Exactly one of the two must be present or boot fails.**

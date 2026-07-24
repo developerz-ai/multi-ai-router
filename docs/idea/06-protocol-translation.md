@@ -1,7 +1,10 @@
 # Protocol translation
 
-Status: design only. Nothing here is implemented. Entities are defined in
-[02-domain-model.md](02-domain-model.md); the driver that owns each egress dialect is in
+Status: **the passthrough half is implemented**; the ingress surface, the model-alias rule, and the
+byte-for-byte relay all work. **Cross-dialect translation is not built** — a request that would need
+it is refused with a `400` naming the reason, before any upstream call, in
+`services/dataplane/egress/mode.ts`. That module is the seam this whole page lands on. Entities are
+defined in [02-domain-model.md](02-domain-model.md); the driver that owns each egress dialect is in
 [03-providers.md](03-providers.md).
 
 ## The core rule

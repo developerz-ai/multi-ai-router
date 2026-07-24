@@ -7,6 +7,7 @@
 
 export { type BoundedQueue, createBoundedQueue } from "./queue"
 export {
+  clientRequestIdFrom,
   correlationIdFrom,
   errorClassOf,
   NO_TOKENS,

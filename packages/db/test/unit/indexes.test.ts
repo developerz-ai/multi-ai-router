@@ -8,6 +8,29 @@ function nameOf(target: object): string | undefined {
   return typeof value === "string" ? value : undefined
 }
 
+/**
+ * An index entry may be a column or a SQL expression. Expressions have no `name`, so they are
+ * rendered from their chunks — an expression index is still part of the grain and a test that
+ * silently read it as `undefined` would assert nothing about it.
+ */
+function entryOf(target: object): string | undefined {
+  const name = nameOf(target)
+  if (name !== undefined) return name
+  const queryChunks: unknown = Reflect.get(target, "queryChunks")
+  if (!Array.isArray(queryChunks)) return undefined
+  return queryChunks.map((chunk) => renderChunk(chunk)).join("")
+}
+
+/** A chunk is a literal fragment (`StringChunk`, whose `value` is a string array) or a column. */
+function renderChunk(chunk: unknown): string {
+  if (typeof chunk === "string") return chunk
+  if (chunk === null || typeof chunk !== "object") return ""
+  const literal: unknown = Reflect.get(chunk, "value")
+  if (Array.isArray(literal)) return literal.join("")
+  if (typeof literal === "string") return literal
+  return nameOf(chunk) ?? ""
+}
+
 interface IndexShape {
   readonly unique: boolean
   readonly columns: readonly (string | undefined)[]
@@ -20,7 +43,7 @@ function indexShape(table: PgTable, name: string): IndexShape {
   }
   return {
     unique: found.config.unique,
-    columns: found.config.columns.map((column) => nameOf(column)),
+    columns: found.config.columns.map((column) => entryOf(column)),
   }
 }
 
@@ -49,6 +72,14 @@ describe("the indexes the access patterns actually need", () => {
     ])
   })
 
+  test("a support request names a client request id, and that is a lookup", () => {
+    // Partial: NULL on every row whose id the router minted, which is nearly all of them, and this
+    // is the write-heaviest table in the schema.
+    const index = indexShape(usageRecords, "usage_records_client_request_idx")
+    expect(index.columns).toEqual(["client_request_id"])
+    expect(index.unique).toBe(false)
+  })
+
   test("the retention sweep can delete raw usage by age", () => {
     expect(indexShape(usageRecords, "usage_records_created_at_idx").columns).toEqual(["created_at"])
   })
@@ -63,9 +94,20 @@ describe("the indexes the access patterns actually need", () => {
     expect(indexShape(sessions, "sessions_last_used_at_idx").columns).toEqual(["last_used_at"])
   })
 
-  test("the daily rollup is idempotent per (day, key, account, model)", () => {
+  test("the daily rollup is idempotent per (day, key, account, pool, model)", () => {
     const index = indexShape(usageDaily, "usage_daily_grain_key")
-    expect(index.columns).toEqual(["day", "api_key_id", "account_id", "model"])
     expect(index.unique).toBe(true)
+    expect(index.columns[0]).toBe("day")
+    expect(index.columns[1]).toBe("api_key_id")
+    expect(index.columns[2]).toBe("account_id")
+    expect(index.columns[4]).toBe("model")
+  })
+
+  test("the rollup grain coalesces a null pool, or every unscoped total would double", () => {
+    // Two NULLs are distinct in Postgres, so a bare nullable `pool_id` in a unique index would
+    // let the hourly rollup insert a fresh "no pool" row on every run instead of upserting.
+    const index = indexShape(usageDaily, "usage_daily_grain_key")
+    expect(index.columns[3]).toContain("coalesce")
+    expect(index.columns[3]).toContain("pool_id")
   })
 })

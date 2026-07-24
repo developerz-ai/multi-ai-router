@@ -1,13 +1,17 @@
 # Architecture
 
-Status: design only. Nothing here is implemented. See [00-overview.md](00-overview.md) for the
-product boundary and [02-domain-model.md](02-domain-model.md) for the entities named below.
+Status: the layering, dependency rules, performance budget, warm catalog, and composition root are
+**implemented and enforced**. Steps 8b (Agent SDK) and the cross-dialect half of step 8 are not —
+both are refused explicitly rather than approximated. The scheduler layer does not exist yet; its
+contract below is the design it must satisfy. See [00-overview.md](00-overview.md) for the product
+boundary and [02-domain-model.md](02-domain-model.md) for the entities named below.
 
 ## Request lifecycle
 
 1. **Ingress.** Hono receives `POST /v1/messages`, `POST /v1/chat/completions`,
    `POST /v1/responses`, or `GET /v1/models`. The request id is assigned here and propagated end to
-   end. Body size caps and rate limits apply before anything is parsed.
+   end. Body size caps apply before anything is parsed; per-key rate limits are specified and **not
+   yet enforced**.
 2. **Key verification.** The router key arrives as `Authorization: Bearer mar_live_…` or
    `x-api-key: mar_live_…`. Verification is served from an in-memory cache; on a miss, a short
    display prefix indexes the row, so it costs one indexed lookup plus one decrypt and a
@@ -17,8 +21,10 @@ product boundary and [02-domain-model.md](02-domain-model.md) for the entities n
    into the ingress dialect's shape happens only when cross-dialect translation turns out to be
    required; on the passthrough path the body stays opaque. See the performance budget below.
 4. **Session resolution.** The sticky key is taken from the client-supplied session header, else
-   fingerprinted from the first user message plus the working directory. Resolution is a lookup in a
-   bounded in-memory LRU; a miss creates the session.
+   fingerprinted from the conversation's opening bytes. On the plain HTTP path this is **pure
+   derivation with nothing stored** — the key is an input to rendezvous hashing, so placement
+   survives a restart as arithmetic rather than as state. Only the SDK path needs a persisted
+   Session→Account binding, and it needs it because an SDK session id cannot be resumed elsewhere.
 5. **Candidate filtering.** The candidate set is **always the intersection of the Pool's members and
    the key's scope** — `all`, a set of Pools, or an explicit account list. A key can never reach an
    Account outside its scope, whatever the policy would prefer, and the intersection never silently
@@ -103,18 +109,24 @@ product boundary and [02-domain-model.md](02-domain-model.md) for the entities n
 
 | Layer | Owns | Module path |
 |---|---|---|
-| transport | HTTP routes, middleware, request id, body caps, SSE relay | `apps/api/routes/**`, `apps/api/middleware/**` |
-| auth | Admin session cookie + CSRF; router key verification | `apps/api/services/auth/**` |
-| routing | Candidate filter, the six policies, failover order, circuit-breaker math | `apps/api/services/routing/**` |
-| providers (HTTP driver) | One driver per HTTP Provider: dialect, endpoints, headers, OAuth constants, refresh, keep-alive pool | `apps/api/providers/**` |
-| providers (SDK driver) | Claude subscriptions only: `claude-agent-sdk` subprocess per request, per-Account `CLAUDE_CONFIG_DIR`, SDK-event → wire-format re-synthesis, `rate_limit_event` quota signals — [11-anthropic-agent-sdk.md](11-anthropic-agent-sdk.md) | `apps/api/providers/anthropic-sdk/**` |
-| translation | Ingress ⇄ egress dialect conversion, streaming and non-streaming | `apps/api/services/translate/**` |
-| usage | Usage records, cost estimation, rollups, metrics exposition | `apps/api/services/usage/**` |
-| scheduler | Every periodic task: jittered in-process interval timers, Postgres advisory-lock leader election, retention sweeps, usage rollup, OAuth-state purge, last-run/outcome recording | `apps/api/services/scheduler/**` |
+| transport | HTTP routes, middleware, request id, body caps, SSE relay | `apps/api/src/routes/**`, `apps/api/src/middleware/**` |
+| auth | Admin session cookie + CSRF; router key verification and its cache | `apps/api/src/services/admin-auth/**`, `apps/api/src/services/dataplane/auth/**` |
+| admin | CRUD services for accounts, pools, keys, plus the shared result/parse/audit/coherence plumbing | `apps/api/src/services/{accounts,pools,keys,admin}/**` |
+| catalog | The warm accounts/pools snapshot the request path reads, and its refresh triggers | `apps/api/src/services/catalog/**` |
+| data plane | Body scanning, session resolution, egress decision, attempt chain, stream relay | `apps/api/src/services/dataplane/**` |
+| routing | Candidate filter, the six policies, failover order, circuit-breaker math | `apps/api/src/services/routing/**` |
+| providers (HTTP driver) | One driver per HTTP Provider: dialect, endpoints, headers, failure classification | `apps/api/src/providers/**` |
+| providers (SDK driver) | Claude subscriptions only: `claude-agent-sdk` subprocess per request, per-Account `CLAUDE_CONFIG_DIR`, SDK-event → wire-format re-synthesis, `rate_limit_event` quota signals — [11-anthropic-agent-sdk.md](11-anthropic-agent-sdk.md) | `apps/api/src/providers/claude-sdk/**` |
+| translation | Ingress ⇄ egress dialect conversion, streaming and non-streaming | `apps/api/src/services/translate/**` |
+| usage | Usage records, cost estimation, rollups, metrics exposition | `apps/api/src/services/usage/**` |
+| scheduler | Every periodic task: jittered in-process interval timers, Postgres advisory-lock leader election, retention sweeps, usage rollup, OAuth-state purge, last-run/outcome recording | `apps/api/src/scheduler/**` |
 | db | Drizzle schema over **PostgreSQL 16+** (postgres.js), migrations, repositories — the only place with SQL | `packages/db/**` |
-| config | Zod-validated env, retention knobs, price table | `packages/core/**`, `apps/api/config/**` |
+| config | Zod-validated env, retention knobs, price table | `packages/core/**`, `apps/api/src/config/**` |
 
-## Planned repo layout
+Everything is wired together in `apps/api/src/composition.ts` — see
+[The composition root](#the-composition-root).
+
+## Repo layout
 
 ```
 apps/
@@ -124,9 +136,12 @@ packages/
   db/             Drizzle schema + migrations + repositories
   core/           shared types, errors, zod schemas
 docs/idea/        this design spec
-bin/              dev, test, lint, ci  (thin shell wrappers)
+bin/              setup, dev, check, test, lint, fmt, build, db  (thin shell wrappers)
 .github/workflows/ ci.yml, release.yml
 ```
+
+`bin/` is the interface: `bin/setup` on a fresh clone, `bin/dev` each session, `bin/check` before
+committing. Never write an ad-hoc invocation where a wrapper exists.
 
 ## Dependency rules
 
@@ -186,6 +201,52 @@ time-to-first-token** beyond the one extra network hop.
 **The Agent-SDK path is the labeled exception.** A subprocess per request is inherently heavier than
 an HTTP hop; the budget does not apply to it uniformly and the docs say so rather than pretending
 otherwise. Pooling or reusing SDK processes is `DEFERRED` — measure first.
+
+### The warm routing catalog
+
+"Nothing touches Postgres on the critical path" is a rule; the **catalog** is the mechanism that
+makes it true. It holds the accounts, pools, and membership that routing reads on every request, in
+memory, and exposes them **synchronously** — `accounts()` and `pools()` return arrays, not
+promises, because a method that *could* be awaited is a method someone will eventually await on the
+request path.
+
+It refreshes three ways, and the three cover different failure modes:
+
+| Trigger | Why it exists |
+|---|---|
+| **At boot**, awaited before the listener opens | Serving against an empty catalog is indistinguishable from a deployment with no accounts configured. The first request must see real state |
+| **After an admin write**, awaited before the response is written | Makes the console **read-after-write consistent**. An operator who adds an account and immediately fires a request gets the account they just added. Affordable precisely because this is the admin plane, where no latency budget applies |
+| **On a jittered timer** (`CATALOG_REFRESH_SECONDS`) | The only mechanism that copes with a **second replica**. There is no broker, so a write made by another process arrives no other way — which makes the interval a bound on staleness, not a cache nicety |
+
+Three consequences worth stating, because each is a decision rather than an implementation detail:
+
+- **A failed refresh keeps the previous snapshot.** Serving slightly stale routing beats serving
+  none: the alternative is a total outage because one periodic query timed out.
+- **Concurrent refreshes share one in-flight promise.** Two identical queries racing to install the
+  same snapshot is waste, not safety.
+- **Disabled accounts stay in the catalog.** Filtering is routing's job, and a catalog that hides
+  them makes "why did nothing match" unanswerable.
+
+The write-through decorators live in `services/admin/coherence.ts` and are **decorators, not
+service dependencies**: cache coherence is not a CRUD service's reason to change, and a service
+that knew about the catalog could no longer be tested without one.
+
+### The composition root
+
+Every long-lived object in the process is built in **one file** — `apps/api/src/composition.ts` —
+and injected downward. It is not ceremony; it exists so the two things that must be true of this
+system can be *seen* in one place rather than inferred from twenty:
+
+1. **Nothing on the request path touches Postgres.** A repository handed to a data-plane object is
+   always a background caller — the catalog loader, the usage flusher, the key-cache miss path.
+   That is auditable at a glance here and nowhere else.
+2. **The two credential planes never meet.** Admin services and the data plane are built from the
+   same repositories but wired into disjoint routers behind disjoint guards.
+
+`createApp` stays a pure factory a test calls with stubs; composition is the production wiring and
+the only place a `Database` becomes a service. It also owns start and stop: the catalog is loaded
+and the background writers are running *before* the listener opens, and on shutdown the queue is
+flushed before the connection it needs is closed.
 
 ## Background work and scheduling
 
@@ -259,7 +320,7 @@ This is the part that is easy to get wrong, so it is stated as a rule rather tha
    subscriptions, and is described in [11-anthropic-agent-sdk.md](11-anthropic-agent-sdk.md); a new
    provider takes it only if its vendor ships a first-party programmatic client that must own
    authentication. Both shapes satisfy the same interface, so nothing above the driver changes.
-1. Add one file under `apps/api/providers/` implementing the driver interface.
+1. Add one file under `apps/api/src/providers/drivers/` implementing the driver interface.
 2. Register its id in the static provider registry.
 3. Pin its constants (endpoints, client id, scopes, required headers) in that same file, each with a
    comment recording where the value came from and what breaks if the provider changes it.
@@ -271,14 +332,14 @@ This is the part that is easy to get wrong, so it is stated as a rule rather tha
 
 **Adding a load-balancing policy** — see [05-routing-and-failover.md](05-routing-and-failover.md).
 
-1. Add one pure selection function under `apps/api/services/routing/policies/`.
+1. Add one pure selection function under `apps/api/src/services/routing/policies/`.
 2. Register it in the policy registry and extend the policy enum in `packages/core`.
 3. Expose it in the Pool settings screen.
 4. Add unit tests — no mocks required, the function is pure.
 
 **Adding an ingress dialect** — see [06-protocol-translation.md](06-protocol-translation.md).
 
-1. Add the route under `apps/api/routes/` with its Zod request schema.
+1. Add the route under `apps/api/src/routes/v1/` with its Zod request schema.
 2. Add the dialect's row and column to the translation matrix in `services/translate/`.
 3. Declare which same-dialect provider drivers get passthrough.
 4. Document the lossy edges for each new cross-dialect pair.

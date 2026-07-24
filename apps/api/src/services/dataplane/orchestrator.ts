@@ -7,7 +7,7 @@ import {
 import type { Logger } from "../../logging/logger"
 import type { CredentialCipher } from "../crypto/cipher"
 import { type FailoverOptions, type SelectionOptions, selectAccounts } from "../routing"
-import { correlationIdFrom, type UsageRecorder } from "../usage"
+import { clientRequestIdFrom, correlationIdFrom, type UsageRecorder } from "../usage"
 import type { VerifiedKey } from "./auth/verifier"
 import { type BodyReadOptions, readRequestBody } from "./body/read"
 import { DEFAULT_SESSION_HEADERS, resolveSessionKey } from "./body/session"
@@ -101,10 +101,15 @@ export function createDispatcher(deps: DispatcherDeps): Dispatcher {
         clock,
         timeoutMs: options.upstreamTimeoutMs ?? DEFAULT_UPSTREAM_TIMEOUT_MS,
         record: (record) => deps.usage.record(record),
+        // Two different ids on purpose: the correlation id is router-owned and joins this
+        // request's attempts, while the client's own id is a trace label a caller may repeat or
+        // forge. Using the latter as the join key would merge two clients' chains.
         correlationId: correlationIdFrom(input.requestId),
+        clientRequestId: clientRequestIdFrom(input.requestId),
         apiKeyId: input.key.id,
         sessionKey: session.key,
         model,
+        ingressDialect: input.ingress,
         requestStarted,
       })
 

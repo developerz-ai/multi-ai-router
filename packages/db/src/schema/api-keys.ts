@@ -25,7 +25,14 @@ export const apiKeys = pgTable(
 
     scope: keyScope("scope").notNull().default("all"),
 
-    /** Per-key ceiling, enforced on the data plane. NULL means no per-key limit. */
+    /**
+     * Per-key ceiling. NULL means no per-key limit.
+     *
+     * **Stored and carried, not yet enforced.** The verifier puts both values on `VerifiedKey`,
+     * but no limiter reads them, so setting a limit today changes nothing about what a key can
+     * do. Said plainly here rather than described as enforced, because a security control that
+     * is documented as working and is not is worse than one that is absent.
+     */
     rateLimitRequests: integer("rate_limit_requests"),
     rateLimitWindowSeconds: integer("rate_limit_window_seconds"),
 

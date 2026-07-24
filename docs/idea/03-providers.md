@@ -1,6 +1,9 @@
 # Providers
 
-Status: design only. No code exists yet. Everything here describes the intended base.
+Status: the driver contract, the total registry, and eight HTTP drivers are **implemented**
+(`apps/api/src/providers/`). `anthropic-oauth` (Agent SDK), `openai-oauth`, and `gemini` carry a
+recorded reason instead of a driver. Every constant below is pinned in code with a provenance
+comment; where this page and a driver file disagree, the driver file is the truth.
 
 ## Provider vs Account
 
@@ -42,9 +45,9 @@ admin UI, in usage breakdowns, and in logs; the credential itself never appears 
 | `openai-oauth` | OAuth (authorization code + PKCE) | OpenAI Responses | `https://chatgpt.com/backend-api/codex` | ChatGPT/Codex subscription. Requires `chatgpt-account-id`. |
 | `openai-api` | API key | OpenAI Chat Completions / Responses | `https://api.openai.com/v1` | Standard platform key. |
 | `openrouter` | API key | OpenAI Chat Completions | `https://openrouter.ai/api/v1` | Aggregator; model ids are namespaced (`vendor/model`), so an alias map is usually required. |
-| `zai` | API key | Anthropic **or** OpenAI | `https://api.z.ai/api/anthropic` (Anthropic) · `https://api.z.ai/api/coding/paas/v4` (OpenAI) | Two compatible surfaces; the Account picks one. Own model ids (`glm-5.2`, `glm-4.7`). |
-| `kimi` | API key | Anthropic | `https://api.kimi.com/coding` | Own model ids (`k3`). |
-| `minimax` | API key | Anthropic | `https://api.minimax.io/anthropic` | Anthropic-compatible surface. Own model ids, so an alias map is usually required. |
+| `zai` | API key, `Authorization: Bearer` | Anthropic **or** OpenAI | `https://api.z.ai/api/anthropic` (Anthropic) · `https://api.z.ai/api/coding/paas/v4` (OpenAI) | Two compatible surfaces; the Account picks one, and the choice decides the endpoint *and* the header form. Own model ids (`glm-5.2`, `glm-4.7`). |
+| `kimi` | API key, `Authorization: Bearer` | Anthropic | `https://api.kimi.com/coding` | Own model ids (`k3`). **Never `x-api-key`** — see below. |
+| `minimax` | API key, `Authorization: Bearer` | Anthropic | `https://api.minimax.io/anthropic` | Anthropic-compatible surface. Reports some failures in a `base_resp` envelope on an HTTP `200`. Own model ids, so an alias map is usually required. |
 | `gemini` | API key | **DEFERRED** — v1 reaches it through the OpenAI-compatible layer | **DEFERRED** | A native Google GenAI driver is not in v1; endpoint constants not yet pinned. |
 | `openai-compatible` | API key | OpenAI Chat Completions | operator-supplied | Escape hatch. Any vLLM / Ollama / LiteLLM / vendor endpoint. |
 | `anthropic-compatible` | API key | Anthropic Messages | operator-supplied | Escape hatch for Anthropic-shaped endpoints. |
@@ -60,48 +63,66 @@ driver reaches for a clock, a store, or a logger it was not handed.
 ```ts
 interface ProviderDriver {
   readonly id: ProviderId;
+  // The surface used when the Account expresses no preference.
   readonly dialect: 'anthropic' | 'openai-chat' | 'openai-responses';
   readonly authKind: 'api-key' | 'oauth';
 
-  // Where this Account's requests go. Account override wins over the registry default.
-  resolveBaseUrl(account: Account): URL;
+  // Where this Account's requests go. Account override wins over the pinned default.
+  resolveBaseUrl(account: DriverAccount): URL;
+
+  // Which surface this Account chose — the input to the passthrough-vs-translate decision.
+  resolveDialect(account: DriverAccount): Dialect;
 
   // Auth + provider-mandated headers for one upstream request. Never mutates the Account.
-  buildHeaders(account: Account, credential: DecryptedCredential): Headers;
+  buildHeaders(account: DriverAccount, credential: ProviderCredential): Headers;
 
   // Client model name -> upstream model id, via the Account's alias map.
   // Identity when the Account has no entry for that name.
-  mapModelAlias(account: Account, requestedModel: string): string;
+  mapModelAlias(account: DriverAccount, requestedModel: string): string;
 
   // Read rate-limit / quota signals out of an upstream response (headers and/or body).
   // Pure over the response; returns null when the provider says nothing.
   parseRateLimit(response: UpstreamResponse): RateLimitSignal | null;
 
-  // OAuth drivers only. Single-flight is the caller's job, not the driver's.
-  refreshCredentials?(credential: DecryptedCredential): Promise<RefreshedCredential>;
-
-  // Cheap liveness/quota probe for the health snapshot. No request body side effects.
-  probeHealth(account: Account, credential: DecryptedCredential): Promise<HealthProbe>;
+  // What this response means as a failure, or null if it is not one. Accepts a 2xx,
+  // because some providers report a dead balance in the body of a 200.
+  classifyFailure(response: UpstreamResponse): FailureClassification | null;
 }
 ```
 
 | Member | Responsibility | Must not |
 |---|---|---|
 | `resolveBaseUrl` | Apply the Account override, else the pinned default. | Encode per-request path knowledge. |
+| `resolveDialect` | Report the Account's chosen surface. | Decide whether translation happens — it only supplies the fact. |
 | `buildHeaders` | Inject the credential and every provider-mandated header (beta flags, account id). | Log or return credential material. |
 | `mapModelAlias` | Translate one name. Identity on miss. | Choose a *different* model on the client's behalf. |
-| `parseRateLimit` | Normalize provider-specific reset/utilization signals into one shape. | Decide policy — that is [05-routing-and-failover.md](05-routing-and-failover.md)'s job. |
-| `refreshCredentials` | One token exchange. | Persist; the caller encrypts and writes. |
-| `probeHealth` | Report reachability and headroom. | Consume meaningful quota. |
+| `parseRateLimit` | Normalize provider-specific reset/utilization signals into one shape. Never estimate: a reset the provider did not report is `unknown`, not a guess. | Decide policy — that is [05-routing-and-failover.md](05-routing-and-failover.md)'s job. |
+| `classifyFailure` | Say what the upstream signal *means* — `rate-limited`, `credits-exhausted`, `auth`, … — and record which signal decided it. | Decide what to do about it. Retrying, cooling down, and marking `exhausted` are routing's. |
 
-`RateLimitSignal` carries at minimum: whether the account is limited now, the reported reset
-instant (if any), and per-window utilization (if any). `HealthProbe` carries reachability plus
-the same utilization shape, so `quota-aware` routing has one thing to read.
+Every member is **pure**: no clock, no store, no logger, no network. `RateLimitSignal` carries at
+minimum whether the account is limited now, the reported reset instant (if any), and per-window
+utilization (if any), each labeled with its source.
 
-**One driver is not HTTP.** `anthropic-oauth` satisfies the same interface, but its transport is
-an SDK subprocess rather than a fetch: `resolveBaseUrl` and `buildHeaders` are inert for it, and
-`parseRateLimit` reads SDK stream events instead of response headers. The interface holds because
-everything routing cares about — model mapping, rate-limit signals, health — is transport-agnostic.
+Two members from the original design are **deliberately absent until their callers exist**:
+`refreshCredentials` (OAuth drivers only — no OAuth provider is implemented) and `probeHealth`
+(I/O, owned by the half-open probe). Both are additive when that layer lands, which is the point of
+the interface being this narrow.
+
+### The registry is total, and says why when there is no driver
+
+The registry is a **total** record keyed by `ProviderId`, so adding an id in `packages/core` fails
+the registry to compile until it is accounted for — the Open/Closed rule with a compiler behind it.
+Every id is present, and the ones without an HTTP driver carry a reason rather than being silently
+absent or stubbed into something that looks like it works:
+
+| Transport | Ids | Meaning |
+|---|---|---|
+| `http` | `anthropic-api`, `openai-api`, `openrouter`, `zai`, `kimi`, `minimax`, `openai-compatible`, `anthropic-compatible` | A driver in `providers/drivers/`, satisfying the interface above |
+| `agent-sdk` | `anthropic-oauth` | Served by `query()`, not by any driver here. There is nothing to proxy, so it is not an inert driver — it is a different transport |
+| `unimplemented` | `openai-oauth`, `gemini` | Declared in the domain, no implementation. Selecting one is a configuration error and is refused by name, before any upstream call |
+
+That three-way split is what lets the data plane refuse honestly. A request routed to an account
+whose provider has no driver fails saying so; it never degrades into a lossy approximation.
 
 ## `anthropic-oauth` — Claude Max/Pro subscription, via the Claude Agent SDK
 
@@ -233,6 +254,28 @@ recognizing an out-of-credits response — each words it differently — and rep
 `exhausted` rather than a cooldown, because no clock refills a dead balance. See
 [05-routing-and-failover.md](05-routing-and-failover.md).
 
+### Credit exhaustion, per provider — what the upstream actually says
+
+Every value below is a pinned constant in that provider's driver file, with a provenance comment
+next to it. They are here because an operator staring at a `402` needs to know what the upstream
+said to earn it, and because **getting one wrong is invisible until it costs a pool**: an
+unrecognized dead balance classifies as a generic error, the account is never marked `exhausted`,
+and the router keeps selecting a credential that can no longer serve a request.
+
+| Provider | Signal the driver keys on | Why it is not just the status code |
+|---|---|---|
+| `anthropic-api` | message matches `credit balance is too low`; or `error.type` is `billing_error` | Anthropic answers a spent console balance with **`400 invalid_request_error`**. Read the status alone and it classifies as a client mistake |
+| `openai-api` | `error.code` / `error.type` in `insufficient_quota`, `billing_hard_limit_reached`, `account_deactivated` | OpenAI returns **`429`** for a spent balance — the same status it uses for real rate limiting. Status alone marks a dead account `cooling_down` and retries it on a timer forever |
+| `openrouter` | message matches `insufficient credits` / `requires more credits` / `add more using`; or `error.code` is `402` | OpenRouter echoes the numeric HTTP status back in `error.code` rather than a string. The wording rule is what still catches it when the `402` is proxied through with another status |
+| `zai` | `error.code` in `1113`, `1112`; or message matches `insufficient balance` / `balance is insufficient` / `account balance` | Numeric vendor codes on both surfaces. `130x` is throttling and `100x` is auth — three families that all arrive as one HTTP status |
+| `kimi` | `error.type` is `exceeded_current_quota_error`; or message matches `insufficient balance` / `account … not active` | Anthropic-shaped body, Moonshot's own `type` vocabulary. Without it the account cools down on a timer instead of being flagged for a human |
+| `minimax` | `base_resp.status_code` is `1008` | **MiniMax reports failures in a `base_resp` envelope that can arrive with HTTP 200.** A driver reading only the status sees a success and hands an error body to the client as a completion |
+| `openai-compatible`, `anthropic-compatible` | one shared wording rule — `insufficient quota/credits/balance`, `out of credits`, `quota exceeded/exhausted` — guarded by an error status | The endpoint behind these is unknown. Guessing at a vendor's error vocabulary produces confident misclassifications, so this is deliberately the *only* wording either matches. The status guard is what stops a completion containing the word "quota" reading as a billing stop |
+
+Each classification also records **which signal decided it** (`openai:insufficient_quota`,
+`minimax:base_resp-1008`, …) so a misclassification is debuggable rather than a mystery. Expect
+drift: a vendor renaming a code is a one-file fix, and that is the whole point of pinning them.
+
 The interesting part is the **model alias map**. These providers expect their own model ids,
 while a client like Claude Code sends `opus`, `sonnet`, or `haiku` and has no idea it is
 talking to anything else. The router honors the client's model name (that is the central
@@ -274,13 +317,21 @@ header, or a non-standard quota signal.
 
 ## Adding a provider
 
-1. Add one file under `providers/<id>.ts` implementing `ProviderDriver`.
-2. Pin its constants at the top of that file — base URL, client id, scopes, required headers —
-   each with a provenance comment.
+1. Add one file under `providers/drivers/<id>.ts`. Most providers are a `createHttpDriver({…})`
+   call: declare the surfaces and how the vendor words a dead balance, and alias mapping, base-URL
+   override, header rules, and rate-limit parsing compose from the shared body.
+2. Pin its constants at the top of that file — base URL, error codes, required headers — each with
+   a provenance comment and its blast radius.
 3. Add its id to the `ProviderId` union in `packages/core`.
-4. Register the driver in the registry map.
-5. Add unit tests for `mapModelAlias`, `buildHeaders`, and `parseRateLimit` — all pure.
-6. Ship. Routing, keys, pools, usage, and the admin UI need no changes.
+4. Register it in `providers/registry.ts`. The record is total, so this step is not optional —
+   omitting it fails the build.
+5. Add unit tests for `buildHeaders`, `mapModelAlias`, and `classifyFailure` — all pure.
+6. Ship. Routing, keys, pools, usage, and the admin UI need no changes; the console reads the
+   registry from `/api/admin/providers` rather than keeping its own list.
+
+A provider that needs something the shared body cannot express supplies its own `readFacts` or
+`parseRateLimit` (MiniMax does), or implements `ProviderDriver` directly. That escape hatch is why
+the shared body is not a framework.
 
 That is the Open/Closed rule from [01-architecture.md](01-architecture.md) in practice: adding a
 provider touches one new file plus two registration lines, and nothing else.

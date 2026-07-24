@@ -1,5 +1,4 @@
-import type { ProviderId } from "@multi-ai-router/core"
-import type { UsageOutcome } from "@multi-ai-router/db"
+import type { Dialect, EgressMode, ProviderId, UsageOutcome } from "@multi-ai-router/core"
 import type { FailureKind } from "../routing"
 import type { UsageRecord } from "../usage"
 import { errorClassOf, NO_TOKENS, outcomeOf, type TokenCounts, USAGE_SUCCESS } from "../usage"
@@ -25,17 +24,36 @@ export interface AttemptTiming {
   readonly totalMs: number
   /** Time spent waiting on upstreams for the whole request so far. */
   readonly upstreamMs: number
+  /**
+   * Time to the first relayed byte, when one was relayed.
+   *
+   * Separate from `latencyMs` because only this one can catch a violation of the zero-added
+   * time-to-first-token rule: total latency is dominated by generation time, so a relay that
+   * started buffering would barely move it.
+   */
+  readonly ttfbMs?: number
 }
 
+/**
+ * Everything the record needs that the dispatch loop already knows.
+ *
+ * The optional members are the ones a caller may genuinely not have: an attempt that never selected
+ * an account has no pool and no egress mode, and a non-streamed or failed attempt has no first
+ * byte. Absent is recorded as NULL, never as zero — a TTFB of 0 ms is a claim nobody measured.
+ */
 export interface AttemptRecordInput {
   readonly correlationId: string
+  readonly clientRequestId?: string | null
   readonly attempt: number
   readonly apiKeyId: string
   readonly accountId: string | null
+  readonly poolId?: string | null
   readonly provider: ProviderId | null
   readonly sessionKey: string
   readonly model: string
   readonly upstreamModel: string
+  readonly ingressDialect?: Dialect | null
+  readonly egressMode?: EgressMode | null
   readonly tokens?: TokenCounts
   readonly timing: AttemptTiming
   readonly outcome: UsageOutcome
@@ -46,20 +64,26 @@ export interface AttemptRecordInput {
 
 export function attemptRecord(input: AttemptRecordInput): UsageRecord {
   const tokens = input.tokens ?? NO_TOKENS
+  const ttfbMs = input.timing.ttfbMs
   return {
     correlationId: input.correlationId,
+    clientRequestId: input.clientRequestId ?? null,
     attempt: input.attempt,
     apiKeyId: input.apiKeyId,
     accountId: input.accountId,
+    poolId: input.poolId ?? null,
     provider: input.provider,
     sessionKey: input.sessionKey,
     model: input.model,
     upstreamModel: input.upstreamModel,
+    ingressDialect: input.ingressDialect ?? null,
+    egressMode: input.egressMode ?? null,
     tokensIn: tokens.tokensIn,
     tokensOut: tokens.tokensOut,
     cacheReadTokens: tokens.cacheReadTokens,
     cacheWriteTokens: tokens.cacheWriteTokens,
     latencyMs: Math.max(0, Math.round(input.timing.latencyMs)),
+    ttfbMs: ttfbMs === undefined ? null : Math.max(0, Math.round(ttfbMs)),
     routerOverheadMs: Math.max(0, Math.round(input.timing.totalMs - input.timing.upstreamMs)),
     outcome: input.outcome,
     streamed: input.streamed,
@@ -73,24 +97,27 @@ export function attemptRecord(input: AttemptRecordInput): UsageRecord {
 export const SUCCESS_OUTCOME = USAGE_SUCCESS
 
 /**
- * The outcome an upstream failure is recorded under. `quota_exhausted` and `credits_exhausted`
- * stay distinct all the way into the row: one comes back on a clock, the other needs a human, and
- * a report that folds them together makes a dead pool look merely throttled.
+ * The outcome an upstream failure is recorded under.
  *
- * `UsageOutcome` is `"success" | RouterErrorCode`, which has no member for "the upstream returned
- * a 4xx/5xx the router passed straight through" — `08-observability.md` names `upstream_error` and
- * `client_error` as outcomes but no such error codes exist. Those land on `no_healthy_account`
- * here; adding the codes is a `packages/core` change, not a change to this mapping's callers.
+ * `quota_exhausted` and `credits_exhausted` stay distinct all the way into the row: one comes back
+ * on a clock, the other needs a human, and a report that folds them together makes a dead pool look
+ * merely throttled.
+ *
+ * The kinds that are nobody's quota problem — a 5xx, a refused connection, an SDK session the
+ * account no longer knows — report as `upstream_error`, and a malformed request as `client_error`.
+ * All four used to land on `no_healthy_account`, which told an operator the pool was out of
+ * capacity when the provider had a bad minute or the caller sent bad JSON. `httpStatus` separates
+ * "the upstream answered with an error" from "we never reached it": an integer versus NULL.
  */
 const FAILURE_OUTCOMES: Readonly<Record<FailureKind, UsageOutcome>> = {
   "rate-limited": "quota_exhausted",
   "credits-exhausted": "credits_exhausted",
   auth: "upstream_auth_failed",
   timeout: "upstream_timeout",
-  connection: "upstream_timeout",
-  "server-error": "no_healthy_account",
-  "client-error": "no_healthy_account",
-  "stale-session": "no_healthy_account",
+  connection: "upstream_error",
+  "server-error": "upstream_error",
+  "client-error": "client_error",
+  "stale-session": "upstream_error",
 }
 
 export function failureOutcome(kind: FailureKind): UsageOutcome {

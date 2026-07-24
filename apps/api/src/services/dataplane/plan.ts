@@ -1,4 +1,9 @@
-import { type Dialect, isRouterError, type RouterError } from "@multi-ai-router/core"
+import {
+  type Dialect,
+  type EgressMode,
+  isRouterError,
+  type RouterError,
+} from "@multi-ai-router/core"
 import type { ProviderDriver } from "../../providers"
 import type { Candidate } from "../routing"
 import { upstreamUrl } from "./egress/endpoint"
@@ -24,6 +29,12 @@ export interface ServableCandidate {
   readonly url: URL
   /** The model name this account expects. Identity unless its alias map renames it. */
   readonly upstreamModel: string
+  /**
+   * How this attempt reaches the upstream. Only `passthrough` is servable in this build, but the
+   * value is carried rather than assumed: it lands on the `UsageRecord`, where it is what makes a
+   * `router_overhead_seconds` regression attributable to a path rather than to the router at large.
+   */
+  readonly egressMode: EgressMode
 }
 
 export interface CandidatePlan {
@@ -76,6 +87,7 @@ export function planCandidates(
       url,
       // The alias map is the operator's, applied by the driver, outbound-only, identity on a miss.
       upstreamModel: egress.driver.mapModelAlias(account.driver, candidate.upstreamModel),
+      egressMode: egress.mode,
     })
   }
 

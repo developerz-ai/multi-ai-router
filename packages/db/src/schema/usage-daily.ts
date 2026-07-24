@@ -1,3 +1,4 @@
+import { sql } from "drizzle-orm"
 import {
   bigint,
   date,
@@ -33,6 +34,16 @@ export const usageDaily = pgTable(
     day: date("day", { mode: "string" }).notNull(),
     apiKeyId: uuid("api_key_id").notNull(),
     accountId: uuid("account_id").notNull(),
+    /**
+     * The pool whose policy placed the request. NULL when the presenting key's scope resolved
+     * outside any pool, which is the normal case for a scope of `all`.
+     *
+     * Part of the grain, not a decoration: "is my routing policy doing what I set it to" is a
+     * per-pool question, an account belongs to many pools, and membership changes over time — so
+     * it cannot be recovered by joining after the fact. Raw rows expire on the retention window,
+     * so if the rollup does not carry it the answer becomes unavailable rather than merely slow.
+     */
+    poolId: uuid("pool_id"),
     model: text("model").notNull(),
 
     /** Client-facing requests. */
@@ -52,10 +63,16 @@ export const usageDaily = pgTable(
     updatedAt: timestamp("updated_at", { withTimezone: true, mode: "date" }).notNull().defaultNow(),
   },
   (table) => [
+    // `coalesce` rather than the bare column: in Postgres two NULLs are distinct, so a plain
+    // unique index over a nullable `pool_id` would let the hourly rollup insert a duplicate
+    // "no pool" row on every run instead of upserting the existing one — silently doubling every
+    // unscoped total. `NULLS NOT DISTINCT` would be the direct expression of this and is not
+    // reachable through drizzle's `uniqueIndex`, so the sentinel does the same job explicitly.
     uniqueIndex("usage_daily_grain_key").on(
       table.day,
       table.apiKeyId,
       table.accountId,
+      sql`coalesce(${table.poolId}, '00000000-0000-0000-0000-000000000000'::uuid)`,
       table.model,
     ),
     index("usage_daily_day_idx").on(table.day),

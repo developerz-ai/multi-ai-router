@@ -1,35 +1,41 @@
 # Observability
 
-Status: design only. Nothing here is implemented. Retention knobs live in
-[09-deployment.md](09-deployment.md).
+Status: **`UsageRecord` writing, structured logging, redaction, audit events, and `/healthz` +
+`/readyz` are implemented.** Everything downstream of the raw rows is **not**: no rollups, no usage
+API, no charts, no `/metrics`, no quota surface, no scheduled tasks to report on. The field table
+below matches the shipped schema; the rest is the contract those surfaces must meet. Retention knobs
+live in [09-deployment.md](09-deployment.md).
 
 ## UsageRecord
 
 **One row per upstream attempt — including failed attempts and every failed-over attempt.** A single
 client request that hits a rate-limited account, fails over, and succeeds on the second produces
 **two** rows. This is deliberate: the failure is the data you need. The two rows are joined by
-`requestId`, the correlation id assigned at ingress and propagated end to end
+`correlationId`, assigned at ingress and propagated end to end
 ([01-architecture.md](01-architecture.md)).
 
 | Field | Type | Meaning |
 |---|---|---|
 | `id` | id | Row identity |
-| `requestId` | string | Correlation id of the client-facing request. Shared by every attempt |
-| `attempt` | int | 1-based attempt number within that request |
-| `keyId` / `accountId` / `poolId` / `sessionId` | refs | Attribution: which router key presented, which Account served or failed, which Pool it was selected from, which Session it belongs to |
-| `requestedModel` | string | Exactly what the client sent |
-| `upstreamModel` | string | After the Account's alias map; equal to `requestedModel` when there is no alias |
-| `ingressDialect` / `egressDialect` | enum | `anthropic` \| `openai-chat` \| `openai-responses` \| `agent-sdk` (egress only). Equal means passthrough |
-| `streamed` | bool | Whether bytes reached the client (a streamed attempt is never retried) |
-| `inputTokens` / `outputTokens` | int? | Upstream's own numbers, never the translated ones. Null when the upstream reported none |
-| `cacheReadTokens` / `cacheCreationTokens` | int? | Where the provider reports them. Anthropic always does |
-| `costEstimate` | decimal? | See below. Null when no price is known |
+| `correlationId` | uuid | Shared by every attempt of one client request. **Router-owned**, always a UUID |
+| `clientRequestId` | string? | The caller's `x-request-id`, verbatim, when it sent one. A **trace** field, never a join key — it is caller-controlled, so two clients both sending `req-1` must not have their chains merged |
+| `attempt` | int | 1-based position in the failover chain |
+| `apiKeyId` / `accountId` / `poolId` / `sessionKey` | refs | Attribution: which key presented, which Account served or failed, which Pool it was selected from, which conversation it belonged to. `poolId` is null when the key's scope was `all` or an explicit account list — no pool was in play |
+| `provider` | enum? | Denormalized so the row survives the Account it names |
+| `model` | string | Exactly what the client sent. Never substituted |
+| `upstreamModel` | string? | The name actually put on the wire, after the Account's alias map. A separate **fact**, not a derivation: the alias map is mutable, so re-deriving it later answers "what would we send now", never "what did we send then" |
+| `ingressDialect` | enum? | The API surface the client called |
+| `egressMode` | enum? | `passthrough` \| `translate` \| `agent-sdk` — the per-row twin of the `path` label on `router_overhead_seconds`. Carried instead of an egress *dialect*: the fact worth storing is the relationship between the two, and the SDK path has no egress dialect at all |
+| `streamed` | bool | Whether bytes reached the client. A streamed attempt is never retried, so this column is the audit of that rule |
+| `tokensIn` / `tokensOut` | int | Upstream's own numbers, never the translated ones |
+| `cacheReadTokens` / `cacheWriteTokens` | int | Where the provider reports them. Anthropic always does |
+| `costEstimate` | decimal? | See below. Null for an unknown model — never silently zero |
 | `costBasis` | enum | `metered` \| `notional` \| `unknown` |
-| `latencyMs` / `ttfbMs` | int / int? | Router-observed wall time for this attempt; time to first byte for streamed attempts |
+| `latencyMs` / `ttfbMs` | int / int? | Router-observed wall time for the attempt; time to the first relayed byte. **TTFB is what makes "zero added time-to-first-token" a measurement** — `latencyMs` is dominated by generation time and hides a buffering regression completely |
 | `routerOverheadMs` | int | Time in the router, excluding upstream — the per-record twin of `router_overhead_seconds` |
 | `outcome` | enum | `success` \| `upstream_error` \| `rate_limited` \| `exhausted` \| `timeout` \| `client_error` \| `router_error`. `rate_limited` and `exhausted` are distinct outcomes, never folded together |
-| `httpStatus` / `errorClass` | int? / string? | Upstream status when there was one; `RouterError` subclass name — never a message, never a body |
-| `startedAt` / `finishedAt` | timestamp | |
+| `httpStatus` / `errorClass` | int? / string? | Upstream status when it answered; the thrown class's **name** — never a message, never a body |
+| `createdAt` | timestamp | |
 
 **Written off the request path, always.** Records are handed to an in-memory queue and flushed to
 Postgres in batches by a background writer. A request never waits on an insert, never opens a
@@ -38,8 +44,8 @@ reporting, never traffic** — the queue is bounded, and on overflow it drops th
 increments a counter rather than applying backpressure to live requests. No prompt content, no
 completion content, and no credential material is ever stored on a record.
 
-> **Total prompt size is `inputTokens` + `cacheCreationTokens` + `cacheReadTokens`.** Every total,
-> chart, and cost line here uses the sum. Reporting `inputTokens` alone counts only the uncached
+> **Total prompt size is `tokensIn` + `cacheWriteTokens` + `cacheReadTokens`.** Every total,
+> chart, and cost line here uses the sum. Reporting `tokensIn` alone counts only the uncached
 > remainder and under-reports cached traffic badly — the better the caching, the worse the error,
 > which is backwards from what an operator expects ([06-protocol-translation.md](06-protocol-translation.md)).
 
@@ -144,9 +150,12 @@ reset at all.
 
 | `resetSource` | Meaning | UI treatment |
 |---|---|---|
-| `provider` | The provider told us (`resetsAt`, `Retry-After`) | Absolute local time + live countdown |
-| `estimate` | Computed from the window type because the provider reported none | Same, visibly marked as an estimate |
+| `provider-reported` | The provider told us (`resetsAt`, `Retry-After`) | Absolute local time + live countdown |
+| `estimated` | Computed from the window type because the provider reported none | Same, visibly marked as an estimate |
 | `unknown` | No signal; the breaker is on exponential backoff | No countdown. "Unknown — will retry with backoff" |
+
+The three values are `ResetSource` in `packages/core` — the enum the API, the database, and the SPA
+all derive from. Never restate them.
 
 **`exhausted` has no reset, and that is the whole point.** An out-of-credits Account shows "needs
 top-up" and never a countdown ([05-routing-and-failover.md](05-routing-and-failover.md)). Inventing an
@@ -194,7 +203,7 @@ identity beyond its label.
 | `router_failovers_total` | counter | `pool_id`, `from_provider`, `reason` (`rate_limited`\|`exhausted`\|`upstream_error`\|`timeout`) | Times a request moved to the next candidate |
 | `router_accounts` | gauge | `provider`, `status` (`active`\|`disabled`\|**`cooling_down`**\|**`exhausted`**\|`needs_reauth`) | Accounts by status. `cooling_down` and `exhausted` are **separate label values and never summed** — one comes back on a clock, the other needs a human. Alert on them differently |
 | `router_quota_utilization` | gauge | `account_id`, `window` (`five_hour`\|`seven_day`\|`seven_day_opus`\|`seven_day_sonnet`\|`provider_specific`) | Fraction of a quota window consumed |
-| `router_quota_reset_seconds` | gauge | `account_id`, `window`, `source` (`provider`\|`estimate`\|`unknown`) | Seconds until reset. Absent for `exhausted` accounts — there is no reset to report |
+| `router_quota_reset_seconds` | gauge | `account_id`, `window`, `source` (`provider-reported`\|`estimated`\|`unknown`) | Seconds until reset. Absent for `exhausted` accounts — there is no reset to report |
 | `router_quota_last_checked_timestamp_seconds` | gauge | `account_id` | When the utilization above was last refreshed. Read the two together or you are alerting on a stale number |
 | `router_usage_queue_depth` | gauge | — | Pending `UsageRecord`s awaiting batch write. Rising depth means reporting lag, not request lag |
 | `router_usage_records_dropped_total` | counter | — | Records shed on queue overflow. Non-zero means the reporting path is behind; traffic is unaffected |
@@ -263,6 +272,25 @@ called out, not left to inference.
 | Circuit-breaker half-open probes | scheduled per account when its reset passes — not a fixed interval |
 | Quota refresh for idle subscription accounts | slow floor only; active accounts refresh from `rate_limit_event` traffic |
 | Expired OAuth `state` / PKCE verifier purge | every few minutes |
+
+### The catalog refresh is not a scheduled task
+
+Two background timers run in this process and they are **deliberately different things**. Confusing
+them is how someone "fixes" the catalog by putting an advisory lock on it and breaks every replica
+but one.
+
+| | Scheduled tasks (janitor, rollup, purge) | Catalog refresh |
+|---|---|---|
+| Coordination | One `pg_try_advisory_lock` per task — **exactly one replica** runs it | **None. Every replica runs its own** |
+| Why | The work mutates shared state; running it twice is waste at best | The work populates *this process's* memory. A replica that skips it serves stale routing forever |
+| Recorded | A `ScheduledTaskRun` row per run | No row. It is a cache load, not a unit of work |
+| Failure | Recorded, surfaced, alertable | Swallowed; the previous snapshot stays in place and the next tick retries |
+| Cadence | Task-specific, jittered | `CATALOG_REFRESH_SECONDS`, jittered ±20% so replicas that started together do not refresh in lockstep |
+
+What the interval actually bounds: **how long this replica may lag a write made by another
+replica.** A write by *this* replica refreshes it immediately and before the response is written, so
+in a single-replica deployment the interval is nearly irrelevant. Detail:
+[01-architecture.md](01-architecture.md#the-warm-routing-catalog).
 
 | Metric | Type | Labels | Meaning |
 |---|---|---|---|

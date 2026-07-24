@@ -21,7 +21,7 @@ function harness(probes: Partial<ReadinessProbes> = {}): Harness {
     logger: createLogger({ level: "debug", write: (line) => lines.push(line) }),
     probes: {
       database: probes.database ?? (() => Promise.resolve(true)),
-      healthyAccounts: probes.healthyAccounts ?? (() => Promise.resolve(true)),
+      accounts: probes.accounts ?? (() => Promise.resolve("ok")),
     },
   }
   return { app: createApp(deps), lines }
@@ -90,6 +90,40 @@ describe("GET /readyz", () => {
       checks: { database: "fail", accounts: "ok" },
       reason: "database unreachable",
     })
+  })
+
+  test("stays ready with no accounts configured — a fresh install must be reachable", async () => {
+    // The deadlock this avoids: gate readiness on accounts and a new deployment is never ready,
+    // so nothing routes to the console that is the only way to add the first account.
+    const { app } = harness({ accounts: () => Promise.resolve("none") })
+    const res = await app.request("/readyz")
+
+    expect(res.status).toBe(200)
+    expect(await res.json()).toMatchObject({
+      status: "ready",
+      checks: { database: "ok", accounts: "none" },
+      reason: "no accounts configured",
+    })
+  })
+
+  test("stays ready when every account is blocked, and says so", async () => {
+    const { app } = harness({ accounts: () => Promise.resolve("blocked") })
+    const res = await app.request("/readyz")
+
+    // Still 200: withholding traffic would take away the console the operator needs to fix it.
+    expect(res.status).toBe(200)
+    expect(await res.json()).toMatchObject({
+      checks: { accounts: "blocked" },
+      reason: "every account is unavailable",
+    })
+  })
+
+  test("a throwing account probe reports blocked — unknown is not the same as fine", async () => {
+    const { app } = harness({ accounts: () => Promise.reject(new Error("boom")) })
+    const res = await app.request("/readyz")
+
+    expect(await res.json()).toMatchObject({ checks: { accounts: "blocked" } })
+    expect(await (await app.request("/readyz")).text()).not.toContain("boom")
   })
 
   test("treats a throwing probe as a failed check, not a 500", async () => {

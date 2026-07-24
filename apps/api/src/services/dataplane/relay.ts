@@ -18,6 +18,14 @@ import { clientHeaders } from "./egress/headers"
  */
 
 export interface RelayObserver {
+  /**
+   * Fired once, after the **first** chunk is on its way to the client.
+   *
+   * This is the only place time-to-first-byte can be observed honestly. Measuring it anywhere
+   * earlier would measure the router's intent rather than the client's experience, and measuring
+   * it before the enqueue would put the measurement itself on the path it exists to protect.
+   */
+  onFirstByte?: () => void
   /** Called after the chunk is already on its way to the client. Never before. */
   onChunk?: (chunk: Uint8Array) => void
   /** The upstream stream ended cleanly. `bytes` is the total relayed. */
@@ -47,8 +55,10 @@ export function relayResponse(upstream: Response, observer: RelayObserver = {}):
     transform(chunk, controller) {
       // Enqueue first. Everything after this line happens on time the client already has.
       controller.enqueue(chunk)
+      const first = bytes === 0
       bytes += chunk.length
       try {
+        if (first) observer.onFirstByte?.()
         observer.onChunk?.(chunk)
       } catch {
         // A broken observer degrades reporting for this request. It does not break the stream.

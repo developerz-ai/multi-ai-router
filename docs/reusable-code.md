@@ -11,7 +11,7 @@ helper — most of the small things you are about to write are already here.
 | Persistence, for any consumer | `packages/db/src/**` | `packages/db/src/repositories/` |
 | Within one app only | that app's `src/lib/` | `apps/web/src/lib/cx.ts` |
 | Within one app, but a layer not a helper | that layer's directory | `apps/api/src/logging/`, `apps/api/src/middleware/` |
-| Across shell scripts | `bin/` | `bin/check` calls `bin/lint` + `bin/test` |
+| Across shell scripts | `bin/` | `bin/check` runs lint, typecheck, then `bin/test` — the CI job list, in order |
 
 Timing, from the org standard (`gold-standards-in-ai/docs/architecture/solid-srp.md` — "Reusable
 helpers, not copy-paste" and "No premature abstraction"):
@@ -49,10 +49,10 @@ The only module that knows SQL.
 nothing ever imports an app.** If two modules need each other, the shared piece belongs in `core`
 (`docs/idea/01-architecture.md`, dependency rules 7–8).
 
-`apps/api` depends on both packages. **`apps/web` currently depends on neither** — it restates
-`AccountStatus` and `ResetSource` as local literal unions in `lib/`, and the `ResetSource` values
-already disagree with core's. Adding `@multi-ai-router/core` and deriving those from the Zod schemas
-is the fix; do not add a third copy.
+`apps/api` depends on both packages. **`apps/web` depends on `core` only** — it imports
+`AccountStatus` and `ResetSource` as types and maps them to presentation, and never restates the
+literals. It must never depend on `db`: the API's answer is the answer, and a browser has no
+business knowing a table.
 
 ## Inventory
 
@@ -99,7 +99,11 @@ Each is a Zod schema **and** its `z.infer` type under one name. These are the si
 | `createDatabase(options)` → `{ db, sql, close }` | `packages/db/src/client.ts` | Opening a pool. A factory, not a singleton — no side effects at import; the owner closes it |
 | `Database`, `DatabaseHandle`, `SqlConnection`, `DatabaseOptions` | same | Typing anything that takes a handle. `databaseProbe.ts` takes `Pick<DatabaseHandle, "sql">` |
 | `runMigrations({ url })`, `defaultMigrationsFolder()` | `packages/db/src/migrate.ts` | Boot, tests, `bun run migrate`. Advisory-locked and idempotent |
-| `createApiKeyRepository(db)` → `ApiKeyRepository` | `packages/db/src/repositories/api-key-repository.ts` | Any `api_keys` query. The only repository so far |
+| `createAccountRepository(db)` → `AccountRepository` | `repositories/account-repository.ts` | Any `accounts` query — CRUD, and the `list` the catalog loads from |
+| `createApiKeyRepository(db)` → `ApiKeyRepository` | `repositories/api-key-repository.ts` | Any `api_keys` query, including the scope join tables and the prefix lookup verification uses |
+| `createPoolRepository(db)` → `PoolRepository` | `repositories/pool-repository.ts` | Pools and membership. `listMembersForPools` returns every pool's members in one statement — use it rather than a query per pool |
+| `createAuditRepository(db)` → `AuditRepository` | `repositories/audit-repository.ts` | Appending an `AuditEvent`. Append-only; there is no update or delete outside retention |
+| `createUsageRecordRepository(db)` → `UsageRecordRepository` | `repositories/usage-repository.ts` | Usage persistence. `insertMany` is the whole write surface on purpose — a per-record insert is the round trip the batching exists to avoid |
 | Tables, row types, `pgEnum`s, `schema` namespace | `packages/db/src/schema/**`, re-exported from `src/index.ts` | Building a query inside a repository |
 
 **Repositories own SQL; services never inline a query.** A new query is a new method in
@@ -119,6 +123,36 @@ Each is a Zod schema **and** its `z.infer` type under one name. These are the si
 | `AppEnv` | `types.ts` | Typing a Hono route or middleware. Transport-only — it never leaves that layer |
 | `createApp(deps)` | `app.ts` | Integration tests. Pure factory: no listener, no timers, no `process.env` |
 | `checkReadiness(probes)`, `ReadinessProbes`, `createDatabaseProbe(...)`, `assumeHealthyAccounts` | `services/health/` | Health surfaces. Probes are injected, so the service needs no I/O |
+| `createRuntime(deps)` → `Runtime` | `composition.ts` | The composition root. Every long-lived object is built here once and injected downward — never construct a repository, cache, or recorder anywhere else |
+
+### Admin-plane plumbing — `apps/api/src/services/admin/` + `routes/admin/render.ts`
+
+Every admin route group is three lines because these four exist. Use them; do not hand-roll a
+rejection shape, a body read, or an audit write.
+
+| Thing | Where | Use it when |
+|---|---|---|
+| `AdminResult<T>`, `ok`, `invalid`, `notFound`, `conflict`, `failureBody` | `services/admin/result.ts` | Reporting an admin CRUD outcome. **Not** a `RouterError` — those are data-plane request outcomes with fixed statuses, and borrowing one points the console at the wrong layer. Only `400` / `404` / `409` exist here; nothing on this plane is a 5xx |
+| `readJsonBody(request)`, `validate(schema, input)`, `validateId(value)` | `services/admin/parse.ts` | The two things every admin route does before calling a service. Hono-free — they take a `Request` and an `unknown` |
+| `createAuditRecorder(sink)`, `AUDIT_KINDS`, `AUDIT_SUBJECTS`, `AuditSink` | `services/admin/audit.ts` | Any admin mutation. Every detail object passes through the tested redactor **inside** the recorder, so the "audit events never contain credential material" guarantee is structural rather than trusted at each call site |
+| `withCatalogRefresh`, `withPoolCatalogRefresh`, `withKeyInvalidation`, `CoherenceHooks` | `services/admin/coherence.ts` | Making a write take effect on the request path before the response is written. **Decorators, not service dependencies** — cache coherence is not a CRUD service's reason to change, and a service that knew about the catalog could not be tested without one |
+| `render(c, result, status?)` | `routes/admin/render.ts` | The one place an `AdminResult` becomes a response. Four copies of it is four chances for one to answer `200` with an error body |
+
+### Warm routing catalog — `apps/api/src/services/catalog/`
+
+| Thing | Where | Use it when |
+|---|---|---|
+| `createRoutingCatalog(deps)` → `RoutingCatalogStore` | `services/catalog/store.ts` | Reading accounts and pools on the request path. `accounts()` and `pools()` are **synchronous by design** — an `await` here would put Postgres on the critical path |
+| `loadCatalog(sources)` → `CatalogData` | `services/catalog/load.ts` | Shaping rows into what routing consumes. Two queries total, never one per pool. Runs at boot, on the timer, and after an admin write — never on a request |
+
+Disabled accounts are deliberately *in* the catalog: filtering is routing's job, and a catalog that
+hides them makes "why did nothing match" unanswerable.
+
+### Test support — `apps/api/test/`
+
+| Thing | Where | Use it when |
+|---|---|---|
+| `createMemoryStore()` → `MemoryStore` | `test/support/memory-store.ts` | Any test of an admin service or the admin API. Not a mock with expectations — the smallest honest implementation of the four repository interfaces, so the service under test runs its real code path and the test asserts on **rows**. It is what lets the admin unit *and* integration suites run with no `DATABASE_URL` |
 
 ### Web — `apps/web/src/`
 
@@ -136,14 +170,18 @@ Each is a Zod schema **and** its `z.infer` type under one name. These are the si
 | `ThemeToggle` | `components/ThemeToggle.tsx` | The header toggle. The one sanctioned `createEffect` in the app |
 | `queryClient` | `lib/query.ts` | Server state. Configured in exactly one place — never construct a second client |
 | `CONSOLE_ROUTES`, `LOGIN_PATH`, `AppShell`, `LoginScreen`, `NotFoundScreen`, `ConsoleRoute` | `lib/routes.ts` | Adding a screen. Single source of truth for the router **and** the sidebar |
+| `createFocusTrap(options)` | `lib/focus-trap.ts` | Containing focus in a modal overlay. Deliberately small — the drawer's needs, not a dialog library; it grows an option when a second overlay needs one |
+| `createScrollLock(active)` | `lib/scroll-lock.ts` | Holding the page still behind an open overlay. Scoped strictly to `active()`, previous value restored on cleanup — a permanently unscrollable page is the failure this shape rules out |
+| `createMediaQuery(query)`, `SIDEBAR_QUERY` | `lib/media.ts` | Needing a breakpoint in JS. `SIDEBAR_QUERY` mirrors `styles/_breakpoints.scss`; CSS owns the layout, JS needs the same number for `inert` and the focus trap — change one, change the other |
 
 ## Things that must never be duplicated
 
 | Never copy | Why |
 |---|---|
 | The error code → HTTP status table | It lives on the `RouterError` subclass. A second mapping drifts and answers 500 where the class says 402 |
-| Enum value sets (`AccountStatus`, `ProviderId`, `RoutingPolicy`, `KeyScope`, `ResetSource`, …) | Core's Zod schema is the source; db builds `pgEnum`s from `.options`. `apps/web` restates two of them by hand and its `ResetSource` values (`provider` / `estimate`) already differ from core's (`provider-reported` / `estimated`) — exactly the drift this rule exists to stop |
-| Routing selection math (filter → policy → failover), when it lands | Pure functions with injected snapshots. A second implementation in the UI or a driver picks a different account than the router did |
+| Enum value sets (`AccountStatus`, `ProviderId`, `RoutingPolicy`, `KeyScope`, `ResetSource`, …) | Core's Zod schema is the source; db builds `pgEnum`s from `.options`, and `apps/web` imports the types rather than restating them. A hand-written literal union is how the two versions start to disagree |
+| Routing selection math (filter → policy → failover) | Pure functions in `apps/api/src/services/routing/` with injected snapshots. A second implementation in the UI or a driver picks a different account than the router did |
+| The `AdminResult` failure shape | `services/admin/result.ts`. A route that builds its own `c.json({ error })` is a route that will answer `200` with an error body |
 | The log redactor (`logging/redact.ts`) | A second, weaker scrubber is how a credential reaches a log line. One redactor, one test asserting nothing leaks |
 | The `cooling_down` vs `exhausted` distinction | Clock-recoverable vs human-recoverable: 429 + `Retry-After` vs 402, countdown vs "needs top-up". Collapsing them makes the router retry a dead account on a timer forever |
 

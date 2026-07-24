@@ -1,6 +1,10 @@
 # Routing and Failover
 
-Status: design only. No code exists yet. Everything here describes the intended base.
+Status: **implemented** in `apps/api/src/services/routing/` — scope intersection, the candidate
+filter, all six policies, overflow, bounded failover, and the circuit breaker, all as pure functions
+over an injected snapshot. What is **not** built: persisted quota-window state (so `quota-aware`
+reads only what live traffic has reported), the scheduled half-open probe, and the persisted
+Session→Account binding the Agent-SDK path needs.
 
 > **The client picks the model. The router picks the account.**
 

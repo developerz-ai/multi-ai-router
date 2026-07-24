@@ -1,9 +1,12 @@
 # Domain model
 
-Status: design only. **The field lists below are the design contract, not a migration.** Types are
-intent (`string`, `enum`, `json`), not column definitions; the Drizzle schema in `packages/db`
-(PostgreSQL 16+) will be the authority once it exists. See [01-architecture.md](01-architecture.md) for where each entity
-lives in the layering.
+Status: **the Drizzle schema in `packages/db` exists and is the authority.** The field lists below
+are the design contract behind it — types are intent (`string`, `enum`, `json`), not column
+definitions, and a column name may differ where the schema found a better one. Where the two
+disagree, the schema wins and this page is the bug. Account, Pool, ApiKey, UsageRecord, and
+AuditEvent are live; Session, QuotaWindow, ScheduledTaskRun, and OauthState have tables that
+nothing writes yet. See [01-architecture.md](01-architecture.md) for where each entity lives in the
+layering.
 
 ## Entity relations
 
@@ -129,6 +132,12 @@ An `exhausted` Account has **no** reset by definition — that is what separates
 | `name` | string | Human-chosen |
 | `policy` | enum | `sticky` (default) \| `round-robin` \| `weighted` \| `least-used` \| `priority-failover` \| `quota-aware` — see [05-routing-and-failover.md](05-routing-and-failover.md). On a Pool containing Claude subscription Accounts, `round-robin` / `weighted` / `least-used` are **unsafe as-is**: they ignore the Session → Account binding, which on that path breaks the conversation rather than just the cache |
 | `members` | Account[] | Ordered/weighted set. An Account may sit in several Pools |
+| `overflowAccountId` | id, optional | The Pool's **member of last resort** — typically a paid API key — engaged only once every ordinary member has filtered out, and invisible to the policy until then. Still subject to the presenting key's scope. Absent means the Pool simply fails when its members are unavailable, which is the default: spending real money is opted into, never inferred. See [05-routing-and-failover.md](05-routing-and-failover.md#overflow-optional-opt-in) |
+
+**Deleting the overflow Account clears the reference; it never deletes the Pool.**
+`overflow_account_id` is `ON DELETE SET NULL` for exactly that reason — losing a fallback must
+degrade the Pool to "no overflow", not destroy the Pool and every key bound to it. Membership is
+the opposite case and cascades: a `pool_members` row has no meaning without both ends.
 
 ## ApiKey
 

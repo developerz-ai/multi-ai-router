@@ -74,6 +74,36 @@ describe("stream relay", () => {
     expect(seen).toEqual(["one"])
   })
 
+  test("first-byte fires once, and only after the byte is on its way to the client", async () => {
+    const events: string[] = []
+    const upstream = slowStream(["one", "two", "three"])
+    const relayed = relayResponse(upstream.response, {
+      onFirstByte: () => events.push("first-byte"),
+      onChunk: (chunk) => events.push(`chunk:${decoder.decode(chunk)}`),
+    })
+    if (relayed.body === null) throw new Error("expected a body")
+    const reader = relayed.body.getReader()
+
+    upstream.release(0)
+    expect(await readOne(reader)).toBe("one")
+    // Ordering matters: this is the measurement that guards the zero-added-TTFT rule, so it must
+    // be taken after the enqueue rather than before it.
+    expect(events).toEqual(["first-byte", "chunk:one"])
+
+    upstream.release(1)
+    expect(await readOne(reader)).toBe("two")
+    expect(events.filter((event) => event === "first-byte")).toHaveLength(1)
+  })
+
+  test("a body with no stream never reports a first byte", () => {
+    const events: string[] = []
+    relayResponse(new Response(null, { status: 204 }), {
+      onFirstByte: () => events.push("first-byte"),
+    })
+    // A TTFB of 0 would be a claim nobody measured; absent is the honest record.
+    expect(events).toEqual([])
+  })
+
   test("a throwing observer degrades reporting, never the stream", async () => {
     const upstream = slowStream(["one"])
     const relayed = relayResponse(upstream.response, {

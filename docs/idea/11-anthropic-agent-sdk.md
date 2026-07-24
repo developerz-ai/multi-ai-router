@@ -1,6 +1,9 @@
 # 11 — Claude subscriptions via the Claude Agent SDK
 
-Status: design. Nothing here is built.
+Status: **nothing here is built.** `anthropic-oauth` is in the provider registry with a recorded
+reason and no driver, and a request routed to such an Account is refused by name in
+`services/dataplane/egress/mode.ts` rather than served some other way. This page is the contract
+M4 must satisfy.
 
 How `anthropic-oauth` Accounts (Claude Max/Pro subscriptions) are served. Extracted from
 [Meridian](https://github.com/rynfar/meridian), a working single-user proxy on this exact path;
