@@ -1,0 +1,38 @@
+# Local development: the database only.
+#
+# The router itself runs on the host under `bin/dev` (hot reload, real stack
+# traces, a debugger you can attach). Containerising it during development
+# would cost a rebuild per edit and buy nothing.
+#
+# `docker-compose.yml` (no -dev) is the deployment file: it runs the published
+# image alongside Postgres and is what an operator uses. Do not merge the two —
+# they have opposite goals.
+
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: router
+      POSTGRES_PASSWORD: router
+      POSTGRES_DB: router
+    # Published on the host, unlike the deployment compose file, because the
+    # router process runs outside Docker here and has to reach it. Dev-only
+    # credentials, bound to loopback only.
+    #
+    # 5433, NOT the default 5432: developers commonly already run a Postgres —
+    # a system install or another project's container — and claiming 5432 fails
+    # the whole setup with "port is already allocated". Override with
+    # DEV_DB_PORT if 5433 is taken too.
+    ports:
+      - "127.0.0.1:${DEV_DB_PORT:-5433}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U router -d router"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+      start_period: 20s
+    volumes:
+      - dev-postgres-data:/var/lib/postgresql/data
+
+volumes:
+  dev-postgres-data:

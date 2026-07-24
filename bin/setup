@@ -1,0 +1,78 @@
+#!/usr/bin/env bash
+# Fresh clone -> running stack. Idempotent: safe to re-run any time.
+#
+# The house DX contract is three commands (gold-standards dx-scripts.md):
+#   bin/setup   once, after clone
+#   bin/dev     every session
+#   bin/check   before commit
+set -euo pipefail
+cd "$(dirname "${BASH_SOURCE[0]}")/.."
+
+ok()   { printf '\033[0;32m✔\033[0m  %s\n' "$*"; }
+step() { printf '\n\033[1m▸ %s\033[0m\n' "$*"; }
+die()  { printf '\033[0;31m✘\033[0m  %s\n' "$*" >&2; exit 1; }
+
+step "Checking prerequisites"
+command -v bun    >/dev/null || die "bun not found — https://bun.sh"
+command -v docker >/dev/null || die "docker not found — the dev database runs in a container"
+docker info >/dev/null 2>&1  || die "docker is installed but not running"
+ok "bun $(bun --version), docker present and running"
+
+step "Installing dependencies"
+bun install
+ok "dependencies installed"
+
+step "Environment"
+if [ -f .env ]; then
+  ok ".env already exists — leaving it alone"
+else
+  # ENCRYPTION_KEY is generated rather than copied from the example: a shared
+  # example key would be the same on every developer's box, and it is the one
+  # secret that protects every stored credential.
+  key="$(openssl rand -base64 32)"
+  sed -e "s|^ADMIN_USERNAME=.*|ADMIN_USERNAME=admin|" \
+      -e "s|^ADMIN_PASSWORD=.*|ADMIN_PASSWORD=dev-only-change-me|" \
+      -e "s|^ENCRYPTION_KEY=.*|ENCRYPTION_KEY=${key}|" \
+      .env.example > .env
+  ok ".env created with a freshly generated ENCRYPTION_KEY"
+fi
+
+DEV_DB_PORT="${DEV_DB_PORT:-5433}"
+export DEV_DB_PORT
+
+step "Starting the dev database"
+# A developer very often already runs Postgres — a system install, or another
+# project's container. Detect the collision here with an actionable message
+# instead of letting docker fail with "port is already allocated".
+if command -v ss >/dev/null && ss -lnt "sport = :${DEV_DB_PORT}" 2>/dev/null | grep -q LISTEN; then
+  die "port ${DEV_DB_PORT} is already in use. Re-run with a free one: DEV_DB_PORT=5434 bin/setup"
+fi
+docker compose -f docker-compose.dev.yml up -d
+printf '   waiting for postgres'
+for _ in $(seq 1 60); do
+  if docker compose -f docker-compose.dev.yml exec -T postgres pg_isready -U router -d router >/dev/null 2>&1; then
+    printf '\n'; ok "postgres healthy on localhost:${DEV_DB_PORT}"
+    break
+  fi
+  printf '.'; sleep 1
+done
+docker compose -f docker-compose.dev.yml exec -T postgres pg_isready -U router -d router >/dev/null 2>&1 \
+  || die "postgres did not become ready — check: docker compose -f docker-compose.dev.yml logs postgres"
+
+step "Applying migrations"
+# Migrations also run at boot; doing them here means `bin/dev` starts clean and
+# a failure shows up now, attached to this step, rather than in the server log.
+DATABASE_URL="postgres://router:router@localhost:${DEV_DB_PORT}/router" bun run --cwd packages/db migrate
+ok "schema up to date"
+
+printf '\n'
+ok "Setup complete."
+cat <<'NEXT'
+
+   Next:
+     bin/dev            API on :8080, console on :5173
+     bin/check          the CI gate, locally
+     bin/db psql        a shell on the dev database
+
+   The console login is ADMIN_USERNAME / ADMIN_PASSWORD from .env.
+NEXT

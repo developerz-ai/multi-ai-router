@@ -1,0 +1,18 @@
+#!/bin/sh
+# The gate: lint, typecheck, test — the same commands CI runs, in the same order.
+#
+# Run this before committing. If it passes here it passes on the PR; if it fails
+# here you have the failure locally with a fast loop, instead of a red run and a
+# five-minute round trip.
+set -eu
+
+cd "$(dirname "$0")/.."
+
+# Same flag CI uses, so a stale lockfile fails here rather than on the PR.
+bun install --frozen-lockfile
+
+# Sequential and fail-fast (set -e): stop at the first broken gate, exactly like
+# reading the CI job list top to bottom.
+bun run lint
+bun run typecheck
+bin/test

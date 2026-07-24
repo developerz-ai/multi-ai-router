@@ -11,7 +11,7 @@ helper — most of the small things you are about to write are already here.
 | Persistence, for any consumer | `packages/db/src/**` | `packages/db/src/repositories/` |
 | Within one app only | that app's `src/lib/` | `apps/web/src/lib/cx.ts` |
 | Within one app, but a layer not a helper | that layer's directory | `apps/api/src/logging/`, `apps/api/src/middleware/` |
-| Across shell scripts | `bin/` | `bin/ci` calls `bin/lint` + `bin/test` |
+| Across shell scripts | `bin/` | `bin/check` calls `bin/lint` + `bin/test` |
 
 Timing, from the org standard (`gold-standards-in-ai/docs/architecture/solid-srp.md` — "Reusable
 helpers, not copy-paste" and "No premature abstraction"):

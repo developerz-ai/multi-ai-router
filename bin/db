@@ -1,0 +1,54 @@
+#!/usr/bin/env bash
+# Shortcuts against the local dev database (docker-compose.dev.yml).
+#
+#   bin/db psql          interactive shell
+#   bin/db migrate       apply pending migrations
+#   bin/db generate      author a migration from the current schema
+#   bin/db reset         DESTROY the dev data and re-migrate from scratch
+#   bin/db url           print the DATABASE_URL these commands use
+set -euo pipefail
+cd "$(dirname "${BASH_SOURCE[0]}")/.."
+
+DEV_DB_PORT="${DEV_DB_PORT:-5433}"
+export DEV_DB_PORT
+DEV_URL="postgres://router:router@localhost:${DEV_DB_PORT}/router"
+COMPOSE="docker compose -f docker-compose.dev.yml"
+
+case "${1:-}" in
+  psql)
+    shift
+    exec $COMPOSE exec postgres psql -U router -d router "$@"
+    ;;
+  migrate)
+    exec env DATABASE_URL="$DEV_URL" bun run --cwd packages/db migrate
+    ;;
+  generate)
+    # Deliberately no DATABASE_URL: `generate` only reads ./src/schema and must
+    # work with no database running. See packages/db/drizzle.config.ts.
+    exec bun run --cwd packages/db db:generate
+    ;;
+  reset)
+    # Guarded because it is unrecoverable. Only ever points at the dev compose
+    # volume — it cannot reach a deployed database.
+    printf 'This DESTROYS the local dev database and its volume. Type "reset" to confirm: '
+    read -r confirm
+    [ "$confirm" = "reset" ] || { echo "aborted"; exit 1; }
+    $COMPOSE down -v
+    $COMPOSE up -d
+    printf 'waiting for postgres'
+    for _ in $(seq 1 60); do
+      $COMPOSE exec -T postgres pg_isready -U router -d router >/dev/null 2>&1 && break
+      printf '.'; sleep 1
+    done
+    printf '\n'
+    env DATABASE_URL="$DEV_URL" bun run --cwd packages/db migrate
+    echo "dev database reset."
+    ;;
+  url)
+    echo "$DEV_URL"
+    ;;
+  *)
+    sed -n '2,9p' "$0" | sed 's/^# \{0,1\}//'
+    exit 2
+    ;;
+esac

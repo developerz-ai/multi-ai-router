@@ -55,7 +55,9 @@ Postgres is the house standard and the current decision — earlier drafts said 
 
 ## Commands
 
-Intended interface — `bin/` wrappers do not exist yet. Create them before writing ad-hoc invocations; never document a raw command in their place.
+`bin/` is the interface. Never write an ad-hoc invocation where a wrapper exists, and never document a raw command in its place — if something is worth running twice, it belongs in `bin/`.
+
+**Fresh clone: `bin/setup`** (prereqs → install → `.env` with a generated `ENCRYPTION_KEY` → dev Postgres → migrate). Then `bin/dev` each session, `bin/check` before committing. Those three are the house contract and mean this repo behaves like every other one.
 
 | Task | Command |
 |---|---|
@@ -64,7 +66,9 @@ Intended interface — `bin/` wrappers do not exist yet. Create them before writ
 | Single test by pattern | `bun test <pattern>` |
 | Lint (biome check + `tsc --noEmit`) | `bin/lint` |
 | Format | `bin/fmt` |
-| Reproduce CI locally | `bin/ci` |
+| Fresh clone → running stack | `bin/setup` |
+| The gate (lint + typecheck + test), before committing | `bin/check` |
+| Dev database shell / migrate / reset | `bin/db psql` · `bin/db migrate` · `bin/db reset` |
 | Build release image locally | `docker build -t multi-ai-router:dev .` |
 
 Local config: copy `.env.example` → `.env`. `.env` is gitignored. Three env vars you set by hand — `ADMIN_USERNAME`, `ADMIN_PASSWORD` (or `ADMIN_PASSWORD_HASH`), `ENCRYPTION_KEY` — plus `DATABASE_URL`, which the compose file supplies.
