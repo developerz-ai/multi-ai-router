@@ -20,6 +20,13 @@ apps/web/dist/
 *.dump
 data/
 
+# ...but generated migrations ARE source and must be committed: the image applies
+# them at boot, and CI's integration test applies them against a real Postgres.
+# Without this negation `*.sql` above swallows them, leaving a meta/_journal.json
+# that references a file nobody else has — which passes locally (the file is on
+# disk, just untracked) and fails only on a fresh checkout.
+!packages/db/migrations/**/*.sql
+
 # Per-Account CLAUDE_CONFIG_DIR trees. These hold live Claude subscription
 # credentials in cleartext — the single most dangerous thing that could land in
 # a commit. See docs/idea/07-security.md.
