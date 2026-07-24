@@ -32,6 +32,17 @@ export type {
   UpdatePoolInput,
 } from "./repositories/pool-repository"
 export { createPoolRepository } from "./repositories/pool-repository"
+export type {
+  UsageDimension,
+  UsageGroupRow,
+  UsageGroupSeriesPoint,
+  UsageLatency,
+  UsageReadRepository,
+  UsageSeriesPoint,
+  UsageTotals,
+  UsageWindow,
+} from "./repositories/usage-read-repository"
+export { createUsageReadRepository } from "./repositories/usage-read-repository"
 export type { UsageRecordRepository } from "./repositories/usage-repository"
 export { createUsageRecordRepository } from "./repositories/usage-repository"
 // --- row types --------------------------------------------------------------

@@ -9,6 +9,11 @@ export interface AccountRecheckProps {
   readonly accountId: string
   readonly busy: boolean
   readonly nowMs: number
+  /**
+   * `availability.lastCheckedAt` from the accounts read — what the *server* remembers, so a cold
+   * load and another operator's press both show a time rather than "not checked".
+   */
+  readonly lastCheckedAt: string | null
   readonly onRecheck: (id: string) => void
 }
 
@@ -26,11 +31,14 @@ export interface AccountRecheckProps {
  *   error — a red state for pressing a button twice would be hostile, which is
  *   why the API does not answer 429 here.
  * - `lastCheckedAt` is **always visible**, pressed or not, so the control is
- *   never a mystery box.
+ *   never a mystery box. It comes from the accounts read, and the press result
+ *   supersedes it only because that one also carries `nextAllowedAt`.
  */
 export function AccountRecheck(props: AccountRecheckProps) {
   const last = useLastRecheck(() => props.accountId)
   const result = (): RecheckResult | null => (last.isSuccess ? (last.data ?? null) : null)
+  // Server-remembered time, used until this tab makes a press of its own.
+  const checkedAt = (): string | null => result()?.lastCheckedAt ?? props.lastCheckedAt
 
   return (
     <div class={styles.root}>
@@ -45,27 +53,34 @@ export function AccountRecheck(props: AccountRecheckProps) {
 
       <Show
         fallback={
-          // No `GET` carries `lastCheckedAt`, so a cold load genuinely does not
-          // know. Saying so beats inventing a time.
-          <span class={styles.note}>Not checked from this console</span>
+          // Genuinely never checked since the router started — the timestamps live in memory
+          // alongside the breaker marks they guard. Saying so beats inventing a time.
+          <span class={styles.note}>Not checked since restart</span>
         }
-        when={result()}
+        when={checkedAt()}
       >
         {(checked) => (
           <span class={styles.note}>
             <span class={styles.line}>
-              Checked {formatTimestamp(checked().lastCheckedAt)} (
-              {formatRelative(checked().lastCheckedAt, props.nowMs)})
+              Checked {formatTimestamp(checked())} ({formatRelative(checked(), props.nowMs)})
             </span>
-            <Show
-              fallback={
-                <span class={styles.line}>Eligible again — status updates on the next request</span>
-              }
-              when={!checked().rechecked}
-            >
-              <span class={styles.line}>
-                On cooldown — next check {formatRelative(checked().nextAllowedAt, props.nowMs)}
-              </span>
+            {/* Only a press from this tab knows whether the cooldown declined it; the read
+                carries the timestamp but not that verdict. */}
+            <Show when={result()}>
+              {(pressed) => (
+                <Show
+                  fallback={
+                    <span class={styles.line}>
+                      Eligible again — status updates on the next request
+                    </span>
+                  }
+                  when={!pressed().rechecked}
+                >
+                  <span class={styles.line}>
+                    On cooldown — next check {formatRelative(pressed().nextAllowedAt, props.nowMs)}
+                  </span>
+                </Show>
+              )}
             </Show>
           </span>
         )}

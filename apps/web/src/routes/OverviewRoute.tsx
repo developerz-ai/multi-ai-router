@@ -135,12 +135,6 @@ export default function OverviewRoute() {
         />
       </section>
 
-      <Banner title="Three of the tiles above are placeholder figures" tone="warn">
-        Account, pool and key counts are live. Requests, spend and error rate are generated locally
-        — the router has no usage read API yet, so no number in those three came from a request it
-        served.
-      </Banner>
-
       <QueryBoundary
         errorTitle="Fleet status could not be loaded"
         loading={<TableSkeleton label="Loading fleet status" rows={5} />}

@@ -9,6 +9,7 @@ import { ADMIN_AUTH_BASE_PATH, adminAuthRoutes } from "./routes/admin/auth"
 import { ADMIN_KEYS_BASE_PATH, adminKeyRoutes } from "./routes/admin/keys"
 import { ADMIN_POOLS_BASE_PATH, adminPoolRoutes } from "./routes/admin/pools"
 import { ADMIN_PROVIDERS_BASE_PATH, adminProviderRoutes } from "./routes/admin/providers"
+import { ADMIN_USAGE_BASE_PATH, adminUsageRoutes } from "./routes/admin/usage"
 import { healthRoutes } from "./routes/health"
 import { DATA_PLANE_BASE_PATH, dataPlaneRoutes } from "./routes/v1"
 import type {
@@ -96,5 +97,6 @@ function mountAdmin(app: Hono<AppEnv>, admin: AdminServices, trustProxy: boolean
   )
   app.route(ADMIN_POOLS_BASE_PATH, adminPoolRoutes({ guard, service: admin.pools }))
   app.route(ADMIN_KEYS_BASE_PATH, adminKeyRoutes({ guard, service: admin.keys }))
+  app.route(ADMIN_USAGE_BASE_PATH, adminUsageRoutes({ guard, service: admin.usage }))
   app.route(ADMIN_PROVIDERS_BASE_PATH, adminProviderRoutes({ guard }))
 }

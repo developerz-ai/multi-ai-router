@@ -3,6 +3,8 @@
  * nothing outside this directory reaches into a file inside it.
  */
 
+export type { AccountAvailability, AvailabilityDeps } from "./availability"
+export { withAvailability } from "./availability"
 export type { ProviderDescriptor, ProviderTransport } from "./providers"
 export { describeProvider, describeProviders } from "./providers"
 export type { RecheckResult, RecheckService, RecheckServiceDeps } from "./recheck"

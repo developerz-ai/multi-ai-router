@@ -50,10 +50,21 @@ describe("cooling down — temporary, a clock will fix it", () => {
     expect(state.cooldownSource).toBe("provider-reported")
   })
 
-  test("with nothing reported it falls back to backoff, labeled unknown — not dressed as fact", () => {
+  test("with nothing reported it falls back to backoff, labeled estimated — not dressed as fact", () => {
     const state = recordFailure(HEALTHY, failure("rate-limited"), NOW)
-    expect(state.cooldownSource).toBe("unknown")
+    // `estimated`, not `unknown`. The instant is real — we computed it from the backoff schedule —
+    // and that is exactly what the middle value of `ResetSource` is for. `unknown` is reserved for
+    // having no instant at all, which is the `exhausted` case. The console renders this qualifier
+    // beside the countdown, so an operator can tell the provider's own reset from our arithmetic.
+    expect(state.cooldownSource).toBe("estimated")
     expect(state.cooldownUntil).toEqual(at(backoffMs(1)))
+  })
+
+  test("an auth failure carries no reset instant, so its source really is unknown", () => {
+    // The contrast that makes the value above meaningful: nothing here computed a time.
+    const state = recordFailure(HEALTHY, failure("auth"), NOW, { authKind: "api-key" })
+    expect(state.cooldownUntil).toBeUndefined()
+    expect(state.cooldownSource).toBe("unknown")
   })
 
   test("5xx counts toward a streak and trips only at the threshold", () => {

@@ -138,8 +138,12 @@ function trip(
 ): BreakerState {
   const reported = reportedReset(failure, now)
   const until = reported ?? new Date(now.getTime() + backoffMs(failures, options))
+  // `estimated`, not `unknown`: when the provider reported nothing we still computed an instant
+  // from the backoff schedule, and that is precisely what "estimated" means. Calling it unknown
+  // would understate what we know, and the console renders this qualifier next to the countdown —
+  // an operator has to be able to tell a provider's own reset from our arithmetic.
   const source: ResetSource =
-    reported === null ? "unknown" : (failure.resetSource ?? "provider-reported")
+    reported === null ? "estimated" : (failure.resetSource ?? "provider-reported")
 
   // A later mark may extend an entry; an earlier one never shortens it, so two concurrent
   // failures cannot un-learn the longer reset.

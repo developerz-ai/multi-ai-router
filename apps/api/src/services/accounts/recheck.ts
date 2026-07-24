@@ -44,6 +44,14 @@ export interface RecheckService {
   recheck(accountId: string): Promise<AdminResult<RecheckResult>>
   /** Every account, each under its own cooldown. */
   recheckAll(): Promise<AdminResult<readonly RecheckResult[]>>
+  /**
+   * When this account was last re-checked, or null if not since this process started.
+   *
+   * Synchronous and in-memory: the accounts list reads it per row, and CLAUDE.md requires the
+   * timestamp to be visible whether or not the operator just pressed the button — a control whose
+   * last effect is invisible is a mystery box.
+   */
+  lastCheckedAt(accountId: string): Date | null
 }
 
 export interface RecheckServiceDeps {
@@ -88,6 +96,8 @@ export function createRecheckService(deps: RecheckServiceDeps): RecheckService {
       if (account === undefined) return notFound("No account has that id")
       return ok(attempt(accountId, deps.now()))
     },
+
+    lastCheckedAt: (accountId) => lastChecked.get(accountId) ?? null,
 
     recheckAll: async () => {
       const now = deps.now()

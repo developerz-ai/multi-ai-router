@@ -4,6 +4,7 @@ import type {
   Dialect,
   KeyScope,
   ProviderId,
+  ResetSource,
   RoutingPolicy,
 } from "@multi-ai-router/core"
 
@@ -38,6 +39,25 @@ export interface AccountView {
   readonly tokenExpiresAt: string | null
   readonly createdAt: string
   readonly updatedAt: string
+  /**
+   * What the router currently observes, overlaid on the read by the API.
+   *
+   * Absent on a write response, which returns the row just written rather than a fresh
+   * observation of it — so every consumer must treat it as optional.
+   */
+  readonly availability?: AccountAvailability
+}
+
+/** `services/accounts/availability.ts` — `AccountAvailability`. */
+export interface AccountAvailability {
+  /** What the operator set: `active` or `disabled`, never an observation. */
+  readonly configuredStatus: AccountStatus
+  readonly resetsAt: string | null
+  /** Always present, so a countdown is never rendered without its qualifier. */
+  readonly resetSource: ResetSource
+  readonly lastCheckedAt: string | null
+  readonly consecutiveFailures: number
+  readonly inFlight: number
 }
 
 /** `services/pools/view.ts` — `PoolMemberView`. */

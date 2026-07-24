@@ -1,5 +1,6 @@
 import type { AccountStatus, Dialect, ProviderId } from "@multi-ai-router/core"
 import type { AccountRow, ModelAliasMap } from "@multi-ai-router/db"
+import type { AccountAvailability } from "./availability"
 
 /**
  * What the admin plane is allowed to say about an account.
@@ -34,6 +35,12 @@ export interface AccountView {
   readonly tokenExpiresAt: string | null
   readonly createdAt: string
   readonly updatedAt: string
+  /**
+   * What the router currently observes: live reset instant, how trustworthy it is, and when an
+   * operator last re-checked. Added by the `withAvailability` decorator on reads, and absent on
+   * a write — which returns the row just written, not a fresh observation of it.
+   */
+  readonly availability?: AccountAvailability
 }
 
 export function toAccountView(row: AccountRow): AccountView {

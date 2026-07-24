@@ -3,6 +3,7 @@ import type { AccountsService, RecheckService } from "./services/accounts"
 import type { AdminAuthService } from "./services/admin-auth"
 import type { KeysService } from "./services/keys"
 import type { PoolsService } from "./services/pools"
+import type { UsageService } from "./services/usage-read"
 
 /**
  * The Hono environment every route and middleware in the transport layer shares. Transport is
@@ -32,6 +33,7 @@ export interface AdminServices {
   readonly accounts: AccountsService
   readonly pools: PoolsService
   readonly keys: KeysService
+  readonly usage: UsageService
   /** The "Re-check now" button's server side, per account and for all of them. */
   readonly recheck: RecheckService
 }

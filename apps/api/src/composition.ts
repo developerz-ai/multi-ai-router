@@ -3,12 +3,13 @@ import {
   createApiKeyRepository,
   createAuditRepository,
   createPoolRepository,
+  createUsageReadRepository,
   createUsageRecordRepository,
   type Database,
 } from "@multi-ai-router/db"
 import type { Env } from "./config/env"
 import type { Logger } from "./logging/logger"
-import { createAccountsService, createRecheckService } from "./services/accounts"
+import { createAccountsService, createRecheckService, withAvailability } from "./services/accounts"
 import {
   createAuditRecorder,
   withCatalogRefresh,
@@ -30,6 +31,7 @@ import {
 import { createKeysService } from "./services/keys"
 import { createPoolsService } from "./services/pools"
 import { createUsageRecorder, toUsageRecordRow, type UsageRecorder } from "./services/usage"
+import { createUsageService } from "./services/usage-read"
 import type { AdminServices } from "./types"
 
 /**
@@ -152,6 +154,16 @@ export function createRuntime(deps: RuntimeDeps): Runtime {
   // before the response is written. Without them an account disabled in the
   // console keeps routing, and a revoked key keeps authenticating, until a TTL
   // expires.
+  // "Re-check now": clears the breaker marks so the next real request probes the account, rather
+  // than sending a synthetic one the provider would still bill. Built before the services,
+  // because the accounts read overlays its last-checked timestamps.
+  const recheck = createRecheckService({
+    accounts,
+    health,
+    cooldownSeconds: env.accountRecheckCooldownSeconds,
+    now,
+  })
+
   const coherence = {
     refreshCatalog: () => catalog.refresh(),
     invalidateKey: (keyId: string) => verifier.invalidate(keyId),
@@ -170,9 +182,13 @@ export function createRuntime(deps: RuntimeDeps): Runtime {
         adminLoginLockoutMinutes: env.adminAuth.loginLockoutMinutes,
       }),
     }),
-    accounts: withCatalogRefresh(
-      createAccountsService({ accounts, keys, cipher, audit, now }),
-      coherence,
+    // Two decorators, two concerns, applied in the order they must run: the CRUD service knows
+    // nothing about caches or health, `withCatalogRefresh` makes a write land on the request
+    // path, and `withAvailability` answers a read with what the router currently observes rather
+    // than with the row the operator last wrote.
+    accounts: withAvailability(
+      withCatalogRefresh(createAccountsService({ accounts, keys, cipher, audit, now }), coherence),
+      { catalog, health, recheck, now },
     ),
     pools: withPoolCatalogRefresh(
       createPoolsService({ pools, accounts, keys, audit, now }),
@@ -182,14 +198,19 @@ export function createRuntime(deps: RuntimeDeps): Runtime {
       createKeysService({ keys, pools, accounts, cipher, audit, now }),
       coherence,
     ),
-    // "Re-check now": clears the breaker marks so the next real request probes the
-    // account, rather than sending a synthetic one the provider would still bill.
-    recheck: createRecheckService({
-      accounts,
-      health,
-      cooldownSeconds: env.accountRecheckCooldownSeconds,
+    // Accounts and pools are named from the warm catalog; keys need the one query, which is
+    // unremarkable on the admin plane. A miss means the subject was deleted — the row still
+    // renders as "deleted", because spend that happened is still spend.
+    usage: createUsageService({
+      usage: createUsageReadRepository(database),
+      labels: async () => ({
+        keys: new Map((await keys.list()).map((key) => [key.id, key.name])),
+        accounts: new Map(catalog.accounts().map((a) => [a.id, a.snapshot.label])),
+        pools: new Map(catalog.pools().map((pool) => [pool.id, pool.name])),
+      }),
       now,
     }),
+    recheck,
   }
 
   return {

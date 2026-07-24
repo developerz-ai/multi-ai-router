@@ -54,8 +54,12 @@ export function AccountsTable(props: AccountsTableProps) {
       cell: (account) => (
         <ResetIndicator
           nowMs={props.nowMs}
-          resetSource="unknown"
-          resetsAt={null}
+          resetSource={account.availability?.resetSource ?? "unknown"}
+          resetsAt={
+            account.availability?.resetsAt === undefined || account.availability.resetsAt === null
+              ? null
+              : Date.parse(account.availability.resetsAt)
+          }
           status={account.status}
         />
       ),
@@ -93,6 +97,7 @@ export function AccountsTable(props: AccountsTableProps) {
         <AccountRecheck
           accountId={account.id}
           busy={props.recheckingId === account.id}
+          lastCheckedAt={account.availability?.lastCheckedAt ?? null}
           nowMs={props.nowMs}
           onRecheck={props.onRecheck}
         />
@@ -130,7 +135,7 @@ export function AccountsTable(props: AccountsTableProps) {
 
   return (
     <Table
-      caption="Upstream accounts. Reset is shown as absolute time and countdown once quota state is on the wire."
+      caption="Upstream accounts. Reset is shown as absolute time and countdown, labelled by how much the instant can be trusted."
       columns={columns()}
       rowId={(account) => account.id}
       rows={props.accounts}

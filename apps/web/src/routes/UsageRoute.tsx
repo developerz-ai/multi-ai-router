@@ -23,11 +23,10 @@ import { UsageBreakdown } from "./usage/UsageBreakdown"
  * The headline surface: any dimension against any window, with the same measures
  * in every cell.
  *
- * **The numbers on this screen are generated, not measured.** There is no usage
- * read API yet; `lib/api/usage.ts` produces them from a fixed seed and every
- * value carries `placeholder: true`, which is what raises the banner below. The
- * layout, the measures and the query wiring are the real thing, so landing the
- * endpoint is a one-file change.
+ * Every figure is measured: `GET /api/admin/usage` aggregates the `UsageRecord`
+ * rows the router writes off the request path. `placeholder` stays on the shape
+ * so the banner can return the moment any part of this screen is ever fed
+ * something generated again.
  */
 export default function UsageRoute() {
   const [window, setWindow] = createSignal<UsageWindow>("7d")
@@ -70,9 +69,7 @@ export default function UsageRoute() {
           <>
             <Show when={data.placeholder}>
               <Banner title="These figures are placeholder data, not measurements" tone="warn">
-                The router has no usage read API yet. Everything on this screen is generated locally
-                from a fixed seed so the surface can be built and reviewed — no number here came
-                from a request the router served.
+                Nothing on this screen came from a request the router served.
               </Banner>
             </Show>
 

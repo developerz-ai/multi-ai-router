@@ -1,36 +1,25 @@
-// ─────────────────────────────────────────────────────────────────────────────
-// PLACEHOLDER DATA. THERE IS NO USAGE READ API YET.
-//
-// Every figure this module returns is generated locally from a fixed seed. It
-// is not a cache, not a sample, and not derived from anything the router
-// measured. `UsageSummary.placeholder` is `true` on every value, and the Usage
-// surface renders a standing banner off that flag — nothing in this console may
-// present these numbers without saying where they came from.
-//
-// **The swap is this one file.** The types below are the contract the console
-// already renders against; when the endpoint lands, `fetchUsageSummary` becomes
-// a `request()` call and `placeholder` becomes `false`. No route, component or
-// query key changes.
-//
-// The endpoint this was written against:
-//
-//   GET /api/admin/usage?window=today|7d|30d|lifetime
-//   GET /api/admin/usage?from=<iso>&to=<iso>          (custom window)
-//   → UsageSummary, with `placeholder` absent or false
-//
-// The shape matters in three specific ways, each of which is a rule from
-// CLAUDE.md rather than a preference:
-//   - `requests` and `attempts` are separate fields and are never summed. A
-//     failover chain of three is one request and three attempts.
-//   - `costMetered` and `costNotional` are separate fields and are never
-//     summed. A subscription account has no per-token price, only an
-//     attribution.
-//   - `tokensIn` is the prompt tokens *excluding* cache; total prompt size is
-//     `tokensIn + cacheReadTokens + cacheWriteTokens`, which is why all three
-//     travel together.
-// ─────────────────────────────────────────────────────────────────────────────
+import { request } from "./client"
 
-export const USAGE_IS_PLACEHOLDER = true
+// Usage reads, backed by `GET /api/admin/usage`.
+//
+// The wire shape differs from what this module hands the console in three ways,
+// and each difference is deliberate rather than incidental:
+//
+//   - **Costs arrive as strings.** They are Postgres `numeric`, and serialising
+//     them as JSON numbers would round money through a float. They are parsed
+//     once here, at the edge, so no component has to know.
+//   - **A label may be null**, with a `note` saying why: `deleted` when the key
+//     or account is gone (usage rows outlive what they name), `none` when the
+//     dimension did not apply — a key scoped `all` was placed by no pool. Both
+//     still render, because spend that happened is still spend and hiding a row
+//     would make the breakdown stop adding up to the total printed above it.
+//   - **Percentiles are per group** on the wire and are folded into this
+//     module\'s flat `UsageTotals`, which is the shape the tables already render.
+//
+// Every series is dense and aligned to `axis`: a quiet bucket is a zero, not a
+// missing point, so two rows in a table are comparable at a glance.
+
+export const USAGE_IS_PLACEHOLDER = false
 
 export const USAGE_WINDOWS = ["today", "7d", "30d", "lifetime"] as const
 export type UsageWindow = (typeof USAGE_WINDOWS)[number]
@@ -172,119 +161,112 @@ function addTotals(a: UsageTotals, b: UsageTotals): UsageTotals {
   }
 }
 
-// ---------------------------------------------------------------- generation
+// ------------------------------------------------------------------ the wire
 
-const BUCKETS: Readonly<Record<UsageWindow, number>> = {
-  today: 24,
-  "7d": 7,
-  "30d": 30,
-  lifetime: 30,
+/** Exactly what `GET /api/admin/usage` returns. Parsed into the types above. */
+interface WireTotals {
+  readonly requests: number
+  readonly attempts: number
+  readonly errors: number
+  readonly tokensIn: number
+  readonly tokensOut: number
+  readonly cacheReadTokens: number
+  readonly cacheWriteTokens: number
+  readonly costMetered: string
+  readonly costNotional: string
 }
 
-const DAY_MS = 86_400_000
-const HOUR_MS = 3_600_000
+interface WireRow {
+  readonly id: string | null
+  readonly label: string | null
+  readonly note: "deleted" | "none" | null
+  readonly totals: WireTotals
+  readonly latencyP50Ms: number | null
+  readonly latencyP95Ms: number | null
+  readonly routerOverheadP95Ms: number | null
+  readonly series: readonly number[]
+}
 
-/** Deterministic per seed, so a re-render never reshuffles the numbers. */
-function seeded(seed: string): () => number {
-  let state = 2166136261
-  for (const char of seed) {
-    state = Math.imul(state ^ char.charCodeAt(0), 16777619)
+interface WireSummary {
+  readonly window: string
+  readonly bucket: "hour" | "day"
+  readonly from: string
+  readonly to: string
+  readonly totals: WireTotals
+  readonly latency: {
+    readonly p50Ms: number | null
+    readonly p95Ms: number | null
+    readonly routerOverheadP95Ms: number | null
+    readonly ttfbP95Ms: number | null
   }
-  return () => {
-    state = Math.imul(state ^ (state >>> 15), 2246822507)
-    state = Math.imul(state ^ (state >>> 13), 3266489909)
-    state = state ^ (state >>> 16)
-    return (state >>> 0) / 4294967296
-  }
+  readonly axis: readonly string[]
+  readonly series: readonly { readonly at: string; readonly requests: number }[]
+  readonly byKey: readonly WireRow[]
+  readonly byAccount: readonly WireRow[]
+  readonly byPool: readonly WireRow[]
+  readonly byModel: readonly WireRow[]
 }
 
-const MEMBERS: Readonly<Record<UsageDimension, readonly (readonly [string, string])[]>> = {
-  key: [
-    ["ci-pipeline", "scope: all"],
-    ["dev-laptops", "scope: 2 pools"],
-    ["nightly-evals", "scope: 3 accounts"],
-  ],
-  account: [
-    ["claude-max-01", "anthropic-oauth"],
-    ["claude-max-02", "anthropic-oauth"],
-    ["openai-team", "openai-api"],
-    ["openrouter-fallback", "openrouter"],
-  ],
-  pool: [
-    ["claude-subs", "sticky"],
-    ["overflow", "priority-failover"],
-  ],
-  model: [
-    ["claude-sonnet-4-5", "anthropic"],
-    ["claude-opus-4-1", "anthropic"],
-    ["gpt-5", "openai-chat"],
-  ],
-}
-
-function makeSeries(random: () => number, buckets: number, scale: number): readonly number[] {
-  return Array.from({ length: buckets }, () => Math.round(random() * scale + scale * 0.15))
-}
-
-function totalsFrom(series: readonly number[], random: () => number): UsageTotals {
-  const requests = series.reduce((sum, value) => sum + value, 0)
-  const attempts = requests + Math.round(requests * random() * 0.18)
-  return {
-    requests,
-    attempts,
-    errors: Math.round(attempts * random() * 0.06),
-    tokensIn: requests * Math.round(420 + random() * 900),
-    tokensOut: requests * Math.round(180 + random() * 500),
-    cacheReadTokens: requests * Math.round(random() * 2400),
-    cacheWriteTokens: requests * Math.round(random() * 320),
-    costMetered: requests * (random() * 0.004),
-    costNotional: requests * (random() * 0.006),
-    latencyP50Ms: Math.round(600 + random() * 900),
-    latencyP95Ms: Math.round(2200 + random() * 3000),
-    routerOverheadP95Ms: Math.round(1 + random() * 3),
-  }
-}
-
-function breakdown(
-  dimension: UsageDimension,
-  window: UsageWindow,
-  buckets: number,
-): readonly UsageBreakdownRow[] {
-  return MEMBERS[dimension].map(([label, note], index) => {
-    const random = seeded(`${dimension}:${label}:${window}`)
-    const series = makeSeries(random, buckets, 40 / (index + 1))
-    return {
-      id: `${dimension}-${label}`,
-      label,
-      note,
-      series,
-      totals: totalsFrom(series, random),
-    }
-  })
-}
-
-/**
- * The function that becomes a `request()` call. Async today only so the swap
- * changes nothing about how the query layer calls it.
- */
 export async function fetchUsageSummary(window: UsageWindow): Promise<UsageSummary> {
-  const buckets = BUCKETS[window]
-  const byAccount = breakdown("account", window, buckets)
-  const to = new Date()
-  const spanMs = window === "today" ? buckets * HOUR_MS : buckets * DAY_MS
+  const wire = await request<WireSummary>({ method: "GET", path: "/usage", query: { window } })
 
   return {
     window,
-    bucket: window === "today" ? "hour" : "day",
-    from: new Date(to.getTime() - spanMs).toISOString(),
-    to: to.toISOString(),
-    totals: sumTotals(byAccount),
-    series: Array.from({ length: buckets }, (_, index) =>
-      byAccount.reduce((sum, row) => sum + (row.series[index] ?? 0), 0),
-    ),
-    byKey: breakdown("key", window, buckets),
-    byAccount,
-    byPool: breakdown("pool", window, buckets),
-    byModel: breakdown("model", window, buckets),
+    bucket: wire.bucket,
+    from: wire.from,
+    to: wire.to,
+    totals: {
+      ...parseTotals(wire.totals),
+      latencyP50Ms: wire.latency.p50Ms ?? 0,
+      latencyP95Ms: wire.latency.p95Ms ?? 0,
+      routerOverheadP95Ms: wire.latency.routerOverheadP95Ms ?? 0,
+    },
+    series: wire.series.map((point) => point.requests),
+    byKey: wire.byKey.map(toRow),
+    byAccount: wire.byAccount.map(toRow),
+    byPool: wire.byPool.map(toRow),
+    byModel: wire.byModel.map(toRow),
     placeholder: USAGE_IS_PLACEHOLDER,
   }
+}
+
+function parseTotals(
+  totals: WireTotals,
+): Omit<UsageTotals, "latencyP50Ms" | "latencyP95Ms" | "routerOverheadP95Ms"> {
+  return {
+    requests: totals.requests,
+    attempts: totals.attempts,
+    errors: totals.errors,
+    tokensIn: totals.tokensIn,
+    tokensOut: totals.tokensOut,
+    cacheReadTokens: totals.cacheReadTokens,
+    cacheWriteTokens: totals.cacheWriteTokens,
+    costMetered: Number(totals.costMetered),
+    costNotional: Number(totals.costNotional),
+  }
+}
+
+/**
+ * A missing label is rendered, never hidden. `null` becomes an explicit word so a table cell is
+ * never blank and a reader never has to guess whether a row is broken or simply unattributed.
+ */
+function toRow(row: WireRow): UsageBreakdownRow {
+  return {
+    id: row.id ?? `none-${row.note ?? "unknown"}`,
+    label: row.label ?? (row.note === "deleted" ? "(deleted)" : "(none)"),
+    note: noteFor(row),
+    series: row.series,
+    totals: {
+      ...parseTotals(row.totals),
+      latencyP50Ms: row.latencyP50Ms ?? 0,
+      latencyP95Ms: row.latencyP95Ms ?? 0,
+      routerOverheadP95Ms: row.routerOverheadP95Ms ?? 0,
+    },
+  }
+}
+
+function noteFor(row: WireRow): string {
+  if (row.note === "deleted") return "no longer exists"
+  if (row.note === "none") return "not attributed"
+  return ""
 }
