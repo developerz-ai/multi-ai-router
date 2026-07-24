@@ -112,6 +112,11 @@ naming the offending variable — the process never starts half-configured.
 | `KEY_CACHE_NEGATIVE_TTL_SECONDS` | no | `5` | How long a failed lookup is remembered. Short on purpose: it stops a flood of bad keys becoming a flood of queries, and a just-minted key must start working quickly. |
 | `USAGE_QUEUE_MAX` | no | `10000` | `UsageRecord` rows queued before the writer sheds the oldest. Overflow degrades reporting, never traffic. |
 | `USAGE_BATCH_SIZE` | no | `200` | Rows per insert. Larger means fewer round trips and a bigger loss if the process dies mid-queue. |
+| `ROUTING_MAX_ATTEMPTS` | no | `3` | Distinct accounts tried for one client request before the honest failure. Never overrides the rule that an attempt is not retried once bytes are on the wire. |
+| `ROUTING_FAILURE_THRESHOLD` | no | `3` | Consecutive 5xx or connection failures before an account's breaker trips. |
+| `ROUTING_BASE_BACKOFF_MS` | no | `1000` | First cooldown step; doubles per consecutive failure. |
+| `ROUTING_MAX_BACKOFF_MS` | no | `300000` | Ceiling on that doubling, so a long outage does not park an account for hours. |
+| `UPSTREAM_TIMEOUT_MS` | no | `600000` | How long the router waits on one upstream. Long, because a long completion is a normal response and not a hung one. |
 | `USAGE_FLUSH_INTERVAL_MS` | no | `1000` | Drain cadence. Raising it widens the window in which a crash loses unwritten usage rows; it never affects request latency. |
 
 The last two groups are the request path's own tunables: nothing there queries Postgres, so those

@@ -48,10 +48,10 @@ Marked ⏳ where the design is settled but the code is not — see [Status](#-st
 - 🧩 ⏳ **Subscriptions as first-class upstreams** — Claude subscriptions via the Agent SDK (a `CLAUDE_CONFIG_DIR` per account), ChatGPT/Codex via OAuth + PKCE, connected from the admin UI by redirect capture *or* manual code paste, with background refresh ahead of expiry.
 - ⚖️ **Six load-balancing policies per pool** — sticky, round-robin, weighted, least-used, priority-failover, quota-aware — plus an optional overflow account, bounded failover, and a circuit breaker.
 - 🔑 **Named, retrievable keys with full or limited scope** — every key has a human-chosen name and a scope: `all` accounts, one or more pools, or an explicit account list. Stored encrypted, not hashed, so you can look a key up again without rotating it.
-- 📊 **Usage** — one record per upstream **attempt** (key, account, pool, session, model, tokens, cost, latency, TTFB, router overhead, outcome), queued in memory and batch-written off the request path. ⏳ Rollups, the usage screens, charts, and Prometheus `/metrics`.
+- 📊 **Usage** — one record per upstream **attempt** (key, account, pool, session, model, tokens, cost, latency, TTFB, router overhead, outcome), queued in memory and batch-written off the request path, and read back by the console over any window, broken down by key, account, pool or model. ⏳ Daily rollups and Prometheus `/metrics`.
 - ⏱️ ⏳ **Reset visibility** — every unavailable account shows its reset as an absolute time *and* a countdown, per window for Claude subs (5-hour, 7-day, per-model), labeled as reported / estimated / unknown. Plus a manual **Re-check now**, per account or for all: providers sometimes reset early or lift a limit for everyone, and the router shouldn't sit on a stale timestamp.
 - ⚡ **Performance as a stated goal** — under 5 ms added p99 on the passthrough path and zero added time-to-first-token. Streams are never buffered, passthrough bodies are never parsed, and nothing touches Postgres on the critical path: accounts and pools are read from a warm catalog, keys from a bounded cache, usage is written off-path.
-- 🖥️ ⏳ **SolidJS operator console** — the shell, navigation, theming, and design system exist; the accounts, pools, keys, usage, and settings screens are placeholders over a working admin API.
+- 🖥️ **SolidJS operator console** — accounts, pools, keys and usage all render live data: key reveal with no shown-once flow, destructive actions that name exactly what they break, reset shown as absolute time *and* countdown labelled by how far it can be trusted, and a red banner for any account out of credits. ⏳ Settings is partly placeholder, and says so on the screen.
 - 🐳 **`docker compose up -d`** — the router plus PostgreSQL 16, a healthcheck gating startup, three env vars you set by hand.
 
 ---
@@ -75,7 +75,8 @@ everything below that says "no" is refused explicitly, by name, and never silent
 | **Cross-dialect translation** — an Anthropic-dialect client reaching an OpenAI-dialect account | ❌ refused with a `400` naming the reason |
 | **Claude subscriptions via the Agent SDK** | ❌ refused; `anthropic-oauth` accounts cannot be served |
 | **ChatGPT/Codex OAuth, Gemini native** | ❌ no driver |
-| **Operator console screens** — accounts, pools, keys, usage, settings | ❌ shell, navigation, and theming only; every screen is still a placeholder |
+| **Operator console screens** — accounts, pools, keys, usage | ✅ live data end to end |
+| **Operator console** — settings | ⚠️ session and provider registry are live; prices, retention, task health and audit are not built, and the screen says so |
 | **`/metrics`, the janitor and retention sweeps, usage rollups, per-key rate-limit enforcement** | ❌ not built |
 
 The contract is [`docs/idea/`](docs/idea/): entity names, endpoints, policies, env vars, and invariants

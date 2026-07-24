@@ -2,8 +2,9 @@
 
 Status: **implemented**, except where a row says otherwise — the two planes, admin auth with CSRF
 and login throttling, key mint/reveal/revoke, both header styles, and scope enforced as an
-intersection all work. Per-key rate limits are stored but **not yet enforced**; `/api/admin/usage`
-and `/api/admin/settings` do not exist; OAuth connect/reconnect does not exist.
+intersection all work, as does `GET /api/admin/usage`. Per-key rate limits are stored and carried
+on the verified key but **not yet enforced by any limiter**; `/api/admin/settings` does not exist;
+OAuth connect/reconnect does not exist.
 
 ## Two planes
 
@@ -227,7 +228,7 @@ Paths and purpose only. Handler detail belongs in [01-architecture.md](01-archit
 | `/api/admin/pools/**` | pool CRUD, membership, policy, weights, priority order, overflow account | yes |
 | `/api/admin/keys/**` | list, create, reveal, edit limits and bindings, revoke | yes |
 | `/api/admin/providers` | the static provider registry, so the console's account form is never a second copy of it | yes |
-| `/api/admin/usage/**` | usage and cost queries by key, account, model, time | no |
+| `GET /api/admin/usage` | totals, series and breakdowns by key, account, pool, model, over a window | yes |
 | `/api/admin/settings/**` | retention knobs, price table overrides, log level | no |
 
 Data-plane routes (`/v1/messages`, `/v1/chat/completions`, `/v1/responses`, `/v1/models`) are in

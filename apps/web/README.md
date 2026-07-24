@@ -57,9 +57,9 @@ route cannot drift apart.
 
 ## Routes
 
-Every screen below renders live admin data. The two exceptions are marked in the UI itself, on the
-screen, not only here: the **Usage** figures are generated (there is no usage read API yet), and the
-four Settings sections listed as unbuilt have no endpoint behind them.
+Every screen below renders live admin data, Usage included. The one exception is marked in the UI
+itself, on the screen and not only here: the four Settings sections listed as unbuilt have no
+endpoint behind them.
 
 | Path | Screen | What it shows |
 |---|---|---|
@@ -68,7 +68,7 @@ four Settings sections listed as unbuilt have no endpoint behind them.
 | `/accounts` | Accounts | Status, availability, credential kind, re-check per account and for all, add, disable, delete |
 | `/pools` | Pools | Membership, policy, overflow account, and how many members are routable *now* |
 | `/keys` | Keys | Named, scoped, mint, revoke, delete — and **reveal, any time, no shown-once flow** |
-| `/usage` | Usage | Any dimension × any window. **Placeholder figures**, banner-marked |
+| `/usage` | Usage | Any dimension × any window, from `GET /api/admin/usage`. Requests and attempts, and metered and notional spend, are shown as separate measures and never summed |
 | `/settings` | Settings | Live session and provider registry; prices, retention, task health and audit still unbuilt |
 | `*` | Not found | Inside the layout |
 

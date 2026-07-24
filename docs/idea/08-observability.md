@@ -178,14 +178,28 @@ immediately if it is healthy.
 | Endpoint | Auth | Meaning | Codes |
 |---|---|---|---|
 | `GET /healthz` | none | Liveness. The process is up and serving | `200` always while serving |
-| `GET /readyz` | none | Readiness: DB reachable **and** at least one Account in a healthy state | `200` ready, `503` with a short reason otherwise |
+| `GET /readyz` | none | Readiness: **database reachable**. The account pool is reported (`ok` / `none` / `blocked`) but does not gate the answer | `200` ready, `503` with a short reason when the database is unreachable |
 | `GET /metrics` | **DEFERRED** (bind-scoped or token) | Prometheus text exposition | `200` |
 | `GET /v1/usage/quota` | router key or admin session | Per-Account, per-window utilization, `resetsAt`, `resetSource`, `status`, `lastCheckedAt` — the same shape the UI renders, so an operator can alert on it externally | `200` |
-| `POST /admin/accounts/:id/recheck` | admin session | Manual re-check; `all` re-checks every account | `200`, `429` in cooldown |
+| `POST /api/admin/accounts/:id/recheck` | admin session | Manual re-check. `POST /api/admin/accounts/recheck` re-checks every account | `200` always — a cooldown refusal is `rechecked: false`, not `429` |
+| `GET /api/admin/usage` | admin session | Totals, series and breakdowns per key / account / pool / model over a window | `200` |
 
-`/healthz` never touches the database. `/readyz` is what an orchestrator gates traffic on — a router
-with zero healthy accounts can serve nothing useful, so it reports not-ready rather than failing
-every request at the last moment. `GET /v1/usage/quota` is scoped to the presenting key's reachable
+`/healthz` never touches the database.
+
+**`/readyz` deliberately does not gate on healthy accounts**, though the obvious design says it
+should. A fresh install has zero accounts, so gating would mean it is never ready, so an
+orchestrator never routes traffic to the admin console *served by this same process* — the only
+way to add the first account. The router would be permanently not-ready with no way out. So the
+account dimension is reported and not gated: `none` (nothing configured yet), `blocked` (accounts
+exist and every one is unavailable) and `ok` are distinct, each carries a reason, and the probe
+reads the same warm snapshot the request path reads so it cannot disagree with the router about
+what is routable.
+
+A re-check is **not a synthetic probe**. It clears the account's breaker marks, which is the state
+a cooldown expiring produces, so the account becomes eligible as a half-open probe and the next
+real request tests it. One recovery path, not two that can disagree — and no unbilled request to a
+provider on a button press. The consequence is that a re-check reports eligibility, never a verdict
+on whether the account is back. `GET /v1/usage/quota` is scoped to the presenting key's reachable
 accounts and returns labels and utilization only — never a credential, never an account's provider
 identity beyond its label.
 
