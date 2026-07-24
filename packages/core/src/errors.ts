@@ -15,6 +15,9 @@ export const ROUTER_ERROR_CODES = [
   "credits_exhausted",
   "scope_violation",
   "key_revoked",
+  "admin_auth_failed",
+  "csrf_token_invalid",
+  "upstream_auth_failed",
   "upstream_timeout",
   "credential_decrypt_failed",
   "translation_failed",
@@ -97,6 +100,52 @@ export class ScopeViolationError extends RouterError {
 export class KeyRevokedError extends RouterError {
   readonly code = "key_revoked"
   readonly status = 401
+}
+
+/**
+ * Admin-plane authentication failed: bad credentials, no session, an expired session, or a
+ * router API key presented where only an admin session is accepted.
+ *
+ * Distinct from `KeyRevokedError` on purpose. Both are `401`, but they describe different
+ * credential spaces, and the two planes are deliberately separate — a router key can never
+ * authenticate the admin plane. Reusing `key_revoked` here would tell an operator staring at a
+ * failed console login that their *API key* was revoked, which is both wrong and a genuinely
+ * confusing thing to debug.
+ *
+ * The message must stay generic: never reveal whether the username existed.
+ */
+export class AdminAuthError extends RouterError {
+  readonly code = "admin_auth_failed"
+  readonly status = 401
+}
+
+/**
+ * A mutating admin request arrived without a valid CSRF token.
+ *
+ * Distinct from `ScopeViolationError` for the same reason as above: both are `403`, but scope
+ * violation is a data-plane authorization outcome ("this key may not reach that account"),
+ * while this is a request-forgery rejection. A client seeing `scope_violation` on a console
+ * action would look in entirely the wrong place.
+ */
+export class CsrfTokenError extends RouterError {
+  readonly code = "csrf_token_invalid"
+  readonly status = 403
+}
+
+/**
+ * The upstream rejected our credential — a `401`/`403` from the provider, not from us.
+ *
+ * `502`, deliberately: the client's own credential was fine and there is nothing they can do
+ * about it. Returning `401` here would tell a developer their router key was bad when the real
+ * problem is an Account the operator needs to re-authenticate.
+ *
+ * Distinct from `KeyRevokedError` (the *router* key) and from `AdminAuthError` (the console).
+ * Routing marks the offending Account `needs_reauth` and fails over; see
+ * docs/idea/05-routing-and-failover.md.
+ */
+export class UpstreamAuthError extends RouterError {
+  readonly code = "upstream_auth_failed"
+  readonly status = 502
 }
 
 /** The upstream (or the SDK subprocess) did not answer within its deadline. */

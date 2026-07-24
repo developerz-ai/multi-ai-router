@@ -81,15 +81,27 @@ The threat model changes shape rather than disappearing — there is no token co
 forged request to get an account banned, but the config-directory volume becomes live credential
 material with the same handling requirements as the database.
 
-Envelope format — every ciphertext record carries its own metadata:
+Envelope format — every ciphertext record carries its own metadata. Five dot-separated segments,
+unpadded base64url (`.` never occurs in base64url, so the split is unambiguous):
 
-```json
-{ "v": 1, "kid": "k1", "alg": "A256GCM", "nonce": "<base64>", "ct": "<base64>", "tag": "<base64>" }
+```
+v1.<keyId>.<nonce>.<authTag>.<ciphertext>
 ```
 
-`kid` is present from day one even though only one key exists. **Key rotation is `DEFERRED`** — but
-the envelope must never be simplified away, because rotation without a key id means re-encrypting
-blind.
+Stored in one `text` column. An earlier draft of this doc specified a JSON object with an `alg`
+field; the implementation is the compact string above and it is what the code does.
+
+- **The key id is present from day one** even though only one key exists. **Key rotation is
+  `DEFERRED`** — but the envelope must never be simplified away, because rotation without a key id
+  means re-encrypting blind.
+- **`v1.<keyId>` is bound as the GCM additional authenticated data.** A record therefore cannot be
+  re-labelled with a different version or key id and still verify.
+- **There is deliberately no `alg` field.** The version tag already pins the algorithm, and a
+  caller-selectable algorithm is a downgrade vector.
+- An unknown version or key id is **refused before decryption is attempted**, rather than tried
+  against the one key we hold.
+- Segment shapes are validated (and nonce/tag byte lengths checked) before any bytes reach the
+  cipher, so malformed input fails as a `CredentialDecryptError` rather than inside OpenSSL.
 
 ## Secrets in transit
 
@@ -136,7 +148,7 @@ inline with a copy button — retrieval is the recovery path, not the normal one
 
 **The two credential spaces are completely separate.** A router key authenticates the data plane and
 nothing else: it is never accepted on an admin route, cannot mint or read keys, cannot list accounts,
-and cannot reach `/admin/**`. There is no scope, no flag, and no configuration that promotes a router
+and cannot reach `/api/admin/**`. There is no scope, no flag, and no configuration that promotes a router
 key into the admin plane. Conversely, an admin session is not accepted on `/v1/**`.
 
 ## Redaction
@@ -183,7 +195,7 @@ rules:
 For operators, at deploy time:
 
 - Put the router behind a reverse proxy that terminates HTTPS. Do not publish the container port.
-- Do **not** expose the admin plane (`/admin/**`, the SPA) to the public internet — bind it to a
+- Do **not** expose the admin plane (`/api/admin/**`, the SPA) to the public internet — bind it to a
   private network, a VPN, or an authenticating proxy. The data plane can be public; the admin plane
   has no reason to be.
 - Generate `ENCRYPTION_KEY` from a CSPRNG (32 bytes, base64). Store it in a secret store if you have

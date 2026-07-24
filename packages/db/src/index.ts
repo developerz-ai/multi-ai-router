@@ -14,9 +14,14 @@ export type { MigrateOptions } from "./migrate"
 
 // --- migrations -------------------------------------------------------------
 export { defaultMigrationsFolder, runMigrations } from "./migrate"
-export type { ApiKeyRepository } from "./repositories/api-key-repository"
-
+export type {
+  AccountListFilter,
+  AccountRepository,
+  CreateAccountInput,
+} from "./repositories/account-repository"
 // --- repositories -----------------------------------------------------------
+export { createAccountRepository } from "./repositories/account-repository"
+export type { ApiKeyRepository } from "./repositories/api-key-repository"
 export { createApiKeyRepository } from "./repositories/api-key-repository"
 // --- row types --------------------------------------------------------------
 export type { AccountRow, ModelAliasMap, NewAccountRow } from "./schema/accounts"

@@ -72,7 +72,7 @@ account per provider. The `label` is what distinguishes them to a human.
 | `tokenExpiresAt` | timestamp, optional | OAuth accounts only. Drives the per-account refresh schedule; refresh fires at a fraction of the remaining lifetime, never on a `401`, and is re-scheduled each time a new token lands |
 | `refreshState` | in-memory | The single-flight guard for this account: concurrent requests hitting a refreshing account await one shared promise, never N racing writes. Plus the backoff counter for failed refreshes |
 | `status` | enum | `active` \| `disabled` \| `cooling_down` \| `exhausted` \| `needs_reauth` |
-| `quotaWindows` | json, optional | Per-window quota state — see below. A Claude subscription has several concurrent windows that reset independently |
+| *(quota windows)* | separate `quota_windows` table | Per-window quota state — see below. A Claude subscription has several concurrent windows that reset independently, so they are rows keyed `(account_id, window)`, not a JSON blob on the account: each window is upserted and expires on its own clock, and one refresh must not rewrite the others |
 | `modelAliases` | json, optional | Maps the client's model name to the account's (`sonnet` → `glm-4.7`, `sonnet` → `k3`). Absent means pass the name through unchanged |
 | `weight` | number | Bias for the `weighted` policy |
 | `priority` | number | Strict order for the `priority-failover` policy |

@@ -18,6 +18,8 @@ const TABLE_COLUMNS: ReadonlyArray<{ table: Table; columns: readonly string[] }>
       "authMaterial",
       "configDir",
       "tokenExpiresAt",
+      "baseUrl",
+      "dialect",
       "modelAliases",
       "weight",
       "priority",
@@ -235,6 +237,12 @@ describe("accounts", () => {
   test("Claude subscription accounts hold a config dir instead of auth material", () => {
     expect(schema.accounts.configDir.notNull).toBe(false)
     expect(schema.accounts.authMaterial.notNull).toBe(false)
+    // Both overrides are nullable, and NULL is meaningful: it means "use the
+    // provider driver's default", not "unset". `openai-compatible` and
+    // `anthropic-compatible` have no default endpoint, so those accounts must
+    // supply a baseUrl — that is a service-layer rule, not a column constraint.
+    expect(schema.accounts.baseUrl.notNull).toBe(false)
+    expect(schema.accounts.dialect.notNull).toBe(false)
   })
 
   test("weight and priority exist for the weighted and failover policies", () => {

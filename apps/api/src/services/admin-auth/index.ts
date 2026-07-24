@@ -1,0 +1,33 @@
+/**
+ * The admin authentication plane's public surface. Transport imports from here; nothing else
+ * reaches inside the directory.
+ */
+
+export {
+  type AdminAuthConfig,
+  type AdminAuthEnvConfig,
+  adminAuthConfigFromEnv,
+  DEFAULT_ADMIN_AUTH_CONFIG,
+  DEFAULT_ADMIN_AUTH_ENV,
+  resolveAdminAuthConfig,
+} from "./config"
+export {
+  SESSION_COOKIE_FULL_NAME,
+  SESSION_COOKIE_NAME,
+  type SessionCookieOptions,
+  sessionCookieOptions,
+} from "./cookies"
+export { CSRF_HEADER, isMutatingMethod } from "./csrf"
+export {
+  type AdminAuthDeps,
+  type AdminAuthService,
+  createAdminAuthService,
+  type LoginInput,
+  type LoginResult,
+} from "./service"
+export {
+  type AdminSession,
+  createMemorySessionStore,
+  type SessionStore,
+  sessionExpiryMs,
+} from "./sessionStore"

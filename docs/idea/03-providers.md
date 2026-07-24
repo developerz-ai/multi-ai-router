@@ -169,8 +169,8 @@ sanctioned API usage: plain HTTP to `https://api.anthropic.com/v1/messages` thro
 HTTP driver — no subprocess, no config directory, no `claude` CLI, no re-synthesis. The two share
 a vendor and nothing else; treat them as separate providers, because they are.
 
-The header rules for any Anthropic-dialect HTTP request (`anthropic-api`, `anthropic-compatible`,
-z.ai / Kimi / MiniMax on their Anthropic surfaces) are verified and not up for reinterpretation:
+The header rules for a **first-party Anthropic** request (`anthropic-api`, and any
+`anthropic-compatible` Account pointed at Anthropic itself):
 
 | Credential | Headers |
 |---|---|
@@ -182,6 +182,24 @@ work**, and a Bearer token without the `oauth-2025-04-20` beta header does not e
 converting between the two forms is a header change, not a key swap. The router does not emit
 Bearer-token Anthropic requests for Claude subscriptions (those go through the SDK), but the rule
 stands for any operator-supplied Account that carries such a token.
+
+### Anthropic-compatible vendors use `Authorization: Bearer`, not `x-api-key`
+
+An earlier revision of this doc lumped z.ai, Kimi, and MiniMax into the table above. **That was
+wrong.** Those vendors document their key as Claude Code's `ANTHROPIC_AUTH_TOKEN`, and Claude Code
+sends `ANTHROPIC_AUTH_TOKEN` as `Authorization: Bearer` — not as `x-api-key`. The vendor setup
+snippets are all of this shape:
+
+```sh
+ANTHROPIC_AUTH_TOKEN="$ZAI_API_KEY"  ANTHROPIC_BASE_URL="https://api.z.ai/api/anthropic"  claude
+ANTHROPIC_AUTH_TOKEN="$KIMI_API_KEY" ANTHROPIC_BASE_URL="https://api.kimi.com/coding"     claude
+```
+
+So: **`anthropic-api` → `x-api-key`; z.ai / Kimi / MiniMax on their Anthropic surfaces →
+`Authorization: Bearer`.** They share a *dialect*, not an *auth scheme*, and the driver layer is
+exactly where that distinction belongs. Note these vendors do **not** want the
+`anthropic-beta: oauth-2025-04-20` header — that beta is specific to real Anthropic subscription
+tokens; a compatible vendor's Bearer key is just a key.
 
 ## `openai-oauth` — ChatGPT/Codex subscription
 

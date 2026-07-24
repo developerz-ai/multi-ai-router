@@ -1,3 +1,4 @@
+import type { Dialect } from "@multi-ai-router/core"
 import {
   index,
   integer,
@@ -47,6 +48,27 @@ export const accounts = pgTable(
      * those tokens and the router never schedules a refresh for them.
      */
     tokenExpiresAt: timestamp("token_expires_at", { withTimezone: true, mode: "date" }),
+
+    /**
+     * Per-account base URL override. NULL means the provider driver's own
+     * default (`03-providers.md` has the verified defaults per provider).
+     *
+     * This is what makes the `openai-compatible` / `anthropic-compatible`
+     * escape hatches work at all — those providers have no default endpoint,
+     * the operator supplies one.
+     */
+    baseUrl: text("base_url"),
+
+    /**
+     * Per-account surface override, for providers that expose more than one.
+     * NULL means the driver's default dialect.
+     *
+     * z.ai is the motivating case: the same key works against an
+     * Anthropic-dialect endpoint and an OpenAI-dialect one, and the account —
+     * not the provider — records which was chosen, because the choice selects
+     * the endpoint and the header form together.
+     */
+    dialect: text("dialect").$type<Dialect>(),
 
     /** Absent means the client's model name passes through unchanged. */
     modelAliases: jsonb("model_aliases").$type<ModelAliasMap>(),

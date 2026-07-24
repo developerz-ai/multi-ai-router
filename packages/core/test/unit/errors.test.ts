@@ -1,7 +1,9 @@
 import { describe, expect, test } from "bun:test"
 import {
+  AdminAuthError,
   CredentialDecryptError,
   CreditsExhaustedError,
+  CsrfTokenError,
   isRouterError,
   KeyRevokedError,
   NoHealthyAccountError,
@@ -11,6 +13,7 @@ import {
   type RouterErrorCode,
   ScopeViolationError,
   TranslationError,
+  UpstreamAuthError,
   UpstreamTimeoutError,
 } from "../../src/index"
 
@@ -37,6 +40,14 @@ const cases: readonly ErrorCase[] = [
   },
   { name: "ScopeViolationError", ctor: ScopeViolationError, code: "scope_violation", status: 403 },
   { name: "KeyRevokedError", ctor: KeyRevokedError, code: "key_revoked", status: 401 },
+  { name: "AdminAuthError", ctor: AdminAuthError, code: "admin_auth_failed", status: 401 },
+  { name: "CsrfTokenError", ctor: CsrfTokenError, code: "csrf_token_invalid", status: 403 },
+  {
+    name: "UpstreamAuthError",
+    ctor: UpstreamAuthError,
+    code: "upstream_auth_failed",
+    status: 502,
+  },
   {
     name: "UpstreamTimeoutError",
     ctor: UpstreamTimeoutError,

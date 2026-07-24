@@ -19,8 +19,10 @@ export { AuthKind, ProviderId } from "./domain/provider"
 export { DEFAULT_ROUTING_POLICY, RoutingPolicy } from "./domain/routing"
 export type { QuotaExhaustedInit, RouterErrorCode } from "./errors"
 export {
+  AdminAuthError,
   CredentialDecryptError,
   CreditsExhaustedError,
+  CsrfTokenError,
   isRouterError,
   KeyRevokedError,
   NoHealthyAccountError,
@@ -29,6 +31,7 @@ export {
   RouterError,
   ScopeViolationError,
   TranslationError,
+  UpstreamAuthError,
   UpstreamTimeoutError,
 } from "./errors"
 export {

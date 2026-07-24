@@ -8,6 +8,13 @@
       "when": 1784918696599,
       "tag": "0000_spotty_vin_gonzales",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1784923466882,
+      "tag": "0001_light_pixie",
+      "breakpoints": true
     }
   ]
 }
