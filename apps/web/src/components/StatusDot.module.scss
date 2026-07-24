@@ -1,0 +1,33 @@
+@use "../styles/mixins" as *;
+
+.root {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  white-space: nowrap;
+}
+
+.dot {
+  flex: none;
+  width: 0.5rem;
+  height: 0.5rem;
+  border-radius: 50%;
+  // Set by the component from the status's semantic token.
+  background: var(--dot-color);
+}
+
+// `needs_reauth` and `exhausted` both read as danger; the ring keeps them
+// distinguishable without inventing a colour outside the token set.
+.hollow {
+  background: transparent;
+  box-shadow: inset 0 0 0 2px var(--dot-color);
+}
+
+.label {
+  font-size: var(--text-sm);
+  color: var(--text);
+}
+
+.srOnly {
+  @include visually-hidden;
+}

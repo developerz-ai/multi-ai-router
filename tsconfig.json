@@ -1,0 +1,11 @@
+{
+  // Solution-style root: no files of its own, just references to every package.
+  // `bun run typecheck` (tsc --build) walks these in dependency order.
+  "files": [],
+  "references": [
+    { "path": "packages/core" },
+    { "path": "packages/db" },
+    { "path": "apps/api" },
+    { "path": "apps/web" }
+  ]
+}

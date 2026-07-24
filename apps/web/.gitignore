@@ -1,0 +1,3 @@
+# tsc runs as a type checker only, but a composite project may not disable
+# emit — the declarations it writes here are a build artefact, not a product.
+dist-types/

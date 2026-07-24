@@ -1,0 +1,72 @@
+/**
+ * `@multi-ai-router/db` — the only module in the system that knows SQL.
+ *
+ * Public surface, explicitly listed: the schema (tables + enums + row types),
+ * the connection factory, the migration runner, and the repositories services
+ * call instead of writing queries.
+ */
+
+export type { Database, DatabaseHandle, DatabaseOptions, SqlConnection } from "./client"
+
+// --- connection -------------------------------------------------------------
+export { createDatabase } from "./client"
+export type { MigrateOptions } from "./migrate"
+
+// --- migrations -------------------------------------------------------------
+export { defaultMigrationsFolder, runMigrations } from "./migrate"
+export type { ApiKeyRepository } from "./repositories/api-key-repository"
+
+// --- repositories -----------------------------------------------------------
+export { createApiKeyRepository } from "./repositories/api-key-repository"
+// --- row types --------------------------------------------------------------
+export type { AccountRow, ModelAliasMap, NewAccountRow } from "./schema/accounts"
+
+// --- tables -----------------------------------------------------------------
+export { accounts } from "./schema/accounts"
+export type {
+  ApiKeyAccountRow,
+  ApiKeyPoolRow,
+  NewApiKeyAccountRow,
+  NewApiKeyPoolRow,
+} from "./schema/api-key-scope"
+export { apiKeyAccounts, apiKeyPools } from "./schema/api-key-scope"
+export type { ApiKeyRow, NewApiKeyRow } from "./schema/api-keys"
+export { apiKeys } from "./schema/api-keys"
+export type { AuditDetail, AuditEventRow, NewAuditEventRow } from "./schema/audit-events"
+export { auditEvents } from "./schema/audit-events"
+export type { UsageOutcome } from "./schema/enums"
+// --- enums ------------------------------------------------------------------
+export {
+  accountStatus,
+  costBasis,
+  keyScope,
+  providerId,
+  resetSource,
+  routingPolicy,
+  scheduledTask,
+  scheduledTaskOutcome,
+  USAGE_OUTCOME_SUCCESS,
+  utilizationSource,
+} from "./schema/enums"
+// The whole schema as one namespace, for `drizzle(sql, { schema })` and for
+// query builders that need a table this barrel does not name individually.
+export * as schema from "./schema/index"
+export type { NewOauthStateRow, OauthStateRow } from "./schema/oauth-states"
+export { oauthStates } from "./schema/oauth-states"
+export type { NewPoolMemberRow, NewPoolRow, PoolMemberRow, PoolRow } from "./schema/pools"
+export { poolMembers, pools } from "./schema/pools"
+export type { NewQuotaWindowRow, QuotaWindowRow } from "./schema/quota-windows"
+export { quotaWindows } from "./schema/quota-windows"
+export type { NewScheduledTaskRunRow, ScheduledTaskRunRow } from "./schema/scheduled-task-runs"
+export { scheduledTaskRuns } from "./schema/scheduled-task-runs"
+export type {
+  NewSessionRow,
+  SessionFingerprintSource,
+  SessionLineageState,
+  SessionRow,
+} from "./schema/sessions"
+export { sessions } from "./schema/sessions"
+export type { NewUsageDailyRow, UsageDailyRow } from "./schema/usage-daily"
+export { usageDaily } from "./schema/usage-daily"
+export type { NewUsageRecordRow, UsageRecordRow } from "./schema/usage-records"
+export { usageRecords } from "./schema/usage-records"

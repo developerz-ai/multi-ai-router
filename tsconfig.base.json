@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json.schemastore.org/tsconfig",
+  "compilerOptions": {
+    // Bun runs TypeScript directly; tsc is used only as a type checker
+    // (`--noEmit` in CI), never as a build step. See bin/lint.
+    "target": "ESNext",
+    "lib": ["ESNext"],
+    "module": "Preserve",
+    "moduleResolution": "bundler",
+    "moduleDetection": "force",
+    "types": ["bun"],
+
+    // Strictness is non-negotiable — CLAUDE.md forbids `any`. These go beyond
+    // `strict: true` because the ones it omits are the ones that catch real
+    // bugs in a proxy: unchecked index access and unhandled switch cases.
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "noImplicitOverride": true,
+    "noFallthroughCasesInSwitch": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "verbatimModuleSyntax": true,
+    "isolatedModules": true,
+    "skipLibCheck": true,
+
+    // Project references need these; each package sets its own outDir/rootDir.
+    "composite": true,
+    "declaration": true,
+    "declarationMap": true,
+    "sourceMap": true
+  }
+}

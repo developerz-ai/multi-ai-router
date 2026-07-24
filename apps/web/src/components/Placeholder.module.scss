@@ -1,0 +1,52 @@
+@use "../styles/mixins" as *;
+
+.root {
+  @include card;
+
+  padding: var(--space-4);
+  // Dashed edge reads as "scaffold" at a glance; the badge says it in words.
+  border-style: dashed;
+  border-color: var(--border-strong);
+}
+
+.badge {
+  display: inline-block;
+  padding: 0 var(--space-2);
+  border: 1px solid var(--warn);
+  border-radius: var(--radius-1);
+  color: var(--warn);
+  font-size: var(--text-xs);
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.summary {
+  margin-top: var(--space-3);
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+}
+
+.items {
+  display: grid;
+  gap: var(--space-2);
+  margin-top: var(--space-3);
+}
+
+.item {
+  display: flex;
+  gap: var(--space-2);
+  align-items: baseline;
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+
+  &::before {
+    content: "";
+    flex: none;
+    width: 0.25rem;
+    height: 0.25rem;
+    border-radius: 50%;
+    background: var(--border-strong);
+    transform: translateY(-0.15em);
+  }
+}

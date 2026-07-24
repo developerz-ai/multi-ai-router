@@ -1,0 +1,12 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "composite": true,
+    "rootDir": "src",
+    "outDir": "dist"
+  },
+  // `rootDir` is src, so tests are excluded from the project build; `bun test`
+  // type-checks nothing but runs them directly.
+  "include": ["src"],
+  "references": [{ "path": "../../packages/core" }, { "path": "../../packages/db" }]
+}

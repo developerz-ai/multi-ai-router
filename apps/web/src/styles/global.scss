@@ -1,0 +1,4 @@
+// Single global entry, imported once from `main.tsx`. Order matters: tokens
+// must be defined before the reset consumes them.
+@use "tokens";
+@use "reset";

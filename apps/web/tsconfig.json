@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json.schemastore.org/tsconfig",
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    // The base config targets Bun on the server: no DOM lib, `types: ["bun"]`.
+    // Both are wrong for a browser bundle and must be replaced, not extended.
+    "lib": ["ESNext", "DOM", "DOM.Iterable"],
+    "types": ["vite/client"],
+
+    // Solid compiles JSX itself through babel-preset-solid; tsc must hand the
+    // JSX through untouched.
+    "jsx": "preserve",
+    "jsxImportSource": "solid-js",
+
+    // Vite emits the bundle. tsc runs only as a type checker, but a referenced
+    // project may not disable emit, so declarations go to a throwaway dir.
+    "composite": true,
+    "rootDir": "src",
+    "outDir": "dist-types"
+  },
+  // `vite.config.ts` and `test/` sit outside rootDir on purpose: the config is
+  // type-checked by Vite's own esbuild pass, the tests by `bun test`.
+  "include": ["src"],
+  // The shared domain vocabulary — `AccountStatus`, `ResetSource` — is defined
+  // once in core and imported here, never restated.
+  "references": [{ "path": "../../packages/core" }]
+}

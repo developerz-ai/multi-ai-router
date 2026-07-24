@@ -1,0 +1,44 @@
+/**
+ * `@multi-ai-router/core` — the shared types, errors, and Zod schemas every other package builds
+ * on. It imports nothing from the apps and has no runtime dependency on the server.
+ *
+ * This barrel is the package's entire public API. Callers import from `@multi-ai-router/core`,
+ * never from a path inside `src/`.
+ */
+
+export {
+  AccountStatus,
+  QuotaWindowKind,
+  QuotaWindowState,
+  ResetSource,
+  UtilizationSource,
+} from "./domain/account"
+export { Dialect, EgressMode } from "./domain/dialect"
+export { KeyScope } from "./domain/key"
+export { AuthKind, ProviderId } from "./domain/provider"
+export { DEFAULT_ROUTING_POLICY, RoutingPolicy } from "./domain/routing"
+export type { QuotaExhaustedInit, RouterErrorCode } from "./errors"
+export {
+  CredentialDecryptError,
+  CreditsExhaustedError,
+  isRouterError,
+  KeyRevokedError,
+  NoHealthyAccountError,
+  QuotaExhaustedError,
+  ROUTER_ERROR_CODES,
+  RouterError,
+  ScopeViolationError,
+  TranslationError,
+  UpstreamTimeoutError,
+} from "./errors"
+export {
+  generateRouterKey,
+  isRouterKey,
+  ROUTER_KEY_DISPLAY_PREFIX_LENGTH,
+  ROUTER_KEY_DISPLAY_RANDOM_LENGTH,
+  ROUTER_KEY_LENGTH,
+  ROUTER_KEY_PATTERN,
+  ROUTER_KEY_PREFIX,
+  ROUTER_KEY_RANDOM_LENGTH,
+  routerKeyDisplayPrefix,
+} from "./ids"

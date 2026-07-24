@@ -1,0 +1,29 @@
+@use "../styles/mixins" as *;
+
+.screen {
+  display: grid;
+  place-items: center;
+  min-height: 100%;
+  padding: var(--space-5);
+  background: var(--surface);
+}
+
+.card {
+  @include card;
+
+  width: min(24rem, 100%);
+  display: grid;
+  gap: var(--space-4);
+  padding: var(--space-5);
+}
+
+.brand {
+  font-size: var(--text-lg);
+  font-weight: 600;
+}
+
+.note {
+  margin-top: var(--space-1);
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+}
