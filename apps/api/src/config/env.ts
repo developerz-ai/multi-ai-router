@@ -49,6 +49,36 @@ export interface AdminAuthConfig {
   readonly loginLockoutMinutes: number
 }
 
+/**
+ * The knobs on the request path's two in-memory caches and its off-path writer.
+ *
+ * Every one of these is a staleness or memory bound that an operator running a
+ * large pool may legitimately want to move, which is why none of them is a
+ * constant in code (CLAUDE.md non-negotiable 11).
+ */
+export interface DataPlaneConfig {
+  /**
+   * How long the warm routing catalog may lag a write made by *another* replica.
+   * A write by this replica refreshes it immediately, so this bounds only the
+   * multi-replica case.
+   */
+  readonly catalogRefreshSeconds: number
+  /** Verified router keys held in memory. The ceiling is memory, not correctness. */
+  readonly keyCacheMax: number
+  /** How long a successful key verification is reused. Revocation invalidates immediately. */
+  readonly keyCacheTtlSeconds: number
+  /**
+   * How long a *failed* lookup is remembered. Short on purpose: this is what
+   * stops a flood of bad keys from becoming a flood of queries, and a key that
+   * was just minted must start working quickly.
+   */
+  readonly keyCacheNegativeTtlSeconds: number
+  /** Usage records held in memory before the writer sheds the oldest. Reporting degrades; traffic does not. */
+  readonly usageQueueMax: number
+  readonly usageBatchSize: number
+  readonly usageFlushIntervalMs: number
+}
+
 export interface Env {
   readonly port: number
   readonly databaseUrl: string
@@ -63,6 +93,7 @@ export interface Env {
   readonly retention: RetentionConfig
   readonly janitorIntervalMinutes: number
   readonly adminAuth: AdminAuthConfig
+  readonly dataPlane: DataPlaneConfig
 }
 
 /**
@@ -126,6 +157,13 @@ const envSchema = z
     ADMIN_LOGIN_MAX_ATTEMPTS: wholeNumber.optional(),
     ADMIN_LOGIN_ATTEMPT_WINDOW_MINUTES: wholeNumber.optional(),
     ADMIN_LOGIN_LOCKOUT_MINUTES: wholeNumber.optional(),
+    CATALOG_REFRESH_SECONDS: wholeNumber.optional(),
+    KEY_CACHE_MAX: wholeNumber.optional(),
+    KEY_CACHE_TTL_SECONDS: wholeNumber.optional(),
+    KEY_CACHE_NEGATIVE_TTL_SECONDS: wholeNumber.optional(),
+    USAGE_QUEUE_MAX: wholeNumber.optional(),
+    USAGE_BATCH_SIZE: wholeNumber.optional(),
+    USAGE_FLUSH_INTERVAL_MS: wholeNumber.optional(),
   })
   .transform((raw, ctx): Env => {
     // Precedence: ADMIN_PASSWORD_HASH wins when both are set; exactly one is required.
@@ -168,6 +206,17 @@ const envSchema = z
         loginMaxAttempts: raw.ADMIN_LOGIN_MAX_ATTEMPTS ?? 5,
         loginAttemptWindowMinutes: raw.ADMIN_LOGIN_ATTEMPT_WINDOW_MINUTES ?? 15,
         loginLockoutMinutes: raw.ADMIN_LOGIN_LOCKOUT_MINUTES ?? 15,
+      },
+      // Defaults mirror the layer constants they override, so an unset variable
+      // and a variable set to the default behave identically.
+      dataPlane: {
+        catalogRefreshSeconds: raw.CATALOG_REFRESH_SECONDS ?? 30,
+        keyCacheMax: raw.KEY_CACHE_MAX ?? 4_096,
+        keyCacheTtlSeconds: raw.KEY_CACHE_TTL_SECONDS ?? 60,
+        keyCacheNegativeTtlSeconds: raw.KEY_CACHE_NEGATIVE_TTL_SECONDS ?? 5,
+        usageQueueMax: raw.USAGE_QUEUE_MAX ?? 10_000,
+        usageBatchSize: raw.USAGE_BATCH_SIZE ?? 200,
+        usageFlushIntervalMs: raw.USAGE_FLUSH_INTERVAL_MS ?? 1_000,
       },
     }
   })

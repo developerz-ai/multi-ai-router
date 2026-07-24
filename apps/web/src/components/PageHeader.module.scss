@@ -1,15 +1,22 @@
+@use "../styles/breakpoints" as bp;
+
 .root {
   display: flex;
   flex-wrap: wrap;
-  gap: var(--space-2) var(--space-4);
+  gap: var(--space-3) var(--space-5);
   align-items: baseline;
   justify-content: space-between;
-  padding-bottom: var(--space-3);
-  border-bottom: 1px solid var(--border);
+  padding-block-end: var(--space-4);
+  border-block-end: 1px solid var(--border);
 }
 
 .title {
   font-size: var(--text-xl);
+  line-height: var(--line-tight);
+
+  @include bp.respond-to("sidebar") {
+    font-size: var(--text-2xl);
+  }
 }
 
 .actions {
@@ -19,8 +26,10 @@
 }
 
 .subtitle {
-  margin-top: var(--space-1);
+  max-width: 72ch;
+  margin-block-start: var(--space-2);
   color: var(--text-muted);
   font-size: var(--text-sm);
-  max-width: 72ch;
+  line-height: var(--line-body);
+  text-wrap: pretty;
 }

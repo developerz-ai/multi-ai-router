@@ -11,7 +11,7 @@
   flex: none;
   width: 0.5rem;
   height: 0.5rem;
-  border-radius: 50%;
+  border-radius: var(--radius-full);
   // Set by the component from the status's semantic token.
   background: var(--dot-color);
 }
@@ -24,8 +24,9 @@
 }
 
 .label {
-  font-size: var(--text-sm);
   color: var(--text);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
 }
 
 .srOnly {

@@ -14,6 +14,24 @@ export const AccountStatus = z.enum([
 export type AccountStatus = z.infer<typeof AccountStatus>
 
 /**
+ * Whether an Account's status is a *standing* block or a passing one.
+ *
+ * `cooling_down` is the only status a clock alone recovers from, so it is the
+ * only one that is not standing. Everything else needs something to change:
+ * `disabled` needs the operator, `exhausted` needs a top-up, `needs_reauth`
+ * needs a re-login.
+ *
+ * This is the distinction a **listing** wants, and it is not the one candidate
+ * filtering wants. Filtering asks "can this account serve *this request, now*",
+ * so it drops a cooling account too. A model catalog asks "is this model part of
+ * what this key can reach", and a five-minute cooldown must not make a model
+ * blink out of the client's list and back — see `dataplane/models.ts`.
+ */
+export function isStandingBlock(status: AccountStatus): boolean {
+  return status === "disabled" || status === "exhausted" || status === "needs_reauth"
+}
+
+/**
  * The quota windows an Account can hold. A Claude subscription has several running concurrently
  * and resetting independently, and the account is blocked by whichever one is spent.
  */

@@ -1,18 +1,26 @@
+@use "../styles/mixins" as *;
+
 .button {
-  display: inline-flex;
+  @include tappable;
+
+  display: flex;
   align-items: center;
-  gap: var(--space-2);
-  padding: var(--space-1) var(--space-3);
-  background: var(--surface-raised);
-  border: 1px solid var(--border);
+  gap: var(--space-3);
+  padding-inline: var(--space-3);
+  background: none;
+  border: 1px solid transparent;
   border-radius: var(--radius-1);
   color: var(--text-muted);
-  font-size: var(--text-xs);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+  text-align: start;
   cursor: pointer;
-  transition: color var(--duration-fast) ease, border-color var(--duration-fast) ease;
+  transition:
+    background var(--duration-fast) var(--ease-out),
+    color var(--duration-fast) var(--ease-out);
 
   &:hover {
+    background: var(--surface-sunken);
     color: var(--text);
-    border-color: var(--border-strong);
   }
 }

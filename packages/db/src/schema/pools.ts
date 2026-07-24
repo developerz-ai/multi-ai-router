@@ -9,6 +9,20 @@ export const pools = pgTable(
     id: uuid("id").primaryKey().defaultRandom(),
     name: text("name").notNull(),
     policy: routingPolicy("policy").notNull().default(DEFAULT_ROUTING_POLICY),
+
+    /**
+     * The pool's member of last resort — typically a paid API key — engaged only
+     * when every ordinary member has filtered out. Invisible to the policy until
+     * then, and still subject to the presenting key's scope
+     * (docs/idea/05-routing-and-failover.md#overflow-optional-opt-in).
+     *
+     * `ON DELETE SET NULL`: deleting the overflow account must drop the pool's
+     * fallback, never the pool.
+     */
+    overflowAccountId: uuid("overflow_account_id").references(() => accounts.id, {
+      onDelete: "set null",
+    }),
+
     createdAt: timestamp("created_at", { withTimezone: true, mode: "date" }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true, mode: "date" }).notNull().defaultNow(),
   },

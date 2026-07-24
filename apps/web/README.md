@@ -32,11 +32,21 @@ apps/web/
 │   │   ├── query.ts        the TanStack Query client, configured once
 │   │   └── …               pure mappers and formatters
 │   ├── routes/             one default-exported component per screen
-│   ├── layout/             AppLayout: nav, skip link, theme toggle
-│   ├── components/         shared UI: Table, StatusDot, PageHeader, …
-│   └── styles/             tokens, reset, shared mixins — the only global CSS
+│   ├── layout/             AppLayout: sidebar/drawer, skip link, theme toggle
+│   ├── components/         shared UI: Table, StatusDot, Icon, Skeleton, …
+│   └── styles/             the only global CSS — see below
 └── test/unit/              bun:test, DOM-free
 ```
+
+`src/styles/` is split by reason to change, not by convenience:
+
+| File | Contains, and nothing else |
+|---|---|
+| `_tokens.scss` | Custom-property declarations. The two scheme mixins exist only so one token set can be declared twice |
+| `_breakpoints.scss` | The `$breakpoints` map and the `respond-to` / `respond-to-fine` mixins built from it |
+| `_mixins.scss` | Reusable patterns. Depends on `_breakpoints`; declares no tokens |
+| `reset.scss` | Element reset and the document shell. The only place bare element selectors are allowed |
+| `global.scss` | The entry barrel `main.tsx` imports: tokens, then reset |
 
 Every screen is `lazy(() => import(...))`, so the login page ships the shell and nothing else.
 `routes.ts` is the single source of truth for both the router and the sidebar — a nav entry and a
@@ -67,26 +77,108 @@ route cannot drift apart.
 `bin/build`, which places the bundle at `dist/web/`** — building this package in isolation writes
 `apps/web/dist` and stops there.
 
+## Navigation and responsive strategy
+
+**Mobile-first, literally.** Base styles are the phone layout; every media query is `min-width`.
+There is no `max-width` query in the codebase — wider viewports *add* the sidebar rather than
+narrower ones taking it away.
+
+| Width | Navigation |
+|---|---|
+| Base | Sticky top bar with a hamburger; the nav is an off-canvas drawer over a scrim |
+| ≥ `48rem` | The same nav element becomes a permanent full-height vertical sidebar; the top bar is `display: none` |
+
+One `<nav>` serves both. Nothing is duplicated, so a link cannot exist in one layout and not the
+other. The sidebar is `position: sticky` inside its own grid column rather than `fixed`: it behaves
+like a fixed rail but still occupies layout, so `main` needs no compensating margin.
+
+**Why a drawer and not a bottom bar.** A bottom bar is the better pattern at three to five
+destinations. This console has six plus a theme control, which is past the point where a bottom bar
+starts truncating labels or hiding items behind "More" — and truncated labels are exactly wrong for
+a tool where `/pools` and `/keys` mean specific things. The drawer holds all six at full label width
+with room for the icon.
+
+Drawer behaviour, all verified in a browser at 320px:
+
+| Requirement | How |
+|---|---|
+| Toggle is keyboard reachable and named | Real `<button>` with `aria-expanded`, `aria-controls`, and a label that flips between "Open/Close navigation" |
+| Focus trapped while open | `createFocusTrap` cycles Tab within the drawer; focus moves to the first link on open |
+| Focus restored on close | Returns to the hamburger, via the trap's `restoreTo` |
+| `Escape` closes | Handled in the trap's keydown listener |
+| Hidden from the a11y tree when closed | `visibility: hidden` (not merely offscreen) plus the `inert` attribute. `inert` is applied only below the breakpoint — a sidebar is never inert |
+| No scroll trap | The page is locked only while open and released deterministically on close *and* on unmount; the drawer scrolls itself with `overscroll-behavior: contain` |
+
+The `visibility` transition is asymmetric, which is load-bearing: opening flips it immediately
+because `.focus()` is a no-op on a `visibility: hidden` element, while closing delays the flip until
+the slide-out finishes. Getting this wrong silently breaks the focus trap — it did, once.
+
+### Tables on a phone
+
+Wide tables scroll **inside their own container**, and the first column is pinned. The page itself
+never scrolls horizontally at 320px; the `minmax(0, 1fr)` grid tracks in `AppLayout.module.scss` are
+what prevent a wide table from widening the whole document.
+
+Reflowing each row into a stacked card was considered and rejected. The operator's question is
+comparative — *which* key is spending most, *which* account is throttled — and cards destroy
+row-to-row comparison by putting one record per screen. A CSS row-to-card transform also breaks the
+table semantics screen readers rely on and duplicates every header string into `::before` content.
+Pinning the identity column solves the one real weakness of scrolling, which is losing track of
+which row a number belongs to.
+
 ## Design system
 
 Semantic tokens only. A raw hex in a component is a bug; the palette lives in one file.
 
 | Token | Use |
 |---|---|
-| `--surface` / `--surface-raised` / `--surface-sunken` | Page, card, recessed row |
-| `--text` / `--text-muted` | Body, secondary and disabled |
-| `--border` / `--border-strong` | Hairlines; emphasised edges |
-| `--accent` / `--accent-contrast` | Interactive, focus ring; text on accent |
+| `--surface` / `--surface-raised` / `--surface-overlay` / `--surface-sunken` | Page, card, floating, recessed |
+| `--text` / `--text-muted` | Body; secondary |
+| `--border` / `--border-strong` | Hairline separators; emphasised edges |
+| `--accent` / `--accent-soft` / `--accent-contrast` | Interactive and focus ring; active tint; text on accent |
 | `--ok` / `--warn` / `--danger` | `active`; `cooling_down`; `exhausted` and `needs_reauth` |
+| `--scrim`, `--shadow-1`, `--shadow-2` | Modal backdrop; the only two elevation levels |
+| `--space-1…8`, `--radius-1/2/full`, `--text-xs…2xl`, `--weight-*`, `--line-*`, `--tracking-*` | The scales. Nothing in a component is an off-scale magic number |
+| `--duration-fast/base/drawer`, `--ease-out` | Motion. Nothing exceeds 200ms |
 
-`src/styles/tokens.scss` defines both schemes from one pair of mixins: dark on `:root` (dark-first),
-light under `@media (prefers-color-scheme: light)`, then `:root[data-theme="dark"|"light"]`. The
-attribute selectors outrank bare `:root` on specificity, inside the media query as well as outside,
-so an explicit choice wins in **both** directions — dark OS + light chosen, and the reverse.
-`"system"` removes the attribute rather than writing a value.
+`_tokens.scss` defines both schemes from one pair of mixins: dark on `:root` (dark-first), light
+under `@media (prefers-color-scheme: light)`, then `:root[data-theme="dark"|"light"]`. The attribute
+selectors outrank bare `:root` on specificity, inside the media query as well as outside, so an
+explicit choice wins in **both** directions — dark OS + light chosen, and the reverse. `"system"`
+removes the attribute rather than writing a value.
 
-`src/styles/reset.scss` is the only other global sheet: focus-visible is restyled and never removed,
-and `prefers-reduced-motion: reduce` neutralises transitions and animations app-wide.
+**Contrast is checked, not assumed.** Every foreground token clears WCAG AA (4.5:1) against every
+surface it can sit on, in both schemes. Worst pairing is 4.75:1 (light `--accent` on
+`--surface-sunken`); `--text-muted` — the token a dark UI usually fails on — is 7.11:1 dark and
+5.75:1 light against `--surface-raised`. The light `--accent`, `--ok` and `--danger` are darker than
+their dark-scheme twins for this reason; the naive "same hue in both schemes" palette failed on
+`--surface-sunken`.
+
+`reset.scss` is the only other global sheet: focus-visible is restyled and never removed, and
+`prefers-reduced-motion: reduce` neutralises transitions and animations app-wide. The skeleton
+shimmer additionally drops its gradient under that query, because a clamped animation would
+otherwise freeze mid-sweep.
+
+### SCSS rules
+
+1. **One module, one component.** `Foo.module.scss` styles `Foo` only. A parent styles the *slot* it
+   provides (`.navFooter` is `display: grid`) and never reaches into a child's rules.
+2. **Class-scoped only.** No bare element selectors outside `reset.scss`; no `:global`; no
+   `!important`. All three are grep-enforceable and currently return nothing.
+3. **Extend by variant or token**, never by editing an existing rule. Every colour, radius, shadow
+   and spacing value in a component is a `var(--…)`.
+4. **A visual pattern earns a mixin on its third caller.** `overlay` was deleted for having one —
+   the drawer writes its two elevation declarations out. **Accessibility and interaction policies
+   are the deliberate exception** and are centralised on first use: `focus-ring`, `visually-hidden`
+   and `tappable` each have two callers, because two components disagreeing about focus or touch
+   target size is a defect, not a style difference.
+5. **Mixins take only what they vary on.** `numeric` was split into `tabular-figures` (the digits)
+   and `numeric` (digits + column alignment) so a headline figure can take the first without
+   inheriting `text-align: right`.
+
+> **Deliberate deviation from the org standard.** `docs/stack/frontend-solidjs.md` specifies
+> Tailwind. This app uses SCSS modules + CSS custom properties because the operator chose it
+> explicitly, and `CLAUDE.md` records it as the project stack. Not an oversight — do not "fix" it.
 
 > **Deliberate deviation from the org standard.** `docs/stack/frontend-solidjs.md` specifies
 > Tailwind. This app uses SCSS modules + CSS custom properties because the operator chose it
@@ -139,6 +231,7 @@ cover; the recipe above is the whole of it.
 | Class names | CSS-module lookups are `string \| undefined` under `noUncheckedIndexedAccess`. Template concatenation emits the literal `"undefined"` into `class` — use `cx()` from `src/lib/cx.ts` |
 | Status colour | Colour never carries meaning alone. `needs_reauth` and `exhausted` share `--danger` and differ by dot fill (hollow vs. solid) plus label; `cooling_down` (`--warn`) is never folded in with either |
 | Reset display | `exhausted` shows "needs top-up" and never a countdown, and a reset whose source is `unknown` shows no countdown at all |
+| Breakpoint duplication | `48rem` lives in `_breakpoints.scss` *and* in `lib/media.ts` as `SIDEBAR_QUERY`. The focus trap must know when the drawer stops being modal, and CSS cannot hand a value to JS. Change both; no test catches this |
 | Domain enums | Import them from `@multi-ai-router/core`, as **types only** — `import type { AccountStatus }`. A value import of a Zod enum drags Zod into the browser bundle: measured at **+51 kB raw / +14.3 kB gzip** to read five string literals. Where an ordered list is needed, `STATUS_DISPLAY_ORDER` is presentation data, `satisfies`-checked against core's union and permutation-tested against `AccountStatus.options` |
 | No fallback branches on an enum | The reset-source bug was a ternary whose `else` silently relabeled anything unrecognised as "estimated". Map enum values through an exhaustive `Record` so a new member fails the build instead |
 | tsc emit | A composite project may not set `noEmit`, so type-check declarations land in the gitignored `dist-types/`. Vite emits the real bundle |

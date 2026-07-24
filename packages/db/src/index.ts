@@ -23,6 +23,17 @@ export type {
 export { createAccountRepository } from "./repositories/account-repository"
 export type { ApiKeyRepository } from "./repositories/api-key-repository"
 export { createApiKeyRepository } from "./repositories/api-key-repository"
+export type { AppendAuditEventInput, AuditRepository } from "./repositories/audit-repository"
+export { createAuditRepository } from "./repositories/audit-repository"
+export type {
+  CreatePoolInput,
+  PoolMemberInput,
+  PoolRepository,
+  UpdatePoolInput,
+} from "./repositories/pool-repository"
+export { createPoolRepository } from "./repositories/pool-repository"
+export type { UsageRecordRepository } from "./repositories/usage-repository"
+export { createUsageRecordRepository } from "./repositories/usage-repository"
 // --- row types --------------------------------------------------------------
 export type { AccountRow, ModelAliasMap, NewAccountRow } from "./schema/accounts"
 

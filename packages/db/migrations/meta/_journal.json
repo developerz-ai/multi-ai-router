@@ -15,6 +15,13 @@
       "when": 1784923466882,
       "tag": "0001_light_pixie",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1784923846602,
+      "tag": "0002_free_goblin_queen",
+      "breakpoints": true
     }
   ]
 }

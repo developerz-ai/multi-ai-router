@@ -1,0 +1,38 @@
+@use "sass:map";
+
+// Responsive thresholds and the queries built from them. Nothing else lives
+// here: no tokens, no patterns. One reason to change — the layout breakpoints.
+//
+// Every query in this app is `min-width`. There is no `max-width` anywhere; the
+// small layout is the base and wider viewports *add* to it.
+//
+// `sidebar` is mirrored in `src/lib/media.ts` as `SIDEBAR_QUERY`, because the
+// drawer's focus trap has to know the same threshold and CSS cannot hand a
+// value to JS. Changing one means changing the other.
+$breakpoints: (
+  "sidebar": 48rem,
+);
+
+@function width($name) {
+  @if not map.has-key($breakpoints, $name) {
+    @error "Unknown breakpoint #{$name}. Known: #{map.keys($breakpoints)}.";
+  }
+
+  @return map.get($breakpoints, $name);
+}
+
+/// Everything from `$name` upwards.
+@mixin respond-to($name) {
+  @media (min-width: width($name)) {
+    @content;
+  }
+}
+
+/// From `$name` upwards *and* only where the pointer is precise. Density is
+/// only safe with a mouse — touch keeps full-size targets at every width, so
+/// this is deliberately not a plain width query.
+@mixin respond-to-fine($name) {
+  @media (min-width: width($name)) and (pointer: fine) {
+    @content;
+  }
+}

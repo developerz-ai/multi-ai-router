@@ -1,29 +1,41 @@
+@use "../styles/breakpoints" as bp;
 @use "../styles/mixins" as *;
 
 .screen {
   display: grid;
   place-items: center;
   min-height: 100%;
-  padding: var(--space-5);
+  // Comfortable on a phone, generous once there is room. Nothing sits against
+  // the container edge at any width.
+  padding: var(--space-4) var(--space-3);
   background: var(--surface);
+
+  @include bp.respond-to("sidebar") {
+    padding: var(--space-8) var(--space-6);
+  }
 }
 
 .card {
   @include card;
 
-  width: min(24rem, 100%);
   display: grid;
-  gap: var(--space-4);
-  padding: var(--space-5);
+  gap: var(--space-5);
+  width: min(28rem, 100%);
+  padding: var(--space-5) var(--space-4);
+
+  @include bp.respond-to("sidebar") {
+    padding: var(--space-6);
+  }
 }
 
 .brand {
-  font-size: var(--text-lg);
-  font-weight: 600;
+  font-size: var(--text-xl);
+  letter-spacing: var(--tracking-tight);
 }
 
 .note {
-  margin-top: var(--space-1);
+  margin-block-start: var(--space-2);
   color: var(--text-muted);
   font-size: var(--text-sm);
+  line-height: var(--line-body);
 }

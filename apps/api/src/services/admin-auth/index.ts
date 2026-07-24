@@ -11,6 +11,12 @@ export {
   DEFAULT_ADMIN_AUTH_ENV,
   resolveAdminAuthConfig,
 } from "./config"
+/**
+ * Exported for the data plane's router-key verification, which compares a decrypted key against
+ * the presented one under the same rule. One implementation, never a second, weaker copy —
+ * docs/reusable-code.md, "Things that must never be duplicated".
+ */
+export { timingSafeEqualStrings } from "./constantTime"
 export {
   SESSION_COOKIE_FULL_NAME,
   SESSION_COOKIE_NAME,

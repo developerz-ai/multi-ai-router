@@ -1,0 +1,31 @@
+@use "../styles/mixins" as *;
+
+.tile {
+  @include card;
+
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-4);
+}
+
+.label {
+  @include eyebrow;
+
+  color: var(--text-muted);
+}
+
+.value {
+  @include tabular-figures;
+
+  font-size: var(--text-2xl);
+  font-weight: var(--weight-semibold);
+  line-height: var(--line-tight);
+  letter-spacing: var(--tracking-tight);
+}
+
+.note {
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+  line-height: var(--line-snug);
+}

@@ -1,4 +1,8 @@
 import type { Logger } from "./logging/logger"
+import type { AccountsService } from "./services/accounts"
+import type { AdminAuthService } from "./services/admin-auth"
+import type { KeysService } from "./services/keys"
+import type { PoolsService } from "./services/pools"
 
 /**
  * The Hono environment every route and middleware in the transport layer shares. Transport is
@@ -12,4 +16,22 @@ export interface AppEnv {
     /** Request-scoped logger, pre-bound with `requestId` and `component`. */
     log: Logger
   }
+}
+
+/**
+ * Everything the admin plane is mounted against.
+ *
+ * The CRUD services arrive already wrapped in the cache-coherence decorators
+ * from `services/admin/coherence.ts`, so a mutation reaching this bundle has
+ * already taken effect on the request path. `resetHealth` is the one remaining
+ * reach *into* the data plane, and it is the complete list: the console can
+ * clear a breaker, and it can do nothing else to a live request.
+ */
+export interface AdminServices {
+  readonly auth: AdminAuthService
+  readonly accounts: AccountsService
+  readonly pools: PoolsService
+  readonly keys: KeysService
+  /** Clears an account's breaker — the "Re-check now" button's server side. */
+  readonly resetHealth: (accountId: string) => void
 }

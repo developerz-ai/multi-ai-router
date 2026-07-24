@@ -9,6 +9,7 @@ export default function SettingsRoute() {
         subtitle="Router configuration, price overrides, retention windows and background task health."
       />
       <Placeholder
+        icon="settings"
         summary="Everything the operator tunes, plus the proof that background work is still running."
         items={[
           "Price table overrides on top of the shipped static table",

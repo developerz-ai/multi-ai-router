@@ -1,45 +1,64 @@
 @use "../styles/mixins" as *;
 
+// Responsive strategy: the table stays a real table at every width and scrolls
+// horizontally inside its own container, with the identity column pinned. See
+// the README — the alternative (reflowing rows into cards) was rejected because
+// it destroys row-to-row comparison, which is the operator's actual task.
+
 .scroller {
   @include card;
 
   overflow-x: auto;
+  // A horizontal swipe that runs out of table must not become a browser
+  // back-gesture.
+  overscroll-behavior-x: contain;
+
+  // Keyboard users need to be able to scroll this region, so it carries
+  // `tabindex="0"` and therefore needs a focus state of its own.
+  &:focus-visible {
+    @include focus-ring;
+  }
 }
 
 .table {
   width: 100%;
-  border-collapse: collapse;
+  // `separate` (with zero spacing) rather than `collapse`: collapsed borders
+  // detach from sticky cells and smear across the pinned column when scrolled.
+  border-collapse: separate;
+  border-spacing: 0;
   font-size: var(--text-sm);
 }
 
 .caption {
-  padding: var(--space-2) var(--space-3);
+  padding: var(--space-3) var(--space-4);
   color: var(--text-muted);
   font-size: var(--text-xs);
-  text-align: left;
+  text-align: start;
   border-bottom: 1px solid var(--border);
 }
 
 .headCell {
+  @include eyebrow;
+
   position: sticky;
   top: 0;
-  z-index: 1;
-  padding: var(--space-2) var(--space-3);
+  z-index: 2;
+  padding: var(--space-3) var(--space-4);
   background: var(--surface-raised);
   color: var(--text-muted);
-  font-weight: 600;
-  font-size: var(--text-xs);
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-  text-align: left;
+  text-align: start;
   white-space: nowrap;
   border-bottom: 1px solid var(--border);
 }
 
 .cell {
-  padding: var(--space-2) var(--space-3);
+  padding: var(--space-3) var(--space-4);
   border-bottom: 1px solid var(--border);
-  vertical-align: top;
+  vertical-align: middle;
+}
+
+.row {
+  transition: background var(--duration-fast) var(--ease-out);
 }
 
 .row:last-child .cell {
@@ -50,12 +69,45 @@
   background: var(--surface-sunken);
 }
 
+// ---------- Pinned identity column ----------
+// By convention the first column identifies the row (account label, key name,
+// model). Pinning it means the operator always knows which row a number belongs
+// to while scrolling the measures. It needs an opaque background of its own,
+// which must follow the row's hover state or it visibly detaches.
+
+.headCell:first-child,
+.cell:first-child {
+  position: sticky;
+  inset-inline-start: 0;
+  background: var(--surface-raised);
+  // Hairline divider that takes no part in layout, so it cannot widen the
+  // table the way a real border would.
+  box-shadow: 1px 0 0 var(--border);
+}
+
+.headCell:first-child {
+  // Beats both the sticky header row and the sticky column at the corner.
+  z-index: 3;
+}
+
+.cell:first-child {
+  z-index: 1;
+  color: var(--text);
+  font-weight: var(--weight-medium);
+}
+
+.row:hover .cell:first-child {
+  background: var(--surface-sunken);
+}
+
+// ---------- Modifiers ----------
+
 .numeric {
   @include numeric;
 }
 
 .empty {
-  padding: var(--space-5) var(--space-3);
+  padding: var(--space-7) var(--space-4);
   color: var(--text-muted);
   text-align: center;
 }

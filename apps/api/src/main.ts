@@ -1,5 +1,6 @@
 import { createDatabase, runMigrations } from "@multi-ai-router/db"
 import { createApp } from "./app"
+import { createRuntime } from "./composition"
 import { type Env, EnvValidationError, parseEnv } from "./config/env"
 import { createLogger, type Logger } from "./logging/logger"
 import { createDatabaseProbe } from "./services/health/databaseProbe"
@@ -19,12 +20,26 @@ async function main(): Promise<void> {
   await migrate(env, logger)
 
   const database = createDatabase({ url: env.databaseUrl })
+  const runtime = createRuntime({ env, database: database.db, logger })
+
+  // Before the listener opens: the catalog is loaded and the background writers are
+  // running, so the first request is served against real state rather than an empty one.
+  await runtime.start()
+
   const app = createApp({
     logger,
     probes: {
       database: createDatabaseProbe({ handle: database, log: logger }),
       healthyAccounts: assumeHealthyAccounts,
     },
+    admin: runtime.admin,
+    dataPlane: {
+      verifier: runtime.verifier,
+      dispatcher: runtime.dispatcher,
+      catalog: runtime.catalog,
+      health: runtime.health,
+    },
+    trustProxy: env.trustProxy,
   })
 
   const server = Bun.serve({ port: env.port, fetch: app.fetch })
@@ -35,8 +50,11 @@ async function main(): Promise<void> {
     trustProxy: env.trustProxy,
   })
 
+  // Order on the way out mirrors the way in: stop taking traffic, flush what is
+  // queued, then close the connection the flush needs.
   installShutdownHandlers(logger, async () => {
     await server.stop()
+    await runtime.stop()
     await database.close()
   })
 }

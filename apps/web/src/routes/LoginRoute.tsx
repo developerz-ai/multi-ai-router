@@ -14,6 +14,7 @@ export default function LoginRoute() {
           <p class={styles.note}>Sign in to the admin console.</p>
         </div>
         <Placeholder
+          icon="keys"
           summary="Single-admin sign-in against ADMIN_USERNAME and the argon2id password hash."
           items={[
             "Username and password, posted to the admin auth endpoint",

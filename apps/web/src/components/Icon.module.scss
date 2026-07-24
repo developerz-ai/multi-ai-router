@@ -1,0 +1,7 @@
+.icon {
+  flex: none;
+  width: 1rem;
+  height: 1rem;
+  // Optical alignment: a 16px glyph beside 14px text sits a hair low otherwise.
+  transform: translateY(-0.5px);
+}

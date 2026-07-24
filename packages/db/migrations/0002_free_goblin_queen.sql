@@ -1,0 +1,2 @@
+ALTER TABLE "pools" ADD COLUMN "overflow_account_id" uuid;--> statement-breakpoint
+ALTER TABLE "pools" ADD CONSTRAINT "pools_overflow_account_id_accounts_id_fk" FOREIGN KEY ("overflow_account_id") REFERENCES "public"."accounts"("id") ON DELETE set null ON UPDATE no action;

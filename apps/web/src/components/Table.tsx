@@ -1,4 +1,4 @@
-import { For, type JSX, mergeProps, Show } from "solid-js"
+import { createMemo, createUniqueId, For, type JSX, mergeProps, Show } from "solid-js"
 import { cx } from "../lib/cx"
 import styles from "./Table.module.scss"
 
@@ -32,12 +32,26 @@ export interface TableProps<T> {
  */
 export function Table<T>(props: TableProps<T>) {
   const merged = mergeProps({ emptyMessage: "Nothing here yet." }, props)
+  const captionId = createUniqueId()
+
+  // A landmark with no accessible name is worse than no landmark, so the role
+  // and the name are produced together or not at all — one object, never two
+  // independent attributes that could drift apart.
+  const region = createMemo(() =>
+    merged.caption === undefined ? {} : ({ role: "region", "aria-labelledby": captionId } as const),
+  )
 
   return (
-    <div class={styles.scroller}>
+    // `tabindex` makes the scroll region reachable by keyboard — a scroll
+    // container that only a pointer can move is a WCAG 2.1.1 failure.
+    <div {...region()} class={styles.scroller} tabindex="0">
       <table class={styles.table}>
         <Show when={merged.caption}>
-          {(caption) => <caption class={styles.caption}>{caption()}</caption>}
+          {(caption) => (
+            <caption class={styles.caption} id={captionId}>
+              {caption()}
+            </caption>
+          )}
         </Show>
         <thead>
           <tr>

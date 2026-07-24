@@ -1,0 +1,147 @@
+// Custom-property declarations, and nothing else. No patterns, no breakpoints:
+// one reason to change, which is "a design value moved".
+//
+// Components reference `var(--surface)` and friends — never a raw hex, never a
+// palette name. The two mixins below are not reusable patterns; they exist only
+// so a single token set can be declared twice, once per scheme.
+//
+// Contrast is a constraint, not an afterthought: every foreground token clears
+// WCAG AA (4.5:1) against every surface token it can legally sit on, in both
+// schemes. The light `--accent`, `--ok` and `--danger` are darker than their
+// dark-scheme twins for exactly that reason — the naive "same hue both ways"
+// palette fails on `--surface-sunken`.
+
+@mixin dark-tokens {
+  color-scheme: dark;
+
+  // Four elevations, close together on purpose. A dark UI reads as cheap when
+  // the steps are large; depth comes from the border, not from a big jump.
+  --surface: #0b0e14;
+  --surface-raised: #12161f;
+  --surface-overlay: #171c27;
+  --surface-sunken: #070910;
+
+  --text: #e9edf5;
+  --text-muted: #99a3b3;
+
+  --border: #232a37;
+  --border-strong: #525d6d;
+
+  --accent: #5b9dff;
+  --accent-soft: rgb(91 157 255 / 0.14);
+  --accent-contrast: #06090f;
+
+  --ok: #46c46a;
+  --warn: #dda63a;
+  --danger: #f76b62;
+
+  --scrim: rgb(4 6 11 / 0.66);
+  --shadow-1: 0 1px 2px rgb(0 0 0 / 0.4);
+  --shadow-2: 0 12px 32px rgb(0 0 0 / 0.5);
+  --skeleton-sheen: rgb(255 255 255 / 0.06);
+}
+
+@mixin light-tokens {
+  color-scheme: light;
+
+  --surface: #ffffff;
+  --surface-raised: #f7f8fa;
+  --surface-overlay: #ffffff;
+  --surface-sunken: #eef0f4;
+
+  --text: #0f1319;
+  --text-muted: #59636f;
+
+  --border: #e2e6eb;
+  --border-strong: #949fad;
+
+  --accent: #1a63dd;
+  --accent-soft: rgb(26 99 221 / 0.1);
+  --accent-contrast: #ffffff;
+
+  --ok: #15703a;
+  --warn: #8a6300;
+  --danger: #cf2b28;
+
+  --scrim: rgb(15 19 25 / 0.42);
+  --shadow-1: 0 1px 2px rgb(15 19 25 / 0.06);
+  --shadow-2: 0 12px 32px rgb(15 19 25 / 0.12);
+  --skeleton-sheen: rgb(15 19 25 / 0.05);
+}
+
+// Dark-first: the default set is the dark set.
+:root {
+  @include dark-tokens;
+
+  // ---- Spacing. A 4px base, used for *everything*, so rhythm is consistent
+  // by construction rather than by eye.
+  --space-1: 0.25rem;
+  --space-2: 0.5rem;
+  --space-3: 0.75rem;
+  --space-4: 1rem;
+  --space-5: 1.5rem;
+  --space-6: 2rem;
+  --space-7: 3rem;
+  --space-8: 4rem;
+
+  // ---- Radii. Two steps, applied consistently: controls and cards. A third
+  // value per component is what makes a UI look assembled from parts.
+  --radius-1: 6px;
+  --radius-2: 10px;
+  --radius-full: 999px;
+
+  // ---- Type. Body is 14px: dense enough for a console, large enough to read.
+  --font-sans:
+    ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", sans-serif;
+  --font-mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+
+  --text-xs: 0.75rem;
+  --text-sm: 0.8125rem;
+  --text-md: 0.875rem;
+  --text-lg: 1rem;
+  --text-xl: 1.25rem;
+  --text-2xl: 1.5rem;
+
+  --weight-normal: 400;
+  --weight-medium: 500;
+  --weight-semibold: 600;
+
+  --line-tight: 1.2;
+  --line-snug: 1.35;
+  --line-body: 1.55;
+
+  --tracking-tight: -0.011em;
+  --tracking-wide: 0.04em;
+
+  // ---- Layout
+  --sidebar-width: 14rem;
+  --drawer-width: min(17rem, 84vw);
+  // Apple/WCAG minimum touch target. Applied to every control at mobile size.
+  --tap-target: 44px;
+
+  // ---- Motion. Short and eased; nothing here is decorative.
+  --duration-fast: 90ms;
+  --duration-base: 150ms;
+  --duration-drawer: 200ms;
+  --ease-out: cubic-bezier(0.2, 0, 0, 1);
+
+  --focus-ring: 2px;
+}
+
+// A viewer who never touched the toggle follows the OS.
+@media (prefers-color-scheme: light) {
+  :root {
+    @include light-tokens;
+  }
+}
+
+// An explicit choice wins in *both* directions: these selectors outrank the
+// bare `:root` above on specificity, inside the media query as well as out, so
+// "light OS + dark chosen" and "dark OS + light chosen" both resolve correctly.
+:root[data-theme="dark"] {
+  @include dark-tokens;
+}
+
+:root[data-theme="light"] {
+  @include light-tokens;
+}

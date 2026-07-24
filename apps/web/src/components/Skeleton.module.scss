@@ -1,0 +1,40 @@
+.block {
+  display: block;
+  border-radius: var(--radius-1);
+  background: var(--surface-sunken);
+  // The sheen is a moving highlight over a flat base, so the shape never
+  // pulses between two colours — that reads as an error state, not as loading.
+  background-image: linear-gradient(
+    90deg,
+    transparent 0%,
+    var(--skeleton-sheen) 50%,
+    transparent 100%
+  );
+  background-size: 200% 100%;
+  background-repeat: no-repeat;
+  animation: sheen 1.4s var(--ease-out) infinite;
+}
+
+.circle {
+  composes: block;
+
+  border-radius: var(--radius-full);
+}
+
+@keyframes sheen {
+  from {
+    background-position: -100% 0;
+  }
+
+  to {
+    background-position: 100% 0;
+  }
+}
+
+// The global reset clamps every animation under `prefers-reduced-motion`, which
+// would leave the sheen frozen mid-sweep. Drop it to a plain resting block.
+@media (prefers-reduced-motion: reduce) {
+  .block {
+    background-image: none;
+  }
+}

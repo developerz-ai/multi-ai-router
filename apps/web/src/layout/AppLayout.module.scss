@@ -1,46 +1,155 @@
+@use "../styles/breakpoints" as bp;
 @use "../styles/mixins" as *;
+
+// Mobile-first. The base rules below ARE the phone layout: a sticky top bar,
+// content underneath, navigation off-canvas. The single `respond-to` block at
+// the bottom promotes the drawer into a permanent sidebar. There is no
+// `max-width` query anywhere in this file.
 
 .shell {
   display: grid;
-  grid-template-columns: 13rem 1fr;
+  // `minmax(0, 1fr)` rather than `1fr`: a grid track refuses to shrink below
+  // its content otherwise, and one wide table would push the whole page into
+  // horizontal scroll. This is the single most important line in the file.
+  grid-template-rows: auto minmax(0, 1fr);
+  grid-template-columns: minmax(0, 1fr);
   min-height: 100%;
 }
 
+// ---------- Mobile top bar ----------
+
+.topbar {
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  background: var(--surface-raised);
+  border-bottom: 1px solid var(--border);
+}
+
+.menuButton {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: var(--tap-target);
+  height: var(--tap-target);
+  background: none;
+  border: 1px solid transparent;
+  border-radius: var(--radius-1);
+  color: var(--text);
+  cursor: pointer;
+  transition: background var(--duration-fast) var(--ease-out);
+
+  &:hover {
+    background: var(--surface-sunken);
+  }
+}
+
+.topbarBrand {
+  font-size: var(--text-md);
+  font-weight: var(--weight-semibold);
+  letter-spacing: var(--tracking-tight);
+}
+
+// ---------- Scrim ----------
+
+.scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 25;
+  background: var(--scrim);
+  // Progressive: ignored where unsupported, and never the only cue.
+  backdrop-filter: blur(2px);
+}
+
+// ---------- Navigation: drawer at base, sidebar once wide ----------
+
 .sidebar {
+  // Elevation 2, written out rather than extracted: the drawer is the only
+  // floating surface in the app so far. It earns a mixin when a menu or a
+  // dialog becomes the third caller, not before.
+  background: var(--surface-overlay);
+  box-shadow: var(--shadow-2);
+  position: fixed;
+  z-index: 30;
+  inset-block: 0;
+  inset-inline-start: 0;
   display: flex;
   flex-direction: column;
   gap: var(--space-5);
+  width: var(--drawer-width);
   padding: var(--space-4) var(--space-3);
-  background: var(--surface-raised);
-  border-right: 1px solid var(--border);
+  overflow-y: auto;
+  // Scrolling the drawer to its end must not start scrolling the page behind
+  // it. The page is separately held still by `createScrollLock` while open.
+  overscroll-behavior: contain;
+  border-inline-end: 1px solid var(--border);
+  transform: translateX(-100%);
+  // `visibility` removes the closed drawer from the accessibility tree — being
+  // merely offscreen would leave every link readable and reachable. The `inert`
+  // attribute on the element backs this up for focus.
+  visibility: hidden;
+  // Asymmetric on purpose. Opening flips `visibility` immediately, because the
+  // focus trap moves focus into the drawer in the same tick and `.focus()` is a
+  // no-op on a `visibility: hidden` element. Closing delays the flip until the
+  // slide-out has finished, so the drawer does not vanish mid-animation.
+  transition:
+    transform var(--duration-drawer) var(--ease-out),
+    visibility 0s linear var(--duration-drawer);
+
+  &[data-open="true"] {
+    transform: none;
+    visibility: visible;
+    transition:
+      transform var(--duration-drawer) var(--ease-out),
+      visibility 0s;
+  }
 }
 
 .brand {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  padding-inline: var(--space-2);
+}
+
+.brandName {
   font-size: var(--text-md);
-  font-weight: 600;
-  letter-spacing: -0.01em;
+  font-weight: var(--weight-semibold);
+  letter-spacing: var(--tracking-tight);
 }
 
 .brandNote {
-  display: block;
-  margin-top: var(--space-1);
+  @include eyebrow;
+
   color: var(--text-muted);
-  font-size: var(--text-xs);
-  font-weight: 400;
 }
 
-.nav {
+.navList {
   display: grid;
   gap: var(--space-1);
 }
 
 .navLink {
-  display: block;
-  padding: var(--space-1) var(--space-2);
+  @include tappable;
+
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding-inline: var(--space-3);
   border-radius: var(--radius-1);
   color: var(--text-muted);
-  font-size: var(--text-sm);
+  font-size: var(--text-md);
+  font-weight: var(--weight-medium);
   text-decoration: none;
+  transition:
+    background var(--duration-fast) var(--ease-out),
+    color var(--duration-fast) var(--ease-out);
 
   &:hover {
     background: var(--surface-sunken);
@@ -49,22 +158,56 @@
   }
 }
 
+// Three simultaneous cues, so colour never does the work alone: the rail
+// (shape), the weight (typography), and the tint (colour).
 .navLinkActive {
-  background: var(--surface-sunken);
+  background: var(--accent-soft);
   color: var(--text);
-  box-shadow: inset 2px 0 0 var(--accent);
+  font-weight: var(--weight-semibold);
+
+  .navRail {
+    transform: scaleY(1);
+  }
 }
 
-.footer {
-  margin-top: auto;
+.navRail {
+  position: absolute;
+  inset-block: 20%;
+  inset-inline-start: 0;
+  width: 3px;
+  border-radius: var(--radius-full);
+  background: var(--accent);
+  transform: scaleY(0);
+  transition: transform var(--duration-base) var(--ease-out);
 }
+
+.navLabel {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+// The layout of the slot belongs to this component; the appearance of whatever
+// sits in it belongs to that child. `grid` stretches the toggle to the rail
+// width without this file reaching into `ThemeToggle`'s own rules.
+.navFooter {
+  display: grid;
+  margin-block-start: auto;
+  padding-block-start: var(--space-4);
+  border-block-start: 1px solid var(--border);
+}
+
+// ---------- Main ----------
 
 .main {
+  // Same reason as the grid track: without it a wide table inside makes the
+  // main column wider than the viewport.
+  min-width: 0;
   display: grid;
-  gap: var(--space-4);
+  gap: var(--space-5);
   align-content: start;
-  padding: var(--space-5);
-  max-width: 90rem;
+  padding: var(--space-4) var(--space-3) var(--space-7);
 }
 
 .skipLink {
@@ -72,33 +215,50 @@
 
   &:focus-visible {
     position: fixed;
-    top: var(--space-2);
-    left: var(--space-2);
-    z-index: 10;
+    inset-block-start: var(--space-2);
+    inset-inline-start: var(--space-2);
+    z-index: 40;
     width: auto;
     height: auto;
     margin: 0;
     padding: var(--space-2) var(--space-3);
     clip-path: none;
-    background: var(--surface-raised);
+    background: var(--surface-overlay);
     border: 1px solid var(--accent);
     border-radius: var(--radius-1);
+    box-shadow: var(--shadow-2);
   }
 }
 
-@media (max-width: 48rem) {
+// ---------- Sidebar layout ----------
+
+@include bp.respond-to("sidebar") {
   .shell {
-    grid-template-columns: 1fr;
+    grid-template-rows: minmax(0, 1fr);
+    grid-template-columns: var(--sidebar-width) minmax(0, 1fr);
+  }
+
+  .topbar {
+    display: none;
   }
 
   .sidebar {
-    border-right: 0;
-    border-bottom: 1px solid var(--border);
+    // Sticky rather than fixed: it stays put full-height like a fixed rail but
+    // still occupies its grid column, so `main` needs no compensating margin.
+    position: sticky;
+    inset-block-start: 0;
+    z-index: auto;
+    height: 100dvh;
+    width: auto;
+    padding: var(--space-5) var(--space-3);
+    background: var(--surface-raised);
+    box-shadow: none;
+    transform: none;
+    visibility: visible;
+    transition: none;
   }
 
-  .nav {
-    grid-auto-flow: column;
-    grid-auto-columns: max-content;
-    overflow-x: auto;
+  .main {
+    padding: var(--space-6) var(--space-6) var(--space-8);
   }
 }

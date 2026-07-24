@@ -9,6 +9,7 @@ export default function UsageRoute() {
         subtitle="Who burned what — answered without anyone writing a query."
       />
       <Placeholder
+        icon="usage"
         summary="Any dimension against any window, with the same measures in every cell."
         items={[
           "Slice by key, account, pool, model or session",

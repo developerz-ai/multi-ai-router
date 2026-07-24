@@ -41,7 +41,10 @@ const TABLE_COLUMNS: ReadonlyArray<{ table: Table; columns: readonly string[] }>
       "createdAt",
     ],
   },
-  { table: schema.pools, columns: ["id", "name", "policy", "createdAt", "updatedAt"] },
+  {
+    table: schema.pools,
+    columns: ["id", "name", "policy", "overflowAccountId", "createdAt", "updatedAt"],
+  },
   {
     table: schema.poolMembers,
     columns: ["id", "poolId", "accountId", "weight", "priority", "createdAt"],
