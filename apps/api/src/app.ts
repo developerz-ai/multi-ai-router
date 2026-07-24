@@ -90,7 +90,10 @@ function mountAdmin(app: Hono<AppEnv>, admin: AdminServices, trustProxy: boolean
   const guard = adminAuth(admin.auth)
 
   app.route(ADMIN_AUTH_BASE_PATH, adminAuthRoutes({ service: admin.auth, trustProxy }))
-  app.route(ADMIN_ACCOUNTS_BASE_PATH, adminAccountRoutes({ guard, service: admin.accounts }))
+  app.route(
+    ADMIN_ACCOUNTS_BASE_PATH,
+    adminAccountRoutes({ guard, service: admin.accounts, recheck: admin.recheck }),
+  )
   app.route(ADMIN_POOLS_BASE_PATH, adminPoolRoutes({ guard, service: admin.pools }))
   app.route(ADMIN_KEYS_BASE_PATH, adminKeyRoutes({ guard, service: admin.keys }))
   app.route(ADMIN_PROVIDERS_BASE_PATH, adminProviderRoutes({ guard }))

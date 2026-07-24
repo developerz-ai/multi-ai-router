@@ -5,6 +5,8 @@
 
 export type { ProviderDescriptor, ProviderTransport } from "./providers"
 export { describeProvider, describeProviders } from "./providers"
+export type { RecheckResult, RecheckService, RecheckServiceDeps } from "./recheck"
+export { createRecheckService } from "./recheck"
 export type { AccountShape } from "./rules"
 export { checkAccountShape } from "./rules"
 export type {

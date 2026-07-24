@@ -8,7 +8,7 @@ import {
 } from "@multi-ai-router/db"
 import type { Env } from "./config/env"
 import type { Logger } from "./logging/logger"
-import { createAccountsService } from "./services/accounts"
+import { createAccountsService, createRecheckService } from "./services/accounts"
 import {
   createAuditRecorder,
   withCatalogRefresh,
@@ -133,7 +133,17 @@ export function createRuntime(deps: RuntimeDeps): Runtime {
     },
   })
 
-  const dispatcher = createDispatcher({ catalog, health, cipher, usage, logger })
+  const dispatcher = createDispatcher({
+    catalog,
+    health,
+    cipher,
+    usage,
+    logger,
+    options: {
+      failover: { maxAttempts: env.failover.maxAttempts },
+      upstreamTimeoutMs: env.failover.upstreamTimeoutMs,
+    },
+  })
 
   // --- admin plane ----------------------------------------------------------
   //
@@ -172,9 +182,14 @@ export function createRuntime(deps: RuntimeDeps): Runtime {
       createKeysService({ keys, pools, accounts, cipher, audit, now }),
       coherence,
     ),
-    // The "Re-check now" button's server side: clears the breaker so the next
-    // request probes the account instead of skipping it.
-    resetHealth: (accountId) => health.reset(accountId),
+    // "Re-check now": clears the breaker marks so the next real request probes the
+    // account, rather than sending a synthetic one the provider would still bill.
+    recheck: createRecheckService({
+      accounts,
+      health,
+      cooldownSeconds: env.accountRecheckCooldownSeconds,
+      now,
+    }),
   }
 
   return {

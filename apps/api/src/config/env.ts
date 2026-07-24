@@ -79,6 +79,30 @@ export interface DataPlaneConfig {
   readonly usageFlushIntervalMs: number
 }
 
+/**
+ * How hard the router tries before it gives up, and how long a failing account stays out.
+ *
+ * These are the knobs an operator reaches for when their pool's shape does not match the
+ * defaults — a two-account deployment wants a different attempt cap than a twenty-account one,
+ * and a provider with a slow recovery wants a longer backoff ceiling.
+ *
+ * One thing no value here can change: **an attempt is never retried after bytes are on the
+ * wire.** That is a correctness rule, not a tuning parameter (CLAUDE.md, "Retry a request onto
+ * another account after bytes are on the wire — fail honestly").
+ */
+export interface FailoverConfig {
+  /** Distinct accounts tried for one client request, before the honest failure. */
+  readonly maxAttempts: number
+  /** Consecutive 5xx or connection failures before an account's breaker trips. */
+  readonly failureThreshold: number
+  /** First cooldown step. Doubles per consecutive failure. */
+  readonly baseBackoffMs: number
+  /** Ceiling on that doubling, so a long outage does not park an account for hours. */
+  readonly maxBackoffMs: number
+  /** How long the router waits on one upstream. Long, because a long completion is normal. */
+  readonly upstreamTimeoutMs: number
+}
+
 export interface Env {
   readonly port: number
   readonly databaseUrl: string
@@ -94,6 +118,7 @@ export interface Env {
   readonly janitorIntervalMinutes: number
   readonly adminAuth: AdminAuthConfig
   readonly dataPlane: DataPlaneConfig
+  readonly failover: FailoverConfig
 }
 
 /**
@@ -164,6 +189,11 @@ const envSchema = z
     USAGE_QUEUE_MAX: wholeNumber.optional(),
     USAGE_BATCH_SIZE: wholeNumber.optional(),
     USAGE_FLUSH_INTERVAL_MS: wholeNumber.optional(),
+    ROUTING_MAX_ATTEMPTS: wholeNumber.optional(),
+    ROUTING_FAILURE_THRESHOLD: wholeNumber.optional(),
+    ROUTING_BASE_BACKOFF_MS: wholeNumber.optional(),
+    ROUTING_MAX_BACKOFF_MS: wholeNumber.optional(),
+    UPSTREAM_TIMEOUT_MS: wholeNumber.optional(),
   })
   .transform((raw, ctx): Env => {
     // Precedence: ADMIN_PASSWORD_HASH wins when both are set; exactly one is required.
@@ -217,6 +247,13 @@ const envSchema = z
         usageQueueMax: raw.USAGE_QUEUE_MAX ?? 10_000,
         usageBatchSize: raw.USAGE_BATCH_SIZE ?? 200,
         usageFlushIntervalMs: raw.USAGE_FLUSH_INTERVAL_MS ?? 1_000,
+      },
+      failover: {
+        maxAttempts: raw.ROUTING_MAX_ATTEMPTS ?? 3,
+        failureThreshold: raw.ROUTING_FAILURE_THRESHOLD ?? 3,
+        baseBackoffMs: raw.ROUTING_BASE_BACKOFF_MS ?? 1_000,
+        maxBackoffMs: raw.ROUTING_MAX_BACKOFF_MS ?? 300_000,
+        upstreamTimeoutMs: raw.UPSTREAM_TIMEOUT_MS ?? 600_000,
       },
     }
   })

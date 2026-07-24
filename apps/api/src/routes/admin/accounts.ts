@@ -4,6 +4,7 @@ import {
   type AccountsService,
   accountListQuery,
   createAccountBody,
+  type RecheckService,
   updateAccountBody,
 } from "../../services/accounts"
 import { readJsonBody, validate, validateId } from "../../services/admin"
@@ -20,12 +21,16 @@ import { render } from "./render"
  * `DELETE` is the hard delete and is deliberately the *second* option in the UI:
  * `POST /:id/disable` is the soft one, which keeps the id, the pool membership,
  * and the joinable usage history.
+ *
+ * `POST /recheck` and `POST /:id/recheck` are the operator's "Re-check now" — the
+ * all-accounts form is first so it cannot be shadowed by the `/:id` pattern.
  */
 
 export const ADMIN_ACCOUNTS_BASE_PATH = "/api/admin/accounts"
 
 export interface AdminAccountRoutesDeps {
   readonly service: AccountsService
+  readonly recheck: RecheckService
   /** `adminAuth(adminAuthService)`. Required, so no mount can forget the guard. */
   readonly guard: MiddlewareHandler<AdminAuthEnv>
 }
@@ -46,6 +51,9 @@ export function adminAccountRoutes(deps: AdminAccountRoutesDeps): Hono<AdminAuth
     return render(c, await deps.service.create(body.value), 201)
   })
 
+  // Registered before `/:id`, or Hono would match "recheck" as an account id.
+  routes.post("/recheck", async (c) => render(c, await deps.recheck.recheckAll()))
+
   routes.get("/:id", async (c) => {
     const id = validateId(c.req.param("id"))
     if (!id.ok) return render(c, id)
@@ -64,6 +72,12 @@ export function adminAccountRoutes(deps: AdminAccountRoutesDeps): Hono<AdminAuth
     const id = validateId(c.req.param("id"))
     if (!id.ok) return render(c, id)
     return render(c, await deps.service.disable(id.value))
+  })
+
+  routes.post("/:id/recheck", async (c) => {
+    const id = validateId(c.req.param("id"))
+    if (!id.ok) return render(c, id)
+    return render(c, await deps.recheck.recheck(id.value))
   })
 
   routes.delete("/:id", async (c) => {
