@@ -256,7 +256,7 @@ Cache-aware by design: total prompt size is the sum of `input_tokens`, `cache_cr
 | Lint/format | Biome |
 | Tests | `bun test` — unit (pure) + integration (HTTP, mocked upstreams) |
 | CI | GitHub Actions on Blacksmith runners |
-| Distribution | Multi-arch image — `ghcr.io/developerz-ai/multi-ai-router`, plus a Postgres service in the bundled compose file |
+| Distribution | Multi-arch image — `ghcr.io/developerz-ai/multi-ai-router`, published only on a `v*` release tag, plus a Postgres service in the bundled compose file |
 
 ---
 

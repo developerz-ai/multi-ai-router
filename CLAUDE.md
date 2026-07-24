@@ -49,7 +49,7 @@ M1 skeleton: builds, boots, serves health checks. No data plane yet (no accounts
 | Lint/format | Biome |
 | Tests | `bun test` — unit (pure, no I/O) + integration (HTTP + mocked upstreams) |
 | CI | GitHub Actions on Blacksmith runners |
-| Distribution | `ghcr.io/developerz-ai/multi-ai-router`, multi-arch; `docker compose up -d` starts router + Postgres 16, healthcheck gating the router |
+| Distribution | `ghcr.io/developerz-ai/multi-ai-router`, multi-arch. **Images publish only on a `v*` tag** (`release.yml`); pushes to `main` run the quality gate and publish nothing. `docker compose up -d` starts router + Postgres 16, healthcheck gating the router |
 
 Postgres is the house standard and the current decision — earlier drafts said SQLite; **any doc still saying SQLite, single-file DB, or `DATABASE_PATH` is stale, fix it.** Migrations run at boot, idempotent, and fail the boot rather than start half-migrated. `DATABASE_URL` ships in the bundled compose file so the operator still sets three env vars by hand.
 

@@ -247,8 +247,19 @@ Multi-arch (`linux/amd64`, `linux/arm64`), published to `ghcr.io/developerz-ai/m
 
 | Trigger | Tags | Use it for |
 |---|---|---|
-| push to `main` | `<short-sha>`, `main` | Tracking the edge; `<short-sha>` is the only immutable one. |
-| `v*` tag | `1.2.3`, `1.2`, `1`, `latest` | Production. Pin at least the minor. |
+| `v*` tag | `1.2.3`, `1.2`, `1`, `latest` | Everything. Pin at least the minor. |
+
+**A tagged release is the only thing that publishes an image.** Pushing to `main` runs the quality
+gate (lint, typecheck, test, build) and stops there — it deliberately publishes nothing.
+
+The reason is that a registry accumulating one image per commit makes "which tag is real" ambiguous,
+and a moving `main` tag invites deploying an untagged commit. The release tag is the only ref
+anything should deploy. CI still *builds* the artifact on every push, so a commit that cannot
+produce one fails immediately rather than at release time.
+
+To cut a release: `git tag v0.1.0 && git push origin v0.1.0`. That fires `release.yml`, which builds
+both arches natively, pushes each by digest, merges them into one manifest list under the tags above,
+and creates the GitHub release.
 
 ## Performance
 
