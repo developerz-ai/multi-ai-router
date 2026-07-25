@@ -1,5 +1,4 @@
-import { createSignal, For, Show } from "solid-js"
-import { Banner } from "../components/Banner"
+import { createSignal, For } from "solid-js"
 import { PageHeader } from "../components/PageHeader"
 import { QueryBoundary } from "../components/QueryBoundary"
 import { Sparkline } from "../components/Sparkline"
@@ -85,12 +84,6 @@ export default function UsageRoute() {
       >
         {(data) => (
           <>
-            <Show when={data.placeholder}>
-              <Banner title="These figures are placeholder data, not measurements" tone="warn">
-                Nothing on this screen came from a request the router served.
-              </Banner>
-            </Show>
-
             <section aria-label="Headline figures" class={styles.tiles}>
               <StatTile
                 label="Requests"

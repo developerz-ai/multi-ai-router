@@ -19,8 +19,6 @@ import { request } from "./client"
 // Every series is dense and aligned to `axis`: a quiet bucket is a zero, not a
 // missing point, so two rows in a table are comparable at a glance.
 
-export const USAGE_IS_PLACEHOLDER = false
-
 export const USAGE_WINDOWS = ["today", "7d", "30d", "lifetime"] as const
 export type UsageWindow = (typeof USAGE_WINDOWS)[number]
 
@@ -99,8 +97,6 @@ export interface UsageSummary {
   readonly byAccount: readonly UsageBreakdownRow[]
   readonly byPool: readonly UsageBreakdownRow[]
   readonly byModel: readonly UsageBreakdownRow[]
-  /** True while these numbers are generated. The banner is driven off this. */
-  readonly placeholder: boolean
 }
 
 export function breakdownFor(
@@ -226,7 +222,6 @@ export async function fetchUsageSummary(window: UsageWindow): Promise<UsageSumma
     byAccount: wire.byAccount.map(toRow),
     byPool: wire.byPool.map(toRow),
     byModel: wire.byModel.map(toRow),
-    placeholder: USAGE_IS_PLACEHOLDER,
   }
 }
 

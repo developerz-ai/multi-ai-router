@@ -67,7 +67,7 @@ export default function SettingsRoute() {
   return (
     <>
       <PageHeader
-        subtitle="This session, the provider registry, the price table, retention windows, background task health and the audit log."
+        subtitle="Session, providers, pricing, retention, scheduler health, and audit trail."
         title="Settings"
       />
 
