@@ -12,15 +12,20 @@ export { createScheduler } from "./runner"
 export type {
   JanitorDeps,
   OauthPurgeDeps,
+  QuotaFloorDeps,
   ScheduledTaskDeps,
   Sweep,
   SweepOptions,
   SweepReport,
+  UsageRollupDeps,
 } from "./tasks"
 export {
   createJanitorTask,
   createOauthPurgeTask,
+  createQuotaFloorTask,
   createScheduledTasks,
+  createUsageRollupTask,
+  rollupFrom,
   runSweeps,
 } from "./tasks"
 export type {
