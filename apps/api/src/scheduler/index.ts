@@ -10,6 +10,20 @@ export { advisoryTaskLock } from "./lock"
 export type { Scheduler, SchedulerDeps } from "./runner"
 export { createScheduler } from "./runner"
 export type {
+  JanitorDeps,
+  OauthPurgeDeps,
+  ScheduledTaskDeps,
+  Sweep,
+  SweepOptions,
+  SweepReport,
+} from "./tasks"
+export {
+  createJanitorTask,
+  createOauthPurgeTask,
+  createScheduledTasks,
+  runSweeps,
+} from "./tasks"
+export type {
   ScheduledTask,
   TaskContext,
   TaskLock,
