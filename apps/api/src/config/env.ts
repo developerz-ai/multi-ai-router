@@ -144,6 +144,12 @@ export interface Env {
   readonly publicUrl: string | null
   readonly claudeConfigRoot: string
   /**
+   * Pins the `claude` binary the Agent SDK spawns, bypassing the resolution ladder. Set means
+   * *exactly this*: an unusable path fails rather than falling through to some other binary the
+   * operator did not name — `providers/claude-sdk/resolve-cli.ts`.
+   */
+  readonly claudeCliPath: string | null
+  /**
    * Bearer token `GET /metrics` demands, or null to leave it open. Null is the right default for
    * a deployment whose metrics port is not routable; see `routes/metrics.ts`.
    */
@@ -207,6 +213,7 @@ const envSchema = z
     TRUST_PROXY: flag.optional(),
     PUBLIC_URL: absoluteUrl.optional(),
     CLAUDE_CONFIG_ROOT: nonEmpty.optional(),
+    CLAUDE_CLI_PATH: nonEmpty.optional(),
     METRICS_TOKEN: nonEmpty.optional(),
     ACCOUNT_RECHECK_COOLDOWN_SECONDS: wholeNumber.optional(),
     RETENTION_SESSIONS_HOURS: wholeNumber.optional(),
@@ -270,6 +277,7 @@ const envSchema = z
       trustProxy: raw.TRUST_PROXY ?? false,
       publicUrl: raw.PUBLIC_URL ?? null,
       claudeConfigRoot: raw.CLAUDE_CONFIG_ROOT ?? "/data/claude",
+      claudeCliPath: raw.CLAUDE_CLI_PATH ?? null,
       metricsToken: raw.METRICS_TOKEN ?? null,
       accountRecheckCooldownSeconds: raw.ACCOUNT_RECHECK_COOLDOWN_SECONDS ?? 60,
       retention: {

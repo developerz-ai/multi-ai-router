@@ -4,6 +4,7 @@ import { createRuntime } from "./composition"
 import { type Env, EnvValidationError, parseEnv } from "./config/env"
 import { createLogger, type Logger } from "./logging/logger"
 import { createAccountProbe } from "./services/health/accountProbe"
+import { createClaudeCliProbe } from "./services/health/claudeCliProbe"
 import { createDatabaseProbe } from "./services/health/databaseProbe"
 
 /**
@@ -26,6 +27,11 @@ async function main(): Promise<void> {
   // running, so the first request is served against real state rather than an empty one.
   await runtime.start()
 
+  // Resolves which `claude` binary the Agent SDK would spawn. Called once here so the winning rung
+  // is in the boot log before the first request, then again per `/readyz`.
+  const claudeCli = createClaudeCliProbe({ override: env.claudeCliPath, log: logger })
+  await claudeCli()
+
   const app = createApp({
     logger,
     probes: {
@@ -33,6 +39,7 @@ async function main(): Promise<void> {
       // Reads the same warm state the request path reads, so the endpoint cannot
       // disagree with the router about what is routable.
       accounts: createAccountProbe({ catalog: runtime.catalog, health: runtime.health }),
+      claudeCli,
     },
     admin: runtime.admin,
     metrics: { metrics: runtime.metrics, token: env.metricsToken },

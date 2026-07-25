@@ -130,7 +130,8 @@ Each is a Zod schema **and** its `z.infer` type under one name. These are the si
 | `parseEnv(raw)`, `Env`, `EnvValidationError`, `decodeEncryptionKey(value)`, `LOG_LEVELS` | `config/env.ts` | Reading configuration. Pure over a raw map; `main.ts` owns the one `process.env` read |
 | `AppEnv` | `types.ts` | Typing a Hono route or middleware. Transport-only — it never leaves that layer |
 | `createApp(deps)` | `app.ts` | Integration tests. Pure factory: no listener, no timers, no `process.env` |
-| `checkReadiness(probes)`, `ReadinessProbes`, `createDatabaseProbe(...)`, `assumeHealthyAccounts` | `services/health/` | Health surfaces. Probes are injected, so the service needs no I/O |
+| `checkReadiness(probes)`, `ReadinessProbes`, `createDatabaseProbe(...)`, `createClaudeCliProbe(...)`, `assumeHealthyAccounts` | `services/health/` | Health surfaces. Probes are injected, so the service needs no I/O |
+| `resolveClaudeCli(probe)`, `createCliProbe(options)`, `CliResolution`, `CliSource` | `providers/claude-sdk/` | Anywhere the `claude` binary's path is needed — the SDK driver's `pathToClaudeCodeExecutable`, `/readyz`, the image build. The ladder is pure over an injected probe; `cli-probe.ts` is the only part that touches the filesystem |
 | `createRuntime(deps)` → `Runtime` | `composition.ts` | The composition root. Every long-lived object is built here once and injected downward — never construct a repository, cache, or recorder anywhere else |
 
 ### Metrics — `apps/api/src/observability/`
@@ -240,6 +241,7 @@ in a test as on the wire.
 | The `cooling_down` vs `exhausted` distinction | Clock-recoverable vs human-recoverable: 429 + `Retry-After` vs 402, countdown vs "needs top-up". Collapsing them makes the router retry a dead account on a timer forever |
 | Per-key rate-limit accounting | `services/dataplane/limits.ts`, charged once per request in the dispatcher. A second counter — in a middleware, a route, or the verifier (which is cached, so it would only see misses) — double-charges or under-charges the same key |
 | Which conversion serves a dialect pair | `services/translate/registry.ts`. A second lookup — in a route, a driver, or the relay — is how a request gets converted one way on the way out and a different way on the way back |
+| How the `claude` binary is located | `providers/claude-sdk/resolve-cli.ts`. The Dockerfile stages the binary by *running* that resolver, never by hard-coding a store path: a second answer means the image ships one binary and the router spawns another, and the symptom is an unreadable SDK stderr string |
 
 ## Conventions for new shared code
 

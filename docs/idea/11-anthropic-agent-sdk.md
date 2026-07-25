@@ -453,18 +453,37 @@ working directory hidden in `<system-reminder>` blocks, and LiteLLM's `x-litellm
 
 ## 9. Operational notes
 
-**The glibc/musl trap.** `@anthropic-ai/claude-code`'s postinstall downloads a *platform-native*
-binary. Build on Debian/glibc, run on Alpine/musl, and the file is present but cannot exec —
-`ENOENT` despite existing, because the dynamic loader path differs. Fix: `--ignore-scripts` in the
-build stage, run `install.cjs` **in the runtime stage** so the binary matches the runtime libc.
-A separate musl platform package exists (`@anthropic-ai/claude-code-linux-<arch>-musl`). Also
-symlink the binary onto `PATH` as `claude` — a *symlink*, not a shell wrapper, which the SDK's
-launcher rejects on some paths — so `claude auth status` and the SDK resolve the same binary.
+**The glibc/musl trap.** The `claude` CLI is a *platform-native* binary. Build on Debian/glibc, run
+on Alpine/musl, and the file is present but cannot exec — `ENOENT` despite existing, because the
+dynamic loader path differs. `@anthropic-ai/claude-code` acquires it in a postinstall
+(`install.cjs`), so a build that wants that package must pass `--ignore-scripts` in the build stage
+and run `install.cjs` **in the runtime stage** so the binary matches the runtime libc; a separate
+musl platform package exists (`@anthropic-ai/claude-code-linux-<arch>-musl`). Either way the binary
+belongs on `PATH` as `claude` — a *symlink* or the real executable, never a shell wrapper, which the
+SDK's launcher rejects on some paths — so `claude auth status` and the SDK resolve the same file.
 
-**Executable resolution is a ladder and must be observable**: env override → bundled binary (skipping
-the ~500-byte stub a failed postinstall leaves) → platform package → `PATH` lookup → legacy fallback
-(`models.ts:339-540`). `/health` should report which rung won; "the wrong `claude` got picked" is
-otherwise indistinguishable from any other SDK error.
+**How our image actually does it, and why it differs.** `@anthropic-ai/claude-agent-sdk` (0.3.220+)
+ships the same binary as its *own* prebuilt optional dependency
+(`@anthropic-ai/claude-agent-sdk-<platform>-<arch>`, glibc and musl variants), and its internal
+resolution says so: it fails with "Reinstall `@anthropic-ai/claude-agent-sdk` without
+`--omit=optional`, or set `options.pathToClaudeCodeExecutable`". So we install **no** second CLI
+package: `bun install` already puts a lockfile-pinned binary in the tree, at a version that cannot
+skew from the SDK calling it, with no network fetch or postinstall at image-build time. The builder
+stage stages that exact file (found by running our own resolver — never a hard-coded store path,
+which would drift the moment bun changes its layout) and the runtime stage copies it to
+`/usr/local/bin/claude` and runs `claude --version`, so the libc trap fails the **build** instead of
+the first subscription request. `--ignore-scripts` stays on both builder installs as a security
+floor. This makes the builder and runtime bases share a libc — the invariant the `RUN` enforces.
+
+**Executable resolution is a ladder and must be observable**: env override (`CLAUDE_CLI_PATH`, and a
+set-but-unusable pin *fails* rather than falling through to a binary nobody named) → bundled binary
+(`@anthropic-ai/claude-code`'s `bin/claude.exe` — that one filename on every platform, skipping the
+~500-byte stub a skipped postinstall leaves) → SDK platform package (same candidate order the SDK
+walks, resolved from the SDK's own directory because bun installs a package's deps beside it) →
+`PATH` lookup → legacy native-installer paths. `/readyz` reports **which rung won**; "the wrong
+`claude` got picked" is otherwise indistinguishable from any other SDK error. The path is logged,
+not returned: `/readyz` is unauthenticated. Implementation:
+`apps/api/src/providers/claude-sdk/resolve-cli.ts` (pure ladder) + `cli-probe.ts` (host facts).
 
 | Concern | Design |
 |---|---|

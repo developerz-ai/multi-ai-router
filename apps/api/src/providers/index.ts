@@ -5,6 +5,17 @@
 
 export type { AnthropicAuthForm } from "./auth-headers"
 export { ANTHROPIC_OAUTH_BETA, ANTHROPIC_VERSION } from "./auth-headers"
+export type { CliProbeOptions } from "./claude-sdk/cli-probe"
+export { createCliProbe } from "./claude-sdk/cli-probe"
+export type {
+  CliAttempt,
+  CliProbe,
+  CliRejection,
+  CliResolution,
+  CliSource,
+  FileFacts,
+} from "./claude-sdk/resolve-cli"
+export { resolveClaudeCli } from "./claude-sdk/resolve-cli"
 export type { HttpDriverConfig, ProviderSurface } from "./driver"
 export { createHttpDriver } from "./driver"
 export type { ClassificationRule, ClassifyOptions } from "./failure/classify"
