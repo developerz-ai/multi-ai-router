@@ -1,4 +1,5 @@
 import type { Dialect } from "@multi-ai-router/core"
+import type { SdkInvoker } from "../../providers"
 import type { CredentialCipher } from "../crypto/cipher"
 import type { UsageRecord } from "../usage"
 import type { HealthStore } from "./health"
@@ -19,6 +20,12 @@ export interface RuntimeInput {
   readonly health: HealthStore
   readonly cipher: Pick<CredentialCipher, "decrypt">
   readonly call: FetchLike
+  /**
+   * The Claude subscription transport, when one is wired. The SDK path's counterpart to `call`, and
+   * optional for the same reason `call` is injected: the data plane must be dispatchable without a
+   * subprocess. Absent, a subscription candidate fails its attempt by name — see `sdk-attempt.ts`.
+   */
+  readonly invokeSdk?: SdkInvoker
   readonly clock: DataPlaneClock
   readonly timeoutMs: number
   readonly record: (record: UsageRecord) => void

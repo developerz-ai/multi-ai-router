@@ -7,6 +7,9 @@ export type { AnthropicAuthForm } from "./auth-headers"
 export { ANTHROPIC_OAUTH_BETA, ANTHROPIC_VERSION } from "./auth-headers"
 export type { CliProbeOptions } from "./claude-sdk/cli-probe"
 export { createCliProbe } from "./claude-sdk/cli-probe"
+export type { ClaudeSdkDriver, SdkAccount } from "./claude-sdk/driver"
+export { claudeSdkDriver } from "./claude-sdk/driver"
+export type { SdkInvocation, SdkInvoker } from "./claude-sdk/invoke"
 export type {
   CliAttempt,
   CliProbe,

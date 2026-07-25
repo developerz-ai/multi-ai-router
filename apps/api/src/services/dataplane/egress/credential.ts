@@ -11,6 +11,14 @@ import type { RoutableAccount } from "../types"
  * Two stored forms, distinguished by shape rather than by a flag, because the two are not
  * interchangeable on the Anthropic dialect — an OAuth token on `x-api-key` does not work and a
  * bearer token without the beta header does not either (`providers/auth-headers.ts`).
+ *
+ * **The Agent-SDK path never reaches here.** A Claude subscription Account holds
+ * `authMaterial === null` by construction (`services/accounts/rules.ts`): its credentials live
+ * inside the Account's `CLAUDE_CONFIG_DIR` and only the `claude` CLI reads them
+ * (docs/idea/11-anthropic-agent-sdk.md §3). That is why the null case below is a hard error and not
+ * a "no credential needed" fallback — reaching it means an HTTP attempt was planned for an Account
+ * that has nothing to authenticate with, which must fail loudly rather than send an anonymous
+ * request upstream.
  */
 
 interface StoredOAuth {

@@ -202,6 +202,20 @@ account, an answer converted back toward the client. The `created` stamp and the
 injected, never read off a clock inside a translator, so a recorded input converts to the same bytes
 in a test as on the wire.
 
+### Transports — `apps/api/src/providers/` + `services/dataplane/`
+
+| Thing | Where | Use it when |
+|---|---|---|
+| `PROVIDER_REGISTRY[id]` → `ProviderSupport` | `providers/registry.ts` | Deciding **how** a provider is reached. Narrow on `transport` — `http`, `agent-sdk`, `unimplemented` — never compare a `ProviderId` to decide a transport. Total over `ProviderId`, so a new id fails the file to compile |
+| `httpDriver(id)` → `ProviderDriver \| null` | `providers/registry.ts` | Reaching for an HTTP driver's pure resolvers. Null means "not served over HTTP", which is an answer, not an error |
+| `claudeSdkDriver`, `ClaudeSdkDriver`, `SdkAccount` | `providers/claude-sdk/driver.ts` | The Claude subscription facts: the one dialect it renders, its auth style, its alias map, and `resolveConfigDir` — the counterpart of `resolveBaseUrl`, which throws rather than falling back to a shared directory. A **separate** interface from `ProviderDriver` on purpose; three of that interface's members have no meaning here |
+| `SdkInvoker`, `SdkInvocation` | `providers/claude-sdk/invoke.ts` | The SDK path's `FetchLike`. In: Anthropic Messages bytes. Out: a `Response` of Anthropic Messages. Injected, so no test spawns a `claude` CLI |
+| `resolveEgress(ingress, account)` → `EgressDecision` | `services/dataplane/egress/mode.ts` | Asking what a (dialect, account) pair takes: `passthrough`, `translate`, `agent-sdk`, or a named rejection. The one place all three modes are decided |
+| `planCandidates(candidates, catalog, ingress)` → `CandidatePlan` | `services/dataplane/plan.ts` | Turning routing's ordered candidates into dispatchable attempts. `kind` carries the transport: `http` with a `url`, `sdk` with a `configDir`. A chain may mix both |
+| `runAttempt(input)` / `runSdkAttempt(input)` → `AttemptOutcome` | `services/dataplane/attempt.ts`, `sdk-attempt.ts` | Dispatching one attempt. Two transports, **one** outcome type, so health, records, and relay are written once. Siblings, never modes inside one function |
+| `attemptDeadline(timeoutMs, clientSignal?)` | `services/dataplane/attempt.ts` | Bounding an upstream call. Shared by both transports: on the SDK path the same signal terminates the subprocess, so a client that disconnects never orphans one |
+| `relayUpstreamError(upstream, ingress)` | `services/dataplane/relay-error.ts` | Rendering an upstream's own error. `null` ingress relays it unchanged (passthrough); a dialect re-renders it into the client's shape, naming no account |
+
 ### Test support — `apps/api/test/`
 
 | Thing | Where | Use it when |
@@ -242,6 +256,7 @@ in a test as on the wire.
 | Per-key rate-limit accounting | `services/dataplane/limits.ts`, charged once per request in the dispatcher. A second counter — in a middleware, a route, or the verifier (which is cached, so it would only see misses) — double-charges or under-charges the same key |
 | Which conversion serves a dialect pair | `services/translate/registry.ts`. A second lookup — in a route, a driver, or the relay — is how a request gets converted one way on the way out and a different way on the way back |
 | How the `claude` binary is located | `providers/claude-sdk/resolve-cli.ts`. The Dockerfile stages the binary by *running* that resolver, never by hard-coding a store path: a second answer means the image ships one binary and the router spawns another, and the symptom is an unreadable SDK stderr string |
+| Which transport serves a provider | `PROVIDER_REGISTRY[id].transport`, narrowed. A `provider === "anthropic-oauth"` check anywhere else is a second registry that will disagree with the first the moment a provider moves transports |
 
 ## Conventions for new shared code
 

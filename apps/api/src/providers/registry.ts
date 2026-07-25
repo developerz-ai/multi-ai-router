@@ -1,4 +1,5 @@
 import type { ProviderId } from "@multi-ai-router/core"
+import { type ClaudeSdkDriver, claudeSdkDriver } from "./claude-sdk/driver"
 import { anthropicApiDriver } from "./drivers/anthropic-api"
 import { anthropicCompatibleDriver } from "./drivers/anthropic-compatible"
 import { kimiDriver } from "./drivers/kimi"
@@ -14,14 +15,23 @@ import type { ProviderDriver } from "./types"
  * `packages/core` fails this file to compile until it is accounted for — the Open/Closed rule
  * with a compiler behind it.
  *
- * Every id is present, and the ones with no HTTP driver say why rather than being silently
+ * Every id is present, and the ones with no implementation say why rather than being silently
  * absent or stubbed into something that looks like it works.
+ *
+ * `transport` is also the **transport seam**: two transports, two driver interfaces, one
+ * discriminated union. Every caller that needs to know how a provider is reached narrows on it, so
+ * "is this HTTP or the Agent SDK" is a question the compiler answers — never a provider-id
+ * comparison scattered across the data plane.
  */
 
 export type ProviderSupport =
   | { readonly transport: "http"; readonly driver: ProviderDriver }
-  /** Served by the Claude Agent SDK, not by any driver here. */
-  | { readonly transport: "agent-sdk"; readonly reason: string }
+  /**
+   * Served by `@anthropic-ai/claude-agent-sdk`'s `query()`, against a per-Account
+   * `CLAUDE_CONFIG_DIR`. A different interface, not a `ProviderDriver` — see `claude-sdk/driver.ts`.
+   * `reason` is operator-facing: the console shows it beside the provider.
+   */
+  | { readonly transport: "agent-sdk"; readonly driver: ClaudeSdkDriver; readonly reason: string }
   /** Declared in the domain, no implementation yet. Selecting one is a configuration error. */
   | { readonly transport: "unimplemented"; readonly reason: string }
 
@@ -39,8 +49,9 @@ export const PROVIDER_REGISTRY: Readonly<Record<ProviderId, ProviderSupport>> = 
 
   "anthropic-oauth": {
     transport: "agent-sdk",
+    driver: claudeSdkDriver,
     reason:
-      "Claude Max/Pro subscriptions go through @anthropic-ai/claude-agent-sdk. No subscription token is ever extracted or attached to an HTTP request — docs/idea/11-anthropic-agent-sdk.md.",
+      "Claude Max/Pro subscriptions go through @anthropic-ai/claude-agent-sdk, one isolated CLAUDE_CONFIG_DIR per account. No subscription token is ever extracted or attached to an HTTP request — docs/idea/11-anthropic-agent-sdk.md.",
   },
   "openai-oauth": {
     transport: "unimplemented",

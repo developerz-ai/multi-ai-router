@@ -90,6 +90,8 @@ export interface AccountOptions {
   readonly modelAliases?: Record<string, string>
   readonly snapshot?: Partial<AccountSnapshot>
   readonly cipher?: CredentialCipher
+  /** Claude subscription accounts only. A path, never a credential — nothing is written to it. */
+  readonly configDir?: string
 }
 
 export function account(id: string, options: AccountOptions = {}): RoutableAccount {
@@ -106,7 +108,23 @@ export function account(id: string, options: AccountOptions = {}): RoutableAccou
       modelAliases: options.modelAliases ?? null,
     },
     authMaterial: cryptor.encrypt(options.apiKey ?? `sk-${id}`),
-    configDir: null,
+    configDir: options.configDir ?? null,
+  }
+}
+
+/**
+ * A Claude subscription account, as the catalog holds one: a config directory and **no credential
+ * material at all** (`services/accounts/rules.ts` enforces the pairing). Written this way so a test
+ * asserting the SDK path never decrypts anything is asserting it against the real shape.
+ */
+export function subscriptionAccount(
+  id: string,
+  options: Omit<AccountOptions, "provider" | "apiKey"> = {},
+): RoutableAccount {
+  return {
+    ...account(id, { ...options, provider: "anthropic-oauth" }),
+    authMaterial: null,
+    configDir: options.configDir ?? `/data/accounts/${id}`,
   }
 }
 

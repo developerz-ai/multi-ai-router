@@ -56,12 +56,12 @@ describe("egress mode", () => {
     expect(egressRejectionError(rejection)).toBeInstanceOf(TranslationError)
   })
 
-  test("a Claude subscription is refused as the Agent-SDK path, not as a bad request", () => {
-    const decision = resolveEgress("anthropic", account("a", { provider: "anthropic-oauth" }))
+  test("an unimplemented provider is a capacity failure, not a bad request", () => {
+    const decision = resolveEgress("openai-responses", account("a", { provider: "gemini" }))
 
     expect(decision.mode).toBe("rejected")
     if (decision.mode !== "rejected") return
-    expect(decision.reason).toBe("agent-sdk")
+    expect(decision.reason).toBe("unimplemented")
     // 503, not 400: the caller did nothing wrong and there is nothing they can change.
     expect(egressRejectionError(decision)).toBeInstanceOf(NoHealthyAccountError)
   })

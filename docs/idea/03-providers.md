@@ -118,11 +118,14 @@ absent or stubbed into something that looks like it works:
 | Transport | Ids | Meaning |
 |---|---|---|
 | `http` | `anthropic-api`, `openai-api`, `openrouter`, `zai`, `kimi`, `minimax`, `openai-compatible`, `anthropic-compatible` | A driver in `providers/drivers/`, satisfying the interface above |
-| `agent-sdk` | `anthropic-oauth` | Served by `query()`, not by any driver here. There is nothing to proxy, so it is not an inert driver — it is a different transport |
+| `agent-sdk` | `anthropic-oauth` | Served by `query()`. Its own driver interface in `providers/claude-sdk/driver.ts`, not a `ProviderDriver`: there is no base URL to resolve, no headers to build, and failures arrive as strings |
 | `unimplemented` | `openai-oauth`, `gemini` | Declared in the domain, no implementation. Selecting one is a configuration error and is refused by name, before any upstream call |
 
-That three-way split is what lets the data plane refuse honestly. A request routed to an account
-whose provider has no driver fails saying so; it never degrades into a lossy approximation.
+That three-way split is what lets the data plane refuse honestly, and it is also the **transport
+seam**: `transport` is the discriminant every caller narrows on, so "is this HTTP or the Agent SDK"
+is a question the compiler answers rather than a provider-id comparison scattered across the data
+plane. A request routed to an account whose provider has no implementation fails saying so; it never
+degrades into a lossy approximation.
 
 ## `anthropic-oauth` — Claude Max/Pro subscription, via the Claude Agent SDK
 

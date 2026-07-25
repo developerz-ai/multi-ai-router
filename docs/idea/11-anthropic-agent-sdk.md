@@ -1,9 +1,27 @@
 # 11 — Claude subscriptions via the Claude Agent SDK
 
-Status: **nothing here is built.** `anthropic-oauth` is in the provider registry with a recorded
-reason and no driver, and a request routed to such an Account is refused by name in
-`services/dataplane/egress/mode.ts` rather than served some other way. This page is the contract
-M4 must satisfy.
+Status: **the seams exist; the transport does not.** `anthropic-oauth` has a driver
+(`providers/claude-sdk/driver.ts`) — a *separate* interface from `ProviderDriver`, because three of
+that interface's five members would be lies here (§9). A request routed to such an Account is now
+**planned** rather than refused: `resolveEgress` returns an `agent-sdk` decision,
+`planCandidates` resolves the Account's `CLAUDE_CONFIG_DIR` instead of a URL, and `chain.ts`
+dispatches through `runSdkAttempt`, which answers with the same `AttemptOutcome` an HTTP attempt does
+— so the failover loop, the health store, the relay, and the `UsageRecord` are written once for both
+transports. What is still absent is the one thing that does the work: the `SdkInvoker` behind
+`providers/claude-sdk/invoke.ts` that actually calls `query()`. Until it is wired, a subscription
+attempt fails by name (retryably, so an HTTP Account in the same Pool still serves) rather than
+being degraded onto some other path. Everything in §4 (sessions), §5 (quota), §6 (re-synthesis), and
+§7 (tools) remains unbuilt. This page is the contract M4 must satisfy.
+
+Two decisions the seam already commits to, both taken from §6:
+
+- **There is no passthrough mode on this path.** `resolveEgress` never reports one for a
+  subscription, even for `POST /v1/messages`, because the SDK yields message objects and the answer
+  is re-synthesized rather than relayed.
+- **One renderer, not one per dialect.** The SDK is rendered into the driver's own dialect
+  (`anthropic`) and any other ingress dialect is then served by the *ordinary* translation pair — the
+  same one an `anthropic-api` Account would have used. An Account that pins a different surface does
+  not move that target.
 
 How `anthropic-oauth` Accounts (Claude Max/Pro subscriptions) are served. Extracted from
 [Meridian](https://github.com/rynfar/meridian), a working single-user proxy on this exact path;

@@ -5,6 +5,7 @@ import { requestLogger } from "../../src/middleware/logger"
 import { requestId } from "../../src/middleware/requestId"
 import type { RouterKeyEnv } from "../../src/middleware/routerKeyAuth"
 import { createMetrics } from "../../src/observability"
+import type { SdkInvoker } from "../../src/providers"
 import { metricsRoutes } from "../../src/routes/metrics"
 import { dataPlaneRoutes } from "../../src/routes/v1"
 import {
@@ -13,7 +14,7 @@ import {
   createRouterKeyVerifier,
   type RoutableAccount,
 } from "../../src/services/dataplane"
-import type { PoolSnapshot } from "../../src/services/routing"
+import type { PoolSnapshot, SelectionOptions } from "../../src/services/routing"
 import {
   account,
   apiKeyRow,
@@ -47,6 +48,13 @@ export interface HarnessOptions {
   readonly accountIds?: readonly string[]
   readonly responses: readonly (() => Response)[]
   readonly maxAttempts?: number
+  /** Overrides the default `sticky` policy, for a suite that needs a deterministic chain order. */
+  readonly selection?: SelectionOptions
+  /**
+   * The Claude subscription transport, stubbed at the `SdkInvoker` boundary. Omitted means this
+   * router serves no subscription account — no `claude` CLI is ever spawned either way.
+   */
+  readonly invokeSdk?: SdkInvoker
 }
 
 export function harness(options: HarnessOptions) {
@@ -97,9 +105,13 @@ export function harness(options: HarnessOptions) {
         cipher: CRYPTOR,
         usage: usageWithMetrics,
         fetch: upstream.fetch,
+        ...(options.invokeSdk === undefined ? {} : { invokeSdk: options.invokeSdk }),
         clock: testClock,
         onRequest: (sample) => metrics.observeRequest(sample),
-        options: { failover: { maxAttempts: options.maxAttempts ?? 3 } },
+        options: {
+          failover: { maxAttempts: options.maxAttempts ?? 3 },
+          ...(options.selection === undefined ? {} : { selection: options.selection }),
+        },
       }),
     }),
   )

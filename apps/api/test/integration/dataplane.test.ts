@@ -1,6 +1,12 @@
 import { describe, expect, test } from "bun:test"
 import type { UsageRecord } from "../../src/services/usage"
-import { account, jsonResponse, newRouterKey, slowStream } from "../unit/dataplane/fixtures"
+import {
+  account,
+  jsonResponse,
+  newRouterKey,
+  slowStream,
+  subscriptionAccount,
+} from "../unit/dataplane/fixtures"
 import { bearer, CRYPTOR, harness, KEY, MESSAGE, post, settle } from "./harness"
 
 /**
@@ -351,15 +357,120 @@ describe("cross-dialect and Agent-SDK egress", () => {
     expect(JSON.stringify(await res.json())).toContain("logprobs")
   })
 
-  test("a Claude subscription is refused as unservable, not as a bad request", async () => {
-    const { app } = harness({
-      accounts: [
-        { ...account("sub"), driver: { ...account("sub").driver, provider: "anthropic-oauth" } },
-      ],
+  test("a Claude subscription with no config directory is unservable, not a bad request", async () => {
+    const { app, upstream } = harness({
+      accounts: [subscriptionAccount("sub", { configDir: "" })],
       responses: [() => jsonResponse(200, {})],
     })
 
     expect((await app.request("/v1/messages", post(MESSAGE, bearer()))).status).toBe(503)
+    // Never addressed over HTTP, so nothing was attempted against `api.anthropic.com`.
+    expect(upstream.calls).toHaveLength(0)
+  })
+
+  test("a Claude subscription on a router with no SDK transport fails honestly", async () => {
+    const { app, usage } = harness({
+      accounts: [subscriptionAccount("sub")],
+      responses: [() => jsonResponse(200, {})],
+    })
+
+    const res = await app.request("/v1/messages", post(MESSAGE, bearer()))
+    await settle()
+
+    expect(res.status).toBe(503)
+    // The attempt happened and is counted — the account was planned, not refused at the gate.
+    expect(usage.rows[0]).toMatchObject({
+      accountId: "sub",
+      egressMode: "agent-sdk",
+      provider: "anthropic-oauth",
+    })
+  })
+})
+
+describe("the Agent-SDK transport", () => {
+  const sdkResponse = () =>
+    new Response(
+      JSON.stringify({
+        id: "msg_01",
+        type: "message",
+        role: "assistant",
+        model: "claude-opus-5",
+        content: [{ type: "text", text: "hi" }],
+        stop_reason: "end_turn",
+        usage: { input_tokens: 7, output_tokens: 3 },
+      }),
+      { status: 200, headers: { "content-type": "application/json" } },
+    )
+
+  test("serves a subscription account without touching HTTP or a credential", async () => {
+    const seen: { configDir: string; model: string }[] = []
+    const { app, upstream, usage } = harness({
+      accounts: [subscriptionAccount("sub", { configDir: "/data/accounts/sub" })],
+      responses: [() => jsonResponse(500, {})],
+      invokeSdk: async ({ configDir, model }) => {
+        seen.push({ configDir, model })
+        return sdkResponse()
+      },
+    })
+
+    const res = await app.request("/v1/messages", post(MESSAGE, bearer()))
+    await res.text()
+    await settle()
+
+    expect(res.status).toBe(200)
+    // No socket was opened: a subscription is never proxied, and the account holds no credential to
+    // decrypt in the first place.
+    expect(upstream.calls).toHaveLength(0)
+    expect(seen).toEqual([{ configDir: "/data/accounts/sub", model: "claude-opus-5" }])
+    expect(usage.rows[0]).toMatchObject({
+      egressMode: "agent-sdk",
+      outcome: "success",
+      tokensIn: 7,
+      tokensOut: 3,
+    })
+  })
+
+  test("an OpenAI client reaches a subscription through the ordinary translator", async () => {
+    const { app, usage } = harness({
+      accounts: [subscriptionAccount("sub")],
+      responses: [() => jsonResponse(500, {})],
+      invokeSdk: async () => sdkResponse(),
+    })
+
+    const body = JSON.stringify({
+      model: "claude-opus-5",
+      messages: [{ role: "user", content: "hello" }],
+    })
+    const res = await app.request("/v1/chat/completions", post(body, bearer()))
+    const payload = await res.json()
+    await settle()
+
+    expect(res.status).toBe(200)
+    // Rendered SDK → Anthropic once, then Anthropic → openai-chat by the same pair an
+    // `anthropic-api` account would have used. No second renderer.
+    expect(payload).toMatchObject({ object: "chat.completion" })
+    expect(usage.rows[0]?.egressMode).toBe("agent-sdk")
+  })
+
+  test("a failed subscription attempt fails over to the HTTP account beside it", async () => {
+    const { app, usage } = harness({
+      accounts: [
+        subscriptionAccount("sub", { snapshot: { priority: 0 } }),
+        account("api-1", { apiKey: "sk-one", cipher: CRYPTOR, snapshot: { priority: 1 } }),
+      ],
+      // Priority, not the default sticky hash: this asserts an *order*, so the order has to be the
+      // operator's rather than a hash's.
+      selection: { unpooledPolicy: "priority-failover" },
+      responses: [() => jsonResponse(200, { usage: { input_tokens: 1, output_tokens: 2 } })],
+      invokeSdk: () => Promise.reject(new Error("the subprocess exited with code 1")),
+    })
+
+    const res = await app.request("/v1/messages", post(MESSAGE, bearer()))
+    await res.text()
+    await settle()
+
+    expect(res.status).toBe(200)
+    expect(usage.rows.map((row) => row.egressMode)).toEqual(["agent-sdk", "passthrough"])
   })
 })
 

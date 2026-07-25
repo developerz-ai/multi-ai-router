@@ -4,7 +4,7 @@ import {
   isRouterError,
   type RouterError,
 } from "@multi-ai-router/core"
-import type { ProviderDriver } from "../../providers"
+import type { ClaudeSdkDriver, ProviderDriver } from "../../providers"
 import type { Candidate } from "../routing"
 import type { TranslationPair } from "../translate"
 import { upstreamUrl } from "./egress/endpoint"
@@ -25,20 +25,30 @@ import type { RoutableAccount, RoutingCatalog } from "./types"
  * one OpenAI-compatible account plans a passthrough attempt followed by a translated one, in the
  * order routing chose — which is why the conversion is carried per candidate rather than decided
  * once for the request.
+ *
+ * It is also free to mix **transports**. `kind` is the seam: an HTTP candidate carries the URL it is
+ * addressed at, a Claude subscription carries the `CLAUDE_CONFIG_DIR` its subprocess runs against,
+ * and nothing else in the chain has to ask which is which. Resolving both here means the same class
+ * of operator misconfiguration — no base URL, no config directory — is caught at the same point, by
+ * the driver that owns the answer, before a request is spent on it.
  */
 
-export interface ServableCandidate {
+/** What both transports carry. `kind` below decides what each carries on top of it. */
+interface ServablePlan {
   readonly candidate: Candidate
   readonly account: RoutableAccount
-  readonly driver: ProviderDriver
-  /** The dialect this attempt is addressed in: the account's own, translated or not. */
+  /**
+   * The dialect this attempt speaks: the account's own on the HTTP path, translated or not, and the
+   * one the SDK is re-synthesized into on the Agent-SDK path.
+   */
   readonly dialect: Dialect
-  readonly url: URL
   /** The model name this account expects. Identity unless its alias map renames it. */
   readonly upstreamModel: string
   /**
-   * The conversion this attempt runs, or null on the passthrough path — where there is deliberately
-   * no translator at all, because a same-dialect body is opaque bytes with no schema behind them.
+   * The conversion this attempt runs, or null when the client already speaks the dialect this
+   * attempt answers in. On the passthrough path that null is load-bearing: there is deliberately no
+   * translator at all, because a same-dialect body is opaque bytes with no schema behind them. On
+   * the Agent-SDK path it only means no conversion is needed — the body is read either way.
    */
   readonly translation: TranslationPair | null
   /**
@@ -47,6 +57,26 @@ export interface ServableCandidate {
    */
   readonly egressMode: EgressMode
 }
+
+/** Addressed over HTTP: a URL, a credential, and a body forwarded to it. */
+export interface HttpServableCandidate extends ServablePlan {
+  readonly kind: "http"
+  readonly driver: ProviderDriver
+  readonly url: URL
+}
+
+/**
+ * Served by the Claude Agent SDK. There is no URL and no credential the router holds: the config
+ * directory is where the subscription's own credentials live, and the SDK is the only thing that
+ * reads them (docs/idea/11-anthropic-agent-sdk.md §3).
+ */
+export interface SdkServableCandidate extends ServablePlan {
+  readonly kind: "sdk"
+  readonly driver: ClaudeSdkDriver
+  readonly configDir: string
+}
+
+export type ServableCandidate = HttpServableCandidate | SdkServableCandidate
 
 export interface CandidatePlan {
   /** In failover order. Empty when nothing in the chain can be served. */
@@ -77,34 +107,43 @@ export function planCandidates(
       continue
     }
 
-    // A translated request is addressed by the **account's** dialect, not the client's: the body is
-    // converted, so it has to arrive at the endpoint that speaks the shape it was converted into.
-    const dialect = egress.mode === "passthrough" ? egress.dialect : egress.to
+    // A converted request takes the **account's** dialect, not the client's: the body is rewritten,
+    // so it has to arrive in the shape it was rewritten into.
+    const plan: ServablePlan = {
+      candidate,
+      account,
+      dialect: egress.mode === "passthrough" ? egress.dialect : egress.to,
+      // The alias map is the operator's, applied by the driver, outbound-only, identity on a miss.
+      upstreamModel: egress.driver.mapModelAlias(account.driver, candidate.upstreamModel),
+      translation: egress.mode === "passthrough" ? null : egress.pair,
+      egressMode: egress.mode,
+    }
 
-    let url: URL
     try {
-      url = upstreamUrl(egress.driver, account.driver, dialect)
+      servable.push(
+        egress.mode === "agent-sdk"
+          ? {
+              ...plan,
+              kind: "sdk",
+              driver: egress.driver,
+              configDir: egress.driver.resolveConfigDir(account),
+            }
+          : {
+              ...plan,
+              kind: "http",
+              driver: egress.driver,
+              url: upstreamUrl(egress.driver, account.driver, plan.dialect),
+            },
+      )
     } catch (error) {
-      // `resolveBaseUrl` throws a `RouterError` naming the account. One unusable endpoint must
-      // not take the rest of the chain down with it.
+      // Both resolvers throw a `RouterError` naming the account. One unusable endpoint — or one
+      // subscription account with no config directory — must not take the rest of the chain down.
       if (isRouterError(error)) {
         endpointError ??= error
         continue
       }
       throw error
     }
-
-    servable.push({
-      candidate,
-      account,
-      driver: egress.driver,
-      dialect,
-      url,
-      // The alias map is the operator's, applied by the driver, outbound-only, identity on a miss.
-      upstreamModel: egress.driver.mapModelAlias(account.driver, candidate.upstreamModel),
-      translation: egress.mode === "translate" ? egress.pair : null,
-      egressMode: egress.mode,
-    })
   }
 
   return { servable, rejection, endpointError }
