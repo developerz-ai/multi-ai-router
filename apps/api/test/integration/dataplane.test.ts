@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test"
+import type { PoolSnapshot } from "../../src/services/routing"
 import type { UsageRecord } from "../../src/services/usage"
 import {
   account,
@@ -556,6 +557,46 @@ describe("the Agent-SDK transport", () => {
     expect(res.status).toBe(200)
     expect(usage.rows.map((row) => row.egressMode)).toEqual(["agent-sdk", "passthrough"])
   })
+
+  test("bytes a subscription account already streamed are never replayed onto the account behind it", async () => {
+    const slow = slowStream(["data: partial\n\n"])
+    let sdkCalls = 0
+    const { app, upstream, usage } = harness({
+      accounts: [...mixedPool()],
+      selection: { unpooledPolicy: "priority-failover" },
+      responses: [() => jsonResponse(200, { shouldNotBeReached: true })],
+      invokeSdk: () => {
+        sdkCalls += 1
+        return Promise.resolve(slow.response)
+      },
+    })
+
+    const res = await app.request("/v1/messages", post(MESSAGE, bearer()))
+    if (res.body === null) throw new Error("expected a body")
+    const reader = res.body.getReader()
+
+    slow.release(0)
+    expect(new TextDecoder().decode((await reader.read()).value)).toContain("partial")
+
+    // The subprocess's stream breaks after bytes are already on the wire. `chain.ts`'s
+    // `markStreamed` (set the instant `outcome.kind === "success"`) makes this structurally
+    // unreachable from another account — the loop already returned control before the break — and
+    // this is the Agent-SDK transport's proof of the same guarantee `slowStream`'s HTTP sibling
+    // asserts above.
+    slow.abort()
+    await reader.read().catch(() => undefined)
+    await settle()
+
+    expect(sdkCalls).toBe(1)
+    expect(upstream.calls).toHaveLength(0)
+    expect(usage.rows).toHaveLength(1)
+    expect(usage.rows[0]).toMatchObject({
+      accountId: "sub",
+      egressMode: "agent-sdk",
+      streamed: true,
+      outcome: "success",
+    })
+  })
 })
 
 describe("usage accounting", () => {
@@ -745,5 +786,196 @@ describe("request validation", () => {
 
     expect(res.status).toBe(400)
     expect(upstream.calls).toHaveLength(0)
+  })
+})
+
+/**
+ * One pool, three egress modes: a Claude subscription, a cross-dialect account, and an ordinary
+ * passthrough account, side by side. Everything above this point proves each transport works in
+ * isolation; this proves the pool doesn't care which one served the request — failover walks
+ * across them exactly like it walks across three `anthropic-api` accounts, scope stays an
+ * intersection with pool membership regardless of which member answers, and every attempt writes
+ * its own priced `UsageRecord` whether it succeeded or not.
+ */
+describe("full-stack integration: one pool, three egress modes", () => {
+  const MIXED_POOL_ID = "mixed-pool"
+
+  const mixedPool = (overrides: Partial<PoolSnapshot> = {}): PoolSnapshot => ({
+    id: MIXED_POOL_ID,
+    name: "mixed",
+    policy: "priority-failover",
+    members: [
+      { accountId: "sub", priority: 0 },
+      { accountId: "o", priority: 1 },
+      { accountId: "acct-1", priority: 2 },
+    ],
+    ...overrides,
+  })
+
+  const mixedAccounts = () => [
+    subscriptionAccount("sub"),
+    account("o", { provider: "openai-api", apiKey: "sk-o", cipher: CRYPTOR }),
+    account("acct-1", { apiKey: "sk-one", cipher: CRYPTOR }),
+  ]
+
+  // A flat rate so every attempt prices, regardless of which provider or model actually answered:
+  // the point of the assertion below is that a row is priced, not what number it lands on.
+  const flatRate = () => ({
+    inputPerMtok: 1,
+    outputPerMtok: 2,
+    cacheReadPerMtok: 0,
+    cacheWritePerMtok: 0,
+  })
+
+  test("fails over from the SDK account through the translate account to the passthrough account", async () => {
+    let sdkCalls = 0
+    const { app, upstream, usage } = harness({
+      accounts: mixedAccounts(),
+      pools: [mixedPool()],
+      scope: "pools",
+      poolIds: [MIXED_POOL_ID],
+      prices: flatRate,
+      invokeSdk: () => {
+        sdkCalls += 1
+        return Promise.reject(new Error("the subprocess exited with code 1"))
+      },
+      responses: [
+        // The translate account's turn: a plain 429 classifies as rate-limited off the status
+        // alone, no provider-specific body needed, and is retryable — the chain keeps going.
+        () => jsonResponse(429, {}),
+        // The passthrough account's turn: succeeds.
+        () => jsonResponse(200, { usage: { input_tokens: 5, output_tokens: 7 } }),
+      ],
+    })
+
+    const res = await app.request("/v1/messages", post(MESSAGE, bearer()))
+    await res.text()
+    await settle()
+
+    expect(res.status).toBe(200)
+    expect(res.status).not.toBe(500)
+    expect(sdkCalls).toBe(1)
+    expect(upstream.calls).toHaveLength(2)
+    expect(usage.rows.map((row) => row.egressMode)).toEqual([
+      "agent-sdk",
+      "translate",
+      "passthrough",
+    ])
+    expect(usage.rows.map((row) => row.accountId)).toEqual(["sub", "o", "acct-1"])
+    // Every attempt is attributed to the pool that produced it, no matter which transport served it.
+    expect(usage.rows.map((row) => row.poolId)).toEqual([
+      MIXED_POOL_ID,
+      MIXED_POOL_ID,
+      MIXED_POOL_ID,
+    ])
+    expect(usage.rows.map((row) => row.outcome)).toEqual([
+      "upstream_error",
+      "quota_exhausted",
+      "success",
+    ])
+    // A `UsageRecord` per attempt, failures included, and every one of them priced.
+    expect(usage.rows).toHaveLength(3)
+    expect(usage.rows.every((row) => row.costEstimate !== null)).toBe(true)
+  })
+
+  test("a cooling-down translate account is a 429 with Retry-After, never a generic 500", async () => {
+    const { app, usage } = harness({
+      accounts: [account("o", { provider: "openai-api", apiKey: "sk-o", cipher: CRYPTOR })],
+      pools: [mixedPool({ members: [{ accountId: "o", priority: 0 }] })],
+      scope: "pools",
+      poolIds: [MIXED_POOL_ID],
+      responses: [() => jsonResponse(429, {}, { "retry-after": "17" })],
+    })
+
+    const res = await app.request("/v1/messages", post(MESSAGE, bearer()))
+    await settle()
+
+    expect(res.status).toBe(429)
+    expect(res.status).not.toBe(500)
+    expect(res.headers.get("Retry-After")).toBe("17")
+    expect(usage.rows[0]).toMatchObject({ egressMode: "translate", outcome: "quota_exhausted" })
+  })
+
+  test("a credit-exhausted translate account is a 402, never retried on a timer", async () => {
+    const { app, upstream, usage } = harness({
+      accounts: [account("o", { provider: "openai-api", apiKey: "sk-o", cipher: CRYPTOR })],
+      pools: [mixedPool({ members: [{ accountId: "o", priority: 0 }] })],
+      scope: "pools",
+      poolIds: [MIXED_POOL_ID],
+      responses: [() => jsonResponse(402, {})],
+    })
+
+    const res = await app.request("/v1/messages", post(MESSAGE, bearer()))
+    await settle()
+
+    expect(res.status).toBe(402)
+    expect(res.status).not.toBe(500)
+    // One attempt, not a retry loop: `credits-exhausted` is clock-independent, so nothing about a
+    // second call here would ever be a timer firing.
+    expect(upstream.calls).toHaveLength(1)
+    expect(usage.rows[0]).toMatchObject({ egressMode: "translate", outcome: "credits_exhausted" })
+  })
+
+  test("an empty pool scope is a 403 and reaches none of the three accounts", async () => {
+    let sdkCalls = 0
+    const { app, upstream, usage } = harness({
+      accounts: mixedAccounts(),
+      pools: [mixedPool()],
+      scope: "pools",
+      poolIds: [],
+      invokeSdk: () => {
+        sdkCalls += 1
+        return Promise.resolve(jsonResponse(200, {}))
+      },
+      responses: [() => jsonResponse(200, {})],
+    })
+
+    const res = await app.request("/v1/messages", post(MESSAGE, bearer()))
+    await settle()
+
+    expect(res.status).toBe(403)
+    expect(res.status).not.toBe(500)
+    expect(sdkCalls).toBe(0)
+    expect(upstream.calls).toHaveLength(0)
+    expect(usage.rows[0]).toMatchObject({ accountId: null, outcome: "scope_violation" })
+  })
+
+  test("scope stays an intersection with pool membership no matter which member would answer", async () => {
+    let sdkCalls = 0
+    // A fourth account, healthier and higher priority than every pool member, but never a member
+    // of `mixed-pool` — the key's scope is the pool, so this account is not a candidate at all,
+    // regardless of what its own health or priority would otherwise earn it.
+    const outside = account("outside", {
+      apiKey: "sk-outside",
+      cipher: CRYPTOR,
+      snapshot: { priority: -1 },
+    })
+
+    const { app, upstream, usage } = harness({
+      accounts: [...mixedAccounts(), outside],
+      pools: [mixedPool()],
+      scope: "pools",
+      poolIds: [MIXED_POOL_ID],
+      invokeSdk: () => {
+        sdkCalls += 1
+        return Promise.reject(new Error("the subprocess exited with code 1"))
+      },
+      responses: [
+        () => jsonResponse(429, {}),
+        () => jsonResponse(200, { usage: { input_tokens: 1, output_tokens: 1 } }),
+      ],
+    })
+
+    const res = await app.request("/v1/messages", post(MESSAGE, bearer()))
+    await res.text()
+    await settle()
+
+    expect(res.status).toBe(200)
+    expect(sdkCalls).toBe(1)
+    // Two upstream calls, both against pool members: `o` (translate, fails) then `acct-1`
+    // (passthrough, succeeds) — `outside` is never dialed even though it would outrank both.
+    expect(upstream.calls).toHaveLength(2)
+    expect(usage.rows.map((row) => row.accountId)).toEqual(["sub", "o", "acct-1"])
+    expect(usage.rows.some((row) => row.accountId === "outside")).toBe(false)
   })
 })
