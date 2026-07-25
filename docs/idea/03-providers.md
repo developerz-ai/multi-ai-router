@@ -143,7 +143,8 @@ their mechanisms instead of routing around them.
 | Login | the `claude` CLI's own flow, driven by the router. The admin UI shows the authorization URL and takes the pasted `code#state` back, then hands it to the CLI |
 | Second credential form | a long-lived token from `claude setup-token` |
 | Refresh | happens inside the config directory. **The router never mints, stores, or attaches a subscription token** |
-| Reconnect | re-runs the same CLI login against the same directory, preserving id, pool membership, and usage history |
+| Reconnect | `POST /api/admin/accounts/:id/reconnect` re-runs the same CLI login against the same directory, preserving id, pool membership, and usage history |
+| Credential probe | `claude auth status --json` against the Account's directory, carried by **Re-check now**. Local, unbilled, and the only thing that makes a silently revoked login visible before every request has failed |
 | Runtime requirement | the `claude` CLI present in the image |
 | Quota signal | the SDK's `rate_limit_event` stream events (below) |
 | Usage endpoint | `GET https://api.anthropic.com/api/oauth/usage` — **optional and secondary**, never the primary source |

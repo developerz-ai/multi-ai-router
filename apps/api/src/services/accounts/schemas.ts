@@ -72,3 +72,19 @@ export const accountListQuery = z
   .strict()
 
 export type AccountListQuery = z.infer<typeof accountListQuery>
+
+/**
+ * What the operator pastes back from the CLI's authorization page: the whole `code#state` string.
+ *
+ * One field and `.strict()`, because everything else about the flow is already bound server-side —
+ * an account id in the path and a pending login in memory. A body that could name a `state` would
+ * be a body that could be used to answer a login it did not start.
+ *
+ * The value **is** credential material for the moment it is in flight, so nothing downstream echoes
+ * it: the service's rejections describe the shape and never the value, and `services/admin/parse.ts`
+ * names a failing field without quoting what was in it. Bounded because an authorization code is a
+ * few hundred bytes and a megabyte of it is not a paste.
+ */
+export const completeConnectBody = z.object({ pasted: z.string().trim().min(1).max(4096) }).strict()
+
+export type CompleteConnectBody = z.infer<typeof completeConnectBody>

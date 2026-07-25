@@ -43,6 +43,20 @@ export const AUDIT_KINDS = {
   accountUpdated: "account.updated",
   accountDisabled: "account.disabled",
   accountDeleted: "account.deleted",
+  /** A subscription login completed against this account's own config directory. */
+  accountConnected: "account.connected",
+  /**
+   * An account that was already connected got a working login back — either the operator re-ran the
+   * CLI flow against the existing row, or a probe found the credential healthy and cleared
+   * `needs_reauth`. Distinct from `account.connected` so the log separates a first login from a
+   * repair, which is the difference between onboarding and an incident.
+   */
+  accountReauthorized: "account.reauthorized",
+  /**
+   * An operator pressed "Re-check now" and it took effect. A refused re-check — inside the
+   * server-side cooldown — writes nothing, because nothing happened.
+   */
+  accountRechecked: "account.rechecked",
   keyCreated: "key.created",
   keyUpdated: "key.updated",
   keyRevealed: "key.revealed",

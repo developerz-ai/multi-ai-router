@@ -192,7 +192,7 @@ immediately if it is healthy.
 | `GET /readyz` | none | Readiness: **database reachable**. Two dimensions are reported without gating the answer: the account pool (`ok` / `none` / `blocked`) and the `claude` CLI (the resolution rung that won, or `missing`) | `200` ready, `503` with a short reason when the database is unreachable |
 | `GET /metrics` | `METRICS_TOKEN` when set, none when not | Prometheus text exposition | `200`, `401` when the token is set and not presented |
 | `GET /v1/usage/quota` | router key or admin session | Per-Account, per-window utilization, `resetsAt`, `resetSource`, `status`, `lastCheckedAt` — the same shape the UI renders, so an operator can alert on it externally | `200` |
-| `POST /api/admin/accounts/:id/recheck` | admin session | Manual re-check. `POST /api/admin/accounts/recheck` re-checks every account | `200` always — a cooldown refusal is `rechecked: false`, not `429` |
+| `POST /api/admin/accounts/:id/recheck` | admin session | Manual re-check. `POST /api/admin/accounts/recheck` re-checks every account. For Claude subscriptions it also carries the credential probe, reported as `auth` | `200` always — a cooldown refusal is `rechecked: false`, not `429` |
 | `GET /api/admin/usage` | admin session | Totals, series and breakdowns per key / account / pool / model over a window | `200` |
 
 `/healthz` never touches the database.
@@ -220,7 +220,19 @@ A re-check is **not a synthetic probe**. It clears the account's breaker marks, 
 a cooldown expiring produces, so the account becomes eligible as a half-open probe and the next
 real request tests it. One recovery path, not two that can disagree — and no unbilled request to a
 provider on a button press. The consequence is that a re-check reports eligibility, never a verdict
-on whether the account is back. `GET /v1/usage/quota` is scoped to the presenting key's reachable
+on whether the account is back.
+
+**Claude subscriptions get one extra answer, and it costs nothing.** For those accounts the re-check
+also runs `claude auth status` against the account's own config directory — a local file read, no
+provider contacted — and returns `auth: {loggedIn, email, subscriptionType}` beside the eligibility
+result. That is a different fact from "is the window back", and it is what makes a silently revoked
+login visible before every request to the account has already failed. Logged out moves an `active`
+account to `needs_reauth`; logged in clears `needs_reauth`. A `disabled` account is never touched,
+and a CLI that cannot answer reports *nothing* rather than a definite "logged out". Every effective
+re-check writes an `account.rechecked` audit event; a cooldown refusal writes none, because nothing
+happened. Rationale: [11-anthropic-agent-sdk.md §3.2](11-anthropic-agent-sdk.md).
+
+`GET /v1/usage/quota` is scoped to the presenting key's reachable
 accounts and returns labels and utilization only — never a credential, never an account's provider
 identity beyond its label.
 

@@ -1,6 +1,8 @@
-import type { AccountRepository } from "@multi-ai-router/db"
+import type { AccountRepository, AccountRow } from "@multi-ai-router/db"
+import { AUDIT_KINDS, AUDIT_SUBJECTS, type AuditRecorder } from "../admin/audit"
 import { type AdminResult, notFound, ok } from "../admin/result"
 import type { HealthStore } from "../dataplane"
+import type { AccountAuthProbe, ClaudeAuthReport } from "../health/claudeAuthProbe"
 
 /**
  * The operator's **Re-check now**.
@@ -21,10 +23,18 @@ import type { HealthStore } from "../dataplane"
  * and pretending otherwise would mean fabricating a result from a probe we deliberately do not
  * send.
  *
+ * **The one exception proves the rule.** A Claude subscription can be asked, locally and for free,
+ * whether it is still logged in — `claude auth status` reads the credential file the CLI wrote, with
+ * no provider contacted and nothing billed. That answer is a *different fact* from "is the window
+ * back", and it is the only way a silently revoked credential becomes visible before every request
+ * to the account has failed. So it rides on this call rather than getting a button of its own
+ * (`../health/claudeAuthProbe.ts`), and its result is reported per account as `auth`.
+ *
  * **The cooldown is server-side.** A client-side one is a suggestion — a held-down button, an
  * impatient script, or two operators in two browsers all bypass it. This is also why the
  * cooldown applies to `recheckAll` per account rather than globally: rechecking one account then
- * all accounts must not be a way to double the rate.
+ * all accounts must not be a way to double the rate. It is also what bounds the subprocess above:
+ * no button press can spawn a second one for an account inside its window.
  */
 
 export interface RecheckResult {
@@ -38,6 +48,12 @@ export interface RecheckResult {
    * system is already in, and a 429 for pressing a button twice is hostile.
    */
   readonly rechecked: boolean
+  /**
+   * What the account's own credential says, for the account class that can be asked. Absent for
+   * every other provider, and absent when the CLI could not answer — which is never the same thing
+   * as an account reporting itself logged out.
+   */
+  readonly auth?: ClaudeAuthReport
 }
 
 export interface RecheckService {
@@ -57,6 +73,12 @@ export interface RecheckService {
 export interface RecheckServiceDeps {
   readonly accounts: Pick<AccountRepository, "list" | "findById">
   readonly health: Pick<HealthStore, "reset">
+  readonly audit: AuditRecorder
+  /**
+   * Absent means subscription accounts get the breaker reset and nothing more. Optional because a
+   * deployment with no Claude subscriptions has nothing for it to ask.
+   */
+  readonly auth?: AccountAuthProbe
   readonly cooldownSeconds: number
   readonly now: () => Date
 }
@@ -67,26 +89,46 @@ export function createRecheckService(deps: RecheckServiceDeps): RecheckService {
   const lastChecked = new Map<string, Date>()
   const cooldownMs = deps.cooldownSeconds * 1_000
 
-  const attempt = (accountId: string, now: Date): RecheckResult => {
-    const previous = lastChecked.get(accountId)
-    const withinCooldown = previous !== undefined && now.getTime() - previous.getTime() < cooldownMs
+  const refused = (accountId: string, previous: Date): RecheckResult => ({
+    accountId,
+    lastCheckedAt: previous.toISOString(),
+    nextAllowedAt: new Date(previous.getTime() + cooldownMs).toISOString(),
+    rechecked: false,
+  })
 
-    if (withinCooldown) {
-      return {
-        accountId,
-        lastCheckedAt: previous.toISOString(),
-        nextAllowedAt: new Date(previous.getTime() + cooldownMs).toISOString(),
-        rechecked: false,
-      }
+  const attempt = async (account: AccountRow, now: Date): Promise<RecheckResult> => {
+    const previous = lastChecked.get(account.id)
+    if (previous !== undefined && now.getTime() - previous.getTime() < cooldownMs) {
+      return refused(account.id, previous)
     }
 
-    deps.health.reset(accountId)
-    lastChecked.set(accountId, now)
+    deps.health.reset(account.id)
+    lastChecked.set(account.id, now)
+
+    // After the reset, never before: the breaker marks are cleared whether or not the CLI answers,
+    // so a missing binary can never cost an account the recovery this button exists to give it.
+    const auth = (await deps.auth?.check(account)) ?? undefined
+
+    await deps.audit.record({
+      kind: AUDIT_KINDS.accountRechecked,
+      subjectType: AUDIT_SUBJECTS.account,
+      subjectId: account.id,
+      detail: {
+        provider: account.provider,
+        // Flags, never the email or the plan the probe read — those are for the operator's screen,
+        // not for an append-only log the janitor keeps for months.
+        ...(auth === undefined
+          ? {}
+          : { loggedIn: auth.loggedIn, statusChangedTo: auth.statusChangedTo }),
+      },
+    })
+
     return {
-      accountId,
+      accountId: account.id,
       lastCheckedAt: now.toISOString(),
       nextAllowedAt: new Date(now.getTime() + cooldownMs).toISOString(),
       rechecked: true,
+      ...(auth === undefined ? {} : { auth }),
     }
   }
 
@@ -94,7 +136,7 @@ export function createRecheckService(deps: RecheckServiceDeps): RecheckService {
     recheck: async (accountId) => {
       const account = await deps.accounts.findById(accountId)
       if (account === undefined) return notFound("No account has that id")
-      return ok(attempt(accountId, deps.now()))
+      return ok(await attempt(account, deps.now()))
     },
 
     lastCheckedAt: (accountId) => lastChecked.get(accountId) ?? null,
@@ -102,7 +144,11 @@ export function createRecheckService(deps: RecheckServiceDeps): RecheckService {
     recheckAll: async () => {
       const now = deps.now()
       const accounts = await deps.accounts.list({})
-      return ok(accounts.map((account) => attempt(account.id, now)))
+      const results: RecheckResult[] = []
+      // Sequential, not `Promise.all`: each account that is actually re-checked may spawn a `claude
+      // auth status`, and fanning those out means one button press forking once per subscription.
+      for (const account of accounts) results.push(await attempt(account, now))
+      return ok(results)
     },
   }
 }
