@@ -73,6 +73,14 @@ export {
   type HealthStore,
   overlayHealth,
 } from "./health"
+export {
+  createRateLimiter,
+  DEFAULT_RATE_LIMIT_MAX_KEYS,
+  type RateLimitDecision,
+  type RateLimitedKey,
+  type RateLimiter,
+  type RateLimiterOptions,
+} from "./limits"
 export { type ReachableModel, reachableModels } from "./models"
 export {
   createDispatcher,

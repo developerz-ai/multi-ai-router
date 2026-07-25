@@ -61,10 +61,11 @@ business knowing a table.
 | Thing | Where | Use it when |
 |---|---|---|
 | `RouterError` (abstract base) | `packages/core/src/errors.ts` | Adding a new failure class. Never throw a bare `Error` for a request outcome |
-| `NoHealthyAccountError` (503), `QuotaExhaustedError` (429), `CreditsExhaustedError` (402), `ScopeViolationError` (403), `KeyRevokedError` (401), `UpstreamTimeoutError` (504), `CredentialDecryptError` (500), `TranslationError` (400) | same | The failure is one of these. Adding a class = the class + its code in `ROUTER_ERROR_CODES` + a row in the `errors.test.ts` table |
+| `RetryableRouterError` (abstract) | same | The failure can say *when* to come back. `errors/render.ts` reads `Retry-After` off this base, so a new clock-recoverable class gets the header for free |
+| `NoHealthyAccountError` (503), `QuotaExhaustedError` (429), `KeyRateLimitedError` (429), `CreditsExhaustedError` (402), `ScopeViolationError` (403), `KeyRevokedError` (401), `UpstreamTimeoutError` (504), `CredentialDecryptError` (500), `TranslationError` (400) | same | The failure is one of these. Adding a class = the class + its code in `ROUTER_ERROR_CODES` + a row in the `errors.test.ts` table |
 | `ROUTER_ERROR_CODES`, `RouterErrorCode` | same | Typing an outcome column or metric label — `UsageOutcome` in db already does |
 | `isRouterError(value)` | same | Narrowing an unknown throw. Used by `errors/render.ts` and `middleware/errorHandler.ts` |
-| `QuotaExhaustedInit` | same | Constructing a 429 with `retryAfterSeconds` / `resetsAt` |
+| `QuotaExhaustedInit`, `RetryableInit` | same | Constructing a 429 with `retryAfterSeconds` / `resetsAt` |
 
 **The HTTP status comes from the error instance.** `error.status` and `error.code` are fixed at class
 declaration. Nothing may re-derive a status from a route, a code string, or a second mapping table.
@@ -176,6 +177,17 @@ rejection shape, a body read, or an audit write.
 Disabled accounts are deliberately *in* the catalog: filtering is routing's job, and a catalog that
 hides them makes "why did nothing match" unanswerable.
 
+### Per-key limits & usage plumbing — `apps/api/src/services/`
+
+| Thing | Where | Use it when |
+|---|---|---|
+| `createRateLimiter(options)` → `RateLimiter` | `services/dataplane/limits.ts` | Charging a request against a key's ceiling. Pure over an injected `nowMs` and its own map: no clock, no timer, no I/O. `check` charges *and* decides in one call — two calls would hand the same headroom to two concurrent requests |
+| `createUsageRecorderFromEnv(deps)` → `UsageRecorder` | `services/usage/fromEnv.ts` | Building the production recorder: repository writer, queue shape from env, and the throttled log lines that keep a shed record or a rejected batch from being silent. `composition.ts` is its one caller; tests use `createUsageRecorder` with an array |
+
+A per-key refusal is **not** a `QuotaExhaustedError`. Same status, different owner: one key spent its
+own allowance, the pool did not run out. `key_rate_limited` and `quota_exhausted` stay apart in the
+error hierarchy, in `UsageOutcome`, and on `router_requests_total`.
+
 ### Test support — `apps/api/test/`
 
 | Thing | Where | Use it when |
@@ -213,6 +225,7 @@ hides them makes "why did nothing match" unanswerable.
 | The log redactor (`logging/redact.ts`) | A second, weaker scrubber is how a credential reaches a log line. One redactor, one test asserting nothing leaks |
 | Per-token prices and the cost arithmetic | `services/cost/`. A total recomputed in the console or the rollup drifts from the `costEstimate` on the row, and the two numbers then disagree about what the same request cost |
 | The `cooling_down` vs `exhausted` distinction | Clock-recoverable vs human-recoverable: 429 + `Retry-After` vs 402, countdown vs "needs top-up". Collapsing them makes the router retry a dead account on a timer forever |
+| Per-key rate-limit accounting | `services/dataplane/limits.ts`, charged once per request in the dispatcher. A second counter — in a middleware, a route, or the verifier (which is cached, so it would only see misses) — double-charges or under-charges the same key |
 
 ## Conventions for new shared code
 

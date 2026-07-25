@@ -35,6 +35,11 @@ export const UsageOutcome = z.enum([
   "key_revoked",
   /** The key's scope intersected the pool to nothing, or named an account it may not reach. */
   "scope_violation",
+  /**
+   * The key spent its own configured ceiling. The caller's problem, not the pool's — kept apart
+   * from `quota_exhausted` so a throttled client never reads as an operator out of capacity.
+   */
+  "key_rate_limited",
 
   // --- the operator has no capacity to give --------------------------------
   /** Nothing in scope could serve this, for a reason that is not quota, credits, or scope. */
@@ -87,6 +92,7 @@ const FAULT_BY_OUTCOME: Readonly<Record<UsageOutcome, UsageFault>> = {
   translation_failed: "client",
   key_revoked: "client",
   scope_violation: "client",
+  key_rate_limited: "client",
 
   no_healthy_account: "capacity",
   quota_exhausted: "capacity",
@@ -118,6 +124,7 @@ const OUTCOME_BY_ERROR_CODE: Readonly<Record<RouterErrorCode, UsageOutcome>> = {
   credits_exhausted: "credits_exhausted",
   scope_violation: "scope_violation",
   key_revoked: "key_revoked",
+  key_rate_limited: "key_rate_limited",
   upstream_auth_failed: "upstream_auth_failed",
   upstream_timeout: "upstream_timeout",
   credential_decrypt_failed: "credential_decrypt_failed",

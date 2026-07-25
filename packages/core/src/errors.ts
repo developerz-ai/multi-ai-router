@@ -15,6 +15,7 @@ export const ROUTER_ERROR_CODES = [
   "credits_exhausted",
   "scope_violation",
   "key_revoked",
+  "key_rate_limited",
   "admin_auth_failed",
   "csrf_token_invalid",
   "upstream_auth_failed",
@@ -52,28 +53,59 @@ export class NoHealthyAccountError extends RouterError {
   readonly status = 503
 }
 
-export interface QuotaExhaustedInit extends ErrorOptions {
+export interface RetryableInit extends ErrorOptions {
   /** Seconds to wait before retrying — rendered as the `Retry-After` header. */
   readonly retryAfterSeconds?: number
+}
+
+export interface QuotaExhaustedInit extends RetryableInit {
   /** Absolute instant the spent window refills, when a reset was reported or estimated. */
   readonly resetsAt?: Date
+}
+
+/**
+ * A failure a clock will fix, and that can therefore say *when* to come back.
+ *
+ * The base exists so the transport renders `Retry-After` from a capability rather than from a list
+ * of classes it has to remember to extend — a `429` with no `Retry-After` makes a client guess, and
+ * guessing clients retry in lockstep.
+ */
+export abstract class RetryableRouterError extends RouterError {
+  readonly retryAfterSeconds: number | undefined
+
+  constructor(message: string, init: RetryableInit = {}) {
+    super(message, init)
+    this.retryAfterSeconds = init.retryAfterSeconds
+  }
 }
 
 /**
  * A rate-limit window is spent. Temporary and clock-recoverable: the account is
  * `cooling_down`, not dead. `429` plus a `Retry-After`.
  */
-export class QuotaExhaustedError extends RouterError {
+export class QuotaExhaustedError extends RetryableRouterError {
   readonly code = "quota_exhausted"
   readonly status = 429
-  readonly retryAfterSeconds: number | undefined
   readonly resetsAt: Date | undefined
 
   constructor(message: string, init: QuotaExhaustedInit = {}) {
     super(message, init)
-    this.retryAfterSeconds = init.retryAfterSeconds
     this.resetsAt = init.resetsAt
   }
+}
+
+/**
+ * The presented router key exceeded **its own** configured ceiling — nothing upstream was asked,
+ * and no Account is out of anything.
+ *
+ * Deliberately not {@link QuotaExhaustedError}, though both are `429`: that one means the operator
+ * has no capacity to give right now, this one means one key is spending its allowance faster than
+ * the operator allowed. Same status, different owner, different remedy — the caller slows down, or
+ * the operator raises the ceiling — so they stay separate codes and separate usage outcomes.
+ */
+export class KeyRateLimitedError extends RetryableRouterError {
+  readonly code = "key_rate_limited"
+  readonly status = 429
 }
 
 /**

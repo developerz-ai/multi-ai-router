@@ -1,5 +1,6 @@
 import {
   type Dialect,
+  KeyRateLimitedError,
   NoHealthyAccountError,
   type RouterError,
   TranslationError,
@@ -15,6 +16,7 @@ import { DEFAULT_SESSION_HEADERS, resolveSessionKey } from "./body/session"
 import { runChain } from "./chain"
 import { egressRejectionError } from "./egress/mode"
 import { buildSnapshot, type HealthStore } from "./health"
+import type { RateLimiter } from "./limits"
 import { planCandidates } from "./plan"
 import { attemptRecord, errorClassOf, outcomeOf, SUCCESS_OUTCOME } from "./records"
 import { createRuntime } from "./runtime"
@@ -59,6 +61,11 @@ export interface DispatcherDeps {
   readonly health: HealthStore
   readonly cipher: Pick<CredentialCipher, "decrypt">
   readonly usage: Pick<UsageRecorder, "record">
+  /**
+   * Enforces the ceiling stored on the key. Omitted means unlimited — a dispatcher built without
+   * one behaves exactly as this router did before limits were enforced.
+   */
+  readonly limiter?: Pick<RateLimiter, "check">
   /** Injected so tests need no network and no live provider. Defaults to global `fetch`. */
   readonly fetch?: FetchLike
   readonly clock?: DataPlaneClock
@@ -94,6 +101,12 @@ export function createDispatcher(deps: DispatcherDeps): Dispatcher {
    */
   const serve = async (input: DispatchInput, progress: RequestProgress): Promise<Response> => {
     const { startedAt, requestStarted } = progress
+
+    // Before the body: refusing a key over its ceiling must cost less than serving it, and no
+    // usage row is written because nothing was attempted — the refusal is counted on
+    // `router_requests_total{outcome="key_rate_limited"}` by the observer below.
+    const limit = deps.limiter?.check(input.key, startedAt.getTime())
+    if (limit !== undefined && !limit.allowed) throw keyRateLimited(input.key, limit)
 
     const body = await readRequestBody(input.request.body, options.body)
     const model = body.fields.model
@@ -189,6 +202,22 @@ export function createDispatcher(deps: DispatcherDeps): Dispatcher {
       }
     },
   }
+}
+
+/**
+ * The refusal a spent per-key window renders as. The ceiling is the caller's own configuration, so
+ * naming it is help rather than disclosure, and the reset is stated absolutely as well as as a
+ * countdown — a client that retried on the relative number alone would drift.
+ */
+function keyRateLimited(
+  key: VerifiedKey,
+  limit: { readonly retryAfterSeconds: number; readonly resetsAt: Date },
+): KeyRateLimitedError {
+  const ceiling = `${key.rateLimitRequests} requests per ${key.rateLimitWindowSeconds}s`
+  return new KeyRateLimitedError(
+    `This API key is over its rate limit of ${ceiling}. The window resets at ${limit.resetsAt.toISOString()}`,
+    { retryAfterSeconds: limit.retryAfterSeconds },
+  )
 }
 
 /** The mutable half of one dispatch: what the observer needs and only `serve` finds out. */

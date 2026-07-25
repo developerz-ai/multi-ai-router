@@ -33,7 +33,7 @@ client request that hits a rate-limited account, fails over, and succeeds on the
 | `costBasis` | enum | `metered` \| `notional` \| `unknown` |
 | `latencyMs` / `ttfbMs` | int / int? | Router-observed wall time for the attempt; time to the first relayed byte. **TTFB is what makes "zero added time-to-first-token" a measurement** — `latencyMs` is dominated by generation time and hides a buffering regression completely |
 | `routerOverheadMs` | int | Time in the router, excluding upstream — the per-record twin of `router_overhead_seconds` |
-| `outcome` | enum | `success` \| `upstream_error` \| `rate_limited` \| `exhausted` \| `timeout` \| `client_error` \| `router_error`. `rate_limited` and `exhausted` are distinct outcomes, never folded together |
+| `outcome` | enum | `success` \| `client_error` \| `translation_failed` \| `key_revoked` \| `scope_violation` \| `key_rate_limited` \| `no_healthy_account` \| `quota_exhausted` \| `credits_exhausted` \| `upstream_error` \| `upstream_timeout` \| `upstream_auth_failed` \| `credential_decrypt_failed` \| `router_error`. Grouped by *whose problem it is* (`packages/core/src/domain/usage.ts`). Three that share a status but never fold together: `quota_exhausted` (a window a clock refills), `credits_exhausted` (a balance a human refills), and `key_rate_limited` (one key spent its own ceiling — not the operator's capacity) |
 | `httpStatus` / `errorClass` | int? / string? | Upstream status when it answered; the thrown class's **name** — never a message, never a body |
 | `createdAt` | timestamp | |
 
@@ -41,8 +41,15 @@ client request that hits a rate-limited account, fails over, and succeeds on the
 Postgres in batches by a background writer. A request never waits on an insert, never opens a
 transaction, and never fails because the database is slow. **A slow or unavailable database degrades
 reporting, never traffic** — the queue is bounded, and on overflow it drops the oldest records and
-increments a counter rather than applying backpressure to live requests. No prompt content, no
-completion content, and no credential material is ever stored on a record.
+increments a counter rather than applying backpressure to live requests (`router_usage_queue_depth`
+and `router_usage_records_dropped_total`, plus a throttled log line — a drop is never silent). No
+prompt content, no completion content, and no credential material is ever stored on a record.
+
+One request writes no record at all: a key refused for exceeding **its own** rate limit
+([04-api-keys-and-access.md](04-api-keys-and-access.md#per-key-controls)). The check runs before the
+body is read, so there is no model and no session to attribute a row to, and a refusal that
+allocated a record per attempt would be an amplifier rather than a limit. It is counted on
+`router_requests_total{key_id,outcome="key_rate_limited"}`, which is per key already.
 
 > **Total prompt size is `tokensIn` + `cacheWriteTokens` + `cacheReadTokens`.** Every total,
 > chart, and cost line here uses the sum. Reporting `tokensIn` alone counts only the uncached

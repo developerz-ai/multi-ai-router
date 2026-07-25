@@ -26,16 +26,18 @@ export {
   usageOutcomeFault,
   usageOutcomeForErrorCode,
 } from "./domain/usage"
-export type { QuotaExhaustedInit, RouterErrorCode } from "./errors"
+export type { QuotaExhaustedInit, RetryableInit, RouterErrorCode } from "./errors"
 export {
   AdminAuthError,
   CredentialDecryptError,
   CreditsExhaustedError,
   CsrfTokenError,
   isRouterError,
+  KeyRateLimitedError,
   KeyRevokedError,
   NoHealthyAccountError,
   QuotaExhaustedError,
+  RetryableRouterError,
   ROUTER_ERROR_CODES,
   RouterError,
   ScopeViolationError,
