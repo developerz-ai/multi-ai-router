@@ -5,7 +5,7 @@ import { requestLogger } from "../../src/middleware/logger"
 import { requestId } from "../../src/middleware/requestId"
 import type { RouterKeyEnv } from "../../src/middleware/routerKeyAuth"
 import { createMetrics } from "../../src/observability"
-import type { SdkInvoker } from "../../src/providers"
+import type { SdkInvoker, SessionStore } from "../../src/providers"
 import { metricsRoutes } from "../../src/routes/metrics"
 import { dataPlaneRoutes } from "../../src/routes/v1"
 import {
@@ -55,6 +55,11 @@ export interface HarnessOptions {
    * router serves no subscription account — no `claude` CLI is ever spawned either way.
    */
   readonly invokeSdk?: SdkInvoker
+  /**
+   * Session -> Account bindings. Omitted means every subscription turn starts a fresh SDK session,
+   * which is what a deployment with no store does.
+   */
+  readonly sessions?: SessionStore
 }
 
 export function harness(options: HarnessOptions) {
@@ -106,6 +111,7 @@ export function harness(options: HarnessOptions) {
         usage: usageWithMetrics,
         fetch: upstream.fetch,
         ...(options.invokeSdk === undefined ? {} : { invokeSdk: options.invokeSdk }),
+        ...(options.sessions === undefined ? {} : { sessions: options.sessions }),
         clock: testClock,
         onRequest: (sample) => metrics.observeRequest(sample),
         options: {

@@ -1,13 +1,12 @@
 import {
   type Dialect,
-  KeyRateLimitedError,
   NoHealthyAccountError,
   type RouterError,
   TranslationError,
   type UsageOutcome,
 } from "@multi-ai-router/core"
 import type { Logger } from "../../logging/logger"
-import type { SdkInvoker } from "../../providers"
+import type { SdkInvoker, SessionStore } from "../../providers"
 import type { CredentialCipher } from "../crypto/cipher"
 import { type FailoverOptions, type SelectionOptions, selectAccounts } from "../routing"
 import { clientRequestIdFrom, correlationIdFrom, type UsageRecorder } from "../usage"
@@ -17,10 +16,11 @@ import { DEFAULT_SESSION_HEADERS, resolveSessionKey } from "./body/session"
 import { runChain } from "./chain"
 import { egressRejectionError } from "./egress/mode"
 import { buildSnapshot, type HealthStore } from "./health"
-import type { RateLimiter } from "./limits"
+import { keyRateLimitedError, type RateLimiter } from "./limits"
 import { planCandidates } from "./plan"
 import { attemptRecord, errorClassOf, outcomeOf, SUCCESS_OUTCOME } from "./records"
 import { createRuntime } from "./runtime"
+import { sessionBindings } from "./session-binding"
 import { createTranslatedRequestBody } from "./translate-body"
 import {
   type DataPlaneClock,
@@ -86,6 +86,12 @@ export interface DispatcherDeps {
    * fails its attempt by name rather than being routed onto some other path.
    */
   readonly invokeSdk?: SdkInvoker
+  /**
+   * Session -> Account bindings. Omitted, every subscription turn starts a fresh SDK session and
+   * routing places it freely — correct, and cold. Present, a bound session is where selection
+   * starts and where an SDK resume becomes possible at all (`session-binding.ts`).
+   */
+  readonly sessions?: SessionStore
   readonly clock?: DataPlaneClock
   readonly logger?: Logger
   /** Notified once per client request, after it ended. Feeds `router_requests_total`. */
@@ -112,6 +118,7 @@ export function createDispatcher(deps: DispatcherDeps): Dispatcher {
   const clock = deps.clock ?? SYSTEM_CLOCK
   const call = deps.fetch ?? ((request: Request) => fetch(request))
   const options = deps.options ?? {}
+  const bindings = sessionBindings(deps.catalog, deps.sessions)
 
   /**
    * The request itself. `progress` carries the two readings the observer needs but only this
@@ -124,7 +131,7 @@ export function createDispatcher(deps: DispatcherDeps): Dispatcher {
     // usage row is written because nothing was attempted — the refusal is counted on
     // `router_requests_total{outcome="key_rate_limited"}` by the observer below.
     const limit = deps.limiter?.check(input.key, startedAt.getTime())
-    if (limit !== undefined && !limit.allowed) throw keyRateLimited(input.key, limit)
+    if (limit !== undefined && !limit.allowed) throw keyRateLimitedError(input.key, limit)
 
     const body = await readRequestBody(input.request.body, options.body)
     const model = body.fields.model
@@ -138,11 +145,17 @@ export function createDispatcher(deps: DispatcherDeps): Dispatcher {
       options.sessionHeaders ?? DEFAULT_SESSION_HEADERS,
     )
 
+    // Read before selection because selection may not overrule it: an SDK session id resumes only
+    // on the account that minted it, so this is persisted truth, not a routing preference.
+    const binding = await bindings.read(input.key.id, session.key)
+
     const runtime = createRuntime({
       health: deps.health,
       cipher: deps.cipher,
       call,
       ...(deps.invokeSdk === undefined ? {} : { invokeSdk: deps.invokeSdk }),
+      ...(deps.sessions === undefined ? {} : { sessions: deps.sessions }),
+      sessionKeySource: session.source,
       clock,
       timeoutMs: options.upstreamTimeoutMs ?? DEFAULT_UPSTREAM_TIMEOUT_MS,
       record: (record) => deps.usage.record(record),
@@ -175,9 +188,14 @@ export function createDispatcher(deps: DispatcherDeps): Dispatcher {
     // Scope intersection, filtering, and policy — one pure call over an injected snapshot.
     const selection = selectAccounts(
       buildSnapshot(deps.catalog, deps.health, clock.now()),
-      { sessionKey: session.key, model, keyScope: input.key.scope },
+      { sessionKey: session.key, model, keyScope: input.key.scope, binding },
       options.selection,
     )
+    // Dropped, never moved. A `blocked` binding is deliberately kept: the account is coming back
+    // on a clock and the conversation stays resumable, so the request fails honestly instead.
+    if (selection.decision.binding.state === "invalidated") {
+      bindings.invalidate(input.key.id, session.key)
+    }
     if (!selection.ok) return fail(selection.error)
 
     const plan = planCandidates(selection.candidates, deps.catalog, input.ingress)
@@ -232,22 +250,6 @@ export function createDispatcher(deps: DispatcherDeps): Dispatcher {
       }
     },
   }
-}
-
-/**
- * The refusal a spent per-key window renders as. The ceiling is the caller's own configuration, so
- * naming it is help rather than disclosure, and the reset is stated absolutely as well as as a
- * countdown — a client that retried on the relative number alone would drift.
- */
-function keyRateLimited(
-  key: VerifiedKey,
-  limit: { readonly retryAfterSeconds: number; readonly resetsAt: Date },
-): KeyRateLimitedError {
-  const ceiling = `${key.rateLimitRequests} requests per ${key.rateLimitWindowSeconds}s`
-  return new KeyRateLimitedError(
-    `This API key is over its rate limit of ${ceiling}. The window resets at ${limit.resetsAt.toISOString()}`,
-    { retryAfterSeconds: limit.retryAfterSeconds },
-  )
 }
 
 /** The mutable half of one dispatch: what the observer needs and only `serve` finds out. */

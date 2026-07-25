@@ -48,6 +48,38 @@ export type {
   FileFacts,
 } from "./claude-sdk/resolve-cli"
 export { resolveClaudeCli } from "./claude-sdk/resolve-cli"
+export type {
+  ConversationView,
+  FingerprintSeed,
+  FreshReason,
+  LineageClass,
+  LineageMessage,
+  LineageOverlap,
+  ResolveLineageInput,
+  ResolveTurnInput,
+  SessionCache,
+  SessionCacheOptions,
+  SessionEntry,
+  SessionPlan,
+  SessionStore,
+  SessionStoreDeps,
+  SessionTurn,
+  StoredBinding,
+} from "./claude-sdk/session"
+export {
+  classifyLineage,
+  createSessionCache,
+  createSessionStore,
+  DEFAULT_SESSION_CACHE_MAX_ENTRIES,
+  DEFAULT_SESSION_CACHE_NEGATIVE_TTL_MS,
+  DEFAULT_SESSION_CACHE_TTL_MS,
+  FIRST_USER_TEXT_LIMIT,
+  hashMessages,
+  readConversation,
+  resolveLineage,
+  scopedKey,
+  sessionFingerprint,
+} from "./claude-sdk/session"
 export type { HttpDriverConfig, ProviderSurface } from "./driver"
 export { createHttpDriver } from "./driver"
 export type { ClassificationRule, ClassifyOptions } from "./failure/classify"

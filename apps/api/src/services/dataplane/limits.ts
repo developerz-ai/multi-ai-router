@@ -20,6 +20,8 @@
  * one thing the performance budget forbids.
  */
 
+import { KeyRateLimitedError } from "@multi-ai-router/core"
+
 /** What the limiter needs off the verified key. */
 export interface RateLimitedKey {
   readonly id: string
@@ -163,4 +165,23 @@ function live(window: Window): number {
 function drained(window: Window, nowMs: number): boolean {
   const newest = window.instants[window.instants.length - 1]
   return newest === undefined || newest + window.windowMs <= nowMs
+}
+
+/**
+ * The refusal a spent window renders as. It lives beside the ceiling that produced it, so the two
+ * cannot describe different numbers.
+ *
+ * The ceiling is the caller's own configuration, so naming it is help rather than disclosure, and
+ * the reset is stated absolutely as well as as a countdown — a client retrying on the relative
+ * number alone would drift.
+ */
+export function keyRateLimitedError(
+  key: RateLimitedKey,
+  refusal: Extract<RateLimitDecision, { allowed: false }>,
+): KeyRateLimitedError {
+  const ceiling = `${key.rateLimitRequests} requests per ${key.rateLimitWindowSeconds}s`
+  return new KeyRateLimitedError(
+    `This API key is over its rate limit of ${ceiling}. The window resets at ${refusal.resetsAt.toISOString()}`,
+    { retryAfterSeconds: refusal.retryAfterSeconds },
+  )
 }

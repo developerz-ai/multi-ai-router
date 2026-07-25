@@ -143,6 +143,7 @@ describe("running a subscription attempt", () => {
         seen.push(invocation)
         return new Response('{"type":"message"}', { status: 200 })
       },
+      session: undefined,
       timeoutMs: 1_000,
     })
 
@@ -162,6 +163,7 @@ describe("running a subscription attempt", () => {
       plan: SDK_PLAN,
       body: null,
       invoke: undefined,
+      session: undefined,
       timeoutMs: 1_000,
     })
 
@@ -180,6 +182,7 @@ describe("running a subscription attempt", () => {
       plan: SDK_PLAN,
       body: null,
       invoke: () => Promise.reject(new DOMException("aborted", "AbortError")),
+      session: undefined,
       timeoutMs: 1_000,
     })
 
@@ -198,6 +201,7 @@ describe("running a subscription attempt", () => {
         signal = invocation.signal
         return new Response(null, { status: 200 })
       },
+      session: undefined,
       timeoutMs: 60_000,
       signal: client.signal,
     })

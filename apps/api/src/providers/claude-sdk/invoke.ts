@@ -1,3 +1,5 @@
+import type { SessionPlan } from "./session"
+
 /**
  * The I/O half of the Claude subscription transport: one `query()` call, one answer.
  *
@@ -17,6 +19,9 @@
  *   `UsageRecord` are written once for both transports.
  * - **Abort:** one signal, already composed from the client's disconnect and the attempt deadline.
  *   Aborting terminates the subprocess; a client that goes away must never orphan one (§9).
+ * - **Session:** a resolved lineage plan in, the SDK's own session id back out. Deciding *whether*
+ *   to resume is a pure function over stored hashes (`session/lineage.ts`); this seam only carries
+ *   the answer to `query()` and reports what the subprocess named itself (§4).
  */
 export interface SdkInvocation {
   /** Which Account this runs as. Rate-limit state and session lineage are keyed by it, never global. */
@@ -28,6 +33,27 @@ export interface SdkInvocation {
   /** Anthropic Messages request bytes. Null only when the client sent no body at all. */
   readonly body: Uint8Array | null
   readonly signal: AbortSignal
+  /**
+   * `resume`, `forkSession` + `resumeSessionAt`, or nothing — already decided. A launch must apply
+   * it verbatim: re-deriving it here would put the same correctness decision in two places, and
+   * `fresh` is a decision, not the absence of one.
+   */
+  readonly session: SessionPlan
+  /**
+   * Called once the SDK names its session, which it does in `system`/`init` before any content.
+   * The binding is only worth persisting from here: an Account with no session id to resume is a
+   * pin with no payoff, and pinning one would cost the failover a cooling-down Account still has.
+   */
+  readonly onSession?: (report: SdkSessionReport) => void
+}
+
+export interface SdkSessionReport {
+  readonly sdkSessionId: string
+  /**
+   * The SDK assistant message this turn produced, when the SDK named one. It is what a later undo
+   * rewinds to; without it an undo starts a fresh session rather than forking at the right point.
+   */
+  readonly assistantUuid?: string
 }
 
 export type SdkInvoker = (invocation: SdkInvocation) => Promise<Response>

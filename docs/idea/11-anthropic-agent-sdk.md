@@ -264,6 +264,26 @@ other); requests marked as a fork or subagent child; anything after the SDK repo
   Nothing about it is scheduled or brokered; the durable mapping in Postgres is the shared truth,
   and a cold replica simply re-reads it.
 
+### As built
+
+`apps/api/src/providers/claude-sdk/session/`: `conversation.ts` (request → one hashable string per
+message), `fingerprint.ts`, `lineage.ts` (the six classes and the never-resume rules), `cache.ts`
+(the pair, with coordinated eviction), `store.ts` (Postgres behind both). The binding reaches
+routing through `services/dataplane/session-binding.ts`, which populates the `SelectionRequest.binding`
+`services/routing/` already consumed.
+
+Decisions taken while building it, each narrower than the spec text above:
+
+| Decision | Why |
+|---|---|
+| The row is keyed by `(apiKeyId, sessionKey)`; the fingerprint is an **alias** into it, not a second row | One truth to invalidate. The header key names the row, the Account-scoped fingerprint finds it again when a headerless client's byte-level key shifts underneath it |
+| The binding lookup is **gated on the catalog holding a subscription Account** | Only this path ever writes one. Without the gate a router serving plain HTTP would pay an indexed query per request for a table that is empty for it |
+| Misses are cached, with their own shorter TTL (`SESSION_CACHE_NEGATIVE_TTL_SECONDS`) | A subscription-serving router still carries HTTP traffic whose sessions will never have a row. The short clock is what still lets a binding minted on another replica appear |
+| A binding is written only once the SDK **names a session id** | An Account with no session id to resume is a pin with no payoff, and pinning one costs the next turn a failover that a cooling-down Account would otherwise still have |
+| `assistantUuids[i]` is written one **past** the end of the hashes it accompanies | That is the index the client will send this answer back at next turn — the position an undo has to be able to name. Absent, an undo starts fresh rather than forking at a guessed point |
+| A read or write failure degrades to "no binding" and is logged, never thrown | A slow session table costs a cold prompt cache. Turning it into a `500` would fail requests over a cache |
+| `resolve()` runs **per attempt**, not per request | A failover to a second subscription Account is a different set of SDK sessions; the first Account's plan would resume one the second has never heard of |
+
 ---
 
 ## 5. Quota and rate-limit signals

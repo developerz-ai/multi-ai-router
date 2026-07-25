@@ -187,6 +187,7 @@ function dispatch(
       plan: servable,
       body,
       invoke: runtime.invokeSdk,
+      session: runtime.session,
       timeoutMs: runtime.timeoutMs,
       signal: ctx.request.signal,
     })

@@ -14,6 +14,7 @@
 export type { AttemptOutcome, AttemptPlan, UpstreamError } from "./attempt"
 export { attemptDeadline, runAttempt } from "./attempt"
 export { createTtlCache, type TtlCache, type TtlCacheOptions } from "./auth/cache"
+export { stampLastUsed } from "./auth/last-used"
 export { bearerToken, credentialStyle, presentedRouterKey } from "./auth/presented"
 export {
   createScopeLoader,
@@ -80,6 +81,7 @@ export {
 export {
   createRateLimiter,
   DEFAULT_RATE_LIMIT_MAX_KEYS,
+  keyRateLimitedError,
   type RateLimitDecision,
   type RateLimitedKey,
   type RateLimiter,
@@ -105,7 +107,13 @@ export {
 export { type RelayObserver, relayResponse } from "./relay"
 export { relayUpstreamError } from "./relay-error"
 export { relayTranslatedResponse, type TranslatedRelayInput } from "./relay-translate"
-export { runSdkAttempt, type SdkAttemptInput } from "./sdk-attempt"
+export { runSdkAttempt, type SdkAttemptInput, type SdkSessionContext } from "./sdk-attempt"
+export {
+  type SessionBindings,
+  type SessionStoreEnvDeps,
+  sessionBindings,
+  sessionStoreFromEnv,
+} from "./session-binding"
 export { createTranslatedRequestBody, type TranslatedRequestBody } from "./translate-body"
 export {
   type DataPlaneClock,

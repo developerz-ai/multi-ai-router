@@ -1,4 +1,4 @@
-import type { SdkInvoker } from "../../providers"
+import type { SdkInvoker, SessionStore, SessionTurn } from "../../providers"
 import { type AttemptOutcome, attemptDeadline } from "./attempt"
 import type { SdkServableCandidate } from "./plan"
 
@@ -21,6 +21,13 @@ import type { SdkServableCandidate } from "./plan"
  *
  * The invoker is injected because spawning a subprocess is I/O: the data plane must be dispatchable
  * without one, and no test may spawn a real `claude` CLI.
+ *
+ * **Session lineage brackets the call** (§4). Before it, a resume/fork/fresh plan is resolved from
+ * what this Account's SDK sessions already hold; after it, whatever session the SDK named is
+ * recorded against this Account. Both sides are keyed by Account because an SDK session id resumes
+ * nowhere else — which is also why the record is written only once a session id exists, and why a
+ * failed attempt records nothing: a binding to an Account that produced no session would pin the
+ * conversation there for no gain and cost the next turn a failover it could have had.
  */
 
 export interface SdkAttemptInput {
@@ -32,9 +39,26 @@ export interface SdkAttemptInput {
    * attempt honestly rather than silently degrading a subscription request onto some other path.
    */
   readonly invoke: SdkInvoker | undefined
+  /** Session lineage for this request. Undefined leaves every turn a fresh SDK session. */
+  readonly session: SdkSessionContext | undefined
   readonly timeoutMs: number
   /** The client's own abort signal, so a client that goes away terminates the subprocess. */
   readonly signal?: AbortSignal
+}
+
+/** The request's own session identity, plus the store that turns it into a plan. */
+export interface SdkSessionContext {
+  readonly store: SessionStore
+  readonly apiKeyId: string
+  /** The router's session key: the client's header verbatim, else the derived fingerprint. */
+  readonly sessionKey: string
+  readonly keySource: "header" | "fingerprint"
+}
+
+/** No store wired: every turn is a fresh SDK session, which is correct, just cold. */
+const NO_SESSION: SessionTurn = {
+  plan: { kind: "fresh", reason: "no-session" },
+  remember: () => {},
 }
 
 const NO_TRANSPORT =
@@ -46,6 +70,8 @@ export async function runSdkAttempt(input: SdkAttemptInput): Promise<AttemptOutc
   // account later in the same pool still serves the request instead of the whole chain dying here.
   if (invoke === undefined) return failure("server-error", NO_TRANSPORT)
 
+  const turn = resolveTurn(input, plan.account.id)
+
   let response: Response
   try {
     response = await invoke({
@@ -54,6 +80,8 @@ export async function runSdkAttempt(input: SdkAttemptInput): Promise<AttemptOutc
       model: plan.upstreamModel,
       body: input.body,
       signal: attemptDeadline(input.timeoutMs, input.signal),
+      session: turn.plan,
+      onSession: (report) => turn.remember(report.sdkSessionId, report.assistantUuid),
     })
   } catch (error) {
     return invocationFailure(error)
@@ -63,6 +91,26 @@ export async function runSdkAttempt(input: SdkAttemptInput): Promise<AttemptOutc
   // `rate_limit_event` messages inside the query stream, which the renderer feeds to Account state
   // and never forwards to the client (docs/idea/11-anthropic-agent-sdk.md §5).
   return { kind: "success", response, rateLimit: null }
+}
+
+/**
+ * The lineage plan for this attempt, against *this* account.
+ *
+ * Resolved per attempt rather than per request on purpose: a failover to a second subscription
+ * account is a different set of SDK sessions, so the first account's plan would resume a session
+ * the second one has never heard of.
+ */
+function resolveTurn(input: SdkAttemptInput, accountId: string): SessionTurn {
+  const session = input.session
+  if (session === undefined) return NO_SESSION
+
+  return session.store.resolve({
+    apiKeyId: session.apiKeyId,
+    sessionKey: session.sessionKey,
+    keySource: session.keySource,
+    accountId,
+    body: input.body,
+  })
 }
 
 /**
