@@ -208,12 +208,21 @@ function rollupStatement(scanFrom: Date, scanTo: Date) {
   `
 }
 
-function startOfUtcDay(at: Date): Date {
+/**
+ * Midnight UTC of the day `at` falls in.
+ *
+ * Exported alongside {@link toUtcDay} rather than kept private: the rollup task
+ * and the usage read service both have to reason in this table's grain — one to
+ * decide which days to recompute, the other to decide which days are closed —
+ * and three private copies of the same boundary arithmetic is how two of them
+ * eventually disagree about where a day starts.
+ */
+export function startOfUtcDay(at: Date): Date {
   return new Date(Date.UTC(at.getUTCFullYear(), at.getUTCMonth(), at.getUTCDate()))
 }
 
 /** The exclusive upper bound of the day `at` falls in — `at` itself when it is already midnight. */
-function startOfNextUtcDay(at: Date): Date {
+export function startOfNextUtcDay(at: Date): Date {
   const start = startOfUtcDay(at)
   return start.getTime() === at.getTime() ? start : new Date(start.getTime() + MILLIS_PER_DAY)
 }

@@ -1,4 +1,10 @@
-import type { AccountRepository, AccountRow, PoolRepository } from "@multi-ai-router/db"
+import type { QuotaWindowState } from "@multi-ai-router/core"
+import type {
+  AccountRepository,
+  AccountRow,
+  PoolRepository,
+  QuotaWindowRow,
+} from "@multi-ai-router/db"
 import type { RoutableAccount } from "../dataplane"
 import type { PoolSnapshot } from "../routing"
 
@@ -11,7 +17,7 @@ import type { PoolSnapshot } from "../routing"
  */
 
 export interface CatalogSources {
-  readonly accounts: Pick<AccountRepository, "list">
+  readonly accounts: Pick<AccountRepository, "list" | "listQuotaWindows">
   readonly pools: Pick<PoolRepository, "list" | "listMembersForPools">
 }
 
@@ -27,7 +33,24 @@ export async function loadCatalog(sources: CatalogSources): Promise<CatalogData>
     sources.accounts.list({}),
     sources.pools.list(),
   ])
-  const members = await sources.pools.listMembersForPools(poolRows.map((pool) => pool.id))
+  const [members, windowRows] = await Promise.all([
+    sources.pools.listMembersForPools(poolRows.map((pool) => pool.id)),
+    sources.accounts.listQuotaWindows(accountRows.map((account) => account.id)),
+  ])
+
+  // Quota state is durable and routing reads it per request, so it is hydrated
+  // here rather than queried: `findSpentWindow` and `continuousHeadroom`
+  // (`services/routing/quota.ts`) run against this snapshot, on the request
+  // path, where a query is not allowed. An account with no rows keeps
+  // `quotaWindows` absent — routing reads absent as *unknown*, and an empty
+  // array would be the different and wrong claim that we looked and there was
+  // nothing to report.
+  const windowsByAccount = new Map<string, QuotaWindowState[]>()
+  for (const row of windowRows) {
+    const bucket = windowsByAccount.get(row.accountId) ?? []
+    bucket.push(toQuotaWindowState(row))
+    windowsByAccount.set(row.accountId, bucket)
+  }
 
   const membersByPool = new Map<string, { accountId: string; weight: number; priority: number }[]>()
   for (const member of members) {
@@ -41,7 +64,7 @@ export async function loadCatalog(sources: CatalogSources): Promise<CatalogData>
   }
 
   return {
-    accounts: accountRows.map(toRoutableAccount),
+    accounts: accountRows.map((row) => toRoutableAccount(row, windowsByAccount.get(row.id))),
     pools: poolRows.map((pool) => ({
       id: pool.id,
       name: pool.name,
@@ -58,7 +81,10 @@ export async function loadCatalog(sources: CatalogSources): Promise<CatalogData>
  * and `health` are overlaid per request from the in-memory health store, so the
  * value here is the operator's setting, not the live observation.
  */
-function toRoutableAccount(row: AccountRow): RoutableAccount {
+function toRoutableAccount(
+  row: AccountRow,
+  quotaWindows: readonly QuotaWindowState[] | undefined,
+): RoutableAccount {
   return {
     id: row.id,
     snapshot: {
@@ -70,6 +96,7 @@ function toRoutableAccount(row: AccountRow): RoutableAccount {
       priority: row.priority,
       health: { consecutiveFailures: 0, inFlight: 0, recentTokens: 0 },
       ...(row.modelAliases === null ? {} : { modelAliases: row.modelAliases }),
+      ...(quotaWindows === undefined ? {} : { quotaWindows }),
     },
     driver: {
       id: row.id,
@@ -80,5 +107,22 @@ function toRoutableAccount(row: AccountRow): RoutableAccount {
     },
     authMaterial: row.authMaterial,
     configDir: row.configDir,
+  }
+}
+
+/**
+ * A stored window as routing states it. NULL becomes absent, not zero: a source
+ * that reports nothing has told us nothing, and `0` would read as "wide open" to
+ * `isWindowSpent` — the one misreading that would route traffic at an account
+ * the provider has already cut off.
+ */
+function toQuotaWindowState(row: QuotaWindowRow): QuotaWindowState {
+  return {
+    window: row.window,
+    utilizationSource: row.utilizationSource,
+    resetSource: row.resetSource,
+    lastCheckedAt: row.lastCheckedAt,
+    ...(row.utilization === null ? {} : { utilization: row.utilization }),
+    ...(row.resetsAt === null ? {} : { resetsAt: row.resetsAt }),
   }
 }

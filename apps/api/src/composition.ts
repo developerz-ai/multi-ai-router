@@ -2,13 +2,24 @@ import {
   createAccountRepository,
   createApiKeyRepository,
   createAuditRepository,
+  createOauthStateRepository,
   createPoolRepository,
+  createScheduledTaskRepository,
+  createSessionRepository,
+  createUsageDailyRepository,
   createUsageReadRepository,
   createUsageRecordRepository,
   type Database,
+  type SqlConnection,
 } from "@multi-ai-router/db"
 import type { Env } from "./config/env"
 import type { Logger } from "./logging/logger"
+import {
+  advisoryTaskLock,
+  createScheduledTasks,
+  createScheduler,
+  type Scheduler,
+} from "./scheduler"
 import { createAccountsService, createRecheckService, withAvailability } from "./services/accounts"
 import {
   createAuditRecorder,
@@ -56,6 +67,12 @@ import type { AdminServices } from "./types"
 export interface RuntimeDeps {
   readonly env: Env
   readonly database: Database
+  /**
+   * The pool behind `database`. One consumer: an advisory lock lives on a
+   * *session*, so the scheduler needs a connection it can reserve. No service is
+   * ever handed it.
+   */
+  readonly sql: SqlConnection
   readonly logger: Logger
 }
 
@@ -65,6 +82,8 @@ export interface Runtime {
   readonly dispatcher: Dispatcher
   readonly catalog: RoutingCatalogStore
   readonly health: HealthStore
+  /** Exposed for the admin plane's "run now" and for shutdown ordering; the timers are internal. */
+  readonly scheduler: Scheduler
   /** Loads the catalog and starts the background writers. Awaited before the listener opens. */
   start(): Promise<void>
   /** Flushes what is queued and stops the timers. */
@@ -79,8 +98,18 @@ export function createRuntime(deps: RuntimeDeps): Runtime {
   const accounts = createAccountRepository(database)
   const keys = createApiKeyRepository(database)
   const pools = createPoolRepository(database)
-  const audit = createAuditRecorder(createAuditRepository(database))
+  const auditEvents = createAuditRepository(database)
+  const audit = createAuditRecorder(auditEvents)
   const usageRecords = createUsageRecordRepository(database)
+  // Written by the admin-auth and OAuth flows; here only so the sweeps can reach them.
+  const sessions = createSessionRepository(database)
+  const oauthStates = createOauthStateRepository(database)
+  // Shared by the admin read path (closed days) and the rollup task (the writer
+  // that puts them there) — one repository, both directions.
+  const usageDaily = createUsageDailyRepository(database)
+  // The scheduler's run log. The usage read path needs it too, to know which
+  // days the rollup has actually closed.
+  const scheduledTasks = createScheduledTaskRepository(database)
 
   // --- warm state -----------------------------------------------------------
   const health = createHealthStore()
@@ -102,6 +131,29 @@ export function createRuntime(deps: RuntimeDeps): Runtime {
       flushIntervalMs: env.dataPlane.usageFlushIntervalMs,
     },
   )
+
+  // --- background work ------------------------------------------------------
+  // Every periodic task behind one in-process runner (non-negotiable 13). The lock
+  // is bound here and passed as a capability, so nothing below holds a connection.
+  const scheduler = createScheduler({
+    tasks: createScheduledTasks({
+      sessions,
+      usageRecords,
+      auditEvents,
+      apiKeys: keys,
+      oauthStates,
+      usageDaily,
+      accounts,
+      scheduledTasks,
+      health,
+      env,
+    }),
+    repo: scheduledTasks,
+    lock: advisoryTaskLock(deps.sql),
+    jitterFraction: env.scheduler.jitterFraction,
+    logger,
+    now,
+  })
 
   // --- data plane -----------------------------------------------------------
   const verifier = createRouterKeyVerifier({
@@ -203,6 +255,8 @@ export function createRuntime(deps: RuntimeDeps): Runtime {
     // renders as "deleted", because spend that happened is still spend.
     usage: createUsageService({
       usage: createUsageReadRepository(database),
+      daily: usageDaily,
+      scheduledTasks,
       labels: async () => ({
         keys: new Map((await keys.list()).map((key) => [key.id, key.name])),
         accounts: new Map(catalog.accounts().map((a) => [a.id, a.snapshot.label])),
@@ -219,12 +273,15 @@ export function createRuntime(deps: RuntimeDeps): Runtime {
     dispatcher,
     catalog,
     health,
+    scheduler,
     start: async () => {
       // Awaited: serving a request against an empty catalog would look exactly
       // like a deployment with no accounts configured.
       await catalog.refresh()
       catalog.start()
       usage.start()
+      // Synchronous by design: the first sweep is not a boot precondition.
+      scheduler.start()
       logger.info("runtime ready", {
         component: "runtime",
         accounts: catalog.accounts().length,
@@ -232,6 +289,9 @@ export function createRuntime(deps: RuntimeDeps): Runtime {
       })
     },
     stop: async () => {
+      // First, and awaited: a tick in flight holds a reserved connection, and the
+      // caller closes the pool once this resolves.
+      await scheduler.stop()
       catalog.stop()
       await usage.stop()
     },

@@ -1,4 +1,4 @@
-import { desc, eq } from "drizzle-orm"
+import { and, desc, eq } from "drizzle-orm"
 import type { Database } from "../client"
 import type { scheduledTask, scheduledTaskOutcome } from "../schema/enums"
 import { type ScheduledTaskRunRow, scheduledTaskRuns } from "../schema/scheduled-task-runs"
@@ -39,6 +39,22 @@ export interface ScheduledTaskRepository {
    * disappear if the query only ever returns a success.
    */
   lastRun(task: ScheduledTaskName): Promise<ScheduledTaskRunRow | undefined>
+  /**
+   * The most recent run that actually *completed successfully*, or `undefined`
+   * when a task has never had one.
+   *
+   * The cursor a catch-up task resumes from, and deliberately not
+   * {@link ScheduledTaskRepository.lastRun}: the row `begin` opens for the tick
+   * currently executing is itself the newest row, so a task reading `lastRun`
+   * from inside its own `run` reads *itself* and concludes no time has passed.
+   * Filtering on `success` excludes that row — it has no outcome yet — along
+   * with every run that failed without writing anything.
+   *
+   * `startedAt`, not `finishedAt`, is the cursor worth taking: a row written
+   * while that run was executing may or may not have been included in it, and
+   * the conservative bound covers both.
+   */
+  lastSuccess(task: ScheduledTaskName): Promise<ScheduledTaskRunRow | undefined>
 }
 
 /** The four periodic tasks, from the `scheduled_task` Postgres enum. */
@@ -94,6 +110,16 @@ export function createScheduledTaskRepository(db: Database): ScheduledTaskReposi
         .select()
         .from(scheduledTaskRuns)
         .where(eq(scheduledTaskRuns.task, task))
+        .orderBy(desc(scheduledTaskRuns.startedAt))
+        .limit(1)
+      return rows[0]
+    },
+
+    lastSuccess: async (task) => {
+      const rows = await db
+        .select()
+        .from(scheduledTaskRuns)
+        .where(and(eq(scheduledTaskRuns.task, task), eq(scheduledTaskRuns.outcome, "success")))
         .orderBy(desc(scheduledTaskRuns.startedAt))
         .limit(1)
       return rows[0]

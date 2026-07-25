@@ -20,7 +20,7 @@ async function main(): Promise<void> {
   await migrate(env, logger)
 
   const database = createDatabase({ url: env.databaseUrl })
-  const runtime = createRuntime({ env, database: database.db, logger })
+  const runtime = createRuntime({ env, database: database.db, sql: database.sql, logger })
 
   // Before the listener opens: the catalog is loaded and the background writers are
   // running, so the first request is served against real state rather than an empty one.

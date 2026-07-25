@@ -248,6 +248,14 @@ the only place a `Database` becomes a service. It also owns start and stop: the 
 and the background writers are running *before* the listener opens, and on shutdown the queue is
 flushed before the connection it needs is closed.
 
+The [scheduler](#background-work-and-scheduling) is built here too, and it is the one thing given
+the raw `postgres.js` pool rather than a repository — an advisory lock lives on a *session*, so a
+task needs a connection it can reserve. Composition binds that into a lock capability and hands
+that to the runner, so no service ever holds a connection. Ordering follows from what the lock
+implies: arming the timers is synchronous and is *not* awaited at boot, because the first sweep is
+not a precondition for serving a request; on the way out the scheduler stops **first** and is
+awaited, because a tick in flight is holding a pooled connection and shutdown closes the pool.
+
 ## Background work and scheduling
 
 All background work runs **in-process, on jittered interval timers, coordinated through Postgres**.
