@@ -60,6 +60,33 @@ export function openAiChatRequest(
   }
 }
 
+export interface RawOpenAiResponsesRequest {
+  model: string
+  input: unknown
+  instructions?: string
+  max_output_tokens?: number
+  temperature?: number
+  top_p?: number
+  stream?: boolean
+  tools?: unknown[]
+  tool_choice?: unknown
+  previous_response_id?: string
+  store?: boolean
+  include?: string[]
+  reasoning?: unknown
+  text?: unknown
+}
+
+export function openAiResponsesRequest(
+  overrides: Partial<RawOpenAiResponsesRequest> = {},
+): RawOpenAiResponsesRequest {
+  return {
+    model: "gpt-5",
+    input: [{ role: "user", content: "hello" }],
+    ...overrides,
+  }
+}
+
 export function anthropicTool(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return {
     name: "get_weather",
@@ -113,6 +140,54 @@ export function anthropicFrame(type: string, payload: Record<string, unknown> = 
 /** An openai-chat frame off the wire: data only, no `event:` line. */
 export function openAiChatFrame(payload: Record<string, unknown>): SseFrame {
   return { event: null, data: JSON.stringify(payload) }
+}
+
+/**
+ * An openai-responses frame off the wire: `event:` named, `type` repeated inside the payload — a
+ * Responses stream states its event type in both places, the same redundancy `anthropicFrame` models.
+ */
+export function responsesFrame(type: string, payload: Record<string, unknown> = {}): SseFrame {
+  return { event: type, data: JSON.stringify({ type, ...payload }) }
+}
+
+/** An openai-responses `response` object off the wire, non-streaming. */
+export function responsesBodyWire(
+  overrides: Record<string, unknown> = {},
+): Record<string, unknown> {
+  return {
+    id: "resp_01",
+    object: "response",
+    created_at: 1_700_000_000,
+    status: "completed",
+    model: "gpt-5",
+    output: [],
+    incomplete_details: null,
+    error: null,
+    ...overrides,
+  }
+}
+
+export function responsesTextItem(text: string, overrides: Record<string, unknown> = {}) {
+  return {
+    type: "message",
+    id: "msg_1",
+    role: "assistant",
+    status: "completed",
+    content: [{ type: "output_text", text, annotations: [] }],
+    ...overrides,
+  }
+}
+
+export function responsesFunctionCallItem(overrides: Record<string, unknown> = {}) {
+  return {
+    type: "function_call",
+    id: "fc_1",
+    call_id: "call_1",
+    name: "get_weather",
+    arguments: '{"city":"sf"}',
+    status: "completed",
+    ...overrides,
+  }
 }
 
 export function openAiChatChunk(
