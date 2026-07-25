@@ -16,13 +16,13 @@ import type { Env } from "./config/env"
 import type { Logger } from "./logging/logger"
 import { createRuntimeMetrics, type RouterMetrics } from "./observability"
 import { createAccountConfigDirs } from "./providers/claude-sdk/config-dir"
+import { type Scheduler, schedulerFromEnv } from "./scheduler"
 import {
-  advisoryTaskLock,
-  createScheduledTasks,
-  createScheduler,
-  type Scheduler,
-} from "./scheduler"
-import { createAccountsService, createRecheckService, withAvailability } from "./services/accounts"
+  claudeCliFromEnv,
+  createAccountsService,
+  createRecheckService,
+  withAvailability,
+} from "./services/accounts"
 import {
   createAuditRecorder,
   withCatalogRefresh,
@@ -71,10 +71,7 @@ import type { AdminServices } from "./types"
 export interface RuntimeDeps {
   readonly env: Env
   readonly database: Database
-  /**
-   * The pool behind `database`. One consumer: an advisory lock lives on a *session*, so the
-   * scheduler needs a connection it can reserve. No service is ever handed it.
-   */
+  /** The pool behind `database`. One consumer, `schedulerFromEnv` — see the note on its deps. */
   readonly sql: SqlConnection
   readonly logger: Logger
 }
@@ -133,24 +130,20 @@ export function createRuntime(deps: RuntimeDeps): Runtime {
   })
 
   // --- background work ------------------------------------------------------
-  // Every periodic task behind one in-process runner (non-negotiable 13). The lock is bound here
-  // and passed as a capability, so nothing below holds a connection.
-  const scheduler = createScheduler({
-    tasks: createScheduledTasks({
-      sessions,
-      usageRecords,
-      auditEvents,
-      apiKeys: keys,
-      oauthStates,
-      usageDaily,
-      accounts,
-      scheduledTasks,
-      health,
-      env,
-    }),
-    repo: scheduledTasks,
-    lock: advisoryTaskLock(deps.sql),
-    jitterFraction: env.scheduler.jitterFraction,
+  // Every periodic task behind one in-process runner (non-negotiable 13). `schedulerFromEnv` binds
+  // the advisory lock to `deps.sql`, so nothing below is ever handed a connection.
+  const scheduler = schedulerFromEnv({
+    sessions,
+    usageRecords,
+    auditEvents,
+    apiKeys: keys,
+    oauthStates,
+    usageDaily,
+    accounts,
+    scheduledTasks,
+    health,
+    env,
+    sql: deps.sql,
     logger,
     now,
     onTick: (result) => metrics.observeTask(result),
@@ -198,19 +191,25 @@ export function createRuntime(deps: RuntimeDeps): Runtime {
   // The CRUD services know nothing about caches; the `services/admin/coherence.ts` decorators make
   // a write take effect on the request path before the response is written. Without them an account
   // disabled in the console keeps routing, and a revoked key keeps authenticating, until a TTL ends.
+  //
+  // One isolated CLAUDE_CONFIG_DIR per subscription account (created 0700, deleted with the row,
+  // never opened by the router — `providers/claude-sdk/config-dir.ts`), and both halves of running
+  // the `claude` binary against it: the connect/reconnect login, and the credential probe below.
+  const configDirs = createAccountConfigDirs({ root: env.claudeConfigRoot })
+  const claude = claudeCliFromEnv({ accounts, configDirs, audit, env, logger, now })
+
   // "Re-check now": clears the breaker marks so the next real request probes the account rather than
   // sending a synthetic one the provider would still bill. Built before the services, because the
   // accounts read overlays its last-checked timestamps.
   const recheck = createRecheckService({
     accounts,
     health,
+    audit,
+    auth: claude.authProbe,
     cooldownSeconds: env.accountRecheckCooldownSeconds,
     now,
   })
 
-  // One isolated CLAUDE_CONFIG_DIR per subscription account, created 0700 and deleted with the row.
-  // The router names the directory and never opens it — `providers/claude-sdk/config-dir.ts`.
-  const configDirs = createAccountConfigDirs({ root: env.claudeConfigRoot })
   const accountsService = createAccountsService({ accounts, keys, cipher, configDirs, audit, now })
 
   const coherence = {
@@ -266,6 +265,7 @@ export function createRuntime(deps: RuntimeDeps): Runtime {
       now,
     }),
     recheck,
+    connect: claude.connect,
   }
 
   return {
@@ -292,6 +292,7 @@ export function createRuntime(deps: RuntimeDeps): Runtime {
     stop: async () => {
       // First and awaited: a tick in flight holds a connection the caller's pool close would cut.
       await scheduler.stop()
+      claude.connect.stop() // every pending login, so no `claude` subprocess outlives the router
       catalog.stop()
       await usage.stop()
     },

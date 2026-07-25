@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import type { AccountRow } from "@multi-ai-router/db"
 import { createRecheckService } from "../../../src/services/accounts"
+import type { AuditEventInput } from "../../../src/services/admin"
 
 /**
  * "Re-check now" — the button that exists because providers reset early.
@@ -34,6 +35,7 @@ function accountRow(id: string): AccountRow {
 function harness(cooldownSeconds = 60) {
   const rows = [accountRow("a"), accountRow("b")]
   const resets: string[] = []
+  const audited: AuditEventInput[] = []
   let clock = NOW
 
   const service = createRecheckService({
@@ -42,6 +44,11 @@ function harness(cooldownSeconds = 60) {
       findById: async (id) => rows.find((row) => row.id === id),
     },
     health: { reset: (accountId) => resets.push(accountId) },
+    audit: {
+      record: async (event) => {
+        audited.push(event)
+      },
+    },
     cooldownSeconds,
     now: () => clock,
   })
@@ -49,6 +56,7 @@ function harness(cooldownSeconds = 60) {
   return {
     service,
     resets,
+    audited,
     advance: (ms: number) => {
       clock = new Date(clock.getTime() + ms)
     },
@@ -113,6 +121,18 @@ describe("recheck", () => {
     expect(all.value.find((entry) => entry.accountId === "a")?.rechecked).toBe(false)
     expect(all.value.find((entry) => entry.accountId === "b")?.rechecked).toBe(true)
     expect(resets).toEqual(["a", "b"])
+  })
+
+  test("a re-check that took effect is audited; a refused one writes nothing", async () => {
+    const { service, audited } = harness(60)
+    await service.recheck("a")
+    await service.recheck("a")
+
+    expect(audited).toHaveLength(1)
+    expect(audited[0]?.kind).toBe("account.rechecked")
+    expect(audited[0]?.subjectId).toBe("a")
+    // No probe was injected, so nothing claims to know whether the account is logged in.
+    expect(audited[0]?.detail).toEqual({ provider: "zai" })
   })
 
   test("an unknown account id is a 404, not a silent success", async () => {

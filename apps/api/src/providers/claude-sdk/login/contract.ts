@@ -103,3 +103,34 @@ export interface ClaudeCliLogin {
    */
   start(input: ClaudeLoginStartInput): Promise<ClaudeLoginHandle>
 }
+
+/**
+ * What the CLI says about the credential it is holding in one `CLAUDE_CONFIG_DIR`.
+ *
+ * The first-party answer to "is this Account still logged in", and the only one available without
+ * spending a request: `claude auth status` reads the directory the CLI itself wrote and reports on
+ * it (docs/idea/11-anthropic-agent-sdk.md §3). No provider is contacted, nothing is billed, and no
+ * token is handled — which is what makes it safe to run on an operator's button press.
+ *
+ * Three fields, and deliberately not the rest of what the CLI prints. `orgId` and `orgName` identify
+ * a tenant the router has no business recording, and `authMethod` restates a choice this router
+ * already made for the Account by pinning `--claudeai`.
+ */
+export interface ClaudeAuthStatus {
+  readonly loggedIn: boolean
+  /** The subscription's account email. Null whenever the CLI reports it logged out. */
+  readonly email: string | null
+  /** `max`, `pro`, … verbatim from the CLI — a label to render, never a value to branch on. */
+  readonly subscriptionType: string | null
+}
+
+export interface ClaudeAuthCheck {
+  /**
+   * Reads the credential state of one config directory.
+   *
+   * Null means *the CLI could not answer* — it is missing, it timed out, or it printed something
+   * this router does not recognise. Never a stand-in for "logged out": an unanswerable probe that
+   * reported a definite result would mark healthy Accounts `needs_reauth` on a bad mount.
+   */
+  check(configDir: string): Promise<ClaudeAuthStatus | null>
+}

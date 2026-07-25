@@ -1,3 +1,6 @@
+import { z } from "zod"
+import type { ClaudeAuthStatus } from "./contract"
+
 /**
  * Everything about the `claude` CLI's login that is a *pinned fact about the CLI* rather than a
  * decision of ours, plus the pure functions that read its output.
@@ -25,6 +28,23 @@
  * that renames this is a one-line change here and a failing `cli_unavailable` until it is made.
  */
 export const CLAUDE_LOGIN_ARGV: readonly string[] = Object.freeze(["auth", "login", "--claudeai"])
+
+/**
+ * The subcommand that reports what credential a `CLAUDE_CONFIG_DIR` holds.
+ *
+ * *Provenance:* `claude auth status --help` on Claude Code 2.1.220 — `--json` is documented as the
+ * default and is passed anyway, because a default is a decision the CLI may revisit and `--text`
+ * output is prose this router would have to parse.
+ *
+ * *Blast radius:* the account auth probe behind "Re-check now" (`services/health/claudeAuthProbe.ts`)
+ * stops answering, which is reported as *unknown* rather than as logged out — a CLI that renames
+ * this leaves Accounts routing exactly as they were.
+ */
+export const CLAUDE_AUTH_STATUS_ARGV: readonly string[] = Object.freeze([
+  "auth",
+  "status",
+  "--json",
+])
 
 /**
  * Handed to the child on top of the isolated environment `../env.ts` builds.
@@ -129,4 +149,55 @@ export function parsePastedCode(pasted: string): { code: string; state: string }
   const code = trimmed.slice(0, hash)
   const state = trimmed.slice(hash + 1)
   return state.length === 0 ? null : { code, state }
+}
+
+/**
+ * *Provenance:* observed output of `claude auth status --json` on Claude Code 2.1.220 — pretty
+ * printed, exit code `0` either way. Logged out it prints `loggedIn`, `authMethod`, `apiProvider`;
+ * logged in it adds `email`, `orgId`, `orgName`, `subscriptionType`.
+ *
+ * Unknown keys are **dropped**, not carried: `orgId` and `orgName` name a tenant this router has no
+ * business storing, and a field the CLI adds later must not become one this router persists by
+ * accident. `loggedIn` is the only field required, because it is the only one present in both
+ * shapes — insisting on `email` would read a logged-out Account as an unparseable one.
+ */
+const AUTH_STATUS = z.object({
+  loggedIn: z.boolean(),
+  email: z.string().min(1).nullish(),
+  subscriptionType: z.string().min(1).nullish(),
+})
+
+/**
+ * The CLI's answer about one config directory, or null when it did not give one this router
+ * recognises.
+ *
+ * Null rather than a guess, every time: this value decides whether an Account is dropped from
+ * routing as `needs_reauth`, so "the output looked odd" must never round to "logged out"
+ * (`contract.ts`, {@link ClaudeAuthStatus}).
+ */
+export function readAuthStatus(output: string): ClaudeAuthStatus | null {
+  const parsed = AUTH_STATUS.safeParse(readJsonObject(output))
+  if (!parsed.success) return null
+  return {
+    loggedIn: parsed.data.loggedIn,
+    email: parsed.data.email ?? null,
+    subscriptionType: parsed.data.subscriptionType ?? null,
+  }
+}
+
+/**
+ * The one JSON object in a chunk of CLI output.
+ *
+ * Sliced between the outermost braces rather than parsed from the whole string, so a deprecation
+ * notice or a node warning printed ahead of the payload does not read as a broken CLI.
+ */
+function readJsonObject(output: string): unknown {
+  const open = output.indexOf("{")
+  const close = output.lastIndexOf("}")
+  if (open < 0 || close < open) return null
+  try {
+    return JSON.parse(output.slice(open, close + 1))
+  } catch {
+    return null
+  }
 }

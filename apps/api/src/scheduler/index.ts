@@ -6,6 +6,8 @@
  * jittered timers, one advisory lock per task, no broker (non-negotiable 13).
  */
 
+export type { SchedulerFromEnvDeps } from "./fromEnv"
+export { schedulerFromEnv } from "./fromEnv"
 export { advisoryTaskLock } from "./lock"
 export type { Scheduler, SchedulerDeps } from "./runner"
 export { createScheduler } from "./runner"

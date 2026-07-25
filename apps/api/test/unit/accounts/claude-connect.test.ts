@@ -157,7 +157,7 @@ describe("starting a login", () => {
     const h = harness()
     const id = await h.account()
 
-    const started = await h.connect.begin(id)
+    const started = await h.connect.begin(id, "connect")
     if (!started.ok) throw new Error(started.failure.message)
 
     expect(started.value.authorizeUrl).toBe(URL)
@@ -168,7 +168,7 @@ describe("starting a login", () => {
 
   test("the window comes from config, not a constant", async () => {
     const h = harness({ ttlMinutes: 2 })
-    const started = await h.connect.begin(await h.account())
+    const started = await h.connect.begin(await h.account(), "connect")
     if (!started.ok) throw new Error(started.failure.message)
 
     expect(started.value.expiresAt).toBe("2026-07-25T09:02:00.000Z")
@@ -176,14 +176,14 @@ describe("starting a login", () => {
 
   test("refuses an account that is not a Claude subscription", async () => {
     const h = harness()
-    const reason = failure(await h.connect.begin(await h.account("openrouter")))
+    const reason = failure(await h.connect.begin(await h.account("openrouter"), "connect"))
 
     expect(reason.code).toBe("not_a_subscription_account")
   })
 
   test("refuses an id no account has", async () => {
     const h = harness()
-    const reason = failure(await h.connect.begin("00000000-0000-4000-8000-000000000000"))
+    const reason = failure(await h.connect.begin("00000000-0000-4000-8000-000000000000", "connect"))
 
     expect(reason.code).toBe("not_found")
   })
@@ -192,8 +192,8 @@ describe("starting a login", () => {
     const h = harness()
     const id = await h.account()
 
-    await h.connect.begin(id)
-    await h.connect.begin(id)
+    await h.connect.begin(id, "connect")
+    await h.connect.begin(id, "connect")
 
     expect(h.login.handles).toHaveLength(2)
     expect(h.login.handles[0]?.stats.cancels).toBe(1)
@@ -205,7 +205,7 @@ describe("starting a login", () => {
     login.refuse(new ClaudeLoginError("cli_unavailable", "the claude CLI could not be started"))
     const h = harness({ login })
 
-    const reason = failure(await h.connect.begin(await h.account()))
+    const reason = failure(await h.connect.begin(await h.account(), "connect"))
     expect(reason.code).toBe("claude_login_cli_unavailable")
   })
 
@@ -215,7 +215,7 @@ describe("starting a login", () => {
     const h = harness({ login })
     const id = await h.account()
 
-    expect(failure(await h.connect.begin(id)).code).toBe("claude_login_unbound_state")
+    expect(failure(await h.connect.begin(id, "connect")).code).toBe("claude_login_unbound_state")
     expect(failure(await h.connect.complete(id, PASTE)).code).toBe("no_pending_login")
   })
 })
@@ -224,19 +224,33 @@ describe("pasting the code back", () => {
   test("hands the whole value to the CLI and reports the account connected", async () => {
     const h = harness()
     const id = await h.account()
-    await h.connect.begin(id)
+    await h.connect.begin(id, "connect")
 
     const done = await h.connect.complete(id, `  ${PASTE}\n`)
     if (!done.ok) throw new Error(done.failure.message)
 
-    expect(done.value).toEqual({ accountId: id, connected: true, repaired: false })
+    expect(done.value).toEqual({ accountId: id, mode: "connect", connected: true, repaired: false })
     expect(h.login.handles[0]?.submitted).toEqual([PASTE])
+  })
+
+  test("a reconnect is the same call, audited as a repair rather than a first login", async () => {
+    const h = harness()
+    const id = await h.account()
+    await h.connect.begin(id, "reconnect")
+
+    const done = await h.connect.complete(id, PASTE)
+    if (!done.ok) throw new Error(done.failure.message)
+
+    expect(done.value.mode).toBe("reconnect")
+    // Same row, same directory: nothing about a reconnect creates or replaces anything.
+    expect(h.configDirs.present.has(`/data/claude/${id}`)).toBe(true)
+    expect(h.store.rows.audit.at(-1)?.kind).toBe("account.reauthorized")
   })
 
   test("says so when the credential file had to be re-minified", async () => {
     const h = harness({ credentials: fakeCredentials("repaired") })
     const id = await h.account()
-    await h.connect.begin(id)
+    await h.connect.begin(id, "connect")
 
     const done = await h.connect.complete(id, PASTE)
     if (!done.ok) throw new Error(done.failure.message)
@@ -246,7 +260,7 @@ describe("pasting the code back", () => {
   test("a login that left no credential is a failure, not a connected account", async () => {
     const h = harness({ credentials: fakeCredentials("absent") })
     const id = await h.account()
-    await h.connect.begin(id)
+    await h.connect.begin(id, "connect")
 
     expect(failure(await h.connect.complete(id, PASTE)).code).toBe("no_credential")
   })
@@ -254,7 +268,7 @@ describe("pasting the code back", () => {
   test("an unparseable credential file is refused the same way", async () => {
     const h = harness({ credentials: fakeCredentials("unreadable") })
     const id = await h.account()
-    await h.connect.begin(id)
+    await h.connect.begin(id, "connect")
 
     expect(failure(await h.connect.complete(id, PASTE)).code).toBe("no_credential")
   })
@@ -263,7 +277,7 @@ describe("pasting the code back", () => {
     const h = harness()
     const id = await h.account()
     await h.store.accounts.update(id, { status: "needs_reauth" }, NOW)
-    await h.connect.begin(id)
+    await h.connect.begin(id, "connect")
 
     await h.connect.complete(id, PASTE)
     expect((await h.store.accounts.findById(id))?.status).toBe("active")
@@ -273,7 +287,7 @@ describe("pasting the code back", () => {
     const h = harness()
     const id = await h.account()
     await h.store.accounts.update(id, { status: "disabled" }, NOW)
-    await h.connect.begin(id)
+    await h.connect.begin(id, "connect")
 
     await h.connect.complete(id, PASTE)
     expect((await h.store.accounts.findById(id))?.status).toBe("disabled")
@@ -284,7 +298,7 @@ describe("pasting the code back", () => {
     login.reject(new ClaudeLoginError("login_rejected", "the claude CLI did not accept that code"))
     const h = harness({ login })
     const id = await h.account()
-    await h.connect.begin(id)
+    await h.connect.begin(id, "connect")
 
     expect(failure(await h.connect.complete(id, PASTE)).code).toBe("claude_login_login_rejected")
   })
@@ -294,7 +308,7 @@ describe("the checks the router owns", () => {
   test("a state from another login is refused", async () => {
     const h = harness()
     const id = await h.account()
-    await h.connect.begin(id)
+    await h.connect.begin(id, "connect")
 
     const reason = failure(await h.connect.complete(id, "ac_notarealcode#s-someone-else"))
     expect(reason.code).toBe("state_mismatch")
@@ -305,7 +319,7 @@ describe("the checks the router owns", () => {
   test("a state is one-shot: a wrong paste burns the login rather than allowing a retry", async () => {
     const h = harness()
     const id = await h.account()
-    await h.connect.begin(id)
+    await h.connect.begin(id, "connect")
 
     expect(failure(await h.connect.complete(id, "ac_x#wrong")).code).toBe("state_mismatch")
     expect(failure(await h.connect.complete(id, PASTE)).code).toBe("no_pending_login")
@@ -314,7 +328,7 @@ describe("the checks the router owns", () => {
   test("a completed login cannot be replayed", async () => {
     const h = harness()
     const id = await h.account()
-    await h.connect.begin(id)
+    await h.connect.begin(id, "connect")
 
     expect((await h.connect.complete(id, PASTE)).ok).toBe(true)
     expect(failure(await h.connect.complete(id, PASTE)).code).toBe("no_pending_login")
@@ -323,7 +337,7 @@ describe("the checks the router owns", () => {
   test("a paste after the window closes is refused and the subprocess terminated", async () => {
     const h = harness()
     const id = await h.account()
-    await h.connect.begin(id)
+    await h.connect.begin(id, "connect")
 
     h.clock.now = new Date(NOW.getTime() + 11 * 60_000)
     expect(failure(await h.connect.complete(id, PASTE)).code).toBe("login_expired")
@@ -334,7 +348,7 @@ describe("the checks the router owns", () => {
   test("a malformed paste never reaches the CLI", async () => {
     const h = harness()
     const id = await h.account()
-    await h.connect.begin(id)
+    await h.connect.begin(id, "connect")
 
     const reason = failure(await h.connect.complete(id, "ac_notarealcode"))
     expect(reason.code).toBe("malformed_paste")
@@ -346,7 +360,7 @@ describe("the checks the router owns", () => {
     const h = harness()
     const first = await h.account()
     const second = await h.account()
-    await h.connect.begin(first)
+    await h.connect.begin(first, "connect")
 
     expect(failure(await h.connect.complete(second, PASTE)).code).toBe("no_pending_login")
     expect((await h.connect.complete(first, PASTE)).ok).toBe(true)
@@ -357,8 +371,8 @@ describe("the checks the router owns", () => {
     const first = await h.account()
     const second = await h.account()
 
-    await h.connect.begin(first)
-    await h.connect.begin(second)
+    await h.connect.begin(first, "connect")
+    await h.connect.begin(second, "connect")
 
     expect(h.configDirs.present.has(`/data/claude/${first}`)).toBe(true)
     expect(h.configDirs.present.has(`/data/claude/${second}`)).toBe(true)
@@ -368,7 +382,7 @@ describe("the checks the router owns", () => {
   test("cancelling releases the login, and cancelling nothing is not an error", async () => {
     const h = harness()
     const id = await h.account()
-    await h.connect.begin(id)
+    await h.connect.begin(id, "connect")
 
     const first = await h.connect.cancel(id)
     const second = await h.connect.cancel(id)
@@ -381,8 +395,8 @@ describe("the checks the router owns", () => {
 
   test("shutdown leaves no subprocess behind", async () => {
     const h = harness()
-    await h.connect.begin(await h.account())
-    await h.connect.begin(await h.account())
+    await h.connect.begin(await h.account(), "connect")
+    await h.connect.begin(await h.account(), "connect")
 
     h.connect.stop()
     expect(h.login.handles.map((handle) => handle.stats.cancels)).toEqual([1, 1])
@@ -394,7 +408,7 @@ describe("what a connect is allowed to leave behind", () => {
   test("no code, state, or token reaches an audit row", async () => {
     const h = harness()
     const id = await h.account()
-    await h.connect.begin(id)
+    await h.connect.begin(id, "connect")
     await h.connect.complete(id, PASTE)
 
     const connected = h.store.rows.audit.filter((row) => row.kind === "account.connected")
@@ -409,7 +423,7 @@ describe("what a connect is allowed to leave behind", () => {
     const h = harness()
     const id = await h.account()
 
-    const started = await h.connect.begin(id)
+    const started = await h.connect.begin(id, "connect")
     const done = await h.connect.complete(id, PASTE)
     const rendered = JSON.stringify([started, done])
 
@@ -421,7 +435,7 @@ describe("what a connect is allowed to leave behind", () => {
   test("the account row never gains a credential from a subscription login", async () => {
     const h = harness()
     const id = await h.account()
-    await h.connect.begin(id)
+    await h.connect.begin(id, "connect")
     await h.connect.complete(id, PASTE)
 
     const row = await h.store.accounts.findById(id)

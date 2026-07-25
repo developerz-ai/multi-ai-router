@@ -41,10 +41,20 @@ import { describeProvider } from "../providers"
  *
  * Reconnect is this same call against an existing row: the id, the config directory, the pool
  * membership, and the usage history all survive, because nothing here creates or replaces a row.
+ * The {@link ClaudeConnectMode} changes nothing about what runs — it is the operator saying which
+ * of the two they meant, carried through so the audit log can tell a first login from a repair.
  */
+
+/**
+ * Which button was pressed. Not derived: "has this directory a credential in it already" is a
+ * question only the CLI can answer, and spawning it to label an audit row would double the cost of
+ * every connect to decide a word.
+ */
+export type ClaudeConnectMode = "connect" | "reconnect"
 
 export interface ClaudeConnectStarted {
   readonly accountId: string
+  readonly mode: ClaudeConnectMode
   /** The CLI's own authorization URL, verbatim. The operator opens it; the router never follows it. */
   readonly authorizeUrl: string
   /** When the pending login expires and its subprocess is terminated. */
@@ -55,6 +65,7 @@ export interface ClaudeConnectStarted {
 
 export interface ClaudeConnectCompleted {
   readonly accountId: string
+  readonly mode: ClaudeConnectMode
   readonly connected: true
   /** True when the credential file needed re-minifying to be readable — see `login/credentials.ts`. */
   readonly repaired: boolean
@@ -67,7 +78,7 @@ export interface ClaudeConnectCancelled {
 }
 
 export interface ClaudeConnectService {
-  begin(accountId: string): Promise<AdminResult<ClaudeConnectStarted>>
+  begin(accountId: string, mode: ClaudeConnectMode): Promise<AdminResult<ClaudeConnectStarted>>
   /** `pasted` is the whole `code#state` string from the CLI's callback page. */
   complete(accountId: string, pasted: string): Promise<AdminResult<ClaudeConnectCompleted>>
   cancel(accountId: string): Promise<AdminResult<ClaudeConnectCancelled>>
@@ -94,6 +105,7 @@ export interface ClaudeConnectDeps {
 interface Pending {
   readonly handle: ClaudeLoginHandle
   readonly configDir: string
+  readonly mode: ClaudeConnectMode
   readonly expiresAt: Date
   readonly timer: ReturnType<typeof setTimeout>
 }
@@ -129,7 +141,7 @@ export function createClaudeConnectService(deps: ClaudeConnectDeps): ClaudeConne
   }
 
   return {
-    begin: async (accountId) => {
+    begin: async (accountId, mode) => {
       const account = await subscription(accountId)
       if (!account.ok) return account
 
@@ -151,10 +163,11 @@ export function createClaudeConnectService(deps: ClaudeConnectDeps): ClaudeConne
       const expiresAt = new Date(deps.now().getTime() + ttlMs)
       const timer = setTimeout(() => discard(accountId), ttlMs)
       timer.unref?.()
-      pending.set(accountId, { handle, configDir, expiresAt, timer })
+      pending.set(accountId, { handle, configDir, mode, expiresAt, timer })
 
       return ok({
         accountId,
+        mode,
         authorizeUrl: handle.authorizeUrl,
         expiresAt: expiresAt.toISOString(),
         capture: "paste",
@@ -220,14 +233,17 @@ export function createClaudeConnectService(deps: ClaudeConnectDeps): ClaudeConne
       }
 
       await deps.audit.record({
-        kind: AUDIT_KINDS.accountConnected,
+        kind:
+          found.mode === "reconnect"
+            ? AUDIT_KINDS.accountReauthorized
+            : AUDIT_KINDS.accountConnected,
         subjectType: AUDIT_SUBJECTS.account,
         subjectId: accountId,
         // Names and flags. There is no field here that could hold a code, a state, or a token.
         detail: { label: account.value.label, provider: account.value.provider, previousStatus },
       })
 
-      return ok({ accountId, connected: true, repaired: state === "repaired" })
+      return ok({ accountId, mode: found.mode, connected: true, repaired: state === "repaired" })
     },
 
     cancel: async (accountId) => {

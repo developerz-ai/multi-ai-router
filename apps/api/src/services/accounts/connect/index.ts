@@ -7,7 +7,10 @@ export type {
   ClaudeConnectCancelled,
   ClaudeConnectCompleted,
   ClaudeConnectDeps,
+  ClaudeConnectMode,
   ClaudeConnectService,
   ClaudeConnectStarted,
 } from "./claude"
 export { createClaudeConnectService } from "./claude"
+export type { ClaudeCliFromEnvDeps, ClaudeCliStack } from "./fromEnv"
+export { claudeCliFromEnv } from "./fromEnv"

@@ -246,7 +246,7 @@ Append-only record of admin-plane mutations. **Never contains credential materia
 | Field | Type | Notes |
 |---|---|---|
 | `id` | id | |
-| `kind` | enum | Account added, key created/revoked, policy changed, key value viewed |
+| `kind` | enum | Account added, connected, reauthorized, re-checked; key created/revoked; policy changed; key value viewed |
 | `subject` | ref | Entity id the event concerns |
 | `detail` | json | Redacted by the tested redactor before write |
 | `createdAt` | timestamp | 365 day retention |

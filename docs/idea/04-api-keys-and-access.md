@@ -3,7 +3,9 @@
 Status: **implemented**, except where a row says otherwise — the two planes, admin auth with CSRF
 and login throttling, key mint/reveal/revoke, both header styles, and scope enforced as an
 intersection all work, as does `GET /api/admin/usage`. Per-key rate limits are enforced in memory,
-per replica. `/api/admin/settings` does not exist; OAuth connect/reconnect does not exist.
+per replica. `/api/admin/settings` does not exist. Connect/reconnect is built for Claude
+subscriptions (the `claude` CLI's own login, driven server-side); the reverse-engineered OAuth
+providers and their redirect callback are not.
 
 ## Two planes
 
@@ -226,12 +228,21 @@ Paths and purpose only. Handler detail belongs in [01-architecture.md](01-archit
 | Group | Purpose | Built |
 |---|---|---|
 | `/api/admin/auth/**` | login, logout, session probe, CSRF token | yes |
-| `/api/admin/accounts/**` | upstream account CRUD, health, re-check | CRUD + disable + re-check; the OAuth connect/reconnect + callback flows are not built |
+| `/api/admin/accounts/**` | upstream account CRUD, health, re-check, connect/reconnect | CRUD + disable + re-check, and connect/reconnect for Claude subscriptions; the reverse-engineered OAuth flows and their redirect callback are not built |
 | `/api/admin/pools/**` | pool CRUD, membership, policy, weights, priority order, overflow account | yes |
 | `/api/admin/keys/**` | list, create, reveal, edit limits and bindings, revoke | yes |
 | `/api/admin/providers` | the static provider registry, so the console's account form is never a second copy of it | yes |
 | `GET /api/admin/usage` | totals, series and breakdowns by key, account, pool, model, over a window | yes |
 | `/api/admin/settings/**` | retention knobs, price table overrides, log level | no |
+
+The connect flow under `/api/admin/accounts` is four calls, all guarded like the rest of the plane:
+`POST /:id/connect` starts the CLI's login and answers with the authorization URL it printed,
+`POST /:id/connect/complete` takes the pasted `code#state`, `DELETE /:id/connect` abandons a pending
+login rather than leaving a subprocess to its TTL, and `POST /:id/reconnect` is the same start
+against the same row — id, config directory, pool membership, and usage history all survive, and
+only the audit kind differs (`account.reauthorized` rather than `account.connected`). The mechanics
+are in [11-anthropic-agent-sdk.md §3.1](11-anthropic-agent-sdk.md). No response, log, or error on
+any of them carries an authorization code, a `state`, or a token.
 
 Data-plane routes (`/v1/messages`, `/v1/chat/completions`, `/v1/responses`, `/v1/models`) are in
 [06-protocol-translation.md](06-protocol-translation.md). Operational endpoints (`/healthz`,

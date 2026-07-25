@@ -11,7 +11,10 @@ import type { AccountReadiness } from "./readiness"
  * probe at all: this endpoint exists to be believed.
  *
  * It is also free: no database round trip, so an orchestrator polling every few seconds costs
- * nothing and cannot itself become the reason the database is slow.
+ * nothing and cannot itself become the reason the database is slow — which is why the per-Account
+ * credential check lives in `./claudeAuthProbe.ts` and is reached from the admin plane's "Re-check
+ * now" instead. That one spawns a subprocess per Account; on an unauthenticated endpoint anyone
+ * could poll, it would be a way to fork the container to death.
  */
 
 export interface AccountProbeDeps {
