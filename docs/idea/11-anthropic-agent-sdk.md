@@ -486,6 +486,36 @@ cache TTL) are stripped while prompt caching, 1 M context, and fine-grained tool
 through. An earlier unconditional strip cost a cache miss every turn (`betas.ts:11-14`). For us this
 is **per-Account billing safety**.
 
+### As built
+
+`apps/api/src/providers/claude-sdk/tools/`: `schema.ts` (the client's JSON Schema → the Zod raw
+shape MCP registration demands), `passthrough.ts` (the in-process server, handlers that refuse),
+`register.ts` (deduplication, alphabetical order, the deferral decision, and the one seam a launch
+consumes), `names.ts` (the `mcp__client__` prefix, on and off), `repair.ts` (the case-only rename),
+`rewrite.ts` (the two edits a `tool_use` block needs on the wire), `early-stop.ts` (the hook, the
+deny-hold, the stop). `createQueryLaunch` takes the result as one optional `passthrough` field and
+turns it into `mcpServers` + `hooks`; it changes nothing else about a launch.
+
+Decisions taken while building it, each narrower than the spec text above:
+
+| Decision | Why |
+|---|---|
+| The client's declared tools stream through as real `content_block_start`/`_delta`/`_stop` triples; the hook's captures are **not** re-emitted as synthetic blocks | The model already emitted the blocks. Synthesizing a second copy would either duplicate them or require suppressing the first, and "never fabricate model output" (§6) is easier to keep when nothing is fabricated |
+| A `tool_use` block's `input_json_delta`s are **buffered** and re-emitted as one repaired fragment | Argument JSON splits mid-key, so no per-chunk rewrite is possible: the input is not a document until `content_block_stop`. Text and thinking are untouched, so time-to-first-token is unaffected — and this path is already the labeled exception to "never buffer a stream" (non-negotiable 8) |
+| Unparseable or oversized argument JSON is forwarded **verbatim**, unrepaired | A client that can make sense of it still can. Swallowing it would turn a fidelity gap into a lost tool call |
+| Early stop terminates the subprocess and yields a synthesized `result` with `stop_reason: "tool_use"` and **no usage** | The stop reason is a fact — the calls were emitted and the turn is over. The counts are not ours to invent, so they fall back to the last `message_delta`'s: the tokens for the turn the client actually received |
+| Turn-2 suppression is conditioned on the turn having emitted a tool call | Without one, a second `message_start` is the SDK doing something we have no reason to truncate |
+| Deferred loading is implemented but **gated on `allowlist.ts` naming `ToolSearch`**, which it does not | Deferring the tail behind a search the model is not permitted to run hides it entirely, which is worse than a long prompt. The threshold is honoured the day that grant is reviewed in ([07-security.md](07-security.md)) |
+| A client's own `defer_loading` on a tool wins over our threshold | It knows which of its tools this conversation is about; we do not |
+| Registration is sorted by **code point**, and duplicates keep the first declaration | `localeCompare` would make the system prompt depend on which replica served the turn, and a prompt that differs by a line is a cache miss on the whole prefix |
+| A client that sent no tools gets no MCP server, no hook, and no stream wrapper | A plain chat request must not pay for machinery that exists to bound a tool loop |
+| Nothing registered here reaches `allowedTools` | The MCP server is a *declaration* surface. Execution is still the reviewed allowlist's decision alone, and the handler refuses if both gates are somehow passed |
+
+Not built here, and deliberately: **subagent `agents` synthesis**. A client's `Task`-style tool is
+registered as an ordinary passthrough tool, so the model asks for it and the client runs it, which
+is the correct answer for a router — synthesizing SDK agent definitions would put subagent traffic
+back on this host's loop.
+
 ---
 
 ## 8. Per-client adapters

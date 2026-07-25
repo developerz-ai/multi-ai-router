@@ -93,6 +93,38 @@ export {
   scopedKey,
   sessionFingerprint,
 } from "./claude-sdk/session"
+export type {
+  CapturedToolCall,
+  DeclaredTool,
+  EarlyStop,
+  EarlyStopInput,
+  EmittedToolCall,
+  Passthrough,
+  PassthroughInput,
+  PassthroughTool,
+  ToolInputRepair,
+  ToolIntegrity,
+  ToolRewrite,
+  ToolRewriter,
+  ToolSchema,
+} from "./claude-sdk/tools"
+export {
+  createEarlyStop,
+  createPassthrough,
+  createPassthroughServer,
+  createToolRewriter,
+  DEFER_LOADING_THRESHOLD,
+  DENY_HOLD_TIMEOUT_SECONDS,
+  MAX_BUFFERED_TOOL_INPUT,
+  PASSTHROUGH_SERVER_NAME,
+  passthroughToolDefinition,
+  qualifyToolName,
+  readDeclaredTools,
+  readToolSchema,
+  repairToolInput,
+  TOOL_SEARCH,
+  unprefixToolName,
+} from "./claude-sdk/tools"
 export type { HttpDriverConfig, ProviderSurface } from "./driver"
 export { createHttpDriver } from "./driver"
 export type { ClassificationRule, ClassifyOptions } from "./failure/classify"
