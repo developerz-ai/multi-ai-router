@@ -3,8 +3,11 @@ import { readFileSync } from "node:fs"
 import { join } from "node:path"
 import type { PermissionResult } from "@anthropic-ai/claude-agent-sdk"
 import {
+  createPassthrough,
   createQueryLaunch,
+  PASSTHROUGH_SERVER_NAME,
   PERMITTED_TOOLS,
+  qualifyToolName,
   type SdkInvoker,
   STRIPPED_ENV_NAMES,
   STRIPPED_ENV_PREFIXES,
@@ -95,6 +98,71 @@ describe("host-executing tool calls are rejected, not parked or run", () => {
       const result = await askToUseTool(launch, name)
       expect(result.behavior).toBe("deny")
     }
+  })
+})
+
+describe("registering the client's own tools widens nothing", () => {
+  const passthrough = createPassthrough({
+    tools: [{ name: "get_weather", description: "d", input_schema: { type: "object" } }],
+  })
+
+  function launchWithPassthrough() {
+    if (passthrough === null) throw new Error("a client that declared tools must get a passthrough")
+    return createQueryLaunch({
+      configDir: "/data/accounts/sub",
+      model: "claude-opus-5",
+      cliPath: "/opt/claude/cli.js",
+      signal: new AbortController().signal,
+      inheritedEnv: {},
+      passthrough,
+    })
+  }
+
+  test("the allowlist, the empty base tool set, and every isolation flag are unchanged", () => {
+    const launch = launchWithPassthrough()
+    expect(launch.options.allowedTools).toEqual([...PERMITTED_TOOLS])
+    expect(launch.options.tools).toEqual([])
+    expect(launch.options.permissionMode).toBe("dontAsk")
+    expect(launch.options.settingSources).toEqual([])
+    expect(launch.options.strictMcpConfig).toBe(true)
+    expect(launch.options.skills).toEqual([])
+    expect(Object.keys(launch.options.mcpServers ?? {})).toEqual([PASSTHROUGH_SERVER_NAME])
+  })
+
+  test("a registered client tool is denied by canUseTool exactly like a built-in", async () => {
+    const launch = launchWithPassthrough()
+    const result = await askToUseTool(launch, qualifyToolName("get_weather"))
+    expect(result.behavior).toBe("deny")
+  })
+
+  test("host-executing built-ins stay denied with the client's tools registered", async () => {
+    const launch = launchWithPassthrough()
+    for (const toolName of HOST_TOOLS) {
+      expect((await askToUseTool(launch, toolName)).behavior).toBe("deny")
+    }
+  })
+
+  test("the PreToolUse hook denies every call it sees, including a host built-in", async () => {
+    if (passthrough === null) throw new Error("a client that declared tools must get a passthrough")
+    const hook = passthrough.hooks.PreToolUse?.[0]?.hooks[0]
+    if (hook === undefined) throw new Error("a PreToolUse hook must be registered")
+
+    const output = await hook(
+      {
+        hook_event_name: "PreToolUse",
+        session_id: "s",
+        transcript_path: "/dev/null",
+        cwd: "/data/accounts/sub",
+        tool_name: "Bash",
+        tool_input: { command: "cat /proc/self/environ" },
+        tool_use_id: "toolu_1",
+      },
+      "toolu_1",
+      { signal: AbortSignal.abort() },
+    )
+    expect(output).toMatchObject({
+      hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "deny" },
+    })
   })
 })
 

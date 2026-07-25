@@ -38,8 +38,8 @@ import type { TranslatedRequestBody } from "./translate-body"
  * response and never re-enters the loop. `markStreamed` records the same fact for the failover
  * planner, which refuses every retry from that point on.
  *
- * Attempts are bounded, each one is a distinct account, and every one of them — success or
- * failure — writes its own `UsageRecord`, all sharing the request's correlation id.
+ * Attempts are bounded, each one a distinct account — except the single in-place replay a stale SDK
+ * session earns — and every one writes its own `UsageRecord`, sharing the request's correlation id.
  */
 
 export interface ChainContext {
@@ -72,13 +72,13 @@ export async function runChain(ctx: ChainContext): Promise<Response> {
 
   for (;;) {
     const decision = planNextAttempt(ordered, progress, lastFailure, ctx.failover)
-    if (decision.action !== "attempt") break
+    if (decision.action === "stop") break
 
     const servable = byId.get(decision.candidate.account.id)
     if (servable === undefined) break
 
     const accountId = servable.account.id
-    progress = recordAttempt(progress, accountId)
+    progress = recordAttempt(progress, accountId, decision.action === "retry-in-place")
     runtime.health.beginAttempt(accountId)
 
     const attemptStartedAt = runtime.clock.now()
@@ -115,10 +115,11 @@ export async function runChain(ctx: ChainContext): Promise<Response> {
       continue
     }
 
-    runtime.health.applyRateLimit(accountId, outcome.rateLimit, attemptStartedAt)
-
+    // Applied after the verdict, never before: `recordSuccess`'s unconditional reset to `active`
+    // would otherwise erase a `rejected` reading's cooldown on an otherwise-200 response.
     if (outcome.kind === "success") {
       runtime.health.recordSuccess(accountId)
+      runtime.health.applyRateLimit(accountId, outcome.rateLimit, attemptStartedAt)
       progress = markStreamed(progress)
       return relaySuccess(ctx, servable, decision.attempt, outcome.response, at)
     }
@@ -129,6 +130,7 @@ export async function runChain(ctx: ChainContext): Promise<Response> {
       attemptStartedAt,
       breakerOptionsFor(servable.driver.authKind),
     )
+    runtime.health.applyRateLimit(accountId, outcome.rateLimit, attemptStartedAt)
     runtime.health.endAttempt(accountId)
     upstreamMs += runtime.clock.elapsed() - attemptStarted
 
@@ -170,11 +172,9 @@ interface AttemptClock {
 }
 
 /**
- * The one place the two transports diverge, and it is a single expression wide.
- *
- * Both answer with the same `AttemptOutcome`, so the loop above, the health store, the records, and
- * the relay below are written once. The SDK's `Response` is synthesized from re-synthesized SDK
- * output rather than relayed from a socket; from here down, nothing can tell.
+ * The one place the two transports diverge. Both answer with the same `AttemptOutcome`, so the loop
+ * above, the health store, the records, and the relay below are written once — from here down,
+ * nothing can tell a re-synthesized SDK `Response` from one relayed off a socket.
  */
 function dispatch(
   ctx: ChainContext,
@@ -187,6 +187,9 @@ function dispatch(
       plan: servable,
       body,
       invoke: runtime.invokeSdk,
+      session: runtime.session,
+      quota: runtime.quota,
+      now: runtime.clock.now,
       timeoutMs: runtime.timeoutMs,
       signal: ctx.request.signal,
     })
@@ -205,16 +208,10 @@ function dispatch(
 }
 
 /**
- * The body this account gets.
- *
- * On the passthrough path: identical bytes unless the account's operator-authored alias map renames
- * the model — the one edit a passthrough body ever receives, and even then only the model's own
- * bytes move. No parse, no re-serialization, no dropped unknown field.
- *
- * On the translate path the body is rebuilt field by field, which is the whole difference between
- * the two modes and the reason the parse is confined to one call. A Claude subscription takes
- * whichever branch its ingress dialect earns — Anthropic-shaped bytes either way, because that is
- * what the SDK's prompt is built from.
+ * The body this account gets. Passthrough: identical bytes, unless the account's alias map renames
+ * the model — the one edit a passthrough body ever receives. Translate: rebuilt field by field,
+ * which a Claude subscription also takes since the SDK's prompt is built from Anthropic-shaped
+ * bytes either way.
  *
  * @throws TranslationError when a translated body has a field with no target representation.
  */

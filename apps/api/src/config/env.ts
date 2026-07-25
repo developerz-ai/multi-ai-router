@@ -74,6 +74,20 @@ export interface DataPlaneConfig {
    * was just minted must start working quickly.
    */
   readonly keyCacheNegativeTtlSeconds: number
+  /** Session -> Account bindings held in memory, plus their fingerprint aliases. */
+  readonly sessionCacheMax: number
+  /**
+   * How long a binding is reused before its row is re-read. It bounds only how long this replica
+   * may lag another one's rebind; the row itself never expires, because an SDK session outlives
+   * any cache and dropping the mapping forces a destructive replay.
+   */
+  readonly sessionCacheTtlSeconds: number
+  /**
+   * How long "this session has no binding" is remembered. Short, and for the opposite reason to
+   * the key cache's: it is what keeps plain HTTP traffic on a subscription-serving router from
+   * re-asking Postgres every request, while still letting a binding minted elsewhere show up.
+   */
+  readonly sessionCacheNegativeTtlSeconds: number
   /** Usage records held in memory before the writer sheds the oldest. Reporting degrades; traffic does not. */
   readonly usageQueueMax: number
   readonly usageBatchSize: number
@@ -254,6 +268,9 @@ const envSchema = z
     KEY_CACHE_MAX: wholeNumber.optional(),
     KEY_CACHE_TTL_SECONDS: wholeNumber.optional(),
     KEY_CACHE_NEGATIVE_TTL_SECONDS: wholeNumber.optional(),
+    SESSION_CACHE_MAX: wholeNumber.optional(),
+    SESSION_CACHE_TTL_SECONDS: wholeNumber.optional(),
+    SESSION_CACHE_NEGATIVE_TTL_SECONDS: wholeNumber.optional(),
     USAGE_QUEUE_MAX: wholeNumber.optional(),
     USAGE_BATCH_SIZE: wholeNumber.optional(),
     USAGE_FLUSH_INTERVAL_MS: wholeNumber.optional(),
@@ -324,6 +341,9 @@ const envSchema = z
         keyCacheMax: raw.KEY_CACHE_MAX ?? 4_096,
         keyCacheTtlSeconds: raw.KEY_CACHE_TTL_SECONDS ?? 60,
         keyCacheNegativeTtlSeconds: raw.KEY_CACHE_NEGATIVE_TTL_SECONDS ?? 5,
+        sessionCacheMax: raw.SESSION_CACHE_MAX ?? 4_096,
+        sessionCacheTtlSeconds: raw.SESSION_CACHE_TTL_SECONDS ?? 300,
+        sessionCacheNegativeTtlSeconds: raw.SESSION_CACHE_NEGATIVE_TTL_SECONDS ?? 30,
         usageQueueMax: raw.USAGE_QUEUE_MAX ?? 10_000,
         usageBatchSize: raw.USAGE_BATCH_SIZE ?? 200,
         usageFlushIntervalMs: raw.USAGE_FLUSH_INTERVAL_MS ?? 1_000,

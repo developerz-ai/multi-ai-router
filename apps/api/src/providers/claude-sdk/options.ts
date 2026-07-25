@@ -1,6 +1,7 @@
 import type { Options, PermissionResult } from "@anthropic-ai/claude-agent-sdk"
 import { isPermittedTool, PERMITTED_TOOLS, toolDenial } from "./allowlist"
 import { subprocessEnv } from "./env"
+import type { Passthrough } from "./tools"
 
 /**
  * The `Options` one Agent SDK `query()` is launched with, and the abort wiring around it.
@@ -18,6 +19,7 @@ import { subprocessEnv } from "./env"
  * | `allowedTools` + `canUseTool` | The allowlist, applied twice: as the auto-approval set, and as a deny-by-default gate on every call. `permissionMode: "dontAsk"` is the third, independent lock — a call that reaches neither is denied rather than parked on a prompt nobody is there to answer. Never `bypassPermissions`, which auto-approves *before* the callback and would make the gate decorative |
  * | `maxTurns` | The SDK is an autonomous agent with a 200-turn internal budget; we are a single-turn endpoint. After a denied tool call it still runs a fully billed "digest" turn, so the budget is what bounds the loop (§7) |
  * | `cwd` | Server-controlled. The client's own working directory does not exist on this host, and passing it fails the spawn with an error that reads like anything but the cause (§8) |
+ * | `mcpServers` + `hooks` | Present only when the client sent tools. The server declares them so the model emits well-formed calls; the hook denies every one and hands it to the client (`tools/`). Neither grants execution — the allowlist above is still the only thing that can (§7) |
  *
  * **The abort path is the reason this returns more than an object.** The SDK takes an
  * `AbortController`, the data plane produces an `AbortSignal` already composed from the attempt
@@ -50,6 +52,16 @@ export interface QueryLaunchInput {
   readonly onStderr?: (chunk: string) => void
   /** What to inherit the child environment from. Defaults to `process.env`. */
   readonly inheritedEnv?: NodeJS.ProcessEnv
+  /**
+   * The client's own tools, registered on an in-process MCP server with no-op handlers, plus the
+   * `PreToolUse` hook that denies and captures every call (`tools/`). Absent for a client that sent
+   * no tools: a plain chat request must not carry the machinery that bounds a tool loop.
+   *
+   * It widens nothing. The registered tools are **not** added to `allowedTools`, so `canUseTool`
+   * refuses them exactly as it refuses a built-in, and the MCP handler behind them does nothing if
+   * both gates are somehow passed (docs/idea/07-security.md).
+   */
+  readonly passthrough?: Passthrough
 }
 
 export interface QueryLaunch {
@@ -93,6 +105,9 @@ export function createQueryLaunch(input: QueryLaunchInput): QueryLaunch {
     // assembled from the same events — one renderer, not one per response shape.
     includePartialMessages: true,
     ...(input.onStderr === undefined ? {} : { stderr: input.onStderr }),
+    ...(input.passthrough === undefined
+      ? {}
+      : { mcpServers: input.passthrough.mcpServers, hooks: input.passthrough.hooks }),
   }
 
   return {

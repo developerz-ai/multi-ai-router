@@ -1,11 +1,17 @@
 import { describe, expect, test } from "bun:test"
 import { NoHealthyAccountError } from "@multi-ai-router/core"
-import { claudeSdkDriver, type SdkInvocation } from "../../../src/providers"
+import {
+  claudeSdkDriver,
+  type SdkInvocation,
+  type SessionPlan,
+  type SessionStore,
+} from "../../../src/providers"
 import {
   planCandidates,
   resolveEgress,
   runSdkAttempt,
   type SdkServableCandidate,
+  type SdkSessionContext,
 } from "../../../src/services/dataplane"
 import type { Candidate } from "../../../src/services/routing"
 import { account, catalog, subscriptionAccount } from "./fixtures"
@@ -143,6 +149,7 @@ describe("running a subscription attempt", () => {
         seen.push(invocation)
         return new Response('{"type":"message"}', { status: 200 })
       },
+      session: undefined,
       timeoutMs: 1_000,
     })
 
@@ -162,6 +169,7 @@ describe("running a subscription attempt", () => {
       plan: SDK_PLAN,
       body: null,
       invoke: undefined,
+      session: undefined,
       timeoutMs: 1_000,
     })
 
@@ -180,6 +188,7 @@ describe("running a subscription attempt", () => {
       plan: SDK_PLAN,
       body: null,
       invoke: () => Promise.reject(new DOMException("aborted", "AbortError")),
+      session: undefined,
       timeoutMs: 1_000,
     })
 
@@ -198,6 +207,7 @@ describe("running a subscription attempt", () => {
         signal = invocation.signal
         return new Response(null, { status: 200 })
       },
+      session: undefined,
       timeoutMs: 60_000,
       signal: client.signal,
     })
@@ -205,6 +215,123 @@ describe("running a subscription attempt", () => {
     expect(signal?.aborted).toBe(false)
     client.abort()
     expect(signal?.aborted).toBe(true)
+  })
+})
+
+/** A store that records what selection asked of it, and hands back the plan the test wants. */
+function sessionDouble(plan: SessionPlan): {
+  readonly context: SdkSessionContext
+  readonly invalidated: string[]
+} {
+  const invalidated: string[] = []
+  const store: SessionStore = {
+    binding: () => Promise.resolve(undefined),
+    invalidate: (apiKeyId, sessionKey) => invalidated.push(`${apiKeyId}::${sessionKey}`),
+    resolve: () => ({ plan, remember: () => {} }),
+  }
+  return {
+    context: { store, apiKeyId: "key-1", sessionKey: "sess-1", keySource: "header" },
+    invalidated,
+  }
+}
+
+function rejectingAttempt(error: unknown, session?: SdkSessionContext) {
+  return runSdkAttempt({
+    plan: SDK_PLAN,
+    body: null,
+    invoke: () => Promise.reject(error),
+    session,
+    timeoutMs: 1_000,
+  })
+}
+
+describe("what a subscription failure is read as", () => {
+  test("an expired credential reaches the breaker as auth, not as a mystery 5xx", async () => {
+    const outcome = await rejectingAttempt(new Error("OAuth token has expired"))
+
+    expect(outcome.kind).toBe("failure")
+    if (outcome.kind !== "failure") return
+    // `auth` on an oauth account is what marks it `needs_reauth` and drops it from routing.
+    expect(outcome.failure.kind).toBe("auth")
+    expect(outcome.classification?.signal).toBe("claude-sdk:credential-expired")
+    // Nothing answered over HTTP, so there is no provider body to relay.
+    expect(outcome.upstream).toBeNull()
+  })
+
+  test("a spent window is rate limited, so the client gets a 429 rather than a 503", async () => {
+    const outcome = await rejectingAttempt(new Error("Claude AI usage limit reached"))
+
+    expect(outcome.kind).toBe("failure")
+    if (outcome.kind !== "failure") return
+    expect(outcome.failure.kind).toBe("rate-limited")
+    expect(outcome.classification?.kind).toBe("rate-limited")
+  })
+
+  test("a busy session and a crash both leave the next account free to serve", async () => {
+    for (const message of [
+      "Session 4f2b is currently running as a background agent",
+      "Claude Code process exited with code 1",
+    ]) {
+      const outcome = await rejectingAttempt(new Error(message))
+
+      expect(outcome.kind).toBe("failure")
+      if (outcome.kind !== "failure") return
+      expect(outcome.failure.kind).toBe("server-error")
+    }
+  })
+
+  test("the message a client may read is the router's, never the SDK's", async () => {
+    const outcome = await rejectingAttempt(
+      new Error("No conversation found with session ID /data/accounts/sub/sessions/4f2b"),
+    )
+
+    expect(outcome.kind).toBe("failure")
+    if (outcome.kind !== "failure") return
+    expect(outcome.failure.message).not.toContain("/data/accounts")
+  })
+
+  test("a stale session drops the binding that named it, so the replay starts fresh", async () => {
+    const session = sessionDouble({
+      kind: "resume",
+      sdkSessionId: "sdk-1",
+      lineage: "continuation",
+      deltaFrom: 1,
+    })
+
+    const outcome = await rejectingAttempt(
+      new Error("No conversation found with session ID: sdk-1"),
+      session.context,
+    )
+
+    expect(outcome.kind).toBe("failure")
+    if (outcome.kind !== "failure") return
+    // The planner reads this kind by name and replays once on the *same* account.
+    expect(outcome.failure.kind).toBe("stale-session")
+    expect(session.invalidated).toEqual(["key-1::sess-1"])
+  })
+
+  test("a turn that resumed nothing has no binding to discredit", async () => {
+    const session = sessionDouble({ kind: "fresh", reason: "no-session" })
+
+    await rejectingAttempt(
+      new Error("No conversation found with session ID: sdk-1"),
+      session.context,
+    )
+
+    expect(session.invalidated).toEqual([])
+  })
+
+  test("a failure that is not the session's leaves the binding alone", async () => {
+    const session = sessionDouble({
+      kind: "resume",
+      sdkSessionId: "sdk-1",
+      lineage: "continuation",
+      deltaFrom: 1,
+    })
+
+    await rejectingAttempt(new Error("Claude AI usage limit reached"), session.context)
+
+    expect(session.invalidated).toEqual([])
   })
 })
 

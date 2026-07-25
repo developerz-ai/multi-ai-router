@@ -34,6 +34,11 @@ export interface ClassifyOptions {
  * Whether the router may try the **next candidate account**. `auth` and `invalid-request` are
  * false: a bad request is bad at every account, and a rejected credential is this account's
  * problem to fix, not the next account's to absorb.
+ *
+ * The two session kinds are false for a different reason: their recovery is on the *same* account —
+ * a replay in place, or a wait and a fork — and it happens before the failover planner is consulted
+ * at all (docs/idea/05-routing-and-failover.md, "a stale session is not a failover"). A dead
+ * subprocess carries no such claim, so the next account gets its turn.
  */
 const RETRYABLE: Readonly<Record<UpstreamFailureKind, boolean>> = {
   "rate-limited": true,
@@ -41,7 +46,15 @@ const RETRYABLE: Readonly<Record<UpstreamFailureKind, boolean>> = {
   auth: false,
   "invalid-request": false,
   "server-error": true,
+  "stale-session": false,
+  "busy-session": false,
+  "subprocess-crash": true,
   unknown: false,
+}
+
+/** One table, both transports: an SDK failure answers this question the same way an HTTP one does. */
+export function isRetryableFailureKind(kind: UpstreamFailureKind): boolean {
+  return RETRYABLE[kind]
 }
 
 interface StatusVerdict {

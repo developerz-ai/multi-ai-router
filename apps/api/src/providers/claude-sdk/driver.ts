@@ -19,8 +19,9 @@ import type { DriverAccount } from "../types"
  * Everything here is **pure**, for the same reason every `ProviderDriver` member is: no clock, no
  * filesystem, no subprocess. Spawning `query()` is I/O and lives behind `SdkInvoker` (`invoke.ts`).
  *
- * Members absent until their callers exist, mirroring `ProviderDriver`'s own two: SDK failure
- * classification (`errors.ts`) and `rate_limit_event` ingestion (`quota.ts`). Both are additive.
+ * The two members `ProviderDriver` has for reading an upstream's answer have no equivalent here and
+ * are not simulated: SDK failures are prose (`errors.ts`) and quota arrives inside the query stream
+ * rather than on a response (`quota.ts`), so both live beside this contract instead of inside it.
  */
 
 /**

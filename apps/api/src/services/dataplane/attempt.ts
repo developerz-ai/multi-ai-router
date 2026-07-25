@@ -123,14 +123,31 @@ export async function runAttempt(input: AttemptInput): Promise<AttemptOutcome> {
   }
 }
 
-/** The driver's vocabulary mapped onto failover's. `unknown` falls back to what the status says. */
+/**
+ * The driver's vocabulary mapped onto failover's. `unknown` falls back to what the status says.
+ *
+ * `busy-session` and `subprocess-crash` land on `server-error` deliberately: by the time either
+ * reaches the failover chain the SDK transport has already spent its own recovery — the waits, the
+ * fork — so what is left is one account that could not serve, which is what `server-error` means.
+ * `stale-session` is the exception the planner reads by name, because its recovery is a replay on
+ * that same account (docs/idea/11-anthropic-agent-sdk.md §9).
+ */
 const FAILURE_KINDS: Readonly<Record<UpstreamFailureKind, FailureKind | null>> = {
   "rate-limited": "rate-limited",
   "credits-exhausted": "credits-exhausted",
   auth: "auth",
   "invalid-request": "client-error",
   "server-error": "server-error",
+  "stale-session": "stale-session",
+  "busy-session": "server-error",
+  "subprocess-crash": "server-error",
   unknown: null,
+}
+
+/** Shared with the Agent-SDK transport, which classifies prose into the same vocabulary. */
+export function failoverKind(kind: UpstreamFailureKind | null, status: number): FailureKind {
+  const mapped = kind === null ? null : FAILURE_KINDS[kind]
+  return mapped ?? classifyStatus(status) ?? "server-error"
 }
 
 function toAttemptFailure(
@@ -138,8 +155,7 @@ function toAttemptFailure(
   classification: FailureClassification | null,
   rateLimit: RateLimitSignal | null,
 ): AttemptFailure {
-  const mapped = classification === null ? null : FAILURE_KINDS[classification.kind]
-  const kind = mapped ?? classifyStatus(status) ?? "server-error"
+  const kind = failoverKind(classification?.kind ?? null, status)
   const signal = classification?.rateLimit ?? rateLimit
 
   return {

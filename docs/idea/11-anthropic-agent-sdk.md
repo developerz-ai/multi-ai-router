@@ -264,6 +264,26 @@ other); requests marked as a fork or subagent child; anything after the SDK repo
   Nothing about it is scheduled or brokered; the durable mapping in Postgres is the shared truth,
   and a cold replica simply re-reads it.
 
+### As built
+
+`apps/api/src/providers/claude-sdk/session/`: `conversation.ts` (request → one hashable string per
+message), `fingerprint.ts`, `lineage.ts` (the six classes and the never-resume rules), `cache.ts`
+(the pair, with coordinated eviction), `store.ts` (Postgres behind both). The binding reaches
+routing through `services/dataplane/session-binding.ts`, which populates the `SelectionRequest.binding`
+`services/routing/` already consumed.
+
+Decisions taken while building it, each narrower than the spec text above:
+
+| Decision | Why |
+|---|---|
+| The row is keyed by `(apiKeyId, sessionKey)`; the fingerprint is an **alias** into it, not a second row | One truth to invalidate. The header key names the row, the Account-scoped fingerprint finds it again when a headerless client's byte-level key shifts underneath it |
+| The binding lookup is **gated on the catalog holding a subscription Account** | Only this path ever writes one. Without the gate a router serving plain HTTP would pay an indexed query per request for a table that is empty for it |
+| Misses are cached, with their own shorter TTL (`SESSION_CACHE_NEGATIVE_TTL_SECONDS`) | A subscription-serving router still carries HTTP traffic whose sessions will never have a row. The short clock is what still lets a binding minted on another replica appear |
+| A binding is written only once the SDK **names a session id** | An Account with no session id to resume is a pin with no payoff, and pinning one costs the next turn a failover that a cooling-down Account would otherwise still have |
+| `assistantUuids[i]` is written one **past** the end of the hashes it accompanies | That is the index the client will send this answer back at next turn — the position an undo has to be able to name. Absent, an undo starts fresh rather than forking at a guessed point |
+| A read or write failure degrades to "no binding" and is logged, never thrown | A slow session table costs a cold prompt cache. Turning it into a `500` would fail requests over a cache |
+| `resolve()` runs **per attempt**, not per request | A failover to a second subscription Account is a different set of SDK sessions; the first Account's plan would resume one the second has never heard of |
+
 ---
 
 ## 5. Quota and rate-limit signals
@@ -281,11 +301,33 @@ client** — they are Account state (`rateLimitStore.ts`).
 | `surpassedThreshold` | threshold that triggered the event | diagnostics |
 
 Windows: `five_hour`, `seven_day`, `seven_day_opus`, `seven_day_sonnet`, `overage`. Events without a
-`rateLimitType` land in an internal `default` bucket that must never be rendered as a real window.
+`rateLimitType` land in an internal `default` bucket that must never be rendered as a real window —
+and a `rateLimitType` this build does not know gets its own unrendered bucket under the SDK's word
+for it, because naming a window we cannot name is the one way to report a limit that does not exist.
+Either way a `rejected` still cools the Account down: the refusal is the fact, the window is detail.
+
+Two readings are dropped rather than passed on, both because the alternative is a fabricated fact.
+A **reset instant already in the past** — late delivery, clock skew, or a value reported in seconds —
+would set a cooldown that has already elapsed, so the breaker's own backoff takes over, labelled
+`estimated`. And the **`overage` window never blocks by itself**: it carries its reset and the
+`isUsingOverage` flag for the console, while whichever included window actually refused decides
+whether the Account can serve. Implementation: `apps/api/src/providers/claude-sdk/quota.ts`, whose
+store is created per runtime and keyed by Account — never a module-level singleton.
 
 **The critical caveat: `utilization` is only populated near the limit** (`oauthUsage.ts:5-8`). It is
 an *alarm*, not a gauge — a `quota-aware` policy built only on SDK events sees `null` headroom for
 most of every window and degrades to round-robin.
+
+**The dispatch-level wire.** `SdkInvocation.onRateLimit` (`invoke.ts`) is the seam a launcher calls
+for every `rate_limit_event`, the `onSession` of quota. `runSdkAttempt` (`sdk-attempt.ts`) folds each
+call through the injected `SdkQuotaStore` and carries the account's whole reading afterwards as this
+attempt's `AttemptOutcome.rateLimit` — on **both** the success and the failure branch, since the
+event may arrive on a turn that otherwise completed fine. `runChain` (`chain.ts`) then applies that
+reading **after** `recordSuccess`/`recordFailure`, never before: applying it first would have
+`recordSuccess`'s unconditional reset to `active` erase the very cooldown a `rejected` reading on an
+otherwise-200 turn just recorded. This is the same property an HTTP driver's rate-limit headers need
+and get from the identical ordering — the Agent-SDK transport is not a special case here, only a
+different source for the same `RateLimitSignal`.
 
 The optional secondary source closes that gap: `GET https://api.anthropic.com/api/oauth/usage` with
 `anthropic-beta: oauth-2025-04-20` returns **continuous** percentages for every active window
@@ -338,10 +380,26 @@ re-synthesis, not a passthrough.**
 
 - **Block indices are ours** — the SDK restarts them per internal turn; a monotonic
   SDK→client index map is required (`server.ts:2516`).
+- **The index map is keyed on `(parent_tool_use_id, index)`, not on the index alone.** A subagent
+  numbers its blocks from zero exactly as the main turn does and the two interleave, so an
+  index-only map lets a dropped subagent block evict the mapping of the answer's own block 0 —
+  after which the rest of the real answer is silently discarded.
 - **Intermediate `message_stop`s are dropped** — the SDK emits one per internal turn; the contract is one.
+  So are intermediate `message_delta`s: their stop reason is remembered and stated once, at the end.
 - **Block filtering must skip the whole start/delta/stop triple**, not just the start.
 - **Heartbeats hide upstream stalls.** Our `: ping` resets the client's idle timer, so a separate
   **upstream** idle guard (90 s in Meridian, `streamIdleGuard.ts`) must race each `next()` → `504`.
+- **The status is decided before the first byte.** The response is not constructed until the first
+  client frame exists, so a stall or a death on the way to it is a real `504`. After it, a failure
+  is a terminal SSE `error` frame inside the `200` — a response in flight cannot retract its status.
+- **A stop reason nobody stated is `null`.** Absence is reported as absence, exactly as a token
+  count nobody measured is; claiming `end_turn` for a turn that never said so is the same class of
+  invention as the canned fallback sentence.
+- **Message ids are CSPRNG-backed** (`crypto.randomUUID`), never clock-derived — see the fidelity
+  table below.
+- **One renderer, both response shapes.** `includePartialMessages: true` is unconditional, so
+  `stream: false` folds the identical frame sequence into one body rather than reading the SDK a
+  second, differently-shaped way. Two readers would eventually disagree about where a block began.
 
 ### OpenAI dialect out
 
@@ -438,6 +496,36 @@ Beta headers are filtered, not forwarded blindly: on a subscription Account bill
 cache TTL) are stripped while prompt caching, 1 M context, and fine-grained tool streaming pass
 through. An earlier unconditional strip cost a cache miss every turn (`betas.ts:11-14`). For us this
 is **per-Account billing safety**.
+
+### As built
+
+`apps/api/src/providers/claude-sdk/tools/`: `schema.ts` (the client's JSON Schema → the Zod raw
+shape MCP registration demands), `passthrough.ts` (the in-process server, handlers that refuse),
+`register.ts` (deduplication, alphabetical order, the deferral decision, and the one seam a launch
+consumes), `names.ts` (the `mcp__client__` prefix, on and off), `repair.ts` (the case-only rename),
+`rewrite.ts` (the two edits a `tool_use` block needs on the wire), `early-stop.ts` (the hook, the
+deny-hold, the stop). `createQueryLaunch` takes the result as one optional `passthrough` field and
+turns it into `mcpServers` + `hooks`; it changes nothing else about a launch.
+
+Decisions taken while building it, each narrower than the spec text above:
+
+| Decision | Why |
+|---|---|
+| The client's declared tools stream through as real `content_block_start`/`_delta`/`_stop` triples; the hook's captures are **not** re-emitted as synthetic blocks | The model already emitted the blocks. Synthesizing a second copy would either duplicate them or require suppressing the first, and "never fabricate model output" (§6) is easier to keep when nothing is fabricated |
+| A `tool_use` block's `input_json_delta`s are **buffered** and re-emitted as one repaired fragment | Argument JSON splits mid-key, so no per-chunk rewrite is possible: the input is not a document until `content_block_stop`. Text and thinking are untouched, so time-to-first-token is unaffected — and this path is already the labeled exception to "never buffer a stream" (non-negotiable 8) |
+| Unparseable or oversized argument JSON is forwarded **verbatim**, unrepaired | A client that can make sense of it still can. Swallowing it would turn a fidelity gap into a lost tool call |
+| Early stop terminates the subprocess and yields a synthesized `result` with `stop_reason: "tool_use"` and **no usage** | The stop reason is a fact — the calls were emitted and the turn is over. The counts are not ours to invent, so they fall back to the last `message_delta`'s: the tokens for the turn the client actually received |
+| Turn-2 suppression is conditioned on the turn having emitted a tool call | Without one, a second `message_start` is the SDK doing something we have no reason to truncate |
+| Deferred loading is implemented but **gated on `allowlist.ts` naming `ToolSearch`**, which it does not | Deferring the tail behind a search the model is not permitted to run hides it entirely, which is worse than a long prompt. The threshold is honoured the day that grant is reviewed in ([07-security.md](07-security.md)) |
+| A client's own `defer_loading` on a tool wins over our threshold | It knows which of its tools this conversation is about; we do not |
+| Registration is sorted by **code point**, and duplicates keep the first declaration | `localeCompare` would make the system prompt depend on which replica served the turn, and a prompt that differs by a line is a cache miss on the whole prefix |
+| A client that sent no tools gets no MCP server, no hook, and no stream wrapper | A plain chat request must not pay for machinery that exists to bound a tool loop |
+| Nothing registered here reaches `allowedTools` | The MCP server is a *declaration* surface. Execution is still the reviewed allowlist's decision alone, and the handler refuses if both gates are somehow passed |
+
+Not built here, and deliberately: **subagent `agents` synthesis**. A client's `Task`-style tool is
+registered as an ordinary passthrough tool, so the model asks for it and the client runs it, which
+is the correct answer for a router — synthesizing SDK agent definitions would put subagent traffic
+back on this host's loop.
 
 ---
 
@@ -555,6 +643,21 @@ the message plus the subprocess stderr tail. Classes worth naming as our own err
 | Overage required | `extra usage` + `1m` | Drop the extended-context variant, cool down |
 | Subprocess crash | `exited with code N` + stderr | 502. Meridian maps a generic exit-1 to 401 on a heuristic — **do not copy that**; classify honestly and log the stderr tail |
 | Upstream idle | Guard expiry | 504 |
+
+The table is matched in order, most specific phrase first, and two rules keep it from lying
+(`apps/api/src/providers/claude-sdk/errors.ts`). A **bare status number is read from the message
+only, never from the stderr tail** — that is the mechanical form of "do not copy that": a `401` in a
+megabyte of a crashed subprocess's output is not evidence about *this* failure, and acting on it
+marks a working Account `needs_reauth` until a human logs in again. And **the SDK's own words never
+become a client-facing error**; every class carries a router-authored sentence, with the raw text
+kept only for the log line. Nothing matched is `unknown` — a `502` and a failover, never a guess.
+
+The classes are values of the shared `UpstreamFailureKind` vocabulary rather than a private enum, so
+one failover chain reads both transports; `stale-session`, `busy-session`, and `subprocess-crash`
+were added there for this path. Only `stale-session` reaches the failover planner by name, because
+its recovery is a replay on that same Account. The other two have spent their own recovery — the
+bounded waits, the fork — by the time the chain sees them, so what is left is one Account that could
+not serve, which is what `server-error` already means.
 
 ---
 

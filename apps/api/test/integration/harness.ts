@@ -5,7 +5,7 @@ import { requestLogger } from "../../src/middleware/logger"
 import { requestId } from "../../src/middleware/requestId"
 import type { RouterKeyEnv } from "../../src/middleware/routerKeyAuth"
 import { createMetrics } from "../../src/observability"
-import type { SdkInvoker } from "../../src/providers"
+import type { SdkInvoker, SdkQuotaStore, SessionStore } from "../../src/providers"
 import { metricsRoutes } from "../../src/routes/metrics"
 import { dataPlaneRoutes } from "../../src/routes/v1"
 import {
@@ -55,6 +55,16 @@ export interface HarnessOptions {
    * router serves no subscription account — no `claude` CLI is ever spawned either way.
    */
   readonly invokeSdk?: SdkInvoker
+  /**
+   * Session -> Account bindings. Omitted means every subscription turn starts a fresh SDK session,
+   * which is what a deployment with no store does.
+   */
+  readonly sessions?: SessionStore
+  /**
+   * Where an SDK-backed account's `rate_limit_event` folds into quota state. Omitted, a subscription
+   * attempt's rate-limit reading is never captured — the same as a deployment that never wires one.
+   */
+  readonly sdkQuota?: SdkQuotaStore
 }
 
 export function harness(options: HarnessOptions) {
@@ -106,6 +116,8 @@ export function harness(options: HarnessOptions) {
         usage: usageWithMetrics,
         fetch: upstream.fetch,
         ...(options.invokeSdk === undefined ? {} : { invokeSdk: options.invokeSdk }),
+        ...(options.sessions === undefined ? {} : { sessions: options.sessions }),
+        ...(options.sdkQuota === undefined ? {} : { quota: options.sdkQuota }),
         clock: testClock,
         onRequest: (sample) => metrics.observeRequest(sample),
         options: {

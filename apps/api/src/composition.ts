@@ -41,6 +41,8 @@ import {
   type HealthStore,
   type RouterKeyVerifier,
   repositoryScopeLoader,
+  sessionStoreFromEnv,
+  stampLastUsed,
 } from "./services/dataplane"
 import { createKeysService } from "./services/keys"
 import { createPoolsService } from "./services/pools"
@@ -104,7 +106,7 @@ export function createRuntime(deps: RuntimeDeps): Runtime {
   const auditEvents = createAuditRepository(database)
   const audit = createAuditRecorder(auditEvents)
   const usageRecords = createUsageRecordRepository(database)
-  // Written by the admin-auth and OAuth flows; here only so the sweeps can reach them.
+  // Conversation identity: written by the data plane's session store, swept by the janitor.
   const sessions = createSessionRepository(database)
   const oauthStates = createOauthStateRepository(database)
   // One repository, both directions: the admin read path reads closed days, the rollup closes them.
@@ -165,19 +167,15 @@ export function createRuntime(deps: RuntimeDeps): Runtime {
       negativeTtlMs: env.dataPlane.keyCacheNegativeTtlSeconds * 1_000,
     },
     // Fired, never awaited: `lastUsedAt` is reporting, and a request must not wait on it.
-    onVerified: (key) => {
-      void keys.touchLastUsed(key.id, now()).catch((error: unknown) => {
-        logger.warn("failed to stamp key last-used", {
-          component: "dataplane",
-          keyId: key.id,
-          reason: error instanceof Error ? error.message : String(error),
-        })
-      })
-    },
+    onVerified: stampLastUsed(keys, logger, now),
   })
 
   // Per replica by design (`limits.ts`); sized off the key cache — one window per verified key.
   const limiter = createRateLimiter({ maxKeys: env.dataPlane.keyCacheMax })
+
+  // Postgres is the truth, the LRU pair in front of it is the cache. A binding says where a
+  // conversation physically lives upstream, so no policy may overrule it and no hash recomputes it.
+  const sessionStore = sessionStoreFromEnv({ env, repository: sessions, logger, now })
 
   const dispatcher = createDispatcher({
     catalog,
@@ -185,6 +183,7 @@ export function createRuntime(deps: RuntimeDeps): Runtime {
     cipher,
     usage,
     limiter,
+    sessions: sessionStore,
     logger,
     onRequest: (sample) => metrics.observeRequest(sample),
     options: {

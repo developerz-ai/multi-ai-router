@@ -1,10 +1,12 @@
 import type { Dialect } from "@multi-ai-router/core"
-import type { SdkInvoker } from "../../providers"
+import type { SdkInvoker, SdkQuotaStore, SessionStore } from "../../providers"
 import type { CredentialCipher } from "../crypto/cipher"
 import type { UsageRecord } from "../usage"
+import type { SessionKeySource } from "./body/session"
 import type { HealthStore } from "./health"
 import type { ServableCandidate } from "./plan"
 import type { AttemptRecordInput, AttemptTiming } from "./records"
+import type { SdkSessionContext } from "./sdk-attempt"
 import type { DataPlaneClock, FetchLike } from "./types"
 
 /**
@@ -26,6 +28,19 @@ export interface RuntimeInput {
    * subprocess. Absent, a subscription candidate fails its attempt by name — see `sdk-attempt.ts`.
    */
   readonly invokeSdk?: SdkInvoker
+  /**
+   * Session lineage, when the deployment has a store for it. Only the Agent-SDK path reads it: an
+   * HTTP session's placement is recomputed by rendezvous hashing and hopping costs a cold cache,
+   * while an SDK session id resumes on exactly one account (docs/idea/11-anthropic-agent-sdk.md §4).
+   */
+  readonly sessions?: SessionStore
+  /**
+   * Where a `rate_limit_event` folds into Account quota state. Only the Agent-SDK path reads it: an
+   * HTTP driver's reading is parsed straight off its own response and needs no store beside it.
+   */
+  readonly quota?: SdkQuotaStore
+  /** How this request's session key was obtained. Decides whether the never-resume rules apply. */
+  readonly sessionKeySource: SessionKeySource
   readonly clock: DataPlaneClock
   readonly timeoutMs: number
   readonly record: (record: UsageRecord) => void
@@ -52,6 +67,8 @@ export type AttemptAttribution = Omit<
 >
 
 export interface DispatchRuntime extends RuntimeInput {
+  /** This request's session identity, assembled once. Undefined when no store is wired. */
+  readonly session: SdkSessionContext | undefined
   attribution(attempt: number, servable: ServableCandidate): AttemptAttribution
   /**
    * Router overhead is total router time minus time spent waiting on upstreams.
@@ -79,8 +96,20 @@ export function createRuntime(input: RuntimeInput): DispatchRuntime {
     ingressDialect: input.ingressDialect,
   }
 
+  const store = input.sessions
+
   return {
     ...input,
+
+    session:
+      store === undefined
+        ? undefined
+        : {
+            store,
+            apiKeyId: input.apiKeyId,
+            sessionKey: input.sessionKey,
+            keySource: input.sessionKeySource,
+          },
 
     attribution: (attempt, servable) => ({
       ...shared,

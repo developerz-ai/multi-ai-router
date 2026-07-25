@@ -34,12 +34,18 @@ export function isStandingBlock(status: AccountStatus): boolean {
 /**
  * The quota windows an Account can hold. A Claude subscription has several running concurrently
  * and resetting independently, and the account is blocked by whichever one is spent.
+ *
+ * `overage` is the paid allowance *beyond* the included windows, and it is a window rather than a
+ * flag because it resets on its own clock and the operator has to be able to see when. It never
+ * blocks an account by itself: a spent overage matters only once an included window is spent too,
+ * so the reading that filters an account out always comes from one of the four above it.
  */
 export const QuotaWindowKind = z.enum([
   "five_hour",
   "seven_day",
   "seven_day_opus",
   "seven_day_sonnet",
+  "overage",
 ])
 export type QuotaWindowKind = z.infer<typeof QuotaWindowKind>
 
