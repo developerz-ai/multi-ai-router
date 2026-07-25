@@ -39,6 +39,13 @@ describe("parseEnv", () => {
       revokedKeysDays: 30,
       oauthStateMinutes: 10,
     })
+    expect(env.scheduler).toEqual({
+      usageRollupIntervalMinutes: 60,
+      oauthStatePurgeIntervalMinutes: 5,
+      quotaFloorIntervalMinutes: 30,
+      sweepBatchSize: 1_000,
+      jitterFraction: 0.2,
+    })
   })
 
   test("reads overrides for every knob", () => {
@@ -56,6 +63,11 @@ describe("parseEnv", () => {
       RETENTION_REVOKED_KEYS_DAYS: "1",
       RETENTION_OAUTH_STATE_MINUTES: "5",
       JANITOR_INTERVAL_MINUTES: "15",
+      USAGE_ROLLUP_INTERVAL_MINUTES: "120",
+      OAUTH_STATE_PURGE_INTERVAL_MINUTES: "10",
+      QUOTA_FLOOR_INTERVAL_MINUTES: "45",
+      SWEEP_BATCH_SIZE: "500",
+      SCHEDULER_JITTER_FRACTION: "0.5",
     })
 
     expect(env.port).toBe(9000)
@@ -66,6 +78,13 @@ describe("parseEnv", () => {
     expect(env.accountRecheckCooldownSeconds).toBe(30)
     expect(env.retention.sessionsHours).toBe(6)
     expect(env.janitorIntervalMinutes).toBe(15)
+    expect(env.scheduler).toEqual({
+      usageRollupIntervalMinutes: 120,
+      oauthStatePurgeIntervalMinutes: 10,
+      quotaFloorIntervalMinutes: 45,
+      sweepBatchSize: 500,
+      jitterFraction: 0.5,
+    })
   })
 
   test("treats an empty variable as unset", () => {
@@ -161,6 +180,56 @@ describe("parseEnv", () => {
       expect(error.variables).toContain("ADMIN_USERNAME")
       expect(error.variables).toContain("ENCRYPTION_KEY")
       expect(error.variables).toContain("PORT")
+    })
+  })
+
+  describe("scheduler knobs", () => {
+    test("names USAGE_ROLLUP_INTERVAL_MINUTES when it is not a whole number", () => {
+      expect(expectEnvError({ ...base, USAGE_ROLLUP_INTERVAL_MINUTES: "soon" }).variables).toEqual([
+        "USAGE_ROLLUP_INTERVAL_MINUTES",
+      ])
+    })
+
+    test("names OAUTH_STATE_PURGE_INTERVAL_MINUTES when it is not a whole number", () => {
+      expect(
+        expectEnvError({ ...base, OAUTH_STATE_PURGE_INTERVAL_MINUTES: "-5" }).variables,
+      ).toEqual(["OAUTH_STATE_PURGE_INTERVAL_MINUTES"])
+    })
+
+    test("names QUOTA_FLOOR_INTERVAL_MINUTES when it is not a whole number", () => {
+      expect(expectEnvError({ ...base, QUOTA_FLOOR_INTERVAL_MINUTES: "1.5" }).variables).toEqual([
+        "QUOTA_FLOOR_INTERVAL_MINUTES",
+      ])
+    })
+
+    test("names SWEEP_BATCH_SIZE when it is not a whole number", () => {
+      expect(expectEnvError({ ...base, SWEEP_BATCH_SIZE: "lots" }).variables).toEqual([
+        "SWEEP_BATCH_SIZE",
+      ])
+    })
+
+    test("names SCHEDULER_JITTER_FRACTION when it is not a number", () => {
+      expect(expectEnvError({ ...base, SCHEDULER_JITTER_FRACTION: "high" }).variables).toEqual([
+        "SCHEDULER_JITTER_FRACTION",
+      ])
+    })
+
+    test("rejects a SCHEDULER_JITTER_FRACTION above 1", () => {
+      const error = expectEnvError({ ...base, SCHEDULER_JITTER_FRACTION: "1.5" })
+
+      expect(error.variables).toEqual(["SCHEDULER_JITTER_FRACTION"])
+      expect(error.message).toContain("between 0 and 1")
+    })
+
+    test("rejects a negative SCHEDULER_JITTER_FRACTION", () => {
+      expect(expectEnvError({ ...base, SCHEDULER_JITTER_FRACTION: "-0.1" }).variables).toEqual([
+        "SCHEDULER_JITTER_FRACTION",
+      ])
+    })
+
+    test("accepts SCHEDULER_JITTER_FRACTION at each boundary", () => {
+      expect(parseEnv({ ...base, SCHEDULER_JITTER_FRACTION: "0" }).scheduler.jitterFraction).toBe(0)
+      expect(parseEnv({ ...base, SCHEDULER_JITTER_FRACTION: "1" }).scheduler.jitterFraction).toBe(1)
     })
   })
 })
