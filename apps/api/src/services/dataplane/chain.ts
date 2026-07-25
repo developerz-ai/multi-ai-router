@@ -1,4 +1,9 @@
-import { isRouterError, NoHealthyAccountError, type RouterError } from "@multi-ai-router/core"
+import {
+  type Dialect,
+  isRouterError,
+  NoHealthyAccountError,
+  type RouterError,
+} from "@multi-ai-router/core"
 import type { Logger } from "../../logging/logger"
 import { toRouterError } from "../../providers"
 import {
@@ -10,6 +15,7 @@ import {
   planNextAttempt,
   recordAttempt,
 } from "../routing"
+import { type TranslationContext, translateUpstreamError } from "../translate"
 import { createTokenObserver } from "../usage"
 import { runAttempt, type UpstreamError } from "./attempt"
 import { rewriteModel } from "./body/read"
@@ -18,7 +24,9 @@ import { breakerOptionsFor } from "./health"
 import type { ServableCandidate } from "./plan"
 import { attemptRecord, failureOutcome, SUCCESS_OUTCOME } from "./records"
 import { relayResponse } from "./relay"
+import { relayTranslatedResponse } from "./relay-translate"
 import type { DispatchRuntime } from "./runtime"
+import type { TranslatedRequestBody } from "./translate-body"
 
 /**
  * The failover chain: dispatch to the head, advance on a retryable failure, stop honestly.
@@ -39,6 +47,10 @@ export interface ChainContext {
   readonly request: Request
   readonly bodyBytes: Uint8Array
   readonly modelSpan: ByteSpan | null
+  /** The clock stamp, fallback ids, and configured ceiling every conversion of this request reads. */
+  readonly translation: TranslationContext
+  /** The converted upstream body, built lazily and only for a candidate that needs one. */
+  readonly translated: TranslatedRequestBody
   readonly failover: FailoverOptions | undefined
   readonly log: Logger | undefined
 }
@@ -51,6 +63,8 @@ export async function runChain(ctx: ChainContext): Promise<Response> {
   let progress = NO_ATTEMPTS
   let lastFailure: AttemptFailure | null = null
   let lastUpstream: UpstreamError | null = null
+  /** The dialect the last upstream error must be re-rendered into, or null when it already is. */
+  let lastUpstreamDialect: Dialect | null = null
   let lastError: RouterError | null = null
   let upstreamMs = 0
 
@@ -69,13 +83,29 @@ export async function runChain(ctx: ChainContext): Promise<Response> {
     const attemptStarted = runtime.clock.elapsed()
     const at = { startedAt: attemptStartedAt, started: attemptStarted, upstreamMs }
 
+    // Before the call, never during it: a body with no faithful representation in this account's
+    // dialect is a `400` naming the field, and the spec requires it to land before any upstream is
+    // touched. `client-error` is not retryable, which is the right answer — a bad request is bad at
+    // every account that would need the same conversion.
+    let upstreamBody: Uint8Array | null
+    try {
+      upstreamBody = bodyFor(ctx, servable)
+    } catch (error) {
+      runtime.health.endAttempt(accountId)
+      if (!isRouterError(error)) throw error
+      lastError = error
+      lastFailure = { kind: "client-error", message: error.message }
+      recordFailure(ctx, servable, decision.attempt, lastFailure, null, { ...at, upstreamMs })
+      continue
+    }
+
     let outcome: Awaited<ReturnType<typeof runAttempt>>
     try {
       outcome = await runAttempt({
         plan: servable,
         method: ctx.request.method,
         clientHeaders: ctx.request.headers,
-        body: bodyFor(ctx, servable),
+        body: upstreamBody,
         fetch: runtime.call,
         cipher: runtime.cipher,
         timeoutMs: runtime.timeoutMs,
@@ -122,6 +152,8 @@ export async function runChain(ctx: ChainContext): Promise<Response> {
 
     lastFailure = outcome.failure
     lastUpstream = outcome.upstream
+    // A translated attempt's error body is the *account's* dialect. The client is owed its own.
+    lastUpstreamDialect = servable.translation === null ? null : runtime.ingressDialect
     lastError = outcome.classification === null ? null : toRouterError(outcome.classification)
   }
 
@@ -131,7 +163,7 @@ export async function runChain(ctx: ChainContext): Promise<Response> {
   // answer, relayed unchanged: a bad request is bad at every account, and the provider's reply is
   // the honest one.
   if (lastError !== null) throw lastError
-  if (lastUpstream !== null) return relayUpstreamError(lastUpstream)
+  if (lastUpstream !== null) return relayUpstreamError(lastUpstream, lastUpstreamDialect)
   if (lastFailure !== null) {
     throw new NoHealthyAccountError(`every attempt failed: ${lastFailure.message}`)
   }
@@ -145,11 +177,20 @@ interface AttemptClock {
 }
 
 /**
- * The body this account gets. Identical bytes unless its operator-authored alias map renames the
- * model — the one edit a passthrough body ever receives, and even then only the model's own bytes
- * move. No parse, no re-serialization, no dropped unknown field.
+ * The body this account gets.
+ *
+ * On the passthrough path: identical bytes unless the account's operator-authored alias map renames
+ * the model — the one edit a passthrough body ever receives, and even then only the model's own
+ * bytes move. No parse, no re-serialization, no dropped unknown field.
+ *
+ * On the translate path the body is rebuilt field by field, which is the whole difference between
+ * the two modes and the reason the parse is confined to one call.
+ *
+ * @throws TranslationError when a translated body has a field with no target representation.
  */
 function bodyFor(ctx: ChainContext, servable: ServableCandidate): Uint8Array | null {
+  const pair = servable.translation
+  if (pair !== null) return ctx.translated.bodyFor(pair, servable.upstreamModel)
   if (ctx.bodyBytes.length === 0) return null
   if (ctx.modelSpan === null || servable.upstreamModel === ctx.runtime.model) return ctx.bodyBytes
   return rewriteModel(ctx.bodyBytes, ctx.modelSpan, servable.upstreamModel)
@@ -180,14 +221,30 @@ function relaySuccess(
     )
   }
 
-  return relayResponse(response, {
+  const observer = {
     onFirstByte: () => {
       firstByteAt = ctx.runtime.clock.elapsed()
     },
-    onChunk: (chunk) => tokens.observe(chunk),
-    onEnd: (bytes) => settle(bytes > 0),
+    onChunk: (chunk: Uint8Array) => tokens.observe(chunk),
+    onEnd: (bytes: number) => settle(bytes > 0),
     // A stream that broke after bytes were on the wire is a truncation, never a retry.
     onError: () => settle(true),
+  }
+
+  const pair = servable.translation
+  if (pair === null) return relayResponse(response, observer)
+
+  return relayTranslatedResponse({
+    upstream: response,
+    pair,
+    context: ctx.translation,
+    observer,
+    onUnrecognizedStopReason: (reason) =>
+      ctx.log?.warn("upstream reported an unrecognized stop reason", {
+        accountId: servable.account.id,
+        provider: servable.account.driver.provider,
+        stopReason: reason,
+      }),
   })
 }
 
@@ -211,11 +268,26 @@ function recordFailure(
   )
 }
 
-/** The upstream's own error body, unchanged — it is already in the ingress dialect's shape. */
-function relayUpstreamError(upstream: UpstreamError): Response {
+/**
+ * The upstream's own error, as the client should see it.
+ *
+ * On the passthrough path the body is relayed unchanged: it is already in the ingress dialect's
+ * shape, and re-rendering it would drop fields the provider stated. On the translate path it is
+ * re-rendered into `ingress` — a Claude Code client gets an Anthropic-shaped error even when the
+ * account that failed was an OpenAI one — with the message redacted and bounded, and naming no
+ * account (docs/idea/06-protocol-translation.md#error-shapes, docs/idea/07-security.md).
+ */
+function relayUpstreamError(upstream: UpstreamError, ingress: Dialect | null): Response {
   const headers = new Headers()
-  if (upstream.contentType !== null) headers.set("content-type", upstream.contentType)
   const retryAfter = upstream.headers.get("retry-after")
   if (retryAfter !== null) headers.set("retry-after", retryAfter)
-  return new Response(upstream.bodyText, { status: upstream.status, headers })
+
+  if (ingress === null) {
+    if (upstream.contentType !== null) headers.set("content-type", upstream.contentType)
+    return new Response(upstream.bodyText, { status: upstream.status, headers })
+  }
+
+  headers.set("content-type", "application/json")
+  const body = translateUpstreamError(upstream.bodyText, upstream.status, ingress)
+  return new Response(JSON.stringify(body), { status: upstream.status, headers })
 }

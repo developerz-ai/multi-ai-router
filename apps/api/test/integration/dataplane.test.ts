@@ -1,135 +1,14 @@
 import { describe, expect, test } from "bun:test"
-import { Hono } from "hono"
-import { createLogger } from "../../src/logging/logger"
-import { errorHandler, notFoundHandler } from "../../src/middleware/errorHandler"
-import { requestLogger } from "../../src/middleware/logger"
-import { requestId } from "../../src/middleware/requestId"
-import type { RouterKeyEnv } from "../../src/middleware/routerKeyAuth"
-import { createMetrics } from "../../src/observability"
-import { metricsRoutes } from "../../src/routes/metrics"
-import { dataPlaneRoutes } from "../../src/routes/v1"
-import {
-  createDispatcher,
-  createHealthStore,
-  createRouterKeyVerifier,
-  type RoutableAccount,
-} from "../../src/services/dataplane"
-import type { PoolSnapshot } from "../../src/services/routing"
 import type { UsageRecord } from "../../src/services/usage"
-import {
-  account,
-  apiKeyRow,
-  catalog,
-  cipher,
-  clock,
-  jsonResponse,
-  keyRepository,
-  mockUpstream,
-  newRouterKey,
-  slowStream,
-  usageSink,
-} from "../unit/dataplane/fixtures"
+import { account, jsonResponse, newRouterKey, slowStream } from "../unit/dataplane/fixtures"
+import { bearer, CRYPTOR, harness, KEY, MESSAGE, post, settle } from "./harness"
 
 /**
  * The data plane end to end: real Hono, real middleware, real routing, **mocked upstreams**.
  * Nothing here touches a network or a database — `fetch` and the key repository are injected, which
- * is exactly why they are dependencies.
+ * is exactly why they are dependencies. The harness itself lives in `./harness` and is shared with
+ * `translate.test.ts`.
  */
-
-const KEY = newRouterKey()
-const CRYPTOR = cipher()
-
-interface HarnessOptions {
-  readonly accounts?: readonly RoutableAccount[]
-  readonly pools?: readonly PoolSnapshot[]
-  readonly scope?: "all" | "pools" | "accounts"
-  readonly poolIds?: readonly string[]
-  readonly accountIds?: readonly string[]
-  readonly responses: readonly (() => Response)[]
-  readonly maxAttempts?: number
-}
-
-function harness(options: HarnessOptions) {
-  const accounts = options.accounts ?? [account("acct-1", { apiKey: "sk-one", cipher: CRYPTOR })]
-  const upstream = mockUpstream(options.responses)
-  const usage = usageSink()
-  const health = createHealthStore()
-  const testClock = clock()
-  const metrics = createMetrics({ now: testClock.now })
-  const store = catalog(accounts, options.pools ?? [])
-  // Same shape the composition root wires: the usage sink records for the test's own assertions,
-  // and metrics observes off the same call — here synchronously, since this harness has no
-  // background drain to feed it from.
-  const usageWithMetrics = {
-    record: (record: (typeof usage.rows)[number]) => {
-      usage.record(record)
-      metrics.observeUsage(record)
-    },
-  }
-
-  const verifier = createRouterKeyVerifier({
-    repository: keyRepository([apiKeyRow(KEY, CRYPTOR, { scope: options.scope ?? "all" })]),
-    cipher: CRYPTOR,
-    loadScope: async (row) =>
-      row.scope === "all"
-        ? { kind: "all" }
-        : row.scope === "pools"
-          ? { kind: "pools", poolIds: [...(options.poolIds ?? [])] }
-          : { kind: "accounts", accountIds: [...(options.accountIds ?? [])] },
-    now: testClock.now,
-  })
-
-  const app = new Hono<RouterKeyEnv>()
-  app.use("*", requestId())
-  app.use("*", requestLogger(createLogger({ level: "error", write: () => undefined })))
-  app.onError(errorHandler(createLogger({ level: "error", write: () => undefined })))
-  app.notFound(notFoundHandler())
-  app.route(
-    "/",
-    dataPlaneRoutes({
-      verifier,
-      catalog: store,
-      health,
-      now: testClock.now,
-      dispatcher: createDispatcher({
-        catalog: store,
-        health,
-        cipher: CRYPTOR,
-        usage: usageWithMetrics,
-        fetch: upstream.fetch,
-        clock: testClock,
-        onRequest: (sample) => metrics.observeRequest(sample),
-        options: { failover: { maxAttempts: options.maxAttempts ?? 3 } },
-      }),
-    }),
-  )
-  app.route("/", metricsRoutes({ metrics, token: null }))
-
-  return { app, upstream, usage, health, clock: testClock, metrics }
-}
-
-const MESSAGE = JSON.stringify({
-  model: "claude-opus-5",
-  max_tokens: 64,
-  messages: [{ role: "user", content: "hello" }],
-})
-
-function post(body = MESSAGE, headers: Record<string, string> = {}): RequestInit {
-  return {
-    method: "POST",
-    headers: { "content-type": "application/json", ...headers },
-    body,
-  }
-}
-
-function bearer(): Record<string, string> {
-  return { authorization: `Bearer ${KEY}` }
-}
-
-async function settle(): Promise<void> {
-  await Promise.resolve()
-  await Promise.resolve()
-}
 
 describe("authentication", () => {
   test("accepts the OpenAI bearer form", async () => {
@@ -419,18 +298,57 @@ describe("scope enforcement", () => {
 })
 
 describe("cross-dialect and Agent-SDK egress", () => {
-  test("a request needing translation is refused by name, before any upstream call", async () => {
-    const { app, upstream } = harness({
+  test("an anthropic request reaches an openai-chat account, converted both ways", async () => {
+    const { app, upstream, usage } = harness({
       accounts: [account("o", { provider: "openai-api", apiKey: "sk-o", cipher: CRYPTOR })],
-      responses: [() => jsonResponse(200, {})],
+      responses: [
+        () =>
+          jsonResponse(200, {
+            id: "chatcmpl-1",
+            model: "claude-opus-5",
+            choices: [
+              { index: 0, message: { role: "assistant", content: "hi" }, finish_reason: "stop" },
+            ],
+            usage: { prompt_tokens: 11, completion_tokens: 22 },
+          }),
+      ],
     })
 
     const res = await app.request("/v1/messages", post(MESSAGE, bearer()))
-    const body = (await res.json()) as { error?: { message?: string } }
+    const body = (await res.json()) as Record<string, unknown>
+    await settle()
+
+    expect(res.status).toBe(200)
+    // The request went out in the account's dialect, at the account's dialect's path.
+    expect(upstream.calls[0]?.url).toContain("/chat/completions")
+    const sent = JSON.parse(upstream.calls[0]?.body ?? "{}") as Record<string, unknown>
+    expect(sent.messages).toEqual([{ role: "user", content: "hello" }])
+    // The answer came back in the client's.
+    expect(body).toMatchObject({
+      type: "message",
+      role: "assistant",
+      content: [{ type: "text", text: "hi" }],
+      stop_reason: "end_turn",
+    })
+    expect(usage.rows[0]).toMatchObject({ egressMode: "translate", outcome: "success" })
+  })
+
+  test("a request with no faithful conversion is refused by name, before any upstream call", async () => {
+    const { app, upstream } = harness({
+      accounts: [account("a", { apiKey: "sk-a", cipher: CRYPTOR })],
+      responses: [() => jsonResponse(200, {})],
+    })
+
+    const body = JSON.stringify({
+      model: "claude-opus-5",
+      messages: [{ role: "user", content: "hello" }],
+      logprobs: true,
+    })
+    const res = await app.request("/v1/chat/completions", post(body, bearer()))
 
     expect(res.status).toBe(400)
     expect(upstream.calls).toHaveLength(0)
-    expect(JSON.stringify(body)).toContain("translation")
+    expect(JSON.stringify(await res.json())).toContain("logprobs")
   })
 
   test("a Claude subscription is refused as unservable, not as a bad request", async () => {

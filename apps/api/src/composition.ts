@@ -165,8 +165,7 @@ export function createRuntime(deps: RuntimeDeps): Runtime {
       ttlMs: env.dataPlane.keyCacheTtlSeconds * 1_000,
       negativeTtlMs: env.dataPlane.keyCacheNegativeTtlSeconds * 1_000,
     },
-    // A write, so it is fired and not awaited: `lastUsedAt` is reporting, and a
-    // request must never wait on it.
+    // Fired, never awaited: `lastUsedAt` is reporting, and a request must not wait on it.
     onVerified: (key) => {
       void keys.touchLastUsed(key.id, now()).catch((error: unknown) => {
         logger.warn("failed to stamp key last-used", {
@@ -179,7 +178,7 @@ export function createRuntime(deps: RuntimeDeps): Runtime {
   })
 
   // Per replica by design: a shared counter costs a round trip per request — `limits.ts` says why.
-  // Sized off the key cache: one window per verified key, so it is the same inventory either way.
+  // Sized off the key cache: one window per verified key, same inventory either way.
   const limiter = createRateLimiter({ maxKeys: env.dataPlane.keyCacheMax })
 
   const dispatcher = createDispatcher({
@@ -193,6 +192,7 @@ export function createRuntime(deps: RuntimeDeps): Runtime {
     options: {
       failover: { maxAttempts: env.failover.maxAttempts },
       upstreamTimeoutMs: env.failover.upstreamTimeoutMs,
+      translation: { defaultMaxTokens: env.translation.defaultMaxTokens },
     },
   })
 

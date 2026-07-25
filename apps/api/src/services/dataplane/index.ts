@@ -4,9 +4,10 @@
  *
  * Transport imports from here; nothing outside this directory reaches into a module inside it.
  *
- * What this build serves: **same-dialect passthrough**. Cross-dialect translation and the
- * Agent-SDK path are refused explicitly by name in `egress/mode.ts`, before any upstream call, and
- * that module is the seam both land on.
+ * What this build serves: **same-dialect passthrough** and the anthropic ⇄ openai-chat
+ * **translation** pair. A dialect pair with no translator and the Agent-SDK path are refused
+ * explicitly by name in `egress/mode.ts`, before any upstream call, and that module is the seam
+ * all three land on.
  */
 
 export type { AttemptOutcome, AttemptPlan, UpstreamError } from "./attempt"
@@ -64,6 +65,7 @@ export {
   egressRejectionError,
   type PassthroughEgress,
   resolveEgress,
+  type TranslateEgress,
 } from "./egress/mode"
 export {
   type AccountHealthState,
@@ -89,9 +91,12 @@ export {
   type DispatcherDeps,
   type DispatchInput,
   type DispatchOptions,
+  type TranslationOptions,
 } from "./orchestrator"
 export { type CandidatePlan, planCandidates, type ServableCandidate } from "./plan"
 export { type RelayObserver, relayResponse } from "./relay"
+export { relayTranslatedResponse, type TranslatedRelayInput } from "./relay-translate"
+export { createTranslatedRequestBody, type TranslatedRequestBody } from "./translate-body"
 export {
   type DataPlaneClock,
   type FetchLike,

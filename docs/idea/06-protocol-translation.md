@@ -1,10 +1,12 @@
 # Protocol translation
 
-Status: **the passthrough half is implemented**; the ingress surface, the model-alias rule, and the
-byte-for-byte relay all work. **Cross-dialect translation is not built** — a request that would need
-it is refused with a `400` naming the reason, before any upstream call, in
-`services/dataplane/egress/mode.ts`. That module is the seam this whole page lands on. Entities are
-defined in [02-domain-model.md](02-domain-model.md); the driver that owns each egress dialect is in
+Status: **passthrough and the `anthropic` ⇄ `openai-chat` translation pair are implemented** —
+request, non-streaming response, and streaming, in both directions. The `openai-responses` rows of
+the matrix below are **not built**: a request that would need one is refused with a `400` naming the
+reason, before any upstream call, in `services/dataplane/egress/mode.ts`. That module is the seam
+this whole page lands on, and `services/translate/registry.ts` is the one file a new pair is added
+to. The Agent-SDK column is refused the same way and is its own deliverable. Entities are defined in
+[02-domain-model.md](02-domain-model.md); the driver that owns each egress dialect is in
 [03-providers.md](03-providers.md).
 
 ## The core rule
@@ -58,6 +60,32 @@ re-synthesize = rendered from Agent SDK output, never proxied (below).
 router holds no conversation state; and any request whose required feature has no faithful target
 representation — `400`, naming the field. Native Google GenAI egress is **DEFERRED**; Gemini goes
 through an OpenAI-compatible layer in v1.
+
+## How the translate mode is wired
+
+The decision is one function — `resolveEgress` — and it takes passthrough whenever the dialects
+match, so the registry is never consulted on the hot path. A pair with no entry is a rejection, not
+a degraded conversion, which is what keeps "servable" meaning "a translator exists".
+
+| Seam | Rule |
+|---|---|
+| Egress decision | `services/dataplane/egress/mode.ts`. Passthrough first; then a registry lookup; then a `400` naming the pair |
+| Which conversion | `services/translate/registry.ts`, keyed by (ingress, egress). **Request and response run in opposite directions** — an `anthropic` client on an `openai-chat` account sends a body converted *toward* openai-chat and reads one converted *back* toward anthropic |
+| Request body | Converted once per target dialect, lazily, and only when a translate candidate is actually reached. The **model** is re-applied per attempt, because two accounts of one dialect can carry different alias maps |
+| Response | `relay-translate.ts`, a sibling of the passthrough relay and never a mode inside it, so no edit here can put a parser on the passthrough path |
+| Upstream errors | Re-rendered into the **ingress** dialect on this path only. A passthrough error is relayed unchanged, because it is already the right shape and re-rendering it would drop fields the provider stated |
+
+A chain may mix modes freely: an `anthropic` request over a pool holding one Anthropic account and
+one OpenAI-compatible account plans a passthrough attempt and a translated one, in the order routing
+chose. A body that cannot be converted **stops** the chain rather than walking it — the refusal is a
+fact about the request, a bad request is bad at every account needing the same conversion, and the
+`UsageRecord` records it as a client error rather than as an upstream failure.
+
+Two asymmetries in what the relay reports, both deliberate. Token counting is fed the **upstream's**
+bytes, because the `UsageRecord` stores the upstream's own numbers and not the translated ones.
+Time-to-first-byte is measured on the **client's** first translated byte, because that is the claim
+it exists to make. Both are observed after the enqueue, so neither can sit between a byte and the
+client.
 
 ## Agent-SDK egress (Claude subscriptions)
 
@@ -171,8 +199,23 @@ message_start → content_block_start → content_block_delta* → content_block
 | | |
 |---|---|
 | Clean | Text deltas, tool-call argument deltas, terminal usage, stream termination. |
-| Lossy | Block indices and boundaries are reconstructed, not preserved; a dialect with no "block" concept loses which block a delta belonged to. Thinking deltas are dropped toward `openai-chat`. |
+| Lossy | Block indices and boundaries are reconstructed, not preserved; a dialect with no "block" concept loses which block a delta belonged to. Thinking deltas are dropped toward `openai-chat`. Toward `anthropic`, `message_start` states a zeroed `usage`. |
 | Rejected | Nothing at stream time — once bytes are on the wire the request fails honestly, it is never retranslated. |
+
+**Toward `anthropic`, `message_start.usage` is zeroed and the real counts land on `message_delta`.**
+`openai-chat` reports its token counts *last* — on a trailing chunk carrying no choices at all — so
+nothing is known when the first event has to go out, and the field is required by the shape. This is
+the one place a zero is written for an unknown count, and it is written because Anthropic itself puts
+the authoritative numbers on `message_delta`, which is where a client already looks. The
+`UsageRecord` is unaffected: it stores the upstream's own numbers, and a field the upstream never
+sent stays null there.
+
+**A truncated stream is never given a synthesized ending.** If the upstream dies before its finish
+reason, the translator emits no `message_delta`, no `message_stop`, and no `[DONE]` — the client
+learns the truth from the abrupt close. Manufacturing a clean terminator would report a completion
+that did not happen, on a request that cannot be retried because its bytes are already on the wire.
+The reverse case is owed and is emitted: a stream that stated its finish reason but never sent the
+terminator gets one, because the completion is whole and only its punctuation is missing.
 
 ### Stop and finish reasons
 
@@ -308,7 +351,7 @@ requirements, not preferences — a violation is a bug, not a tuning opportunity
 
 | Rule | Meaning |
 |---|---|
-| Pure function pairs | `(request in) → request out` and `(event in) → events out`. No clock, no store, no network, no logger. |
+| Pure function pairs | `(request in) → request out` and `(event in) → events out`. No clock, no store, no network, no logger. A value a translator cannot compute without one — the `created` stamp, the id used when the upstream names none — is **injected**, so the same recorded input converts to the same bytes in a test as it does on the wire. |
 | Fully unit-testable | Every pair is exercised with fixtures alone. Streaming is tested by feeding a recorded event sequence and asserting the emitted sequence. |
 | One module per dialect pair | `services/translate/<from>-to-<to>/`, request and stream translators split. A pair is added without touching the others (Open/Closed). |
 | Passthrough is not a translator | It is a relay in the transport layer. It has no per-dialect module and no schema knowledge. |

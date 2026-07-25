@@ -126,6 +126,24 @@ export function usageToAnthropic(usage: OpenAiChatUsage): AnthropicUsage {
   }
 }
 
+/**
+ * The `usage` block an Anthropic response states, built from openai-chat counts.
+ *
+ * `output_tokens` is required by the shape and is therefore the one count stated unconditionally;
+ * everything else appears only when the upstream actually counted it. Same rule as everywhere else
+ * here — a zero written for a number nobody measured is invented data — and one helper rather than
+ * two, because the streaming and non-streaming halves of one dialect must agree about it.
+ */
+export function anthropicUsageCounts(usage: OpenAiChatUsage | null): Record<string, number> {
+  const mapped = usage === null ? null : usageToAnthropic(usage)
+  const counts: Record<string, number> = { output_tokens: mapped?.output_tokens ?? 0 }
+  const input = mapped?.input_tokens ?? null
+  if (input !== null) counts.input_tokens = input
+  const cached = mapped?.cache_read_input_tokens ?? null
+  if (cached !== null) counts.cache_read_input_tokens = cached
+  return counts
+}
+
 /** Null only when every term is null: one known term still makes a partial total worth reporting. */
 function sum(values: readonly (number | null)[]): number | null {
   let total: number | null = null
