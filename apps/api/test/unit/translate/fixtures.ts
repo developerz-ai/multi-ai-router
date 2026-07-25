@@ -1,3 +1,5 @@
+import type { SseEvent, SseFrame } from "../../../src/services/translate"
+
 /**
  * Canned wire bodies for the translate unit tests, one builder per shape.
  *
@@ -101,4 +103,37 @@ export function openAiChatUsageWire(
     prompt_tokens_details: { cached_tokens: 20 },
     ...overrides,
   }
+}
+
+/** An Anthropic frame off the wire: `event:` named, `type` repeated inside the payload. */
+export function anthropicFrame(type: string, payload: Record<string, unknown> = {}): SseFrame {
+  return { event: type, data: JSON.stringify({ type, ...payload }) }
+}
+
+/** An openai-chat frame off the wire: data only, no `event:` line. */
+export function openAiChatFrame(payload: Record<string, unknown>): SseFrame {
+  return { event: null, data: JSON.stringify(payload) }
+}
+
+export function openAiChatChunk(
+  delta: Record<string, unknown>,
+  overrides: Record<string, unknown> = {},
+): SseFrame {
+  return openAiChatFrame({
+    id: "chatcmpl-1",
+    object: "chat.completion.chunk",
+    created: 1_700_000_000,
+    model: "gpt-4o",
+    choices: [{ index: 0, delta, finish_reason: null }],
+    ...overrides,
+  })
+}
+
+/** Every emitted payload, decoded — the shape an assertion actually wants to read. */
+export function payloads(events: readonly SseEvent[]): unknown[] {
+  return events.filter((event) => event.data !== "[DONE]").map((event) => JSON.parse(event.data))
+}
+
+export function eventNames(events: readonly SseEvent[]): (string | undefined)[] {
+  return events.map((event) => event.event)
 }

@@ -171,8 +171,23 @@ message_start → content_block_start → content_block_delta* → content_block
 | | |
 |---|---|
 | Clean | Text deltas, tool-call argument deltas, terminal usage, stream termination. |
-| Lossy | Block indices and boundaries are reconstructed, not preserved; a dialect with no "block" concept loses which block a delta belonged to. Thinking deltas are dropped toward `openai-chat`. |
+| Lossy | Block indices and boundaries are reconstructed, not preserved; a dialect with no "block" concept loses which block a delta belonged to. Thinking deltas are dropped toward `openai-chat`. Toward `anthropic`, `message_start` states a zeroed `usage`. |
 | Rejected | Nothing at stream time — once bytes are on the wire the request fails honestly, it is never retranslated. |
+
+**Toward `anthropic`, `message_start.usage` is zeroed and the real counts land on `message_delta`.**
+`openai-chat` reports its token counts *last* — on a trailing chunk carrying no choices at all — so
+nothing is known when the first event has to go out, and the field is required by the shape. This is
+the one place a zero is written for an unknown count, and it is written because Anthropic itself puts
+the authoritative numbers on `message_delta`, which is where a client already looks. The
+`UsageRecord` is unaffected: it stores the upstream's own numbers, and a field the upstream never
+sent stays null there.
+
+**A truncated stream is never given a synthesized ending.** If the upstream dies before its finish
+reason, the translator emits no `message_delta`, no `message_stop`, and no `[DONE]` — the client
+learns the truth from the abrupt close. Manufacturing a clean terminator would report a completion
+that did not happen, on a request that cannot be retried because its bytes are already on the wire.
+The reverse case is owed and is emitted: a stream that stated its finish reason but never sent the
+terminator gets one, because the completion is whole and only its punctuation is missing.
 
 ### Stop and finish reasons
 

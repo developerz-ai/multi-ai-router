@@ -17,11 +17,15 @@
  */
 
 export { anthropicToOpenAiChatRequest } from "./anthropic-to-openai-chat/request"
+export type { AnthropicToOpenAiChatStreamOptions } from "./anthropic-to-openai-chat/stream"
+export { anthropicToOpenAiChatStream } from "./anthropic-to-openai-chat/stream"
 export type { OpenAiChatToAnthropicOptions } from "./openai-chat-to-anthropic/request"
 export {
   DEFAULT_MAX_TOKENS,
   openAiChatToAnthropicRequest,
 } from "./openai-chat-to-anthropic/request"
+export type { OpenAiChatToAnthropicStreamOptions } from "./openai-chat-to-anthropic/stream"
+export { openAiChatToAnthropicStream } from "./openai-chat-to-anthropic/stream"
 export type {
   AnthropicBlock,
   AnthropicImageBlock,
@@ -81,3 +85,7 @@ export {
   usageToAnthropic,
   usageToOpenAiChat,
 } from "./shared/usage"
+export type { SseEvent, StreamTranslator } from "./sse/emit"
+export { DONE, encodeSseEvent, NO_EVENTS } from "./sse/emit"
+export type { SseFrame, SseParser } from "./sse/parse"
+export { createSseParser, frameJson } from "./sse/parse"
