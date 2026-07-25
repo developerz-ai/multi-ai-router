@@ -4,8 +4,10 @@ import type {
   Dialect,
   KeyScope,
   ProviderId,
+  QuotaWindowKind,
   ResetSource,
   RoutingPolicy,
+  UtilizationSource,
 } from "@multi-ai-router/core"
 
 // The wire shapes of `/api/admin/**`, declared **here** rather than imported
@@ -48,6 +50,25 @@ export interface AccountView {
   readonly availability?: AccountAvailability
 }
 
+/**
+ * `services/accounts/availability.ts` — `QuotaWindowView`.
+ *
+ * One row per window, never collapsed: a Claude subscription runs several on independent clocks
+ * and is blocked by whichever is spent, so a single "resets at" would name one and drop the rest.
+ */
+export interface QuotaWindowView {
+  readonly window: QuotaWindowKind
+  /** `0..1`, or null where the source reported nothing — normal, not a fault. */
+  readonly utilization: number | null
+  readonly utilizationSource: UtilizationSource
+  readonly resetsAt: string | null
+  /** Always present, so a countdown is never rendered without its qualifier. */
+  readonly resetSource: ResetSource
+  readonly lastCheckedAt: string
+  /** Computed server-side with the same function candidate filtering calls. */
+  readonly spent: boolean
+}
+
 /** `services/accounts/availability.ts` — `AccountAvailability`. */
 export interface AccountAvailability {
   /** What the operator set: `active` or `disabled`, never an observation. */
@@ -58,6 +79,8 @@ export interface AccountAvailability {
   readonly lastCheckedAt: string | null
   readonly consecutiveFailures: number
   readonly inFlight: number
+  /** Empty where the router knows of none. Absent on a write response, like the rest of this. */
+  readonly quotaWindows?: readonly QuotaWindowView[]
 }
 
 /** `services/pools/view.ts` — `PoolMemberView`. */
@@ -122,6 +145,13 @@ export type MintedKey = ApiKeyView & { readonly value: string }
 
 export type ProviderTransport = "http" | "agent-sdk" | "unimplemented"
 
+/**
+ * How an account of this provider is logged in. `claude-cli` drives the `claude` binary,
+ * `oauth` is an authorization-code flow the router performs itself, and `null` is an API-key
+ * provider where the operator pastes a credential and there is nothing to connect.
+ */
+export type ProviderConnectFlow = "claude-cli" | "oauth"
+
 /** `services/accounts/providers.ts` — `ProviderDescriptor`. */
 export interface ProviderDescriptor {
   readonly id: ProviderId
@@ -131,6 +161,12 @@ export interface ProviderDescriptor {
   readonly supportedDialects: readonly Dialect[]
   readonly requiresBaseUrl: boolean
   readonly requiresConfigDir: boolean
+  /**
+   * Which connect flow this provider takes, or null for one that takes none. Also what makes the
+   * credential field optional: an account that will be logged in exists *before* its
+   * authorization, so the one-shot `state` has a row to bind to.
+   */
+  readonly connectFlow: ProviderConnectFlow | null
   readonly creatable: boolean
   readonly reason: string | null
 }

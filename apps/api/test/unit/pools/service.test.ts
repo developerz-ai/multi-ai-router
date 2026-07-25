@@ -26,6 +26,10 @@ function harness(): { service: ReturnType<typeof createPoolsService>; store: Mem
   return { service, store }
 }
 
+function auditOf(store: MemoryStore, kind: string) {
+  return store.rows.audit.find((row) => row.kind === kind)
+}
+
 async function seeded() {
   const { service, store } = harness()
   const account = await store.accounts.create({ label: "zai-1", provider: "zai" })
@@ -138,11 +142,43 @@ describe("update", () => {
     if (!pool.ok) throw new Error("setup failed")
 
     await service.update(pool.value.id, { policy: "quota-aware" })
-    expect(store.rows.audit.at(-1)).toMatchObject({ kind: "pool.updated" })
-    expect(store.rows.audit.at(-1)?.detail).toMatchObject({
+
+    // Two rows for one edit, on purpose: `pool.updated` is what the operator did, and
+    // `policy.changed` is the one an "why did traffic move" question filters on.
+    expect(store.rows.audit.map((row) => row.kind)).toEqual([
+      "pool.created",
+      "pool.updated",
+      "policy.changed",
+    ])
+    expect(auditOf(store, "pool.updated")?.detail).toMatchObject({
       policyBefore: "sticky",
       policyAfter: "quota-aware",
     })
+    expect(auditOf(store, "policy.changed")).toMatchObject({
+      subjectType: "pool",
+      subjectId: pool.value.id,
+      detail: { poolId: pool.value.id, from: "sticky", to: "quota-aware" },
+    })
+  })
+
+  test("an edit that leaves the policy alone writes no policy.changed", async () => {
+    const { service, store } = await seeded()
+    const pool = await service.create({ name: "team", policy: "round-robin" })
+    if (!pool.ok) throw new Error("setup failed")
+
+    await service.update(pool.value.id, { name: "team-eu" })
+
+    expect(store.rows.audit.map((row) => row.kind)).toEqual(["pool.created", "pool.updated"])
+  })
+
+  test("re-sending the policy a pool already has is a no-op the routing log stays out of", async () => {
+    const { service, store } = await seeded()
+    const pool = await service.create({ name: "team", policy: "round-robin" })
+    if (!pool.ok) throw new Error("setup failed")
+
+    await service.update(pool.value.id, { policy: "round-robin" })
+
+    expect(store.rows.audit.map((row) => row.kind)).toEqual(["pool.created", "pool.updated"])
   })
 
   test("an unknown pool is a 404", async () => {

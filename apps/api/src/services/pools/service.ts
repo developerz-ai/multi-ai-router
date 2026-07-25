@@ -145,6 +145,19 @@ export function createPoolsService(deps: PoolsServiceDeps): PoolsService {
         },
       })
 
+      // A second, narrower event for the same edit, because the two answer different questions:
+      // `pool.updated` is what the operator did, `policy.changed` is where every future request
+      // will go. Compared against the row that came back rather than against the body, so a
+      // PATCH naming the policy a pool already has writes nothing at all.
+      if (pool.policy !== current.policy) {
+        await deps.audit.record({
+          kind: AUDIT_KINDS.policyChanged,
+          subjectType: AUDIT_SUBJECTS.pool,
+          subjectId: pool.id,
+          detail: { poolId: pool.id, from: current.policy, to: pool.policy },
+        })
+      }
+
       return ok(await render(pool))
     },
 

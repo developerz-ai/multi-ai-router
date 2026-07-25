@@ -3,7 +3,7 @@
  * nothing outside this directory reaches into a file inside it.
  */
 
-export type { AccountAvailability, AvailabilityDeps } from "./availability"
+export type { AccountAvailability, AvailabilityDeps, QuotaWindowView } from "./availability"
 export { withAvailability } from "./availability"
 export type {
   AuthorizedCode,

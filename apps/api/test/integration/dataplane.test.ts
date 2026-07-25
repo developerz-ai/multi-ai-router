@@ -638,6 +638,27 @@ describe("usage accounting", () => {
     expect(usage.rows[0]?.costEstimate).not.toBeNull()
     expect(usage.rows[0]?.costBasis).toBe("metered")
   })
+
+  test("an operator's price override is what the row is priced with", async () => {
+    const priced = MESSAGE.replace("claude-opus-5", "claude-sonnet-5")
+    // A tenth of the shipped rate, so the assertion cannot pass against the shipped table by
+    // coincidence: 11 in + 22 out at $0.3 / $1.5 per Mtok.
+    const { app, usage } = harness({
+      prices: () => ({
+        inputPerMtok: 0.3,
+        outputPerMtok: 1.5,
+        cacheReadPerMtok: 0,
+        cacheWritePerMtok: 0,
+      }),
+      responses: [() => jsonResponse(200, { usage: { input_tokens: 11, output_tokens: 22 } })],
+    })
+
+    await (await app.request("/v1/messages", post(priced, bearer()))).text()
+    await settle()
+
+    expect(usage.rows[0]?.costEstimate).toBe("0.000036")
+    expect(usage.rows[0]?.costBasis).toBe("metered")
+  })
 })
 
 describe("observability", () => {

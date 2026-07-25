@@ -10,6 +10,14 @@ import { ADMIN_KEYS_BASE_PATH, adminKeyRoutes } from "./routes/admin/keys"
 import { oauthCallbackRoutes } from "./routes/admin/oauth-callback"
 import { ADMIN_POOLS_BASE_PATH, adminPoolRoutes } from "./routes/admin/pools"
 import { ADMIN_PROVIDERS_BASE_PATH, adminProviderRoutes } from "./routes/admin/providers"
+import {
+  ADMIN_AUDIT_BASE_PATH,
+  ADMIN_SETTINGS_BASE_PATH,
+  ADMIN_TASKS_BASE_PATH,
+  adminAuditRoutes,
+  adminSettingsRoutes,
+  adminTaskRoutes,
+} from "./routes/admin/settings"
 import { ADMIN_USAGE_BASE_PATH, adminUsageRoutes } from "./routes/admin/usage"
 import { healthRoutes } from "./routes/health"
 import { type MetricsRouteDeps, metricsRoutes } from "./routes/metrics"
@@ -117,4 +125,9 @@ function mountAdmin(app: Hono<AppEnv>, admin: AdminServices, trustProxy: boolean
   app.route(ADMIN_KEYS_BASE_PATH, adminKeyRoutes({ guard, service: admin.keys }))
   app.route(ADMIN_USAGE_BASE_PATH, adminUsageRoutes({ guard, service: admin.usage }))
   app.route(ADMIN_PROVIDERS_BASE_PATH, adminProviderRoutes({ guard }))
+  // Three paths, one service: the settings screen reads configuration, task health and the audit
+  // feed together — see `services/settings/service.ts`.
+  app.route(ADMIN_SETTINGS_BASE_PATH, adminSettingsRoutes({ guard, service: admin.settings }))
+  app.route(ADMIN_TASKS_BASE_PATH, adminTaskRoutes({ guard, service: admin.settings }))
+  app.route(ADMIN_AUDIT_BASE_PATH, adminAuditRoutes({ guard, service: admin.settings }))
 }

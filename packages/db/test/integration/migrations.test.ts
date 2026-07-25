@@ -7,6 +7,7 @@ import { defaultMigrationsFolder, runMigrations } from "../../src/migrate"
 import { createAccountRepository } from "../../src/repositories/account-repository"
 import { createApiKeyRepository } from "../../src/repositories/api-key-repository"
 import { createOauthStateRepository } from "../../src/repositories/oauth-state-repository"
+import { createPriceOverrideRepository } from "../../src/repositories/price-override-repository"
 import { createScheduledTaskRepository } from "../../src/repositories/scheduled-task-repository"
 import { createSessionRepository } from "../../src/repositories/session-repository"
 import { createUsageDailyRepository } from "../../src/repositories/usage-daily-repository"
@@ -14,6 +15,7 @@ import { createUsageRecordRepository } from "../../src/repositories/usage-reposi
 import { accounts } from "../../src/schema/accounts"
 import { apiKeys } from "../../src/schema/api-keys"
 import { oauthStates } from "../../src/schema/oauth-states"
+import { priceOverrides } from "../../src/schema/price-overrides"
 import { scheduledTaskRuns } from "../../src/schema/scheduled-task-runs"
 import { usageDaily } from "../../src/schema/usage-daily"
 import { usageRecords } from "../../src/schema/usage-records"
@@ -41,6 +43,9 @@ afterAll(async () => {
     if (scheduledTaskRunIds.length > 0) {
       await db.delete(scheduledTaskRuns).where(inArray(scheduledTaskRuns.id, scheduledTaskRunIds))
     }
+    // The whole table, not a fixture subset: `replaceAll` clears it by design, so anything that
+    // was here is already gone and leaving it empty is the only honest teardown.
+    await db.delete(priceOverrides)
     await db.delete(usageDaily).where(eq(usageDaily.model, "test-migrations-model"))
     await db.delete(usageRecords).where(eq(usageRecords.model, "test-migrations-model"))
     await db.delete(oauthStates).where(eq(oauthStates.state, "test-migrations-state"))
@@ -62,6 +67,7 @@ const EXPECTED_TABLES = [
   "audit_events",
   "scheduled_task_runs",
   "oauth_states",
+  "price_overrides",
 ] as const
 
 describe.skipIf(!runnable)("migrations against a live database", () => {
@@ -160,6 +166,82 @@ describe.skipIf(!runnable)("migrations against a live database", () => {
 
     const last = await repository.lastRun("quota_floor_refresh")
     expect(last?.id).toBe(id)
+  })
+
+  test("price overrides round-trip through replaceAll and list", async () => {
+    db = (handle as DatabaseHandle).db
+    const repository = createPriceOverrideRepository(db)
+    const now = new Date("2026-07-24T12:00:00.000Z")
+
+    const replaced = await repository.replaceAll(
+      [
+        {
+          provider: "zai",
+          model: "test-migrations-glm",
+          inputPerMtok: 0.6,
+          outputPerMtok: 2.2,
+          cacheReadPerMtok: 0.11,
+          cacheWritePerMtok: 0.75,
+        },
+        {
+          provider: "anthropic-api",
+          model: "test-migrations-sonnet",
+          inputPerMtok: 3,
+          outputPerMtok: 15,
+          cacheReadPerMtok: 0.3,
+          cacheWritePerMtok: 3.75,
+        },
+      ],
+      now,
+    )
+
+    // Provider then model, and provider sorts in the enum's declared order — `anthropic-api`
+    // is declared before `zai`, so the insert order is not the read order.
+    expect(replaced.map((row) => row.model)).toEqual([
+      "test-migrations-sonnet",
+      "test-migrations-glm",
+    ])
+    // Numbers, not numeric strings: no caller should have to parse a price back out of the row.
+    expect(replaced[0]?.inputPerMtok).toBe(3)
+    expect(replaced[0]?.cacheWritePerMtok).toBe(3.75)
+    expect(replaced[1]?.inputPerMtok).toBe(0.6)
+    expect(replaced[0]?.createdAt.toISOString()).toBe(now.toISOString())
+
+    const listed = await repository.list()
+    expect(listed.map((row) => row.model)).toEqual(replaced.map((row) => row.model))
+  })
+
+  test("a duplicated model rolls the whole replace back", async () => {
+    db = (handle as DatabaseHandle).db
+    const repository = createPriceOverrideRepository(db)
+    const duplicate = {
+      provider: "openrouter",
+      model: "test-migrations-dupe",
+      inputPerMtok: 1,
+      outputPerMtok: 1,
+      cacheReadPerMtok: 1,
+      cacheWritePerMtok: 1,
+    } as const
+
+    await expect(
+      repository.replaceAll([duplicate, duplicate], new Date("2026-07-24T12:00:00.000Z")),
+    ).rejects.toThrow()
+
+    // The transaction is the point: a rejected edit leaves the previous table intact rather than
+    // half of it, and a half-applied price table prices reports against rates nobody chose.
+    const listed = await repository.list()
+    expect(listed.map((row) => row.model)).toEqual([
+      "test-migrations-sonnet",
+      "test-migrations-glm",
+    ])
+  })
+
+  test("an empty replace clears the table", async () => {
+    db = (handle as DatabaseHandle).db
+    const repository = createPriceOverrideRepository(db)
+
+    expect(await repository.replaceAll([], new Date("2026-07-24T12:00:00.000Z"))).toEqual([])
+    expect(await repository.list()).toEqual([])
   })
 
   test("usage daily rollup round-trips from raw usage records", async () => {

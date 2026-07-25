@@ -68,7 +68,9 @@ export function adminAuthRoutes(deps: AdminAuthRoutesDeps): Hono<AdminAuthEnv> {
   })
 
   routes.post("/logout", guard, async (c) => {
-    await deps.service.logout(c.get("adminSession").id)
+    // The source address rides along for the same reason login's does: the audit row for a
+    // session ending is only useful next to the one that started it.
+    await deps.service.logout(c.get("adminSession").id, clientIp(c, deps.trustProxy))
     deleteCookie(c, SESSION_COOKIE_NAME, sessionCookieOptions(0))
     return c.json({ status: "logged_out" })
   })

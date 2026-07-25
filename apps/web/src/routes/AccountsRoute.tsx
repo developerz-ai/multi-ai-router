@@ -10,7 +10,8 @@ import { TableSkeleton } from "../components/TableSkeleton"
 import { needsOperator, STATUS_DISPLAY_ORDER, statusLabel } from "../lib/account-status"
 import type { AccountListFilter } from "../lib/api/accounts"
 import { errorMessage } from "../lib/api/errors"
-import type { AccountView } from "../lib/api/types"
+import { findProvider } from "../lib/api/providers"
+import type { AccountView, ProviderConnectFlow } from "../lib/api/types"
 import { createNow } from "../lib/clock"
 import {
   useAccounts,
@@ -22,7 +23,9 @@ import {
   useUpdateAccount,
 } from "../lib/queries/accounts"
 import { useProviders } from "../lib/queries/providers"
+import { useTableUsage } from "../lib/queries/table-usage"
 import styles from "./AccountsRoute.module.scss"
+import { AccountConnect } from "./accounts/AccountConnect"
 import { AccountFormDialog } from "./accounts/AccountFormDialog"
 import { AccountsTable } from "./accounts/AccountsTable"
 
@@ -39,6 +42,7 @@ export default function AccountsRoute() {
   const [provider, setProvider] = createSignal<ProviderId | "">("")
   const [adding, setAdding] = createSignal(false)
   const [pendingDelete, setPendingDelete] = createSignal<AccountView | null>(null)
+  const [connecting, setConnecting] = createSignal<AccountView | null>(null)
 
   const filter = createMemo<AccountListFilter>(() => ({
     ...(status() === "" ? {} : { status: status() as AccountStatus }),
@@ -48,6 +52,18 @@ export default function AccountsRoute() {
   const accounts = useAccounts(filter)
   const providers = useProviders()
   const providerList = () => (providers.isSuccess ? (providers.data ?? []) : [])
+
+  // Asked of the descriptor, never of a list kept here: a provider that grows a login becomes
+  // connectable the day its driver file lands (CLAUDE.md non-negotiable 12).
+  const connectFlowFor = (account: AccountView): ProviderConnectFlow | null =>
+    findProvider(providerList(), account.provider)?.connectFlow ?? null
+
+  const connectingFlow = createMemo(() => {
+    const account = connecting()
+    return account === null ? null : connectFlowFor(account)
+  })
+
+  const usage = useTableUsage("account")
 
   const create = useCreateAccount()
   const update = useUpdateAccount()
@@ -148,12 +164,15 @@ export default function AccountsRoute() {
           >
             <AccountsTable
               accounts={rows}
+              connectFlowFor={connectFlowFor}
               nowMs={now()}
+              onConnect={setConnecting}
               onDelete={setPendingDelete}
               onDisable={(account) => disable.mutate(account.id)}
               onEnable={(account) => update.mutate({ id: account.id, patch: { status: "active" } })}
               onRecheck={(id) => recheck.mutate(id)}
               recheckingId={recheck.isPending ? (recheck.variables ?? null) : null}
+              {...usage()}
             />
           </Show>
         )}
@@ -163,9 +182,26 @@ export default function AccountsRoute() {
         busy={create.isPending}
         error={create.error}
         onClose={closeForm}
-        onSubmit={(input) => create.mutate(input, { onSuccess: closeForm })}
+        onSubmit={(input) =>
+          create.mutate(input, {
+            onSuccess: (account) => {
+              closeForm()
+              // A provider that takes a login lands here unauthorised on purpose — the row exists
+              // so the one-shot `state` has something to bind to. Going straight into Connect is
+              // the rest of the same gesture, not a second task the operator has to remember.
+              if (connectFlowFor(account) !== null) setConnecting(account)
+            },
+          })
+        }
         open={adding()}
         providers={providerList()}
+      />
+
+      <AccountConnect
+        account={connecting()}
+        connectFlow={connectingFlow()}
+        nowMs={now()}
+        onClose={() => setConnecting(null)}
       />
 
       <Show when={pendingDelete()}>

@@ -2,8 +2,11 @@ import { Show } from "solid-js"
 import { Badge } from "../../components/Badge"
 import { Button } from "../../components/Button"
 import { type Column, Table } from "../../components/Table"
+import { UsageCell } from "../../components/UsageCell"
 import type { ApiKeyView } from "../../lib/api/types"
 import { formatDate, formatRelative, formatWindow } from "../../lib/format"
+import type { UsageRowSummary } from "../../lib/usage-index"
+import { usageFor } from "../../lib/usage-index"
 import styles from "./KeysTable.module.scss"
 
 export interface KeysTableProps {
@@ -11,6 +14,12 @@ export interface KeysTableProps {
   readonly nowMs: number
   /** The id currently being revealed, if any. */
   readonly revealingId: string | null
+  /** Per-key usage for the selected window, indexed by key id. */
+  readonly usage: ReadonlyMap<string, UsageRowSummary>
+  readonly usageBucket: "hour" | "day"
+  readonly usageLoading: boolean
+  /** The window these figures cover, for the column header — "7 days". */
+  readonly usageWindowLabel: string
   readonly onReveal: (key: ApiKeyView) => void
   readonly onRevoke: (key: ApiKeyView) => void
   readonly onDelete: (key: ApiKeyView) => void
@@ -22,6 +31,11 @@ export interface KeysTableProps {
  * The identity column shows the name and the **stored display prefix** — never
  * the value. A screenshot of this table leaks nothing; the value lives behind
  * an audited `POST /keys/:id/reveal`, which the Reveal action calls.
+ *
+ * Usage is a column here rather than a trip to the usage screen: "which key is
+ * burning the budget" is the question an operator arrives at this table with,
+ * and answering it elsewhere means holding two screens side by side. Metered and
+ * notional spend are printed apart in that cell and never summed.
  */
 export function KeysTable(props: KeysTableProps) {
   const columns = (): readonly Column<ApiKeyView>[] => [
@@ -62,6 +76,18 @@ export function KeysTable(props: KeysTableProps) {
             </span>
           )}
         </Show>
+      ),
+    },
+    {
+      id: "usage",
+      header: `Usage · ${props.usageWindowLabel}`,
+      cell: (key) => (
+        <UsageCell
+          bucket={props.usageBucket}
+          label={`Requests per ${props.usageBucket} for key ${key.name}`}
+          loading={props.usageLoading}
+          usage={usageFor(props.usage, key.id)}
+        />
       ),
     },
     {

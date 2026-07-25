@@ -1,4 +1,4 @@
-import type { ProviderId } from "@multi-ai-router/core"
+import { ProviderId } from "@multi-ai-router/core"
 
 /**
  * The price table shipped with the image.
@@ -12,8 +12,9 @@ import type { ProviderId } from "@multi-ai-router/core"
  * Blast radius of a wrong number here: one cost line in a report. Nothing about pricing reaches
  * routing, a response, or a model choice — the client picks the model, always.
  *
- * The operator-editable override is deferred. When it lands it layers over this table; the shipped
- * numbers stay the fallback rather than being replaced.
+ * Operator-editable overrides layer *over* this table rather than replacing it (`book.ts`): an
+ * override wins for the provider + model it names, and every other model keeps the shipped number.
+ * A deployment correcting one stale price must not lose the rest of the table to do it.
  */
 
 export interface ModelRates {
@@ -22,6 +23,16 @@ export interface ModelRates {
   readonly cacheReadPerMtok: number
   readonly cacheWritePerMtok: number
 }
+
+/**
+ * How a caller asks for a price. The shipped {@link lookupRates} is one implementation and the warm
+ * override-aware book is the other, which is the whole point: `estimateCost` prices an attempt
+ * without knowing whether an operator has edited anything.
+ */
+export type RateLookup = (provider: ProviderId, model: string) => ModelRates | null
+
+/** One row of the shipped table, flattened for display beside the operator's overrides. */
+export type ShippedRate = { readonly provider: ProviderId; readonly model: string } & ModelRates
 
 /**
  * Provenance: Anthropic publishes cache rates as multiples of a model's input rate — reads at 0.1x,
@@ -91,10 +102,42 @@ const PRICES: Partial<Record<ProviderId, Readonly<Record<string, ModelRates>>>> 
  */
 const SNAPSHOT_SUFFIX = /-\d{8}$/
 
+/**
+ * The names one model may be priced under, most specific first: the model as asked for, then its
+ * family with the date pin stripped.
+ *
+ * Exported because the override book has to normalize a name exactly as this table does — an
+ * override written as `claude-haiku-4-5` must answer for `Claude-Haiku-4-5-20251001`. A second copy
+ * of the rule is a second thing to keep in step with the first.
+ */
+export function modelLookupKeys(model: string): readonly [string, string] {
+  const name = model.trim().toLowerCase()
+  return [name, name.replace(SNAPSHOT_SUFFIX, "")]
+}
+
 /** The rates for one upstream model, or null when this image ships no price for it. */
 export function lookupRates(provider: ProviderId, model: string): ModelRates | null {
   const table = PRICES[provider]
   if (table === undefined) return null
-  const name = model.trim().toLowerCase()
-  return table[name] ?? table[name.replace(SNAPSHOT_SUFFIX, "")] ?? null
+  const [name, family] = modelLookupKeys(model)
+  return table[name] ?? table[family] ?? null
+}
+
+/**
+ * Every shipped row, provider then model, so the settings screen can render the table it is
+ * overriding. Sorted rather than emitted in declaration order: a list an operator reads against
+ * their own edits must not reshuffle because a row moved in this file.
+ */
+export function listShippedRates(): readonly ShippedRate[] {
+  const rows: ShippedRate[] = []
+  // Driven off core's id list rather than the table's own keys: `Object.keys` on a partial record
+  // is `string[]`, and narrowing it back would be an assertion nobody checks.
+  for (const provider of ProviderId.options) {
+    const table = PRICES[provider]
+    if (table === undefined) continue
+    for (const [model, rates] of Object.entries(table)) {
+      rows.push({ provider, model, ...rates })
+    }
+  }
+  return rows.sort((a, b) => a.provider.localeCompare(b.provider) || a.model.localeCompare(b.model))
 }

@@ -1,5 +1,10 @@
 import { describe, expect, test } from "bun:test"
-import { estimateCost, lookupRates } from "../../../src/services/cost"
+import {
+  estimateCost,
+  listShippedRates,
+  lookupRates,
+  type RateLookup,
+} from "../../../src/services/cost"
 import type { TokenCounts } from "../../../src/services/usage"
 
 /**
@@ -108,6 +113,84 @@ describe("what the table does not know", () => {
       costEstimate: null,
       costBasis: "unknown",
     })
+  })
+})
+
+describe("listing the shipped table", () => {
+  // The settings screen renders these rows beside the operator's overrides, which is only possible
+  // because the table can be enumerated at all — it used to be probeable one key at a time.
+  test("every row agrees with the single-model lookup", () => {
+    const rows = listShippedRates()
+
+    expect(rows.length).toBeGreaterThan(0)
+    for (const { provider, model, ...rates } of rows) {
+      expect(lookupRates(provider, model)).toEqual(rates)
+    }
+  })
+
+  test("both anthropic surfaces are listed, priced identically and separately", () => {
+    const providers = new Set(listShippedRates().map((row) => row.provider))
+
+    // A subscription is valued at what the same tokens cost on the API, so it carries the same
+    // rows — and an operator overriding one must be able to see it is not overriding the other.
+    expect(providers).toEqual(new Set(["anthropic-oauth", "anthropic-api"]))
+  })
+
+  test("the order is stable across calls and groups a provider's models together", () => {
+    // A list read against an operator's own edits must not reshuffle between renders.
+    const first = listShippedRates().map((row) => `${row.provider}/${row.model}`)
+    const second = listShippedRates().map((row) => `${row.provider}/${row.model}`)
+    expect(first).toEqual(second)
+
+    // One contiguous run per provider, so a screen renders one heading each without re-sorting.
+    const providers = listShippedRates().map((row) => row.provider)
+    const runs = providers.filter((id, i) => id !== providers[i - 1]).length
+    expect(runs).toBe(new Set(providers).size)
+  })
+})
+
+describe("an injected price lookup", () => {
+  // The operator's override book is one of these, and `estimateCost` must not be able to tell.
+  const flat: RateLookup = () => ({
+    inputPerMtok: 100,
+    outputPerMtok: 200,
+    cacheReadPerMtok: 0,
+    cacheWritePerMtok: 0,
+  })
+
+  test("wins over the shipped table for a model the shipped table also prices", () => {
+    const counts = tokens({ tokensIn: 1_000_000, tokensOut: 1_000_000 })
+    expect(estimateCost("anthropic-api", "claude-sonnet-5", counts, flat)).toEqual({
+      costEstimate: "300.000000",
+      costBasis: "metered",
+    })
+    // The shipped table itself is untouched — an override layers over it, it does not replace it.
+    expect(lookupRates("anthropic-api", "claude-sonnet-5")?.inputPerMtok).toBe(3)
+  })
+
+  test("prices a provider the shipped table has no list for at all", () => {
+    // z.ai bills its own model ids, so only an operator can say what one costs.
+    expect(estimateCost("zai", "glm-4.7", tokens({ tokensIn: 1_000_000 }), flat)).toEqual({
+      costEstimate: "100.000000",
+      costBasis: "metered",
+    })
+  })
+
+  test("is genuinely consulted: a lookup that knows nothing reports unknown", () => {
+    // Proves the injection replaces the table rather than merging with it. If the shipped rate
+    // leaked through here, an override that removed a price would silently keep charging.
+    expect(
+      estimateCost("anthropic-api", "claude-sonnet-5", tokens({ tokensIn: 1 }), () => null),
+    ).toEqual({ costEstimate: null, costBasis: "unknown" })
+  })
+
+  test("omitting it prices exactly as passing the shipped table does", () => {
+    const counts = tokens({ tokensIn: 4_000, cacheReadTokens: 9_000 })
+    for (const model of ["claude-opus-4-8", "claude-not-a-model"]) {
+      expect(estimateCost("anthropic-api", model, counts)).toEqual(
+        estimateCost("anthropic-api", model, counts, lookupRates),
+      )
+    }
   })
 })
 

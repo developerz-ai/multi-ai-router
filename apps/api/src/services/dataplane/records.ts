@@ -1,5 +1,5 @@
 import type { Dialect, EgressMode, ProviderId, UsageOutcome } from "@multi-ai-router/core"
-import { estimateCost } from "../cost"
+import { estimateCost, type RateLookup } from "../cost"
 import type { FailureKind } from "../routing"
 import type { UsageRecord } from "../usage"
 import { errorClassOf, NO_TOKENS, outcomeOf, type TokenCounts, USAGE_SUCCESS } from "../usage"
@@ -60,6 +60,8 @@ export interface AttemptRecordInput {
   readonly ingressDialect?: Dialect | null
   readonly egressMode?: EgressMode | null
   readonly tokens?: TokenCounts
+  /** The operator's price book, when one is wired. Absent prices off the shipped table. */
+  readonly prices?: RateLookup
   readonly timing: AttemptTiming
   readonly outcome: UsageOutcome
   readonly streamed: boolean
@@ -89,7 +91,7 @@ export function attemptRecord(input: AttemptRecordInput): UsageRecord {
     cacheWriteTokens: tokens.cacheWriteTokens,
     // Priced on the model that went upstream, not on the one the client asked for: the account's
     // alias map decides which name the upstream billed.
-    ...estimateCost(input.provider, input.upstreamModel, tokens),
+    ...estimateCost(input.provider, input.upstreamModel, tokens, input.prices),
     latencyMs: Math.max(0, Math.round(input.timing.latencyMs)),
     ttfbMs: ttfbMs === undefined ? null : Math.max(0, Math.round(ttfbMs)),
     routerOverheadMs: Math.max(0, Math.round(input.timing.totalMs - input.timing.upstreamMs)),

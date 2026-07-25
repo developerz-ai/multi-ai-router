@@ -1,5 +1,4 @@
-import { createSignal, For, Show } from "solid-js"
-import { Banner } from "../components/Banner"
+import { createSignal, For } from "solid-js"
 import { PageHeader } from "../components/PageHeader"
 import { QueryBoundary } from "../components/QueryBoundary"
 import { Sparkline } from "../components/Sparkline"
@@ -14,10 +13,17 @@ import {
   usageDimensionLabel,
   usageWindowLabel,
 } from "../lib/api/usage"
+import { createNow } from "../lib/clock"
 import { formatCost, formatCount, formatPercent } from "../lib/format"
+import { useAllAccounts } from "../lib/queries/accounts"
 import { useUsageSummary } from "../lib/queries/usage"
 import styles from "./UsageRoute.module.scss"
 import { UsageBreakdown } from "./usage/UsageBreakdown"
+import { UsageQuota } from "./usage/UsageQuota"
+import { UsageTopN } from "./usage/UsageTopN"
+
+/** How many rows a leaderboard shows. Enough to name the outliers, few enough to read at a glance. */
+const TOP_N = 5
 
 /**
  * The headline surface: any dimension against any window, with the same measures
@@ -27,11 +33,22 @@ import { UsageBreakdown } from "./usage/UsageBreakdown"
  * rows the router writes off the request path. `placeholder` stays on the shape
  * so the banner can return the moment any part of this screen is ever fed
  * something generated again.
+ *
+ * **Metered and notional spend are shown apart and never summed**, here and in
+ * every child. Metered is money someone was billed; notional is spend attributed
+ * to a flat-fee subscription, where the invoice does not move when the number
+ * does. Adding them produces a figure nobody will ever be charged.
+ *
+ * Quota is its own section rather than a column, for the same reason: a
+ * subscription's limit is a window, not a currency, and the two do not belong in
+ * one table.
  */
 export default function UsageRoute() {
+  const now = createNow(30_000)
   const [window, setWindow] = createSignal<UsageWindow>("7d")
   const [dimension, setDimension] = createSignal<UsageDimension>("key")
   const summary = useUsageSummary(window)
+  const accounts = useAllAccounts()
 
   return (
     <>
@@ -67,12 +84,6 @@ export default function UsageRoute() {
       >
         {(data) => (
           <>
-            <Show when={data.placeholder}>
-              <Banner title="These figures are placeholder data, not measurements" tone="warn">
-                Nothing on this screen came from a request the router served.
-              </Banner>
-            </Show>
-
             <section aria-label="Headline figures" class={styles.tiles}>
               <StatTile
                 label="Requests"
@@ -86,8 +97,15 @@ export default function UsageRoute() {
               />
               <StatTile
                 label="Metered spend"
-                note={`Notional ${formatCost(data.totals.costNotional)}, shown apart`}
+                note="Real money, from a priced model"
                 value={formatCost(data.totals.costMetered)}
+              />
+              {/* Its own tile, not a footnote on the one above: two measures in different
+                  currencies of trust, and a reader who sees them stacked adds them. */}
+              <StatTile
+                label="Notional spend"
+                note="Attributed to subscriptions — never added to metered"
+                value={formatCost(data.totals.costNotional)}
               />
               <StatTile
                 label="Error rate"
@@ -134,11 +152,19 @@ export default function UsageRoute() {
               </For>
             </fieldset>
 
+            <UsageTopN
+              dimension={dimension()}
+              limit={TOP_N}
+              rows={breakdownFor(data, dimension())}
+            />
+
             <UsageBreakdown
               bucket={data.bucket}
               dimension={dimension()}
               rows={breakdownFor(data, dimension())}
             />
+
+            <UsageQuota accounts={accounts.data ?? []} failed={accounts.isError} nowMs={now()} />
           </>
         )}
       </QueryBoundary>

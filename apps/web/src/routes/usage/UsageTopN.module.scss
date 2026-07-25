@@ -1,0 +1,208 @@
+@use "../../styles/breakpoints" as bp;
+@use "../../styles/mixins" as *;
+
+.panel {
+  @include card;
+
+  display: grid;
+  gap: var(--space-3);
+  padding: var(--space-4);
+}
+
+.head {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  align-items: center;
+  justify-content: space-between;
+}
+
+.title {
+  margin: 0;
+  font-size: var(--text-lg);
+  font-weight: var(--weight-semibold);
+  line-height: var(--line-tight);
+  letter-spacing: var(--tracking-tight);
+}
+
+// The segmented control shares its shape with the window and dimension
+// switchers, so the operator reads all three as the same kind of switch. It sits
+// on the sunken surface rather than the raised one because this one is inside a
+// card, and a raised control on a raised panel has no edge.
+.measures {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+  min-width: 0;
+  margin: 0;
+  padding: var(--space-1);
+  background: var(--surface-sunken);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-1);
+}
+
+// The group's name: visible to assistive tech, folded away visually, because the
+// four buttons already say what they switch.
+.groupLabel {
+  @include visually-hidden;
+}
+
+.measure {
+  @include tappable(1.875rem);
+
+  padding-inline: var(--space-3);
+  background: none;
+  border: 0;
+  border-radius: var(--radius-1);
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+  cursor: pointer;
+  transition: background var(--duration-fast) var(--ease-out);
+}
+
+.measure:hover {
+  background: var(--surface-overlay);
+  color: var(--text);
+}
+
+.measure:focus-visible {
+  @include focus-ring;
+}
+
+.measure[aria-pressed="true"] {
+  background: var(--accent);
+  color: var(--accent-contrast);
+  font-weight: var(--weight-medium);
+}
+
+.caveat {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+  line-height: var(--line-snug);
+}
+
+.empty {
+  margin: 0;
+  padding-block: var(--space-4);
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+}
+
+.rows {
+  display: grid;
+}
+
+// Small first: rank, name and figure on one line, the share bar under them. The
+// trend is the one thing that needs room, so it is added at the breakpoint
+// rather than squeezed at every width.
+.row {
+  display: grid;
+  gap: var(--space-1) var(--space-3);
+  align-items: center;
+  grid-template-areas:
+    "rank identity value"
+    "share share share";
+  grid-template-columns: 1.75rem minmax(0, 1fr) auto;
+  padding-block: var(--space-3);
+  border-block-end: 1px solid var(--border);
+
+  @include bp.respond-to("sidebar") {
+    grid-template-areas: "rank identity trend value share";
+    grid-template-columns: 1.75rem minmax(0, 1fr) auto auto minmax(7rem, 13rem);
+  }
+}
+
+.row:last-child {
+  padding-block-end: 0;
+  border-block-end: 0;
+}
+
+.rank {
+  @include tabular-figures;
+
+  grid-area: rank;
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+  text-align: end;
+}
+
+.identity {
+  grid-area: identity;
+  display: grid;
+  gap: var(--space-1);
+  min-width: 0;
+}
+
+.label {
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+  overflow-wrap: anywhere;
+}
+
+.note {
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+}
+
+.trend {
+  grid-area: trend;
+  display: none;
+  color: var(--text-muted);
+
+  @include bp.respond-to("sidebar") {
+    display: block;
+  }
+}
+
+.value {
+  @include tabular-figures;
+
+  grid-area: value;
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+  text-align: end;
+  white-space: nowrap;
+}
+
+.share {
+  grid-area: share;
+  display: flex;
+  gap: var(--space-2);
+  align-items: center;
+  min-width: 0;
+}
+
+.track {
+  flex: 1 1 auto;
+  min-width: 48px;
+  height: 6px;
+  overflow: hidden;
+  background: var(--surface-sunken);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-1);
+}
+
+.fill {
+  display: block;
+  height: 100%;
+  background: var(--accent);
+  transition: width var(--duration-base) var(--ease-out);
+
+  // The global reset clamps every transition under reduced motion; saying it
+  // here as well keeps the intent with the rule that would otherwise animate.
+  @media (prefers-reduced-motion: reduce) {
+    transition: none;
+  }
+}
+
+// The bar is a comparison; this is the value. Never one without the other.
+.percent {
+  @include tabular-figures;
+
+  flex: 0 0 auto;
+  min-width: 4.5ch;
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+  text-align: end;
+}

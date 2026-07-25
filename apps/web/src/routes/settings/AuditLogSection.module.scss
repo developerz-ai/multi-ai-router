@@ -1,0 +1,116 @@
+@use "../../styles/mixins" as *;
+
+.section {
+  display: grid;
+  gap: var(--space-3);
+}
+
+.heading {
+  font-size: var(--text-lg);
+}
+
+.controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-4);
+  align-items: end;
+}
+
+// Segmented control, the same shape the usage window switch uses so the two read
+// as the same kind of control.
+.limits {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+  min-width: 0;
+  margin: 0;
+  padding: var(--space-1);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-1);
+  background: var(--surface-raised);
+}
+
+.groupLabel {
+  @include visually-hidden;
+}
+
+.limit {
+  @include tappable(1.875rem);
+
+  padding-inline: var(--space-3);
+  background: none;
+  border: 0;
+  border-radius: var(--radius-1);
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+  cursor: pointer;
+  transition: background var(--duration-fast) var(--ease-out);
+}
+
+.limit:hover {
+  background: var(--surface-sunken);
+  color: var(--text);
+}
+
+.limit[aria-pressed="true"] {
+  background: var(--accent);
+  color: var(--accent-contrast);
+  font-weight: var(--weight-medium);
+}
+
+.stack {
+  display: grid;
+  gap: var(--space-1);
+  min-width: 8rem;
+}
+
+.sub {
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+  white-space: nowrap;
+}
+
+.kind {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  overflow-wrap: anywhere;
+}
+
+.id {
+  @include tabular-figures;
+
+  font-size: var(--text-xs);
+}
+
+// `key=value` chips rather than a JSON dump: one long field would otherwise set
+// the width of the whole row.
+.chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+  max-width: 26rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.chip {
+  display: inline-flex;
+  gap: var(--space-1);
+  align-items: baseline;
+  padding: 0 var(--space-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-full);
+  background: var(--surface-sunken);
+  font-size: var(--text-xs);
+  line-height: 1.6;
+}
+
+.chipKey {
+  color: var(--text-muted);
+}
+
+.chipValue {
+  font-family: var(--font-mono);
+  overflow-wrap: anywhere;
+}

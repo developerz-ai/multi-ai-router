@@ -1,0 +1,67 @@
+@use "../styles/mixins" as *;
+
+.root {
+  display: flex;
+  gap: var(--space-2);
+  align-items: center;
+  min-width: 0;
+}
+
+.track {
+  flex: 1 1 auto;
+  min-width: 48px;
+  height: 6px;
+  overflow: hidden;
+  background: var(--surface-sunken);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-1);
+}
+
+// No reading is not zero. The hatch says "nothing was reported" in a way an
+// empty track cannot, and it carries no tone — an absent signal is not a warning.
+.unread {
+  background-image: repeating-linear-gradient(
+    135deg,
+    transparent 0 3px,
+    var(--border-strong) 3px 4px
+  );
+  opacity: 0.6;
+}
+
+.fill {
+  height: 100%;
+  background: currentcolor;
+  transition: width var(--duration-base) var(--ease-out);
+
+  @media (prefers-reduced-motion: reduce) {
+    transition: none;
+  }
+}
+
+.neutral {
+  color: var(--accent);
+}
+
+.warn {
+  color: var(--warn);
+}
+
+.danger {
+  color: var(--danger);
+}
+
+.figure {
+  @include tabular-figures;
+
+  flex: 0 0 auto;
+  min-width: 3.25ch;
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+  text-align: right;
+}
+
+// The value as assistive tech reads it: named, and "no reading" rather than an
+// em-dash, which is announced inconsistently and reads as a broken cell.
+.reading {
+  @include visually-hidden;
+}

@@ -116,17 +116,17 @@ export default function OverviewRoute() {
         />
         <StatTile
           label="Requests today"
-          note="Placeholder — no usage API yet"
+          note={usageWindowLabel("today").toLowerCase()}
           value={usage.isSuccess ? formatCount(usage.data?.totals.requests ?? 0) : undefined}
         />
         <StatTile
           label="Metered spend"
-          note="Placeholder — notional shown apart"
+          note="Notional shown apart"
           value={usage.isSuccess ? formatCost(usage.data?.totals.costMetered ?? 0) : undefined}
         />
         <StatTile
           label="Error rate"
-          note={`Placeholder · ${usageWindowLabel("today").toLowerCase()}`}
+          note={usageWindowLabel("today").toLowerCase()}
           value={
             usage.isSuccess
               ? formatPercent(usage.data?.totals.errors ?? 0, usage.data?.totals.attempts ?? 0)

@@ -29,6 +29,14 @@ export interface AccountFormDialogProps {
  *
  * The credential goes up and never comes back. No response in this console has
  * a field that could carry it.
+ *
+ * **A provider with a connect flow takes no credential here at all.** The row is
+ * created first precisely so the one-shot `state` has something to bind to, and
+ * the authorization happens afterwards in the Connect dialog — for `oauth` by a
+ * code exchange the router performs, for `claude-cli` by driving the `claude`
+ * binary into this account's own `CLAUDE_CONFIG_DIR`. Offering a paste box for
+ * either would invite an operator to hand-extract a token, which is the thing
+ * CLAUDE.md's first non-negotiable exists to prevent.
  */
 export function AccountFormDialog(props: AccountFormDialogProps) {
   const [label, setLabel] = createSignal("")
@@ -43,7 +51,7 @@ export function AccountFormDialog(props: AccountFormDialogProps) {
     { value: "", label: "Choose a provider…" },
     ...props.providers.map((provider) => ({
       value: provider.id,
-      label: provider.creatable ? provider.id : `${provider.id} — not implemented`,
+      label: providerOptionLabel(provider),
       disabled: !provider.creatable,
     })),
   ])
@@ -123,7 +131,18 @@ export function AccountFormDialog(props: AccountFormDialogProps) {
           </div>
         </Show>
 
-        <Show when={selected() !== undefined && selected()?.requiresConfigDir !== true}>
+        <Show when={selected()?.connectFlow === "oauth"}>
+          <div class={styles.providerNote}>
+            <p>
+              This provider is logged in, not pasted. Add the account first — it exists so the
+              authorization can bind to it — then choose <strong>Connect</strong> on its row. The
+              router performs the code exchange itself and stores only the resulting credential,
+              encrypted.
+            </p>
+          </div>
+        </Show>
+
+        <Show when={selected() !== undefined && selected()?.connectFlow === null}>
           <TextField
             autocomplete="off"
             hint="Encrypted at rest and never returned by any endpoint, in any form."
@@ -163,4 +182,14 @@ export function AccountFormDialog(props: AccountFormDialogProps) {
       </form>
     </Modal>
   )
+}
+
+/**
+ * Which providers take a login is read off the descriptor, never listed here — a provider that
+ * grows an OAuth flow becomes connectable the day its driver file lands, with nothing to change
+ * in this file (CLAUDE.md non-negotiable 12).
+ */
+function providerOptionLabel(provider: ProviderDescriptor): string {
+  if (!provider.creatable) return `${provider.id} — not implemented`
+  return provider.connectFlow === null ? provider.id : `${provider.id} — connect after adding`
 }

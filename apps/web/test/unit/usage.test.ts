@@ -4,7 +4,6 @@ import {
   EMPTY_TOTALS,
   sumTotals,
   USAGE_DIMENSIONS,
-  USAGE_IS_PLACEHOLDER,
   USAGE_WINDOWS,
   usageDimensionLabel,
   usageWindowLabel,
@@ -17,14 +16,6 @@ import {
  * pinning here is the arithmetic the console does *after* the wire, because that is the part that
  * can quietly produce a number nobody measured.
  */
-
-describe("the figures are measured", () => {
-  test("nothing on the usage screen is generated any more", () => {
-    // The banner is driven off this flag. It stays in the shape so it can come back the moment
-    // any part of this screen is ever fed something generated again.
-    expect(USAGE_IS_PLACEHOLDER).toBe(false)
-  })
-})
 
 describe("sumTotals", () => {
   test("an empty set sums to zero rather than to undefined", () => {

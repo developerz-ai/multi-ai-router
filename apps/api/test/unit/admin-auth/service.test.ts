@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import { AdminAuthError, CsrfTokenError, QuotaExhaustedError } from "@multi-ai-router/core"
+import { type AuditRecorder, createAuditRecorder } from "../../../src/services/admin"
 import type { AdminAuthConfig } from "../../../src/services/admin-auth/config"
 import { ARGON2ID_PARAMS } from "../../../src/services/admin-auth/password"
 import { createAdminAuthService } from "../../../src/services/admin-auth/service"
@@ -8,6 +9,7 @@ import {
   deriveSessionSigningKey,
   parseSignedSessionId,
 } from "../../../src/services/admin-auth/sessionToken"
+import { createMemoryStore } from "../../support/memory-store"
 
 /**
  * The service holds every rule the routes and the guard delegate to. Clock injected, store
@@ -22,20 +24,24 @@ const IP = "203.0.113.7"
 
 const HOUR_MS = 60 * 60 * 1000
 
-function build(config: Partial<AdminAuthConfig> = {}) {
+const ENV = {
+  adminUsername: "admin",
+  adminCredential: { kind: "hash", value: PASSWORD_HASH },
+  encryptionKey: ENCRYPTION_KEY,
+} as const
+
+function build(config: Partial<AdminAuthConfig> = {}, audit?: AuditRecorder) {
   const clock = { nowMs: 1_700_000_000_000 }
   const store = createMemorySessionStore()
+  const memory = createMemoryStore()
   const service = createAdminAuthService({
-    env: {
-      adminUsername: "admin",
-      adminCredential: { kind: "hash", value: PASSWORD_HASH },
-      encryptionKey: ENCRYPTION_KEY,
-    },
+    env: ENV,
     store,
     config,
     now: () => clock.nowMs,
+    audit: audit ?? createAuditRecorder(memory.audit),
   })
-  return { clock, store, service }
+  return { clock, store, service, auditRows: memory.rows.audit }
 }
 
 function login(service: ReturnType<typeof build>["service"], password = PASSWORD) {
@@ -242,6 +248,140 @@ describe("logout", () => {
   })
 })
 
+describe("the audit trail", () => {
+  test("a good credential writes one admin.login carrying the source address", async () => {
+    const { service, auditRows } = build()
+    await login(service)
+    await tick()
+
+    expect(auditRows.map((row) => row.kind)).toEqual(["admin.login"])
+    expect(auditRows[0]).toMatchObject({
+      subjectType: "admin",
+      subjectId: "admin",
+      detail: { ip: IP },
+    })
+  })
+
+  test("a wrong password writes admin.login_failed and no admin.login", async () => {
+    const { service, auditRows } = build()
+    await rejection(login(service, "wrong"))
+    await tick()
+
+    expect(auditRows.map((row) => row.kind)).toEqual(["admin.login_failed"])
+    expect(auditRows[0]?.detail).toMatchObject({ ip: IP, locked: false, usernameMatched: true })
+  })
+
+  test("an unknown username is a flag, never the string that was typed", async () => {
+    const { service, auditRows } = build()
+    await rejection(service.login({ username: "r00t-probe", password: PASSWORD, ip: IP }))
+    await tick()
+
+    expect(auditRows[0]?.detail).toMatchObject({ usernameMatched: false })
+    // A probe's guesses are not worth an append-only row, and neither is a password typed into
+    // the wrong box. The flag answers the only question the log is actually asked.
+    expect(JSON.stringify(auditRows)).not.toContain("r00t-probe")
+  })
+
+  test("an attempt refused by the lockout is flagged, so a wall of them reads as an attack", async () => {
+    const { service, auditRows } = build({ maxFailedAttempts: 2 })
+    await rejection(login(service, "wrong"))
+    await rejection(login(service, "wrong"))
+    await rejection(login(service))
+    await tick()
+
+    expect(auditRows.map((row) => row.kind)).toEqual([
+      "admin.login_failed",
+      "admin.login_failed",
+      "admin.login_failed",
+    ])
+    expect(auditRows[0]?.detail).toMatchObject({ locked: false })
+    expect(auditRows.at(-1)?.detail).toMatchObject({ locked: true, usernameMatched: true })
+  })
+
+  test("logout writes admin.logout with the address it was given", async () => {
+    const { service, auditRows } = build()
+    const { session } = await login(service)
+
+    await service.logout(session.id, "198.51.100.9")
+    await tick()
+
+    expect(auditRows.map((row) => row.kind)).toEqual(["admin.login", "admin.logout"])
+    expect(auditRows.at(-1)?.detail).toMatchObject({ ip: "198.51.100.9" })
+  })
+
+  test("a caller that cannot resolve an address still gets a row", async () => {
+    const { service, auditRows } = build()
+    const { session } = await login(service)
+
+    await service.logout(session.id)
+    await tick()
+
+    expect(auditRows.at(-1)?.detail).toMatchObject({ ip: "unknown" })
+  })
+
+  test("no password, hash, cookie, session id, or CSRF token reaches any detail", async () => {
+    const { service, auditRows } = build()
+    await rejection(login(service, "wrong"))
+    const result = await login(service)
+    await service.logout(result.session.id, IP)
+    await tick()
+
+    const rendered = JSON.stringify(auditRows)
+    for (const secret of [
+      PASSWORD,
+      PASSWORD_HASH,
+      result.cookieValue,
+      result.session.id,
+      result.session.csrfToken,
+    ]) {
+      expect(rendered).not.toContain(secret)
+    }
+    expect(rendered).toContain(IP)
+  })
+
+  test("a sink that rejects or throws fails neither login nor logout, and leaves no unhandled rejection", async () => {
+    const unhandled: unknown[] = []
+    const onUnhandled = (reason: unknown): void => {
+      unhandled.push(reason)
+    }
+    process.on("unhandledRejection", onUnhandled)
+
+    try {
+      const rejecting: AuditRecorder = {
+        record: () => Promise.reject(new Error("audit table is gone")),
+      }
+      const throwing: AuditRecorder = {
+        record: () => {
+          throw new Error("audit sink exploded")
+        },
+      }
+
+      for (const audit of [rejecting, throwing]) {
+        const { service, store } = build({}, audit)
+        const result = await login(service)
+        expect(result.session.username).toBe("admin")
+        expect(await rejection(login(service, "wrong"))).toBeInstanceOf(AdminAuthError)
+
+        await service.logout(result.session.id, IP)
+        expect(await store.get(result.session.id)).toBeUndefined()
+      }
+
+      await tick()
+      expect(unhandled).toEqual([])
+    } finally {
+      process.off("unhandledRejection", onUnhandled)
+    }
+  })
+
+  test("no recorder wired is a supported configuration, not a crash", async () => {
+    const service = createAdminAuthService({ env: ENV, store: createMemorySessionStore() })
+    const result = await service.login({ username: "admin", password: PASSWORD, ip: IP })
+
+    expect(result.session.username).toBe("admin")
+    await service.logout(result.session.id)
+  })
+})
+
 describe("assertCsrf", () => {
   test("accepts the session's own token and nothing else", async () => {
     const { service } = build()
@@ -254,6 +394,11 @@ describe("assertCsrf", () => {
     expect(() => service.assertCsrf(session, "")).toThrow(CsrfTokenError)
   })
 })
+
+/** One turn of the loop: the audit append is fired, never awaited, and so is an unhandled one. */
+function tick(): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, 0))
+}
 
 async function medianMs(samples: number, run: () => Promise<unknown>): Promise<number> {
   const times: number[] = []

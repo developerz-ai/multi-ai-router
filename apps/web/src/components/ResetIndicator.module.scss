@@ -1,5 +1,12 @@
 .root {
   display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.summary {
+  display: flex;
   flex-wrap: wrap;
   gap: var(--space-1) var(--space-2);
   align-items: baseline;
@@ -23,4 +30,16 @@
   color: var(--text-muted);
   font-size: var(--text-xs);
   white-space: nowrap;
+}
+
+// One row per window. A list, not a table: these are five readings of one
+// account, not five records — and a nested table inside a table cell is a
+// screen-reader trap for no gain.
+.windows {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: 0;
+  margin: 0;
+  list-style: none;
 }

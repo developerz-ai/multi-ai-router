@@ -36,6 +36,20 @@
       "when": 1784926870709,
       "tag": "0004_wise_silver_sable",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1785018648232,
+      "tag": "0005_misty_loki",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1785019207986,
+      "tag": "0006_pink_thunderball",
+      "breakpoints": true
     }
   ]
 }

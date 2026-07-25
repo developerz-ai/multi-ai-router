@@ -667,6 +667,9 @@ describe("audit", () => {
       "account.updated",
       "pool.created",
       "pool.updated",
+      // A policy move is its own event beside the update: "why did traffic shift" must be
+      // answerable without opening every `pool.updated` in the log.
+      "policy.changed",
       "key.created",
       "key.revealed",
       "key.revoked",

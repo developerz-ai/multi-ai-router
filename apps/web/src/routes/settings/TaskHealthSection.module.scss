@@ -1,0 +1,45 @@
+.section {
+  display: grid;
+  gap: var(--space-3);
+}
+
+.heading {
+  font-size: var(--text-lg);
+}
+
+.identity {
+  display: grid;
+  gap: var(--space-1);
+  min-width: 10rem;
+}
+
+.name {
+  font-weight: var(--weight-medium);
+}
+
+.sub {
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+  font-weight: var(--weight-normal);
+  white-space: nowrap;
+}
+
+// A task needing attention says so in words, in its own row. Colour is never the
+// only carrier: the badge beside it repeats the state as text.
+.attention {
+  color: var(--warn);
+  font-size: var(--text-xs);
+  line-height: var(--line-snug);
+  text-wrap: pretty;
+}
+
+.error {
+  padding: var(--space-1) var(--space-2);
+  border-radius: var(--radius-1);
+  background: color-mix(in srgb, var(--danger) 12%, var(--surface-raised));
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  line-height: var(--line-snug);
+  overflow-wrap: anywhere;
+}

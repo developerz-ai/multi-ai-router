@@ -36,10 +36,6 @@ export function listPools(): Promise<readonly PoolView[]> {
   return request<readonly PoolView[]>({ method: "GET", path: "/pools" })
 }
 
-export function getPool(id: string): Promise<PoolView> {
-  return request<PoolView>({ method: "GET", path: `/pools/${id}` })
-}
-
 export function createPool(input: CreatePoolInput): Promise<PoolView> {
   return request<PoolView>({ method: "POST", path: "/pools", body: input })
 }

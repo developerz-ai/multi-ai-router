@@ -1,13 +1,15 @@
 import type { ProviderId } from "@multi-ai-router/core"
 import type { CostBasis } from "@multi-ai-router/db"
 import type { TokenCounts } from "../usage"
-import { lookupRates } from "./prices"
+import { lookupRates, type RateLookup } from "./prices"
 
 /**
  * What one attempt cost, or an honest admission that nobody knows.
  *
- * Pure arithmetic over the shipped price table: no clock, no store, no network, so it runs on the
- * request path beside the rest of the record assembly. Three outcomes, and the third is a feature:
+ * Pure arithmetic over an injected price lookup: no clock, no store, no network, so it runs on the
+ * request path beside the rest of the record assembly. The lookup defaults to the table shipped with
+ * the image; a deployment with operator overrides passes the warm book instead, and this function
+ * never learns the difference. Three outcomes, and the third is a feature:
  *
  * | Basis | When | Reported as |
  * |---|---|---|
@@ -43,14 +45,18 @@ const SUBSCRIPTION_PROVIDERS: ReadonlySet<ProviderId> = new Set(["anthropic-oaut
 /**
  * Price one attempt. `model` is the model that actually went **upstream** — after the account's
  * alias map — because that is the name the upstream billed.
+ *
+ * `prices` is optional so every caller that has no override book keeps pricing off the shipped table
+ * unchanged, which is also what a router booted without a database-backed price book must do.
  */
 export function estimateCost(
   provider: ProviderId | null,
   model: string,
   tokens: TokenCounts,
+  prices: RateLookup = lookupRates,
 ): CostEstimate {
   if (provider === null) return UNKNOWN_COST
-  const rates = lookupRates(provider, model)
+  const rates = prices(provider, model)
   if (rates === null) return UNKNOWN_COST
 
   const dollars =

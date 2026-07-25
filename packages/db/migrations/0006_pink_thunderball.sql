@@ -1,0 +1,1 @@
+ALTER TABLE "audit_events" ALTER COLUMN "subject_id" SET DATA TYPE text;

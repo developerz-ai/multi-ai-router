@@ -108,6 +108,7 @@ Each is a Zod schema **and** its `z.infer` type under one name. These are the si
 | `createUsageReadRepository(db)` → `UsageReadRepository` | `repositories/usage-read-repository.ts` | Aggregates over raw `usage_records` — totals, breakdowns, buckets, percentiles. Requests are `count(distinct correlation_id)`, attempts are `count(*)`; never sum rows for "requests" |
 | `createUsageDailyRepository(db)` → `UsageDailyRepository` | `repositories/usage-daily-repository.ts` | The daily rollup, both directions: `rollup(from, to)` writes whole UTC days, `totals`/`breakdown` read them. Any aggregate over a **closed** day belongs here — raw rows expire, these do not |
 | `toUtcDay`, `startOfUtcDay`, `startOfNextUtcDay` | same | Anything reasoning in the rollup's day grain. Do not re-derive the boundary arithmetic |
+| `createPriceOverrideRepository(db)` → `PriceOverrideRepository` | `repositories/price-override-repository.ts` | The operator's price edits. `list` orders provider-then-model for the screen; `replaceAll` swaps the whole table in one transaction, the same "edited as one object" rule pool membership follows. Rates come back as numbers, not numeric strings |
 | `createScheduledTaskRepository(db)` → `ScheduledTaskRepository` | `repositories/scheduled-task-repository.ts` | The scheduler's run log. `begin`/`finish` bracket a tick; `lastRun` is the health read, `lastSuccess` is the cursor a catch-up task resumes from — a task reading `lastRun` inside its own `run` reads itself |
 | `createSessionRepository(db)` → `SessionRepository` | `repositories/session-repository.ts` | Admin session rows, and the idle sweep behind them |
 | `createOauthStateRepository(db)` → `OauthStateRepository` | `repositories/oauth-state-repository.ts` | One-shot `state` + PKCE verifier rows. `consume` is what turns a replayed `state` into a rejection, `abandonForAccount` is what makes restarting or cancelling a connect flow leave nothing redeemable; the purge deletes strictly after `expires_at` |
@@ -152,8 +153,9 @@ failover chain.
 
 | Thing | Where | Use it when |
 |---|---|---|
-| `estimateCost(provider, upstreamModel, tokens)` → `CostEstimate` | `services/cost/estimate.ts` | Pricing an attempt. Pure — no clock, no store — and the **only** place a `costBasis` is decided: `metered`, `notional` for a subscription's attribution, `unknown` when unpriced. Unknown is null, never zero |
-| `lookupRates(provider, model)` → `ModelRates \| null` | `services/cost/prices.ts` | Reading a shipped per-Mtok rate. One table, every entry commented with its provenance; a provider absent from it has no published per-model price |
+| `estimateCost(provider, upstreamModel, tokens, rates?)` → `CostEstimate` | `services/cost/estimate.ts` | Pricing an attempt. Pure — no clock, no store — and the **only** place a `costBasis` is decided: `metered`, `notional` for a subscription's attribution, `unknown` when unpriced. Unknown is null, never zero. `rates` is any `RateLookup`; omitted, it prices off the shipped table |
+| `lookupRates(provider, model)` → `ModelRates \| null`, `listShippedRates()` | `services/cost/prices.ts` | Reading a shipped per-Mtok rate, or enumerating the whole shipped table for the settings screen. Every entry commented with its provenance; a provider absent from it has no published per-model price |
+| `createPriceBook(deps)` → `PriceBook` | `services/cost/book.ts` | Pricing on the request path once overrides exist. `lookup` is **synchronous by design** for the same reason the catalog's readers are; overrides win per provider + model, the shipped table is the fallback, and a failed refresh keeps the last snapshot |
 
 ### Admin-plane plumbing — `apps/api/src/services/admin/` + `routes/admin/render.ts`
 
@@ -167,6 +169,15 @@ rejection shape, a body read, or an audit write.
 | `createAuditRecorder(sink)`, `AUDIT_KINDS`, `AUDIT_SUBJECTS`, `AuditSink` | `services/admin/audit.ts` | Any admin mutation. Every detail object passes through the tested redactor **inside** the recorder, so the "audit events never contain credential material" guarantee is structural rather than trusted at each call site |
 | `withCatalogRefresh`, `withPoolCatalogRefresh`, `withKeyInvalidation`, `CoherenceHooks` | `services/admin/coherence.ts` | Making a write take effect on the request path before the response is written. **Decorators, not service dependencies** — cache coherence is not a CRUD service's reason to change, and a service that knew about the catalog could not be tested without one |
 | `render(c, result, status?)` | `routes/admin/render.ts` | The one place an `AdminResult` becomes a response. Four copies of it is four chances for one to answer `200` with an error body |
+
+### Settings, task health and the audit feed — `apps/api/src/services/settings/`
+
+| Thing | Where | Use it when |
+|---|---|---|
+| `createSettingsService(deps)` → `SettingsService` | `services/settings/service.ts` | The settings screen's four reads and its one write. One service for three route groups because it is one screen and one operator question |
+| `classifyTaskHealth(input)` → `TaskHealth` | `services/settings/tasks.ts` | Judging whether a scheduled task is `ok`, `running`, `stale`, `failing` or `never_run`. Pure, injected clock; the interval comes from `scheduledTaskIntervals(env)` so the verdict is always against the running schedule |
+| `updatePriceOverridesBody`, `auditQuery`, `priceOverrideInput` | `services/settings/schema.ts` | Validating a price-override write or an audit page. The write is the complete set, capped and de-duplicated, with the model name normalized before it reaches the table |
+| `scheduledTaskIntervals(env)` | `scheduler/tasks/index.ts` | Anywhere a cadence is needed outside the scheduler. One source, so the health screen cannot drift from the timers |
 
 ### Warm routing catalog — `apps/api/src/services/catalog/`
 
@@ -271,15 +282,25 @@ in a test as on the wire.
 |---|---|---|
 | `cx(...parts)` | `lib/cx.ts` | Every `class` built from CSS-module lookups. Template concatenation emits literal `"undefined"` |
 | `statusPresentation`, `statusToken`, `statusLabel`, `isRoutable`, `needsOperator`, `hasReset`, `ACCOUNT_STATUSES` | `lib/account-status.ts` | Rendering an account status. One mapping table, no per-screen colour choices |
-| `describeReset(input, nowMs)`, `formatDuration(ms)`, `formatAbsolute(epochMs)` | `lib/reset-countdown.ts` | Any reset/countdown display. Clock is a parameter — never read inside |
+| `describeReset(input, nowMs)`, `resetQualifier(source)`, `formatDuration(ms)`, `formatAbsolute(epochMs)` | `lib/reset-countdown.ts` | Any reset/countdown display. Clock is a parameter — never read inside. `resetQualifier` is the total `reported`\|`estimated`\|`unknown` label, for surfaces that must label **every** row |
+| `describeQuotaWindows(input, nowMs)`, `quotaWindowLabel/Title`, `formatUtilization`, `quotaWindowTone`, `QUOTA_WINDOW_DISPLAY_ORDER` | `lib/quota-windows.ts` | Rendering per-window quota anywhere. Windows are never collapsed into one reset; `exhausted` never yields a countdown; a null utilization stays null, never `0` |
+| `indexUsage(rows)`, `usageFor(index, id)`, `NO_USAGE`, `topN`, `shareOf`, `topNMeasure*` | `lib/usage-index.ts` | Joining usage onto a table row, or ranking one. Ranks on **one** measure at a time — metered and notional are never summed |
+| `classifyPaste`, `isSubmittablePaste`, `describePasteShape`, `connectExpiry` | `lib/connect-capture.ts` | Client-side pre-validation of an authorization paste. Mirrors the server's `parseAuthorizationPaste` acceptance; never echoes the pasted value |
 | `parseTheme`, `nextTheme`, `themeLabel`, `THEME_PREFERENCES`, `THEME_STORAGE_KEY` | `lib/theme.ts` | Theme logic (pure half) |
 | `applyTheme`, `loadTheme`, `storeTheme` | `lib/theme-dom.ts` | Theme DOM/storage half, kept apart so the rules stay testable without a browser |
 | `Table<T>`, `Column<T>` | `components/Table.tsx` | Every list surface. Structure, alignment, empty state — no sorting or fetching until a second caller needs it |
 | `StatusDot` | `components/StatusDot.tsx` | Status atom in rows and headers. Colour never carries meaning alone |
+| `QuotaGauge` | `components/QuotaGauge.tsx` | One bounded reading with its figure always printed beside it. A null value renders as explicitly unread, never as an empty-because-zero bar |
+| `ResetIndicator` | `components/ResetIndicator.tsx` | Account availability: the account-level reset **plus one row per quota window**, each labelled by source |
+| `QuotaWindowRow` | `components/QuotaWindowRow.tsx` | One quota window on any surface. Absolute time *and* countdown, a source on every row, `spent` marked with a word as well as an edge — two hand-written copies drifted on exactly those before it was shared |
+| `UsageCell` | `components/UsageCell.tsx` | Per-row usage in a table: sparkline, requests, and metered/notional printed apart |
+| `Sparkline` | `components/Sparkline.tsx` | Trend inside a table cell. `currentColor` throughout — introduces no colour of its own |
 | `PageHeader` | `components/PageHeader.tsx` | Title, subtitle, page-level actions |
 | `Placeholder` | `components/Placeholder.tsx` | A screen that is scaffold, so nothing looks implemented when it is not |
 | `ThemeToggle` | `components/ThemeToggle.tsx` | The header toggle. The one sanctioned `createEffect` in the app |
 | `queryClient` | `lib/query.ts` | Server state. Configured in exactly one place — never construct a second client |
+| `useTableUsage(dimension)` | `lib/queries/table-usage.ts` | A usage column on the keys or accounts table. One window and one cache key for both, so two tables cannot disagree about what "this week" means |
+| `useWatchedAccount(id, intervalMs)` | `lib/queries/accounts.ts` | The **only** poll in this console, and only while an OAuth redirect capture is outstanding — that exchange lands on the router, not on this tab. `false` for the interval turns it off |
 | `CONSOLE_ROUTES`, `LOGIN_PATH`, `AppShell`, `LoginScreen`, `NotFoundScreen`, `ConsoleRoute` | `lib/routes.ts` | Adding a screen. Single source of truth for the router **and** the sidebar |
 | `createFocusTrap(options)` | `lib/focus-trap.ts` | Containing focus in a modal overlay. Deliberately small — the drawer's needs, not a dialog library; it grows an option when a second overlay needs one |
 | `createScrollLock(active)` | `lib/scroll-lock.ts` | Holding the page still behind an open overlay. Scoped strictly to `active()`, previous value restored on cleanup — a permanently unscrollable page is the failure this shape rules out |

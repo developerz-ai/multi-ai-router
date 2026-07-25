@@ -43,10 +43,6 @@ export function listKeys(): Promise<readonly ApiKeyView[]> {
   return request<readonly ApiKeyView[]>({ method: "GET", path: "/keys" })
 }
 
-export function getKey(id: string): Promise<ApiKeyView> {
-  return request<ApiKeyView>({ method: "GET", path: `/keys/${id}` })
-}
-
 /** The mint is one of the two responses that carry the value. */
 export function createKey(input: CreateKeyInput): Promise<MintedKey> {
   return request<MintedKey>({ method: "POST", path: "/keys", body: input })

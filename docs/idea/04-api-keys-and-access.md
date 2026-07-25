@@ -3,7 +3,9 @@
 Status: **implemented**, except where a row says otherwise — the two planes, admin auth with CSRF
 and login throttling, key mint/reveal/revoke, both header styles, and scope enforced as an
 intersection all work, as does `GET /api/admin/usage`. Per-key rate limits are enforced in memory,
-per replica. `/api/admin/settings` does not exist. Connect/reconnect is built for both logins — the
+per replica. `/api/admin/settings` reads the deployment's configuration and edits the price-override
+table; the retention windows and the log level are environment variables and are shown, not
+editable. Connect/reconnect is built for both logins — the
 `claude` CLI's own for Claude subscriptions, and the authorization-code flow the router drives for
 the reverse-engineered OAuth providers, including its redirect callback.
 
@@ -233,7 +235,9 @@ Paths and purpose only. Handler detail belongs in [01-architecture.md](01-archit
 | `/api/admin/keys/**` | list, create, reveal, edit limits and bindings, revoke | yes |
 | `/api/admin/providers` | the static provider registry, so the console's account form is never a second copy of it | yes |
 | `GET /api/admin/usage` | totals, series and breakdowns by key, account, pool, model, over a window | yes |
-| `/api/admin/settings/**` | retention knobs, price table overrides, log level | no |
+| `GET`/`PATCH` `/api/admin/settings` | retention knobs, log level and janitor cadence read from the environment; price table overrides read and written | yes — the `PATCH` takes the price overrides as one complete set, so the table is never half-applied, and the warm price book is refreshed before the response is written |
+| `GET /api/admin/tasks` | the latest run of every scheduled task, and whether it is overdue | yes |
+| `GET /api/admin/audit` | the append-only admin-plane audit feed, newest first | yes |
 
 The connect flow under `/api/admin/accounts` is four calls, all guarded like the rest of the plane:
 `POST /:id/connect` answers with an authorization URL, `POST /:id/connect/complete` takes back the
