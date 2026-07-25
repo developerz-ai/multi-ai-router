@@ -5,6 +5,14 @@
 
 export type { AccountAvailability, AvailabilityDeps } from "./availability"
 export { withAvailability } from "./availability"
+export type {
+  ClaudeConnectCancelled,
+  ClaudeConnectCompleted,
+  ClaudeConnectDeps,
+  ClaudeConnectService,
+  ClaudeConnectStarted,
+} from "./connect"
+export { createClaudeConnectService } from "./connect"
 export type { ProviderDescriptor, ProviderTransport } from "./providers"
 export { describeProvider, describeProviders } from "./providers"
 export type { RecheckResult, RecheckService, RecheckServiceDeps } from "./recheck"

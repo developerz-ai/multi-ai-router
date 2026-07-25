@@ -43,6 +43,8 @@ export const AUDIT_KINDS = {
   accountUpdated: "account.updated",
   accountDisabled: "account.disabled",
   accountDeleted: "account.deleted",
+  /** A subscription login completed against this account's own config directory. */
+  accountConnected: "account.connected",
   keyCreated: "key.created",
   keyUpdated: "key.updated",
   keyRevealed: "key.revealed",

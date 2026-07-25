@@ -162,7 +162,7 @@ neither write body has a field for one; `CLAUDE_CONFIG_ROOT` is the only knob, a
 | Operation | How |
 |---|---|
 | Provision | `<CLAUDE_CONFIG_ROOT>/<accountId>` at `0700`, created with the Account row — see above. Idempotent, so re-provisioning is never a way to lose a login |
-| Connect | Drive the `claude` CLI's own login against the Account's dir. Headless: build a PKCE authorize URL, take the pasted `code#state`, exchange, write `.credentials.json` into that dir (`profileCli.ts:159-227`) — the two capture modes [03-providers.md](03-providers.md) already specifies |
+| Connect | Drive the `claude` CLI's own login against the Account's dir — see [§3.1](#31-connect-driving-the-clis-login). The CLI mints the PKCE verifier and `state`, exchanges the pasted code, and writes `.credentials.json` itself; the router scrapes the authorize URL out of its output and writes the pasted `code#state` back to its stdin |
 | Health probe | `claude auth status` with the dir set returns JSON `{loggedIn, email, subscriptionType}` (`profileCli.ts:133-157`) — cheap, first-party, no token handling |
 | Refresh | **Not ours.** The SDK / `claude` CLI refreshes inside the config directory. The router does **not** schedule, mint, or write subscription tokens — see the box below |
 | Reconnect | Re-run login against the **same** directory: Account id, Pool membership, and usage history survive |
@@ -176,6 +176,28 @@ neither write body has a field for one; `CLAUDE_CONFIG_ROOT` is the only knob, a
 > remains useful only as *background on how the credential files are shaped* (compact JSON, the
 > Keychain naming rule) — never as an implementation to port. This is a **skip**, not a copy;
 > anyone reimplementing it has misread the design.
+
+### 3.1 Connect — driving the CLI's login
+
+Implemented in `providers/claude-sdk/login/` (the CLI half) and
+`services/accounts/connect/claude.ts` (the checks). Two admin calls with a live subprocess between
+them:
+
+1. **`begin`** provisions `<CLAUDE_CONFIG_ROOT>/<accountId>`, spawns the CLI's login against it with
+   the isolated environment from `env.ts`, and reads the authorization URL out of the child's
+   output. That URL goes to the operator.
+2. **`complete`** takes the pasted `code#state`, checks it against this Account's pending login, and
+   writes it to the child's stdin. The CLI exchanges the code and writes `.credentials.json`.
+
+| Rule | Why |
+|---|---|
+| The **CLI** mints the PKCE `code_verifier` and the `state` | The verifier never crosses back to the router — there is no field on this side that could hold it, which is a stronger guarantee than "kept server-side" ([07-security.md](07-security.md)). The router never builds an authorize URL, never calls a token endpoint, and never holds a subscription token (CLAUDE.md non-negotiable 1) |
+| The **router** owns the `state`, read out of the URL | One-shot, TTL-bounded, and bound to one Account row are checks nobody downstream performs. A mismatched paste *burns* the pending login rather than allowing a retry |
+| Pending logins live in memory | A pending login *is* a running subprocess. A restart kills it, so persisting the `state` would preserve a value no CLI is waiting for |
+| TTL is `RETENTION_OAUTH_STATE_MINUTES` | The same 10-minute window as the reverse-engineered flows, and config rather than a constant (non-negotiable 11). Its timer terminates the subprocess, so an abandoned login is not a leaked process |
+| Manual paste is the **only** mode here | The CLI owns its redirect URI; a router callback would mean intercepting a code meant for the CLI. The mode that needs no reachable `PUBLIC_URL` is the mode that gets the checks |
+| `.credentials.json` is settled afterwards | Absent means the login did not land. Pretty-printed is re-minified in place, because the CLI's parser reads indentation as *logged out* — the worst shape a bug can take here, since the tokens are valid and every request still fails |
+| Only `needs_reauth` is cleared | A connect is not a way around a `disabled` Account. Reconnect is this same call against the existing row: id, directory, Pool membership, and usage history all survive |
 
 ### Container layout
 
