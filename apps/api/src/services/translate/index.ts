@@ -9,6 +9,11 @@
  *
  * Passthrough is deliberately absent. Same-dialect egress is a byte relay in the transport layer,
  * not a translator, and it has no schema knowledge at all.
+ *
+ * The response-side helpers — stop reasons, usage, upstream errors — are shared rather than
+ * per-direction: each is one small table read both ways, and splitting them per pair would make the
+ * two halves of one mapping editable independently, which is how a table drifts out of agreement
+ * with itself.
  */
 
 export { anthropicToOpenAiChatRequest } from "./anthropic-to-openai-chat/request"
@@ -28,6 +33,8 @@ export type {
   AnthropicToolResultBlock,
   AnthropicToolUseBlock,
 } from "./shared/anthropic"
+export type { UpstreamErrorDetail } from "./shared/errors"
+export { parseUpstreamError, translateUpstreamError } from "./shared/errors"
 export type {
   OpenAiChatImagePart,
   OpenAiChatMessage,
@@ -44,6 +51,21 @@ export {
   parseRequest,
   rejectField,
 } from "./shared/reject"
+export type {
+  AnthropicStopReason,
+  MappedReason,
+  OpenAiFinishReason,
+} from "./shared/stop-reason"
+export {
+  ANTHROPIC_STOP_REASONS,
+  CONSERVATIVE_FINISH_REASON,
+  CONSERVATIVE_STOP_REASON,
+  isAnthropicStopReason,
+  isOpenAiFinishReason,
+  OPENAI_FINISH_REASONS,
+  toAnthropicStopReason,
+  toOpenAiFinishReason,
+} from "./shared/stop-reason"
 export {
   argumentsFromInput,
   inputFromArguments,
@@ -52,3 +74,10 @@ export {
   toolsToAnthropic,
   toolsToOpenAiChat,
 } from "./shared/tools"
+export type { AnthropicUsage, OpenAiChatUsage } from "./shared/usage"
+export {
+  parseAnthropicUsage,
+  parseOpenAiChatUsage,
+  usageToAnthropic,
+  usageToOpenAiChat,
+} from "./shared/usage"

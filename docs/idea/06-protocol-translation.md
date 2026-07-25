@@ -188,6 +188,11 @@ change, logged and mapped conservatively to `end_turn` / `stop`, never dropped s
 | `stop_sequence` | `stop` | `status: "completed"` | lossy → OpenAI: *which* sequence matched (`stop_sequence` field) is lost |
 | — | `content_filter` | `incomplete_details.reason: "content_filter"` | lossy → Anthropic: mapped to `end_turn`, the refusal reason is lost |
 | `pause_turn`, `refusal` | `stop` | `status: "completed"` | lossy → OpenAI |
+| — | `function_call` | — | OpenAI's superseded single-function form; still emitted by some compatible upstreams, so it is read as `tool_use` rather than falling to `end_turn` and reporting a tool call as text |
+
+Because a translator is a pure function with no logger behind it, the mapping **returns** the
+unrecognized value alongside the conservative one; the caller — which holds the request id — is what
+logs it. One line per provider change, none in steady state.
 
 ### Usage and token fields
 
@@ -196,11 +201,11 @@ Anthropic reports exactly four fields: `input_tokens`, `output_tokens`, `cache_c
 
 | Anthropic | OpenAI Chat | Responses |
 |---|---|---|
-| `input_tokens` | `prompt_tokens` | `input_tokens` |
+| `input_tokens` + `cache_creation_input_tokens` + `cache_read_input_tokens` | `prompt_tokens` | `input_tokens` |
 | `output_tokens` | `completion_tokens` | `output_tokens` |
 | (sum) | `total_tokens` | `total_tokens` |
 | `cache_read_input_tokens` | `prompt_tokens_details.cached_tokens` | `input_tokens_details.cached_tokens` |
-| `cache_creation_input_tokens` | no counterpart | no counterpart |
+| `cache_creation_input_tokens` | no field of its own — folded into `prompt_tokens` | same |
 | no counterpart | `completion_tokens_details.reasoning_tokens` | `output_tokens_details.reasoning_tokens` |
 
 > **Total prompt size is the sum of all three input fields** — `input_tokens` +
@@ -208,9 +213,19 @@ Anthropic reports exactly four fields: `input_tokens`, `output_tokens`, `cache_c
 > uncached remainder, so a dashboard reporting it by itself under-reports cached traffic badly, and
 > the better the caching the worse the error. Same rule in [08-observability.md](08-observability.md).
 
+**The prompt row is a conversion, not a rename**, and that is what the note above forces. Anthropic's
+`input_tokens` is the uncached remainder; OpenAI's `prompt_tokens` is the whole prompt with
+`cached_tokens` a subset of it. So the crossing sums the three input fields toward `openai-chat`, and
+subtracts `cached_tokens` back out toward `anthropic`. Mapping the two field names onto each other
+verbatim would report a cache-heavy request as a handful of tokens and break every client-side cost
+estimate built on it. `cache_creation_input_tokens` is never invented in the other direction:
+`openai-chat` reports cache reads only, and guessing the write is the one number an operator reads to
+decide whether caching is paying for itself.
+
 The **`UsageRecord` stores the upstream's own numbers**, not the translated ones. OpenAI streams omit
 usage unless `stream_options.include_usage` is set; translating an Anthropic stream toward
-`openai-chat` always emits it, and a missing field is recorded as null, never as zero.
+`openai-chat` always emits it, and a missing field is recorded as null, never as zero — zero is a
+measurement, and reporting it for a field the upstream never sent invents data.
 
 ### Error shapes
 
@@ -224,6 +239,17 @@ receives an Anthropic-shaped error even when the account that failed was an Open
 Agent-SDK one. Router-origin errors (`NoHealthyAccountError`, `QuotaExhaustedError`, …) use the same
 shape with a stable HTTP status. `param` and `code` are best-effort and may be null. No error body
 ever carries credential material or the identity of the account that failed.
+
+The rendered `type` is derived from the **HTTP status**, not copied from the upstream body. The
+vocabularies are per-dialect — `invalid_request_error` is spelled the same in both, `overloaded_error`
+and `server_error` are not — and a foreign type name in the wrong dialect is a lie a client will
+branch on; the status is the one signal both dialects agree on. The upstream's own type survives in
+the best-effort `code` field where the target shape has room for it. The upstream's `message` is
+passed through, because it is the only diagnostic the caller has, but it is **scrubbed with the log
+redactor and length-bounded** first: an upstream is free to quote a key back at us or answer with a
+whole HTML page, and this body is a client-facing surface. The HTTP status itself is not remapped
+here — whether a provider's `401` becomes something else to the client is a routing decision, made
+before a body needs rendering.
 
 ## Known lossy edges
 
