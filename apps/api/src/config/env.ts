@@ -103,6 +103,26 @@ export interface FailoverConfig {
   readonly upstreamTimeoutMs: number
 }
 
+/**
+ * Scheduler task intervals and tuning.
+ *
+ * Every interval is config, never a constant in code (CLAUDE.md non-negotiable 11).
+ * The actual interval is jittered around the configured value so sweeps never pile
+ * onto request spikes or onto each other after a restart.
+ */
+export interface SchedulerConfig {
+  /** Usage record rollup interval, in minutes. */
+  readonly usageRollupIntervalMinutes: number
+  /** OAuth state (and PKCE verifier) purge interval, in minutes. */
+  readonly oauthStatePurgeIntervalMinutes: number
+  /** Account quota floor probe interval, in minutes. */
+  readonly quotaFloorIntervalMinutes: number
+  /** Max rows per bounded-delete sweep. */
+  readonly sweepBatchSize: number
+  /** Jitter applied to task intervals as a fraction of the interval. E.g., 0.2 means ±20%. */
+  readonly jitterFraction: number
+}
+
 export interface Env {
   readonly port: number
   readonly databaseUrl: string
@@ -119,6 +139,7 @@ export interface Env {
   readonly adminAuth: AdminAuthConfig
   readonly dataPlane: DataPlaneConfig
   readonly failover: FailoverConfig
+  readonly scheduler: SchedulerConfig
 }
 
 /**
@@ -177,6 +198,16 @@ const envSchema = z
     RETENTION_REVOKED_KEYS_DAYS: wholeNumber.optional(),
     RETENTION_OAUTH_STATE_MINUTES: wholeNumber.optional(),
     JANITOR_INTERVAL_MINUTES: wholeNumber.optional(),
+    USAGE_ROLLUP_INTERVAL_MINUTES: wholeNumber.optional(),
+    OAUTH_STATE_PURGE_INTERVAL_MINUTES: wholeNumber.optional(),
+    QUOTA_FLOOR_INTERVAL_MINUTES: wholeNumber.optional(),
+    SWEEP_BATCH_SIZE: wholeNumber.optional(),
+    SCHEDULER_JITTER_FRACTION: z
+      .string()
+      .regex(/^\d+(\.\d+)?$/, "must be a number")
+      .transform(Number)
+      .refine((v) => v >= 0 && v <= 1, "must be between 0 and 1")
+      .optional(),
     ADMIN_SESSION_IDLE_MINUTES: wholeNumber.optional(),
     ADMIN_SESSION_ABSOLUTE_HOURS: wholeNumber.optional(),
     ADMIN_LOGIN_MAX_ATTEMPTS: wholeNumber.optional(),
@@ -230,6 +261,13 @@ const envSchema = z
         oauthStateMinutes: raw.RETENTION_OAUTH_STATE_MINUTES ?? 10,
       },
       janitorIntervalMinutes: raw.JANITOR_INTERVAL_MINUTES ?? 60,
+      scheduler: {
+        usageRollupIntervalMinutes: raw.USAGE_ROLLUP_INTERVAL_MINUTES ?? 60,
+        oauthStatePurgeIntervalMinutes: raw.OAUTH_STATE_PURGE_INTERVAL_MINUTES ?? 5,
+        quotaFloorIntervalMinutes: raw.QUOTA_FLOOR_INTERVAL_MINUTES ?? 30,
+        sweepBatchSize: raw.SWEEP_BATCH_SIZE ?? 1_000,
+        jitterFraction: raw.SCHEDULER_JITTER_FRACTION ?? 0.2,
+      },
       adminAuth: {
         sessionIdleMinutes: raw.ADMIN_SESSION_IDLE_MINUTES ?? 480,
         sessionAbsoluteHours: raw.ADMIN_SESSION_ABSOLUTE_HOURS ?? 24,
