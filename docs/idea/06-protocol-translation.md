@@ -112,12 +112,24 @@ Quota signals arrive as SDK `rate_limit_event` messages rather than response hea
 
 | | |
 |---|---|
-| Clean | `user` / `assistant` roles; text blocks; `image` blocks with a base64 `source` ⇄ OpenAI `image_url` with a `data:` URI; `tool_result` ⇄ `role: "tool"` message keyed by `tool_call_id`. |
-| Lossy | OpenAI `image_url` pointing at a remote URL has no Anthropic counterpart with the same semantics — it is fetched and inlined, or rejected (`DEFERRED`: which). `detail: "low"/"high"` is dropped. Anthropic `document` blocks and `thinking` blocks have no OpenAI Chat counterpart. |
-| Rejected | Interleaved multi-part `tool_result` content the target cannot express; audio and file parts. |
+| Clean | `user` / `assistant` roles; text blocks; `image` blocks with a base64 `source` ⇄ OpenAI `image_url` with a `data:` URI; a remote-URL `image_url` ⇄ Anthropic's `source: {type:"url"}`; `tool_result` ⇄ `role: "tool"` message keyed by `tool_call_id`. |
+| Lossy | `detail: "low"/"high"` is dropped. Anthropic `thinking` / `redacted_thinking` blocks have no OpenAI Chat counterpart and are dropped. |
+| Rejected | Interleaved multi-part `tool_result` content the target cannot express; audio and file parts; an image source that is neither a base64 `data:` URI nor http(s); Anthropic `document` blocks. |
+
+A remote URL is **never fetched and inlined**. A translator is a pure function, and reaching an
+arbitrary URL from inside one puts a network call — and an SSRF surface — on the request path;
+Anthropic's own `url` image source carries the reference instead, so the fetch never has to happen.
+Anthropic `document` blocks are **rejected, not dropped**: a document is content the caller sent,
+and losing it quietly returns an answer to a question that was never asked.
 
 Anthropic requires strict `user`/`assistant` alternation; OpenAI does not. Translating toward
-Anthropic merges consecutive same-role messages rather than reordering them.
+Anthropic merges consecutive same-role messages rather than reordering them. Merging concatenates
+content the model was going to read in that order anyway; reordering would change what it was told.
+Every `role:"tool"` message becomes a `tool_result` block on a **user** turn, so a run of them
+merges into one turn — which is exactly the shape Anthropic expects. Toward OpenAI the same merge
+runs for plain-content turns only: alternation is not required there, but several
+OpenAI-compatible upstreams reject two adjacent `user` messages that OpenAI itself accepts. A turn
+carrying `tool_calls` or a `tool_call_id` never merges — it is keyed to one specific call.
 
 ### Tool and function calling
 
@@ -176,6 +188,11 @@ change, logged and mapped conservatively to `end_turn` / `stop`, never dropped s
 | `stop_sequence` | `stop` | `status: "completed"` | lossy → OpenAI: *which* sequence matched (`stop_sequence` field) is lost |
 | — | `content_filter` | `incomplete_details.reason: "content_filter"` | lossy → Anthropic: mapped to `end_turn`, the refusal reason is lost |
 | `pause_turn`, `refusal` | `stop` | `status: "completed"` | lossy → OpenAI |
+| — | `function_call` | — | OpenAI's superseded single-function form; still emitted by some compatible upstreams, so it is read as `tool_use` rather than falling to `end_turn` and reporting a tool call as text |
+
+Because a translator is a pure function with no logger behind it, the mapping **returns** the
+unrecognized value alongside the conservative one; the caller — which holds the request id — is what
+logs it. One line per provider change, none in steady state.
 
 ### Usage and token fields
 
@@ -184,11 +201,11 @@ Anthropic reports exactly four fields: `input_tokens`, `output_tokens`, `cache_c
 
 | Anthropic | OpenAI Chat | Responses |
 |---|---|---|
-| `input_tokens` | `prompt_tokens` | `input_tokens` |
+| `input_tokens` + `cache_creation_input_tokens` + `cache_read_input_tokens` | `prompt_tokens` | `input_tokens` |
 | `output_tokens` | `completion_tokens` | `output_tokens` |
 | (sum) | `total_tokens` | `total_tokens` |
 | `cache_read_input_tokens` | `prompt_tokens_details.cached_tokens` | `input_tokens_details.cached_tokens` |
-| `cache_creation_input_tokens` | no counterpart | no counterpart |
+| `cache_creation_input_tokens` | no field of its own — folded into `prompt_tokens` | same |
 | no counterpart | `completion_tokens_details.reasoning_tokens` | `output_tokens_details.reasoning_tokens` |
 
 > **Total prompt size is the sum of all three input fields** — `input_tokens` +
@@ -196,9 +213,19 @@ Anthropic reports exactly four fields: `input_tokens`, `output_tokens`, `cache_c
 > uncached remainder, so a dashboard reporting it by itself under-reports cached traffic badly, and
 > the better the caching the worse the error. Same rule in [08-observability.md](08-observability.md).
 
+**The prompt row is a conversion, not a rename**, and that is what the note above forces. Anthropic's
+`input_tokens` is the uncached remainder; OpenAI's `prompt_tokens` is the whole prompt with
+`cached_tokens` a subset of it. So the crossing sums the three input fields toward `openai-chat`, and
+subtracts `cached_tokens` back out toward `anthropic`. Mapping the two field names onto each other
+verbatim would report a cache-heavy request as a handful of tokens and break every client-side cost
+estimate built on it. `cache_creation_input_tokens` is never invented in the other direction:
+`openai-chat` reports cache reads only, and guessing the write is the one number an operator reads to
+decide whether caching is paying for itself.
+
 The **`UsageRecord` stores the upstream's own numbers**, not the translated ones. OpenAI streams omit
 usage unless `stream_options.include_usage` is set; translating an Anthropic stream toward
-`openai-chat` always emits it, and a missing field is recorded as null, never as zero.
+`openai-chat` always emits it, and a missing field is recorded as null, never as zero — zero is a
+measurement, and reporting it for a field the upstream never sent invents data.
 
 ### Error shapes
 
@@ -213,6 +240,17 @@ Agent-SDK one. Router-origin errors (`NoHealthyAccountError`, `QuotaExhaustedErr
 shape with a stable HTTP status. `param` and `code` are best-effort and may be null. No error body
 ever carries credential material or the identity of the account that failed.
 
+The rendered `type` is derived from the **HTTP status**, not copied from the upstream body. The
+vocabularies are per-dialect — `invalid_request_error` is spelled the same in both, `overloaded_error`
+and `server_error` are not — and a foreign type name in the wrong dialect is a lie a client will
+branch on; the status is the one signal both dialects agree on. The upstream's own type survives in
+the best-effort `code` field where the target shape has room for it. The upstream's `message` is
+passed through, because it is the only diagnostic the caller has, but it is **scrubbed with the log
+redactor and length-bounded** first: an upstream is free to quote a key back at us or answer with a
+whole HTML page, and this body is a client-facing surface. The HTTP status itself is not remapped
+here — whether a provider's `401` becomes something else to the client is a routing decision, made
+before a body needs rendering.
+
 ## Known lossy edges
 
 Be suspicious of any cell not listed here — if it is not documented, it is not translated.
@@ -225,7 +263,8 @@ Be suspicious of any cell not listed here — if it is not documented, it is not
 | OpenAI `n > 1` | → `anthropic` | no counterpart; rejected with `400` |
 | `seed`, `frequency_penalty`, `presence_penalty`, `logit_bias` | → `anthropic` | dropped (documented, not rejected — they are hints, not contracts) |
 | Anthropic `top_k` | → OpenAI | dropped |
-| Remote-URL images, `detail: "low"/"high"` | → `anthropic` | inlined or rejected (**DEFERRED**) / dropped |
+| Remote-URL images | → `anthropic` | carried as Anthropic's `source: {type:"url"}`, never fetched — see [above](#message-roles-and-content-blocks). `detail: "low"/"high"` is dropped |
+| Absent `max_tokens` | → `anthropic` | Anthropic requires one and OpenAI's is optional, so a configured default is supplied. Not a constant in a branch: the value is a parameter of the translator, defaulted generously, because a low ceiling would truncate an answer the caller never asked to truncate |
 | Anthropic server-side tools (web search, code execution) | → OpenAI | unsupported; `400` |
 | Beta headers (`anthropic-beta`) | → non-Anthropic, and on the Agent-SDK path | dropped |
 | `temperature`, `top_p`, `top_k`, `max_tokens`, `stop`, `seed`, `n`, `logprobs`, penalties | → `agent-sdk` | **accepted and silently inert** — `query()` has no equivalent for any of them, so a value the caller set has no effect on the request. `reasoning_effort` is the exception, mapped onto the SDK's effort scale (`low`…`max`; OpenAI's `minimal` has no target) |

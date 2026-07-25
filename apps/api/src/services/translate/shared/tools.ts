@@ -1,0 +1,146 @@
+import { z } from "zod"
+import type {
+  AnthropicTool,
+  AnthropicToolChoice,
+  ParsedAnthropicTool,
+  ParsedAnthropicToolChoice,
+} from "./anthropic"
+import type {
+  OpenAiChatTool,
+  OpenAiChatToolChoice,
+  ParsedOpenAiChatTool,
+  ParsedOpenAiChatToolChoice,
+} from "./openai-chat"
+import { rejectField } from "./reject"
+
+/**
+ * Tool declarations, tool choice, and the call payload, across the anthropic ⇄ openai-chat seam.
+ *
+ * The declarations are near-identical — `{name, description, input_schema}` against
+ * `function.{name, description, parameters}` — so almost all of the work here is the one shape
+ * difference that is *not* cosmetic: Anthropic's `tool_use.input` is a **JSON object** and OpenAI's
+ * `tool_calls[].function.arguments` is a **JSON string**. Every crossing parses or serializes, and
+ * a string that does not decode to an object is a `400`, never an empty call handed to a model
+ * that will act on it (docs/idea/06-protocol-translation.md#tool-and-function-calling).
+ *
+ * Ids are preserved verbatim in both directions; a translator that mints its own breaks the
+ * `tool_use` ↔ `tool_result` pairing on the next turn.
+ */
+
+const jsonObject = z.record(z.string(), z.unknown())
+
+const NOT_JSON = "is not valid JSON: an anthropic `tool_use.input` is an object, not a blob"
+const NOT_AN_OBJECT =
+  "must decode to a JSON object: an anthropic `tool_use.input` has no array or scalar form"
+
+/** Anthropic mandates an object schema. A tool taking no arguments still declares one. */
+function emptyObjectSchema(): Record<string, unknown> {
+  return { type: "object", properties: {} }
+}
+
+function assertObjectSchema(schema: Record<string, unknown>, field: string): void {
+  const type = schema.type
+  if (type !== undefined && type !== "object") {
+    rejectField(field, 'must be a JSON Schema of `type: "object"`')
+  }
+}
+
+export function toolsToOpenAiChat(tools: readonly ParsedAnthropicTool[]): OpenAiChatTool[] {
+  return tools.map((tool, index) => {
+    const at = `tools[${index}]`
+    const name = tool.name
+    if (name === undefined || name.length === 0) rejectField(`${at}.name`, "is required")
+
+    const schema = tool.input_schema
+    if (schema === undefined) {
+      // A server-side tool (web search, code execution) is a capability of Anthropic's own
+      // inference, not a declaration the client can execute. Nothing on the OpenAI side runs it.
+      rejectField(
+        `${at}.input_schema`,
+        `is missing: \`${name}\` is an Anthropic server-side tool (type \`${tool.type ?? "unknown"}\`), which has no openai-chat counterpart`,
+      )
+    }
+    assertObjectSchema(schema, `${at}.input_schema`)
+
+    return {
+      type: "function",
+      function: { name, description: tool.description, parameters: schema },
+    }
+  })
+}
+
+export function toolsToAnthropic(tools: readonly ParsedOpenAiChatTool[]): AnthropicTool[] {
+  return tools.map((tool, index) => {
+    const at = `tools[${index}]`
+    const fn = tool.function
+    if (fn === undefined) {
+      rejectField(
+        at,
+        `declares no \`function\`: tool type \`${tool.type ?? "unknown"}\` has no anthropic counterpart`,
+      )
+    }
+
+    const parameters = fn.parameters
+    if (parameters === undefined) {
+      return { name: fn.name, description: fn.description, input_schema: emptyObjectSchema() }
+    }
+    assertObjectSchema(parameters, `${at}.function.parameters`)
+
+    return {
+      name: fn.name,
+      description: fn.description,
+      // OpenAI lets `type` stay implicit on an object schema; Anthropic requires it stated.
+      input_schema: parameters.type === undefined ? { ...parameters, type: "object" } : parameters,
+    }
+  })
+}
+
+export function toolChoiceToOpenAiChat(choice: ParsedAnthropicToolChoice): OpenAiChatToolChoice {
+  switch (choice.type) {
+    case "auto":
+      return "auto"
+    case "any":
+      return "required"
+    case "none":
+      return "none"
+    case "tool":
+      return { type: "function", function: { name: choice.name } }
+  }
+}
+
+export function toolChoiceToAnthropic(choice: ParsedOpenAiChatToolChoice): AnthropicToolChoice {
+  if (choice === "auto") return { type: "auto" }
+  if (choice === "required") return { type: "any" }
+  if (choice === "none") return { type: "none" }
+  return { type: "tool", name: choice.function.name }
+}
+
+/** Object → JSON string. The direction that cannot fail. */
+export function argumentsFromInput(input: Record<string, unknown>): string {
+  return JSON.stringify(input)
+}
+
+/**
+ * JSON string → object, or a `400` naming the call whose arguments did not decode.
+ *
+ * An absent or blank string is a no-argument call, which is how the OpenAI SDK and several
+ * compatible upstreams spell it — that one is `{}`, not a failure.
+ */
+export function inputFromArguments(
+  raw: string | undefined,
+  field: string,
+): Record<string, unknown> {
+  if (raw === undefined || raw.trim().length === 0) return {}
+
+  let decoded: unknown
+  try {
+    decoded = JSON.parse(raw)
+  } catch {
+    rejectField(field, NOT_JSON)
+  }
+
+  if (Array.isArray(decoded)) rejectField(field, NOT_AN_OBJECT)
+  const parsed = jsonObject.safeParse(decoded)
+  if (!parsed.success) rejectField(field, NOT_AN_OBJECT)
+  return parsed.data
+}
