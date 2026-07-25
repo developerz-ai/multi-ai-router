@@ -188,6 +188,19 @@ A per-key refusal is **not** a `QuotaExhaustedError`. Same status, different own
 own allowance, the pool did not run out. `key_rate_limited` and `quota_exhausted` stay apart in the
 error hierarchy, in `UsageOutcome`, and on `router_requests_total`.
 
+### Cross-dialect translation — `apps/api/src/services/translate/`
+
+| Thing | Where | Use it when |
+|---|---|---|
+| `translationPair(ingress, egress)` → `TranslationPair \| null` | `services/translate/registry.ts` | Asking whether a dialect pair can be served, and getting the three converters that serve it. Null is the honest answer for the diagonal (that is a byte relay, not a translation) and for a pair with no entry. Adding a pair touches this file and nothing else |
+| `createSseParser()` → `SseParser` | `services/translate/sse/parse.ts` | Reading SSE. The repo's **only** parser: frames come back the instant their blank line lands, carrying partial lines and split CRLFs across chunk boundaries. Never used on the passthrough path, which parses nothing at all |
+| `relayTranslatedResponse(input)` | `services/dataplane/relay-translate.ts` | Writing a converted response. A sibling of `relay.ts`, never a mode inside it, so no edit here can put a parser on the passthrough path. Same `RelayObserver` contract, so token counting and TTFB are unchanged |
+
+`request` and `response` on a pair run in **opposite directions** — a body converted toward the
+account, an answer converted back toward the client. The `created` stamp and the fallback id are
+injected, never read off a clock inside a translator, so a recorded input converts to the same bytes
+in a test as on the wire.
+
 ### Test support — `apps/api/test/`
 
 | Thing | Where | Use it when |
@@ -226,6 +239,7 @@ error hierarchy, in `UsageOutcome`, and on `router_requests_total`.
 | Per-token prices and the cost arithmetic | `services/cost/`. A total recomputed in the console or the rollup drifts from the `costEstimate` on the row, and the two numbers then disagree about what the same request cost |
 | The `cooling_down` vs `exhausted` distinction | Clock-recoverable vs human-recoverable: 429 + `Retry-After` vs 402, countdown vs "needs top-up". Collapsing them makes the router retry a dead account on a timer forever |
 | Per-key rate-limit accounting | `services/dataplane/limits.ts`, charged once per request in the dispatcher. A second counter — in a middleware, a route, or the verifier (which is cached, so it would only see misses) — double-charges or under-charges the same key |
+| Which conversion serves a dialect pair | `services/translate/registry.ts`. A second lookup — in a route, a driver, or the relay — is how a request gets converted one way on the way out and a different way on the way back |
 
 ## Conventions for new shared code
 

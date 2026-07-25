@@ -3,7 +3,7 @@ import { renderErrorBody } from "../../../errors/render"
 import { parseUpstreamError } from "../shared/errors"
 import { toAnthropicStopReason } from "../shared/stop-reason"
 import type { OpenAiChatUsage } from "../shared/usage"
-import { parseOpenAiChatUsage, usageToAnthropic } from "../shared/usage"
+import { anthropicUsageCounts, parseOpenAiChatUsage } from "../shared/usage"
 import type { SseEvent, StreamTranslator } from "../sse/emit"
 import { NO_EVENTS } from "../sse/emit"
 import { frameJson } from "../sse/parse"
@@ -198,17 +198,6 @@ export function openAiChatToAnthropicStream(
     )
   }
 
-  function terminalUsage(): Record<string, number> {
-    const mapped = usage === null ? null : usageToAnthropic(usage)
-    // `output_tokens` is required by the shape; the rest are stated only when the upstream counted.
-    const counts: Record<string, number> = { output_tokens: mapped?.output_tokens ?? 0 }
-    const input = mapped?.input_tokens ?? null
-    if (input !== null) counts.input_tokens = input
-    const cached = mapped?.cache_read_input_tokens ?? null
-    if (cached !== null) counts.cache_read_input_tokens = cached
-    return counts
-  }
-
   function terminate(out: SseEvent[]): void {
     if (terminated) return
     terminated = true
@@ -219,7 +208,7 @@ export function openAiChatToAnthropicStream(
     out.push(
       event("message_delta", {
         delta: { stop_reason: mapped.value, stop_sequence: null },
-        usage: terminalUsage(),
+        usage: anthropicUsageCounts(usage),
       }),
     )
     out.push(event("message_stop", {}))

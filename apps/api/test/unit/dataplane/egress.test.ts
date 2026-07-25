@@ -23,12 +23,23 @@ describe("egress mode", () => {
     expect(decision.mode).toBe("passthrough")
   })
 
-  test("differing dialects are refused by name, before any upstream call", () => {
+  test("differing dialects translate, carrying the pair that will do it", () => {
     const decision = resolveEgress("anthropic", account("a", { provider: "openai-api" }))
+
+    expect(decision.mode).toBe("translate")
+    if (decision.mode !== "translate") return
+    expect(decision.from).toBe("anthropic")
+    expect(decision.to).toBe("openai-chat")
+    expect(decision.pair.ingress).toBe("anthropic")
+    expect(decision.pair.egress).toBe("openai-chat")
+  })
+
+  test("a dialect pair with no translator is refused by name, before any upstream call", () => {
+    const decision = resolveEgress("openai-responses", account("a", { provider: "openai-api" }))
 
     expect(decision.mode).toBe("rejected")
     if (decision.mode !== "rejected") return
-    expect(decision.reason).toBe("cross-dialect")
+    expect(decision.reason).toBe("no-translator")
     expect(egressRejectionError(decision)).toBeInstanceOf(TranslationError)
   })
 
@@ -45,7 +56,8 @@ describe("egress mode", () => {
   test("an account's chosen surface decides the dialect, not the provider default", () => {
     const zaiOpenAi = account("z", { provider: "zai", dialect: "openai-chat" })
     expect(resolveEgress("openai-chat", zaiOpenAi).mode).toBe("passthrough")
-    expect(resolveEgress("anthropic", zaiOpenAi).mode).toBe("rejected")
+    // The same account on the other surface is a conversion, not a passthrough.
+    expect(resolveEgress("anthropic", zaiOpenAi).mode).toBe("translate")
   })
 })
 

@@ -419,18 +419,57 @@ describe("scope enforcement", () => {
 })
 
 describe("cross-dialect and Agent-SDK egress", () => {
-  test("a request needing translation is refused by name, before any upstream call", async () => {
-    const { app, upstream } = harness({
+  test("an anthropic request reaches an openai-chat account, converted both ways", async () => {
+    const { app, upstream, usage } = harness({
       accounts: [account("o", { provider: "openai-api", apiKey: "sk-o", cipher: CRYPTOR })],
-      responses: [() => jsonResponse(200, {})],
+      responses: [
+        () =>
+          jsonResponse(200, {
+            id: "chatcmpl-1",
+            model: "claude-opus-5",
+            choices: [
+              { index: 0, message: { role: "assistant", content: "hi" }, finish_reason: "stop" },
+            ],
+            usage: { prompt_tokens: 11, completion_tokens: 22 },
+          }),
+      ],
     })
 
     const res = await app.request("/v1/messages", post(MESSAGE, bearer()))
-    const body = (await res.json()) as { error?: { message?: string } }
+    const body = (await res.json()) as Record<string, unknown>
+    await settle()
+
+    expect(res.status).toBe(200)
+    // The request went out in the account's dialect, at the account's dialect's path.
+    expect(upstream.calls[0]?.url).toContain("/chat/completions")
+    const sent = JSON.parse(upstream.calls[0]?.body ?? "{}") as Record<string, unknown>
+    expect(sent.messages).toEqual([{ role: "user", content: "hello" }])
+    // The answer came back in the client's.
+    expect(body).toMatchObject({
+      type: "message",
+      role: "assistant",
+      content: [{ type: "text", text: "hi" }],
+      stop_reason: "end_turn",
+    })
+    expect(usage.rows[0]).toMatchObject({ egressMode: "translate", outcome: "success" })
+  })
+
+  test("a request with no faithful conversion is refused by name, before any upstream call", async () => {
+    const { app, upstream } = harness({
+      accounts: [account("a", { apiKey: "sk-a", cipher: CRYPTOR })],
+      responses: [() => jsonResponse(200, {})],
+    })
+
+    const body = JSON.stringify({
+      model: "claude-opus-5",
+      messages: [{ role: "user", content: "hello" }],
+      logprobs: true,
+    })
+    const res = await app.request("/v1/chat/completions", post(body, bearer()))
 
     expect(res.status).toBe(400)
     expect(upstream.calls).toHaveLength(0)
-    expect(JSON.stringify(body)).toContain("translation")
+    expect(JSON.stringify(await res.json())).toContain("logprobs")
   })
 
   test("a Claude subscription is refused as unservable, not as a bad request", async () => {

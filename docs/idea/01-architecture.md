@@ -1,10 +1,10 @@
 # Architecture
 
-Status: the layering, dependency rules, performance budget, warm catalog, and composition root are
-**implemented and enforced**. Steps 8b (Agent SDK) and the cross-dialect half of step 8 are not —
-both are refused explicitly rather than approximated. The scheduler layer does not exist yet; its
-contract below is the design it must satisfy. See [00-overview.md](00-overview.md) for the product
-boundary and [02-domain-model.md](02-domain-model.md) for the entities named below.
+Status: the layering, dependency rules, performance budget, warm catalog, composition root, and
+scheduler are **implemented and enforced**. Step 8's cross-dialect half is implemented for the
+`anthropic` ⇄ `openai-chat` pair; the `openai-responses` pairs and step 8b (Agent SDK) are not, and
+both are refused explicitly rather than approximated. See [00-overview.md](00-overview.md) for the
+product boundary and [02-domain-model.md](02-domain-model.md) for the entities named below.
 
 ## Request lifecycle
 

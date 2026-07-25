@@ -20,6 +20,7 @@ import type { RateLimiter } from "./limits"
 import { planCandidates } from "./plan"
 import { attemptRecord, errorClassOf, outcomeOf, SUCCESS_OUTCOME } from "./records"
 import { createRuntime } from "./runtime"
+import { createTranslatedRequestBody } from "./translate-body"
 import {
   type DataPlaneClock,
   type FetchLike,
@@ -51,6 +52,16 @@ export interface DispatchOptions {
   /** Headers a client may name its conversation with. See `body/session.ts`. */
   readonly sessionHeaders?: readonly string[]
   readonly upstreamTimeoutMs?: number
+  readonly translation?: TranslationOptions
+}
+
+export interface TranslationOptions {
+  /**
+   * The `max_tokens` an Anthropic egress is given when the client's dialect made it optional and
+   * the client omitted it. Operator-configured, deliberately generous: a low ceiling would truncate
+   * an answer the caller never asked to truncate (`06-protocol-translation.md#known-lossy-edges`).
+   */
+  readonly defaultMaxTokens?: number
 }
 
 /** Long, because a long completion is a normal response, not a hung one. Configurable. */
@@ -170,12 +181,23 @@ export function createDispatcher(deps: DispatcherDeps): Dispatcher {
       )
     }
 
+    // Injected, never read off a clock inside a translator: the same recorded body must convert to
+    // the same bytes in a test as it does on the wire.
+    const translation = {
+      created: Math.floor(startedAt.getTime() / 1000),
+      model,
+      fallbackId: input.requestId,
+      defaultMaxTokens: options.translation?.defaultMaxTokens,
+    }
+
     return runChain({
       runtime,
       plan: plan.servable,
       request: input.request,
       bodyBytes: body.bytes,
       modelSpan: body.fields.modelSpan,
+      translation,
+      translated: createTranslatedRequestBody(body.bytes, translation),
       failover: options.failover,
       log: deps.logger?.child({ component: "transport", requestId: input.requestId }),
     })

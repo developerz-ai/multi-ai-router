@@ -123,6 +123,16 @@ export interface SchedulerConfig {
   readonly jitterFraction: number
 }
 
+/** Cross-dialect translation tuning. A ceiling an operator lives with is config, never code. */
+export interface TranslationConfig {
+  /**
+   * The `max_tokens` an Anthropic egress is given when the client's dialect made it optional and
+   * the client omitted it. Deliberately generous: a low value truncates an answer the caller never
+   * asked to truncate, which is the one failure a default must not cause silently.
+   */
+  readonly defaultMaxTokens: number
+}
+
 export interface Env {
   readonly port: number
   readonly databaseUrl: string
@@ -145,6 +155,7 @@ export interface Env {
   readonly dataPlane: DataPlaneConfig
   readonly failover: FailoverConfig
   readonly scheduler: SchedulerConfig
+  readonly translation: TranslationConfig
 }
 
 /**
@@ -231,6 +242,7 @@ const envSchema = z
     ROUTING_BASE_BACKOFF_MS: wholeNumber.optional(),
     ROUTING_MAX_BACKOFF_MS: wholeNumber.optional(),
     UPSTREAM_TIMEOUT_MS: wholeNumber.optional(),
+    TRANSLATE_DEFAULT_MAX_TOKENS: wholeNumber.optional(),
   })
   .transform((raw, ctx): Env => {
     // Precedence: ADMIN_PASSWORD_HASH wins when both are set; exactly one is required.
@@ -299,6 +311,9 @@ const envSchema = z
         baseBackoffMs: raw.ROUTING_BASE_BACKOFF_MS ?? 1_000,
         maxBackoffMs: raw.ROUTING_MAX_BACKOFF_MS ?? 300_000,
         upstreamTimeoutMs: raw.UPSTREAM_TIMEOUT_MS ?? 600_000,
+      },
+      translation: {
+        defaultMaxTokens: raw.TRANSLATE_DEFAULT_MAX_TOKENS ?? 4_096,
       },
     }
   })

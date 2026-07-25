@@ -5,6 +5,7 @@ import {
   TranslationError,
 } from "@multi-ai-router/core"
 import { PROVIDER_REGISTRY, type ProviderDriver } from "../../../providers"
+import { type TranslationPair, translationPair } from "../../translate"
 import type { RoutableAccount } from "../types"
 
 /**
@@ -12,12 +13,18 @@ import type { RoutableAccount } from "../types"
  *
  * There are three modes and the router takes the leftmost one that applies
  * (docs/idea/06-protocol-translation.md): **passthrough** when the dialects match,
- * **translate** when they differ, **Agent-SDK re-synthesis** for Claude subscriptions.
+ * **translate** when they differ and a conversion pair exists, **Agent-SDK re-synthesis** for
+ * Claude subscriptions.
  *
- * **This build implements passthrough only.** Translation is a separate deliverable and the
- * Agent-SDK path is another; both are refused here explicitly, named, and before any upstream call
- * — never degraded into a lossy approximation. The seam is exactly this function: when
- * `services/translate/**` lands, a `translate` variant joins the union and nothing above changes.
+ * **Passthrough is always preferred**, because it has zero translation loss: a new upstream
+ * feature, a content block type nobody here has heard of, a beta flag — all survive a passthrough
+ * and none survive a translation we did not write. So the dialect test comes first and the registry
+ * lookup only happens when the dialects genuinely differ.
+ *
+ * The Agent-SDK path is a separate deliverable and is refused here explicitly, named, and before
+ * any upstream call — never degraded into a lossy approximation. So is a dialect pair with no
+ * translator: the `openai-responses` rows of the matrix are exactly that today, and they become
+ * servable by adding an entry to `services/translate/registry.ts` and nothing else.
  */
 
 export interface PassthroughEgress {
@@ -26,9 +33,20 @@ export interface PassthroughEgress {
   readonly dialect: Dialect
 }
 
+export interface TranslateEgress {
+  readonly mode: "translate"
+  readonly driver: ProviderDriver
+  /** The dialect the client spoke. */
+  readonly from: Dialect
+  /** The dialect the account speaks, and the one this request is addressed and converted into. */
+  readonly to: Dialect
+  /** The conversion, resolved here so "servable" means "a translator exists", not "one might". */
+  readonly pair: TranslationPair
+}
+
 export type EgressRejectionReason =
-  /** Dialects differ. A faithful conversion is required and is not implemented here. */
-  | "cross-dialect"
+  /** Dialects differ and this build has no conversion pair for them. */
+  | "no-translator"
   /** Claude subscription: served by `query()`, not by any HTTP driver. Nothing to proxy. */
   | "agent-sdk"
   /** The provider is declared in the domain but has no driver yet. */
@@ -40,7 +58,7 @@ export interface EgressRejection {
   readonly message: string
 }
 
-export type EgressDecision = PassthroughEgress | EgressRejection
+export type EgressDecision = PassthroughEgress | TranslateEgress | EgressRejection
 
 export function resolveEgress(ingress: Dialect, account: RoutableAccount): EgressDecision {
   const support = PROVIDER_REGISTRY[account.driver.provider]
@@ -62,26 +80,33 @@ export function resolveEgress(ingress: Dialect, account: RoutableAccount): Egres
   }
 
   const egressDialect = support.driver.resolveDialect(account.driver)
-  if (egressDialect !== ingress) {
+  if (egressDialect === ingress) {
+    return { mode: "passthrough", driver: support.driver, dialect: egressDialect }
+  }
+
+  const pair = translationPair(ingress, egressDialect)
+  if (pair === null) {
     return {
       mode: "rejected",
-      reason: "cross-dialect",
-      message: `a ${ingress} request cannot be served by a ${egressDialect} account without protocol translation, which this build does not implement`,
+      reason: "no-translator",
+      message: `a ${ingress} request cannot be served by a ${egressDialect} account: this build implements no ${ingress} to ${egressDialect} translation`,
     }
   }
 
-  return { mode: "passthrough", driver: support.driver, dialect: egressDialect }
+  return { mode: "translate", driver: support.driver, from: ingress, to: egressDialect, pair }
 }
 
 /**
  * The client-facing failure when no candidate could be served.
  *
- * Cross-dialect is a `400` — the request as sent has no faithful representation upstream, which is
- * a fact about the request. The other two are a `503`: the caller did nothing wrong and there is
- * nothing they can change, so answering `400` would send them looking in the wrong place.
+ * A missing translator is a `400` — the request as sent has no faithful representation on any
+ * account this key can reach, which is a fact about the request rather than about capacity, and a
+ * caller can act on it by calling a different ingress path. The other two are a `503`: the caller
+ * did nothing wrong and there is nothing they can change, so answering `400` would send them
+ * looking in the wrong place.
  */
 export function egressRejectionError(rejection: EgressRejection): RouterError {
-  return rejection.reason === "cross-dialect"
+  return rejection.reason === "no-translator"
     ? new TranslationError(rejection.message)
     : new NoHealthyAccountError(rejection.message)
 }

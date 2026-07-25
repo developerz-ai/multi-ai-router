@@ -17,6 +17,8 @@
  */
 
 export { anthropicToOpenAiChatRequest } from "./anthropic-to-openai-chat/request"
+export type { AnthropicToOpenAiChatResponseOptions } from "./anthropic-to-openai-chat/response"
+export { anthropicToOpenAiChatResponse } from "./anthropic-to-openai-chat/response"
 export type { AnthropicToOpenAiChatStreamOptions } from "./anthropic-to-openai-chat/stream"
 export { anthropicToOpenAiChatStream } from "./anthropic-to-openai-chat/stream"
 export type { OpenAiChatToAnthropicOptions } from "./openai-chat-to-anthropic/request"
@@ -24,8 +26,12 @@ export {
   DEFAULT_MAX_TOKENS,
   openAiChatToAnthropicRequest,
 } from "./openai-chat-to-anthropic/request"
+export type { OpenAiChatToAnthropicResponseOptions } from "./openai-chat-to-anthropic/response"
+export { openAiChatToAnthropicResponse } from "./openai-chat-to-anthropic/response"
 export type { OpenAiChatToAnthropicStreamOptions } from "./openai-chat-to-anthropic/stream"
 export { openAiChatToAnthropicStream } from "./openai-chat-to-anthropic/stream"
+export type { TranslationContext, TranslationPair } from "./registry"
+export { translationPair } from "./registry"
 export type {
   AnthropicBlock,
   AnthropicImageBlock,
@@ -55,6 +61,7 @@ export {
   parseRequest,
   rejectField,
 } from "./shared/reject"
+export type { TranslatedResponse } from "./shared/response"
 export type {
   AnthropicStopReason,
   MappedReason,
@@ -80,6 +87,7 @@ export {
 } from "./shared/tools"
 export type { AnthropicUsage, OpenAiChatUsage } from "./shared/usage"
 export {
+  anthropicUsageCounts,
   parseAnthropicUsage,
   parseOpenAiChatUsage,
   usageToAnthropic,
