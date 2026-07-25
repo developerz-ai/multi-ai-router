@@ -115,6 +115,22 @@ subscription token; it sets one environment variable.
 | CLI settings | per-account `settings.json` and friends |
 | Session transcripts | what `resume: <sdkSessionId>` reads |
 
+### Where the directory comes from
+
+`<CLAUDE_CONFIG_ROOT>/<accountId>`, minted and created by the router when the Account row is
+created — `apps/api/src/providers/claude-sdk/config-dir.ts`. The operator never types a path and
+neither write body has a field for one; `CLAUDE_CONFIG_ROOT` is the only knob, and it defaults to
+`/data/claude` on the persistent volume.
+
+| Decision | Why |
+|---|---|
+| Keyed on Account **id**, never `label` | A label is the operator's disambiguator between five near-identical subscriptions and is renameable. Keying on it would mean a rename orphans a logged-in directory and hands the Account a fresh, logged-out one. The id is the row's identity for its whole life |
+| Router-assigned, not operator-supplied | Every path an operator could type is either this one or a mistake, and one mistake is unrecoverable — see the `$HOME/.claude` trap below. A root at or under the CLI's own config directory is refused at boot for the same reason |
+| Created `0700` | The contents are cleartext OAuth credentials the CLI owns. `mkdir` applies its mode only to what it creates and the umask can clear bits from it, so the mode is re-asserted on every provision — a directory left behind with looser permissions is tightened, not trusted |
+| Created **before** the row, removed **before** the row | A row naming a directory that does not exist is a login that cannot happen, so provisioning comes first and an insert that never lands takes its directory back. Deletion is the mirror: credentials outliving their Account is the worse half of the failure, while a row whose subscription is logged out is visible and fixable by re-login |
+| Removal names `<root>/<id>`, not the stored path | Bounded by construction. A path this router did not mint is not this router's to `rm -rf` |
+| Unique index on `accounts.config_dir` | Two Accounts sharing a directory is exactly the cross-contamination isolation exists to prevent, so it is a write the database refuses rather than an invariant code has to remember |
+
 ### Traps, all load-bearing
 
 | Trap | Rule |
@@ -130,6 +146,7 @@ subscription token; it sets one environment variable.
 
 | Operation | How |
 |---|---|
+| Provision | `<CLAUDE_CONFIG_ROOT>/<accountId>` at `0700`, created with the Account row — see above. Idempotent, so re-provisioning is never a way to lose a login |
 | Connect | Drive the `claude` CLI's own login against the Account's dir. Headless: build a PKCE authorize URL, take the pasted `code#state`, exchange, write `.credentials.json` into that dir (`profileCli.ts:159-227`) — the two capture modes [03-providers.md](03-providers.md) already specifies |
 | Health probe | `claude auth status` with the dir set returns JSON `{loggedIn, email, subscriptionType}` (`profileCli.ts:133-157`) — cheap, first-party, no token handling |
 | Refresh | **Not ours.** The SDK / `claude` CLI refreshes inside the config directory. The router does **not** schedule, mint, or write subscription tokens — see the box below |

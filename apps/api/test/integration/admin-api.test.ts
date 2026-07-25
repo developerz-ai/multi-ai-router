@@ -16,6 +16,7 @@ import { createAdminAuthService } from "../../src/services/admin-auth/service"
 import { createCredentialCipher } from "../../src/services/crypto/cipher"
 import { createKeysService } from "../../src/services/keys"
 import { createPoolsService } from "../../src/services/pools"
+import { createMemoryConfigDirs } from "../support/config-dirs"
 import { createMemoryStore } from "../support/memory-store"
 
 /**
@@ -54,6 +55,7 @@ function harness(guard: MiddlewareHandler<AdminAuthEnv> = stubSession()) {
         accounts: store.accounts,
         keys: store.keys,
         cipher,
+        configDirs: createMemoryConfigDirs().dirs,
         audit,
         now,
       }),

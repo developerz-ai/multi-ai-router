@@ -11,6 +11,10 @@ import type { AccountView, DeletedView } from "./types"
 // - On the update body, `null` means *clear this* and an absent key means
 //   *leave it alone*. `credential` is the exception — it may be rotated but
 //   never cleared, so it is `string | undefined` and never nullable.
+//
+// `configDir` is on neither body. A Claude subscription's `CLAUDE_CONFIG_DIR` is
+// named by the router after the account id and provisioned on create; both
+// bodies are strict, so sending one is a 400 rather than a value ignored.
 
 export interface AccountListFilter {
   readonly status?: AccountStatus
@@ -21,7 +25,6 @@ export interface CreateAccountInput {
   readonly label: string
   readonly provider: ProviderId
   readonly credential?: string
-  readonly configDir?: string
   readonly baseUrl?: string
   readonly dialect?: Dialect
   readonly modelAliases?: Readonly<Record<string, string>>
@@ -35,7 +38,6 @@ export type OperatorStatus = "active" | "disabled"
 export interface UpdateAccountInput {
   readonly label?: string
   readonly credential?: string
-  readonly configDir?: string | null
   readonly baseUrl?: string | null
   readonly dialect?: Dialect | null
   readonly modelAliases?: Readonly<Record<string, string>> | null

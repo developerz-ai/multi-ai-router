@@ -1,3 +1,4 @@
+import { isAbsolute } from "node:path"
 import { z } from "zod"
 
 /**
@@ -142,6 +143,7 @@ export interface Env {
   readonly logLevel: LogLevel
   readonly trustProxy: boolean
   readonly publicUrl: string | null
+  /** Parent of the per-Account `CLAUDE_CONFIG_DIR`s — `providers/claude-sdk/config-dir.ts`. */
   readonly claudeConfigRoot: string
   /**
    * Pins the `claude` binary the Agent SDK spawns, bypassing the resolution ladder. Set means
@@ -212,7 +214,7 @@ const envSchema = z
     LOG_LEVEL: z.enum(LOG_LEVELS).optional(),
     TRUST_PROXY: flag.optional(),
     PUBLIC_URL: absoluteUrl.optional(),
-    CLAUDE_CONFIG_ROOT: nonEmpty.optional(),
+    CLAUDE_CONFIG_ROOT: nonEmpty.refine(isAbsolute, "must be an absolute path").optional(),
     CLAUDE_CLI_PATH: nonEmpty.optional(),
     METRICS_TOKEN: nonEmpty.optional(),
     ACCOUNT_RECHECK_COOLDOWN_SECONDS: wholeNumber.optional(),
