@@ -1,4 +1,6 @@
 import type {
+  ScheduledTaskRepository,
+  UsageDailyRepository,
   UsageDimension,
   UsageGroupRow,
   UsageGroupSeriesPoint,
@@ -7,6 +9,7 @@ import type {
   UsageTotals,
 } from "@multi-ai-router/db"
 import { type AdminResult, ok } from "../admin/result"
+import { readBreakdown, readTotals } from "./aggregate"
 import { buildAxis, densify } from "./axis"
 import { resolveWindow, type UsageWindowQuery } from "./window"
 
@@ -23,6 +26,11 @@ import { resolveWindow, type UsageWindowQuery } from "./window"
  * keys are purged 30 days later, historical rows stay), so a row can reference something that no
  * longer exists. That renders as "deleted", never as a blank cell and never by dropping the row —
  * spend that happened is still spend, and hiding it would make the totals stop adding up.
+ *
+ * **Totals and breakdowns are stitched from rolled days plus today's raw rows** (`aggregate.ts`),
+ * because raw rows expire and the rollup does not — a `lifetime` total read from raw alone would
+ * quietly mean "since the retention window". The series is the one aggregate still read straight
+ * from raw: its buckets can be hourly, a grain `usage_daily` does not have.
  */
 
 export interface UsageSummary {
@@ -83,6 +91,14 @@ export interface UsageLabelSets {
 
 export interface UsageServiceDeps {
   readonly usage: UsageReadRepository
+  /** The rolled days. Every closed day in a window is answered from here, never by scanning raw rows. */
+  readonly daily: Pick<UsageDailyRepository, "totals" | "breakdown">
+  /**
+   * How far the rollup has actually got. Read per summary rather than cached:
+   * it changes hourly, it is one indexed row, and a stale reading here is the
+   * one that would make a day of usage look like a day of silence.
+   */
+  readonly scheduledTasks: Pick<ScheduledTaskRepository, "lastSuccess">
   readonly labels: () => Promise<UsageLabelSets>
   readonly now: () => Date
 }
@@ -94,18 +110,28 @@ export interface UsageService {
 export function createUsageService(deps: UsageServiceDeps): UsageService {
   return {
     summary: async (query) => {
-      const window = resolveWindow(query, deps.now())
+      // One reading of the clock for the whole summary: it resolves the window *and* decides
+      // which days count as closed, and two readings could disagree across a midnight tick.
+      const now = deps.now()
+      const window = resolveWindow(query, now)
+
+      // Which table answers which day depends on how far the rollup got, so this one row has to
+      // land before the aggregates are issued. It rides with the labels, which need nothing.
+      const [labels, lastRollup] = await Promise.all([
+        deps.labels(),
+        deps.scheduledTasks.lastSuccess("usage_rollup"),
+      ])
+      const rolledAt = lastRollup?.startedAt ?? null
 
       // One window, several independent aggregates: issued together rather than in sequence, so
       // the screen costs one round trip's latency instead of seven.
       const dimensions: readonly UsageDimension[] = ["apiKeyId", "accountId", "poolId", "model"]
 
-      const [labels, totals, latency, series, breakdowns, groupSeries] = await Promise.all([
-        deps.labels(),
-        deps.usage.totals(window),
+      const [totals, latency, series, breakdowns, groupSeries] = await Promise.all([
+        readTotals(deps, window, now, rolledAt),
         deps.usage.latency(window),
         deps.usage.series(window, window.bucket),
-        Promise.all(dimensions.map((d) => deps.usage.breakdown(window, d))),
+        Promise.all(dimensions.map((d) => readBreakdown(deps, window, now, rolledAt, d))),
         Promise.all(dimensions.map((d) => deps.usage.seriesByDimension(window, window.bucket, d))),
       ])
 

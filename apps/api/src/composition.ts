@@ -3,6 +3,8 @@ import {
   createApiKeyRepository,
   createAuditRepository,
   createPoolRepository,
+  createScheduledTaskRepository,
+  createUsageDailyRepository,
   createUsageReadRepository,
   createUsageRecordRepository,
   type Database,
@@ -81,6 +83,12 @@ export function createRuntime(deps: RuntimeDeps): Runtime {
   const pools = createPoolRepository(database)
   const audit = createAuditRecorder(createAuditRepository(database))
   const usageRecords = createUsageRecordRepository(database)
+  // Shared by the admin read path (closed days) and the rollup task (the writer
+  // that puts them there) — one repository, both directions.
+  const usageDaily = createUsageDailyRepository(database)
+  // The scheduler's run log. The usage read path needs it too, to know which
+  // days the rollup has actually closed.
+  const scheduledTasks = createScheduledTaskRepository(database)
 
   // --- warm state -----------------------------------------------------------
   const health = createHealthStore()
@@ -203,6 +211,8 @@ export function createRuntime(deps: RuntimeDeps): Runtime {
     // renders as "deleted", because spend that happened is still spend.
     usage: createUsageService({
       usage: createUsageReadRepository(database),
+      daily: usageDaily,
+      scheduledTasks,
       labels: async () => ({
         keys: new Map((await keys.list()).map((key) => [key.id, key.name])),
         accounts: new Map(catalog.accounts().map((a) => [a.id, a.snapshot.label])),

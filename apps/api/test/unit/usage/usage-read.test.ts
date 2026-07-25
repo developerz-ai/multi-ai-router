@@ -47,6 +47,17 @@ function service(rows: readonly UsageGroupRow[]) {
       seriesByDimension: async () => [],
       breakdown: async () => [...rows],
     },
+    // Every case below asks for `today`, which has no closed days — the rolled
+    // side is never consulted, and saying so with a throw keeps it that way.
+    daily: {
+      totals: async () => {
+        throw new Error("the rolled table must not be read for a same-day window")
+      },
+      breakdown: async () => {
+        throw new Error("the rolled table must not be read for a same-day window")
+      },
+    },
+    scheduledTasks: { lastSuccess: async () => undefined },
     labels: async () => ({
       keys: new Map([["key-1", "dev-laptops"]]),
       accounts: new Map([["acct-1", "claude-max-01"]]),

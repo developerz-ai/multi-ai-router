@@ -3,6 +3,10 @@
  * writer the request path feeds — same table, opposite direction, different reasons to change.
  */
 
+export type { UsageAggregateSources } from "./aggregate"
+export { readBreakdown, readTotals } from "./aggregate"
+export type { WindowSplit } from "./rollup"
+export { addDecimal, mergeGroupRows, splitWindow, sumTotals } from "./rollup"
 export type {
   UsageBreakdownRow,
   UsageLabelSets,

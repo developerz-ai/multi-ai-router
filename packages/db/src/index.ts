@@ -58,7 +58,12 @@ export type {
   UsageDailyRepository,
   UsageDayRange,
 } from "./repositories/usage-daily-repository"
-export { createUsageDailyRepository, toUtcDay } from "./repositories/usage-daily-repository"
+export {
+  createUsageDailyRepository,
+  startOfNextUtcDay,
+  startOfUtcDay,
+  toUtcDay,
+} from "./repositories/usage-daily-repository"
 export type {
   UsageDimension,
   UsageGroupRow,

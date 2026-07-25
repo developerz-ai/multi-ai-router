@@ -1,14 +1,20 @@
 import type {
+  AccountRepository,
   ApiKeyRepository,
   AuditRepository,
   OauthStateRepository,
+  ScheduledTaskRepository,
   SessionRepository,
+  UsageDailyRepository,
   UsageRecordRepository,
 } from "@multi-ai-router/db"
 import type { Env } from "../../config/env"
+import type { HealthStore } from "../../services/dataplane"
 import type { ScheduledTask } from "../types"
 import { createJanitorTask } from "./janitor"
 import { createOauthPurgeTask } from "./oauth-purge"
+import { createQuotaFloorTask } from "./quota-floor"
+import { createUsageRollupTask } from "./usage-rollup"
 
 /**
  * The task registry — the list `createScheduler` is handed, and the one place
@@ -31,6 +37,12 @@ export interface ScheduledTaskDeps {
   readonly auditEvents: Pick<AuditRepository, "deleteOlderThan">
   readonly apiKeys: Pick<ApiKeyRepository, "deleteRevokedOlderThan">
   readonly oauthStates: Pick<OauthStateRepository, "deleteExpiredBefore">
+  readonly usageDaily: Pick<UsageDailyRepository, "rollup">
+  readonly accounts: Pick<AccountRepository, "list" | "listQuotaWindows" | "upsertQuotaWindow">
+  /** The rollup's catch-up cursor. The runner uses this repository too, for its own run rows. */
+  readonly scheduledTasks: Pick<ScheduledTaskRepository, "lastSuccess">
+  /** The quota floor's freshness read. It never writes health — see that task's note. */
+  readonly health: Pick<HealthStore, "stateOf">
   /** A full `Env` satisfies this, so the composition root passes `env` straight through. */
   readonly env: Pick<Env, "retention" | "janitorIntervalMinutes" | "scheduler">
 }
@@ -41,6 +53,7 @@ const MINUTE_MS = 60_000
 export function createScheduledTasks(deps: ScheduledTaskDeps): readonly ScheduledTask[] {
   const { env } = deps
   const batchSize = env.scheduler.sweepBatchSize
+  const quotaFloorMs = env.scheduler.quotaFloorIntervalMinutes * MINUTE_MS
 
   return [
     createJanitorTask({
@@ -52,10 +65,26 @@ export function createScheduledTasks(deps: ScheduledTaskDeps): readonly Schedule
       intervalMs: env.janitorIntervalMinutes * MINUTE_MS,
       batchSize,
     }),
+    createUsageRollupTask({
+      usageDaily: deps.usageDaily,
+      scheduledTasks: deps.scheduledTasks,
+      retention: env.retention,
+      intervalMs: env.scheduler.usageRollupIntervalMinutes * MINUTE_MS,
+    }),
     createOauthPurgeTask({
       oauthStates: deps.oauthStates,
       intervalMs: env.scheduler.oauthStatePurgeIntervalMinutes * MINUTE_MS,
       batchSize,
+    }),
+    createQuotaFloorTask({
+      accounts: deps.accounts,
+      health: deps.health,
+      intervalMs: quotaFloorMs,
+      // The interval *is* the idleness threshold: the floor's job is to cover
+      // exactly the accounts traffic did not refresh since it last looked.
+      // Deriving it here keeps the two from ever drifting apart, and keeps a
+      // knob out of `.env` that nobody could tune meaningfully.
+      idleAfterMs: quotaFloorMs,
     }),
   ]
 }
@@ -64,5 +93,9 @@ export type { JanitorDeps } from "./janitor"
 export { createJanitorTask } from "./janitor"
 export type { OauthPurgeDeps } from "./oauth-purge"
 export { createOauthPurgeTask } from "./oauth-purge"
+export type { QuotaFloorDeps } from "./quota-floor"
+export { createQuotaFloorTask } from "./quota-floor"
 export type { Sweep, SweepOptions, SweepReport } from "./sweep"
 export { runSweeps } from "./sweep"
+export type { UsageRollupDeps } from "./usage-rollup"
+export { createUsageRollupTask, rollupFrom } from "./usage-rollup"

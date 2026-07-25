@@ -1,4 +1,5 @@
 import type { UsageWindow } from "@multi-ai-router/db"
+import { startOfUtcDay } from "@multi-ai-router/db"
 import { z } from "zod"
 
 /**
@@ -66,8 +67,4 @@ export function resolveWindow(query: UsageWindowQuery, now: Date): ResolvedWindo
 
 function bucketFor(spanMs: number): UsageBucket {
   return spanMs <= HOURLY_MAX_SPAN_MS ? "hour" : "day"
-}
-
-function startOfUtcDay(now: Date): Date {
-  return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()))
 }
