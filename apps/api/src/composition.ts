@@ -14,6 +14,7 @@ import {
 } from "@multi-ai-router/db"
 import type { Env } from "./config/env"
 import type { Logger } from "./logging/logger"
+import { createRuntimeMetrics, type RouterMetrics } from "./observability"
 import {
   advisoryTaskLock,
   createScheduledTasks,
@@ -34,10 +35,10 @@ import {
   createDispatcher,
   createHealthStore,
   createRouterKeyVerifier,
-  createScopeLoader,
   type Dispatcher,
   type HealthStore,
   type RouterKeyVerifier,
+  repositoryScopeLoader,
 } from "./services/dataplane"
 import { createKeysService } from "./services/keys"
 import { createPoolsService } from "./services/pools"
@@ -84,6 +85,8 @@ export interface Runtime {
   readonly health: HealthStore
   /** Exposed for the admin plane's "run now" and for shutdown ordering; the timers are internal. */
   readonly scheduler: Scheduler
+  /** What `GET /metrics` renders. Fed from the usage drain, the scheduler, and per-scrape gauges. */
+  readonly metrics: RouterMetrics
   /** Loads the catalog and starts the background writers. Awaited before the listener opens. */
   start(): Promise<void>
   /** Flushes what is queued and stops the timers. */
@@ -118,6 +121,8 @@ export function createRuntime(deps: RuntimeDeps): Runtime {
     refreshIntervalMs: env.dataPlane.catalogRefreshSeconds * 1_000,
     now,
   })
+  // `usage` is a getter because the recorder below reports *into* this: see `observability/`.
+  const metrics = createRuntimeMetrics({ catalog, health, usage: () => usage, logger, now })
 
   const usage: UsageRecorder = createUsageRecorder(
     {
@@ -129,6 +134,7 @@ export function createRuntime(deps: RuntimeDeps): Runtime {
       maxQueued: env.dataPlane.usageQueueMax,
       batchSize: env.dataPlane.usageBatchSize,
       flushIntervalMs: env.dataPlane.usageFlushIntervalMs,
+      onRecord: (record) => metrics.observeUsage(record),
     },
   )
 
@@ -153,22 +159,14 @@ export function createRuntime(deps: RuntimeDeps): Runtime {
     jitterFraction: env.scheduler.jitterFraction,
     logger,
     now,
+    onTick: (result) => metrics.observeTask(result),
   })
 
   // --- data plane -----------------------------------------------------------
   const verifier = createRouterKeyVerifier({
     repository: keys,
     cipher,
-    loadScope: createScopeLoader(async (apiKeyId) => {
-      const [poolRows, accountRows] = await Promise.all([
-        keys.listPoolTargets(apiKeyId),
-        keys.listAccountTargets(apiKeyId),
-      ])
-      return {
-        poolIds: poolRows.map((row) => row.poolId),
-        accountIds: accountRows.map((row) => row.accountId),
-      }
-    }),
+    loadScope: repositoryScopeLoader(keys),
     cache: {
       maxEntries: env.dataPlane.keyCacheMax,
       ttlMs: env.dataPlane.keyCacheTtlSeconds * 1_000,
@@ -193,6 +191,7 @@ export function createRuntime(deps: RuntimeDeps): Runtime {
     cipher,
     usage,
     logger,
+    onRequest: (sample) => metrics.observeRequest(sample),
     options: {
       failover: { maxAttempts: env.failover.maxAttempts },
       upstreamTimeoutMs: env.failover.upstreamTimeoutMs,
@@ -274,6 +273,7 @@ export function createRuntime(deps: RuntimeDeps): Runtime {
     catalog,
     health,
     scheduler,
+    metrics,
     start: async () => {
       // Awaited: serving a request against an empty catalog would look exactly
       // like a deployment with no accounts configured.

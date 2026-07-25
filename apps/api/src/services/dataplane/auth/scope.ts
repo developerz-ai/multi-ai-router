@@ -45,6 +45,29 @@ export function createScopeLoader(
 }
 
 /**
+ * The two membership queries a scoped key's targets come from. Structural rather than the
+ * repository's own type, so this layer still never learns what a table is.
+ */
+export interface KeyTargetSource {
+  listPoolTargets(apiKeyId: string): Promise<readonly { readonly poolId: string }[]>
+  listAccountTargets(apiKeyId: string): Promise<readonly { readonly accountId: string }[]>
+}
+
+/** The production loader: both membership queries in parallel, shaped into a scope snapshot. */
+export function repositoryScopeLoader(source: KeyTargetSource): KeyScopeLoader {
+  return createScopeLoader(async (apiKeyId) => {
+    const [pools, accounts] = await Promise.all([
+      source.listPoolTargets(apiKeyId),
+      source.listAccountTargets(apiKeyId),
+    ])
+    return {
+      poolIds: pools.map((row) => row.poolId),
+      accountIds: accounts.map((row) => row.accountId),
+    }
+  })
+}
+
+/**
  * A loader for a deployment with no scoped keys yet: `all` passes, and a key that *claims* a
  * limited scope resolves to an **empty** target set rather than to `all`. Failing closed is the
  * only safe direction — widening a scope because its targets could not be loaded is precisely the

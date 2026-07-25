@@ -3,6 +3,7 @@ import {
   NoHealthyAccountError,
   type RouterError,
   TranslationError,
+  type UsageOutcome,
 } from "@multi-ai-router/core"
 import type { Logger } from "../../logging/logger"
 import type { CredentialCipher } from "../crypto/cipher"
@@ -15,9 +16,16 @@ import { runChain } from "./chain"
 import { egressRejectionError } from "./egress/mode"
 import { buildSnapshot, type HealthStore } from "./health"
 import { planCandidates } from "./plan"
-import { attemptRecord, errorClassOf, outcomeOf } from "./records"
+import { attemptRecord, errorClassOf, outcomeOf, SUCCESS_OUTCOME } from "./records"
 import { createRuntime } from "./runtime"
-import { type DataPlaneClock, type FetchLike, type RoutingCatalog, SYSTEM_CLOCK } from "./types"
+import {
+  type DataPlaneClock,
+  type FetchLike,
+  type RequestObserver,
+  type RequestSample,
+  type RoutingCatalog,
+  SYSTEM_CLOCK,
+} from "./types"
 
 /**
  * The request lifecycle, steps 3-12 of `docs/idea/01-architecture.md`:
@@ -55,6 +63,8 @@ export interface DispatcherDeps {
   readonly fetch?: FetchLike
   readonly clock?: DataPlaneClock
   readonly logger?: Logger
+  /** Notified once per client request, after it ended. Feeds `router_requests_total`. */
+  readonly onRequest?: RequestObserver
   readonly options?: DispatchOptions
 }
 
@@ -78,81 +88,143 @@ export function createDispatcher(deps: DispatcherDeps): Dispatcher {
   const call = deps.fetch ?? ((request: Request) => fetch(request))
   const options = deps.options ?? {}
 
+  /**
+   * The request itself. `progress` carries the two readings the observer needs but only this
+   * function learns: when the request started, and what model its body named.
+   */
+  const serve = async (input: DispatchInput, progress: RequestProgress): Promise<Response> => {
+    const { startedAt, requestStarted } = progress
+
+    const body = await readRequestBody(input.request.body, options.body)
+    const model = body.fields.model
+    if (model === null) throw new TranslationError(NO_MODEL)
+    progress.model = model
+
+    const session = resolveSessionKey(
+      input.request.headers,
+      input.key.id,
+      body.fields.conversationPrefix,
+      options.sessionHeaders ?? DEFAULT_SESSION_HEADERS,
+    )
+
+    const runtime = createRuntime({
+      health: deps.health,
+      cipher: deps.cipher,
+      call,
+      clock,
+      timeoutMs: options.upstreamTimeoutMs ?? DEFAULT_UPSTREAM_TIMEOUT_MS,
+      record: (record) => deps.usage.record(record),
+      // Two different ids on purpose: the correlation id is router-owned and joins this
+      // request's attempts, while the client's own id is a trace label a caller may repeat or
+      // forge. Using the latter as the join key would merge two clients' chains.
+      correlationId: correlationIdFrom(input.requestId),
+      clientRequestId: clientRequestIdFrom(input.requestId),
+      apiKeyId: input.key.id,
+      sessionKey: session.key,
+      model,
+      ingressDialect: input.ingress,
+      requestStarted,
+    })
+
+    const fail = (error: RouterError): never => {
+      runtime.record(
+        attemptRecord({
+          ...runtime.preflightAttribution(),
+          timing: runtime.timing(startedAt, requestStarted, 0),
+          outcome: outcomeOf(error),
+          streamed: false,
+          httpStatus: null,
+          errorClass: errorClassOf(error),
+        }),
+      )
+      throw error
+    }
+
+    // Scope intersection, filtering, and policy — one pure call over an injected snapshot.
+    const selection = selectAccounts(
+      buildSnapshot(deps.catalog, deps.health, clock.now()),
+      { sessionKey: session.key, model, keyScope: input.key.scope },
+      options.selection,
+    )
+    if (!selection.ok) return fail(selection.error)
+
+    const plan = planCandidates(selection.candidates, deps.catalog, input.ingress)
+    if (plan.servable.length === 0) {
+      return fail(
+        plan.rejection !== null
+          ? egressRejectionError(plan.rejection)
+          : (plan.endpointError ?? new NoHealthyAccountError(NO_CANDIDATE)),
+      )
+    }
+
+    return runChain({
+      runtime,
+      plan: plan.servable,
+      request: input.request,
+      bodyBytes: body.bytes,
+      modelSpan: body.fields.modelSpan,
+      failover: options.failover,
+      log: deps.logger?.child({ component: "transport", requestId: input.requestId }),
+    })
+  }
+
+  const observe = deps.onRequest
+
   return {
     async dispatch(input) {
-      const startedAt = clock.now()
-      const requestStarted = clock.elapsed()
+      const progress: RequestProgress = {
+        startedAt: clock.now(),
+        requestStarted: clock.elapsed(),
+        model: null,
+      }
+      if (observe === undefined) return serve(input, progress)
 
-      const body = await readRequestBody(input.request.body, options.body)
-      const model = body.fields.model
-      if (model === null) throw new TranslationError(NO_MODEL)
-
-      const session = resolveSessionKey(
-        input.request.headers,
-        input.key.id,
-        body.fields.conversationPrefix,
-        options.sessionHeaders ?? DEFAULT_SESSION_HEADERS,
-      )
-
-      const runtime = createRuntime({
-        health: deps.health,
-        cipher: deps.cipher,
-        call,
-        clock,
-        timeoutMs: options.upstreamTimeoutMs ?? DEFAULT_UPSTREAM_TIMEOUT_MS,
-        record: (record) => deps.usage.record(record),
-        // Two different ids on purpose: the correlation id is router-owned and joins this
-        // request's attempts, while the client's own id is a trace label a caller may repeat or
-        // forge. Using the latter as the join key would merge two clients' chains.
-        correlationId: correlationIdFrom(input.requestId),
-        clientRequestId: clientRequestIdFrom(input.requestId),
-        apiKeyId: input.key.id,
-        sessionKey: session.key,
-        model,
-        ingressDialect: input.ingress,
-        requestStarted,
-      })
-
-      const fail = (error: RouterError): never => {
-        runtime.record(
-          attemptRecord({
-            ...runtime.preflightAttribution(),
-            timing: runtime.timing(startedAt, requestStarted, 0),
-            outcome: outcomeOf(error),
-            streamed: false,
-            httpStatus: null,
-            errorClass: errorClassOf(error),
-          }),
-        )
+      try {
+        const response = await serve(input, progress)
+        observe(sampleOf(input, progress, outcomeForResponse(response), clock, streamed(response)))
+        return response
+      } catch (error) {
+        observe(sampleOf(input, progress, outcomeOf(error), clock, false))
         throw error
       }
-
-      // Scope intersection, filtering, and policy — one pure call over an injected snapshot.
-      const selection = selectAccounts(
-        buildSnapshot(deps.catalog, deps.health, clock.now()),
-        { sessionKey: session.key, model, keyScope: input.key.scope },
-        options.selection,
-      )
-      if (!selection.ok) return fail(selection.error)
-
-      const plan = planCandidates(selection.candidates, deps.catalog, input.ingress)
-      if (plan.servable.length === 0) {
-        return fail(
-          plan.rejection !== null
-            ? egressRejectionError(plan.rejection)
-            : (plan.endpointError ?? new NoHealthyAccountError(NO_CANDIDATE)),
-        )
-      }
-
-      return runChain({
-        runtime,
-        plan: plan.servable,
-        request: input.request,
-        bodyBytes: body.bytes,
-        modelSpan: body.fields.modelSpan,
-        failover: options.failover,
-        log: deps.logger?.child({ component: "transport", requestId: input.requestId }),
-      })
     },
   }
+}
+
+/** The mutable half of one dispatch: what the observer needs and only `serve` finds out. */
+interface RequestProgress {
+  readonly startedAt: Date
+  readonly requestStarted: number
+  model: string | null
+}
+
+function sampleOf(
+  input: DispatchInput,
+  progress: RequestProgress,
+  outcome: UsageOutcome,
+  clock: DataPlaneClock,
+  isStreamed: boolean,
+): RequestSample {
+  return {
+    ingressDialect: input.ingress,
+    model: progress.model,
+    keyId: input.key.id,
+    outcome,
+    durationMs: Math.max(0, clock.elapsed() - progress.requestStarted),
+    streamed: isStreamed,
+  }
+}
+
+/**
+ * A relayed upstream error is a `Response`, not a throw — the chain hands back the provider's own
+ * answer when that is the honest one. Counting it as a success because it resolved would report a
+ * pool answering nothing but 400s as perfectly healthy.
+ */
+function outcomeForResponse(response: Response): UsageOutcome {
+  if (response.ok) return SUCCESS_OUTCOME
+  return response.status < 500 ? "client_error" : "upstream_error"
+}
+
+function streamed(response: Response): boolean {
+  return response.headers.get("content-type")?.includes("text/event-stream") ?? false
 }

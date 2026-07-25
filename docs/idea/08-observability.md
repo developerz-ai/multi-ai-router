@@ -1,10 +1,10 @@
 # Observability
 
-Status: **`UsageRecord` writing, structured logging, redaction, audit events, and `/healthz` +
-`/readyz` are implemented.** Everything downstream of the raw rows is **not**: no rollups, no usage
-API, no charts, no `/metrics`, no quota surface, no scheduled tasks to report on. The field table
-below matches the shipped schema; the rest is the contract those surfaces must meet. Retention knobs
-live in [09-deployment.md](09-deployment.md).
+Status: **`UsageRecord` writing, structured logging, redaction, audit events, the usage API, the
+scheduled tasks, and `/healthz` + `/readyz` + `/metrics` are implemented.** Not yet: charts beyond
+what the console renders today, the quota surface, and cost estimation. The field table below
+matches the shipped schema; the rest is the contract those surfaces must meet. Retention knobs live
+in [09-deployment.md](09-deployment.md).
 
 ## UsageRecord
 
@@ -179,7 +179,7 @@ immediately if it is healthy.
 |---|---|---|---|
 | `GET /healthz` | none | Liveness. The process is up and serving | `200` always while serving |
 | `GET /readyz` | none | Readiness: **database reachable**. The account pool is reported (`ok` / `none` / `blocked`) but does not gate the answer | `200` ready, `503` with a short reason when the database is unreachable |
-| `GET /metrics` | **DEFERRED** (bind-scoped or token) | Prometheus text exposition | `200` |
+| `GET /metrics` | `METRICS_TOKEN` when set, none when not | Prometheus text exposition | `200`, `401` when the token is set and not presented |
 | `GET /v1/usage/quota` | router key or admin session | Per-Account, per-window utilization, `resetsAt`, `resetSource`, `status`, `lastCheckedAt` — the same shape the UI renders, so an operator can alert on it externally | `200` |
 | `POST /api/admin/accounts/:id/recheck` | admin session | Manual re-check. `POST /api/admin/accounts/recheck` re-checks every account | `200` always — a cooldown refusal is `rechecked: false`, not `429` |
 | `GET /api/admin/usage` | admin session | Totals, series and breakdowns per key / account / pool / model over a window | `200` |
@@ -225,7 +225,28 @@ identity beyond its label.
 
 Label discipline: no unbounded label values. `key_id` and `account_id` are bounded by the
 deployment's own inventory; `session_id`, `request_id`, and user-supplied strings are **never**
-metric labels — they live on the `UsageRecord` and in logs.
+metric labels — they live on the `UsageRecord` and in logs. `model` is the one label a client can
+influence, so it is truncated and every metric stops adding series at a per-metric ceiling rather
+than growing without bound; hitting the ceiling logs a `warn` naming the metric.
+
+### Where the numbers come from
+
+Recording is off the critical path by construction, and reading the series correctly depends on
+knowing which clock each one is on:
+
+| Series | Fed from | Reads as |
+|---|---|---|
+| Everything per **attempt** (`router_upstream_*`, `router_tokens_total`, `router_overhead_seconds`, `router_failovers_total`) | The usage recorder's **batch drain** — the same background pass that writes the rows | Lags a scrape by at most one flush interval. Never costs a request anything |
+| `router_requests_total`, `router_request_duration_seconds` | Once per client request, where the request ends | Duration is measured to the response being handed back. A **streamed** body drains after that, so a streamed sample is time-to-response, not time-to-last-token — never average the two `streamed` label values together |
+| `router_accounts`, `router_quota_*`, `router_usage_queue_depth` | Sampled **per scrape** from the same warm state the request path reads | Cannot disagree with the router about which accounts are cooling down |
+| `router_task_*` | Each settled scheduler tick | `skipped_locked` records a run that never happened: no duration, no items, and the failure streak is left alone |
+
+Two deliberate absences. `router_overhead_seconds` has no sample for a request rejected before an
+egress path was chosen — there is no `path` to report, and inventing a fourth label value to hold
+"none" would put router-only failures in the same series operators use to compare passthrough with
+translation. And `router_failovers_total` counts a hop only once a **later** attempt of the same
+request proves the router moved on, so a chain that gave up leaves its final failure uncounted:
+it moved nowhere. Requests that failed outright are counted by `router_requests_total{outcome}`.
 
 ## Structured logging
 

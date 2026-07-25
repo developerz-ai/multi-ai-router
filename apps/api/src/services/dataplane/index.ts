@@ -17,8 +17,10 @@ export {
   createScopeLoader,
   type KeyScopeLoader,
   type KeyScopeTargets,
+  type KeyTargetSource,
   keyScopeSnapshot,
   NO_TARGETS,
+  repositoryScopeLoader,
   unscopedLoader,
 } from "./auth/scope"
 export {
@@ -86,6 +88,8 @@ export {
   type DataPlaneClock,
   type FetchLike,
   type IngressDialect,
+  type RequestObserver,
+  type RequestSample,
   type RoutableAccount,
   type RoutingCatalog,
   routingView,

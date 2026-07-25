@@ -133,6 +133,11 @@ export interface Env {
   readonly trustProxy: boolean
   readonly publicUrl: string | null
   readonly claudeConfigRoot: string
+  /**
+   * Bearer token `GET /metrics` demands, or null to leave it open. Null is the right default for
+   * a deployment whose metrics port is not routable; see `routes/metrics.ts`.
+   */
+  readonly metricsToken: string | null
   readonly accountRecheckCooldownSeconds: number
   readonly retention: RetentionConfig
   readonly janitorIntervalMinutes: number
@@ -191,6 +196,7 @@ const envSchema = z
     TRUST_PROXY: flag.optional(),
     PUBLIC_URL: absoluteUrl.optional(),
     CLAUDE_CONFIG_ROOT: nonEmpty.optional(),
+    METRICS_TOKEN: nonEmpty.optional(),
     ACCOUNT_RECHECK_COOLDOWN_SECONDS: wholeNumber.optional(),
     RETENTION_SESSIONS_HOURS: wholeNumber.optional(),
     RETENTION_USAGE_DAYS: wholeNumber.optional(),
@@ -252,6 +258,7 @@ const envSchema = z
       trustProxy: raw.TRUST_PROXY ?? false,
       publicUrl: raw.PUBLIC_URL ?? null,
       claudeConfigRoot: raw.CLAUDE_CONFIG_ROOT ?? "/data/claude",
+      metricsToken: raw.METRICS_TOKEN ?? null,
       accountRecheckCooldownSeconds: raw.ACCOUNT_RECHECK_COOLDOWN_SECONDS ?? 60,
       retention: {
         sessionsHours: raw.RETENTION_SESSIONS_HOURS ?? 24,

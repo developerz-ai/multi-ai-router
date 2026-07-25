@@ -1,4 +1,4 @@
-import type { Dialect } from "@multi-ai-router/core"
+import type { Dialect, UsageOutcome } from "@multi-ai-router/core"
 import type { DriverAccount } from "../../providers"
 import type { AccountSnapshot, PoolSnapshot } from "../routing"
 
@@ -53,6 +53,31 @@ export const SYSTEM_CLOCK: DataPlaneClock = {
   now: () => new Date(),
   elapsed: () => performance.now(),
 }
+
+/**
+ * One finished client request, as the router observed it.
+ *
+ * Reported here because no `UsageRecord` can carry it: a request that failed over writes several
+ * attempt rows, and none of them says which attempt the client's answer came from. Everything
+ * that *is* per-attempt stays on the record and is counted off the request path.
+ */
+export interface RequestSample {
+  readonly ingressDialect: Dialect
+  /** What the body named, never substituted. Null when it named nothing at all. */
+  readonly model: string | null
+  readonly keyId: string
+  readonly outcome: UsageOutcome
+  /**
+   * Router-observed time until the response was handed back. A streamed body drains *after* that
+   * point, so a streamed sample measures time-to-response and not time-to-last-token — which is
+   * why `streamed` travels with it, and why the two populations are never averaged together.
+   */
+  readonly durationMs: number
+  readonly streamed: boolean
+}
+
+/** Notified once per client request. Must not throw; it is never awaited. */
+export type RequestObserver = (sample: RequestSample) => void
 
 /** Convenience for building a catalog entry's routing view without restating the defaults. */
 export function routingView(

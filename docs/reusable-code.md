@@ -132,6 +132,20 @@ Each is a Zod schema **and** its `z.infer` type under one name. These are the si
 | `checkReadiness(probes)`, `ReadinessProbes`, `createDatabaseProbe(...)`, `assumeHealthyAccounts` | `services/health/` | Health surfaces. Probes are injected, so the service needs no I/O |
 | `createRuntime(deps)` → `Runtime` | `composition.ts` | The composition root. Every long-lived object is built here once and injected downward — never construct a repository, cache, or recorder anywhere else |
 
+### Metrics — `apps/api/src/observability/`
+
+| Thing | Where | Use it when |
+|---|---|---|
+| `createRegistry(options)` → `Registry` with `counter` / `gauge` / `histogram` / `onCollect` / `expose` | `observability/registry.ts` | Any new metric primitive. Label names are declared once per metric and checked by the compiler, so a `request_id` label is a type error rather than a review comment. Series are capped per metric — cardinality may degrade, it may not take the process down |
+| `createSeries(options)` → `RouterSeries` | `observability/series.ts` | Adding or renaming a series. **Every** exported metric is declared here and nowhere else; the mapping code never names a metric |
+| `createMetrics(options)` → `RouterMetrics` | `observability/metrics.ts` | Turning a `UsageRecord`, a finished request, or a scheduler tick into numbers. Never measures anything itself |
+| `createRuntimeMetrics(deps)` → `RouterMetrics` | `observability/runtime.ts` | The production wiring: the registry plus the per-scrape gauges read from the warm catalog and health store. `composition.ts` is its one caller |
+
+Recording is off the critical path by construction: attempt series ride the usage recorder's
+`onRecord` drain, state gauges are sampled per scrape, and the only per-request call is a single
+counter increment at the point a request ends. Never add a metric write inside `attempt.ts` or the
+failover chain.
+
 ### Admin-plane plumbing — `apps/api/src/services/admin/` + `routes/admin/render.ts`
 
 Every admin route group is three lines because these four exist. Use them; do not hand-roll a
