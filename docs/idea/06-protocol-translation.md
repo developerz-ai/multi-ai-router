@@ -112,12 +112,24 @@ Quota signals arrive as SDK `rate_limit_event` messages rather than response hea
 
 | | |
 |---|---|
-| Clean | `user` / `assistant` roles; text blocks; `image` blocks with a base64 `source` ⇄ OpenAI `image_url` with a `data:` URI; `tool_result` ⇄ `role: "tool"` message keyed by `tool_call_id`. |
-| Lossy | OpenAI `image_url` pointing at a remote URL has no Anthropic counterpart with the same semantics — it is fetched and inlined, or rejected (`DEFERRED`: which). `detail: "low"/"high"` is dropped. Anthropic `document` blocks and `thinking` blocks have no OpenAI Chat counterpart. |
-| Rejected | Interleaved multi-part `tool_result` content the target cannot express; audio and file parts. |
+| Clean | `user` / `assistant` roles; text blocks; `image` blocks with a base64 `source` ⇄ OpenAI `image_url` with a `data:` URI; a remote-URL `image_url` ⇄ Anthropic's `source: {type:"url"}`; `tool_result` ⇄ `role: "tool"` message keyed by `tool_call_id`. |
+| Lossy | `detail: "low"/"high"` is dropped. Anthropic `thinking` / `redacted_thinking` blocks have no OpenAI Chat counterpart and are dropped. |
+| Rejected | Interleaved multi-part `tool_result` content the target cannot express; audio and file parts; an image source that is neither a base64 `data:` URI nor http(s); Anthropic `document` blocks. |
+
+A remote URL is **never fetched and inlined**. A translator is a pure function, and reaching an
+arbitrary URL from inside one puts a network call — and an SSRF surface — on the request path;
+Anthropic's own `url` image source carries the reference instead, so the fetch never has to happen.
+Anthropic `document` blocks are **rejected, not dropped**: a document is content the caller sent,
+and losing it quietly returns an answer to a question that was never asked.
 
 Anthropic requires strict `user`/`assistant` alternation; OpenAI does not. Translating toward
-Anthropic merges consecutive same-role messages rather than reordering them.
+Anthropic merges consecutive same-role messages rather than reordering them. Merging concatenates
+content the model was going to read in that order anyway; reordering would change what it was told.
+Every `role:"tool"` message becomes a `tool_result` block on a **user** turn, so a run of them
+merges into one turn — which is exactly the shape Anthropic expects. Toward OpenAI the same merge
+runs for plain-content turns only: alternation is not required there, but several
+OpenAI-compatible upstreams reject two adjacent `user` messages that OpenAI itself accepts. A turn
+carrying `tool_calls` or a `tool_call_id` never merges — it is keyed to one specific call.
 
 ### Tool and function calling
 
@@ -225,7 +237,8 @@ Be suspicious of any cell not listed here — if it is not documented, it is not
 | OpenAI `n > 1` | → `anthropic` | no counterpart; rejected with `400` |
 | `seed`, `frequency_penalty`, `presence_penalty`, `logit_bias` | → `anthropic` | dropped (documented, not rejected — they are hints, not contracts) |
 | Anthropic `top_k` | → OpenAI | dropped |
-| Remote-URL images, `detail: "low"/"high"` | → `anthropic` | inlined or rejected (**DEFERRED**) / dropped |
+| Remote-URL images | → `anthropic` | carried as Anthropic's `source: {type:"url"}`, never fetched — see [above](#message-roles-and-content-blocks). `detail: "low"/"high"` is dropped |
+| Absent `max_tokens` | → `anthropic` | Anthropic requires one and OpenAI's is optional, so a configured default is supplied. Not a constant in a branch: the value is a parameter of the translator, defaulted generously, because a low ceiling would truncate an answer the caller never asked to truncate |
 | Anthropic server-side tools (web search, code execution) | → OpenAI | unsupported; `400` |
 | Beta headers (`anthropic-beta`) | → non-Anthropic, and on the Agent-SDK path | dropped |
 | `temperature`, `top_p`, `top_k`, `max_tokens`, `stop`, `seed`, `n`, `logprobs`, penalties | → `agent-sdk` | **accepted and silently inert** — `query()` has no equivalent for any of them, so a value the caller set has no effect on the request. `reasoning_effort` is the exception, mapped onto the SDK's effort scale (`low`…`max`; OpenAI's `minimal` has no target) |
