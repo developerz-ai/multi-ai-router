@@ -138,6 +138,22 @@ export interface SchedulerConfig {
   readonly jitterFraction: number
 }
 
+/**
+ * Router-held OAuth token refresh. Per-account and expiry-driven, so none of these is an interval:
+ * they shape a schedule each account's own token dictates — `services/accounts/refresh/`.
+ *
+ * Claude subscriptions are untouched by every value here. Their tokens live in a `CLAUDE_CONFIG_DIR`
+ * the Agent SDK owns and the router never schedules a refresh for one (non-negotiable 1).
+ */
+export interface OAuthRefreshConfig {
+  /** Share of a token's remaining lifetime allowed to elapse first. `0.75` leaves a quarter. */
+  readonly leadFraction: number
+  /** Floor on any refresh delay, and the first step of the retry backoff. Never zero. */
+  readonly minDelaySeconds: number
+  /** Unreachable-issuer attempts before the account is parked. A refusal is never retried. */
+  readonly maxAttempts: number
+}
+
 /** Cross-dialect translation tuning. A ceiling an operator lives with is config, never code. */
 export interface TranslationConfig {
   /**
@@ -184,6 +200,7 @@ export interface Env {
   readonly dataPlane: DataPlaneConfig
   readonly failover: FailoverConfig
   readonly scheduler: SchedulerConfig
+  readonly oauthRefresh: OAuthRefreshConfig
   readonly translation: TranslationConfig
 }
 
@@ -218,6 +235,12 @@ const wholeNumber = z.string().regex(/^\d+$/, "must be a whole number").transfor
 /** For a ceiling where zero is not "unlimited" but "nothing ever runs". */
 const atLeastOne = wholeNumber.refine((v) => v >= 1, "must be at least 1")
 const flag = z.enum(["true", "false", "1", "0"]).transform((v) => v === "true" || v === "1")
+/** A share of something, written as a decimal in 0..1. */
+const fraction = z
+  .string()
+  .regex(/^\d+(\.\d+)?$/, "must be a number")
+  .transform(Number)
+  .refine((v) => v >= 0 && v <= 1, "must be between 0 and 1")
 const absoluteUrl = z.string().refine((v) => URL.canParse(v), "must be an absolute URL")
 const encryptionKey = z
   .string()
@@ -253,12 +276,14 @@ const envSchema = z
     OAUTH_STATE_PURGE_INTERVAL_MINUTES: wholeNumber.optional(),
     QUOTA_FLOOR_INTERVAL_MINUTES: wholeNumber.optional(),
     SWEEP_BATCH_SIZE: wholeNumber.optional(),
-    SCHEDULER_JITTER_FRACTION: z
-      .string()
-      .regex(/^\d+(\.\d+)?$/, "must be a number")
-      .transform(Number)
-      .refine((v) => v >= 0 && v <= 1, "must be between 0 and 1")
+    SCHEDULER_JITTER_FRACTION: fraction.optional(),
+    // Exclusive bounds: `0` would refresh in a loop and `1` would refresh at the instant of
+    // expiry, so both are misconfigurations rather than extreme-but-valid settings.
+    OAUTH_REFRESH_LEAD_FRACTION: fraction
+      .refine((v) => v > 0 && v < 1, "must be between 0 and 1, exclusive")
       .optional(),
+    OAUTH_REFRESH_MIN_DELAY_SECONDS: atLeastOne.optional(),
+    OAUTH_REFRESH_MAX_ATTEMPTS: atLeastOne.optional(),
     ADMIN_SESSION_IDLE_MINUTES: wholeNumber.optional(),
     ADMIN_SESSION_ABSOLUTE_HOURS: wholeNumber.optional(),
     ADMIN_LOGIN_MAX_ATTEMPTS: wholeNumber.optional(),
@@ -326,6 +351,11 @@ const envSchema = z
         quotaFloorIntervalMinutes: raw.QUOTA_FLOOR_INTERVAL_MINUTES ?? 30,
         sweepBatchSize: raw.SWEEP_BATCH_SIZE ?? 1_000,
         jitterFraction: raw.SCHEDULER_JITTER_FRACTION ?? 0.2,
+      },
+      oauthRefresh: {
+        leadFraction: raw.OAUTH_REFRESH_LEAD_FRACTION ?? 0.75,
+        minDelaySeconds: raw.OAUTH_REFRESH_MIN_DELAY_SECONDS ?? 30,
+        maxAttempts: raw.OAUTH_REFRESH_MAX_ATTEMPTS ?? 5,
       },
       adminAuth: {
         sessionIdleMinutes: raw.ADMIN_SESSION_IDLE_MINUTES ?? 480,

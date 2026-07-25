@@ -302,7 +302,7 @@ This is the part that is easy to get wrong, so it is stated as a rule rather tha
 | Rule | Meaning |
 |---|---|
 | **Per-account and expiry-driven** | Each OAuth account schedules its **own** refresh at a fraction of its remaining token lifetime — well before expiry, never lazily on a `401` — and re-schedules each time a new token lands. A fixed poll across all accounts is both wasteful and too late for a short-lived token |
-| **Single-flight per account** | Concurrent requests hitting an account whose token is refreshing wait on the same in-flight promise. Never N parallel refreshes racing to write the same row |
+| **Single-flight per account** | Concurrent triggers for one account — its timer, a re-arm after a login, an operator — await the same in-flight promise. Never N parallel refreshes racing to write the same row. **The request path is not one of those triggers**: a request never waits on a refresh, because nothing lazy on a `401` exists and no blocking I/O belongs on that path |
 | **A failed refresh does not fail requests** | The account moves to `needs_reauth`, drops out of routing, and surfaces in the admin UI. Retries back off and then stop, rather than hammering the provider |
 | **Claude subscription accounts have no router-managed token lifecycle at all** | Their credentials live inside that Account's `CLAUDE_CONFIG_DIR` and are refreshed by the Agent SDK / `claude` CLI. **The router never schedules, mints, or writes those tokens.** Our only job is to notice an SDK-reported auth failure and mark the account `needs_reauth`. Any doc or code describing a refresh timer for a Claude subscription is wrong — see [11-anthropic-agent-sdk.md](11-anthropic-agent-sdk.md) |
 

@@ -34,6 +34,12 @@ export interface OAuthExchangeDeps {
   readonly fetch: (request: Request) => Promise<Response>
   readonly exchangeTimeoutMs: number
   readonly now: () => Date
+  /**
+   * Fired once a token set has landed, so its refresh timer is armed against the new expiry rather
+   * than the one the row carried a moment ago (`../refresh/`). Optional, and required never to
+   * reject: a schedule that could not be re-armed must not turn a completed login into a failure.
+   */
+  readonly onCredentialWritten?: (accountId: string) => Promise<void>
 }
 
 export interface AuthorizedCode {
@@ -146,5 +152,6 @@ async function store(
     detail: { label: row.label, provider: row.provider, capture, previousStatus: row.status },
   })
 
+  await deps.onCredentialWritten?.(row.id)
   return mode
 }

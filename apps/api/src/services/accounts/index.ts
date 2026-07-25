@@ -46,6 +46,31 @@ export type { ProviderConnectFlow, ProviderDescriptor, ProviderTransport } from 
 export { describeProvider, describeProviders } from "./providers"
 export type { RecheckResult, RecheckService, RecheckServiceDeps } from "./recheck"
 export { createRecheckService } from "./recheck"
+export type {
+  CredentialRefreshConfig,
+  CredentialRefresher,
+  CredentialRefresherDeps,
+  RefreshExchangeDeps,
+  RefresherFromEnvDeps,
+  RefreshFailure,
+  RefreshOutcome,
+  RefreshStatusDeps,
+  RefreshTiming,
+  StoredOAuthCredential,
+} from "./refresh"
+export {
+  createCredentialRefresher,
+  MAX_TIMER_MS,
+  parkForReauth,
+  readStoredOAuth,
+  refreshCredential,
+  refreshDueAt,
+  refresherFromEnv,
+  retryDelayMs,
+  reviveAfterRefresh,
+  timerDelayMs,
+  writeStoredOAuth,
+} from "./refresh"
 export type { AccountShape } from "./rules"
 export { checkAccountShape } from "./rules"
 export type {
