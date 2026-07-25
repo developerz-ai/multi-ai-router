@@ -15,17 +15,19 @@ import {
   planNextAttempt,
   recordAttempt,
 } from "../routing"
-import { type TranslationContext, translateUpstreamError } from "../translate"
+import type { TranslationContext } from "../translate"
 import { createTokenObserver } from "../usage"
-import { runAttempt, type UpstreamError } from "./attempt"
+import { type AttemptOutcome, runAttempt, type UpstreamError } from "./attempt"
 import { rewriteModel } from "./body/read"
 import type { ByteSpan } from "./body/scanner"
 import { breakerOptionsFor } from "./health"
 import type { ServableCandidate } from "./plan"
 import { attemptRecord, failureOutcome, SUCCESS_OUTCOME } from "./records"
 import { relayResponse } from "./relay"
+import { relayUpstreamError } from "./relay-error"
 import { relayTranslatedResponse } from "./relay-translate"
 import type { DispatchRuntime } from "./runtime"
+import { runSdkAttempt } from "./sdk-attempt"
 import type { TranslatedRequestBody } from "./translate-body"
 
 /**
@@ -99,18 +101,9 @@ export async function runChain(ctx: ChainContext): Promise<Response> {
       continue
     }
 
-    let outcome: Awaited<ReturnType<typeof runAttempt>>
+    let outcome: AttemptOutcome
     try {
-      outcome = await runAttempt({
-        plan: servable,
-        method: ctx.request.method,
-        clientHeaders: ctx.request.headers,
-        body: upstreamBody,
-        fetch: runtime.call,
-        cipher: runtime.cipher,
-        timeoutMs: runtime.timeoutMs,
-        signal: ctx.request.signal,
-      })
+      outcome = await dispatch(ctx, servable, upstreamBody)
     } catch (error) {
       // A credential that will not decrypt, or a driver that refused to build the request. This
       // account cannot serve; the next one still can, and the reason is kept in case none can.
@@ -177,6 +170,41 @@ interface AttemptClock {
 }
 
 /**
+ * The one place the two transports diverge, and it is a single expression wide.
+ *
+ * Both answer with the same `AttemptOutcome`, so the loop above, the health store, the records, and
+ * the relay below are written once. The SDK's `Response` is synthesized from re-synthesized SDK
+ * output rather than relayed from a socket; from here down, nothing can tell.
+ */
+function dispatch(
+  ctx: ChainContext,
+  servable: ServableCandidate,
+  body: Uint8Array | null,
+): Promise<AttemptOutcome> {
+  const { runtime } = ctx
+  if (servable.kind === "sdk") {
+    return runSdkAttempt({
+      plan: servable,
+      body,
+      invoke: runtime.invokeSdk,
+      timeoutMs: runtime.timeoutMs,
+      signal: ctx.request.signal,
+    })
+  }
+
+  return runAttempt({
+    plan: servable,
+    method: ctx.request.method,
+    clientHeaders: ctx.request.headers,
+    body,
+    fetch: runtime.call,
+    cipher: runtime.cipher,
+    timeoutMs: runtime.timeoutMs,
+    signal: ctx.request.signal,
+  })
+}
+
+/**
  * The body this account gets.
  *
  * On the passthrough path: identical bytes unless the account's operator-authored alias map renames
@@ -184,7 +212,9 @@ interface AttemptClock {
  * bytes move. No parse, no re-serialization, no dropped unknown field.
  *
  * On the translate path the body is rebuilt field by field, which is the whole difference between
- * the two modes and the reason the parse is confined to one call.
+ * the two modes and the reason the parse is confined to one call. A Claude subscription takes
+ * whichever branch its ingress dialect earns — Anthropic-shaped bytes either way, because that is
+ * what the SDK's prompt is built from.
  *
  * @throws TranslationError when a translated body has a field with no target representation.
  */
@@ -266,28 +296,4 @@ function recordFailure(
       errorClass: null,
     }),
   )
-}
-
-/**
- * The upstream's own error, as the client should see it.
- *
- * On the passthrough path the body is relayed unchanged: it is already in the ingress dialect's
- * shape, and re-rendering it would drop fields the provider stated. On the translate path it is
- * re-rendered into `ingress` — a Claude Code client gets an Anthropic-shaped error even when the
- * account that failed was an OpenAI one — with the message redacted and bounded, and naming no
- * account (docs/idea/06-protocol-translation.md#error-shapes, docs/idea/07-security.md).
- */
-function relayUpstreamError(upstream: UpstreamError, ingress: Dialect | null): Response {
-  const headers = new Headers()
-  const retryAfter = upstream.headers.get("retry-after")
-  if (retryAfter !== null) headers.set("retry-after", retryAfter)
-
-  if (ingress === null) {
-    if (upstream.contentType !== null) headers.set("content-type", upstream.contentType)
-    return new Response(upstream.bodyText, { status: upstream.status, headers })
-  }
-
-  headers.set("content-type", "application/json")
-  const body = translateUpstreamError(upstream.bodyText, upstream.status, ingress)
-  return new Response(JSON.stringify(body), { status: upstream.status, headers })
 }

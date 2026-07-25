@@ -73,6 +73,12 @@ export interface AccountRepository {
 }
 
 export interface CreateAccountInput {
+  /**
+   * Minted by the caller when something outside this table has to be named after the row before it
+   * exists — a Claude subscription's `CLAUDE_CONFIG_DIR` is `<root>/<id>`, so the id has to be
+   * known before the insert. Omitted everywhere else; the column defaults to a fresh uuid.
+   */
+  readonly id?: string
   /** Human-chosen, required: the disambiguator between same-provider accounts. */
   readonly label: string
   readonly provider: ProviderId
@@ -141,6 +147,7 @@ export function createAccountRepository(db: Database): AccountRepository {
       const rows = await db
         .insert(accounts)
         .values({
+          ...(input.id === undefined ? {} : { id: input.id }),
           label: input.label,
           provider: input.provider,
           ...(input.status === undefined ? {} : { status: input.status }),

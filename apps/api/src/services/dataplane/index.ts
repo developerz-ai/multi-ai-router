@@ -4,14 +4,15 @@
  *
  * Transport imports from here; nothing outside this directory reaches into a module inside it.
  *
- * What this build serves: **same-dialect passthrough** and the anthropic ⇄ openai-chat
- * **translation** pair. A dialect pair with no translator and the Agent-SDK path are refused
- * explicitly by name in `egress/mode.ts`, before any upstream call, and that module is the seam
- * all three land on.
+ * Three egress modes, decided in `egress/mode.ts`: **same-dialect passthrough**, cross-dialect
+ * **translation**, and **Agent-SDK re-synthesis** for Claude subscriptions. A dialect pair with no
+ * translator and a provider with no implementation are refused there by name, before any upstream
+ * call. Which transport an attempt takes is the `kind` on a `ServableCandidate`; both answer with
+ * one `AttemptOutcome`, so everything downstream of `chain.ts` is written once.
  */
 
 export type { AttemptOutcome, AttemptPlan, UpstreamError } from "./attempt"
-export { runAttempt } from "./attempt"
+export { attemptDeadline, runAttempt } from "./attempt"
 export { createTtlCache, type TtlCache, type TtlCacheOptions } from "./auth/cache"
 export { bearerToken, credentialStyle, presentedRouterKey } from "./auth/presented"
 export {
@@ -59,6 +60,7 @@ export { accountCredential } from "./egress/credential"
 export { upstreamModelsUrl, upstreamUrl } from "./egress/endpoint"
 export { clientHeaders, upstreamHeaders } from "./egress/headers"
 export {
+  type AgentSdkEgress,
   type EgressDecision,
   type EgressRejection,
   type EgressRejectionReason,
@@ -93,9 +95,17 @@ export {
   type DispatchOptions,
   type TranslationOptions,
 } from "./orchestrator"
-export { type CandidatePlan, planCandidates, type ServableCandidate } from "./plan"
+export {
+  type CandidatePlan,
+  type HttpServableCandidate,
+  planCandidates,
+  type SdkServableCandidate,
+  type ServableCandidate,
+} from "./plan"
 export { type RelayObserver, relayResponse } from "./relay"
+export { relayUpstreamError } from "./relay-error"
 export { relayTranslatedResponse, type TranslatedRelayInput } from "./relay-translate"
+export { runSdkAttempt, type SdkAttemptInput } from "./sdk-attempt"
 export { createTranslatedRequestBody, type TranslatedRequestBody } from "./translate-body"
 export {
   type DataPlaneClock,

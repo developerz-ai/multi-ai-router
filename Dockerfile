@@ -4,13 +4,12 @@
 # plus the `claude` CLI the Agent SDK spawns for Claude subscription accounts.
 # PostgreSQL is a separate service (see docker-compose.yml), not part of this image.
 #
-# NOTE: this targets the PLANNED repo layout from the design spec (§5) —
-#   apps/api/    Hono server (the router)
-#   apps/web/    SolidJS admin SPA (Vite)
-#   packages/db  Drizzle schema + migrations + repositories
+# The repo layout this builds (design spec §5) —
+#   apps/api/     Hono server (the router)
+#   apps/web/     SolidJS admin SPA (Vite)
+#   packages/db   Drizzle schema + migrations + repositories
 #   packages/core shared types, errors, zod schemas
-# No source exists yet. The paths below are the contract the implementation is
-# expected to satisfy; if the layout changes, this file changes with it.
+# If the layout changes, this file changes with it.
 
 # ---- build ----
 # `oven/bun:1` (Debian-based, not the -slim/-alpine variants) for the build
@@ -33,7 +32,12 @@ COPY packages/db/package.json packages/db/
 
 # `--frozen-lockfile` makes the image build fail rather than silently resolving
 # a different tree than CI tested. Same flag CI uses.
-RUN bun install --frozen-lockfile
+#
+# `--ignore-scripts` is a security floor, not an optimisation: a postinstall in
+# any transitive dependency runs with the build's full context. Nothing we ship
+# needs one — the `claude` binary arrives as a prebuilt platform package, not as
+# a postinstall download (see the staging step below).
+RUN bun install --frozen-lockfile --ignore-scripts
 
 # Now the actual sources. `.dockerignore` keeps node_modules, dist, .git and any
 # local *.db out of the context so this COPY is small and cache-stable.
@@ -46,10 +50,41 @@ COPY . .
 #                        just works — see spec §17b)
 RUN bun run build
 
+# ---- the `claude` binary ----
+# Claude subscription Accounts go through the Claude Agent SDK, which SPAWNS A
+# NATIVE `claude` BINARY as a subprocess (spec §11). Without it in the image,
+# every Claude subscription account is dead on arrival — API-key accounts are
+# unaffected.
+#
+# The binary is a prebuilt optional dependency of `@anthropic-ai/claude-agent-sdk`
+# (`@anthropic-ai/claude-agent-sdk-<platform>-<arch>`), so it is already in the
+# install tree at a lockfile-pinned version that cannot skew from the SDK calling
+# it. Staging it here — rather than fetching `@anthropic-ai/claude-code` in the
+# runtime stage — is the difference between one pinned copy and a second,
+# separately versioned copy of the same executable.
+#
+# Resolved by the router's OWN ladder (`providers/claude-sdk/resolve-cli.ts`),
+# run as source so module resolution anchors inside apps/api where the SDK's
+# install tree is visible. Hard-coding the store path here would drift from the
+# resolver the instant bun changes its layout — silently, which is the whole
+# failure mode the ladder exists to expose. No binary, no image: the build fails
+# here rather than at the first Claude subscription request.
+RUN mkdir -p /opt/claude-cli \
+ && cp "$(bun apps/api/src/providers/claude-sdk/print-cli-path.ts)" /opt/claude-cli/claude \
+ && chmod 0755 /opt/claude-cli/claude
+
 # Prune the install down to production-only, so the runtime stage copies a
 # node_modules without Vite, Biome, type packages, etc. Anything the bundler
 # already inlined is gone; what survives is native/externalised deps.
-RUN bun install --frozen-lockfile --production
+RUN bun install --frozen-lockfile --production --ignore-scripts
+
+# …with one exception the prune cannot make: bun resolves the SDK's platform
+# package for every libc it might need, so the tree holds a ~260 MB copy of the
+# same executable per variant — half a gigabyte of image for a file we already
+# staged on PATH and hand to the SDK explicitly (`pathToClaudeCodeExecutable`).
+# Matched by size, not by store path, so a change in bun's install layout can
+# neither break this line nor silently reinflate the image.
+RUN find node_modules -type f -name claude -size +100M -delete
 
 # ---- runtime ----
 # -slim: Debian without the build toolchain. Not distroless — the `claude` CLI
@@ -62,22 +97,21 @@ WORKDIR /app
 ENV NODE_ENV=production
 
 # ---- the `claude` CLI ----
-# Claude subscription Accounts go through the Claude Agent SDK, which SPAWNS THIS
-# BINARY as a subprocess (spec §11). Without it in the image, every Claude
-# subscription account is dead on arrival — API-key accounts are unaffected.
+# The binary staged in the builder, landing on /usr/local/bin — already on PATH
+# for every user, so the CLI an operator runs (`docker exec … claude auth status`)
+# and the CLI the SDK spawns are the same file. It is the real executable, not a
+# shell wrapper: the SDK's launcher rejects a wrapper on some paths.
 #
-# INSTALLED IN THE RUNTIME STAGE ON PURPOSE, and this is a trap worth stating:
-# the CLI is a NATIVE binary selected for the platform's libc. Fetching it in the
-# Debian builder stage and copying it into a musl runtime (alpine) produces an
-# executable that cannot exec at all — the failure surfaces as a bare "no such
-# file or directory" on a file that plainly exists, which is the dynamic loader
-# missing, not the binary. Install it in the stage whose libc matches the runtime,
-# and if the runtime base ever changes libc, this line moves with it.
-#
-# BUN_INSTALL puts the global bin on /usr/local/bin, which is already on PATH for
-# every user — a global install under root's home would be invisible to `bun`.
-ENV BUN_INSTALL=/usr/local
-RUN bun install -g @anthropic-ai/claude-code
+# THE LIBC TRAP, and it is why the next line is a `RUN` and not a comment: this is
+# a NATIVE binary linked against one libc. Building on Debian/glibc and running on
+# musl (alpine) produces an executable that cannot exec at all — the failure
+# surfaces as a bare "no such file or directory" on a file that plainly exists,
+# because the missing thing is the dynamic loader, not the binary. Both stages are
+# Debian today, so the copy is sound; `claude --version` proves it *at build time*
+# rather than leaving it to the first Claude subscription request. If either base
+# image ever changes libc, this is the line that fails.
+COPY --from=builder /opt/claude-cli/claude /usr/local/bin/claude
+RUN claude --version
 
 # One CLAUDE_CONFIG_DIR per Claude subscription Account lives under this root, so
 # N subscriptions coexist with no cross-contamination (spec §11). Declared as a

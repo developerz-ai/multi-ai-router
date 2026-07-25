@@ -15,6 +15,7 @@ import {
 import type { Env } from "./config/env"
 import type { Logger } from "./logging/logger"
 import { createRuntimeMetrics, type RouterMetrics } from "./observability"
+import { createAccountConfigDirs } from "./providers/claude-sdk/config-dir"
 import {
   advisoryTaskLock,
   createScheduledTasks,
@@ -108,8 +109,7 @@ export function createRuntime(deps: RuntimeDeps): Runtime {
   const oauthStates = createOauthStateRepository(database)
   // One repository, both directions: the admin read path reads closed days, the rollup closes them.
   const usageDaily = createUsageDailyRepository(database)
-  // The scheduler's run log. The usage read path needs it too, to know which days the rollup has
-  // actually closed.
+  // The scheduler's run log; the usage read path reads it to know which days the rollup closed.
   const scheduledTasks = createScheduledTaskRepository(database)
 
   // --- warm state -----------------------------------------------------------
@@ -122,8 +122,7 @@ export function createRuntime(deps: RuntimeDeps): Runtime {
   // `usage` is a getter because the recorder below reports *into* this: see `observability/`.
   const metrics = createRuntimeMetrics({ catalog, health, usage: () => usage, logger, now })
 
-  // Queued in memory, batch-written off-path, and loud about both ways it can lose a record: a shed
-  // one and a rejected batch both reach a log line — see `services/usage/fromEnv.ts`.
+  // Queued in memory, batch-written off-path. Both loss modes reach a log line — see fromEnv.ts.
   const usage: UsageRecorder = createUsageRecorderFromEnv({
     records: usageRecords,
     env,
@@ -177,8 +176,7 @@ export function createRuntime(deps: RuntimeDeps): Runtime {
     },
   })
 
-  // Per replica by design: a shared counter costs a round trip per request — `limits.ts` says why.
-  // Sized off the key cache: one window per verified key, same inventory either way.
+  // Per replica by design (`limits.ts`); sized off the key cache — one window per verified key.
   const limiter = createRateLimiter({ maxKeys: env.dataPlane.keyCacheMax })
 
   const dispatcher = createDispatcher({
@@ -198,10 +196,9 @@ export function createRuntime(deps: RuntimeDeps): Runtime {
 
   // --- admin plane ----------------------------------------------------------
   //
-  // The CRUD services are plain and know nothing about caches; the decorators in
-  // `services/admin/coherence.ts` make a write take effect on the request path before the response
-  // is written. Without them an account disabled in the console keeps routing, and a revoked key
-  // keeps authenticating, until a TTL expires.
+  // The CRUD services know nothing about caches; the `services/admin/coherence.ts` decorators make
+  // a write take effect on the request path before the response is written. Without them an account
+  // disabled in the console keeps routing, and a revoked key keeps authenticating, until a TTL ends.
   // "Re-check now": clears the breaker marks so the next real request probes the account rather than
   // sending a synthetic one the provider would still bill. Built before the services, because the
   // accounts read overlays its last-checked timestamps.
@@ -211,6 +208,11 @@ export function createRuntime(deps: RuntimeDeps): Runtime {
     cooldownSeconds: env.accountRecheckCooldownSeconds,
     now,
   })
+
+  // One isolated CLAUDE_CONFIG_DIR per subscription account, created 0700 and deleted with the row.
+  // The router names the directory and never opens it — `providers/claude-sdk/config-dir.ts`.
+  const configDirs = createAccountConfigDirs({ root: env.claudeConfigRoot })
+  const accountsService = createAccountsService({ accounts, keys, cipher, configDirs, audit, now })
 
   const coherence = {
     refreshCatalog: () => catalog.refresh(),
@@ -234,14 +236,15 @@ export function createRuntime(deps: RuntimeDeps): Runtime {
         adminLoginLockoutMinutes: env.adminAuth.loginLockoutMinutes,
       }),
     }),
-    // Two decorators, two concerns, applied in the order they must run: the CRUD service knows
-    // nothing about caches or health, `withCatalogRefresh` makes a write land on the request
-    // path, and `withAvailability` answers a read with what the router currently observes rather
-    // than with the row the operator last wrote.
-    accounts: withAvailability(
-      withCatalogRefresh(createAccountsService({ accounts, keys, cipher, audit, now }), coherence),
-      { catalog, health, recheck, now },
-    ),
+    // Two decorators in the order they must run: `withCatalogRefresh` makes a write land on the
+    // request path, `withAvailability` answers a read with what the router currently observes
+    // rather than with the row the operator last wrote.
+    accounts: withAvailability(withCatalogRefresh(accountsService, coherence), {
+      catalog,
+      health,
+      recheck,
+      now,
+    }),
     pools: withPoolCatalogRefresh(
       createPoolsService({ pools, accounts, keys, audit, now }),
       coherence,
@@ -250,9 +253,8 @@ export function createRuntime(deps: RuntimeDeps): Runtime {
       createKeysService({ keys, pools, accounts, cipher, audit, now }),
       coherence,
     ),
-    // Accounts and pools are named from the warm catalog; keys need the one query, which is
-    // unremarkable on the admin plane. A miss means the subject was deleted — the row still
-    // renders as "deleted", because spend that happened is still spend.
+    // Accounts and pools are named from the warm catalog; keys need the one query, unremarkable on
+    // the admin plane. A miss means the subject was deleted — spend that happened is still spend.
     usage: createUsageService({
       usage: createUsageReadRepository(database),
       daily: usageDaily,
@@ -276,8 +278,7 @@ export function createRuntime(deps: RuntimeDeps): Runtime {
     scheduler,
     metrics,
     start: async () => {
-      // Awaited: serving a request against an empty catalog would look exactly
-      // like a deployment with no accounts configured.
+      // Awaited: an empty catalog would look exactly like a deployment with no accounts.
       await catalog.refresh()
       catalog.start()
       usage.start()
@@ -290,8 +291,7 @@ export function createRuntime(deps: RuntimeDeps): Runtime {
       })
     },
     stop: async () => {
-      // First, and awaited: a tick in flight holds a reserved connection, and the
-      // caller closes the pool once this resolves.
+      // First and awaited: a tick in flight holds a connection the caller's pool close would cut.
       await scheduler.stop()
       catalog.stop()
       await usage.stop()

@@ -45,14 +45,6 @@ export interface ProviderDescriptor {
   readonly reason: string | null
 }
 
-/**
- * Provenance: docs/idea/03-providers.md — a Claude Max/Pro subscription is served through the
- * Agent SDK, whose output is re-synthesized into Anthropic Messages. There is no HTTP driver to
- * ask, so the one fact the console needs is stated here. Blast radius: the label on one row of
- * the "add account" form.
- */
-const AGENT_SDK_DIALECT: Dialect = "anthropic"
-
 export function describeProviders(): readonly ProviderDescriptor[] {
   return Object.keys(PROVIDER_REGISTRY)
     .map((id) => describeProvider(id as ProviderId))
@@ -78,12 +70,16 @@ export function describeProvider(id: ProviderId): ProviderDescriptor {
   }
 
   if (support.transport === "agent-sdk") {
+    // One surface, and it is the driver's, not the account's: the SDK's output is re-synthesized
+    // into exactly one dialect and every other ingress is served by translating from it
+    // (docs/idea/11-anthropic-agent-sdk.md §6). So the form offers no dialect choice here.
+    const driver = support.driver
     return {
       id,
       transport: "agent-sdk",
-      authKind: "oauth",
-      nativeDialect: AGENT_SDK_DIALECT,
-      supportedDialects: [AGENT_SDK_DIALECT],
+      authKind: driver.authKind,
+      nativeDialect: driver.dialect,
+      supportedDialects: [driver.dialect],
       requiresBaseUrl: false,
       requiresConfigDir: true,
       creatable: true,

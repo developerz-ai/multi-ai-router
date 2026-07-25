@@ -34,7 +34,6 @@ export function AccountFormDialog(props: AccountFormDialogProps) {
   const [label, setLabel] = createSignal("")
   const [providerId, setProviderId] = createSignal("")
   const [credential, setCredential] = createSignal("")
-  const [configDir, setConfigDir] = createSignal("")
   const [baseUrl, setBaseUrl] = createSignal("")
   const [dialect, setDialect] = createSignal("")
 
@@ -63,7 +62,6 @@ export function AccountFormDialog(props: AccountFormDialogProps) {
       label: label().trim(),
       provider: provider.id as ProviderId,
       ...(credential().length > 0 ? { credential: credential() } : {}),
-      ...(configDir().length > 0 ? { configDir: configDir() } : {}),
       ...(baseUrl().length > 0 ? { baseUrl: baseUrl() } : {}),
       ...(dialect().length > 0 ? { dialect: dialect() as Dialect } : {}),
     })
@@ -116,13 +114,13 @@ export function AccountFormDialog(props: AccountFormDialogProps) {
         </Show>
 
         <Show when={selected()?.requiresConfigDir === true}>
-          <TextField
-            hint="A CLAUDE_CONFIG_DIR of its own, on the persistent volume. The Agent SDK owns the credentials inside it — the router never reads them."
-            label="Config directory"
-            onInput={(event) => setConfigDir(event.currentTarget.value)}
-            required
-            value={configDir()}
-          />
+          <div class={styles.providerNote}>
+            <p>
+              This account gets a <code>CLAUDE_CONFIG_DIR</code> of its own on the persistent
+              volume, named after its id and created with it. Nothing to fill in: the Agent SDK owns
+              the credentials inside it and the router never reads them.
+            </p>
+          </div>
         </Show>
 
         <Show when={selected() !== undefined && selected()?.requiresConfigDir !== true}>

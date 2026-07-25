@@ -7,6 +7,7 @@ import {
 } from "../../../src/services/accounts"
 import { createAuditRecorder } from "../../../src/services/admin"
 import { createCredentialCipher } from "../../../src/services/crypto/cipher"
+import { createMemoryConfigDirs, type MemoryConfigDirs } from "../../support/config-dirs"
 import { createMemoryStore, type MemoryStore } from "../../support/memory-store"
 
 /**
@@ -15,21 +16,39 @@ import { createMemoryStore, type MemoryStore } from "../../support/memory-store"
  * The assertions that matter most are negative ones: the plaintext credential
  * and its ciphertext must not appear in any value this service hands back, nor
  * in any audit row it writes (CLAUDE.md non-negotiable 3).
+ *
+ * The second group is about the one account whose lifecycle reaches past its
+ * row — a Claude subscription owns a `CLAUDE_CONFIG_DIR` full of cleartext
+ * OAuth credentials, and it is this service that creates and destroys it.
  */
 
 const SECRET = "sk-live-super-secret-upstream-key"
 const NOW = new Date("2026-07-24T12:00:00.000Z")
 
-function harness(): { service: AccountsService; store: MemoryStore } {
+interface Harness {
+  service: AccountsService
+  store: MemoryStore
+  configDirs: MemoryConfigDirs
+}
+
+function harness(): Harness {
   const store = createMemoryStore()
+  const configDirs = createMemoryConfigDirs()
   const service = createAccountsService({
     accounts: store.accounts,
     keys: store.keys,
     cipher: createCredentialCipher({ key: new Uint8Array(32).fill(7) }),
+    configDirs: configDirs.dirs,
     audit: createAuditRecorder(store.audit),
     now: () => NOW,
   })
-  return { service, store }
+  return { service, store, configDirs }
+}
+
+async function subscription(service: AccountsService) {
+  const result = await service.create({ label: "claude-max-seb", provider: "anthropic-oauth" })
+  if (!result.ok) throw new Error(`create failed: ${result.failure.message}`)
+  return result.value
 }
 
 async function created(service: AccountsService) {
@@ -86,6 +105,73 @@ describe("create", () => {
     expect(result.ok).toBe(false)
     expect(store.rows.accounts).toHaveLength(0)
     expect(store.rows.audit).toHaveLength(0)
+  })
+})
+
+describe("the config directory a Claude subscription owns", () => {
+  test("is named after the account id and exists before the row does", async () => {
+    const { service, configDirs, store } = harness()
+    const view = await subscription(service)
+
+    expect(view.configDir).toBe(`/data/claude/${view.id}`)
+    expect(store.rows.accounts[0]?.configDir).toBe(view.configDir)
+    expect(configDirs.present.get(view.configDir ?? "")).toBe(0o700)
+    // Created first: a row naming a directory that does not exist is a login that cannot happen.
+    expect(configDirs.calls[0]).toBe(`mkdir /data/claude/${view.id}`)
+  })
+
+  test("is one per account, so five subscriptions never share a credential store", async () => {
+    const { service, configDirs } = harness()
+    const first = await subscription(service)
+    const second = await subscription(service)
+
+    expect(first.configDir).not.toBe(second.configDir)
+    expect(configDirs.present.size).toBe(2)
+  })
+
+  test("is never asked for, and never accepted, from the operator", () => {
+    const rejected = createAccountBody.safeParse({
+      label: "claude-max-seb",
+      provider: "anthropic-oauth",
+      configDir: "/tmp/somewhere-else",
+    })
+    expect(rejected.success).toBe(false)
+    expect(updateAccountBody.safeParse({ configDir: "/tmp/somewhere-else" }).success).toBe(false)
+  })
+
+  test("is not created for a provider served over HTTP", async () => {
+    const { service, configDirs } = harness()
+    const view = await created(service)
+
+    expect(view.configDir).toBeNull()
+    expect(configDirs.calls).toEqual([])
+  })
+
+  test("goes with the row, and goes first — credentials outliving their account is the worse half", async () => {
+    const { service, configDirs } = harness()
+    const view = await subscription(service)
+
+    const result = await service.remove(view.id)
+    expect(result.ok).toBe(true)
+    expect(configDirs.present.size).toBe(0)
+    expect(configDirs.calls.at(-1)).toBe(`rm /data/claude/${view.id}`)
+  })
+
+  test("survives a disable, which is the reversible door", async () => {
+    const { service, configDirs } = harness()
+    const view = await subscription(service)
+
+    await service.disable(view.id)
+    expect(configDirs.present.has(view.configDir ?? "")).toBe(true)
+  })
+
+  test("is taken back when the row it was minted for never lands", async () => {
+    const { service, configDirs, store } = harness()
+    store.accounts.create = () => Promise.reject(new Error("insert failed"))
+
+    await expect(subscription(service)).rejects.toThrow("insert failed")
+    expect(configDirs.present.size).toBe(0)
+    expect(configDirs.calls.at(-1)).toStartWith("rm /data/claude/")
   })
 })
 

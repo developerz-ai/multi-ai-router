@@ -1,9 +1,42 @@
 # 11 — Claude subscriptions via the Claude Agent SDK
 
-Status: **nothing here is built.** `anthropic-oauth` is in the provider registry with a recorded
-reason and no driver, and a request routed to such an Account is refused by name in
-`services/dataplane/egress/mode.ts` rather than served some other way. This page is the contract
-M4 must satisfy.
+Status: **the seams exist; the transport does not.** `anthropic-oauth` has a driver
+(`providers/claude-sdk/driver.ts`) — a *separate* interface from `ProviderDriver`, because three of
+that interface's five members would be lies here (§9). A request routed to such an Account is now
+**planned** rather than refused: `resolveEgress` returns an `agent-sdk` decision,
+`planCandidates` resolves the Account's `CLAUDE_CONFIG_DIR` instead of a URL, and `chain.ts`
+dispatches through `runSdkAttempt`, which answers with the same `AttemptOutcome` an HTTP attempt does
+— so the failover loop, the health store, the relay, and the `UsageRecord` are written once for both
+transports.
+
+The **launch** half now exists too: `providers/claude-sdk/options.ts` builds the `Options` for one
+`query()` — `settingSources: []`, `strictMcpConfig: true`, `skills: []`, `tools: []`, a bounded
+`maxTurns`, `includePartialMessages: true`, a server-controlled `cwd`, and one `AbortController` per
+request bridged to the attempt deadline (with a `detach()` so a finished query stops retaining the
+signal). `allowlist.ts` is the reviewed constant naming the tools permitted to execute on this host
+— empty, because passthrough is the only supported mode — applied both as `allowedTools` and as a
+deny-by-default `canUseTool` gate under `permissionMode: "dontAsk"`. `env.ts` strips the
+`ANTHROPIC_*` family (by prefix, so a new variable cannot slip through), `CLAUDE_CODE_OAUTH_TOKEN`,
+and the router's own secrets before the spawn, then sets `CLAUDE_CONFIG_DIR` last.
+`concurrency.ts` is the semaphore pair — per-Account acquired **before** global, so a bursting
+Account queues on its own budget instead of parking global capacity and starving the Pool.
+
+What is still absent is the one thing that does the work: the `SdkInvoker` behind
+`providers/claude-sdk/invoke.ts` that actually calls `query()`, because it needs the renderer in §6
+to turn SDK messages back into Anthropic Messages. Until it is wired, a subscription attempt fails
+by name (retryably, so an HTTP Account in the same Pool still serves) rather than being degraded
+onto some other path. Everything in §4 (sessions), §5 (quota), §6 (re-synthesis), and §7 (tools)
+remains unbuilt. This page is the contract M4 must satisfy.
+
+Two decisions the seam already commits to, both taken from §6:
+
+- **There is no passthrough mode on this path.** `resolveEgress` never reports one for a
+  subscription, even for `POST /v1/messages`, because the SDK yields message objects and the answer
+  is re-synthesized rather than relayed.
+- **One renderer, not one per dialect.** The SDK is rendered into the driver's own dialect
+  (`anthropic`) and any other ingress dialect is then served by the *ordinary* translation pair — the
+  same one an `anthropic-api` Account would have used. An Account that pins a different surface does
+  not move that target.
 
 How `anthropic-oauth` Accounts (Claude Max/Pro subscriptions) are served. Extracted from
 [Meridian](https://github.com/rynfar/meridian), a working single-user proxy on this exact path;
@@ -97,6 +130,22 @@ subscription token; it sets one environment variable.
 | CLI settings | per-account `settings.json` and friends |
 | Session transcripts | what `resume: <sdkSessionId>` reads |
 
+### Where the directory comes from
+
+`<CLAUDE_CONFIG_ROOT>/<accountId>`, minted and created by the router when the Account row is
+created — `apps/api/src/providers/claude-sdk/config-dir.ts`. The operator never types a path and
+neither write body has a field for one; `CLAUDE_CONFIG_ROOT` is the only knob, and it defaults to
+`/data/claude` on the persistent volume.
+
+| Decision | Why |
+|---|---|
+| Keyed on Account **id**, never `label` | A label is the operator's disambiguator between five near-identical subscriptions and is renameable. Keying on it would mean a rename orphans a logged-in directory and hands the Account a fresh, logged-out one. The id is the row's identity for its whole life |
+| Router-assigned, not operator-supplied | Every path an operator could type is either this one or a mistake, and one mistake is unrecoverable — see the `$HOME/.claude` trap below. A root at or under the CLI's own config directory is refused at boot for the same reason |
+| Created `0700` | The contents are cleartext OAuth credentials the CLI owns. `mkdir` applies its mode only to what it creates and the umask can clear bits from it, so the mode is re-asserted on every provision — a directory left behind with looser permissions is tightened, not trusted |
+| Created **before** the row, removed **before** the row | A row naming a directory that does not exist is a login that cannot happen, so provisioning comes first and an insert that never lands takes its directory back. Deletion is the mirror: credentials outliving their Account is the worse half of the failure, while a row whose subscription is logged out is visible and fixable by re-login |
+| Removal names `<root>/<id>`, not the stored path | Bounded by construction. A path this router did not mint is not this router's to `rm -rf` |
+| Unique index on `accounts.config_dir` | Two Accounts sharing a directory is exactly the cross-contamination isolation exists to prevent, so it is a write the database refuses rather than an invariant code has to remember |
+
 ### Traps, all load-bearing
 
 | Trap | Rule |
@@ -112,6 +161,7 @@ subscription token; it sets one environment variable.
 
 | Operation | How |
 |---|---|
+| Provision | `<CLAUDE_CONFIG_ROOT>/<accountId>` at `0700`, created with the Account row — see above. Idempotent, so re-provisioning is never a way to lose a login |
 | Connect | Drive the `claude` CLI's own login against the Account's dir. Headless: build a PKCE authorize URL, take the pasted `code#state`, exchange, write `.credentials.json` into that dir (`profileCli.ts:159-227`) — the two capture modes [03-providers.md](03-providers.md) already specifies |
 | Health probe | `claude auth status` with the dir set returns JSON `{loggedIn, email, subscriptionType}` (`profileCli.ts:133-157`) — cheap, first-party, no token handling |
 | Refresh | **Not ours.** The SDK / `claude` CLI refreshes inside the config directory. The router does **not** schedule, mint, or write subscription tokens — see the box below |
@@ -367,7 +417,7 @@ as synthetic blocks with `stop_reason: "tool_use"`.
 
 | Mechanism | Why it exists |
 |---|---|
-| `tools: []` in the options | `disallowedTools` blocks *invocation* but leaves the ~25 k-token built-in catalog in the upstream payload; only `tools: []` elides it (`query.ts:274`) |
+| `tools: []` in the options | `disallowedTools` blocks *invocation* but leaves the ~25 k-token built-in catalog in the upstream payload; only `tools: []` elides it (`query.ts:274`). For us it is the **second** lock: the first is the named allowlist in `allowlist.ts`, enforced by `canUseTool` under `permissionMode: "dontAsk"`, because "we did not offer it" is an argument about what the model is shown, not about what the harness will run ([07-security.md](07-security.md)) |
 | Deterministic (alphabetical) registration | Registration order changes the SDK system prompt, which blows the prompt cache |
 | `maxTurns` ≈ 3–4 (vs 200 internal) | After each deny the SDK still runs a "digest" turn; the budget bounds it (`query.ts:154`) |
 | Early stop | That digest turn is fully billed, and on always-thinking models costs a thinking pass per tool step. Abort once every denied call is observed (`passthroughEarlyStop.ts`) |
@@ -453,24 +503,43 @@ working directory hidden in `<system-reminder>` blocks, and LiteLLM's `x-litellm
 
 ## 9. Operational notes
 
-**The glibc/musl trap.** `@anthropic-ai/claude-code`'s postinstall downloads a *platform-native*
-binary. Build on Debian/glibc, run on Alpine/musl, and the file is present but cannot exec —
-`ENOENT` despite existing, because the dynamic loader path differs. Fix: `--ignore-scripts` in the
-build stage, run `install.cjs` **in the runtime stage** so the binary matches the runtime libc.
-A separate musl platform package exists (`@anthropic-ai/claude-code-linux-<arch>-musl`). Also
-symlink the binary onto `PATH` as `claude` — a *symlink*, not a shell wrapper, which the SDK's
-launcher rejects on some paths — so `claude auth status` and the SDK resolve the same binary.
+**The glibc/musl trap.** The `claude` CLI is a *platform-native* binary. Build on Debian/glibc, run
+on Alpine/musl, and the file is present but cannot exec — `ENOENT` despite existing, because the
+dynamic loader path differs. `@anthropic-ai/claude-code` acquires it in a postinstall
+(`install.cjs`), so a build that wants that package must pass `--ignore-scripts` in the build stage
+and run `install.cjs` **in the runtime stage** so the binary matches the runtime libc; a separate
+musl platform package exists (`@anthropic-ai/claude-code-linux-<arch>-musl`). Either way the binary
+belongs on `PATH` as `claude` — a *symlink* or the real executable, never a shell wrapper, which the
+SDK's launcher rejects on some paths — so `claude auth status` and the SDK resolve the same file.
 
-**Executable resolution is a ladder and must be observable**: env override → bundled binary (skipping
-the ~500-byte stub a failed postinstall leaves) → platform package → `PATH` lookup → legacy fallback
-(`models.ts:339-540`). `/health` should report which rung won; "the wrong `claude` got picked" is
-otherwise indistinguishable from any other SDK error.
+**How our image actually does it, and why it differs.** `@anthropic-ai/claude-agent-sdk` (0.3.220+)
+ships the same binary as its *own* prebuilt optional dependency
+(`@anthropic-ai/claude-agent-sdk-<platform>-<arch>`, glibc and musl variants), and its internal
+resolution says so: it fails with "Reinstall `@anthropic-ai/claude-agent-sdk` without
+`--omit=optional`, or set `options.pathToClaudeCodeExecutable`". So we install **no** second CLI
+package: `bun install` already puts a lockfile-pinned binary in the tree, at a version that cannot
+skew from the SDK calling it, with no network fetch or postinstall at image-build time. The builder
+stage stages that exact file (found by running our own resolver — never a hard-coded store path,
+which would drift the moment bun changes its layout) and the runtime stage copies it to
+`/usr/local/bin/claude` and runs `claude --version`, so the libc trap fails the **build** instead of
+the first subscription request. `--ignore-scripts` stays on both builder installs as a security
+floor. This makes the builder and runtime bases share a libc — the invariant the `RUN` enforces.
+
+**Executable resolution is a ladder and must be observable**: env override (`CLAUDE_CLI_PATH`, and a
+set-but-unusable pin *fails* rather than falling through to a binary nobody named) → bundled binary
+(`@anthropic-ai/claude-code`'s `bin/claude.exe` — that one filename on every platform, skipping the
+~500-byte stub a skipped postinstall leaves) → SDK platform package (same candidate order the SDK
+walks, resolved from the SDK's own directory because bun installs a package's deps beside it) →
+`PATH` lookup → legacy native-installer paths. `/readyz` reports **which rung won**; "the wrong
+`claude` got picked" is otherwise indistinguishable from any other SDK error. The path is logged,
+not returned: `/readyz` is unauthenticated. Implementation:
+`apps/api/src/providers/claude-sdk/resolve-cli.ts` (pure ladder) + `cli-probe.ts` (host facts).
 
 | Concern | Design |
 |---|---|
-| Concurrency | A semaphore over `query()`, sized to memory not CPU. Ours must be **global and per-Account** — one Account's burst must not starve the Pool |
-| Cancellation | One `AbortController` per request, wired to the HTTP signal and the SDK; aborting terminates the subprocess. No separate `interrupt()`/`kill()` in Meridian |
-| Client disconnect | Detect closed-stream writes, stop the loop, abort, detach. Never orphan a subprocess |
+| Concurrency | A semaphore over `query()`, sized to memory not CPU. Ours is **global and per-Account** (`CLAUDE_SDK_MAX_CONCURRENCY`, `…_PER_ACCOUNT`) — `concurrency.ts`. The per-Account gate is taken **first**: reversed, a bursting Account would hold global capacity while it waited and starve the Pool, which is the failure the per-Account limit exists to prevent. Excess callers queue FIFO; a caller aborted while queued throws the signal's own reason, so a deadline stays a `TimeoutError` and a disconnect stays an `AbortError` |
+| Cancellation | One `AbortController` per request, wired to the HTTP signal and the SDK; aborting terminates the subprocess. No separate `interrupt()`/`kill()` in Meridian. Ours is bridged in `options.ts`: the data plane's composed signal (deadline ∪ client) drives a controller the SDK owns |
+| Client disconnect | Detect closed-stream writes, stop the loop, abort, detach. Never orphan a subprocess — and never retain the signal either, which is why `QueryLaunch` exposes `detach()` alongside `abort()` |
 | Timeouts | Client keep-alive ≈ 15 s; **upstream** idle guard ≈ 90 s → 504. Independent, both needed |
 | Retries | Bounded, and **forbidden once bytes are on the wire** — the same rule as [05-routing-and-failover.md](05-routing-and-failover.md) |
 

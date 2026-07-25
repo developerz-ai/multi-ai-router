@@ -1,9 +1,11 @@
 import { createDatabase, runMigrations } from "@multi-ai-router/db"
 import { createApp } from "./app"
-import { createRuntime } from "./composition"
+import { createRuntime, type Runtime, type RuntimeDeps } from "./composition"
 import { type Env, EnvValidationError, parseEnv } from "./config/env"
 import { createLogger, type Logger } from "./logging/logger"
+import { ConfigDirError } from "./providers/claude-sdk/config-dir"
 import { createAccountProbe } from "./services/health/accountProbe"
+import { createClaudeCliProbe } from "./services/health/claudeCliProbe"
 import { createDatabaseProbe } from "./services/health/databaseProbe"
 
 /**
@@ -20,11 +22,16 @@ async function main(): Promise<void> {
   await migrate(env, logger)
 
   const database = createDatabase({ url: env.databaseUrl })
-  const runtime = createRuntime({ env, database: database.db, sql: database.sql, logger })
+  const runtime = buildRuntime({ env, database: database.db, sql: database.sql, logger })
 
   // Before the listener opens: the catalog is loaded and the background writers are
   // running, so the first request is served against real state rather than an empty one.
   await runtime.start()
+
+  // Resolves which `claude` binary the Agent SDK would spawn. Called once here so the winning rung
+  // is in the boot log before the first request, then again per `/readyz`.
+  const claudeCli = createClaudeCliProbe({ override: env.claudeCliPath, log: logger })
+  await claudeCli()
 
   const app = createApp({
     logger,
@@ -33,6 +40,7 @@ async function main(): Promise<void> {
       // Reads the same warm state the request path reads, so the endpoint cannot
       // disagree with the router about what is routable.
       accounts: createAccountProbe({ catalog: runtime.catalog, health: runtime.health }),
+      claudeCli,
     },
     admin: runtime.admin,
     metrics: { metrics: runtime.metrics, token: env.metricsToken },
@@ -68,6 +76,23 @@ function readEnv(): Env {
     return parseEnv(process.env)
   } catch (error) {
     if (error instanceof EnvValidationError) {
+      process.stderr.write(`${error.message}\n`)
+      process.exit(1)
+    }
+    throw error
+  }
+}
+
+/**
+ * A `CLAUDE_CONFIG_ROOT` that would break subscription OAuth exits the same way a malformed env
+ * var does. It is only knowable here — the check needs this host's home directory, which `parseEnv`
+ * is deliberately unable to read.
+ */
+function buildRuntime(deps: RuntimeDeps): Runtime {
+  try {
+    return createRuntime(deps)
+  } catch (error) {
+    if (error instanceof ConfigDirError) {
       process.stderr.write(`${error.message}\n`)
       process.exit(1)
     }

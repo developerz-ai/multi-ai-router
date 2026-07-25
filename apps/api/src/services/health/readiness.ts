@@ -1,3 +1,5 @@
+import type { CliSource } from "../../providers"
+
 /**
  * Readiness is what an orchestrator gates traffic on. Liveness is a different question and
  * deliberately checks neither the database nor the accounts —
@@ -14,6 +16,12 @@
  * operator can act on — but a router that can serve its console is ready, because serving the
  * console is how the account problem gets fixed.
  *
+ * The `claude` CLI is reported on the same terms, and for a second reason: it matters only to
+ * Claude *subscription* accounts, so a deployment with none — or with API-key accounts only — is
+ * fully functional without it. What it reports is *which rung of the resolution ladder won*,
+ * because "the wrong `claude` got picked" is otherwise indistinguishable from any other Agent SDK
+ * failure (docs/idea/11-anthropic-agent-sdk.md#9-operational-notes).
+ *
  * Probes are injected, so the service stays free of I/O and of any Hono type.
  */
 
@@ -22,6 +30,8 @@ export interface ReadinessProbes {
   readonly database: () => Promise<boolean>
   /** What the routing catalog and health store currently say about the account pool. */
   readonly accounts: () => Promise<AccountReadiness>
+  /** Which rung of the `claude` CLI resolution ladder won, or `missing` when none did. */
+  readonly claudeCli: () => Promise<ClaudeCliReadiness>
 }
 
 /**
@@ -34,11 +44,24 @@ export interface ReadinessProbes {
  */
 export type AccountReadiness = "ok" | "none" | "blocked"
 
-export type CheckState = "ok" | "fail" | AccountReadiness
+/**
+ * The winning rung's name, or `missing`. Naming the rung rather than answering yes/no is the whole
+ * point: two hosts can both say "found it" and be running different binaries.
+ *
+ * The resolved *path* is deliberately not here. `/readyz` is unauthenticated, so it reports which
+ * rung won and the boot log carries where — see `claudeCliProbe.ts`.
+ */
+export type ClaudeCliReadiness = CliSource | "missing"
+
+export type CheckState = "ok" | "fail" | AccountReadiness | ClaudeCliReadiness
 
 export interface ReadinessReport {
   readonly ready: boolean
-  readonly checks: { readonly database: CheckState; readonly accounts: CheckState }
+  readonly checks: {
+    readonly database: CheckState
+    readonly accounts: CheckState
+    readonly claudeCli: CheckState
+  }
   /**
    * Short operator-facing reason. Present whenever something is wrong, **including when the
    * router is still ready** — an account problem is worth saying out loud even though it does
@@ -48,19 +71,21 @@ export interface ReadinessReport {
 }
 
 export async function checkReadiness(probes: ReadinessProbes): Promise<ReadinessReport> {
-  const [database, accounts] = await Promise.all([
+  const [database, accounts, claudeCli] = await Promise.all([
     settleDatabase(probes.database),
     settleAccounts(probes.accounts),
+    settleClaudeCli(probes.claudeCli),
   ])
 
   const reasons: string[] = []
   if (!database) reasons.push("database unreachable")
   if (accounts === "none") reasons.push("no accounts configured")
   if (accounts === "blocked") reasons.push("every account is unavailable")
+  if (claudeCli === "missing") reasons.push("claude cli not found")
 
   return {
     ready: database,
-    checks: { database: database ? "ok" : "fail", accounts },
+    checks: { database: database ? "ok" : "fail", accounts, claudeCli },
     reason: reasons.length > 0 ? reasons.join("; ") : null,
   }
 }
@@ -80,5 +105,16 @@ async function settleAccounts(probe: () => Promise<AccountReadiness>): Promise<A
     return await probe()
   } catch {
     return "blocked"
+  }
+}
+
+/** Same rule: a resolver that threw has not told us which binary would be spawned. */
+async function settleClaudeCli(
+  probe: () => Promise<ClaudeCliReadiness>,
+): Promise<ClaudeCliReadiness> {
+  try {
+    return await probe()
+  } catch {
+    return "missing"
   }
 }

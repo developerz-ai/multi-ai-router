@@ -1,3 +1,4 @@
+import { isAbsolute } from "node:path"
 import { z } from "zod"
 
 /**
@@ -142,7 +143,21 @@ export interface Env {
   readonly logLevel: LogLevel
   readonly trustProxy: boolean
   readonly publicUrl: string | null
+  /** Parent of the per-Account `CLAUDE_CONFIG_DIR`s — `providers/claude-sdk/config-dir.ts`. */
   readonly claudeConfigRoot: string
+  /**
+   * Pins the `claude` binary the Agent SDK spawns, bypassing the resolution ladder. Set means
+   * *exactly this*: an unusable path fails rather than falling through to some other binary the
+   * operator did not name — `providers/claude-sdk/resolve-cli.ts`.
+   */
+  readonly claudeCliPath: string | null
+  /**
+   * `claude` subprocesses in flight on this replica — every `query()` spawns a ~200 MB native
+   * binary, so this is a memory bound, not a throughput one. Excess requests queue rather than
+   * fail. The per-account ceiling is what stops one Account's burst starving the pool.
+   */
+  readonly claudeSdkMaxConcurrency: number
+  readonly claudeSdkMaxConcurrencyPerAccount: number
   /**
    * Bearer token `GET /metrics` demands, or null to leave it open. Null is the right default for
    * a deployment whose metrics port is not routable; see `routes/metrics.ts`.
@@ -186,6 +201,8 @@ export function decodeEncryptionKey(value: string): Uint8Array | null {
 
 const nonEmpty = z.string().min(1)
 const wholeNumber = z.string().regex(/^\d+$/, "must be a whole number").transform(Number)
+/** For a ceiling where zero is not "unlimited" but "nothing ever runs". */
+const atLeastOne = wholeNumber.refine((v) => v >= 1, "must be at least 1")
 const flag = z.enum(["true", "false", "1", "0"]).transform((v) => v === "true" || v === "1")
 const absoluteUrl = z.string().refine((v) => URL.canParse(v), "must be an absolute URL")
 const encryptionKey = z
@@ -206,7 +223,10 @@ const envSchema = z
     LOG_LEVEL: z.enum(LOG_LEVELS).optional(),
     TRUST_PROXY: flag.optional(),
     PUBLIC_URL: absoluteUrl.optional(),
-    CLAUDE_CONFIG_ROOT: nonEmpty.optional(),
+    CLAUDE_CONFIG_ROOT: nonEmpty.refine(isAbsolute, "must be an absolute path").optional(),
+    CLAUDE_CLI_PATH: nonEmpty.optional(),
+    CLAUDE_SDK_MAX_CONCURRENCY: atLeastOne.optional(),
+    CLAUDE_SDK_MAX_CONCURRENCY_PER_ACCOUNT: atLeastOne.optional(),
     METRICS_TOKEN: nonEmpty.optional(),
     ACCOUNT_RECHECK_COOLDOWN_SECONDS: wholeNumber.optional(),
     RETENTION_SESSIONS_HOURS: wholeNumber.optional(),
@@ -270,6 +290,9 @@ const envSchema = z
       trustProxy: raw.TRUST_PROXY ?? false,
       publicUrl: raw.PUBLIC_URL ?? null,
       claudeConfigRoot: raw.CLAUDE_CONFIG_ROOT ?? "/data/claude",
+      claudeCliPath: raw.CLAUDE_CLI_PATH ?? null,
+      claudeSdkMaxConcurrency: raw.CLAUDE_SDK_MAX_CONCURRENCY ?? 10,
+      claudeSdkMaxConcurrencyPerAccount: raw.CLAUDE_SDK_MAX_CONCURRENCY_PER_ACCOUNT ?? 4,
       metricsToken: raw.METRICS_TOKEN ?? null,
       accountRecheckCooldownSeconds: raw.ACCOUNT_RECHECK_COOLDOWN_SECONDS ?? 60,
       retention: {

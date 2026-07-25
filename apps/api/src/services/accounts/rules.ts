@@ -53,6 +53,12 @@ function unimplemented(provider: ProviderDescriptor): AdminFailure | null {
  * A Claude subscription holds no router-managed credential — its tokens live in
  * an isolated `CLAUDE_CONFIG_DIR` owned by the Agent SDK. Every other provider
  * is the exact opposite: a credential is the whole account.
+ *
+ * `configDir` is never operator input (`schemas.ts` has no field for it), so the
+ * two rules about it read as assertions on what the service is about to write:
+ * one directory for the providers that need one, none for the providers that do
+ * not. They can still fire on an update, for a row predating the router owning
+ * the path.
  */
 function credentialRule(provider: ProviderDescriptor, shape: AccountShape): AdminFailure | null {
   if (provider.requiresConfigDir) {
@@ -64,7 +70,7 @@ function credentialRule(provider: ProviderDescriptor, shape: AccountShape): Admi
     }
     if (shape.configDir === null) {
       return failure(
-        `provider "${provider.id}" requires "configDir": one isolated CLAUDE_CONFIG_DIR per account`,
+        `provider "${provider.id}" has no config directory: it is served from one isolated CLAUDE_CONFIG_DIR per account, assigned by the router`,
         "config_dir_required",
       )
     }
@@ -73,7 +79,7 @@ function credentialRule(provider: ProviderDescriptor, shape: AccountShape): Admi
 
   if (shape.configDir !== null) {
     return failure(
-      `provider "${provider.id}" is served over HTTP and takes no "configDir"`,
+      `provider "${provider.id}" is served over HTTP and has no config directory`,
       "config_dir_not_accepted",
     )
   }

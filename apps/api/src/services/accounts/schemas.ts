@@ -10,12 +10,16 @@ import { z } from "zod"
  * before it reaches a repository and is never read back out), and every
  * nullable field on the update body is a deliberate "clear this" — an absent
  * key means "leave it alone".
+ *
+ * `configDir` is in neither body, and the `.strict()` on both means sending one
+ * is a 400 rather than a value quietly ignored. A Claude subscription's
+ * `CLAUDE_CONFIG_DIR` is the router's to name — `<CLAUDE_CONFIG_ROOT>/<id>`,
+ * minted and provisioned on create (`providers/claude-sdk/config-dir.ts`).
  */
 
 const LABEL = z.string().trim().min(1).max(120)
 /** Bounded so an oversized body cannot become an oversized ciphertext. */
 const CREDENTIAL = z.string().min(1).max(8192)
-const CONFIG_DIR = z.string().trim().min(1).max(1024)
 const BASE_URL = z.url().max(2048)
 const MODEL_ALIASES = z.record(z.string().min(1).max(200), z.string().min(1).max(200))
 /** Bias for `weighted`; zero would silently remove the account from that policy. */
@@ -28,7 +32,6 @@ export const createAccountBody = z
     label: LABEL,
     provider: ProviderId,
     credential: CREDENTIAL.optional(),
-    configDir: CONFIG_DIR.optional(),
     baseUrl: BASE_URL.optional(),
     dialect: Dialect.optional(),
     modelAliases: MODEL_ALIASES.optional(),
@@ -44,7 +47,6 @@ export const updateAccountBody = z
     label: LABEL.optional(),
     /** Rotates the stored credential. Never clearable: an account with no credential is broken. */
     credential: CREDENTIAL.optional(),
-    configDir: CONFIG_DIR.nullable().optional(),
     baseUrl: BASE_URL.nullable().optional(),
     dialect: Dialect.nullable().optional(),
     modelAliases: MODEL_ALIASES.nullable().optional(),

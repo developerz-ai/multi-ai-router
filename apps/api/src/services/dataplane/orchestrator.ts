@@ -7,6 +7,7 @@ import {
   type UsageOutcome,
 } from "@multi-ai-router/core"
 import type { Logger } from "../../logging/logger"
+import type { SdkInvoker } from "../../providers"
 import type { CredentialCipher } from "../crypto/cipher"
 import { type FailoverOptions, type SelectionOptions, selectAccounts } from "../routing"
 import { clientRequestIdFrom, correlationIdFrom, type UsageRecorder } from "../usage"
@@ -79,6 +80,12 @@ export interface DispatcherDeps {
   readonly limiter?: Pick<RateLimiter, "check">
   /** Injected so tests need no network and no live provider. Defaults to global `fetch`. */
   readonly fetch?: FetchLike
+  /**
+   * The Claude subscription transport. Injected for the same reason `fetch` is — no test may spawn
+   * a real `claude` CLI. Omitted means this router serves no subscription account, and one selected
+   * fails its attempt by name rather than being routed onto some other path.
+   */
+  readonly invokeSdk?: SdkInvoker
   readonly clock?: DataPlaneClock
   readonly logger?: Logger
   /** Notified once per client request, after it ended. Feeds `router_requests_total`. */
@@ -135,6 +142,7 @@ export function createDispatcher(deps: DispatcherDeps): Dispatcher {
       health: deps.health,
       cipher: deps.cipher,
       call,
+      ...(deps.invokeSdk === undefined ? {} : { invokeSdk: deps.invokeSdk }),
       clock,
       timeoutMs: options.upstreamTimeoutMs ?? DEFAULT_UPSTREAM_TIMEOUT_MS,
       record: (record) => deps.usage.record(record),

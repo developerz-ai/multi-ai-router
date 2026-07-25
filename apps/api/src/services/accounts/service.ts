@@ -1,7 +1,9 @@
 import type { AccountRepository, AccountRow, ApiKeyRepository } from "@multi-ai-router/db"
+import type { AccountConfigDirs } from "../../providers/claude-sdk/config-dir"
 import { AUDIT_KINDS, AUDIT_SUBJECTS, type AuditRecorder } from "../admin/audit"
 import { type AdminResult, conflict, notFound, ok } from "../admin/result"
 import type { CredentialCipher } from "../crypto/cipher"
+import { describeProvider } from "./providers"
 import { checkAccountShape } from "./rules"
 import type { AccountListQuery, CreateAccountBody, UpdateAccountBody } from "./schemas"
 import { type AccountView, toAccountView } from "./view"
@@ -15,6 +17,12 @@ import { type AccountView, toAccountView } from "./view"
  * and never leave it.** `cipher.encrypt` is called on the way in, the envelope
  * goes to the repository, and every response is built by `toAccountView`, which
  * has no field that can hold credential material.
+ *
+ * A Claude subscription account is the one whose lifecycle reaches past the row:
+ * it owns an isolated `CLAUDE_CONFIG_DIR` that is created with it and deleted
+ * with it, named after its id so a rename cannot orphan a logged-in directory
+ * (`providers/claude-sdk/config-dir.ts`). Its *contents* stay the SDK's — this
+ * module makes the directory and never opens it.
  */
 
 export interface AccountsService {
@@ -34,6 +42,8 @@ export interface AccountsServiceDeps {
   /** Read-only here: a destructive account change must say which keys it breaks. */
   readonly keys: Pick<ApiKeyRepository, "listKeysScopedToAccount">
   readonly cipher: Pick<CredentialCipher, "encrypt">
+  /** Only ever touched for a provider the registry says carries a `CLAUDE_CONFIG_DIR`. */
+  readonly configDirs: AccountConfigDirs
   readonly audit: AuditRecorder
   readonly now: () => Date
 }
@@ -56,26 +66,43 @@ export function createAccountsService(deps: AccountsServiceDeps): AccountsServic
     },
 
     create: async (body) => {
+      // The id is minted here rather than by the column default because the config directory is
+      // named after it, and the directory has to exist before anything can be logged in to it.
+      const id = crypto.randomUUID()
+      const configDir = describeProvider(body.provider).requiresConfigDir
+        ? deps.configDirs.pathFor(id)
+        : null
+
       const checked = checkAccountShape({
         provider: body.provider,
         hasCredential: body.credential !== undefined,
-        configDir: body.configDir ?? null,
+        configDir,
         baseUrl: body.baseUrl ?? null,
         dialect: body.dialect ?? null,
       })
       if (!checked.ok) return checked
 
-      const row = await deps.accounts.create({
-        label: body.label,
-        provider: body.provider,
-        authMaterial: body.credential === undefined ? null : deps.cipher.encrypt(body.credential),
-        configDir: body.configDir ?? null,
-        baseUrl: body.baseUrl ?? null,
-        dialect: body.dialect ?? null,
-        modelAliases: body.modelAliases ?? null,
-        ...(body.weight === undefined ? {} : { weight: body.weight }),
-        ...(body.priority === undefined ? {} : { priority: body.priority }),
-      })
+      if (configDir !== null) await deps.configDirs.provision(id)
+
+      const row = await deps.accounts
+        .create({
+          id,
+          label: body.label,
+          provider: body.provider,
+          authMaterial: body.credential === undefined ? null : deps.cipher.encrypt(body.credential),
+          configDir,
+          baseUrl: body.baseUrl ?? null,
+          dialect: body.dialect ?? null,
+          modelAliases: body.modelAliases ?? null,
+          ...(body.weight === undefined ? {} : { weight: body.weight }),
+          ...(body.priority === undefined ? {} : { priority: body.priority }),
+        })
+        .catch(async (error: unknown) => {
+          // An insert that never landed leaves a directory no row will ever name again — and the
+          // unique index would refuse to hand it to anyone else. Take it back before rethrowing.
+          if (configDir !== null) await deps.configDirs.remove(id)
+          throw error
+        })
 
       await deps.audit.record({
         kind: AUDIT_KINDS.accountCreated,
@@ -100,7 +127,8 @@ export function createAccountsService(deps: AccountsServiceDeps): AccountsServic
       const checked = checkAccountShape({
         provider: current.provider,
         hasCredential: body.credential !== undefined || current.authMaterial !== null,
-        configDir: resolve(body.configDir, current.configDir),
+        // Not patchable: the path is a function of the id, and the id never moves.
+        configDir: current.configDir,
         baseUrl: resolve(body.baseUrl, current.baseUrl),
         dialect: resolve(body.dialect, current.dialect ?? null),
       })
@@ -113,7 +141,6 @@ export function createAccountsService(deps: AccountsServiceDeps): AccountsServic
           ...(body.credential === undefined
             ? {}
             : { authMaterial: deps.cipher.encrypt(body.credential) }),
-          ...(body.configDir === undefined ? {} : { configDir: body.configDir }),
           ...(body.baseUrl === undefined ? {} : { baseUrl: body.baseUrl }),
           ...(body.dialect === undefined ? {} : { dialect: body.dialect }),
           ...(body.modelAliases === undefined ? {} : { modelAliases: body.modelAliases }),
@@ -166,6 +193,11 @@ export function createAccountsService(deps: AccountsServiceDeps): AccountsServic
           "account_in_use",
         )
       }
+
+      // Directory first, and only then the row. The other order can strand cleartext OAuth
+      // credentials on the volume with nothing left pointing at them; this order can at worst
+      // leave a row whose subscription is logged out, which is visible and fixable by re-login.
+      if (found.value.configDir !== null) await deps.configDirs.remove(found.value.id)
 
       const deleted = await deps.accounts.delete(id)
       if (!deleted) return notFound(`no account with id "${id}"`)

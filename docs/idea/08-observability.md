@@ -189,7 +189,7 @@ immediately if it is healthy.
 | Endpoint | Auth | Meaning | Codes |
 |---|---|---|---|
 | `GET /healthz` | none | Liveness. The process is up and serving | `200` always while serving |
-| `GET /readyz` | none | Readiness: **database reachable**. The account pool is reported (`ok` / `none` / `blocked`) but does not gate the answer | `200` ready, `503` with a short reason when the database is unreachable |
+| `GET /readyz` | none | Readiness: **database reachable**. Two dimensions are reported without gating the answer: the account pool (`ok` / `none` / `blocked`) and the `claude` CLI (the resolution rung that won, or `missing`) | `200` ready, `503` with a short reason when the database is unreachable |
 | `GET /metrics` | `METRICS_TOKEN` when set, none when not | Prometheus text exposition | `200`, `401` when the token is set and not presented |
 | `GET /v1/usage/quota` | router key or admin session | Per-Account, per-window utilization, `resetsAt`, `resetSource`, `status`, `lastCheckedAt` — the same shape the UI renders, so an operator can alert on it externally | `200` |
 | `POST /api/admin/accounts/:id/recheck` | admin session | Manual re-check. `POST /api/admin/accounts/recheck` re-checks every account | `200` always — a cooldown refusal is `rechecked: false`, not `429` |
@@ -205,6 +205,16 @@ account dimension is reported and not gated: `none` (nothing configured yet), `b
 exist and every one is unavailable) and `ok` are distinct, each carries a reason, and the probe
 reads the same warm snapshot the request path reads so it cannot disagree with the router about
 what is routable.
+
+**The `claude` CLI dimension is reported for a second reason:** it matters only to Claude
+subscription accounts, so a deployment with none — or with API-key accounts only — is fully
+functional without it, and gating on it would withhold traffic from a router that has nothing wrong.
+What it answers is *which rung of the resolution ladder won* (`env_override`, `bundled_binary`,
+`platform_package`, `path_lookup`, `legacy_install`, or `missing`), because "the wrong `claude` got
+picked" is otherwise indistinguishable from any other Agent SDK failure. The resolved **path** is in
+the boot log, not the response: this endpoint is unauthenticated. It re-resolves per request, so an
+operator who fixes a bad mount sees the answer change without a restart
+([11-anthropic-agent-sdk.md](11-anthropic-agent-sdk.md#9-operational-notes)).
 
 A re-check is **not a synthetic probe**. It clears the account's breaker marks, which is the state
 a cooldown expiring produces, so the account becomes eligible as a half-open probe and the next

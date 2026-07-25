@@ -15,9 +15,10 @@ import type { AccountAvailability } from "./availability"
  * said: whether the account holds one at all, which is what distinguishes a
  * configured account from a half-finished one. It is derived, never stored.
  *
- * `configDir` is a filesystem path, not a credential — the operator picked it
- * and needs to see which directory an account owns. Its *contents* are live
- * credential material and are never read by this layer.
+ * `configDir` is a filesystem path, not a credential. The router picked it —
+ * `<CLAUDE_CONFIG_ROOT>/<id>` — and the operator still needs to see which
+ * directory an account owns, to back it up or to look at it on the volume. Its
+ * *contents* are live credential material and are never read by this layer.
  */
 export interface AccountView {
   readonly id: string

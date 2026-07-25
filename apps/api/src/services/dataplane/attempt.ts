@@ -77,7 +77,7 @@ export async function runAttempt(input: AttemptInput): Promise<AttemptOutcome> {
     method: input.method,
     headers,
     ...(input.body === null ? {} : { body: input.body }),
-    signal: deadline(input.timeoutMs, input.signal),
+    signal: attemptDeadline(input.timeoutMs, input.signal),
   })
 
   let response: Response
@@ -163,8 +163,13 @@ function transportFailure(error: unknown): AttemptFailure {
   }
 }
 
-/** The upstream call is bounded, and a client that disconnects releases it immediately. */
-function deadline(timeoutMs: number, client: AbortSignal | undefined): AbortSignal {
+/**
+ * The upstream call is bounded, and a client that disconnects releases it immediately.
+ *
+ * Shared with the Agent-SDK path, where the same signal terminates the subprocess: a client that
+ * goes away must never orphan one (docs/idea/11-anthropic-agent-sdk.md §9).
+ */
+export function attemptDeadline(timeoutMs: number, client: AbortSignal | undefined): AbortSignal {
   const timeout = AbortSignal.timeout(timeoutMs)
   return client === undefined ? timeout : AbortSignal.any([timeout, client])
 }

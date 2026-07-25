@@ -22,6 +22,7 @@ function harness(probes: Partial<ReadinessProbes> = {}): Harness {
     probes: {
       database: probes.database ?? (() => Promise.resolve(true)),
       accounts: probes.accounts ?? (() => Promise.resolve("ok")),
+      claudeCli: probes.claudeCli ?? (() => Promise.resolve("platform_package")),
     },
   }
   return { app: createApp(deps), lines }
@@ -75,7 +76,7 @@ describe("GET /readyz", () => {
     expect(res.status).toBe(200)
     expect(await res.json()).toEqual({
       status: "ready",
-      checks: { database: "ok", accounts: "ok" },
+      checks: { database: "ok", accounts: "ok", claudeCli: "platform_package" },
       reason: null,
     })
   })
@@ -89,6 +90,25 @@ describe("GET /readyz", () => {
       status: "not_ready",
       checks: { database: "fail", accounts: "ok" },
       reason: "database unreachable",
+    })
+  })
+
+  test("names the claude cli rung that won — two hosts can both 'find it' and differ", async () => {
+    const { app } = harness({ claudeCli: () => Promise.resolve("env_override") })
+    const res = await app.request("/readyz")
+
+    expect(await res.json()).toMatchObject({ checks: { claudeCli: "env_override" } })
+  })
+
+  test("stays ready without a claude cli — API-key accounts do not need one", async () => {
+    const { app } = harness({ claudeCli: () => Promise.resolve("missing") })
+    const res = await app.request("/readyz")
+
+    expect(res.status).toBe(200)
+    expect(await res.json()).toMatchObject({
+      status: "ready",
+      checks: { claudeCli: "missing" },
+      reason: "claude cli not found",
     })
   })
 
