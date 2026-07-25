@@ -338,10 +338,26 @@ re-synthesis, not a passthrough.**
 
 - **Block indices are ours** — the SDK restarts them per internal turn; a monotonic
   SDK→client index map is required (`server.ts:2516`).
+- **The index map is keyed on `(parent_tool_use_id, index)`, not on the index alone.** A subagent
+  numbers its blocks from zero exactly as the main turn does and the two interleave, so an
+  index-only map lets a dropped subagent block evict the mapping of the answer's own block 0 —
+  after which the rest of the real answer is silently discarded.
 - **Intermediate `message_stop`s are dropped** — the SDK emits one per internal turn; the contract is one.
+  So are intermediate `message_delta`s: their stop reason is remembered and stated once, at the end.
 - **Block filtering must skip the whole start/delta/stop triple**, not just the start.
 - **Heartbeats hide upstream stalls.** Our `: ping` resets the client's idle timer, so a separate
   **upstream** idle guard (90 s in Meridian, `streamIdleGuard.ts`) must race each `next()` → `504`.
+- **The status is decided before the first byte.** The response is not constructed until the first
+  client frame exists, so a stall or a death on the way to it is a real `504`. After it, a failure
+  is a terminal SSE `error` frame inside the `200` — a response in flight cannot retract its status.
+- **A stop reason nobody stated is `null`.** Absence is reported as absence, exactly as a token
+  count nobody measured is; claiming `end_turn` for a turn that never said so is the same class of
+  invention as the canned fallback sentence.
+- **Message ids are CSPRNG-backed** (`crypto.randomUUID`), never clock-derived — see the fidelity
+  table below.
+- **One renderer, both response shapes.** `includePartialMessages: true` is unconditional, so
+  `stream: false` folds the identical frame sequence into one body rather than reading the SDK a
+  second, differently-shaped way. Two readers would eventually disagree about where a block began.
 
 ### OpenAI dialect out
 

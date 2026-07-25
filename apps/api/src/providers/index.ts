@@ -23,6 +23,23 @@ export type { SdkInvocation, SdkInvoker } from "./claude-sdk/invoke"
 export type { QueryLaunch, QueryLaunchInput } from "./claude-sdk/options"
 export { createQueryLaunch, MAX_TURNS } from "./claude-sdk/options"
 export type {
+  ClientFrame,
+  Completion,
+  Envelope,
+  IdleGuard,
+  SdkRenderInput,
+  SdkRenderObserver,
+  StreamPacing,
+  Ticker,
+} from "./claude-sdk/render"
+export {
+  createEnvelope,
+  createIdleGuard,
+  DEFAULT_STREAM_PACING,
+  renderSdkResponse,
+  systemTicker,
+} from "./claude-sdk/render"
+export type {
   CliAttempt,
   CliProbe,
   CliRejection,
