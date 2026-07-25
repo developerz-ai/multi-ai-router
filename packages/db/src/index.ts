@@ -6,6 +6,10 @@
  * call instead of writing queries.
  */
 
+export type { AdvisoryLockRun } from "./advisory-lock"
+
+// --- leader election --------------------------------------------------------
+export { advisoryLockKey, advisoryUnlock, tryAdvisoryLock, withAdvisoryLock } from "./advisory-lock"
 export type { Database, DatabaseHandle, DatabaseOptions, SqlConnection } from "./client"
 
 // --- connection -------------------------------------------------------------
@@ -26,12 +30,35 @@ export { createApiKeyRepository } from "./repositories/api-key-repository"
 export type { AppendAuditEventInput, AuditRepository } from "./repositories/audit-repository"
 export { createAuditRepository } from "./repositories/audit-repository"
 export type {
+  CreateOauthStateInput,
+  OauthStateRepository,
+} from "./repositories/oauth-state-repository"
+export { createOauthStateRepository } from "./repositories/oauth-state-repository"
+export type {
   CreatePoolInput,
   PoolMemberInput,
   PoolRepository,
   UpdatePoolInput,
 } from "./repositories/pool-repository"
 export { createPoolRepository } from "./repositories/pool-repository"
+export type {
+  FinishScheduledTaskInput,
+  ScheduledTaskName,
+  ScheduledTaskOutcome,
+  ScheduledTaskRepository,
+} from "./repositories/scheduled-task-repository"
+export { createScheduledTaskRepository } from "./repositories/scheduled-task-repository"
+export type {
+  SessionRepository,
+  UpsertSessionInput,
+} from "./repositories/session-repository"
+export { createSessionRepository } from "./repositories/session-repository"
+export type {
+  UsageDailyGroupRow,
+  UsageDailyRepository,
+  UsageDayRange,
+} from "./repositories/usage-daily-repository"
+export { createUsageDailyRepository, toUtcDay } from "./repositories/usage-daily-repository"
 export type {
   UsageDimension,
   UsageGroupRow,
