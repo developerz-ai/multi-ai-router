@@ -1,4 +1,5 @@
 import type { Dialect, EgressMode, ProviderId, UsageOutcome } from "@multi-ai-router/core"
+import { estimateCost } from "../cost"
 import type { FailureKind } from "../routing"
 import type { UsageRecord } from "../usage"
 import { errorClassOf, NO_TOKENS, outcomeOf, type TokenCounts, USAGE_SUCCESS } from "../usage"
@@ -13,6 +14,10 @@ import { errorClassOf, NO_TOKENS, outcomeOf, type TokenCounts, USAGE_SUCCESS } f
  * `routerOverheadMs` is the record's half of `router_overhead_seconds`: total router-observed time
  * minus the time spent waiting on upstreams. A regression in it is a bug, so it is computed rather
  * than estimated, and it never goes negative on a clock hiccup.
+ *
+ * Cost is the one derived field, and it is derived *here* rather than at read time because the price
+ * table and the account's alias map both change: what a report needs is what the attempt cost when
+ * it ran, not what the same tokens would cost today.
  */
 
 export interface AttemptTiming {
@@ -82,6 +87,9 @@ export function attemptRecord(input: AttemptRecordInput): UsageRecord {
     tokensOut: tokens.tokensOut,
     cacheReadTokens: tokens.cacheReadTokens,
     cacheWriteTokens: tokens.cacheWriteTokens,
+    // Priced on the model that went upstream, not on the one the client asked for: the account's
+    // alias map decides which name the upstream billed.
+    ...estimateCost(input.provider, input.upstreamModel, tokens),
     latencyMs: Math.max(0, Math.round(input.timing.latencyMs)),
     ttfbMs: ttfbMs === undefined ? null : Math.max(0, Math.round(ttfbMs)),
     routerOverheadMs: Math.max(0, Math.round(input.timing.totalMs - input.timing.upstreamMs)),

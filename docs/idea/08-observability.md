@@ -53,9 +53,13 @@ completion content, and no credential material is ever stored on a record.
 
 | | |
 |---|---|
-| Source | A static price table shipped with the image, keyed by `provider + model`, with input/output/cache rates |
-| Override | The operator can edit or extend it in `/settings`. Overrides win; the shipped table is the fallback |
-| Unknown model | `costEstimate` is null and `costBasis` is `unknown` — never silently zero, never guessed |
+| Source | A static price table shipped with the image (`services/cost/prices.ts`), keyed by `provider + model`, with input/output/cache rates. Every entry carries its provenance |
+| Override | The operator can edit or extend it in `/settings` — **DEFERRED**. Overrides will win; the shipped table stays the fallback |
+| Which model | The **upstream** model, after the Account's alias map — that is the name the upstream billed. A dated snapshot (`…-20251001`) prices as its family, which is how the provider prices the pin |
+| Unknown model | `costEstimate` is null and `costBasis` is `unknown` — never silently zero, never guessed. Same for a provider with no published per-model list: an aggregator's price depends on the route it chose, and a `*-compatible` endpoint is the operator's own contract |
+| Priced, no tokens | `0` with a real basis. Zero tokens against a known rate is a measurement, not an admission |
+| Cache rates | Where a provider states them as multiples of its input rate, they are derived, not restated. A response never says which cache TTL was written, so the cheaper default is assumed — cache writes read low, never high |
+| Estimated where computed | On the attempt, when the attempt ran. The price table and the alias map both change; a report needs what it cost then, not what the same tokens would cost today |
 
 **Subscription accounts have no per-token price.** A Claude Max or ChatGPT/Codex account is a flat
 monthly fee, so any per-request "cost" is an attribution, not a charge. Those rows are marked

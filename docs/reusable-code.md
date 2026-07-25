@@ -146,6 +146,13 @@ Recording is off the critical path by construction: attempt series ride the usag
 counter increment at the point a request ends. Never add a metric write inside `attempt.ts` or the
 failover chain.
 
+### Cost estimation — `apps/api/src/services/cost/`
+
+| Thing | Where | Use it when |
+|---|---|---|
+| `estimateCost(provider, upstreamModel, tokens)` → `CostEstimate` | `services/cost/estimate.ts` | Pricing an attempt. Pure — no clock, no store — and the **only** place a `costBasis` is decided: `metered`, `notional` for a subscription's attribution, `unknown` when unpriced. Unknown is null, never zero |
+| `lookupRates(provider, model)` → `ModelRates \| null` | `services/cost/prices.ts` | Reading a shipped per-Mtok rate. One table, every entry commented with its provenance; a provider absent from it has no published per-model price |
+
 ### Admin-plane plumbing — `apps/api/src/services/admin/` + `routes/admin/render.ts`
 
 Every admin route group is three lines because these four exist. Use them; do not hand-roll a
@@ -204,6 +211,7 @@ hides them makes "why did nothing match" unanswerable.
 | Routing selection math (filter → policy → failover) | Pure functions in `apps/api/src/services/routing/` with injected snapshots. A second implementation in the UI or a driver picks a different account than the router did |
 | The `AdminResult` failure shape | `services/admin/result.ts`. A route that builds its own `c.json({ error })` is a route that will answer `200` with an error body |
 | The log redactor (`logging/redact.ts`) | A second, weaker scrubber is how a credential reaches a log line. One redactor, one test asserting nothing leaks |
+| Per-token prices and the cost arithmetic | `services/cost/`. A total recomputed in the console or the rollup drifts from the `costEstimate` on the row, and the two numbers then disagree about what the same request cost |
 | The `cooling_down` vs `exhausted` distinction | Clock-recoverable vs human-recoverable: 429 + `Retry-After` vs 402, countdown vs "needs top-up". Collapsing them makes the router retry a dead account on a timer forever |
 
 ## Conventions for new shared code
