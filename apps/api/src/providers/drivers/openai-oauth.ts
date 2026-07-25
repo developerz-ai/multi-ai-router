@@ -6,6 +6,8 @@ import { readErrorFacts } from "../failure/error-body"
 import { parseRateLimitHeaders } from "../rate-limit/parse"
 import type {
   DriverAccount,
+  OAuthTokenRequest,
+  OAuthTokens,
   ProviderCredential,
   ProviderDriver,
   RateLimitSignal,
@@ -66,14 +68,6 @@ export const CHATGPT_CODEX_BASE_URL = "https://chatgpt.com/backend-api/codex"
 export const OPENAI_AUTH_CLAIM = "https://api.openai.com/auth"
 export const CHATGPT_ACCOUNT_ID_HEADER = "chatgpt-account-id"
 
-/** A ready-to-send token-endpoint call. The caller owns the fetch; this owns the shape. */
-export interface TokenEndpointRequest {
-  readonly url: string
-  readonly method: "POST"
-  readonly headers: Readonly<Record<string, string>>
-  readonly body: string
-}
-
 /**
  * `state` is one-shot and server-side; the S256 verifier behind `codeChallenge` never leaves the
  * router until the exchange (docs/idea/07-security.md). `id_token_add_organizations=true` mirrors
@@ -105,7 +99,7 @@ export function openAiOAuthCodeExchange(input: {
   readonly code: string
   readonly redirectUri: string
   readonly codeVerifier: string
-}): TokenEndpointRequest {
+}): OAuthTokenRequest {
   return {
     url: OPENAI_OAUTH_TOKEN_URL,
     method: "POST",
@@ -121,7 +115,7 @@ export function openAiOAuthCodeExchange(input: {
 }
 
 /** The refresh is a **JSON body**, and no `redirect_uri` or verifier is involved. */
-export function openAiOAuthRefresh(input: { readonly refreshToken: string }): TokenEndpointRequest {
+export function openAiOAuthRefresh(input: { readonly refreshToken: string }): OAuthTokenRequest {
   return {
     url: OPENAI_OAUTH_TOKEN_URL,
     method: "POST",
@@ -135,13 +129,9 @@ export function openAiOAuthRefresh(input: { readonly refreshToken: string }): To
   }
 }
 
-/** A `null` means the issuer said nothing: keep what the account holds. Refresh rotation varies. */
-export interface OpenAiOAuthTokens {
-  readonly accessToken: string
-  readonly refreshToken: string | null
+/** The shared shape plus what only this provider carries. Both extras are derived, never configured. */
+export interface OpenAiOAuthTokens extends OAuthTokens {
   readonly idToken: string | null
-  readonly expiresInSeconds: number | null
-  /** Derived from the tokens above, never configured. */
   readonly chatGptAccountId: string | null
 }
 
@@ -288,9 +278,20 @@ const codex = createHttpDriver({
   ],
 })
 
-/** Everything shared, plus the one header no other provider needs. */
+/**
+ * Everything shared, plus the one header no other provider needs and the flow that connects an
+ * account. `oauth` is the same four builders above under their provider-independent names, so
+ * `services/accounts/connect/oauth.ts` drives this flow without naming this provider.
+ */
 export const openAiOAuthDriver: ProviderDriver = {
   ...codex,
+  oauth: {
+    loopbackRedirectUri: OPENAI_OAUTH_LOOPBACK_REDIRECT_URI,
+    authorizeUrl: openAiOAuthAuthorizeUrl,
+    codeExchange: openAiOAuthCodeExchange,
+    refresh: openAiOAuthRefresh,
+    readTokens: readOpenAiOAuthTokens,
+  },
   buildHeaders: (account, credential) => {
     const headers = codex.buildHeaders(account, credential)
     headers.set(CHATGPT_ACCOUNT_ID_HEADER, requireChatGptAccountId(account, credential))

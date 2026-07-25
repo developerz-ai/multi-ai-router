@@ -83,7 +83,11 @@ function credentialRule(provider: ProviderDescriptor, shape: AccountShape): Admi
       "config_dir_not_accepted",
     )
   }
-  if (!shape.hasCredential) {
+  // A provider the router logs in to *itself* starts without one: `POST /:id/connect` mints the
+  // credential, and the row has to exist before the authorization so the one-shot `state` has
+  // something to bind to (docs/idea/07-security.md, "Pending rows"). Pasting a token set by hand
+  // is still allowed — that is an import, not a second way to authenticate.
+  if (!shape.hasCredential && provider.connectFlow === null) {
     return failure(`provider "${provider.id}" requires "credential"`, "credential_required")
   }
   return null

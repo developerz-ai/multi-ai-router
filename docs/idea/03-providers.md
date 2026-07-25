@@ -266,6 +266,31 @@ a spent 5-hour or weekly window is `rate-limited` (clock-recoverable, `cooling_d
 `resets_in_seconds` the payload carries is used as the reported reset instead of the breaker's
 guess. Only a deactivated plan is `credits-exhausted` — permanent until a human acts.
 
+### Connecting one
+
+`services/accounts/connect/oauth.ts` drives the flow and names no provider: it works for any driver
+that advertises a `ProviderOAuthFlow` — the four pure builders above under provider-independent
+names. Adding the second OAuth provider is still one file under `providers/drivers/`.
+
+The Account row is created **first**, with no credential and status `needs_reauth`: it is what the
+one-shot `state` binds to, and `needs_reauth` keeps it out of routing until the login lands rather
+than letting selection pick an Account with nothing to authenticate with. `POST /:id/connect` mints
+a 256-bit `state` and an S256 PKCE verifier, stores the verifier as an AES-256-GCM envelope, and
+answers with the provider's authorization URL.
+
+| Step | |
+|---|---|
+| `redirect_uri` | `PUBLIC_URL + /admin/accounts/oauth/callback` when a `PUBLIC_URL` is set, otherwise the first-party client's `http://localhost:1455/auth/callback`. Stored on the pending row and **replayed** at the exchange — the provider binds the code to the exact value, and `PUBLIC_URL` may be edited in between |
+| Redirect capture | The browser lands on `GET /admin/accounts/oauth/callback`. Unguarded by design: a provider's redirect is a cross-site navigation, so the `SameSite=Strict` session cookie is not sent, and the `state` is the authorization. It answers a small self-contained HTML page, the one non-JSON surface on the admin plane |
+| Paste capture | `POST /:id/connect/complete` with whatever the address bar held — the whole callback URL, a bare query string, or the `code#state` shorthand. Available in *both* modes: a callback the browser cannot load still leaves the code in the address bar, which is what makes an unreachable `PUBLIC_URL` a non-event |
+| The exchange | One code exchange, one write: `{accessToken, refreshToken}` encrypted into `authMaterial`, `tokenExpiresAt` from `expires_in`, `needs_reauth` cleared — and nothing else, because a `disabled` Account stays disabled |
+| Restart / cancel | A second `POST /:id/connect` retires whatever the last one left redeemable, and `DELETE /:id/connect` does the same on demand. One live authorization per Account |
+| Which audit kind | Derived, not declared: an Account that already held a credential was re-connected (`account.reauthorized`), one that did not was connected (`account.connected`). The event records the capture mode and never a code, a `state`, or a token |
+
+Every rejection — unknown, consumed, expired, unbound, or bound to a different Account — answers
+one sentence, because a callback that explains *why* it refused is a probe oracle. Rules in
+[07-security.md](07-security.md).
+
 ## API-key providers — z.ai, Kimi, MiniMax, OpenRouter
 
 No refresh, no expiry, no OAuth state. An Account is a base URL, a key, and an alias map.

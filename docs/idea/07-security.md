@@ -178,6 +178,19 @@ rules:
 | Pending rows | The pending account row exists before the redirect and is cleaned up if the flow never completes. No half-created accounts |
 | Both modes | Redirect capture and manual `code#state` paste converge on the same server-side exchange step and the same checks |
 | Display | Tokens, refresh tokens, and codes are never rendered in the UI after exchange |
+| At rest | The verifier is an AES-256-GCM envelope; the `state` is stored as-is, because it is the lookup key a callback presents and a value the database must match cannot also be ciphertext |
+| Uniform rejection | Unknown, consumed, expired, unbound, and bound-elsewhere all answer the same sentence. A callback that explains *why* it refused is a probe oracle |
+
+**The redirect callback is unguarded, and that is the design.** A provider's redirect is a
+cross-site top-level navigation, so the `__Host-`/`SameSite=Strict` admin session cookie is not sent
+with it and a guard would refuse every real callback. The one-shot `state` is the authorization: 256
+bits minted server-side minutes earlier, bound to one Account row, redeemable once. It is mounted at
+its own published path (`PUBLIC_URL + /admin/accounts/oauth/callback`), it reaches exactly one
+service call, and the page it answers escapes everything it renders.
+
+Consume **then** check: the `state` is redeemed before the binding is judged, so a wrong guess burns
+it rather than leaving it available for another try. Claude subscriptions do the same with their
+pending login ([11-anthropic-agent-sdk.md](11-anthropic-agent-sdk.md) §3.1).
 
 ## Blast radius
 

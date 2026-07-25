@@ -127,7 +127,7 @@ export {
 } from "./claude-sdk/tools"
 export type { HttpDriverConfig, ProviderSurface } from "./driver"
 export { createHttpDriver } from "./driver"
-export type { OpenAiOAuthTokens, TokenEndpointRequest } from "./drivers/openai-oauth"
+export type { OpenAiOAuthTokens } from "./drivers/openai-oauth"
 export {
   CHATGPT_ACCOUNT_ID_HEADER,
   CHATGPT_CODEX_BASE_URL,
@@ -163,8 +163,11 @@ export { HTTP_DRIVERS, httpDriver, PROVIDER_REGISTRY } from "./registry"
 export type {
   DriverAccount,
   FailureClassification,
+  OAuthTokenRequest,
+  OAuthTokens,
   ProviderCredential,
   ProviderDriver,
+  ProviderOAuthFlow,
   RateLimitSignal,
   RateLimitWindow,
   UpstreamErrorFacts,

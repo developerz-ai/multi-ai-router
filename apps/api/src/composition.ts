@@ -19,6 +19,7 @@ import { createAccountConfigDirs } from "./providers/claude-sdk/config-dir"
 import { type Scheduler, schedulerFromEnv } from "./scheduler"
 import {
   claudeCliFromEnv,
+  connectFromEnv,
   createAccountsService,
   createRecheckService,
   withAvailability,
@@ -187,25 +188,24 @@ export function createRuntime(deps: RuntimeDeps): Runtime {
   })
 
   // --- admin plane ----------------------------------------------------------
-  //
   // The CRUD services know nothing about caches; the `services/admin/coherence.ts` decorators make
   // a write take effect on the request path before the response is written. Without them an account
   // disabled in the console keeps routing, and a revoked key keeps authenticating, until a TTL ends.
   //
-  // One isolated CLAUDE_CONFIG_DIR per subscription account (created 0700, deleted with the row,
-  // never opened by the router — `providers/claude-sdk/config-dir.ts`), and both halves of running
-  // the `claude` binary against it: the connect/reconnect login, and the credential probe below.
+  // One isolated CLAUDE_CONFIG_DIR per subscription account, both halves of running the `claude`
+  // binary against it, and every login flow behind the one service the admin plane mounts.
   const configDirs = createAccountConfigDirs({ root: env.claudeConfigRoot })
-  const claude = claudeCliFromEnv({ accounts, configDirs, audit, env, logger, now })
+  const cli = claudeCliFromEnv({ accounts, configDirs, audit, env, logger, now })
+  const connect = connectFromEnv({ cli, accounts, oauthStates, cipher, audit, env, now })
 
-  // "Re-check now": clears the breaker marks so the next real request probes the account rather than
-  // sending a synthetic one the provider would still bill. Built before the services, because the
-  // accounts read overlays its last-checked timestamps.
+  // "Re-check now": clears the breaker marks so the next real request probes the account rather
+  // than sending a synthetic one the provider would still bill. Built before the services, because
+  // the accounts read overlays its last-checked timestamps.
   const recheck = createRecheckService({
     accounts,
     health,
     audit,
-    auth: claude.authProbe,
+    auth: cli.authProbe,
     cooldownSeconds: env.accountRecheckCooldownSeconds,
     now,
   })
@@ -265,7 +265,7 @@ export function createRuntime(deps: RuntimeDeps): Runtime {
       now,
     }),
     recheck,
-    connect: claude.connect,
+    connect,
   }
 
   return {
@@ -292,7 +292,7 @@ export function createRuntime(deps: RuntimeDeps): Runtime {
     stop: async () => {
       // First and awaited: a tick in flight holds a connection the caller's pool close would cut.
       await scheduler.stop()
-      claude.connect.stop() // every pending login, so no `claude` subprocess outlives the router
+      connect.stop() // every pending login, so no `claude` subprocess outlives the router
       catalog.stop()
       await usage.stop()
     },

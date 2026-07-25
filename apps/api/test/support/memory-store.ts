@@ -6,6 +6,8 @@ import type {
   ApiKeyRepository,
   ApiKeyRow,
   AuditEventRow,
+  OauthStateRepository,
+  OauthStateRow,
   PoolMemberRow,
   PoolRepository,
   PoolRow,
@@ -13,7 +15,7 @@ import type {
 import type { AuditSink } from "../../src/services/admin"
 
 /**
- * In-memory stands-in for the four stores the admin services depend on.
+ * In-memory stands-in for the stores the admin services depend on.
  *
  * These are not mocks with expectations — they are the smallest honest
  * implementation of the same interfaces, so a service under test exercises its
@@ -48,6 +50,7 @@ export interface MemoryStore {
   readonly accounts: MemoryAccounts
   readonly keys: MemoryKeys
   readonly pools: PoolRepository
+  readonly oauthStates: OauthStateRepository
   readonly audit: AuditSink
   /** The rows themselves, for assertions. */
   readonly rows: {
@@ -57,6 +60,7 @@ export interface MemoryStore {
     readonly keyAccounts: ApiKeyAccountRow[]
     readonly pools: PoolRow[]
     readonly poolMembers: PoolMemberRow[]
+    readonly oauthStates: OauthStateRow[]
     readonly audit: AuditEventRow[]
   }
 }
@@ -70,10 +74,11 @@ export function createMemoryStore(): MemoryStore {
   const keyAccounts: ApiKeyAccountRow[] = []
   const pools: PoolRow[] = []
   const poolMembers: PoolMemberRow[] = []
+  const oauthStates: OauthStateRow[] = []
   const audit: AuditEventRow[] = []
 
   return {
-    rows: { accounts, keys, keyPools, keyAccounts, pools, poolMembers, audit },
+    rows: { accounts, keys, keyPools, keyAccounts, pools, poolMembers, oauthStates, audit },
 
     accounts: {
       create: async (input) => {
@@ -198,6 +203,47 @@ export function createMemoryStore(): MemoryStore {
         }))
         poolMembers.push(...created)
         return created
+      },
+    },
+
+    // Same three rules the real repository enforces in SQL: `consume` is atomic and one-shot, an
+    // expired row is as good as absent, and abandoning stamps every live row for one account.
+    oauthStates: {
+      create: async (input) => {
+        const row: OauthStateRow = {
+          id: crypto.randomUUID(),
+          state: input.state,
+          codeVerifier: input.codeVerifier,
+          provider: input.provider,
+          accountId: input.accountId ?? null,
+          redirectUri: input.redirectUri ?? null,
+          consumedAt: null,
+          expiresAt: input.expiresAt,
+          createdAt: EPOCH,
+        }
+        oauthStates.push(row)
+        return row
+      },
+      consume: async (state, now) => {
+        const row = oauthStates.find(
+          (candidate) =>
+            candidate.state === state && candidate.consumedAt === null && candidate.expiresAt > now,
+        )
+        if (row === undefined) return undefined
+        row.consumedAt = now
+        return { ...row }
+      },
+      abandonForAccount: async (accountId, now) => {
+        const live = oauthStates.filter(
+          (row) => row.accountId === accountId && row.consumedAt === null && row.expiresAt > now,
+        )
+        for (const row of live) row.consumedAt = now
+        return live.length
+      },
+      deleteExpiredBefore: async (cutoff, limit) => {
+        const expired = oauthStates.filter((row) => row.expiresAt < cutoff).slice(0, limit)
+        drop(oauthStates, (row) => expired.includes(row))
+        return expired.length
       },
     },
 

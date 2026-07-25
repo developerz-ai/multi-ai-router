@@ -90,6 +90,12 @@ export function createAccountsService(deps: AccountsServiceDeps): AccountsServic
           label: body.label,
           provider: body.provider,
           authMaterial: body.credential === undefined ? null : deps.cipher.encrypt(body.credential),
+          // A row that exists only so an authorization can bind to it is not routable yet, and
+          // `needs_reauth` is exactly that state: excluded from selection, visible in the console
+          // as "connect me", cleared by the connect flow and by nothing else.
+          ...(checked.value.connectFlow === "oauth" && body.credential === undefined
+            ? { status: "needs_reauth" as const }
+            : {}),
           configDir,
           baseUrl: body.baseUrl ?? null,
           dialect: body.dialect ?? null,

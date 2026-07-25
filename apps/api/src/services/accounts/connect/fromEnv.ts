@@ -1,4 +1,4 @@
-import type { AccountRepository } from "@multi-ai-router/db"
+import type { AccountRepository, OauthStateRepository } from "@multi-ai-router/db"
 import type { Env } from "../../../config/env"
 import type { Logger } from "../../../logging/logger"
 import { createCliProbe, resolveClaudeCli } from "../../../providers"
@@ -12,8 +12,11 @@ import {
   createCredentialGuard,
 } from "../../../providers/claude-sdk/login"
 import type { AuditRecorder } from "../../admin/audit"
+import type { CredentialCipher } from "../../crypto/cipher"
 import { type AccountAuthProbe, createClaudeAuthProbe } from "../../health/claudeAuthProbe"
 import { type ClaudeConnectService, createClaudeConnectService } from "./claude"
+import { createOAuthConnectService, OAUTH_CALLBACK_PATH } from "./oauth"
+import { type ConnectService, createConnectService } from "./service"
 
 /**
  * The two things the router does by *running* the `claude` binary — connecting an Account and
@@ -102,4 +105,46 @@ export function claudeCliFromEnv(deps: ClaudeCliFromEnvDeps): ClaudeCliStack {
       now: deps.now,
     }),
   }
+}
+
+export interface ConnectFromEnvDeps {
+  /** The `claude` CLI half, already built: the two flows share nothing but this bundle's shape. */
+  readonly cli: ClaudeCliStack
+  readonly accounts: Pick<AccountRepository, "findById" | "update">
+  readonly oauthStates: OauthStateRepository
+  readonly cipher: Pick<CredentialCipher, "encrypt" | "decrypt">
+  readonly audit: AuditRecorder
+  readonly env: Pick<Env, "publicUrl" | "retention" | "failover">
+  readonly now: () => Date
+}
+
+/**
+ * Both login flows behind the one service the admin plane mounts.
+ *
+ * Two conversions happen here and nowhere else. **The callback URL** is `PUBLIC_URL` joined to the
+ * published path; unset means no reachable callback exists, so the flow starts in paste mode
+ * instead of advertising an address the provider would redirect into nothing. **The exchange
+ * timeout** is the data plane's upstream timeout rather than a knob of its own: it is the same
+ * question asked of the same provider, and a second setting would be one more thing to get wrong
+ * for no operator benefit (CLAUDE.md non-negotiable 11 — config, never a constant).
+ */
+export function connectFromEnv(deps: ConnectFromEnvDeps): ConnectService {
+  return createConnectService({
+    accounts: deps.accounts,
+    claude: deps.cli.connect,
+    oauth: createOAuthConnectService({
+      accounts: deps.accounts,
+      states: deps.oauthStates,
+      cipher: deps.cipher,
+      audit: deps.audit,
+      stateMinutes: deps.env.retention.oauthStateMinutes,
+      callbackUrl:
+        deps.env.publicUrl === null
+          ? null
+          : new URL(OAUTH_CALLBACK_PATH, deps.env.publicUrl).toString(),
+      fetch: (request) => fetch(request),
+      exchangeTimeoutMs: deps.env.failover.upstreamTimeoutMs,
+      now: deps.now,
+    }),
+  })
 }

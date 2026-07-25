@@ -19,6 +19,8 @@ import { ADMIN_PROVIDERS_BASE_PATH, adminProviderRoutes } from "../../src/routes
 import {
   createAccountsService,
   createClaudeConnectService,
+  createConnectService,
+  createOAuthConnectService,
   createRecheckService,
 } from "../../src/services/accounts"
 import { createAuditRecorder } from "../../src/services/admin"
@@ -87,15 +89,32 @@ function harness(
         audit,
         now,
       }),
-      connect: createClaudeConnectService({
+      // The dispatching service `app.ts` mounts, not one backend of it: which login an account
+      // takes is decided from the provider registry, and that decision is part of the surface.
+      connect: createConnectService({
         accounts: store.accounts,
-        configDirs: configDirs.dirs,
-        login,
-        credentials: options.credentials ?? fakeCredentials(),
-        audit,
-        pendingLoginMinutes: options.pendingLoginMinutes ?? 10,
-        logger,
-        now,
+        claude: createClaudeConnectService({
+          accounts: store.accounts,
+          configDirs: configDirs.dirs,
+          login,
+          credentials: options.credentials ?? fakeCredentials(),
+          audit,
+          pendingLoginMinutes: options.pendingLoginMinutes ?? 10,
+          logger,
+          now,
+        }),
+        oauth: createOAuthConnectService({
+          accounts: store.accounts,
+          states: store.oauthStates,
+          cipher,
+          audit,
+          stateMinutes: options.pendingLoginMinutes ?? 10,
+          callbackUrl: null,
+          // No test reaches a provider: an unexpected call is a failure, not a silent 404.
+          fetch: () => Promise.reject(new Error("no upstream in this harness")),
+          exchangeTimeoutMs: 1_000,
+          now,
+        }),
       }),
       recheck: createRecheckService({
         accounts: store.accounts,
@@ -616,14 +635,15 @@ describe("connecting a Claude subscription", () => {
     // `started.value.authorizeUrl` for the operator to open, never in a completion or a log line.
   })
 
-  test("only a Claude subscription account can be connected", async () => {
+  test("an account with no login flow at all is refused by name", async () => {
     const { app } = harness()
+    // An API-key provider: neither the CLI's login nor an authorization flow this router drives.
     const openrouter = await newAccount(app)
 
     const res = await call(app, "POST", `${ADMIN_ACCOUNTS_BASE_PATH}/${openrouter.id}/connect`)
 
     expect(res.status).toBe(400)
-    expect((res.body as { error: { code: string } }).error.code).toBe("not_a_subscription_account")
+    expect((res.body as { error: { code: string } }).error.code).toBe("not_an_oauth_account")
   })
 })
 
