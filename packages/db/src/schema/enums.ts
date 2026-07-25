@@ -60,6 +60,7 @@ export const resetSource = pgEnumFrom("reset_source", ResetSource.options)
  * never a charge — the two totals are displayed separately and never summed.
  */
 export const costBasis = pgEnum("cost_basis", ["metered", "notional", "unknown"])
+export type CostBasis = (typeof costBasis.enumValues)[number]
 
 /** Not in core: the scheduler's task list is a db/scheduler concern. */
 export const scheduledTask = pgEnum("scheduled_task", [

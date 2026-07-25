@@ -1,4 +1,4 @@
-import { type Dialect, isRouterError, QuotaExhaustedError } from "@multi-ai-router/core"
+import { type Dialect, isRouterError, RetryableRouterError } from "@multi-ai-router/core"
 
 /**
  * Turns a thrown value into the HTTP status and the dialect-appropriate JSON body the client
@@ -87,8 +87,9 @@ export function toErrorResponse(error: unknown, dialect: Dialect | null): ErrorR
   return {
     status: error.status,
     body: renderErrorBody(dialect, error.status, error.message, error.code),
+    // Every failure a clock will fix carries the wait it knows about; nothing else invents one.
     retryAfterSeconds:
-      error instanceof QuotaExhaustedError ? (error.retryAfterSeconds ?? null) : null,
+      error instanceof RetryableRouterError ? (error.retryAfterSeconds ?? null) : null,
   }
 }
 

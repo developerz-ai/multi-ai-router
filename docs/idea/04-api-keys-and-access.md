@@ -2,9 +2,8 @@
 
 Status: **implemented**, except where a row says otherwise — the two planes, admin auth with CSRF
 and login throttling, key mint/reveal/revoke, both header styles, and scope enforced as an
-intersection all work, as does `GET /api/admin/usage`. Per-key rate limits are stored and carried
-on the verified key but **not yet enforced by any limiter**; `/api/admin/settings` does not exist;
-OAuth connect/reconnect does not exist.
+intersection all work, as does `GET /api/admin/usage`. Per-key rate limits are enforced in memory,
+per replica. `/api/admin/settings` does not exist; OAuth connect/reconnect does not exist.
 
 ## Two planes
 
@@ -108,11 +107,14 @@ belongs in a secret store rather than a committed `.env`. See [07-security.md](0
 ### Verification path
 
 Presented key → **indexed lookup by display prefix** → decrypt → **constant-time compare** →
-check `revoked`, `expires_at`, rate limit → resolve scope.
+check `revoked`, `expires_at` → resolve scope → **charge the rate-limit window**.
 
 The display prefix is a short leading slice of the key, stored in clear and indexed. It turns
 verification into one row fetch and one decrypt instead of a table scan, and it is also what the
 UI shows in lists (`mar_live_8f3c…`). It is too short to be useful to an attacker on its own.
+
+The rate-limit window is charged last, and by the dispatcher rather than the verifier: a verified
+key is **cached**, so a limiter living inside verification would only ever see the cache misses.
 
 ### Accepted in both dialects
 
@@ -139,7 +141,7 @@ Every key carries a **scope** — the set of Accounts it may reach — in one of
 |---|---|---|
 | `name` | string, required | human-chosen; unique per deployment |
 | Scope | `all` / pools / accounts | see above |
-| Rate limit | requests per window | Stored on the key and carried on the verified-key snapshot. **Not enforced yet** — the ceiling is configurable and currently advisory |
+| Rate limit | requests per window | Enforced as an **exact sliding window** over accepted requests, in memory, before the request body is read — a refusal must cost less than the request it refuses. Over the ceiling → `429` `key_rate_limited` + `Retry-After`, and never `quota_exhausted`: one key spending its allowance is not the pool running out. **Per replica**, deliberately: a shared counter would put a round trip on the request path, so two replicas admit up to twice the ceiling |
 | Expiry | timestamp, optional | a key past expiry is rejected exactly like a revoked one |
 | Revoked | flag | one-way |
 

@@ -85,6 +85,26 @@ describe("attempt record", () => {
     expect(record.clientRequestId).toBeNull()
   })
 
+  test("cost is priced on the upstream model, so an alias does not silently mis-bill", () => {
+    // The client asked for `sonnet`; this account sent `claude-sonnet-5`. Pricing the requested name
+    // would charge Anthropic's rate for whatever the operator's alias map happened to point at.
+    const priced = attemptRecord(
+      input({
+        upstreamModel: "claude-sonnet-5",
+        tokens: { tokensIn: 1_000_000, tokensOut: 0, cacheReadTokens: 0, cacheWriteTokens: 0 },
+      }),
+    )
+    expect(priced.costEstimate).toBe("3.000000")
+    expect(priced.costBasis).toBe("metered")
+  })
+
+  test("an unpriced model records null and unknown, never a zero that reads as free", () => {
+    const record = attemptRecord(input())
+    expect(record.upstreamModel).toBe("glm-4.7")
+    expect(record.costEstimate).toBeNull()
+    expect(record.costBasis).toBe("unknown")
+  })
+
   test("router overhead is total minus upstream, and never negative on a clock hiccup", () => {
     expect(attemptRecord(input()).routerOverheadMs).toBe(4)
     const skewed = { ...input().timing, totalMs: 100, upstreamMs: 120 }

@@ -5,9 +5,11 @@ import {
   CreditsExhaustedError,
   CsrfTokenError,
   isRouterError,
+  KeyRateLimitedError,
   KeyRevokedError,
   NoHealthyAccountError,
   QuotaExhaustedError,
+  RetryableRouterError,
   ROUTER_ERROR_CODES,
   RouterError,
   type RouterErrorCode,
@@ -40,6 +42,12 @@ const cases: readonly ErrorCase[] = [
   },
   { name: "ScopeViolationError", ctor: ScopeViolationError, code: "scope_violation", status: 403 },
   { name: "KeyRevokedError", ctor: KeyRevokedError, code: "key_revoked", status: 401 },
+  {
+    name: "KeyRateLimitedError",
+    ctor: KeyRateLimitedError,
+    code: "key_rate_limited",
+    status: 429,
+  },
   { name: "AdminAuthError", ctor: AdminAuthError, code: "admin_auth_failed", status: 401 },
   { name: "CsrfTokenError", ctor: CsrfTokenError, code: "csrf_token_invalid", status: 403 },
   {
@@ -141,6 +149,29 @@ describe("rate limited is not out of credits", () => {
     expect(rateLimited.resetsAt).toBeUndefined()
     expect(Object.hasOwn(outOfCredits, "resetsAt")).toBe(false)
     expect(Object.hasOwn(outOfCredits, "retryAfterSeconds")).toBe(false)
+  })
+})
+
+describe("a key over its own ceiling is not a pool out of capacity", () => {
+  const keyLimited = new KeyRateLimitedError("60 requests per 60s", { retryAfterSeconds: 12 })
+  const poolLimited = new QuotaExhaustedError("five-hour window spent", { retryAfterSeconds: 12 })
+
+  test("they share the status and nothing else", () => {
+    expect(keyLimited.status).toBe(poolLimited.status)
+    expect(keyLimited.code).not.toBe(poolLimited.code)
+    expect(keyLimited).not.toBeInstanceOf(QuotaExhaustedError)
+  })
+
+  test("both can say when to come back", () => {
+    for (const error of [keyLimited, poolLimited]) {
+      expect(error).toBeInstanceOf(RetryableRouterError)
+      expect(error.retryAfterSeconds).toBe(12)
+    }
+  })
+
+  test("a failure only a human can fix carries no wait", () => {
+    // Which is what stops it from being retried on a timer.
+    expect(new CreditsExhaustedError("balance drained")).not.toBeInstanceOf(RetryableRouterError)
   })
 })
 

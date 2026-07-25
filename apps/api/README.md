@@ -84,7 +84,7 @@ production wiring lives in `composition.ts`, and a `Database` becomes a service 
 | `POST /v1/messages`, `/v1/chat/completions`, `/v1/responses` | router key | shipped, **passthrough only** | Same-dialect relay. Cross-dialect and the Agent-SDK path are refused by name in `services/dataplane/egress/mode.ts`, before any upstream call |
 | `GET /v1/models` | router key | shipped | Exactly the models reachable within the presenting key's scope, shaped by the credential style the client authenticated with |
 | `/api/admin/usage/**`, `/api/admin/settings/**` | session cookie | not built | M7–M8 |
-| `GET /metrics` | deferred | not built | Prometheus exposition |
+| `GET /metrics` | `METRICS_TOKEN` when set | shipped | Prometheus exposition. Mounted beside health, guarded by neither plane's credential |
 
 The two health endpoints are deliberately **not** aliases: aliasing them is the classic mistake,
 and it makes an orchestrator restart a healthy process because Postgres blinked. The database half

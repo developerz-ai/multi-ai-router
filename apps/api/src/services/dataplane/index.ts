@@ -17,8 +17,10 @@ export {
   createScopeLoader,
   type KeyScopeLoader,
   type KeyScopeTargets,
+  type KeyTargetSource,
   keyScopeSnapshot,
   NO_TARGETS,
+  repositoryScopeLoader,
   unscopedLoader,
 } from "./auth/scope"
 export {
@@ -71,6 +73,14 @@ export {
   type HealthStore,
   overlayHealth,
 } from "./health"
+export {
+  createRateLimiter,
+  DEFAULT_RATE_LIMIT_MAX_KEYS,
+  type RateLimitDecision,
+  type RateLimitedKey,
+  type RateLimiter,
+  type RateLimiterOptions,
+} from "./limits"
 export { type ReachableModel, reachableModels } from "./models"
 export {
   createDispatcher,
@@ -86,6 +96,8 @@ export {
   type DataPlaneClock,
   type FetchLike,
   type IngressDialect,
+  type RequestObserver,
+  type RequestSample,
   type RoutableAccount,
   type RoutingCatalog,
   routingView,

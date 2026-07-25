@@ -43,6 +43,11 @@ export interface SchedulerDeps {
   readonly now?: () => Date
   /** Injected so a test is deterministic; production leaves it alone. */
   readonly random?: () => number
+  /**
+   * Called once per settled tick, including the ones that skipped on a lost lock. Feeds the
+   * `router_task_*` series; it must not throw, and it is never awaited.
+   */
+  readonly onTick?: (result: TickResult) => void
 }
 
 export interface Scheduler {
@@ -153,9 +158,14 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
   const run = (task: ScheduledTask): Promise<TickResult> => {
     const existing = inFlight.get(task.name)
     if (existing !== undefined) return existing
-    const pending = tick(task).finally(() => {
-      inFlight.delete(task.name)
-    })
+    const pending = tick(task)
+      .then((result) => {
+        deps.onTick?.(result)
+        return result
+      })
+      .finally(() => {
+        inFlight.delete(task.name)
+      })
     inFlight.set(task.name, pending)
     return pending
   }

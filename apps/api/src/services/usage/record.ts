@@ -4,7 +4,7 @@ import {
   USAGE_OUTCOME_SUCCESS,
   usageOutcomeForErrorCode,
 } from "@multi-ai-router/core"
-import type { NewUsageRecordRow } from "@multi-ai-router/db"
+import type { CostBasis, NewUsageRecordRow } from "@multi-ai-router/db"
 
 /**
  * One record per upstream **attempt**, not per client request. A request that failed over twice
@@ -44,6 +44,13 @@ export interface UsageRecord {
   readonly tokensOut: number
   readonly cacheReadTokens: number
   readonly cacheWriteTokens: number
+  /**
+   * Estimated dollars for this attempt, as a decimal string, or null when this image ships no price
+   * for the model. Null is the honest value: a zero here would read as a free request.
+   */
+  readonly costEstimate: string | null
+  /** `metered` upstream, `notional` for a subscription's attribution, `unknown` when unpriced. */
+  readonly costBasis: CostBasis
   /** Router-observed wall time for this attempt. */
   readonly latencyMs: number
   /** Time to the first relayed byte. Null when no byte was relayed. */
@@ -142,6 +149,8 @@ export function toUsageRecordRow(record: UsageRecord): NewUsageRecordRow {
     tokensOut: record.tokensOut,
     cacheReadTokens: record.cacheReadTokens,
     cacheWriteTokens: record.cacheWriteTokens,
+    costEstimate: record.costEstimate,
+    costBasis: record.costBasis,
     latencyMs: record.latencyMs,
     ttfbMs: record.ttfbMs,
     routerOverheadMs: record.routerOverheadMs,

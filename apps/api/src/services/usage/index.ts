@@ -5,6 +5,10 @@
  * Callers import from here; nothing outside this directory reaches into a module inside it.
  */
 
+export {
+  createUsageRecorderFromEnv,
+  type UsageRecorderFromEnvDeps,
+} from "./fromEnv"
 export { type BoundedQueue, createBoundedQueue } from "./queue"
 export {
   clientRequestIdFrom,

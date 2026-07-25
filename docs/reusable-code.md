@@ -61,10 +61,11 @@ business knowing a table.
 | Thing | Where | Use it when |
 |---|---|---|
 | `RouterError` (abstract base) | `packages/core/src/errors.ts` | Adding a new failure class. Never throw a bare `Error` for a request outcome |
-| `NoHealthyAccountError` (503), `QuotaExhaustedError` (429), `CreditsExhaustedError` (402), `ScopeViolationError` (403), `KeyRevokedError` (401), `UpstreamTimeoutError` (504), `CredentialDecryptError` (500), `TranslationError` (400) | same | The failure is one of these. Adding a class = the class + its code in `ROUTER_ERROR_CODES` + a row in the `errors.test.ts` table |
+| `RetryableRouterError` (abstract) | same | The failure can say *when* to come back. `errors/render.ts` reads `Retry-After` off this base, so a new clock-recoverable class gets the header for free |
+| `NoHealthyAccountError` (503), `QuotaExhaustedError` (429), `KeyRateLimitedError` (429), `CreditsExhaustedError` (402), `ScopeViolationError` (403), `KeyRevokedError` (401), `UpstreamTimeoutError` (504), `CredentialDecryptError` (500), `TranslationError` (400) | same | The failure is one of these. Adding a class = the class + its code in `ROUTER_ERROR_CODES` + a row in the `errors.test.ts` table |
 | `ROUTER_ERROR_CODES`, `RouterErrorCode` | same | Typing an outcome column or metric label — `UsageOutcome` in db already does |
 | `isRouterError(value)` | same | Narrowing an unknown throw. Used by `errors/render.ts` and `middleware/errorHandler.ts` |
-| `QuotaExhaustedInit` | same | Constructing a 429 with `retryAfterSeconds` / `resetsAt` |
+| `QuotaExhaustedInit`, `RetryableInit` | same | Constructing a 429 with `retryAfterSeconds` / `resetsAt` |
 
 **The HTTP status comes from the error instance.** `error.status` and `error.code` are fixed at class
 declaration. Nothing may re-derive a status from a route, a code string, or a second mapping table.
@@ -132,6 +133,27 @@ Each is a Zod schema **and** its `z.infer` type under one name. These are the si
 | `checkReadiness(probes)`, `ReadinessProbes`, `createDatabaseProbe(...)`, `assumeHealthyAccounts` | `services/health/` | Health surfaces. Probes are injected, so the service needs no I/O |
 | `createRuntime(deps)` → `Runtime` | `composition.ts` | The composition root. Every long-lived object is built here once and injected downward — never construct a repository, cache, or recorder anywhere else |
 
+### Metrics — `apps/api/src/observability/`
+
+| Thing | Where | Use it when |
+|---|---|---|
+| `createRegistry(options)` → `Registry` with `counter` / `gauge` / `histogram` / `onCollect` / `expose` | `observability/registry.ts` | Any new metric primitive. Label names are declared once per metric and checked by the compiler, so a `request_id` label is a type error rather than a review comment. Series are capped per metric — cardinality may degrade, it may not take the process down |
+| `createSeries(options)` → `RouterSeries` | `observability/series.ts` | Adding or renaming a series. **Every** exported metric is declared here and nowhere else; the mapping code never names a metric |
+| `createMetrics(options)` → `RouterMetrics` | `observability/metrics.ts` | Turning a `UsageRecord`, a finished request, or a scheduler tick into numbers. Never measures anything itself |
+| `createRuntimeMetrics(deps)` → `RouterMetrics` | `observability/runtime.ts` | The production wiring: the registry plus the per-scrape gauges read from the warm catalog and health store. `composition.ts` is its one caller |
+
+Recording is off the critical path by construction: attempt series ride the usage recorder's
+`onRecord` drain, state gauges are sampled per scrape, and the only per-request call is a single
+counter increment at the point a request ends. Never add a metric write inside `attempt.ts` or the
+failover chain.
+
+### Cost estimation — `apps/api/src/services/cost/`
+
+| Thing | Where | Use it when |
+|---|---|---|
+| `estimateCost(provider, upstreamModel, tokens)` → `CostEstimate` | `services/cost/estimate.ts` | Pricing an attempt. Pure — no clock, no store — and the **only** place a `costBasis` is decided: `metered`, `notional` for a subscription's attribution, `unknown` when unpriced. Unknown is null, never zero |
+| `lookupRates(provider, model)` → `ModelRates \| null` | `services/cost/prices.ts` | Reading a shipped per-Mtok rate. One table, every entry commented with its provenance; a provider absent from it has no published per-model price |
+
 ### Admin-plane plumbing — `apps/api/src/services/admin/` + `routes/admin/render.ts`
 
 Every admin route group is three lines because these four exist. Use them; do not hand-roll a
@@ -154,6 +176,17 @@ rejection shape, a body read, or an audit write.
 
 Disabled accounts are deliberately *in* the catalog: filtering is routing's job, and a catalog that
 hides them makes "why did nothing match" unanswerable.
+
+### Per-key limits & usage plumbing — `apps/api/src/services/`
+
+| Thing | Where | Use it when |
+|---|---|---|
+| `createRateLimiter(options)` → `RateLimiter` | `services/dataplane/limits.ts` | Charging a request against a key's ceiling. Pure over an injected `nowMs` and its own map: no clock, no timer, no I/O. `check` charges *and* decides in one call — two calls would hand the same headroom to two concurrent requests |
+| `createUsageRecorderFromEnv(deps)` → `UsageRecorder` | `services/usage/fromEnv.ts` | Building the production recorder: repository writer, queue shape from env, and the throttled log lines that keep a shed record or a rejected batch from being silent. `composition.ts` is its one caller; tests use `createUsageRecorder` with an array |
+
+A per-key refusal is **not** a `QuotaExhaustedError`. Same status, different owner: one key spent its
+own allowance, the pool did not run out. `key_rate_limited` and `quota_exhausted` stay apart in the
+error hierarchy, in `UsageOutcome`, and on `router_requests_total`.
 
 ### Test support — `apps/api/test/`
 
@@ -190,7 +223,9 @@ hides them makes "why did nothing match" unanswerable.
 | Routing selection math (filter → policy → failover) | Pure functions in `apps/api/src/services/routing/` with injected snapshots. A second implementation in the UI or a driver picks a different account than the router did |
 | The `AdminResult` failure shape | `services/admin/result.ts`. A route that builds its own `c.json({ error })` is a route that will answer `200` with an error body |
 | The log redactor (`logging/redact.ts`) | A second, weaker scrubber is how a credential reaches a log line. One redactor, one test asserting nothing leaks |
+| Per-token prices and the cost arithmetic | `services/cost/`. A total recomputed in the console or the rollup drifts from the `costEstimate` on the row, and the two numbers then disagree about what the same request cost |
 | The `cooling_down` vs `exhausted` distinction | Clock-recoverable vs human-recoverable: 429 + `Retry-After` vs 402, countdown vs "needs top-up". Collapsing them makes the router retry a dead account on a timer forever |
+| Per-key rate-limit accounting | `services/dataplane/limits.ts`, charged once per request in the dispatcher. A second counter — in a middleware, a route, or the verifier (which is cached, so it would only see misses) — double-charges or under-charges the same key |
 
 ## Conventions for new shared code
 

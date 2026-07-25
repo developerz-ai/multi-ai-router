@@ -11,6 +11,7 @@ import { ADMIN_POOLS_BASE_PATH, adminPoolRoutes } from "./routes/admin/pools"
 import { ADMIN_PROVIDERS_BASE_PATH, adminProviderRoutes } from "./routes/admin/providers"
 import { ADMIN_USAGE_BASE_PATH, adminUsageRoutes } from "./routes/admin/usage"
 import { healthRoutes } from "./routes/health"
+import { type MetricsRouteDeps, metricsRoutes } from "./routes/metrics"
 import { DATA_PLANE_BASE_PATH, dataPlaneRoutes } from "./routes/v1"
 import type {
   Dispatcher,
@@ -44,6 +45,8 @@ export interface AppDeps {
   /** Absent means the admin plane is not mounted — the health-only skeleton a test may want. */
   readonly admin?: AdminServices
   readonly dataPlane?: DataPlaneDeps
+  /** Absent means `/metrics` is not mounted at all — a `404`, not an empty exposition. */
+  readonly metrics?: MetricsRouteDeps
   /** `Env.trustProxy`. Off by default: an unvetted `X-Forwarded-For` is a login-throttle bypass. */
   readonly trustProxy?: boolean
 }
@@ -66,6 +69,11 @@ export function createApp(deps: AppDeps): Hono<AppEnv> {
   app.notFound(notFoundHandler())
 
   app.route("/", healthRoutes(deps.probes))
+
+  // Beside health, and guarded like neither plane: a scrape carries no session and no router key.
+  if (deps.metrics !== undefined) {
+    app.route("/", metricsRoutes(deps.metrics))
+  }
 
   if (deps.admin !== undefined) {
     mountAdmin(app, deps.admin, deps.trustProxy ?? false)

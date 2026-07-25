@@ -35,6 +35,7 @@ async function main(): Promise<void> {
       accounts: createAccountProbe({ catalog: runtime.catalog, health: runtime.health }),
     },
     admin: runtime.admin,
+    metrics: { metrics: runtime.metrics, token: env.metricsToken },
     dataPlane: {
       verifier: runtime.verifier,
       dispatcher: runtime.dispatcher,

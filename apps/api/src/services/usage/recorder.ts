@@ -26,6 +26,16 @@ export interface UsageRecorderOptions {
   /** Called once per shed record, so the drop counter and the warn log have a source. */
   readonly onShed?: (record: UsageRecord) => void
   readonly onWriteError?: (error: unknown, batch: readonly UsageRecord[]) => void
+  /**
+   * Called once per record as the batch drains — which is to say on the flush timer, never on
+   * the request path. This is where metrics are fed from: an observation costs a map lookup and
+   * an add, and even that belongs off the critical path (CLAUDE.md non-negotiable 8).
+   *
+   * Called whether or not the write succeeds: the record is a fact about what the router did,
+   * and a database that rejected the row does not un-do the attempt it describes. It must not
+   * throw; one that does would take a batch's remaining records with it.
+   */
+  readonly onRecord?: (record: UsageRecord) => void
 }
 
 /** Defaults, all overridable: no retention window, interval, or limit is a constant in code. */
@@ -65,6 +75,8 @@ export function createUsageRecorder(
   let writeFailures = 0
 
   const writeBatch = async (batch: readonly UsageRecord[]): Promise<void> => {
+    const observe = options.onRecord
+    if (observe !== undefined) for (const record of batch) observe(record)
     try {
       await writer.write(batch)
       written += batch.length

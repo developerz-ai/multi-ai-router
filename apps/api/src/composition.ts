@@ -14,6 +14,7 @@ import {
 } from "@multi-ai-router/db"
 import type { Env } from "./config/env"
 import type { Logger } from "./logging/logger"
+import { createRuntimeMetrics, type RouterMetrics } from "./observability"
 import {
   advisoryTaskLock,
   createScheduledTasks,
@@ -33,44 +34,43 @@ import { createCredentialCipherFromEnv } from "./services/crypto/fromEnv"
 import {
   createDispatcher,
   createHealthStore,
+  createRateLimiter,
   createRouterKeyVerifier,
-  createScopeLoader,
   type Dispatcher,
   type HealthStore,
   type RouterKeyVerifier,
+  repositoryScopeLoader,
 } from "./services/dataplane"
 import { createKeysService } from "./services/keys"
 import { createPoolsService } from "./services/pools"
-import { createUsageRecorder, toUsageRecordRow, type UsageRecorder } from "./services/usage"
+import { createUsageRecorderFromEnv, type UsageRecorder } from "./services/usage"
 import { createUsageService } from "./services/usage-read"
 import type { AdminServices } from "./types"
 
 /**
- * The composition root: every long-lived object in the process is constructed
- * here, exactly once, and injected downward.
+ * The composition root: every long-lived object in the process is constructed here, exactly once,
+ * and injected downward.
  *
- * It exists so the two things that must be true of this system can be *seen* in
- * one file rather than inferred from twenty:
+ * It exists so the two things that must be true of this system can be *seen* in one file rather
+ * than inferred from twenty:
  *
- * 1. **Nothing on the request path touches Postgres.** The catalog is warm, the
- *    key cache is in memory, and usage writes are queued and flushed off-path.
- *    A repository handed to a data-plane object is always a background caller.
- * 2. **The two credential planes never meet.** The admin services and the data
- *    plane are built from the same repositories but are wired into disjoint
- *    routers with disjoint guards.
+ * 1. **Nothing on the request path touches Postgres.** The catalog is warm, the key cache and the
+ *    rate-limit windows are in memory, and usage writes are queued and flushed off-path. A
+ *    repository handed to a data-plane object is always a background caller.
+ * 2. **The two credential planes never meet.** The admin services and the data plane are built
+ *    from the same repositories but are wired into disjoint routers with disjoint guards.
  *
- * Wiring is separated from `createApp` because `createApp` is a pure factory
- * that a test calls with stubs. This function is the production wiring, and it
- * is the only place a `Database` becomes a service.
+ * Wiring is separated from `createApp` because `createApp` is a pure factory that a test calls with
+ * stubs. This function is the production wiring, and it is the only place a `Database` becomes a
+ * service.
  */
 
 export interface RuntimeDeps {
   readonly env: Env
   readonly database: Database
   /**
-   * The pool behind `database`. One consumer: an advisory lock lives on a
-   * *session*, so the scheduler needs a connection it can reserve. No service is
-   * ever handed it.
+   * The pool behind `database`. One consumer: an advisory lock lives on a *session*, so the
+   * scheduler needs a connection it can reserve. No service is ever handed it.
    */
   readonly sql: SqlConnection
   readonly logger: Logger
@@ -84,6 +84,8 @@ export interface Runtime {
   readonly health: HealthStore
   /** Exposed for the admin plane's "run now" and for shutdown ordering; the timers are internal. */
   readonly scheduler: Scheduler
+  /** What `GET /metrics` renders. Fed from the usage drain, the scheduler, and per-scrape gauges. */
+  readonly metrics: RouterMetrics
   /** Loads the catalog and starts the background writers. Awaited before the listener opens. */
   start(): Promise<void>
   /** Flushes what is queued and stops the timers. */
@@ -104,11 +106,10 @@ export function createRuntime(deps: RuntimeDeps): Runtime {
   // Written by the admin-auth and OAuth flows; here only so the sweeps can reach them.
   const sessions = createSessionRepository(database)
   const oauthStates = createOauthStateRepository(database)
-  // Shared by the admin read path (closed days) and the rollup task (the writer
-  // that puts them there) — one repository, both directions.
+  // One repository, both directions: the admin read path reads closed days, the rollup closes them.
   const usageDaily = createUsageDailyRepository(database)
-  // The scheduler's run log. The usage read path needs it too, to know which
-  // days the rollup has actually closed.
+  // The scheduler's run log. The usage read path needs it too, to know which days the rollup has
+  // actually closed.
   const scheduledTasks = createScheduledTaskRepository(database)
 
   // --- warm state -----------------------------------------------------------
@@ -118,23 +119,21 @@ export function createRuntime(deps: RuntimeDeps): Runtime {
     refreshIntervalMs: env.dataPlane.catalogRefreshSeconds * 1_000,
     now,
   })
+  // `usage` is a getter because the recorder below reports *into* this: see `observability/`.
+  const metrics = createRuntimeMetrics({ catalog, health, usage: () => usage, logger, now })
 
-  const usage: UsageRecorder = createUsageRecorder(
-    {
-      write: async (batch) => {
-        await usageRecords.insertMany(batch.map(toUsageRecordRow))
-      },
-    },
-    {
-      maxQueued: env.dataPlane.usageQueueMax,
-      batchSize: env.dataPlane.usageBatchSize,
-      flushIntervalMs: env.dataPlane.usageFlushIntervalMs,
-    },
-  )
+  // Queued in memory, batch-written off-path, and loud about both ways it can lose a record: a shed
+  // one and a rejected batch both reach a log line — see `services/usage/fromEnv.ts`.
+  const usage: UsageRecorder = createUsageRecorderFromEnv({
+    records: usageRecords,
+    env,
+    logger,
+    onRecord: (record) => metrics.observeUsage(record),
+  })
 
   // --- background work ------------------------------------------------------
-  // Every periodic task behind one in-process runner (non-negotiable 13). The lock
-  // is bound here and passed as a capability, so nothing below holds a connection.
+  // Every periodic task behind one in-process runner (non-negotiable 13). The lock is bound here
+  // and passed as a capability, so nothing below holds a connection.
   const scheduler = createScheduler({
     tasks: createScheduledTasks({
       sessions,
@@ -153,22 +152,14 @@ export function createRuntime(deps: RuntimeDeps): Runtime {
     jitterFraction: env.scheduler.jitterFraction,
     logger,
     now,
+    onTick: (result) => metrics.observeTask(result),
   })
 
   // --- data plane -----------------------------------------------------------
   const verifier = createRouterKeyVerifier({
     repository: keys,
     cipher,
-    loadScope: createScopeLoader(async (apiKeyId) => {
-      const [poolRows, accountRows] = await Promise.all([
-        keys.listPoolTargets(apiKeyId),
-        keys.listAccountTargets(apiKeyId),
-      ])
-      return {
-        poolIds: poolRows.map((row) => row.poolId),
-        accountIds: accountRows.map((row) => row.accountId),
-      }
-    }),
+    loadScope: repositoryScopeLoader(keys),
     cache: {
       maxEntries: env.dataPlane.keyCacheMax,
       ttlMs: env.dataPlane.keyCacheTtlSeconds * 1_000,
@@ -187,12 +178,18 @@ export function createRuntime(deps: RuntimeDeps): Runtime {
     },
   })
 
+  // Per replica by design: a shared counter costs a round trip per request — `limits.ts` says why.
+  // Sized off the key cache: one window per verified key, so it is the same inventory either way.
+  const limiter = createRateLimiter({ maxKeys: env.dataPlane.keyCacheMax })
+
   const dispatcher = createDispatcher({
     catalog,
     health,
     cipher,
     usage,
+    limiter,
     logger,
+    onRequest: (sample) => metrics.observeRequest(sample),
     options: {
       failover: { maxAttempts: env.failover.maxAttempts },
       upstreamTimeoutMs: env.failover.upstreamTimeoutMs,
@@ -202,13 +199,12 @@ export function createRuntime(deps: RuntimeDeps): Runtime {
   // --- admin plane ----------------------------------------------------------
   //
   // The CRUD services are plain and know nothing about caches; the decorators in
-  // `services/admin/coherence.ts` make a write take effect on the request path
-  // before the response is written. Without them an account disabled in the
-  // console keeps routing, and a revoked key keeps authenticating, until a TTL
-  // expires.
-  // "Re-check now": clears the breaker marks so the next real request probes the account, rather
-  // than sending a synthetic one the provider would still bill. Built before the services,
-  // because the accounts read overlays its last-checked timestamps.
+  // `services/admin/coherence.ts` make a write take effect on the request path before the response
+  // is written. Without them an account disabled in the console keeps routing, and a revoked key
+  // keeps authenticating, until a TTL expires.
+  // "Re-check now": clears the breaker marks so the next real request probes the account rather than
+  // sending a synthetic one the provider would still bill. Built before the services, because the
+  // accounts read overlays its last-checked timestamps.
   const recheck = createRecheckService({
     accounts,
     health,
@@ -218,7 +214,11 @@ export function createRuntime(deps: RuntimeDeps): Runtime {
 
   const coherence = {
     refreshCatalog: () => catalog.refresh(),
-    invalidateKey: (keyId: string) => verifier.invalidate(keyId),
+    // A revoked key must stop authenticating *and* stop occupying a rate-limit window.
+    invalidateKey: (keyId: string) => {
+      verifier.invalidate(keyId)
+      limiter.forget(keyId)
+    },
   }
 
   const admin: AdminServices = {
@@ -274,6 +274,7 @@ export function createRuntime(deps: RuntimeDeps): Runtime {
     catalog,
     health,
     scheduler,
+    metrics,
     start: async () => {
       // Awaited: serving a request against an empty catalog would look exactly
       // like a deployment with no accounts configured.

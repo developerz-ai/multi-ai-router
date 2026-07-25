@@ -5,6 +5,8 @@ import { errorHandler, notFoundHandler } from "../../src/middleware/errorHandler
 import { requestLogger } from "../../src/middleware/logger"
 import { requestId } from "../../src/middleware/requestId"
 import type { RouterKeyEnv } from "../../src/middleware/routerKeyAuth"
+import { createMetrics } from "../../src/observability"
+import { metricsRoutes } from "../../src/routes/metrics"
 import { dataPlaneRoutes } from "../../src/routes/v1"
 import {
   createDispatcher,
@@ -53,7 +55,17 @@ function harness(options: HarnessOptions) {
   const usage = usageSink()
   const health = createHealthStore()
   const testClock = clock()
+  const metrics = createMetrics({ now: testClock.now })
   const store = catalog(accounts, options.pools ?? [])
+  // Same shape the composition root wires: the usage sink records for the test's own assertions,
+  // and metrics observes off the same call — here synchronously, since this harness has no
+  // background drain to feed it from.
+  const usageWithMetrics = {
+    record: (record: (typeof usage.rows)[number]) => {
+      usage.record(record)
+      metrics.observeUsage(record)
+    },
+  }
 
   const verifier = createRouterKeyVerifier({
     repository: keyRepository([apiKeyRow(KEY, CRYPTOR, { scope: options.scope ?? "all" })]),
@@ -83,15 +95,17 @@ function harness(options: HarnessOptions) {
         catalog: store,
         health,
         cipher: CRYPTOR,
-        usage,
+        usage: usageWithMetrics,
         fetch: upstream.fetch,
         clock: testClock,
+        onRequest: (sample) => metrics.observeRequest(sample),
         options: { failover: { maxAttempts: options.maxAttempts ?? 3 } },
       }),
     }),
   )
+  app.route("/", metricsRoutes({ metrics, token: null }))
 
-  return { app, upstream, usage, health, clock: testClock }
+  return { app, upstream, usage, health, clock: testClock, metrics }
 }
 
 const MESSAGE = JSON.stringify({
@@ -497,6 +511,39 @@ describe("usage accounting", () => {
     await settle()
 
     expect(usage.rows[0]?.routerOverheadMs).toBeGreaterThanOrEqual(0)
+  })
+
+  test("a priced model's usage row carries a non-null cost estimate", async () => {
+    const priced = MESSAGE.replace("claude-opus-5", "claude-sonnet-5")
+    const { app, usage } = harness({
+      responses: [() => jsonResponse(200, { usage: { input_tokens: 11, output_tokens: 22 } })],
+    })
+
+    await (await app.request("/v1/messages", post(priced, bearer()))).text()
+    await settle()
+
+    expect(usage.rows[0]?.costEstimate).not.toBeNull()
+    expect(usage.rows[0]?.costBasis).toBe("metered")
+  })
+})
+
+describe("observability", () => {
+  test("/metrics shows a router_overhead_seconds observation after one request", async () => {
+    const { app } = harness({ responses: [() => jsonResponse(200, {})] })
+
+    await (await app.request("/v1/messages", post(MESSAGE, bearer()))).text()
+    await settle()
+
+    const res = await app.request("/metrics")
+    expect(res.status).toBe(200)
+    const body = await res.text()
+
+    // At least one attempt landed in the histogram: the count line is above zero.
+    const countLine = body
+      .split("\n")
+      .find((line) => line.startsWith("router_overhead_seconds_count"))
+    expect(countLine).toBeDefined()
+    expect(Number(countLine?.split(" ").pop())).toBeGreaterThan(0)
   })
 })
 

@@ -1,10 +1,10 @@
 # Observability
 
-Status: **`UsageRecord` writing, structured logging, redaction, audit events, and `/healthz` +
-`/readyz` are implemented.** Everything downstream of the raw rows is **not**: no rollups, no usage
-API, no charts, no `/metrics`, no quota surface, no scheduled tasks to report on. The field table
-below matches the shipped schema; the rest is the contract those surfaces must meet. Retention knobs
-live in [09-deployment.md](09-deployment.md).
+Status: **`UsageRecord` writing, structured logging, redaction, audit events, the usage API, the
+scheduled tasks, and `/healthz` + `/readyz` + `/metrics` are implemented.** Not yet: charts beyond
+what the console renders today, the quota surface, and cost estimation. The field table below
+matches the shipped schema; the rest is the contract those surfaces must meet. Retention knobs live
+in [09-deployment.md](09-deployment.md).
 
 ## UsageRecord
 
@@ -33,7 +33,7 @@ client request that hits a rate-limited account, fails over, and succeeds on the
 | `costBasis` | enum | `metered` \| `notional` \| `unknown` |
 | `latencyMs` / `ttfbMs` | int / int? | Router-observed wall time for the attempt; time to the first relayed byte. **TTFB is what makes "zero added time-to-first-token" a measurement** — `latencyMs` is dominated by generation time and hides a buffering regression completely |
 | `routerOverheadMs` | int | Time in the router, excluding upstream — the per-record twin of `router_overhead_seconds` |
-| `outcome` | enum | `success` \| `upstream_error` \| `rate_limited` \| `exhausted` \| `timeout` \| `client_error` \| `router_error`. `rate_limited` and `exhausted` are distinct outcomes, never folded together |
+| `outcome` | enum | `success` \| `client_error` \| `translation_failed` \| `key_revoked` \| `scope_violation` \| `key_rate_limited` \| `no_healthy_account` \| `quota_exhausted` \| `credits_exhausted` \| `upstream_error` \| `upstream_timeout` \| `upstream_auth_failed` \| `credential_decrypt_failed` \| `router_error`. Grouped by *whose problem it is* (`packages/core/src/domain/usage.ts`). Three that share a status but never fold together: `quota_exhausted` (a window a clock refills), `credits_exhausted` (a balance a human refills), and `key_rate_limited` (one key spent its own ceiling — not the operator's capacity) |
 | `httpStatus` / `errorClass` | int? / string? | Upstream status when it answered; the thrown class's **name** — never a message, never a body |
 | `createdAt` | timestamp | |
 
@@ -41,8 +41,15 @@ client request that hits a rate-limited account, fails over, and succeeds on the
 Postgres in batches by a background writer. A request never waits on an insert, never opens a
 transaction, and never fails because the database is slow. **A slow or unavailable database degrades
 reporting, never traffic** — the queue is bounded, and on overflow it drops the oldest records and
-increments a counter rather than applying backpressure to live requests. No prompt content, no
-completion content, and no credential material is ever stored on a record.
+increments a counter rather than applying backpressure to live requests (`router_usage_queue_depth`
+and `router_usage_records_dropped_total`, plus a throttled log line — a drop is never silent). No
+prompt content, no completion content, and no credential material is ever stored on a record.
+
+One request writes no record at all: a key refused for exceeding **its own** rate limit
+([04-api-keys-and-access.md](04-api-keys-and-access.md#per-key-controls)). The check runs before the
+body is read, so there is no model and no session to attribute a row to, and a refusal that
+allocated a record per attempt would be an amplifier rather than a limit. It is counted on
+`router_requests_total{key_id,outcome="key_rate_limited"}`, which is per key already.
 
 > **Total prompt size is `tokensIn` + `cacheWriteTokens` + `cacheReadTokens`.** Every total,
 > chart, and cost line here uses the sum. Reporting `tokensIn` alone counts only the uncached
@@ -53,9 +60,13 @@ completion content, and no credential material is ever stored on a record.
 
 | | |
 |---|---|
-| Source | A static price table shipped with the image, keyed by `provider + model`, with input/output/cache rates |
-| Override | The operator can edit or extend it in `/settings`. Overrides win; the shipped table is the fallback |
-| Unknown model | `costEstimate` is null and `costBasis` is `unknown` — never silently zero, never guessed |
+| Source | A static price table shipped with the image (`services/cost/prices.ts`), keyed by `provider + model`, with input/output/cache rates. Every entry carries its provenance |
+| Override | The operator can edit or extend it in `/settings` — **DEFERRED**. Overrides will win; the shipped table stays the fallback |
+| Which model | The **upstream** model, after the Account's alias map — that is the name the upstream billed. A dated snapshot (`…-20251001`) prices as its family, which is how the provider prices the pin |
+| Unknown model | `costEstimate` is null and `costBasis` is `unknown` — never silently zero, never guessed. Same for a provider with no published per-model list: an aggregator's price depends on the route it chose, and a `*-compatible` endpoint is the operator's own contract |
+| Priced, no tokens | `0` with a real basis. Zero tokens against a known rate is a measurement, not an admission |
+| Cache rates | Where a provider states them as multiples of its input rate, they are derived, not restated. A response never says which cache TTL was written, so the cheaper default is assumed — cache writes read low, never high |
+| Estimated where computed | On the attempt, when the attempt ran. The price table and the alias map both change; a report needs what it cost then, not what the same tokens would cost today |
 
 **Subscription accounts have no per-token price.** A Claude Max or ChatGPT/Codex account is a flat
 monthly fee, so any per-request "cost" is an attribution, not a charge. Those rows are marked
@@ -179,7 +190,7 @@ immediately if it is healthy.
 |---|---|---|---|
 | `GET /healthz` | none | Liveness. The process is up and serving | `200` always while serving |
 | `GET /readyz` | none | Readiness: **database reachable**. The account pool is reported (`ok` / `none` / `blocked`) but does not gate the answer | `200` ready, `503` with a short reason when the database is unreachable |
-| `GET /metrics` | **DEFERRED** (bind-scoped or token) | Prometheus text exposition | `200` |
+| `GET /metrics` | `METRICS_TOKEN` when set, none when not | Prometheus text exposition | `200`, `401` when the token is set and not presented |
 | `GET /v1/usage/quota` | router key or admin session | Per-Account, per-window utilization, `resetsAt`, `resetSource`, `status`, `lastCheckedAt` — the same shape the UI renders, so an operator can alert on it externally | `200` |
 | `POST /api/admin/accounts/:id/recheck` | admin session | Manual re-check. `POST /api/admin/accounts/recheck` re-checks every account | `200` always — a cooldown refusal is `rechecked: false`, not `429` |
 | `GET /api/admin/usage` | admin session | Totals, series and breakdowns per key / account / pool / model over a window | `200` |
@@ -225,7 +236,28 @@ identity beyond its label.
 
 Label discipline: no unbounded label values. `key_id` and `account_id` are bounded by the
 deployment's own inventory; `session_id`, `request_id`, and user-supplied strings are **never**
-metric labels — they live on the `UsageRecord` and in logs.
+metric labels — they live on the `UsageRecord` and in logs. `model` is the one label a client can
+influence, so it is truncated and every metric stops adding series at a per-metric ceiling rather
+than growing without bound; hitting the ceiling logs a `warn` naming the metric.
+
+### Where the numbers come from
+
+Recording is off the critical path by construction, and reading the series correctly depends on
+knowing which clock each one is on:
+
+| Series | Fed from | Reads as |
+|---|---|---|
+| Everything per **attempt** (`router_upstream_*`, `router_tokens_total`, `router_overhead_seconds`, `router_failovers_total`) | The usage recorder's **batch drain** — the same background pass that writes the rows | Lags a scrape by at most one flush interval. Never costs a request anything |
+| `router_requests_total`, `router_request_duration_seconds` | Once per client request, where the request ends | Duration is measured to the response being handed back. A **streamed** body drains after that, so a streamed sample is time-to-response, not time-to-last-token — never average the two `streamed` label values together |
+| `router_accounts`, `router_quota_*`, `router_usage_queue_depth` | Sampled **per scrape** from the same warm state the request path reads | Cannot disagree with the router about which accounts are cooling down |
+| `router_task_*` | Each settled scheduler tick | `skipped_locked` records a run that never happened: no duration, no items, and the failure streak is left alone |
+
+Two deliberate absences. `router_overhead_seconds` has no sample for a request rejected before an
+egress path was chosen — there is no `path` to report, and inventing a fourth label value to hold
+"none" would put router-only failures in the same series operators use to compare passthrough with
+translation. And `router_failovers_total` counts a hop only once a **later** attempt of the same
+request proves the router moved on, so a chain that gave up leaves its final failure uncounted:
+it moved nowhere. Requests that failed outright are counted by `router_requests_total{outcome}`.
 
 ## Structured logging
 
