@@ -6,14 +6,25 @@ import { adminAuth } from "../../src/middleware/adminAuth"
 import { errorHandler, notFoundHandler } from "../../src/middleware/errorHandler"
 import { requestLogger } from "../../src/middleware/logger"
 import { requestId } from "../../src/middleware/requestId"
+import type {
+  ClaudeCliLogin,
+  ClaudeLoginHandle,
+  CredentialGuard,
+  CredentialState,
+} from "../../src/providers/claude-sdk/login"
 import { ADMIN_ACCOUNTS_BASE_PATH, adminAccountRoutes } from "../../src/routes/admin/accounts"
 import { ADMIN_KEYS_BASE_PATH, adminKeyRoutes } from "../../src/routes/admin/keys"
 import { ADMIN_POOLS_BASE_PATH, adminPoolRoutes } from "../../src/routes/admin/pools"
 import { ADMIN_PROVIDERS_BASE_PATH, adminProviderRoutes } from "../../src/routes/admin/providers"
-import { createAccountsService } from "../../src/services/accounts"
+import {
+  createAccountsService,
+  createClaudeConnectService,
+  createRecheckService,
+} from "../../src/services/accounts"
 import { createAuditRecorder } from "../../src/services/admin"
 import { createAdminAuthService } from "../../src/services/admin-auth/service"
 import { createCredentialCipher } from "../../src/services/crypto/cipher"
+import { createHealthStore } from "../../src/services/dataplane"
 import { createKeysService } from "../../src/services/keys"
 import { createPoolsService } from "../../src/services/pools"
 import { createMemoryConfigDirs } from "../support/config-dirs"
@@ -34,14 +45,31 @@ const SECRET = "sk-live-upstream-credential-value"
 const NOW = new Date("2026-07-24T12:00:00.000Z")
 const ENCRYPTION_KEY = Buffer.alloc(32, 7).toString("base64")
 
-function harness(guard: MiddlewareHandler<AdminAuthEnv> = stubSession()) {
+interface HarnessOptions {
+  readonly login?: FakeLogin
+  readonly credentials?: CredentialGuard
+  /** Mutable, so a test can move the clock forward to expire a pending login. */
+  readonly clock?: { now: Date }
+  readonly pendingLoginMinutes?: number
+}
+
+function harness(
+  guard: MiddlewareHandler<AdminAuthEnv> = stubSession(),
+  options: HarnessOptions = {},
+) {
   const store = createMemoryStore()
   const cipher = createCredentialCipher({ key: new Uint8Array(32).fill(7) })
   const audit = createAuditRecorder(store.audit)
-  const now = () => NOW
+  const clock = options.clock ?? { now: NOW }
+  const now = () => clock.now
+  const configDirs = createMemoryConfigDirs()
+  const login = options.login ?? fakeLogin()
 
   const app = new Hono<AdminAuthEnv>()
-  const logger = createLogger({ level: "error", write: () => undefined })
+  const logLines: string[] = []
+  // `debug` so a login failure's `logger.warn(...)` line is captured too — the token-leak
+  // assertions need every line the router would actually write, not just what an operator sees.
+  const logger = createLogger({ level: "debug", write: (line) => logLines.push(line) })
   app.use("*", requestId())
   app.use("*", requestLogger(logger))
   app.onError(errorHandler(logger))
@@ -55,8 +83,25 @@ function harness(guard: MiddlewareHandler<AdminAuthEnv> = stubSession()) {
         accounts: store.accounts,
         keys: store.keys,
         cipher,
-        configDirs: createMemoryConfigDirs().dirs,
+        configDirs: configDirs.dirs,
         audit,
+        now,
+      }),
+      connect: createClaudeConnectService({
+        accounts: store.accounts,
+        configDirs: configDirs.dirs,
+        login,
+        credentials: options.credentials ?? fakeCredentials(),
+        audit,
+        pendingLoginMinutes: options.pendingLoginMinutes ?? 10,
+        logger,
+        now,
+      }),
+      recheck: createRecheckService({
+        accounts: store.accounts,
+        health: createHealthStore(),
+        audit,
+        cooldownSeconds: 60,
         now,
       }),
     }),
@@ -90,7 +135,53 @@ function harness(guard: MiddlewareHandler<AdminAuthEnv> = stubSession()) {
   )
   app.route(ADMIN_PROVIDERS_BASE_PATH, adminProviderRoutes({ guard }))
 
-  return { app, store }
+  return { app, store, configDirs, clock, login, logLines }
+}
+
+/**
+ * A fake `claude` CLI login, stubbed at the same `ClaudeCliLogin` seam PR 7's SDK-security test
+ * uses — no subprocess in CI. Real is everything the router owns on top of it: the one-shot
+ * `state`, the TTL, and the rule that no code, state, or token ever reaches a response or a log.
+ */
+const STATE_PREFIX = "s-"
+let stateCounter = 0
+function nextState(): string {
+  stateCounter += 1
+  return `${STATE_PREFIX}${stateCounter}`
+}
+
+interface FakeLogin extends ClaudeCliLogin {
+  readonly handles: FakeHandle[]
+}
+
+interface FakeHandle extends ClaudeLoginHandle {
+  readonly submitted: string[]
+}
+
+function fakeLogin(): FakeLogin {
+  const handles: FakeHandle[] = []
+  return {
+    handles,
+    start: async () => {
+      const state = nextState()
+      const submitted: string[] = []
+      const handle: FakeHandle = {
+        authorizeUrl: `https://claude.com/cai/oauth/authorize?code=true&client_id=9d1c250a&state=${state}`,
+        state,
+        submitted,
+        submit: async (value) => {
+          submitted.push(value)
+        },
+        cancel: () => undefined,
+      }
+      handles.push(handle)
+      return handle
+    },
+  }
+}
+
+function fakeCredentials(state: CredentialState = "compact"): CredentialGuard {
+  return { settle: async () => state }
 }
 
 /** Stands in for a resolved admin session, so these tests are about the CRUD surface. */
@@ -355,6 +446,184 @@ describe("keys", () => {
       expect((await call(app, "POST", ADMIN_KEYS_BASE_PATH, body)).status).toBe(400)
     }
     expect(store.rows.keys).toHaveLength(0)
+  })
+})
+
+describe("connecting a Claude subscription", () => {
+  async function newClaudeAccount(app: App, label: string) {
+    const created = await call(app, "POST", ADMIN_ACCOUNTS_BASE_PATH, {
+      label,
+      provider: "anthropic-oauth",
+    })
+    expect(created.status).toBe(201)
+    return created.body as { id: string }
+  }
+
+  function stateOf(body: unknown): string {
+    const { authorizeUrl } = body as { authorizeUrl: string }
+    const state = new URL(authorizeUrl).searchParams.get("state")
+    if (state === null) throw new Error("fake authorize URL carried no state")
+    return state
+  }
+
+  test("two accounts connect into two distinct config directories", async () => {
+    const { app, configDirs } = harness()
+    const first = await newClaudeAccount(app, "claude-1")
+    const second = await newClaudeAccount(app, "claude-2")
+
+    const startedFirst = await call(app, "POST", `${ADMIN_ACCOUNTS_BASE_PATH}/${first.id}/connect`)
+    const startedSecond = await call(
+      app,
+      "POST",
+      `${ADMIN_ACCOUNTS_BASE_PATH}/${second.id}/connect`,
+    )
+    expect(startedFirst.status).toBe(200)
+    expect(startedSecond.status).toBe(200)
+
+    expect(configDirs.present.has(`/data/claude/${first.id}`)).toBe(true)
+    expect(configDirs.present.has(`/data/claude/${second.id}`)).toBe(true)
+    expect(first.id).not.toBe(second.id)
+
+    const doneFirst = await call(
+      app,
+      "POST",
+      `${ADMIN_ACCOUNTS_BASE_PATH}/${first.id}/connect/complete`,
+      {
+        pasted: `ac_notarealcode#${stateOf(startedFirst.body)}`,
+      },
+    )
+    const doneSecond = await call(
+      app,
+      "POST",
+      `${ADMIN_ACCOUNTS_BASE_PATH}/${second.id}/connect/complete`,
+      { pasted: `ac_notarealcode#${stateOf(startedSecond.body)}` },
+    )
+    expect(doneFirst.status).toBe(200)
+    expect(doneSecond.status).toBe(200)
+    expect((doneFirst.body as { accountId: string }).accountId).toBe(first.id)
+    expect((doneSecond.body as { accountId: string }).accountId).toBe(second.id)
+  })
+
+  test("a state that belongs to a different login is rejected", async () => {
+    const { app } = harness()
+    const first = await newClaudeAccount(app, "claude-1")
+    const second = await newClaudeAccount(app, "claude-2")
+    await call(app, "POST", `${ADMIN_ACCOUNTS_BASE_PATH}/${first.id}/connect`)
+    const startedSecond = await call(
+      app,
+      "POST",
+      `${ADMIN_ACCOUNTS_BASE_PATH}/${second.id}/connect`,
+    )
+
+    // The first account's login is still pending; pasting the second login's state against it
+    // must fail rather than complete a login it did not start.
+    const res = await call(
+      app,
+      "POST",
+      `${ADMIN_ACCOUNTS_BASE_PATH}/${first.id}/connect/complete`,
+      {
+        pasted: `ac_notarealcode#${stateOf(startedSecond.body)}`,
+      },
+    )
+
+    expect(res.status).toBe(400)
+    expect((res.body as { error: { code: string } }).error.code).toBe("state_mismatch")
+  })
+
+  test("a state is one-shot: reusing it after it is burned is rejected", async () => {
+    const { app } = harness()
+    const account = await newClaudeAccount(app, "claude-1")
+    const started = await call(app, "POST", `${ADMIN_ACCOUNTS_BASE_PATH}/${account.id}/connect`)
+    const state = stateOf(started.body)
+
+    // Wrong code, right state: burns the one-shot pending login.
+    const wrong = await call(
+      app,
+      "POST",
+      `${ADMIN_ACCOUNTS_BASE_PATH}/${account.id}/connect/complete`,
+      {
+        pasted: `ac_wrong#not-${state}`,
+      },
+    )
+    expect(wrong.status).toBe(400)
+    expect((wrong.body as { error: { code: string } }).error.code).toBe("state_mismatch")
+
+    // Reusing the very same, now-burned state is refused too — there is nothing pending anymore.
+    const replay = await call(
+      app,
+      "POST",
+      `${ADMIN_ACCOUNTS_BASE_PATH}/${account.id}/connect/complete`,
+      {
+        pasted: `ac_notarealcode#${state}`,
+      },
+    )
+    expect(replay.status).toBe(400)
+    expect((replay.body as { error: { code: string } }).error.code).toBe("no_pending_login")
+  })
+
+  test("a paste after the window closes is rejected as expired", async () => {
+    const clock = { now: NOW }
+    const { app } = harness(stubSession(), { clock, pendingLoginMinutes: 10 })
+    const account = await newClaudeAccount(app, "claude-1")
+    const started = await call(app, "POST", `${ADMIN_ACCOUNTS_BASE_PATH}/${account.id}/connect`)
+    const state = stateOf(started.body)
+
+    clock.now = new Date(NOW.getTime() + 11 * 60_000)
+    const res = await call(
+      app,
+      "POST",
+      `${ADMIN_ACCOUNTS_BASE_PATH}/${account.id}/connect/complete`,
+      {
+        pasted: `ac_notarealcode#${state}`,
+      },
+    )
+
+    expect(res.status).toBe(400)
+    expect((res.body as { error: { code: string } }).error.code).toBe("login_expired")
+  })
+
+  test("no response, log line, or error body ever carries the pasted code or the state", async () => {
+    const { app, logLines } = harness()
+    const account = await newClaudeAccount(app, "claude-1")
+    const started = await call(app, "POST", `${ADMIN_ACCOUNTS_BASE_PATH}/${account.id}/connect`)
+    const state = stateOf(started.body)
+    const pastedCode = "ac_notarealcode"
+
+    // A rejected paste (wrong state) and a successful one, and every rejection shape besides —
+    // every one of these responses and every log line the router wrote while handling them.
+    const mismatch = await call(
+      app,
+      "POST",
+      `${ADMIN_ACCOUNTS_BASE_PATH}/${account.id}/connect/complete`,
+      { pasted: `${pastedCode}#not-${state}` },
+    )
+    const secondStart = await call(app, "POST", `${ADMIN_ACCOUNTS_BASE_PATH}/${account.id}/connect`)
+    const secondState = stateOf(secondStart.body)
+    const completed = await call(
+      app,
+      "POST",
+      `${ADMIN_ACCOUNTS_BASE_PATH}/${account.id}/connect/complete`,
+      { pasted: `${pastedCode}#${secondState}` },
+    )
+
+    expect(mismatch.status).toBe(400)
+    expect(completed.status).toBe(200)
+
+    const rendered = [mismatch.text, completed.text, ...logLines].join("\n")
+    expect(rendered).not.toContain(pastedCode)
+    expect(rendered).not.toContain(secondState)
+    // The authorize URL is the one place a state may legitimately appear — it was handed back in
+    // `started.value.authorizeUrl` for the operator to open, never in a completion or a log line.
+  })
+
+  test("only a Claude subscription account can be connected", async () => {
+    const { app } = harness()
+    const openrouter = await newAccount(app)
+
+    const res = await call(app, "POST", `${ADMIN_ACCOUNTS_BASE_PATH}/${openrouter.id}/connect`)
+
+    expect(res.status).toBe(400)
+    expect((res.body as { error: { code: string } }).error.code).toBe("not_a_subscription_account")
   })
 })
 
