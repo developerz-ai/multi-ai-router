@@ -115,10 +115,11 @@ export async function runChain(ctx: ChainContext): Promise<Response> {
       continue
     }
 
-    runtime.health.applyRateLimit(accountId, outcome.rateLimit, attemptStartedAt)
-
+    // Applied after the verdict, never before: `recordSuccess`'s unconditional reset to `active`
+    // would otherwise erase a `rejected` reading's cooldown on an otherwise-200 response.
     if (outcome.kind === "success") {
       runtime.health.recordSuccess(accountId)
+      runtime.health.applyRateLimit(accountId, outcome.rateLimit, attemptStartedAt)
       progress = markStreamed(progress)
       return relaySuccess(ctx, servable, decision.attempt, outcome.response, at)
     }
@@ -129,6 +130,7 @@ export async function runChain(ctx: ChainContext): Promise<Response> {
       attemptStartedAt,
       breakerOptionsFor(servable.driver.authKind),
     )
+    runtime.health.applyRateLimit(accountId, outcome.rateLimit, attemptStartedAt)
     runtime.health.endAttempt(accountId)
     upstreamMs += runtime.clock.elapsed() - attemptStarted
 
@@ -170,11 +172,9 @@ interface AttemptClock {
 }
 
 /**
- * The one place the two transports diverge, and it is a single expression wide.
- *
- * Both answer with the same `AttemptOutcome`, so the loop above, the health store, the records, and
- * the relay below are written once. The SDK's `Response` is synthesized from re-synthesized SDK
- * output rather than relayed from a socket; from here down, nothing can tell.
+ * The one place the two transports diverge. Both answer with the same `AttemptOutcome`, so the loop
+ * above, the health store, the records, and the relay below are written once — from here down,
+ * nothing can tell a re-synthesized SDK `Response` from one relayed off a socket.
  */
 function dispatch(
   ctx: ChainContext,
@@ -188,6 +188,8 @@ function dispatch(
       body,
       invoke: runtime.invokeSdk,
       session: runtime.session,
+      quota: runtime.quota,
+      now: runtime.clock.now,
       timeoutMs: runtime.timeoutMs,
       signal: ctx.request.signal,
     })
@@ -206,16 +208,10 @@ function dispatch(
 }
 
 /**
- * The body this account gets.
- *
- * On the passthrough path: identical bytes unless the account's operator-authored alias map renames
- * the model — the one edit a passthrough body ever receives, and even then only the model's own
- * bytes move. No parse, no re-serialization, no dropped unknown field.
- *
- * On the translate path the body is rebuilt field by field, which is the whole difference between
- * the two modes and the reason the parse is confined to one call. A Claude subscription takes
- * whichever branch its ingress dialect earns — Anthropic-shaped bytes either way, because that is
- * what the SDK's prompt is built from.
+ * The body this account gets. Passthrough: identical bytes, unless the account's alias map renames
+ * the model — the one edit a passthrough body ever receives. Translate: rebuilt field by field,
+ * which a Claude subscription also takes since the SDK's prompt is built from Anthropic-shaped
+ * bytes either way.
  *
  * @throws TranslationError when a translated body has a field with no target representation.
  */

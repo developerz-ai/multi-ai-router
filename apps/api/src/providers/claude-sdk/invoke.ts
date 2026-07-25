@@ -45,6 +45,13 @@ export interface SdkInvocation {
    * pin with no payoff, and pinning one would cost the failover a cooling-down Account still has.
    */
   readonly onSession?: (report: SdkSessionReport) => void
+  /**
+   * Called for every `rate_limit_event` the SDK reports, forwarding the raw `rate_limit_info`
+   * payload unread — folding it into Account quota state is `quota.ts`'s vocabulary, not this
+   * seam's. Optional for the same reason `onSession` is: a launch that never wires quota still
+   * answers, just without cooling the account down ahead of the next `429`.
+   */
+  readonly onRateLimit?: (info: unknown) => void
 }
 
 export interface SdkSessionReport {

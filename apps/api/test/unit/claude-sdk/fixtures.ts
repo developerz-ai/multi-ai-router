@@ -133,3 +133,78 @@ export function ticker(start = 0): { now: () => number; advance: (ms: number) =>
     },
   }
 }
+
+/** A raw Anthropic wire event, exactly as the SDK carries it in `stream_event.event`. */
+export function wireEvent(event: Record<string, unknown>, parentToolUseId: string | null = null) {
+  return { type: "stream_event", event, parent_tool_use_id: parentToolUseId }
+}
+
+/** One internal SDK turn's `message_start` → …blocks… → `message_delta` → `message_stop`. */
+export function sdkTurn(options: {
+  readonly messageId?: string
+  readonly model?: string
+  readonly blocks: readonly (readonly [Record<string, unknown>, Record<string, unknown>])[]
+  readonly stopReason?: string
+  readonly parentToolUseId?: string | null
+}): readonly Record<string, unknown>[] {
+  const parent = options.parentToolUseId ?? null
+  const events: Record<string, unknown>[] = [
+    wireEvent(
+      {
+        type: "message_start",
+        message: {
+          id: options.messageId ?? "msg_upstream",
+          type: "message",
+          role: "assistant",
+          model: options.model ?? "claude-sonnet-4-5",
+          content: [],
+        },
+      },
+      parent,
+    ),
+  ]
+  options.blocks.forEach(([start, delta], index) => {
+    events.push(
+      wireEvent({ type: "content_block_start", index, content_block: start }, parent),
+      wireEvent({ type: "content_block_delta", index, delta }, parent),
+      wireEvent({ type: "content_block_stop", index }, parent),
+    )
+  })
+  events.push(
+    wireEvent(
+      { type: "message_delta", delta: { stop_reason: options.stopReason ?? "end_turn" } },
+      parent,
+    ),
+    wireEvent({ type: "message_stop" }, parent),
+  )
+  return events
+}
+
+export interface SdkQueryStreamOptions {
+  readonly sessionId?: string
+  /** One entry per internal SDK turn — build each with {@link sdkTurn}. */
+  readonly turns: readonly (readonly Record<string, unknown>[])[]
+  /** `rate_limit_info`, as `readSdkRateLimitInfo` reads it. Omitted emits no `rate_limit_event`. */
+  readonly rateLimitInfo?: Record<string, unknown>
+  readonly result?: Record<string, unknown>
+}
+
+/**
+ * A `query()` stream, shaped the way the real SDK emits one: `system`/`init` names the session
+ * first, every internal turn's `stream_event`s follow in order, an optional `rate_limit_event`
+ * carries the account's own reading, and `result` closes the loop with the authoritative usage and
+ * stop reason. The one shape every render and dispatch test below drives the pipeline with, so a
+ * fixture that stops matching the real SDK's wire format is one place to fix, not a dozen.
+ */
+export function sdkQueryStream(options: SdkQueryStreamOptions): AsyncIterable<unknown> {
+  return {
+    async *[Symbol.asyncIterator]() {
+      yield { type: "system", subtype: "init", session_id: options.sessionId ?? "sess_1" }
+      for (const turn of options.turns) for (const event of turn) yield event
+      if (options.rateLimitInfo !== undefined) {
+        yield { type: "rate_limit_event", rate_limit_info: options.rateLimitInfo }
+      }
+      yield { type: "result", subtype: "success", ...options.result }
+    },
+  }
+}

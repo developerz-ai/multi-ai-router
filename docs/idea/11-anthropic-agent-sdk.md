@@ -318,6 +318,17 @@ store is created per runtime and keyed by Account — never a module-level singl
 an *alarm*, not a gauge — a `quota-aware` policy built only on SDK events sees `null` headroom for
 most of every window and degrades to round-robin.
 
+**The dispatch-level wire.** `SdkInvocation.onRateLimit` (`invoke.ts`) is the seam a launcher calls
+for every `rate_limit_event`, the `onSession` of quota. `runSdkAttempt` (`sdk-attempt.ts`) folds each
+call through the injected `SdkQuotaStore` and carries the account's whole reading afterwards as this
+attempt's `AttemptOutcome.rateLimit` — on **both** the success and the failure branch, since the
+event may arrive on a turn that otherwise completed fine. `runChain` (`chain.ts`) then applies that
+reading **after** `recordSuccess`/`recordFailure`, never before: applying it first would have
+`recordSuccess`'s unconditional reset to `active` erase the very cooldown a `rejected` reading on an
+otherwise-200 turn just recorded. This is the same property an HTTP driver's rate-limit headers need
+and get from the identical ordering — the Agent-SDK transport is not a special case here, only a
+different source for the same `RateLimitSignal`.
+
 The optional secondary source closes that gap: `GET https://api.anthropic.com/api/oauth/usage` with
 `anthropic-beta: oauth-2025-04-20` returns **continuous** percentages for every active window
 (0..100 → normalize to 0..1), an `extra_usage` block (`isEnabled`, `monthlyLimit`, `usedCredits`,

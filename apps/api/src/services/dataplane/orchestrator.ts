@@ -6,7 +6,7 @@ import {
   type UsageOutcome,
 } from "@multi-ai-router/core"
 import type { Logger } from "../../logging/logger"
-import type { SdkInvoker, SessionStore } from "../../providers"
+import type { SdkInvoker, SdkQuotaStore, SessionStore } from "../../providers"
 import type { CredentialCipher } from "../crypto/cipher"
 import { type FailoverOptions, type SelectionOptions, selectAccounts } from "../routing"
 import { clientRequestIdFrom, correlationIdFrom, type UsageRecorder } from "../usage"
@@ -92,6 +92,12 @@ export interface DispatcherDeps {
    * starts and where an SDK resume becomes possible at all (`session-binding.ts`).
    */
   readonly sessions?: SessionStore
+  /**
+   * Where a `rate_limit_event` folds into Account quota state. Omitted, a subscription attempt
+   * still classifies a spent window from a later `429` — it just cannot cool the account down a
+   * turn early, the way an HTTP driver's parsed headers do.
+   */
+  readonly quota?: SdkQuotaStore
   readonly clock?: DataPlaneClock
   readonly logger?: Logger
   /** Notified once per client request, after it ended. Feeds `router_requests_total`. */
@@ -155,6 +161,7 @@ export function createDispatcher(deps: DispatcherDeps): Dispatcher {
       call,
       ...(deps.invokeSdk === undefined ? {} : { invokeSdk: deps.invokeSdk }),
       ...(deps.sessions === undefined ? {} : { sessions: deps.sessions }),
+      ...(deps.quota === undefined ? {} : { quota: deps.quota }),
       sessionKeySource: session.source,
       clock,
       timeoutMs: options.upstreamTimeoutMs ?? DEFAULT_UPSTREAM_TIMEOUT_MS,

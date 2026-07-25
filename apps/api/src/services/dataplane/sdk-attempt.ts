@@ -1,7 +1,9 @@
 import { UpstreamTimeoutError } from "@multi-ai-router/core"
 import {
   classifySdkFailure,
+  type RateLimitSignal,
   type SdkInvoker,
+  type SdkQuotaStore,
   type SessionStore,
   type SessionTurn,
 } from "../../providers"
@@ -52,6 +54,14 @@ export interface SdkAttemptInput {
   readonly invoke: SdkInvoker | undefined
   /** Session lineage for this request. Undefined leaves every turn a fresh SDK session. */
   readonly session: SdkSessionContext | undefined
+  /**
+   * Where a `rate_limit_event` folds into Account quota state. Undefined leaves the account's own
+   * cooldown reading unwritten — the account still cools down once the next `429` classifies, just
+   * a turn later than a stream that reported it early.
+   */
+  readonly quota?: SdkQuotaStore
+  /** Stamps a `rate_limit_event` reading. Unused when `quota` is undefined. Defaults to the clock. */
+  readonly now?: () => Date
   readonly timeoutMs: number
   /** The client's own abort signal, so a client that goes away terminates the subprocess. */
   readonly signal?: AbortSignal
@@ -84,6 +94,7 @@ export async function runSdkAttempt(input: SdkAttemptInput): Promise<AttemptOutc
   if (invoke === undefined) return failure("server-error", NO_TRANSPORT)
 
   const turn = resolveTurn(input, plan.account.id)
+  const rateLimit = rateLimitCapture(input, plan.account.id)
 
   let response: Response
   try {
@@ -95,15 +106,42 @@ export async function runSdkAttempt(input: SdkAttemptInput): Promise<AttemptOutc
       signal: attemptDeadline(input.timeoutMs, input.signal),
       session: turn.plan,
       onSession: (report) => turn.remember(report.sdkSessionId, report.assistantUuid),
+      onRateLimit: rateLimit.capture,
     })
   } catch (error) {
-    return invocationFailure(error, input, turn)
+    return invocationFailure(error, input, turn, rateLimit.signal())
   }
 
   // Rate-limit and quota state does not ride the HTTP response here: it arrives as
-  // `rate_limit_event` messages inside the query stream, which the renderer feeds to Account state
-  // and never forwards to the client (docs/idea/11-anthropic-agent-sdk.md §5).
-  return { kind: "success", response, rateLimit: null }
+  // `rate_limit_event` messages inside the query stream, which `rateLimitCapture` folds into
+  // Account state exactly as `applyRateLimit` folds in an HTTP driver's parsed headers
+  // (docs/idea/11-anthropic-agent-sdk.md §5).
+  return { kind: "success", response, rateLimit: rateLimit.signal() }
+}
+
+/**
+ * Folds every `rate_limit_event` of one attempt into Account quota state, and remembers the
+ * account's whole reading afterwards — not just this event's, since a warning window earlier in the
+ * same turn still belongs in what the breaker sees.
+ *
+ * A no-op when no store is wired: `capture` still exists so the invoker always has something to
+ * call, and `signal()` reports null forever, exactly like an HTTP driver that parsed no headers.
+ */
+function rateLimitCapture(
+  input: SdkAttemptInput,
+  accountId: string,
+): { capture: (info: unknown) => void; signal: () => RateLimitSignal | null } {
+  const { quota } = input
+  let latest: RateLimitSignal | null = null
+  return {
+    capture: (info) => {
+      if (quota === undefined) return
+      const now = input.now?.() ?? new Date()
+      const snapshot = quota.ingest(accountId, info, now)
+      if (snapshot !== null) latest = snapshot.signal
+    },
+    signal: () => latest,
+  }
 }
 
 /**
@@ -137,6 +175,7 @@ function invocationFailure(
   error: unknown,
   input: SdkAttemptInput,
   turn: SessionTurn,
+  rateLimit: RateLimitSignal | null,
 ): AttemptOutcome {
   if (isDeadline(error)) return failure("timeout", DEADLINE)
 
@@ -153,8 +192,10 @@ function invocationFailure(
       message: clientMessage,
     },
     classification,
-    // The account's quota state rides `rate_limit_event`, never the throw (§5).
-    rateLimit: null,
+    // The account's quota state rides `rate_limit_event`, never the throw (§5) — `classifySdkFailure`
+    // never invents one (`classification.rateLimit` is always null), so whatever this attempt's own
+    // stream reported is the only source.
+    rateLimit,
     upstream: null,
   }
 }

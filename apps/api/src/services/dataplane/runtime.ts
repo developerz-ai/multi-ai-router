@@ -1,5 +1,5 @@
 import type { Dialect } from "@multi-ai-router/core"
-import type { SdkInvoker, SessionStore } from "../../providers"
+import type { SdkInvoker, SdkQuotaStore, SessionStore } from "../../providers"
 import type { CredentialCipher } from "../crypto/cipher"
 import type { UsageRecord } from "../usage"
 import type { SessionKeySource } from "./body/session"
@@ -34,6 +34,11 @@ export interface RuntimeInput {
    * while an SDK session id resumes on exactly one account (docs/idea/11-anthropic-agent-sdk.md §4).
    */
   readonly sessions?: SessionStore
+  /**
+   * Where a `rate_limit_event` folds into Account quota state. Only the Agent-SDK path reads it: an
+   * HTTP driver's reading is parsed straight off its own response and needs no store beside it.
+   */
+  readonly quota?: SdkQuotaStore
   /** How this request's session key was obtained. Decides whether the never-resume rules apply. */
   readonly sessionKeySource: SessionKeySource
   readonly clock: DataPlaneClock
