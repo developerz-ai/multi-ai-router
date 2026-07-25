@@ -1,15 +1,15 @@
 # 11 — Claude subscriptions via the Claude Agent SDK
 
-Status: **the seams exist; the transport does not.** `anthropic-oauth` has a driver
+Status: **built and served end to end.** `anthropic-oauth` has a driver
 (`providers/claude-sdk/driver.ts`) — a *separate* interface from `ProviderDriver`, because three of
-that interface's five members would be lies here (§9). A request routed to such an Account is now
-**planned** rather than refused: `resolveEgress` returns an `agent-sdk` decision,
+that interface's five members would be lies here (§9). A request routed to such an Account is
+**served**, not refused: `resolveEgress` returns an `agent-sdk` decision,
 `planCandidates` resolves the Account's `CLAUDE_CONFIG_DIR` instead of a URL, and `chain.ts`
 dispatches through `runSdkAttempt`, which answers with the same `AttemptOutcome` an HTTP attempt does
 — so the failover loop, the health store, the relay, and the `UsageRecord` are written once for both
 transports.
 
-The **launch** half now exists too: `providers/claude-sdk/options.ts` builds the `Options` for one
+The **launch** half: `providers/claude-sdk/options.ts` builds the `Options` for one
 `query()` — `settingSources: []`, `strictMcpConfig: true`, `skills: []`, `tools: []`, a bounded
 `maxTurns`, `includePartialMessages: true`, a server-controlled `cwd`, and one `AbortController` per
 request bridged to the attempt deadline (with a `detach()` so a finished query stops retaining the
@@ -21,12 +21,13 @@ and the router's own secrets before the spawn, then sets `CLAUDE_CONFIG_DIR` las
 `concurrency.ts` is the semaphore pair — per-Account acquired **before** global, so a bursting
 Account queues on its own budget instead of parking global capacity and starving the Pool.
 
-What is still absent is the one thing that does the work: the `SdkInvoker` behind
-`providers/claude-sdk/invoke.ts` that actually calls `query()`, because it needs the renderer in §6
-to turn SDK messages back into Anthropic Messages. Until it is wired, a subscription attempt fails
-by name (retryably, so an HTTP Account in the same Pool still serves) rather than being degraded
-onto some other path. Everything in §4 (sessions), §5 (quota), §6 (re-synthesis), and §7 (tools)
-remains unbuilt. This page is the contract M4 must satisfy.
+The `SdkInvoker` behind `providers/claude-sdk/invoke.ts` calls `query()` and, together with the
+renderer in §6, turns SDK messages back into Anthropic Messages — streaming and non-streaming alike.
+§4 (sessions), §5 (quota), §6 (re-synthesis), §7 (tools), and login/reconnect are all implemented and
+covered by integration tests (`test/integration/claude-sdk.test.ts`) that assert the streaming byte
+shape, `UsageRecord.egressMode: "agent-sdk"`, and a `rate_limit_event` driving `cooling_down` — with
+no HTTP call and no credential ever touching the wire. This page remains the contract that
+implementation must continue to satisfy.
 
 Two decisions the seam already commits to, both taken from §6:
 

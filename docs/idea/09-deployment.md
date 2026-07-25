@@ -105,6 +105,11 @@ naming the offending variable — the process never starts half-configured.
 | `RETENTION_REVOKED_KEYS_DAYS` | no | `30` | How long a revoked/expired `ApiKey` row survives before purge. |
 | `RETENTION_OAUTH_STATE_MINUTES` | no | `10` | TTL for one-shot OAuth `state` + PKCE verifiers. |
 | `JANITOR_INTERVAL_MINUTES` | no | `60` | Base sweep interval; the janitor jitters around it. |
+| `USAGE_ROLLUP_INTERVAL_MINUTES` | no | `60` | Usage record rollup interval, in minutes. Raw records older than `RETENTION_USAGE_DAYS` are summarized into daily aggregates. |
+| `OAUTH_STATE_PURGE_INTERVAL_MINUTES` | no | `5` | OAuth state (and PKCE verifier) purge interval, in minutes. One-shot values older than `RETENTION_OAUTH_STATE_MINUTES` are deleted. |
+| `QUOTA_FLOOR_INTERVAL_MINUTES` | no | `30` | Account quota floor probe interval, in minutes. Periodic refresh of cached quota state. |
+| `SWEEP_BATCH_SIZE` | no | `1000` | Max rows per bounded-delete sweep (usage, session, revoked keys, audit, OAuth state). Larger trades memory and latency for fewer sweeps; smaller means more passes. |
+| `SCHEDULER_JITTER_FRACTION` | no | `0.2` | Jitter applied to task intervals as a fraction of the interval. E.g., `0.2` means ±20% around the base value, spreading load after a restart. |
 | `OAUTH_REFRESH_LEAD_FRACTION` | no | `0.75` | Share of a router-held OAuth token's remaining lifetime allowed to elapse before it is refreshed — `0.75` refreshes with a quarter of the lifetime in hand. Not an interval: refresh is per account and expiry-driven, never a poll. Claude subscriptions are unaffected; the Agent SDK owns those tokens. |
 | `OAUTH_REFRESH_MIN_DELAY_SECONDS` | no | `30` | Floor on any refresh delay, and the first step of the retry backoff. What stops an already-expired token from re-arming at zero and hammering the provider. |
 | `OAUTH_REFRESH_MAX_ATTEMPTS` | no | `5` | Attempts against an unreachable token endpoint before the account is parked at `needs_reauth`. A *refused* refresh is never retried — only a clock fixes an outage. |
@@ -117,6 +122,9 @@ naming the offending variable — the process never starts half-configured.
 | `KEY_CACHE_MAX` | no | `4096` | Verified router keys held in memory. The ceiling is memory, not correctness — an evicted key costs one indexed lookup. |
 | `KEY_CACHE_TTL_SECONDS` | no | `60` | How long a successful verification is reused. Revocation invalidates immediately, so this bounds staleness of a key's limits and scope, not of its revocation. |
 | `KEY_CACHE_NEGATIVE_TTL_SECONDS` | no | `5` | How long a failed lookup is remembered. Short on purpose: it stops a flood of bad keys becoming a flood of queries, and a just-minted key must start working quickly. |
+| `SESSION_CACHE_MAX` | no | `4096` | Session → Account bindings held in memory, plus their fingerprint aliases. Only Claude subscription accounts ever create one. |
+| `SESSION_CACHE_TTL_SECONDS` | no | `300` | How long a binding is reused before its row is re-read. Bounds only how long this replica may lag another one's rebind; the row itself never expires, because an SDK session outlives any cache. |
+| `SESSION_CACHE_NEGATIVE_TTL_SECONDS` | no | `30` | How long "this session has no binding" is remembered. Short, and for the opposite reason: it keeps plain HTTP traffic on a subscription-serving router from re-asking Postgres every request. |
 | `USAGE_QUEUE_MAX` | no | `10000` | `UsageRecord` rows queued before the writer sheds the oldest. Overflow degrades reporting, never traffic. |
 | `USAGE_BATCH_SIZE` | no | `200` | Rows per insert. Larger means fewer round trips and a bigger loss if the process dies mid-queue. |
 | `ROUTING_MAX_ATTEMPTS` | no | `3` | Distinct accounts tried for one client request before the honest failure. Never overrides the rule that an attempt is not retried once bytes are on the wire. |

@@ -1,11 +1,10 @@
 # Observability
 
 Status: **`UsageRecord` writing, structured logging, redaction, audit events, the usage API, cost
-estimation with operator-editable price overrides, the scheduled tasks and their admin surface, and
-`/healthz` + `/readyz` + `/metrics` are implemented.** Not yet: charts beyond
-what the console renders today, and the quota surface. The field table below
-matches the shipped schema; the rest is the contract those surfaces must meet. Retention knobs live
-in [09-deployment.md](09-deployment.md).
+estimation with operator-editable price overrides, the scheduled tasks and their admin surface, the
+quota surface (per-window gauges, reset countdowns, top-N, sparklines), and `/healthz` + `/readyz` +
+`/metrics` are all implemented.** The field table below matches the shipped schema; the rest is the
+contract those surfaces must meet. Retention knobs live in [09-deployment.md](09-deployment.md).
 
 ## UsageRecord
 

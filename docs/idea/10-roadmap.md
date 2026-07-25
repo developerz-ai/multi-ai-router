@@ -1,19 +1,20 @@
 # Roadmap
 
-Status: **M1, M2, M3, and M5 are done. M4, M4b, M6, M7, and M8 are not.** The capability table in
-the [README](../../README.md#-status) is the authoritative statement of what runs today; this page is
-the order the remaining work happens in.
+Status: **M1 through M8 are all done.** The capability table in the [README](../../README.md#-status)
+is the authoritative statement of what runs today; this page is the order the work happened in and
+what remains genuinely open (see [Open questions](#open-questions) below — those are design
+uncertainties, not missing code).
 
 ## Milestones
 
 Sequential in intent, though M5 landed ahead of M4 — pools and routing needed no subscription
-account to be correct, and the Agent-SDK path is the hardest milestone rather than the next one.
-Each is shippable on its own.
+account to be correct, and the Agent-SDK path was the hardest milestone rather than the next one.
+Each shipped on its own.
 
 | Milestone | State |
 |---|---|
 | M1 Skeleton · M2 Accounts · M3 Data plane passthrough · M5 Pools & load balancing | done |
-| M4 Claude subscriptions via the Agent SDK · M4b ChatGPT/Codex · M6 Translation · M7 Admin UI · M8 Ops | not started |
+| M4 Claude subscriptions via the Agent SDK · M4b ChatGPT/Codex · M6 Translation · M7 Admin UI · M8 Ops | done |
 
 | Milestone | Scope | Done when |
 |---|---|---|

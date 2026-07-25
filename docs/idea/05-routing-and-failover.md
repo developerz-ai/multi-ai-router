@@ -2,9 +2,10 @@
 
 Status: **implemented** in `apps/api/src/services/routing/` — scope intersection, the candidate
 filter, all six policies, overflow, bounded failover, and the circuit breaker, all as pure functions
-over an injected snapshot. What is **not** built: persisted quota-window state (so `quota-aware`
-reads only what live traffic has reported), the scheduled half-open probe, and the persisted
-Session→Account binding the Agent-SDK path needs.
+over an injected snapshot. Also built: persisted quota-window state (`packages/db/src/schema/quota-windows.ts`,
+kept fresh by the `quota-floor` scheduled task), the half-open recovery probe (manual **Re-check now**,
+`services/accounts/recheck.ts`, sharing its one code path with the automatic transition), and the
+persisted Session→Account binding the Agent-SDK path needs (`providers/claude-sdk/session/store.ts`).
 
 > **The client picks the model. The router picks the account.**
 

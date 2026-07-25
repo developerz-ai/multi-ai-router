@@ -4,7 +4,7 @@ Self-hosted API router. A team of developers and AI agents shares one pool of AI
 
 Pooling is the product: **many Accounts of the same Provider is the normal case** (five Claude subs side by side). Nothing in the schema, UI, or routing may assume one account per provider.
 
-M1 skeleton: builds, boots, serves health checks. No data plane yet (no accounts, pools, keys, or `/v1/messages` — those are M2–M3). Spec: `docs/idea/`. Behavior change → update the spec in the same PR. Shared code inventory: `docs/reusable-code.md`.
+Full data plane shipped: accounts, pools, keys, `/v1/messages` + `/v1/chat/completions` + `/v1/responses`, cross-dialect translation, Claude subscriptions via the Agent SDK, ChatGPT/Codex OAuth, admin CRUD, 7 migrations, and a complete SolidJS operator console. See `docs/idea/10-roadmap.md` for per-milestone state. Spec: `docs/idea/`. Behavior change → update the spec in the same PR. Shared code inventory: `docs/reusable-code.md`.
 
 ## Response Rules
 
@@ -79,12 +79,12 @@ One reason to change per layer. Don't blur.
 
 | Layer | Owns | Module |
 |---|---|---|
-| Transport | Hono routes, middleware, SSE streaming, request size caps | `apps/api/src/transport/` |
-| Auth | Admin session cookie + CSRF; router key verification | `apps/api/src/auth/` |
-| Routing | Filter → policy → failover chain, health state, circuit breaker | `apps/api/src/routing/` |
+| Transport | Hono routes, middleware, SSE streaming, request size caps | `apps/api/src/routes/`, `apps/api/src/middleware/` |
+| Auth | Admin session cookie + CSRF; router key verification | `apps/api/src/services/admin-auth/`, `apps/api/src/services/dataplane/auth/` |
+| Routing | Filter → policy → failover chain, health state, circuit breaker | `apps/api/src/services/routing/` |
 | Providers | Per-upstream drivers, OAuth flows, pinned constants | `apps/api/src/providers/` |
 | Claude SDK | Agent SDK `query()` calls, per-Account `CLAUDE_CONFIG_DIR` lifecycle, `rate_limit_event` → quota state, SDK-output → wire-format re-synthesis | `apps/api/src/providers/claude-sdk/` |
-| Translation | Ingress dialect × egress dialect conversion, streaming, tool calls | `apps/api/src/translation/` |
+| Translation | Ingress dialect × egress dialect conversion, streaming, tool calls | `apps/api/src/services/translate/` |
 | Usage | UsageRecord writes, cost estimation, rollups | `apps/api/src/usage/` |
 | Scheduler | Every periodic task — jittered in-process timers, `pg_try_advisory_lock` per task, `ScheduledTaskRun` last-run records. Retention sweeps (the janitor) are one task among several: usage rollup, OAuth-state purge, quota floor | `apps/api/src/scheduler/` |
 | DB | Drizzle schema, migrations, repositories | `packages/db/` |
