@@ -1,11 +1,11 @@
 # Protocol translation
 
-Status: **passthrough and the `anthropic` ⇄ `openai-chat` translation pair are implemented** —
-request, non-streaming response, and streaming, in both directions. The `openai-responses` rows of
-the matrix below are **not built**: a request that would need one is refused with a `400` naming the
-reason, before any upstream call, in `services/dataplane/egress/mode.ts`. That module is the seam
-this whole page lands on, and `services/translate/registry.ts` is the one file a new pair is added
-to. The Agent-SDK column is refused the same way and is its own deliverable. Entities are defined in
+Status: **passthrough and all six HTTP translation pairs are implemented** — every crossing between
+`anthropic`, `openai-chat`, and `openai-responses`, in request, non-streaming response, and
+streaming form. The **Agent-SDK column is not built** and is its own deliverable: a request that
+would need it is refused, named, before any upstream call in
+`services/dataplane/egress/mode.ts`. That module is the seam this whole page lands on, and
+`services/translate/registry.ts` is the one file a new pair is added to. Entities are defined in
 [02-domain-model.md](02-domain-model.md); the driver that owns each egress dialect is in
 [03-providers.md](03-providers.md).
 
@@ -56,10 +56,17 @@ Legend: **passthrough** = bytes untouched · translate = pure conversion pair, l
 re-synthesize = rendered from Agent SDK output, never proxied (below).
 
 **Unsupported**, returning `4xx` rather than a degraded call: a stateful Responses request
-(`previous_response_id`, `store: true`, reasoning items) against non-Responses egress — `400`, the
-router holds no conversation state; and any request whose required feature has no faithful target
-representation — `400`, naming the field. Native Google GenAI egress is **DEFERRED**; Gemini goes
-through an OpenAI-compatible layer in v1.
+(`previous_response_id`, `store: true`, `include`, `reasoning` and `item_reference` input items)
+against non-Responses egress — `400`, the router holds no conversation state; and any request whose
+required feature has no faithful target representation — `400`, naming the field. Native Google
+GenAI egress is **DEFERRED**; Gemini goes through an OpenAI-compatible layer in v1.
+
+Statefulness is refused rather than approximated because the alternative is silent: a
+`previous_response_id` the router cannot resolve would become a request carrying only the newest
+turn, and the model would answer a conversation it was never shown. The refusal names the field, so
+a client learns to send the whole transcript instead of receiving a confidently wrong answer. Note
+that an **absent** `store` is not read as the provider's default — the caller stated nothing, and
+refusing over a field nobody sent would make every ordinary Responses client unservable.
 
 ## How the translate mode is wired
 
@@ -199,7 +206,7 @@ message_start → content_block_start → content_block_delta* → content_block
 | | |
 |---|---|
 | Clean | Text deltas, tool-call argument deltas, terminal usage, stream termination. |
-| Lossy | Block indices and boundaries are reconstructed, not preserved; a dialect with no "block" concept loses which block a delta belonged to. Thinking deltas are dropped toward `openai-chat`. Toward `anthropic`, `message_start` states a zeroed `usage`. |
+| Lossy | Block indices and boundaries are reconstructed, not preserved; a dialect with no "block" concept loses which block a delta belonged to. Thinking deltas are dropped toward `openai-chat`. Toward `anthropic`, `message_start` states a zeroed `usage`. Toward `openai-responses`, item ids (`msg_…`, `fc_…`, `rs_…`) are minted from the response id and the item's position, and a thinking delta becomes a reasoning *summary* delta — the encrypted reasoning handle a native Responses upstream also emits cannot be synthesized and is not. |
 | Rejected | Nothing at stream time — once bytes are on the wire the request fails honestly, it is never retranslated. |
 
 **Toward `anthropic`, `message_start.usage` is zeroed and the real counts land on `message_delta`.**
@@ -209,6 +216,15 @@ the one place a zero is written for an unknown count, and it is written because 
 the authoritative numbers on `message_delta`, which is where a client already looks. The
 `UsageRecord` is unaffected: it stores the upstream's own numbers, and a field the upstream never
 sent stays null there.
+
+**Toward `openai-responses` the translator keeps a copy of the text it has already sent, and that is
+not buffering.** Every delta leaves the instant it arrives; what is retained is a copy, because the
+dialect's own contract restates the finished text on `response.output_text.done` and the whole
+response object on `response.completed` — the field a Responses client reads to get its final
+answer. Emitting an empty terminal object would satisfy "hold only the state needed to reconstruct
+boundaries" by breaking every client that uses the SDK's final-response accessor. When the model
+stopped early the terminal event is `response.incomplete`, which is the same fact stated in the
+field Responses reserves for it.
 
 **A truncated stream is never given a synthesized ending.** If the upstream dies before its finish
 reason, the translator emits no `message_delta`, no `message_stop`, and no `[DONE]` — the client
@@ -309,6 +325,14 @@ Be suspicious of any cell not listed here — if it is not documented, it is not
 | Remote-URL images | → `anthropic` | carried as Anthropic's `source: {type:"url"}`, never fetched — see [above](#message-roles-and-content-blocks). `detail: "low"/"high"` is dropped |
 | Absent `max_tokens` | → `anthropic` | Anthropic requires one and OpenAI's is optional, so a configured default is supplied. Not a constant in a branch: the value is a parameter of the translator, defaulted generously, because a low ceiling would truncate an answer the caller never asked to truncate |
 | Anthropic server-side tools (web search, code execution) | → OpenAI | unsupported; `400` |
+| OpenAI built-in tools (`web_search_preview`, `file_search`, `code_interpreter`, …) | `openai-responses` → any | unsupported; `400`. Served inside OpenAI's own inference, so nothing on the other side of the seam runs one |
+| `stop` / `stop_sequences` | → `openai-responses` | no counterpart — the dialect has no stop parameter at all; **rejected** `400`, because a stop sequence decides where the answer ends and dropping it returns text past the delimiter the caller drew |
+| `text.format` (structured output / JSON Schema) | `openai-responses` → any | `{"type":"text"}` passes; anything else is **rejected** `400`. A schema-constrained answer is a contract the caller will parse, and prose in its place is a different answer, not a degraded one |
+| Responses `reasoning` output items | → `anthropic`, `openai-chat` | dropped. An Anthropic `thinking` block a client can replay needs a `signature` the router cannot produce, and openai-chat has no field at all |
+| Anthropic `thinking` blocks | → `openai-responses` | carried as a reasoning **summary** item; the encrypted reasoning handle is not synthesized |
+| `reasoning.effort` | `openai-responses` → `anthropic`, `openai-chat` | dropped. Anthropic's thinking budget is a token count, not an effort word, and inventing one would change what the caller pays for |
+| `input_image` naming only a `file_id` | `openai-responses` → any | rejected `400`: a stored file is provider-side state this router cannot resolve into bytes |
+| Responses item ids | → `openai-responses` | minted by the router from the response id and the item's position — deterministic, but not the provider's own |
 | Beta headers (`anthropic-beta`) | → non-Anthropic, and on the Agent-SDK path | dropped |
 | `temperature`, `top_p`, `top_k`, `max_tokens`, `stop`, `seed`, `n`, `logprobs`, penalties | → `agent-sdk` | **accepted and silently inert** — `query()` has no equivalent for any of them, so a value the caller set has no effect on the request. `reasoning_effort` is the exception, mapped onto the SDK's effort scale (`low`…`max`; OpenAI's `minimal` has no target) |
 
@@ -353,7 +377,8 @@ requirements, not preferences — a violation is a bug, not a tuning opportunity
 |---|---|
 | Pure function pairs | `(request in) → request out` and `(event in) → events out`. No clock, no store, no network, no logger. A value a translator cannot compute without one — the `created` stamp, the id used when the upstream names none — is **injected**, so the same recorded input converts to the same bytes in a test as it does on the wire. |
 | Fully unit-testable | Every pair is exercised with fixtures alone. Streaming is tested by feeding a recorded event sequence and asserting the emitted sequence. |
-| One module per dialect pair | `services/translate/<from>-to-<to>/`, request and stream translators split. A pair is added without touching the others (Open/Closed). |
+| One module per dialect pair | `services/translate/<from>-to-<to>/`, request and stream translators split. A pair is added without touching the others (Open/Closed). Each pair owns its own *reading* of the wire — its schemas are local, so a field added for one pair cannot change what another accepts |
+| One emitter per target dialect | The event sequence a dialect's clients rely on is a fact about that dialect, not about the pair producing it, so it is written once (`shared/anthropic-stream.ts`, `shared/responses-stream.ts`). Two copies could disagree, and a client would then be able to tell from the stream which ingress path served it — the one thing a translator exists to hide. `openai-chat` needs no such module: its stream carries no block or item structure, so there is no ordering to disagree about |
 | Passthrough is not a translator | It is a relay in the transport layer. It has no per-dialect module and no schema knowledge. |
 | Fail loud, never degrade | A request that cannot be translated faithfully returns a clear `4xx` naming the offending field, before any upstream call. Silently dropping a *contract* field is a bug; dropping a documented *hint* is listed above. |
 | One direction at a time | Each translator is written and tested per direction. "Round-trips" are not assumed to be lossless and are not asserted. |

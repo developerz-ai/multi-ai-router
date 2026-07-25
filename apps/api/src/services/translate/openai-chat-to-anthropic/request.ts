@@ -1,9 +1,13 @@
-import type {
-  AnthropicBlock,
-  AnthropicImageBlock,
-  AnthropicMessage,
-  AnthropicRequest,
-} from "../shared/anthropic"
+import type { AnthropicBlock, AnthropicRequest } from "../shared/anthropic"
+import { DEFAULT_MAX_TOKENS } from "../shared/anthropic"
+import type { AnthropicTurn } from "../shared/anthropic-turns"
+import {
+  BLOCK_JOIN,
+  blocksText,
+  imageBlockFromUrl,
+  mergeTurns,
+  pushTurn,
+} from "../shared/anthropic-turns"
 import type {
   ParsedOpenAiChatContent,
   ParsedOpenAiChatRequest,
@@ -29,29 +33,8 @@ import { inputFromArguments, toolChoiceToAnthropic, toolsToAnthropic } from "../
  * `presence_penalty`, `logit_bias`, `user`, `parallel_tool_calls`, `strict`, and image `detail`.
  */
 
-/**
- * Anthropic requires `max_tokens`; OpenAI's is optional and most clients omit it.
- *
- * A ceiling has to come from somewhere, so it is a parameter with a documented default rather than
- * a constant buried in a branch — the caller supplies the operator's configured value once the
- * translate egress mode is wired, and the default only covers a request that reaches here without
- * one. It is deliberately generous: a low value would truncate answers the client never asked to
- * truncate, which is the one failure a default must not cause silently.
- */
-export const DEFAULT_MAX_TOKENS = 4096
-
 export interface OpenAiChatToAnthropicOptions {
   readonly defaultMaxTokens?: number | undefined
-}
-
-const BLOCK_JOIN = "\n\n"
-
-/** `data:<media-type>;base64,<payload>` — the only inline image form either dialect spells. */
-const DATA_URI = /^data:([^;,]+);base64,([\s\S]*)$/
-
-interface Draft {
-  readonly role: "user" | "assistant"
-  readonly blocks: AnthropicBlock[]
 }
 
 /** @throws TranslationError (400) naming the field that has no anthropic representation. */
@@ -63,7 +46,7 @@ export function openAiChatToAnthropicRequest(
   assertTranslatableToAnthropic(request)
 
   const system: string[] = []
-  const drafts: Draft[] = []
+  const turns: AnthropicTurn[] = []
   // Ids seen on an assistant turn, so a result naming a call that never happened is refused rather
   // than handed upstream to fail there with a message about a body we wrote.
   const calls = new Set<string>()
@@ -79,10 +62,14 @@ export function openAiChatToAnthropicRequest(
         break
       }
       case "user":
-        push(drafts, "user", contentBlocks(message.content, at))
+        pushTurn(turns, "user", contentBlocks(message.content, at))
         break
       case "assistant":
-        push(drafts, "assistant", assistantBlocks(message.content, message.tool_calls, calls, at))
+        pushTurn(
+          turns,
+          "assistant",
+          assistantBlocks(message.content, message.tool_calls, calls, at),
+        )
         break
       case "tool":
         if (!calls.has(message.tool_call_id)) {
@@ -91,7 +78,7 @@ export function openAiChatToAnthropicRequest(
             "matches no `tool_calls` entry earlier in the transcript, so it has no `tool_use` block to attach to",
           )
         }
-        push(drafts, "user", [
+        pushTurn(turns, "user", [
           {
             type: "tool_result",
             tool_use_id: message.tool_call_id,
@@ -102,7 +89,7 @@ export function openAiChatToAnthropicRequest(
     }
   }
 
-  const messages = merge(drafts)
+  const messages = mergeTurns(turns)
   if (messages.length === 0) {
     rejectField("messages", "carries no user or assistant turn: an anthropic request needs one")
   }
@@ -163,7 +150,7 @@ function contentBlocks(content: ParsedOpenAiChatContent | undefined, at: string)
         if (part.text.length > 0) blocks.push({ type: "text", text: part.text })
         break
       case "image_url":
-        blocks.push(imageBlock(part.image_url.url, `${field}.image_url.url`))
+        blocks.push(imageBlockFromUrl(part.image_url.url, `${field}.image_url.url`))
         break
       default:
         rejectField(`${field}.type`, `\`${part.actual}\` has no anthropic counterpart`)
@@ -172,68 +159,13 @@ function contentBlocks(content: ParsedOpenAiChatContent | undefined, at: string)
   return blocks
 }
 
-/**
- * A remote URL is **not** fetched and inlined here.
- *
- * A translator is a pure function, and reaching out to an arbitrary URL from inside one would put a
- * network call — and an SSRF surface — on the request path. Anthropic's own `url` image source
- * carries the reference as-is, so the fetch never has to happen; that is what resolves the
- * DEFERRED at `06-protocol-translation.md`'s remote-image row. Anything that is neither a `data:`
- * URI nor http(s) has no source form at all and is refused.
- */
-function imageBlock(url: string, at: string): AnthropicImageBlock {
-  const inline = DATA_URI.exec(url)
-  const mediaType = inline?.[1]
-  const data = inline?.[2]
-  if (mediaType !== undefined && data !== undefined) {
-    return { type: "image", source: { type: "base64", media_type: mediaType, data } }
-  }
-  if (url.startsWith("https://") || url.startsWith("http://")) {
-    return { type: "image", source: { type: "url", url } }
-  }
-  rejectField(
-    at,
-    "is neither a base64 `data:` URI nor an http(s) URL, which are the only image sources anthropic accepts",
-  )
-}
-
 /** A system prompt and a tool result are both plain text on the Anthropic side. */
 function contentText(
   content: ParsedOpenAiChatContent | undefined,
   at: string,
   purpose: string,
 ): string {
-  const texts: string[] = []
-  for (const block of contentBlocks(content, at)) {
-    if (block.type !== "text") {
-      rejectField(
-        `${at}.content`,
-        `carries a non-text part, which an anthropic ${purpose} cannot hold`,
-      )
-    }
-    texts.push(block.text)
-  }
-  return texts.join(BLOCK_JOIN)
-}
-
-function push(drafts: Draft[], role: Draft["role"], blocks: readonly AnthropicBlock[]): void {
-  // A turn that translated to nothing is not emitted: Anthropic rejects an empty content array,
-  // and an assistant turn with neither text nor a tool call said nothing to begin with.
-  if (blocks.length === 0) return
-  drafts.push({ role, blocks: [...blocks] })
-}
-
-function merge(drafts: readonly Draft[]): AnthropicMessage[] {
-  const merged: Draft[] = []
-  for (const draft of drafts) {
-    const previous = merged.at(-1)
-    if (previous !== undefined && previous.role === draft.role) {
-      previous.blocks.push(...draft.blocks)
-      continue
-    }
-    merged.push(draft)
-  }
-  return merged.map((draft) => ({ role: draft.role, content: draft.blocks }))
+  return blocksText(contentBlocks(content, at), `${at}.content`, purpose)
 }
 
 function stopSequences(stop: ParsedOpenAiChatRequest["stop"]): readonly string[] | undefined {

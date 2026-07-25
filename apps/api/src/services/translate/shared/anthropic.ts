@@ -18,6 +18,18 @@ import { z } from "zod"
 /** A block type this build cannot represent, kept as data so it can be refused by name. */
 export const UNSUPPORTED_BLOCK = "__unsupported__"
 
+/**
+ * Anthropic requires `max_tokens`; every OpenAI dialect's ceiling is optional and most clients omit
+ * it, so a value has to come from somewhere on the way in.
+ *
+ * A fact about this dialect rather than about one translator, which is why it lives beside the
+ * schema that requires it: every `* → anthropic` request translator takes the operator's configured
+ * value as a parameter and falls back to this only when a request reaches it without one. It is
+ * deliberately generous — a low ceiling would truncate an answer the caller never asked to
+ * truncate, the one failure a default must not cause silently.
+ */
+export const DEFAULT_MAX_TOKENS = 4096
+
 const KNOWN_BLOCK_TYPES: ReadonlySet<string> = new Set([
   "text",
   "image",

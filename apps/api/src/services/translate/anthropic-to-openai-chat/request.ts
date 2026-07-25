@@ -1,12 +1,6 @@
-import type {
-  ParsedAnthropicBlock,
-  ParsedAnthropicImageSource,
-  ParsedAnthropicMessage,
-  ParsedAnthropicRequest,
-  ParsedAnthropicToolResult,
-  ParsedAnthropicToolResultContent,
-} from "../shared/anthropic"
+import type { ParsedAnthropicBlock, ParsedAnthropicMessage } from "../shared/anthropic"
 import { anthropicRequestSchema } from "../shared/anthropic"
+import { imageUrlFromSource, systemText, toolResultText } from "../shared/anthropic-blocks"
 import type {
   OpenAiChatMessage,
   OpenAiChatPart,
@@ -35,11 +29,8 @@ import { argumentsFromInput, toolChoiceToOpenAiChat, toolsToOpenAiChat } from ".
  * contract field is never dropped quietly.
  */
 
-/** `is_error` has no OpenAI field. Folded into the text, because a failure that reads as a success
- * is worse than a clumsy prefix. */
-const TOOL_ERROR_PREFIX = "Error: "
-
-const BLOCK_JOIN = "\n\n"
+/** What a refusal calls the thing an Anthropic `tool_result` lands in on this side. */
+const TOOL_CARRIER = 'an openai-chat `role:"tool"` message'
 
 interface Draft {
   readonly role: OpenAiChatRole
@@ -81,16 +72,6 @@ export function anthropicToOpenAiChatRequest(body: unknown): OpenAiChatRequest {
   }
 }
 
-/** Multiple system blocks concatenate; the split cannot be reconstructed and is not claimed to be. */
-function systemText(system: ParsedAnthropicRequest["system"]): string {
-  if (system === undefined) return ""
-  if (typeof system === "string") return system
-  return system
-    .map((block) => block.text)
-    .filter((text) => text.length > 0)
-    .join(BLOCK_JOIN)
-}
-
 function appendMessage(drafts: Draft[], message: ParsedAnthropicMessage, at: string): void {
   const blocks: readonly ParsedAnthropicBlock[] =
     typeof message.content === "string"
@@ -107,7 +88,7 @@ function appendMessage(drafts: Draft[], message: ParsedAnthropicMessage, at: str
         if (block.text.length > 0) parts.push({ type: "text", text: block.text })
         break
       case "image":
-        parts.push({ type: "image_url", image_url: { url: imageUrl(block.source) } })
+        parts.push({ type: "image_url", image_url: { url: imageUrlFromSource(block.source) } })
         break
       case "tool_use":
         toolCalls.push({
@@ -120,7 +101,7 @@ function appendMessage(drafts: Draft[], message: ParsedAnthropicMessage, at: str
         drafts.push({
           role: "tool",
           toolCallId: block.tool_use_id,
-          parts: [{ type: "text", text: toolResultText(block, field) }],
+          parts: [{ type: "text", text: toolResultText(block, field, TOOL_CARRIER) }],
           toolCalls: [],
         })
         break
@@ -142,32 +123,6 @@ function appendMessage(drafts: Draft[], message: ParsedAnthropicMessage, at: str
   }
   if (parts.length === 0 && toolCalls.length === 0) return
   drafts.push({ role: message.role, parts, toolCalls })
-}
-
-function imageUrl(source: ParsedAnthropicImageSource): string {
-  return source.type === "url" ? source.url : `data:${source.media_type};base64,${source.data}`
-}
-
-function toolResultText(block: ParsedAnthropicToolResult, at: string): string {
-  const content = block.content
-  const text =
-    content === undefined ? "" : typeof content === "string" ? content : joinToolResult(content, at)
-  return block.is_error === true ? `${TOOL_ERROR_PREFIX}${text}` : text
-}
-
-/** An OpenAI `role:"tool"` message is text. An image inside a result has nowhere to go. */
-function joinToolResult(blocks: readonly ParsedAnthropicToolResultContent[], at: string): string {
-  const texts: string[] = []
-  for (const [index, block] of blocks.entries()) {
-    if (block.type !== "text") {
-      rejectField(
-        `${at}.content[${index}].type`,
-        '`image` cannot be carried in an openai-chat `role:"tool"` message, which is text only',
-      )
-    }
-    texts.push(block.text)
-  }
-  return texts.join(BLOCK_JOIN)
 }
 
 /**
