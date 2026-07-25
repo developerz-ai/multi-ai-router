@@ -1,12 +1,12 @@
 # Protocol translation
 
-Status: **passthrough and all six HTTP translation pairs are implemented** — every crossing between
-`anthropic`, `openai-chat`, and `openai-responses`, in request, non-streaming response, and
-streaming form. The **Agent-SDK re-synthesis is not built**, and is its own deliverable
-([11-anthropic-agent-sdk.md](11-anthropic-agent-sdk.md)); its *seam* is, and it needs no new column
-here. The SDK renders into `anthropic` once, and every other ingress dialect is then served by the
-pair already in this table — so a subscription Account reuses this page's translators rather than
-adding a row to it. `services/dataplane/egress/mode.ts` is the seam the whole page lands on, and
+Status: **passthrough, all six HTTP translation pairs, and Agent-SDK re-synthesis are all
+implemented** — every crossing between `anthropic`, `openai-chat`, and `openai-responses`, in
+request, non-streaming response, and streaming form, plus the SDK path documented in its own
+deliverable ([11-anthropic-agent-sdk.md](11-anthropic-agent-sdk.md)). The SDK renders into
+`anthropic` once, and every other ingress dialect is then served by the pair already in this table —
+so a subscription Account reuses this page's translators rather than adding a row to it.
+`services/dataplane/egress/mode.ts` is the seam the whole page lands on, and
 `services/translate/registry.ts` is the one file a new pair is added to. Entities are defined in
 [02-domain-model.md](02-domain-model.md); the driver that owns each egress dialect is in
 [03-providers.md](03-providers.md).

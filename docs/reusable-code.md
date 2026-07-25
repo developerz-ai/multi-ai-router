@@ -305,6 +305,46 @@ in a test as on the wire.
 | `createFocusTrap(options)` | `lib/focus-trap.ts` | Containing focus in a modal overlay. Deliberately small — the drawer's needs, not a dialog library; it grows an option when a second overlay needs one |
 | `createScrollLock(active)` | `lib/scroll-lock.ts` | Holding the page still behind an open overlay. Scoped strictly to `active()`, previous value restored on cleanup — a permanently unscrollable page is the failure this shape rules out |
 | `createMediaQuery(query)`, `SIDEBAR_QUERY` | `lib/media.ts` | Needing a breakpoint in JS. `SIDEBAR_QUERY` mirrors `styles/_breakpoints.scss`; CSS owns the layout, JS needs the same number for `inert` and the focus trap — change one, change the other |
+| `copyText(value)` | `lib/clipboard.ts` | Any copy-to-clipboard action (`CopyValue`, key reveal). One `navigator.clipboard` call, one fallback, so a second hand-rolled copy path can't drift on browser support |
+| `createNow(intervalMs?)` | `lib/clock.ts` | A live-ticking display (countdowns, sparkline "as of now"). The only place a component reads the wall clock on an interval — everything else takes `nowMs` as a parameter |
+| `formatCount`, `formatCost`, `formatPercent`, `formatTimestamp`, `formatDate` | `lib/format.ts` | Any number or date rendered in the console. One formatting pass per unit, so two tables can't disagree about how a cost or a percentage is spelled |
+
+### Web API client & server-state queries — `apps/web/src/lib/api/`, `apps/web/src/lib/queries/`
+
+The console's data layer is two matched directories: `lib/api/*` is the thin `fetch` wrapper per
+admin resource (`accounts.ts`, `audit.ts`, `auth.ts`, `pools.ts`, `providers.ts`, `router-keys.ts`,
+`session.ts`, `settings.ts`, `tasks.ts`, `usage.ts`, `connect.ts`, plus the shared `client.ts` request
+helper, `errors.ts` for parsing an `AdminResult`/`RouterError` body, and `types.ts` for the response
+shapes), and `lib/queries/*` is the TanStack Solid Query wrapper one layer up — one file per
+resource, mirroring the `api/` file it wraps, plus `query-keys.ts` as the single source of cache-key
+shape so two screens invalidate the same query. A new admin resource gets one file in each directory,
+never a `fetch` call inline in a route component.
+
+| Thing | Where | Use it when |
+|---|---|---|
+| `apiClient`, `ApiError` | `lib/api/client.ts` | The one place a request is built and a non-2xx response is turned into a typed error. Every other `lib/api/*` file calls through this, never `fetch` directly |
+| `parseApiError`, `isApiError` | `lib/api/errors.ts` | Rendering a failed admin call. Reads the same `AdminResult`/`RouterError` failure shape the API renders, so the console never invents a second error format |
+| Per-resource client modules (`accounts.ts`, `pools.ts`, `router-keys.ts`, `providers.ts`, `session.ts`, `settings.ts`, `tasks.ts`, `usage.ts`, `audit.ts`, `connect.ts`, `auth.ts`) | `lib/api/` | Calling `/api/admin/**` or the connect/session endpoints from a component. One module per resource, not a shared `fetch("...")` scattered across routes |
+| `QUERY_KEYS` | `lib/queries/query-keys.ts` | Naming a cache key. The one table both a query and its invalidation read, so a write on one screen can't leave a stale read on another |
+| Per-resource query modules (`accounts.ts`, `pools.ts`, `router-keys.ts`, `providers.ts`, `session.ts`, `settings.ts`, `usage.ts`, `connect.ts`) | `lib/queries/` | Reading or mutating a resource from a component. Wraps the matching `lib/api/*` client in `createQuery`/`createMutation` with the shared `queryClient` |
+
+### More components — `apps/web/src/components/`
+
+| Thing | Where | Use it when |
+|---|---|---|
+| `Button` | `components/Button.tsx` | Every clickable action. Tone (`primary`/`neutral`/`ghost`/`danger`) and size are the only variants — no ad-hoc button styling in a route |
+| `Badge` | `components/Badge.tsx` | A small inline status/tag chip. Tone-based, same palette as `StatusDot` |
+| `Banner` | `components/Banner.tsx` | Page-level notices — the `exhausted` red banner, a settings-screen warning |
+| `Modal` | `components/Modal.tsx` | Any overlay dialog. Wraps the focus trap and scroll lock so a new dialog doesn't reinvent either |
+| `ConfirmDialog` | `components/ConfirmDialog.tsx` | Every destructive action's confirmation, naming exactly what breaks — never a bare `confirm()` |
+| `CopyValue` | `components/CopyValue.tsx` | Displaying a copyable secret (a router key, a value from key reveal) with a copy button wired to `lib/clipboard.ts` |
+| `Field`, `TextField` | `components/Field.tsx` | Form inputs across every admin dialog — one label/error/hint layout, not a per-form one-off |
+| `Icon`, `IconName` | `components/Icon.tsx` | Any icon in the console. Closed set of names, so a typo is a type error, not a blank glyph |
+| `EmptyState` | `components/EmptyState.tsx` | A list/table with nothing in it yet |
+| `ErrorState` | `components/ErrorState.tsx` | A failed query's render, paired with `QueryBoundary` |
+| `QueryBoundary` | `components/QueryBoundary.tsx` | Wrapping a Solid Query read with its loading/error/empty states in one place, so a screen doesn't hand-roll the three-way branch |
+| `Skeleton`, `TableSkeleton` | `components/Skeleton.tsx`, `components/TableSkeleton.tsx` | Loading placeholders — a table's skeleton rows, a stat tile's skeleton — shown while `QueryBoundary` is pending |
+| `StatTile` | `components/StatTile.tsx` | A headline number on the overview/usage screens |
 
 ## Things that must never be duplicated
 

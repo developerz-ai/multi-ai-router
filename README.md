@@ -44,23 +44,24 @@ Why: a router that makes a team's subscriptions usable only works if the account
 Marked ⏳ where the design is settled but the code is not — see [Status](#-status).
 
 - 🔀 **Two ingress dialects** — `POST /v1/messages` (Anthropic Messages), `POST /v1/chat/completions` and `POST /v1/responses` (OpenAI), `GET /v1/models` scoped to the presenting key.
-- 🔁 **Passthrough first** — same-dialect requests swap headers and forward the body byte-for-byte, streaming included. ⏳ Cross-dialect translation is specified, its lossy edges documented, and currently **refused with a `400`** rather than approximated.
-- 🧩 ⏳ **Subscriptions as first-class upstreams** — Claude subscriptions via the Agent SDK (a `CLAUDE_CONFIG_DIR` per account), ChatGPT/Codex via OAuth + PKCE, connected from the admin UI by redirect capture *or* manual code paste, with background refresh ahead of expiry.
+- 🔁 **Passthrough first** — same-dialect requests swap headers and forward the body byte-for-byte, streaming included. Cross-dialect translation is implemented for every crossing between the three dialects (Anthropic, OpenAI Chat Completions, OpenAI Responses), including streaming and tool calls; its lossy edges are documented and a request that cannot be translated faithfully is refused with a `400` naming the reason, rather than approximated.
+- 🧩 **Subscriptions as first-class upstreams** — Claude subscriptions via the Agent SDK (a `CLAUDE_CONFIG_DIR` per account), ChatGPT/Codex via OAuth + PKCE, connected from the admin UI by redirect capture *or* manual code paste, with background refresh ahead of expiry for both.
 - ⚖️ **Six load-balancing policies per pool** — sticky, round-robin, weighted, least-used, priority-failover, quota-aware — plus an optional overflow account, bounded failover, and a circuit breaker.
-- 🔑 **Named, retrievable keys with full or limited scope** — every key has a human-chosen name and a scope: `all` accounts, one or more pools, or an explicit account list. Stored encrypted, not hashed, so you can look a key up again without rotating it.
-- 📊 **Usage** — one record per upstream **attempt** (key, account, pool, session, model, tokens, cost, latency, TTFB, router overhead, outcome), queued in memory and batch-written off the request path, and read back by the console over any window, broken down by key, account, pool or model — with daily rollups behind it and a Prometheus `/metrics` exposition in front. ⏳ Cost estimation.
-- ⏱️ ⏳ **Reset visibility** — every unavailable account shows its reset as an absolute time *and* a countdown, per window for Claude subs (5-hour, 7-day, per-model), labeled as reported / estimated / unknown. Plus a manual **Re-check now**, per account or for all: providers sometimes reset early or lift a limit for everyone, and the router shouldn't sit on a stale timestamp.
+- 🔑 **Named, retrievable keys with full or limited scope** — every key has a human-chosen name and a scope: `all` accounts, one or more pools, or an explicit account list. Stored encrypted, not hashed, so you can look a key up again without rotating it. A per-key rate limit is enforced on the request path.
+- 📊 **Usage** — one record per upstream **attempt** (key, account, pool, session, model, tokens, cost, latency, TTFB, router overhead, outcome), queued in memory and batch-written off the request path, and read back by the console over any window, broken down by key, account, pool or model — with daily rollups behind it, cost estimation from an operator-editable price table, and a Prometheus `/metrics` exposition in front.
+- ⏱️ **Reset visibility** — every unavailable account shows its reset as an absolute time *and* a countdown, per window for Claude subs (5-hour, 7-day, per-model), labeled as reported / estimated / unknown. Plus a manual **Re-check now**, per account or for all: providers sometimes reset early or lift a limit for everyone, and the router shouldn't sit on a stale timestamp.
 - ⚡ **Performance as a stated goal** — under 5 ms added p99 on the passthrough path and zero added time-to-first-token. Streams are never buffered, passthrough bodies are never parsed, and nothing touches Postgres on the critical path: accounts and pools are read from a warm catalog, keys from a bounded cache, usage is written off-path.
-- 🖥️ **SolidJS operator console** — accounts, pools, keys and usage all render live data: key reveal with no shown-once flow, destructive actions that name exactly what they break, reset shown as absolute time *and* countdown labelled by how far it can be trusted, and a red banner for any account out of credits. ⏳ Settings is partly placeholder, and says so on the screen.
+- 🖥️ **SolidJS operator console** — overview, accounts, pools, keys, usage and settings all render live data: key reveal with no shown-once flow, destructive actions that name exactly what they break, reset shown as absolute time *and* countdown labelled by how far it can be trusted, a red banner for any account out of credits, and a settings screen with live price overrides, retention knobs, scheduled-task health, and the audit feed.
 - 🐳 **`docker compose up -d`** — the router plus PostgreSQL 16, a healthcheck gating startup, three env vars you set by hand.
 
 ---
 
 ## 🚧 Status
 
-**The admin API and the same-dialect data plane work. Cross-dialect translation, the Claude Agent SDK
-path, and the operator console's screens do not.** The table is honest rather than aspirational —
-everything below that says "no" is refused explicitly, by name, and never silently approximated.
+**Every milestone in the roadmap has shipped: the admin API, the full data plane (same-dialect
+passthrough, cross-dialect translation, and the Claude Agent SDK path), and the operator console are
+all live.** The table is honest rather than aspirational — the one remaining gap (Gemini's native
+dialect) is named explicitly, not silently approximated.
 
 | Capability | State |
 |---|---|
@@ -72,15 +73,15 @@ everything below that says "no" is refused explicitly, by name, and never silent
 | Routing: scope intersection, the six policies, overflow, bounded failover, circuit breaker | ✅ |
 | Warm routing catalog + off-path batched `UsageRecord` writer | ✅ |
 | HTTP provider drivers: Anthropic API, OpenAI API, ChatGPT/Codex OAuth, OpenRouter, z.ai, Kimi, MiniMax, and the two compatible escape hatches | ✅ |
-| **Cross-dialect translation** — an Anthropic-dialect client reaching an OpenAI-dialect account | ❌ refused with a `400` naming the reason |
-| **Claude subscriptions via the Agent SDK** | ❌ refused; `anthropic-oauth` accounts cannot be served |
-| **ChatGPT/Codex OAuth** | ⚠️ driver pinned and registered, and an account can be connected — authorization code + PKCE, redirect *and* paste capture; background token refresh is not built, so a connected account stops at first expiry |
-| **Gemini native** | ❌ no driver |
-| **Operator console screens** — accounts, pools, keys, usage | ✅ live data end to end |
-| **Operator console** — settings | ⚠️ session and provider registry are live; prices, retention, task health and audit are not built, and the screen says so |
+| **Cross-dialect translation** — every crossing between `anthropic`, `openai-chat`, `openai-responses`, request/response/streaming, tool calls included | ✅ an untranslatable request is refused with a `400` naming the reason |
+| **Claude subscriptions via the Agent SDK** | ✅ `anthropic-oauth` accounts are served — login, per-account `CLAUDE_CONFIG_DIR`, sessions, quota, tool passthrough, SDK-output re-synthesis |
+| **ChatGPT/Codex OAuth** | ✅ authorization code + PKCE, redirect *and* paste capture, and background token refresh ahead of expiry |
+| **Gemini native** | ❌ no driver — reachable today through `openai-compatible` |
+| **Operator console screens** — overview, accounts, pools, keys, usage | ✅ live data end to end |
+| **Operator console** — settings | ✅ session, provider registry, price overrides, retention knobs, scheduled-task health, and the audit feed are all live |
 | Background tasks: janitor/retention sweeps, usage rollups, OAuth-state purge, quota floor — in-process timers, one advisory lock per task | ✅ |
 | **`/metrics`** | ✅ Prometheus exposition, token-gated when `METRICS_TOKEN` is set |
-| **Cost estimation and per-key rate-limit enforcement** | ❌ not built |
+| **Cost estimation and per-key rate-limit enforcement** | ✅ operator-editable price table plus a per-key sliding-window limiter on the request path |
 
 The contract is [`docs/idea/`](docs/idea/): entity names, endpoints, policies, env vars, and invariants
 described there are what gets built, and are the reference for any implementation work. Sections below
@@ -147,7 +148,7 @@ docker compose up -d
 
 Migrations run at boot, are idempotent, and fail the boot loudly rather than starting on a half-migrated schema. Pointing `DATABASE_URL` at an existing or managed Postgres and dropping the bundled `db` service is a one-line change.
 
-Then log in and add an account, a pool, and a key. **Today that means `/api/admin/**` directly** — the console's screens are still placeholders ([Status](#-status)). **Give the key a name; you can view and copy its value again at any time** via `POST /api/admin/keys/:id/reveal` — keys are stored encrypted, not hashed, because an operator running a fleet of agents needs to look one up later without rotating it.
+Then log in and add an account, a pool, and a key — the SolidJS console at `/` handles all three end to end ([Status](#-status)); `/api/admin/**` is also there directly if you'd rather script it. **Give the key a name; you can view and copy its value again at any time** via `POST /api/admin/keys/:id/reveal` — keys are stored encrypted, not hashed, because an operator running a fleet of agents needs to look one up later without rotating it.
 
 | Env var | Required | Notes |
 |---|---|---|
@@ -190,7 +191,7 @@ export OPENAI_API_KEY="mar_live_…"
 
 Send whatever model name you normally send. It passes through unchanged unless the selected account defines an alias map. Details in [`docs/idea/06-protocol-translation.md`](docs/idea/06-protocol-translation.md).
 
-**Until translation lands, a client can only reach accounts speaking its own dialect.** An Anthropic-dialect request routed to an OpenAI-dialect account fails with a `400` naming the reason, rather than being converted approximately — scope each key to accounts that match the client, or wait for M6.
+**Cross-dialect translation is live** — an Anthropic-dialect client can reach an OpenAI-dialect account and back, including streaming and tool calls. The one exception is a request shape that cannot be translated faithfully (a lossy edge documented in [`docs/idea/06-protocol-translation.md`](docs/idea/06-protocol-translation.md)): that fails with a `400` naming the reason rather than being converted approximately.
 
 ---
 
@@ -210,8 +211,8 @@ The registry is a **total** record, so every provider id is either a driver or a
 | `minimax` | API key, `Bearer` | ✅ | Anthropic-shaped, and reports some failures in a `base_resp` envelope on an HTTP `200`. |
 | `openai-compatible` | API key, `Bearer` | ✅ | Any third-party OpenAI-shaped endpoint. Operator-supplied base URL. |
 | `anthropic-compatible` | API key | ✅ | Any third-party Anthropic-shaped endpoint. Keeps Anthropic's own header rules. |
-| `anthropic-oauth` | Claude Agent SDK | ⏳ | Claude Max/Pro subscription. Login and credential refresh run through the `claude` CLI into a per-account `CLAUDE_CONFIG_DIR`; the router never mints or stores a subscription token. Quota from SDK `rate_limit_event`s. **Not served yet** — an account of this provider is refused by name. |
-| `openai-oauth` | OAuth + PKCE | ⏳ | ChatGPT/Codex subscription via `auth.openai.com`, `offline_access` scope, `chatgpt-account-id` derived from the token claims. The **driver** and the **connect flow** are in place: an account is created with no credential, connected through `POST /:id/connect` by redirect or paste capture, and holds an encrypted token pair afterwards. Background refresh ahead of expiry is not built yet. |
+| `anthropic-oauth` | Claude Agent SDK | ✅ | Claude Max/Pro subscription. Login and credential refresh run through the `claude` CLI into a per-account `CLAUDE_CONFIG_DIR`; the router never mints or stores a subscription token. Requests are served through `@anthropic-ai/claude-agent-sdk`'s `query()`, with session stickiness, quota from SDK `rate_limit_event`s, tool passthrough, and SDK-output re-synthesized back into Anthropic (and, via translation, OpenAI) wire format. |
+| `openai-oauth` | OAuth + PKCE | ✅ | ChatGPT/Codex subscription via `auth.openai.com`, `offline_access` scope, `chatgpt-account-id` derived from the token claims. An account is created with no credential, connected through `POST /:id/connect` by redirect or paste capture, and refreshed in the background ahead of expiry — a failed refresh parks it at `needs_reauth` rather than failing a request. |
 | `gemini` | API key | ⏳ | Deferred in v1: reachable through `openai-compatible`; native endpoint constants are not pinned. |
 
 **z.ai, Kimi, and MiniMax take their key as `Authorization: Bearer`, never `x-api-key`** — they share the Anthropic *dialect*, not its auth scheme, and they must not receive the Anthropic OAuth beta header either.
