@@ -127,6 +127,25 @@ export {
 } from "./claude-sdk/tools"
 export type { HttpDriverConfig, ProviderSurface } from "./driver"
 export { createHttpDriver } from "./driver"
+export type { OpenAiOAuthTokens, TokenEndpointRequest } from "./drivers/openai-oauth"
+export {
+  CHATGPT_ACCOUNT_ID_HEADER,
+  CHATGPT_CODEX_BASE_URL,
+  chatGptAccountId,
+  OPENAI_AUTH_CLAIM,
+  OPENAI_OAUTH_AUTHORIZE_URL,
+  OPENAI_OAUTH_CLIENT_ID,
+  OPENAI_OAUTH_ISSUER,
+  OPENAI_OAUTH_LOOPBACK_REDIRECT_URI,
+  OPENAI_OAUTH_REFRESH_SCOPE,
+  OPENAI_OAUTH_SCOPE,
+  OPENAI_OAUTH_TOKEN_URL,
+  openAiOAuthAuthorizeUrl,
+  openAiOAuthCodeExchange,
+  openAiOAuthDriver,
+  openAiOAuthRefresh,
+  readOpenAiOAuthTokens,
+} from "./drivers/openai-oauth"
 export type { ClassificationRule, ClassifyOptions } from "./failure/classify"
 export {
   classifyUpstreamFailure,

@@ -6,6 +6,7 @@ import { kimiDriver } from "./drivers/kimi"
 import { miniMaxDriver } from "./drivers/minimax"
 import { openAiApiDriver } from "./drivers/openai-api"
 import { openAiCompatibleDriver } from "./drivers/openai-compatible"
+import { openAiOAuthDriver } from "./drivers/openai-oauth"
 import { openRouterDriver } from "./drivers/openrouter"
 import { zaiDriver } from "./drivers/zai"
 import type { ProviderDriver } from "./types"
@@ -40,6 +41,9 @@ const http = (driver: ProviderDriver): ProviderSupport => ({ transport: "http", 
 export const PROVIDER_REGISTRY: Readonly<Record<ProviderId, ProviderSupport>> = {
   "anthropic-api": http(anthropicApiDriver),
   "openai-api": http(openAiApiDriver),
+  // A subscription over ordinary HTTP: the router holds and refreshes the token, so it is a
+  // `ProviderDriver` like any other — unlike a Claude subscription, whose tokens the SDK owns.
+  "openai-oauth": http(openAiOAuthDriver),
   openrouter: http(openRouterDriver),
   zai: http(zaiDriver),
   kimi: http(kimiDriver),
@@ -52,11 +56,6 @@ export const PROVIDER_REGISTRY: Readonly<Record<ProviderId, ProviderSupport>> = 
     driver: claudeSdkDriver,
     reason:
       "Claude Max/Pro subscriptions go through @anthropic-ai/claude-agent-sdk, one isolated CLAUDE_CONFIG_DIR per account. No subscription token is ever extracted or attached to an HTTP request — docs/idea/11-anthropic-agent-sdk.md.",
-  },
-  "openai-oauth": {
-    transport: "unimplemented",
-    reason:
-      "ChatGPT/Codex subscription: OAuth + PKCE, a derived chatgpt-account-id, and a refresh lifecycle. Not part of the HTTP key-based drivers.",
   },
   gemini: {
     transport: "unimplemented",

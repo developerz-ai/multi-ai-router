@@ -1,7 +1,7 @@
 # Providers
 
-Status: the driver contract, the total registry, and eight HTTP drivers are **implemented**
-(`apps/api/src/providers/`). `anthropic-oauth` (Agent SDK), `openai-oauth`, and `gemini` carry a
+Status: the driver contract, the total registry, and nine HTTP drivers are **implemented**
+(`apps/api/src/providers/`). `anthropic-oauth` is served by the Agent SDK; only `gemini` carries a
 recorded reason instead of a driver. Every constant below is pinned in code with a provenance
 comment; where this page and a driver file disagree, the driver file is the truth.
 
@@ -103,10 +103,10 @@ Every member is **pure**: no clock, no store, no logger, no network. `RateLimitS
 minimum whether the account is limited now, the reported reset instant (if any), and per-window
 utilization (if any), each labeled with its source.
 
-Two members from the original design are **deliberately absent until their callers exist**:
-`refreshCredentials` (OAuth drivers only — no OAuth provider is implemented) and `probeHealth`
-(I/O, owned by the half-open probe). Both are additive when that layer lands, which is the point of
-the interface being this narrow.
+Two members from the original design are **deliberately absent**: `probeHealth` (I/O, owned by the
+half-open probe) and `refreshCredentials` (I/O as well). `openai-oauth` is what settles the second
+one — its driver file owns the token-request shapes as pure builders, while the fetch, the timers,
+and the single-flighting live in `services/accounts/`, so the interface stays pure and this narrow.
 
 ### The registry is total, and says why when there is no driver
 
@@ -117,9 +117,9 @@ absent or stubbed into something that looks like it works:
 
 | Transport | Ids | Meaning |
 |---|---|---|
-| `http` | `anthropic-api`, `openai-api`, `openrouter`, `zai`, `kimi`, `minimax`, `openai-compatible`, `anthropic-compatible` | A driver in `providers/drivers/`, satisfying the interface above |
+| `http` | `anthropic-api`, `openai-api`, `openai-oauth`, `openrouter`, `zai`, `kimi`, `minimax`, `openai-compatible`, `anthropic-compatible` | A driver in `providers/drivers/`, satisfying the interface above |
 | `agent-sdk` | `anthropic-oauth` | Served by `query()`. Its own driver interface in `providers/claude-sdk/driver.ts`, not a `ProviderDriver`: there is no base URL to resolve, no headers to build, and failures arrive as strings |
-| `unimplemented` | `openai-oauth`, `gemini` | Declared in the domain, no implementation. Selecting one is a configuration error and is refused by name, before any upstream call |
+| `unimplemented` | `gemini` | Declared in the domain, no implementation. Selecting one is a configuration error and is refused by name, before any upstream call |
 
 That three-way split is what lets the data plane refuse honestly, and it is also the **transport
 seam**: `transport` is the discriminant every caller narrows on, so "is this HTTP or the Agent SDK"
@@ -236,17 +236,35 @@ tokens; a compatible vendor's Bearer key is just a key.
 | Scope | `openid profile email offline_access` |
 | Authorize | `<issuer>/oauth/authorize` |
 | Token | `<issuer>/oauth/token` |
+| Authorize query | `response_type=code`, `client_id`, `redirect_uri`, `scope`, `code_challenge`, `code_challenge_method=S256`, `id_token_add_organizations=true`, `state` |
 | Code exchange | `grant_type=authorization_code` + `code`, `redirect_uri`, `client_id`, `code_verifier` (form-encoded) |
-| Refresh | `grant_type=refresh_token` + `refresh_token`, `client_id` — **JSON body**, not form-encoded |
+| Refresh | `grant_type=refresh_token` + `refresh_token`, `client_id`, `scope=openid profile email` — **JSON body**, not form-encoded |
+| Loopback redirect | `http://localhost:1455/auth/callback` — the value the first-party client registers |
 | Base URL | `https://chatgpt.com/backend-api/codex` |
 | Auth header | `Authorization: Bearer <access_token>` |
 | Required header | `chatgpt-account-id: <account id>` |
+| Account-id claim | `https://api.openai.com/auth` → `chatgpt_account_id` |
+
+All of it lives in `providers/drivers/openai-oauth.ts`, including the two token requests as pure
+builders: the driver owns the *shapes*, the connect flow and the refresher own the fetch, the
+timers, and the single-flighting. A provider change touches that one file.
 
 `offline_access` is what earns the refresh token; without it the account degrades to
-`needs_reauth` at first expiry. The account id is **derived, not configured** — decoded from
-the `id_token` claims (falling back to the `access_token` claims), then stored on the Account
-and sent on every request. Deriving it wrong produces upstream 401/403s that look like a bad
-token, so it is captured once at connect time and re-derived on every refresh.
+`needs_reauth` at first expiry. The refresh deliberately asks for less — it does not re-issue the
+grant, and the first-party client omits `offline_access` there. `id_token_add_organizations=true`
+mirrors the same client: it enriches the claim the account id is read from.
+
+The account id is **derived, not configured** — decoded from the `id_token` claims (falling back to
+the `access_token` claims), then stored on the Account and sent on every request. Deriving it wrong
+produces upstream 401/403s that look like a bad token, so it is captured once at connect time and
+re-derived on every refresh. A token that carries no such claim is refused *before* the request
+goes out, as an upstream-auth failure naming the account — sending a Codex call without the header
+would return a 401 the operator would misread as a bad token.
+
+**A subscription has no balance to drain**, so its refusals are read differently from an API key's:
+a spent 5-hour or weekly window is `rate-limited` (clock-recoverable, `cooling_down`), and the
+`resets_in_seconds` the payload carries is used as the reported reset instead of the breaker's
+guess. Only a deactivated plan is `credits-exhausted` — permanent until a human acts.
 
 ## API-key providers — z.ai, Kimi, MiniMax, OpenRouter
 

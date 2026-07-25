@@ -71,10 +71,11 @@ everything below that says "no" is refused explicitly, by name, and never silent
 | Data plane, **same-dialect passthrough**: `/v1/messages`, `/v1/chat/completions`, `/v1/responses`, `/v1/models` | ✅ |
 | Routing: scope intersection, the six policies, overflow, bounded failover, circuit breaker | ✅ |
 | Warm routing catalog + off-path batched `UsageRecord` writer | ✅ |
-| HTTP provider drivers: Anthropic API, OpenAI API, OpenRouter, z.ai, Kimi, MiniMax, and the two compatible escape hatches | ✅ |
+| HTTP provider drivers: Anthropic API, OpenAI API, ChatGPT/Codex OAuth, OpenRouter, z.ai, Kimi, MiniMax, and the two compatible escape hatches | ✅ |
 | **Cross-dialect translation** — an Anthropic-dialect client reaching an OpenAI-dialect account | ❌ refused with a `400` naming the reason |
 | **Claude subscriptions via the Agent SDK** | ❌ refused; `anthropic-oauth` accounts cannot be served |
-| **ChatGPT/Codex OAuth, Gemini native** | ❌ no driver |
+| **ChatGPT/Codex OAuth** | ⚠️ driver pinned and registered; the PKCE connect flow and token refresh are not built, so no account can hold a credential |
+| **Gemini native** | ❌ no driver |
 | **Operator console screens** — accounts, pools, keys, usage | ✅ live data end to end |
 | **Operator console** — settings | ⚠️ session and provider registry are live; prices, retention, task health and audit are not built, and the screen says so |
 | Background tasks: janitor/retention sweeps, usage rollups, OAuth-state purge, quota floor — in-process timers, one advisory lock per task | ✅ |
@@ -210,7 +211,7 @@ The registry is a **total** record, so every provider id is either a driver or a
 | `openai-compatible` | API key, `Bearer` | ✅ | Any third-party OpenAI-shaped endpoint. Operator-supplied base URL. |
 | `anthropic-compatible` | API key | ✅ | Any third-party Anthropic-shaped endpoint. Keeps Anthropic's own header rules. |
 | `anthropic-oauth` | Claude Agent SDK | ⏳ | Claude Max/Pro subscription. Login and credential refresh run through the `claude` CLI into a per-account `CLAUDE_CONFIG_DIR`; the router never mints or stores a subscription token. Quota from SDK `rate_limit_event`s. **Not served yet** — an account of this provider is refused by name. |
-| `openai-oauth` | OAuth + PKCE | ⏳ | ChatGPT/Codex subscription via `auth.openai.com`, `offline_access` scope. |
+| `openai-oauth` | OAuth + PKCE | ⏳ | ChatGPT/Codex subscription via `auth.openai.com`, `offline_access` scope, `chatgpt-account-id` derived from the token claims. The **driver** is in place (endpoints, both token-request shapes, classification); connecting an account and refreshing its token are not built, so an account has no way to get a credential yet. |
 | `gemini` | API key | ⏳ | Deferred in v1: reachable through `openai-compatible`; native endpoint constants are not pinned. |
 
 **z.ai, Kimi, and MiniMax take their key as `Authorization: Bearer`, never `x-api-key`** — they share the Anthropic *dialect*, not its auth scheme, and they must not receive the Anthropic OAuth beta header either.

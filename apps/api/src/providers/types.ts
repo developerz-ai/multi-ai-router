@@ -16,9 +16,10 @@ import type { ModelAliasMap } from "@multi-ai-router/db"
  * a request is addressed and authenticated and what an upstream response *means*; what to do
  * about it is routing's job (docs/idea/05-routing-and-failover.md).
  *
- * Two members from the design doc are deliberately absent until their callers exist:
- * `refreshCredentials` (OAuth drivers only — `openai-oauth` is not implemented) and `probeHealth`
- * (I/O, owned by the half-open probe). Both are additive when that layer lands.
+ * Two members from the design doc are deliberately absent. `probeHealth` is I/O, owned by the
+ * half-open probe. `refreshCredentials` would be I/O too, and `openai-oauth` shows why it does not
+ * belong here: its driver file owns the token-request *shapes* as pure builders, while the fetch,
+ * the timers, and the single-flighting live in `services/accounts/`. Both stay additive.
  */
 
 /**
