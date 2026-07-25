@@ -102,8 +102,9 @@ Each is a Zod schema **and** its `z.infer` type under one name. These are the si
 | `createAccountRepository(db)` → `AccountRepository` | `repositories/account-repository.ts` | Any `accounts` query — CRUD, and the `list` the catalog loads from |
 | `createApiKeyRepository(db)` → `ApiKeyRepository` | `repositories/api-key-repository.ts` | Any `api_keys` query, including the scope join tables and the prefix lookup verification uses |
 | `createPoolRepository(db)` → `PoolRepository` | `repositories/pool-repository.ts` | Pools and membership. `listMembersForPools` returns every pool's members in one statement — use it rather than a query per pool |
-| `createAuditRepository(db)` → `AuditRepository` | `repositories/audit-repository.ts` | Appending an `AuditEvent`. Append-only; there is no update or delete outside retention |
-| `createUsageRecordRepository(db)` → `UsageRecordRepository` | `repositories/usage-repository.ts` | Usage persistence. `insertMany` is the whole write surface on purpose — a per-record insert is the round trip the batching exists to avoid |
+| `createAuditRepository(db)` → `AuditRepository` | `repositories/audit-repository.ts` | Appending an `AuditEvent`. Append-only; no update, and the one delete narrows by age and nothing else |
+| `createUsageRecordRepository(db)` → `UsageRecordRepository` | `repositories/usage-repository.ts` | Usage persistence. `insertMany` is the whole mutation surface besides the retention sweep — a per-record insert is the round trip the batching exists to avoid |
+| `deleteOldestBatch({ db, table, id, agedBy, cutoff, limit, narrowedBy? })` → `number` | `repositories/bounded-delete.ts` | Any retention sweep, inside `packages/db` only. Postgres takes no `LIMIT` on a `DELETE`, so the batch comes from an ordered, limited subselect; the returned count is the caller's `partial` signal. Never hand-roll a second one |
 | Tables, row types, `pgEnum`s, `schema` namespace | `packages/db/src/schema/**`, re-exported from `src/index.ts` | Building a query inside a repository |
 
 **Repositories own SQL; services never inline a query.** A new query is a new method in

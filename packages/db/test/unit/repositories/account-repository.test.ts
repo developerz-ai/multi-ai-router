@@ -1,15 +1,12 @@
 import { describe, expect, test } from "bun:test"
-import { drizzle } from "drizzle-orm/pg-proxy"
-import type { Database } from "../../../src/client"
 import { createAccountRepository } from "../../../src/repositories/account-repository"
+import { harness } from "./fixtures"
 
 /**
- * No database required. Drizzle's proxy driver hands the repository a real query
- * builder and lets the test see exactly the SQL and parameters that would go on
- * the wire, plus feed rows back the way postgres would return them.
+ * No database required — see `fixtures.ts` for the proxy-driver seam.
  *
- * That is what is worth locking here: which table each method touches, which
- * predicate narrows it, and — the rule this repository exists to enforce — that
+ * What is worth locking here: which table each method touches, which predicate
+ * narrows it, and — the rule this repository exists to enforce — that
  * `auth_material` crosses the boundary as ciphertext in both directions, with
  * nothing in between attempting to read it.
  */
@@ -21,18 +18,6 @@ const ACCOUNT_ID = "11111111-1111-1111-1111-111111111111"
 const NOW = new Date("2026-07-24T12:00:00.000Z")
 /** Drizzle maps a `timestamp with time zone` to an ISO string before it reaches the driver. */
 const NOW_PARAM = NOW.toISOString()
-
-interface Statement {
-  readonly sql: string
-  readonly params: readonly unknown[]
-}
-
-interface Harness {
-  readonly db: Database
-  readonly statements: readonly Statement[]
-  /** The single statement the method under test issued. */
-  only(): Statement
-}
 
 /** Row order matches `select *` on `accounts`, which is how postgres answers. */
 const accountRow = [
@@ -49,28 +34,6 @@ const accountRow = [
   "2026-07-01 00:00:00+00",
   "2026-07-01 00:00:00+00",
 ]
-
-function harness(rows: unknown[][] = []): Harness {
-  const statements: Statement[] = []
-  // The proxy driver is a `PgRemoteDatabase`, structurally identical for every
-  // query this repository builds but branded for a different driver, so the
-  // cast is the whole seam. Nothing else here pretends to be postgres.
-  const db = drizzle(async (sql, params) => {
-    statements.push({ sql, params })
-    return { rows }
-  }) as unknown as Database
-
-  return {
-    db,
-    statements,
-    only: () => {
-      expect(statements).toHaveLength(1)
-      const statement = statements[0]
-      if (statement === undefined) throw new Error("no statement was issued")
-      return statement
-    },
-  }
-}
 
 describe("create", () => {
   test("inserts one accounts row and returns it", async () => {
@@ -261,5 +224,36 @@ describe("quota window state", () => {
     const timestamps = stub.only().params.filter((param) => param === NOW_PARAM)
     expect(timestamps).toHaveLength(2)
     expect(stub.only().params).toContain(null)
+  })
+
+  test("listQuotaWindows reads every window for a set of accounts in one query", async () => {
+    const stub = harness([quotaRow])
+    const other = "33333333-3333-3333-3333-333333333333"
+    const rows = await createAccountRepository(stub.db).listQuotaWindows([ACCOUNT_ID, other])
+
+    // The catalog hydrates a whole pool at load; one query per account would be
+    // one round trip per account.
+    const { sql, params } = stub.only()
+    expect(sql).toContain('from "quota_windows"')
+    expect(sql).toContain('"quota_windows"."account_id" in ($1, $2)')
+    expect(params).toEqual([ACCOUNT_ID, other])
+    expect(rows[0]?.window).toBe("five_hour")
+  })
+
+  test("listQuotaWindows orders by account then window, so grouping is stable", async () => {
+    const stub = harness([quotaRow])
+    await createAccountRepository(stub.db).listQuotaWindows([ACCOUNT_ID])
+
+    expect(stub.only().sql).toContain(
+      'order by "quota_windows"."account_id" asc, "quota_windows"."window" asc',
+    )
+  })
+
+  test("listQuotaWindows asks nothing of the database for an empty set", async () => {
+    const stub = harness([quotaRow])
+    // `in ()` is what a missing guard produces, and it is not what an empty
+    // input means: a caller with no accounts has nothing to hydrate.
+    expect(await createAccountRepository(stub.db).listQuotaWindows([])).toEqual([])
+    expect(stub.statements).toHaveLength(0)
   })
 })
