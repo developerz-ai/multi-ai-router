@@ -1,0 +1,121 @@
+@use "../../styles/mixins" as *;
+
+// Two capture modes, presented as two equal blocks. Nothing here dims, indents
+// or otherwise demotes the paste box: it is the mode that works with no
+// reachable public URL, and the only mode the CLI login has at all.
+
+.section {
+  display: grid;
+  gap: var(--space-3);
+  padding: var(--space-4);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-2);
+  background: var(--surface-sunken);
+  justify-items: start;
+}
+
+.sectionTitle {
+  @include eyebrow;
+
+  color: var(--text-muted);
+}
+
+.hint {
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+  line-height: var(--line-snug);
+  text-wrap: pretty;
+}
+
+// What is about to happen, in the flow's own terms. Same treatment as the
+// provider note on the account form, so the two dialogs read as one console.
+.note {
+  display: grid;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-1);
+  background: var(--surface-sunken);
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+  line-height: var(--line-snug);
+  text-wrap: pretty;
+}
+
+.open {
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+}
+
+// Absolute time *and* countdown, the same pair every reset in this console
+// shows — a deadline stated only as "4m left" is unreadable the moment the tab
+// is left open.
+.expiry {
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+  line-height: var(--line-snug);
+}
+
+.paste {
+  width: 100%;
+  min-height: 5.5rem;
+  padding: var(--space-2) var(--space-3);
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-1);
+  color: var(--text);
+  // Monospaced: the operator is checking a pasted blob for a truncated tail,
+  // and a proportional font hides exactly that.
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  line-height: var(--line-snug);
+  resize: vertical;
+  transition: border-color var(--duration-fast) var(--ease-out);
+}
+
+.paste:hover {
+  border-color: var(--accent);
+}
+
+.paste:focus-visible {
+  @include focus-ring;
+}
+
+// The live shape verdict. Muted and never coloured by outcome: it says which
+// shape was recognised in words, so it carries no meaning a colour has to.
+.feedback {
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+  line-height: var(--line-snug);
+  text-wrap: pretty;
+}
+
+.success {
+  display: grid;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  border: 1px solid var(--ok);
+  border-radius: var(--radius-1);
+  background: color-mix(in srgb, var(--ok) 10%, var(--surface-overlay));
+}
+
+.successLine {
+  font-size: var(--text-sm);
+  line-height: var(--line-snug);
+  text-wrap: pretty;
+}
+
+.error {
+  padding: var(--space-3);
+  border: 1px solid var(--danger);
+  border-radius: var(--radius-1);
+  background: color-mix(in srgb, var(--danger) 10%, var(--surface-overlay));
+  font-size: var(--text-sm);
+  line-height: var(--line-snug);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .paste {
+    transition: none;
+  }
+}

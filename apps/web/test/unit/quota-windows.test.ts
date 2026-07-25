@@ -1,0 +1,257 @@
+import { describe, expect, test } from "bun:test"
+import type { AccountStatus, QuotaWindowKind } from "@multi-ai-router/core"
+import { QuotaWindowKind as QuotaWindowKindSchema } from "@multi-ai-router/core"
+import type { QuotaWindowView } from "../../src/lib/api/types"
+import {
+  describeQuotaWindow,
+  describeQuotaWindows,
+  formatUtilization,
+  QUOTA_WINDOW_DISPLAY_ORDER,
+  quotaWindowLabel,
+  quotaWindowTitle,
+  quotaWindowTone,
+  utilizationNote,
+} from "../../src/lib/quota-windows"
+
+// Per-window quota rendering. Every case here is a rule from
+// `docs/idea/05-routing-and-failover.md` rather than a formatting preference — an exhausted
+// account that shows a countdown, or a window row with no source label, is a lie the console tells
+// an operator who is deciding whether to wait or to reach for a credit card.
+
+const NOW = Date.parse("2026-07-25T12:00:00.000Z")
+const IN_AN_HOUR = new Date(NOW + 3_600_000).toISOString()
+const AN_HOUR_AGO = new Date(NOW - 3_600_000).toISOString()
+
+function window(overrides: Partial<QuotaWindowView> = {}): QuotaWindowView {
+  return {
+    window: "five_hour",
+    utilization: 0.62,
+    utilizationSource: "continuous",
+    resetsAt: IN_AN_HOUR,
+    resetSource: "provider-reported",
+    lastCheckedAt: new Date(NOW).toISOString(),
+    spent: false,
+    ...overrides,
+  }
+}
+
+describe("the display order", () => {
+  test("is a permutation of every window core defines", () => {
+    expect([...QUOTA_WINDOW_DISPLAY_ORDER].sort()).toEqual(
+      [...QuotaWindowKindSchema.options].sort(),
+    )
+  })
+
+  test("puts the shortest window first and overage last", () => {
+    expect(QUOTA_WINDOW_DISPLAY_ORDER[0]).toBe("five_hour")
+    expect(QUOTA_WINDOW_DISPLAY_ORDER.at(-1)).toBe("overage")
+  })
+
+  test("names and titles every window core defines", () => {
+    for (const kind of QuotaWindowKindSchema.options) {
+      expect(quotaWindowLabel(kind as QuotaWindowKind).length).toBeGreaterThan(0)
+      expect(quotaWindowTitle(kind as QuotaWindowKind).length).toBeGreaterThan(0)
+    }
+  })
+})
+
+describe("describeQuotaWindows", () => {
+  test("returns the windows in reading order, whatever order they arrived in", () => {
+    const rows = describeQuotaWindows(
+      {
+        status: "active",
+        windows: [
+          window({ window: "overage" }),
+          window({ window: "seven_day_sonnet" }),
+          window({ window: "five_hour" }),
+        ],
+      },
+      NOW,
+    )
+
+    expect(rows.map((row) => row.window)).toEqual(["five_hour", "seven_day_sonnet", "overage"])
+  })
+
+  test("invents no row for a window this account did not report", () => {
+    const rows = describeQuotaWindows({ status: "active", windows: [window()] }, NOW)
+    expect(rows).toHaveLength(1)
+  })
+
+  test("returns nothing for an account with no windows at all", () => {
+    expect(describeQuotaWindows({ status: "active", windows: [] }, NOW)).toEqual([])
+  })
+})
+
+describe("an exhausted account", () => {
+  const EXHAUSTED: AccountStatus = "exhausted"
+
+  test("shows needs top-up on a window row, never a countdown", () => {
+    const row = describeQuotaWindow(EXHAUSTED, window({ resetsAt: IN_AN_HOUR }), NOW)
+
+    expect(row.reset.kind).toBe("needs_topup")
+    expect(row.reset.countdown).toBeNull()
+    expect(row.reset.text).toContain("top-up")
+  })
+
+  test("drops the absolute instant too, so nothing on the row promises a reset", () => {
+    const row = describeQuotaWindow(EXHAUSTED, window({ resetsAt: IN_AN_HOUR }), NOW)
+    expect(row.resetsAtMs).toBeNull()
+  })
+
+  test("suppresses the countdown on every window, not just the spent one", () => {
+    const rows = describeQuotaWindows(
+      {
+        status: EXHAUSTED,
+        windows: [window({ window: "five_hour" }), window({ window: "seven_day", spent: true })],
+      },
+      NOW,
+    )
+
+    expect(rows.every((row) => row.reset.countdown === null)).toBe(true)
+    expect(rows.every((row) => row.resetsAtMs === null)).toBe(true)
+  })
+})
+
+describe("a cooling account", () => {
+  test("carries both halves of the reset: countdown and absolute instant", () => {
+    const row = describeQuotaWindow("cooling_down", window({ resetsAt: IN_AN_HOUR }), NOW)
+
+    expect(row.reset.kind).toBe("countdown")
+    expect(row.reset.countdown).toBe("1h")
+    expect(row.resetsAtMs).toBe(Date.parse(IN_AN_HOUR))
+  })
+
+  test("a window on an *active* account still counts down — it refills on its own clock", () => {
+    // The account-level line has nothing to say for a healthy account. A window does: this one is
+    // 62% spent and an hour from refilling, and printing "—" beside a moving gauge is a lie of a
+    // different kind than an exhausted countdown.
+    const row = describeQuotaWindow("active", window({ resetsAt: IN_AN_HOUR }), NOW)
+
+    expect(row.reset.kind).toBe("countdown")
+    expect(row.reset.countdown).toBe("1h")
+    expect(row.reset.qualifier).toBe("reported")
+    expect(row.resetsAtMs).toBe(Date.parse(IN_AN_HOUR))
+  })
+
+  test("a window on a needs_reauth account keeps its instant too", () => {
+    const row = describeQuotaWindow("needs_reauth", window({ resetsAt: IN_AN_HOUR }), NOW)
+    expect(row.reset.kind).toBe("countdown")
+  })
+
+  test("reads a reset already in the past as due rather than counting backwards", () => {
+    const row = describeQuotaWindow("cooling_down", window({ resetsAt: AN_HOUR_AGO }), NOW)
+    expect(row.reset.kind).toBe("due")
+    expect(row.reset.countdown).toBeNull()
+  })
+})
+
+// A printed timestamp is a claim. It may only appear beside a sentence that is about that
+// instant — never beside "Unknown", and never beside "needs top-up".
+describe("the absolute instant", () => {
+  test("is dropped when the source is unknown, however the row was stored", () => {
+    const row = describeQuotaWindow(
+      "cooling_down",
+      window({ resetsAt: IN_AN_HOUR, resetSource: "unknown" }),
+      NOW,
+    )
+
+    expect(row.reset.kind).toBe("unknown")
+    expect(row.resetsAtMs).toBeNull()
+  })
+
+  test("survives for the two kinds that are about an instant", () => {
+    expect(describeQuotaWindow("active", window({ resetsAt: IN_AN_HOUR }), NOW).resetsAtMs).toBe(
+      Date.parse(IN_AN_HOUR),
+    )
+    expect(describeQuotaWindow("active", window({ resetsAt: AN_HOUR_AGO }), NOW).resetsAtMs).toBe(
+      Date.parse(AN_HOUR_AGO),
+    )
+  })
+})
+
+describe("the source label", () => {
+  test("is stated on every row, unknown included", () => {
+    const rows = describeQuotaWindows(
+      {
+        status: "cooling_down",
+        windows: [
+          window({ window: "five_hour", resetSource: "provider-reported" }),
+          window({ window: "seven_day", resetSource: "estimated" }),
+          window({ window: "overage", resetSource: "unknown", resetsAt: null }),
+        ],
+      },
+      NOW,
+    )
+
+    expect(rows.map((row) => row.resetLabel)).toEqual(["reported", "estimated", "unknown"])
+  })
+})
+
+describe("the utilization reading", () => {
+  test("keeps a null reading null rather than collapsing it to zero", () => {
+    const row = describeQuotaWindow("active", window({ utilization: null }), NOW)
+
+    expect(row.utilization).toBeNull()
+    expect(row.utilizationText).toBe("—")
+  })
+
+  test("explains why a threshold-triggered gauge can be empty", () => {
+    const row = describeQuotaWindow(
+      "active",
+      window({ utilization: null, utilizationSource: "threshold-triggered" }),
+      NOW,
+    )
+
+    expect(row.utilizationNote).toBe(utilizationNote("threshold-triggered"))
+    expect(row.utilizationNote).toContain("normal")
+  })
+
+  test("never rounds a small non-zero share down to 0%", () => {
+    expect(formatUtilization(0.004)).toBe("0.4%")
+    expect(formatUtilization(0)).toBe("0%")
+  })
+
+  test("never rounds an incomplete window up to 100%", () => {
+    expect(formatUtilization(0.996)).toBe("99.6%")
+    expect(formatUtilization(1)).toBe("100%")
+  })
+
+  test("reads a missing or nonsense value as no reading", () => {
+    expect(formatUtilization(null)).toBe("—")
+    expect(formatUtilization(Number.NaN)).toBe("—")
+  })
+})
+
+describe("the tone", () => {
+  test("follows the server's spent verdict, not the raw utilization", () => {
+    // A window at 1.0 whose reset has already passed is refilled — routing does not treat it as
+    // blocking, and neither may the console.
+    const refilled = describeQuotaWindow(
+      "active",
+      window({ utilization: 1, spent: false, resetsAt: AN_HOUR_AGO }),
+      NOW,
+    )
+    const blocking = describeQuotaWindow(
+      "cooling_down",
+      window({ utilization: 1, spent: true }),
+      NOW,
+    )
+
+    expect(quotaWindowTone(refilled)).not.toBe("danger")
+    expect(quotaWindowTone(blocking)).toBe("danger")
+  })
+
+  test("warns before a window is spent, and stays quiet with headroom left", () => {
+    expect(quotaWindowTone(describeQuotaWindow("active", window({ utilization: 0.85 }), NOW))).toBe(
+      "warn",
+    )
+    expect(quotaWindowTone(describeQuotaWindow("active", window({ utilization: 0.2 }), NOW))).toBe(
+      "neutral",
+    )
+  })
+
+  test("stays neutral with no reading — an absent signal is not a warning", () => {
+    const unread = describeQuotaWindow("active", window({ utilization: null }), NOW)
+    expect(quotaWindowTone(unread)).toBe("neutral")
+  })
+})

@@ -1,6 +1,13 @@
 import { describe, expect, test } from "bun:test"
 import { ResetSource } from "@multi-ai-router/core"
-import { describeReset, formatDuration, type ResetInput } from "../../src/lib/reset-countdown"
+import {
+  describeInstant,
+  describeReset,
+  formatDuration,
+  NEEDS_TOPUP,
+  type ResetInput,
+  resetQualifier,
+} from "../../src/lib/reset-countdown"
 
 // A fixed clock, passed in. Nothing in this module reads Date.now().
 const NOW = Date.UTC(2026, 0, 15, 12, 0, 0)
@@ -64,6 +71,52 @@ describe("ResetSource agreement with core", () => {
     )
     expect(display.qualifier).toBe("reported")
     expect(display.qualifier).not.toBe("estimated")
+  })
+})
+
+// The label a per-window row uses. `describeReset` drops the qualifier for `unknown` because there
+// is no instant to qualify; a table of five windows cannot, or the unlabelled row reads as the
+// certain one.
+describe("resetQualifier", () => {
+  test("labels every source core defines, unknown included", () => {
+    const labels = ResetSource.options.map((source) => resetQualifier(source))
+    expect(labels.sort()).toEqual(["estimated", "reported", "unknown"])
+  })
+})
+
+// The half of `describeReset` that does not consult a status. Per-window rows call it directly: a
+// quota window refills on its own clock whether or not the account is currently blocked.
+describe("describeInstant", () => {
+  test("counts down to an instant without asking what the account's status is", () => {
+    const display = describeInstant(NOW + HOUR, "provider-reported", NOW)
+
+    expect(display.kind).toBe("countdown")
+    expect(display.countdown).toBe("1h")
+    expect(display.qualifier).toBe("reported")
+  })
+
+  test("reads a passed instant as due rather than counting backwards", () => {
+    expect(describeInstant(NOW - HOUR, "estimated", NOW).kind).toBe("due")
+  })
+
+  test("says unknown rather than dressing an absent instant up as a fact", () => {
+    expect(describeInstant(null, "provider-reported", NOW).kind).toBe("unknown")
+    expect(describeInstant(NOW + HOUR, "unknown", NOW).qualifier).toBeNull()
+  })
+})
+
+describe("NEEDS_TOPUP", () => {
+  test("carries no countdown, so no caller can render one from it", () => {
+    expect(NEEDS_TOPUP.countdown).toBeNull()
+    expect(NEEDS_TOPUP.kind).toBe("needs_topup")
+  })
+
+  test("is what an exhausted account gets, whatever instant it was handed", () => {
+    const display = describeReset(
+      { status: "exhausted", resetsAt: NOW + HOUR, resetSource: "provider-reported" },
+      NOW,
+    )
+    expect(display).toEqual(NEEDS_TOPUP)
   })
 })
 

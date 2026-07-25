@@ -1,6 +1,13 @@
-import type { AccountStatus, ResetSource } from "@multi-ai-router/core"
+import type {
+  AccountStatus,
+  QuotaWindowKind,
+  QuotaWindowState,
+  ResetSource,
+  UtilizationSource,
+} from "@multi-ai-router/core"
 import type { AdminResult } from "../admin/result"
 import { buildSnapshot, type HealthStore, type RoutingCatalog } from "../dataplane"
+import { isWindowSpent } from "../routing"
 import type { RecheckService } from "./recheck"
 import type { AccountsService } from "./service"
 import type { AccountView } from "./view"
@@ -24,7 +31,29 @@ import type { AccountView } from "./view"
  * (docs/idea/05-routing-and-failover.md). `exhausted` has no reset *by definition* — that absence
  * is precisely what separates it from a cooldown, and it is why the console must show "needs
  * top-up" there and never a countdown.
+ *
+ * **Quota windows are carried per window, never collapsed into one number.** A Claude subscription
+ * runs several concurrently on independent clocks, and the account is blocked by whichever one is
+ * spent; a single "resets at" would name one of them and silently drop the other four. `spent` is
+ * computed with `isWindowSpent` — the same pure function candidate filtering calls — at that
+ * function's default threshold. Selection can be handed a different one (`SelectOptions
+ * .quotaSpentThreshold`); nothing configures one today, and the day something does, it has to be
+ * threaded here too or the console starts disagreeing with the router about which window blocks.
  */
+
+export interface QuotaWindowView {
+  readonly window: QuotaWindowKind
+  /** `0..1`, or null where the source reported nothing. Absent is normal, not a fault. */
+  readonly utilization: number | null
+  /** Why a gauge may be empty. A threshold-triggered source reads null for most of a window. */
+  readonly utilizationSource: UtilizationSource
+  readonly resetsAt: string | null
+  /** Always present, so a countdown is never rendered without its qualifier. */
+  readonly resetSource: ResetSource
+  readonly lastCheckedAt: string
+  /** Whether this window is one of the ones currently blocking the account. */
+  readonly spent: boolean
+}
 
 export interface AccountAvailability {
   /** What the operator set. `active` or `disabled`, and nothing else. */
@@ -37,6 +66,8 @@ export interface AccountAvailability {
   readonly lastCheckedAt: string | null
   readonly consecutiveFailures: number
   readonly inFlight: number
+  /** Every window this account holds, in the provider's own order. Empty where none are known. */
+  readonly quotaWindows: readonly QuotaWindowView[]
 }
 
 export interface AvailabilityDeps {
@@ -53,7 +84,8 @@ export function withAvailability(
   const overlay = (views: readonly AccountView[]): readonly AccountView[] => {
     // One snapshot for the whole list: `buildSnapshot` is the same call the request path makes,
     // so the console cannot disagree with the router about what is available.
-    const snapshot = buildSnapshot(deps.catalog, deps.health, deps.now())
+    const now = deps.now()
+    const snapshot = buildSnapshot(deps.catalog, deps.health, now)
     const live = new Map(snapshot.accounts.map((account) => [account.id, account]))
 
     return views.map((view) => {
@@ -77,6 +109,7 @@ export function withAvailability(
           lastCheckedAt: deps.recheck.lastCheckedAt(view.id)?.toISOString() ?? null,
           consecutiveFailures: observed.health.consecutiveFailures,
           inFlight: observed.health.inFlight,
+          quotaWindows: (observed.quotaWindows ?? []).map((window) => toWindowView(window, now)),
         },
       }
     })
@@ -95,5 +128,22 @@ export function withAvailability(
       return result.ok ? { ok: true, value: overlay(result.value) } : result
     },
     get: async (id) => overlayOne(await service.get(id)),
+  }
+}
+
+/**
+ * One stored window as the console reads it. `undefined` becomes `null` rather than `0`: a source
+ * that reported nothing has said nothing, and a zero would render as a wide-open gauge on an
+ * account the provider may already have cut off.
+ */
+function toWindowView(window: QuotaWindowState, now: Date): QuotaWindowView {
+  return {
+    window: window.window,
+    utilization: window.utilization ?? null,
+    utilizationSource: window.utilizationSource,
+    resetsAt: window.resetsAt?.toISOString() ?? null,
+    resetSource: window.resetSource,
+    lastCheckedAt: window.lastCheckedAt.toISOString(),
+    spent: isWindowSpent(window, now),
   }
 }

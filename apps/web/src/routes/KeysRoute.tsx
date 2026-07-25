@@ -17,6 +17,7 @@ import {
   useRevealKey,
   useRevokeKey,
 } from "../lib/queries/router-keys"
+import { useTableUsage } from "../lib/queries/table-usage"
 import styles from "./KeysRoute.module.scss"
 import { KeyFormDialog } from "./keys/KeyFormDialog"
 import { KeysTable } from "./keys/KeysTable"
@@ -39,12 +40,19 @@ interface ShownKey {
  * The revealed value is held in a component signal and never written to the
  * query cache — caching it would leave a live credential in memory for the rest
  * of the tab's life for no benefit, since re-reading it is one click.
+ *
+ * Usage rides along as its own query rather than being folded into the keys
+ * list: the two have different shapes of staleness — a key row changes when an
+ * operator edits it, a usage figure changes every batch flush — and joining them
+ * server-side would put an aggregate on the path of every scope edit.
  */
 export default function KeysRoute() {
   const now = createNow(30_000)
   const keys = useKeys()
   const pools = usePools()
   const accounts = useAllAccounts()
+
+  const usage = useTableUsage("key")
 
   const create = useCreateKey()
   const reveal = useRevealKey()
@@ -110,6 +118,7 @@ export default function KeysRoute() {
               }
               onRevoke={setPendingRevoke}
               revealingId={reveal.isPending ? (reveal.variables ?? null) : null}
+              {...usage()}
             />
           </Show>
         )}

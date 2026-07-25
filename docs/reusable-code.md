@@ -282,15 +282,25 @@ in a test as on the wire.
 |---|---|---|
 | `cx(...parts)` | `lib/cx.ts` | Every `class` built from CSS-module lookups. Template concatenation emits literal `"undefined"` |
 | `statusPresentation`, `statusToken`, `statusLabel`, `isRoutable`, `needsOperator`, `hasReset`, `ACCOUNT_STATUSES` | `lib/account-status.ts` | Rendering an account status. One mapping table, no per-screen colour choices |
-| `describeReset(input, nowMs)`, `formatDuration(ms)`, `formatAbsolute(epochMs)` | `lib/reset-countdown.ts` | Any reset/countdown display. Clock is a parameter — never read inside |
+| `describeReset(input, nowMs)`, `resetQualifier(source)`, `formatDuration(ms)`, `formatAbsolute(epochMs)` | `lib/reset-countdown.ts` | Any reset/countdown display. Clock is a parameter — never read inside. `resetQualifier` is the total `reported`\|`estimated`\|`unknown` label, for surfaces that must label **every** row |
+| `describeQuotaWindows(input, nowMs)`, `quotaWindowLabel/Title`, `formatUtilization`, `quotaWindowTone`, `QUOTA_WINDOW_DISPLAY_ORDER` | `lib/quota-windows.ts` | Rendering per-window quota anywhere. Windows are never collapsed into one reset; `exhausted` never yields a countdown; a null utilization stays null, never `0` |
+| `indexUsage(rows)`, `usageFor(index, id)`, `NO_USAGE`, `topN`, `shareOf`, `topNMeasure*` | `lib/usage-index.ts` | Joining usage onto a table row, or ranking one. Ranks on **one** measure at a time — metered and notional are never summed |
+| `classifyPaste`, `isSubmittablePaste`, `describePasteShape`, `connectExpiry` | `lib/connect-capture.ts` | Client-side pre-validation of an authorization paste. Mirrors the server's `parseAuthorizationPaste` acceptance; never echoes the pasted value |
 | `parseTheme`, `nextTheme`, `themeLabel`, `THEME_PREFERENCES`, `THEME_STORAGE_KEY` | `lib/theme.ts` | Theme logic (pure half) |
 | `applyTheme`, `loadTheme`, `storeTheme` | `lib/theme-dom.ts` | Theme DOM/storage half, kept apart so the rules stay testable without a browser |
 | `Table<T>`, `Column<T>` | `components/Table.tsx` | Every list surface. Structure, alignment, empty state — no sorting or fetching until a second caller needs it |
 | `StatusDot` | `components/StatusDot.tsx` | Status atom in rows and headers. Colour never carries meaning alone |
+| `QuotaGauge` | `components/QuotaGauge.tsx` | One bounded reading with its figure always printed beside it. A null value renders as explicitly unread, never as an empty-because-zero bar |
+| `ResetIndicator` | `components/ResetIndicator.tsx` | Account availability: the account-level reset **plus one row per quota window**, each labelled by source |
+| `QuotaWindowRow` | `components/QuotaWindowRow.tsx` | One quota window on any surface. Absolute time *and* countdown, a source on every row, `spent` marked with a word as well as an edge — two hand-written copies drifted on exactly those before it was shared |
+| `UsageCell` | `components/UsageCell.tsx` | Per-row usage in a table: sparkline, requests, and metered/notional printed apart |
+| `Sparkline` | `components/Sparkline.tsx` | Trend inside a table cell. `currentColor` throughout — introduces no colour of its own |
 | `PageHeader` | `components/PageHeader.tsx` | Title, subtitle, page-level actions |
 | `Placeholder` | `components/Placeholder.tsx` | A screen that is scaffold, so nothing looks implemented when it is not |
 | `ThemeToggle` | `components/ThemeToggle.tsx` | The header toggle. The one sanctioned `createEffect` in the app |
 | `queryClient` | `lib/query.ts` | Server state. Configured in exactly one place — never construct a second client |
+| `useTableUsage(dimension)` | `lib/queries/table-usage.ts` | A usage column on the keys or accounts table. One window and one cache key for both, so two tables cannot disagree about what "this week" means |
+| `useWatchedAccount(id, intervalMs)` | `lib/queries/accounts.ts` | The **only** poll in this console, and only while an OAuth redirect capture is outstanding — that exchange lands on the router, not on this tab. `false` for the interval turns it off |
 | `CONSOLE_ROUTES`, `LOGIN_PATH`, `AppShell`, `LoginScreen`, `NotFoundScreen`, `ConsoleRoute` | `lib/routes.ts` | Adding a screen. Single source of truth for the router **and** the sidebar |
 | `createFocusTrap(options)` | `lib/focus-trap.ts` | Containing focus in a modal overlay. Deliberately small — the drawer's needs, not a dialog library; it grows an option when a second overlay needs one |
 | `createScrollLock(active)` | `lib/scroll-lock.ts` | Holding the page still behind an open overlay. Scoped strictly to `active()`, previous value restored on cleanup — a permanently unscrollable page is the failure this shape rules out |
