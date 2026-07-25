@@ -1,0 +1,33 @@
+@use "../../styles/breakpoints" as bp;
+@use "../../styles/mixins" as *;
+
+.form {
+  @include card;
+
+  display: grid;
+  gap: var(--space-3);
+  padding: var(--space-4);
+
+  @include bp.respond-to("sidebar") {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto;
+    gap: var(--space-4);
+    align-items: end;
+  }
+}
+
+.action {
+  justify-self: start;
+}
+
+.error {
+  padding: var(--space-3);
+  border: 1px solid var(--danger);
+  border-radius: var(--radius-1);
+  background: color-mix(in srgb, var(--danger) 10%, var(--surface-raised));
+  font-size: var(--text-sm);
+  line-height: var(--line-snug);
+
+  @include bp.respond-to("sidebar") {
+    grid-column: 1 / -1;
+  }
+}

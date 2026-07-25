@@ -1,8 +1,9 @@
 # Observability
 
-Status: **`UsageRecord` writing, structured logging, redaction, audit events, the usage API, the
-scheduled tasks, and `/healthz` + `/readyz` + `/metrics` are implemented.** Not yet: charts beyond
-what the console renders today, the quota surface, and cost estimation. The field table below
+Status: **`UsageRecord` writing, structured logging, redaction, audit events, the usage API, cost
+estimation with operator-editable price overrides, the scheduled tasks and their admin surface, and
+`/healthz` + `/readyz` + `/metrics` are implemented.** Not yet: charts beyond
+what the console renders today, and the quota surface. The field table below
 matches the shipped schema; the rest is the contract those surfaces must meet. Retention knobs live
 in [09-deployment.md](09-deployment.md).
 
@@ -61,7 +62,7 @@ allocated a record per attempt would be an amplifier rather than a limit. It is 
 | | |
 |---|---|
 | Source | A static price table shipped with the image (`services/cost/prices.ts`), keyed by `provider + model`, with input/output/cache rates. Every entry carries its provenance |
-| Override | The operator can edit or extend it in `/settings` — **DEFERRED**. Overrides will win; the shipped table stays the fallback |
+| Override | The operator edits or extends it in `/settings`, stored in `price_overrides` and held in a warm book beside the routing catalog. An override wins for the provider + model it names; the shipped table stays the fallback for everything else, so correcting one stale rate never costs the rest of the table. Same staleness bound as the catalog, because a price edited on another replica reaches this one the same way |
 | Which model | The **upstream** model, after the Account's alias map — that is the name the upstream billed. A dated snapshot (`…-20251001`) prices as its family, which is how the provider prices the pin |
 | Unknown model | `costEstimate` is null and `costBasis` is `unknown` — never silently zero, never guessed. Same for a provider with no published per-model list: an aggregator's price depends on the route it chose, and a `*-compatible` endpoint is the operator's own contract |
 | Priced, no tokens | `0` with a real basis. Zero tokens against a known rate is a measurement, not an admission |
@@ -322,6 +323,17 @@ Rules: append-only — no update, no delete outside the janitor's retention swee
 credential material**: no key values, no tokens, no password hashes. Field-level diffs record names
 and non-secret values only.
 
+`subject_id` is text, not a uuid, for the same reason `kind` is text: not every audited subject is a
+row. A settings change names the setting it changed (`price_overrides`), an admin login names the
+configured operator. A failed login records the source address and whether the attempt named the
+configured admin — never the string that was typed, because a password fat-fingered into the
+username box, or a probe's guesses, would otherwise be written to an append-only table. Auditing a
+login is reporting and never part of the decision: the append is fired, not awaited, so a rejected
+write cannot turn a correct password into a `500`, and both branches make exactly one non-blocking
+call so the log can never become an oracle for which half of the credential was wrong.
+
+`GET /api/admin/audit` serves the console's feed, newest first, paged by `limit`.
+
 ## Scheduled task visibility
 
 Background work runs as **in-process jittered interval timers coordinated by Postgres advisory
@@ -330,8 +342,12 @@ idempotent, resumable, and works in bounded batches; the rationale is in
 [09-deployment.md](09-deployment.md). What belongs here is that **a task which silently stops running
 is the failure this surface exists to catch.** Each run appends to `scheduled_task_runs` — task name,
 started/finished, outcome, items processed — and `/settings` renders the latest row per task in plain
-language (*"janitor last ran 4 min ago, deleted 812 rows"*). A task with no recent successful run is
-called out, not left to inference.
+language (*"janitor last ran 4 min ago, deleted 812 rows"*), served by `GET /api/admin/tasks`. A task
+with no recent successful run is called out, not left to inference: the health it reports is
+`never_run`, `running`, `ok`, `stale` or `failing`, judged against the cadence *this process is
+actually running* — the intervals come from the same registry the scheduler was built from, so the
+screen cannot call a task healthy on a schedule nobody configured. A run left open past its own
+interval reads `stale`, which is what a wedged task looks like from the outside.
 
 | Task | Cadence |
 |---|---|

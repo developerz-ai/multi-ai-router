@@ -3,6 +3,7 @@ import type {
   ApiKeyRepository,
   AuditRepository,
   OauthStateRepository,
+  ScheduledTaskName,
   ScheduledTaskRepository,
   SessionRepository,
   UsageDailyRepository,
@@ -49,11 +50,31 @@ export interface ScheduledTaskDeps {
 
 const MINUTE_MS = 60_000
 
+/**
+ * Every task's cadence, in milliseconds, keyed by its `scheduled_task` name.
+ *
+ * Exported because the admin plane's task-health screen has to judge "is this
+ * task overdue?" against the schedule *this process is actually running*
+ * (docs/idea/08-observability.md#scheduled-task-visibility). Restating the
+ * arithmetic there would let the screen call a task healthy on a cadence nobody
+ * configured, so both readers take it from here.
+ */
+export function scheduledTaskIntervals(
+  env: ScheduledTaskDeps["env"],
+): Readonly<Record<ScheduledTaskName, number>> {
+  return {
+    janitor_sweep: env.janitorIntervalMinutes * MINUTE_MS,
+    usage_rollup: env.scheduler.usageRollupIntervalMinutes * MINUTE_MS,
+    oauth_state_purge: env.scheduler.oauthStatePurgeIntervalMinutes * MINUTE_MS,
+    quota_floor_refresh: env.scheduler.quotaFloorIntervalMinutes * MINUTE_MS,
+  }
+}
+
 /** Builds every periodic task this process runs, in `scheduled_task` enum order. */
 export function createScheduledTasks(deps: ScheduledTaskDeps): readonly ScheduledTask[] {
   const { env } = deps
   const batchSize = env.scheduler.sweepBatchSize
-  const quotaFloorMs = env.scheduler.quotaFloorIntervalMinutes * MINUTE_MS
+  const intervals = scheduledTaskIntervals(env)
 
   return [
     createJanitorTask({
@@ -62,29 +83,29 @@ export function createScheduledTasks(deps: ScheduledTaskDeps): readonly Schedule
       auditEvents: deps.auditEvents,
       apiKeys: deps.apiKeys,
       retention: env.retention,
-      intervalMs: env.janitorIntervalMinutes * MINUTE_MS,
+      intervalMs: intervals.janitor_sweep,
       batchSize,
     }),
     createUsageRollupTask({
       usageDaily: deps.usageDaily,
       scheduledTasks: deps.scheduledTasks,
       retention: env.retention,
-      intervalMs: env.scheduler.usageRollupIntervalMinutes * MINUTE_MS,
+      intervalMs: intervals.usage_rollup,
     }),
     createOauthPurgeTask({
       oauthStates: deps.oauthStates,
-      intervalMs: env.scheduler.oauthStatePurgeIntervalMinutes * MINUTE_MS,
+      intervalMs: intervals.oauth_state_purge,
       batchSize,
     }),
     createQuotaFloorTask({
       accounts: deps.accounts,
       health: deps.health,
-      intervalMs: quotaFloorMs,
+      intervalMs: intervals.quota_floor_refresh,
       // The interval *is* the idleness threshold: the floor's job is to cover
       // exactly the accounts traffic did not refresh since it last looked.
       // Deriving it here keeps the two from ever drifting apart, and keeps a
       // knob out of `.env` that nobody could tune meaningfully.
-      idleAfterMs: quotaFloorMs,
+      idleAfterMs: intervals.quota_floor_refresh,
     }),
   ]
 }

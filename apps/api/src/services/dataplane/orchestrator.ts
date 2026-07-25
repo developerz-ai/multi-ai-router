@@ -3,10 +3,10 @@ import {
   NoHealthyAccountError,
   type RouterError,
   TranslationError,
-  type UsageOutcome,
 } from "@multi-ai-router/core"
 import type { Logger } from "../../logging/logger"
 import type { SdkInvoker, SdkQuotaStore, SessionStore } from "../../providers"
+import type { RateLookup } from "../cost"
 import type { CredentialCipher } from "../crypto/cipher"
 import { type FailoverOptions, type SelectionOptions, selectAccounts } from "../routing"
 import { clientRequestIdFrom, correlationIdFrom, type UsageRecorder } from "../usage"
@@ -17,8 +17,9 @@ import { runChain } from "./chain"
 import { egressRejectionError } from "./egress/mode"
 import { buildSnapshot, type HealthStore } from "./health"
 import { keyRateLimitedError, type RateLimiter } from "./limits"
+import { outcomeForResponse, type RequestProgress, sampleOf, streamed } from "./observe"
 import { planCandidates } from "./plan"
-import { attemptRecord, errorClassOf, outcomeOf, SUCCESS_OUTCOME } from "./records"
+import { attemptRecord, errorClassOf, outcomeOf } from "./records"
 import { createRuntime } from "./runtime"
 import { sessionBindings } from "./session-binding"
 import { createTranslatedRequestBody } from "./translate-body"
@@ -26,7 +27,6 @@ import {
   type DataPlaneClock,
   type FetchLike,
   type RequestObserver,
-  type RequestSample,
   type RoutingCatalog,
   SYSTEM_CLOCK,
 } from "./types"
@@ -98,6 +98,8 @@ export interface DispatcherDeps {
    * turn early, the way an HTTP driver's parsed headers do.
    */
   readonly quota?: SdkQuotaStore
+  /** The operator's warm price overrides. Omitted, attempts price off the shipped table. */
+  readonly prices?: RateLookup
   readonly clock?: DataPlaneClock
   readonly logger?: Logger
   /** Notified once per client request, after it ended. Feeds `router_requests_total`. */
@@ -162,6 +164,7 @@ export function createDispatcher(deps: DispatcherDeps): Dispatcher {
       ...(deps.invokeSdk === undefined ? {} : { invokeSdk: deps.invokeSdk }),
       ...(deps.sessions === undefined ? {} : { sessions: deps.sessions }),
       ...(deps.quota === undefined ? {} : { quota: deps.quota }),
+      ...(deps.prices === undefined ? {} : { prices: deps.prices }),
       sessionKeySource: session.source,
       clock,
       timeoutMs: options.upstreamTimeoutMs ?? DEFAULT_UPSTREAM_TIMEOUT_MS,
@@ -247,52 +250,17 @@ export function createDispatcher(deps: DispatcherDeps): Dispatcher {
       }
       if (observe === undefined) return serve(input, progress)
 
+      const identity = { ingressDialect: input.ingress, keyId: input.key.id }
       try {
         const response = await serve(input, progress)
-        observe(sampleOf(input, progress, outcomeForResponse(response), clock, streamed(response)))
+        observe(
+          sampleOf(identity, progress, outcomeForResponse(response), clock, streamed(response)),
+        )
         return response
       } catch (error) {
-        observe(sampleOf(input, progress, outcomeOf(error), clock, false))
+        observe(sampleOf(identity, progress, outcomeOf(error), clock, false))
         throw error
       }
     },
   }
-}
-
-/** The mutable half of one dispatch: what the observer needs and only `serve` finds out. */
-interface RequestProgress {
-  readonly startedAt: Date
-  readonly requestStarted: number
-  model: string | null
-}
-
-function sampleOf(
-  input: DispatchInput,
-  progress: RequestProgress,
-  outcome: UsageOutcome,
-  clock: DataPlaneClock,
-  isStreamed: boolean,
-): RequestSample {
-  return {
-    ingressDialect: input.ingress,
-    model: progress.model,
-    keyId: input.key.id,
-    outcome,
-    durationMs: Math.max(0, clock.elapsed() - progress.requestStarted),
-    streamed: isStreamed,
-  }
-}
-
-/**
- * A relayed upstream error is a `Response`, not a throw — the chain hands back the provider's own
- * answer when that is the honest one. Counting it as a success because it resolved would report a
- * pool answering nothing but 400s as perfectly healthy.
- */
-function outcomeForResponse(response: Response): UsageOutcome {
-  if (response.ok) return SUCCESS_OUTCOME
-  return response.status < 500 ? "client_error" : "upstream_error"
-}
-
-function streamed(response: Response): boolean {
-  return response.headers.get("content-type")?.includes("text/event-stream") ?? false
 }

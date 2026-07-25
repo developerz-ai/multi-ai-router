@@ -8,6 +8,7 @@ import { createMetrics } from "../../src/observability"
 import type { SdkInvoker, SdkQuotaStore, SessionStore } from "../../src/providers"
 import { metricsRoutes } from "../../src/routes/metrics"
 import { dataPlaneRoutes } from "../../src/routes/v1"
+import type { RateLookup } from "../../src/services/cost"
 import {
   createDispatcher,
   createHealthStore,
@@ -65,6 +66,11 @@ export interface HarnessOptions {
    * attempt's rate-limit reading is never captured — the same as a deployment that never wires one.
    */
   readonly sdkQuota?: SdkQuotaStore
+  /**
+   * The operator's price overrides, as the composition root passes them: `PriceBook.lookup`.
+   * Omitted, every attempt prices off the table shipped in the image.
+   */
+  readonly prices?: RateLookup
 }
 
 export function harness(options: HarnessOptions) {
@@ -118,6 +124,7 @@ export function harness(options: HarnessOptions) {
         ...(options.invokeSdk === undefined ? {} : { invokeSdk: options.invokeSdk }),
         ...(options.sessions === undefined ? {} : { sessions: options.sessions }),
         ...(options.sdkQuota === undefined ? {} : { quota: options.sdkQuota }),
+        ...(options.prices === undefined ? {} : { prices: options.prices }),
         clock: testClock,
         onRequest: (sample) => metrics.observeRequest(sample),
         options: {

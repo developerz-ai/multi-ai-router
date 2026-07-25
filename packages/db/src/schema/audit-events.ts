@@ -19,7 +19,13 @@ export const auditEvents = pgTable(
 
     /** Entity the event concerns — kind + id, with no FK so history outlives the row. */
     subjectType: text("subject_type"),
-    subjectId: uuid("subject_id"),
+    /**
+     * Text for the same reason `kind` is: not every audited subject is a row. A
+     * settings change names the setting it changed, an admin login names the
+     * configured operator, and a `uuid` column rejects both at insert time —
+     * silently, because those appends are deliberately non-blocking.
+     */
+    subjectId: text("subject_id"),
 
     detail: jsonb("detail").$type<AuditDetail>(),
 

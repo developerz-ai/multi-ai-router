@@ -1,0 +1,64 @@
+@use "../../styles/breakpoints" as bp;
+@use "../../styles/mixins" as *;
+
+.section {
+  display: grid;
+  gap: var(--space-3);
+}
+
+.heading {
+  font-size: var(--text-lg);
+}
+
+.note {
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+  line-height: var(--line-snug);
+  text-wrap: pretty;
+}
+
+// The save bar sits under the table rather than floating: nothing on this screen
+// is written until it is pressed, so it belongs at the end of what it commits.
+.bar {
+  @include card;
+
+  display: grid;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4);
+
+  @include bp.respond-to("sidebar") {
+    grid-template-columns: 1fr auto;
+    align-items: center;
+  }
+}
+
+.summary {
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+  line-height: var(--line-snug);
+}
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+
+  @include bp.respond-to("sidebar") {
+    justify-content: end;
+  }
+}
+
+.error {
+  display: grid;
+  gap: var(--space-1);
+  padding: var(--space-3);
+  border: 1px solid var(--danger);
+  border-radius: var(--radius-1);
+  background: color-mix(in srgb, var(--danger) 10%, var(--surface-raised));
+  font-size: var(--text-sm);
+  line-height: var(--line-snug);
+}
+
+.line {
+  overflow-wrap: anywhere;
+}

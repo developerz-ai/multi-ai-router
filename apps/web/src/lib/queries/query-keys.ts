@@ -1,4 +1,5 @@
 import type { AccountListFilter } from "../api/accounts"
+import type { AuditQuery } from "../api/audit"
 import type { UsageWindow } from "../api/usage"
 
 // Every cache key in the console, built here and nowhere else.
@@ -44,5 +45,22 @@ export const queryKeys = {
   usage: {
     root: () => ["usage"] as const,
     summary: (window: UsageWindow) => ["usage", "summary", window] as const,
+  },
+
+  /** One body carries retention, log level and the price table, so one detail key holds all of it. */
+  settings: {
+    root: () => ["settings"] as const,
+    detail: () => ["settings", "detail"] as const,
+  },
+
+  tasks: {
+    root: () => ["tasks"] as const,
+    list: () => ["tasks", "list"] as const,
+  },
+
+  audit: {
+    root: () => ["audit"] as const,
+    list: (query: AuditQuery) =>
+      ["audit", "list", query.limit, query.kind ?? null, query.subjectId ?? null] as const,
   },
 } as const

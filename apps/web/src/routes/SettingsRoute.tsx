@@ -1,7 +1,6 @@
 import { Show } from "solid-js"
 import { Badge } from "../components/Badge"
 import { PageHeader } from "../components/PageHeader"
-import { Placeholder } from "../components/Placeholder"
 import { QueryBoundary } from "../components/QueryBoundary"
 import { type Column, Table } from "../components/Table"
 import { TableSkeleton } from "../components/TableSkeleton"
@@ -10,15 +9,22 @@ import { formatTimestamp } from "../lib/format"
 import { useProviders } from "../lib/queries/providers"
 import { useSession } from "../lib/queries/session"
 import styles from "./SettingsRoute.module.scss"
+import { AuditLogSection } from "./settings/AuditLogSection"
+import { PriceOverridesSection } from "./settings/PriceOverridesSection"
+import { RetentionSection } from "./settings/RetentionSection"
+import { TaskHealthSection } from "./settings/TaskHealthSection"
 
 /**
  * What the operator can see and tune about the router itself.
  *
- * Two of the four sections the spec calls for are live — the session and the
- * provider registry, both of which have endpoints. Prices, retention windows,
- * scheduled-task health and the audit log do not, and they keep their
- * `Placeholder` rather than being faked: a settings screen that shows an
- * invented retention window is worse than one that admits it has none.
+ * Six sections, ordered by how often an operator comes here for them: the
+ * session and the provider registry are read-only facts about this process;
+ * prices are the one thing on this screen that is editable; retention, task
+ * health and the audit log answer "what is the router doing on its own".
+ *
+ * Each section owns its query and its own loading and empty states, so a
+ * failing audit read never blanks the price table beside it. This file is
+ * layout and nothing else.
  */
 export default function SettingsRoute() {
   const session = useSession()
@@ -61,7 +67,7 @@ export default function SettingsRoute() {
   return (
     <>
       <PageHeader
-        subtitle="Router configuration, price overrides, retention windows and background task health."
+        subtitle="This session, the provider registry, the price table, retention windows, background task health and the audit log."
         title="Settings"
       />
 
@@ -111,16 +117,10 @@ export default function SettingsRoute() {
         </QueryBoundary>
       </section>
 
-      <Placeholder
-        icon="settings"
-        items={[
-          "Price table overrides on top of the shipped static table",
-          "Retention windows for usage records, audit events, sessions and OAuth state",
-          "Latest run per scheduled task in plain language; a stale task is called out",
-          "Audit log of admin-plane mutations, append-only and credential-free",
-        ]}
-        summary="These four have no admin endpoint yet, so nothing is shown rather than something invented."
-      />
+      <PriceOverridesSection />
+      <RetentionSection />
+      <TaskHealthSection />
+      <AuditLogSection />
     </>
   )
 }

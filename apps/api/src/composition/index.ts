@@ -4,36 +4,21 @@ import {
   createAuditRepository,
   createOauthStateRepository,
   createPoolRepository,
+  createPriceOverrideRepository,
   createScheduledTaskRepository,
   createSessionRepository,
   createUsageDailyRepository,
-  createUsageReadRepository,
   createUsageRecordRepository,
   type Database,
   type SqlConnection,
 } from "@multi-ai-router/db"
-import type { Env } from "./config/env"
-import type { Logger } from "./logging/logger"
-import { createRuntimeMetrics, type RouterMetrics } from "./observability"
-import { createAccountConfigDirs } from "./providers/claude-sdk/config-dir"
-import { type Scheduler, schedulerFromEnv } from "./scheduler"
-import {
-  claudeCliFromEnv,
-  connectFromEnv,
-  createAccountsService,
-  createRecheckService,
-  refresherFromEnv,
-  withAvailability,
-} from "./services/accounts"
-import {
-  createAuditRecorder,
-  withCatalogRefresh,
-  withKeyInvalidation,
-  withPoolCatalogRefresh,
-} from "./services/admin"
-import { adminAuthConfigFromEnv, createAdminAuthService } from "./services/admin-auth"
-import { createRoutingCatalog, loadCatalog, type RoutingCatalogStore } from "./services/catalog"
-import { createCredentialCipherFromEnv } from "./services/crypto/fromEnv"
+import type { Env } from "../config/env"
+import type { Logger } from "../logging/logger"
+import { createRuntimeMetrics, type RouterMetrics } from "../observability"
+import { type Scheduler, schedulerFromEnv } from "../scheduler"
+import { createRoutingCatalog, loadCatalog, type RoutingCatalogStore } from "../services/catalog"
+import { createPriceBook } from "../services/cost"
+import { createCredentialCipherFromEnv } from "../services/crypto/fromEnv"
 import {
   createDispatcher,
   createHealthStore,
@@ -45,13 +30,10 @@ import {
   repositoryScopeLoader,
   sessionStoreFromEnv,
   stampLastUsed,
-} from "./services/dataplane"
-import { createKeysService } from "./services/keys"
-import { createPoolsService } from "./services/pools"
-import { createUsageRecorderFromEnv, type UsageRecorder } from "./services/usage"
-import { catalogLabels, createUsageService } from "./services/usage-read"
-import type { AdminServices } from "./types"
-
+} from "../services/dataplane"
+import { createUsageRecorderFromEnv, type UsageRecorder } from "../services/usage"
+import type { AdminServices } from "../types"
+import { createAdminPlane } from "./admin"
 /**
  * The composition root: every long-lived object in the process is constructed here, exactly once,
  * and injected downward.
@@ -103,8 +85,9 @@ export function createRuntime(deps: RuntimeDeps): Runtime {
   const keys = createApiKeyRepository(database)
   const pools = createPoolRepository(database)
   const auditEvents = createAuditRepository(database)
-  const audit = createAuditRecorder(auditEvents)
   const usageRecords = createUsageRecordRepository(database)
+  // Operator-edited prices. Read at boot into the warm book below, never on the request path.
+  const priceOverrides = createPriceOverrideRepository(database)
   // Conversation identity: written by the data plane's session store, swept by the janitor.
   const sessions = createSessionRepository(database)
   const oauthStates = createOauthStateRepository(database)
@@ -117,6 +100,15 @@ export function createRuntime(deps: RuntimeDeps): Runtime {
   const health = createHealthStore()
   const catalog = createRoutingCatalog({
     load: () => loadCatalog({ accounts, pools }),
+    refreshIntervalMs: env.dataPlane.catalogRefreshSeconds * 1_000,
+    now,
+  })
+  // The shipped price table plus the operator's overrides, held in memory for the same reason the
+  // catalog is: every attempt is priced while the request is still being served. It shares the
+  // catalog's staleness bound because it is the same kind of value — admin-edited configuration
+  // another replica may have changed — and one knob for both is one fewer to explain.
+  const prices = createPriceBook({
+    load: () => priceOverrides.list(),
     refreshIntervalMs: env.dataPlane.catalogRefreshSeconds * 1_000,
     now,
   })
@@ -179,6 +171,9 @@ export function createRuntime(deps: RuntimeDeps): Runtime {
     usage,
     limiter,
     sessions: sessionStore,
+    // Synchronous, warm, and the whole reason the book exists: an attempt is priced on the request
+    // path, so a lookup that could await a query would put Postgres on it.
+    prices: prices.lookup,
     logger,
     onRequest: (sample) => metrics.observeRequest(sample),
     options: {
@@ -189,81 +184,35 @@ export function createRuntime(deps: RuntimeDeps): Runtime {
   })
 
   // --- admin plane ----------------------------------------------------------
-  // The CRUD services know nothing about caches; the `services/admin/coherence.ts` decorators make
-  // a write take effect on the request path before the response is written. Without them an account
-  // disabled in the console keeps routing, and a revoked key keeps authenticating, until a TTL ends.
-  //
-  // One isolated CLAUDE_CONFIG_DIR per subscription account, both halves of running the `claude`
-  // binary against it, and every login flow behind the one service the admin plane mounts.
-  const configDirs = createAccountConfigDirs({ root: env.claudeConfigRoot })
-  const cli = claudeCliFromEnv({ accounts, configDirs, audit, env, logger, now })
-  // Expiry-driven per account, never a poll (non-negotiable 13); built before `connect` needs it.
-  const refresher = refresherFromEnv({ accounts, cipher, audit, env, logger, now, catalog })
-  const connect = connectFromEnv({ cli, accounts, oauthStates, cipher, audit, env, now, refresher })
-
-  // "Re-check now": clears the breaker marks so the next real request probes the account rather
-  // than sending a synthetic one the provider would still bill. Built before the services, because
-  // the accounts read overlays its last-checked timestamps.
-  const recheck = createRecheckService({
-    accounts,
-    health,
-    audit,
-    auth: cli.authProbe,
-    cooldownSeconds: env.accountRecheckCooldownSeconds,
+  // Assembled next door, in `composition/admin.ts`: this file owns the process, that one owns the
+  // console's API surface. The two things it needs from here are the warm state a console write
+  // must invalidate, and the price book a price edit must refresh.
+  const { services: admin, refresher } = createAdminPlane({
+    env,
+    logger,
     now,
-  })
-
-  const accountsService = createAccountsService({ accounts, keys, cipher, configDirs, audit, now })
-
-  const coherence = {
-    refreshCatalog: () => catalog.refresh(),
-    // A revoked key must stop authenticating *and* stop occupying a rate-limit window.
-    invalidateKey: (keyId: string) => {
-      verifier.invalidate(keyId)
-      limiter.forget(keyId)
+    database,
+    accounts,
+    keys,
+    pools,
+    auditEvents,
+    oauthStates,
+    usageDaily,
+    scheduledTasks,
+    priceOverrides,
+    cipher,
+    catalog,
+    health,
+    prices,
+    coherence: {
+      refreshCatalog: () => catalog.refresh(),
+      // A revoked key must stop authenticating *and* stop occupying a rate-limit window.
+      invalidateKey: (keyId: string) => {
+        verifier.invalidate(keyId)
+        limiter.forget(keyId)
+      },
     },
-  }
-
-  const admin: AdminServices = {
-    auth: createAdminAuthService({
-      env,
-      // The env layer speaks minutes and hours; the service speaks seconds.
-      // `adminAuthConfigFromEnv` is the single conversion, so the two never drift.
-      config: adminAuthConfigFromEnv({
-        adminSessionIdleMinutes: env.adminAuth.sessionIdleMinutes,
-        adminSessionAbsoluteHours: env.adminAuth.sessionAbsoluteHours,
-        adminLoginMaxAttempts: env.adminAuth.loginMaxAttempts,
-        adminLoginAttemptWindowMinutes: env.adminAuth.loginAttemptWindowMinutes,
-        adminLoginLockoutMinutes: env.adminAuth.loginLockoutMinutes,
-      }),
-    }),
-    // Two decorators in the order they must run: `withCatalogRefresh` makes a write land on the
-    // request path, `withAvailability` answers a read with what the router currently observes
-    // rather than with the row the operator last wrote.
-    accounts: withAvailability(withCatalogRefresh(accountsService, coherence), {
-      catalog,
-      health,
-      recheck,
-      now,
-    }),
-    pools: withPoolCatalogRefresh(
-      createPoolsService({ pools, accounts, keys, audit, now }),
-      coherence,
-    ),
-    keys: withKeyInvalidation(
-      createKeysService({ keys, pools, accounts, cipher, audit, now }),
-      coherence,
-    ),
-    usage: createUsageService({
-      usage: createUsageReadRepository(database),
-      daily: usageDaily,
-      scheduledTasks,
-      labels: catalogLabels({ keys, catalog }),
-      now,
-    }),
-    recheck,
-    connect,
-  }
+  })
 
   return {
     admin,
@@ -277,6 +226,11 @@ export function createRuntime(deps: RuntimeDeps): Runtime {
       // Awaited: an empty catalog would look exactly like a deployment with no accounts.
       await catalog.refresh()
       catalog.start()
+      // Awaited for the weaker reason: an unloaded book prices off the shipped table, which is
+      // wrong rather than absent, and a spend column that corrects itself a second later is worse
+      // than one that was right from the first request.
+      await prices.refresh()
+      prices.start()
       usage.start()
       // Synchronous by design: the first sweep is not a boot precondition.
       scheduler.start()
@@ -292,8 +246,9 @@ export function createRuntime(deps: RuntimeDeps): Runtime {
       // First and awaited: a tick in flight holds a connection the caller's pool close would cut.
       await scheduler.stop()
       await refresher.stop() // same reason: an in-flight token write must land before the pool goes
-      connect.stop() // every pending login, so no `claude` subprocess outlives the router
+      admin.connect.stop() // every pending login, so no `claude` subprocess outlives the router
       catalog.stop()
+      prices.stop()
       await usage.stop()
     },
   }

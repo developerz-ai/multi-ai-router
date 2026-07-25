@@ -1,5 +1,6 @@
 import type { Dialect } from "@multi-ai-router/core"
 import type { SdkInvoker, SdkQuotaStore, SessionStore } from "../../providers"
+import type { RateLookup } from "../cost"
 import type { CredentialCipher } from "../crypto/cipher"
 import type { UsageRecord } from "../usage"
 import type { SessionKeySource } from "./body/session"
@@ -39,6 +40,11 @@ export interface RuntimeInput {
    * HTTP driver's reading is parsed straight off its own response and needs no store beside it.
    */
   readonly quota?: SdkQuotaStore
+  /**
+   * The operator's price overrides, warm and read synchronously. Absent, every attempt prices off
+   * the table shipped in the image — which is also what a router booted without a price book does.
+   */
+  readonly prices?: RateLookup
   /** How this request's session key was obtained. Decides whether the never-resume rules apply. */
   readonly sessionKeySource: SessionKeySource
   readonly clock: DataPlaneClock
@@ -94,6 +100,9 @@ export function createRuntime(input: RuntimeInput): DispatchRuntime {
     sessionKey: input.sessionKey,
     model: input.model,
     ingressDialect: input.ingressDialect,
+    // Carried on the attribution rather than read at write time: every attempt of one request must
+    // price against the same book, including the preflight failure that never chose an account.
+    ...(input.prices === undefined ? {} : { prices: input.prices }),
   }
 
   const store = input.sessions

@@ -42,6 +42,11 @@ export type {
 } from "./repositories/pool-repository"
 export { createPoolRepository } from "./repositories/pool-repository"
 export type {
+  PriceOverrideInput,
+  PriceOverrideRepository,
+} from "./repositories/price-override-repository"
+export { createPriceOverrideRepository } from "./repositories/price-override-repository"
+export type {
   FinishScheduledTaskInput,
   ScheduledTaskName,
   ScheduledTaskOutcome,
@@ -114,6 +119,8 @@ export type { NewOauthStateRow, OauthStateRow } from "./schema/oauth-states"
 export { oauthStates } from "./schema/oauth-states"
 export type { NewPoolMemberRow, NewPoolRow, PoolMemberRow, PoolRow } from "./schema/pools"
 export { poolMembers, pools } from "./schema/pools"
+export type { NewPriceOverrideRow, PriceOverrideRow } from "./schema/price-overrides"
+export { priceOverrides } from "./schema/price-overrides"
 export type { NewQuotaWindowRow, QuotaWindowRow } from "./schema/quota-windows"
 export { quotaWindows } from "./schema/quota-windows"
 export type { NewScheduledTaskRunRow, ScheduledTaskRunRow } from "./schema/scheduled-task-runs"

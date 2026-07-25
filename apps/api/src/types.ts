@@ -3,6 +3,7 @@ import type { AccountsService, ConnectService, RecheckService } from "./services
 import type { AdminAuthService } from "./services/admin-auth"
 import type { KeysService } from "./services/keys"
 import type { PoolsService } from "./services/pools"
+import type { SettingsService } from "./services/settings"
 import type { UsageService } from "./services/usage-read"
 
 /**
@@ -34,6 +35,11 @@ export interface AdminServices {
   readonly pools: PoolsService
   readonly keys: KeysService
   readonly usage: UsageService
+  /**
+   * One field for three route groups: configuration, scheduled-task health and the audit feed are
+   * one screen and one service — see `services/settings/service.ts`.
+   */
+  readonly settings: SettingsService
   /** The "Re-check now" button's server side, per account and for all of them. */
   readonly recheck: RecheckService
   /** Connect and reconnect, both flows: the `claude` CLI's login, and the router's own PKCE one. */

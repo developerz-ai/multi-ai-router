@@ -9,6 +9,8 @@ import { queryKeys } from "../../src/lib/queries/query-keys"
 const startsWith = (key: readonly unknown[], prefix: readonly unknown[]): boolean =>
   prefix.every((segment, index) => key[index] === segment)
 
+const auditQuery = { limit: 50, kind: null, subjectId: null }
+
 describe("queryKeys", () => {
   test("every accounts key is prefixed by the accounts root", () => {
     const root = queryKeys.accounts.root()
@@ -27,6 +29,14 @@ describe("queryKeys", () => {
     expect(startsWith(queryKeys.usage.summary("7d"), queryKeys.usage.root())).toBe(true)
   })
 
+  test("every settings, tasks and audit key is prefixed by its root", () => {
+    // The price mutation invalidates the settings root; a detail key that did not share the
+    // prefix would leave the table showing the rates it had before the save.
+    expect(startsWith(queryKeys.settings.detail(), queryKeys.settings.root())).toBe(true)
+    expect(startsWith(queryKeys.tasks.list(), queryKeys.tasks.root())).toBe(true)
+    expect(startsWith(queryKeys.audit.list(auditQuery), queryKeys.audit.root())).toBe(true)
+  })
+
   test("the resource roots are disjoint, so one mutation cannot invalidate another's cache", () => {
     const roots = [
       queryKeys.accounts.root()[0],
@@ -34,6 +44,9 @@ describe("queryKeys", () => {
       queryKeys.keys.root()[0],
       queryKeys.providers.root()[0],
       queryKeys.usage.root()[0],
+      queryKeys.settings.root()[0],
+      queryKeys.tasks.root()[0],
+      queryKeys.audit.root()[0],
       queryKeys.session()[0],
     ]
     expect(new Set(roots).size).toBe(roots.length)
@@ -51,6 +64,16 @@ describe("queryKeys", () => {
   test("an empty filter and an explicit-undefined filter are the same cache entry", () => {
     expect(queryKeys.accounts.list({})).toEqual(
       queryKeys.accounts.list({ status: undefined, provider: undefined }),
+    )
+  })
+
+  test("an audit page is keyed by every part of its query, so a filter change is a new read", () => {
+    expect(queryKeys.audit.list(auditQuery)).toEqual(queryKeys.audit.list({ ...auditQuery }))
+    expect(queryKeys.audit.list(auditQuery)).not.toEqual(
+      queryKeys.audit.list({ ...auditQuery, limit: 200 }),
+    )
+    expect(queryKeys.audit.list(auditQuery)).not.toEqual(
+      queryKeys.audit.list({ ...auditQuery, kind: "key.viewed" }),
     )
   })
 })

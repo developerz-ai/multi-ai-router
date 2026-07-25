@@ -3,7 +3,9 @@
  * inside it.
  */
 
+export type { PriceBook, PriceBookDeps } from "./book"
+export { createPriceBook } from "./book"
 export type { CostEstimate } from "./estimate"
 export { estimateCost, UNKNOWN_COST } from "./estimate"
-export type { ModelRates } from "./prices"
-export { lookupRates } from "./prices"
+export type { ModelRates, RateLookup, ShippedRate } from "./prices"
+export { listShippedRates, lookupRates } from "./prices"
