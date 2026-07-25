@@ -1,7 +1,8 @@
 import type { ProviderId } from "@multi-ai-router/core"
-import { and, asc, eq, gt, inArray, isNull, lt } from "drizzle-orm"
+import { and, eq, gt, isNull } from "drizzle-orm"
 import type { Database } from "../client"
 import { type OauthStateRow, oauthStates } from "../schema/oauth-states"
+import { deleteOldestBatch } from "./bounded-delete"
 
 /**
  * The one-shot OAuth `state` + PKCE verifier. Repositories own SQL; this file is
@@ -97,21 +98,15 @@ export function createOauthStateRepository(db: Database): OauthStateRepository {
       return rows[0]
     },
 
-    // Deleted by id from an ordered, limited subselect: Postgres has no LIMIT on
-    // DELETE, and an unbounded delete would hold locks across the whole table.
-    // The subselect rides `oauth_states_expires_at_idx`.
-    deleteExpiredBefore: async (cutoff, limit) => {
-      const stale = db
-        .select({ id: oauthStates.id })
-        .from(oauthStates)
-        .where(lt(oauthStates.expiresAt, cutoff))
-        .orderBy(asc(oauthStates.expiresAt))
-        .limit(limit)
-      const rows = await db
-        .delete(oauthStates)
-        .where(inArray(oauthStates.id, stale))
-        .returning({ id: oauthStates.id })
-      return rows.length
-    },
+    // Rides `oauth_states_expires_at_idx`.
+    deleteExpiredBefore: (cutoff, limit) =>
+      deleteOldestBatch({
+        db,
+        table: oauthStates,
+        id: oauthStates.id,
+        agedBy: oauthStates.expiresAt,
+        cutoff,
+        limit,
+      }),
   }
 }

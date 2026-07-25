@@ -1,4 +1,4 @@
-import { and, asc, eq, inArray, lt } from "drizzle-orm"
+import { and, eq } from "drizzle-orm"
 import type { Database } from "../client"
 import {
   type SessionFingerprintSource,
@@ -6,6 +6,7 @@ import {
   type SessionRow,
   sessions,
 } from "../schema/sessions"
+import { deleteOldestBatch } from "./bounded-delete"
 
 /**
  * Conversation identity. Repositories own SQL; this file is the only place that
@@ -110,23 +111,15 @@ export function createSessionRepository(db: Database): SessionRepository {
       return rows.length
     },
 
-    // Deleted by id from an ordered, limited subselect rather than by
-    // `where last_used_at < cutoff limit n` — which Postgres does not accept on
-    // a DELETE at all, and which would otherwise be an unbounded delete holding
-    // locks across the whole table. The subselect rides
-    // `sessions_last_used_at_idx`.
-    deleteIdleBefore: async (cutoff, limit) => {
-      const oldest = db
-        .select({ id: sessions.id })
-        .from(sessions)
-        .where(lt(sessions.lastUsedAt, cutoff))
-        .orderBy(asc(sessions.lastUsedAt))
-        .limit(limit)
-      const rows = await db
-        .delete(sessions)
-        .where(inArray(sessions.id, oldest))
-        .returning({ id: sessions.id })
-      return rows.length
-    },
+    // Rides `sessions_last_used_at_idx`.
+    deleteIdleBefore: (cutoff, limit) =>
+      deleteOldestBatch({
+        db,
+        table: sessions,
+        id: sessions.id,
+        agedBy: sessions.lastUsedAt,
+        cutoff,
+        limit,
+      }),
   }
 }

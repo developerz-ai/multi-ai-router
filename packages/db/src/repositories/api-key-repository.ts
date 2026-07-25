@@ -8,6 +8,7 @@ import {
   apiKeyPools,
 } from "../schema/api-key-scope"
 import { type ApiKeyRow, apiKeys } from "../schema/api-keys"
+import { deleteOldestBatch } from "./bounded-delete"
 
 /**
  * Repositories own SQL. Services call these methods and never write a query
@@ -43,6 +44,19 @@ export interface ApiKeyRepository {
   update(id: string, patch: UpdateApiKeyInput, now: Date): Promise<ApiKeyRow | undefined>
   /** `true` when a row was removed. Scope rows cascade. */
   delete(id: string): Promise<boolean>
+  /**
+   * Purges keys revoked before `cutoff` in one bounded batch, oldest revocation
+   * first, and returns how many went. Exactly `limit` means there is more to do
+   * and the run should report `partial`.
+   *
+   * Revocation already excluded these keys from verification; this only reclaims
+   * the rows a configured window later. Usage history survives —
+   * `usage_records.api_key_id` is ON DELETE SET NULL — and scope rows cascade.
+   *
+   * A revoked row whose `revoked_at` is NULL has no measurable age and is never
+   * swept, which is the safe reading: unpurged is recoverable, purged is not.
+   */
+  deleteRevokedOlderThan(cutoff: Date, limit: number): Promise<number>
 
   listPoolTargets(apiKeyId: string): Promise<ApiKeyPoolRow[]>
   listAccountTargets(apiKeyId: string): Promise<ApiKeyAccountRow[]>
@@ -173,6 +187,21 @@ export function createApiKeyRepository(db: Database): ApiKeyRepository {
       const rows = await db.delete(apiKeys).where(eq(apiKeys.id, id)).returning({ id: apiKeys.id })
       return rows.length > 0
     },
+
+    // Rides `api_keys_revoked_at_idx`. The `revoked` predicate is not redundant
+    // with a non-null `revoked_at`: the flag is what `findUsableByPrefix` reads,
+    // so narrowing on it means the sweep can only ever reach a key verification
+    // already refuses — whatever a stray timestamp on a live row might say.
+    deleteRevokedOlderThan: (cutoff, limit) =>
+      deleteOldestBatch({
+        db,
+        table: apiKeys,
+        id: apiKeys.id,
+        agedBy: apiKeys.revokedAt,
+        cutoff,
+        limit,
+        narrowedBy: eq(apiKeys.revoked, true),
+      }),
 
     listPoolTargets: (apiKeyId) =>
       db.select().from(apiKeyPools).where(eq(apiKeyPools.apiKeyId, apiKeyId)),

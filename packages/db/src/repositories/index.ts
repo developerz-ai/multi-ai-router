@@ -1,6 +1,7 @@
 export * from "./account-repository"
 export * from "./api-key-repository"
 export * from "./audit-repository"
+export * from "./bounded-delete"
 export * from "./oauth-state-repository"
 export * from "./pool-repository"
 export * from "./scheduled-task-repository"

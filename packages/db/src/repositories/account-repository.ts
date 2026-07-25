@@ -57,6 +57,19 @@ export interface AccountRepository {
    * stopped reporting must not leave yesterday's number on display.
    */
   upsertQuotaWindow(accountId: string, state: QuotaWindowState): Promise<QuotaWindowRow>
+  /**
+   * Every persisted window for a set of accounts, in one query, ordered by
+   * account then window so grouping is stable across calls.
+   *
+   * The read side of {@link AccountRepository.upsertQuotaWindow}: the routing
+   * catalog hydrates its in-memory snapshot from these at load and refresh, so
+   * this is never on the request path.
+   *
+   * An account with no rows is not an account with a full quota — routing reads
+   * an absent window as *unknown* and a present one as measured, which is why
+   * this returns the rows it has and never synthesizes the rest.
+   */
+  listQuotaWindows(accountIds: readonly string[]): Promise<QuotaWindowRow[]>
 }
 
 export interface CreateAccountInput {
@@ -222,6 +235,17 @@ export function createAccountRepository(db: Database): AccountRepository {
         })
         .returning()
       return required(rows[0], "upsertQuotaWindow")
+    },
+
+    listQuotaWindows: async (accountIds) => {
+      // An empty set is a caller with nothing to hydrate, not a caller asking
+      // for every window — `in ()` would be the second thing and is not meant.
+      if (accountIds.length === 0) return []
+      return db
+        .select()
+        .from(quotaWindows)
+        .where(inArray(quotaWindows.accountId, [...accountIds]))
+        .orderBy(asc(quotaWindows.accountId), asc(quotaWindows.window))
     },
   }
 }
