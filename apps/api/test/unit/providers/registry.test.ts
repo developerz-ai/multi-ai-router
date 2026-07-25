@@ -11,6 +11,7 @@ import { HTTP_DRIVERS, httpDriver, PROVIDER_REGISTRY } from "../../../src/provid
 const HTTP_PROVIDERS = [
   "anthropic-api",
   "openai-api",
+  "openai-oauth",
   "openrouter",
   "zai",
   "kimi",
@@ -18,6 +19,9 @@ const HTTP_PROVIDERS = [
   "openai-compatible",
   "anthropic-compatible",
 ] as const
+
+/** Every HTTP provider is a key except the ChatGPT/Codex subscription, which is a refreshed token. */
+const OAUTH_PROVIDERS: readonly string[] = ["openai-oauth"]
 
 describe("PROVIDER_REGISTRY", () => {
   test("every declared ProviderId has an entry", () => {
@@ -32,7 +36,7 @@ describe("PROVIDER_REGISTRY", () => {
       const driver = httpDriver(id)
 
       expect(driver?.id).toBe(id)
-      expect(driver?.authKind).toBe("api-key")
+      expect(driver?.authKind).toBe(OAUTH_PROVIDERS.includes(id) ? "oauth" : "api-key")
     }
   })
 
@@ -47,8 +51,17 @@ describe("PROVIDER_REGISTRY", () => {
     expect(httpDriver("anthropic-oauth")).toBeNull()
   })
 
+  test("a ChatGPT/Codex subscription is an ordinary HTTP driver, tokens and all", () => {
+    const driver = httpDriver("openai-oauth")
+
+    expect(driver?.authKind).toBe("oauth")
+    expect(driver?.dialect).toBe("openai-responses")
+    expect(driver?.resolveBaseUrl({ id: "a", provider: "openai-oauth" }).toString()).toBe(
+      "https://chatgpt.com/backend-api/codex",
+    )
+  })
+
   test("the unimplemented providers name themselves as such", () => {
-    expect(PROVIDER_REGISTRY["openai-oauth"].transport).toBe("unimplemented")
     expect(PROVIDER_REGISTRY.gemini.transport).toBe("unimplemented")
     expect(httpDriver("gemini")).toBeNull()
   })

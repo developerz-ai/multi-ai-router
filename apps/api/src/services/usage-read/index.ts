@@ -5,6 +5,7 @@
 
 export type { UsageAggregateSources } from "./aggregate"
 export { readBreakdown, readTotals } from "./aggregate"
+export { catalogLabels } from "./labels"
 export type { WindowSplit } from "./rollup"
 export { addDecimal, mergeGroupRows, splitWindow, sumTotals } from "./rollup"
 export type {

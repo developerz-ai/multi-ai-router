@@ -19,8 +19,10 @@ import { createAccountConfigDirs } from "./providers/claude-sdk/config-dir"
 import { type Scheduler, schedulerFromEnv } from "./scheduler"
 import {
   claudeCliFromEnv,
+  connectFromEnv,
   createAccountsService,
   createRecheckService,
+  refresherFromEnv,
   withAvailability,
 } from "./services/accounts"
 import {
@@ -47,7 +49,7 @@ import {
 import { createKeysService } from "./services/keys"
 import { createPoolsService } from "./services/pools"
 import { createUsageRecorderFromEnv, type UsageRecorder } from "./services/usage"
-import { createUsageService } from "./services/usage-read"
+import { catalogLabels, createUsageService } from "./services/usage-read"
 import type { AdminServices } from "./types"
 
 /**
@@ -187,25 +189,26 @@ export function createRuntime(deps: RuntimeDeps): Runtime {
   })
 
   // --- admin plane ----------------------------------------------------------
-  //
   // The CRUD services know nothing about caches; the `services/admin/coherence.ts` decorators make
   // a write take effect on the request path before the response is written. Without them an account
   // disabled in the console keeps routing, and a revoked key keeps authenticating, until a TTL ends.
   //
-  // One isolated CLAUDE_CONFIG_DIR per subscription account (created 0700, deleted with the row,
-  // never opened by the router — `providers/claude-sdk/config-dir.ts`), and both halves of running
-  // the `claude` binary against it: the connect/reconnect login, and the credential probe below.
+  // One isolated CLAUDE_CONFIG_DIR per subscription account, both halves of running the `claude`
+  // binary against it, and every login flow behind the one service the admin plane mounts.
   const configDirs = createAccountConfigDirs({ root: env.claudeConfigRoot })
-  const claude = claudeCliFromEnv({ accounts, configDirs, audit, env, logger, now })
+  const cli = claudeCliFromEnv({ accounts, configDirs, audit, env, logger, now })
+  // Expiry-driven per account, never a poll (non-negotiable 13); built before `connect` needs it.
+  const refresher = refresherFromEnv({ accounts, cipher, audit, env, logger, now, catalog })
+  const connect = connectFromEnv({ cli, accounts, oauthStates, cipher, audit, env, now, refresher })
 
-  // "Re-check now": clears the breaker marks so the next real request probes the account rather than
-  // sending a synthetic one the provider would still bill. Built before the services, because the
-  // accounts read overlays its last-checked timestamps.
+  // "Re-check now": clears the breaker marks so the next real request probes the account rather
+  // than sending a synthetic one the provider would still bill. Built before the services, because
+  // the accounts read overlays its last-checked timestamps.
   const recheck = createRecheckService({
     accounts,
     health,
     audit,
-    auth: claude.authProbe,
+    auth: cli.authProbe,
     cooldownSeconds: env.accountRecheckCooldownSeconds,
     now,
   })
@@ -251,21 +254,15 @@ export function createRuntime(deps: RuntimeDeps): Runtime {
       createKeysService({ keys, pools, accounts, cipher, audit, now }),
       coherence,
     ),
-    // Accounts and pools are named from the warm catalog; keys need the one query, unremarkable on
-    // the admin plane. A miss means the subject was deleted — spend that happened is still spend.
     usage: createUsageService({
       usage: createUsageReadRepository(database),
       daily: usageDaily,
       scheduledTasks,
-      labels: async () => ({
-        keys: new Map((await keys.list()).map((key) => [key.id, key.name])),
-        accounts: new Map(catalog.accounts().map((a) => [a.id, a.snapshot.label])),
-        pools: new Map(catalog.pools().map((pool) => [pool.id, pool.name])),
-      }),
+      labels: catalogLabels({ keys, catalog }),
       now,
     }),
     recheck,
-    connect: claude.connect,
+    connect,
   }
 
   return {
@@ -283,6 +280,8 @@ export function createRuntime(deps: RuntimeDeps): Runtime {
       usage.start()
       // Synchronous by design: the first sweep is not a boot precondition.
       scheduler.start()
+      // Awaited: rebuilt from `tokenExpiresAt`, so a token that expired during downtime is due now.
+      await refresher.start()
       logger.info("runtime ready", {
         component: "runtime",
         accounts: catalog.accounts().length,
@@ -292,7 +291,8 @@ export function createRuntime(deps: RuntimeDeps): Runtime {
     stop: async () => {
       // First and awaited: a tick in flight holds a connection the caller's pool close would cut.
       await scheduler.stop()
-      claude.connect.stop() // every pending login, so no `claude` subprocess outlives the router
+      await refresher.stop() // same reason: an in-flight token write must land before the pool goes
+      connect.stop() // every pending login, so no `claude` subprocess outlives the router
       catalog.stop()
       await usage.stop()
     },

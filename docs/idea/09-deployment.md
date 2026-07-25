@@ -105,6 +105,9 @@ naming the offending variable — the process never starts half-configured.
 | `RETENTION_REVOKED_KEYS_DAYS` | no | `30` | How long a revoked/expired `ApiKey` row survives before purge. |
 | `RETENTION_OAUTH_STATE_MINUTES` | no | `10` | TTL for one-shot OAuth `state` + PKCE verifiers. |
 | `JANITOR_INTERVAL_MINUTES` | no | `60` | Base sweep interval; the janitor jitters around it. |
+| `OAUTH_REFRESH_LEAD_FRACTION` | no | `0.75` | Share of a router-held OAuth token's remaining lifetime allowed to elapse before it is refreshed — `0.75` refreshes with a quarter of the lifetime in hand. Not an interval: refresh is per account and expiry-driven, never a poll. Claude subscriptions are unaffected; the Agent SDK owns those tokens. |
+| `OAUTH_REFRESH_MIN_DELAY_SECONDS` | no | `30` | Floor on any refresh delay, and the first step of the retry backoff. What stops an already-expired token from re-arming at zero and hammering the provider. |
+| `OAUTH_REFRESH_MAX_ATTEMPTS` | no | `5` | Attempts against an unreachable token endpoint before the account is parked at `needs_reauth`. A *refused* refresh is never retried — only a clock fixes an outage. |
 | `ADMIN_SESSION_IDLE_MINUTES` | no | `480` | Sliding idle window, and the session cookie's `Max-Age`. Raising it leaves an abandoned browser a live credential for longer. |
 | `ADMIN_SESSION_ABSOLUTE_HOURS` | no | `24` | Hard ceiling on a session's total life regardless of activity. A purely sliding session is one a thief renews forever. |
 | `ADMIN_LOGIN_MAX_ATTEMPTS` | no | `5` | Failed logins per throttle key (per IP, per username) before it locks. |

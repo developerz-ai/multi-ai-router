@@ -7,6 +7,7 @@ import { requestId } from "./middleware/requestId"
 import { ADMIN_ACCOUNTS_BASE_PATH, adminAccountRoutes } from "./routes/admin/accounts"
 import { ADMIN_AUTH_BASE_PATH, adminAuthRoutes } from "./routes/admin/auth"
 import { ADMIN_KEYS_BASE_PATH, adminKeyRoutes } from "./routes/admin/keys"
+import { oauthCallbackRoutes } from "./routes/admin/oauth-callback"
 import { ADMIN_POOLS_BASE_PATH, adminPoolRoutes } from "./routes/admin/pools"
 import { ADMIN_PROVIDERS_BASE_PATH, adminProviderRoutes } from "./routes/admin/providers"
 import { ADMIN_USAGE_BASE_PATH, adminUsageRoutes } from "./routes/admin/usage"
@@ -108,6 +109,10 @@ function mountAdmin(app: Hono<AppEnv>, admin: AdminServices, trustProxy: boolean
       connect: admin.connect,
     }),
   )
+  // Mounted at the root, at its own published path, and without the guard: a provider's redirect
+  // is a cross-site navigation that carries no `SameSite=Strict` cookie, and the one-shot `state`
+  // is what authorizes it. See `routes/admin/oauth-callback.ts`.
+  app.route("/", oauthCallbackRoutes({ connect: admin.connect }))
   app.route(ADMIN_POOLS_BASE_PATH, adminPoolRoutes({ guard, service: admin.pools }))
   app.route(ADMIN_KEYS_BASE_PATH, adminKeyRoutes({ guard, service: admin.keys }))
   app.route(ADMIN_USAGE_BASE_PATH, adminUsageRoutes({ guard, service: admin.usage }))

@@ -25,6 +25,13 @@ const PROBE_ID = "00000000-0000-0000-0000-000000000000"
 
 export type ProviderTransport = "http" | "agent-sdk" | "unimplemented"
 
+/**
+ * How an Account of this provider is logged in, where the router drives a login at all: by running
+ * the `claude` CLI, or by an authorization-code flow this router performs itself. `null` is an
+ * API-key provider — the operator pastes a credential and there is nothing to connect.
+ */
+export type ProviderConnectFlow = "claude-cli" | "oauth"
+
 export interface ProviderDescriptor {
   readonly id: ProviderId
   /** How this provider is served: an HTTP driver, the Claude Agent SDK, or not at all yet. */
@@ -39,6 +46,12 @@ export interface ProviderDescriptor {
   readonly requiresBaseUrl: boolean
   /** Claude subscriptions carry a `CLAUDE_CONFIG_DIR` instead of a router-held credential. */
   readonly requiresConfigDir: boolean
+  /**
+   * Which connect flow this provider takes, or `null` for one that takes none. Also what makes a
+   * credential optional at create time: an Account that will be logged in exists *before* its
+   * authorization, so there is something for the one-shot `state` to bind to.
+   */
+  readonly connectFlow: ProviderConnectFlow | null
   /** False means an account cannot be created for it — the console greys the option out. */
   readonly creatable: boolean
   /** Why an unimplemented or SDK-served provider is what it is. Verbatim from the registry. */
@@ -64,6 +77,8 @@ export function describeProvider(id: ProviderId): ProviderDescriptor {
       supportedDialects: supportedDialects(driver),
       requiresBaseUrl: !hasPinnedBaseUrl(driver, id),
       requiresConfigDir: false,
+      // Asked of the driver, so a new OAuth provider becomes connectable the day its file lands.
+      connectFlow: driver.oauth === undefined ? null : "oauth",
       creatable: true,
       reason: null,
     }
@@ -82,6 +97,7 @@ export function describeProvider(id: ProviderId): ProviderDescriptor {
       supportedDialects: [driver.dialect],
       requiresBaseUrl: false,
       requiresConfigDir: true,
+      connectFlow: "claude-cli",
       creatable: true,
       reason: support.reason,
     }
@@ -95,6 +111,7 @@ export function describeProvider(id: ProviderId): ProviderDescriptor {
     supportedDialects: [],
     requiresBaseUrl: false,
     requiresConfigDir: false,
+    connectFlow: null,
     creatable: false,
     reason: support.reason,
   }

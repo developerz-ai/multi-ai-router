@@ -27,7 +27,16 @@ const SECRET_FIELD_NAMES = new Set([
 ])
 
 /** Substrings that make a field name secret wherever they appear. */
-const SECRET_FIELD_MARKERS = ["password", "secret", "token", "credential", "encryption_key"]
+const SECRET_FIELD_MARKERS = [
+  "password",
+  "secret",
+  "token",
+  "credential",
+  "encryption_key",
+  // Catches `codeVerifier`/`code_verifier` however it is spelled — `code_verifier` above only
+  // matches the bare snake_case wire name, and the PKCE verifier is exactly as secret camelCased.
+  "verifier",
+]
 
 /** Values that are self-identifying secrets even under an innocent field name. */
 const SECRET_VALUE_PATTERNS = [

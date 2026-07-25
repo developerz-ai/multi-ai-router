@@ -6,6 +6,7 @@
 export type { AccountAvailability, AvailabilityDeps } from "./availability"
 export { withAvailability } from "./availability"
 export type {
+  AuthorizedCode,
   ClaudeCliFromEnvDeps,
   ClaudeCliStack,
   ClaudeConnectCancelled,
@@ -14,12 +15,62 @@ export type {
   ClaudeConnectMode,
   ClaudeConnectService,
   ClaudeConnectStarted,
+  ConnectCancelled,
+  ConnectCompleted,
+  ConnectFromEnvDeps,
+  ConnectMode,
+  ConnectService,
+  ConnectServiceDeps,
+  ConnectStarted,
+  OAuthCallbackQuery,
+  OAuthCapture,
+  OAuthConnectCancelled,
+  OAuthConnectCompleted,
+  OAuthConnectDeps,
+  OAuthConnectService,
+  OAuthConnectStarted,
+  OAuthExchangeDeps,
+  PresentedCode,
 } from "./connect"
-export { claudeCliFromEnv, createClaudeConnectService } from "./connect"
-export type { ProviderDescriptor, ProviderTransport } from "./providers"
+export {
+  claudeCliFromEnv,
+  completeAuthorization,
+  connectFromEnv,
+  createClaudeConnectService,
+  createConnectService,
+  createOAuthConnectService,
+  OAUTH_CALLBACK_PATH,
+  parseAuthorizationPaste,
+} from "./connect"
+export type { ProviderConnectFlow, ProviderDescriptor, ProviderTransport } from "./providers"
 export { describeProvider, describeProviders } from "./providers"
 export type { RecheckResult, RecheckService, RecheckServiceDeps } from "./recheck"
 export { createRecheckService } from "./recheck"
+export type {
+  CredentialRefreshConfig,
+  CredentialRefresher,
+  CredentialRefresherDeps,
+  RefreshExchangeDeps,
+  RefresherFromEnvDeps,
+  RefreshFailure,
+  RefreshOutcome,
+  RefreshStatusDeps,
+  RefreshTiming,
+  StoredOAuthCredential,
+} from "./refresh"
+export {
+  createCredentialRefresher,
+  MAX_TIMER_MS,
+  parkForReauth,
+  readStoredOAuth,
+  refreshCredential,
+  refreshDueAt,
+  refresherFromEnv,
+  retryDelayMs,
+  reviveAfterRefresh,
+  timerDelayMs,
+  writeStoredOAuth,
+} from "./refresh"
 export type { AccountShape } from "./rules"
 export { checkAccountShape } from "./rules"
 export type {

@@ -3,7 +3,7 @@ import type { AdminAuthEnv } from "../../middleware/adminAuth"
 import {
   type AccountsService,
   accountListQuery,
-  type ClaudeConnectService,
+  type ConnectService,
   completeConnectBody,
   createAccountBody,
   type RecheckService,
@@ -27,15 +27,21 @@ import { render } from "./render"
  * `POST /recheck` and `POST /:id/recheck` are the operator's "Re-check now" — the
  * all-accounts form is first so it cannot be shadowed by the `/:id` pattern.
  *
- * **Connect is two calls with a live subprocess between them.** `POST /:id/connect`
- * starts the `claude` CLI's own login and answers with the authorization URL it
- * printed; the operator authorizes in a browser and `POST /:id/connect/complete`
- * hands the pasted `code#state` back. `POST /:id/reconnect` is the same call
- * against the same row — the id, the config directory, the pool membership, and
- * the usage history all survive, and only the audit kind differs.
- * `DELETE /:id/connect` abandons a pending login rather than leaving a
- * subprocess to its TTL. Nothing in any of these responses carries a code, a
- * state, or a token (docs/idea/11-anthropic-agent-sdk.md §3.1).
+ * **Connect is two calls with an authorization in between.** `POST /:id/connect`
+ * answers with an authorization URL — the `claude` CLI's own for a Claude
+ * subscription, one this router built for an OAuth provider — and
+ * `POST /:id/connect/complete` takes back the value the authorization page left
+ * behind. Which flow that is comes from the provider registry, in
+ * `services/accounts/connect/service.ts`, not from here.
+ * `POST /:id/reconnect` is the same call against the same row — the id, the
+ * config directory, the pool membership, and the usage history all survive, and
+ * only the audit kind differs. `DELETE /:id/connect` abandons what is pending
+ * rather than leaving a subprocess, or a redeemable `state`, to its TTL.
+ *
+ * The OAuth flow's other capture mode is a browser redirect, and its callback is
+ * mounted separately and unguarded — see `./oauth-callback.ts`. Nothing in any
+ * response here carries a code, a state, or a token
+ * (docs/idea/11-anthropic-agent-sdk.md §3.1, docs/idea/07-security.md).
  */
 
 export const ADMIN_ACCOUNTS_BASE_PATH = "/api/admin/accounts"
@@ -43,7 +49,7 @@ export const ADMIN_ACCOUNTS_BASE_PATH = "/api/admin/accounts"
 export interface AdminAccountRoutesDeps {
   readonly service: AccountsService
   readonly recheck: RecheckService
-  readonly connect: ClaudeConnectService
+  readonly connect: ConnectService
   /** `adminAuth(adminAuthService)`. Required, so no mount can forget the guard. */
   readonly guard: MiddlewareHandler<AdminAuthEnv>
 }

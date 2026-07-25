@@ -1,5 +1,5 @@
 import type { Logger } from "./logging/logger"
-import type { AccountsService, ClaudeConnectService, RecheckService } from "./services/accounts"
+import type { AccountsService, ConnectService, RecheckService } from "./services/accounts"
 import type { AdminAuthService } from "./services/admin-auth"
 import type { KeysService } from "./services/keys"
 import type { PoolsService } from "./services/pools"
@@ -36,6 +36,6 @@ export interface AdminServices {
   readonly usage: UsageService
   /** The "Re-check now" button's server side, per account and for all of them. */
   readonly recheck: RecheckService
-  /** Connect and reconnect for Claude subscriptions: the `claude` CLI's login, driven server-side. */
-  readonly connect: ClaudeConnectService
+  /** Connect and reconnect, both flows: the `claude` CLI's login, and the router's own PKCE one. */
+  readonly connect: ConnectService
 }
