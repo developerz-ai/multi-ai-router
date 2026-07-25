@@ -7,11 +7,26 @@ that interface's five members would be lies here (§9). A request routed to such
 `planCandidates` resolves the Account's `CLAUDE_CONFIG_DIR` instead of a URL, and `chain.ts`
 dispatches through `runSdkAttempt`, which answers with the same `AttemptOutcome` an HTTP attempt does
 — so the failover loop, the health store, the relay, and the `UsageRecord` are written once for both
-transports. What is still absent is the one thing that does the work: the `SdkInvoker` behind
-`providers/claude-sdk/invoke.ts` that actually calls `query()`. Until it is wired, a subscription
-attempt fails by name (retryably, so an HTTP Account in the same Pool still serves) rather than
-being degraded onto some other path. Everything in §4 (sessions), §5 (quota), §6 (re-synthesis), and
-§7 (tools) remains unbuilt. This page is the contract M4 must satisfy.
+transports.
+
+The **launch** half now exists too: `providers/claude-sdk/options.ts` builds the `Options` for one
+`query()` — `settingSources: []`, `strictMcpConfig: true`, `skills: []`, `tools: []`, a bounded
+`maxTurns`, `includePartialMessages: true`, a server-controlled `cwd`, and one `AbortController` per
+request bridged to the attempt deadline (with a `detach()` so a finished query stops retaining the
+signal). `allowlist.ts` is the reviewed constant naming the tools permitted to execute on this host
+— empty, because passthrough is the only supported mode — applied both as `allowedTools` and as a
+deny-by-default `canUseTool` gate under `permissionMode: "dontAsk"`. `env.ts` strips the
+`ANTHROPIC_*` family (by prefix, so a new variable cannot slip through), `CLAUDE_CODE_OAUTH_TOKEN`,
+and the router's own secrets before the spawn, then sets `CLAUDE_CONFIG_DIR` last.
+`concurrency.ts` is the semaphore pair — per-Account acquired **before** global, so a bursting
+Account queues on its own budget instead of parking global capacity and starving the Pool.
+
+What is still absent is the one thing that does the work: the `SdkInvoker` behind
+`providers/claude-sdk/invoke.ts` that actually calls `query()`, because it needs the renderer in §6
+to turn SDK messages back into Anthropic Messages. Until it is wired, a subscription attempt fails
+by name (retryably, so an HTTP Account in the same Pool still serves) rather than being degraded
+onto some other path. Everything in §4 (sessions), §5 (quota), §6 (re-synthesis), and §7 (tools)
+remains unbuilt. This page is the contract M4 must satisfy.
 
 Two decisions the seam already commits to, both taken from §6:
 
@@ -402,7 +417,7 @@ as synthetic blocks with `stop_reason: "tool_use"`.
 
 | Mechanism | Why it exists |
 |---|---|
-| `tools: []` in the options | `disallowedTools` blocks *invocation* but leaves the ~25 k-token built-in catalog in the upstream payload; only `tools: []` elides it (`query.ts:274`) |
+| `tools: []` in the options | `disallowedTools` blocks *invocation* but leaves the ~25 k-token built-in catalog in the upstream payload; only `tools: []` elides it (`query.ts:274`). For us it is the **second** lock: the first is the named allowlist in `allowlist.ts`, enforced by `canUseTool` under `permissionMode: "dontAsk"`, because "we did not offer it" is an argument about what the model is shown, not about what the harness will run ([07-security.md](07-security.md)) |
 | Deterministic (alphabetical) registration | Registration order changes the SDK system prompt, which blows the prompt cache |
 | `maxTurns` ≈ 3–4 (vs 200 internal) | After each deny the SDK still runs a "digest" turn; the budget bounds it (`query.ts:154`) |
 | Early stop | That digest turn is fully billed, and on always-thinking models costs a thinking pass per tool step. Abort once every denied call is observed (`passthroughEarlyStop.ts`) |
@@ -522,9 +537,9 @@ not returned: `/readyz` is unauthenticated. Implementation:
 
 | Concern | Design |
 |---|---|
-| Concurrency | A semaphore over `query()`, sized to memory not CPU. Ours must be **global and per-Account** — one Account's burst must not starve the Pool |
-| Cancellation | One `AbortController` per request, wired to the HTTP signal and the SDK; aborting terminates the subprocess. No separate `interrupt()`/`kill()` in Meridian |
-| Client disconnect | Detect closed-stream writes, stop the loop, abort, detach. Never orphan a subprocess |
+| Concurrency | A semaphore over `query()`, sized to memory not CPU. Ours is **global and per-Account** (`CLAUDE_SDK_MAX_CONCURRENCY`, `…_PER_ACCOUNT`) — `concurrency.ts`. The per-Account gate is taken **first**: reversed, a bursting Account would hold global capacity while it waited and starve the Pool, which is the failure the per-Account limit exists to prevent. Excess callers queue FIFO; a caller aborted while queued throws the signal's own reason, so a deadline stays a `TimeoutError` and a disconnect stays an `AbortError` |
+| Cancellation | One `AbortController` per request, wired to the HTTP signal and the SDK; aborting terminates the subprocess. No separate `interrupt()`/`kill()` in Meridian. Ours is bridged in `options.ts`: the data plane's composed signal (deadline ∪ client) drives a controller the SDK owns |
+| Client disconnect | Detect closed-stream writes, stop the loop, abort, detach. Never orphan a subprocess — and never retain the signal either, which is why `QueryLaunch` exposes `detach()` alongside `abort()` |
 | Timeouts | Client keep-alive ≈ 15 s; **upstream** idle guard ≈ 90 s → 504. Independent, both needed |
 | Retries | Bounded, and **forbidden once bytes are on the wire** — the same rule as [05-routing-and-failover.md](05-routing-and-failover.md) |
 
