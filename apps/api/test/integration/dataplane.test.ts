@@ -452,6 +452,90 @@ describe("the Agent-SDK transport", () => {
     expect(usage.rows[0]?.egressMode).toBe("agent-sdk")
   })
 
+  /** The two-account chain the "did it hop?" assertions below need. */
+  const mixedPool = () =>
+    [
+      subscriptionAccount("sub", { snapshot: { priority: 0 } }),
+      account("api-1", { apiKey: "sk-one", cipher: CRYPTOR, snapshot: { priority: 1 } }),
+    ] as const
+
+  test("a stale SDK session is replayed on the same account, never handed to another", async () => {
+    let calls = 0
+    const { app, upstream, usage } = harness({
+      accounts: [...mixedPool()],
+      selection: { unpooledPolicy: "priority-failover" },
+      responses: [() => jsonResponse(200, {})],
+      invokeSdk: () => {
+        calls += 1
+        return calls === 1
+          ? Promise.reject(new Error("No conversation found with session ID: sdk-1"))
+          : Promise.resolve(sdkResponse())
+      },
+    })
+
+    const res = await app.request("/v1/messages", post(MESSAGE, bearer()))
+    await res.text()
+    await settle()
+
+    expect(res.status).toBe(200)
+    // Recovery in place: the same subprocess transport, twice, and the HTTP account beside it never
+    // saw the request (docs/idea/05-routing-and-failover.md, "a stale session is not a failover").
+    expect(calls).toBe(2)
+    expect(upstream.calls).toHaveLength(0)
+    expect(usage.rows.map((row) => row.egressMode)).toEqual(["agent-sdk", "agent-sdk"])
+  })
+
+  test("the replay is granted exactly once", async () => {
+    let calls = 0
+    const { app } = harness({
+      accounts: [subscriptionAccount("sub")],
+      responses: [() => jsonResponse(200, {})],
+      invokeSdk: () => {
+        calls += 1
+        return Promise.reject(new Error("No conversation found with session ID: sdk-1"))
+      },
+    })
+
+    const res = await app.request("/v1/messages", post(MESSAGE, bearer()))
+    await res.text()
+
+    expect(calls).toBe(2)
+    expect(res.status).toBe(503)
+  })
+
+  test("a spent subscription window is a 429, never a generic 503", async () => {
+    const { app, usage } = harness({
+      accounts: [subscriptionAccount("sub")],
+      responses: [() => jsonResponse(200, {})],
+      invokeSdk: () => Promise.reject(new Error("Claude AI usage limit reached")),
+    })
+
+    const res = await app.request("/v1/messages", post(MESSAGE, bearer()))
+    await res.text()
+    await settle()
+
+    expect(res.status).toBe(429)
+    expect(usage.rows[0]?.outcome).toBe("quota_exhausted")
+  })
+
+  test("an expired subscription credential is the account's problem, not the caller's", async () => {
+    const { app, usage } = harness({
+      accounts: [subscriptionAccount("sub")],
+      responses: [() => jsonResponse(200, {})],
+      invokeSdk: () => Promise.reject(new Error("OAuth token has expired")),
+    })
+
+    const res = await app.request("/v1/messages", post(MESSAGE, bearer()))
+    const payload = await res.json()
+    await settle()
+
+    // 502, not 401: the presented router key was fine and the operator is the one who must re-login.
+    expect(res.status).toBe(502)
+    expect(usage.rows[0]?.outcome).toBe("upstream_auth_failed")
+    // The SDK's own wording never becomes the client's error body.
+    expect(JSON.stringify(payload)).not.toContain("OAuth token")
+  })
+
   test("a failed subscription attempt fails over to the HTTP account beside it", async () => {
     const { app, usage } = harness({
       accounts: [

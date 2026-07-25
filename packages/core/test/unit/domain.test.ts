@@ -48,8 +48,8 @@ const enums = [
   {
     name: "QuotaWindowKind",
     schema: QuotaWindowKind,
-    valid: ["five_hour", "seven_day", "seven_day_opus", "seven_day_sonnet"],
-    invalid: ["five-hour", "5h", "daily", "seven_day_haiku", ""],
+    valid: ["five_hour", "seven_day", "seven_day_opus", "seven_day_sonnet", "overage"],
+    invalid: ["five-hour", "5h", "daily", "seven_day_haiku", "extra_usage", ""],
   },
   {
     name: "ResetSource",

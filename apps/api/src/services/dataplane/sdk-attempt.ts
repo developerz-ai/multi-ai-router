@@ -1,5 +1,11 @@
-import type { SdkInvoker, SessionStore, SessionTurn } from "../../providers"
-import { type AttemptOutcome, attemptDeadline } from "./attempt"
+import { UpstreamTimeoutError } from "@multi-ai-router/core"
+import {
+  classifySdkFailure,
+  type SdkInvoker,
+  type SessionStore,
+  type SessionTurn,
+} from "../../providers"
+import { type AttemptOutcome, attemptDeadline, failoverKind } from "./attempt"
 import type { SdkServableCandidate } from "./plan"
 
 /**
@@ -21,6 +27,11 @@ import type { SdkServableCandidate } from "./plan"
  *
  * The invoker is injected because spawning a subprocess is I/O: the data plane must be dispatchable
  * without one, and no test may spawn a real `claude` CLI.
+ *
+ * **A failure arrives as prose, not as a status** (§9). `providers/claude-sdk/errors.ts` reads the
+ * class out of it and this module applies the one consequence that belongs to the attempt itself:
+ * a stale session drops the binding that named it, so the replay the failover planner schedules
+ * opens a fresh session instead of resuming one the CLI has already forgotten.
  *
  * **Session lineage brackets the call** (§4). Before it, a resume/fork/fresh plan is resolved from
  * what this Account's SDK sessions already hold; after it, whatever session the SDK named is
@@ -64,6 +75,8 @@ const NO_SESSION: SessionTurn = {
 const NO_TRANSPORT =
   "no Claude Agent SDK transport is configured on this router: a subscription account cannot be dispatched to"
 
+const DEADLINE = "the Agent SDK did not answer within its deadline"
+
 export async function runSdkAttempt(input: SdkAttemptInput): Promise<AttemptOutcome> {
   const { invoke, plan } = input
   // A router-side configuration fault, not the account's. `server-error` is retryable, so an HTTP
@@ -84,7 +97,7 @@ export async function runSdkAttempt(input: SdkAttemptInput): Promise<AttemptOutc
       onSession: (report) => turn.remember(report.sdkSessionId, report.assistantUuid),
     })
   } catch (error) {
-    return invocationFailure(error)
+    return invocationFailure(error, input, turn)
   }
 
   // Rate-limit and quota state does not ride the HTTP response here: it arrives as
@@ -116,15 +129,52 @@ function resolveTurn(input: SdkAttemptInput, accountId: string): SessionTurn {
 /**
  * What an invoker throwing means.
  *
- * Only the two classes this seam can know are named. Everything the SDK itself reports — an expired
- * credential, a spent window, a session the CLI no longer has — arrives as a **string** in the query
- * stream, so classifying it belongs to the module that reads that stream, not here.
+ * A deadline is the one class read off the error *object* — a composed signal fires with a name,
+ * and the idle guard raises its own `504` — because a subprocess that said nothing said nothing in
+ * every language. Everything the SDK itself reports is prose and goes to `classifySdkFailure`.
  */
-function invocationFailure(error: unknown): AttemptOutcome {
+function invocationFailure(
+  error: unknown,
+  input: SdkAttemptInput,
+  turn: SessionTurn,
+): AttemptOutcome {
+  if (isDeadline(error)) return failure("timeout", DEADLINE)
+
+  const { classification, clientMessage } = classifySdkFailure(error)
+  if (classification.kind === "stale-session") evictBinding(input, turn)
+
+  return {
+    kind: "failure",
+    failure: {
+      kind: failoverKind(classification.kind, classification.status),
+      status: classification.status,
+      // Router-authored: this is the sentence a client reads when no account could serve, and the
+      // SDK's own wording never becomes one (docs/idea/07-security.md).
+      message: clientMessage,
+    },
+    classification,
+    // The account's quota state rides `rate_limit_event`, never the throw (§5).
+    rateLimit: null,
+    upstream: null,
+  }
+}
+
+function isDeadline(error: unknown): boolean {
+  if (error instanceof UpstreamTimeoutError) return true
   const name = error instanceof Error ? error.name : ""
   return name === "TimeoutError" || name === "AbortError"
-    ? failure("timeout", "the Agent SDK did not answer within its deadline")
-    : failure("server-error", "the Agent SDK could not be invoked for this account")
+}
+
+/**
+ * The SDK says it has never heard of the session we resumed, so the binding that named it is wrong
+ * and stays wrong. Dropped rather than moved: an SDK session id resumes nowhere but the Account that
+ * minted it, and this one resumes nowhere at all.
+ */
+function evictBinding(input: SdkAttemptInput, turn: SessionTurn): void {
+  const session = input.session
+  // A fresh turn resumed nothing, so there is no binding this failure discredits.
+  if (session === undefined || turn.plan.kind === "fresh") return
+  session.store.invalidate(session.apiKeyId, session.sessionKey)
 }
 
 function failure(kind: "timeout" | "server-error", message: string): AttemptOutcome {

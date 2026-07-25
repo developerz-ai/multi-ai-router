@@ -19,9 +19,22 @@ export {
   STRIPPED_ENV_PREFIXES,
   subprocessEnv,
 } from "./claude-sdk/env"
+export type { SdkFailure, SdkFailureText } from "./claude-sdk/errors"
+export { classifySdkFailure, readSdkFailure, STDERR_TAIL_LIMIT } from "./claude-sdk/errors"
 export type { SdkInvocation, SdkInvoker } from "./claude-sdk/invoke"
 export type { QueryLaunch, QueryLaunchInput } from "./claude-sdk/options"
 export { createQueryLaunch, MAX_TURNS } from "./claude-sdk/options"
+export type {
+  SdkQuotaSnapshot,
+  SdkQuotaStore,
+  SdkRateLimitReading,
+  SdkRateLimitStatus,
+} from "./claude-sdk/quota"
+export {
+  createSdkQuotaStore,
+  readSdkRateLimitInfo,
+  SDK_DEFAULT_BUCKET,
+} from "./claude-sdk/quota"
 export type {
   ClientFrame,
   Completion,
@@ -83,7 +96,13 @@ export {
 export type { HttpDriverConfig, ProviderSurface } from "./driver"
 export { createHttpDriver } from "./driver"
 export type { ClassificationRule, ClassifyOptions } from "./failure/classify"
-export { classifyUpstreamFailure, codeRule, messageRule, typeRule } from "./failure/classify"
+export {
+  classifyUpstreamFailure,
+  codeRule,
+  isRetryableFailureKind,
+  messageRule,
+  typeRule,
+} from "./failure/classify"
 export { readErrorFacts } from "./failure/error-body"
 export { toRouterError } from "./failure/router-error"
 export { mapModelAlias } from "./model-alias"

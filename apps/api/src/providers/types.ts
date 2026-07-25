@@ -99,6 +99,11 @@ export interface RateLimitSignal {
  * The outcomes an upstream failure can have. `rate-limited` and `credits-exhausted` are separate
  * for the same reason `QuotaExhaustedError` and `CreditsExhaustedError` are: a clock fixes the
  * first, only a human fixes the second.
+ *
+ * The last three exist only on the Agent-SDK transport, and they are named rather than folded into
+ * `server-error` because each one has a *different recovery* — replay this account, wait then fork,
+ * or give up on the subprocess (docs/idea/11-anthropic-agent-sdk.md §9). A single `server-error`
+ * would make all three retry the same wrong way.
  */
 export const UPSTREAM_FAILURE_KINDS = [
   "rate-limited",
@@ -106,6 +111,12 @@ export const UPSTREAM_FAILURE_KINDS = [
   "auth",
   "invalid-request",
   "server-error",
+  /** The SDK no longer holds the session we resumed. Evict the binding, replay once in place. */
+  "stale-session",
+  /** The SDK session is still running as a background agent. Bounded waits, then fork it. */
+  "busy-session",
+  /** The `claude` subprocess died. Reported honestly, never re-read as an auth failure. */
+  "subprocess-crash",
   "unknown",
 ] as const
 

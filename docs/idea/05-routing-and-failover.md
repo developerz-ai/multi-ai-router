@@ -255,7 +255,9 @@ For `anthropic-oauth` (Claude subscriptions) that distinction is the whole story
 most of a window every Claude subscription account reports `null` headroom, every candidate ties,
 and the tiebreak is an arbitrary rotation — with round-robin's cache and affinity costs and none of
 its honesty about what it is doing. The endpoint is not an optimization on this path; it is the
-signal. Windows: `five_hour`, `seven_day`, `seven_day_opus`, `seven_day_sonnet`. Merge rule, cache
+signal. Windows: `five_hour`, `seven_day`, `seven_day_opus`, `seven_day_sonnet`, `overage` — the
+last one is recorded state, never a block on its own: a rejected paid top-up says nothing about an
+included window that is still serving requests, and only the window that refused does. Merge rule, cache
 TTLs, and last-good-snapshot behavior are in
 [11-anthropic-agent-sdk.md](11-anthropic-agent-sdk.md) §5; see also
 [03-providers.md](03-providers.md).

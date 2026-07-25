@@ -301,7 +301,18 @@ client** — they are Account state (`rateLimitStore.ts`).
 | `surpassedThreshold` | threshold that triggered the event | diagnostics |
 
 Windows: `five_hour`, `seven_day`, `seven_day_opus`, `seven_day_sonnet`, `overage`. Events without a
-`rateLimitType` land in an internal `default` bucket that must never be rendered as a real window.
+`rateLimitType` land in an internal `default` bucket that must never be rendered as a real window —
+and a `rateLimitType` this build does not know gets its own unrendered bucket under the SDK's word
+for it, because naming a window we cannot name is the one way to report a limit that does not exist.
+Either way a `rejected` still cools the Account down: the refusal is the fact, the window is detail.
+
+Two readings are dropped rather than passed on, both because the alternative is a fabricated fact.
+A **reset instant already in the past** — late delivery, clock skew, or a value reported in seconds —
+would set a cooldown that has already elapsed, so the breaker's own backoff takes over, labelled
+`estimated`. And the **`overage` window never blocks by itself**: it carries its reset and the
+`isUsingOverage` flag for the console, while whichever included window actually refused decides
+whether the Account can serve. Implementation: `apps/api/src/providers/claude-sdk/quota.ts`, whose
+store is created per runtime and keyed by Account — never a module-level singleton.
 
 **The critical caveat: `utilization` is only populated near the limit** (`oauthUsage.ts:5-8`). It is
 an *alarm*, not a gauge — a `quota-aware` policy built only on SDK events sees `null` headroom for
@@ -591,6 +602,21 @@ the message plus the subprocess stderr tail. Classes worth naming as our own err
 | Overage required | `extra usage` + `1m` | Drop the extended-context variant, cool down |
 | Subprocess crash | `exited with code N` + stderr | 502. Meridian maps a generic exit-1 to 401 on a heuristic — **do not copy that**; classify honestly and log the stderr tail |
 | Upstream idle | Guard expiry | 504 |
+
+The table is matched in order, most specific phrase first, and two rules keep it from lying
+(`apps/api/src/providers/claude-sdk/errors.ts`). A **bare status number is read from the message
+only, never from the stderr tail** — that is the mechanical form of "do not copy that": a `401` in a
+megabyte of a crashed subprocess's output is not evidence about *this* failure, and acting on it
+marks a working Account `needs_reauth` until a human logs in again. And **the SDK's own words never
+become a client-facing error**; every class carries a router-authored sentence, with the raw text
+kept only for the log line. Nothing matched is `unknown` — a `502` and a failover, never a guess.
+
+The classes are values of the shared `UpstreamFailureKind` vocabulary rather than a private enum, so
+one failover chain reads both transports; `stale-session`, `busy-session`, and `subprocess-crash`
+were added there for this path. Only `stale-session` reaches the failover planner by name, because
+its recovery is a replay on that same Account. The other two have spent their own recovery — the
+bounded waits, the fork — by the time the chain sees them, so what is left is one Account that could
+not serve, which is what `server-error` already means.
 
 ---
 

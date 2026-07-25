@@ -38,8 +38,8 @@ import type { TranslatedRequestBody } from "./translate-body"
  * response and never re-enters the loop. `markStreamed` records the same fact for the failover
  * planner, which refuses every retry from that point on.
  *
- * Attempts are bounded, each one is a distinct account, and every one of them — success or
- * failure — writes its own `UsageRecord`, all sharing the request's correlation id.
+ * Attempts are bounded, each one a distinct account — except the single in-place replay a stale SDK
+ * session earns — and every one writes its own `UsageRecord`, sharing the request's correlation id.
  */
 
 export interface ChainContext {
@@ -72,13 +72,13 @@ export async function runChain(ctx: ChainContext): Promise<Response> {
 
   for (;;) {
     const decision = planNextAttempt(ordered, progress, lastFailure, ctx.failover)
-    if (decision.action !== "attempt") break
+    if (decision.action === "stop") break
 
     const servable = byId.get(decision.candidate.account.id)
     if (servable === undefined) break
 
     const accountId = servable.account.id
-    progress = recordAttempt(progress, accountId)
+    progress = recordAttempt(progress, accountId, decision.action === "retry-in-place")
     runtime.health.beginAttempt(accountId)
 
     const attemptStartedAt = runtime.clock.now()
