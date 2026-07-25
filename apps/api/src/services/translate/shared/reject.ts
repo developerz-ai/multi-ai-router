@@ -95,3 +95,90 @@ export function assertTranslatableToAnthropic(request: {
     rejectField("n", "> 1 has no anthropic counterpart: one request yields exactly one completion")
   }
 }
+
+const NO_STATE =
+  "names conversation state held by the provider: this router stores nothing between requests and picks an account per request, so there is no stored response to continue from"
+
+/**
+ * The stateful half of openai-responses, refused before any upstream call.
+ *
+ * `previous_response_id` and `store` are the dialect's whole reason for existing — a client sends
+ * one turn and the *provider* remembers the rest. That contract cannot survive a hop onto an
+ * account the router chose this request, on a dialect with no stored-conversation concept at all, so
+ * the request is refused by name rather than served as though the missing history were empty
+ * (docs/idea/06-protocol-translation.md#translation-matrix). `include` asks for extra fields on a
+ * response shape the target does not produce, which fails the same way for the same reason.
+ *
+ * `store: false` is the stateless case and passes. An absent `store` is not read as its
+ * provider-side default: the caller stated nothing, and refusing a request over a field it never
+ * sent would make every ordinary client unservable.
+ */
+export function assertStatelessResponses(request: {
+  readonly previous_response_id?: string | null | undefined
+  readonly store?: boolean | null | undefined
+  readonly include?: readonly string[] | null | undefined
+}): void {
+  if (typeof request.previous_response_id === "string") {
+    rejectField("previous_response_id", NO_STATE)
+  }
+  if (request.store === true) rejectField("store", `\`true\` ${NO_STATE}`)
+  if (request.include !== null && request.include !== undefined && request.include.length > 0) {
+    rejectField("include", "asks for openai-responses fields another dialect does not produce")
+  }
+}
+
+/**
+ * A `reasoning` or `item_reference` input item — the two that are the *transcript's* half of the
+ * same statefulness. A reasoning item replays an opaque handle the provider issued; an item
+ * reference names a stored item by id. Neither has content this router could carry anywhere.
+ *
+ * @throws TranslationError — always.
+ */
+export function rejectStatefulItem(field: string, kind: string): never {
+  rejectField(field, `is a \`${kind}\` item, which ${NO_STATE}`)
+}
+
+const NO_STOP =
+  "has no openai-responses counterpart at all: the dialect states no stop parameter, and a stop sequence decides where the answer ends, so dropping it would return text past the delimiter the caller drew"
+
+/**
+ * A stop sequence aimed at openai-responses, which has no stop parameter of any kind.
+ *
+ * Refused rather than dropped, which is the one place this build treats a *sampling* field as a
+ * contract: every other knob nudges how the model writes, while a stop sequence decides where the
+ * answer ends, and a caller that drew a delimiter is going to parse on it. One helper for both
+ * source dialects — Anthropic's `stop_sequences` and openai-chat's `stop` are the same field with
+ * two names, and two copies of the rule could disagree about which requests are servable.
+ *
+ * `[]` and `""` state no sequence and pass: refusing a request over a constraint it never placed
+ * would make an ordinary client unservable, the same call `assertStatelessResponses` makes about an
+ * absent `store`.
+ */
+export function assertNoStopSequence(
+  stop: string | readonly string[] | null | undefined,
+  field: string,
+): void {
+  if (stop === null || stop === undefined) return
+  const stated = typeof stop === "string" ? stop.length > 0 : stop.some((one) => one.length > 0)
+  if (stated) rejectField(field, NO_STOP)
+}
+
+/**
+ * Structured output, which openai-responses spells as `text.format`.
+ *
+ * `{"type":"text"}` is the default and the only form that survives: a JSON-Schema-constrained
+ * response is a *contract* the caller will parse, and this build translates no such constraint onto
+ * another dialect. Refused by name rather than dropped — a caller that asked for schema-valid JSON
+ * and got prose was answered a different question.
+ */
+export function assertPlainTextFormat(request: {
+  readonly text?: { readonly format?: { readonly type: string } | null | undefined } | null
+}): void {
+  const type = request.text?.format?.type
+  if (type !== undefined && type !== "text") {
+    rejectField(
+      "text.format.type",
+      `\`${type}\` constrains the response shape, and this build translates no structured-output constraint onto another dialect`,
+    )
+  }
+}

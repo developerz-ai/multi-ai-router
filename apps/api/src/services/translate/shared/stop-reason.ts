@@ -1,5 +1,5 @@
 /**
- * Why a completion ended, across the anthropic ⇄ openai-chat seam.
+ * Why a completion ended, across every dialect seam.
  *
  * The Anthropic set is **closed and complete** — `end_turn`, `max_tokens`, `stop_sequence`,
  * `tool_use`, `pause_turn`, `refusal` — and every member has a row in the table at
@@ -14,6 +14,12 @@
  * `null` in means the upstream has not finished yet: an openai-chat chunk carries
  * `finish_reason: null` on every delta before the last one. That is absence, not an unknown value,
  * and it maps to absence.
+ *
+ * **openai-responses states the same fact in two fields** — a `status` plus an
+ * `incomplete_details.reason` — so its conversions route through the openai-chat `finish_reason`
+ * rather than restating the Anthropic table a second time. One table, read from both ends, cannot
+ * drift out of agreement with itself, and the Responses column of the spec's table is exactly the
+ * openai-chat column with the two fields split apart.
  */
 
 export const ANTHROPIC_STOP_REASONS = [
@@ -103,4 +109,72 @@ export function toAnthropicStopReason(
   const mapped = TO_ANTHROPIC.get(reason)
   if (mapped !== undefined) return { value: mapped, unrecognized: null }
   return { value: CONSERVATIVE_STOP_REASON, unrecognized: reason }
+}
+
+/**
+ * An upstream's own `finish_reason` string, narrowed to the set this build defines.
+ *
+ * The openai-chat reading of what `toOpenAiFinishReason` does for Anthropic: a value outside the set
+ * is a provider change, mapped conservatively and **returned** for the caller — which holds the
+ * request id — to log. Absence is absence and reports nothing.
+ */
+export function readOpenAiFinishReason(
+  reason: string | null | undefined,
+): MappedReason<OpenAiFinishReason> {
+  if (reason === null || reason === undefined) return ABSENT
+  if (isOpenAiFinishReason(reason)) return { value: reason, unrecognized: null }
+  return { value: CONSERVATIVE_FINISH_REASON, unrecognized: reason }
+}
+
+/** The pair of fields a Responses body states instead of one `finish_reason`. */
+export interface ResponsesCompletion {
+  readonly status: "completed" | "incomplete"
+  /** `incomplete_details.reason`, or null when the response ran to its own end. */
+  readonly incompleteReason: string | null
+}
+
+const MAX_OUTPUT_TOKENS = "max_output_tokens"
+const CONTENT_FILTER = "content_filter"
+
+/**
+ * openai-chat `finish_reason` → a Responses `status` + `incomplete_details.reason`.
+ *
+ * `tool_calls` is **not** an incompleteness: a response that stopped to call a tool is `completed`
+ * carrying a function-call output item, which is what the spec's table states and what a Responses
+ * client branches on. An absent reason maps to `completed` — the conservative claim, and the only
+ * one a body with no stated finish supports.
+ */
+export function toResponsesCompletion(
+  reason: OpenAiFinishReason | null | undefined,
+): ResponsesCompletion {
+  if (reason === "length") return { status: "incomplete", incompleteReason: MAX_OUTPUT_TOKENS }
+  if (reason === CONTENT_FILTER) return { status: "incomplete", incompleteReason: CONTENT_FILTER }
+  return { status: "completed", incompleteReason: null }
+}
+
+/**
+ * A Responses `status` + `incomplete_details.reason` → an openai-chat `finish_reason`.
+ *
+ * `hasToolCall` is the caller's, because only it has seen the output items: Responses says "the
+ * model called a tool" by emitting a `function_call` item, never by naming a reason, so a
+ * translation that ignored the items would report every tool call as ordinary text.
+ *
+ * A status that is neither `completed` nor `incomplete` — `in_progress`, `failed` — is **absence**,
+ * not a finish: the upstream did not state that the completion ended well, and claiming `stop` for
+ * it would report a success that did not happen.
+ */
+export function fromResponsesCompletion(
+  status: string | null | undefined,
+  incompleteReason: string | null | undefined,
+  hasToolCall: boolean,
+): MappedReason<OpenAiFinishReason> {
+  if (status === "completed") {
+    return { value: hasToolCall ? "tool_calls" : CONSERVATIVE_FINISH_REASON, unrecognized: null }
+  }
+  if (status !== "incomplete") return ABSENT
+  if (incompleteReason === MAX_OUTPUT_TOKENS) return { value: "length", unrecognized: null }
+  if (incompleteReason === CONTENT_FILTER) return { value: CONTENT_FILTER, unrecognized: null }
+  // Incomplete for a reason this build does not define: a provider change, mapped conservatively
+  // and reported, exactly as an unknown `stop_reason` is.
+  return { value: CONSERVATIVE_FINISH_REASON, unrecognized: incompleteReason ?? "incomplete" }
 }

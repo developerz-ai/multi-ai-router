@@ -34,13 +34,26 @@ describe("egress mode", () => {
     expect(decision.pair.egress).toBe("openai-chat")
   })
 
-  test("a dialect pair with no translator is refused by name, before any upstream call", () => {
+  test("an openai-responses client on an openai-chat account takes the documented downgrade", () => {
     const decision = resolveEgress("openai-responses", account("a", { provider: "openai-api" }))
 
-    expect(decision.mode).toBe("rejected")
-    if (decision.mode !== "rejected") return
-    expect(decision.reason).toBe("no-translator")
-    expect(egressRejectionError(decision)).toBeInstanceOf(TranslationError)
+    expect(decision.mode).toBe("translate")
+    if (decision.mode !== "translate") return
+    expect(decision.pair.ingress).toBe("openai-responses")
+    expect(decision.pair.egress).toBe("openai-chat")
+  })
+
+  test("a dialect pair with no translator is a 400, not a capacity failure", () => {
+    // Every crossing between the three HTTP dialects has a translator, so the rejection itself is
+    // only reachable through the mapping — which is what a caller sees, and what must not become a
+    // 503: the request is bad at every account needing the same conversion.
+    const rejection = {
+      mode: "rejected",
+      reason: "no-translator",
+      message: "no translation",
+    } as const
+
+    expect(egressRejectionError(rejection)).toBeInstanceOf(TranslationError)
   })
 
   test("a Claude subscription is refused as the Agent-SDK path, not as a bad request", () => {

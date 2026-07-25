@@ -23,8 +23,8 @@ import type { RoutableAccount } from "../types"
  *
  * The Agent-SDK path is a separate deliverable and is refused here explicitly, named, and before
  * any upstream call — never degraded into a lossy approximation. So is a dialect pair with no
- * translator: the `openai-responses` rows of the matrix are exactly that today, and they become
- * servable by adding an entry to `services/translate/registry.ts` and nothing else.
+ * translator; every crossing between the three HTTP dialects has one today, and a pair added later
+ * becomes servable by adding an entry to `services/translate/registry.ts` and nothing else.
  */
 
 export interface PassthroughEgress {

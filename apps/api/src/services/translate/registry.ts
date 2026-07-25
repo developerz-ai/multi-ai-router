@@ -2,9 +2,21 @@ import type { Dialect } from "@multi-ai-router/core"
 import { anthropicToOpenAiChatRequest } from "./anthropic-to-openai-chat/request"
 import { anthropicToOpenAiChatResponse } from "./anthropic-to-openai-chat/response"
 import { anthropicToOpenAiChatStream } from "./anthropic-to-openai-chat/stream"
+import { anthropicToOpenAiResponsesRequest } from "./anthropic-to-openai-responses/request"
+import { anthropicToOpenAiResponsesResponse } from "./anthropic-to-openai-responses/response"
+import { anthropicToOpenAiResponsesStream } from "./anthropic-to-openai-responses/stream"
 import { openAiChatToAnthropicRequest } from "./openai-chat-to-anthropic/request"
 import { openAiChatToAnthropicResponse } from "./openai-chat-to-anthropic/response"
 import { openAiChatToAnthropicStream } from "./openai-chat-to-anthropic/stream"
+import { openAiChatToOpenAiResponsesRequest } from "./openai-chat-to-openai-responses/request"
+import { openAiChatToOpenAiResponsesResponse } from "./openai-chat-to-openai-responses/response"
+import { openAiChatToOpenAiResponsesStream } from "./openai-chat-to-openai-responses/stream"
+import { openAiResponsesToAnthropicRequest } from "./openai-responses-to-anthropic/request"
+import { openAiResponsesToAnthropicResponse } from "./openai-responses-to-anthropic/response"
+import { openAiResponsesToAnthropicStream } from "./openai-responses-to-anthropic/stream"
+import { openAiResponsesToOpenAiChatRequest } from "./openai-responses-to-openai-chat/request"
+import { openAiResponsesToOpenAiChatResponse } from "./openai-responses-to-openai-chat/response"
+import { openAiResponsesToOpenAiChatStream } from "./openai-responses-to-openai-chat/stream"
 import type { TranslatedResponse } from "./shared/response"
 import type { StreamTranslator } from "./sse/emit"
 
@@ -19,9 +31,9 @@ import type { StreamTranslator } from "./sse/emit"
  * `openAiChatToAnthropic*Response*`, not with its same-named sibling.
  *
  * A pair with no entry is not "translate badly"; it is refused by name before any upstream call
- * (`services/dataplane/egress/mode.ts`). The `openai-responses` rows of the matrix at
- * `docs/idea/06-protocol-translation.md#translation-matrix` are exactly that today, and they become
- * servable by adding entries here and nothing else — the Open/Closed rule the design rules state.
+ * (`services/dataplane/egress/mode.ts`). All six crossings between the three HTTP dialects have one
+ * today; a dialect added later becomes servable by adding entries here and nothing else — the
+ * Open/Closed rule the design rules state.
  *
  * The diagonal is deliberately absent. Same-dialect egress is a byte relay in the transport layer
  * with no schema knowledge at all, and giving it a translator here would invite someone to use it.
@@ -67,9 +79,10 @@ export interface TranslationPair {
   readonly stream: (context: TranslationContext) => StreamTranslator
 }
 
-/** Anthropic ids read `msg_…`, openai-chat ids `chatcmpl-…`; a fallback should look like one. */
+/** Each dialect's ids have a shape — `msg_…`, `chatcmpl-…`, `resp_…`; a fallback looks like one. */
 const ANTHROPIC_ID_PREFIX = "msg_"
 const OPENAI_CHAT_ID_PREFIX = "chatcmpl-"
+const OPENAI_RESPONSES_ID_PREFIX = "resp_"
 
 const ANTHROPIC_TO_OPENAI_CHAT: TranslationPair = {
   ingress: "anthropic",
@@ -108,16 +121,93 @@ const OPENAI_CHAT_TO_ANTHROPIC: TranslationPair = {
     }),
 }
 
+const ANTHROPIC_TO_OPENAI_RESPONSES: TranslationPair = {
+  ingress: "anthropic",
+  egress: "openai-responses",
+  // No `defaultMaxTokens` in this direction either: an anthropic request carries its own ceiling.
+  request: (body) => anthropicToOpenAiResponsesRequest(body),
+  response: (body, context) =>
+    openAiResponsesToAnthropicResponse(body, {
+      id: `${ANTHROPIC_ID_PREFIX}${context.fallbackId}`,
+      model: context.model,
+    }),
+  stream: (context) =>
+    openAiResponsesToAnthropicStream({
+      id: `${ANTHROPIC_ID_PREFIX}${context.fallbackId}`,
+      model: context.model,
+    }),
+}
+
+const OPENAI_RESPONSES_TO_ANTHROPIC: TranslationPair = {
+  ingress: "openai-responses",
+  egress: "anthropic",
+  request: (body, context) =>
+    openAiResponsesToAnthropicRequest(body, { defaultMaxTokens: context.defaultMaxTokens }),
+  response: (body, context) =>
+    anthropicToOpenAiResponsesResponse(body, {
+      created: context.created,
+      id: `${OPENAI_RESPONSES_ID_PREFIX}${context.fallbackId}`,
+      model: context.model,
+    }),
+  stream: (context) =>
+    anthropicToOpenAiResponsesStream({
+      created: context.created,
+      id: `${OPENAI_RESPONSES_ID_PREFIX}${context.fallbackId}`,
+      model: context.model,
+    }),
+}
+
+const OPENAI_CHAT_TO_OPENAI_RESPONSES: TranslationPair = {
+  ingress: "openai-chat",
+  egress: "openai-responses",
+  request: (body) => openAiChatToOpenAiResponsesRequest(body),
+  response: (body, context) =>
+    openAiResponsesToOpenAiChatResponse(body, {
+      created: context.created,
+      id: `${OPENAI_CHAT_ID_PREFIX}${context.fallbackId}`,
+      model: context.model,
+    }),
+  stream: (context) =>
+    openAiResponsesToOpenAiChatStream({
+      created: context.created,
+      id: `${OPENAI_CHAT_ID_PREFIX}${context.fallbackId}`,
+      model: context.model,
+    }),
+}
+
+/** The documented **downgrade**: the richer dialect expressed in the poorer one. */
+const OPENAI_RESPONSES_TO_OPENAI_CHAT: TranslationPair = {
+  ingress: "openai-responses",
+  egress: "openai-chat",
+  request: (body) => openAiResponsesToOpenAiChatRequest(body),
+  response: (body, context) =>
+    openAiChatToOpenAiResponsesResponse(body, {
+      created: context.created,
+      id: `${OPENAI_RESPONSES_ID_PREFIX}${context.fallbackId}`,
+      model: context.model,
+    }),
+  stream: (context) =>
+    openAiChatToOpenAiResponsesStream({
+      created: context.created,
+      id: `${OPENAI_RESPONSES_ID_PREFIX}${context.fallbackId}`,
+      model: context.model,
+    }),
+}
+
 /**
  * A `Map`, not an object literal: the key is built from two values that reach this module from a
  * request, and a plain object would resolve `"constructor"` through its prototype and hand the
  * caller something that is not a translation pair at all.
  */
 const PAIRS: ReadonlyMap<string, TranslationPair> = new Map(
-  [ANTHROPIC_TO_OPENAI_CHAT, OPENAI_CHAT_TO_ANTHROPIC].map((pair) => [
-    key(pair.ingress, pair.egress),
-    pair,
-  ]),
+  [
+    ANTHROPIC_TO_OPENAI_CHAT,
+    OPENAI_CHAT_TO_ANTHROPIC,
+    ANTHROPIC_TO_OPENAI_RESPONSES,
+    OPENAI_RESPONSES_TO_ANTHROPIC,
+    OPENAI_CHAT_TO_OPENAI_RESPONSES,
+    OPENAI_RESPONSES_TO_OPENAI_CHAT,
+  ].map((pair) => [key(pair.ingress, pair.egress), pair]),
 )
 
 /** @returns null when the pair is the same-dialect diagonal, or when no translator exists yet. */

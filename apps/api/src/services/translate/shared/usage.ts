@@ -1,9 +1,9 @@
 import { z } from "zod"
 
 /**
- * Token counts across the anthropic ⇄ openai-chat seam.
+ * Token counts across every dialect seam.
  *
- * The two dialects disagree about what "prompt" means, and the disagreement is the whole module:
+ * Two dialects disagree about what "prompt" means, and the disagreement is the whole module:
  *
  * - Anthropic's `input_tokens` is the **uncached remainder**. Total prompt size is
  *   `input_tokens + cache_creation_input_tokens + cache_read_input_tokens`.
@@ -21,6 +21,12 @@ import { z } from "zod"
  * **A missing field is null, never zero.** Zero is a measurement — "the upstream counted, and the
  * answer was none" — and reporting it for a field the upstream never sent invents data. Every
  * count is therefore `number | null` end to end.
+ *
+ * `openai-responses` is on the **openai-chat side of that argument**, not the Anthropic one: its
+ * `input_tokens` is the whole prompt and `input_tokens_details.cached_tokens` a subset of it, so the
+ * crossing between the two OpenAI dialects is a rename and nothing more. That is why the Responses
+ * conversions here go through the openai-chat shape rather than restating the Anthropic arithmetic —
+ * one table read twice cannot drift out of agreement with itself.
  *
  * Nothing here throws. Usage arrives on a response, and by then bytes are on the wire: a malformed
  * usage block is worth reporting as absent, never worth failing a request that already succeeded
@@ -45,6 +51,14 @@ export const openAiChatUsageSchema = z.looseObject({
   completion_tokens_details: z.looseObject({ reasoning_tokens: tokenCount }).nullish().catch(null),
 })
 
+export const openAiResponsesUsageSchema = z.looseObject({
+  input_tokens: tokenCount,
+  output_tokens: tokenCount,
+  total_tokens: tokenCount,
+  input_tokens_details: z.looseObject({ cached_tokens: tokenCount }).nullish().catch(null),
+  output_tokens_details: z.looseObject({ reasoning_tokens: tokenCount }).nullish().catch(null),
+})
+
 export interface AnthropicUsage {
   readonly input_tokens: number | null
   readonly output_tokens: number | null
@@ -57,6 +71,15 @@ export interface OpenAiChatUsage {
   readonly completion_tokens: number | null
   readonly total_tokens: number | null
   readonly prompt_tokens_details?: { readonly cached_tokens: number | null } | undefined
+  readonly completion_tokens_details?: { readonly reasoning_tokens: number | null } | undefined
+}
+
+export interface OpenAiResponsesUsage {
+  readonly input_tokens: number | null
+  readonly output_tokens: number | null
+  readonly total_tokens: number | null
+  readonly input_tokens_details?: { readonly cached_tokens: number | null } | undefined
+  readonly output_tokens_details?: { readonly reasoning_tokens: number | null } | undefined
 }
 
 /** @returns null when the value is not a usage object at all — an absent or malformed block. */
@@ -77,11 +100,59 @@ export function parseOpenAiChatUsage(value: unknown): OpenAiChatUsage | null {
   if (!parsed.success) return null
 
   const cached = parsed.data.prompt_tokens_details?.cached_tokens ?? null
+  const reasoning = parsed.data.completion_tokens_details?.reasoning_tokens ?? null
   return {
     prompt_tokens: parsed.data.prompt_tokens ?? null,
     completion_tokens: parsed.data.completion_tokens ?? null,
     total_tokens: parsed.data.total_tokens ?? null,
     prompt_tokens_details: cached === null ? undefined : { cached_tokens: cached },
+    completion_tokens_details: reasoning === null ? undefined : { reasoning_tokens: reasoning },
+  }
+}
+
+/** @returns null when the value is not a usage object at all — an absent or malformed block. */
+export function parseOpenAiResponsesUsage(value: unknown): OpenAiResponsesUsage | null {
+  const parsed = openAiResponsesUsageSchema.safeParse(value)
+  if (!parsed.success) return null
+
+  const cached = parsed.data.input_tokens_details?.cached_tokens ?? null
+  const reasoning = parsed.data.output_tokens_details?.reasoning_tokens ?? null
+  return {
+    input_tokens: parsed.data.input_tokens ?? null,
+    output_tokens: parsed.data.output_tokens ?? null,
+    total_tokens: parsed.data.total_tokens ?? null,
+    input_tokens_details: cached === null ? undefined : { cached_tokens: cached },
+    output_tokens_details: reasoning === null ? undefined : { reasoning_tokens: reasoning },
+  }
+}
+
+/**
+ * openai-responses usage → openai-chat usage. A rename in both directions, and only a rename: both
+ * dialects count the whole prompt in one field with the cached part as a subset of it, so no
+ * arithmetic is owed here and doing any would invent a difference the two do not have.
+ */
+export function responsesUsageToOpenAiChat(usage: OpenAiResponsesUsage): OpenAiChatUsage {
+  const cached = usage.input_tokens_details?.cached_tokens ?? null
+  const reasoning = usage.output_tokens_details?.reasoning_tokens ?? null
+  return {
+    prompt_tokens: usage.input_tokens,
+    completion_tokens: usage.output_tokens,
+    total_tokens: usage.total_tokens,
+    prompt_tokens_details: cached === null ? undefined : { cached_tokens: cached },
+    completion_tokens_details: reasoning === null ? undefined : { reasoning_tokens: reasoning },
+  }
+}
+
+/** openai-chat usage → openai-responses usage. The same rename, read the other way. */
+export function openAiChatUsageToResponses(usage: OpenAiChatUsage): OpenAiResponsesUsage {
+  const cached = usage.prompt_tokens_details?.cached_tokens ?? null
+  const reasoning = usage.completion_tokens_details?.reasoning_tokens ?? null
+  return {
+    input_tokens: usage.prompt_tokens,
+    output_tokens: usage.completion_tokens,
+    total_tokens: usage.total_tokens ?? sum([usage.prompt_tokens, usage.completion_tokens]),
+    input_tokens_details: cached === null ? undefined : { cached_tokens: cached },
+    output_tokens_details: reasoning === null ? undefined : { reasoning_tokens: reasoning },
   }
 }
 

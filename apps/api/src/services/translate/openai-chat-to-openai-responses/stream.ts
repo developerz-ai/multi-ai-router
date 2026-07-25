@@ -1,29 +1,32 @@
 import { z } from "zod"
-import { createAnthropicStreamEmitter } from "../shared/anthropic-stream"
-import { toAnthropicStopReason } from "../shared/stop-reason"
+import { createResponsesStreamEmitter } from "../shared/responses-stream"
+import { readOpenAiFinishReason, toResponsesCompletion } from "../shared/stop-reason"
 import type { OpenAiChatUsage } from "../shared/usage"
-import { anthropicUsageCounts, parseOpenAiChatUsage } from "../shared/usage"
+import { openAiChatUsageToResponses, parseOpenAiChatUsage } from "../shared/usage"
 import type { SseEvent, StreamTranslator } from "../sse/emit"
 import { NO_EVENTS } from "../sse/emit"
 import { frameJson } from "../sse/parse"
 
 /**
- * A `chat.completion.chunk` stream → Anthropic SSE events.
+ * A `chat.completion.chunk` stream → openai-responses SSE events.
  *
- * The block structure Anthropic requires is invented by `shared/anthropic-stream.ts`, which owns the
- * verified event order for every dialect translated into it. What lives here is the openai-chat half
- * of the reading: text arrives as `delta.content`, calls as `delta.tool_calls[]` keyed by an index
- * that counts only calls, with no start, no stop, and no ordering between the two.
+ * The item structure Responses requires is invented by `shared/responses-stream.ts`, which owns the
+ * event order for every dialect translated into it. What lives here is the openai-chat half of the
+ * reading, and it is the same structural problem the anthropic sibling documents: openai-chat has no
+ * item concept at all — text arrives as `delta.content`, calls as `delta.tool_calls[]` keyed by an
+ * index that counts only calls, with no start, no stop, and no ordering between the two — so item
+ * boundaries are **invented**: one open item at a time, closed the moment the content switches kind.
  *
- * **The terminal events wait for the end of the stream, and only the terminal events.** openai-chat
+ * **The terminal event waits for the end of the stream, and only the terminal event.** openai-chat
  * puts `finish_reason` on one chunk and — with `stream_options.include_usage` — the token counts on
- * a *later* chunk carrying no choices at all, so `message_delta` cannot be emitted the instant a
- * finish reason lands without reporting a completion with no tokens. Content deltas are never held:
+ * a *later* chunk carrying no choices at all, so `response.completed` cannot be emitted the instant
+ * a finish reason lands without reporting a response with no tokens. Content deltas are never held:
  * every one leaves as it arrives.
  */
 
-/** Neither field is required: a compatible upstream always names both on its first chunk. */
-export interface OpenAiChatToAnthropicStreamOptions {
+export interface OpenAiChatToOpenAiResponsesStreamOptions {
+  /** Unix **seconds**, stamped as `created_at`. Supplied by the caller: a translator holds no clock. */
+  readonly created: number
   /** Used until a chunk names the upstream's own id, and if none ever does. */
   readonly id?: string | undefined
   /** Used until a chunk names the model. The client's requested name is the right value. */
@@ -66,18 +69,21 @@ const chunkSchema = z.looseObject({
   usage: z.unknown().optional(),
 })
 
-export function openAiChatToAnthropicStream(
-  options: OpenAiChatToAnthropicStreamOptions = {},
+export function openAiChatToOpenAiResponsesStream(
+  options: OpenAiChatToOpenAiResponsesStreamOptions,
 ): StreamTranslator {
-  const emitter = createAnthropicStreamEmitter(options)
+  const emitter = createResponsesStreamEmitter(options)
   let finishReason: string | null = null
   let usage: OpenAiChatUsage | null = null
   let unrecognized: string | null = null
 
   function terminate(out: SseEvent[]): void {
-    const mapped = toAnthropicStopReason(finishReason)
+    const mapped = readOpenAiFinishReason(finishReason)
     unrecognized = mapped.unrecognized ?? unrecognized
-    emitter.terminate(out, { stopReason: mapped.value, usage: anthropicUsageCounts(usage) })
+    emitter.complete(out, {
+      ...toResponsesCompletion(mapped.value),
+      usage: usage === null ? null : openAiChatUsageToResponses(usage),
+    })
   }
 
   return {
@@ -115,16 +121,16 @@ export function openAiChatToAnthropicStream(
       }
       if (choice.finish_reason !== null && choice.finish_reason !== undefined) {
         finishReason = choice.finish_reason
-        // The block is closed here rather than at termination: a finish reason means no further
-        // content, and the client learns the block ended without waiting for the usage chunk.
-        emitter.closeBlock(out)
+        // The item is closed here rather than at termination: a finish reason means no further
+        // content, and the client learns the item ended without waiting for the usage chunk.
+        emitter.closeItem(out)
       }
       return out
     },
 
     flush() {
-      // A stream that ended without a finish reason was truncated. Synthesizing `message_delta` and
-      // `message_stop` for it would report a completion that never happened.
+      // A stream that ended without a finish reason was truncated. Synthesizing `response.completed`
+      // for it would report a response that never happened.
       if (emitter.isTerminated() || finishReason === null) return NO_EVENTS
       const out: SseEvent[] = []
       terminate(out)
