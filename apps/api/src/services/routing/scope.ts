@@ -5,15 +5,18 @@
  *     candidates = pool_members ∩ key_scope
  *
  * Both must admit an account. No policy, no failover step, and no "everything else is down"
- * condition ever reaches outside the result — there is no setting that relaxes it. Because a key
- * scoped to two pools gets *each pool's own policy applied within that pool*, the output is a
- * list of groups, not one flat set: the policy never runs across the union.
+ * condition ever reaches outside the result — there is no setting that relaxes it. A pool's
+ * overflow account is no exception: it is one of the pool's own memberships, held back from the
+ * policy, never an account admitted from outside the intersection. Because a key scoped to two
+ * pools gets *each pool's own policy applied within that pool*, the output is a list of groups,
+ * not one flat set: the policy never runs across the union.
  */
 
 import { DEFAULT_ROUTING_POLICY } from "@multi-ai-router/core"
 import type { ScopeDiagnostics } from "./result"
 import type {
   AccountSnapshot,
+  PoolMembership,
   PoolSnapshot,
   RoutingSnapshot,
   ScopedAccount,
@@ -39,8 +42,8 @@ export function resolveScope(
   const inScope = new Set<string>()
   for (const group of groups) {
     for (const member of group.members) inScope.add(member.account.id)
-    // The overflow member is in scope too — it is simply invisible to the policy until the
-    // primary set filters empty.
+    // The overflow is in scope because it is one of the pool's own memberships, withheld from
+    // the policy rather than admitted from outside — see `resolveOverflow`.
     if (group.overflow !== null) inScope.add(group.overflow.account.id)
   }
 
@@ -111,19 +114,20 @@ function poolGroup(
   fallbackRotation: number,
 ): ScopeGroup {
   const members: ScopedAccount[] = []
+  let overflowMembership: PoolMembership | undefined
   for (const membership of pool.members) {
+    if (membership.accountId === pool.overflowAccountId) {
+      // Held back, not dropped: the designated member is resolved below, after the primary set
+      // has its order, so the policy never sees it.
+      overflowMembership = membership
+      continue
+    }
     const account = accounts.get(membership.accountId)
     if (account === undefined) {
       unresolved.push(membership.accountId)
       continue
     }
-    members.push({
-      account,
-      poolId: pool.id,
-      weight: membership.weight ?? account.weight,
-      priority: membership.priority ?? account.priority,
-      order: members.length,
-    })
+    members.push(scopedMember(membership, account, pool.id, members.length))
   }
 
   return {
@@ -132,24 +136,50 @@ function poolGroup(
     policy: pool.policy,
     rotationCounter: pool.rotationCounter ?? fallbackRotation,
     members,
-    overflow: resolveOverflow(pool, accounts, members.length),
+    overflow: resolveOverflow(pool, overflowMembership, accounts, members.length, unresolved),
   }
 }
 
 /**
- * The pool's member of last resort. It is scoped by the pool that designates it, so a key scoped
- * to that pool may reach it — and a key scoped to explicit accounts never does, because such a
- * key has no pool group at all.
+ * The pool's member of last resort — a *membership* the policy never sees, not a way out of the
+ * pool.
+ *
+ * Non-negotiable 6 fixes the candidate set at `pool_members ∩ key_scope`. An overflow that is not
+ * a member sits outside that intersection, so honoring one would let a key scoped to `team-a`
+ * spend an account it never named the moment every member cooled down — and advertise its models
+ * in `/v1/models` besides. The admin plane refuses to write one
+ * (`services/pools/service.ts`); this drops any row that predates that check rather than routing
+ * to it.
  */
 function resolveOverflow(
   pool: PoolSnapshot,
+  membership: PoolMembership | undefined,
   accounts: ReadonlyMap<string, AccountSnapshot>,
   order: number,
+  unresolved: string[],
 ): ScopedAccount | null {
-  if (pool.overflowAccountId === undefined) return null
+  if (pool.overflowAccountId === undefined || membership === undefined) return null
   const account = accounts.get(pool.overflowAccountId)
-  if (account === undefined) return null
-  return scoped(account, pool.id, order)
+  if (account === undefined) {
+    unresolved.push(pool.overflowAccountId)
+    return null
+  }
+  return scopedMember(membership, account, pool.id, order)
+}
+
+function scopedMember(
+  membership: PoolMembership,
+  account: AccountSnapshot,
+  poolId: string,
+  order: number,
+): ScopedAccount {
+  return {
+    account,
+    poolId,
+    weight: membership.weight ?? account.weight,
+    priority: membership.priority ?? account.priority,
+    order,
+  }
 }
 
 function resolveAccountList(

@@ -57,6 +57,7 @@ export {
   resolveSessionKey,
   type SessionKeySource,
 } from "./body/session"
+export { answeredFailure, type ChainFailure, foldChainFailure, routerFailure } from "./chain-error"
 export { accountCredential } from "./egress/credential"
 export {
   upstreamCountTokensUrl,
@@ -78,10 +79,11 @@ export {
 export {
   type AccountHealthState,
   breakerOptionsFor,
-  buildSnapshot,
   createHealthStore,
+  DEFAULT_PROBE_HOLD_MS,
   type HealthStore,
-  overlayHealth,
+  type HealthStoreOptions,
+  type ProbeAdmission,
 } from "./health"
 export {
   createRateLimiter,
@@ -109,6 +111,7 @@ export {
   type SdkServableCandidate,
   type ServableCandidate,
 } from "./plan"
+export { admitHalfOpenProbe, type HalfOpenProbe } from "./probe"
 export { type RelayObserver, relayResponse } from "./relay"
 export { relayUpstreamError } from "./relay-error"
 export { relayTranslatedResponse, type TranslatedRelayInput } from "./relay-translate"
@@ -119,6 +122,7 @@ export {
   sessionBindings,
   sessionStoreFromEnv,
 } from "./session-binding"
+export { buildSnapshot, overlayHealth } from "./snapshot"
 export { createTranslatedRequestBody, type TranslatedRequestBody } from "./translate-body"
 export {
   type DataPlaneClock,

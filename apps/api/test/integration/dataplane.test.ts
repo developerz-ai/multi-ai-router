@@ -436,6 +436,82 @@ describe("failover", () => {
     expect(outOfCredits.status).toBe(402)
   })
 
+  test("a 402 carrying spent rate-limit headers stays exhausted — no timer revives it", async () => {
+    // The common shape, and the one that used to lose the distinction: the drained balance answers
+    // `402`, and the *same* response still carries the limiter headers every response carries, with
+    // the window spent. Folding those in downgraded the account to `cooling_down` and handed the
+    // client `429 + Retry-After` for a balance no clock refills (CLAUDE.md non-negotiable 7).
+    const { app, health, upstream, usage } = harness({
+      responses: [
+        () =>
+          jsonResponse(
+            402,
+            {
+              type: "error",
+              error: { type: "billing_error", message: "credit balance is too low" },
+            },
+            {
+              "x-ratelimit-limit-requests": "1000",
+              "x-ratelimit-remaining-requests": "0",
+              "x-ratelimit-reset-requests": "60s",
+            },
+          ),
+        () => jsonResponse(200, {}),
+      ],
+    })
+
+    const first = await app.request("/v1/messages", post(MESSAGE, bearer()))
+    await settle()
+
+    expect(first.status).toBe(402)
+    expect(health.stateOf("acct-1").breaker.status).toBe("exhausted")
+    // `exhausted` carries no reset **by definition** — that is what makes it un-retryable.
+    expect(health.stateOf("acct-1").breaker.cooldownUntil).toBeUndefined()
+    // Refused, not discarded: the operator still sees what the limiter said.
+    expect(health.stateOf("acct-1").limiterWindows[0]).toMatchObject({
+      limiter: "requests",
+      remaining: 0,
+    })
+
+    const second = await app.request("/v1/messages", post(MESSAGE, bearer()))
+    await settle()
+
+    // 402 again, naming the top-up — never a 429 with a countdown, and never a second upstream call.
+    expect(second.status).toBe(402)
+    expect(second.headers.get("Retry-After")).toBeNull()
+    expect(upstream.calls).toHaveLength(1)
+    expect(usage.rows.map((row) => row.outcome)).toEqual(["credits_exhausted", "credits_exhausted"])
+  })
+
+  test("a 401 carrying spent rate-limit headers still needs a human, not a timer", async () => {
+    const { app, health, upstream } = harness({
+      responses: [
+        () =>
+          jsonResponse(
+            401,
+            { type: "error", error: { type: "authentication_error", message: "invalid key" } },
+            { "x-ratelimit-remaining-requests": "0", "x-ratelimit-reset-requests": "60s" },
+          ),
+        () => jsonResponse(200, {}),
+      ],
+    })
+
+    await app.request("/v1/messages", post(MESSAGE, bearer()))
+    await settle()
+
+    // An `api-key` account whose key was rejected needs the operator to change it: `disabled`, with
+    // no cooldown a header could have written over it.
+    expect(health.stateOf("acct-1").breaker.status).toBe("disabled")
+    expect(health.stateOf("acct-1").breaker.cooldownUntil).toBeUndefined()
+
+    const second = await app.request("/v1/messages", post(MESSAGE, bearer()))
+    await settle()
+
+    expect(second.status).toBe(503)
+    expect(second.headers.get("Retry-After")).toBeNull()
+    expect(upstream.calls).toHaveLength(1)
+  })
+
   test("Gemini's throttle names billing and is still a cooldown, timed off the body", async () => {
     // The trap this driver exists for: `RESOURCE_EXHAUSTED` covers a per-minute limit *and* a spent
     // free-tier day, and its message says "check your plan and billing details". Read the word and a
@@ -504,6 +580,236 @@ describe("failover", () => {
 
     expect(health.stateOf("acct-1").breaker.status).toBe("cooling_down")
     expect(health.stateOf("acct-2").breaker.status).toBe("active")
+  })
+
+  /**
+   * An account whose stored credential the router cannot read: a rotated `ENCRYPTION_KEY`, or a row
+   * written by another deployment. The cipher refuses the envelope, so the attempt dies before a
+   * socket is opened.
+   */
+  const misEncrypted: RoutableAccount = {
+    ...account("acct-2", { apiKey: "sk-two", cipher: CRYPTOR }),
+    authMaterial: "not-a-credential-envelope",
+  }
+
+  test("a mis-encrypted account cannot turn a pool-wide 429 into a 500", async () => {
+    const { app, upstream, usage } = harness({
+      accounts: [account("acct-1", { apiKey: "sk-one", cipher: CRYPTOR }), misEncrypted],
+      responses: [() => jsonResponse(429, {}, { "retry-after": "30" })],
+    })
+
+    const res = await app.request("/v1/messages", post(MESSAGE, bearer()))
+    await settle()
+
+    // The chain reports the most actionable failure, not the last one. Candidate 1 said "come back
+    // in 30 seconds"; candidate 2 said "this router cannot read its own row", which is true and
+    // useless to a caller. Surfacing the second erased the wait and handed back a bare `500`.
+    expect(res.status).toBe(429)
+    expect(res.headers.get("Retry-After")).toBe("30")
+    // Both attempts are recorded — the broken account is still visible to the operator, it just no
+    // longer speaks for the pool. Only one of them reached a socket.
+    expect(upstream.calls).toHaveLength(1)
+    expect(usage.rows.map((row) => row.outcome)).toEqual(["quota_exhausted", "upstream_error"])
+  })
+
+  test("a mis-encrypted account is still reported when it is all that went wrong", async () => {
+    // The fold ranks it last; it must not swallow it. One candidate, nothing more actionable to
+    // hold, so the router's own broken state is the honest answer — and the caller's key was fine.
+    const { app, upstream } = harness({
+      accounts: [misEncrypted],
+      responses: [() => jsonResponse(200, {})],
+    })
+
+    const res = await app.request("/v1/messages", post(MESSAGE, bearer()))
+    await settle()
+
+    expect(res.status).toBe(500)
+    expect(upstream.calls).toHaveLength(0)
+  })
+
+  test("a later candidate's bare 5xx cannot erase an earlier one's Retry-After", async () => {
+    // Same defect, different mask: a `503` produces no router-shaped verdict, so relaying it lost
+    // candidate 1's `429` and the wait that came with it.
+    const { app, usage } = harness({
+      accounts: twoAccounts,
+      responses: [
+        () => jsonResponse(429, {}, { "retry-after": "30" }),
+        () => jsonResponse(503, { error: { message: "overloaded" } }),
+      ],
+    })
+
+    const res = await app.request("/v1/messages", post(MESSAGE, bearer()))
+    await settle()
+
+    expect(res.status).toBe(429)
+    expect(res.headers.get("Retry-After")).toBe("30")
+    expect(usage.rows.map((row) => row.outcome)).toEqual(["quota_exhausted", "upstream_error"])
+  })
+
+  test("a drained balance never speaks over an account a clock will revive", async () => {
+    const { app } = harness({
+      accounts: twoAccounts,
+      responses: [
+        () => jsonResponse(429, {}, { "retry-after": "30" }),
+        () =>
+          jsonResponse(402, {
+            type: "error",
+            error: { type: "billing_error", message: "credit balance is too low" },
+          }),
+      ],
+    })
+
+    const res = await app.request("/v1/messages", post(MESSAGE, bearer()))
+    await settle()
+
+    // `402` says "no timer will fix this". With acct-1 back in thirty seconds, that is false about
+    // the pool (CLAUDE.md non-negotiable 7 read from the caller's side).
+    expect(res.status).toBe(429)
+    expect(res.headers.get("Retry-After")).toBe("30")
+  })
+})
+
+/**
+ * "One request is allowed through as a probe" — `05-routing-and-failover.md`'s words for the
+ * half-open transition. `filter.ts` labelled the probe and the policies demoted it, but until the
+ * gate existed nothing *admitted* one: the reset instant passing made the recovering account
+ * eligible to every waiting request simultaneously, so the backlog that piled up during the
+ * cooldown dispatched onto it in the same millisecond and rate-limited it again.
+ */
+describe("the half-open probe is admitted one at a time", () => {
+  const deferred = () => {
+    let resolve: (response: Response) => void = () => undefined
+    const promise = new Promise<Response>((settleWith) => {
+      resolve = settleWith
+    })
+    return { promise, resolve }
+  }
+
+  /** Trips the breaker on the sole account, then advances past the reset it reported. */
+  const recovering = async (probeResponse: () => Promise<Response>) => {
+    const kit = harness({
+      accounts: [account("acct-1", { apiKey: "sk-one", cipher: CRYPTOR })],
+      responses: [
+        () =>
+          jsonResponse(
+            429,
+            { type: "error", error: { type: "rate_limit_error" } },
+            {
+              "retry-after": "60",
+            },
+          ),
+        probeResponse,
+        // Nothing may reach this. It is scripted so that a router without the gate answers the
+        // stampede instead of hanging on the held probe — the difference between a test that fails
+        // with an assertion and one that fails with a timeout.
+        () => jsonResponse(200, { shouldNotBeReached: true }),
+      ],
+    })
+
+    expect((await kit.app.request("/v1/messages", post(MESSAGE, bearer()))).status).toBe(429)
+    kit.clock.advance(60_000)
+    return kit
+  }
+
+  test("one request reaches the recovering account; the backlog behind it waits", async () => {
+    const probe = deferred()
+    const { app, upstream } = await recovering(() => probe.promise)
+
+    // The probe goes out and stays in flight — the window a real upstream takes to answer, and
+    // exactly the window in which a stampede happens.
+    const first = app.request("/v1/messages", post(MESSAGE, bearer()))
+    await settle()
+
+    const backlog = await Promise.all(
+      Array.from({ length: 25 }, () => app.request("/v1/messages", post(MESSAGE, bearer()))),
+    )
+
+    // Two calls in total: the one that tripped the breaker, and the single probe.
+    expect(upstream.calls).toHaveLength(2)
+    for (const response of backlog) {
+      // Not a 500, and not a silent queue: the honest "a clock fixes this, come back" (CLAUDE.md
+      // non-negotiable 7).
+      expect(response.status).toBe(429)
+      expect(Number(response.headers.get("Retry-After"))).toBeGreaterThan(0)
+    }
+
+    probe.resolve(jsonResponse(200, { served: true }))
+    expect((await first).status).toBe(200)
+  })
+
+  test("a probe that succeeds reopens the account to everyone", async () => {
+    const probe = deferred()
+    const { app, upstream } = await recovering(() => probe.promise)
+
+    const first = app.request("/v1/messages", post(MESSAGE, bearer()))
+    await settle()
+    probe.resolve(jsonResponse(200, { served: true }))
+    expect((await first).status).toBe(200)
+
+    // The account is `active` again, so the gate is irrelevant: no hold outlives the verdict.
+    const after = await app.request("/v1/messages", post(MESSAGE, bearer()))
+    expect(after.status).toBe(200)
+    expect(upstream.calls).toHaveLength(3)
+  })
+
+  test("a probe that fails cools the account down again — nobody inherits the gate", async () => {
+    const probe = deferred()
+    const { app, upstream } = await recovering(() => probe.promise)
+
+    const first = app.request("/v1/messages", post(MESSAGE, bearer()))
+    await settle()
+    probe.resolve(
+      jsonResponse(
+        429,
+        { type: "error", error: { type: "rate_limit_error" } },
+        {
+          "retry-after": "120",
+        },
+      ),
+    )
+    expect((await first).status).toBe(429)
+
+    const after = await app.request("/v1/messages", post(MESSAGE, bearer()))
+
+    expect(after.status).toBe(429)
+    expect(after.headers.get("Retry-After")).toBe("120")
+    expect(upstream.calls).toHaveLength(2)
+  })
+
+  test("a healthy account in the same pool is never held out by the gate", async () => {
+    // The hold takes one *account* out of one request's chain. A pool with a healthy member has to
+    // keep serving at full speed while a convalescing member is tested behind it.
+    const { app, upstream, clock } = harness({
+      accounts: [
+        account("acct-1", { apiKey: "sk-one", cipher: CRYPTOR }),
+        account("acct-2", { apiKey: "sk-two", cipher: CRYPTOR }),
+      ],
+      selection: { unpooledPolicy: "priority-failover" },
+      responses: [
+        () =>
+          jsonResponse(
+            429,
+            { type: "error", error: { type: "rate_limit_error" } },
+            { "retry-after": "60" },
+          ),
+        () => jsonResponse(200, { servedBy: "acct-2" }),
+      ],
+    })
+
+    // acct-1 trips; acct-2 serves the same request.
+    expect((await app.request("/v1/messages", post(MESSAGE, bearer()))).status).toBe(200)
+    clock.advance(60_000)
+
+    // acct-1 is a probe now, and a probe ranks behind a healthy account — so acct-2 takes every
+    // one of these and the gate never comes into it.
+    const burst = await Promise.all(
+      Array.from({ length: 10 }, () => app.request("/v1/messages", post(MESSAGE, bearer()))),
+    )
+
+    for (const response of burst) expect(response.status).toBe(200)
+    for (const call of upstream.calls.slice(1)) {
+      expect(call.headers.get("x-api-key")).toBe("sk-two")
+    }
   })
 })
 

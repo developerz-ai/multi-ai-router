@@ -20,7 +20,8 @@ export interface CreatePoolInput {
   readonly name: string
   readonly policy?: RoutingPolicy
   readonly members?: readonly PoolMemberInput[]
-  readonly overflowAccountId?: string
+  /** Must be one of `members`. `null` is the same as absent: no overflow. */
+  readonly overflowAccountId?: string | null
 }
 
 export interface UpdatePoolInput {

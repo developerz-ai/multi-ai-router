@@ -21,12 +21,17 @@ export type FilterReason =
   | "needs-reauth"
   | "exhausted"
   | "cooling-down"
+  /** Its cooldown passed, but another request is already spending the one probe it earns. */
+  | "probe-in-flight"
   | "quota-window-spent"
   | "model-unsupported"
 
 /** Filter reasons a clock alone recovers from. Everything else needs a human or a client change. */
 export const RECOVERABLE_FILTER_REASONS: readonly FilterReason[] = [
   "cooling-down",
+  // A probe is in flight and settles in milliseconds; the account is either back or cooling again
+  // the instant it does. Nothing here needs a human, so it must not read as though it did.
+  "probe-in-flight",
   "quota-window-spent",
 ]
 
@@ -77,6 +82,7 @@ export type BindingInvalidationReason =
   | "model-unsupported"
   | "quota-window-spent"
   | "cooling-down"
+  | "probe-in-flight"
 
 export type BindingDecision =
   | { readonly state: "none" }

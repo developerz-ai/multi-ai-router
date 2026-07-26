@@ -132,12 +132,21 @@ An `exhausted` Account has **no** reset by definition — that is what separates
 | `name` | string | Human-chosen |
 | `policy` | enum | `sticky` (default) \| `round-robin` \| `weighted` \| `least-used` \| `priority-failover` \| `quota-aware` — see [05-routing-and-failover.md](05-routing-and-failover.md). On a Pool containing Claude subscription Accounts, `round-robin` / `weighted` / `least-used` are **unsafe as-is**: they ignore the Session → Account binding, which on that path breaks the conversation rather than just the cache |
 | `members` | Account[] | Ordered/weighted set. An Account may sit in several Pools |
-| `overflowAccountId` | id, optional | The Pool's **member of last resort** — typically a paid API key — engaged only once every ordinary member has filtered out, and invisible to the policy until then. Still subject to the presenting key's scope. Absent means the Pool simply fails when its members are unavailable, which is the default: spending real money is opted into, never inferred. See [05-routing-and-failover.md](05-routing-and-failover.md#overflow-optional-opt-in) |
+| `overflowAccountId` | id, optional | The Pool's **member of last resort** — typically a paid API key — engaged only once every *other* member has filtered out, and invisible to the policy until then. **Must be one of `members`.** Absent means the Pool simply fails when its members are unavailable, which is the default: spending real money is opted into, never inferred. See [05-routing-and-failover.md](05-routing-and-failover.md#overflow-optional-opt-in) |
+
+**The overflow is a designation on a membership, not an escape from it.** Candidates are
+`pool_members ∩ key_scope` and nothing widens that ([04](04-api-keys-and-access.md)), so an
+overflow outside the membership would let a key scoped to this Pool spend an Account the Pool does
+not hold — and see its models in `/v1/models` — the moment every member cooled down. Both writes
+check it against the Pool *as it will be after the write*, so an edit that drops the overflow's
+membership is refused (`overflow_not_member`, `400`) rather than leaving a reference routing never
+honors; routing refuses one that predates the rule for the same reason.
 
 **Deleting the overflow Account clears the reference; it never deletes the Pool.**
 `overflow_account_id` is `ON DELETE SET NULL` for exactly that reason — losing a fallback must
 degrade the Pool to "no overflow", not destroy the Pool and every key bound to it. Membership is
-the opposite case and cascades: a `pool_members` row has no meaning without both ends.
+the opposite case and cascades: a `pool_members` row has no meaning without both ends. Deleting
+the Account therefore clears both, which keeps the two consistent.
 
 ## ApiKey
 

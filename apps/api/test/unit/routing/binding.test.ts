@@ -66,6 +66,24 @@ describe("kept, because a clock will fix it", () => {
     expect(decide(spent, "bound").state).toBe("blocked")
   })
 
+  test("another request's probe on the bound account is the shortest clock of all", () => {
+    // Milliseconds, not minutes: the probe either brings the account back or cools it down again.
+    // Dropping a resumable conversation over that would restart it for nothing.
+    const probed = [
+      subscription("bound", {
+        status: "cooling_down",
+        health: health({ cooldownUntil: at(-1_000), probeHeldUntil: at(20_000) }),
+      }),
+      subscription("other"),
+    ]
+
+    expect(decide(probed, "bound")).toEqual({
+      state: "blocked",
+      accountId: "bound",
+      resetsAt: at(20_000),
+    })
+  })
+
   test("`rebind` is opt-in and invalidates instead of waiting", () => {
     expect(decide(cooling, "bound", { boundAccountCoolingDown: "rebind" })).toEqual({
       state: "invalidated",

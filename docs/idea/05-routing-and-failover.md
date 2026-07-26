@@ -307,8 +307,9 @@ Rules:
   Replaying a partially delivered stream would produce a response the client cannot reconcile —
   duplicated tokens, a second `message_start`, a tool call emitted twice. The router surfaces the
   truncation as an error and lets the client decide. This is a hard rule, not a tunable.
-- The failure that surfaces is the **last** attempt's, with the attempt count in the error
-  metadata and in the `UsageRecord`.
+- The failure that surfaces is the **most actionable** attempt's — never simply the last one — with
+  the attempt count in the error metadata and in the `UsageRecord`. Every attempt is still recorded;
+  only one of them answers the client. See [Which failure the client hears](#which-failure-the-client-hears).
 
 ### Failover mid-conversation — the two paths are not the same operation
 
@@ -349,16 +350,40 @@ attempt cap apply identically to both paths.
 | **Provider-reported reset** | The response carries a reset instant (rate-limit header, or a quota window's `resets_at`). Always preferred — it is the truth. |
 | **Exponential backoff** | Nothing is reported. Grows per consecutive failure, jittered, capped. Resets to the floor on the first success. |
 
+`ROUTING_FAILURE_THRESHOLD`, `ROUTING_BASE_BACKOFF_MS`, and `ROUTING_MAX_BACKOFF_MS` are the
+operator's numbers for the two tables above, and the health store supplies them on **every**
+transition it makes — including the one a rate-limit header folds in without any failure being
+classified. Jitter comes from the same place, because the breaker itself is a pure function over an
+injected clock and reads no randomness: without a supplied fraction, every account tripped in the
+same second returns in the same millisecond and re-stampedes whatever knocked them over. Jitter only
+widens an *estimated* step; a provider-reported reset is the truth and is never nudged off it.
+
 Breaker state is in-memory routing hygiene, not durable truth: after a restart the first failing
 request re-marks. It expires with its own reset window (see the retention table in
 [09-deployment.md](09-deployment.md)). A later mark may extend an entry; an
 earlier one never shortens it, so two concurrent failures cannot un-learn the longer reset.
 
+### Exactly one half-open probe
+
+"One request is allowed through as a probe" is a gate, not a label. A cooldown expiring makes the
+account eligible to **every** waiting request at the same instant, so without one, the backlog that
+piled up during a five-minute cooldown dispatches onto the recovering account together and rate
+limits it again before it has answered any of them.
+
+| Rule | Statement |
+|---|---|
+| **Taken at attempt time** | Not when the candidate is merely *ordered*. A probe ranks behind every healthy account and is usually never reached; holding it for a request that walks past would park a recovering account for nothing. |
+| **A refusal costs nothing** | The chain drops that candidate and walks on — no attempt spent, no `UsageRecord`, no upstream contacted. Nothing happened to that account. |
+| **The hold is a routing state** | It rides in the health snapshot, so every request selecting *after* it was taken is filtered out as `probe-in-flight` — a `429` carrying the hold's expiry, because a clock fixes this in milliseconds. Never a `500`, and never a queue. |
+| **Released on the verdict** | The moment the attempt is classified, not when its stream settles: the probe's question was "is this account back?", and it has been answered. `ROUTING_HALF_OPEN_HOLD_MS` is the backstop for a probe that never reports at all. |
+| **Per account, never global** | Many accounts of one provider is the normal case. One account recovering must not gate another, and a pool with a healthy member keeps serving at full speed. |
+| **One gate, one recovery path** | The operator's **Re-check now** clears the account's marks — the hold among them — so the next request becomes the probe and the ones behind it wait for its verdict. It does not get a gate of its own. |
+
 ### Health signals feeding it
 
 | Signal | Source |
 |---|---|
-| Rate-limit headers and reset instants | `parseRateLimit` on every upstream response |
+| Rate-limit headers and reset instants | `parseRateLimit` on every upstream response. A *reading*, not a verdict — see the precedence rule below |
 | Subscription quota windows and utilization | Two kinds, never conflated. **Threshold-triggered**: the SDK's `rate_limit_event` events for Claude subs — fires only near the limit, so it is what trips the breaker but cannot rank headroom. **Continuous**: provider usage endpoints (Anthropic's OAuth usage endpoint for Claude subs, equivalents elsewhere) — a real percentage at any time, and the only thing `quota-aware` can rank on. Short-TTL cached, deduped per account |
 | Consecutive failure streak | attempt outcomes |
 | Auth failures | `401`/`403` → `needs_reauth` / `disabled`, not a cooldown |
@@ -383,6 +408,7 @@ Rules:
 | Rule | Statement |
 |---|---|
 | **Detect, don't guess** | The classification comes from the upstream signal — status code plus the provider's error body. This is a **driver-level** concern ([03-providers.md](03-providers.md)), because every provider words it differently. The router records *which* signal produced the classification, so a misclassification is debuggable. |
+| **A verdict outranks a header** | Limiter headers ride *every* response, including the `402` that says the balance is dead — a drained account very often answers `402` **and** `x-ratelimit-remaining-requests: 0` in the same breath. The classified failure is the verdict and lands first; the parsed headers are a reading and land second, where they may extend a cooldown but **never** overwrite `exhausted`, `needs_reauth`, or `disabled`. Without this, a dead balance becomes a countdown, gets retried on a timer, and the client is told `429 + Retry-After` for something no clock fixes. The reading is still recorded — refused, not discarded — so the console can show what the limiter said. |
 | **Remove immediately** | An `exhausted` account leaves every candidate set at once, for every key and every pool. |
 | **Surface loudly** | `exhausted` gets a **red banner on the dashboard**, not a status buried on a detail page. This is the failure an operator most needs to see, because it silently shrinks the pool while everything still appears to work. |
 | **Warn before it dies** | Where a provider exposes a balance at all, a low-balance threshold flags the account *before* it hits zero. |
@@ -402,20 +428,61 @@ code follows the cause:
 
 Never a generic upstream `500`. Never a silent fallback outside the key's scope.
 
+### Which failure the client hears
+
+The table above decides a chain that never started. A chain that *did* start has the same problem
+one attempt at a time: three candidates, three different reasons, one status to return. It is
+resolved by the same rule — **the most actionable failure wins, never simply the last one.**
+
+| Rank | Failure | The caller's next step |
+|---|---|---|
+| 1 | A clock fixes it — `429` | Wait the `Retry-After`, then the pool serves. |
+| 2 | A human fixes it — `402` top up, `502` re-authenticate the Account | One named action, by the operator. |
+| 3 | The upstream answered — relayed verbatim | Whatever the provider said, in the provider's own words. |
+| 4 | *This one Account* could not take *this request* — `400` no faithful conversion into its dialect, `500` a credential this router cannot read | Nothing the caller can use. |
+
+Two arguments produce that order, and they are the same argument twice:
+
+- **A pool is serviceable again at its earliest reset.** So one account's `429` outranks any verdict
+  a *different* account gave. Answering `402` — "no timer will fix this" — while another candidate
+  cools down for thirty seconds is false, and it is non-negotiable 7 read from the caller's side.
+- **An Account that answered has proved the request itself was fine.** So a refusal specific to one
+  Account never speaks for the chain. A mis-encrypted credential on candidate 3 is the *router's*
+  broken state; surfacing it as a `500` erased candidate 1's honest `429` and the wait that came
+  with it, leaving the client to retry blind.
+
+Ties keep the earliest attempt's, so the account named is the first one that failed that way —
+except between two spent windows, where the **sooner** wait wins, for the same reason the
+"every candidate unavailable" table reports the soonest reset.
+
+Every attempt still writes its own `UsageRecord`, so the account that could not be dispatched to
+stays visible to the operator. It just does not answer the client.
+
 ### Overflow (optional, opt-in)
 
-A Pool may designate one **overflow Account** — typically a paid API key — used **only** when
-every primary member is cooling down or exhausted.
+A Pool may designate one of its **members** as the **overflow Account** — typically a paid API key
+— used **only** when every other member is cooling down or exhausted.
 
 | Property | Value |
 |---|---|
 | Default | **Off.** Spending real money is opted into, never inferred. |
-| Trigger | The primary candidate set is empty *after* filtering. Not on a single 429, not on latency. |
-| Scope | Still subject to the key's scope — an overflow account outside the key's scope is not used. |
+| Membership | **The overflow must be a member of the Pool.** The designation withholds that membership from the policy; it never admits an Account from outside. |
+| Trigger | The primary candidate set — the members *other than* the overflow — is empty after filtering. Not on a single 429, not on latency. |
+| Scope | The same intersection as everything else, `pool_members ∩ key_scope`, with no exception for the overflow. |
 | Visibility | Every overflow-served request is marked as such in its `UsageRecord`, so "why did we spend money last night" has an answer. |
 
 Overflow is distinct from `priority-failover`: that policy orders the pool's own members;
 overflow is a member of last resort that is otherwise invisible to the policy.
+
+**Why membership is required.** The candidate set is `pool_members ∩ key_scope` and nothing
+widens it. An overflow outside the membership sits outside that intersection: a key scoped to
+pool `team-a` would spend a corporate Account it never named — and see its models in `/v1/models`
+— the instant every member of `team-a` cooled down. Requiring membership keeps the invariant true
+by construction and costs the operator nothing: put the paid key in the pool, mark it the
+overflow, and it stays held back until it is the only thing left. The admin plane refuses a write
+that would break the rule (`overflow_not_member`, `400`), including an edit that drops the
+overflow's own membership, and routing ignores an overflow reference that predates the rule
+rather than honoring it.
 
 ## Reset visibility and manual re-check
 

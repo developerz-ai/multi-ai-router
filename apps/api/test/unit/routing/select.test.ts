@@ -95,6 +95,26 @@ describe("the empty candidate set fails by cause", () => {
     expect(result.error.message).toContain("pool team")
   })
 
+  test("a pool whose only account is being probed is 429, never a 503 or a stampede", () => {
+    // The bug this pins: the reset instant passing made the account eligible to every waiting
+    // request at once. Now one holds the probe and the rest are told to come back — with a wait,
+    // because a clock fixes this in milliseconds and nothing here needs a human.
+    const state = snapshot(
+      [
+        account("a", {
+          status: "cooling_down",
+          health: health({ cooldownUntil: at(-1_000), probeHeldUntil: at(20_000) }),
+        }),
+      ],
+      [pool("team", ["a"])],
+    )
+    const result = expectFailure(selectAccounts(state, ask()))
+
+    expect(result.error.status).toBe(429)
+    expect(result.error.message).toContain(at(20_000).toISOString())
+    expect(result.decision.rejected[0]?.reason).toBe("probe-in-flight")
+  })
+
   test("everything out of credits is 402 and names who needs a top-up", () => {
     const state = snapshot(
       [account("a", { status: "exhausted" }), account("b", { status: "exhausted" })],
@@ -224,7 +244,7 @@ describe("overflow", () => {
   const withOverflow = (memberStatus: "active" | "exhausted") =>
     snapshot(
       [account("a", { status: memberStatus }), account("paid")],
-      [pool("team", ["a"], { overflowAccountId: "paid" })],
+      [pool("team", ["a", "paid"], { overflowAccountId: "paid" })],
     )
 
   test("stays invisible while a primary member can serve", () => {
@@ -252,6 +272,33 @@ describe("overflow", () => {
       ),
     )
     expect(result.error.status).toBe(402)
+  })
+
+  test("an overflow the pool does not hold is never spent, however dead the pool is", () => {
+    // The leak this closes: a key scoped to `team` reaching a corporate account in no pool it
+    // names, the moment every member of `team` went down. `pool_members ∩ key_scope` admits no
+    // such account, so the honest answer is the 402 the members earned.
+    const leaky = snapshot(
+      [account("a", { status: "exhausted" }), account("corp")],
+      [pool("team", ["a"], { overflowAccountId: "corp" })],
+    )
+    const result = expectFailure(selectAccounts(leaky, ask()))
+
+    expect(result.error.status).toBe(402)
+    expect(result.decision.usedOverflow).toBe(false)
+    expect(result.decision.scope.inScopeAccountIds).toEqual(["a"])
+  })
+
+  test("the overflow is held back from the policy, not merely ordered last", () => {
+    // `priority-failover` would otherwise put the paid key first on its priority alone.
+    const eager = snapshot(
+      [account("a", { priority: 5 }), account("paid", { priority: 0 })],
+      [pool("team", ["a", "paid"], { policy: "priority-failover", overflowAccountId: "paid" })],
+    )
+    const result = expectSuccess(selectAccounts(eager, ask()))
+
+    expect(ids(result.candidates)).toEqual(["a"])
+    expect(result.decision.usedOverflow).toBe(false)
   })
 })
 

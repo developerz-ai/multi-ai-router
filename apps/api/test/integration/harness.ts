@@ -13,6 +13,7 @@ import {
   createDispatcher,
   createHealthStore,
   createRouterKeyVerifier,
+  type HealthStoreOptions,
   type RoutableAccount,
 } from "../../src/services/dataplane"
 import type { PoolSnapshot, SelectionOptions } from "../../src/services/routing"
@@ -47,8 +48,11 @@ export interface HarnessOptions {
   readonly scope?: "all" | "pools" | "accounts"
   readonly poolIds?: readonly string[]
   readonly accountIds?: readonly string[]
-  readonly responses: readonly (() => Response)[]
+  /** An entry may return a promise, to hold one upstream call in flight while the test drives on. */
+  readonly responses: readonly (() => Response | Promise<Response>)[]
   readonly maxAttempts?: number
+  /** Breaker and half-open-gate tuning, as the composition root passes it from `env.failover`. */
+  readonly health?: HealthStoreOptions
   /** Overrides the default `sticky` policy, for a suite that needs a deterministic chain order. */
   readonly selection?: SelectionOptions
   /**
@@ -77,7 +81,8 @@ export function harness(options: HarnessOptions) {
   const accounts = options.accounts ?? [account("acct-1", { apiKey: "sk-one", cipher: CRYPTOR })]
   const upstream = mockUpstream(options.responses)
   const usage = usageSink()
-  const health = createHealthStore()
+  // Jitter off by default: a test that cannot pin the backoff cannot assert it.
+  const health = createHealthStore({ jitter: () => 0, ...options.health })
   const testClock = clock()
   const metrics = createMetrics({ now: testClock.now })
   const store = catalog(accounts, options.pools ?? [])

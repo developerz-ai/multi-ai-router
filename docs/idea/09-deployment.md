@@ -139,6 +139,7 @@ naming the offending variable — the process never starts half-configured.
 | `ROUTING_FAILURE_THRESHOLD` | no | `3` | Consecutive 5xx or connection failures before an account's breaker trips. |
 | `ROUTING_BASE_BACKOFF_MS` | no | `1000` | First cooldown step; doubles per consecutive failure. |
 | `ROUTING_MAX_BACKOFF_MS` | no | `300000` | Ceiling on that doubling, so a long outage does not park an account for hours. |
+| `ROUTING_HALF_OPEN_HOLD_MS` | no | `30000` | How long the one request admitted onto a recovering account holds it. Everyone else gets `429` with this instant until the probe reports, so the backlog built up during a cooldown cannot stampede the account the moment it returns. Released on the probe's verdict, so this only governs a probe that never reports. |
 | `UPSTREAM_TIMEOUT_MS` | no | `600000` | How long the router waits on one upstream. Long, because a long completion is a normal response and not a hung one. |
 | `TRANSLATE_DEFAULT_MAX_TOKENS` | no | `4096` | The `max_tokens` an Anthropic account is given when the client spoke a dialect that makes it optional and sent none. Anthropic requires the field; the default is generous on purpose, because a low value truncates answers nobody asked to truncate. |
 | `USAGE_FLUSH_INTERVAL_MS` | no | `1000` | Drain cadence. Raising it widens the window in which a crash loses unwritten usage rows; it never affects request latency. |

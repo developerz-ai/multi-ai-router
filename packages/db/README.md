@@ -45,7 +45,7 @@ test/integration/     needs a live Postgres, skips cleanly without one
 |---|---|
 | `accounts` | One credential to one provider. Many per provider is the normal case |
 | `quota_windows` | One row per account per window: utilization, reset, and how trustworthy each is |
-| `pools` | A named set of accounts with a routing policy, plus an optional overflow account |
+| `pools` | A named set of accounts with a routing policy, plus an optional overflow account — which must be one of the pool's own members |
 | `pool_members` | Account ↔ pool membership, carrying that membership's weight and priority |
 | `api_keys` | Router-issued `mar_live_…` keys — encrypted, retrievable, never hashed |
 | `api_key_pools` / `api_key_accounts` | A key's scope targets |
@@ -66,6 +66,7 @@ Modeling decisions worth knowing:
 | `cost_metered` and `cost_notional` are separate columns | A subscription is a flat fee, so its per-request cost is an attribution, not a charge. The docs forbid summing the two |
 | `sessions.account_id` is `ON DELETE SET NULL` | A binding is *invalidated*, never migrated: another account cannot resume an SDK session id. The FK is the backstop; the service clears `sdk_session_id` and lineage with it |
 | `pools.overflow_account_id` is `ON DELETE SET NULL`, while `pool_members` **cascades** | Deleting the overflow account must drop the pool's fallback, never the pool and every key bound to it. A `pool_members` row is the opposite case — it has no meaning without both ends |
+| "the overflow is one of the pool's members" is enforced in `services/pools` and `services/routing/scope.ts`, not by a constraint | Candidates are `pool_members ∩ key_scope` and nothing widens that, so the rule is real — but a composite FK cannot express it: `replaceMembers` empties the membership mid transaction, and a dropped membership needs `set null` on one column of a two-column reference. Migration `0010` backfills the rows written before the rule |
 | Closed sets are `pgEnum`; open labels are `text` typed against core | An unknown `account_status` is a bug worth a migration to change. A new quota window kind or `RouterError` code is a core-only change |
 
 Enum values are built from `@multi-ai-router/core`'s Zod `.options`, so the Postgres type and the

@@ -5,7 +5,7 @@
 
 import { describe, expect, test } from "bun:test"
 import type { SelectionRequest } from "../../../src/services/routing"
-import { resolveScope } from "../../../src/services/routing"
+import { isInScope, resolveScope } from "../../../src/services/routing"
 import { account, pool, snapshot } from "./fixtures"
 
 const request = (keyScope: SelectionRequest["keyScope"]): SelectionRequest => ({
@@ -115,10 +115,88 @@ describe("grouping", () => {
   })
 
   test("a pool's overflow member is resolved but kept out of the member list", () => {
-    const state = snapshot(accounts, [pool("team", ["a"], { overflowAccountId: "d" })])
+    const state = snapshot(accounts, [pool("team", ["a", "d"], { overflowAccountId: "d" })])
     const group = resolveScope(state, request({ kind: "pools", poolIds: ["team"] })).groups[0]
 
     expect(group?.members.map((m) => m.account.id)).toEqual(["a"])
     expect(group?.overflow?.account.id).toBe("d")
+  })
+})
+
+/**
+ * `pool_members ∩ key_scope` has no exception for the overflow. An overflow that is not a member
+ * sits outside the intersection, so honoring it would hand a key scoped to `team` an account the
+ * pool does not hold — the leak this whole group exists to keep closed.
+ */
+describe("overflow stays inside the intersection", () => {
+  test("an overflow the pool does not hold is not admitted, in the group or in scope", () => {
+    const state = snapshot(accounts, [pool("team", ["a"], { overflowAccountId: "d" })])
+    const resolved = resolveScope(state, request({ kind: "pools", poolIds: ["team"] }))
+
+    expect(resolved.groups[0]?.overflow).toBeNull()
+    expect(resolved.groups[0]?.members.map((m) => m.account.id)).toEqual(["a"])
+    expect(resolved.diagnostics.inScopeAccountIds).toEqual(["a"])
+  })
+
+  test("the overflow keeps its own membership's weight and priority", () => {
+    const state = snapshot(
+      [account("a"), account("d", { weight: 100, priority: 0 })],
+      [
+        {
+          ...pool("team", []),
+          members: [{ accountId: "a" }, { accountId: "d", weight: 300, priority: 7 }],
+          overflowAccountId: "d",
+        },
+      ],
+    )
+    const group = resolveScope(state, request({ kind: "pools", poolIds: ["team"] })).groups[0]
+
+    expect(group?.overflow?.weight).toBe(300)
+    expect(group?.overflow?.priority).toBe(7)
+    // Held back behind the primary set rather than interleaved into it.
+    expect(group?.overflow?.order).toBe(1)
+  })
+
+  test("an overflow whose account has vanished is reported, not invented", () => {
+    const state = snapshot(
+      [account("a")],
+      [pool("team", ["a", "ghost"], { overflowAccountId: "ghost" })],
+    )
+    const resolved = resolveScope(state, request({ kind: "pools", poolIds: ["team"] }))
+
+    expect(resolved.groups[0]?.overflow).toBeNull()
+    expect(resolved.diagnostics.unresolvedTargetIds).toEqual(["ghost"])
+  })
+
+  test("a pool's own overflow is not a candidate when the key's scope is an explicit account list that excludes it", () => {
+    // `paid` is a legitimate member of `team`, designated as its overflow — nothing wrong with the
+    // pool. The leak is scope-shaped: an `accounts`-scoped key ignores pool membership entirely
+    // (`resolveAccountList`), so `paid` never enters a group and is never in scope, regardless of
+    // what any pool says about it.
+    const state = snapshot(
+      [account("a"), account("paid")],
+      [pool("team", ["a", "paid"], { overflowAccountId: "paid" })],
+    )
+    const resolved = resolveScope(state, request({ kind: "accounts", accountIds: ["a"] }))
+
+    expect(isInScope(resolved, "paid")).toBe(false)
+    expect(isInScope(resolved, "a")).toBe(true)
+    expect(resolved.groups).toHaveLength(1)
+    expect(resolved.groups[0]?.overflow).toBeNull()
+    expect(resolved.diagnostics.inScopeAccountIds).toEqual(["a"])
+  })
+
+  test("a pool's overflow reached only through a pool the key does not name is not a candidate", () => {
+    // Two real pools, two real overflows. A key scoped to `team` alone must never see `burst`'s
+    // overflow — the intersection is per named pool, not "any pool this account happens to sit in".
+    const state = snapshot(
+      [account("a"), account("b"), account("paid")],
+      [pool("team", ["a"]), pool("burst", ["b", "paid"], { overflowAccountId: "paid" })],
+    )
+    const resolved = resolveScope(state, request({ kind: "pools", poolIds: ["team"] }))
+
+    expect(isInScope(resolved, "paid")).toBe(false)
+    expect(resolved.groups).toHaveLength(1)
+    expect(resolved.groups[0]?.overflow).toBeNull()
   })
 })

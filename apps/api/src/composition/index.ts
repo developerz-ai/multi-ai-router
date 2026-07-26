@@ -99,7 +99,16 @@ export function createRuntime(deps: RuntimeDeps): Runtime {
   const scheduledTasks = createScheduledTaskRepository(database)
 
   // --- warm state -----------------------------------------------------------
-  const health = createHealthStore()
+  // The breaker's numbers reach it from exactly one place: `breaker.ts` reads no configuration and
+  // no randomness of its own, so a store built without them silently runs the module defaults and
+  // returns every account tripped in the same second in the same millisecond. `probeHoldMs` is the
+  // other half — the gate that admits one half-open probe onto a recovering account.
+  const health = createHealthStore({
+    failureThreshold: env.failover.failureThreshold,
+    baseBackoffMs: env.failover.baseBackoffMs,
+    maxBackoffMs: env.failover.maxBackoffMs,
+    probeHoldMs: env.failover.halfOpenHoldMs,
+  })
   const catalog = createRoutingCatalog({
     load: () => loadCatalog({ accounts, pools }),
     refreshIntervalMs: env.dataPlane.catalogRefreshSeconds * 1_000,

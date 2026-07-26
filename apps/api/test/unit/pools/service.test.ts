@@ -90,17 +90,40 @@ describe("create", () => {
     if (!result.ok) expect(result.failure.code).toBe("unknown_overflow_account")
   })
 
-  test("accepts an overflow account that is not a member — it is a last resort, not a member", async () => {
+  test("rejects an overflow account the pool does not hold — that is a scope leak, not a fallback", async () => {
     const { service, account, spare } = await seeded()
     const result = await service.create({
       name: "team",
       members: [{ accountId: account.id }],
       overflowAccountId: spare.id,
     })
+    expect(result.ok).toBe(false)
+    if (!result.ok) {
+      expect(result.failure.code).toBe("overflow_not_member")
+      expect(result.failure.status).toBe(400)
+    }
+  })
+
+  test("rejects an overflow on a pool with no members at all", async () => {
+    const { service, spare } = await seeded()
+    const result = await service.create({ name: "team", overflowAccountId: spare.id })
+    expect(result.ok).toBe(false)
+    if (!result.ok) expect(result.failure.code).toBe("overflow_not_member")
+  })
+
+  test("accepts an overflow that is one of the members, and still lists it as a member", async () => {
+    const { service, account, spare } = await seeded()
+    const result = await service.create({
+      name: "team",
+      members: [{ accountId: account.id }, { accountId: spare.id }],
+      overflowAccountId: spare.id,
+    })
     expect(result.ok).toBe(true)
     if (result.ok) {
       expect(result.value.overflowAccountId).toBe(spare.id)
-      expect(result.value.members.map((member) => member.accountId)).toEqual([account.id])
+      expect(result.value.members.map((member) => member.accountId).sort()).toEqual(
+        [account.id, spare.id].sort(),
+      )
     }
   })
 
@@ -129,11 +152,77 @@ describe("update", () => {
 
   test("clears the overflow account when it is explicitly set to null", async () => {
     const { service, spare } = await seeded()
-    const pool = await service.create({ name: "team", overflowAccountId: spare.id })
+    const pool = await service.create({
+      name: "team",
+      members: [{ accountId: spare.id }],
+      overflowAccountId: spare.id,
+    })
     if (!pool.ok) throw new Error("setup failed")
 
     const updated = await service.update(pool.value.id, { overflowAccountId: null })
     expect(updated.ok && updated.value.overflowAccountId).toBeNull()
+  })
+
+  test("rejects an overflow the patch's membership does not hold", async () => {
+    const { service, account, spare } = await seeded()
+    const pool = await service.create({ name: "team", members: [{ accountId: account.id }] })
+    if (!pool.ok) throw new Error("setup failed")
+
+    const updated = await service.update(pool.value.id, { overflowAccountId: spare.id })
+    expect(updated.ok).toBe(false)
+    if (!updated.ok) expect(updated.failure.code).toBe("overflow_not_member")
+  })
+
+  test("refuses an edit that drops the overflow's own membership, rather than stranding it", async () => {
+    // The patch names only `members`, so the offending reference is the *stored* overflow — the
+    // one case a body-only check reads as clean.
+    const { service, store, account, spare } = await seeded()
+    const pool = await service.create({
+      name: "team",
+      members: [{ accountId: account.id }, { accountId: spare.id }],
+      overflowAccountId: spare.id,
+    })
+    if (!pool.ok) throw new Error("setup failed")
+
+    const updated = await service.update(pool.value.id, { members: [{ accountId: account.id }] })
+    expect(updated.ok).toBe(false)
+    if (!updated.ok) expect(updated.failure.code).toBe("overflow_not_member")
+    // Refused means refused: the membership is untouched.
+    expect(store.rows.poolMembers).toHaveLength(2)
+  })
+
+  test("an edit that touches neither membership nor overflow still passes", async () => {
+    const { service, account, spare } = await seeded()
+    const pool = await service.create({
+      name: "team",
+      members: [{ accountId: account.id }, { accountId: spare.id }],
+      overflowAccountId: spare.id,
+    })
+    if (!pool.ok) throw new Error("setup failed")
+
+    const updated = await service.update(pool.value.id, { policy: "round-robin" })
+    expect(updated.ok).toBe(true)
+    if (updated.ok) expect(updated.value.overflowAccountId).toBe(spare.id)
+  })
+
+  test("dropping the overflow's membership and the overflow together is allowed", async () => {
+    const { service, account, spare } = await seeded()
+    const pool = await service.create({
+      name: "team",
+      members: [{ accountId: account.id }, { accountId: spare.id }],
+      overflowAccountId: spare.id,
+    })
+    if (!pool.ok) throw new Error("setup failed")
+
+    const updated = await service.update(pool.value.id, {
+      members: [{ accountId: account.id }],
+      overflowAccountId: null,
+    })
+    expect(updated.ok).toBe(true)
+    if (updated.ok) {
+      expect(updated.value.overflowAccountId).toBeNull()
+      expect(updated.value.members.map((member) => member.accountId)).toEqual([account.id])
+    }
   })
 
   test("records the policy change on both sides, which is what a routing question starts from", async () => {

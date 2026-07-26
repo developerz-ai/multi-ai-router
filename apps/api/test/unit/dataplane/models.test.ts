@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test"
 import { isRouterError, ModelNotFoundError } from "@multi-ai-router/core"
 import type { VerifiedKey } from "../../../src/services/dataplane"
 import { reachableModel, reachableModels } from "../../../src/services/dataplane"
+import type { PoolSnapshot } from "../../../src/services/routing"
 import { account, catalog, health, NOW } from "./fixtures"
 
 /**
@@ -137,5 +138,64 @@ describe("reachableModel", () => {
     expect(() =>
       reachableModel(catalog([account("a")]), health(), scopedKey, "sonnet", NOW),
     ).toThrow(ModelNotFoundError)
+  })
+})
+
+/**
+ * The catalog is the second half of the pool-overflow scope leak: an overflow the pool does not
+ * hold would not only be spendable by a key scoped to that pool, its models would be advertised
+ * to that key as well. Reachability here is the same intersection selection uses, so closing it
+ * in `services/routing/scope.ts` has to close it here too.
+ */
+describe("a pool's overflow and the catalog", () => {
+  const KEY_SCOPED_TO_TEAM: VerifiedKey = {
+    ...keyWithFullScope(),
+    scope: { kind: "pools", poolIds: ["team"] },
+  }
+
+  /** Declared models, so neither account is a passthrough that answers any probe. */
+  const serving = (id: string, model: string) =>
+    account(id, { provider: "zai", snapshot: { supportedModels: [model] } })
+
+  const team = (memberIds: readonly string[]): PoolSnapshot => ({
+    id: "team",
+    name: "team",
+    policy: "sticky",
+    members: memberIds.map((accountId) => ({ accountId })),
+    overflowAccountId: "corp",
+  })
+
+  const accounts = [serving("sub", "sonnet"), serving("corp", "corp-only-model")]
+
+  test("an overflow the pool does not hold advertises nothing to a key scoped to that pool", () => {
+    const models = reachableModels(
+      catalog(accounts, [team(["sub"])]),
+      health(),
+      KEY_SCOPED_TO_TEAM,
+      NOW,
+    )
+    expect(models.map((model) => model.id)).toEqual(["sonnet"])
+  })
+
+  test("a probe for that overflow's model is a 404, not a route to it", () => {
+    expect(() =>
+      reachableModel(
+        catalog(accounts, [team(["sub"])]),
+        health(),
+        KEY_SCOPED_TO_TEAM,
+        "corp-only-model",
+        NOW,
+      ),
+    ).toThrow(ModelNotFoundError)
+  })
+
+  test("an overflow the pool does hold advertises normally — it is a member", () => {
+    const models = reachableModels(
+      catalog(accounts, [team(["sub", "corp"])]),
+      health(),
+      KEY_SCOPED_TO_TEAM,
+      NOW,
+    )
+    expect(models.map((model) => model.id)).toEqual(["corp-only-model", "sonnet"])
   })
 })

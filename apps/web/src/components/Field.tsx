@@ -1,4 +1,4 @@
-import { createUniqueId, For, type JSX, Show, splitProps } from "solid-js"
+import { createEffect, createUniqueId, For, type JSX, Show, splitProps } from "solid-js"
 import { cx } from "../lib/cx"
 import styles from "./Field.module.scss"
 
@@ -82,6 +82,23 @@ export interface SelectFieldProps extends JSX.SelectHTMLAttributes<HTMLSelectEle
 
 export function SelectField(props: SelectFieldProps) {
   const [local, rest] = splitProps(props, ["label", "hint", "options", "class"])
+  let element: HTMLSelectElement | undefined
+
+  /**
+   * A spread assigns `value` to the `<select>` *before* the `<For>` appends any `<option>`, and
+   * a browser silently drops a value no option carries — so without this, a control opened on
+   * anything but its first option renders the wrong selection, and so does one whose options
+   * arrive from a query after mount. Re-applied once both sides exist, and again whenever
+   * either changes. Skipped when nothing matches, rather than forcing a selection that is not
+   * on offer.
+   */
+  createEffect(() => {
+    const value = rest.value
+    const options = local.options
+    if (element === undefined || (typeof value !== "string" && typeof value !== "number")) return
+    const wanted = String(value)
+    if (options.some((option) => option.value === wanted)) element.value = wanted
+  })
 
   return (
     <Field hint={local.hint} label={local.label} required={rest.required === true}>
@@ -91,6 +108,9 @@ export function SelectField(props: SelectFieldProps) {
           aria-describedby={local.hint === undefined ? undefined : ids.describedBy}
           class={cx(styles.control, styles.select, local.class)}
           id={ids.id}
+          ref={(node) => {
+            element = node
+          }}
         >
           <For each={local.options}>
             {(option) => (

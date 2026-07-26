@@ -36,8 +36,11 @@ export const createPoolBody = z
     name: POOL_NAME,
     policy: RoutingPolicy.optional(),
     members: z.array(poolMemberInput).max(200).optional(),
-    /** The member of last resort — invisible to the policy until the pool filters empty. */
-    overflowAccountId: z.uuid().optional(),
+    /**
+     * The member of last resort — one of `members`, held back from the policy until the pool
+     * filters empty. `null` is the same as absent: no overflow.
+     */
+    overflowAccountId: z.uuid().nullable().optional(),
   })
   .strict()
 

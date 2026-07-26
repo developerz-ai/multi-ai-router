@@ -56,12 +56,20 @@ export function PoolFormDialog(props: PoolFormDialogProps) {
     ),
   )
 
+  /**
+   * The overflow is one of the members, held back from the policy — never a way out of the pool,
+   * because a key scoped to this pool must not reach an account the pool does not hold. So the
+   * choices are the members, and dropping a member drops the designation with it.
+   */
+  const overflowChoices = () => props.accounts.filter((account) => members().includes(account.id))
+  const overflowValue = () => (members().includes(overflow()) ? overflow() : "")
+
   const toggle = (accountId: string) => {
-    setMembers((current) =>
-      current.includes(accountId)
-        ? current.filter((id) => id !== accountId)
-        : [...current, accountId],
-    )
+    const next = members().includes(accountId)
+      ? members().filter((id) => id !== accountId)
+      : [...members(), accountId]
+    setMembers(next)
+    if (!next.includes(overflow())) setOverflow("")
   }
 
   const submit = (event: SubmitEvent) => {
@@ -71,7 +79,8 @@ export function PoolFormDialog(props: PoolFormDialogProps) {
       name: name().trim(),
       policy: policy(),
       members: memberInputs,
-      ...(overflow().length > 0 ? { overflowAccountId: overflow() } : {}),
+      // Explicitly `null` rather than absent: on an edit that is what clears a pool's overflow.
+      overflowAccountId: overflowValue().length > 0 ? overflowValue() : null,
     })
   }
 
@@ -137,14 +146,14 @@ export function PoolFormDialog(props: PoolFormDialogProps) {
         </fieldset>
 
         <SelectField
-          hint="The member of last resort — invisible to the policy until the pool filters empty."
+          hint="One of the members above, held back from the policy until every other member filters out. A key scoped to this pool never reaches an account the pool does not hold, so the overflow cannot be one."
           label="Overflow account"
           onChange={(event) => setOverflow(event.currentTarget.value)}
           options={[
-            { value: "", label: "None" },
-            ...props.accounts.map((account) => ({ value: account.id, label: account.label })),
+            { value: "", label: members().length === 0 ? "None — add a member first" : "None" },
+            ...overflowChoices().map((account) => ({ value: account.id, label: account.label })),
           ]}
-          value={overflow()}
+          value={overflowValue()}
         />
 
         <Show when={props.error !== undefined && props.error !== null}>

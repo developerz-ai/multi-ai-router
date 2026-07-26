@@ -1,11 +1,5 @@
-import {
-  type Dialect,
-  isRouterError,
-  NoHealthyAccountError,
-  type RouterError,
-} from "@multi-ai-router/core"
+import { isRouterError, NoHealthyAccountError } from "@multi-ai-router/core"
 import type { Logger } from "../../logging/logger"
-import { toRouterError } from "../../providers"
 import {
   type AttemptFailure,
   type Candidate,
@@ -16,16 +10,15 @@ import {
   recordAttempt,
 } from "../routing"
 import type { TranslationContext } from "../translate"
-import { createTokenObserver, NO_TOKEN_OBSERVER } from "../usage"
-import { type AttemptOutcome, runAttempt, type UpstreamError } from "./attempt"
+import { type AttemptOutcome, runAttempt } from "./attempt"
 import { rewriteModel } from "./body/read"
 import type { ByteSpan } from "./body/scanner"
+import { answeredFailure, type ChainFailure, foldChainFailure, routerFailure } from "./chain-error"
+import { recordAttemptFailure, relaySuccess } from "./chain-relay"
 import { breakerOptionsFor } from "./health"
 import type { ServableCandidate } from "./plan"
-import { attemptRecord, failureOutcome, SUCCESS_OUTCOME } from "./records"
-import { relayResponse } from "./relay"
+import { admitHalfOpenProbe } from "./probe"
 import { relayUpstreamError } from "./relay-error"
-import { relayTranslatedResponse } from "./relay-translate"
 import type { DispatchRuntime } from "./runtime"
 import { runSdkAttempt } from "./sdk-attempt"
 import type { TranslatedRequestBody } from "./translate-body"
@@ -40,6 +33,14 @@ import type { TranslatedRequestBody } from "./translate-body"
  *
  * Attempts are bounded, each one a distinct account — except the single in-place replay a stale SDK
  * session earns — and every one writes its own `UsageRecord`, sharing the request's correlation id.
+ *
+ * When several attempts fail, the one the client hears about is the **most actionable**, not the
+ * last: `chain-error.ts` ranks them, so a broken account late in the chain cannot bury the honest
+ * answer an account earlier in it already gave.
+ *
+ * A candidate the breaker offered as a half-open probe is admitted one at a time (`probe.ts`). A
+ * refusal drops it from this chain's candidate list — no attempt, no record, no upstream — because
+ * another request is already spending the single probe that account earns.
  */
 
 export interface ChainContext {
@@ -58,16 +59,16 @@ export interface ChainContext {
 }
 
 export async function runChain(ctx: ChainContext): Promise<Response> {
-  const ordered: readonly Candidate[] = ctx.plan.map((entry) => entry.candidate)
+  // Mutable for one reason: a half-open candidate another request is already probing is removed, so
+  // the planner walks past it instead of re-offering the same refusal forever.
+  let ordered: readonly Candidate[] = ctx.plan.map((entry) => entry.candidate)
   const byId = new Map(ctx.plan.map((entry) => [entry.candidate.account.id, entry]))
   const { runtime } = ctx
 
   let progress = NO_ATTEMPTS
   let lastFailure: AttemptFailure | null = null
-  let lastUpstream: UpstreamError | null = null
-  /** The dialect the last upstream error must be re-rendered into, or null when it already is. */
-  let lastUpstreamDialect: Dialect | null = null
-  let lastError: RouterError | null = null
+  /** The most actionable failure any attempt has produced so far. See `chain-error.ts`. */
+  let held: ChainFailure | null = null
   let upstreamMs = 0
 
   for (;;) {
@@ -78,10 +79,21 @@ export async function runChain(ctx: ChainContext): Promise<Response> {
     if (servable === undefined) break
 
     const accountId = servable.account.id
+    const attemptStartedAt = runtime.clock.now()
+
+    // Before the attempt is counted, because a refused probe is not an attempt: another request is
+    // already testing this recovering account, so this one drops the candidate and walks on rather
+    // than joining a stampede onto it.
+    const probe = admitHalfOpenProbe(runtime.health, decision.candidate, attemptStartedAt)
+    if (!probe.admitted) {
+      ordered = ordered.filter((candidate) => candidate.account.id !== accountId)
+      ctx.log?.debug("half-open probe already in flight", { accountId })
+      continue
+    }
+
     progress = recordAttempt(progress, accountId, decision.action === "retry-in-place")
     runtime.health.beginAttempt(accountId)
 
-    const attemptStartedAt = runtime.clock.now()
     const attemptStarted = runtime.clock.elapsed()
     const at = { startedAt: attemptStartedAt, started: attemptStarted, upstreamMs }
 
@@ -94,10 +106,14 @@ export async function runChain(ctx: ChainContext): Promise<Response> {
       upstreamBody = bodyFor(ctx, servable)
     } catch (error) {
       runtime.health.endAttempt(accountId)
+      probe.release()
       if (!isRouterError(error)) throw error
-      lastError = error
+      held = foldChainFailure(held, routerFailure(error))
       lastFailure = { kind: "client-error", message: error.message }
-      recordFailure(ctx, servable, decision.attempt, lastFailure, null, { ...at, upstreamMs })
+      recordAttemptFailure(ctx, servable, decision.attempt, lastFailure, null, {
+        ...at,
+        upstreamMs,
+      })
       continue
     }
 
@@ -106,12 +122,18 @@ export async function runChain(ctx: ChainContext): Promise<Response> {
       outcome = await dispatch(ctx, servable, upstreamBody)
     } catch (error) {
       // A credential that will not decrypt, or a driver that refused to build the request. This
-      // account cannot serve; the next one still can, and the reason is kept in case none can.
+      // account cannot serve; the next one still can, and the reason is kept in case none can —
+      // *kept*, not promoted: this account never reached an upstream, so it has no verdict on the
+      // request and cannot speak over one an account that did reach its upstream already gave.
       runtime.health.endAttempt(accountId)
+      probe.release()
       upstreamMs += runtime.clock.elapsed() - attemptStarted
-      lastError = isRouterError(error) ? error : null
+      held = foldChainFailure(held, isRouterError(error) ? routerFailure(error) : null)
       lastFailure = { kind: "server-error", message: "the account could not be dispatched to" }
-      recordFailure(ctx, servable, decision.attempt, lastFailure, null, { ...at, upstreamMs })
+      recordAttemptFailure(ctx, servable, decision.attempt, lastFailure, null, {
+        ...at,
+        upstreamMs,
+      })
       continue
     }
 
@@ -120,10 +142,19 @@ export async function runChain(ctx: ChainContext): Promise<Response> {
     if (outcome.kind === "success") {
       runtime.health.recordSuccess(accountId)
       runtime.health.applyRateLimit(accountId, outcome.rateLimit, attemptStartedAt)
+      // Released on the verdict, not when the stream settles: the probe's question was "is this
+      // account back?", and it has been answered. Holding the gate for the length of a generation
+      // would keep a recovered account out of every other request's snapshot for minutes.
+      probe.release()
       progress = markStreamed(progress)
       return relaySuccess(ctx, servable, decision.attempt, outcome.response, at)
     }
 
+    // Order is load-bearing. The classified failure is this response's *verdict* and lands first;
+    // the parsed headers are a reading that rode along with it and land second, where
+    // `applyRateLimit` can see the verdict already in place and decline to overwrite a terminal one.
+    // Reversed, a `402` carrying `x-ratelimit-remaining-requests: 0` would cool the account down
+    // before anything knew its balance was dead.
     runtime.health.recordFailure(
       accountId,
       outcome.failure,
@@ -132,9 +163,12 @@ export async function runChain(ctx: ChainContext): Promise<Response> {
     )
     runtime.health.applyRateLimit(accountId, outcome.rateLimit, attemptStartedAt)
     runtime.health.endAttempt(accountId)
+    // After the marks, never before: the failure has already cooled the account down to its next
+    // backoff step, so releasing here hands the gate to nobody rather than to the next stampede.
+    probe.release()
     upstreamMs += runtime.clock.elapsed() - attemptStarted
 
-    recordFailure(ctx, servable, decision.attempt, outcome.failure, outcome.upstream, {
+    recordAttemptFailure(ctx, servable, decision.attempt, outcome.failure, outcome.upstream, {
       ...at,
       upstreamMs,
     })
@@ -146,29 +180,34 @@ export async function runChain(ctx: ChainContext): Promise<Response> {
     })
 
     lastFailure = outcome.failure
-    lastUpstream = outcome.upstream
-    // A translated attempt's error body is the *account's* dialect. The client is owed its own.
-    lastUpstreamDialect = servable.translation === null ? null : runtime.ingressDialect
-    lastError = outcome.classification === null ? null : toRouterError(outcome.classification)
+    held = foldChainFailure(
+      held,
+      // A translated attempt's error body is the *account's* dialect. The client is owed its own.
+      answeredFailure(
+        outcome.classification,
+        outcome.upstream,
+        servable.translation === null ? null : runtime.ingressDialect,
+      ),
+    )
   }
 
-  // The failure that surfaces is the **last** attempt's. A router-shaped one — 429 with a reset,
-  // 402 saying a human must top up, 502 saying the *account's* credential failed rather than the
-  // caller's — is thrown so it renders in the ingress dialect. Anything else is the upstream's own
-  // answer, relayed unchanged: a bad request is bad at every account, and the provider's reply is
-  // the honest one.
-  if (lastError !== null) throw lastError
-  if (lastUpstream !== null) return relayUpstreamError(lastUpstream, lastUpstreamDialect)
+  // The failure that surfaces is the **most actionable** attempt's, not the last one: `chain-error.ts`
+  // owns that ranking, and the reason it is a ranking rather than an assignment is that a credential
+  // the router cannot read on candidate 3 must never overwrite candidate 1's honest `429`.
+  //
+  // A router-shaped failure — a 429 carrying the wait, a 402 saying a human must top up, a 502
+  // saying the *account's* credential was rejected rather than the caller's — is thrown, so it
+  // renders in the ingress dialect with the status its class fixes. Anything else is the upstream's
+  // own answer, relayed unchanged: a bad request is bad at every account, and the provider's reply
+  // is the honest one.
+  if (held !== null) {
+    if (held.kind === "router") throw held.error
+    return relayUpstreamError(held.upstream, held.dialect)
+  }
   if (lastFailure !== null) {
     throw new NoHealthyAccountError(`every attempt failed: ${lastFailure.message}`)
   }
   throw new NoHealthyAccountError("no candidate account could be attempted")
-}
-
-interface AttemptClock {
-  readonly startedAt: Date
-  readonly started: number
-  readonly upstreamMs: number
 }
 
 /**
@@ -221,89 +260,4 @@ function bodyFor(ctx: ChainContext, servable: ServableCandidate): Uint8Array | n
   if (ctx.bodyBytes.length === 0) return null
   if (ctx.modelSpan === null || servable.upstreamModel === ctx.runtime.model) return ctx.bodyBytes
   return rewriteModel(ctx.bodyBytes, ctx.modelSpan, servable.upstreamModel)
-}
-
-function relaySuccess(
-  ctx: ChainContext,
-  servable: ServableCandidate,
-  attempt: number,
-  response: Response,
-  at: AttemptClock,
-): Response {
-  // A count-tokens answer states `input_tokens` for a prompt that was never run. Reading it would
-  // record — and price — a measurement as though it were a completion, so that one response shape
-  // is relayed and observed for bytes only. See `usage/tokens.ts`. An embeddings answer is the
-  // opposite case and takes the ordinary observer: its `prompt_tokens` were genuinely spent, and
-  // the absent completion count lands as the zero it truthfully is.
-  const tokens =
-    ctx.runtime.operation === "count-tokens" ? NO_TOKEN_OBSERVER : createTokenObserver()
-  let firstByteAt: number | undefined
-  const settle = (streamed: boolean): void => {
-    // Everything this attempt spent — the call and every byte relayed off it — is time the router
-    // waited on the upstream, not time it worked. The failure path adds its attempt before
-    // recording; the success path has to add its own here, at the moment the last byte lands,
-    // because a stream settles long after the loop returned. Passing only the *previous* attempts'
-    // wait would fold a whole generation into `router_overhead_seconds`, the one series that must
-    // never contain upstream time (CLAUDE.md non-negotiable 8).
-    const upstreamMs = at.upstreamMs + (ctx.runtime.clock.elapsed() - at.started)
-    const counts = tokens.counts()
-    ctx.runtime.health.endAttempt(servable.account.id, counts.tokensOut)
-    ctx.runtime.record(
-      attemptRecord({
-        ...ctx.runtime.attribution(attempt, servable),
-        tokens: counts,
-        timing: ctx.runtime.timing(at.startedAt, at.started, upstreamMs, firstByteAt),
-        outcome: SUCCESS_OUTCOME,
-        streamed,
-        httpStatus: response.status,
-        errorClass: null,
-      }),
-    )
-  }
-
-  const observer = {
-    onFirstByte: () => {
-      firstByteAt = ctx.runtime.clock.elapsed()
-    },
-    onChunk: (chunk: Uint8Array) => tokens.observe(chunk),
-    onEnd: (bytes: number) => settle(bytes > 0),
-    // A stream that broke after bytes were on the wire is a truncation, never a retry.
-    onError: () => settle(true),
-  }
-
-  const pair = servable.translation
-  if (pair === null) return relayResponse(response, observer)
-
-  return relayTranslatedResponse({
-    upstream: response,
-    pair,
-    context: ctx.translation,
-    observer,
-    onUnrecognizedStopReason: (reason) =>
-      ctx.log?.warn("upstream reported an unrecognized stop reason", {
-        accountId: servable.account.id,
-        provider: servable.account.driver.provider,
-        stopReason: reason,
-      }),
-  })
-}
-
-function recordFailure(
-  ctx: ChainContext,
-  servable: ServableCandidate,
-  attempt: number,
-  failure: AttemptFailure,
-  upstream: UpstreamError | null,
-  at: AttemptClock,
-): void {
-  ctx.runtime.record(
-    attemptRecord({
-      ...ctx.runtime.attribution(attempt, servable),
-      timing: ctx.runtime.timing(at.startedAt, at.started, at.upstreamMs),
-      outcome: failureOutcome(failure.kind),
-      streamed: false,
-      httpStatus: upstream?.status ?? null,
-      errorClass: null,
-    }),
-  )
 }

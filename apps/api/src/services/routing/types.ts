@@ -27,6 +27,16 @@ export interface AccountHealth {
   readonly cooldownSource?: ResetSource
   /** Consecutive upstream failures — the exponential backoff step. */
   readonly consecutiveFailures: number
+  /**
+   * Deadline of the one half-open probe currently testing this account, absent when none is.
+   *
+   * The breaker says a recovering account may take **one** request as a probe; this is how that
+   * "one" is visible to a pure filter. While it is set and ahead of the clock the account is
+   * somebody else's to test, so every other request is dropped as `probe-in-flight` — which is
+   * clock-recoverable and therefore a `429` with this instant, never a stampede onto an account
+   * that just came back.
+   */
+  readonly probeHeldUntil?: Date
   /** Requests currently in flight. The default `least-used` measure. */
   readonly inFlight: number
   /** Tokens spent in the recent rolling window. The alternative `least-used` measure. */
@@ -68,8 +78,9 @@ export interface PoolSnapshot {
   /** Declared order. It is the tiebreak for `priority-failover` and for every stable sort here. */
   readonly members: readonly PoolMembership[]
   /**
-   * Optional member of last resort — typically a paid API key. Used only when every primary
-   * member is filtered out, and still subject to the key's scope. Designating one *is* the
+   * Optional member of last resort — typically a paid API key. It must be one of {@link members}:
+   * the designation withholds that membership from the policy, it does not admit an account from
+   * outside the pool. Used only when every other member is filtered out. Designating one *is* the
    * opt-in; there is no second switch.
    */
   readonly overflowAccountId?: string
