@@ -12,16 +12,21 @@ approximated. See [00-overview.md](00-overview.md) for the product boundary and
 1. **Ingress.** Hono receives `POST /v1/messages`, `POST /v1/messages/count_tokens`,
    `POST /v1/chat/completions`, `POST /v1/responses`, `POST /v1/embeddings`, or `GET /v1/models`.
    The path fixes both the dialect and the operation; neither is ever sniffed from a body. The request id is assigned here
-   and propagated end to end. Body size caps apply before anything is parsed; per-key rate limits are specified and **not
-   yet enforced**.
+   and propagated end to end.
 2. **Key verification.** The router key arrives as `Authorization: Bearer mar_live_…` or
    `x-api-key: mar_live_…`. Verification is served from an in-memory cache; on a miss, a short
    display prefix indexes the row, so it costs one indexed lookup plus one decrypt and a
    constant-time comparison — never a table scan. A revoked or expired key raises `KeyRevokedError`.
-3. **Request validation.** Only what routing needs is read from the body — the model name and the
-   session key — extracted incrementally, and the model name is carried unchanged. A full Zod parse
-   into the ingress dialect's shape happens only when cross-dialect translation turns out to be
-   required; on the passthrough path the body stays opaque. See the performance budget below.
+3. **Request validation.** The presenting key's own rate-limit ceiling is checked first, before a
+   byte of the body is read, because a refusal must cost less than the request it refuses — over it
+   is `KeyRateLimitedError`. Then only what routing needs is read from the body — the model name and
+   the session key — extracted incrementally, and the model name is carried unchanged. The body size
+   cap (`MAX_REQUEST_BODY_BYTES`, 32 MiB by default) applies here and nothing is ever parsed to
+   enforce it: a declared `Content-Length` over the ceiling is refused unread, and a body that lies
+   about its length is refused as it streams, in both cases with `413` `request_too_large` and never
+   the `400` that would send a caller hunting a malformed field. A full Zod parse into the ingress
+   dialect's shape happens only when cross-dialect translation turns out to be required; on the
+   passthrough path the body stays opaque. See the performance budget below.
 4. **Session resolution.** The sticky key is taken from the client-supplied session header, else
    fingerprinted from the conversation's opening bytes. On the plain HTTP path this is **pure
    derivation with nothing stored** — the key is an input to rendezvous hashing, so placement

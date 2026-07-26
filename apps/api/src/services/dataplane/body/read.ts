@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto"
-import { TranslationError } from "@multi-ai-router/core"
+import { RequestTooLargeError } from "@multi-ai-router/core"
 import {
   type ByteSpan,
   createRoutingScanner,
@@ -21,11 +21,22 @@ import {
  */
 
 export interface BodyReadOptions extends ScannerOptions {
-  /** Hard ceiling. An unbounded read is a denial-of-service surface, not a generosity. */
+  /**
+   * Hard ceiling, in bytes. An unbounded read is a denial-of-service surface, not a generosity.
+   *
+   * Operator-configured (`MAX_REQUEST_BODY_BYTES`), because the right value is a property of the
+   * deployment and not of this file: a router fronting agents that paste whole repositories into a
+   * prompt needs a different number from one serving chat, and a limit compiled into the binary is
+   * one an operator cannot move.
+   */
   readonly maxBytes?: number
 }
 
+/** Generous, because a long agent transcript with base64 images is a normal request. */
 export const DEFAULT_MAX_BODY_BYTES = 32 * 1024 * 1024
+
+/** What the reader needs of a request: the bytes, and what the client claimed it was sending. */
+export type RequestBodySource = Pick<Request, "body" | "headers">
 
 export interface RequestBody {
   readonly bytes: Uint8Array
@@ -34,14 +45,21 @@ export interface RequestBody {
 
 const TOO_LARGE = "Request body exceeds the configured size limit"
 
-/** @throws TranslationError when the body exceeds `maxBytes`. */
+/** @throws RequestTooLargeError when the body exceeds `maxBytes`. */
 export async function readRequestBody(
-  stream: ReadableStream<Uint8Array> | null,
+  request: RequestBodySource,
   options: BodyReadOptions = {},
 ): Promise<RequestBody> {
   const scanner = createRoutingScanner(options)
   const limit = options.maxBytes ?? DEFAULT_MAX_BODY_BYTES
 
+  // The cheapest refusal there is: a client announcing four gigabytes is turned away before the
+  // first chunk is read, rather than after the ceiling's worth of it has been streamed, buffered,
+  // and thrown away. A body that lies about its length is still caught below.
+  const declared = declaredBodyBytes(request.headers)
+  if (declared !== null && declared > limit) throw new RequestTooLargeError(TOO_LARGE)
+
+  const stream = request.body
   if (stream === null) {
     return { bytes: new Uint8Array(0), fields: scanner.result() }
   }
@@ -57,7 +75,7 @@ export async function readRequestBody(
       if (value === undefined) continue
       total += value.length
       // Thrown before the buffer grows past the limit, not after it has already been paid for.
-      if (total > limit) throw new TranslationError(TOO_LARGE)
+      if (total > limit) throw new RequestTooLargeError(TOO_LARGE)
       chunks.push(value)
       if (!scanner.done) scanner.push(value)
     }
@@ -66,6 +84,23 @@ export async function readRequestBody(
   }
 
   return { bytes: concat(chunks, total), fields: scanner.result() }
+}
+
+/** RFC 9110's `Content-Length` is `1*DIGIT` and nothing else. */
+const CONTENT_LENGTH_SHAPE = /^\d+$/
+
+/**
+ * The length the client declared, or null when it declared none the router can act on.
+ *
+ * Anything malformed — a signed value, a list of values, a float, whitespace — is *ignored* rather
+ * than rejected: the streaming ceiling is the authority on how many bytes actually arrived, and a
+ * proxy that refuses a request over a header it could simply not trust breaks callers for no gain.
+ */
+export function declaredBodyBytes(headers: Pick<Headers, "get">): number | null {
+  const raw = headers.get("content-length")
+  if (raw === null || !CONTENT_LENGTH_SHAPE.test(raw)) return null
+  const value = Number(raw)
+  return Number.isFinite(value) ? value : null
 }
 
 function concat(chunks: readonly Uint8Array[], total: number): Uint8Array {

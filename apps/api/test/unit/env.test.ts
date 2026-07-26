@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import { EnvValidationError, parseEnv } from "../../src/config/env"
+import { DEFAULT_MAX_BODY_BYTES } from "../../src/services/dataplane"
 
 const ENCRYPTION_KEY = Buffer.alloc(32, 7).toString("base64")
 
@@ -280,6 +281,29 @@ describe("parseEnv", () => {
     test("a zero half-open hold is refused: a gate that never holds is not a gate", () => {
       expect(expectEnvError({ ...base, ROUTING_HALF_OPEN_HOLD_MS: "0" }).variables).toEqual([
         "ROUTING_HALF_OPEN_HOLD_MS",
+      ])
+    })
+  })
+
+  describe("MAX_REQUEST_BODY_BYTES", () => {
+    test("defaults to the reader's own ceiling, so unset and set-to-the-default agree", () => {
+      expect(parseEnv(base).dataPlane.maxRequestBodyBytes).toBe(DEFAULT_MAX_BODY_BYTES)
+    })
+
+    test("the operator's number is the one parsed", () => {
+      const env = parseEnv({ ...base, MAX_REQUEST_BODY_BYTES: "1048576" })
+      expect(env.dataPlane.maxRequestBodyBytes).toBe(1_048_576)
+    })
+
+    test("a zero ceiling is refused: a router that reads nothing serves nothing", () => {
+      expect(expectEnvError({ ...base, MAX_REQUEST_BODY_BYTES: "0" }).variables).toEqual([
+        "MAX_REQUEST_BODY_BYTES",
+      ])
+    })
+
+    test("names it when it is not a whole number of bytes", () => {
+      expect(expectEnvError({ ...base, MAX_REQUEST_BODY_BYTES: "32MB" }).variables).toEqual([
+        "MAX_REQUEST_BODY_BYTES",
       ])
     })
   })

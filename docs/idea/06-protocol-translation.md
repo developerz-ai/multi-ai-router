@@ -443,6 +443,12 @@ Agent-SDK one. Router-origin errors (`NoHealthyAccountError`, `QuotaExhaustedErr
 shape with a stable HTTP status. `param` and `code` are best-effort and may be null. No error body
 ever carries credential material or the identity of the account that failed.
 
+One router-origin status is worth naming because it is easy to get wrong: a body over
+`MAX_REQUEST_BODY_BYTES` renders as `413` — `request_too_large` in the Anthropic vocabulary,
+`invalid_request_error` with `code: "request_too_large"` in the OpenAI one — and never as `400`. Both
+are the caller's to fix, and the remedies are opposites: `400` says the request is malformed and
+sends a developer hunting a bad field in a body that was merely long.
+
 The rendered `type` is derived from the **HTTP status**, not copied from the upstream body. The
 vocabularies are per-dialect — `invalid_request_error` is spelled the same in both, `overloaded_error`
 and `server_error` are not — and a foreign type name in the wrong dialect is a lie a client will

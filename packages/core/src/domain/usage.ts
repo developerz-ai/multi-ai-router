@@ -31,6 +31,15 @@ export const UsageOutcome = z.enum([
   "client_error",
   /** The router refused to convert the request across dialects rather than drop a contract field. */
   "translation_failed",
+  /**
+   * The body was larger than `MAX_REQUEST_BODY_BYTES` and was refused before any account was asked.
+   *
+   * Kept apart from `client_error` because the remedy is different and an operator's share of it is
+   * real: a caller that legitimately sends long transcripts is fixed by raising the ceiling, not by
+   * fixing a malformed request. Folding the two together would hide "every failure today is one
+   * client hitting a cap I chose" inside "callers are sending bad JSON".
+   */
+  "request_too_large",
   /** The presented router key is unknown, revoked, or expired. */
   "key_revoked",
   /** The key's scope intersected the pool to nothing, or named an account it may not reach. */
@@ -90,6 +99,7 @@ const FAULT_BY_OUTCOME: Readonly<Record<UsageOutcome, UsageFault>> = {
 
   client_error: "client",
   translation_failed: "client",
+  request_too_large: "client",
   key_revoked: "client",
   scope_violation: "client",
   key_rate_limited: "client",
@@ -129,6 +139,7 @@ const OUTCOME_BY_ERROR_CODE: Readonly<Record<RouterErrorCode, UsageOutcome>> = {
   upstream_timeout: "upstream_timeout",
   credential_decrypt_failed: "credential_decrypt_failed",
   translation_failed: "translation_failed",
+  request_too_large: "request_too_large",
   admin_auth_failed: "router_error",
   csrf_token_invalid: "router_error",
   // `GET /v1/models/:id` never runs an attempt and never writes a `UsageRecord` — this only

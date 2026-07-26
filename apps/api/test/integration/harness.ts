@@ -75,6 +75,8 @@ export interface HarnessOptions {
    * Omitted, every attempt prices off the table shipped in the image.
    */
   readonly prices?: RateLookup
+  /** The body ceiling, as the composition root passes `env.dataPlane.maxRequestBodyBytes`. */
+  readonly maxBodyBytes?: number
 }
 
 export function harness(options: HarnessOptions) {
@@ -135,6 +137,9 @@ export function harness(options: HarnessOptions) {
         options: {
           failover: { maxAttempts: options.maxAttempts ?? 3 },
           ...(options.selection === undefined ? {} : { selection: options.selection }),
+          ...(options.maxBodyBytes === undefined
+            ? {}
+            : { body: { maxBytes: options.maxBodyBytes } }),
         },
       }),
     }),

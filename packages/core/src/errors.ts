@@ -23,6 +23,7 @@ export const ROUTER_ERROR_CODES = [
   "credential_decrypt_failed",
   "translation_failed",
   "model_not_found",
+  "request_too_large",
 ] as const
 
 export type RouterErrorCode = (typeof ROUTER_ERROR_CODES)[number]
@@ -215,6 +216,20 @@ export class TranslationError extends RouterError {
 export class ModelNotFoundError extends RouterError {
   readonly code = "model_not_found"
   readonly status = 404
+}
+
+/**
+ * The request body is larger than the configured ceiling (`MAX_REQUEST_BODY_BYTES`).
+ *
+ * `413`, deliberately not the `400` a {@link TranslationError} carries. Both are the caller's to
+ * fix, but the remedies are opposites: `400` says "your request is malformed", which sends a
+ * developer looking for a bad field in a body that was perfectly well formed and merely long. `413`
+ * says "send less, or ask the operator to raise the ceiling", which is the truth. Anthropic and
+ * OpenAI both spell this status the same way, so a client already knows what to do with it.
+ */
+export class RequestTooLargeError extends RouterError {
+  readonly code = "request_too_large"
+  readonly status = 413
 }
 
 /** Narrows an unknown thrown value to a {@link RouterError}. */

@@ -4,6 +4,7 @@ import { createRuntime, type Runtime } from "../../src/composition"
 import { parseEnv } from "../../src/config/env"
 import { createLogger } from "../../src/logging/logger"
 import type { RateLimitSignal } from "../../src/providers"
+import type { VerifiedKey } from "../../src/services/dataplane"
 import { JITTER_FRACTION } from "../../src/services/routing"
 
 /**
@@ -234,5 +235,61 @@ describe("the half-open gate is wired, per its own knob", () => {
     health.admitProbe("a", recovered)
 
     expect(health.stateOf("a").probeHeldUntil).toEqual(new Date(recovered.getTime() + 1_234))
+  })
+})
+
+/**
+ * `MAX_REQUEST_BODY_BYTES` reaching the reader is the whole feature: parsed at boot and wired
+ * nowhere is exactly the failure the file above documents, and the reader's own 32 MiB default would
+ * have hidden it — no test with a body under 32 MiB can tell a wired ceiling from an unwired one.
+ *
+ * The refusal happens before selection, so nothing here needs an account, a catalog, or a query.
+ */
+describe("the body ceiling reaches the reader", () => {
+  const KEY: VerifiedKey = {
+    id: "11111111-1111-4111-8111-111111111111",
+    name: "test",
+    prefix: "mar_test",
+    scope: { kind: "all" },
+    rateLimitRequests: null,
+    rateLimitWindowSeconds: null,
+    expiresAt: null,
+  }
+
+  const dispatch = (runtime: Runtime, body: string): Promise<Response> =>
+    runtime.dispatcher.dispatch({
+      ingress: "anthropic",
+      request: new Request("http://router.test/v1/messages", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body,
+      }),
+      key: KEY,
+      requestId: "req-1",
+    })
+
+  const message = (padding: number): string =>
+    JSON.stringify({
+      model: "claude-opus-5",
+      max_tokens: 16,
+      messages: [{ role: "user", content: "x".repeat(padding) }],
+    })
+
+  test("a body over the operator's ceiling is a 413", async () => {
+    const runtime = runtimeWith({ MAX_REQUEST_BODY_BYTES: "512" })
+
+    const response = await dispatch(runtime, message(2_048)).catch((error: unknown) => error)
+
+    expect(response).toMatchObject({ status: 413, code: "request_too_large" })
+  })
+
+  test("a body under it is not, and gets as far as needing an account", async () => {
+    const runtime = runtimeWith({ MAX_REQUEST_BODY_BYTES: "4096" })
+
+    const response = await dispatch(runtime, message(64)).catch((error: unknown) => error)
+
+    // The catalog is empty because nothing loaded it, so selection is what refuses. The point is
+    // that the read succeeded and the request got as far as selection at all.
+    expect(response).toMatchObject({ code: "scope_violation" })
   })
 })

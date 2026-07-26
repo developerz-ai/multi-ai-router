@@ -147,7 +147,7 @@ export function createDispatcher(deps: DispatcherDeps): Dispatcher {
     const limit = deps.limiter?.check(input.key, startedAt.getTime())
     if (limit !== undefined && !limit.allowed) throw keyRateLimitedError(input.key, limit)
 
-    const body = await readRequestBody(input.request.body, options.body)
+    const body = await readRequestBody(input.request, options.body)
     const model = body.fields.model
     if (model === null) throw new TranslationError(NO_MODEL)
     progress.model = model

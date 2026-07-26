@@ -43,6 +43,7 @@ export {
   ModelNotFoundError,
   NoHealthyAccountError,
   QuotaExhaustedError,
+  RequestTooLargeError,
   RetryableRouterError,
   ROUTER_ERROR_CODES,
   RouterError,

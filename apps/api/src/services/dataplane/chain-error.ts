@@ -56,12 +56,13 @@ export type ChainFailure =
  * until someone has decided what it means for a caller holding one of these instead.
  */
 const RANK: Readonly<Record<RouterErrorCode, number>> = {
-  // Settled before a chain starts (the presented key, its scope), off the data plane entirely (the
-  // admin console), or answered by a catalog lookup rather than a dispatch. None can reach this
-  // fold. They rank above everything rather than at the floor so that a future path which *does*
-  // route one here surfaces it, instead of silently folding it away.
+  // Settled before a chain starts (the presented key, its scope, the size of the body), off the
+  // data plane entirely (the admin console), or answered by a catalog lookup rather than a
+  // dispatch. None can reach this fold. They rank above everything rather than at the floor so that
+  // a future path which *does* route one here surfaces it, instead of silently folding it away.
   key_revoked: 90,
   scope_violation: 90,
+  request_too_large: 90,
   admin_auth_failed: 90,
   csrf_token_invalid: 90,
   model_not_found: 90,
