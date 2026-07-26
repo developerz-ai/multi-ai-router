@@ -279,6 +279,20 @@ in a test as on the wire.
 | Thing | Where | Use it when |
 |---|---|---|
 | `createMemoryStore()` → `MemoryStore` | `test/support/memory-store.ts` | Any test of an admin service or the admin API. Not a mock with expectations — the smallest honest implementation of the four repository interfaces, so the service under test runs its real code path and the test asserts on **rows**. It is what lets the admin unit *and* integration suites run with no `DATABASE_URL` |
+| `harness(options)` → app + upstream + usage + clock | `test/integration/harness.ts` | Any integration suite exercising the data plane. Real Hono, real middleware, real routing and relay; `fetch`, the key repository, and the clock injected. The clock is driven by hand, so "the upstream took 400 ms" is stated, never waited for |
+| `account()`, `catalog()`, `cipher()`, `apiKeyRow()`, `keyRepository()`, `mockUpstream()`, `slowStream()` | `test/unit/dataplane/fixtures.ts` | Building data-plane inputs anywhere — including `apps/api/bench/`, which reuses them rather than restating the shapes |
+
+### Overhead bench — `apps/api/bench/`
+
+| Thing | Where | Use it when |
+|---|---|---|
+| `benchApp(options)` → the router booted in memory | `bench/harness.ts` | Measuring the request path. The composition root's wiring with three substitutions a benchmark forces: the stub upstream, an array key repository, and a log sink that serializes and discards |
+| `stubUpstream(options)` → `fetch` + per-request `Trip` | `bench/upstream.ts` | Answering in either dialect, streamed or not, with a controlled time to first byte and per-request timestamps for both ends of the relay |
+| `parseHistogram()`, `histogramQuantile()`, `histogramMean()`, `sampleQuantile()` | `bench/quantiles.ts` | Reading a Prometheus exposition back as numbers. Pure; `histogramQuantile` matches Prometheus' own interpolation, so a printed number is the number a dashboard shows |
+
+Driven by `bin/bench`, guarded by `test/integration/bench.test.ts`, and explained in
+[`docs/idea/08-observability.md`](idea/08-observability.md#verifying-the-budget). It measures nothing
+itself — it drives traffic and reads `router_overhead_seconds` off `GET /metrics`.
 
 ### Web — `apps/web/src/`
 

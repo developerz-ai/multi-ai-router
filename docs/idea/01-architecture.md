@@ -198,6 +198,7 @@ time-to-first-token** beyond the one extra network hop.
 | Reuse connections | Keep-alive pools per upstream host, warmed at boot, so a request never pays TLS setup. Same for the Postgres pool |
 | Routing math is pure and allocation-light | Rendezvous hashing over a small candidate array; no I/O and no locks on the read path |
 | Measure it | `router_overhead_seconds` (time inside the router, excluding upstream) is a first-class metric, shown next to upstream latency. A regression is a bug |
+| Reproduce it on demand | `bin/bench` drives the real router against an in-process stub upstream and reads both claims back off its own metrics — p50/p95/p99 overhead per egress path, and added time-to-first-token measured separately. Non-zero exit when either breaks. See [08-observability.md](08-observability.md#verifying-the-budget) |
 
 **The Agent-SDK path is the labeled exception.** A subprocess per request is inherently heavier than
 an HTTP hop; the budget does not apply to it uniformly and the docs say so rather than pretending

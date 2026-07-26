@@ -290,6 +290,47 @@ translation. And `router_failovers_total` counts a hop only once a **later** att
 request proves the router moved on, so a chain that gave up leaves its final failure uncounted:
 it moved nowhere. Requests that failed outright are counted by `router_requests_total{outcome}`.
 
+### What "excluding upstream" excludes
+
+`router_overhead_seconds` is `totalMs - upstreamMs` for the request so far, and on a streamed reply
+**the drain counts as upstream time**. Relaying is waiting, not working: the router is a pipe from
+the first byte to the last, and charging a two-minute completion's stream to the router would put
+generation time in the one series that exists to keep generation time out. What is left is the work
+either side of the wire — key verification, session resolution, the health snapshot, selection, the
+egress plan, header swapping, relay set-up, and the usage enqueue.
+
+The invariant that follows is what the tests assert: a request whose upstream took 400 ms records a
+`routerOverheadMs` in single digits, not 400-and-change. `router_overhead_seconds` and
+`router_upstream_duration_seconds` are complements over one wall clock, never two views of the same
+milliseconds — and if they ever start to double-count, the overhead number is the one that has gone
+wrong, because upstream time is the number with an independent witness.
+
+### Verifying the budget
+
+The budget in [01-architecture.md](01-architecture.md) is two claims, and they need two
+measurements, so `bin/bench` reports them as two tables:
+
+| Claim | Measured as |
+|---|---|
+| **< 5 ms added p99** | Read straight off `router_overhead_seconds` via `GET /metrics`, after driving concurrent requests through the real router against an in-process stub upstream. Nothing external is timed — the series that alerts is the series that is checked |
+| **Zero added time-to-first-token** | The stub records when it released its first byte; the driver records when the client saw one. The difference is what the router added. A first client byte arriving *after* the upstream's last is a relay that buffered, which fails the run by name rather than showing up as a slow percentile |
+
+Both non-SDK egress paths are covered, streamed and not. The Agent-SDK path is excluded: it spawns a
+subprocess per request and is the budget's labeled exception.
+
+Two honesty notes the tool prints for itself. The series is fed whole-millisecond samples
+(`routerOverheadMs` is an integer column), so every percentile below 1 ms is a bucket bound rather
+than a measurement and the **mean** is the number with sub-millisecond resolution. And concurrency
+against a fast stub is load-shaping, not realism: an upstream that answers instantly saturates the
+event loop, and the queueing that follows is genuinely time in the router, so it lands in the
+histogram. The defaults sit well under saturation; raising `--concurrency` or dropping
+`--first-byte-ms` measures the saturation point instead, which is a fair thing to want and a
+different thing to read.
+
+`bin/bench` exits non-zero when either claim breaks, which makes it usable as a gate. It is
+deliberately **not** part of `bin/check`: a timing measurement on a shared CI runner is a flaky
+test, and a flaky gate is one people learn to skip.
+
 ## Structured logging
 
 JSON lines to stdout, one object per event. The container logs; shipping them is the operator's job.

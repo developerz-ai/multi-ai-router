@@ -81,6 +81,10 @@ export interface DispatchRuntime extends RuntimeInput {
   /**
    * Router overhead is total router time minus time spent waiting on upstreams.
    *
+   * `upstreamMs` is that wait accumulated across the whole request, **including the attempt being
+   * recorded** — the caller adds its own before calling, because only the caller knows when its
+   * attempt stopped waiting (a stream settles well after the chain returned).
+   *
    * `firstByteAt` is a monotonic reading taken when the first byte was relayed, or undefined when
    * none was. Undefined records as NULL, never as zero: a TTFB of 0 ms is a claim nobody measured.
    */

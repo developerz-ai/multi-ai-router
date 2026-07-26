@@ -50,7 +50,7 @@ Marked ⏳ where the design is settled but the code is not — see [Status](#-st
 - 🔑 **Named, retrievable keys with full or limited scope** — every key has a human-chosen name and a scope: `all` accounts, one or more pools, or an explicit account list. Stored encrypted, not hashed, so you can look a key up again without rotating it. A per-key rate limit is enforced on the request path.
 - 📊 **Usage** — one record per upstream **attempt** (key, account, pool, session, model, tokens, cost, latency, TTFB, router overhead, outcome), queued in memory and batch-written off the request path, and read back by the console over any window, broken down by key, account, pool or model — with daily rollups behind it, cost estimation from an operator-editable price table, and a Prometheus `/metrics` exposition in front.
 - ⏱️ **Reset visibility** — every unavailable account shows its reset as an absolute time *and* a countdown, per window for Claude subs (5-hour, 7-day, per-model), labeled as reported / estimated / unknown. Plus a manual **Re-check now**, per account or for all: providers sometimes reset early or lift a limit for everyone, and the router shouldn't sit on a stale timestamp.
-- ⚡ **Performance as a stated goal** — under 5 ms added p99 on the passthrough path and zero added time-to-first-token. Streams are never buffered, passthrough bodies are never parsed, and nothing touches Postgres on the critical path: accounts and pools are read from a warm catalog, keys from a bounded cache, usage is written off-path.
+- ⚡ **Performance as a stated goal** — under 5 ms added p99 on the passthrough path and zero added time-to-first-token. Streams are never buffered, passthrough bodies are never parsed, and nothing touches Postgres on the critical path: accounts and pools are read from a warm catalog, keys from a bounded cache, usage is written off-path. `bin/bench` checks both claims against a stub upstream and exits non-zero when either breaks.
 - 🖥️ **SolidJS operator console** — overview, accounts, pools, keys, usage and settings all render live data: key reveal with no shown-once flow, destructive actions that name exactly what they break, reset shown as absolute time *and* countdown labelled by how far it can be trusted, a red banner for any account out of credits, and a settings screen with live price overrides, retention knobs, scheduled-task health, and the audit feed.
 - 🐳 **`docker compose up -d`** — the router plus PostgreSQL 16, a healthcheck gating startup, three env vars you set by hand.
 
@@ -100,6 +100,10 @@ bin/setup     # fresh clone: prereqs, install, .env with a generated ENCRYPTION_
 bin/dev       # each session: API + web, watch mode
 bin/check     # before committing: lint, typecheck, test — the CI job list, in order
 ```
+
+One more when you touch the request path: `bin/bench` drives the real router against an in-process
+stub upstream and reports what its own `router_overhead_seconds` histogram recorded, plus added
+time-to-first-token measured separately. It exits non-zero when either half of the budget breaks.
 
 ---
 

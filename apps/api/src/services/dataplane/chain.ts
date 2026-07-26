@@ -239,13 +239,20 @@ function relaySuccess(
     ctx.runtime.operation === "count-tokens" ? NO_TOKEN_OBSERVER : createTokenObserver()
   let firstByteAt: number | undefined
   const settle = (streamed: boolean): void => {
+    // Everything this attempt spent — the call and every byte relayed off it — is time the router
+    // waited on the upstream, not time it worked. The failure path adds its attempt before
+    // recording; the success path has to add its own here, at the moment the last byte lands,
+    // because a stream settles long after the loop returned. Passing only the *previous* attempts'
+    // wait would fold a whole generation into `router_overhead_seconds`, the one series that must
+    // never contain upstream time (CLAUDE.md non-negotiable 8).
+    const upstreamMs = at.upstreamMs + (ctx.runtime.clock.elapsed() - at.started)
     const counts = tokens.counts()
     ctx.runtime.health.endAttempt(servable.account.id, counts.tokensOut)
     ctx.runtime.record(
       attemptRecord({
         ...ctx.runtime.attribution(attempt, servable),
         tokens: counts,
-        timing: ctx.runtime.timing(at.startedAt, at.started, at.upstreamMs, firstByteAt),
+        timing: ctx.runtime.timing(at.startedAt, at.started, upstreamMs, firstByteAt),
         outcome: SUCCESS_OUTCOME,
         streamed,
         httpStatus: response.status,

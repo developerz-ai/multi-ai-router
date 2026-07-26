@@ -68,6 +68,7 @@ Postgres is the house standard and the current decision — earlier drafts said 
 | Format | `bin/fmt` |
 | Fresh clone → running stack | `bin/setup` |
 | The gate (lint + typecheck + test), before committing | `bin/check` |
+| Overhead budget: p50/p95/p99 + added TTFT vs a stub upstream | `bin/bench` |
 | Dev database shell / migrate / reset | `bin/db psql` · `bin/db migrate` · `bin/db reset` |
 | Build release image locally | `docker build -t multi-ai-router:dev .` |
 

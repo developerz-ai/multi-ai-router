@@ -318,6 +318,13 @@ records are enqueued and written in batches by a background writer, so a slow da
 reporting and never traffic. The `router_overhead_seconds` histogram makes a regression visible; see
 [08-observability.md](08-observability.md).
 
+`bin/bench` is how the two claims are checked rather than asserted: it drives the real router against
+an in-process stub upstream, reads the overhead percentiles back off `GET /metrics`, measures added
+time-to-first-token separately, and exits non-zero when either breaks. Run it when you touch the
+request path and before cutting a release — it is not part of `bin/check`, because a timing
+measurement on a shared runner is a flaky test. Details and caveats:
+[08-observability.md](08-observability.md#verifying-the-budget).
+
 | Scales with | Does not scale with |
 |---|---|
 | Concurrent open streams — one socket plus a small buffer per in-flight request | CPU cores. Routing is rendezvous hashing over a short array; passthrough parses nothing. |

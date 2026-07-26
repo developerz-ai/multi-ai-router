@@ -1,0 +1,22 @@
+#!/bin/sh
+# Measure the overhead budget instead of asserting it.
+#
+# CLAUDE.md non-negotiable 8 promises two things: under 5 ms added p99 on the
+# passthrough path, and zero added time-to-first-token on a stream. This drives
+# the real router against an in-process stub upstream, reads the numbers back off
+# its own `router_overhead_seconds` histogram via GET /metrics, and exits 1 when
+# either promise is broken.
+#
+# Deliberately not part of bin/check: a timing measurement on a shared runner is
+# a flaky test, and a flaky gate is one people learn to ignore. Run it when you
+# touch the request path, and before a release.
+#
+#   bin/bench                          # defaults
+#   bin/bench --requests 10000         # a longer run
+#   bin/bench --json                   # machine-readable
+#   bin/bench --help                   # every option
+set -eu
+
+cd "$(dirname "$0")/.."
+
+exec bun apps/api/bench/run.ts "$@"
