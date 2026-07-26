@@ -18,10 +18,11 @@ export {
  */
 export { timingSafeEqualStrings } from "./constantTime"
 export {
-  SESSION_COOKIE_FULL_NAME,
   SESSION_COOKIE_NAME,
   type SessionCookieOptions,
+  sessionCookieFullName,
   sessionCookieOptions,
+  sessionCookiePrefix,
 } from "./cookies"
 export { CSRF_HEADER, isMutatingMethod } from "./csrf"
 export {

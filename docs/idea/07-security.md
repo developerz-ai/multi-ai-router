@@ -112,7 +112,7 @@ field; the implementation is the compact string above and it is what the code do
 |---|---|
 | Front door | HTTPS terminated by a reverse proxy in front. The container speaks plain HTTP on its own port and is not meant to be published directly |
 | `TRUST_PROXY` | When set, `X-Forwarded-For` / `X-Forwarded-Proto` are honored for client IP (rate limiting, throttling, audit) and scheme. Off by default — an untrusted forwarded header is a rate-limit bypass |
-| Cookies | `Secure` always, `httpOnly`, `SameSite=Strict`, host-only, no cookie on data-plane routes |
+| Cookies | `httpOnly` + `SameSite=Strict` always; `Secure` + `__Host-` by default, dropped together only under `SESSION_COOKIE_INSECURE` for a plain-HTTP LAN install (warned at boot — see [04-api-keys-and-access.md](04-api-keys-and-access.md#session-cookie)). No cookie on data-plane routes |
 | Upstream | TLS to the pinned base URLs in [03-providers.md](03-providers.md). No plaintext upstream, no proxy-through of client-supplied upstream URLs |
 
 ## Router API keys
@@ -144,7 +144,7 @@ inline with a copy button — retrieval is the recovery path, not the normal one
 | Identity | A single admin, from the environment. No user table in v1 |
 | Credentials | `ADMIN_USERNAME` + `ADMIN_PASSWORD` (plaintext in env, hashed with argon2id at boot, never persisted in plaintext), or `ADMIN_PASSWORD_HASH` (pre-computed argon2id). **`ADMIN_PASSWORD_HASH` takes precedence when both are set.** Exactly one form must be present or boot fails |
 | Hashing | argon2id, with parameters pinned in one place |
-| Session | Login issues an httpOnly, `SameSite=Strict`, `Secure` cookie with a bounded lifetime. Logout invalidates server-side |
+| Session | Login issues an httpOnly, `SameSite=Strict`, `Secure`, `__Host-` cookie with a bounded lifetime. Logout invalidates server-side. `SESSION_COOKIE_INSECURE` drops `Secure`+`__Host-` for a plain-HTTP install and nothing else |
 | CSRF | A token is required on every mutating admin request. `SameSite=Strict` is the belt; the token is the braces |
 | Throttling | Per-IP and per-account login attempt throttling with backoff. Failed logins are audit events |
 | 2FA | `ADMIN_TOTP_SECRET` is **DEFERRED** |
@@ -225,6 +225,9 @@ For operators, at deploy time:
   tree, owned by the non-root container user, excluded from any log or metrics collection path.
 - Do not expose the Postgres port outside the compose network; run the container as a non-root user.
 - Set `TRUST_PROXY` only when a proxy you control is actually in front.
+- Leave `SESSION_COOKIE_INSECURE` unset. It is only for a plain-HTTP LAN install, where the
+  hardened session cookie is discarded by the browser and login silently fails; the moment HTTPS
+  is in front, unset it. The router logs a `warn` naming the risk on every boot while it is on.
 - Give every key a name and the narrowest pool binding that works. Revoke keys you no longer
   recognize — see [04-api-keys-and-access.md](04-api-keys-and-access.md).
 - Watch the audit log and the account health panel; an unexpected `needs_reauth` or `exhausted`

@@ -7,6 +7,7 @@ import {
   CSRF_HEADER,
   isMutatingMethod,
   SESSION_COOKIE_NAME,
+  sessionCookiePrefix,
 } from "../services/admin-auth"
 import type { AppEnv } from "../types"
 
@@ -22,6 +23,11 @@ import type { AppEnv } from "../types"
  * 2. **The session cookie** resolves to live server-side state, or the request is 401.
  * 3. **CSRF** on every mutating method, because `SameSite=Strict` is a browser behavior and this
  *    is the application invariant — see the reasoning in `services/admin-auth/csrf.ts`.
+ *
+ * `sessionCookieInsecure` is the reader half of `services/admin-auth/cookies.ts`: the prefix
+ * decides which key `getCookie` looks up, so the guard has to be built from the same value the
+ * login route writes under. It is required, not defaulted, for the reason the guard itself is
+ * required on every route factory — a mount cannot silently be wired half-right.
  */
 
 /** `AppEnv` plus the session the guard resolved. Transport-only, like `AppEnv` itself. */
@@ -33,13 +39,18 @@ export interface AdminAuthEnv extends AppEnv {
 
 const ROUTER_KEY_REJECTED = "A router API key cannot authenticate the admin plane"
 
-export function adminAuth(service: AdminAuthService): MiddlewareHandler<AdminAuthEnv> {
+export function adminAuth(
+  service: AdminAuthService,
+  sessionCookieInsecure: boolean,
+): MiddlewareHandler<AdminAuthEnv> {
+  const prefix = sessionCookiePrefix(sessionCookieInsecure)
+
   return async (c, next) => {
     if (presentsRouterKey(c.req.header("authorization"), c.req.header("x-api-key"))) {
       throw new AdminAuthError(ROUTER_KEY_REJECTED)
     }
 
-    const session = await service.authenticate(getCookie(c, SESSION_COOKIE_NAME, "host"))
+    const session = await service.authenticate(getCookie(c, SESSION_COOKIE_NAME, prefix))
 
     if (isMutatingMethod(c.req.method)) {
       service.assertCsrf(session, c.req.header(CSRF_HEADER))

@@ -27,11 +27,12 @@ export interface RetentionConfig {
 }
 
 /**
- * Admin-plane session and login-throttle windows. Grouped like `RetentionConfig`
- * rather than flattened onto `Env`, because they are one policy read by one
- * consumer (`services/admin-auth`).
+ * Admin-plane session policy: the login-throttle windows, and the one transport
+ * decision the session cookie cannot make for itself. Grouped like
+ * `RetentionConfig` rather than flattened onto `Env`, because they are one
+ * policy read by one consumer (`services/admin-auth`).
  *
- * All five are optional: the documented happy path stays three hand-set
+ * All six are optional: the documented happy path stays three hand-set
  * variables plus `docker compose up`.
  *
  * Deliberately NOT `retention.sessionsHours` — that is the *conversation*
@@ -48,6 +49,15 @@ export interface AdminAuthConfig {
   readonly loginAttemptWindowMinutes: number
   /** How long a tripped throttle key stays locked. */
   readonly loginLockoutMinutes: number
+  /**
+   * Drops `Secure` and the `__Host-` prefix from the session cookie. Off by
+   * default and warned about at boot: it is the escape hatch for a plain-HTTP
+   * LAN install (`http://192.168.1.50:8080`), where the hardened cookie is
+   * discarded by the browser and login fails with nothing explaining why.
+   * `HttpOnly`, `SameSite=Strict` and the CSRF token are unaffected — see
+   * `services/admin-auth/cookies.ts`.
+   */
+  readonly sessionCookieInsecure: boolean
 }
 
 /**
@@ -297,6 +307,7 @@ const envSchema = z
     ADMIN_LOGIN_MAX_ATTEMPTS: wholeNumber.optional(),
     ADMIN_LOGIN_ATTEMPT_WINDOW_MINUTES: wholeNumber.optional(),
     ADMIN_LOGIN_LOCKOUT_MINUTES: wholeNumber.optional(),
+    SESSION_COOKIE_INSECURE: flag.optional(),
     CATALOG_REFRESH_SECONDS: wholeNumber.optional(),
     KEY_CACHE_MAX: wholeNumber.optional(),
     KEY_CACHE_TTL_SECONDS: wholeNumber.optional(),
@@ -372,6 +383,7 @@ const envSchema = z
         loginMaxAttempts: raw.ADMIN_LOGIN_MAX_ATTEMPTS ?? 5,
         loginAttemptWindowMinutes: raw.ADMIN_LOGIN_ATTEMPT_WINDOW_MINUTES ?? 15,
         loginLockoutMinutes: raw.ADMIN_LOGIN_LOCKOUT_MINUTES ?? 15,
+        sessionCookieInsecure: raw.SESSION_COOKIE_INSECURE ?? false,
       },
       // Defaults mirror the layer constants they override, so an unset variable
       // and a variable set to the default behave identically.

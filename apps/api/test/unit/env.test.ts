@@ -47,6 +47,14 @@ describe("parseEnv", () => {
       sweepBatchSize: 1_000,
       jitterFraction: 0.2,
     })
+    expect(env.adminAuth).toEqual({
+      sessionIdleMinutes: 480,
+      sessionAbsoluteHours: 24,
+      loginMaxAttempts: 5,
+      loginAttemptWindowMinutes: 15,
+      loginLockoutMinutes: 15,
+      sessionCookieInsecure: false,
+    })
   })
 
   test("reads overrides for every knob", () => {
@@ -70,6 +78,12 @@ describe("parseEnv", () => {
       QUOTA_FLOOR_INTERVAL_MINUTES: "45",
       SWEEP_BATCH_SIZE: "500",
       SCHEDULER_JITTER_FRACTION: "0.5",
+      ADMIN_SESSION_IDLE_MINUTES: "60",
+      ADMIN_SESSION_ABSOLUTE_HOURS: "8",
+      ADMIN_LOGIN_MAX_ATTEMPTS: "3",
+      ADMIN_LOGIN_ATTEMPT_WINDOW_MINUTES: "5",
+      ADMIN_LOGIN_LOCKOUT_MINUTES: "30",
+      SESSION_COOKIE_INSECURE: "true",
     })
 
     expect(env.port).toBe(9000)
@@ -87,6 +101,14 @@ describe("parseEnv", () => {
       quotaFloorIntervalMinutes: 45,
       sweepBatchSize: 500,
       jitterFraction: 0.5,
+    })
+    expect(env.adminAuth).toEqual({
+      sessionIdleMinutes: 60,
+      sessionAbsoluteHours: 8,
+      loginMaxAttempts: 3,
+      loginAttemptWindowMinutes: 5,
+      loginLockoutMinutes: 30,
+      sessionCookieInsecure: true,
     })
   })
 
@@ -183,6 +205,31 @@ describe("parseEnv", () => {
       expect(error.variables).toContain("ADMIN_USERNAME")
       expect(error.variables).toContain("ENCRYPTION_KEY")
       expect(error.variables).toContain("PORT")
+    })
+  })
+
+  describe("SESSION_COOKIE_INSECURE", () => {
+    test("defaults off — the hardened cookie is what an unconfigured router ships", () => {
+      expect(parseEnv(base).adminAuth.sessionCookieInsecure).toBe(false)
+    })
+
+    test("accepts both spellings of on and of off", () => {
+      for (const on of ["true", "1"]) {
+        expect(
+          parseEnv({ ...base, SESSION_COOKIE_INSECURE: on }).adminAuth.sessionCookieInsecure,
+        ).toBe(true)
+      }
+      for (const off of ["false", "0"]) {
+        expect(
+          parseEnv({ ...base, SESSION_COOKIE_INSECURE: off }).adminAuth.sessionCookieInsecure,
+        ).toBe(false)
+      }
+    })
+
+    test("a value that is neither fails boot rather than being read as off", () => {
+      expect(expectEnvError({ ...base, SESSION_COOKIE_INSECURE: "yes" }).variables).toEqual([
+        "SESSION_COOKIE_INSECURE",
+      ])
     })
   })
 

@@ -255,7 +255,7 @@ describe("the guard", () => {
         encryptionKey: ENCRYPTION_KEY,
       },
     })
-    const { app } = harness(adminAuth(service))
+    const { app } = harness(adminAuth(service, false))
 
     for (const path of [
       ADMIN_ACCOUNTS_BASE_PATH,

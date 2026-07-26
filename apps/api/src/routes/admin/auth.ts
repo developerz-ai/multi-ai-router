@@ -29,6 +29,13 @@ export interface AdminAuthRoutesDeps {
   readonly service: AdminAuthService
   /** `Env.trustProxy`. Off by default: an unvetted `X-Forwarded-For` is a throttle bypass. */
   readonly trustProxy: boolean
+  /**
+   * `Env.adminAuth.sessionCookieInsecure` — drops `Secure` and `__Host-` so a plain-HTTP LAN
+   * install can hold a session at all (`services/admin-auth/cookies.ts`). The guard below is
+   * built from the same value: a writer and reader that disagree on the prefix produce a login
+   * that answers `200` and a session nothing ever sees again.
+   */
+  readonly sessionCookieInsecure: boolean
 }
 
 const loginSchema = z.object({
@@ -40,7 +47,7 @@ const loginSchema = z.object({
 
 export function adminAuthRoutes(deps: AdminAuthRoutesDeps): Hono<AdminAuthEnv> {
   const routes = new Hono<AdminAuthEnv>()
-  const guard = adminAuth(deps.service)
+  const guard = adminAuth(deps.service, deps.sessionCookieInsecure)
 
   routes.post("/login", async (c) => {
     const body = await readJson(c.req.raw)
@@ -62,7 +69,7 @@ export function adminAuthRoutes(deps: AdminAuthRoutesDeps): Hono<AdminAuthEnv> {
       c,
       SESSION_COOKIE_NAME,
       result.cookieValue,
-      sessionCookieOptions(result.cookieMaxAgeSeconds),
+      sessionCookieOptions(result.cookieMaxAgeSeconds, deps.sessionCookieInsecure),
     )
     return c.json(sessionBody(result.session))
   })
@@ -71,7 +78,7 @@ export function adminAuthRoutes(deps: AdminAuthRoutesDeps): Hono<AdminAuthEnv> {
     // The source address rides along for the same reason login's does: the audit row for a
     // session ending is only useful next to the one that started it.
     await deps.service.logout(c.get("adminSession").id, clientIp(c, deps.trustProxy))
-    deleteCookie(c, SESSION_COOKIE_NAME, sessionCookieOptions(0))
+    deleteCookie(c, SESSION_COOKIE_NAME, sessionCookieOptions(0, deps.sessionCookieInsecure))
     return c.json({ status: "logged_out" })
   })
 

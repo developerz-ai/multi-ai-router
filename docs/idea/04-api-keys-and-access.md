@@ -49,9 +49,28 @@ verification.
 |---|---|---|
 | `httpOnly` | always | no script can read it |
 | `SameSite` | `Strict` | no cross-site submission carries it |
-| `Secure` | always | HTTPS is assumed in front (reverse proxy) |
 | `Path` | `/` | SPA and API share an origin |
+| `Secure` | default | HTTPS is assumed in front (reverse proxy) |
+| `__Host-` prefix | default | host-only, `Path=/`, `Secure` — enforced by the *browser*. What stops a sibling subdomain planting a session cookie on this origin |
 | Lifetime | sliding idle window (`ADMIN_SESSION_IDLE_MINUTES`, default 480) under a hard absolute cap (`ADMIN_SESSION_ABSOLUTE_HOURS`, default 24) | Sliding alone means a stolen cookie is renewable forever by the thief; the cap turns "forever" into a bounded window. A session dies at whichever bound comes first |
+| `SESSION_COOKIE_INSECURE` | `false` | The escape hatch. Set `true` to drop `Secure` **and** `__Host-`, and nothing else |
+
+**Why the escape hatch exists.** A self-hosted router reached at `http://192.168.1.50:8080` — a
+LAN install with no proxy, which is a normal way this is run — is *unusable* with the hardened
+cookie, and unusable without a diagnosis: a browser silently discards a `Secure` cookie delivered
+over `http://`, so `POST /login` answers `200`, every request after it is `401`, and no log line,
+error body or console message says why. `SESSION_COOKIE_INSECURE=true`
+([09-deployment.md](09-deployment.md#environment-reference)) is the one supported answer.
+
+The two attributes come off **together**, because they cannot come off separately: the `__Host-`
+prefix is honored only on a cookie that also carries `Secure`. Everything that does not depend on
+the transport stays on — `httpOnly`, `SameSite=Strict`, `Path=/`, the server-side session record,
+and the CSRF token on every mutation. What is given up is confidentiality on the wire and the
+sibling-host injection defence, which is why it defaults to off and the router logs a `warn`
+naming the risk on every boot while it is on.
+
+Flipping the flag renames the cookie, so live sessions do not survive the change — the operator
+logs in again, which is the honest outcome rather than a session silently downgraded.
 
 ### CSRF and throttling
 
