@@ -1,8 +1,9 @@
 # multi-ai-router — Overview
 
 Status: the product boundary and the non-goals are settled and hold. What is *built* is in the
-[README's status table](../../README.md#-status) — in short, the admin API and same-dialect
-passthrough work; translation, the Agent-SDK path, and the console's screens do not.
+[README's status table](../../README.md#-status) — in short, everything below is shipped: the admin
+API, same-dialect passthrough, cross-dialect translation, the Agent-SDK path, and the console's
+screens.
 
 ## The problem
 

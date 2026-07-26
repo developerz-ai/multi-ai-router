@@ -1,8 +1,10 @@
 # Deployment and Ops
 
 Status: the compose file, the image, boot-time migrations, and the full environment reference below
-are **implemented and shipped**. The janitor and every other periodic task are **not** — the
-retention windows below are validated configuration that nothing sweeps on yet.
+are **implemented and shipped**. The janitor and every other periodic task (usage rollup, OAuth-state
+purge, quota floor) are also shipped — in-process jittered timers, one `pg_try_advisory_lock` per
+task, last run and outcome recorded to `ScheduledTaskRun` — and the retention windows below are what
+they sweep against.
 
 ## The promise
 

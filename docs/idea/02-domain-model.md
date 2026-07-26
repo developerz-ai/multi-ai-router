@@ -3,9 +3,9 @@
 Status: **the Drizzle schema in `packages/db` exists and is the authority.** The field lists below
 are the design contract behind it — types are intent (`string`, `enum`, `json`), not column
 definitions, and a column name may differ where the schema found a better one. Where the two
-disagree, the schema wins and this page is the bug. Account, Pool, ApiKey, UsageRecord, and
-AuditEvent are live; Session, QuotaWindow, ScheduledTaskRun, and OauthState have tables that
-nothing writes yet. See [01-architecture.md](01-architecture.md) for where each entity lives in the
+disagree, the schema wins and this page is the bug. Account, Pool, ApiKey, UsageRecord, AuditEvent,
+Session, QuotaWindow, ScheduledTaskRun, and OauthState are all live and written by the code that
+owns them. See [01-architecture.md](01-architecture.md) for where each entity lives in the
 layering.
 
 ## Entity relations
