@@ -4,6 +4,7 @@ import {
   sessionCookieFullName,
   sessionCookieOptions,
   sessionCookiePrefix,
+  sessionCookieWouldBeDiscarded,
 } from "../../../src/services/admin-auth/cookies"
 
 /**
@@ -60,5 +61,51 @@ describe("maxAge", () => {
   test("is passed through, including the zero that expires the cookie on logout", () => {
     expect(sessionCookieOptions(0, false).maxAge).toBe(0)
     expect(sessionCookieOptions(28_800, false).maxAge).toBe(28_800)
+  })
+})
+
+describe("sessionCookieWouldBeDiscarded", () => {
+  const plainLan = { insecure: false, requestUrl: "http://192.168.1.50:8080/api/admin/auth/login" }
+
+  test("is true for the LAN install the escape hatch exists for", () => {
+    expect(sessionCookieWouldBeDiscarded({ ...plainLan, forwardedProto: undefined })).toBe(true)
+  })
+
+  test("is false once the escape hatch is on — there is no Secure attribute to reject", () => {
+    expect(
+      sessionCookieWouldBeDiscarded({ ...plainLan, insecure: true, forwardedProto: undefined }),
+    ).toBe(false)
+  })
+
+  test("is false over HTTPS, which is the deployment the default is written for", () => {
+    expect(
+      sessionCookieWouldBeDiscarded({
+        insecure: false,
+        requestUrl: "https://router.example.com/api/admin/auth/login",
+        forwardedProto: undefined,
+      }),
+    ).toBe(false)
+  })
+
+  test("is false behind a TLS-terminating proxy, which reaches us over plain HTTP", () => {
+    for (const proto of ["https", "HTTPS", " https ", "https, http"]) {
+      expect(sessionCookieWouldBeDiscarded({ ...plainLan, forwardedProto: proto })).toBe(false)
+    }
+  })
+
+  test("stays true when the proxy reports the client itself used plain HTTP", () => {
+    for (const proto of ["http", "http, https", "", "   "]) {
+      expect(sessionCookieWouldBeDiscarded({ ...plainLan, forwardedProto: proto })).toBe(true)
+    }
+  })
+
+  test("says nothing about a URL it cannot read — a guess is worse than silence", () => {
+    expect(
+      sessionCookieWouldBeDiscarded({
+        insecure: false,
+        requestUrl: "not-a-url",
+        forwardedProto: undefined,
+      }),
+    ).toBe(false)
   })
 })

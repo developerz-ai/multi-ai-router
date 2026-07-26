@@ -19,11 +19,11 @@
  *
  * The last two, and only those two, come off together under `SESSION_COOKIE_INSECURE`. The escape
  * hatch exists because the plain-HTTP LAN install (`http://192.168.1.50:8080`) is a real way this
- * router is run, and the hardened cookie makes it **unusable with no diagnosis**: a browser
- * silently discards a `Secure` cookie delivered over `http://`, so login answers `200`, every
- * request after it is `401`, and nothing in the console, the log, or the response says why. They
- * come off together because they cannot come off separately — the `__Host-` prefix is honored
- * only on a cookie that carries `Secure`, so keeping the prefix would discard the cookie anyway.
+ * router is run, and the hardened cookie makes it **unusable**: a browser silently discards a
+ * `Secure` cookie delivered over `http://`, so login answers `200`, every request after it is
+ * `401`, and no HTTP status can say why — which is what `sessionCookieWouldBeDiscarded` below is
+ * for. They come off together because they cannot come off separately — the `__Host-` prefix is
+ * honored only on a cookie that carries `Secure`, so keeping the prefix would discard it anyway.
  *
  * What survives the escape hatch is everything that does not depend on the transport: `HttpOnly`,
  * `SameSite=Strict`, `Path=/`, the server-side session record, and the CSRF token on every
@@ -79,4 +79,52 @@ export function sessionCookieOptions(
     path: "/",
     maxAge: maxAgeSeconds,
   }
+}
+
+export interface SessionCookieDeliverability {
+  readonly insecure: boolean
+  /** `c.req.url`. Absolute, so it carries the scheme the connection actually used. */
+  readonly requestUrl: string
+  /** `X-Forwarded-Proto`, if any. See the note on trust below. */
+  readonly forwardedProto: string | undefined
+}
+
+/**
+ * Whether the browser is about to throw away the cookie we are about to set — a `Secure` cookie
+ * delivered over plain `http://`. This is the router's one failure mode with no HTTP answer: the
+ * login itself is a legitimate `200`, and it is the *next* request that is `401`, so the status
+ * code lands on a request that did nothing wrong. The server is the only party that sees both
+ * halves, which is why it is worth a log line naming `SESSION_COOKIE_INSECURE`.
+ *
+ * Pure, per CLAUDE.md non-negotiable 9 — the scheme and the header are the inputs, so the rule is
+ * a unit test rather than a boot-time experiment.
+ *
+ * `forwardedProto` is honored here **regardless of `TRUST_PROXY`**, unlike the login throttle's
+ * view of `X-Forwarded-For`. The asymmetry is deliberate and safe: a forged `X-Forwarded-For` buys
+ * a fresh throttle bucket, while all a forged `X-Forwarded-Proto` buys is the suppression of an
+ * advisory log line. Reading it only under `TRUST_PROXY` would print that line on every login
+ * behind every TLS-terminating proxy whose operator left the default off, and a warning that cries
+ * wolf is a warning nobody reads.
+ */
+export function sessionCookieWouldBeDiscarded(input: SessionCookieDeliverability): boolean {
+  // No `Secure` attribute, so there is nothing for the browser to object to.
+  if (input.insecure) return false
+  // Positive knowledge only: anything but a scheme we can read as `http:` — `https:`, or a URL we
+  // cannot parse — is not evidence of a problem, and a guess is worse than silence here.
+  if (protocolOf(input.requestUrl) !== "http:") return false
+  return firstForwardedProto(input.forwardedProto) !== "https"
+}
+
+function protocolOf(url: string): string | undefined {
+  try {
+    return new URL(url).protocol
+  } catch {
+    return undefined
+  }
+}
+
+/** The client-facing hop of a possibly-chained header (`https, http`), lowercased. */
+function firstForwardedProto(header: string | undefined): string | undefined {
+  const first = header?.split(",")[0]?.trim().toLowerCase()
+  return first === undefined || first.length === 0 ? undefined : first
 }

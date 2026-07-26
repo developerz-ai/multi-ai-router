@@ -57,10 +57,20 @@ verification.
 
 **Why the escape hatch exists.** A self-hosted router reached at `http://192.168.1.50:8080` — a
 LAN install with no proxy, which is a normal way this is run — is *unusable* with the hardened
-cookie, and unusable without a diagnosis: a browser silently discards a `Secure` cookie delivered
-over `http://`, so `POST /login` answers `200`, every request after it is `401`, and no log line,
-error body or console message says why. `SESSION_COOKIE_INSECURE=true`
+cookie: a browser silently discards a `Secure` cookie delivered over `http://`, so `POST /login`
+answers `200` and every request after it is `401`. `SESSION_COOKIE_INSECURE=true`
 ([09-deployment.md](09-deployment.md#environment-reference)) is the one supported answer.
+
+**And the router says so.** This is the only misconfiguration on the admin plane with no HTTP
+answer available: the login is a legitimate `200` and the `401` lands on the *next* request, which
+did nothing wrong. The server is the only party that sees both halves, so `POST /login` emits a
+`warn` naming `SESSION_COOKIE_INSECURE` whenever it sets a `Secure` cookie on a request that
+arrived over plain `http://`. `X-Forwarded-Proto: https` suppresses it, **whether or not
+`TRUST_PROXY` is set** — the asymmetry with the login throttle is deliberate: a forged
+`X-Forwarded-For` earns a fresh throttle bucket, while a forged `X-Forwarded-Proto` earns only the
+silencing of an advisory line, and reading it under `TRUST_PROXY` alone would warn on every
+correctly-proxied install whose operator left that default off. The line is a log line and not a
+field in the response body, because the wire shape of `/login` is a contract with the console.
 
 The two attributes come off **together**, because they cannot come off separately: the `__Host-`
 prefix is honored only on a cookie that also carries `Secure`. Everything that does not depend on

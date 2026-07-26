@@ -9,6 +9,7 @@ import {
   type AdminSession,
   SESSION_COOKIE_NAME,
   sessionCookieOptions,
+  sessionCookieWouldBeDiscarded,
   sessionExpiryMs,
 } from "../../services/admin-auth"
 
@@ -71,6 +72,7 @@ export function adminAuthRoutes(deps: AdminAuthRoutesDeps): Hono<AdminAuthEnv> {
       result.cookieValue,
       sessionCookieOptions(result.cookieMaxAgeSeconds, deps.sessionCookieInsecure),
     )
+    warnIfCookieUndeliverable(c, deps.sessionCookieInsecure)
     return c.json(sessionBody(result.session))
   })
 
@@ -85,6 +87,33 @@ export function adminAuthRoutes(deps: AdminAuthRoutesDeps): Hono<AdminAuthEnv> {
   routes.get("/session", guard, (c) => c.json(sessionBody(c.get("adminSession"))))
 
   return routes
+}
+
+/**
+ * The one misconfiguration this plane cannot answer with a status code. The login is a real `200`
+ * and the browser discards the `Secure` cookie it carried, so the `401` lands on the *next*
+ * request — see `services/admin-auth/cookies.ts`. The rule itself is pure and lives there; this is
+ * only the log line, and it names the variable that fixes it rather than describing the symptom.
+ *
+ * Deliberately not in the response body: it is a deployment fact about this router, and the wire
+ * shape of `/login` is a contract with the console (04-api-keys-and-access.md#session-cookie).
+ */
+function warnIfCookieUndeliverable(c: Context<AdminAuthEnv>, insecure: boolean): void {
+  const undeliverable = sessionCookieWouldBeDiscarded({
+    insecure,
+    requestUrl: c.req.url,
+    forwardedProto: c.req.header("x-forwarded-proto"),
+  })
+  if (!undeliverable) return
+
+  c.get("log").warn(
+    "login succeeded but the session cookie is Secure and this request arrived over plain HTTP — the browser will discard it and every request after it will be 401",
+    {
+      component: "admin-auth",
+      remedy:
+        "set SESSION_COOKIE_INSECURE=true for a plain-HTTP install, or terminate HTTPS in front and forward X-Forwarded-Proto",
+    },
+  )
 }
 
 /**

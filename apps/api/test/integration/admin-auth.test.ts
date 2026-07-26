@@ -46,7 +46,13 @@ function harness(config: Partial<AdminAuthConfig> = {}, sessionCookieInsecure = 
     now: () => clock.nowMs,
   })
 
-  const logger = createLogger({ level: "error", write: () => undefined })
+  // Captured rather than discarded: one behavior here — the plain-HTTP diagnosis — is a log line
+  // and nothing else, because the request it concerns is a legitimate `200`.
+  const logs: LogLine[] = []
+  const logger = createLogger({
+    level: "warn",
+    write: (line) => logs.push(JSON.parse(line) as LogLine),
+  })
   const app = new Hono<AppEnv>()
   app.use("*", requestId())
   app.use("*", requestLogger(logger))
@@ -63,9 +69,10 @@ function harness(config: Partial<AdminAuthConfig> = {}, sessionCookieInsecure = 
   keys.post("/", (c) => c.json({ minted: true }, 201))
   app.route(KEYS, keys)
 
-  return { app, clock }
+  return { app, clock, logs }
 }
 
+type LogLine = { level: string; msg: string } & Record<string, unknown>
 type App = ReturnType<typeof harness>["app"]
 
 function get(app: App, path: string, headers: Record<string, string> = {}): Promise<Response> {
@@ -232,6 +239,76 @@ describe("SESSION_COOKIE_INSECURE", () => {
       401,
     )
     expect((await get(harness().app, SESSION, { cookie: insecure.cookie })).status).toBe(401)
+  })
+})
+
+/**
+ * The failure this flag exists for is invisible from the outside — the login is a real `200` and
+ * the browser throws the cookie away — so the only place it can be diagnosed is the router's log.
+ * These pin that it is diagnosed, and that it stays quiet on the deployments that are fine.
+ */
+describe("the plain-HTTP diagnosis", () => {
+  const CSRF_SAFE_LOGIN = { username: "admin", password: PASSWORD }
+
+  function warnings(logs: LogLine[]): LogLine[] {
+    return logs.filter((line) => line.level === "warn" && line.msg.includes("session cookie"))
+  }
+
+  test("names SESSION_COOKIE_INSECURE when the cookie it just set cannot survive", async () => {
+    const { app, logs } = harness()
+
+    expect((await login(app, CSRF_SAFE_LOGIN)).status).toBe(200)
+
+    const [warned] = warnings(logs)
+    expect(warned?.msg).toContain("plain HTTP")
+    expect(warned?.remedy).toContain("SESSION_COOKIE_INSECURE=true")
+    // The whole point is that the operator can act on it, so it carries the variable's name and
+    // the request id every other line carries.
+    expect(warned?.component).toBe("admin-auth")
+    expect(typeof warned?.requestId).toBe("string")
+  })
+
+  test("stays quiet over HTTPS, which is what the default is written for", async () => {
+    const { app, logs } = harness()
+
+    const res = await app.request(`https://router.example.com${LOGIN}`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(CSRF_SAFE_LOGIN),
+    })
+
+    expect(res.status).toBe(200)
+    expect(warnings(logs)).toEqual([])
+  })
+
+  test("stays quiet behind a proxy that terminated TLS, which reaches us over plain HTTP", async () => {
+    const { app, logs } = harness()
+
+    const res = await app.request(LOGIN, {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-forwarded-proto": "https" },
+      body: JSON.stringify(CSRF_SAFE_LOGIN),
+    })
+
+    expect(res.status).toBe(200)
+    // Honored without TRUST_PROXY on purpose: a forged value silences an advisory line and buys
+    // nothing else, while ignoring it would warn on every correctly-proxied install.
+    expect(warnings(logs)).toEqual([])
+  })
+
+  test("stays quiet once the escape hatch is on — the cookie is deliverable", async () => {
+    const { app, logs } = harness({}, true)
+
+    expect((await login(app, CSRF_SAFE_LOGIN)).status).toBe(200)
+    expect(warnings(logs)).toEqual([])
+  })
+
+  test("is a log line only — the response body the console reads is unchanged", async () => {
+    const { app } = harness()
+
+    const body = (await (await login(app, CSRF_SAFE_LOGIN)).json()) as Record<string, unknown>
+
+    expect(Object.keys(body).sort()).toEqual(["csrfToken", "expiresAt", "issuedAt", "username"])
   })
 })
 

@@ -230,7 +230,9 @@ For operators, at deploy time:
 - Set `TRUST_PROXY` only when a proxy you control is actually in front.
 - Leave `SESSION_COOKIE_INSECURE` unset. It is only for a plain-HTTP LAN install, where the
   hardened session cookie is discarded by the browser and login silently fails; the moment HTTPS
-  is in front, unset it. The router logs a `warn` naming the risk on every boot while it is on.
+  is in front, unset it. The router logs a `warn` naming the risk on every boot while it is on —
+  and, in the other direction, a `warn` naming the variable when it sets a `Secure` cookie on a
+  request that arrived over plain `http://`, so neither mistake is silent.
 - Give every key a name and the narrowest pool binding that works. Revoke keys you no longer
   recognize — see [04-api-keys-and-access.md](04-api-keys-and-access.md).
 - Watch the audit log and the account health panel; an unexpected `needs_reauth` or `exhausted`
