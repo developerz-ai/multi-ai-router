@@ -100,6 +100,10 @@ describe("dialectForPath", () => {
     expect(dialectForPath("/v1/messages/count_tokens")).toBe("anthropic")
   })
 
+  test("embeddings wear the OpenAI shape, which is what every client that calls it expects", () => {
+    expect(dialectForPath("/v1/embeddings")).toBe("openai-chat")
+  })
+
   test("everything else has no dialect", () => {
     expect(dialectForPath("/api/admin/keys")).toBeNull()
     expect(dialectForPath("/healthz")).toBeNull()

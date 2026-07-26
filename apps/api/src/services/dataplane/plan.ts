@@ -4,10 +4,10 @@ import {
   isRouterError,
   type RouterError,
 } from "@multi-ai-router/core"
-import type { ClaudeSdkDriver, ProviderDriver } from "../../providers"
+import type { ClaudeSdkDriver, DriverAccount, ProviderDriver } from "../../providers"
 import type { Candidate } from "../routing"
 import type { TranslationPair } from "../translate"
-import { upstreamCountTokensUrl, upstreamUrl } from "./egress/endpoint"
+import { upstreamCountTokensUrl, upstreamEmbeddingsUrl, upstreamUrl } from "./egress/endpoint"
 import { type EgressRejection, resolveEgress } from "./egress/mode"
 import type { RoutableAccount, RoutingCatalog, UpstreamOperation } from "./types"
 
@@ -27,9 +27,10 @@ import type { RoutableAccount, RoutingCatalog, UpstreamOperation } from "./types
  * once for the request.
  *
  * The `operation` narrows the same walk rather than forking it: a `count-tokens` request plans over
- * exactly the candidates that can count, and one that cannot is dropped here like any other
- * unservable candidate — so a pool holding one Anthropic account and four Claude subscriptions
- * still answers, off the one account that can.
+ * exactly the candidates that can count and an `embeddings` one over exactly those that can embed,
+ * and a candidate that cannot is dropped here like any other unservable one — so a pool holding one
+ * Anthropic account and four Claude subscriptions still counts, and one holding a single OpenAI key
+ * beside them still embeds, off the one account that can.
  *
  * It is also free to mix **transports**. `kind` is the seam: an HTTP candidate carries the URL it is
  * addressed at, a Claude subscription carries the `CLAUDE_CONFIG_DIR` its subprocess runs against,
@@ -92,6 +93,30 @@ export interface CandidatePlan {
   readonly endpointError: RouterError | null
 }
 
+/**
+ * Where this attempt is addressed.
+ *
+ * Only a **passthrough** candidate ever reaches the two operation-specific builders — `resolveEgress`
+ * refuses every other mode for them — so by the time one is called, the account is known to speak a
+ * dialect that states the endpoint, and neither builder has to take a dialect it would only assert
+ * against.
+ */
+function urlFor(
+  operation: UpstreamOperation,
+  driver: ProviderDriver,
+  account: DriverAccount,
+  dialect: Dialect,
+): URL {
+  switch (operation) {
+    case "count-tokens":
+      return upstreamCountTokensUrl(driver, account)
+    case "embeddings":
+      return upstreamEmbeddingsUrl(driver, account)
+    case "messages":
+      return upstreamUrl(driver, account, dialect)
+  }
+}
+
 export function planCandidates(
   candidates: readonly Candidate[],
   catalog: RoutingCatalog,
@@ -138,13 +163,7 @@ export function planCandidates(
               ...plan,
               kind: "http",
               driver: egress.driver,
-              // Only a passthrough candidate reaches here on the count-tokens path — `resolveEgress`
-              // refuses every other mode — so the account is known to speak the one dialect that
-              // states the endpoint.
-              url:
-                operation === "count-tokens"
-                  ? upstreamCountTokensUrl(egress.driver, account.driver)
-                  : upstreamUrl(egress.driver, account.driver, plan.dialect),
+              url: urlFor(operation, egress.driver, account.driver, plan.dialect),
             },
       )
     } catch (error) {

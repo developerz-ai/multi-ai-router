@@ -82,6 +82,7 @@ production wiring lives in `composition.ts`, and a `Database` becomes a service 
 | `/api/admin/keys/**` | session cookie | shipped | List, create, `POST /:id/reveal`, edit, `POST /:id/revoke`, delete |
 | `GET /api/admin/providers` | session cookie | shipped | The static registry, so the console never keeps a second copy of it |
 | `POST /v1/messages`, `/v1/chat/completions`, `/v1/responses` | router key | shipped, **passthrough only** | Same-dialect relay. Cross-dialect and the Agent-SDK path are refused by name in `services/dataplane/egress/mode.ts`, before any upstream call |
+| `POST /v1/messages/count_tokens`, `/v1/embeddings` | router key | shipped, **passthrough only** | Routed, scoped and failed over like any request. A candidate whose provider states no such endpoint is dropped by name in `services/dataplane/egress/mode.ts`; a pool where none can answer gets a `503` saying which — never an estimated count or another model's vectors |
 | `GET /v1/models` | router key | shipped | Exactly the models reachable within the presenting key's scope, shaped by the credential style the client authenticated with |
 | `/api/admin/usage/**`, `/api/admin/settings/**` | session cookie | not built | M7–M8 |
 | `GET /metrics` | `METRICS_TOKEN` when set | shipped | Prometheus exposition. Mounted beside health, guarded by neither plane's credential |

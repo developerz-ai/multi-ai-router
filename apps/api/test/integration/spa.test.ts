@@ -359,6 +359,21 @@ describe("the full app, mounted end to end", () => {
     expect(await res.json()).toMatchObject({ error: { type: "authentication_error" } })
   })
 
+  test("POST /v1/embeddings is mounted too, and answers 401 rather than the shell", async () => {
+    // The newest data-plane path, asserted against the real composition root rather than the
+    // suite-local harness: a route registered only in the harness would 404 into the SPA fallback
+    // here and reach a client as HTML with a 200 on it.
+    const res = await fullApp().request("/v1/embeddings", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: "{}",
+    })
+
+    expect(res.status).toBe(401)
+    expect(res.headers.get("Content-Type")).toContain("application/json")
+    expect(await res.json()).toMatchObject({ error: { type: "authentication_error" } })
+  })
+
   test("GET /healthz answers JSON alongside a fully mounted app", async () => {
     const res = await fullApp().request("/healthz")
 

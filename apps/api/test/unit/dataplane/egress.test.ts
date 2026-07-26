@@ -11,6 +11,7 @@ import {
   egressRejectionError,
   resolveEgress,
   upstreamCountTokensUrl,
+  upstreamEmbeddingsUrl,
   upstreamHeaders,
   upstreamUrl,
 } from "../../../src/services/dataplane"
@@ -121,6 +122,65 @@ describe("counting tokens", () => {
   })
 })
 
+describe("embeddings", () => {
+  test("an openai-chat account passes the body straight through", () => {
+    const decision = resolveEgress(
+      "openai-chat",
+      account("o", { provider: "openai-api" }),
+      "embeddings",
+    )
+    expect(decision.mode).toBe("passthrough")
+  })
+
+  test("an account pinned to the other OpenAI surface embeds too — the chat surface does not decide it", () => {
+    // Ordinary inference across the two OpenAI dialects is a documented downgrade...
+    const responses = account("r", { provider: "openai-api", dialect: "openai-responses" })
+    expect(resolveEgress("openai-chat", responses).mode).toBe("translate")
+    // ...but an embeddings body names no chat surface, so both reach the same endpoint untouched.
+    const decision = resolveEgress("openai-chat", responses, "embeddings")
+
+    expect(decision.mode).toBe("passthrough")
+    if (decision.mode !== "passthrough") return
+    expect(decision.dialect).toBe("openai-responses")
+  })
+
+  test("an anthropic account cannot embed, and is never answered with another model's vectors", () => {
+    const decision = resolveEgress("openai-chat", account("a"), "embeddings")
+
+    expect(decision.mode).toBe("rejected")
+    if (decision.mode !== "rejected") return
+    expect(decision.reason).toBe("unsupported-operation")
+    expect(decision.message).toContain("anthropic")
+    // 503, not 400: the body is a valid embeddings request and only the operator can fix the pool.
+    expect(egressRejectionError(decision)).toBeInstanceOf(NoHealthyAccountError)
+  })
+
+  test("the same anthropic account still serves ordinary inference — only embedding is narrowed", () => {
+    expect(resolveEgress("openai-chat", account("a")).mode).toBe("translate")
+  })
+
+  test("a Claude subscription says so by name — the Agent SDK is a completion transport", () => {
+    const decision = resolveEgress("openai-chat", subscriptionAccount("sub"), "embeddings")
+
+    expect(decision.mode).toBe("rejected")
+    if (decision.mode !== "rejected") return
+    expect(decision.reason).toBe("unsupported-operation")
+    expect(decision.message).toContain("Claude Agent SDK")
+  })
+
+  test("an unimplemented provider keeps its own reason instead of being relabelled", () => {
+    const decision = resolveEgress(
+      "openai-chat",
+      account("g", { provider: "gemini" }),
+      "embeddings",
+    )
+
+    expect(decision.mode).toBe("rejected")
+    if (decision.mode !== "rejected") return
+    expect(decision.reason).toBe("unimplemented")
+  })
+})
+
 describe("endpoint", () => {
   test("each dialect addresses its own path below the account's base URL", () => {
     const driver = httpDriver("anthropic-compatible")
@@ -155,6 +215,29 @@ describe("endpoint", () => {
 
     expect(upstreamCountTokensUrl(driver, entry.driver).toString()).toBe(
       "https://proxy.test/api/v1/messages/count_tokens",
+    )
+  })
+
+  test("embeddings sit below the OpenAI base, which already carries /v1", () => {
+    const driver = httpDriver("openai-api")
+    if (driver === null) throw new Error("expected a driver")
+    const entry = account("o", { provider: "openai-api" })
+
+    expect(upstreamEmbeddingsUrl(driver, { ...entry.driver, baseUrl: null }).toString()).toBe(
+      "https://api.openai.com/v1/embeddings",
+    )
+  })
+
+  test("a self-hosted OpenAI-compatible endpoint keeps the path its base URL carries", () => {
+    const driver = httpDriver("openai-compatible")
+    if (driver === null) throw new Error("expected a driver")
+    const entry = account("v", {
+      provider: "openai-compatible",
+      baseUrl: "https://vllm.internal/openai/v1",
+    })
+
+    expect(upstreamEmbeddingsUrl(driver, entry.driver).toString()).toBe(
+      "https://vllm.internal/openai/v1/embeddings",
     )
   })
 })

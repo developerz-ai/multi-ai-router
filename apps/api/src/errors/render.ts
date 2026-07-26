@@ -59,7 +59,9 @@ const OPENAI_ERROR_TYPES: Record<number, string> = {
  */
 export function dialectForPath(path: string): Dialect | null {
   if (path === "/v1/messages" || path === "/v1/messages/count_tokens") return "anthropic"
-  if (path === "/v1/chat/completions") return "openai-chat"
+  // `/v1/embeddings` is dialect-neutral on the wire; it maps here for the error shape, which is the
+  // OpenAI one every client that calls it expects.
+  if (path === "/v1/chat/completions" || path === "/v1/embeddings") return "openai-chat"
   if (path === "/v1/responses") return "openai-responses"
   return null
 }

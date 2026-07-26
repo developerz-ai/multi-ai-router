@@ -43,7 +43,7 @@ Why: a router that makes a team's subscriptions usable only works if the account
 
 Marked ⏳ where the design is settled but the code is not — see [Status](#-status).
 
-- 🔀 **Two ingress dialects** — `POST /v1/messages` (Anthropic Messages), `POST /v1/chat/completions` and `POST /v1/responses` (OpenAI), `GET /v1/models` scoped to the presenting key, plus `POST /v1/messages/count_tokens` so Claude Code can size its context before a turn.
+- 🔀 **Two ingress dialects** — `POST /v1/messages` (Anthropic Messages), `POST /v1/chat/completions` and `POST /v1/responses` (OpenAI), `GET /v1/models` scoped to the presenting key, plus `POST /v1/messages/count_tokens` so Claude Code can size its context before a turn and `POST /v1/embeddings` so a RAG toolchain indexes through the same endpoint it chats through.
 - 🔁 **Passthrough first** — same-dialect requests swap headers and forward the body byte-for-byte, streaming included. Cross-dialect translation is implemented for every crossing between the three dialects (Anthropic, OpenAI Chat Completions, OpenAI Responses), including streaming and tool calls; its lossy edges are documented and a request that cannot be translated faithfully is refused with a `400` naming the reason, rather than approximated.
 - 🧩 **Subscriptions as first-class upstreams** — Claude subscriptions via the Agent SDK (a `CLAUDE_CONFIG_DIR` per account), ChatGPT/Codex via OAuth + PKCE, connected from the admin UI by redirect capture *or* manual code paste, with background refresh ahead of expiry for both.
 - ⚖️ **Six load-balancing policies per pool** — sticky, round-robin, weighted, least-used, priority-failover, quota-aware — plus an optional overflow account, bounded failover, and a circuit breaker.
@@ -71,6 +71,7 @@ dialect) is named explicitly, not silently approximated.
 | Router keys: minted, named, encrypted, **retrievable** (`POST /api/admin/keys/:id/reveal`), revocable | ✅ |
 | Data plane, **same-dialect passthrough**: `/v1/messages`, `/v1/chat/completions`, `/v1/responses`, `/v1/models` | ✅ |
 | `POST /v1/messages/count_tokens` — routed, scoped and failed over like any request | ✅ passthrough to an Anthropic-dialect account, or a `503` naming why none can count; never an estimate |
+| `POST /v1/embeddings` — routed, scoped and failed over like any request | ✅ passthrough to an OpenAI-dialect account (either surface), or a `503` naming why none can embed; never another model's vectors |
 | Routing: scope intersection, the six policies, overflow, bounded failover, circuit breaker | ✅ |
 | Warm routing catalog + off-path batched `UsageRecord` writer | ✅ |
 | HTTP provider drivers: Anthropic API, OpenAI API, ChatGPT/Codex OAuth, OpenRouter, z.ai, Kimi, MiniMax, and the two compatible escape hatches | ✅ |

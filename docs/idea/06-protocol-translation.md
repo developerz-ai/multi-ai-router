@@ -37,6 +37,7 @@ leftmost one that applies.
 | `POST /v1/messages/count_tokens` | Anthropic Messages (`anthropic`) | count tokens — below |
 | `POST /v1/chat/completions` | OpenAI Chat Completions (`openai-chat`) | inference |
 | `POST /v1/responses` | OpenAI Responses (`openai-responses`) | inference |
+| `POST /v1/embeddings` | OpenAI, dialect-neutral (`openai-chat` for the error shape) | embed — below |
 | `GET /v1/models` | union of models reachable by the presenting key — [04-api-keys-and-access.md](04-api-keys-and-access.md) | — |
 
 **Both OpenAI paths are first-class, and that is not redundancy.** `POST /v1/responses` is OpenAI's
@@ -76,6 +77,47 @@ answers its own `404`, and that `404` is relayed unchanged.
 relay observes bytes and no tokens on this path: the `UsageRecord` carries the request, the account,
 and the latency, with all four token columns at zero and no cost. Reading the number would price a
 question as though it were a completion and inflate every report that sums the column.
+
+## Embeddings
+
+`POST /v1/embeddings` is on the surface because **every RAG toolchain calls it beside its chat
+traffic** — LangChain, LlamaIndex, and Continue.dev all index with it — and telling one of them to
+use a second base URL for embeddings defeats the point of pooling credentials behind one endpoint.
+
+It is an ordinary data-plane request: same router key, same scope intersection, same health
+snapshot, same failover chain, one `UsageRecord` per attempt. Three things about it are its own.
+
+**It is passthrough or nothing, and both OpenAI dialects are one family for it.** The body carries a
+model and an `input` and nothing that distinguishes Chat Completions from Responses, so
+`{baseUrl}/embeddings` is the same endpoint whichever chat surface an Account is pinned to.
+
+| Candidate | Answer | Why |
+|---|---|---|
+| `openai-chat` **or** `openai-responses` account (an OpenAI key, or any OpenAI-compatible endpoint) | **passthrough** to `{baseUrl}/embeddings` | the body names no chat surface, so the Account's chat pin does not decide whether it can embed |
+| Anthropic-dialect account | **not planned** | Anthropic publishes no embeddings API, so there is nothing below its base URL to address |
+| Claude subscription (Agent SDK) | **not planned** | the SDK is a completion transport with no embeddings call, and the router will never forge an `api.anthropic.com` request out of a subscription's credentials — [11-anthropic-agent-sdk.md](11-anthropic-agent-sdk.md) |
+
+Narrowing this to `openai-chat` alone would let an operator's choice of *chat* primitive silently
+decide whether their key can embed, which is a routing rule nobody wrote down. Refusal is **per
+candidate**, so a pool holding one OpenAI key and four Claude subscriptions still embeds, off the one
+account that can — and when none can it surfaces as a **`503`**, for the same reason the token count
+does: the body is a valid request, and what is missing is an account the operator would add. **The
+router never substitutes.** A vector from a different model is not a lesser answer but a wrong one —
+it compares as noise against every embedding already in the caller's index, which is the same
+objection that forbids substituting a model. An OpenAI-compatible endpoint that serves chat but never
+implemented embeddings answers its own `404`, and that `404` is relayed unchanged.
+
+**Its `prompt_tokens` *are* accounted, as input alone.** Unlike a token count, an embedding spends
+what it reports: `tokensIn` takes `prompt_tokens`, `tokensOut` is the zero it truthfully is, and
+`total_tokens` is read nowhere — it restates a sum this router already holds in a column that means
+something else. Embedding models are absent from the shipped price table, so the cost estimate is
+`NULL` and the basis `unknown` (see [08-observability.md](08-observability.md#cost-estimation)) —
+which is what every OpenAI-priced request reports today, and honest rather than a zero that reads as
+free.
+
+**Its ingress dialect is `openai-chat` for one purpose: the error shape.** The path is dialect-neutral
+on the wire, and `openai-chat` is what a client calling `/v1/embeddings` expects a failure to look
+like.
 
 ## Translation matrix
 

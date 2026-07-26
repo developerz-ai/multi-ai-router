@@ -51,6 +51,26 @@ export function upstreamCountTokensUrl(driver: ProviderDriver, account: DriverAc
   return join(driver.resolveBaseUrl(account), ANTHROPIC_COUNT_TOKENS_PATH)
 }
 
+/**
+ * OpenAI's embeddings endpoint, which has **no counterpart in the Anthropic dialect** and — unlike
+ * the chat primitives — no per-dialect variant either. `openai-chat` and `openai-responses` differ
+ * only in how they word a *completion*, and an embeddings body words none, so one path serves both.
+ * That is why this is a constant of its own rather than a third row on the table above.
+ */
+const OPENAI_EMBEDDINGS_PATH = "/embeddings"
+
+/**
+ * Where `POST /v1/embeddings` goes on an OpenAI-dialect Account.
+ *
+ * Takes no dialect for the opposite reason the token count does: both OpenAI surfaces state this
+ * endpoint at the same place, so naming one would imply a distinction the wire does not make. An
+ * OpenAI-compatible endpoint that serves chat but not embeddings answers its own `404`, which is
+ * relayed unchanged — the router never substitutes a vector of its own for a provider's answer.
+ */
+export function upstreamEmbeddingsUrl(driver: ProviderDriver, account: DriverAccount): URL {
+  return join(driver.resolveBaseUrl(account), OPENAI_EMBEDDINGS_PATH)
+}
+
 export function upstreamModelsUrl(
   driver: ProviderDriver,
   account: DriverAccount,

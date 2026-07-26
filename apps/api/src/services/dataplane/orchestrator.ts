@@ -112,9 +112,10 @@ export interface DispatchInput {
   readonly ingress: Dialect
   /**
    * What the called route asks of an Account. Omitted is `messages` — inference, which is what
-   * every ingress path but `POST /v1/messages/count_tokens` performs. It travels with the request
-   * rather than being derived from the URL because the URL is the *route's* to know: everything
-   * below this line addresses an upstream, and an upstream's path is not the client's.
+   * every ingress path but `POST /v1/messages/count_tokens` and `POST /v1/embeddings` performs. It
+   * travels with the request rather than being derived from the URL because the URL is the *route's*
+   * to know: everything below this line addresses an upstream, and an upstream's path is not the
+   * client's.
    */
   readonly operation?: UpstreamOperation
   readonly request: Request

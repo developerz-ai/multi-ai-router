@@ -31,6 +31,13 @@ import type { RoutableAccount, UpstreamOperation } from "../types"
  * — never degraded into a lossy approximation. Every crossing between the three HTTP dialects has
  * one today, and a pair added later becomes servable by adding an entry to
  * `services/translate/registry.ts` and nothing else.
+ *
+ * The `operation` then **narrows** that answer rather than forking it. A route that asks for
+ * something other than a completion — a token count, an embedding — is passthrough or nothing: its
+ * body has no faithful representation on an account whose provider states no such endpoint, and the
+ * two ways to paper over that (estimate the count, embed with a different model) both hand the
+ * client a fabricated number it cannot tell from a measured one. So the candidate is dropped by
+ * name here, and a pool where none can answer surfaces the reason instead.
  */
 
 export interface PassthroughEgress {
@@ -92,7 +99,9 @@ export function resolveEgress(
   operation: UpstreamOperation = "messages",
 ): EgressDecision {
   const decision = resolveTransport(ingress, account)
-  return operation === "count-tokens" ? countable(decision) : decision
+  if (operation === "count-tokens") return countable(decision)
+  if (operation === "embeddings") return embeddable(decision)
+  return decision
 }
 
 function resolveTransport(ingress: Dialect, account: RoutableAccount): EgressDecision {
@@ -178,6 +187,61 @@ function countable(decision: EgressDecision): EgressDecision {
   }
 }
 
+/** The two OpenAI dialects, which are one family for every operation that is not a completion. */
+const OPENAI_DIALECTS: ReadonlySet<Dialect> = new Set<Dialect>(["openai-chat", "openai-responses"])
+
+const NEVER_SUBSTITUTED =
+  "and a vector from a different model is not a lesser answer but a wrong one — it would compare as noise against every embedding already in the caller's index"
+
+/**
+ * Embedding is an **OpenAI-family passthrough**, and both OpenAI dialects are that one family.
+ *
+ * `POST /v1/embeddings` carries a model and an `input` and nothing that distinguishes Chat
+ * Completions from Responses, so `{baseUrl}/embeddings` is the same endpoint whichever chat surface
+ * an Account is pinned to. Narrowing this to `openai-chat` alone would let an operator's choice of
+ * *chat* primitive silently decide whether their key can embed — a routing rule nobody wrote down.
+ *
+ * Refused by name, before any upstream call:
+ *
+ *  - an **Anthropic-dialect** account. Anthropic publishes no embeddings API, so there is nothing
+ *    below its base URL to address, and translating the request would mean answering with some
+ *    other model's vectors — which is worse than failing, for the same reason estimating a token
+ *    count is: embeddings are only comparable within the space the caller's index was built in.
+ *  - a **Claude subscription**. The Agent SDK is a completion transport with no embeddings call,
+ *    and the one thing this router will never do to reach an endpoint it lacks is forge an
+ *    `api.anthropic.com` request out of a subscription's credentials
+ *    (docs/idea/11-anthropic-agent-sdk.md).
+ *
+ * Per candidate, like the token count, so a pool holding one OpenAI key and four Claude
+ * subscriptions still embeds — off the one account that can.
+ */
+function embeddable(decision: EgressDecision): EgressDecision {
+  if (decision.mode === "rejected") return decision
+
+  const dialect = decision.mode === "passthrough" ? decision.dialect : decision.to
+
+  // A candidate pinned to the *other* OpenAI dialect is still a passthrough here: an embeddings body
+  // has nothing in it for a chat translator to convert, and running one would rewrite the request
+  // into a completion. The Agent-SDK mode is excluded by name rather than by its dialect, so an SDK
+  // that later renders into an OpenAI dialect cannot fall into this branch silently.
+  if (decision.mode !== "agent-sdk" && OPENAI_DIALECTS.has(dialect)) {
+    return decision.mode === "passthrough"
+      ? decision
+      : { mode: "passthrough", driver: decision.driver, dialect }
+  }
+
+  const what =
+    decision.mode === "agent-sdk"
+      ? "is a Claude subscription served through the Claude Agent SDK, a completion transport that states no embeddings call"
+      : `speaks ${dialect}, which states no embeddings endpoint`
+
+  return {
+    mode: "rejected",
+    reason: "unsupported-operation",
+    message: `this account cannot embed: it ${what}, ${NEVER_SUBSTITUTED}`,
+  }
+}
+
 /**
  * The client-facing failure when no candidate could be served.
  *
@@ -188,9 +252,9 @@ function countable(decision: EgressDecision): EgressDecision {
  * them looking in the wrong place.
  *
  * An unsupported *operation* is a `503` for that second reason and not the first, even though it
- * also refuses a request before any upstream call. A `count_tokens` body is a perfectly valid
- * Anthropic request and there is no other ingress path to send it down — what is missing is an
- * Anthropic-dialect account in this key's scope, which only the operator can add.
+ * also refuses a request before any upstream call. A `count_tokens` or `embeddings` body is a
+ * perfectly valid request of its dialect and there is no other ingress path to send it down — what
+ * is missing is an account that states the endpoint, which only the operator can add.
  */
 export function egressRejectionError(rejection: EgressRejection): RouterError {
   return rejection.reason === "no-translator"

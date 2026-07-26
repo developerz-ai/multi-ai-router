@@ -232,7 +232,9 @@ function relaySuccess(
 ): Response {
   // A count-tokens answer states `input_tokens` for a prompt that was never run. Reading it would
   // record — and price — a measurement as though it were a completion, so that one response shape
-  // is relayed and observed for bytes only. See `usage/tokens.ts`.
+  // is relayed and observed for bytes only. See `usage/tokens.ts`. An embeddings answer is the
+  // opposite case and takes the ordinary observer: its `prompt_tokens` were genuinely spent, and
+  // the absent completion count lands as the zero it truthfully is.
   const tokens =
     ctx.runtime.operation === "count-tokens" ? NO_TOKEN_OBSERVER : createTokenObserver()
   let firstByteAt: number | undefined
