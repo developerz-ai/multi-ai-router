@@ -4,7 +4,7 @@
  */
 
 import { describe, expect, test } from "bun:test"
-import { RoutingPolicy } from "@multi-ai-router/core"
+import { QuotaExhaustedError, RoutingPolicy } from "@multi-ai-router/core"
 import type { SelectionRequest, SelectionResult } from "../../../src/services/routing"
 import { selectAccounts } from "../../../src/services/routing"
 import { account, at, continuous, health, ids, pool, snapshot, subscription } from "./fixtures"
@@ -126,7 +126,7 @@ describe("the empty candidate set fails by cause", () => {
     expect(result.error.message).toContain("a, b")
   })
 
-  test("mixed causes take the soonest recoverable one", () => {
+  test("mixed causes take the soonest recoverable one, and name both groups honestly", () => {
     const state = snapshot(
       [
         account("a", { status: "exhausted" }),
@@ -137,6 +137,46 @@ describe("the empty candidate set fails by cause", () => {
     const result = expectFailure(selectAccounts(state, ask()))
 
     expect(result.error.status).toBe(429)
+    // The count and the "rate limited" label describe only the recoverable one — not both.
+    expect(result.error.message).toContain("1 of 2 accounts")
+    expect(result.error.message).toContain("rate limited or out of quota (b)")
+    // The exhausted one is still named, not buried behind the 429.
+    expect(result.error.message).toContain("needs a top-up (a)")
+  })
+
+  test("a cooling_down account with no recorded reset still gets a 429 with Retry-After", () => {
+    // `filter.ts` admits this state (status cooling_down, no cooldownUntil) as still cooling —
+    // never having gone through the breaker's own trip(). The reset instant is genuinely unknown,
+    // but cooling_down must never render as a 429 with no Retry-After (non-negotiable 7).
+    const state = snapshot(
+      [account("a", { status: "cooling_down", health: health() })],
+      [pool("team", ["a"])],
+    )
+    const result = expectFailure(selectAccounts(state, ask()))
+
+    expect(result.error.status).toBe(429)
+    expect(result.error.code).toBe("quota_exhausted")
+    expect(result.error).toBeInstanceOf(QuotaExhaustedError)
+    expect((result.error as QuotaExhaustedError).retryAfterSeconds).toBe(1)
+  })
+
+  test("five accounts, one recoverable and four exhausted, never reads as everyone rate limited", () => {
+    const state = snapshot(
+      [
+        account("a", { status: "cooling_down", health: health({ cooldownUntil: at(60_000) }) }),
+        account("b", { status: "exhausted" }),
+        account("c", { status: "exhausted" }),
+        account("d", { status: "exhausted" }),
+        account("e", { status: "exhausted" }),
+      ],
+      [pool("team", ["a", "b", "c", "d", "e"])],
+    )
+    const result = expectFailure(selectAccounts(state, ask()))
+
+    expect(result.error.status).toBe(429)
+    expect(result.error.message).toContain("1 of 5 accounts")
+    expect(result.error.message).not.toContain("5 accounts are rate limited")
+    expect(result.error.message).toContain("b, c, d, e")
   })
 
   test("no account supporting the model is 503, never a generic 500", () => {

@@ -20,6 +20,7 @@ import {
   type RouterError,
   ScopeViolationError,
 } from "@multi-ai-router/core"
+import { DEFAULT_BASE_BACKOFF_MS } from "./breaker"
 import { earliestReset } from "./quota"
 import {
   type BindingDecision,
@@ -28,6 +29,15 @@ import {
   type RejectedCandidate,
   type ScopeDiagnostics,
 } from "./result"
+
+/**
+ * `cooling_down` demands a `Retry-After` (non-negotiable 7) even for the one state `filter.ts`
+ * admits with no recorded instant — a legacy or hand-set row that never went through the
+ * breaker's own `trip()`. Reusing the breaker's first backoff step as the floor keeps this
+ * consistent with what an account with *some* signal would already report, rather than
+ * inventing an unrelated number.
+ */
+const UNKNOWN_RESET_RETRY_AFTER_SECONDS = Math.ceil(DEFAULT_BASE_BACKOFF_MS / 1000)
 
 export interface NoCandidatesInput {
   readonly scope: ScopeDiagnostics
@@ -57,16 +67,25 @@ export function noCandidatesError(input: NoCandidatesInput): RouterError {
   const recoverable = input.rejected.filter((entry) =>
     RECOVERABLE_FILTER_REASONS.includes(entry.reason),
   )
+  const exhausted = input.rejected.filter((entry) => entry.reason === "exhausted")
+
+  // Recoverable outranks exhausted (the doc table's "mixed causes" row: the soonest recoverable
+  // one, 429 if any account has a reset) — but the message must count and label only the accounts
+  // it is actually describing. Total-rejected counts and exhausted-only labels here would both
+  // misrepresent the pool and bury the ones that need a human.
   if (recoverable.length > 0) {
     const reset = earliestReset(recoverable.map((entry) => entry.resetsAt))
+    const mixed =
+      exhausted.length > 0
+        ? `; ${exhausted.length} more ${accountWord(exhausted.length)} out of credits and ${exhausted.length === 1 ? "needs" : "need"} a top-up (${labels(exhausted)})`
+        : ""
     return quotaError(
-      `all ${input.rejected.length} ${accountWord(input.rejected.length)}${where(input.groups)} are rate limited or out of quota (${labels(recoverable)})`,
+      `${recoverable.length} of ${input.rejected.length} ${accountWord(input.rejected.length)}${where(input.groups)} ${recoverable.length === 1 ? "is" : "are"} rate limited or out of quota (${labels(recoverable)})${mixed}`,
       reset,
       input.now,
     )
   }
 
-  const exhausted = input.rejected.filter((entry) => entry.reason === "exhausted")
   if (exhausted.length > 0) {
     return new CreditsExhaustedError(
       `all ${input.rejected.length} ${accountWord(input.rejected.length)}${where(input.groups)} are out of credits and need a top-up (${labels(exhausted)})`,
@@ -78,8 +97,17 @@ export function noCandidatesError(input: NoCandidatesInput): RouterError {
   )
 }
 
+/**
+ * `resetsAt` absent means the reason is recoverable but no instant is known — still `cooling_down`
+ * ≠ `exhausted` (non-negotiable 7), so this still renders `429` with a `Retry-After`, just an
+ * honest floor instead of a fabricated instant.
+ */
 function quotaError(message: string, resetsAt: Date | undefined, now: Date): QuotaExhaustedError {
-  if (resetsAt === undefined) return new QuotaExhaustedError(message)
+  if (resetsAt === undefined) {
+    return new QuotaExhaustedError(`${message}, reset time unknown`, {
+      retryAfterSeconds: UNKNOWN_RESET_RETRY_AFTER_SECONDS,
+    })
+  }
   return new QuotaExhaustedError(`${message}, earliest reset ${resetsAt.toISOString()}`, {
     resetsAt,
     retryAfterSeconds: retryAfterSeconds(resetsAt, now),
