@@ -10,8 +10,10 @@ import type {
   UsageRecordRepository,
 } from "@multi-ai-router/db"
 import type { Env } from "../../config/env"
+import type { AccountConfigDirs } from "../../providers/claude-sdk/config-dir"
 import type { HealthStore } from "../../services/dataplane"
 import type { ScheduledTask } from "../types"
+import { createConfigDirReapTask } from "./config-dir-reap"
 import { createJanitorTask } from "./janitor"
 import { createOauthPurgeTask } from "./oauth-purge"
 import { createQuotaFloorTask } from "./quota-floor"
@@ -39,16 +41,25 @@ export interface ScheduledTaskDeps {
   readonly apiKeys: Pick<ApiKeyRepository, "deleteRevokedOlderThan">
   readonly oauthStates: Pick<OauthStateRepository, "deleteExpiredBefore">
   readonly usageDaily: Pick<UsageDailyRepository, "rollup">
-  readonly accounts: Pick<AccountRepository, "list" | "listQuotaWindows" | "upsertQuotaWindow">
+  readonly accounts: Pick<
+    AccountRepository,
+    "list" | "listIds" | "listQuotaWindows" | "upsertQuotaWindow"
+  >
   /** The rollup's catch-up cursor. The runner uses this repository too, for its own run rows. */
   readonly scheduledTasks: Pick<ScheduledTaskRepository, "lastSuccess">
   /** The quota floor's freshness read. It never writes health — see that task's note. */
   readonly health: Pick<HealthStore, "stateOf">
+  /**
+   * The subscription config-directory volume, for the reaper. Built in the composition root rather
+   * than here because the admin plane provisions and removes through the same instance.
+   */
+  readonly configDirs: Pick<AccountConfigDirs, "root" | "list" | "remove">
   /** A full `Env` satisfies this, so the composition root passes `env` straight through. */
   readonly env: Pick<Env, "retention" | "janitorIntervalMinutes" | "scheduler">
 }
 
 const MINUTE_MS = 60_000
+const HOUR_MS = 60 * MINUTE_MS
 
 /**
  * Every task's cadence, in milliseconds, keyed by its `scheduled_task` name.
@@ -67,6 +78,7 @@ export function scheduledTaskIntervals(
     usage_rollup: env.scheduler.usageRollupIntervalMinutes * MINUTE_MS,
     oauth_state_purge: env.scheduler.oauthStatePurgeIntervalMinutes * MINUTE_MS,
     quota_floor_refresh: env.scheduler.quotaFloorIntervalMinutes * MINUTE_MS,
+    config_dir_reap: env.scheduler.configDirReapIntervalMinutes * MINUTE_MS,
   }
 }
 
@@ -107,9 +119,18 @@ export function createScheduledTasks(deps: ScheduledTaskDeps): readonly Schedule
       // knob out of `.env` that nobody could tune meaningfully.
       idleAfterMs: intervals.quota_floor_refresh,
     }),
+    createConfigDirReapTask({
+      configDirs: deps.configDirs,
+      accounts: deps.accounts,
+      graceMs: env.retention.orphanConfigDirHours * HOUR_MS,
+      intervalMs: intervals.config_dir_reap,
+      batchSize,
+    }),
   ]
 }
 
+export type { ConfigDirReapDeps, OrphanConfigDir, ReapPlan, ReapPlanInput } from "./config-dir-reap"
+export { createConfigDirReapTask, planConfigDirReap } from "./config-dir-reap"
 export type { JanitorDeps } from "./janitor"
 export { createJanitorTask } from "./janitor"
 export type { OauthPurgeDeps } from "./oauth-purge"

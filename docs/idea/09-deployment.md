@@ -108,11 +108,13 @@ naming the offending variable — the process never starts half-configured.
 | `RETENTION_AUDIT_DAYS` | no | `365` | `AuditEvent` retention. |
 | `RETENTION_REVOKED_KEYS_DAYS` | no | `30` | How long a revoked/expired `ApiKey` row survives before purge. |
 | `RETENTION_OAUTH_STATE_MINUTES` | no | `10` | TTL for one-shot OAuth `state` + PKCE verifiers. |
+| `RETENTION_ORPHAN_CONFIG_DIR_HOURS` | no | `24` | Grace before a `CLAUDE_CONFIG_DIR` under `CLAUDE_CONFIG_ROOT` that no account claims is removed. A directory is provisioned just *before* its account row is inserted, so this must comfortably exceed that gap — too short and the reaper deletes a login still being made. |
 | `JANITOR_INTERVAL_MINUTES` | no | `60` | Base sweep interval; the janitor jitters around it. |
 | `USAGE_ROLLUP_INTERVAL_MINUTES` | no | `60` | Usage record rollup interval, in minutes. Raw records older than `RETENTION_USAGE_DAYS` are summarized into daily aggregates. |
 | `OAUTH_STATE_PURGE_INTERVAL_MINUTES` | no | `5` | OAuth state (and PKCE verifier) purge interval, in minutes. One-shot values older than `RETENTION_OAUTH_STATE_MINUTES` are deleted. |
 | `QUOTA_FLOOR_INTERVAL_MINUTES` | no | `30` | Account quota floor probe interval, in minutes. Periodic refresh of cached quota state. |
-| `SWEEP_BATCH_SIZE` | no | `1000` | Max rows per bounded-delete sweep (usage, session, revoked keys, audit, OAuth state). Larger trades memory and latency for fewer sweeps; smaller means more passes. |
+| `CONFIG_DIR_REAP_INTERVAL_MINUTES` | no | `360` | How often the orphaned-`CLAUDE_CONFIG_DIR` reap runs. Hours rather than minutes: an orphan is a crash artifact. *How long* one may linger is `RETENTION_ORPHAN_CONFIG_DIR_HOURS`, not this. |
+| `SWEEP_BATCH_SIZE` | no | `1000` | Max rows per bounded-delete sweep (usage, session, revoked keys, audit, OAuth state), and directories per orphaned-config-dir reap. Larger trades memory and latency for fewer sweeps; smaller means more passes. |
 | `SCHEDULER_JITTER_FRACTION` | no | `0.2` | Jitter applied to task intervals as a fraction of the interval. E.g., `0.2` means ±20% around the base value, spreading load after a restart. |
 | `OAUTH_REFRESH_LEAD_FRACTION` | no | `0.75` | Share of a router-held OAuth token's remaining lifetime allowed to elapse before it is refreshed — `0.75` refreshes with a quarter of the lifetime in hand. Not an interval: refresh is per account and expiry-driven, never a poll. Claude subscriptions are unaffected; the Agent SDK owns those tokens. |
 | `OAUTH_REFRESH_MIN_DELAY_SECONDS` | no | `30` | Floor on any refresh delay, and the first step of the retry backoff. What stops an already-expired token from re-arming at zero and hammering the provider. |
@@ -165,6 +167,7 @@ One background janitor service, one schedule, every window env-tunable.
 | Expired/consumed OAuth state & PKCE verifiers | 10 min | `RETENTION_OAUTH_STATE_MINUTES` | One-shot values. |
 | Revoked / expired API keys | 30 days after revocation, then purged | `RETENTION_REVOKED_KEYS_DAYS` | Keeps historical usage joinable for a while. |
 | Rate-limit & circuit-breaker state | expires with its reset window | — | Derived state, not durable state. |
+| Orphaned `CLAUDE_CONFIG_DIR`s on the volume | 24 h unclaimed | `RETENTION_ORPHAN_CONFIG_DIR_HOURS` | **Not a disk-space sweep.** Each holds a subscription's OAuth credentials in cleartext; one whose account no longer exists is a credential nothing will ever rotate or revoke. Only names that are account ids are candidates, and only past the grace — the directory is created *before* its row, so a young one may be a login still being made. |
 
 Janitor rules:
 

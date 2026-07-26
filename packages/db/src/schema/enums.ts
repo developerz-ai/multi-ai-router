@@ -68,6 +68,7 @@ export const scheduledTask = pgEnum("scheduled_task", [
   "usage_rollup",
   "oauth_state_purge",
   "quota_floor_refresh",
+  "config_dir_reap",
 ])
 
 export const scheduledTaskOutcome = pgEnum("scheduled_task_outcome", [

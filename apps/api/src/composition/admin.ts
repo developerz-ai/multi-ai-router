@@ -14,7 +14,7 @@ import {
 import type { Env } from "../config/env"
 import type { Logger } from "../logging/logger"
 import { createSdkTestProbe, type SdkConcurrency } from "../providers"
-import { createAccountConfigDirs } from "../providers/claude-sdk/config-dir"
+import type { AccountConfigDirs } from "../providers/claude-sdk/config-dir"
 import { scheduledTaskIntervals } from "../scheduler"
 import {
   type CredentialRefresher,
@@ -86,6 +86,12 @@ export interface AdminPlaneDeps {
    * memory budget takes one gate — see `providers/claude-sdk/test-probe.ts`.
    */
   readonly sdkConcurrency: SdkConcurrency
+  /**
+   * One isolated `CLAUDE_CONFIG_DIR` per subscription account, as the composition root built it.
+   * Passed in for the same reason the gate above is: the scheduler's reaper sweeps the very volume
+   * this plane provisions on, and two instances could be rooted at two different places.
+   */
+  readonly configDirs: AccountConfigDirs
   readonly coherence: CoherenceHooks
 }
 
@@ -99,12 +105,11 @@ export interface AdminPlane {
 }
 
 export function createAdminPlane(deps: AdminPlaneDeps): AdminPlane {
-  const { env, logger, now, accounts, keys, cipher, catalog, health } = deps
+  const { env, logger, now, accounts, keys, cipher, catalog, health, configDirs } = deps
   const audit = createAuditRecorder(deps.auditEvents)
 
-  // One isolated CLAUDE_CONFIG_DIR per subscription account, both halves of running the `claude`
-  // binary against it, and every login flow behind the one service the admin plane mounts.
-  const configDirs = createAccountConfigDirs({ root: env.claudeConfigRoot })
+  // Both halves of running the `claude` binary against an account's directory, and every login flow
+  // behind the one service the admin plane mounts.
   const cli = claudeCliFromEnv({ accounts, configDirs, audit, env, logger, now })
   // Expiry-driven per account, never a poll (non-negotiable 13); built before `connect` needs it.
   const refresher = refresherFromEnv({ accounts, cipher, audit, env, logger, now, catalog })

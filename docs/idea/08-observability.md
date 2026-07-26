@@ -465,6 +465,7 @@ interval reads `stale`, which is what a wedged task looks like from the outside.
 | Circuit-breaker half-open probes | scheduled per account when its reset passes — not a fixed interval |
 | Quota refresh for idle subscription accounts | slow floor only; active accounts refresh from `rate_limit_event` traffic |
 | Expired OAuth `state` / PKCE verifier purge | every few minutes |
+| Orphaned `CLAUDE_CONFIG_DIR` reap | every few hours; removes only unclaimed directories past `RETENTION_ORPHAN_CONFIG_DIR_HOURS` |
 
 ### The catalog refresh is not a scheduled task
 
@@ -489,7 +490,7 @@ in a single-replica deployment the interval is nearly irrelevant. Detail:
 |---|---|---|---|
 | `router_task_last_success_timestamp_seconds` | gauge | `task` | Unix time of the last successful run. **The alert that matters**: age beyond a task's expected cadence means wedged or not scheduled |
 | `router_task_duration_seconds` | histogram | `task` | Run time. Replaces the janitor-specific histogram |
-| `router_task_items_total` | counter | `task` | Items processed — rows deleted, records rolled up, accounts probed |
+| `router_task_items_total` | counter | `task` | Items processed — rows deleted, records rolled up, accounts probed, config directories reaped |
 | `router_task_consecutive_failures` | gauge | `task` | Resets to zero on success. Non-zero and climbing is a task failing quietly |
 | `router_task_runs_total` | counter | `task`, `outcome` (`success`\|`failure`\|`skipped_locked`) | `skipped_locked` is normal on a replica that lost the advisory lock, not an error |
 

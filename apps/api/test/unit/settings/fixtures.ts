@@ -29,6 +29,7 @@ export const RETENTION: RetentionConfig = {
   auditDays: 180,
   revokedKeysDays: 15,
   oauthStateMinutes: 7,
+  orphanConfigDirHours: 12,
 }
 
 /** What `scheduledTaskIntervals(env)` returns — the same map the running tasks are built from. */
@@ -37,6 +38,7 @@ export const INTERVALS: Readonly<Record<ScheduledTaskName, number>> = {
   usage_rollup: 60 * MINUTE_MS,
   oauth_state_purge: 5 * MINUTE_MS,
   quota_floor_refresh: 30 * MINUTE_MS,
+  config_dir_reap: 360 * MINUTE_MS,
 }
 
 export interface MemoryPrices {

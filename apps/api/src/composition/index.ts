@@ -16,6 +16,7 @@ import type { Env } from "../config/env"
 import type { Logger } from "../logging/logger"
 import { createRuntimeMetrics, type RouterMetrics } from "../observability"
 import { createSdkConcurrency, createSdkInvoker, createSdkQuotaStore } from "../providers"
+import { createAccountConfigDirs } from "../providers/claude-sdk/config-dir"
 import { type Scheduler, schedulerFromEnv } from "../scheduler"
 import { createRoutingCatalog, loadCatalog, type RoutingCatalogStore } from "../services/catalog"
 import { createPriceBook } from "../services/cost"
@@ -122,6 +123,13 @@ export function createRuntime(deps: RuntimeDeps): Runtime {
     perAccount: env.claudeSdkMaxConcurrencyPerAccount,
   })
 
+  // One isolated CLAUDE_CONFIG_DIR per subscription account, and one view of the volume they live
+  // on. Built here rather than beside the admin plane because it has a second reader: the
+  // scheduler's reaper removes what a crash between provisioning and the insert left behind, and a
+  // reaper rooted somewhere other than the provisioner would sweep the wrong directory or nothing
+  // at all (`scheduler/tasks/config-dir-reap.ts`).
+  const configDirs = createAccountConfigDirs({ root: env.claudeConfigRoot })
+
   // `usage` is a getter because the recorder below reports *into* this: see `observability/`.
   const metrics = createRuntimeMetrics({
     catalog,
@@ -153,6 +161,7 @@ export function createRuntime(deps: RuntimeDeps): Runtime {
     accounts,
     scheduledTasks,
     health,
+    configDirs,
     env,
     sql: deps.sql,
     logger,
@@ -237,6 +246,7 @@ export function createRuntime(deps: RuntimeDeps): Runtime {
     health,
     prices,
     sdkConcurrency,
+    configDirs,
     coherence: {
       refreshCatalog: () => catalog.refresh(),
       // A revoked key must stop authenticating *and* stop occupying a rate-limit window.

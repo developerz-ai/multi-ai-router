@@ -1,4 +1,4 @@
-import { chmod, mkdir, rm } from "node:fs/promises"
+import { chmod, lstat, mkdir, readdir, rm } from "node:fs/promises"
 import { homedir } from "node:os"
 import { isAbsolute, join, relative, resolve } from "node:path"
 
@@ -48,6 +48,22 @@ export class ConfigDirError extends Error {
   }
 }
 
+/**
+ * One directory as it is on the volume right now — what a survey of the root sees, before anything
+ * decides whether it still belongs to anyone.
+ */
+export interface ConfigDirEntry {
+  /** The directory's name on disk, verbatim. Also the path's last segment. */
+  readonly name: string
+  /**
+   * The account this directory is named after, or `null` when the name is not an account id at
+   * all. A `null` here is the difference between "an account was deleted" and "this is not ours".
+   */
+  readonly accountId: string | null
+  /** Newest of the directory's own mtime/ctime/birthtime, epoch ms. The most recent evidence of life. */
+  readonly changedAtMs: number
+}
+
 export interface AccountConfigDirs {
   /** The root every account directory hangs off. Absolute, resolved once at construction. */
   readonly root: string
@@ -62,13 +78,27 @@ export interface AccountConfigDirs {
    * stored on the row: a directory this router did not mint is not this router's to `rm -rf`.
    */
   remove(accountId: string): Promise<void>
+  /**
+   * Every directory directly under `root`, classified and dated. Reads no file inside one — the
+   * contents are the SDK's, and a reaper deciding what is abandoned only ever needs the name and
+   * the age.
+   *
+   * A root that does not exist yet is an empty survey, not a failure: nothing has been provisioned,
+   * so nothing can be orphaned. Symlinks are not entries — the sweep that follows one would be a
+   * sweep outside the root.
+   */
+  list(): Promise<readonly ConfigDirEntry[]>
 }
 
-/** The filesystem as the three calls this module makes, so the policy is testable against no disk. */
+/** The filesystem as the five calls this module makes, so the policy is testable against no disk. */
 export interface ConfigDirFs {
   makeDir(path: string, mode: number): Promise<void>
   setMode(path: string, mode: number): Promise<void>
   removeDir(path: string): Promise<void>
+  /** Names of the plain directories directly under `path`. A missing `path` is `[]`, never a throw. */
+  listDirs(path: string): Promise<readonly string[]>
+  /** Newest of the directory's own timestamps, or `null` when it is gone or is not a plain directory. */
+  statDir(path: string): Promise<number | null>
 }
 
 export interface AccountConfigDirsOptions {
@@ -109,6 +139,19 @@ export function createAccountConfigDirs(options: AccountConfigDirsOptions): Acco
     remove: async (accountId) => {
       await fs.removeDir(pathFor(accountId))
     },
+
+    list: async () => {
+      const names = await fs.listDirs(root)
+      const entries: ConfigDirEntry[] = []
+      for (const name of names) {
+        const changedAtMs = await fs.statDir(join(root, name))
+        // Vanished between the listing and the stat — an account deleted mid-survey. Nothing to
+        // report and nothing to reap.
+        if (changedAtMs === null) continue
+        entries.push({ name, accountId: ACCOUNT_ID.test(name) ? name : null, changedAtMs })
+      }
+      return entries
+    },
   }
 }
 
@@ -118,6 +161,43 @@ const nodeConfigDirFs: ConfigDirFs = {
   },
   setMode: (path, mode) => chmod(path, mode),
   removeDir: (path) => rm(path, { recursive: true, force: true }),
+
+  listDirs: async (path) => {
+    try {
+      const entries = await readdir(path, { withFileTypes: true })
+      // `isDirectory()` is false for a symlink even when it points at one, which is the property
+      // wanted here: a link is never followed, so `remove` can never reach outside the root.
+      return entries.filter((entry) => entry.isDirectory()).map((entry) => entry.name)
+    } catch (error) {
+      if (isMissing(error)) return []
+      throw error
+    }
+  },
+
+  statDir: async (path) => {
+    try {
+      // `lstat`, not `stat`: the entry was a directory when it was listed, and re-resolving a
+      // symlink here would date whatever it points at instead of the thing about to be removed.
+      const stats = await lstat(path)
+      if (!stats.isDirectory()) return null
+      // The newest of the three, because this number only ever delays a deletion: a directory
+      // touched recently is one nothing may confidently call abandoned. `birthtimeMs` is 0 on
+      // filesystems that do not record it, where it simply loses.
+      return Math.max(stats.mtimeMs, stats.ctimeMs, stats.birthtimeMs)
+    } catch (error) {
+      if (isMissing(error)) return null
+      throw error
+    }
+  },
+}
+
+function isMissing(error: unknown): boolean {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    "code" in error &&
+    (error as { code?: unknown }).code === "ENOENT"
+  )
 }
 
 function usableRoot(root: string, homeDir: string | null): string {

@@ -12,9 +12,13 @@ export { advisoryTaskLock } from "./lock"
 export type { Scheduler, SchedulerDeps } from "./runner"
 export { createScheduler } from "./runner"
 export type {
+  ConfigDirReapDeps,
   JanitorDeps,
   OauthPurgeDeps,
+  OrphanConfigDir,
   QuotaFloorDeps,
+  ReapPlan,
+  ReapPlanInput,
   ScheduledTaskDeps,
   Sweep,
   SweepOptions,
@@ -22,11 +26,13 @@ export type {
   UsageRollupDeps,
 } from "./tasks"
 export {
+  createConfigDirReapTask,
   createJanitorTask,
   createOauthPurgeTask,
   createQuotaFloorTask,
   createScheduledTasks,
   createUsageRollupTask,
+  planConfigDirReap,
   rollupFrom,
   runSweeps,
   scheduledTaskIntervals,
