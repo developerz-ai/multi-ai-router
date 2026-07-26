@@ -92,7 +92,7 @@ export {
   type RateLimiter,
   type RateLimiterOptions,
 } from "./limits"
-export { type ReachableModel, reachableModels } from "./models"
+export { type ReachableModel, reachableModel, reachableModels } from "./models"
 export {
   createDispatcher,
   DEFAULT_UPSTREAM_TIMEOUT_MS,

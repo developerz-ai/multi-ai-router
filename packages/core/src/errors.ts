@@ -22,6 +22,7 @@ export const ROUTER_ERROR_CODES = [
   "upstream_timeout",
   "credential_decrypt_failed",
   "translation_failed",
+  "model_not_found",
 ] as const
 
 export type RouterErrorCode = (typeof ROUTER_ERROR_CODES)[number]
@@ -202,6 +203,18 @@ export class CredentialDecryptError extends RouterError {
 export class TranslationError extends RouterError {
   readonly code = "translation_failed"
   readonly status = 400
+}
+
+/**
+ * A client probed one specific model id (`GET /v1/models/:id`) that the presenting key cannot
+ * reach — unknown entirely, or known but filtered out of the key's scope. `404`, deliberately not
+ * the `403`/`503`/`429`/`402` a routing *attempt* against that id might have produced: this is a
+ * catalog lookup, not a failed request, so it always renders as "not found" regardless of which
+ * underlying reason kept every account from claiming it. The message still names that reason.
+ */
+export class ModelNotFoundError extends RouterError {
+  readonly code = "model_not_found"
+  readonly status = 404
 }
 
 /** Narrows an unknown thrown value to a {@link RouterError}. */

@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test"
+import { isRouterError, ModelNotFoundError } from "@multi-ai-router/core"
 import type { VerifiedKey } from "../../../src/services/dataplane"
-import { reachableModels } from "../../../src/services/dataplane"
+import { reachableModel, reachableModels } from "../../../src/services/dataplane"
 import { account, catalog, health, NOW } from "./fixtures"
 
 /**
@@ -79,5 +80,62 @@ describe("reachableModels", () => {
 
   test("an account declaring no models contributes no name rather than inventing a catalog", () => {
     expect(reachableModels(catalog([account("a")]), health(), keyWithFullScope(), NOW)).toEqual([])
+  })
+})
+
+describe("reachableModel", () => {
+  test("finds the requested-side alias name and names its owner", () => {
+    const model = reachableModel(
+      catalog([account("a", { modelAliases: { sonnet: "glm-4.7" }, provider: "zai" })]),
+      health(),
+      keyWithFullScope(),
+      "sonnet",
+      NOW,
+    )
+    expect(model).toEqual({ id: "sonnet", owner: "zai" })
+  })
+
+  test("a passthrough account (no declared models) still answers a probe for any id", () => {
+    // Deliberately the opposite of the listing's rule: the listing can't enumerate a name it
+    // never declared, but an actual routing attempt for that name would still be served.
+    const model = reachableModel(
+      catalog([account("a")]),
+      health(),
+      keyWithFullScope(),
+      "whatever-the-client-asked-for",
+      NOW,
+    )
+    expect(model).toEqual({ id: "whatever-the-client-asked-for", owner: "anthropic-api" })
+  })
+
+  test("throws ModelNotFoundError, naming the scope-aware reason, when no account can serve it", () => {
+    let caught: unknown
+    try {
+      reachableModel(
+        catalog([account("a", { snapshot: { status: "exhausted" } })]),
+        health(),
+        keyWithFullScope(),
+        "sonnet",
+        NOW,
+      )
+    } catch (error) {
+      caught = error
+    }
+
+    expect(caught).toBeInstanceOf(ModelNotFoundError)
+    expect(isRouterError(caught)).toBe(true)
+    expect((caught as ModelNotFoundError).status).toBe(404)
+    expect((caught as ModelNotFoundError).message).toContain("sonnet")
+  })
+
+  test("an out-of-scope key sees nothing to reach, same as the listing would", () => {
+    const scopedKey: VerifiedKey = {
+      ...keyWithFullScope(),
+      scope: { kind: "accounts", accountIds: [] },
+    }
+
+    expect(() =>
+      reachableModel(catalog([account("a")]), health(), scopedKey, "sonnet", NOW),
+    ).toThrow(ModelNotFoundError)
   })
 })

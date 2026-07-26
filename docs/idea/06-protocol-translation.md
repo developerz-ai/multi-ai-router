@@ -39,6 +39,7 @@ leftmost one that applies.
 | `POST /v1/responses` | OpenAI Responses (`openai-responses`) | inference |
 | `POST /v1/embeddings` | OpenAI, dialect-neutral (`openai-chat` for the error shape) | embed — below |
 | `GET /v1/models` | union of models reachable by the presenting key — [04-api-keys-and-access.md](04-api-keys-and-access.md) | — |
+| `GET /v1/models/:id` | one model; `404` if the presenting key cannot reach it | — |
 
 **Both OpenAI paths are first-class, and that is not redundancy.** `POST /v1/responses` is OpenAI's
 current recommended primitive and where new clients are going; `POST /v1/chat/completions` is what the

@@ -778,6 +778,72 @@ describe("GET /v1/models", () => {
   })
 })
 
+describe("GET /v1/models/:id", () => {
+  const aliased = [
+    account("acct-1", {
+      apiKey: "sk-one",
+      cipher: CRYPTOR,
+      modelAliases: { sonnet: "glm-4.7" },
+      // `modelAliases` also has to land on the routing snapshot, not just the driver — that is
+      // what `filterCandidates` actually reads (`resolveModel` is judged after alias mapping),
+      // and what the display listing and the reachability check agreeing depends on.
+      snapshot: {
+        modelAliases: { sonnet: "glm-4.7" },
+        supportedModels: ["claude-opus-5", "glm-4.7"],
+      },
+    }),
+  ]
+
+  test("answers a reachable id in the OpenAI shape for a bearer client", async () => {
+    const { app } = harness({ accounts: aliased, responses: [() => jsonResponse(200, {})] })
+
+    const res = await app.request("/v1/models/sonnet", { headers: bearer() })
+    const body = (await res.json()) as { id: string; object: string; owned_by: string }
+
+    expect(res.status).toBe(200)
+    expect(body).toMatchObject({ id: "sonnet", object: "model" })
+  })
+
+  test("answers an x-api-key client in the Anthropic shape", async () => {
+    const { app } = harness({ accounts: aliased, responses: [() => jsonResponse(200, {})] })
+
+    const res = await app.request("/v1/models/claude-opus-5", { headers: { "x-api-key": KEY } })
+    const body = (await res.json()) as { type: string; id: string }
+
+    expect(res.status).toBe(200)
+    expect(body).toEqual({ type: "model", id: "claude-opus-5", display_name: "claude-opus-5" })
+  })
+
+  test("404s an id no account in the key's scope serves", async () => {
+    const { app } = harness({ accounts: aliased, responses: [() => jsonResponse(200, {})] })
+
+    const res = await app.request("/v1/models/no-such-model", {
+      headers: { "x-api-key": KEY },
+    })
+    const body = (await res.json()) as { error: { message: string } }
+
+    expect(res.status).toBe(404)
+    expect(body.error.message).toContain("no-such-model")
+  })
+
+  test("404s an id outside the presenting key's scope, never leaking it exists", async () => {
+    const { app } = harness({
+      accounts: aliased,
+      scope: "accounts",
+      accountIds: [],
+      responses: [() => jsonResponse(200, {})],
+    })
+
+    const res = await app.request("/v1/models/sonnet", { headers: bearer() })
+    expect(res.status).toBe(404)
+  })
+
+  test("requires a key like every other data-plane route", async () => {
+    const { app } = harness({ responses: [() => jsonResponse(200, {})] })
+    expect((await app.request("/v1/models/sonnet")).status).toBe(401)
+  })
+})
+
 describe("request validation", () => {
   test("a body naming no model is a 400 before any account is selected", async () => {
     const { app, upstream } = harness({ responses: [() => jsonResponse(200, {})] })

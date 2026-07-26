@@ -8,8 +8,8 @@ import type {
   RoutingCatalog,
   UpstreamOperation,
 } from "../../services/dataplane"
-import { reachableModels } from "../../services/dataplane"
-import { renderModels } from "./models"
+import { reachableModel, reachableModels } from "../../services/dataplane"
+import { renderModel, renderModels } from "./models"
 
 /**
  * The data-plane ingress surface — the six routes a client actually talks to
@@ -23,6 +23,7 @@ import { renderModels } from "./models"
  * | `POST /v1/responses` | OpenAI Responses | inference |
  * | `POST /v1/embeddings` | OpenAI | embed |
  * | `GET /v1/models` | the models reachable by the presenting key | — |
+ * | `GET /v1/models/:id` | one model, `404` if the presenting key cannot reach it | — |
  *
  * **Both OpenAI paths are first-class, and that is not redundancy.** `/v1/responses` is where new
  * clients are going; `/v1/chat/completions` is what the installed base sends today. Neither is
@@ -96,6 +97,20 @@ export function dataPlaneRoutes(deps: DataPlaneRoutesDeps): Hono<RouterKeyEnv> {
   routes.get("/v1/models", guard, (c) =>
     renderModels(c, reachableModels(deps.catalog, deps.health, c.get("routerKey"), now()), now()),
   )
+
+  // Throws `ModelNotFoundError` (404) when the presenting key's scope can't reach the id; the
+  // error handler renders it in the client's dialect same as any other thrown `RouterError`.
+  routes.get("/v1/models/:id", guard, (c) => {
+    const at = now()
+    const model = reachableModel(
+      deps.catalog,
+      deps.health,
+      c.get("routerKey"),
+      c.req.param("id"),
+      at,
+    )
+    return renderModel(c, model, at)
+  })
 
   return routes
 }

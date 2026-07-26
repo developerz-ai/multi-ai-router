@@ -35,6 +35,7 @@ export {
   isRouterError,
   KeyRateLimitedError,
   KeyRevokedError,
+  ModelNotFoundError,
   NoHealthyAccountError,
   QuotaExhaustedError,
   RetryableRouterError,

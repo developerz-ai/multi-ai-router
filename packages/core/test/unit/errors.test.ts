@@ -7,6 +7,7 @@ import {
   isRouterError,
   KeyRateLimitedError,
   KeyRevokedError,
+  ModelNotFoundError,
   NoHealthyAccountError,
   QuotaExhaustedError,
   RetryableRouterError,
@@ -69,6 +70,7 @@ const cases: readonly ErrorCase[] = [
     status: 500,
   },
   { name: "TranslationError", ctor: TranslationError, code: "translation_failed", status: 400 },
+  { name: "ModelNotFoundError", ctor: ModelNotFoundError, code: "model_not_found", status: 404 },
 ]
 
 describe("error hierarchy", () => {
