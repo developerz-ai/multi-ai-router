@@ -41,6 +41,18 @@ export function createSeries(options: RegistryOptions = {}) {
   return {
     registry,
 
+    /**
+     * Always `1`; the label is the whole payload. First in the exposition because it is the line an
+     * operator reads first — `router_build_info * on() group_left(version) <anything>` is how a
+     * dashboard annotates a graph with the build that produced it, and a `version` label on every
+     * other series would multiply the cardinality of all of them to say the same thing once.
+     */
+    buildInfo: registry.gauge({
+      name: "router_build_info",
+      help: "Always 1. The version label names the build; join on it to annotate other series.",
+      labels: ["version"],
+    }),
+
     requests: registry.counter({
       name: "router_requests_total",
       help: "Client-facing requests, counted once each on the attempt that ended them.",

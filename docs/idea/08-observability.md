@@ -188,7 +188,7 @@ immediately if it is healthy.
 
 | Endpoint | Auth | Meaning | Codes |
 |---|---|---|---|
-| `GET /healthz` | none | Liveness. The process is up and serving | `200` always while serving |
+| `GET /healthz` | none | Liveness. The process is up and serving, and the build it is: `{"status":"ok","version":"1.0.0"}` | `200` always while serving |
 | `GET /readyz` | none | Readiness: **database reachable**. Two dimensions are reported without gating the answer: the account pool (`ok` / `none` / `blocked`) and the `claude` CLI (the resolution rung that won, or `missing`) | `200` ready, `503` with a short reason when the database is unreachable |
 | `GET /metrics` | `METRICS_TOKEN` when set, none when not | Prometheus text exposition | `200`, `401` when the token is set and not presented |
 | `GET /v1/usage/quota` | router key or admin session | Per-Account, per-window utilization, `resetsAt`, `resetSource`, `status`, `lastCheckedAt` — the same shape the UI renders, so an operator can alert on it externally | `200` |
@@ -196,6 +196,14 @@ immediately if it is healthy.
 | `GET /api/admin/usage` | admin session | Totals, series and breakdowns per key / account / pool / model over a window | `200` |
 
 `/healthz` never touches the database.
+
+**The version is one string with five outlets** — `/healthz`, `router_build_info{version}`, the
+`router listening` boot log line, `GET /api/admin/settings`, and the console footer. All five read
+the `VERSION` constant in `packages/core`, which every workspace `package.json` restates and a unit
+test holds them to. It is on `/healthz` because that is the one surface a deploy pipeline can reach
+without a credential, so "did the new image actually roll out" has an answer that is not a log tail;
+it is on the settings endpoint because the console footer must report *the server's* build, not the
+one the loaded bundle was cut from.
 
 **`/readyz` deliberately does not gate on healthy accounts**, though the obvious design says it
 should. A fresh install has zero accounts, so gating would mean it is never ready, so an
@@ -240,6 +248,7 @@ identity beyond its label.
 
 | Name | Type | Labels | Meaning |
 |---|---|---|---|
+| `router_build_info` | gauge | `version` | Always `1`; the label is the payload. First in the exposition. Join on it — `router_build_info * on() group_left(version) …` — to annotate a graph with the build that produced it, instead of putting a `version` label on every other series and multiplying their cardinality to say the same thing once |
 | `router_requests_total` | counter | `ingress_dialect`, `model`, `key_id`, `outcome` | Client-facing requests |
 | `router_request_duration_seconds` | histogram | `ingress_dialect`, `model`, `streamed` | End-to-end client request latency, upstream time included |
 | **`router_overhead_seconds`** | histogram | `ingress_dialect`, `path` (`passthrough`\|`translate`\|`agent_sdk`) | **Time spent in the router, excluding upstream.** First-class: shown on the dashboard next to upstream latency, because "the router is slow" and "the provider is slow" are different problems. A regression here is a bug, not a tuning opportunity ([06-protocol-translation.md](06-protocol-translation.md)) |

@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test"
+import { VERSION } from "@multi-ai-router/core"
 import { validate } from "../../../src/services/admin"
 import { AUDIT_LIMIT_DEFAULT, auditQuery } from "../../../src/services/settings"
 import { event, harness, NOW, RETENTION } from "./fixtures"
@@ -21,6 +22,15 @@ const SUBJECT = "6f1b0a3e-6d2c-4a5f-9c1e-2b7d8e4f5a60"
 const OTHER_SUBJECT = "0f0e0d0c-0b0a-4908-8706-050403020100"
 
 describe("the settings read", () => {
+  test("names the build, so the console footer reports the server and not its own bundle", async () => {
+    const { service } = harness()
+    const result = await service.read()
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.value.version).toBe(VERSION)
+  })
+
   test("maps the env retention config through unchanged", async () => {
     const { service } = harness()
     const result = await service.read()

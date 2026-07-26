@@ -1,6 +1,7 @@
 import { existsSync } from "node:fs"
 import { join } from "node:path"
 import { fileURLToPath } from "node:url"
+import { VERSION } from "@multi-ai-router/core"
 import { createDatabase, runMigrations } from "@multi-ai-router/db"
 import { createApp } from "./app"
 import { createRuntime, type Runtime, type RuntimeDeps } from "./composition"
@@ -63,6 +64,7 @@ async function main(): Promise<void> {
   const server = Bun.serve({ port: env.port, fetch: app.fetch })
   logger.info("router listening", {
     component: "transport",
+    version: VERSION,
     port: server.port,
     logLevel: env.logLevel,
     trustProxy: env.trustProxy,

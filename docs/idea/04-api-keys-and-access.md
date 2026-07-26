@@ -254,7 +254,7 @@ Paths and purpose only. Handler detail belongs in [01-architecture.md](01-archit
 | `/api/admin/keys/**` | list, create, reveal, edit limits and bindings, revoke | yes |
 | `/api/admin/providers` | the static provider registry, so the console's account form is never a second copy of it | yes |
 | `GET /api/admin/usage` | totals, series and breakdowns by key, account, pool, model, over a window | yes |
-| `GET`/`PATCH` `/api/admin/settings` | retention knobs, log level and janitor cadence read from the environment; price table overrides read and written | yes — the `PATCH` takes the price overrides as one complete set, so the table is never half-applied, and the warm price book is refreshed before the response is written |
+| `GET`/`PATCH` `/api/admin/settings` | the running build's `version`; retention knobs, log level and janitor cadence read from the environment; price table overrides read and written | yes — the `PATCH` takes the price overrides as one complete set, so the table is never half-applied, and the warm price book is refreshed before the response is written |
 | `GET /api/admin/tasks` | the latest run of every scheduled task, and whether it is overdue | yes |
 | `GET /api/admin/audit` | the append-only admin-plane audit feed, newest first | yes |
 

@@ -212,6 +212,16 @@
   overflow-wrap: anywhere;
 }
 
+// The build, on every page. Monospace because it gets copied into a bug report,
+// and the quietest thing in the shell because it is only ever read on purpose.
+.version {
+  padding-inline: var(--space-2);
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  line-height: var(--line-snug);
+}
+
 // ---------- Main ----------
 
 .main {

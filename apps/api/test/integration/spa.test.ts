@@ -111,7 +111,7 @@ describe("the API is never shadowed", () => {
   test("leaves the health endpoints alone", async () => {
     const app = harness()
 
-    expect(await (await app.request("/healthz")).json()).toEqual({ status: "ok" })
+    expect(await (await app.request("/healthz")).json()).toMatchObject({ status: "ok" })
     expect((await app.request("/readyz")).status).toBe(200)
   })
 

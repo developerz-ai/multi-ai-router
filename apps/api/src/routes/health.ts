@@ -1,3 +1,4 @@
+import { VERSION } from "@multi-ai-router/core"
 import { Hono } from "hono"
 import { checkReadiness, type ReadinessProbes } from "../services/health/readiness"
 import type { AppEnv } from "../types"
@@ -7,7 +8,9 @@ import type { AppEnv } from "../types"
  *
  * `GET /healthz` — the process is up and serving. Never touches the database: zero healthy
  *   accounts or an unreachable Postgres is an operator problem, not a reason for an
- *   orchestrator to restart a working process.
+ *   orchestrator to restart a working process. It also names the build, because this is the one
+ *   endpoint a deploy pipeline can already reach without a credential, and "did the new image
+ *   actually roll out" is otherwise a question only a log tail answers.
  * `GET /readyz` — the database is reachable. `503` with a short reason otherwise.
  *   The account pool is **reported** here but does not gate the answer: requiring a healthy
  *   account would deadlock a fresh install, which has none and needs traffic routed to its
@@ -18,7 +21,7 @@ import type { AppEnv } from "../types"
 export function healthRoutes(probes: ReadinessProbes): Hono<AppEnv> {
   const routes = new Hono<AppEnv>()
 
-  routes.get("/healthz", (c) => c.json({ status: "ok" }))
+  routes.get("/healthz", (c) => c.json({ status: "ok", version: VERSION }))
 
   routes.get("/readyz", async (c) => {
     const report = await checkReadiness(probes)

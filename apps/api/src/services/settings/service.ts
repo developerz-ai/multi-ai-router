@@ -1,3 +1,4 @@
+import { VERSION } from "@multi-ai-router/core"
 import type {
   AuditRepository,
   PriceOverrideRepository,
@@ -71,6 +72,7 @@ export interface SettingsServiceDeps {
 
 export function createSettingsService(deps: SettingsServiceDeps): SettingsService {
   const view = (overrides: readonly PriceOverrideRow[]): SettingsView => ({
+    version: VERSION,
     retention: deps.env.retention,
     logLevel: deps.env.logLevel,
     janitorIntervalMinutes: deps.env.janitorIntervalMinutes,

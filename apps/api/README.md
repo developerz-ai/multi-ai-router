@@ -74,7 +74,7 @@ production wiring lives in `composition.ts`, and a `Database` becomes a service 
 
 | Endpoint | Auth | Status | Behavior |
 |---|---|---|---|
-| `GET /healthz` | none | shipped | **Liveness.** 200 whenever the process is serving. Never touches the database — zero healthy accounts is an operator problem, not a reason to restart a working process |
+| `GET /healthz` | none | shipped | **Liveness.** `200` with `{"status":"ok","version":"1.0.0"}` whenever the process is serving. Never touches the database — zero healthy accounts is an operator problem, not a reason to restart a working process. The `version` is here because this is the one endpoint a deploy pipeline reaches without a credential |
 | `GET /readyz` | none | shipped | **Readiness.** 200 only when the database answered **and** at least one Account is healthy; otherwise 503 with `checks` and a short `reason` |
 | `POST /api/admin/auth/login`, `/logout`, `GET /session` | cookie (login issues it) | shipped | Session + CSRF. Login is throttled per IP and per username |
 | `/api/admin/accounts/**` | session cookie | shipped | CRUD, disable, delete, `POST /recheck` and `POST /:id/recheck`. The OAuth connect/reconnect flows are **not** built |

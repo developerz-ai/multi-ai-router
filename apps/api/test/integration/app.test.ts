@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { CreditsExhaustedError, QuotaExhaustedError } from "@multi-ai-router/core"
+import { CreditsExhaustedError, QuotaExhaustedError, VERSION } from "@multi-ai-router/core"
 import { type AppDeps, createApp } from "../../src/app"
 import { createLogger } from "../../src/logging/logger"
 import { REQUEST_ID_HEADER } from "../../src/middleware/requestId"
@@ -29,11 +29,11 @@ function harness(probes: Partial<ReadinessProbes> = {}): Harness {
 }
 
 describe("GET /healthz", () => {
-  test("is 200 whenever the process is serving", async () => {
+  test("is 200 whenever the process is serving, and names the build", async () => {
     const res = await harness().app.request("/healthz")
 
     expect(res.status).toBe(200)
-    expect(await res.json()).toEqual({ status: "ok" })
+    expect(await res.json()).toEqual({ status: "ok", version: VERSION })
   })
 
   test("stays 200 while the database is down — liveness is not readiness", async () => {

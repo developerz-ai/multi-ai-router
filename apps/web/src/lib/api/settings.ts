@@ -56,6 +56,13 @@ export interface PriceTable {
 }
 
 export interface SettingsView {
+  /**
+   * The build the **server** is running, not the one this bundle was cut from.
+   * A console left open across a deploy, or reloaded from a stale cache, would
+   * otherwise report a version nothing is serving — which is the one number a
+   * bug report has to get right.
+   */
+  readonly version: string
   readonly retention: RetentionWindows
   readonly logLevel: string
   readonly janitorIntervalMinutes: number

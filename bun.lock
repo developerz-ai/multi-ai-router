@@ -12,7 +12,7 @@
     },
     "apps/api": {
       "name": "@multi-ai-router/api",
-      "version": "0.0.0",
+      "version": "1.0.0",
       "dependencies": {
         "@anthropic-ai/claude-agent-sdk": "^0.3.220",
         "@hono/zod-validator": "^0.7.0",
@@ -24,7 +24,7 @@
     },
     "apps/web": {
       "name": "@multi-ai-router/web",
-      "version": "0.0.0",
+      "version": "1.0.0",
       "dependencies": {
         "@multi-ai-router/core": "workspace:*",
         "@solidjs/router": "^0.15.3",
@@ -39,14 +39,14 @@
     },
     "packages/core": {
       "name": "@multi-ai-router/core",
-      "version": "0.0.0",
+      "version": "1.0.0",
       "dependencies": {
         "zod": "^4.0.0",
       },
     },
     "packages/db": {
       "name": "@multi-ai-router/db",
-      "version": "0.0.0",
+      "version": "1.0.0",
       "dependencies": {
         "@multi-ai-router/core": "workspace:*",
         "drizzle-orm": "^0.44.2",

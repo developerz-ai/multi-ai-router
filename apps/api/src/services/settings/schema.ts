@@ -127,6 +127,13 @@ export interface PricesView {
 }
 
 export interface SettingsView {
+  /**
+   * The build serving this request — `VERSION`, the same string `/healthz`, the boot log and
+   * `router_build_info` carry. It rides on this endpoint rather than on the session because it is a
+   * fact about the deployment, which is what this screen is for, and because the console footer
+   * showing the *server's* version is the only way an operator on a stale cached SPA finds out.
+   */
+  readonly version: string
   readonly retention: RetentionConfig
   readonly logLevel: LogLevel
   readonly janitorIntervalMinutes: number

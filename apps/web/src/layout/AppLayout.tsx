@@ -7,6 +7,7 @@ import { sessionLost } from "../lib/api/session"
 import { createFocusTrap } from "../lib/focus-trap"
 import { createMediaQuery, SIDEBAR_QUERY } from "../lib/media"
 import { useLogout, useSession } from "../lib/queries/session"
+import { useSettings } from "../lib/queries/settings"
 import { CONSOLE_ROUTES, loginPathFor } from "../lib/routes"
 import { createScrollLock } from "../lib/scroll-lock"
 import styles from "./AppLayout.module.scss"
@@ -30,6 +31,13 @@ export default function AppLayout(props: RouteSectionProps) {
   // `sessionLost` on a cold load with no cookie.
   const session = useSession()
   const logout = useLogout()
+
+  // Only the version is wanted here, but the settings body is one small object and
+  // the settings screen asks for the same query key — so the footer costs a cache
+  // read rather than a request of its own. It is the **server's** version, not this
+  // bundle's: a console reloaded from a stale cache must not name a build nothing is
+  // running.
+  const settings = useSettings()
 
   /**
    * **The single place a lost session becomes a redirect.** Any 401, from any
@@ -147,6 +155,12 @@ export default function AppLayout(props: RouteSectionProps) {
           <Button busy={logout.isPending} onClick={signOut} size="sm" tone="ghost">
             Sign out
           </Button>
+          {/* Guarded the same way and for the same reason. Absent rather than
+              "unknown" while it loads: a version that flickers through a
+              placeholder is a version someone copies into a bug report. */}
+          <Show when={settings.isSuccess}>
+            <span class={styles.version}>v{settings.data?.version}</span>
+          </Show>
         </div>
       </nav>
 
