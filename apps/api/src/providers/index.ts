@@ -99,7 +99,12 @@ export {
   scopedKey,
   sessionFingerprint,
 } from "./claude-sdk/session"
-export type { SdkTestProbe, SdkTestProbeInput, SdkTestProbeOptions } from "./claude-sdk/test-probe"
+export type {
+  SdkProbeQueryFn,
+  SdkTestProbe,
+  SdkTestProbeInput,
+  SdkTestProbeOptions,
+} from "./claude-sdk/test-probe"
 export { createSdkTestProbe } from "./claude-sdk/test-probe"
 export type {
   CapturedToolCall,

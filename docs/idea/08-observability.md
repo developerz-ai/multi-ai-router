@@ -287,6 +287,8 @@ identity beyond its label.
 | `router_quota_last_checked_timestamp_seconds` | gauge | `account_id` | When the utilization above was last refreshed. Read the two together or you are alerting on a stale number |
 | `router_usage_queue_depth` | gauge | — | Pending `UsageRecord`s awaiting batch write. Rising depth means reporting lag, not request lag |
 | `router_usage_records_dropped_total` | counter | — | Records shed on queue overflow. Non-zero means the reporting path is behind; traffic is unaffected |
+| `router_sdk_subprocesses` | gauge | — | `claude` subprocesses running on this replica right now. Against `CLAUDE_SDK_MAX_CONCURRENCY` this is **memory in use**, not throughput — every one of them is a ~245 MB native binary ([09-deployment.md](09-deployment.md#sizing)). Per replica, like the gate itself. Counts the console's "Test now" probe too: it spawns the same process and takes the same slot |
+| `router_sdk_subprocess_queue_depth` | gauge | — | Subscription requests **waiting** for a subprocess slot. Zero at any occupancy is a ceiling that fits; sustained depth is the signal to raise `CLAUDE_SDK_MAX_CONCURRENCY` (if RAM allows) or add a replica. Read it with the gauge above: full-and-empty is saturated-but-sufficient, full-and-queuing is not |
 | `router_task_*` | — | `task` | Background task health — see [Scheduled task visibility](#scheduled-task-visibility) |
 
 Label discipline: no unbounded label values. `key_id` and `account_id` are bounded by the
@@ -304,7 +306,7 @@ knowing which clock each one is on:
 |---|---|---|
 | Everything per **attempt** (`router_upstream_*`, `router_tokens_total`, `router_overhead_seconds`, `router_failovers_total`) | The usage recorder's **batch drain** — the same background pass that writes the rows | Lags a scrape by at most one flush interval. Never costs a request anything |
 | `router_requests_total`, `router_request_duration_seconds` | Once per client request, where the request ends | Duration is measured to the response being handed back. A **streamed** body drains after that, so a streamed sample is time-to-response, not time-to-last-token — never average the two `streamed` label values together |
-| `router_accounts`, `router_quota_*`, `router_usage_queue_depth` | Sampled **per scrape** from the same warm state the request path reads | Cannot disagree with the router about which accounts are cooling down |
+| `router_accounts`, `router_quota_*`, `router_usage_queue_depth`, `router_sdk_subprocess*` | Sampled **per scrape** from the same warm state the request path reads | Cannot disagree with the router about which accounts are cooling down, or about how many subprocesses it is holding. A gauge mirrored on every acquire would put bookkeeping on the path the gate exists to bound |
 | `router_task_*` | Each settled scheduler tick | `skipped_locked` records a run that never happened: no duration, no items, and the failure streak is left alone |
 
 Two deliberate absences. `router_overhead_seconds` has no sample for a request rejected before an

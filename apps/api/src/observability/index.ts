@@ -12,6 +12,7 @@ export {
   createMetrics,
   type MetricsOptions,
   type RouterMetrics,
+  type SdkConcurrencySample,
   type UsageQueueSample,
 } from "./metrics"
 export {

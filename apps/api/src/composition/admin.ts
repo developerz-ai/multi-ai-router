@@ -13,7 +13,7 @@ import {
 } from "@multi-ai-router/db"
 import type { Env } from "../config/env"
 import type { Logger } from "../logging/logger"
-import { createSdkTestProbe } from "../providers"
+import { createSdkTestProbe, type SdkConcurrency } from "../providers"
 import { createAccountConfigDirs } from "../providers/claude-sdk/config-dir"
 import { scheduledTaskIntervals } from "../scheduler"
 import {
@@ -80,6 +80,12 @@ export interface AdminPlaneDeps {
   readonly health: HealthStore
   /** Refreshed after a price edit, so the console is read-after-write consistent on cost. */
   readonly prices: PriceBook
+  /**
+   * The replica's `claude` subprocess ceiling, as the composition root built it. Passed in rather
+   * than created here because "Test now" spawns the same process the dispatch path does, and one
+   * memory budget takes one gate — see `providers/claude-sdk/test-probe.ts`.
+   */
+  readonly sdkConcurrency: SdkConcurrency
   readonly coherence: CoherenceHooks
 }
 
@@ -136,7 +142,10 @@ export function createAdminPlane(deps: AdminPlaneDeps): AdminPlane {
     now,
     // Re-resolved per call inside the probe itself (`resolveClaudeCli`), for the same reason
     // `claudeCliFromEnv` re-resolves rather than resolving once at boot.
-    sdkProbe: createSdkTestProbe({ cliPathOverride: env.claudeCliPath }),
+    sdkProbe: createSdkTestProbe({
+      cliPathOverride: env.claudeCliPath,
+      concurrency: deps.sdkConcurrency,
+    }),
   })
 
   const accountsService = createAccountsService({ accounts, keys, cipher, configDirs, audit, now })

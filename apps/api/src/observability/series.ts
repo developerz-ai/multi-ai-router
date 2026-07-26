@@ -134,6 +134,23 @@ export function createSeries(options: RegistryOptions = {}) {
       labels: [],
     }),
 
+    /**
+     * The `claude` subprocess ceiling, seen from inside. Unlabelled by Account on purpose: the thing
+     * being bounded is this container's memory, which is one number, and a per-Account series would
+     * grow with the inventory to say something the queue depth already says.
+     */
+    sdkSubprocesses: registry.gauge({
+      name: "router_sdk_subprocesses",
+      help: "claude subprocesses running now. Against CLAUDE_SDK_MAX_CONCURRENCY, this is memory in use.",
+      labels: [],
+    }),
+
+    sdkSubprocessQueueDepth: registry.gauge({
+      name: "router_sdk_subprocess_queue_depth",
+      help: "Subscription requests waiting for a subprocess slot. Sustained depth means raise the ceiling or add a replica.",
+      labels: [],
+    }),
+
     usageRecordsDropped: registry.counter({
       name: "router_usage_records_dropped_total",
       help: "Usage records shed on queue overflow. Traffic is unaffected; reporting is behind.",

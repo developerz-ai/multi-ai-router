@@ -94,7 +94,7 @@ naming the offending variable — the process never starts half-configured.
 | `PORT` | no | `8080` | Listen port inside the container. |
 | `CLAUDE_CONFIG_ROOT` | no | `/data/claude` | Parent directory holding one `CLAUDE_CONFIG_DIR` per Claude subscription Account. Must sit on the persistent `claude-config` volume. Secret material — see [Persistence & backup](#persistence--backup). |
 | `CLAUDE_CLI_PATH` | no | — | Pins the `claude` binary the Agent SDK spawns, bypassing resolution. Unset is right: the image stages one on `PATH` and `/readyz` reports which rung of the ladder won. A set-but-unusable path **fails** rather than falling back, so the router never spawns a binary you did not name — see [11-anthropic-agent-sdk.md](11-anthropic-agent-sdk.md#9-operational-notes). |
-| `CLAUDE_SDK_MAX_CONCURRENCY` | no | `10` | `claude` subprocesses in flight on this replica. Every subscription request spawns one (~245 MB native binary, measured — see [Sizing](#sizing)), so this is a **memory** bound, not a throughput one — size against RAM, not CPUs. Requests over the ceiling queue rather than fail. |
+| `CLAUDE_SDK_MAX_CONCURRENCY` | no | `10` | `claude` subprocesses in flight on this replica. Every subscription request spawns one (~245 MB native binary, measured — see [Sizing](#sizing)), so this is a **memory** bound, not a throughput one — size against RAM, not CPUs. Requests over the ceiling queue rather than fail. Bounds every spawner, including the console's **Test now** button. Watch `router_sdk_subprocesses` and `router_sdk_subprocess_queue_depth` to size it against real traffic. |
 | `CLAUDE_SDK_MAX_CONCURRENCY_PER_ACCOUNT` | no | `4` | The same ceiling for any one subscription Account — what stops one Account's burst starving the pool. Values above `CLAUDE_SDK_MAX_CONCURRENCY` are legal and simply never bind. |
 | `ACCOUNT_RECHECK_COOLDOWN_SECONDS` | no | `60` | Minimum interval between manual **Re-check now** probes of the same account. The button re-queries the provider's live quota signal; this is what stops it being used to hammer an upstream. |
 | `ACCOUNT_TEST_NOW_COOLDOWN_SECONDS` | no | `120` | Minimum interval between manual **Test now** presses of the same account. Distinct from the re-check cooldown above and deliberately longer: this button sends one real, billed completion, and on a Claude subscription it spawns a `claude` subprocess and spends a turn. |
@@ -415,7 +415,12 @@ concurrency_ceiling ≈ (available_RAM_MB − 512_MB_baseline) / 245_MB
 The `CLAUDE_SDK_MAX_CONCURRENCY` default of `10` costs ~2.45 GB at full occupancy — conservative on
 anything but the smallest box, and the right default precisely because it is safe everywhere before
 an operator tunes it up against their own RAM using the formula above. Cap concurrency deliberately
-rather than discovering the ceiling under load: an unbounded subprocess count is the failure mode. A
+rather than discovering the ceiling under load: an unbounded subprocess count is the failure mode.
+The ceiling covers **every** path that spawns, dispatch and the console's **Test now** probe alike —
+a bound one caller can step around bounds nothing. `router_sdk_subprocesses` and
+`router_sdk_subprocess_queue_depth` are how you check the formula against your own traffic:
+saturation with an empty queue means the ceiling fits, sustained queue depth means raise it (if RAM
+allows) or add a replica. A
 same-dialect passthrough (the common case) does no body parsing at all; see
 [06-protocol-translation.md](06-protocol-translation.md).
 

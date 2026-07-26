@@ -22,7 +22,9 @@ import { describeProvider } from "./providers"
  * spends a token or two of a real quota window; a Claude subscription spends a turn *and* spawns a
  * subprocess, which is why that path additionally refuses to run without `confirmed: true` on the
  * request — CLAUDE.md's "never on the Agent-SDK path without an explicit confirm" is enforced here,
- * not trusted to the console.
+ * not trusted to the console. The subprocess is bounded by the replica's own ceiling, not by this
+ * button: the cooldown below is per Account and would not stop ten Accounts being tested at once,
+ * so the probe takes a slot from the dispatch path's gate (`claude-sdk/test-probe.ts`).
  *
  * **Its own cooldown, not the re-check's.** Sharing one would let a free button's press block a
  * paid one's, or the reverse — an operator rechecking five accounts in a row must never find the
@@ -163,7 +165,11 @@ async function runSdkProbe(
     }
   }
 
+  // The deadline bounds the wait for a subprocess slot as well as the turn itself: the probe shares
+  // the dispatch path's ceiling (`claude-sdk/test-probe.ts`), so a saturated replica answers "at the
+  // ceiling" rather than queueing a button press behind live traffic indefinitely.
   const result = await deps.sdkProbe.run({
+    accountId: account.id,
     configDir,
     model,
     signal: AbortSignal.timeout(deps.timeoutMs),

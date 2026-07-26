@@ -37,6 +37,12 @@ export interface UsageQueueSample {
   readonly dropped: number
 }
 
+/** The subprocess gate's own two numbers, read per scrape — `providers/claude-sdk/concurrency.ts`. */
+export interface SdkConcurrencySample {
+  readonly inFlight: number
+  readonly queued: number
+}
+
 export interface RouterMetrics {
   /** One client request, at the point it ended. */
   observeRequest(sample: RequestSample): void
@@ -46,6 +52,11 @@ export interface RouterMetrics {
   /** Replaces the account and quota gauges wholesale. Called per scrape, never per request. */
   setAccounts(accounts: readonly AccountMetric[]): void
   setUsageQueue(sample: UsageQueueSample): void
+  /**
+   * Occupancy of the `claude` subprocess ceiling. Per scrape, from the gate's own counters — a
+   * semaphore that reported every acquire would put bookkeeping on the path it is bounding.
+   */
+  setSdkConcurrency(sample: SdkConcurrencySample): void
   /** Registers a per-scrape sampler — see `collectors.ts`. */
   onCollect(collect: () => void): void
   expose(): string
@@ -228,6 +239,11 @@ export function createMetrics(options: MetricsOptions = {}): RouterMetrics {
         s.usageRecordsDropped.inc({}, sample.dropped - droppedSeen)
         droppedSeen = sample.dropped
       }
+    },
+
+    setSdkConcurrency(sample) {
+      s.sdkSubprocesses.set({}, sample.inFlight)
+      s.sdkSubprocessQueueDepth.set({}, sample.queued)
     },
 
     onCollect: (collect) => s.registry.onCollect(collect),

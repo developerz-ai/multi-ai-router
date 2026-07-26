@@ -113,8 +113,24 @@ export function createRuntime(deps: RuntimeDeps): Runtime {
     refreshIntervalMs: env.dataPlane.catalogRefreshSeconds * 1_000,
     now,
   })
+  // The replica's `claude` subprocess ceiling. Warm state like the two above, and constructed here
+  // rather than beside the invoker because it is shared: the dispatch path and the console's "Test
+  // now" probe spawn the same ~245 MB process, so they must count against the same budget. A second
+  // instance sized the same would bound twice what the operator configured (`concurrency.ts`).
+  const sdkConcurrency = createSdkConcurrency({
+    global: env.claudeSdkMaxConcurrency,
+    perAccount: env.claudeSdkMaxConcurrencyPerAccount,
+  })
+
   // `usage` is a getter because the recorder below reports *into* this: see `observability/`.
-  const metrics = createRuntimeMetrics({ catalog, health, usage: () => usage, logger, now })
+  const metrics = createRuntimeMetrics({
+    catalog,
+    health,
+    usage: () => usage,
+    sdkConcurrency,
+    logger,
+    now,
+  })
 
   // Queued in memory, batch-written off-path. Both loss modes reach a log line — see fromEnv.ts.
   const usage: UsageRecorder = createUsageRecorderFromEnv({
@@ -165,22 +181,16 @@ export function createRuntime(deps: RuntimeDeps): Runtime {
   // conversation physically lives upstream, so no policy may overrule it and no hash recomputes it.
   const sessionStore = sessionStoreFromEnv({ env, repository: sessions, logger, now })
 
-  // The Claude subscription transport. Two long-lived pieces and one invoker over them:
-  //
-  // - the semaphore pair is a **memory** bound on `claude` subprocesses, so it is per replica and
-  //   shared by every request — one per dispatcher, never one per call;
-  // - the quota store is keyed by Account and lives as long as this runtime, because a
-  //   `rate_limit_event` on one turn is what cools the account down on the next (§5). A
-  //   module-level one would bleed between runtimes inside a single process.
+  // The Claude subscription transport. The semaphore pair above and one quota store, keyed by
+  // Account and living as long as this runtime — a `rate_limit_event` on one turn is what cools the
+  // account down on the next (§5), and a module-level one would bleed between runtimes inside a
+  // single process.
   //
   // Built unconditionally: whether a deployment serves subscriptions is a question about its
   // accounts, not about its wiring, and an operator who connects one must not need a restart.
   const sdkQuota = createSdkQuotaStore()
   const invokeSdk = createSdkInvoker({
-    concurrency: createSdkConcurrency({
-      global: env.claudeSdkMaxConcurrency,
-      perAccount: env.claudeSdkMaxConcurrencyPerAccount,
-    }),
+    concurrency: sdkConcurrency,
     cliPathOverride: env.claudeCliPath,
   })
 
@@ -226,6 +236,7 @@ export function createRuntime(deps: RuntimeDeps): Runtime {
     catalog,
     health,
     prices,
+    sdkConcurrency,
     coherence: {
       refreshCatalog: () => catalog.refresh(),
       // A revoked key must stop authenticating *and* stop occupying a rate-limit window.
