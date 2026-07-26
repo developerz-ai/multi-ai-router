@@ -83,6 +83,19 @@ describe("transport", () => {
     expect(gemini.connectFlow).toBeNull()
   })
 
+  test("the six OpenAI-shaped vendors render as one-surface key providers, nothing to connect", () => {
+    for (const id of ["groq", "deepseek", "xai", "mistral", "together", "cerebras"] as const) {
+      const provider = describeProvider(id)
+
+      expect(provider.transport).toBe("http")
+      expect(provider.authKind).toBe("api-key")
+      expect(provider.supportedDialects).toEqual(["openai-chat"])
+      expect(provider.requiresBaseUrl).toBe(false)
+      expect(provider.requiresConfigDir).toBe(false)
+      expect(provider.connectFlow).toBeNull()
+    }
+  })
+
   test("an HTTP provider reports the auth style its driver declares", () => {
     expect(describeProvider("kimi").transport).toBe("http")
     expect(describeProvider("kimi").authKind).toBe("api-key")

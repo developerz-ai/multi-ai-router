@@ -181,6 +181,15 @@ describe("redact — self-identifying credential shapes", () => {
     expect(safe.detail).toBe(REDACTED)
   })
 
+  test("a Cerebras key is scrubbed, and a DeepSeek one by the shared sk- shape", () => {
+    const safe = redact({
+      cerebras: `csk-${"d".repeat(40)}`,
+      deepseek: `sk-${"e".repeat(32)}`,
+    })
+
+    expect(safe).toEqual({ cerebras: REDACTED, deepseek: REDACTED })
+  })
+
   test("a credential in a query string is scrubbed, and the endpoint survives", () => {
     const safe = redact({
       keyed: `https://generativelanguage.googleapis.com/v1beta/models?key=AIzaSy${"0".repeat(33)}&alt=sse`,

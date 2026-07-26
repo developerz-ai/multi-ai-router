@@ -19,6 +19,12 @@ export const ProviderId = z.enum([
   "kimi",
   "minimax",
   "gemini",
+  "groq",
+  "deepseek",
+  "xai",
+  "mistral",
+  "together",
+  "cerebras",
   "openai-compatible",
   "anthropic-compatible",
 ])

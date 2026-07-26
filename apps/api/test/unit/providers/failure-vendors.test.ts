@@ -26,6 +26,12 @@ const zai = httpDriver("zai")
 const kimi = httpDriver("kimi")
 const minimax = httpDriver("minimax")
 const gemini = httpDriver("gemini")
+const groq = httpDriver("groq")
+const deepseek = httpDriver("deepseek")
+const xai = httpDriver("xai")
+const mistral = httpDriver("mistral")
+const together = httpDriver("together")
+const cerebras = httpDriver("cerebras")
 
 describe("zai", () => {
   test("code 1113 is a drained balance, whatever the status says", () => {
@@ -195,6 +201,314 @@ describe("gemini", () => {
     }
 
     expect(gemini?.classifyFailure(response(503, { body }))?.rateLimit).toBeNull()
+  })
+})
+
+/**
+ * The six OpenAI-shaped vendors. They share a dialect and differ only in how each words a failure,
+ * which is the whole reason each is a pinned id rather than an `openai-compatible` account. Only the
+ * fields a driver actually keys on are corroborated below; the surrounding ones are filled the way
+ * the vendor's own captures fill them.
+ */
+
+/** A real completion, for the "a success is never a failure" half of each vendor's coverage. */
+const COMPLETION = {
+  id: "chatcmpl-1",
+  object: "chat.completion",
+  choices: [{ index: 0, message: { role: "assistant", content: "hi" }, finish_reason: "stop" }],
+}
+
+describe("groq", () => {
+  test("a spend limit arrives as a 400 and is still a dead balance", () => {
+    const result = groq?.classifyFailure(
+      response(400, {
+        body: {
+          error: {
+            message: "Organization has been blocked from making API requests.",
+            type: "invalid_request_error",
+            code: "blocked_api_access",
+          },
+        },
+      }),
+    )
+
+    expect(result?.kind).toBe("credits-exhausted")
+    expect(result?.signal).toBe("groq:blocked_api_access")
+    expect(result?.retryable).toBe(true)
+  })
+
+  test("`type` names the limit that was hit, so no rule here reads it", () => {
+    // `type: "tokens"` is Groq's *dimension*, not an error kind. A typeRule would classify it as an
+    // unknown vocabulary and fall through; the code is what carries the meaning.
+    const result = groq?.classifyFailure(
+      response(429, {
+        body: {
+          error: {
+            message:
+              "Rate limit reached for model `llama-3.3-70b-versatile` on tokens per minute (TPM): Limit 15000, Used 11972, Requested 4351.",
+            type: "tokens",
+            code: "rate_limit_exceeded",
+          },
+        },
+      }),
+    )
+
+    expect(result?.kind).toBe("rate-limited")
+    expect(result?.signal).toBe("groq:rate_limit_exceeded")
+  })
+
+  test("flex-tier capacity is transient, though 498 is a 4xx", () => {
+    const result = groq?.classifyFailure(response(498, { body: "Flex Tier Capacity Exceeded" }))
+
+    expect(result?.kind).toBe("server-error")
+    expect(result?.signal).toBe("groq:flex-tier-capacity")
+    expect(result?.retryable).toBe(true)
+  })
+
+  test("a rejected key is this account's own problem", () => {
+    const result = groq?.classifyFailure(
+      response(401, {
+        body: { error: { message: "Invalid API Key", code: "invalid_api_key" } },
+      }),
+    )
+
+    expect(result?.kind).toBe("auth")
+    expect(result?.retryable).toBe(false)
+  })
+})
+
+describe("deepseek", () => {
+  const balanceBody = {
+    error: {
+      message: "Insufficient Balance",
+      type: "unknown_error",
+      param: null,
+      code: "invalid_request_error",
+    },
+  }
+
+  test("402 Insufficient Balance is a dead balance, and the signal names why", () => {
+    const result = deepseek?.classifyFailure(response(402, { body: balanceBody }))
+
+    expect(result?.kind).toBe("credits-exhausted")
+    expect(result?.signal).toBe("deepseek:insufficient-balance")
+  })
+
+  test("nothing reads DeepSeek's inverted code — a rejected key is still auth", () => {
+    // `code` here says `invalid_request_error`, which is what OpenAI would put in `type`. A codeRule
+    // would read this as a client mistake and never flag the credential.
+    const result = deepseek?.classifyFailure(
+      response(401, {
+        body: {
+          error: {
+            message: "Authentication Fails (no such user)",
+            type: "authentication_error",
+            param: null,
+            code: "invalid_request_error",
+          },
+        },
+      }),
+    )
+
+    expect(result?.kind).toBe("auth")
+    expect(result?.retryable).toBe(false)
+  })
+
+  test("429 is a cooldown and 503 is transient — DeepSeek's statuses mean what they say", () => {
+    expect(deepseek?.classifyFailure(response(429))?.kind).toBe("rate-limited")
+    expect(deepseek?.classifyFailure(response(503))?.kind).toBe("server-error")
+  })
+})
+
+describe("xai", () => {
+  test("a 429 is a cooldown, and outranks the wording backstop below it", () => {
+    // The trap this ordering exists for: a throttle message that names a quota. Read by wording
+    // alone it is a dead balance, and no clock revives a `402`.
+    const result = xai?.classifyFailure(
+      response(429, {
+        body: { error: { message: "Request quota exceeded for grok-4, please slow down." } },
+      }),
+    )
+
+    expect(result?.kind).toBe("rate-limited")
+    expect(result?.signal).toBe("vendor:http-429")
+  })
+
+  test("a 402 is a dead balance on the status alone — xAI publishes no code for one", () => {
+    const result = xai?.classifyFailure(
+      response(402, { body: { error: { message: "no credits" } } }),
+    )
+
+    expect(result?.kind).toBe("credits-exhausted")
+    expect(result?.signal).toBe("http-status:402")
+  })
+
+  test("the flat Responses-shape error still yields a readable message", () => {
+    const result = xai?.classifyFailure(
+      response(400, {
+        body: {
+          code: "Client specified an invalid argument",
+          error: "Argument not supported on this model: stop",
+        },
+      }),
+    )
+
+    expect(result?.kind).toBe("invalid-request")
+    expect(result?.message).toBe("Argument not supported on this model: stop")
+  })
+})
+
+describe("mistral", () => {
+  test("the unwrapped envelope is read at all — there is no `error` key to find", () => {
+    const result = mistral?.classifyFailure(
+      response(401, {
+        body: {
+          object: "error",
+          message: "Unauthorized",
+          type: "authentication_error",
+          param: null,
+          code: null,
+        },
+      }),
+    )
+
+    expect(result?.kind).toBe("auth")
+    expect(result?.signal).toBe("mistral:authentication_error")
+  })
+
+  test("service-tier capacity is a cooldown, matched on the message its codes contradict", () => {
+    const result = mistral?.classifyFailure(
+      response(429, {
+        body: {
+          object: "error",
+          message: "Service tier capacity exceeded for this model.",
+          type: "service_tier_capacity_exceeded",
+          param: null,
+          code: "3505",
+        },
+      }),
+    )
+
+    expect(result?.kind).toBe("rate-limited")
+    expect(result?.signal).toBe("mistral:service-tier-capacity")
+  })
+
+  test("a rate_limit_error relayed under a status of its own is still a cooldown", () => {
+    const result = mistral?.classifyFailure(
+      response(500, {
+        body: {
+          object: "error",
+          message: "Requests rate limit exceeded",
+          type: "rate_limit_error",
+        },
+      }),
+    )
+
+    expect(result?.kind).toBe("rate-limited")
+    expect(result?.signal).toBe("mistral:rate_limit_error")
+  })
+
+  test("a completion is not a failure — the looser reader must not find one in a 200", () => {
+    expect(mistral?.classifyFailure(response(200, { body: COMPLETION }))).toBeNull()
+  })
+})
+
+describe("together", () => {
+  test("403 is an oversized prompt, not a rejected credential", () => {
+    // Together's own error table: 403 means input tokens + max_tokens exceeded the context length.
+    // Left to the default it would be `auth`, which flags the key and pulls the account.
+    const result = together?.classifyFailure(
+      response(403, {
+        body: {
+          error: {
+            message:
+              "Input token count + max_tokens parameter must be less than the context length of the model being queried.",
+            type: "invalid_request_error",
+          },
+        },
+      }),
+    )
+
+    expect(result?.kind).toBe("invalid-request")
+    expect(result?.signal).toBe("together:context-length-403")
+    expect(result?.retryable).toBe(false)
+  })
+
+  test("429 names which dynamic limit was hit", () => {
+    const result = together?.classifyFailure(
+      response(429, {
+        body: {
+          error: { message: "You have been rate limited.", type: "dynamic_token_limited" },
+        },
+      }),
+    )
+
+    expect(result?.kind).toBe("rate-limited")
+    expect(result?.signal).toBe("together:dynamic-rate-limited")
+  })
+
+  test("503 is the platform's capacity, never this account's budget", () => {
+    const result = together?.classifyFailure(
+      response(503, { body: { error: { message: "Model is overloaded", type: "overloaded" } } }),
+    )
+
+    expect(result?.kind).toBe("server-error")
+    expect(result?.retryable).toBe(true)
+  })
+
+  test("402 is the monthly spending cap, and no clock lifts one", () => {
+    const result = together?.classifyFailure(
+      response(402, {
+        body: {
+          error: {
+            message:
+              "The account associated with the API key has reached its maximum allowed monthly spending limit.",
+          },
+        },
+      }),
+    )
+
+    expect(result?.kind).toBe("credits-exhausted")
+    expect(result?.retryable).toBe(true)
+  })
+})
+
+describe("cerebras", () => {
+  test("the unwrapped envelope carries `wrong_api_key`, and that is an auth failure", () => {
+    const result = cerebras?.classifyFailure(
+      response(401, {
+        body: {
+          message: "Wrong API Key",
+          type: "invalid_request_error",
+          param: "api_key",
+          code: "wrong_api_key",
+        },
+      }),
+    )
+
+    expect(result?.kind).toBe("auth")
+    expect(result?.signal).toBe("cerebras:wrong_api_key")
+    expect(result?.retryable).toBe(false)
+  })
+
+  test("a spent daily token allowance is a 429, so it cools down rather than exhausting", () => {
+    const result = cerebras?.classifyFailure(
+      response(429, {
+        body: { message: "Total tokens per day limit exceeded", type: "too_many_requests_error" },
+      }),
+    )
+
+    expect(result?.kind).toBe("rate-limited")
+    expect(result?.signal).toBe("vendor:http-429")
+    expect(result?.retryable).toBe(true)
+  })
+
+  test("402 is the one refusal a human has to clear", () => {
+    expect(cerebras?.classifyFailure(response(402))?.kind).toBe("credits-exhausted")
+  })
+
+  test("a completion is not a failure", () => {
+    expect(cerebras?.classifyFailure(response(200, { body: COMPLETION }))).toBeNull()
   })
 })
 

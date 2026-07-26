@@ -17,6 +17,12 @@ const HTTP_PROVIDERS = [
   "kimi",
   "minimax",
   "gemini",
+  "groq",
+  "deepseek",
+  "xai",
+  "mistral",
+  "together",
+  "cerebras",
   "openai-compatible",
   "anthropic-compatible",
 ] as const
@@ -81,6 +87,22 @@ describe("PROVIDER_REGISTRY", () => {
     expect(driver?.resolveBaseUrl({ id: "g", provider: "gemini" }).toString()).toBe(
       "https://generativelanguage.googleapis.com/v1beta/openai",
     )
+  })
+
+  test("the six OpenAI-shaped vendors are one pinned surface each, and a key apiece", () => {
+    // They exist as ids rather than as `openai-compatible` accounts precisely because an id is what
+    // carries the endpoint and the credit-exhaustion rules. If one of them ever needed an operator
+    // to supply a base URL, it would have earned nothing over the escape hatch.
+    const vendors = ["groq", "deepseek", "xai", "mistral", "together", "cerebras"] as const
+
+    for (const id of vendors) {
+      const driver = httpDriver(id)
+
+      expect(driver?.dialect).toBe("openai-chat")
+      expect(driver?.authKind).toBe("api-key")
+      expect(driver?.oauth).toBeUndefined()
+      expect(driver?.resolveBaseUrl({ id: "probe", provider: id }).protocol).toBe("https:")
+    }
   })
 
   test("every registered driver declares a dialect the translation layer knows", () => {

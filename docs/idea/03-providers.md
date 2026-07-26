@@ -1,6 +1,6 @@
 # Providers
 
-Status: the driver contract, the total registry, and ten HTTP drivers are **implemented**
+Status: the driver contract, the total registry, and sixteen HTTP drivers are **implemented**
 (`apps/api/src/providers/`). `anthropic-oauth` is served by the Agent SDK; every other declared id
 has an HTTP driver. Every constant below is pinned in code with a provenance comment; where this
 page and a driver file disagree, the driver file is the truth.
@@ -49,6 +49,12 @@ admin UI, in usage breakdowns, and in logs; the credential itself never appears 
 | `kimi` | API key, `Authorization: Bearer` | Anthropic | `https://api.kimi.com/coding` | Own model ids (`k3`). **Never `x-api-key`** — see below. |
 | `minimax` | API key, `Authorization: Bearer` | Anthropic | `https://api.minimax.io/anthropic` | Anthropic-compatible surface. Reports some failures in a `base_resp` envelope on an HTTP `200`. Own model ids, so an alias map is usually required. |
 | `gemini` | API key, `Authorization: Bearer` | OpenAI Chat Completions | `https://generativelanguage.googleapis.com/v1beta/openai` | Google's **OpenAI-compatibility** surface. Own model ids (`gemini-2.5-pro`, `gemini-2.5-flash`), so an alias map is usually required. Words failures as canonical gRPC statuses and reports the retry delay in the body, not a header — see below. The **native Google GenAI dialect stays deferred** ([10-roadmap.md](10-roadmap.md)): it is a fourth column in the translation matrix. |
+| `groq` | API key, `Authorization: Bearer` | OpenAI Chat Completions | `https://api.groq.com/openai/v1` | GroqCloud. Own ids for open-weight models, so an alias map is usually required. **Overloads `error.type` to name the limit that was hit** (`tokens`, `requests`), so its rules key on `code`; a spend limit is a `400 blocked_api_access`, and `498` is a flex-tier capacity refusal in the 4xx range. |
+| `deepseek` | API key, `Authorization: Bearer` | OpenAI Chat Completions | `https://api.deepseek.com` | Own model ids (`deepseek-chat`, `deepseek-reasoner`). The one vendor here whose statuses mean what they say — a spent balance is a real **`402 Insufficient Balance`**. Its `error.type` and `error.code` are inverted and inconsistent, so the driver reads neither. |
+| `xai` | API key, `Authorization: Bearer` | OpenAI Chat Completions | `https://api.x.ai/v1` | Grok. Answers in **two** error shapes — OpenAI's nested one and a flat `{code, error}` whose `code` is an English sentence. Publishes no status for a depleted balance, so the driver encodes none; regional hosts are an Account base-URL override. |
+| `mistral` | API key, `Authorization: Bearer` | OpenAI Chat Completions | `https://api.mistral.ai/v1` | **Error body has no `error` wrapper** — `{object:"error", message, type, param, code}` at the top level. Keys on `type` (four published categories) and never on `code`, which is a numeric string the docs describe as symbolic. |
+| `together` | API key, `Authorization: Bearer` | OpenAI Chat Completions | `https://api.together.ai/v1` | Namespaced model ids, so an alias map is usually required. **`403` means the prompt exceeded the context length, not a rejected credential**, and `503` is the platform's capacity rather than this account's budget. |
+| `cerebras` | API key, `Authorization: Bearer` | OpenAI Chat Completions | `https://api.cerebras.ai/v1` | Shares Mistral's unwrapped error envelope. A spent free-tier **day** is a `429`, not a billing state — it refills on a clock. |
 | `openai-compatible` | API key | OpenAI Chat Completions | operator-supplied | Escape hatch. Any vLLM / Ollama / LiteLLM / vendor endpoint. |
 | `anthropic-compatible` | API key | Anthropic Messages | operator-supplied | Escape hatch for Anthropic-shaped endpoints. |
 
@@ -117,7 +123,7 @@ absent or stubbed into something that looks like it works:
 
 | Transport | Ids | Meaning |
 |---|---|---|
-| `http` | `anthropic-api`, `openai-api`, `openai-oauth`, `openrouter`, `zai`, `kimi`, `minimax`, `gemini`, `openai-compatible`, `anthropic-compatible` | A driver in `providers/drivers/`, satisfying the interface above |
+| `http` | `anthropic-api`, `openai-api`, `openai-oauth`, `openrouter`, `zai`, `kimi`, `minimax`, `gemini`, `groq`, `deepseek`, `xai`, `mistral`, `together`, `cerebras`, `openai-compatible`, `anthropic-compatible` | A driver in `providers/drivers/`, satisfying the interface above |
 | `agent-sdk` | `anthropic-oauth` | Served by `query()`. Its own driver interface in `providers/claude-sdk/driver.ts`, not a `ProviderDriver`: there is no base URL to resolve, no headers to build, and failures arrive as strings |
 | `unimplemented` | *(none today)* | Where an id declared in `packages/core` ahead of its driver lands. Selecting one is a configuration error, refused by name before any upstream call. Kept rather than deleted because that is the whole point of a total registry — the alternative is a new id compiling into a half-wired provider |
 
@@ -322,12 +328,37 @@ compatibility surface, and `INVALID_ARGUMENT` (400) with the message `API key no
 Generative Language API behind it. Classified on the status alone, the second reads as a client
 mistake — the operator then debugs the request instead of the credential.
 
-## API-key providers — z.ai, Kimi, MiniMax, OpenRouter, Gemini
+## The OpenAI-shaped fleet — Groq, DeepSeek, xAI, Mistral, Together, Cerebras
+
+Six vendors that all speak OpenAI Chat Completions and differ only in how each words a failure. Each
+is a pinned id rather than an `openai-compatible` account, and the difference is worth naming: an id
+carries the endpoint, the credit-exhaustion rules, and an operator's ability to see *which* upstream
+a pool is spending. An escape-hatch account carries a URL and one shared wording guess.
+
+What separates them is a short list of traps, each of which turns a correct verdict into a plausible
+one:
+
+| Vendor | The trap | What the driver does about it |
+|---|---|---|
+| `groq` | `error.type` names the **limit that was hit** (`tokens`, `requests`), not the kind of error — and a spend limit arrives as a `400`, while `498` is a capacity refusal inside the 4xx range | Every rule keys on `code`. `blocked_api_access` is `exhausted`; `498` is a `server-error`, so it fails over instead of failing the request |
+| `deepseek` | `type` and `code` are inverted — a `402` carries `type: "unknown_error"` beside `code: "invalid_request_error"` | Reads neither. DeepSeek's statuses are honest, including the `402` almost nobody else sends, so the status carries the verdict and one wording rule names it |
+| `xai` | Two error shapes, one of them flat with an English sentence in `code`; and **no published status for a depleted balance** | Reads the message, never `code`. Encodes no xAI-specific credit rule — a guess parks a healthy account where no clock reaches it |
+| `mistral` | The body has **no `error` wrapper**, so the shared reader finds nothing; `code` is a numeric string the docs describe as symbolic | Reads the unwrapped envelope, keys on the four published `type` categories, and matches the "service tier capacity exceeded" *message*, whose codes disagree between captures |
+| `together` | **`403` is an oversized prompt**, not a rejected credential; `503` is the platform out of capacity, not this account over budget | `403` → `invalid-request`, so the key is never flagged for a client's mistake. `503` keeps the status default's `server-error` |
+| `cerebras` | Same unwrapped envelope as Mistral; a spent **daily** token allowance is a `429` | Shares the reader. The throttle guard keeps a spent day a cooldown — it refills on a clock, and `exhausted` would wait for a human who has nothing to do |
+
+Where a vendor publishes no billing status at all, the driver falls back to the *shared* wording rule
+the escape hatches use, and records `compatible:out-of-credits-wording` as the signal — which says
+out loud that the verdict came from phrasing rather than from a vocabulary the vendor publishes.
+That rule is always ordered **behind** a guard that reads any `429` as a cooldown, because the one
+thing worse than not recognizing a dead balance is inventing one out of a throttle message.
+
+## API-key providers — z.ai, Kimi, MiniMax, OpenRouter, Gemini, and the OpenAI-shaped fleet
 
 No refresh, no expiry, no OAuth state. An Account is a base URL, a key, and an alias map.
 Valid until revoked upstream; a 401 moves the Account to `disabled`, not `needs_reauth`.
 
-These are the providers whose money can run out — a prepaid balance for four of them, a billing
+These are the providers whose money can run out — a prepaid balance for most of them, a billing
 account for Gemini — so their drivers carry the other half of the job: recognizing that response,
 which each words differently, and reporting it as `exhausted` rather than a cooldown, because no
 clock refills a dead balance. See [05-routing-and-failover.md](05-routing-and-failover.md).
@@ -349,7 +380,12 @@ and the router keeps selecting a credential that can no longer serve a request.
 | `kimi` | `error.type` is `exceeded_current_quota_error`; or message matches `insufficient balance` / `account … not active` | Anthropic-shaped body, Moonshot's own `type` vocabulary. Without it the account cools down on a timer instead of being flagged for a human |
 | `minimax` | `base_resp.status_code` is `1008` | **MiniMax reports failures in a `base_resp` envelope that can arrive with HTTP 200.** A driver reading only the status sees a success and hands an error body to the client as a completion |
 | `gemini` | message matches `enable billing` / `requires billing` / `billing account … not found` / `has been suspended` — and **nothing else** | Google's `RESOURCE_EXHAUSTED` (429) covers a per-minute limit *and* a spent free-tier day, and its message says "check your plan and billing details". Both refill on a clock, so both are `cooling_down`. Keying on the word "billing" would flip every throttled request to `exhausted` and pull a healthy key out of the pool. Only a project with billing off, a billing account that no longer resolves, or a suspended project is permanent |
-| `openai-compatible`, `anthropic-compatible` | one shared wording rule — `insufficient quota/credits/balance`, `out of credits`, `quota exceeded/exhausted` — guarded by an error status | The endpoint behind these is unknown. Guessing at a vendor's error vocabulary produces confident misclassifications, so this is deliberately the *only* wording either matches. The status guard is what stops a completion containing the word "quota" reading as a billing stop |
+| `groq` | `error.code` is `blocked_api_access` — on an HTTP **400** | Groq's only documented billing-dead signal is a spend limit, and it wears the status of a malformed request. Read the status alone and a blocked organization is debugged as a bad request while it fails every call it is handed |
+| `deepseek` | HTTP `402`; message matches `insufficient balance` | The one vendor here that answers a spent balance with the status that means it. The wording rule exists for the relayed case and to record a signal better than `http-status:402` |
+| `together` | HTTP `402` — a monthly spending cap | Documented and unambiguous. What is *not* documented is the status a zero prepaid balance returns, and Together is fully prepaid, so the shared wording rule stands behind the status |
+| `cerebras` | HTTP `402`, and nothing else | Cerebras' error page lists statuses only. A spent free-tier **day**, by contrast, is a `429` — clock-recoverable, never `exhausted` |
+| `xai`, `mistral` | one shared wording rule, behind a guard that reads any `429` as a cooldown | Neither publishes a status for a depleted balance or a spend-suspended workspace. Encoding a guess is how a healthy account gets parked at `402`, so neither driver encodes one; the shared phrasing is the whole of it, and the signal it records says so |
+| `openai-compatible`, `anthropic-compatible` | one shared wording rule — `insufficient quota/credits/balance`, `out of credits`, `quota exceeded/exhausted` — guarded by an error status | The endpoint behind these is unknown. Guessing at a vendor's error vocabulary produces confident misclassifications, so this is deliberately the *only* wording either matches. The status guard is what stops a completion containing the word "quota" reading as a billing stop. **No 429 guard here**, unlike the pinned vendors: behind an escape hatch may sit an OpenAI-shaped endpoint, where a `429` genuinely *is* a spent balance |
 
 Each classification also records **which signal decided it** (`openai:insufficient_quota`,
 `minimax:base_resp-1008`, …) so a misclassification is debuggable rather than a mystery. Expect

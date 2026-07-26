@@ -89,6 +89,9 @@ const SECRET_VALUE_PATTERNS: readonly ValuePattern[] = [
   { pattern: /\bxai-[A-Za-z0-9_-]{16,}/g, replacement: REDACTED },
   // Groq.
   { pattern: /\bgsk_[A-Za-z0-9]{20,}/g, replacement: REDACTED },
+  // Cerebras. DeepSeek's keys are `sk-…` and are covered above; Mistral's and Together's carry no
+  // prefix at all, so nothing here can recognize one — their field names are what protects them.
+  { pattern: /\bcsk-[A-Za-z0-9-]{16,}/g, replacement: REDACTED },
 ]
 
 const MAX_DEPTH = 4

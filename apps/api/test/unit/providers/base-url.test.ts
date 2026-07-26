@@ -12,6 +12,13 @@ const PINNED: ReadonlyArray<readonly [ProviderId, string]> = [
   ["kimi", "https://api.kimi.com/coding"],
   ["minimax", "https://api.minimax.io/anthropic"],
   ["gemini", "https://generativelanguage.googleapis.com/v1beta/openai"],
+  ["groq", "https://api.groq.com/openai/v1"],
+  // The bare host is DeepSeek's own OpenAI-format base; `/v1` is an alias it also accepts.
+  ["deepseek", "https://api.deepseek.com/"],
+  ["xai", "https://api.x.ai/v1"],
+  ["mistral", "https://api.mistral.ai/v1"],
+  ["together", "https://api.together.ai/v1"],
+  ["cerebras", "https://api.cerebras.ai/v1"],
 ]
 
 describe("resolveBaseUrl", () => {

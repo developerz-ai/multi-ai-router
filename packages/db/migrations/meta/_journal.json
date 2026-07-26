@@ -50,6 +50,13 @@
       "when": 1785019207986,
       "tag": "0006_pink_thunderball",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1785051932301,
+      "tag": "0007_far_namorita",
+      "breakpoints": true
     }
   ]
 }

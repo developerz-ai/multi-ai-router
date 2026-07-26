@@ -2,13 +2,19 @@ import type { ProviderId } from "@multi-ai-router/core"
 import { type ClaudeSdkDriver, claudeSdkDriver } from "./claude-sdk/driver"
 import { anthropicApiDriver } from "./drivers/anthropic-api"
 import { anthropicCompatibleDriver } from "./drivers/anthropic-compatible"
+import { cerebrasDriver } from "./drivers/cerebras"
+import { deepSeekDriver } from "./drivers/deepseek"
 import { geminiDriver } from "./drivers/gemini"
+import { groqDriver } from "./drivers/groq"
 import { kimiDriver } from "./drivers/kimi"
 import { miniMaxDriver } from "./drivers/minimax"
+import { mistralDriver } from "./drivers/mistral"
 import { openAiApiDriver } from "./drivers/openai-api"
 import { openAiCompatibleDriver } from "./drivers/openai-compatible"
 import { openAiOAuthDriver } from "./drivers/openai-oauth"
 import { openRouterDriver } from "./drivers/openrouter"
+import { togetherDriver } from "./drivers/together"
+import { xaiDriver } from "./drivers/xai"
 import { zaiDriver } from "./drivers/zai"
 import type { ProviderDriver } from "./types"
 
@@ -54,6 +60,15 @@ export const PROVIDER_REGISTRY: Readonly<Record<ProviderId, ProviderSupport>> = 
   // Google's OpenAI-compatibility surface, not the native GenAI protocol — that dialect is still
   // deferred (docs/idea/10-roadmap.md), and this driver is what makes the id reachable meanwhile.
   gemini: http(geminiDriver),
+  // Six vendors that all speak OpenAI Chat Completions and differ only in how they word a failure.
+  // Pinned ids rather than `openai-compatible` accounts, because an id is what carries the endpoint,
+  // the credit-exhaustion rules, and the operator's ability to see which upstream a pool is spending.
+  groq: http(groqDriver),
+  deepseek: http(deepSeekDriver),
+  xai: http(xaiDriver),
+  mistral: http(mistralDriver),
+  together: http(togetherDriver),
+  cerebras: http(cerebrasDriver),
   "openai-compatible": http(openAiCompatibleDriver),
   "anthropic-compatible": http(anthropicCompatibleDriver),
 

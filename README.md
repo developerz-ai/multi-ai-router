@@ -75,7 +75,7 @@ one) is named explicitly rather than silently approximated.
 | `POST /v1/embeddings` — routed, scoped and failed over like any request | ✅ passthrough to an OpenAI-dialect account (either surface), or a `503` naming why none can embed; never another model's vectors |
 | Routing: scope intersection, the six policies, overflow, bounded failover, circuit breaker | ✅ |
 | Warm routing catalog + off-path batched `UsageRecord` writer | ✅ |
-| HTTP provider drivers: Anthropic API, OpenAI API, ChatGPT/Codex OAuth, OpenRouter, z.ai, Kimi, MiniMax, Gemini, and the two compatible escape hatches | ✅ |
+| HTTP provider drivers: Anthropic API, OpenAI API, ChatGPT/Codex OAuth, OpenRouter, z.ai, Kimi, MiniMax, Gemini, Groq, DeepSeek, xAI, Mistral, Together, Cerebras, and the two compatible escape hatches | ✅ |
 | **Cross-dialect translation** — every crossing between `anthropic`, `openai-chat`, `openai-responses`, request/response/streaming, tool calls included | ✅ an untranslatable request is refused with a `400` naming the reason |
 | **Claude subscriptions via the Agent SDK** | ✅ `anthropic-oauth` accounts are served — login, per-account `CLAUDE_CONFIG_DIR`, sessions, quota, tool passthrough, SDK-output re-synthesis |
 | **ChatGPT/Codex OAuth** | ✅ authorization code + PKCE, redirect *and* paste capture, and background token refresh ahead of expiry |
@@ -212,6 +212,12 @@ The registry is a **total** record, so every provider id is either a driver or a
 | `zai` | API key, `Bearer` | ✅ | Two surfaces (Anthropic **or** OpenAI); the account picks one. Alias map typically needed. |
 | `kimi` | API key, `Bearer` | ✅ | Anthropic-shaped. Alias map typically needed. **Not `x-api-key`.** |
 | `minimax` | API key, `Bearer` | ✅ | Anthropic-shaped, and reports some failures in a `base_resp` envelope on an HTTP `200`. |
+| `groq` | API key, `Bearer` | ✅ | GroqCloud. Its `error.type` names the *limit* that was hit, not the error kind, so classification keys on `code`; a spend limit is a **`400 blocked_api_access`**, and `498` (flex-tier capacity) fails over instead of failing the request. |
+| `deepseek` | API key, `Bearer` | ✅ | The one vendor whose statuses mean what they say — a spent balance is a real **`402`**. Its `type`/`code` are inverted, so the driver reads neither. |
+| `xai` | API key, `Bearer` | ✅ | Grok. Two error shapes, one flat with an English sentence in `code`. xAI publishes no status for a depleted balance, so the driver encodes no guess. |
+| `mistral` | API key, `Bearer` | ✅ | **Error body has no `error` wrapper.** Keys on the four published `type` categories, never on `code` (a numeric string). "Service tier capacity exceeded" is a cooldown, not a billing stop. |
+| `together` | API key, `Bearer` | ✅ | **`403` means the prompt exceeded the context length**, not a rejected key — so an oversized request never flags the credential. `503` is the platform's capacity, `429` your dynamic rate, `402` the monthly spend cap. |
+| `cerebras` | API key, `Bearer` | ✅ | Shares Mistral's unwrapped error envelope. A spent free-tier **day** is a `429` that refills on a clock, never `exhausted`. |
 | `openai-compatible` | API key, `Bearer` | ✅ | Any third-party OpenAI-shaped endpoint. Operator-supplied base URL. |
 | `anthropic-compatible` | API key | ✅ | Any third-party Anthropic-shaped endpoint. Keeps Anthropic's own header rules. |
 | `anthropic-oauth` | Claude Agent SDK | ✅ | Claude Max/Pro subscription. Login and credential refresh run through the `claude` CLI into a per-account `CLAUDE_CONFIG_DIR`; the router never mints or stores a subscription token. Requests are served through `@anthropic-ai/claude-agent-sdk`'s `query()`, with session stickiness, quota from SDK `rate_limit_event`s, tool passthrough, and SDK-output re-synthesized back into Anthropic (and, via translation, OpenAI) wire format. |

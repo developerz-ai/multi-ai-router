@@ -52,7 +52,7 @@ for it. Adding one is a code change; see [03-providers.md](03-providers.md).
 
 | Field | Type | Notes |
 |---|---|---|
-| `id` | enum | `anthropic-oauth`, `anthropic-api`, `openai-oauth`, `openai-api`, `openrouter`, `zai`, `kimi`, `minimax`, `gemini`, `openai-compatible`, `anthropic-compatible` |
+| `id` | enum | `anthropic-oauth`, `anthropic-api`, `openai-oauth`, `openai-api`, `openrouter`, `zai`, `kimi`, `minimax`, `gemini`, `groq`, `deepseek`, `xai`, `mistral`, `together`, `cerebras`, `openai-compatible`, `anthropic-compatible` |
 | `dialect` | enum | Native wire protocol the driver speaks; drives passthrough vs. translation |
 | `authKind` | enum | `oauth` (refreshable) or `api-key` (valid until revoked upstream) |
 | `constants` | code | Endpoints, client id, scopes, required headers — pinned in one file per provider |

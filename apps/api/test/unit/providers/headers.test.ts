@@ -99,6 +99,12 @@ describe("OpenAI-dialect drivers", () => {
     "openai-api",
     "openrouter",
     "gemini",
+    "groq",
+    "deepseek",
+    "xai",
+    "mistral",
+    "together",
+    "cerebras",
     "openai-compatible",
   ]
 
