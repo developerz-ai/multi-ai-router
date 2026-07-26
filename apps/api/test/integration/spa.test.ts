@@ -272,6 +272,7 @@ describe("the full app, mounted end to end", () => {
             seriesByDimension: unreached,
             breakdown: unreached,
           },
+          recent: { recent: unreached },
           daily: { totals: unreached, breakdown: unreached },
           scheduledTasks: memoryTasks(),
           labels: async () => ({ keys: [], accounts: [], pools: [], models: [] }),

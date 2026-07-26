@@ -1,0 +1,82 @@
+@use "../../styles/mixins" as *;
+
+.panel {
+  @include card;
+
+  display: grid;
+  gap: var(--space-3);
+  padding: var(--space-4);
+}
+
+.head {
+  display: grid;
+  gap: var(--space-1);
+}
+
+.title {
+  margin: 0;
+  font-size: var(--text-lg);
+  font-weight: var(--weight-semibold);
+  line-height: var(--line-tight);
+  letter-spacing: var(--tracking-tight);
+}
+
+.lead {
+  margin: 0;
+  max-width: 68ch;
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+  line-height: var(--line-snug);
+}
+
+.controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  align-items: end;
+}
+
+// The segmented control shares its shape with the window, dimension and rank-by switchers, so an
+// operator reads all four as the same kind of switch. It sits on the sunken surface because this
+// one is inside a card, and a raised control on a raised panel has no edge.
+.limits {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+  min-width: 0;
+  margin: 0;
+  padding: var(--space-1);
+  background: var(--surface-sunken);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-1);
+}
+
+// The group's name: visible to assistive tech, folded away visually, because the buttons already
+// say what they switch.
+.groupLabel {
+  @include visually-hidden;
+}
+
+.limit {
+  @include tappable(1.875rem);
+
+  padding-inline: var(--space-3);
+  background: none;
+  border: 0;
+  border-radius: var(--radius-1);
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+  cursor: pointer;
+  transition: background var(--duration-fast) var(--ease-out);
+
+  &:hover {
+    background: var(--surface-raised);
+    color: var(--text);
+  }
+
+  &[aria-pressed="true"] {
+    background: var(--accent-soft);
+    color: var(--accent);
+    font-weight: var(--weight-medium);
+  }
+}

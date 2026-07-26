@@ -6,6 +6,20 @@
 export type { UsageAggregateSources } from "./aggregate"
 export { readBreakdown, readTotals } from "./aggregate"
 export { catalogLabels } from "./labels"
+export type {
+  RecentAttemptView,
+  RecentQuery,
+  RecentSubject,
+  RecentView,
+} from "./recent"
+export {
+  outcomesFor,
+  RECENT_LIMIT_DEFAULT,
+  RECENT_LIMIT_MAX,
+  RECENT_LIMIT_MIN,
+  recentQuery,
+  toRecentAttemptView,
+} from "./recent"
 export type { WindowSplit } from "./rollup"
 export { addDecimal, mergeGroupRows, splitWindow, sumTotals } from "./rollup"
 export type {

@@ -47,6 +47,13 @@ function service(rows: readonly UsageGroupRow[]) {
       seriesByDimension: async () => [],
       breakdown: async () => [...rows],
     },
+    // The live feed is its own read and its own test file; a summary that
+    // touched it would be reading rows no chart on the screen plots.
+    recent: {
+      recent: async () => {
+        throw new Error("the summary must not read raw attempt rows")
+      },
+    },
     // Every case below asks for `today`, which has no closed days — the rolled
     // side is never consulted, and saying so with a throw keeps it that way.
     daily: {

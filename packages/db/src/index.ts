@@ -80,6 +80,12 @@ export type {
   UsageWindow,
 } from "./repositories/usage-read-repository"
 export { createUsageReadRepository } from "./repositories/usage-read-repository"
+export type {
+  RecentAttemptQuery,
+  RecentAttemptRow,
+  UsageRecentRepository,
+} from "./repositories/usage-recent-repository"
+export { createUsageRecentRepository } from "./repositories/usage-recent-repository"
 export type { UsageRecordRepository } from "./repositories/usage-repository"
 export { createUsageRecordRepository } from "./repositories/usage-repository"
 // --- row types --------------------------------------------------------------

@@ -1,8 +1,8 @@
 import { AdminAuthError, ROUTER_KEY_PREFIX } from "@multi-ai-router/core"
 import type { MiddlewareHandler } from "hono"
 import { getCookie } from "hono/cookie"
+import type { AdminAuthService } from "../services/admin-auth"
 import {
-  type AdminAuthService,
   type AdminSession,
   CSRF_HEADER,
   isMutatingMethod,
@@ -37,10 +37,17 @@ export interface AdminAuthEnv extends AppEnv {
   }
 }
 
+/**
+ * The two methods the guard actually calls. A `Pick` rather than the whole service, matching how
+ * every service in this repo states its dependencies: it says on the type exactly how much of the
+ * auth surface transport reaches, and a real `AdminAuthService` satisfies it unchanged.
+ */
+export type AdminAuthGuardService = Pick<AdminAuthService, "authenticate" | "assertCsrf">
+
 const ROUTER_KEY_REJECTED = "A router API key cannot authenticate the admin plane"
 
 export function adminAuth(
-  service: AdminAuthService,
+  service: AdminAuthGuardService,
   sessionCookieInsecure: boolean,
 ): MiddlewareHandler<AdminAuthEnv> {
   const prefix = sessionCookiePrefix(sessionCookieInsecure)

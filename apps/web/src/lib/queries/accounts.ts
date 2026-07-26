@@ -139,8 +139,10 @@ export function useLastRecheck(id: Accessor<string>) {
  * then announce that a login which had already succeeded had expired.
  *
  * The interval is a parameter and `false` is a normal value for it: this polls only while a
- * redirect capture is actually outstanding, and stops the moment it lands. Nothing else in this
- * console polls, and nothing else should.
+ * redirect capture is actually outstanding, and stops the moment it lands. It is the only
+ * *conditional* poll in the console — the two unconditional ones (scheduled-task health and the
+ * live request feed) are surfaces whose whole point is being current, and nothing else should poll
+ * at all.
  */
 export function useWatchedAccount(
   id: Accessor<string | null>,

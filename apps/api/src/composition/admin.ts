@@ -3,6 +3,7 @@ import {
   type ApiKeyRepository,
   type AuditRepository,
   createUsageReadRepository,
+  createUsageRecentRepository,
   type Database,
   type OauthStateRepository,
   type PoolRepository,
@@ -160,6 +161,7 @@ export function createAdminPlane(deps: AdminPlaneDeps): AdminPlane {
       ),
       usage: createUsageService({
         usage: createUsageReadRepository(deps.database),
+        recent: createUsageRecentRepository(deps.database),
         daily: deps.usageDaily,
         scheduledTasks: deps.scheduledTasks,
         labels: catalogLabels({ keys, catalog }),

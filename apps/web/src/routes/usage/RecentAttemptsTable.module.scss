@@ -1,0 +1,59 @@
+// Two facts stacked in one cell: the value and what qualifies it. Used in every column that
+// carries a pair, so the table keeps one vertical rhythm.
+//
+// **Nothing in this table wraps.** Eight columns of ids, model names and millisecond figures do not
+// fit a laptop viewport, and a wrapping cell resolves that by collapsing to its longest *word* —
+// `smoke-key-bad` became four stacked fragments and a row grew to five lines. `Table` already ships
+// a keyboard-reachable horizontal scroller for exactly this; letting it do its job keeps the rows
+// dense, which is the whole point of an operator console.
+.stack {
+  display: grid;
+  gap: 0.125rem;
+  min-width: 0;
+}
+
+.sub {
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+  white-space: nowrap;
+}
+
+.mono {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  white-space: nowrap;
+}
+
+.outcome {
+  display: flex;
+  gap: var(--space-2);
+  align-items: start;
+  min-width: 0;
+}
+
+// Tinted by whose problem the failure is. Decorative on purpose: the outcome is written in words
+// in the same cell, so colour is never the only carrier.
+.dot {
+  flex: none;
+  width: 0.5rem;
+  height: 0.5rem;
+  margin-top: 0.3rem;
+  border-radius: var(--radius-full);
+  background: var(--dot-color);
+}
+
+.outcomeName {
+  color: var(--text);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+  white-space: nowrap;
+}
+
+.subject {
+  font-size: var(--text-sm);
+  white-space: nowrap;
+}
+
+.when {
+  white-space: nowrap;
+}

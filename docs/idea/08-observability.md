@@ -114,7 +114,30 @@ Measures, identical in every dimension × window cell:
 | `/accounts` table | Same live per-row totals, plus current quota utilization and reset ([below](#quota-resets-and-manual-re-check)) |
 | Account detail | Full measure set, plus per-window quota history |
 | `/pools` | Per-pool totals and the observed split across members — the answer to "is my policy doing what I set it to" |
-| `/usage` | The dedicated screen: any dimension, any window, charts and leaderboards |
+| `/usage` | The dedicated screen: any dimension, any window, charts and leaderboards, plus the live request feed below them |
+
+### The live request feed
+
+Every aggregate above answers *how much* and *how often*. None of them answers **which request
+failed** — and that is the question an operator arrives with after a tool errored. Before the feed
+existed the answer was only in the process logs, which an operator running a container cannot grep.
+
+`GET /api/admin/usage/recent` returns individual `UsageRecord` rows, newest first, and the `/usage`
+screen renders them as one row per **attempt**: a failover chain of three shows as three rows under
+one request id, with the attempt number on each. Merging them would hide exactly the failover the
+router exists to perform.
+
+| Property | Rule |
+|---|---|
+| Filter | `failed=true` (every non-success outcome, derived from the `UsageOutcome` enum so a new outcome is never quietly excluded), or `outcome=<one outcome>`. Never both — that pairing is a `400`, not a silently-resolved preference. `quota_exhausted` and `credits_exhausted` stay separately selectable |
+| Lookup | `requestId` matches the router's `correlation_id` **and** the caller's `x-request-id`. An operator holding an id off a failed run cannot know which of the two they have, so asking them to pick would be asking them to guess |
+| `limit` | 1..200, default 50. Out of range is a `400`, never a silent clamp — a console that asked for 1000 and got 200 without being told would render a truncated page as a complete one |
+| Columns | Named individually by the repository. `sessionKey` and the cost columns are deliberately absent, so a column added to the table never silently appears on an admin screen |
+| Ordering | `created_at desc, id desc`. The tiebreaker is load-bearing: attempts of one chain are written from one batch and can share a millisecond, and a page that reshuffles between two refreshes reads as traffic that did not happen |
+| Colour | The row's dot takes its token from `usageOutcomeFault` — whose problem the failure is. The outcome is always spelt out beside it, so colour is never the only carrier |
+
+Nothing on the feed can carry credential material: `errorClass` is a class name rather than a
+message, and no request or response body is stored anywhere to leak.
 
 ### Charts — data shapes, not a renderer
 
@@ -194,6 +217,7 @@ immediately if it is healthy.
 | `GET /v1/usage/quota` | router key or admin session | Per-Account, per-window utilization, `resetsAt`, `resetSource`, `status`, `lastCheckedAt` — the same shape the UI renders, so an operator can alert on it externally | `200` |
 | `POST /api/admin/accounts/:id/recheck` | admin session | Manual re-check. `POST /api/admin/accounts/recheck` re-checks every account. For Claude subscriptions it also carries the credential probe, reported as `auth` | `200` always — a cooldown refusal is `rechecked: false`, not `429` |
 | `GET /api/admin/usage` | admin session | Totals, series and breakdowns per key / account / pool / model over a window | `200` |
+| `GET /api/admin/usage/recent` | admin session | The [live request feed](#the-live-request-feed): individual attempts, newest first. `limit` (1..200), `failed` or `outcome` (never both), `requestId` (matches either id) | `200`, `400` on a limit out of range or both filters at once |
 
 `/healthz` never touches the database.
 
