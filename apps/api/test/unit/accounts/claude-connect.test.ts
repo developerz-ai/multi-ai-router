@@ -32,10 +32,16 @@ const PASTE = `ac_notarealcode#${STATE}`
 
 interface FakeLogin extends ClaudeCliLogin {
   readonly handles: FakeHandle[]
+  /** Entries into `start`, returned or not — what a per-account queue has to hold at one. */
+  readonly calls: { starts: number }
   /** Makes the next `start` throw this instead of returning a handle. */
   refuse(error: ClaudeLoginError): void
   /** Makes the next `submit` throw this instead of succeeding. */
   reject(error: ClaudeLoginError): void
+  /** Parks every `start` before it yields a handle, the way a real CLI blocks on its handshake. */
+  park(): void
+  /** Lets the parked starts through, and stops parking new ones. */
+  release(): void
 }
 
 interface FakeHandle extends ClaudeLoginHandle {
@@ -45,18 +51,35 @@ interface FakeHandle extends ClaudeLoginHandle {
 
 function fakeLogin(state = STATE, url = URL): FakeLogin {
   const handles: FakeHandle[] = []
+  const calls = { starts: 0 }
   let refusal: ClaudeLoginError | null = null
   let rejection: ClaudeLoginError | null = null
+  let parked: { promise: Promise<void>; open: () => void } | null = null
 
   return {
     handles,
+    calls,
     refuse: (error) => {
       refusal = error
     },
     reject: (error) => {
       rejection = error
     },
+    park: () => {
+      let open = (): void => undefined
+      const promise = new Promise<void>((resolve) => {
+        open = resolve
+      })
+      parked = { promise, open }
+    },
+    release: () => {
+      const held = parked
+      parked = null
+      held?.open()
+    },
     start: async () => {
+      calls.starts += 1
+      if (parked !== null) await parked.promise
       if (refusal !== null) {
         const thrown = refusal
         refusal = null
@@ -145,6 +168,9 @@ function harness(
     },
   }
 }
+
+/** One macrotask, so every continuation an unawaited call has queued has run. */
+const tick = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 0))
 
 function failure(result: { ok: boolean } & Record<string, unknown>) {
   if (result.ok) throw new Error("expected a failure")
@@ -400,6 +426,126 @@ describe("the checks the router owns", () => {
 
     h.connect.stop()
     expect(h.login.handles.map((handle) => handle.stats.cancels)).toEqual([1, 1])
+  })
+})
+
+/**
+ * Two admin calls for one account, overlapping — the operator who double-clicks Connect, or who
+ * cancels while the CLI is still printing its URL. Every call here reads this account's one pending
+ * login and then replaces it, so the awaits in between are where a second caller used to slip past.
+ */
+describe("two calls at once for one account", () => {
+  test("the second begin waits for the first, so no subprocess is left unheld", async () => {
+    const h = harness()
+    const id = await h.account()
+
+    h.login.park()
+    const first = h.connect.begin(id, "connect")
+    const second = h.connect.begin(id, "connect")
+    await tick()
+
+    // Unqueued, both callers would be inside the CLI right here — and only one of the two handles
+    // about to exist would ever be reachable again.
+    expect(h.login.calls.starts).toBe(1)
+
+    h.login.release()
+    const [a, b] = await Promise.all([first, second])
+    if (!a.ok || !b.ok) throw new Error("both begins should have started a login")
+
+    expect(h.login.handles).toHaveLength(2)
+    // Superseded, so terminated — and because that is one code path with clearing its expiry timer,
+    // the displaced login's TTL can no longer fire against the live one that replaced it.
+    expect(h.login.handles[0]?.stats.cancels).toBe(1)
+    expect(h.login.handles[1]?.stats.cancels).toBe(0)
+  })
+
+  test("the paste reaches the login that superseded, never the one it displaced", async () => {
+    const h = harness()
+    const id = await h.account()
+
+    h.login.park()
+    const first = h.connect.begin(id, "connect")
+    const second = h.connect.begin(id, "connect")
+    h.login.release()
+    await Promise.all([first, second])
+
+    expect((await h.connect.complete(id, PASTE)).ok).toBe(true)
+    expect(h.login.handles[0]?.submitted).toEqual([])
+    expect(h.login.handles[1]?.submitted).toEqual([PASTE])
+    // One pending login, so one completion: the displaced one is not a second chance.
+    expect(failure(await h.connect.complete(id, PASTE)).code).toBe("no_pending_login")
+  })
+
+  test("a cancel that lands while the CLI is still starting cancels that login", async () => {
+    const h = harness()
+    const id = await h.account()
+
+    h.login.park()
+    const started = h.connect.begin(id, "connect")
+    const cancelled = h.connect.cancel(id)
+    await tick()
+    h.login.release()
+
+    expect((await started).ok).toBe(true)
+    const result = await cancelled
+    if (!result.ok) throw new Error(result.failure.message)
+
+    // Answering "nothing was pending" and then letting the subprocess register anyway would leave
+    // the operator with a login they had already called off.
+    expect(result.value.cancelled).toBe(true)
+    expect(h.login.handles[0]?.stats.cancels).toBe(1)
+    expect(failure(await h.connect.complete(id, PASTE)).code).toBe("no_pending_login")
+  })
+
+  test("a paste that lands while the CLI is still starting waits for it", async () => {
+    const h = harness()
+    const id = await h.account()
+
+    h.login.park()
+    const started = h.connect.begin(id, "connect")
+    const done = h.connect.complete(id, PASTE)
+    await tick()
+    h.login.release()
+
+    expect((await started).ok).toBe(true)
+    expect((await done).ok).toBe(true)
+  })
+
+  test("two accounts start their logins at once — the queue is per account", async () => {
+    const h = harness()
+    const first = await h.account()
+    const second = await h.account()
+
+    h.login.park()
+    const a = h.connect.begin(first, "connect")
+    const b = h.connect.begin(second, "connect")
+    await tick()
+
+    // Five Claude subscriptions side by side is the normal case: one operator's handshake may not
+    // make the other four wait.
+    expect(h.login.calls.starts).toBe(2)
+
+    h.login.release()
+    const [x, y] = await Promise.all([a, b])
+    expect([x.ok, y.ok]).toEqual([true, true])
+    expect(h.login.handles.map((handle) => handle.stats.cancels)).toEqual([0, 0])
+  })
+
+  test("a login that started while the router was shutting down is terminated, not registered", async () => {
+    const h = harness()
+    const id = await h.account()
+
+    h.login.park()
+    const started = h.connect.begin(id, "connect")
+    await tick()
+    // `stop()` cannot reach a CLI that has not handed back a handle yet, so the login has to refuse
+    // itself — otherwise this subprocess outlives the router.
+    h.connect.stop()
+    h.login.release()
+
+    expect(failure(await started).code).toBe("shutting_down")
+    expect(h.login.handles[0]?.stats.cancels).toBe(1)
+    expect(failure(await h.connect.complete(id, PASTE)).code).toBe("no_pending_login")
   })
 })
 
