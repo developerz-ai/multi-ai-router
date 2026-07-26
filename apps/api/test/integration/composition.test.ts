@@ -157,6 +157,58 @@ describe("an observed quota reading reaches the durable writer", () => {
   })
 })
 
+/**
+ * The breaker's durable half, wired the same way and asserted here for the same reason: an
+ * unwired hook reads exactly like the bug — the account is parked, routing knows, and the row the
+ * console reads still says `active` an hour after the deploy that lost the verdict.
+ */
+describe("a standing block reaches the durable writer", () => {
+  test("out of credits queues a status write", () => {
+    const { health, statusWriter } = runtimeWith({})
+    expect(statusWriter.stats().pending).toBe(0)
+
+    health.recordFailure("a", { kind: "credits-exhausted", message: "402" }, NOW)
+
+    // Queued, not written: nothing has touched the (deliberately unreachable) database.
+    expect(statusWriter.stats()).toMatchObject({ pending: 1, written: 0 })
+  })
+
+  test("an oauth auth failure queues one too", () => {
+    const { health, statusWriter } = runtimeWith({})
+    health.recordFailure("a", { kind: "auth", message: "401" }, NOW, { authKind: "oauth" })
+
+    expect(statusWriter.stats().pending).toBe(1)
+  })
+
+  test("a cooldown queues nothing — a clock ends it and no row should say otherwise", () => {
+    const { health, statusWriter } = runtimeWith({ ROUTING_FAILURE_THRESHOLD: "1" })
+    health.recordFailure("a", { kind: "server-error", message: "500" }, NOW)
+
+    expect(health.stateOf("a").breaker.status).toBe("cooling_down")
+    expect(statusWriter.stats().pending).toBe(0)
+  })
+
+  test("the disabled an api-key failure forms is announced and then dropped", () => {
+    // The wire carries every block; the writer refuses this one, so a provider's bad 401 can never
+    // become indistinguishable from the operator having switched the account off.
+    const { health, statusWriter } = runtimeWith({})
+    health.recordFailure("a", { kind: "auth", message: "401" }, NOW, { authKind: "api-key" })
+
+    expect(health.stateOf("a").breaker.status).toBe("disabled")
+    expect(statusWriter.stats().pending).toBe(0)
+  })
+
+  test("Re-check now drops a queued verdict, so it cannot undo the button press", () => {
+    const { health, statusWriter } = runtimeWith({})
+    health.recordFailure("a", { kind: "credits-exhausted", message: "402" }, NOW)
+    expect(statusWriter.stats().pending).toBe(1)
+
+    health.reset("a")
+
+    expect(statusWriter.stats().pending).toBe(0)
+  })
+})
+
 describe("the half-open gate is wired, per its own knob", () => {
   const recovered = new Date(NOW.getTime() + 60_000)
 

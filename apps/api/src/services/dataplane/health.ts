@@ -1,4 +1,4 @@
-import type { AuthKind, QuotaWindowState } from "@multi-ai-router/core"
+import type { AccountStatus, AuthKind, QuotaWindowState } from "@multi-ai-router/core"
 import type { RateLimitSignal, RateLimitWindow } from "../../providers"
 import {
   type AttemptFailure,
@@ -19,11 +19,12 @@ import { foldRateLimit } from "./health-reading"
  * (docs/idea/05-routing-and-failover.md#health-signals-feeding-it). Routing then reads one
  * immutable snapshot and reads nothing else — no clock, no store, no lock.
  *
- * **Breaker state is routing hygiene, not durable truth.** After a restart the first failing
- * request re-marks. That is the design, not a gap.
- *
  * `cooling_down` and `exhausted` stay separate all the way down, mechanically: `exhausted` carries
  * no cooldown instant, so no amount of clock advance moves it and nothing here schedules a retry.
+ * They differ in durability for the same reason: a restart's first failing request re-derives a
+ * cooldown, but `exhausted` and `needs_reauth` end only when a human acts, so a verdict living in
+ * one replica's memory tells nobody after a deploy. Those transitions are announced through {@link
+ * HealthStoreOptions.onBlocked} and written to `accounts.status` (`status-writer.ts`).
  *
  * This is also where the breaker's numbers are *supplied*. `breaker.ts` reads no configuration and
  * no randomness of its own, so the operator's thresholds and a fresh jitter fraction are merged in
@@ -114,10 +115,20 @@ export interface HealthStoreOptions {
    */
   readonly onQuotaWindows?: (accountId: string, windows: readonly QuotaWindowState[]) => void
   /**
+   * Fired when a failure moves an account **into** the breaker's `blocked` phase, so who gets
+   * announced cannot drift from who routing treats as permanently out. Once per transition, not
+   * once per failure: re-announcing a state the account is already in would turn one
+   * operator-visible event into a line per request. It reports every block formed, including the
+   * `disabled` an `api-key` auth failure produces — which of them are worth *storing* is decided
+   * downstream (`status-writer.ts`). Same contract as {@link onQuotaWindows}.
+   */
+  readonly onBlocked?: (accountId: string, status: AccountStatus) => void
+  /**
    * Fired by {@link HealthStore.reset}, after the marks are dropped. Everything this store holds
    * goes; state the same request path keeps *elsewhere* — the Agent SDK's per-Account quota
-   * buckets — has to go with it, or the next `rate_limit_event` re-publishes the window the
-   * operator just dismissed.
+   * buckets, a status verdict queued for the row — has to go with it, or the next
+   * `rate_limit_event` re-publishes the window (or the write re-asserts the block) the operator
+   * just dismissed.
    */
   readonly onReset?: (accountId: string) => void
 }
@@ -227,10 +238,16 @@ export function createHealthStore(options: HealthStoreOptions = {}): HealthStore
       write(accountId, { breaker: recordSuccess() })
     },
 
-    recordFailure(accountId, failure, now, options) {
-      write(accountId, {
-        breaker: recordFailure(read(accountId).breaker, failure, now, breakerOptions(options)),
-      })
+    recordFailure(accountId, failure, now, caller) {
+      const before = read(accountId).breaker
+      const after = recordFailure(before, failure, now, breakerOptions(caller))
+      write(accountId, { breaker: after })
+      // `blocked` is the breaker's own name for "no timer will change this", so who gets announced
+      // cannot drift from who routing treats as permanently out. A changed status is what makes
+      // this the *moment* the account became an operator's problem rather than a repeat of it.
+      if (after.status !== before.status && phase(after, now) === "blocked") {
+        options.onBlocked?.(accountId, after.status)
+      }
     },
 
     applyRateLimit(accountId, signal, now) {

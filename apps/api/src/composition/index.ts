@@ -27,6 +27,8 @@ import { createRoutingCatalog, loadCatalog, type RoutingCatalogStore } from "../
 import { createPriceBook } from "../services/cost"
 import { createCredentialCipherFromEnv } from "../services/crypto/fromEnv"
 import {
+  type AccountStatusWriter,
+  createAccountStatusWriter,
   createDispatcher,
   createHealthStore,
   createQuotaWindowWriter,
@@ -82,6 +84,11 @@ export interface Runtime {
    */
   readonly sdkQuota: SdkQuotaStore
   readonly quotaWriter: QuotaWindowWriter
+  /**
+   * The durable half of {@link health}: the standing blocks the breaker forms, written through to
+   * `accounts.status` so `exhausted` outlives the process that observed it.
+   */
+  readonly statusWriter: AccountStatusWriter
   /** Exposed for the admin plane's "run now" and for shutdown ordering; the timers are internal. */
   readonly scheduler: Scheduler
   /** What `GET /metrics` renders. Fed from the usage drain, the scheduler, and per-scrape gauges. */
@@ -129,6 +136,16 @@ export function createRuntime(deps: RuntimeDeps): Runtime {
     logger,
     flushIntervalMs: env.dataPlane.quotaWriteIntervalMs,
   })
+  // The durable half of the breaker, and for the same reason: the replica that observed the verdict
+  // is the only one holding it. A cooldown is not written — a clock recovers it — but `exhausted`
+  // and `needs_reauth` end only when a human acts, and a verdict that dies with the process is a
+  // human who never finds out (`services/dataplane/status-writer.ts`).
+  const statusWriter = createAccountStatusWriter({
+    accounts,
+    logger,
+    flushIntervalMs: env.dataPlane.accountStatusWriteIntervalMs,
+    now,
+  })
   // The breaker's numbers reach it from exactly one place: `breaker.ts` reads no configuration and
   // no randomness of its own, so a store built without them silently runs the module defaults and
   // returns every account tripped in the same second in the same millisecond. `probeHoldMs` is the
@@ -141,10 +158,19 @@ export function createRuntime(deps: RuntimeDeps): Runtime {
     // Both transports fold a reading in here and nowhere else, which is what makes one hook enough
     // to make every observed window durable.
     onQuotaWindows: (accountId, windows) => quotaWriter.record(accountId, windows),
+    // Every standing block the breaker forms is announced here and nowhere else, which is what
+    // makes one hook enough to make every one of them durable. Which of them may be *stored* is
+    // the writer's policy, not this file's.
+    onBlocked: (accountId, status) => statusWriter.record(accountId, status),
     // "Re-check now" and account deletion clear this store; the SDK's own per-Account buckets are
     // the same request path's memory of the same fact and have to go with them, or the next
-    // `rate_limit_event` re-publishes the window the operator just dismissed.
-    onReset: (accountId) => sdkQuota.forget(accountId),
+    // `rate_limit_event` re-publishes the window the operator just dismissed. A queued status
+    // verdict goes for the same reason: landing after the operator's clear would undo a button
+    // press with no visible cause.
+    onReset: (accountId) => {
+      sdkQuota.forget(accountId)
+      statusWriter.forget(accountId)
+    },
   })
   const catalog = createRoutingCatalog({
     load: () => loadCatalog({ accounts, pools }),
@@ -305,6 +331,7 @@ export function createRuntime(deps: RuntimeDeps): Runtime {
     health,
     sdkQuota,
     quotaWriter,
+    statusWriter,
     scheduler,
     metrics,
     start: async () => {
@@ -318,6 +345,7 @@ export function createRuntime(deps: RuntimeDeps): Runtime {
       prices.start()
       usage.start()
       quotaWriter.start()
+      statusWriter.start()
       // Synchronous by design: the first sweep is not a boot precondition.
       scheduler.start()
       // Awaited: rebuilt from `tokenExpiresAt`, so a token that expired during downtime is due now.
@@ -339,6 +367,9 @@ export function createRuntime(deps: RuntimeDeps): Runtime {
       // Last, and awaited: a reading observed a second before shutdown is the freshest thing anyone
       // knows about that account's quota, and losing it means the next boot renders a stale gauge.
       await quotaWriter.stop()
+      // Same, and more so: a verdict lost here is an account that comes back `active`, gets a
+      // request, and fails it again to re-learn what this process already knew.
+      await statusWriter.stop()
     },
   }
 }

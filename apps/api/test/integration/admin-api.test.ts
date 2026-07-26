@@ -142,6 +142,7 @@ function harness(
         accounts: store.accounts,
         health: createHealthStore(),
         audit,
+        refreshCatalog: async () => {},
         cooldownSeconds: 60,
         now,
       }),

@@ -365,10 +365,22 @@ injected clock and reads no randomness: without a supplied fraction, every accou
 same second returns in the same millisecond and re-stampedes whatever knocked them over. Jitter only
 widens an *estimated* step; a provider-reported reset is the truth and is never nudged off it.
 
-Breaker state is in-memory routing hygiene, not durable truth: after a restart the first failing
-request re-marks. It expires with its own reset window (see the retention table in
+A **cooldown** is in-memory routing hygiene, not durable truth: after a restart the first failing
+request re-marks it. It expires with its own reset window (see the retention table in
 [09-deployment.md](09-deployment.md)). A later mark may extend an entry; an
 earlier one never shortens it, so two concurrent failures cannot un-learn the longer reset.
+
+A **standing block is durable**, and the split is the same `cooling_down` ≠ `exhausted` rule one
+level down. Re-deriving a cooldown costs one failed request; re-deriving `exhausted` costs the
+operator the only notice they were going to get, because the thing that ends it is a human who has
+to be *told*. So the moment the breaker forms `exhausted` or `needs_reauth`, the replica that
+observed it writes the verdict through to `accounts.status` on an `ACCOUNT_STATUS_WRITE_INTERVAL_MS`
+timer — off the request path, coalesced per account, and guarded so it can never overwrite the
+operator's `disabled` or a block already recorded ([02-domain-model.md](02-domain-model.md#account)).
+The catalog hydrates the row at boot, so a restarted replica filters the account out by name instead
+of re-learning it with a failed request, and the console's red banner has a source. `disabled` is
+reported by the breaker and deliberately *not* stored: a bad API key must not become
+indistinguishable from an account a human switched off.
 
 ### Exactly one half-open probe
 
@@ -448,6 +460,7 @@ Rules:
 | **A verdict outranks a header** | Limiter headers ride *every* response, including the `402` that says the balance is dead — a drained account very often answers `402` **and** `x-ratelimit-remaining-requests: 0` in the same breath. The classified failure is the verdict and lands first; the parsed headers are a reading and land second, where they may extend a cooldown but **never** overwrite `exhausted`, `needs_reauth`, or `disabled`. Without this, a dead balance becomes a countdown, gets retried on a timer, and the client is told `429 + Retry-After` for something no clock fixes. The reading is still recorded — refused, not discarded — so the console can show what the limiter said. |
 | **Remove immediately** | An `exhausted` account leaves every candidate set at once, for every key and every pool. |
 | **Surface loudly** | `exhausted` gets a **red banner on the dashboard**, not a status buried on a detail page. This is the failure an operator most needs to see, because it silently shrinks the pool while everything still appears to work. |
+| **Survive the process** | Which is why the verdict is written to the row rather than kept in memory. A block that only one replica remembers is a block the next deploy erases: routing re-learns it with one more failed request, and the banner that was supposed to tell the operator was reset by the same restart. The clear is the mirror image and belongs to the operator's **Re-check now** — nothing on a timer lifts it. |
 | **Warn before it dies** | Where a provider exposes a balance at all, a low-balance threshold flags the account *before* it hits zero. |
 
 ### When every candidate is unavailable
@@ -565,6 +578,7 @@ computed itself** while capacity is available.
 | Inline outcome | "still limited, resets 14:32" / "back online" / "still out of credits" — shown next to the button. |
 | Last checked | Always visible, whether the last check was manual or automatic. |
 | **One code path** | It is the *same* probe the circuit breaker runs on its half-open transition, triggered manually. Not a second implementation — there is exactly one way to ask a provider "are you back?". |
+| **Lifts the stored block too** | Clearing only this process's memory of an `exhausted` would leave the persisted row standing, the account filtered out, and the operator pressing a button that visibly does nothing. So the row is cleared as well, and the warm catalog is refreshed before the response — guarded to `exhausted` alone. It never touches `disabled` (the operator's own switch) or `needs_reauth` (which ends with a completed login, not with a button that sends nothing). |
 
 Reset instants and utilization are also exposed on the API so an operator can alert on them
 externally; see [08-observability.md](08-observability.md).

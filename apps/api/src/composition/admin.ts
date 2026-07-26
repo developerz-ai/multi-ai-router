@@ -133,6 +133,9 @@ export function createAdminPlane(deps: AdminPlaneDeps): AdminPlane {
     health,
     audit,
     auth: cli.authProbe,
+    // Clearing a stored `exhausted` is a write to a row the warm catalog is serving, so it joins
+    // the same read-after-write guarantee every other admin write has.
+    refreshCatalog: deps.coherence.refreshCatalog,
     cooldownSeconds: env.accountRecheckCooldownSeconds,
     now,
   })

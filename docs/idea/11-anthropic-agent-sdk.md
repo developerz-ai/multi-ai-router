@@ -732,7 +732,7 @@ the message plus the subprocess stderr tail. Classes worth naming as our own err
 
 | Class | Signal | Response |
 |---|---|---|
-| Expired credential | `oauth token has expired`, `not logged in`, `401` | Account → `needs_reauth`, drop from routing, fail over to the next Account in the Pool. **We do not refresh-and-retry** the way Meridian does — the SDK owns the token (§3) |
+| Expired credential | `oauth token has expired`, `not logged in`, `401` | Account → `needs_reauth`, drop from routing, fail over to the next Account in the Pool. The status is **written through to the row** off the request path, because the router never refreshes this token: noticing the failure and parking the Account *is* the whole mechanism, so a verdict that died with the process would be nobody ever being told to log back in ([05-routing-and-failover.md](05-routing-and-failover.md#circuit-breaker)). **We do not refresh-and-retry** the way Meridian does — the SDK owns the token (§3) |
 | Rate limited | `429`, `rate limit`, `usage limit reached` | 429 + circuit breaker; fail over to the next Account |
 | Stale SDK session | `No conversation found with session ID` | Evict the Session mapping, replay once |
 | Busy session | `is currently running as a background agent` | Bounded linear retries, then `forkSession` |

@@ -56,6 +56,26 @@ export interface AccountRepository {
   /** `undefined` when no account has that id. */
   updateStatus(id: string, status: AccountStatus, now: Date): Promise<AccountRow | undefined>
   /**
+   * Conditional status write: applies `to` only where the row currently holds
+   * one of `from`.
+   *
+   * The router's own verdicts about an upstream — `exhausted`, `needs_reauth` —
+   * are written to the same column an operator sets by hand, so an
+   * unconditional write from a background observer would overwrite `disabled`,
+   * which is the operator's word and never an observation. The guard is in the
+   * statement rather than in a read-then-write because several replicas observe
+   * the same account concurrently and a check in TypeScript would be a race.
+   *
+   * `undefined` means nothing changed: no account has that id, the row holds a
+   * status outside `from`, or `from` is empty.
+   */
+  updateStatusWhen(
+    id: string,
+    from: readonly AccountStatus[],
+    to: AccountStatus,
+    now: Date,
+  ): Promise<AccountRow | undefined>
+  /**
    * The soft delete. Rows are never removed: usage history, audit events, and
    * pool membership all reference the account, and a disabled account that is
    * re-enabled keeps its id. Disabled accounts never survive candidate
@@ -244,6 +264,19 @@ export function createAccountRepository(db: Database): AccountRepository {
     },
 
     updateStatus: setStatus,
+
+    updateStatusWhen: async (id, from, to, now) => {
+      // An empty guard admits nothing, and `in ()` is not a predicate postgres
+      // accepts — returning early keeps "nothing may be overwritten" from
+      // rendering as a statement that means something else.
+      if (from.length === 0) return undefined
+      const rows = await db
+        .update(accounts)
+        .set({ status: to, updatedAt: now })
+        .where(and(eq(accounts.id, id), inArray(accounts.status, [...from])))
+        .returning()
+      return rows[0]
+    },
 
     disable: (id, now) => setStatus(id, "disabled", now),
 

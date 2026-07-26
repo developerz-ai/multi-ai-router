@@ -74,13 +74,39 @@ account per provider. The `label` is what distinguishes them to a human.
 | `configDir` | path, optional | Claude subscription accounts only. One isolated `CLAUDE_CONFIG_DIR` per Account so N subscriptions coexist without cross-contamination. Its contents are live credential material. **Assigned by the router, never by the operator**: `<CLAUDE_CONFIG_ROOT>/<id>`, created `0700` with the row and deleted with it. Keyed on `id` because a `label` is renameable and a rename would strand a logged-in directory; a unique index on the column makes "two Accounts, one directory" a write that cannot land |
 | `tokenExpiresAt` | timestamp, optional | OAuth accounts only. Drives the per-account refresh schedule; refresh fires at a fraction of the remaining lifetime, never on a `401`, and is re-scheduled each time a new token lands |
 | `refreshState` | in-memory | This account's armed timer and its single-flight guard: every trigger for one account awaits one shared promise, never N racing writes. Plus the backoff counter for failed refreshes. A *request* is never a trigger — it neither starts nor waits on a refresh |
-| `status` | enum | `active` \| `disabled` \| `cooling_down` \| `exhausted` \| `needs_reauth` |
+| `status` | enum | `active` \| `disabled` \| `cooling_down` \| `exhausted` \| `needs_reauth`. Two kinds of writer share the column, which is why every observed write is guarded — see below |
 | *(quota windows)* | separate `quota_windows` table | Per-window quota state — see below. A Claude subscription has several concurrent windows that reset independently, so they are rows keyed `(account_id, window)`, not a JSON blob on the account: each window is upserted and expires on its own clock, and one refresh must not rewrite the others. Two writers, both idempotent on that key: the replica that *observed* a reading upserts it off its request path (`QUOTA_WRITE_INTERVAL_MS`), and the quota floor clears rows whose own reset has passed |
 | `modelAliases` | json, optional | Maps the client's model name to the account's (`sonnet` → `glm-4.7`, `sonnet` → `k3`). Absent means pass the name through unchanged. Keys are **requested-side** — what a client sends |
 | `supportedModels` | json, optional | The model ids this account's upstream accepts, **upstream-side** — the side `modelAliases` points *at*, and the side a provider's own `/v1/models` returns. Absent (and `[]`) mean *unknown*, which routing reads as passthrough: the account serves whatever the client names. A non-empty list filters selection and is what `GET /v1/models` enumerates. Filled by the operator or by `POST /api/admin/accounts/:id/models/discover`; never on a timer, because a catalog that refreshed itself would change routing without anyone asking |
 | `weight` | number | Bias for the `weighted` policy |
 | `priority` | number | Strict order for the `priority-failover` policy |
 | `health` | in-memory | Cooldown expiry, recent failures, in-flight count, quota headroom. Snapshotted and injected into selection |
+
+**Who writes `status`, and what may overwrite what.** The column holds two different kinds of fact.
+`active` and `disabled` are the **operator's** — a setting, written from the console. `cooling_down`,
+`exhausted`, and `needs_reauth` are the **router's** — verdicts formed by the breaker from what an
+upstream answered.
+
+Only two of the router's three are stored, and the split is the `cooling_down` ≠ `exhausted` rule
+made durable. A cooldown is clock-recoverable, so it stays in memory: re-deriving it after a restart
+costs one failed request, and a stored countdown is stale the moment the process holding it dies.
+`exhausted` and `needs_reauth` end only when a human buys something or logs in, so they are written
+through to the row by the replica that observed them (`ACCOUNT_STATUS_WRITE_INTERVAL_MS`, off the
+request path, coalesced per account) — otherwise the verdict lives in one replica's memory, vanishes
+on the next deploy, and the dashboard's red "needs top-up" banner has no source.
+
+Every observed write is a **guarded** statement (`updateStatusWhen`), never an unconditional one:
+
+- **`disabled` is never overwritten.** It is the operator's word, and no provider response revises it.
+- **A standing block is never overwritten by another standing block.** The first one recorded is the
+  one the operator is acting on; the account is out of rotation either way.
+- **`disabled` is never *written* by an observation either**, even though the breaker forms it from
+  an `api-key` account's `401` — storing it would make a bad key indistinguishable from an account a
+  human switched off.
+
+Clearing is the mirror image and belongs to whoever owns the remedy: `exhausted` is lifted by the
+operator's **Re-check now** (guarded to `exhausted` alone, then the warm catalog is refreshed), and
+`needs_reauth` only by a completed login or by `claude auth status` reporting the account logged in.
 
 **Which accounts have a refresh lifecycle at all.** `tokenExpiresAt` and `refreshState` exist only
 for accounts the router refreshes: non-Anthropic OAuth subscriptions (ChatGPT/Codex today).

@@ -129,6 +129,15 @@ export {
   sessionStoreFromEnv,
 } from "./session-binding"
 export { buildSnapshot, overlayHealth } from "./snapshot"
+export {
+  type AccountStatusWriter,
+  type AccountStatusWriterDeps,
+  type AccountStatusWriterStats,
+  createAccountStatusWriter,
+  type ObservedAccountStatus,
+  OVERWRITABLE_BY_OBSERVATION,
+  persistable,
+} from "./status-writer"
 export { createTranslatedRequestBody, type TranslatedRequestBody } from "./translate-body"
 export {
   type DataPlaneClock,

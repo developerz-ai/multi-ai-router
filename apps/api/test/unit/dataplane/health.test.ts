@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import type { QuotaWindowState } from "@multi-ai-router/core"
+import type { AccountStatus, QuotaWindowState } from "@multi-ai-router/core"
 import type { RateLimitSignal } from "../../../src/providers"
 import { buildSnapshot, createHealthStore, overlayHealth } from "../../../src/services/dataplane"
 import { account, catalog, NOW } from "./fixtures"
@@ -529,6 +529,80 @@ describe("quota windows", () => {
       { limiter: "input-tokens", utilization: 0.75, utilizationSource: "continuous" },
     ])
     expect(overlaid.quotaWindows).toBeUndefined()
+  })
+})
+
+/**
+ * The other half of durable health: a standing block has to leave this process to be worth
+ * anything, and the announcement is the only seam it can leave through.
+ */
+describe("standing blocks are announced", () => {
+  function blocks() {
+    const seen: { accountId: string; status: AccountStatus }[] = []
+    return {
+      seen,
+      store: createHealthStore({
+        onBlocked: (accountId, status) => seen.push({ accountId, status }),
+      }),
+    }
+  }
+
+  test("out of credits is announced, because only a human ends it", () => {
+    const { store, seen } = blocks()
+    store.recordFailure("a", { kind: "credits-exhausted", message: "402" }, NOW)
+
+    expect(seen).toEqual([{ accountId: "a", status: "exhausted" }])
+  })
+
+  test("an oauth auth failure is announced as needs_reauth", () => {
+    const { store, seen } = blocks()
+    store.recordFailure("a", { kind: "auth", message: "401" }, NOW, { authKind: "oauth" })
+
+    expect(seen).toEqual([{ accountId: "a", status: "needs_reauth" }])
+  })
+
+  test("the disabled an api-key failure forms is announced too — storing it is not this file's call", () => {
+    // The store reports every block it makes; `status-writer.ts` decides which are durable. One
+    // predicate, one file, rather than the same exclusion written in two places that can drift.
+    const { store, seen } = blocks()
+    store.recordFailure("a", { kind: "auth", message: "401" }, NOW, { authKind: "api-key" })
+
+    expect(seen).toEqual([{ accountId: "a", status: "disabled" }])
+  })
+
+  test("a cooldown is not announced — a clock ends it, so nobody needs telling", () => {
+    const { store, seen } = blocks()
+    store.recordFailure("a", { kind: "rate-limited", retryAfterSeconds: 30, message: "429" }, NOW)
+    store.applyRateLimit("a", signal({ limited: true, retryAfterSeconds: 30 }), NOW)
+
+    expect(store.stateOf("a").breaker.status).toBe("cooling_down")
+    expect(seen).toEqual([])
+  })
+
+  test("a failure below the trip threshold announces nothing", () => {
+    const { store, seen } = blocks()
+    store.recordFailure("a", { kind: "server-error", message: "500" }, NOW)
+
+    expect(seen).toEqual([])
+  })
+
+  test("once per transition, not once per failure", () => {
+    // Fifty concurrent requests all seeing the same 402 are one verdict, and one log line.
+    const { store, seen } = blocks()
+    for (let index = 0; index < 50; index += 1) {
+      store.recordFailure("a", { kind: "credits-exhausted", message: "402" }, NOW)
+    }
+
+    expect(seen).toHaveLength(1)
+  })
+
+  test("re-announced after a recovery, because the row was cleared with the marks", () => {
+    const { store, seen } = blocks()
+    store.recordFailure("a", { kind: "credits-exhausted", message: "402" }, NOW)
+    store.reset("a")
+    store.recordFailure("a", { kind: "credits-exhausted", message: "402" }, NOW)
+
+    expect(seen).toHaveLength(2)
   })
 })
 

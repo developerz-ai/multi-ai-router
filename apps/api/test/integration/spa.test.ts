@@ -374,6 +374,7 @@ describe("the full app, mounted end to end", () => {
           accounts: store.accounts,
           health: createHealthStore(),
           audit,
+          refreshCatalog: async () => {},
           cooldownSeconds: 60,
           now,
         }),

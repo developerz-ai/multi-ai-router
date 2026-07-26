@@ -158,6 +158,52 @@ describe("status is the lifecycle, and disable is the soft delete", () => {
     expect(stub.only().sql).not.toContain("delete")
     expect(stub.only().params).toEqual(["disabled", NOW_PARAM, ACCOUNT_ID])
   })
+
+  test("updateStatusWhen narrows on the id and on the statuses it may overwrite", async () => {
+    const stub = harness([accountRow])
+    await createAccountRepository(stub.db).updateStatusWhen(
+      ACCOUNT_ID,
+      ["active", "cooling_down"],
+      "exhausted",
+      NOW,
+    )
+
+    // The guard is a predicate, not a read-then-write: several replicas observe the same account
+    // concurrently and a check in TypeScript would be a race.
+    expect(stub.only().sql).toContain('update "accounts" set')
+    expect(stub.only().sql).toContain('"status" in ($4, $5)')
+    expect(stub.only().params).toEqual([
+      "exhausted",
+      NOW_PARAM,
+      ACCOUNT_ID,
+      "active",
+      "cooling_down",
+    ])
+  })
+
+  test("updateStatusWhen returns undefined when the row held something outside the guard", async () => {
+    // Postgres answers zero rows, which is exactly how "the operator's `disabled` was not
+    // overwritten" reaches the caller.
+    const stub = harness([])
+    expect(
+      await createAccountRepository(stub.db).updateStatusWhen(
+        ACCOUNT_ID,
+        ["active"],
+        "exhausted",
+        NOW,
+      ),
+    ).toBeUndefined()
+  })
+
+  test("an empty guard admits nothing, and issues no statement at all", async () => {
+    // `in ()` is not a predicate postgres accepts, so "nothing may be overwritten" must not be
+    // allowed to render as a statement that means something else.
+    const stub = harness([accountRow])
+    expect(
+      await createAccountRepository(stub.db).updateStatusWhen(ACCOUNT_ID, [], "exhausted", NOW),
+    ).toBeUndefined()
+    expect(stub.statements).toHaveLength(0)
+  })
 })
 
 describe("quota window state", () => {
