@@ -30,6 +30,16 @@ import type { AccountAuthProbe, ClaudeAuthReport } from "../health/claudeAuthPro
  * and pretending otherwise would mean fabricating a result from a probe we deliberately do not
  * send.
  *
+ * **`exhausted` is cleared on the row as well as in memory, and that is what makes the button work
+ * at all.** The breaker's standing blocks are written through to `accounts.status`
+ * (`services/dataplane/status-writer.ts`) so they survive a restart; clearing only this process's
+ * memory of one would leave the stored `exhausted` standing, the account filtered out, and the
+ * operator pressing a button that visibly does nothing. Exactly one status is cleared: `disabled`
+ * is the operator's own switch, and `needs_reauth` ends with a completed login rather than with a
+ * button that sends nothing — the guard is in the statement, so neither can be promoted by
+ * accident. The warm catalog is refreshed when the row actually changed, for the same
+ * read-after-write reason `services/admin/coherence.ts` exists.
+ *
  * **The one exception proves the rule.** A Claude subscription can be asked, locally and for free,
  * whether it is still logged in — `claude auth status` reads the credential file the CLI wrote, with
  * no provider contacted and nothing billed. That answer is a *different fact* from "is the window
@@ -56,6 +66,13 @@ export interface RecheckResult {
    */
   readonly rechecked: boolean
   /**
+   * The standing block this call lifted from the stored row, or absent when there was none to lift
+   * — which is the normal case, and is not a failure.
+   *
+   * Only ever `exhausted`: see the note above on why no other status is a re-check's to clear.
+   */
+  readonly clearedStatus?: "exhausted"
+  /**
    * What the account's own credential says, for the account class that can be asked. Absent for
    * every other provider, and absent when the CLI could not answer — which is never the same thing
    * as an account reporting itself logged out.
@@ -78,9 +95,14 @@ export interface RecheckService {
 }
 
 export interface RecheckServiceDeps {
-  readonly accounts: Pick<AccountRepository, "list" | "findById">
+  readonly accounts: Pick<AccountRepository, "list" | "findById" | "updateStatusWhen">
   readonly health: Pick<HealthStore, "reset">
   readonly audit: AuditRecorder
+  /**
+   * Re-reads the warm routing catalog. Called only when a row actually changed, so a re-check that
+   * cleared nothing buys no query.
+   */
+  readonly refreshCatalog: () => Promise<void>
   /**
    * Absent means subscription accounts get the breaker reset and nothing more. Optional because a
    * deployment with no Claude subscriptions has nothing for it to ask.
@@ -112,8 +134,15 @@ export function createRecheckService(deps: RecheckServiceDeps): RecheckService {
     deps.health.reset(account.id)
     lastChecked.set(account.id, now)
 
+    // The stored half of the same verdict. Guarded to `exhausted` in the statement rather than by
+    // reading the row first: the row is a moment old by the time this runs, and a check in
+    // TypeScript would be a race against every other replica observing the same account.
+    const cleared = await deps.accounts.updateStatusWhen(account.id, ["exhausted"], "active", now)
+
     // After the reset, never before: the breaker marks are cleared whether or not the CLI answers,
     // so a missing binary can never cost an account the recovery this button exists to give it.
+    // It runs after the clear too, so an account that is out of credits *and* logged out ends on
+    // `needs_reauth` — the block a re-check cannot lift — rather than on the `active` above.
     const auth = (await deps.auth?.check(account)) ?? undefined
 
     await deps.audit.record({
@@ -122,6 +151,9 @@ export function createRecheckService(deps: RecheckServiceDeps): RecheckService {
       subjectId: account.id,
       detail: {
         provider: account.provider,
+        // The one row change a re-check can make on its own, named so an operator reading the log
+        // can tell "the button lifted a block" from "the button reset a countdown".
+        ...(cleared === undefined ? {} : { clearedStatus: "exhausted" }),
         // Flags, never the email or the plan the probe read — those are for the operator's screen,
         // not for an append-only log the janitor keeps for months.
         ...(auth === undefined
@@ -135,6 +167,7 @@ export function createRecheckService(deps: RecheckServiceDeps): RecheckService {
       lastCheckedAt: now.toISOString(),
       nextAllowedAt: new Date(now.getTime() + cooldownMs).toISOString(),
       rechecked: true,
+      ...(cleared === undefined ? {} : { clearedStatus: "exhausted" as const }),
       ...(auth === undefined ? {} : { auth }),
     }
   }
@@ -143,7 +176,12 @@ export function createRecheckService(deps: RecheckServiceDeps): RecheckService {
     recheck: async (accountId) => {
       const account = await deps.accounts.findById(accountId)
       if (account === undefined) return notFound("No account has that id")
-      return ok(await attempt(account, deps.now()))
+      const result = await attempt(account, deps.now())
+      // Awaited before the response: the console re-reads the accounts list the moment this
+      // returns, and a warm catalog still holding `exhausted` would render the block the operator
+      // just lifted.
+      if (result.clearedStatus !== undefined) await deps.refreshCatalog()
+      return ok(result)
     },
 
     lastCheckedAt: (accountId) => lastChecked.get(accountId) ?? null,
@@ -155,6 +193,9 @@ export function createRecheckService(deps: RecheckServiceDeps): RecheckService {
       // Sequential, not `Promise.all`: each account that is actually re-checked may spawn a `claude
       // auth status`, and fanning those out means one button press forking once per subscription.
       for (const account of accounts) results.push(await attempt(account, now))
+      // Once for the whole sweep, however many rows changed: the catalog is reloaded wholesale, so
+      // a refresh per cleared account would re-read the same table N times for one button press.
+      if (results.some((result) => result.clearedStatus !== undefined)) await deps.refreshCatalog()
       return ok(results)
     },
   }

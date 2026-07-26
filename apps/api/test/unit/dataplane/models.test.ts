@@ -82,6 +82,47 @@ describe("reachableModels", () => {
   test("an account declaring no models contributes no name rather than inventing a catalog", () => {
     expect(reachableModels(catalog([account("a")]), health(), keyWithFullScope(), NOW)).toEqual([])
   })
+
+  test("a declared model set is what a normal deployment advertises — no alias map required", () => {
+    // The bug this column closed: `supportedModels` was declared by routing and written by
+    // nothing, so an operator with no alias map got `data: []` and a tool with an empty picker.
+    const models = reachableModels(
+      catalog([
+        account("a", { snapshot: { supportedModels: ["claude-opus-5", "claude-haiku-5"] } }),
+      ]),
+      health(),
+      keyWithFullScope(),
+      NOW,
+    )
+    expect(models).toEqual([
+      { id: "claude-haiku-5", owner: "anthropic-api" },
+      { id: "claude-opus-5", owner: "anthropic-api" },
+    ])
+  })
+
+  test("an alias pointing outside the declared set is not advertised — the listing never promises a 503", () => {
+    const models = reachableModels(
+      catalog([
+        account("a", {
+          modelAliases: { sonnet: "glm-4.7" },
+          snapshot: { supportedModels: ["glm-4.6"] },
+        }),
+      ]),
+      health(),
+      keyWithFullScope(),
+      NOW,
+    )
+    expect(models.map((model) => model.id)).toEqual(["glm-4.6"])
+  })
+
+  test("a model listed by one account is reachable, as an actual request for it proves", () => {
+    // Listing and routing are one rule: everything advertised must resolve, and it is asserted
+    // here against the real selection path rather than against a second copy of the derivation.
+    const only = catalog([account("a", { snapshot: { supportedModels: ["glm-4.6"] } })])
+    for (const model of reachableModels(only, health(), keyWithFullScope(), NOW)) {
+      expect(reachableModel(only, health(), keyWithFullScope(), model.id, NOW)).toEqual(model)
+    }
+  })
 })
 
 describe("reachableModel", () => {

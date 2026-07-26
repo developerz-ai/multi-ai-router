@@ -96,6 +96,13 @@ function toRoutableAccount(
       priority: row.priority,
       health: { consecutiveFailures: 0, inFlight: 0, recentTokens: 0 },
       ...(row.modelAliases === null ? {} : { modelAliases: row.modelAliases }),
+      // An empty list is dropped rather than carried: routing reads absent as *unknown* and acts
+      // on a present one, so `[]` would be the different and wrong claim that this account
+      // supports no model at all — every request for it a 503, and nothing in `/v1/models`.
+      // A discovery that came back with nothing must not silently take an account offline.
+      ...(row.supportedModels === null || row.supportedModels.length === 0
+        ? {}
+        : { supportedModels: row.supportedModels }),
       ...(quotaWindows === undefined ? {} : { quotaWindows }),
     },
     driver: {

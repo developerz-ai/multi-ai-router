@@ -7,7 +7,7 @@ import { describe, expect, test } from "bun:test"
 import { RoutingPolicy } from "@multi-ai-router/core"
 import type { BindingDecision, PolicyInput } from "../../../src/services/routing"
 import { runPolicy } from "../../../src/services/routing"
-import { account, alarm, candidate, candidates, continuous, health, ids } from "./fixtures"
+import { account, alarm, candidate, candidates, continuous, health, ids, limiter } from "./fixtures"
 
 const input = (overrides: Partial<PolicyInput> = {}): PolicyInput => ({
   candidates: candidates(account("a"), account("b"), account("c")),
@@ -234,6 +234,57 @@ describe("quota-aware", () => {
     const result = runPolicy("quota-aware", input({ rotationCounter: 2 }))
 
     expect(ids(result.ordered)).toEqual(["c", "a", "b"])
+    expect(result.notes[0]?.kind).toBe("policy-degraded")
+  })
+
+  test("an HTTP limiter's headroom ranks too — it is the fleet's only continuous reading", () => {
+    // `requests` and `input-tokens` never become quota windows, because neither has a
+    // `QuotaWindowKind`. Reading only the named windows meant this policy ranked nothing on every
+    // API-key account there is and degraded to round-robin for the pools best able to use it.
+    const pool = [
+      candidate(account("a", { limiterWindows: [limiter(0.9)] }), 0),
+      candidate(account("b", { limiterWindows: [limiter(0.2)] }), 1),
+    ]
+    const result = runPolicy("quota-aware", input({ candidates: pool }))
+
+    expect(ids(result.ordered)).toEqual(["b", "a"])
+    expect(result.notes).toEqual([
+      { kind: "quota-ranked", accountIds: ["b", "a"], unknownAccountIds: [] },
+    ])
+  })
+
+  test("the most consumed reading wins across both vocabularies", () => {
+    const pool = [
+      candidate(
+        account("a", { quotaWindows: [continuous(0.1)], limiterWindows: [limiter(0.95)] }),
+        0,
+      ),
+      candidate(account("b", { quotaWindows: [continuous(0.4)] }), 1),
+    ]
+    expect(ids(runPolicy("quota-aware", input({ candidates: pool })).ordered)).toEqual(["b", "a"])
+  })
+
+  test("a limiter that reported no headroom still ranks nothing", () => {
+    const pool = [
+      candidate(
+        account("a", {
+          limiterWindows: [
+            limiter(0.9, "requests", { utilizationSource: "none", utilization: undefined }),
+          ],
+        }),
+        0,
+      ),
+      candidate(
+        account("b", {
+          limiterWindows: [
+            limiter(0.1, "requests", { utilizationSource: "none", utilization: undefined }),
+          ],
+        }),
+        1,
+      ),
+    ]
+    const result = runPolicy("quota-aware", input({ candidates: pool, rotationCounter: 1 }))
+
     expect(result.notes[0]?.kind).toBe("policy-degraded")
   })
 

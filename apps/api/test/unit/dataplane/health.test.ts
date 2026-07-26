@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test"
+import type { AccountStatus, QuotaWindowState } from "@multi-ai-router/core"
 import type { RateLimitSignal } from "../../../src/providers"
 import { buildSnapshot, createHealthStore, overlayHealth } from "../../../src/services/dataplane"
 import { account, catalog, NOW } from "./fixtures"
@@ -355,6 +356,253 @@ describe("the half-open probe gate", () => {
     store.reset("a")
 
     expect(store.stateOf("a").probeHeldUntil).toBeNull()
+  })
+})
+
+/**
+ * Where every quota-driven surface gets its data. Nothing wrote `quotaWindows` before this: the
+ * filter's `quota-window-spent` could not fire, `quota-aware` ranked on nothing, and the console
+ * rendered empty gauges on accounts the provider had already cut off.
+ */
+describe("quota windows", () => {
+  const window = (overrides: Partial<QuotaWindowState> = {}): QuotaWindowState => ({
+    window: "five_hour",
+    utilization: 1,
+    utilizationSource: "threshold-triggered",
+    resetsAt: new Date(NOW.getTime() + 3_600_000),
+    resetSource: "provider-reported",
+    lastCheckedAt: NOW,
+    ...overrides,
+  })
+
+  test("folds the named windows a signal carried into account state", () => {
+    const store = createHealthStore()
+    store.applyRateLimit("a", signal({ quotaWindows: [window()] }), NOW)
+
+    expect(store.stateOf("a").quotaWindows).toEqual([window()])
+  })
+
+  test("a reading replaces the kinds it names and leaves the ones it does not standing", () => {
+    // A turn that reported `five_hour` said nothing about `seven_day`. Treating that silence as a
+    // refill would hand routing an account it believes is free while a seven-day window blocks it.
+    const store = createHealthStore()
+    store.applyRateLimit(
+      "a",
+      signal({ quotaWindows: [window(), window({ window: "seven_day", utilization: 0.5 })] }),
+      NOW,
+    )
+    store.applyRateLimit("a", signal({ quotaWindows: [window({ utilization: 0.2 })] }), NOW)
+
+    expect(store.stateOf("a").quotaWindows).toEqual([
+      window({ utilization: 0.2 }),
+      window({ window: "seven_day", utilization: 0.5 }),
+    ])
+  })
+
+  test("a signal with no named windows leaves the ones already held alone", () => {
+    // Every HTTP driver, every response: limiter names have no `QuotaWindowKind` equivalent, so
+    // they say nothing about named windows rather than claiming there are none.
+    const store = createHealthStore()
+    store.applyRateLimit("a", signal({ quotaWindows: [window()] }), NOW)
+    store.applyRateLimit("a", signal({ windows: [] }), NOW)
+
+    expect(store.stateOf("a").quotaWindows).toEqual([window()])
+  })
+
+  test("the reading is kept even when a terminal verdict refuses the transition", () => {
+    const store = createHealthStore()
+    store.recordFailure("a", { kind: "credits-exhausted", message: "402" }, NOW)
+    store.applyRateLimit("a", signal({ limited: true, quotaWindows: [window()] }), NOW)
+
+    expect(store.stateOf("a").quotaWindows).toEqual([window()])
+    expect(store.stateOf("a").breaker.status).toBe("exhausted")
+  })
+
+  test("every fold reaches the durable writer, with the whole reading", () => {
+    const seen: { accountId: string; windows: readonly QuotaWindowState[] }[] = []
+    const store = createHealthStore({
+      onQuotaWindows: (accountId, windows) => seen.push({ accountId, windows }),
+    })
+
+    store.applyRateLimit("a", signal({ quotaWindows: [window()] }), NOW)
+    store.applyRateLimit("a", signal({ quotaWindows: [window({ window: "seven_day" })] }), NOW)
+
+    expect(seen).toHaveLength(2)
+    expect(seen[0]?.accountId).toBe("a")
+    expect(seen[1]?.windows).toEqual([window(), window({ window: "seven_day" })])
+  })
+
+  test("a signal with nothing named never wakes the writer", () => {
+    let calls = 0
+    const store = createHealthStore({ onQuotaWindows: () => (calls += 1) })
+    store.applyRateLimit("a", signal({ limited: true }), NOW)
+
+    expect(calls).toBe(0)
+  })
+
+  test("Re-check now drops the windows and says so, so the SDK's own copy goes with them", () => {
+    // Without the second half, the operator dismisses a spent window and the next
+    // `rate_limit_event` re-publishes it from the store's own bucket.
+    const forgotten: string[] = []
+    const store = createHealthStore({ onReset: (accountId) => forgotten.push(accountId) })
+    store.applyRateLimit("a", signal({ quotaWindows: [window()] }), NOW)
+    store.reset("a")
+
+    expect(store.stateOf("a").quotaWindows).toEqual([])
+    expect(forgotten).toEqual(["a"])
+  })
+
+  test("live readings overlay the stored ones, per kind", () => {
+    const stored = window({ utilization: 0.1, lastCheckedAt: new Date(NOW.getTime() - 3_600_000) })
+    const seven = window({ window: "seven_day", utilization: 0.4 })
+    const store = createHealthStore()
+    store.applyRateLimit("a", signal({ quotaWindows: [window({ utilization: 0.9 })] }), NOW)
+
+    const overlaid = overlayHealth(
+      account("a", { snapshot: { quotaWindows: [stored, seven] } }).snapshot,
+      store.stateOf("a"),
+    )
+
+    expect(overlaid.quotaWindows).toEqual([window({ utilization: 0.9 }), seven])
+  })
+
+  test("a stored row that is newer wins — the quota floor's clear is not re-asserted", () => {
+    // The floor retires a window whose own reset has passed, writing `none` / `unknown` with a
+    // fresh `lastCheckedAt`. This replica may still hold the spent reading it observed hours ago;
+    // overlaying that back would show a 100% gauge on a window that has since refilled.
+    const store = createHealthStore()
+    const stale = new Date(NOW.getTime() - 7_200_000)
+    store.applyRateLimit(
+      "a",
+      signal({ quotaWindows: [window({ lastCheckedAt: stale, resetsAt: stale })] }),
+      stale,
+    )
+    const cleared = window({
+      utilization: undefined,
+      utilizationSource: "none",
+      resetsAt: undefined,
+      resetSource: "unknown",
+      lastCheckedAt: NOW,
+    })
+
+    const overlaid = overlayHealth(
+      account("a", { snapshot: { quotaWindows: [cleared] } }).snapshot,
+      store.stateOf("a"),
+    )
+
+    expect(overlaid.quotaWindows).toEqual([cleared])
+  })
+
+  test("an account nobody has observed keeps the hydrated rows and absent stays absent", () => {
+    const fresh = createHealthStore().stateOf("a")
+    const stored = window({ utilization: 0.3 })
+
+    expect(
+      overlayHealth(account("a", { snapshot: { quotaWindows: [stored] } }).snapshot, fresh),
+    ).toMatchObject({ quotaWindows: [stored] })
+    expect(overlayHealth(account("a").snapshot, fresh).quotaWindows).toBeUndefined()
+  })
+
+  test("limiter readings reach selection under the provider's own names, for ranking", () => {
+    // `requests` and `input-tokens` have no `QuotaWindowKind`, so they never become quota windows —
+    // but they are the router's only *continuous* reading, and `quota-aware` ranks on nothing else.
+    const store = createHealthStore()
+    store.applyRateLimit(
+      "a",
+      signal({
+        windows: [
+          {
+            limiter: "input-tokens",
+            limit: 100,
+            remaining: 25,
+            utilization: 0.75,
+            utilizationSource: "continuous",
+            resetSource: "unknown",
+          },
+        ],
+      }),
+      NOW,
+    )
+
+    const overlaid = overlayHealth(account("a").snapshot, store.stateOf("a"))
+    expect(overlaid.limiterWindows).toEqual([
+      { limiter: "input-tokens", utilization: 0.75, utilizationSource: "continuous" },
+    ])
+    expect(overlaid.quotaWindows).toBeUndefined()
+  })
+})
+
+/**
+ * The other half of durable health: a standing block has to leave this process to be worth
+ * anything, and the announcement is the only seam it can leave through.
+ */
+describe("standing blocks are announced", () => {
+  function blocks() {
+    const seen: { accountId: string; status: AccountStatus }[] = []
+    return {
+      seen,
+      store: createHealthStore({
+        onBlocked: (accountId, status) => seen.push({ accountId, status }),
+      }),
+    }
+  }
+
+  test("out of credits is announced, because only a human ends it", () => {
+    const { store, seen } = blocks()
+    store.recordFailure("a", { kind: "credits-exhausted", message: "402" }, NOW)
+
+    expect(seen).toEqual([{ accountId: "a", status: "exhausted" }])
+  })
+
+  test("an oauth auth failure is announced as needs_reauth", () => {
+    const { store, seen } = blocks()
+    store.recordFailure("a", { kind: "auth", message: "401" }, NOW, { authKind: "oauth" })
+
+    expect(seen).toEqual([{ accountId: "a", status: "needs_reauth" }])
+  })
+
+  test("the disabled an api-key failure forms is announced too — storing it is not this file's call", () => {
+    // The store reports every block it makes; `status-writer.ts` decides which are durable. One
+    // predicate, one file, rather than the same exclusion written in two places that can drift.
+    const { store, seen } = blocks()
+    store.recordFailure("a", { kind: "auth", message: "401" }, NOW, { authKind: "api-key" })
+
+    expect(seen).toEqual([{ accountId: "a", status: "disabled" }])
+  })
+
+  test("a cooldown is not announced — a clock ends it, so nobody needs telling", () => {
+    const { store, seen } = blocks()
+    store.recordFailure("a", { kind: "rate-limited", retryAfterSeconds: 30, message: "429" }, NOW)
+    store.applyRateLimit("a", signal({ limited: true, retryAfterSeconds: 30 }), NOW)
+
+    expect(store.stateOf("a").breaker.status).toBe("cooling_down")
+    expect(seen).toEqual([])
+  })
+
+  test("a failure below the trip threshold announces nothing", () => {
+    const { store, seen } = blocks()
+    store.recordFailure("a", { kind: "server-error", message: "500" }, NOW)
+
+    expect(seen).toEqual([])
+  })
+
+  test("once per transition, not once per failure", () => {
+    // Fifty concurrent requests all seeing the same 402 are one verdict, and one log line.
+    const { store, seen } = blocks()
+    for (let index = 0; index < 50; index += 1) {
+      store.recordFailure("a", { kind: "credits-exhausted", message: "402" }, NOW)
+    }
+
+    expect(seen).toHaveLength(1)
+  })
+
+  test("re-announced after a recovery, because the row was cleared with the marks", () => {
+    const { store, seen } = blocks()
+    store.recordFailure("a", { kind: "credits-exhausted", message: "402" }, NOW)
+    store.reset("a")
+    store.recordFailure("a", { kind: "credits-exhausted", message: "402" }, NOW)
+
+    expect(seen).toHaveLength(2)
   })
 })
 

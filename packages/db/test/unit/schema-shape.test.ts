@@ -21,6 +21,7 @@ const TABLE_COLUMNS: ReadonlyArray<{ table: Table; columns: readonly string[] }>
       "baseUrl",
       "dialect",
       "modelAliases",
+      "supportedModels",
       "weight",
       "priority",
       "createdAt",
@@ -302,6 +303,15 @@ describe("accounts", () => {
   test("the model alias map is jsonb and optional", () => {
     expect(schema.accounts.modelAliases.getSQLType()).toBe("jsonb")
     expect(schema.accounts.modelAliases.notNull).toBe(false)
+  })
+
+  test("the supported-model list is jsonb, optional, and has no default", () => {
+    expect(schema.accounts.supportedModels.getSQLType()).toBe("jsonb")
+    // NULL is *unknown*, and routing reads unknown as passthrough. A default of `[]` would make
+    // every new account declare it serves nothing, which is a 503 per request rather than a
+    // config gap — see `services/catalog/load.ts`.
+    expect(schema.accounts.supportedModels.notNull).toBe(false)
+    expect(schema.accounts.supportedModels.hasDefault).toBe(false)
   })
 })
 

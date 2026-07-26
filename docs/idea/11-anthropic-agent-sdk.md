@@ -406,6 +406,24 @@ otherwise-200 turn just recorded. This is the same property an HTTP driver's rat
 and get from the identical ordering — the Agent-SDK transport is not a special case here, only a
 different source for the same `RateLimitSignal`.
 
+**Where the named windows go.** The reading carries its windows on the same `RateLimitSignal`
+(`RateLimitSignal.quotaWindows`), which is the *only* channel by which an Account's `quotaWindows`
+are ever written. The health store folds them per kind — a turn that reported `five_hour` says
+nothing about `seven_day`, so what it did not name is left standing — and `overlayHealth` merges the
+result over the rows the catalog hydrated. Everything quota-driven reads what lands there:
+`quota-window-spent` in the pure filter, `quota-aware`'s ranking, `router_quota_utilization`, and the
+console's per-window gauges and countdowns. An HTTP driver leaves the field **absent**, not empty:
+`requests` and `input-tokens` have no `QuotaWindowKind`, so they travel as limiter readings under the
+provider's own names, and an empty array would be the different claim that the Account holds no
+windows at all.
+
+**And where they are persisted.** `HealthStore` is this replica's memory, so a fold also hands the
+reading to `createQuotaWindowWriter` (`services/dataplane/quota-writer.ts`), which coalesces per
+Account and upserts on a `QUOTA_WRITE_INTERVAL_MS` timer — off the request path, never awaited by
+one. Not a scheduled task: those hold an advisory lock so exactly one replica sweeps, and a reading
+lives in the memory of the replica that *observed* it. Deliberately no history and no queue either —
+a quota window is state, so the newest reading supersedes the older one and there is nothing to shed.
+
 The optional secondary source closes that gap: `GET https://api.anthropic.com/api/oauth/usage` with
 `anthropic-beta: oauth-2025-04-20` returns **continuous** percentages for every active window
 (0..100 → normalize to 0..1), an `extra_usage` block (`isEnabled`, `monthlyLimit`, `usedCredits`,
@@ -714,7 +732,7 @@ the message plus the subprocess stderr tail. Classes worth naming as our own err
 
 | Class | Signal | Response |
 |---|---|---|
-| Expired credential | `oauth token has expired`, `not logged in`, `401` | Account → `needs_reauth`, drop from routing, fail over to the next Account in the Pool. **We do not refresh-and-retry** the way Meridian does — the SDK owns the token (§3) |
+| Expired credential | `oauth token has expired`, `not logged in`, `401` | Account → `needs_reauth`, drop from routing, fail over to the next Account in the Pool. The status is **written through to the row** off the request path, because the router never refreshes this token: noticing the failure and parking the Account *is* the whole mechanism, so a verdict that died with the process would be nobody ever being told to log back in ([05-routing-and-failover.md](05-routing-and-failover.md#circuit-breaker)). **We do not refresh-and-retry** the way Meridian does — the SDK owns the token (§3) |
 | Rate limited | `429`, `rate limit`, `usage limit reached` | 429 + circuit breaker; fail over to the next Account |
 | Stale SDK session | `No conversation found with session ID` | Evict the Session mapping, replay once |
 | Busy session | `is currently running as a background agent` | Bounded linear retries, then `forkSession` |

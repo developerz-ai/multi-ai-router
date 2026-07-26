@@ -1,5 +1,5 @@
 import { isStandingBlock, ModelNotFoundError, type ProviderId } from "@multi-ai-router/core"
-import { resolveScope, selectAccounts } from "../routing"
+import { advertisedModels, resolveScope, selectAccounts } from "../routing"
 import type { VerifiedKey } from "./auth/verifier"
 import type { HealthStore } from "./health"
 import { buildSnapshot } from "./snapshot"
@@ -14,11 +14,15 @@ import type { RoutingCatalog } from "./types"
  * different catalogs, which is the whole point of scope.
  *
  * Names are **requested-side**: an Account that maps `sonnet` -> `glm-4.7` advertises `sonnet`,
- * because that is what a client sends. The alias is outbound-only.
+ * because that is what a client sends. Its `supportedModels` are stated upstream-side, so which of
+ * them survives as a requestable name is not this module's judgement to make — `advertisedModels`
+ * (`services/routing/model.ts`) derives it from the same check selection runs, so a name listed
+ * here is a name a request for it is actually served by. That is the whole contract of this
+ * endpoint, and it is why the derivation lives next to the check rather than here.
  *
  * An Account that declares no model set supports everything — unknown is passthrough, not
- * exclusion — and therefore contributes no enumerable name. A deployment of only such Accounts
- * lists nothing rather than inventing a catalog it cannot stand behind.
+ * exclusion — and therefore contributes no enumerable name beyond its alias keys. A deployment of
+ * only such Accounts lists nothing rather than inventing a catalog it cannot stand behind.
  *
  * An Account under a **standing** block (`disabled`, `exhausted`, `needs_reauth`) contributes
  * nothing either: listing a model no request can be served by sends the client to a 503 it could
@@ -55,10 +59,7 @@ export function reachableModels(
   for (const account of catalog.accounts()) {
     if (!inScope.has(account.id)) continue
     if (isStandingBlock(liveStatus.get(account.id) ?? account.snapshot.status)) continue
-    for (const name of advertisedNames(
-      account.snapshot.supportedModels,
-      account.driver.modelAliases,
-    )) {
+    for (const name of advertisedModels(account.snapshot)) {
       if (!owners.has(name)) owners.set(name, account.driver.provider)
     }
   }
@@ -103,12 +104,4 @@ export function reachableModel(
     throw new ModelNotFoundError(`model "${id}" is not reachable: no eligible account`)
   }
   return { id, owner: head.account.provider }
-}
-
-function advertisedNames(
-  supported: readonly string[] | undefined,
-  aliases: Readonly<Record<string, string>> | null | undefined,
-): readonly string[] {
-  // Alias *keys* are requested-side names; the values are what the upstream is told.
-  return [...(supported ?? []), ...Object.keys(aliases ?? {})]
 }

@@ -1,0 +1,13 @@
+-- The model ids an account's upstream accepts, upstream-side.
+--
+-- `routing/types.ts` has declared `supportedModels` since the first draft and
+-- nothing ever wrote it: no column existed, so `catalog/load.ts` could not
+-- populate it, every account was a passthrough, and `GET /v1/models` answered
+-- `data: []` on any deployment without an alias map. A client filling a model
+-- picker from that listing saw an empty router.
+--
+-- NULL is the correct existing value for every row and is left alone: unknown
+-- is passthrough, not exclusion (CLAUDE.md non-negotiable 4 — the client picks
+-- the model). A row only starts filtering once an operator declares a list, by
+-- hand or via `POST /api/admin/accounts/:id/models/discover`.
+ALTER TABLE "accounts" ADD COLUMN "supported_models" jsonb;

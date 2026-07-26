@@ -2,6 +2,7 @@ import type {
   AuthKind,
   Dialect,
   ProviderId,
+  QuotaWindowState,
   ResetSource,
   UtilizationSource,
 } from "@multi-ai-router/core"
@@ -94,6 +95,21 @@ export interface RateLimitSignal {
   readonly resetsAt?: Date
   readonly resetSource: ResetSource
   readonly windows: readonly RateLimitWindow[]
+  /**
+   * The same reading in the router's own window vocabulary, for the providers that speak it.
+   *
+   * This is the **only** channel by which an Account's `quotaWindows` are ever written: the health
+   * store folds it in exactly as it folds in `windows`, and everything downstream — the filter's
+   * `quota-window-spent`, `quota-aware`'s ranking, the console's per-window countdowns — reads what
+   * lands there and nothing else.
+   *
+   * Absent for every HTTP driver, and that absence is the design, not a gap: `requests` and
+   * `input-tokens` have no `QuotaWindowKind` equivalent, so naming one would record a fact the
+   * provider never stated. They travel as {@link windows}, keeping the provider's own word. Absent
+   * also differs from empty: absent says "nothing to report about named windows" and leaves what is
+   * already known standing, where `[]` would claim this account has none.
+   */
+  readonly quotaWindows?: readonly QuotaWindowState[]
 }
 
 /**

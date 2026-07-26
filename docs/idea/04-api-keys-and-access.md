@@ -263,7 +263,8 @@ or disabling one takes effect on the very next request, with no key change and n
 
 An out-of-scope Account is not "deprioritized" — as far as that key is concerned it does not
 exist, including in `GET /v1/models`, which lists only the models reachable within the presenting
-key's scope.
+key's scope. What each in-scope Account contributes to that listing is its `supportedModels` seen
+through its alias map — see [06-protocol-translation.md](06-protocol-translation.md#model-names).
 
 ## Admin API route groups
 
@@ -272,7 +273,7 @@ Paths and purpose only. Handler detail belongs in [01-architecture.md](01-archit
 | Group | Purpose | Built |
 |---|---|---|
 | `/api/admin/auth/**` | login, logout, session probe, CSRF token | yes |
-| `/api/admin/accounts/**` | upstream account CRUD, health, re-check, connect/reconnect | yes — CRUD + disable + re-check, and connect/reconnect for both flows (the `claude` CLI's login, and the authorization-code flow the router drives) |
+| `/api/admin/accounts/**` | upstream account CRUD, health, re-check, test, model discovery, connect/reconnect | yes — CRUD + disable + re-check + test + `POST /:id/models/discover`, and connect/reconnect for both flows (the `claude` CLI's login, and the authorization-code flow the router drives) |
 | `/api/admin/pools/**` | pool CRUD, membership, policy, weights, priority order, overflow account | yes |
 | `/api/admin/keys/**` | list, create, reveal, edit limits and bindings, revoke | yes |
 | `/api/admin/providers` | the static provider registry, so the console's account form is never a second copy of it | yes |

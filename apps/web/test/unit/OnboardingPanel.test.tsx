@@ -49,6 +49,7 @@ function account(overrides: Partial<AccountView> = {}): AccountView {
     baseUrl: null,
     dialect: "anthropic",
     modelAliases: null,
+    supportedModels: null,
     weight: 1,
     priority: 0,
     tokenExpiresAt: null,

@@ -100,6 +100,7 @@ export function createAccountsService(deps: AccountsServiceDeps): AccountsServic
           baseUrl: body.baseUrl ?? null,
           dialect: body.dialect ?? null,
           modelAliases: body.modelAliases ?? null,
+          supportedModels: body.supportedModels ?? null,
           ...(body.weight === undefined ? {} : { weight: body.weight }),
           ...(body.priority === undefined ? {} : { priority: body.priority }),
         })
@@ -150,6 +151,7 @@ export function createAccountsService(deps: AccountsServiceDeps): AccountsServic
           ...(body.baseUrl === undefined ? {} : { baseUrl: body.baseUrl }),
           ...(body.dialect === undefined ? {} : { dialect: body.dialect }),
           ...(body.modelAliases === undefined ? {} : { modelAliases: body.modelAliases }),
+          ...(body.supportedModels === undefined ? {} : { supportedModels: body.supportedModels }),
           ...(body.weight === undefined ? {} : { weight: body.weight }),
           ...(body.priority === undefined ? {} : { priority: body.priority }),
           ...(body.status === undefined ? {} : { status: body.status }),

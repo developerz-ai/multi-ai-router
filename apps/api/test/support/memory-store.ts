@@ -26,7 +26,15 @@ import type { AuditSink } from "../../src/services/admin"
 
 export type MemoryAccounts = Pick<
   AccountRepository,
-  "create" | "list" | "findById" | "findByIds" | "update" | "disable" | "delete"
+  | "create"
+  | "list"
+  | "findById"
+  | "findByIds"
+  | "update"
+  | "updateStatus"
+  | "updateStatusWhen"
+  | "disable"
+  | "delete"
 >
 
 export type MemoryKeys = Pick<
@@ -93,6 +101,7 @@ export function createMemoryStore(): MemoryStore {
           baseUrl: input.baseUrl ?? null,
           dialect: input.dialect ?? null,
           modelAliases: input.modelAliases ?? null,
+          supportedModels: input.supportedModels ?? null,
           weight: input.weight ?? 100,
           priority: input.priority ?? 0,
           createdAt: EPOCH,
@@ -110,6 +119,15 @@ export function createMemoryStore(): MemoryStore {
       findById: async (id) => accounts.find((row) => row.id === id),
       findByIds: async (ids) => accounts.filter((row) => ids.includes(row.id)),
       update: async (id, patch, now) => replace(accounts, id, patch, now),
+      updateStatus: async (id, status, now) => replace(accounts, id, { status }, now),
+      // The guard, honestly: the point of this method is that it does *not* apply when the row
+      // holds something outside `from`, and a stand-in that always wrote would let a test pass on
+      // a repository that overwrote the operator's `disabled`.
+      updateStatusWhen: async (id, from, to, now) => {
+        const row = accounts.find((candidate) => candidate.id === id)
+        if (row === undefined || !from.includes(row.status)) return undefined
+        return replace(accounts, id, { status: to }, now)
+      },
       disable: async (id, now) => replace(accounts, id, { status: "disabled" }, now),
       delete: async (id) => remove(accounts, id),
     },

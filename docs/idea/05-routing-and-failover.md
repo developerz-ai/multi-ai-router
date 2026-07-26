@@ -118,6 +118,13 @@ An account with **no** declared model set supports everything: unknown means pas
 exclusion. Filtering never falls back to "try it anyway" — an empty candidate set is an honest,
 specific error, and which error depends on *why* it is empty.
 
+The declared set (`supportedModels`) is stated **upstream-side**, which is why the check runs after
+the rename. `GET /v1/models` publishes the requested-side inverse of exactly this check, derived
+from the same function rather than restated — see
+[06-protocol-translation.md](06-protocol-translation.md#model-names). Nothing populates the set on a
+timer: an operator types it, or presses **Discover models**, and a catalog that refreshed itself
+would move traffic off an account the moment a provider retired one name.
+
 ## The six load-balancing policies
 
 **This is the centerpiece.** A Pool exists so that N accounts of the same kind behave like one
@@ -358,10 +365,22 @@ injected clock and reads no randomness: without a supplied fraction, every accou
 same second returns in the same millisecond and re-stampedes whatever knocked them over. Jitter only
 widens an *estimated* step; a provider-reported reset is the truth and is never nudged off it.
 
-Breaker state is in-memory routing hygiene, not durable truth: after a restart the first failing
-request re-marks. It expires with its own reset window (see the retention table in
+A **cooldown** is in-memory routing hygiene, not durable truth: after a restart the first failing
+request re-marks it. It expires with its own reset window (see the retention table in
 [09-deployment.md](09-deployment.md)). A later mark may extend an entry; an
 earlier one never shortens it, so two concurrent failures cannot un-learn the longer reset.
+
+A **standing block is durable**, and the split is the same `cooling_down` ≠ `exhausted` rule one
+level down. Re-deriving a cooldown costs one failed request; re-deriving `exhausted` costs the
+operator the only notice they were going to get, because the thing that ends it is a human who has
+to be *told*. So the moment the breaker forms `exhausted` or `needs_reauth`, the replica that
+observed it writes the verdict through to `accounts.status` on an `ACCOUNT_STATUS_WRITE_INTERVAL_MS`
+timer — off the request path, coalesced per account, and guarded so it can never overwrite the
+operator's `disabled` or a block already recorded ([02-domain-model.md](02-domain-model.md#account)).
+The catalog hydrates the row at boot, so a restarted replica filters the account out by name instead
+of re-learning it with a failed request, and the console's red banner has a source. `disabled` is
+reported by the breaker and deliberately *not* stored: a bad API key must not become
+indistinguishable from an account a human switched off.
 
 ### Exactly one half-open probe
 
@@ -384,7 +403,7 @@ limits it again before it has answered any of them.
 | Signal | Source |
 |---|---|
 | Rate-limit headers and reset instants | `parseRateLimit` on every upstream response. A *reading*, not a verdict — see the precedence rule below |
-| Subscription quota windows and utilization | Two kinds, never conflated. **Threshold-triggered**: the SDK's `rate_limit_event` events for Claude subs — fires only near the limit, so it is what trips the breaker but cannot rank headroom. **Continuous**: provider usage endpoints (Anthropic's OAuth usage endpoint for Claude subs, equivalents elsewhere) — a real percentage at any time, and the only thing `quota-aware` can rank on. Short-TTL cached, deduped per account |
+| Subscription quota windows and utilization | Two kinds, never conflated. **Threshold-triggered**: the SDK's `rate_limit_event` events for Claude subs — fires only near the limit, so it is what trips the breaker but cannot rank headroom. **Continuous**: HTTP limiter headers on every response, and provider usage endpoints (Anthropic's OAuth usage endpoint for Claude subs, equivalents elsewhere) — a real percentage at any time, and the only thing `quota-aware` can rank on. Short-TTL cached, deduped per account |
 | Consecutive failure streak | attempt outcomes |
 | Auth failures | `401`/`403` → `needs_reauth` / `disabled`, not a cooldown |
 | Balance / credit signals | `402` and provider-specific out-of-credits bodies → `exhausted` |
@@ -392,6 +411,36 @@ limits it again before it has answered any of them.
 
 All of it is folded into one **health snapshot**, held in memory, which is the only thing the
 pure selection functions read.
+
+### Where a quota window comes from
+
+Two vocabularies, and keeping them apart is what stops the router recording a fact no provider
+stated.
+
+| Reading | Named by | Written by | Read by |
+|---|---|---|---|
+| **Quota window** — `five_hour`, `seven_day`, `seven_day_opus`, `seven_day_sonnet`, `overage` | The provider, in a vocabulary the router shares | `RateLimitSignal.quotaWindows`, folded by the health store. Today only the Claude subscription transport speaks it ([11-anthropic-agent-sdk.md](11-anthropic-agent-sdk.md) §5) | `quota-window-spent` in the filter, `quota-aware`, `router_quota_utilization`, the console's per-window gauges |
+| **Limiter reading** — `requests`, `input-tokens`, `tokens`, … | The provider, in its own words | `RateLimitSignal.windows`, parsed off every HTTP response | `quota-aware` only. It never filters an account: a limiter that hit zero has already cooled the breaker down |
+
+An HTTP limiter has no `QuotaWindowKind` equivalent, so it never becomes a quota window — but it is
+the fleet's *continuous* reading, published on every response, and `quota-aware` ranks on both.
+Reading only the named windows means ranking nothing on every API-key account there is and silently
+degrading to round-robin exactly where the policy is most useful.
+
+Three merge rules hold everywhere a window is folded:
+
+| Rule | Statement |
+|---|---|
+| **Per kind, never wholesale** | A reading replaces the windows it names and leaves the ones it does not standing. A turn reporting `five_hour` says nothing about `seven_day`, and reading that silence as a refill puts traffic back onto an account a seven-day window still blocks. |
+| **The fresher `lastCheckedAt` wins** | Freshness decides, not provenance. A live reading is newer than a stored row almost always — but not when another replica observed one since, and not when the quota floor retired an expired window, which is exactly the reading a stale in-memory copy would otherwise re-assert as a full gauge. |
+| **Absent ≠ empty** | A provider that names no window has said nothing, and what is already known stands. `[]` is the different claim that the account holds no windows — on a fresh process, that claim would overwrite everything the last one persisted. |
+
+Quota state is durable as well as warm: the replica that observed a reading persists it to
+`quota_windows` on a `QUOTA_WRITE_INTERVAL_MS` timer, off the request path, coalesced per account.
+The catalog hydrates those rows at boot and `overlayHealth` merges this process's own readings over
+them, so a restarted replica renders the last known gauge instead of an empty one. It is not a
+scheduled task — an advisory lock would let one replica persist its readings and drop everyone
+else's — and it is not a queue: a window is state, so the newest reading supersedes the older one.
 
 ## Running out — two different failures, never conflated
 
@@ -411,6 +460,7 @@ Rules:
 | **A verdict outranks a header** | Limiter headers ride *every* response, including the `402` that says the balance is dead — a drained account very often answers `402` **and** `x-ratelimit-remaining-requests: 0` in the same breath. The classified failure is the verdict and lands first; the parsed headers are a reading and land second, where they may extend a cooldown but **never** overwrite `exhausted`, `needs_reauth`, or `disabled`. Without this, a dead balance becomes a countdown, gets retried on a timer, and the client is told `429 + Retry-After` for something no clock fixes. The reading is still recorded — refused, not discarded — so the console can show what the limiter said. |
 | **Remove immediately** | An `exhausted` account leaves every candidate set at once, for every key and every pool. |
 | **Surface loudly** | `exhausted` gets a **red banner on the dashboard**, not a status buried on a detail page. This is the failure an operator most needs to see, because it silently shrinks the pool while everything still appears to work. |
+| **Survive the process** | Which is why the verdict is written to the row rather than kept in memory. A block that only one replica remembers is a block the next deploy erases: routing re-learns it with one more failed request, and the banner that was supposed to tell the operator was reset by the same restart. The clear is the mirror image and belongs to the operator's **Re-check now** — nothing on a timer lifts it. |
 | **Warn before it dies** | Where a provider exposes a balance at all, a low-balance threshold flags the account *before* it hits zero. |
 
 ### When every candidate is unavailable
@@ -528,6 +578,7 @@ computed itself** while capacity is available.
 | Inline outcome | "still limited, resets 14:32" / "back online" / "still out of credits" — shown next to the button. |
 | Last checked | Always visible, whether the last check was manual or automatic. |
 | **One code path** | It is the *same* probe the circuit breaker runs on its half-open transition, triggered manually. Not a second implementation — there is exactly one way to ask a provider "are you back?". |
+| **Lifts the stored block too** | Clearing only this process's memory of an `exhausted` would leave the persisted row standing, the account filtered out, and the operator pressing a button that visibly does nothing. So the row is cleared as well, and the warm catalog is refreshed before the response — guarded to `exhausted` alone. It never touches `disabled` (the operator's own switch) or `needs_reauth` (which ends with a completed login, not with a button that sends nothing). |
 
 Reset instants and utilization are also exposed on the API so an operator can alert on them
 externally; see [08-observability.md](08-observability.md).
@@ -546,9 +597,20 @@ can make.
 | Cost | Real, every time. An HTTP account spends a token or two of a real quota window; a Claude subscription spends a turn **and** spawns a `claude` subprocess. |
 | Confirmation | The Agent-SDK path refuses to run without an explicit `confirmed: true` on the request — the console shows a confirmation dialog naming the subprocess and the spend before it ever fires. Every other provider's press goes straight through. |
 | Throttled | Its own **server-side** per-account cooldown, longer than Re-check now's and never shared with it — a free button's presses must never spend a paid one's window, or the reverse. |
-| Model | The operator names it, same as a client would; the router keeps no model catalog for an upstream to guess from. |
+| Model | The operator names it, same as a client would. The account's declared set is not a substitute: it says what the upstream *accepts*, not which name this press should spend. |
 | Outcome | `ok` or `failed`, plus a short, safe message — a router-authored sentence, the account's own one-word reply, or a failure signal, never a raw upstream body or credential material. |
 | No fan-out | There is no all-accounts form. A button that spends a real request — and on the Agent-SDK path a subprocess — per account in a pool is not one this console offers. |
+
+### Discover models — the third button, and the free one
+
+| Property | Behavior |
+|---|---|
+| What it does | One `GET` at the provider's own model listing, on this account's own dialect and credential, through the same attempt path — then writes the ids into `supportedModels` so selection and `GET /v1/models` both see them. |
+| Cost | None. A listing bills no tokens and spends no quota window, which is why it carries neither a cooldown nor a confirmation — the opposite of Test now on both counts. |
+| Not a poll | Nothing schedules it. A catalog that refreshed itself would change routing without an operator asking, and an upstream retiring one name would quietly take an account out of selection mid-deployment. |
+| Empty answer | Written as *nothing*, never as `[]`. An upstream that listed no models has told the router nothing; declaring "serves no model" would turn a config gap into a `503` per request. |
+| Refused for | Claude subscriptions — the Agent SDK owns that catalog and there is no listing endpoint to ask — and any provider with no implementation. Refused by name, before a socket is opened. |
+| Where the write goes | Through the accounts service, so it audits the field change and refreshes the warm routing catalog exactly like an operator's edit would. A second audit row, `account.models_discovered`, records that the question was asked at all. |
 
 ## Worked example
 

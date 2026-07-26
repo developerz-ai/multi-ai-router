@@ -241,6 +241,12 @@ function snapshotOf(state: AccountQuota): SdkQuotaSnapshot {
       // borrowed from a window that is merely warning would understate the cooldown.
       resetSource: resetsAt === undefined ? "unknown" : "provider-reported",
       windows: limiterWindows,
+      // The named windows ride the signal because that is how they reach Account state: the health
+      // store folds one reading in, from either transport, and the console's gauges and the
+      // filter's `quota-window-spent` read what it folded. Omitted rather than sent empty when this
+      // account has reported only unnamed buckets — `[]` would claim it holds no windows at all,
+      // and on a fresh process that claim would overwrite what the last one persisted.
+      ...(windows.length === 0 ? {} : { quotaWindows: windows }),
       ...(resetsAt === undefined ? {} : { resetsAt }),
     },
   }

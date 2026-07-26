@@ -28,6 +28,7 @@ export interface CreateAccountInput {
   readonly baseUrl?: string
   readonly dialect?: Dialect
   readonly modelAliases?: Readonly<Record<string, string>>
+  readonly supportedModels?: readonly string[]
   readonly weight?: number
   readonly priority?: number
 }
@@ -41,6 +42,8 @@ export interface UpdateAccountInput {
   readonly baseUrl?: string | null
   readonly dialect?: Dialect | null
   readonly modelAliases?: Readonly<Record<string, string>> | null
+  /** `null` (or `[]`) drops the declaration, returning the account to "accepts any model". */
+  readonly supportedModels?: readonly string[] | null
   readonly weight?: number
   readonly priority?: number
   readonly status?: OperatorStatus
@@ -132,6 +135,28 @@ export function recheckAccount(id: string): Promise<RecheckResult> {
 
 export function recheckAllAccounts(): Promise<readonly RecheckResult[]> {
   return request<readonly RecheckResult[]>({ method: "POST", path: "/accounts/recheck" })
+}
+
+/**
+ * What "Discover models" answers. `saved: false` is a success, the same way `tested: false` is:
+ * the upstream listed nothing, so nothing was written and the account still accepts any model
+ * name. A listing that could not be read is a failure and arrives as an error instead.
+ */
+export interface DiscoverModelsResult {
+  readonly accountId: string
+  readonly models: readonly string[]
+  readonly saved: boolean
+  /** Safe to render as-is — the server never sends raw upstream or credential text here. */
+  readonly message: string
+  readonly latencyMs: number
+}
+
+/** One GET at the provider's own listing. Costs no tokens, so it needs no confirmation. */
+export function discoverAccountModels(id: string): Promise<DiscoverModelsResult> {
+  return request<DiscoverModelsResult>({
+    method: "POST",
+    path: `/accounts/${id}/models/discover`,
+  })
 }
 
 export function testAccount(input: TestAccountInput): Promise<TestNowResult> {

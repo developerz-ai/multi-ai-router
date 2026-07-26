@@ -116,6 +116,24 @@ export interface DataPlaneConfig {
   readonly usageQueueMax: number
   readonly usageBatchSize: number
   readonly usageFlushIntervalMs: number
+  /**
+   * How long an observed quota reading may sit in this replica's memory before it is persisted.
+   *
+   * Not a poll: a reading only exists after a response reported one, and the writer flushes what
+   * arrived. The interval bounds how much of a running process's quota state a hard kill loses —
+   * and how stale the console's gauges are on the replica that did *not* serve the request.
+   */
+  readonly quotaWriteIntervalMs: number
+  /**
+   * How long a standing block the breaker just formed — `exhausted`, `needs_reauth` — may sit in
+   * this replica's memory before it is written through to `accounts.status`.
+   *
+   * Not a poll either, and shorter than the quota interval by default because what it bounds is
+   * different: a lost quota reading costs a stale gauge, a lost standing block costs the operator
+   * the banner telling them an account needs topping up. Routing is unaffected at any setting —
+   * the breaker holds the verdict either way.
+   */
+  readonly accountStatusWriteIntervalMs: number
 }
 
 /**
@@ -354,6 +372,8 @@ const envSchema = z
     USAGE_QUEUE_MAX: wholeNumber.optional(),
     USAGE_BATCH_SIZE: wholeNumber.optional(),
     USAGE_FLUSH_INTERVAL_MS: wholeNumber.optional(),
+    QUOTA_WRITE_INTERVAL_MS: atLeastOne.optional(),
+    ACCOUNT_STATUS_WRITE_INTERVAL_MS: atLeastOne.optional(),
     ROUTING_MAX_ATTEMPTS: wholeNumber.optional(),
     ROUTING_FAILURE_THRESHOLD: wholeNumber.optional(),
     ROUTING_BASE_BACKOFF_MS: wholeNumber.optional(),
@@ -446,6 +466,8 @@ const envSchema = z
         usageQueueMax: raw.USAGE_QUEUE_MAX ?? 10_000,
         usageBatchSize: raw.USAGE_BATCH_SIZE ?? 200,
         usageFlushIntervalMs: raw.USAGE_FLUSH_INTERVAL_MS ?? 1_000,
+        quotaWriteIntervalMs: raw.QUOTA_WRITE_INTERVAL_MS ?? 5_000,
+        accountStatusWriteIntervalMs: raw.ACCOUNT_STATUS_WRITE_INTERVAL_MS ?? 1_000,
       },
       failover: {
         maxAttempts: raw.ROUTING_MAX_ATTEMPTS ?? 3,

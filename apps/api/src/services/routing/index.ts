@@ -60,7 +60,7 @@ export {
   filterCandidates,
 } from "./filter"
 export { rendezvousRank, rendezvousScore, scoreWithSeed, sessionSeed } from "./hash"
-export { type ModelResolution, resolveModel } from "./model"
+export { advertisedModels, type ModelResolution, resolveModel } from "./model"
 export { type NoCandidatesInput, noCandidatesError } from "./no-candidates"
 export {
   leastUsed,
@@ -82,6 +82,7 @@ export {
   earliestReset,
   findSpentWindow,
   isWindowSpent,
+  mergeQuotaWindows,
 } from "./quota"
 export type {
   BindingDecision,
@@ -106,6 +107,7 @@ export type {
   Candidate,
   KeyScopeSnapshot,
   LeastUsedMeasure,
+  LimiterReading,
   PoolMembership,
   PoolSnapshot,
   RoutingSnapshot,

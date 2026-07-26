@@ -49,6 +49,7 @@ export function AccountFormDialog(props: AccountFormDialogProps) {
   const [credential, setCredential] = createSignal("")
   const [baseUrl, setBaseUrl] = createSignal("")
   const [dialect, setDialect] = createSignal("")
+  const [supportedModels, setSupportedModels] = createSignal("")
 
   const selected = createMemo(() => findProvider(props.providers, providerId()))
   /** An upstream that authenticates nobody: the key is an option, not a requirement. */
@@ -73,12 +74,15 @@ export function AccountFormDialog(props: AccountFormDialogProps) {
     const provider = selected()
     if (provider === undefined) return
 
+    const models = parseModelList(supportedModels())
+
     props.onSubmit({
       label: label().trim(),
       provider: provider.id as ProviderId,
       ...(credential().length > 0 ? { credential: credential() } : {}),
       ...(baseUrl().length > 0 ? { baseUrl: baseUrl() } : {}),
       ...(dialect().length > 0 ? { dialect: dialect() as Dialect } : {}),
+      ...(models.length > 0 ? { supportedModels: models } : {}),
     })
   }
 
@@ -195,6 +199,14 @@ export function AccountFormDialog(props: AccountFormDialogProps) {
           />
         </Show>
 
+        <TextField
+          hint="Optional, and comma-separated. Leave empty and this account accepts any model a client names — but it then contributes nothing to GET /v1/models, so a tool filling its picker from the router sees an empty list. Discover fills this in from the provider's own listing once the account exists."
+          label="Models it serves"
+          onInput={(event) => setSupportedModels(event.currentTarget.value)}
+          placeholder="glm-4.6, glm-4.7"
+          value={supportedModels()}
+        />
+
         <Show when={props.error !== undefined && props.error !== null}>
           <p class={styles.error} role="alert">
             {errorMessage(props.error)}
@@ -210,6 +222,18 @@ export function AccountFormDialog(props: AccountFormDialogProps) {
  * grows an OAuth flow becomes connectable the day its driver file lands, with nothing to change
  * in this file (CLAUDE.md non-negotiable 12).
  */
+/**
+ * A comma-separated list as the operator typed it. Deduplicated but **not sorted or renamed**:
+ * these are the upstream's own ids, and the router's job is to carry a name through unchanged.
+ */
+export function parseModelList(raw: string): readonly string[] {
+  const names = raw
+    .split(",")
+    .map((name) => name.trim())
+    .filter((name) => name.length > 0)
+  return [...new Set(names)]
+}
+
 function providerOptionLabel(provider: ProviderDescriptor): string {
   if (!provider.creatable) return `${provider.id} — not implemented`
   return provider.connectFlow === null ? provider.id : `${provider.id} — connect after adding`

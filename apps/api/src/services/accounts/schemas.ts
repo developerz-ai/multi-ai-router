@@ -21,7 +21,17 @@ const LABEL = z.string().trim().min(1).max(120)
 /** Bounded so an oversized body cannot become an oversized ciphertext. */
 const CREDENTIAL = z.string().min(1).max(8192)
 const BASE_URL = z.url().max(2048)
+const MODEL_NAME = z.string().trim().min(1).max(200)
 const MODEL_ALIASES = z.record(z.string().min(1).max(200), z.string().min(1).max(200))
+/**
+ * Upstream-side model ids. Bounded because this is a catalog, not a corpus — a provider listing
+ * runs to tens of entries and a body of ten thousand is a mistake or an attack, not a config.
+ *
+ * `[]` is accepted and means the same thing `null` does: unknown, therefore passthrough
+ * (`catalog/load.ts`). It is not rejected, because "I emptied the list" is a real edit and the
+ * operator should not have to know which of the two spellings clears it.
+ */
+const SUPPORTED_MODELS = z.array(MODEL_NAME).max(1000)
 /** Bias for `weighted`; zero would silently remove the account from that policy. */
 const WEIGHT = z.number().int().min(1).max(10_000)
 /** Strict order for `priority-failover`; lower is tried first. */
@@ -35,6 +45,7 @@ export const createAccountBody = z
     baseUrl: BASE_URL.optional(),
     dialect: Dialect.optional(),
     modelAliases: MODEL_ALIASES.optional(),
+    supportedModels: SUPPORTED_MODELS.optional(),
     weight: WEIGHT.optional(),
     priority: PRIORITY.optional(),
   })
@@ -54,6 +65,8 @@ export const updateAccountBody = z
     baseUrl: BASE_URL.nullable().optional(),
     dialect: Dialect.nullable().optional(),
     modelAliases: MODEL_ALIASES.nullable().optional(),
+    /** `null` (or `[]`) drops the declaration, which returns the account to passthrough. */
+    supportedModels: SUPPORTED_MODELS.nullable().optional(),
     weight: WEIGHT.optional(),
     priority: PRIORITY.optional(),
     /**

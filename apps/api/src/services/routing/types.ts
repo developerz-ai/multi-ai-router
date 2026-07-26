@@ -14,7 +14,26 @@ import type {
   QuotaWindowState,
   ResetSource,
   RoutingPolicy,
+  UtilizationSource,
 } from "@multi-ai-router/core"
+
+/**
+ * One limiter's headroom, under the provider's own name for it.
+ *
+ * Separate from {@link AccountSnapshot.quotaWindows} because the vocabularies are separate: an
+ * HTTP provider meters `requests` and `input-tokens`, which have no `QuotaWindowKind` equivalent,
+ * and minting one would record a fact the provider never stated. What these readings *can* answer
+ * is "how much headroom is left", every response, all window long — which is the one question
+ * `quota-aware` asks and the reason this is carried at all rather than dropped as unrenderable.
+ */
+export interface LimiterReading {
+  /** `requests`, `input-tokens`, `tokens` — the provider's word, kept verbatim. */
+  readonly limiter: string
+  /** Fraction consumed, 0..1. Absent when the provider reported no headroom. */
+  readonly utilization?: number
+  /** Ranking reads `continuous` only: an alarm that fires near the limit ranks nothing. */
+  readonly utilizationSource: UtilizationSource
+}
 
 /** In-memory health for one account. Kept warm by upstream responses, never queried per request. */
 export interface AccountHealth {
@@ -61,6 +80,12 @@ export interface AccountSnapshot {
   readonly modelAliases?: Readonly<Record<string, string>>
   /** Per-window quota state. Windows reset independently; the account is blocked by any spent one. */
   readonly quotaWindows?: readonly QuotaWindowState[]
+  /**
+   * What the last response's rate-limit headers said, under the limiter names the provider used.
+   * Never filters an account — a limiter that hit zero has already cooled the breaker down — and
+   * exists so `quota-aware` has a continuous reading to rank on. Absent means none was reported.
+   */
+  readonly limiterWindows?: readonly LimiterReading[]
   readonly health: AccountHealth
 }
 

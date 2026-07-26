@@ -10,6 +10,7 @@ import type { AccountView, ProviderDescriptor } from "../../lib/api/types"
 import { formatDate } from "../../lib/format"
 import type { UsageRowSummary } from "../../lib/usage-index"
 import { usageFor } from "../../lib/usage-index"
+import { AccountModels } from "./AccountModels"
 import { AccountRecheck } from "./AccountRecheck"
 import styles from "./AccountsTable.module.scss"
 import { AccountTestNow } from "./AccountTestNow"
@@ -21,6 +22,8 @@ export interface AccountsTableProps {
   readonly recheckingId: string | null
   /** The id currently being tested, if any. */
   readonly testingId: string | null
+  /** The id whose model catalog is currently being discovered, if any. */
+  readonly discoveringId: string | null
   /**
    * This account's provider as `GET /providers` describes it — which login it takes, and whether it
    * needs a credential at all. Asked of the descriptor so no provider fact is restated here.
@@ -33,6 +36,7 @@ export interface AccountsTableProps {
   readonly usageWindowLabel: string
   readonly onRecheck: (id: string) => void
   readonly onTest: (input: TestAccountInput) => void
+  readonly onDiscoverModels: (id: string) => void
   readonly onConnect: (account: AccountView) => void
   readonly onDisable: (account: AccountView) => void
   readonly onEnable: (account: AccountView) => void
@@ -124,6 +128,19 @@ export function AccountsTable(props: AccountsTableProps) {
       header: "Weight / priority",
       numeric: true,
       cell: (account) => `${account.weight} / ${account.priority}`,
+    },
+    {
+      id: "models",
+      header: "Models",
+      cell: (account) => (
+        <AccountModels
+          accountId={account.id}
+          busy={props.discoveringId === account.id}
+          models={account.supportedModels}
+          onDiscover={props.onDiscoverModels}
+          transport={props.providerFor(account)?.transport}
+        />
+      ),
     },
     {
       id: "recheck",

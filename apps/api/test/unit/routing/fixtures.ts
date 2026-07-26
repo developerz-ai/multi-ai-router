@@ -10,6 +10,7 @@ import type {
   AccountHealth,
   AccountSnapshot,
   Candidate,
+  LimiterReading,
   PoolSnapshot,
   RoutingSnapshot,
   ScopedAccount,
@@ -92,6 +93,18 @@ export function continuous(
 /** A threshold-triggered reading — an alarm, not a gauge. */
 export function alarm(utilization: number, kind: QuotaWindowKind = "five_hour"): QuotaWindowState {
   return window(kind, { utilization, utilizationSource: "threshold-triggered" })
+}
+
+/**
+ * An HTTP limiter's reading, under the provider's own name for it. Continuous by default, because
+ * these headers ride every response — which is what makes them the reading `quota-aware` ranks on.
+ */
+export function limiter(
+  utilization: number,
+  name = "requests",
+  overrides: Partial<LimiterReading> = {},
+): LimiterReading {
+  return { limiter: name, utilization, utilizationSource: "continuous", ...overrides }
 }
 
 export function scoped(

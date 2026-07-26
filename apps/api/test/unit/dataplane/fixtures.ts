@@ -94,12 +94,26 @@ export interface AccountOptions {
   readonly configDir?: string
 }
 
+/**
+ * `modelAliases` lands on **both** halves, because that is what production does: `catalog/load.ts`
+ * copies the one `model_aliases` column onto the driver (which renames the outbound model) and onto
+ * the routing snapshot (which decides whether the account supports it, and what `/v1/models`
+ * advertises). A fixture that set only the driver made the two disagree in a way no deployment can,
+ * and quietly hid every bug that disagreement causes. An explicit `snapshot.modelAliases` still
+ * wins — a test asserting the disagreement itself has to be able to write it down.
+ */
 export function account(id: string, options: AccountOptions = {}): RoutableAccount {
   const provider = options.provider ?? "anthropic-api"
   const cryptor = options.cipher ?? cipher()
   return {
     id,
-    snapshot: routingView({ id, label: id, provider }, options.snapshot),
+    snapshot: routingView(
+      { id, label: id, provider },
+      {
+        ...(options.modelAliases === undefined ? {} : { modelAliases: options.modelAliases }),
+        ...options.snapshot,
+      },
+    ),
     driver: {
       id,
       provider,

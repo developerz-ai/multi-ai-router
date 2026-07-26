@@ -1,7 +1,12 @@
 import type { AccountStatus, Dialect, ProviderId, QuotaWindowState } from "@multi-ai-router/core"
 import { and, asc, eq, inArray } from "drizzle-orm"
 import type { Database } from "../client"
-import { type AccountRow, accounts, type ModelAliasMap } from "../schema/accounts"
+import {
+  type AccountRow,
+  accounts,
+  type ModelAliasMap,
+  type SupportedModelList,
+} from "../schema/accounts"
 import { type QuotaWindowRow, quotaWindows } from "../schema/quota-windows"
 
 /**
@@ -50,6 +55,26 @@ export interface AccountRepository {
   delete(id: string): Promise<boolean>
   /** `undefined` when no account has that id. */
   updateStatus(id: string, status: AccountStatus, now: Date): Promise<AccountRow | undefined>
+  /**
+   * Conditional status write: applies `to` only where the row currently holds
+   * one of `from`.
+   *
+   * The router's own verdicts about an upstream — `exhausted`, `needs_reauth` —
+   * are written to the same column an operator sets by hand, so an
+   * unconditional write from a background observer would overwrite `disabled`,
+   * which is the operator's word and never an observation. The guard is in the
+   * statement rather than in a read-then-write because several replicas observe
+   * the same account concurrently and a check in TypeScript would be a race.
+   *
+   * `undefined` means nothing changed: no account has that id, the row holds a
+   * status outside `from`, or `from` is empty.
+   */
+  updateStatusWhen(
+    id: string,
+    from: readonly AccountStatus[],
+    to: AccountStatus,
+    now: Date,
+  ): Promise<AccountRow | undefined>
   /**
    * The soft delete. Rows are never removed: usage history, audit events, and
    * pool membership all reference the account, and a disabled account that is
@@ -103,6 +128,8 @@ export interface CreateAccountInput {
   /** Which surface this account uses, where the provider exposes more than one. */
   readonly dialect?: Dialect | null
   readonly modelAliases?: ModelAliasMap | null
+  /** Upstream-side model ids. Null or empty means unknown, which routing reads as passthrough. */
+  readonly supportedModels?: SupportedModelList | null
   readonly weight?: number
   readonly priority?: number
   /** Defaults to `active` in the schema; set explicitly for a pending OAuth row. */
@@ -123,6 +150,7 @@ export interface UpdateAccountInput {
   readonly baseUrl?: string | null
   readonly dialect?: Dialect | null
   readonly modelAliases?: ModelAliasMap | null
+  readonly supportedModels?: SupportedModelList | null
   readonly weight?: number
   readonly priority?: number
   readonly status?: AccountStatus
@@ -164,6 +192,7 @@ export function createAccountRepository(db: Database): AccountRepository {
           baseUrl: input.baseUrl ?? null,
           dialect: input.dialect ?? null,
           modelAliases: input.modelAliases ?? null,
+          supportedModels: input.supportedModels ?? null,
           ...(input.weight === undefined ? {} : { weight: input.weight }),
           ...(input.priority === undefined ? {} : { priority: input.priority }),
         })
@@ -214,6 +243,9 @@ export function createAccountRepository(db: Database): AccountRepository {
           ...(patch.baseUrl === undefined ? {} : { baseUrl: patch.baseUrl }),
           ...(patch.dialect === undefined ? {} : { dialect: patch.dialect }),
           ...(patch.modelAliases === undefined ? {} : { modelAliases: patch.modelAliases }),
+          ...(patch.supportedModels === undefined
+            ? {}
+            : { supportedModels: patch.supportedModels }),
           ...(patch.weight === undefined ? {} : { weight: patch.weight }),
           ...(patch.priority === undefined ? {} : { priority: patch.priority }),
           ...(patch.status === undefined ? {} : { status: patch.status }),
@@ -232,6 +264,19 @@ export function createAccountRepository(db: Database): AccountRepository {
     },
 
     updateStatus: setStatus,
+
+    updateStatusWhen: async (id, from, to, now) => {
+      // An empty guard admits nothing, and `in ()` is not a predicate postgres
+      // accepts — returning early keeps "nothing may be overwritten" from
+      // rendering as a statement that means something else.
+      if (from.length === 0) return undefined
+      const rows = await db
+        .update(accounts)
+        .set({ status: to, updatedAt: now })
+        .where(and(eq(accounts.id, id), inArray(accounts.status, [...from])))
+        .returning()
+      return rows[0]
+    },
 
     disable: (id, now) => setStatus(id, "disabled", now),
 

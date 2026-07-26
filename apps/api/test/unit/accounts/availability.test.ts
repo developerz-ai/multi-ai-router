@@ -154,6 +154,44 @@ describe("the quota windows on an account read", () => {
     expect(availability?.quotaWindows[0]?.resetSource).toBe("provider-reported")
   })
 
+  test("shows the reading this process observed, ahead of the row it was hydrated from", async () => {
+    // The console is a read of the same snapshot the router routes on. A reading that arrived a
+    // second ago has not been persisted yet, and a gauge that waits for the flush is a gauge that
+    // tells an operator an account is fine while the router is already filtering it out.
+    const health = createHealthStore()
+    health.applyRateLimit(
+      ACCOUNT_ID,
+      {
+        limited: false,
+        resetSource: "provider-reported",
+        windows: [],
+        quotaWindows: [{ ...FIVE_HOUR, utilization: 1 }],
+      },
+      NOW,
+    )
+
+    const service = withAvailability(serviceOf([view()]), {
+      catalog: catalogOf([routable([FIVE_HOUR])]),
+      health,
+      recheck: { lastCheckedAt: () => undefined },
+      now: () => NOW,
+    })
+    const result = await service.list({})
+    if (!result.ok) throw new Error("the read path must not fail here")
+
+    expect(result.value[0]?.availability?.quotaWindows).toEqual([
+      {
+        window: "five_hour",
+        utilization: 1,
+        utilizationSource: "continuous",
+        resetsAt: LATER.toISOString(),
+        resetSource: "provider-reported",
+        lastCheckedAt: NOW.toISOString(),
+        spent: true,
+      },
+    ])
+  })
+
   test("reports `unknown` as the source when no instant was reported", async () => {
     const availability = await firstAvailability([
       routable([{ ...FIVE_HOUR, resetsAt: undefined, resetSource: "unknown" }]),

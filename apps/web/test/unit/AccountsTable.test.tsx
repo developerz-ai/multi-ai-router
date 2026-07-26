@@ -29,6 +29,7 @@ function account(overrides: Partial<AccountView>): AccountView {
     baseUrl: null,
     dialect: "anthropic",
     modelAliases: null,
+    supportedModels: null,
     weight: 1,
     priority: 0,
     tokenExpiresAt: null,
@@ -62,13 +63,17 @@ function withMount(
         <AccountsTable
           accounts={accounts}
           nowMs={Date.parse("2026-07-26T00:00:00.000Z")}
+          discoveringId={null}
           onConnect={() => {}}
           onDelete={() => {}}
           onDisable={() => {}}
+          onDiscoverModels={() => {}}
           onEnable={() => {}}
           onRecheck={() => {}}
+          onTest={() => {}}
           providerFor={() => PROVIDER}
           recheckingId={null}
+          testingId={null}
           usage={new Map()}
           usageBucket="day"
           usageLoading={false}

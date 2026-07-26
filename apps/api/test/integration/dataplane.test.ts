@@ -1269,7 +1269,10 @@ describe("GET /v1/models", () => {
       apiKey: "sk-one",
       cipher: CRYPTOR,
       modelAliases: { sonnet: "glm-4.7" },
-      snapshot: { supportedModels: ["claude-opus-5"] },
+      // `glm-4.7` is declared as well as aliased to: an account that renames `sonnet` onto a model
+      // it does not serve cannot advertise `sonnet`, because a request for it would be filtered
+      // out as `model-unsupported` (`services/routing/model.ts`).
+      snapshot: { supportedModels: ["claude-opus-5", "glm-4.7"] },
     }),
     account("acct-2", {
       apiKey: "sk-two",
@@ -1285,8 +1288,59 @@ describe("GET /v1/models", () => {
     const body = (await res.json()) as { object: string; data: { id: string }[] }
 
     expect(body.object).toBe("list")
-    // `sonnet`, not `glm-4.7`: the alias is outbound-only.
-    expect(body.data.map((model) => model.id)).toEqual(["claude-opus-5", "gpt-5", "sonnet"])
+    // `sonnet` *and* `glm-4.7`: the alias is outbound-only, so both names reach the same model.
+    expect(body.data.map((model) => model.id)).toEqual([
+      "claude-opus-5",
+      "glm-4.7",
+      "gpt-5",
+      "sonnet",
+    ])
+  })
+
+  test("a declared model set is listed with no alias map at all", () => {
+    // The shipped default before the `supported_models` column existed: no aliases anywhere, and
+    // therefore an empty catalog on every deployment. `data: []` is what a client's model picker
+    // showed, and it is what this asserts can no longer happen.
+    const { app } = harness({
+      accounts: [
+        account("plain", {
+          apiKey: "sk-plain",
+          cipher: CRYPTOR,
+          snapshot: { supportedModels: ["claude-opus-5"] },
+        }),
+      ],
+      responses: [() => jsonResponse(200, {})],
+    })
+
+    return app
+      .request("/v1/models", { headers: bearer() })
+      .then((res) => res.json() as Promise<{ data: { id: string }[] }>)
+      .then((body) => {
+        expect(body.data.map((model) => model.id)).toEqual(["claude-opus-5"])
+      })
+  })
+
+  test("an alias onto a model the account does not serve is never advertised", async () => {
+    // The listing and the router are one rule: a name here must be a name a request for it is
+    // actually served by, or the catalog is promising a 503 nobody could have anticipated.
+    const { app } = harness({
+      accounts: [
+        account("stale", {
+          apiKey: "sk-stale",
+          cipher: CRYPTOR,
+          modelAliases: { sonnet: "glm-4.7" },
+          snapshot: { supportedModels: ["glm-4.6"] },
+        }),
+      ],
+      responses: [() => jsonResponse(200, {})],
+    })
+
+    const listed = await app.request("/v1/models", { headers: bearer() })
+    const body = (await listed.json()) as { data: { id: string }[] }
+    expect(body.data.map((model) => model.id)).toEqual(["glm-4.6"])
+
+    // And the probe agrees, which is the property the listing exists to keep.
+    expect((await app.request("/v1/models/sonnet", { headers: bearer() })).status).toBe(404)
   })
 
   test("answers an x-api-key client in the Anthropic shape", async () => {

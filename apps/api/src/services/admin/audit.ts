@@ -71,6 +71,13 @@ export const AUDIT_KINDS = {
    * of confirmation — writes nothing, same as a refused re-check.
    */
   accountTested: "account.tested",
+  /**
+   * An operator asked an account's upstream what models it serves. Separate from `account.updated`
+   * — which the resulting write records on its own — because the question is worth its own row:
+   * "when did this router last believe that catalog" is a different question from "who edited the
+   * field", and only one of them is answerable by a timer-free deployment.
+   */
+  accountModelsDiscovered: "account.models_discovered",
   keyCreated: "key.created",
   keyUpdated: "key.updated",
   keyRevealed: "key.revealed",

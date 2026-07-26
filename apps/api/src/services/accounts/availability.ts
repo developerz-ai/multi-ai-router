@@ -15,10 +15,12 @@ import type { AccountView } from "./view"
 /**
  * Overlays what the router currently observes onto what the operator configured.
  *
- * The stored `status` is a setting — `active` or `disabled`, the only two a human sets. Whether
- * an account is *available right now* is a different fact, held in the in-memory health store,
- * and it is the one an operator actually needs on the accounts screen: "why is nothing routing"
- * is never answered by re-reading the row they wrote.
+ * The stored `status` is mostly a setting — `active` and `disabled` are the two a human sets, plus
+ * whatever standing block the router last wrote through so it would survive a restart. Whether an
+ * account is *available right now* is a different fact, held in the in-memory health store, and it
+ * is the one an operator actually needs on the accounts screen: "why is nothing routing" is never
+ * answered by re-reading the row, whoever wrote it. The live breaker wins wherever it has something
+ * to say, which is why a cooldown formed a second ago shows even though nothing persisted it.
  *
  * A **decorator**, like `services/admin/coherence.ts`, and for the same reason: the CRUD service
  * has no business knowing a health store exists, and it stays testable without one. It is applied
@@ -56,7 +58,15 @@ export interface QuotaWindowView {
 }
 
 export interface AccountAvailability {
-  /** What the operator set. `active` or `disabled`, and nothing else. */
+  /**
+   * The status as stored, before this process's own health was overlaid.
+   *
+   * Usually what the operator set — `active` or `disabled` — but not only: a standing block the
+   * router formed is written through to the same column so it survives a restart
+   * (`services/dataplane/status-writer.ts`), so a freshly booted replica reads `exhausted` or
+   * `needs_reauth` here with nothing yet in memory to overlay. Both are true statements about the
+   * account; neither is a countdown, which is what the field beside it is for.
+   */
   readonly configuredStatus: AccountStatus
   /** When this reset is expected. Null when there is none, or none is known. */
   readonly resetsAt: string | null

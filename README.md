@@ -219,6 +219,8 @@ export OPENAI_API_KEY="mar_live_…"
 
 Send whatever model name you normally send. It passes through unchanged unless the selected account defines an alias map. Details in [`docs/idea/06-protocol-translation.md`](docs/idea/06-protocol-translation.md).
 
+**If your tool fills a model picker from `GET /v1/models`, tell each account what it serves.** An account that declares nothing accepts any model name you send — that is the default and it is not broken — but the router will not enumerate a catalog it was never given, so the listing comes back empty. Press **Discover** on the account's row and the router reads the provider's own `/v1/models` and fills it in; the field is editable by hand too. Nothing refreshes it on a timer, so a provider retiring a model never silently moves your traffic.
+
 **Cross-dialect translation is live** — an Anthropic-dialect client can reach an OpenAI-dialect account and back, including streaming and tool calls. The one exception is a request shape that cannot be translated faithfully (a lossy edge documented in [`docs/idea/06-protocol-translation.md`](docs/idea/06-protocol-translation.md)): that fails with a `400` naming the reason rather than being converted approximately.
 
 ---
