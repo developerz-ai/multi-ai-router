@@ -14,6 +14,7 @@ import type {
 } from "../../src/providers/claude-sdk/login"
 import { ADMIN_ACCOUNTS_BASE_PATH, adminAccountRoutes } from "../../src/routes/admin/accounts"
 import { ADMIN_KEYS_BASE_PATH, adminKeyRoutes } from "../../src/routes/admin/keys"
+import { oauthCallbackRoutes } from "../../src/routes/admin/oauth-callback"
 import { ADMIN_POOLS_BASE_PATH, adminPoolRoutes } from "../../src/routes/admin/pools"
 import { ADMIN_PROVIDERS_BASE_PATH, adminProviderRoutes } from "../../src/routes/admin/providers"
 import {
@@ -22,6 +23,7 @@ import {
   createConnectService,
   createOAuthConnectService,
   createRecheckService,
+  OAUTH_CALLBACK_PATH,
 } from "../../src/services/accounts"
 import { createAuditRecorder } from "../../src/services/admin"
 import { createAdminAuthService } from "../../src/services/admin-auth/service"
@@ -53,6 +55,8 @@ interface HarnessOptions {
   /** Mutable, so a test can move the clock forward to expire a pending login. */
   readonly clock?: { now: Date }
   readonly pendingLoginMinutes?: number
+  /** The OAuth token-endpoint stand-in the callback route's exchange calls. */
+  readonly oauthFetch?: typeof fetch
 }
 
 function harness(
@@ -77,6 +81,38 @@ function harness(
   app.onError(errorHandler(logger))
   app.notFound(notFoundHandler())
 
+  const connect = createConnectService({
+    accounts: store.accounts,
+    claude: createClaudeConnectService({
+      accounts: store.accounts,
+      configDirs: configDirs.dirs,
+      login,
+      credentials: options.credentials ?? fakeCredentials(),
+      audit,
+      pendingLoginMinutes: options.pendingLoginMinutes ?? 10,
+      logger,
+      now,
+    }),
+    oauth: createOAuthConnectService({
+      accounts: store.accounts,
+      states: store.oauthStates,
+      cipher,
+      audit,
+      stateMinutes: options.pendingLoginMinutes ?? 10,
+      callbackUrl: null,
+      // No test reaches a provider unless it opts in via `oauthFetch` — an unexpected call is a
+      // failure, not a silent 404.
+      fetch: options.oauthFetch ?? (() => Promise.reject(new Error("no upstream in this harness"))),
+      exchangeTimeoutMs: 1_000,
+      now,
+    }),
+  })
+
+  // Mounted at the root, unguarded, exactly as `app.ts` does — the redirect is a cross-site
+  // top-level navigation, so the admin session cookie is never sent with it and a guard here
+  // would refuse every real callback (`routes/admin/oauth-callback.ts`).
+  app.route("/", oauthCallbackRoutes({ connect }))
+
   app.route(
     ADMIN_ACCOUNTS_BASE_PATH,
     adminAccountRoutes({
@@ -91,31 +127,7 @@ function harness(
       }),
       // The dispatching service `app.ts` mounts, not one backend of it: which login an account
       // takes is decided from the provider registry, and that decision is part of the surface.
-      connect: createConnectService({
-        accounts: store.accounts,
-        claude: createClaudeConnectService({
-          accounts: store.accounts,
-          configDirs: configDirs.dirs,
-          login,
-          credentials: options.credentials ?? fakeCredentials(),
-          audit,
-          pendingLoginMinutes: options.pendingLoginMinutes ?? 10,
-          logger,
-          now,
-        }),
-        oauth: createOAuthConnectService({
-          accounts: store.accounts,
-          states: store.oauthStates,
-          cipher,
-          audit,
-          stateMinutes: options.pendingLoginMinutes ?? 10,
-          callbackUrl: null,
-          // No test reaches a provider: an unexpected call is a failure, not a silent 404.
-          fetch: () => Promise.reject(new Error("no upstream in this harness")),
-          exchangeTimeoutMs: 1_000,
-          now,
-        }),
-      }),
+      connect,
       recheck: createRecheckService({
         accounts: store.accounts,
         health: createHealthStore(),
@@ -154,7 +166,7 @@ function harness(
   )
   app.route(ADMIN_PROVIDERS_BASE_PATH, adminProviderRoutes({ guard }))
 
-  return { app, store, configDirs, clock, login, logLines }
+  return { app, store, configDirs, clock, login, logLines, connect }
 }
 
 /**
@@ -465,6 +477,131 @@ describe("keys", () => {
       expect((await call(app, "POST", ADMIN_KEYS_BASE_PATH, body)).status).toBe(400)
     }
     expect(store.rows.keys).toHaveLength(0)
+  })
+})
+
+describe("the OAuth callback route", () => {
+  function tokenResponse(body: unknown, status = 200): Response {
+    return new Response(JSON.stringify(body), {
+      status,
+      headers: { "content-type": "application/json" },
+    })
+  }
+
+  /** Always answers the token exchange the same way, whatever provider or account calls it. */
+  function fakeOAuthFetch(
+    response: Response = tokenResponse({ access_token: "at-1", expires_in: 3600 }),
+  ) {
+    return (async () => response) as typeof fetch
+  }
+
+  async function newOAuthAccount(app: App) {
+    const created = await call(app, "POST", ADMIN_ACCOUNTS_BASE_PATH, {
+      label: "openai-1",
+      provider: "openai-oauth",
+    })
+    expect(created.status).toBe(201)
+    return created.body as { id: string }
+  }
+
+  async function begin(app: App, id: string): Promise<string> {
+    const started = await call(app, "POST", `${ADMIN_ACCOUNTS_BASE_PATH}/${id}/connect`)
+    expect(started.status).toBe(200)
+    const state = new URL((started.body as { authorizeUrl: string }).authorizeUrl).searchParams.get(
+      "state",
+    )
+    if (state === null) throw new Error("fake authorize URL carried no state")
+    return state
+  }
+
+  /** The route answers HTML, not JSON — `call()` can't parse it, so this reads the raw response. */
+  async function callback(app: App, query: Record<string, string>) {
+    const res = await app.request(`${OAUTH_CALLBACK_PATH}?${new URLSearchParams(query)}`)
+    return { status: res.status, text: await res.text() }
+  }
+
+  test("a real callback carries no admin session cookie, and is answered anyway", async () => {
+    // The real guard, unlike the other describe blocks' `stubSession()` — proves the callback
+    // route is reachable with zero cookies because it is mounted outside the guarded group
+    // entirely, not merely because this harness forgot to send one. Setup goes through the
+    // service directly rather than the guarded HTTP routes, since a real login flow (session +
+    // CSRF) is a different surface this file already covers in `admin-auth.test.ts`.
+    const service = createAdminAuthService({
+      env: {
+        adminUsername: "admin",
+        adminCredential: { kind: "hash", value: await Bun.password.hash("hunter2") },
+        encryptionKey: ENCRYPTION_KEY,
+      },
+    })
+    const { app, store, connect } = harness(adminAuth(service, false), {
+      oauthFetch: fakeOAuthFetch(),
+    })
+    const created = await store.accounts.create({ label: "openai-1", provider: "openai-oauth" })
+    const started = await connect.begin(created.id, "connect")
+    if (!started.ok) throw new Error(started.failure.message)
+    const state = new URL(started.value.authorizeUrl).searchParams.get("state")
+    if (state === null) throw new Error("fake authorize URL carried no state")
+
+    // No Cookie header at all — `app.request` never sends one unless told to.
+    const result = await callback(app, { code: "a-real-looking-code", state })
+
+    expect(result.status).toBe(200)
+    expect(result.text).toContain("Connected")
+  })
+
+  test("state is one-shot: a second redeem of the same state is rejected", async () => {
+    const { app } = harness(stubSession(), { oauthFetch: fakeOAuthFetch() })
+    const account = await newOAuthAccount(app)
+    const state = await begin(app, account.id)
+
+    const first = await callback(app, { code: "code-1", state })
+    expect(first.status).toBe(200)
+    expect(first.text).toContain("Connected")
+
+    const replay = await callback(app, { code: "code-2", state })
+    expect(replay.status).toBe(400)
+    expect(replay.text).toContain("Not connected")
+    expect(replay.text).not.toContain("code-2")
+  })
+
+  test("an expired state is rejected, the same way a reused one is", async () => {
+    const clock = { now: NOW }
+    const { app } = harness(stubSession(), {
+      clock,
+      pendingLoginMinutes: 10,
+      oauthFetch: fakeOAuthFetch(),
+    })
+    const account = await newOAuthAccount(app)
+    const state = await begin(app, account.id)
+
+    clock.now = new Date(NOW.getTime() + 11 * 60_000)
+    const result = await callback(app, { code: "code-1", state })
+
+    expect(result.status).toBe(400)
+    expect(result.text).toContain("Not connected")
+  })
+
+  test("an unknown state is rejected the same way, and never reaches the token endpoint", async () => {
+    const oauthFetch = fakeOAuthFetch()
+    const { app } = harness(stubSession(), { oauthFetch })
+
+    const result = await callback(app, { code: "code-1", state: "never-issued" })
+
+    expect(result.status).toBe(400)
+    expect(result.text).toContain("Not connected")
+  })
+
+  test("a redirect carrying an authorization error still burns the state", async () => {
+    const { app } = harness(stubSession())
+    const account = await newOAuthAccount(app)
+    const state = await begin(app, account.id)
+
+    const refused = await callback(app, { error: "access_denied", state })
+    expect(refused.status).toBe(400)
+    expect(refused.text).toContain("Not connected")
+
+    const replay = await callback(app, { code: "code", state })
+    expect(replay.status).toBe(400)
   })
 })
 
