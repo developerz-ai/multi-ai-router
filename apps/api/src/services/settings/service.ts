@@ -53,7 +53,7 @@ export interface SettingsServiceDeps {
   readonly auditEvents: Pick<AuditRepository, "list" | "listForSubject">
   readonly audit: AuditRecorder
   /** A full `Env` satisfies this, so the composition root passes `env` straight through. */
-  readonly env: Pick<Env, "retention" | "logLevel" | "janitorIntervalMinutes">
+  readonly env: Pick<Env, "retention" | "logLevel" | "janitorIntervalMinutes" | "publicUrl">
   /**
    * Each task's cadence in milliseconds — `scheduledTaskIntervals(env)`, the same function
    * `createScheduledTasks` builds the running tasks from. Injected rather than re-derived from
@@ -76,6 +76,7 @@ export function createSettingsService(deps: SettingsServiceDeps): SettingsServic
     retention: deps.env.retention,
     logLevel: deps.env.logLevel,
     janitorIntervalMinutes: deps.env.janitorIntervalMinutes,
+    publicUrl: deps.env.publicUrl,
     prices: {
       shipped: listShippedRates().map(toPriceRateView),
       overrides: overrides.map(toPriceOverrideView),

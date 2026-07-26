@@ -67,6 +67,8 @@ export interface SettingsView {
   readonly logLevel: string
   readonly janitorIntervalMinutes: number
   readonly prices: PriceTable
+  /** The configured `PUBLIC_URL`, or null. The onboarding panel's base URL falls back to this tab's own origin when null. */
+  readonly publicUrl: string | null
 }
 
 /**

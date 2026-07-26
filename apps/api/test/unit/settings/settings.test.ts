@@ -50,6 +50,24 @@ describe("the settings read", () => {
     expect(result.value.janitorIntervalMinutes).toBe(42)
   })
 
+  test("reports null for publicUrl when PUBLIC_URL is not configured", async () => {
+    const { service } = harness()
+    const result = await service.read()
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.value.publicUrl).toBeNull()
+  })
+
+  test("reports the configured PUBLIC_URL, for the console's onboarding panel to hand out", async () => {
+    const { service } = harness({ publicUrl: "https://router.example.com" })
+    const result = await service.read()
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.value.publicUrl).toBe("https://router.example.com")
+  })
+
   test("renders the shipped price table with exactly the six rate fields", async () => {
     const { service } = harness()
     const result = await service.read()

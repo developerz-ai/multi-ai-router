@@ -15,9 +15,12 @@ import { usageWindowLabel } from "../lib/api/usage"
 import { formatCost, formatCount, formatPercent } from "../lib/format"
 import { useAllAccounts, useRecheckAllAccounts } from "../lib/queries/accounts"
 import { usePools } from "../lib/queries/pools"
+import { useProviders } from "../lib/queries/providers"
 import { useKeys } from "../lib/queries/router-keys"
+import { useSettings } from "../lib/queries/settings"
 import { useUsageSummary } from "../lib/queries/usage"
 import styles from "./OverviewRoute.module.scss"
+import { OnboardingPanel } from "./overview/OnboardingPanel"
 
 interface StatusCount {
   readonly status: AccountStatus
@@ -35,15 +38,36 @@ interface StatusCount {
  * `needs_reauth` shares the banner for the same reason — it is the other status
  * no amount of waiting fixes. They are still named separately inside it, because
  * one needs money and the other needs a re-login.
+ *
+ * Before any of that, this is also the screen a brand new deployment lands on with nothing in it
+ * — `OnboardingPanel` owns that walk end to end and decides its own visibility from the same
+ * three queries this route already holds. The banner, tiles and status table are hidden while
+ * there are zero accounts: a table of every status reading zero is noise under a "let's get you
+ * set up" panel, not information.
  */
 export default function OverviewRoute() {
   const accounts = useAllAccounts()
   const pools = usePools()
   const keys = useKeys()
+  const providers = useProviders()
+  const settings = useSettings()
   const usage = useUsageSummary(() => "today")
   const recheckAll = useRecheckAllAccounts()
 
   const list = () => (accounts.isSuccess ? (accounts.data ?? []) : [])
+  const poolList = () => (pools.isSuccess ? (pools.data ?? []) : [])
+  const keyList = () => (keys.isSuccess ? (keys.data ?? []) : [])
+  const providerList = () => (providers.isSuccess ? (providers.data ?? []) : [])
+
+  // One loading concept for both the onboarding panel and the fleet dashboard below it: gating
+  // each on its own query would let the dashboard hide (accounts resolved, zero of them) while
+  // the panel has not decided yet (pools/keys still in flight), leaving a blank gap between them.
+  const loaded = createMemo(() => accounts.isSuccess && pools.isSuccess && keys.isSuccess)
+  // The literal zero state this screen exists to catch — a fresh deployment with nothing in it
+  // yet, where a table of every-status-zero and an all-zero tile row would be noise beneath the
+  // guided panel rather than information.
+  const zeroAccounts = createMemo(() => loaded() && list().length === 0)
+
   const exhausted = createMemo(() => list().filter((account) => account.status === "exhausted"))
   const needsReauth = createMemo(() =>
     list().filter((account) => account.status === "needs_reauth"),
@@ -79,76 +103,88 @@ export default function OverviewRoute() {
         title="Overview"
       />
 
-      <Show when={exhausted().length > 0 || needsReauth().length > 0}>
-        <Banner
-          action={
-            <A class={styles.bannerLink} href="/accounts">
-              Open accounts
-            </A>
-          }
-          title={bannerTitle(exhausted().length, needsReauth().length)}
-          tone="danger"
-        >
-          <Show when={exhausted().length > 0}>
-            <p>Out of credits, no reset to wait for — needs top-up: {names(exhausted())}</p>
-          </Show>
-          <Show when={needsReauth().length > 0}>
-            <p>Credentials can no longer be renewed — reconnect: {names(needsReauth())}</p>
-          </Show>
-        </Banner>
+      <Show when={loaded()}>
+        <OnboardingPanel
+          accounts={list()}
+          keys={keyList()}
+          pools={poolList()}
+          providers={providerList()}
+          publicUrl={settings.data?.publicUrl ?? null}
+        />
       </Show>
 
-      <section aria-label="Headline figures" class={styles.tiles}>
-        <StatTile
-          label="Accounts"
-          note={`${list().filter((account) => isRoutable(account.status)).length} routable now`}
-          value={accounts.isSuccess ? String(list().length) : undefined}
-        />
-        <StatTile
-          label="Pools"
-          note="Each one addressable by a key"
-          value={pools.isSuccess ? String((pools.data ?? []).length) : undefined}
-        />
-        <StatTile
-          label="Router keys"
-          note={`${keys.isSuccess ? (keys.data ?? []).filter((key) => !key.revoked).length : 0} active`}
-          value={keys.isSuccess ? String((keys.data ?? []).length) : undefined}
-        />
-        <StatTile
-          label="Requests today"
-          note={usageWindowLabel("today").toLowerCase()}
-          value={usage.isSuccess ? formatCount(usage.data?.totals.requests ?? 0) : undefined}
-        />
-        <StatTile
-          label="Metered spend"
-          note="Notional shown apart"
-          value={usage.isSuccess ? formatCost(usage.data?.totals.costMetered ?? 0) : undefined}
-        />
-        <StatTile
-          label="Error rate"
-          note={usageWindowLabel("today").toLowerCase()}
-          value={
-            usage.isSuccess
-              ? formatPercent(usage.data?.totals.errors ?? 0, usage.data?.totals.attempts ?? 0)
-              : undefined
-          }
-        />
-      </section>
+      <Show when={!zeroAccounts()}>
+        <Show when={exhausted().length > 0 || needsReauth().length > 0}>
+          <Banner
+            action={
+              <A class={styles.bannerLink} href="/accounts">
+                Open accounts
+              </A>
+            }
+            title={bannerTitle(exhausted().length, needsReauth().length)}
+            tone="danger"
+          >
+            <Show when={exhausted().length > 0}>
+              <p>Out of credits, no reset to wait for — needs top-up: {names(exhausted())}</p>
+            </Show>
+            <Show when={needsReauth().length > 0}>
+              <p>Credentials can no longer be renewed — reconnect: {names(needsReauth())}</p>
+            </Show>
+          </Banner>
+        </Show>
 
-      <QueryBoundary
-        errorTitle="Fleet status could not be loaded"
-        loading={<TableSkeleton label="Loading fleet status" rows={5} />}
-        query={accounts}
-      >
-        {() => (
-          <Table
-            caption="Accounts by status. cooling_down and exhausted are counted separately — one is a clock, the other is a purchase."
-            columns={columns}
-            rowId={(row) => row.status}
-            rows={counts()}
+        <section aria-label="Headline figures" class={styles.tiles}>
+          <StatTile
+            label="Accounts"
+            note={`${list().filter((account) => isRoutable(account.status)).length} routable now`}
+            value={accounts.isSuccess ? String(list().length) : undefined}
           />
-        )}
-      </QueryBoundary>
+          <StatTile
+            label="Pools"
+            note="Each one addressable by a key"
+            value={pools.isSuccess ? String((pools.data ?? []).length) : undefined}
+          />
+          <StatTile
+            label="Router keys"
+            note={`${keys.isSuccess ? (keys.data ?? []).filter((key) => !key.revoked).length : 0} active`}
+            value={keys.isSuccess ? String((keys.data ?? []).length) : undefined}
+          />
+          <StatTile
+            label="Requests today"
+            note={usageWindowLabel("today").toLowerCase()}
+            value={usage.isSuccess ? formatCount(usage.data?.totals.requests ?? 0) : undefined}
+          />
+          <StatTile
+            label="Metered spend"
+            note="Notional shown apart"
+            value={usage.isSuccess ? formatCost(usage.data?.totals.costMetered ?? 0) : undefined}
+          />
+          <StatTile
+            label="Error rate"
+            note={usageWindowLabel("today").toLowerCase()}
+            value={
+              usage.isSuccess
+                ? formatPercent(usage.data?.totals.errors ?? 0, usage.data?.totals.attempts ?? 0)
+                : undefined
+            }
+          />
+        </section>
+
+        <QueryBoundary
+          errorTitle="Fleet status could not be loaded"
+          loading={<TableSkeleton label="Loading fleet status" rows={5} />}
+          query={accounts}
+        >
+          {() => (
+            <Table
+              caption="Accounts by status. cooling_down and exhausted are counted separately — one is a clock, the other is a purchase."
+              columns={columns}
+              rowId={(row) => row.status}
+              rows={counts()}
+            />
+          )}
+        </QueryBoundary>
+      </Show>
     </>
   )
 }

@@ -153,6 +153,8 @@ export interface HarnessOptions {
   readonly onPricesChanged?: () => Promise<void>
   readonly onAudit?: () => void
   readonly now?: Date
+  /** Defaults to null — most fixtures exercise the no-`PUBLIC_URL` deployment. */
+  readonly publicUrl?: string | null
 }
 
 export interface Harness {
@@ -169,7 +171,12 @@ export function harness(options: HarnessOptions = {}): Harness {
     scheduledTasks: memoryTasks(options.runs),
     auditEvents: memoryAuditLog(options.auditLog ?? []),
     audit,
-    env: { retention: RETENTION, logLevel: "warn", janitorIntervalMinutes: 42 },
+    env: {
+      retention: RETENTION,
+      logLevel: "warn",
+      janitorIntervalMinutes: 42,
+      publicUrl: options.publicUrl ?? null,
+    },
     intervals: INTERVALS,
     now: () => options.now ?? NOW,
     ...(options.onPricesChanged === undefined ? {} : { onPricesChanged: options.onPricesChanged }),

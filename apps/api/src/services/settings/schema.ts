@@ -138,6 +138,14 @@ export interface SettingsView {
   readonly logLevel: LogLevel
   readonly janitorIntervalMinutes: number
   readonly prices: PricesView
+  /**
+   * The configured `PUBLIC_URL`, or null when unset. Read-only for the same reason the rest of
+   * this view is: it is environment configuration, not a stored setting. Rides on this endpoint so
+   * the console's onboarding panel can hand the operator the router's real base URL instead of
+   * guessing one — `window.location.origin` is the fallback everywhere this is null, since the
+   * console and the API are always the same origin (no CORS, CLAUDE.md non-negotiable 8).
+   */
+  readonly publicUrl: string | null
 }
 
 export interface TaskRunView {
