@@ -1,0 +1,73 @@
+name: Bug report
+description: Something in the router, admin plane, or console isn't working as documented.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Before filing: check `docs/idea/` for the intended behavior — if the
+        docs and the code disagree, that mismatch is itself the bug, say so.
+
+        Found a security issue (credential leak, auth bypass, tool execution
+        on the router host)? Don't file it here — see `SECURITY.md`.
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What you did, what you expected, what happened instead.
+    validations:
+      required: true
+
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      description: Minimal steps, including the request shape if it's a data-plane bug (redact any real API keys/credentials).
+      placeholder: |
+        1. Configure an account/pool/key like ...
+        2. Send a request to /v1/... with ...
+        3. See ...
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: Router version / image tag
+      placeholder: v1.0.0, or the git commit if built from source
+    validations:
+      required: true
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - Data plane (/v1/messages, /v1/chat/completions, /v1/responses, ...)
+        - Routing / failover / health
+        - Provider driver (OpenAI, Anthropic, Claude subscriptions, Gemini, Ollama, ...)
+        - Admin API / auth
+        - Operator console (web UI)
+        - Scheduler / background tasks
+        - Deployment / Docker / migrations
+        - Docs
+        - Other
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant logs or error body
+      description: Structured JSON log lines or the error response body. Double-check no credential material is included — the redactor should strip it, but verify before pasting.
+      render: json
+
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      placeholder: |
+        - Deployment: docker compose / bare Bun / other
+        - Postgres version:
+        - OS/arch:
