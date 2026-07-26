@@ -33,10 +33,17 @@ import { inputFromArguments, toolChoiceToAnthropic, toolsToAnthropic } from "../
  * `role:"tool"` message becomes a `tool_result` block on a **user** turn, which is where Anthropic
  * puts results — several in a row therefore merge into one turn, exactly as Anthropic expects.
  *
+ * **`reasoning_effort` is dropped here and carried toward openai-responses**, and the asymmetry is
+ * the point: Anthropic's extended thinking is a **token budget**, not an effort word, so turning
+ * `"high"` into a `budget_tokens` would invent both what the caller pays and how long the answer
+ * takes. The same drop is stated in the mirror direction for `reasoning.effort`
+ * (`06-protocol-translation.md#known-lossy-edges`), so the loss does not depend on which way the
+ * request happened to point.
+ *
  * Refused: `logprobs`, `top_logprobs`, `n > 1`, a `response_format` constraining the answer's shape,
  * audio and file parts, and a `tool_call_id` matching no call earlier in the transcript. Dropped, as
  * documented: `seed`, `frequency_penalty`, `presence_penalty`, `logit_bias`, `user`,
- * `parallel_tool_calls`, `strict`, and image `detail`.
+ * `reasoning_effort`, `parallel_tool_calls`, `strict`, and image `detail`.
  */
 
 export interface OpenAiChatToAnthropicOptions {

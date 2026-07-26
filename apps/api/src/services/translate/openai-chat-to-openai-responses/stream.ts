@@ -1,4 +1,5 @@
 import { z } from "zod"
+import { openAiChatReasoningSchema, readOpenAiChatReasoning } from "../shared/openai-chat-reasoning"
 import { createOpenAiChatToolCallReader } from "../shared/openai-chat-tool-calls"
 import { createResponsesStreamEmitter } from "../shared/responses-stream"
 import { readOpenAiFinishReason, toResponsesCompletion } from "../shared/stop-reason"
@@ -25,6 +26,12 @@ import { frameJson } from "../sse/parse"
  * a *later* chunk carrying no choices at all, so `response.completed` cannot be emitted the instant
  * a finish reason lands without reporting a response with no tokens. Content deltas are never held:
  * every one leaves as it arrives.
+ *
+ * **This is the direction a reasoning model's thinking survives.** DeepSeek-R1, QwQ, GLM and every
+ * other reasoning model reached over openai-chat stream their thinking beside the answer, under a
+ * name OpenAI never published; `shared/openai-chat-reasoning.ts` owns which names those are, and
+ * Responses has an item type waiting for the text. Toward `anthropic` the same deltas are dropped,
+ * because a `thinking` block a client can replay needs a `signature` this router cannot produce.
  */
 
 export interface OpenAiChatToOpenAiResponsesStreamOptions {
@@ -60,6 +67,7 @@ const chunkSchema = z.looseObject({
         delta: z
           .looseObject({
             content: z.string().nullish().catch(null),
+            ...openAiChatReasoningSchema,
             tool_calls: z.array(toolCallSchema).nullish().catch(null),
           })
           .nullish()
@@ -117,6 +125,10 @@ export function openAiChatToOpenAiResponsesStream(
       if (choice === undefined) return out
 
       emitter.start(out)
+      // Before the text, which is the order a reasoning model produces the two in and the order
+      // Responses states its items: an upstream that thinks out loud has already finished doing so
+      // by the time it starts answering.
+      emitter.reasoning(out, readOpenAiChatReasoning(choice.delta))
       emitter.text(out, choice.delta?.content ?? "")
       for (const call of choice.delta?.tool_calls ?? []) {
         const key = toolCalls.key(call)

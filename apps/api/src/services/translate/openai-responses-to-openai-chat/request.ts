@@ -47,8 +47,13 @@ import { toolChoiceFromOpenAiResponses, toolsFromOpenAiResponses } from "../shar
  * transcript the caller composed. The sibling merges because Anthropic states several content blocks
  * per turn — the opposite problem.
  *
- * Dropped, as documented: `reasoning.effort`. This build's openai-chat emit shape carries no effort
- * field, and a dropped *hint* is a documented loss where a dropped *contract* would be a bug.
+ * **`reasoning.effort` and `parallel_tool_calls` survive the downgrade**, because they are the two
+ * dials openai-chat states too — `reasoning_effort` is the same word one level flatter. The effort
+ * word travels **verbatim**: the two dialects share one vocabulary, and remapping it through a table
+ * of ours would let a value OpenAI adds later arrive as one it already understood. `reasoning.summary`
+ * has no counterpart and is dropped — it asks the provider to *write* a summary of its own reasoning,
+ * which openai-chat cannot request.
+ *
  * Refused: built-in tools, an image the caller only stored a `file_id` for, a `function_call_output`
  * naming a call that never happened, and any item or content part with no chat counterpart.
  */
@@ -127,6 +132,9 @@ export function openAiResponsesToOpenAiChatRequest(
       request.tool_choice === undefined
         ? undefined
         : toolChoiceFromOpenAiResponses(request.tool_choice),
+    parallel_tool_calls: request.parallel_tool_calls ?? undefined,
+    // The nesting is the only difference between the two spellings, so the word itself is untouched.
+    reasoning_effort: request.reasoning?.effort ?? undefined,
   }
 }
 

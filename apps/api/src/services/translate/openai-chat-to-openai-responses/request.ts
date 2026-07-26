@@ -32,10 +32,16 @@ import { toolChoiceToOpenAiResponses, toolsToOpenAiResponses } from "../shared/t
  * model's own earlier output spells it `output_text`. Responses states the two apart, so this
  * translator has to as well.
  *
+ * **`reasoning_effort` and `parallel_tool_calls` are carried, not dropped**, because this is the one
+ * pair where both sides state them: openai-chat's `reasoning_effort` is openai-responses'
+ * `reasoning.effort` under a flatter name, and `parallel_tool_calls` is spelled identically. The
+ * effort word travels **verbatim** — the two dialects share one vocabulary, and mapping it through a
+ * table of ours would let a value OpenAI adds later arrive as one it already understood.
+ *
  * Refused: `logprobs`, `top_logprobs`, `n > 1`, `stop`, `response_format`, audio and file parts, a
  * non-text part in a system message or a tool result, and a `tool_call_id` matching no call earlier
  * in the transcript. Dropped, as documented: `seed`, `frequency_penalty`, `presence_penalty`,
- * `logit_bias`, `user`, `parallel_tool_calls`, `strict`, and image `detail`.
+ * `logit_bias`, `user`, `strict`, and image `detail`.
  */
 
 /** Several system turns become one `instructions` string, and multi-part text joins the same way. */
@@ -103,6 +109,12 @@ export function openAiChatToOpenAiResponsesRequest(body: unknown): OpenAiRespons
       request.tool_choice === undefined
         ? undefined
         : toolChoiceToOpenAiResponses(request.tool_choice),
+    parallel_tool_calls: request.parallel_tool_calls ?? undefined,
+    // The nesting is the only difference between the two spellings, so the word itself is untouched.
+    reasoning:
+      typeof request.reasoning_effort === "string"
+        ? { effort: request.reasoning_effort }
+        : undefined,
     // Never the caller's value: an openai-chat client has no way to name a stored response on its
     // next turn, so one left behind is litter on the provider that nobody can reference or delete.
     store: false,

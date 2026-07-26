@@ -276,7 +276,7 @@ carrying `tool_calls` or a `tool_call_id` never merges — it is keyed to one sp
 | Calls | Anthropic `tool_use` block `{id, name, input}` ⇄ OpenAI `tool_calls[].{id, function.{name, arguments}}` — `input` is an object, `arguments` is a **JSON string**; both directions parse/serialize |
 | Results | Anthropic `tool_result` `{tool_use_id, content, is_error}` ⇄ one `role:"tool"` message per call; `is_error` has no OpenAI field and is folded into the result text |
 | Clean | Name, description, JSON Schema parameters, call ids, parallel calls (Anthropic emits several `tool_use` blocks; OpenAI emits several `tool_calls` entries). Ids are preserved verbatim; ordering across blocks/entries is reconstructed and may differ |
-| Lossy | `is_error`, `strict`, `parallel_tool_calls: false`, Anthropic server-side/built-in tool types |
+| Lossy | `is_error`, `strict`, Anthropic server-side/built-in tool types. `parallel_tool_calls` is **carried** between the two OpenAI dialects, which spell it identically, and dropped toward `anthropic`, which states the same idea as `tool_choice.disable_parallel_tool_use` — a field on a `tool_choice` the caller may not have sent at all |
 | Rejected | A tool whose schema is not a valid JSON Schema object type; a `tool_result` with no matching call id in the transcript |
 
 ### Streaming SSE event mapping
@@ -297,7 +297,7 @@ message_start → content_block_start → content_block_delta* → content_block
 | `content_block_delta` / `text_delta` | `chunk.choices[].delta.content` | `response.output_text.delta` |
 | `content_block_start` (`tool_use`) | `delta.tool_calls[].{index,id,function.name}` | `response.output_item.added` (function call) |
 | `content_block_delta` / `input_json_delta` | `delta.tool_calls[].function.arguments` | `response.function_call_arguments.delta` |
-| `content_block_delta` / `thinking_delta` | no counterpart — dropped | `response.reasoning_summary_text.delta` |
+| `content_block_delta` / `thinking_delta` | `delta.reasoning_content` / `delta.reasoning` — **read, never written**; see below | `response.reasoning_summary_text.delta` |
 | `content_block_stop` | — (implied) | `response.content_part.done` / `response.output_item.done` |
 | `message_delta` (stop reason, usage) | final chunk `finish_reason` + optional usage chunk | `response.completed` (carries usage) |
 | `message_stop` | `data: [DONE]` | `response.completed` |
@@ -307,8 +307,38 @@ message_start → content_block_start → content_block_delta* → content_block
 | | |
 |---|---|
 | Clean | Text deltas, tool-call argument deltas, terminal usage, stream termination. |
-| Lossy | Block indices and boundaries are reconstructed, not preserved; a dialect with no "block" concept loses which block a delta belonged to. Thinking deltas are dropped toward `openai-chat`. Toward `anthropic`, `message_start` states a zeroed `usage`. Toward `openai-responses`, item ids (`msg_…`, `fc_…`, `rs_…`) are minted from the response id and the item's position, and a thinking delta becomes a reasoning *summary* delta — the encrypted reasoning handle a native Responses upstream also emits cannot be synthesized and is not. |
+| Lossy | Block indices and boundaries are reconstructed, not preserved; a dialect with no "block" concept loses which block a delta belonged to. Reasoning text is dropped toward `openai-chat` and toward `anthropic`. Toward `anthropic`, `message_start` states a zeroed `usage`. Toward `openai-responses`, item ids (`msg_…`, `fc_…`, `rs_…`) are minted from the response id and the item's position, and a thinking or reasoning delta becomes a reasoning *summary* delta — the encrypted reasoning handle a native Responses upstream also emits cannot be synthesized and is not. |
 | Rejected | Nothing at stream time — once bytes are on the wire the request fails honestly, it is never retranslated. |
+
+**Reasoning text on `openai-chat` is read on the way in and never written on the way out.** OpenAI
+publishes no reasoning-text field on a Chat Completions response — only the *count*,
+`usage.completion_tokens_details.reasoning_tokens` — so the text a reasoning model produces travels
+as a vendor extension, and the ecosystem never converged on one spelling. `reasoning_content` is
+DeepSeek's, SGLang's, z.ai/GLM's, DashScope/Qwen's and xAI's; `reasoning` is OpenRouter's, Groq's and
+Ollama's. The split is not even stable per vendor — vLLM emitted `reasoning_content`, flipped its
+canonical name to `reasoning`, and spent a release emitting both. So **both names are read**,
+`reasoning_content` wins when an upstream states both (the one server that does copies one into the
+other, so they are the same string), and the text becomes a Responses reasoning item — that is
+DeepSeek-R1, QwQ and GLM keeping their thinking across the seam instead of losing it.
+
+Neither name is ever *emitted*: a dialect this router speaks toward a client is the one its vendor
+published, and inventing an extension field into an answer is not translation.
+
+Two reasoning shapes are **not read**, and are stated here rather than left to be discovered:
+
+- **OpenRouter's `reasoning_details[]`** — a structured array carrying ids, formats and signed
+  blocks. The flat `reasoning` string beside it is read and is enough to carry the text; the signed
+  blocks are the same problem as an Anthropic `signature`, and nothing downstream can replay them.
+- **Mistral's `content: [{"type":"thinking", …}]`** — magistral states reasoning as a *shape the
+  answer takes*, not a field beside it, and `content` turns polymorphic mid-stream. Every reader here
+  types `content` as a string, so an array-valued one reads as absent: on those models the answer
+  text is dropped too, not merely the thinking. Reading it is a change to how `content` is parsed in
+  every direction, not a field to add.
+
+Toward `anthropic` the same text is dropped rather than turned into a `thinking` block, for a
+harder reason than vocabulary: a client is entitled to replay an assistant turn verbatim on its next
+request, and Anthropic refuses a `thinking` block whose `signature` this router cannot produce. An
+unsigned block would answer this turn and break the next one.
 
 **Toward `anthropic`, `message_start.usage` is zeroed and the real counts land on `message_delta`.**
 `openai-chat` reports its token counts *last* — on a trailing chunk carrying no choices at all — so
@@ -444,9 +474,15 @@ Be suspicious of any cell not listed here — if it is not documented, it is not
 | `text.format` (structured output / JSON Schema) | `openai-responses` → any | `{"type":"text"}` passes; anything else is **rejected** `400`. A schema-constrained answer is a contract the caller will parse, and prose in its place is a different answer, not a degraded one |
 | `response_format` (structured output / JSON mode) | `openai-chat` → any | `{"type":"text"}` passes; `json_object` and `json_schema` are **rejected** `400`. The same rule as `text.format` under openai-chat's older name for the same feature — including toward `openai-responses`, which *does* state it, because honoring it one direction and refusing it the other would make "servable" depend on which way the request pointed. Dropped instead, an OpenAI SDK `.parse()`, LangChain `withStructuredOutput()`, Instructor, or `generateObject` call gets prose and fails at its own `JSON.parse`, with nothing on the wire naming the cause |
 | `conversation`, `prompt`, `background: true` | `openai-responses` → any | **rejected** `400`, the same class as `previous_response_id` under three later names: turns the provider would prepend, instruction text stored provider-side, and a queued response to poll by id. `background: false` passes |
-| Responses `reasoning` output items | → `anthropic`, `openai-chat` | dropped. An Anthropic `thinking` block a client can replay needs a `signature` the router cannot produce, and openai-chat has no field at all |
+| Responses `reasoning` output items | → `anthropic`, `openai-chat` | dropped. An Anthropic `thinking` block a client can replay needs a `signature` the router cannot produce, and openai-chat has no *published* field — the extension names are read from an upstream, never written toward a client |
 | Anthropic `thinking` blocks | → `openai-responses` | carried as a reasoning **summary** item; the encrypted reasoning handle is not synthesized |
-| `reasoning.effort` | `openai-responses` → `anthropic`, `openai-chat` | dropped. Anthropic's thinking budget is a token count, not an effort word, and inventing one would change what the caller pays for |
+| openai-chat `reasoning_content` / `reasoning` | → `openai-responses` | **carried** as a reasoning **summary** item. Both spellings are read — DeepSeek's and OpenRouter's — and `reasoning_content` wins if an upstream states both. See [above](#streaming-sse-event-mapping) |
+| openai-chat `reasoning_content` / `reasoning` | → `anthropic` | dropped. A synthesized `thinking` block carries no `signature`, and Anthropic refuses a replayed one that lacks it — the block would answer this turn and break the next |
+| Anthropic `thinking` request parameter | → any OpenAI dialect | dropped. It is a **token budget** (`budget_tokens`), and no OpenAI dialect states one — only an effort word, which a budget cannot be turned into without inventing a number |
+| `reasoning_effort` ⇄ `reasoning.effort` | `openai-chat` ⇄ `openai-responses` | **carried**, verbatim and both ways: OpenAI's own spec points both fields at one shared `ReasoningEffort` schema, so they are the same dial one level of nesting apart. The word is never validated against a list of ours — that set is `none \| minimal \| low \| medium \| high \| xhigh \| max` today, has grown twice past the four everyone remembers, and `none` means "do not think" rather than "invalid". Refusing a word the upstream accepts would be the router deciding how the model behaves |
+| `reasoning.effort` | `openai-responses` → `anthropic` | dropped, and `reasoning_effort` from `openai-chat` with it. Anthropic's thinking budget is a token count, not an effort word, and inventing one would change what the caller pays for |
+| `reasoning.summary` | `openai-responses` → any | dropped. It asks the *provider* to write a summary of its own reasoning, and no other dialect states the request |
+| `parallel_tool_calls` | `openai-chat` ⇄ `openai-responses` | **carried**, both ways: both dialects spell it identically. An absent field stays absent — `false` is the value that changes behaviour, so defaulting one in would be a decision the caller never made |
 | `input_image` naming only a `file_id` | `openai-responses` → any | rejected `400`: a stored file is provider-side state this router cannot resolve into bytes |
 | `max_tokens` / `max_completion_tokens` | → `openai-chat` | not lossy, but **not one name either** — emitted under whichever of the two the selected Account accepts. See [The output ceiling](#the-output-ceiling-one-field-two-names) |
 | Responses item ids | → `openai-responses` | minted by the router from the response id and the item's position — deterministic, but not the provider's own |

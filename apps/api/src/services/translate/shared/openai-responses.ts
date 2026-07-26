@@ -138,6 +138,9 @@ export const openAiResponsesRequestSchema = z.object({
   stream: z.boolean().nullish(),
   tools: z.array(openAiResponsesToolSchema).optional(),
   tool_choice: openAiResponsesToolChoiceSchema.optional(),
+  parallel_tool_calls: z.boolean().nullish(),
+  // `summary` is read loosely and never carried: it asks the provider to *write* a summary of its own
+  // reasoning, which no other dialect can ask for. `effort` is the half openai-chat also states.
   reasoning: z.looseObject({ effort: z.string().nullish() }).nullish(),
   text: z.looseObject({ format: z.looseObject({ type: z.string() }).nullish() }).nullish(),
   // The six stateful fields. Declared only so they can be refused by name, and read loosely for the
@@ -220,6 +223,8 @@ export interface OpenAiResponsesRequest {
   readonly stream?: boolean | undefined
   readonly tools?: readonly OpenAiResponsesTool[] | undefined
   readonly tool_choice?: OpenAiResponsesToolChoice | undefined
+  readonly parallel_tool_calls?: boolean | undefined
+  /** Only `effort`, and only ever the caller's own word: `summary` has no source to come from. */
   readonly reasoning?: { readonly effort: string } | undefined
   /**
    * Always `false` on a translated request, never the caller's value.

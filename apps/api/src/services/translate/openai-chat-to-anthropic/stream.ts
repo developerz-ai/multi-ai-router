@@ -22,6 +22,13 @@ import { frameJson } from "../sse/parse"
  * a *later* chunk carrying no choices at all, so `message_delta` cannot be emitted the instant a
  * finish reason lands without reporting a completion with no tokens. Content deltas are never held:
  * every one leaves as it arrives.
+ *
+ * **A reasoning model's thinking is dropped here, and carried toward openai-responses.** DeepSeek-R1,
+ * QwQ and GLM stream it beside the answer under names `shared/openai-chat-reasoning.ts` lists, and
+ * Anthropic states a `thinking` block that would hold the text — but a client is entitled to replay
+ * an assistant turn verbatim, and Anthropic refuses a `thinking` block whose `signature` this router
+ * cannot produce. Synthesizing one would answer this turn and break the next
+ * (`06-protocol-translation.md#known-lossy-edges`).
  */
 
 /** Neither field is required: a compatible upstream always names both on its first chunk. */

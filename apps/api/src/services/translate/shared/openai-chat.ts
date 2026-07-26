@@ -7,9 +7,14 @@ import { z } from "zod"
  *
  * Four fields are declared here purely so they can be **refused by name** (`n`, `logprobs`,
  * `top_logprobs`, `response_format`); `shared/reject.ts` owns that call. The documented hints — `seed`,
- * `frequency_penalty`, `presence_penalty`, `logit_bias`, `user`, `parallel_tool_calls` — are
- * deliberately absent instead, because "not in the schema" is exactly what dropping them means
+ * `frequency_penalty`, `presence_penalty`, `logit_bias`, `user` — are deliberately absent instead,
+ * because "not in the schema" is exactly what dropping them means
  * (docs/idea/06-protocol-translation.md#known-lossy-edges).
+ *
+ * `reasoning_effort` and `parallel_tool_calls` are named in both shapes because openai-responses
+ * states the same two dials — `reasoning.effort` and `parallel_tool_calls` — so between those two
+ * dialects they are carried rather than dropped. Toward `anthropic` they have no counterpart and
+ * fall back to being a documented drop, which is why neither is required anywhere.
  */
 
 /** A content part this build cannot represent, kept as data so it can be refused by name. */
@@ -85,6 +90,13 @@ export const openAiChatRequestSchema = z.object({
   stream: z.boolean().nullish(),
   tools: z.array(openAiChatToolSchema).optional(),
   tool_choice: openAiChatToolChoiceSchema.optional(),
+  parallel_tool_calls: z.boolean().nullish(),
+  // Kept as a free string rather than an enum: the effort words are the *provider's* vocabulary and
+  // it has already grown twice past the four everyone remembers — OpenAI's published set is
+  // `none | minimal | low | medium | high | xhigh | max`, and `none` means "do not think", not
+  // "invalid". An enum here would `400` a dial the upstream accepts, which is the router picking the
+  // model's behaviour — the one thing it never does.
+  reasoning_effort: z.string().nullish(),
   n: z.number().int().nullish(),
   logprobs: z.boolean().nullish(),
   top_logprobs: z.number().int().nullish(),
@@ -155,6 +167,9 @@ export interface OpenAiChatRequest {
   readonly stream_options?: { readonly include_usage: true } | undefined
   readonly tools?: readonly OpenAiChatTool[] | undefined
   readonly tool_choice?: OpenAiChatToolChoice | undefined
+  readonly parallel_tool_calls?: boolean | undefined
+  /** The caller's own word, never one this router picked. See the schema above. */
+  readonly reasoning_effort?: string | undefined
 }
 
 /**
