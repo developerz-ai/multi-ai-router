@@ -1,0 +1,42 @@
+{
+  "version": 1,
+  "budgetMs": 5,
+  "rows": [
+    {
+      "scenario": "passthrough",
+      "path": "passthrough",
+      "overheadMeanMs": 0.04950000000000003,
+      "overheadP50Ms": 0.26068821689259647,
+      "overheadP95Ms": 0.49530761209593327,
+      "overheadP99Ms": 0.9366197183098591,
+      "addedTtftP50Ms": null
+    },
+    {
+      "scenario": "passthrough (stream)",
+      "path": "passthrough",
+      "overheadMeanMs": 0.09000000000000007,
+      "overheadP50Ms": 0.2717391304347826,
+      "overheadP95Ms": 0.6986754966887417,
+      "overheadP99Ms": 0.9635761589403974,
+      "addedTtftP50Ms": 0.029612499999529973
+    },
+    {
+      "scenario": "translate",
+      "path": "translate",
+      "overheadMeanMs": 0.053500000000000034,
+      "overheadP50Ms": 0.26246719160104987,
+      "overheadP95Ms": 0.4986876640419948,
+      "overheadP99Ms": 0.936046511627907,
+      "addedTtftP50Ms": null
+    },
+    {
+      "scenario": "translate (stream)",
+      "path": "translate",
+      "overheadMeanMs": 0.07100000000000004,
+      "overheadP50Ms": 0.26413100898045433,
+      "overheadP95Ms": 0.5357142857142857,
+      "overheadP99Ms": 0.9438775510204082,
+      "addedTtftP50Ms": 0.0979029999980412
+    }
+  ]
+}

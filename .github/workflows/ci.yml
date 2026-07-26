@@ -106,6 +106,46 @@ jobs:
       # test bootstrap itself (idempotent, same code path as boot).
       - run: bin/test
 
+  bench:
+    runs-on: blacksmith-2vcpu-ubuntu-2404
+    timeout-minutes: 10
+    needs: test
+    permissions:
+      contents: read
+    # Report, not a gate: CLAUDE.md non-negotiable 8 makes the <5ms p99 overhead budget a promise,
+    # but a shared runner's noise is not a regression signal worth blocking a merge over (see
+    # docs/idea/08-observability.md, "Verifying the budget"). `continue-on-error` keeps a slow-runner
+    # day from failing CI while the numbers — and their delta from the committed bench/baseline.json
+    # — stay visible in the job summary and as a downloadable artifact for every PR.
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v5
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+      - run: bun install --frozen-lockfile
+      - name: bin/bench against the committed baseline
+        run: bin/bench --json --baseline bench/baseline.json | tee bench-report.json
+      - name: publish the numbers to the job summary
+        if: always()
+        run: |
+          {
+            echo '### bench: `router_overhead_seconds` vs `bench/baseline.json`'
+            echo
+            echo 'Re-baseline after an intentional perf change: `bin/bench --write-baseline bench/baseline.json`'
+            echo '(see docs/idea/08-observability.md). This job never fails the build — it reports.'
+            echo
+            echo '```json'
+            cat bench-report.json
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: bench-report
+          path: bench-report.json
+          retention-days: 30
+
   build:
     runs-on: blacksmith-2vcpu-ubuntu-2404
     timeout-minutes: 15

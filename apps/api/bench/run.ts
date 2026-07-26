@@ -1,3 +1,4 @@
+import { type Baseline, compareToBaseline, renderDelta, toBaseline } from "./baseline"
 import { render, verdict } from "./report"
 import { type DriveOptions, runScenario, SCENARIOS, type ScenarioResult } from "./scenarios"
 
@@ -46,12 +47,17 @@ const USAGE = `Usage: bin/bench [options]
   --first-byte-ms N  the stub's time to first byte   (default ${DEFAULTS.firstByteDelayMs})
   --budget-ms N      p99 overhead ceiling            (default ${DEFAULTS.budgetMs})
   --json             emit the report as JSON
+  --baseline PATH    print the delta vs a committed bench/baseline.json (report only, never fails)
+  --write-baseline PATH
+                     write this run's numbers to PATH as a new baseline, instead of benching a gate
   --help             this
 `
 
 interface Options extends DriveOptions {
   readonly budgetMs: number
   readonly json: boolean
+  readonly baselinePath: string | undefined
+  readonly writeBaselinePath: string | undefined
 }
 
 const NUMERIC = {
@@ -68,12 +74,22 @@ const NUMERIC = {
 export function parseArgs(argv: readonly string[]): Options {
   const numbers: Record<string, number> = { ...DEFAULTS }
   let json = false
+  let baselinePath: string | undefined
+  let writeBaselinePath: string | undefined
 
   for (let index = 0; index < argv.length; index += 1) {
     const flag = argv[index]
     if (flag === undefined) continue
     if (flag === "--json") {
       json = true
+      continue
+    }
+    if (flag === "--baseline" || flag === "--write-baseline") {
+      const raw = argv[index + 1]
+      if (raw === undefined) throw new Error(`${flag} needs a path`)
+      if (flag === "--baseline") baselinePath = raw
+      else writeBaselinePath = raw
+      index += 1
       continue
     }
     const key = NUMERIC[flag as keyof typeof NUMERIC]
@@ -95,6 +111,8 @@ export function parseArgs(argv: readonly string[]): Options {
     firstByteDelayMs: numbers.firstByteDelayMs ?? DEFAULTS.firstByteDelayMs,
     budgetMs: numbers.budgetMs ?? DEFAULTS.budgetMs,
     json,
+    baselinePath,
+    writeBaselinePath,
   }
 }
 
@@ -107,6 +125,23 @@ export async function bench(options: Options): Promise<ScenarioResult[]> {
   return results
 }
 
+/**
+ * Loads a `bench/baseline.json` written by a prior `--write-baseline` run. Missing file or a
+ * version this build doesn't understand is a usage error, not a silent no-comparison — a typo'd
+ * path should not read as "no regression".
+ */
+async function loadBaseline(path: string): Promise<Baseline> {
+  const parsed: unknown = await Bun.file(path).json()
+  if (
+    typeof parsed !== "object" ||
+    parsed === null ||
+    (parsed as { version?: unknown }).version !== 1
+  ) {
+    throw new Error(`${path} is not a version-1 bench baseline`)
+  }
+  return parsed as Baseline
+}
+
 async function main(argv: readonly string[]): Promise<number> {
   if (argv.includes("--help") || argv.includes("-h")) {
     process.stdout.write(USAGE)
@@ -117,9 +152,28 @@ async function main(argv: readonly string[]): Promise<number> {
   const results = await bench(options)
   const outcome = verdict(results, options.budgetMs)
 
-  process.stdout.write(
-    options.json ? `${JSON.stringify(outcome, null, 2)}\n` : `${render(outcome)}\n`,
-  )
+  if (options.writeBaselinePath !== undefined) {
+    await Bun.write(options.writeBaselinePath, `${JSON.stringify(toBaseline(outcome), null, 2)}\n`)
+    process.stdout.write(`wrote ${options.writeBaselinePath}\n`)
+    return 0
+  }
+
+  const delta =
+    options.baselinePath === undefined
+      ? undefined
+      : compareToBaseline(await loadBaseline(options.baselinePath), outcome)
+
+  if (options.json) {
+    process.stdout.write(
+      `${JSON.stringify(delta === undefined ? outcome : { ...outcome, delta }, null, 2)}\n`,
+    )
+  } else {
+    process.stdout.write(`${render(outcome)}\n`)
+    if (delta !== undefined) process.stdout.write(`\n${renderDelta(delta)}\n`)
+  }
+
+  // The baseline delta is a report only — see the module comment on `./baseline`. Only the
+  // absolute budget in `outcome.violations` can fail this run.
   return outcome.violations.length === 0 ? 0 : 1
 }
 

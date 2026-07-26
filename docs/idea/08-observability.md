@@ -331,6 +331,38 @@ different thing to read.
 deliberately **not** part of `bin/check`: a timing measurement on a shared CI runner is a flaky
 test, and a flaky gate is one people learn to skip.
 
+### CI: a report, not a gate
+
+`.github/workflows/ci.yml` runs a `bench` job after `test`, on the same shared `blacksmith-*`
+runner as everything else. It never fails the build — the step is `continue-on-error: true` — for
+the same reason `bin/bench` stays out of `bin/check`: a shared runner's jitter is not a signal
+worth blocking a merge over, and a gate nobody trusts gets ignored.
+
+What it produces instead:
+
+- **`bin/bench --json --baseline bench/baseline.json`** — runs the harness and prints its normal
+  verdict plus a `delta` block comparing every scenario's mean and p99 against the numbers
+  committed in `bench/baseline.json`.
+- The JSON is written to the job's **summary** (visible on the PR, no log-diving) and uploaded as
+  the `bench-report` **artifact** (30-day retention), so a trend across PRs is one download away.
+
+`bench/baseline.json` is a committed, versioned file (`{"version": 1, "budgetMs", "rows": [...]}`)
+— not derived at CI time — so the delta is against a number a human chose to keep, not against
+whatever the previous run on a possibly-noisier runner happened to produce.
+
+**Re-baselining**, after an intentional performance change (or before cutting a release, alongside
+a `bin/bench` smoke run):
+
+```
+bin/bench --write-baseline bench/baseline.json
+git add bench/baseline.json
+git commit -m "bench: re-baseline after <why>"
+```
+
+Run it locally, not in CI — the same "shared runner is noisy" reasoning that keeps the job
+non-blocking means a runner-generated baseline would just be next week's false regression. State
+*why* the numbers moved in the commit message; the diff itself only ever shows *that* they did.
+
 ## Structured logging
 
 JSON lines to stdout, one object per event. The container logs; shipping them is the operator's job.
