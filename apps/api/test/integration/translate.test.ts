@@ -147,6 +147,104 @@ describe("cross-dialect streaming (translate egress)", () => {
     expect(rest).toContain("event: message_stop")
   })
 
+  /** An Anthropic frame off the wire: `event:` named, `type` repeated inside the payload. */
+  function anthropicChunk(type: string, payload: Record<string, unknown> = {}): string {
+    return `event: ${type}\ndata: ${JSON.stringify({ type, ...payload })}\n\n`
+  }
+
+  const RESPONSES_BODY = JSON.stringify({
+    model: "claude-opus-5",
+    input: [{ role: "user", content: "what's the weather in NY?" }],
+    tools: [
+      {
+        type: "function",
+        name: "get_weather",
+        parameters: { type: "object", properties: { city: { type: "string" } } },
+      },
+    ],
+  })
+
+  test("a /v1/responses request against an anthropic account comes back as Responses SSE", async () => {
+    const body =
+      anthropicChunk("message_start", {
+        message: { id: "msg_01", model: "claude-opus-5", usage: { input_tokens: 12 } },
+      }) +
+      anthropicChunk("content_block_start", {
+        index: 0,
+        content_block: { type: "tool_use", id: "toolu_1", name: "get_weather", input: {} },
+      }) +
+      anthropicChunk("content_block_delta", {
+        index: 0,
+        delta: { type: "input_json_delta", partial_json: '{"city":"NY"}' },
+      }) +
+      anthropicChunk("content_block_stop", { index: 0 }) +
+      anthropicChunk("message_delta", {
+        delta: { stop_reason: "tool_use" },
+        usage: { output_tokens: 8 },
+      }) +
+      anthropicChunk("message_stop")
+    const slow = slowStream([body])
+    const { app, upstream } = harness({ responses: [() => slow.response] })
+
+    const res = await app.request(
+      "/v1/responses",
+      post(JSON.stringify({ ...JSON.parse(RESPONSES_BODY), stream: true }), bearer()),
+    )
+    slow.release(0)
+    slow.finish()
+    const text = await res.text()
+    await settle()
+
+    expect(res.status).toBe(200)
+    // Addressed at the account's own dialect, anthropic, never the Responses shape the client spoke.
+    expect(upstream.calls[0]?.url).toContain("/v1/messages")
+    expect(text).toContain("event: response.created")
+    expect(text).toContain("event: response.output_item.added")
+    expect(text).toContain('"type":"function_call"')
+    expect(text).toContain('"name":"get_weather"')
+    expect(text).toContain('"arguments":"{\\"city\\":\\"NY\\"}"')
+    expect(text).toContain("event: response.output_item.done")
+    expect(text).toContain("event: response.completed")
+  })
+
+  test("a non-streaming /v1/responses request against an anthropic account round-trips the tool call", async () => {
+    const { app, upstream } = harness({
+      responses: [
+        () =>
+          jsonResponse(200, {
+            id: "msg_01",
+            model: "claude-opus-5",
+            content: [
+              { type: "tool_use", id: "toolu_1", name: "get_weather", input: { city: "NY" } },
+            ],
+            stop_reason: "tool_use",
+            usage: { input_tokens: 12, output_tokens: 8 },
+          }),
+      ],
+    })
+
+    const res = await app.request("/v1/responses", post(RESPONSES_BODY, bearer()))
+    const parsed = (await res.json()) as {
+      status: string
+      output: { type: string; name?: string; arguments?: string }[]
+    }
+    await settle()
+
+    expect(res.status).toBe(200)
+    expect(upstream.calls[0]?.url).toContain("/v1/messages")
+    expect(parsed.status).toBe("completed")
+    expect(parsed.output).toEqual([
+      {
+        type: "function_call",
+        id: expect.any(String),
+        call_id: "toolu_1",
+        name: "get_weather",
+        arguments: '{"city":"NY"}',
+        status: "completed",
+      },
+    ])
+  })
+
   test("an upstream error from a translated account renders in the client's own dialect and names no account", async () => {
     const { app, upstream } = harness({
       accounts: [openRouterAccount("secret-account-id", { apiKey: "sk-shh" })],

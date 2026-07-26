@@ -377,6 +377,14 @@ that did not happen, on a request that cannot be retried because its bytes are a
 The reverse case is owed and is emitted: a stream that stated its finish reason but never sent the
 terminator gets one, because the completion is whole and only its punctuation is missing.
 
+**`[DONE]` is unconditional termination toward Anthropic, and never states a null `stop_reason`.**
+Unlike the upstream connection simply closing, openai-chat's `[DONE]` sentinel is an explicit "I am
+finished" — so `openai-chat-to-anthropic/stream.ts` always emits `message_delta` and `message_stop`
+on it, even on the rare broken upstream that never sent a `finish_reason` chunk first. Anthropic
+itself never states `stop_reason: null` on a `message_delta`, so that case falls back to the same
+conservative `end_turn` an unrecognized reason would, rather than passing the absence through
+literally.
+
 ### Stop and finish reasons
 
 The Anthropic `stop_reason` set is closed and complete: `end_turn`, `max_tokens`, `stop_sequence`,

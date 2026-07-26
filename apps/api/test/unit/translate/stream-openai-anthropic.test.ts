@@ -199,12 +199,23 @@ describe("the terminal events", () => {
     expect(stream.push(openAiChatChunk({ content: "late" }))).toEqual([])
   })
 
-  test("an empty completion still emits a well-formed sequence", () => {
+  test("an empty completion still emits a well-formed sequence, never a null stop_reason", () => {
     const { events } = run([DONE])
     expect(eventNames(events)).toEqual(["message_start", "message_delta", "message_stop"])
     const delta = (payloads(events) as AnthropicEvent[])[1]
-    // No finish reason ever arrived, so none is claimed.
-    expect(delta?.delta).toEqual({ stop_reason: null, stop_sequence: null })
+    // [DONE] is unconditional termination: no finish reason ever arrived, but real Anthropic never
+    // states `stop_reason: null` on a message_delta, so the conservative fallback is claimed instead.
+    expect(delta?.delta).toEqual({ stop_reason: "end_turn", stop_sequence: null })
+  })
+
+  test("[DONE] before any content still terminates with a real stop_reason, not null", () => {
+    const stream = translator()
+    const events = stream.push(DONE)
+    const delta = (payloads(events) as AnthropicEvent[]).find(
+      (event) => event.type === "message_delta",
+    )
+    expect(delta?.delta).toMatchObject({ stop_reason: "end_turn" })
+    expect(delta?.delta).not.toMatchObject({ stop_reason: null })
   })
 })
 

@@ -1,7 +1,7 @@
 import { z } from "zod"
 import { createAnthropicStreamEmitter } from "../shared/anthropic-stream"
 import { createOpenAiChatToolCallReader } from "../shared/openai-chat-tool-calls"
-import { toAnthropicStopReason } from "../shared/stop-reason"
+import { CONSERVATIVE_STOP_REASON, toAnthropicStopReason } from "../shared/stop-reason"
 import type { OpenAiChatUsage } from "../shared/usage"
 import { anthropicUsageCounts, parseOpenAiChatUsage } from "../shared/usage"
 import type { SseEvent, StreamTranslator } from "../sse/emit"
@@ -85,7 +85,15 @@ export function openAiChatToAnthropicStream(
   let unrecognized: string | null = null
 
   function terminate(out: SseEvent[]): void {
-    const mapped = toAnthropicStopReason(finishReason)
+    // `[DONE]` says the upstream is finished talking, even on the rare broken stream that never sent
+    // a `finish_reason` chunk — and real Anthropic never states a `message_delta` with a null
+    // `stop_reason`. `toAnthropicStopReason(null)` reads as "not finished yet" mid-stream, which is
+    // the wrong claim once termination is unconditional here; the conservative fallback is used
+    // directly instead, the same value an unrecognized reason would fall back to.
+    const mapped =
+      finishReason === null
+        ? { value: CONSERVATIVE_STOP_REASON, unrecognized: null }
+        : toAnthropicStopReason(finishReason)
     unrecognized = mapped.unrecognized ?? unrecognized
     emitter.terminate(out, { stopReason: mapped.value, usage: anthropicUsageCounts(usage) })
   }
