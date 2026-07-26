@@ -53,6 +53,7 @@ describe("parseEnv", () => {
       loginMaxAttempts: 5,
       loginAttemptWindowMinutes: 15,
       loginLockoutMinutes: 15,
+      sessionSlideFraction: 0.1,
       sessionCookieInsecure: false,
     })
   })
@@ -83,6 +84,7 @@ describe("parseEnv", () => {
       ADMIN_LOGIN_MAX_ATTEMPTS: "3",
       ADMIN_LOGIN_ATTEMPT_WINDOW_MINUTES: "5",
       ADMIN_LOGIN_LOCKOUT_MINUTES: "30",
+      ADMIN_SESSION_SLIDE_FRACTION: "0.25",
       SESSION_COOKIE_INSECURE: "true",
     })
 
@@ -108,6 +110,7 @@ describe("parseEnv", () => {
       loginMaxAttempts: 3,
       loginAttemptWindowMinutes: 5,
       loginLockoutMinutes: 30,
+      sessionSlideFraction: 0.25,
       sessionCookieInsecure: true,
     })
   })

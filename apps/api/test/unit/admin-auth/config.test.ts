@@ -20,6 +20,7 @@ describe("adminAuthConfigFromEnv", () => {
         adminLoginMaxAttempts: 7,
         adminLoginAttemptWindowMinutes: 10,
         adminLoginLockoutMinutes: 20,
+        adminSessionSlideFraction: 0.25,
       }),
     ).toEqual({
       idleTtlSeconds: 1_800,
@@ -27,6 +28,7 @@ describe("adminAuthConfigFromEnv", () => {
       maxFailedAttempts: 7,
       attemptWindowSeconds: 600,
       lockoutSeconds: 1_200,
+      sessionSlideFraction: 0.25,
     })
   })
 
@@ -38,6 +40,7 @@ describe("adminAuthConfigFromEnv", () => {
       maxFailedAttempts: 5,
       attemptWindowSeconds: 15 * 60,
       lockoutSeconds: 15 * 60,
+      sessionSlideFraction: 0.1,
     })
   })
 })

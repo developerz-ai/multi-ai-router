@@ -50,6 +50,13 @@ export interface AdminAuthConfig {
   /** How long a tripped throttle key stays locked. */
   readonly loginLockoutMinutes: number
   /**
+   * Share of the idle window a session must have advanced before the slide persists to the
+   * store. `0.1` of an 8-hour idle window is ~48 minutes: an operator clicking around gets one
+   * store write roughly every that often instead of one per request — see
+   * `services/admin-auth/service.ts`.
+   */
+  readonly sessionSlideFraction: number
+  /**
    * Drops `Secure` and the `__Host-` prefix from the session cookie. Off by
    * default and warned about at boot: it is the escape hatch for a plain-HTTP
    * LAN install (`http://192.168.1.50:8080`), where the hardened cookie is
@@ -307,6 +314,7 @@ const envSchema = z
     ADMIN_LOGIN_MAX_ATTEMPTS: wholeNumber.optional(),
     ADMIN_LOGIN_ATTEMPT_WINDOW_MINUTES: wholeNumber.optional(),
     ADMIN_LOGIN_LOCKOUT_MINUTES: wholeNumber.optional(),
+    ADMIN_SESSION_SLIDE_FRACTION: fraction.optional(),
     SESSION_COOKIE_INSECURE: flag.optional(),
     CATALOG_REFRESH_SECONDS: wholeNumber.optional(),
     KEY_CACHE_MAX: wholeNumber.optional(),
@@ -383,6 +391,7 @@ const envSchema = z
         loginMaxAttempts: raw.ADMIN_LOGIN_MAX_ATTEMPTS ?? 5,
         loginAttemptWindowMinutes: raw.ADMIN_LOGIN_ATTEMPT_WINDOW_MINUTES ?? 15,
         loginLockoutMinutes: raw.ADMIN_LOGIN_LOCKOUT_MINUTES ?? 15,
+        sessionSlideFraction: raw.ADMIN_SESSION_SLIDE_FRACTION ?? 0.1,
         sessionCookieInsecure: raw.SESSION_COOKIE_INSECURE ?? false,
       },
       // Defaults mirror the layer constants they override, so an unset variable

@@ -206,14 +206,22 @@ export function createAdminAuthService(deps: AdminAuthDeps): AdminAuthService {
       throw new AdminAuthError("Admin session has expired")
     }
 
-    // The slide. TODO(M7): a Postgres-backed store should not write on every request — persist
-    // only once the idle window has advanced past a fraction of itself.
+    // The slide. In-memory `lastSeenAtMs` is authoritative for this response on every request;
+    // the store write is throttled to once the idle window has advanced past
+    // `sessionSlideFraction` of itself since the last *persisted* `lastSeenAtMs` — a
+    // Postgres-backed store sees on the order of one write per fraction-of-idle-window, not one
+    // per request. The persisted row lags by design: a session never expires early because of
+    // this (expiry is checked above, before the slide, against the last-persisted value), it only
+    // ever reports a slightly stale `lastSeenAtMs` to anything reading the store directly.
     const slid: AdminSession = {
       ...session,
       lastSeenAtMs: nowMs,
       idleExpiryMs: nowMs + config.idleTtlSeconds * 1000,
     }
-    await store.save(slid)
+    const slideThresholdMs = config.idleTtlSeconds * 1000 * config.sessionSlideFraction
+    if (nowMs - session.lastSeenAtMs >= slideThresholdMs) {
+      await store.save(slid)
+    }
     return slid
   }
 

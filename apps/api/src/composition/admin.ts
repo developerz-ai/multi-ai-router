@@ -137,6 +137,7 @@ export function createAdminPlane(deps: AdminPlaneDeps): AdminPlane {
           adminLoginMaxAttempts: env.adminAuth.loginMaxAttempts,
           adminLoginAttemptWindowMinutes: env.adminAuth.loginAttemptWindowMinutes,
           adminLoginLockoutMinutes: env.adminAuth.loginLockoutMinutes,
+          adminSessionSlideFraction: env.adminAuth.sessionSlideFraction,
         }),
         audit,
       }),
