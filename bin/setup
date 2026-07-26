@@ -37,6 +37,7 @@ else
   sed -e "s|^ADMIN_USERNAME=.*|ADMIN_USERNAME=admin|" \
       -e "s|^ADMIN_PASSWORD=.*|ADMIN_PASSWORD=dev-only-change-me|" \
       -e "s|^ENCRYPTION_KEY=.*|ENCRYPTION_KEY=${key}|" \
+      -e "s|^# DATABASE_URL=.*|DATABASE_URL=postgres://router:router@localhost:${DEV_DB_PORT}/router|" \
       .env.example > .env
   ok ".env created with a freshly generated ENCRYPTION_KEY"
 fi
