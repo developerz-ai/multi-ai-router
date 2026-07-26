@@ -20,6 +20,7 @@ import { useUsageSummary } from "../lib/queries/usage"
 import styles from "./UsageRoute.module.scss"
 import { UsageBreakdown } from "./usage/UsageBreakdown"
 import { UsageQuota } from "./usage/UsageQuota"
+import { UsageRecent } from "./usage/UsageRecent"
 import { UsageTopN } from "./usage/UsageTopN"
 
 /** How many rows a leaderboard shows. Enough to name the outliers, few enough to read at a glance. */
@@ -42,6 +43,11 @@ const TOP_N = 5
  * Quota is its own section rather than a column, for the same reason: a
  * subscription's limit is a window, not a currency, and the two do not belong in
  * one table.
+ *
+ * The live feed at the foot of the screen is the one panel here that is not an
+ * aggregate. It answers *which* request failed rather than how many did, and it
+ * sits outside the summary's `QueryBoundary` so a failing rollup cannot take the
+ * diagnosis down with it.
  */
 export default function UsageRoute() {
   const now = createNow(30_000)
@@ -73,7 +79,7 @@ export default function UsageRoute() {
             </For>
           </fieldset>
         }
-        subtitle="Who burned what — answered without anyone writing a query."
+        subtitle="Who burned what — and, in the live feed below, which request failed and why."
         title="Usage"
       />
 
@@ -168,6 +174,12 @@ export default function UsageRoute() {
           </>
         )}
       </QueryBoundary>
+
+      {/* Outside the summary's boundary on purpose. The feed is what an operator
+          opens when something is broken, and gating it on the aggregate would
+          mean a failing rollup takes the diagnosis down with it. Its own query,
+          its own window, its own error state. */}
+      <UsageRecent />
     </>
   )
 }

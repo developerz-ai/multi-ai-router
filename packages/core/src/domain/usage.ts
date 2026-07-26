@@ -131,6 +131,10 @@ const OUTCOME_BY_ERROR_CODE: Readonly<Record<RouterErrorCode, UsageOutcome>> = {
   translation_failed: "translation_failed",
   admin_auth_failed: "router_error",
   csrf_token_invalid: "router_error",
+  // `GET /v1/models/:id` never runs an attempt and never writes a `UsageRecord` — this only
+  // satisfies the total-over-`RouterErrorCode` mapping. If it ever did report, "the id this key
+  // asked about doesn't exist for it" is a caller-fixable condition, same family as scope.
+  model_not_found: "client_error",
 }
 
 export function usageOutcomeForErrorCode(code: RouterErrorCode): UsageOutcome {

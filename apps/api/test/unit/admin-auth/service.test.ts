@@ -206,6 +206,38 @@ describe("authenticate", () => {
     }
   })
 
+  test("reads inside the slide fraction persist once, not per request", async () => {
+    const { service, store, clock } = build({ idleTtlSeconds: 3600 })
+    const { session, cookieValue } = await login(service)
+
+    let saveCount = 0
+    const originalSave = store.save.bind(store)
+    store.save = (toSave) => {
+      saveCount += 1
+      return originalSave(toSave)
+    }
+
+    // Default sessionSlideFraction is 0.1, so the store write is due once activity has advanced
+    // 360s (10% of the 3600s idle window) past the last persisted lastSeenAtMs.
+    for (let hop = 0; hop < 5; hop += 1) {
+      clock.nowMs += 60_000
+      const resolved = await service.authenticate(cookieValue)
+      // In-memory lastSeenAtMs is authoritative for the response on every hop...
+      expect(resolved.lastSeenAtMs).toBe(clock.nowMs)
+    }
+    // ...even though nothing has been persisted yet: five reads, zero writes.
+    expect(saveCount).toBe(0)
+    expect((await store.get(session.id))?.lastSeenAtMs).toBe(session.lastSeenAtMs)
+
+    // The sixth read pushes total drift to 360s, crossing the fraction threshold.
+    clock.nowMs += 60_000
+    const resolved = await service.authenticate(cookieValue)
+
+    expect(saveCount).toBe(1)
+    expect(resolved.lastSeenAtMs).toBe(clock.nowMs)
+    expect((await store.get(session.id))?.lastSeenAtMs).toBe(clock.nowMs)
+  })
+
   test("the absolute cap ends the session no matter how active it was", async () => {
     const { service, clock } = build({ idleTtlSeconds: 3600, absoluteTtlSeconds: 4 * 3600 })
     const { cookieValue } = await login(service)

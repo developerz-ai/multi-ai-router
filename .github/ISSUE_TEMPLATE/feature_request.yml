@@ -1,0 +1,59 @@
+name: Feature request
+description: Propose a new capability for the router, admin plane, or console.
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        This project is a proxy, on purpose: your tools → Multi AI Router →
+        providers, speaking the OpenAI or Anthropic wire protocol either
+        side. Check the non-goals in `docs/idea/` and `CLAUDE.md` first —
+        multi-user/RBAC, billing, response caching, and on-router tool
+        execution are explicitly out of scope, not oversights.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem does this solve
+      description: What you're trying to do today that the router can't, or makes harder than it should.
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed behavior
+      description: What you'd want to happen. Include the request/response shape if it's a data-plane or admin-API change.
+    validations:
+      required: true
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - Data plane (/v1/messages, /v1/chat/completions, /v1/responses, ...)
+        - Routing / failover / health
+        - New provider driver
+        - Admin API / auth
+        - Operator console (web UI)
+        - Scheduler / background tasks
+        - Deployment / Docker
+        - Docs
+        - Other
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Workarounds you've tried, or why an existing feature doesn't cover this.
+
+  - type: checkboxes
+    id: scope-check
+    attributes:
+      label: Scope check
+      options:
+        - label: This doesn't require the router to execute tools on its own host (tool calls always go to the client).
+        - label: This doesn't require multi-user auth, RBAC, or billing.

@@ -296,7 +296,7 @@ that pool — the policy never runs across the union.
 | `5xx` | Retry the next candidate. Count toward the breaker's failure streak. |
 | Connection failure / timeout | Retry the next candidate. Count toward the failure streak. |
 | `4xx` other than `429` | **Do not retry.** A bad request is bad at every account; returning the upstream's error is the honest answer. |
-| `401` / `403` | Do not retry. Move the account to `needs_reauth` (OAuth) or `disabled` (API key) and surface it. |
+| `401` / `403` | Do not retry. Move the account to `needs_reauth` (OAuth) or `disabled` (an API key, or a no-auth endpoint that has grown something in front of it — neither has a login to re-run) and surface it. |
 
 Rules:
 
@@ -376,7 +376,7 @@ the mistake that makes a pool look broken when it is fine, or fine when it is br
 | Condition | Meaning | Status | Recovery |
 |---|---|---|---|
 | **Rate limited / quota window hit** | Temporary. A subscription's 5-hour or 7-day window is spent; it refills on a clock. | `cooling_down` | Automatic at the reported reset time; a half-open probe confirms. |
-| **Out of credits / balance exhausted** | Hard stop. A prepaid balance (OpenRouter, z.ai, Kimi, MiniMax) hit zero, a plan expired, or billing failed. **No clock will fix it.** | `exhausted` | **Human action only** — top up, fix billing, replace the key. The router never retries it on a timer. |
+| **Out of credits / balance exhausted** | Hard stop. A prepaid balance (OpenRouter, z.ai, Kimi, MiniMax) hit zero, a billing account went away (Gemini), a plan expired, or billing failed. **No clock will fix it.** | `exhausted` | **Human action only** — top up, fix billing, replace the key. The router never retries it on a timer. |
 
 Rules:
 
@@ -464,6 +464,24 @@ computed itself** while capacity is available.
 
 Reset instants and utilization are also exposed on the API so an operator can alert on them
 externally; see [08-observability.md](08-observability.md).
+
+### "Test now"
+
+A second, distinct button, per account. **Re-check now sends nothing** — it re-queries a quota
+signal and clears breaker marks, so it can never answer "does this credential actually complete a
+request?" Test now answers exactly that: it addresses this one account directly, bypassing pool
+membership, key scope, and failover, and sends the smallest real completion the account's dialect
+can make.
+
+| Property | Behavior |
+|---|---|
+| What it does | One real, minimal completion (capped output) against this account's own credential, via the exact same attempt path a live request takes — same headers, same failure classification. |
+| Cost | Real, every time. An HTTP account spends a token or two of a real quota window; a Claude subscription spends a turn **and** spawns a `claude` subprocess. |
+| Confirmation | The Agent-SDK path refuses to run without an explicit `confirmed: true` on the request — the console shows a confirmation dialog naming the subprocess and the spend before it ever fires. Every other provider's press goes straight through. |
+| Throttled | Its own **server-side** per-account cooldown, longer than Re-check now's and never shared with it — a free button's presses must never spend a paid one's window, or the reverse. |
+| Model | The operator names it, same as a client would; the router keeps no model catalog for an upstream to guess from. |
+| Outcome | `ok` or `failed`, plus a short, safe message — a router-authored sentence, the account's own one-word reply, or a failure signal, never a raw upstream body or credential material. |
+| No fan-out | There is no all-accounts form. A button that spends a real request — and on the Agent-SDK path a subprocess — per account in a pool is not one this console offers. |
 
 ## Worked example
 

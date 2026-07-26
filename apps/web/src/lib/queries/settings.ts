@@ -16,8 +16,8 @@ export function useSettings() {
 }
 
 /**
- * Scheduled-task health, polled — the only read in the console with a
- * `refetchInterval`.
+ * Scheduled-task health, polled — one of the two reads in the console with a
+ * `refetchInterval` (the other is the live request feed, for the same reason).
  *
  * The failure this surface exists to catch is a task that **silently stopped**
  * (docs/idea/08-observability.md#scheduled-task-visibility). A tab left open on

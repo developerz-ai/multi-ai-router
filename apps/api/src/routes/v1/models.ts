@@ -37,15 +37,29 @@ export function renderModels(
     : c.json(openAiList(models, Math.floor(now.getTime() / 1000)))
 }
 
+/** `GET /v1/models/:id` — the same per-dialect shape, unwrapped from the list envelope. */
+export function renderModel(c: Context<RouterKeyEnv>, model: ReachableModel, now: Date): Response {
+  const style = credentialStyle(c.req.header("x-api-key"))
+  return style === "anthropic"
+    ? c.json(anthropicModel(model))
+    : c.json(openAiModel(model, Math.floor(now.getTime() / 1000)))
+}
+
+function anthropicModel(model: ReachableModel): AnthropicModel {
+  return { type: "model", id: model.id, display_name: model.id }
+}
+
+function openAiModel(model: ReachableModel, created: number): OpenAiModel {
+  return { id: model.id, object: "model", created, owned_by: model.owner }
+}
+
 function anthropicList(models: readonly ReachableModel[]): {
   data: readonly AnthropicModel[]
   has_more: false
   first_id: string | null
   last_id: string | null
 } {
-  const data = models.map(
-    (model): AnthropicModel => ({ type: "model", id: model.id, display_name: model.id }),
-  )
+  const data = models.map(anthropicModel)
   return {
     data,
     has_more: false,
@@ -60,13 +74,6 @@ function openAiList(
 ): { object: "list"; data: readonly OpenAiModel[] } {
   return {
     object: "list",
-    data: models.map(
-      (model): OpenAiModel => ({
-        id: model.id,
-        object: "model",
-        created,
-        owned_by: model.owner,
-      }),
-    ),
+    data: models.map((model) => openAiModel(model, created)),
   }
 }

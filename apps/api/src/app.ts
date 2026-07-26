@@ -21,6 +21,7 @@ import {
 import { ADMIN_USAGE_BASE_PATH, adminUsageRoutes } from "./routes/admin/usage"
 import { healthRoutes } from "./routes/health"
 import { type MetricsRouteDeps, metricsRoutes } from "./routes/metrics"
+import { spaRoutes } from "./routes/spa"
 import { DATA_PLANE_BASE_PATH, dataPlaneRoutes } from "./routes/v1"
 import type {
   Dispatcher,
@@ -46,6 +47,9 @@ import type { AdminServices, AppEnv } from "./types"
  * `dataPlane` is optional so a deployment (and a test) can boot the console alone. Health checks
  * are unguarded by design — a probe that needs a credential is a probe that fails during exactly
  * the incident it exists to report.
+ *
+ * The built SPA, when there is one, mounts **last** and at the root: it is the only thing here
+ * that answers a path no route claimed, so it must be the last one asked — see `routes/spa.ts`.
  */
 
 export interface AppDeps {
@@ -58,6 +62,23 @@ export interface AppDeps {
   readonly metrics?: MetricsRouteDeps
   /** `Env.trustProxy`. Off by default: an unvetted `X-Forwarded-For` is a login-throttle bypass. */
   readonly trustProxy?: boolean
+  /**
+   * `Env.adminAuth.sessionCookieInsecure`. Off by default, and the default is the hardened one:
+   * the escape hatch drops `Secure`/`__Host-` so a plain-HTTP LAN install can log in at all —
+   * `services/admin-auth/cookies.ts`.
+   */
+  readonly sessionCookieInsecure?: boolean
+  /**
+   * Directory holding the built SPA. Absent means no static mount at all — an API-only process,
+   * which is what a test boots and what `bin/dev` runs while Vite serves the console itself.
+   */
+  readonly webRoot?: string
+}
+
+/** The two transport-shaped settings the admin plane needs, resolved to a value, never absent. */
+interface AdminMountOptions {
+  readonly trustProxy: boolean
+  readonly sessionCookieInsecure: boolean
 }
 
 export interface DataPlaneDeps {
@@ -85,11 +106,20 @@ export function createApp(deps: AppDeps): Hono<AppEnv> {
   }
 
   if (deps.admin !== undefined) {
-    mountAdmin(app, deps.admin, deps.trustProxy ?? false)
+    mountAdmin(app, deps.admin, {
+      trustProxy: deps.trustProxy ?? false,
+      sessionCookieInsecure: deps.sessionCookieInsecure ?? false,
+    })
   }
 
   if (deps.dataPlane !== undefined) {
     app.route(DATA_PLANE_BASE_PATH, dataPlaneRoutes(deps.dataPlane))
+  }
+
+  // Last. Every API route above is already registered, so the SPA's history-API fallback can only
+  // ever answer a path none of them claimed.
+  if (deps.webRoot !== undefined) {
+    app.route("/", spaRoutes({ root: deps.webRoot }))
   }
 
   return app
@@ -102,18 +132,25 @@ export function createApp(deps: AppDeps): Hono<AppEnv> {
  * silently be added without one.
  *
  * `/auth` is mounted with its own routes rather than under the guard: login is what issues the
- * session, so it cannot require one.
+ * session, so it cannot require one. It still gets `sessionCookieInsecure` from here, so the
+ * guard it builds for `/logout` and `/session` reads the cookie back under the mode `/login`
+ * wrote it in.
  */
-function mountAdmin(app: Hono<AppEnv>, admin: AdminServices, trustProxy: boolean): void {
-  const guard = adminAuth(admin.auth)
+function mountAdmin(app: Hono<AppEnv>, admin: AdminServices, options: AdminMountOptions): void {
+  const { trustProxy, sessionCookieInsecure } = options
+  const guard = adminAuth(admin.auth, sessionCookieInsecure)
 
-  app.route(ADMIN_AUTH_BASE_PATH, adminAuthRoutes({ service: admin.auth, trustProxy }))
+  app.route(
+    ADMIN_AUTH_BASE_PATH,
+    adminAuthRoutes({ service: admin.auth, trustProxy, sessionCookieInsecure }),
+  )
   app.route(
     ADMIN_ACCOUNTS_BASE_PATH,
     adminAccountRoutes({
       guard,
       service: admin.accounts,
       recheck: admin.recheck,
+      testNow: admin.testNow,
       connect: admin.connect,
     }),
   )

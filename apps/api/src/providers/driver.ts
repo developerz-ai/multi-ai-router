@@ -1,4 +1,9 @@
-import type { AuthKind, Dialect, ProviderId } from "@multi-ai-router/core"
+import {
+  type AuthKind,
+  CredentialDecryptError,
+  type Dialect,
+  type ProviderId,
+} from "@multi-ai-router/core"
 import { type AnthropicAuthForm, anthropicAuthHeaders, bearerAuthHeaders } from "./auth-headers"
 import { resolveBaseUrl } from "./base-url"
 import { type ClassificationRule, classifyUpstreamFailure } from "./failure/classify"
@@ -42,7 +47,11 @@ export interface ProviderSurface {
 
 export interface HttpDriverConfig {
   readonly id: ProviderId
-  /** Defaults to `api-key`: every HTTP driver in the registry today is a key, not a token. */
+  /**
+   * Defaults to `api-key`: most HTTP drivers here are a key, not a token. `none` is the local
+   * endpoint that authenticates nobody, and the only value under which this driver will address an
+   * upstream with no credential at all.
+   */
   readonly authKind?: AuthKind
   /** First entry is the default surface — the one an Account with no preference gets. */
   readonly surfaces: readonly [ProviderSurface, ...ProviderSurface[]]
@@ -51,11 +60,27 @@ export interface HttpDriverConfig {
   readonly parseRateLimit?: (response: UpstreamResponse) => RateLimitSignal | null
 }
 
-function surfaceHeaders(surface: ProviderSurface, credential: ProviderCredential): Headers {
+function surfaceHeaders(surface: ProviderSurface, credential: ProviderCredential | null): Headers {
   if (surface.dialect === "anthropic") {
     return anthropicAuthHeaders(credential, surface.anthropicAuth)
   }
   return bearerAuthHeaders(credential)
+}
+
+/**
+ * The one thing a nullable credential must never become: an anonymous request to a provider that
+ * expects one. `authKind: "none"` is the whole permission, and anything else arriving here with
+ * nothing to present is a router bug — loud, and never a key-less call upstream.
+ */
+function requireCredential(
+  config: HttpDriverConfig,
+  account: DriverAccount,
+  credential: ProviderCredential | null,
+): void {
+  if (credential !== null || (config.authKind ?? "api-key") === "none") return
+  throw new CredentialDecryptError(
+    `account ${account.id}: provider "${config.id}" authenticates with a credential and this account holds none`,
+  )
 }
 
 export function createHttpDriver(config: HttpDriverConfig): ProviderDriver {
@@ -76,7 +101,10 @@ export function createHttpDriver(config: HttpDriverConfig): ProviderDriver {
     authKind: config.authKind ?? "api-key",
     resolveBaseUrl: (account) => resolveBaseUrl(account, surfaceFor(account).baseUrl),
     resolveDialect: (account) => surfaceFor(account).dialect,
-    buildHeaders: (account, credential) => surfaceHeaders(surfaceFor(account), credential),
+    buildHeaders: (account, credential) => {
+      requireCredential(config, account, credential)
+      return surfaceHeaders(surfaceFor(account), credential)
+    },
     mapModelAlias,
     parseRateLimit,
     classifyFailure: (response) => classifyUpstreamFailure(classifyOptions, response),

@@ -9,6 +9,7 @@ import {
   type AdminSession,
   SESSION_COOKIE_NAME,
   sessionCookieOptions,
+  sessionCookieWouldBeDiscarded,
   sessionExpiryMs,
 } from "../../services/admin-auth"
 
@@ -29,6 +30,13 @@ export interface AdminAuthRoutesDeps {
   readonly service: AdminAuthService
   /** `Env.trustProxy`. Off by default: an unvetted `X-Forwarded-For` is a throttle bypass. */
   readonly trustProxy: boolean
+  /**
+   * `Env.adminAuth.sessionCookieInsecure` — drops `Secure` and `__Host-` so a plain-HTTP LAN
+   * install can hold a session at all (`services/admin-auth/cookies.ts`). The guard below is
+   * built from the same value: a writer and reader that disagree on the prefix produce a login
+   * that answers `200` and a session nothing ever sees again.
+   */
+  readonly sessionCookieInsecure: boolean
 }
 
 const loginSchema = z.object({
@@ -40,7 +48,7 @@ const loginSchema = z.object({
 
 export function adminAuthRoutes(deps: AdminAuthRoutesDeps): Hono<AdminAuthEnv> {
   const routes = new Hono<AdminAuthEnv>()
-  const guard = adminAuth(deps.service)
+  const guard = adminAuth(deps.service, deps.sessionCookieInsecure)
 
   routes.post("/login", async (c) => {
     const body = await readJson(c.req.raw)
@@ -62,8 +70,9 @@ export function adminAuthRoutes(deps: AdminAuthRoutesDeps): Hono<AdminAuthEnv> {
       c,
       SESSION_COOKIE_NAME,
       result.cookieValue,
-      sessionCookieOptions(result.cookieMaxAgeSeconds),
+      sessionCookieOptions(result.cookieMaxAgeSeconds, deps.sessionCookieInsecure),
     )
+    warnIfCookieUndeliverable(c, deps.sessionCookieInsecure)
     return c.json(sessionBody(result.session))
   })
 
@@ -71,13 +80,40 @@ export function adminAuthRoutes(deps: AdminAuthRoutesDeps): Hono<AdminAuthEnv> {
     // The source address rides along for the same reason login's does: the audit row for a
     // session ending is only useful next to the one that started it.
     await deps.service.logout(c.get("adminSession").id, clientIp(c, deps.trustProxy))
-    deleteCookie(c, SESSION_COOKIE_NAME, sessionCookieOptions(0))
+    deleteCookie(c, SESSION_COOKIE_NAME, sessionCookieOptions(0, deps.sessionCookieInsecure))
     return c.json({ status: "logged_out" })
   })
 
   routes.get("/session", guard, (c) => c.json(sessionBody(c.get("adminSession"))))
 
   return routes
+}
+
+/**
+ * The one misconfiguration this plane cannot answer with a status code. The login is a real `200`
+ * and the browser discards the `Secure` cookie it carried, so the `401` lands on the *next*
+ * request — see `services/admin-auth/cookies.ts`. The rule itself is pure and lives there; this is
+ * only the log line, and it names the variable that fixes it rather than describing the symptom.
+ *
+ * Deliberately not in the response body: it is a deployment fact about this router, and the wire
+ * shape of `/login` is a contract with the console (04-api-keys-and-access.md#session-cookie).
+ */
+function warnIfCookieUndeliverable(c: Context<AdminAuthEnv>, insecure: boolean): void {
+  const undeliverable = sessionCookieWouldBeDiscarded({
+    insecure,
+    requestUrl: c.req.url,
+    forwardedProto: c.req.header("x-forwarded-proto"),
+  })
+  if (!undeliverable) return
+
+  c.get("log").warn(
+    "login succeeded but the session cookie is Secure and this request arrived over plain HTTP — the browser will discard it and every request after it will be 401",
+    {
+      component: "admin-auth",
+      remedy:
+        "set SESSION_COOKIE_INSECURE=true for a plain-HTTP install, or terminate HTTPS in front and forward X-Forwarded-Proto",
+    },
+  )
 }
 
 /**

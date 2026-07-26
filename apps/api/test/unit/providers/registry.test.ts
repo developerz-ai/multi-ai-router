@@ -16,12 +16,28 @@ const HTTP_PROVIDERS = [
   "zai",
   "kimi",
   "minimax",
+  "gemini",
+  "groq",
+  "deepseek",
+  "xai",
+  "mistral",
+  "together",
+  "cerebras",
+  "ollama",
   "openai-compatible",
   "anthropic-compatible",
 ] as const
 
 /** Every HTTP provider is a key except the ChatGPT/Codex subscription, which is a refreshed token. */
 const OAUTH_PROVIDERS: readonly string[] = ["openai-oauth"]
+
+/** …and the local endpoint, which authenticates nobody. */
+const NO_AUTH_PROVIDERS: readonly string[] = ["ollama"]
+
+function expectedAuthKind(id: string): string {
+  if (OAUTH_PROVIDERS.includes(id)) return "oauth"
+  return NO_AUTH_PROVIDERS.includes(id) ? "none" : "api-key"
+}
 
 describe("PROVIDER_REGISTRY", () => {
   test("every declared ProviderId has an entry", () => {
@@ -36,7 +52,7 @@ describe("PROVIDER_REGISTRY", () => {
       const driver = httpDriver(id)
 
       expect(driver?.id).toBe(id)
-      expect(driver?.authKind).toBe(OAUTH_PROVIDERS.includes(id) ? "oauth" : "api-key")
+      expect(driver?.authKind).toBe(expectedAuthKind(id))
     }
   })
 
@@ -61,9 +77,61 @@ describe("PROVIDER_REGISTRY", () => {
     )
   })
 
-  test("the unimplemented providers name themselves as such", () => {
-    expect(PROVIDER_REGISTRY.gemini.transport).toBe("unimplemented")
-    expect(httpDriver("gemini")).toBeNull()
+  test("no declared provider is left without an implementation", () => {
+    // The `unimplemented` transport still exists — it is where an id declared in `packages/core`
+    // ahead of its driver lands, and what lets the data plane refuse it by name. Nothing sits
+    // there today, and this is the assertion that says so out loud rather than by omission.
+    const undriven = ProviderId.options.filter(
+      (id) => PROVIDER_REGISTRY[id].transport === "unimplemented",
+    )
+
+    expect(undriven).toEqual([])
+  })
+
+  test("gemini is reached on Google's OpenAI-compatibility surface, not the native protocol", () => {
+    const driver = httpDriver("gemini")
+
+    expect(driver?.dialect).toBe("openai-chat")
+    expect(driver?.authKind).toBe("api-key")
+    expect(driver?.resolveBaseUrl({ id: "g", provider: "gemini" }).toString()).toBe(
+      "https://generativelanguage.googleapis.com/v1beta/openai",
+    )
+  })
+
+  test("the six OpenAI-shaped vendors are one pinned surface each, and a key apiece", () => {
+    // They exist as ids rather than as `openai-compatible` accounts precisely because an id is what
+    // carries the endpoint and the credit-exhaustion rules. If one of them ever needed an operator
+    // to supply a base URL, it would have earned nothing over the escape hatch.
+    const vendors = ["groq", "deepseek", "xai", "mistral", "together", "cerebras"] as const
+
+    for (const id of vendors) {
+      const driver = httpDriver(id)
+
+      expect(driver?.dialect).toBe("openai-chat")
+      expect(driver?.authKind).toBe("api-key")
+      expect(driver?.oauth).toBeUndefined()
+      expect(driver?.resolveBaseUrl({ id: "probe", provider: id }).protocol).toBe("https:")
+    }
+  })
+
+  test("ollama is the local endpoint: no pinned address, and no credential demanded", () => {
+    const driver = httpDriver("ollama")
+
+    expect(driver?.dialect).toBe("openai-chat")
+    // The whole point of the id. `api-key` here would put a required field in front of an operator
+    // whose upstream has no key to give.
+    expect(driver?.authKind).toBe("none")
+    expect(driver?.oauth).toBeUndefined()
+    expect(() => driver?.resolveBaseUrl({ id: "probe", provider: "ollama" })).toThrow()
+  })
+
+  test("no other provider authenticates with nothing", () => {
+    // `none` is a licence to address an upstream anonymously. It stays deliberate and narrow.
+    const anonymous = HTTP_DRIVERS.filter((driver) => driver.authKind === "none").map(
+      (driver) => driver.id,
+    )
+
+    expect(anonymous).toEqual(["ollama"])
   })
 
   test("every registered driver declares a dialect the translation layer knows", () => {

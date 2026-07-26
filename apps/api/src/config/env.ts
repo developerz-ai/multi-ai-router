@@ -27,11 +27,12 @@ export interface RetentionConfig {
 }
 
 /**
- * Admin-plane session and login-throttle windows. Grouped like `RetentionConfig`
- * rather than flattened onto `Env`, because they are one policy read by one
- * consumer (`services/admin-auth`).
+ * Admin-plane session policy: the login-throttle windows, and the one transport
+ * decision the session cookie cannot make for itself. Grouped like
+ * `RetentionConfig` rather than flattened onto `Env`, because they are one
+ * policy read by one consumer (`services/admin-auth`).
  *
- * All five are optional: the documented happy path stays three hand-set
+ * All six are optional: the documented happy path stays three hand-set
  * variables plus `docker compose up`.
  *
  * Deliberately NOT `retention.sessionsHours` — that is the *conversation*
@@ -48,6 +49,22 @@ export interface AdminAuthConfig {
   readonly loginAttemptWindowMinutes: number
   /** How long a tripped throttle key stays locked. */
   readonly loginLockoutMinutes: number
+  /**
+   * Share of the idle window a session must have advanced before the slide persists to the
+   * store. `0.1` of an 8-hour idle window is ~48 minutes: an operator clicking around gets one
+   * store write roughly every that often instead of one per request — see
+   * `services/admin-auth/service.ts`.
+   */
+  readonly sessionSlideFraction: number
+  /**
+   * Drops `Secure` and the `__Host-` prefix from the session cookie. Off by
+   * default and warned about at boot: it is the escape hatch for a plain-HTTP
+   * LAN install (`http://192.168.1.50:8080`), where the hardened cookie is
+   * discarded by the browser and login fails with nothing explaining why.
+   * `HttpOnly`, `SameSite=Strict` and the CSRF token are unaffected — see
+   * `services/admin-auth/cookies.ts`.
+   */
+  readonly sessionCookieInsecure: boolean
 }
 
 /**
@@ -173,6 +190,13 @@ export interface Env {
   readonly logLevel: LogLevel
   readonly trustProxy: boolean
   readonly publicUrl: string | null
+  /**
+   * Directory holding the built admin SPA, which this process serves at the root. Null means the
+   * default location beside the bundled entrypoint — `main.ts` resolves it, because only it knows
+   * where this module was loaded from. Set means *exactly this*: a directory with no `index.html`
+   * fails boot rather than quietly serving an API-only router that looks like a broken web app.
+   */
+  readonly webRoot: string | null
   /** Parent of the per-Account `CLAUDE_CONFIG_DIR`s — `providers/claude-sdk/config-dir.ts`. */
   readonly claudeConfigRoot: string
   /**
@@ -182,9 +206,10 @@ export interface Env {
    */
   readonly claudeCliPath: string | null
   /**
-   * `claude` subprocesses in flight on this replica — every `query()` spawns a ~200 MB native
-   * binary, so this is a memory bound, not a throughput one. Excess requests queue rather than
-   * fail. The per-account ceiling is what stops one Account's burst starving the pool.
+   * `claude` subprocesses in flight on this replica — every `query()` spawns a ~245 MB native
+   * binary (measured, see docs/idea/09-deployment.md#sizing), so this is a memory bound, not a
+   * throughput one. Excess requests queue rather than fail. The per-account ceiling is what stops
+   * one Account's burst starving the pool.
    */
   readonly claudeSdkMaxConcurrency: number
   readonly claudeSdkMaxConcurrencyPerAccount: number
@@ -194,6 +219,13 @@ export interface Env {
    */
   readonly metricsToken: string | null
   readonly accountRecheckCooldownSeconds: number
+  /**
+   * "Test now"'s own cooldown — deliberately not shared with `accountRecheckCooldownSeconds`. A
+   * re-check is free and clears breaker marks; a test sends a real, billed request (an Agent-SDK
+   * one spawns a subprocess and spends a turn), so pressing one must never consume the other's
+   * window (`services/accounts/test-now.ts`).
+   */
+  readonly accountTestNowCooldownSeconds: number
   readonly retention: RetentionConfig
   readonly janitorIntervalMinutes: number
   readonly adminAuth: AdminAuthConfig
@@ -260,12 +292,14 @@ const envSchema = z
     LOG_LEVEL: z.enum(LOG_LEVELS).optional(),
     TRUST_PROXY: flag.optional(),
     PUBLIC_URL: absoluteUrl.optional(),
+    WEB_ROOT: nonEmpty.optional(),
     CLAUDE_CONFIG_ROOT: nonEmpty.refine(isAbsolute, "must be an absolute path").optional(),
     CLAUDE_CLI_PATH: nonEmpty.optional(),
     CLAUDE_SDK_MAX_CONCURRENCY: atLeastOne.optional(),
     CLAUDE_SDK_MAX_CONCURRENCY_PER_ACCOUNT: atLeastOne.optional(),
     METRICS_TOKEN: nonEmpty.optional(),
     ACCOUNT_RECHECK_COOLDOWN_SECONDS: wholeNumber.optional(),
+    ACCOUNT_TEST_NOW_COOLDOWN_SECONDS: wholeNumber.optional(),
     RETENTION_SESSIONS_HOURS: wholeNumber.optional(),
     RETENTION_USAGE_DAYS: wholeNumber.optional(),
     RETENTION_AUDIT_DAYS: wholeNumber.optional(),
@@ -289,6 +323,8 @@ const envSchema = z
     ADMIN_LOGIN_MAX_ATTEMPTS: wholeNumber.optional(),
     ADMIN_LOGIN_ATTEMPT_WINDOW_MINUTES: wholeNumber.optional(),
     ADMIN_LOGIN_LOCKOUT_MINUTES: wholeNumber.optional(),
+    ADMIN_SESSION_SLIDE_FRACTION: fraction.optional(),
+    SESSION_COOKIE_INSECURE: flag.optional(),
     CATALOG_REFRESH_SECONDS: wholeNumber.optional(),
     KEY_CACHE_MAX: wholeNumber.optional(),
     KEY_CACHE_TTL_SECONDS: wholeNumber.optional(),
@@ -331,12 +367,16 @@ const envSchema = z
       logLevel: raw.LOG_LEVEL ?? "info",
       trustProxy: raw.TRUST_PROXY ?? false,
       publicUrl: raw.PUBLIC_URL ?? null,
+      webRoot: raw.WEB_ROOT ?? null,
       claudeConfigRoot: raw.CLAUDE_CONFIG_ROOT ?? "/data/claude",
       claudeCliPath: raw.CLAUDE_CLI_PATH ?? null,
       claudeSdkMaxConcurrency: raw.CLAUDE_SDK_MAX_CONCURRENCY ?? 10,
       claudeSdkMaxConcurrencyPerAccount: raw.CLAUDE_SDK_MAX_CONCURRENCY_PER_ACCOUNT ?? 4,
       metricsToken: raw.METRICS_TOKEN ?? null,
       accountRecheckCooldownSeconds: raw.ACCOUNT_RECHECK_COOLDOWN_SECONDS ?? 60,
+      // Longer than the re-check default on purpose: this one costs money (and, on the Agent-SDK
+      // path, a subprocess), so the button that spends it should not be as cheap to lean on.
+      accountTestNowCooldownSeconds: raw.ACCOUNT_TEST_NOW_COOLDOWN_SECONDS ?? 120,
       retention: {
         sessionsHours: raw.RETENTION_SESSIONS_HOURS ?? 24,
         usageDays: raw.RETENTION_USAGE_DAYS ?? 90,
@@ -363,6 +403,8 @@ const envSchema = z
         loginMaxAttempts: raw.ADMIN_LOGIN_MAX_ATTEMPTS ?? 5,
         loginAttemptWindowMinutes: raw.ADMIN_LOGIN_ATTEMPT_WINDOW_MINUTES ?? 15,
         loginLockoutMinutes: raw.ADMIN_LOGIN_LOCKOUT_MINUTES ?? 15,
+        sessionSlideFraction: raw.ADMIN_SESSION_SLIDE_FRACTION ?? 0.1,
+        sessionCookieInsecure: raw.SESSION_COOKIE_INSECURE ?? false,
       },
       // Defaults mirror the layer constants they override, so an unset variable
       // and a variable set to the default behave identically.

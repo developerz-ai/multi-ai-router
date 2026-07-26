@@ -162,6 +162,14 @@ describe("auth failures are not cooldowns", () => {
     const state = recordFailure(HEALTHY, failure("auth"), NOW, { authKind: "api-key" })
     expect(state.status).toBe("disabled")
   })
+
+  test("a no-auth account is disabled too: there is nothing to re-authorize", () => {
+    // A local endpoint that suddenly rejects an anonymous request has grown something in front of
+    // it. `needs_reauth` would offer the operator a login this account has never had.
+    const state = recordFailure(HEALTHY, failure("auth"), NOW, { authKind: "none" })
+    expect(state.status).toBe("disabled")
+    expect(phase(state, at(86_400_000))).toBe("blocked")
+  })
 })
 
 describe("failures that say nothing about the account", () => {

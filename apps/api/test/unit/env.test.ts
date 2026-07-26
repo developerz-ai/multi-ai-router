@@ -29,8 +29,10 @@ describe("parseEnv", () => {
     expect(env.logLevel).toBe("info")
     expect(env.trustProxy).toBe(false)
     expect(env.publicUrl).toBeNull()
+    expect(env.webRoot).toBeNull()
     expect(env.claudeConfigRoot).toBe("/data/claude")
     expect(env.accountRecheckCooldownSeconds).toBe(60)
+    expect(env.accountTestNowCooldownSeconds).toBe(120)
     expect(env.janitorIntervalMinutes).toBe(60)
     expect(env.retention).toEqual({
       sessionsHours: 24,
@@ -46,6 +48,15 @@ describe("parseEnv", () => {
       sweepBatchSize: 1_000,
       jitterFraction: 0.2,
     })
+    expect(env.adminAuth).toEqual({
+      sessionIdleMinutes: 480,
+      sessionAbsoluteHours: 24,
+      loginMaxAttempts: 5,
+      loginAttemptWindowMinutes: 15,
+      loginLockoutMinutes: 15,
+      sessionSlideFraction: 0.1,
+      sessionCookieInsecure: false,
+    })
   })
 
   test("reads overrides for every knob", () => {
@@ -55,8 +66,10 @@ describe("parseEnv", () => {
       LOG_LEVEL: "debug",
       TRUST_PROXY: "true",
       PUBLIC_URL: "https://router.example.com",
+      WEB_ROOT: "/srv/console",
       CLAUDE_CONFIG_ROOT: "/srv/claude",
       ACCOUNT_RECHECK_COOLDOWN_SECONDS: "30",
+      ACCOUNT_TEST_NOW_COOLDOWN_SECONDS: "45",
       RETENTION_SESSIONS_HOURS: "6",
       RETENTION_USAGE_DAYS: "7",
       RETENTION_AUDIT_DAYS: "30",
@@ -68,14 +81,23 @@ describe("parseEnv", () => {
       QUOTA_FLOOR_INTERVAL_MINUTES: "45",
       SWEEP_BATCH_SIZE: "500",
       SCHEDULER_JITTER_FRACTION: "0.5",
+      ADMIN_SESSION_IDLE_MINUTES: "60",
+      ADMIN_SESSION_ABSOLUTE_HOURS: "8",
+      ADMIN_LOGIN_MAX_ATTEMPTS: "3",
+      ADMIN_LOGIN_ATTEMPT_WINDOW_MINUTES: "5",
+      ADMIN_LOGIN_LOCKOUT_MINUTES: "30",
+      ADMIN_SESSION_SLIDE_FRACTION: "0.25",
+      SESSION_COOKIE_INSECURE: "true",
     })
 
     expect(env.port).toBe(9000)
     expect(env.logLevel).toBe("debug")
     expect(env.trustProxy).toBe(true)
     expect(env.publicUrl).toBe("https://router.example.com")
+    expect(env.webRoot).toBe("/srv/console")
     expect(env.claudeConfigRoot).toBe("/srv/claude")
     expect(env.accountRecheckCooldownSeconds).toBe(30)
+    expect(env.accountTestNowCooldownSeconds).toBe(45)
     expect(env.retention.sessionsHours).toBe(6)
     expect(env.janitorIntervalMinutes).toBe(15)
     expect(env.scheduler).toEqual({
@@ -84,6 +106,15 @@ describe("parseEnv", () => {
       quotaFloorIntervalMinutes: 45,
       sweepBatchSize: 500,
       jitterFraction: 0.5,
+    })
+    expect(env.adminAuth).toEqual({
+      sessionIdleMinutes: 60,
+      sessionAbsoluteHours: 8,
+      loginMaxAttempts: 3,
+      loginAttemptWindowMinutes: 5,
+      loginLockoutMinutes: 30,
+      sessionSlideFraction: 0.25,
+      sessionCookieInsecure: true,
     })
   })
 
@@ -180,6 +211,31 @@ describe("parseEnv", () => {
       expect(error.variables).toContain("ADMIN_USERNAME")
       expect(error.variables).toContain("ENCRYPTION_KEY")
       expect(error.variables).toContain("PORT")
+    })
+  })
+
+  describe("SESSION_COOKIE_INSECURE", () => {
+    test("defaults off — the hardened cookie is what an unconfigured router ships", () => {
+      expect(parseEnv(base).adminAuth.sessionCookieInsecure).toBe(false)
+    })
+
+    test("accepts both spellings of on and of off", () => {
+      for (const on of ["true", "1"]) {
+        expect(
+          parseEnv({ ...base, SESSION_COOKIE_INSECURE: on }).adminAuth.sessionCookieInsecure,
+        ).toBe(true)
+      }
+      for (const off of ["false", "0"]) {
+        expect(
+          parseEnv({ ...base, SESSION_COOKIE_INSECURE: off }).adminAuth.sessionCookieInsecure,
+        ).toBe(false)
+      }
+    })
+
+    test("a value that is neither fails boot rather than being read as off", () => {
+      expect(expectEnvError({ ...base, SESSION_COOKIE_INSECURE: "yes" }).variables).toEqual([
+        "SESSION_COOKIE_INSECURE",
+      ])
     })
   })
 

@@ -31,16 +31,94 @@ leftmost one that applies.
 
 ## Ingress surface
 
-| Path | Dialect |
-|---|---|
-| `POST /v1/messages` | Anthropic Messages (`anthropic`) |
-| `POST /v1/chat/completions` | OpenAI Chat Completions (`openai-chat`) |
-| `POST /v1/responses` | OpenAI Responses (`openai-responses`) |
-| `GET /v1/models` | union of models reachable by the presenting key — [04-api-keys-and-access.md](04-api-keys-and-access.md) |
+| Path | Dialect | Operation |
+|---|---|---|
+| `POST /v1/messages` | Anthropic Messages (`anthropic`) | inference |
+| `POST /v1/messages/count_tokens` | Anthropic Messages (`anthropic`) | count tokens — below |
+| `POST /v1/chat/completions` | OpenAI Chat Completions (`openai-chat`) | inference |
+| `POST /v1/responses` | OpenAI Responses (`openai-responses`) | inference |
+| `POST /v1/embeddings` | OpenAI, dialect-neutral (`openai-chat` for the error shape) | embed — below |
+| `GET /v1/models` | union of models reachable by the presenting key — [04-api-keys-and-access.md](04-api-keys-and-access.md) | — |
+| `GET /v1/models/:id` | one model; `404` if the presenting key cannot reach it | — |
 
 **Both OpenAI paths are first-class, and that is not redundancy.** `POST /v1/responses` is OpenAI's
 current recommended primitive and where new clients are going; `POST /v1/chat/completions` is what the
 installed base sends today. The router accepts both; neither is deprecated here.
+
+## Counting tokens
+
+`POST /v1/messages/count_tokens` is on the surface because **Claude Code calls it unprompted**,
+before a turn, to decide when to compact its context. A router that 404s it is a router that client
+half-works against.
+
+It is an ordinary data-plane request: same router key, same scope intersection, same health
+snapshot, same failover chain, one `UsageRecord` per attempt. Two things about it are not ordinary.
+
+**It is passthrough or nothing.** A count is a statement about *one provider's tokenizer* for *one
+prompt*, so the only honest answer is the number that provider returns. Neither alternative
+survives contact with what a client does with it:
+
+| Candidate | Answer | Why |
+|---|---|---|
+| Anthropic-dialect account (API key, or a compatible vendor's Anthropic surface) | **passthrough** to `{baseUrl}/v1/messages/count_tokens` | the provider's own number |
+| `openai-chat` / `openai-responses` account | **not planned** | neither dialect exposes a counting endpoint, and a different tokenizer's count is not an answer to the question asked |
+| Claude subscription (Agent SDK) | **not planned** | the SDK exposes no token-count call, and the router will never forge an `api.anthropic.com` request out of a subscription's credentials — [11-anthropic-agent-sdk.md](11-anthropic-agent-sdk.md) |
+
+The refusal is **per candidate**, so a pool holding one Anthropic API key and four Claude
+subscriptions still answers, off the one account that can. Only when *no* in-scope account can
+count does it surface, and then as a **`503`** — the body was a valid Anthropic request and there is
+no other ingress path to send it down, so what is missing is an Anthropic-dialect account, which
+only the operator can add. That is the same reasoning that makes an unimplemented provider a `503`
+rather than the `400` a missing *translator* gets. **The router never estimates.** A fabricated
+integer is indistinguishable from a measured one at the client, which is the objection that already
+forbids substituting a model. An Anthropic-compatible vendor that never implemented the endpoint
+answers its own `404`, and that `404` is relayed unchanged.
+
+**Its `input_tokens` is never accounted.** The response measures a prompt that was never run, so the
+relay observes bytes and no tokens on this path: the `UsageRecord` carries the request, the account,
+and the latency, with all four token columns at zero and no cost. Reading the number would price a
+question as though it were a completion and inflate every report that sums the column.
+
+## Embeddings
+
+`POST /v1/embeddings` is on the surface because **every RAG toolchain calls it beside its chat
+traffic** — LangChain, LlamaIndex, and Continue.dev all index with it — and telling one of them to
+use a second base URL for embeddings defeats the point of pooling credentials behind one endpoint.
+
+It is an ordinary data-plane request: same router key, same scope intersection, same health
+snapshot, same failover chain, one `UsageRecord` per attempt. Three things about it are its own.
+
+**It is passthrough or nothing, and both OpenAI dialects are one family for it.** The body carries a
+model and an `input` and nothing that distinguishes Chat Completions from Responses, so
+`{baseUrl}/embeddings` is the same endpoint whichever chat surface an Account is pinned to.
+
+| Candidate | Answer | Why |
+|---|---|---|
+| `openai-chat` **or** `openai-responses` account (an OpenAI key, or any OpenAI-compatible endpoint) | **passthrough** to `{baseUrl}/embeddings` | the body names no chat surface, so the Account's chat pin does not decide whether it can embed |
+| Anthropic-dialect account | **not planned** | Anthropic publishes no embeddings API, so there is nothing below its base URL to address |
+| Claude subscription (Agent SDK) | **not planned** | the SDK is a completion transport with no embeddings call, and the router will never forge an `api.anthropic.com` request out of a subscription's credentials — [11-anthropic-agent-sdk.md](11-anthropic-agent-sdk.md) |
+
+Narrowing this to `openai-chat` alone would let an operator's choice of *chat* primitive silently
+decide whether their key can embed, which is a routing rule nobody wrote down. Refusal is **per
+candidate**, so a pool holding one OpenAI key and four Claude subscriptions still embeds, off the one
+account that can — and when none can it surfaces as a **`503`**, for the same reason the token count
+does: the body is a valid request, and what is missing is an account the operator would add. **The
+router never substitutes.** A vector from a different model is not a lesser answer but a wrong one —
+it compares as noise against every embedding already in the caller's index, which is the same
+objection that forbids substituting a model. An OpenAI-compatible endpoint that serves chat but never
+implemented embeddings answers its own `404`, and that `404` is relayed unchanged.
+
+**Its `prompt_tokens` *are* accounted, as input alone.** Unlike a token count, an embedding spends
+what it reports: `tokensIn` takes `prompt_tokens`, `tokensOut` is the zero it truthfully is, and
+`total_tokens` is read nowhere — it restates a sum this router already holds in a column that means
+something else. Embedding models are absent from the shipped price table, so the cost estimate is
+`NULL` and the basis `unknown` (see [08-observability.md](08-observability.md#cost-estimation)) —
+which is what every OpenAI-priced request reports today, and honest rather than a zero that reads as
+free.
+
+**Its ingress dialect is `openai-chat` for one purpose: the error shape.** The path is dialect-neutral
+on the wire, and `openai-chat` is what a client calling `/v1/embeddings` expects a failure to look
+like.
 
 ## Translation matrix
 
@@ -60,8 +138,12 @@ re-synthesize = rendered from Agent SDK output, never proxied (below).
 **Unsupported**, returning `4xx` rather than a degraded call: a stateful Responses request
 (`previous_response_id`, `store: true`, `include`, `reasoning` and `item_reference` input items)
 against non-Responses egress — `400`, the router holds no conversation state; and any request whose
-required feature has no faithful target representation — `400`, naming the field. Native Google
-GenAI egress is **DEFERRED**; Gemini goes through an OpenAI-compatible layer in v1.
+required feature has no faithful target representation — `400`, naming the field.
+
+Gemini is **not** an unsupported egress: the `gemini` driver speaks `openai-chat` over Google's
+OpenAI-compatibility surface, so a Gemini account sits in the `OpenAI Chat Completions` column above
+like any other. Only the **native Google GenAI protocol** is deferred — it would be a fourth
+dialect, and a fourth row and column of pairs to write ([10-roadmap.md](10-roadmap.md)).
 
 Statefulness is refused rather than approximated because the alternative is silent: a
 `previous_response_id` the router cannot resolve would become a request carrying only the newest

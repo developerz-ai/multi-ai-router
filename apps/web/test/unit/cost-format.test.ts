@@ -165,6 +165,7 @@ describe("RATE_HEADERS and ORIGIN_TONE completeness", () => {
 
 describe("summarise", () => {
   const view = {
+    version: "1.0.0",
     retention: {
       usageDays: 30,
       auditDays: 90,

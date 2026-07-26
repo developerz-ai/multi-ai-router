@@ -88,7 +88,9 @@ describe("documented enum values", () => {
   })
 
   test("provider ids keep anthropic-oauth and anthropic-api separate", () => {
-    expect(providerId.enumValues).toHaveLength(11)
+    // Counted off core rather than restated: the list grows with every driver, and a literal here
+    // would fail a provider addition for no reason the failure names.
+    expect(providerId.enumValues).toHaveLength(ProviderId.options.length)
     expect(providerId.enumValues).toContain("anthropic-oauth")
     expect(providerId.enumValues).toContain("anthropic-api")
   })

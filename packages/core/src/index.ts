@@ -35,6 +35,7 @@ export {
   isRouterError,
   KeyRateLimitedError,
   KeyRevokedError,
+  ModelNotFoundError,
   NoHealthyAccountError,
   QuotaExhaustedError,
   RetryableRouterError,
@@ -56,3 +57,4 @@ export {
   ROUTER_KEY_RANDOM_LENGTH,
   routerKeyDisplayPrefix,
 } from "./ids"
+export { VERSION } from "./version"

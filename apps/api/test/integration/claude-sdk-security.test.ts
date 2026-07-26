@@ -1,7 +1,10 @@
-import { describe, expect, test } from "bun:test"
-import { readFileSync } from "node:fs"
+import { afterAll, beforeAll, describe, expect, test } from "bun:test"
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
+import { tmpdir } from "node:os"
 import { join } from "node:path"
 import type { PermissionResult } from "@anthropic-ai/claude-agent-sdk"
+import { createApp } from "../../src/app"
+import { createLogger } from "../../src/logging/logger"
 import {
   createPassthrough,
   createQueryLaunch,
@@ -294,5 +297,97 @@ describe("the request path never spawns a host process", () => {
     expect(usage.rows).toHaveLength(1)
     expect(usage.rows[0]?.accountId).toBe("sub-1")
     expect(usage.rows[0]?.egressMode).toBe("agent-sdk")
+  })
+})
+
+describe("the static SPA mount cannot serve anything outside its web root", () => {
+  /**
+   * This isn't the Agent SDK, but the same failure mode is: a filesystem mount reachable from an
+   * unauthenticated HTTP request, sitting on the same host as `CLAUDE_CONFIG_ROOT` (per-Account
+   * OAuth credentials) and the process's own `.env` (`ENCRYPTION_KEY`, `DATABASE_URL`,
+   * `ADMIN_PASSWORD`). `routes/spa.ts` is mounted last, at `/`, with no router key and no session —
+   * a traversal bug there is a wider hole than anything the Agent SDK's own sandbox guards.
+   *
+   * The fixture below never touches the real filesystem locations — it stands up its own `web/`
+   * (the mount's root) beside sibling directories that play the part of `CLAUDE_CONFIG_ROOT` and
+   * the repo root, so a traversal that escapes `web/` lands on a marker this test can see.
+   */
+  const CONFIG_SECRET = "sk-ant-oauth-token-must-never-be-served-by-the-static-mount"
+  const ENV_SECRET = "ENCRYPTION_KEY=must-never-be-served-by-the-static-mount"
+  const SHELL_HTML = "<!doctype html><title>router console</title>"
+  const ACCOUNT_ID = "3f1c0a6e-2b7d-4a51-9c88-0d21e5b7a410"
+
+  let base: string
+  let webRoot: string
+
+  beforeAll(() => {
+    base = mkdtempSync(join(tmpdir(), "router-spa-traversal-"))
+    webRoot = join(base, "web")
+    mkdirSync(webRoot)
+    writeFileSync(join(webRoot, "index.html"), SHELL_HTML)
+
+    // Sibling to the mount's root, one `..` away — exactly where `CLAUDE_CONFIG_ROOT` and a repo
+    // checkout's `.env` sit relative to the bundled `dist/web` in a real deployment (`main.ts`'s
+    // `resolveWebRoot`).
+    const configRoot = join(base, "claude-config-root", ACCOUNT_ID)
+    mkdirSync(configRoot, { recursive: true })
+    writeFileSync(join(configRoot, "credentials.json"), CONFIG_SECRET)
+    writeFileSync(join(base, ".env"), ENV_SECRET)
+
+    // Fixture sanity: if these two writes ever silently no-op, every assertion below would pass
+    // vacuously. Fail loudly here instead.
+    expect(readFileSync(join(configRoot, "credentials.json"), "utf8")).toBe(CONFIG_SECRET)
+    expect(readFileSync(join(base, ".env"), "utf8")).toBe(ENV_SECRET)
+  })
+
+  afterAll(() => {
+    rmSync(base, { recursive: true, force: true })
+  })
+
+  function app() {
+    return createApp({
+      logger: createLogger({ level: "error", write: () => {} }),
+      probes: {
+        database: () => Promise.resolve(true),
+        accounts: () => Promise.resolve("ok"),
+        claudeCli: () => Promise.resolve("platform_package"),
+      },
+      webRoot,
+    })
+  }
+
+  const TRAVERSAL_PATHS = [
+    "/../.env",
+    "/../../.env",
+    "/../claude-config-root/3f1c0a6e-2b7d-4a51-9c88-0d21e5b7a410/credentials.json",
+    "/%2e%2e/.env",
+    "/%2e%2e/%2e%2e/.env",
+    "/%2e%2e/claude-config-root/3f1c0a6e-2b7d-4a51-9c88-0d21e5b7a410/credentials.json",
+    "/assets/%2e%2e/%2e%2e/.env",
+    "/..%2f..%2f.env",
+    "/%2e%2e%2f%2e%2e%2f.env",
+    "/%252e%252e/.env",
+    "/..\\..\\.env",
+  ]
+
+  test.each(TRAVERSAL_PATHS)("GET %s never leaks a byte of either secret file", async (path) => {
+    const res = await app().request(path)
+    const body = await res.text()
+
+    expect(body).not.toContain(CONFIG_SECRET)
+    expect(body).not.toContain(ENV_SECRET)
+    expect(res.status).not.toBe(500)
+    // Every one of these either gets refused outright by the static middleware or falls through
+    // to the history-API fallback — a 200 body must be the shell, byte for byte, never a partial
+    // or wrong file.
+    if (res.status === 200) expect(body).toBe(SHELL_HTML)
+  })
+
+  test("a legitimate asset request one directory up is still refused, not a false negative", async () => {
+    // Guards against a fixture that would make every case above pass by accident (e.g. an empty
+    // `webRoot`, which would 404 no matter what the traversal defence does).
+    const res = await app().request("/index.html")
+    expect(res.status).toBe(200)
+    expect(await res.text()).toBe(SHELL_HTML)
   })
 })

@@ -1,3 +1,7 @@
+import { existsSync } from "node:fs"
+import { join } from "node:path"
+import { fileURLToPath } from "node:url"
+import { VERSION } from "@multi-ai-router/core"
 import { createDatabase, runMigrations } from "@multi-ai-router/db"
 import { createApp } from "./app"
 import { createRuntime, type Runtime, type RuntimeDeps } from "./composition"
@@ -16,6 +20,8 @@ import { createDatabaseProbe } from "./services/health/databaseProbe"
 async function main(): Promise<void> {
   const env = readEnv()
   const logger = createLogger({ level: env.logLevel })
+
+  warnOnInsecureSessionCookie(env, logger)
 
   // Migrations run before the listener opens. A failure exits non-zero rather than serving
   // traffic on a half-migrated schema — docs/idea/09-deployment.md#migrations.
@@ -51,11 +57,14 @@ async function main(): Promise<void> {
       health: runtime.health,
     },
     trustProxy: env.trustProxy,
+    sessionCookieInsecure: env.adminAuth.sessionCookieInsecure,
+    webRoot: resolveWebRoot(env, logger),
   })
 
   const server = Bun.serve({ port: env.port, fetch: app.fetch })
   logger.info("router listening", {
     component: "transport",
+    version: VERSION,
     port: server.port,
     logLevel: env.logLevel,
     trustProxy: env.trustProxy,
@@ -68,6 +77,51 @@ async function main(): Promise<void> {
     await runtime.stop()
     await database.close()
   })
+}
+
+/**
+ * The one setting that trades a security property for reachability, so it announces itself on
+ * every boot rather than only in the file where it was set.
+ *
+ * `warn`, not `info`: the operator who enabled it for a LAN install and later moved the router
+ * behind an HTTPS front has no other signal that the session cookie is still riding plaintext,
+ * and the boot line is the one thing they will look at when something is wrong.
+ */
+function warnOnInsecureSessionCookie(env: Env, logger: Logger): void {
+  if (!env.adminAuth.sessionCookieInsecure) return
+  logger.warn("SESSION_COOKIE_INSECURE is on — the admin session cookie is not Secure", {
+    component: "admin-auth",
+    risk: "the session rides plaintext and any host sharing this domain can set it; unset this once the console is served over HTTPS",
+  })
+}
+
+/**
+ * Where the built SPA lives, or undefined to serve the API alone.
+ *
+ * The default is `../web` relative to *this module*, which is `dist/web` once `bin/build` has
+ * bundled it to `dist/api/index.js` — the same `import.meta.url` trick migrations use to find
+ * `dist/migrations`, and for the same reason: the path has to survive bundling.
+ *
+ * A missing default is not fatal. Running from source (`bin/dev`) has no build output at all, and
+ * Vite serves the console on its own port there. A **set** `WEB_ROOT` holding no `index.html` is
+ * fatal, following `CLAUDE_CLI_PATH`: what the operator named is used or boot fails, never a
+ * silent fall-through to something they did not name.
+ */
+function resolveWebRoot(env: Env, logger: Logger): string | undefined {
+  const root = env.webRoot ?? fileURLToPath(new URL("../web", import.meta.url))
+  if (existsSync(join(root, "index.html"))) return root
+
+  if (env.webRoot !== null) {
+    process.stderr.write(
+      `Invalid environment configuration:\n  WEB_ROOT: no index.html in ${root}\n`,
+    )
+    process.exit(1)
+  }
+  logger.warn("no built admin console found — serving the API only", {
+    component: "transport",
+    webRoot: root,
+  })
+  return undefined
 }
 
 /** A malformed environment exits non-zero naming the offending variable, and never starts. */

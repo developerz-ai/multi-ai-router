@@ -8,6 +8,27 @@ set -eu
 
 cd "$(dirname "$0")/.."
 
+die() { printf '\033[0;31m✘\033[0m  %s\n' "$*" >&2; exit 1; }
+
+# "If it passes here it passes on the PR" is only true when this run covers what
+# CI covers. CI gives the test job a real Postgres service container, so the
+# DB-backed suites — migrations, advisory-lock contention, retention deletes,
+# the readiness probe — always execute there. With DATABASE_URL unset they skip
+# themselves instead, and `bun test` reports a skip inside the same green
+# summary as a pass: the gate would go green having proved strictly less than
+# the PR will. That silence is the bug, so refuse rather than shrink the gate.
+#
+# `bun -e` resolves the variable exactly the way `bun test` will (environment
+# first, then .env / .env.local), so this can never disagree with the run below.
+# It costs no install: the check lands before the first slow step.
+if [ -z "$(bun -e 'process.stdout.write(process.env.DATABASE_URL ?? "")')" ]; then
+  die "DATABASE_URL is not set — the live-Postgres suites would skip and this gate
+    would pass on less than CI runs. Give it a database:
+
+      bin/setup                     starts the dev Postgres and writes DATABASE_URL to .env
+      DATABASE_URL=… bin/check      point at a Postgres 16+ you already run"
+fi
+
 # Same flag CI uses, so a stale lockfile fails here rather than on the PR.
 bun install --frozen-lockfile
 

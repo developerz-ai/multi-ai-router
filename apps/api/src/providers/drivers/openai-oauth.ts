@@ -195,8 +195,11 @@ export function chatGptAccountId(tokens: ClaimTokens): string | null {
  * read as a bad token. `UpstreamAuthError` names it for what it is, the chain fails over to the
  * next candidate, and no token material reaches the message.
  */
-function requireChatGptAccountId(account: DriverAccount, credential: ProviderCredential): string {
-  const accessToken = credential.kind === "oauth" ? credential.accessToken : null
+function requireChatGptAccountId(
+  account: DriverAccount,
+  credential: ProviderCredential | null,
+): string {
+  const accessToken = credential?.kind === "oauth" ? credential.accessToken : null
   const derived = chatGptAccountId({ accessToken })
   if (derived !== null) return derived
   throw new UpstreamAuthError(

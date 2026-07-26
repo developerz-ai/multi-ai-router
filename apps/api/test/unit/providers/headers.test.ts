@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import type { ProviderId } from "@multi-ai-router/core"
+import { CredentialDecryptError, type ProviderId } from "@multi-ai-router/core"
 import {
   ANTHROPIC_OAUTH_BETA,
   ANTHROPIC_VERSION,
@@ -95,7 +95,19 @@ describe("compatible vendors on their Anthropic surfaces", () => {
 })
 
 describe("OpenAI-dialect drivers", () => {
-  const openAiDialect: readonly ProviderId[] = ["openai-api", "openrouter", "openai-compatible"]
+  const openAiDialect: readonly ProviderId[] = [
+    "openai-api",
+    "openrouter",
+    "gemini",
+    "groq",
+    "deepseek",
+    "xai",
+    "mistral",
+    "together",
+    "cerebras",
+    "ollama",
+    "openai-compatible",
+  ]
 
   for (const id of openAiDialect) {
     test(`${id} authenticates with a Bearer token and no Anthropic headers`, () => {
@@ -120,6 +132,41 @@ describe("z.ai picks its header form from the Account's surface", () => {
     expect(headers.get("authorization")).toBe("Bearer sk-test-key")
     expect(headers.get("x-api-key")).toBeNull()
     expect(headers.get("anthropic-version")).toBeNull()
+  })
+})
+
+describe("an upstream that authenticates nobody", () => {
+  test("ollama with no credential sends no auth header at all", () => {
+    const headers = driverFor("ollama").buildHeaders(account({ provider: "ollama" }), null)
+
+    expect([...headers.keys()]).toEqual([])
+  })
+
+  test("ollama with one presents it, for the same endpoint behind a proxy", () => {
+    expect(headersFor("ollama", API_KEY).get("authorization")).toBe("Bearer sk-test-key")
+  })
+
+  test("no other provider may be addressed anonymously — it fails loudly instead", () => {
+    // The guard exists so a nullable credential can never quietly become a keyless call to a
+    // provider that expects one. `authKind: "none"` is the whole permission.
+    for (const id of ["anthropic-api", "openai-api", "openai-compatible"] as const) {
+      expect(() => driverFor(id).buildHeaders(account({ provider: id }), null)).toThrow(
+        CredentialDecryptError,
+      )
+    }
+  })
+
+  test("the refusal names the account and the provider, and no credential material", () => {
+    let caught: unknown
+    try {
+      driverFor("anthropic-api").buildHeaders(account({ provider: "anthropic-api" }), null)
+    } catch (error) {
+      caught = error
+    }
+
+    expect(caught).toBeInstanceOf(CredentialDecryptError)
+    expect((caught as CredentialDecryptError).message).toContain("anthropic-api")
+    expect((caught as CredentialDecryptError).status).toBe(500)
   })
 })
 

@@ -1,8 +1,10 @@
 # Deployment and Ops
 
 Status: the compose file, the image, boot-time migrations, and the full environment reference below
-are **implemented and shipped**. The janitor and every other periodic task are **not** — the
-retention windows below are validated configuration that nothing sweeps on yet.
+are **implemented and shipped**. The janitor and every other periodic task (usage rollup, OAuth-state
+purge, quota floor) are also shipped — in-process jittered timers, one `pg_try_advisory_lock` per
+task, last run and outcome recorded to `ScheduledTaskRun` — and the retention windows below are what
+they sweep against.
 
 ## The promise
 
@@ -92,10 +94,12 @@ naming the offending variable — the process never starts half-configured.
 | `PORT` | no | `8080` | Listen port inside the container. |
 | `CLAUDE_CONFIG_ROOT` | no | `/data/claude` | Parent directory holding one `CLAUDE_CONFIG_DIR` per Claude subscription Account. Must sit on the persistent `claude-config` volume. Secret material — see [Persistence & backup](#persistence--backup). |
 | `CLAUDE_CLI_PATH` | no | — | Pins the `claude` binary the Agent SDK spawns, bypassing resolution. Unset is right: the image stages one on `PATH` and `/readyz` reports which rung of the ladder won. A set-but-unusable path **fails** rather than falling back, so the router never spawns a binary you did not name — see [11-anthropic-agent-sdk.md](11-anthropic-agent-sdk.md#9-operational-notes). |
-| `CLAUDE_SDK_MAX_CONCURRENCY` | no | `10` | `claude` subprocesses in flight on this replica. Every subscription request spawns one (~200 MB native binary), so this is a **memory** bound, not a throughput one — size against RAM, not CPUs. Requests over the ceiling queue rather than fail. |
+| `CLAUDE_SDK_MAX_CONCURRENCY` | no | `10` | `claude` subprocesses in flight on this replica. Every subscription request spawns one (~245 MB native binary, measured — see [Sizing](#sizing)), so this is a **memory** bound, not a throughput one — size against RAM, not CPUs. Requests over the ceiling queue rather than fail. |
 | `CLAUDE_SDK_MAX_CONCURRENCY_PER_ACCOUNT` | no | `4` | The same ceiling for any one subscription Account — what stops one Account's burst starving the pool. Values above `CLAUDE_SDK_MAX_CONCURRENCY` are legal and simply never bind. |
 | `ACCOUNT_RECHECK_COOLDOWN_SECONDS` | no | `60` | Minimum interval between manual **Re-check now** probes of the same account. The button re-queries the provider's live quota signal; this is what stops it being used to hammer an upstream. |
+| `ACCOUNT_TEST_NOW_COOLDOWN_SECONDS` | no | `120` | Minimum interval between manual **Test now** presses of the same account. Distinct from the re-check cooldown above and deliberately longer: this button sends one real, billed completion, and on a Claude subscription it spawns a `claude` subprocess and spends a turn. |
 | `PUBLIC_URL` | no | — | Externally reachable base URL. Only used to build the OAuth redirect-capture callback (`PUBLIC_URL + /admin/accounts/oauth/callback`). Unset → paste-back capture only. |
+| `WEB_ROOT` | no | `dist/web` beside the bundled entrypoint | Directory holding the built admin console, which the router serves at `/` on its own origin. The default is correct in the image; set it only when the assets live elsewhere. Set-but-missing an `index.html` **fails boot** rather than quietly serving an API-only router that looks like a broken web app. Absent assets at the default path are not fatal — that is what running from source looks like, and Vite serves the console itself in dev. |
 | `LOG_LEVEL` | no | `info` | `debug` \| `info` \| `warn` \| `error`. Structured JSON either way. |
 | `METRICS_TOKEN` | no | — | Bearer token `GET /metrics` demands (`Authorization: Bearer …`). Unset leaves the endpoint open, which is right only where its port is not routable from outside the host. The exposition carries account, key and pool ids — never a credential. |
 | `TRUST_PROXY` | no | `false` | Honor `X-Forwarded-For` / `-Proto`. Set `true` **only** behind a proxy you control — otherwise clients can forge their own IP past the rate limiter. |
@@ -118,6 +122,8 @@ naming the offending variable — the process never starts half-configured.
 | `ADMIN_LOGIN_MAX_ATTEMPTS` | no | `5` | Failed logins per throttle key (per IP, per username) before it locks. |
 | `ADMIN_LOGIN_ATTEMPT_WINDOW_MINUTES` | no | `15` | Failures older than this stop counting toward the lock. |
 | `ADMIN_LOGIN_LOCKOUT_MINUTES` | no | `15` | How long a tripped throttle key stays locked. |
+| `ADMIN_SESSION_SLIDE_FRACTION` | no | `0.1` | Share of the idle window a session must advance since its last persisted `lastSeenAtMs` before the slide is written back to the session store. The in-memory value is authoritative for every response regardless; this only throttles the store write, so a Postgres-backed store sees roughly one write per fraction-of-idle-window instead of one per authenticated request. |
+| `SESSION_COOKIE_INSECURE` | no | `false` | Drops `Secure` and the `__Host-` prefix from the admin session cookie. The escape hatch for a **plain-HTTP install** (`http://192.168.1.50:8080` on a LAN), which is otherwise unusable: a browser silently discards a `Secure` cookie sent over `http://`, so login answers `200` and every request after it is `401`. `HttpOnly`, `SameSite=Strict` and the CSRF token are unaffected. What you give up is confidentiality on the wire and the `__Host-` guarantee that no sibling host under this domain can plant a session cookie — so unset it once HTTPS is in front. Leaving it unset on a plain-HTTP install is diagnosed for you: the login logs a `warn` naming this variable. Turning it on logs a `warn` on every boot while it is on. See [04-api-keys-and-access.md](04-api-keys-and-access.md#session-cookie). |
 | `CATALOG_REFRESH_SECONDS` | no | `30` | How long the warm routing catalog may lag a write made by **another replica**. A write by this replica refreshes it immediately, so this bounds only the multi-replica case. |
 | `KEY_CACHE_MAX` | no | `4096` | Verified router keys held in memory. The ceiling is memory, not correctness — an evicted key costs one indexed lookup. |
 | `KEY_CACHE_TTL_SECONDS` | no | `60` | How long a successful verification is reused. Revocation invalidates immediately, so this bounds staleness of a key's limits and scope, not of its revocation. |
@@ -188,12 +194,19 @@ Two operational consequences:
 ## Reverse proxy
 
 Run HTTPS in front. Cookies are always `Secure`, so the admin UI will not work over plain HTTP
-from anything but `localhost`.
+from anything but `localhost`. Every example below disables response buffering explicitly — the
+router streams SSE bytes as they arrive (non-negotiable: never buffer a stream), and a proxy that
+buffers by default turns a live completion into a multi-second stall before the first token
+appears, or a hard cutoff on a long-running one.
 
 ```caddyfile
-# Caddyfile — TLS is automatic
+# Caddyfile — TLS is automatic. Caddy does not buffer reverse-proxied responses by
+# default, so no extra streaming directive is needed, but keep the timeouts open —
+# a completion can legitimately run for the full UPSTREAM_TIMEOUT_MS.
 router.example.com {
-    reverse_proxy localhost:8080
+    reverse_proxy localhost:8080 {
+        flush_interval -1   # stream bytes immediately, never batch
+    }
 }
 ```
 
@@ -219,8 +232,42 @@ server {
 }
 ```
 
+```yaml
+# Traefik — dynamic (file provider) config. Static/router.yml wires the entrypoint
+# and cert resolver; this is the piece specific to this router.
+http:
+  routers:
+    multi-ai-router:
+      rule: "Host(`router.example.com`)"
+      service: multi-ai-router
+      tls:
+        certResolver: letsencrypt
+  services:
+    multi-ai-router:
+      loadBalancer:
+        servers:
+          - url: "http://127.0.0.1:8080"
+        # Traefik does not buffer proxied responses and has no buffering flag to
+        # disable — SSE streams through unmodified by default. The only knob that
+        # matters is the transport's response timeout, which defaults to no limit.
+```
+
+If you run Traefik via Docker labels instead of the file provider, the equivalent is
+`traefik.http.routers.multi-ai-router.rule=Host(\`router.example.com\`)` plus a
+`tls.certresolver` label — no buffering label exists to set because there is nothing to disable.
+
 Set `TRUST_PROXY=true` once a proxy is in front, and `PUBLIC_URL=https://router.example.com` if you
 want OAuth redirect capture.
+
+**`SESSION_COOKIE_INSECURE` and a reverse proxy don't mix.** The escape hatch exists for a
+plain-HTTP install with no proxy in front at all (`http://192.168.1.50:8080` on a LAN) — once any
+of the proxies above is terminating TLS, the browser reaches the router over `https://` and the
+admin cookie's normal `Secure` + `__Host-` attributes work as designed, so leave
+`SESSION_COOKIE_INSECURE` unset (`false`). Setting it **and** running behind a TLS-terminating
+proxy gets you the worst of both: no confidentiality benefit (the browser already speaks HTTPS)
+and a weaker cookie than you need. It is acceptable only on the bare, proxy-less LAN case above,
+and only until HTTPS is put in front — see the env reference above and
+[04-api-keys-and-access.md](04-api-keys-and-access.md#session-cookie).
 
 **Do not publicly expose the admin plane.** `/api/admin/**` and the SPA are protected by one
 password. Keep them on a private network, a VPN, or behind an IP allowlist in the proxy, and expose
@@ -315,6 +362,13 @@ records are enqueued and written in batches by a background writer, so a slow da
 reporting and never traffic. The `router_overhead_seconds` histogram makes a regression visible; see
 [08-observability.md](08-observability.md).
 
+`bin/bench` is how the two claims are checked rather than asserted: it drives the real router against
+an in-process stub upstream, reads the overhead percentiles back off `GET /metrics`, measures added
+time-to-first-token separately, and exits non-zero when either breaks. Run it when you touch the
+request path and before cutting a release — it is not part of `bin/check`, because a timing
+measurement on a shared runner is a flaky test. Details and caveats:
+[08-observability.md](08-observability.md#verifying-the-budget).
+
 | Scales with | Does not scale with |
 |---|---|
 | Concurrent open streams — one socket plus a small buffer per in-flight request | CPU cores. Routing is rendezvous hashing over a short array; passthrough parses nothing. |
@@ -335,12 +389,34 @@ Sizing guidance follows directly from that split:
 | Workload | Baseline |
 |---|---|
 | API-key / passthrough accounts only (no Claude subscriptions) | 1 vCPU, 512 MB for the router. Watch open connections; you will run out of file descriptors long before CPU. |
-| Claude subscriptions in the pool | Size the router's memory around **peak concurrent subscription requests**, not total accounts or total traffic: budget for one `claude` subprocess each, plus the 512 MB baseline. Ten idle Claude accounts cost nothing; ten simultaneous Claude requests do. |
+| Claude subscriptions in the pool | Size the router's memory around **peak concurrent subscription requests**, not total accounts or total traffic: budget **~245 MB per concurrent `claude` subprocess** (measured, see below), plus the 512 MB baseline. Ten idle Claude accounts cost nothing; ten simultaneous Claude requests cost ~2.45 GB. |
 | Postgres | Modest. The working set is small and the critical path does not touch it — the default container settings are fine until retained usage history gets large. |
 
-Cap concurrency deliberately rather than discovering the ceiling under load: a subscription-heavy
-deployment is memory-bound, and an unbounded subprocess count is the failure mode. A same-dialect
-passthrough (the common case) does no body parsing at all; see
+**The per-subprocess figure is measured, not guessed.** Spawning the real `claude` CLI binary
+locally (single process and in 30-/60-way concurrent batches) and polling `/proc/<pid>/status` for
+`VmRSS` at ~5 ms resolution puts a single uncontended process at **~245 MB resident** (three runs:
+244.8 / 245.7 / 244.3 MB), reached during startup before any conversational turn — so it is fixed
+cost, not something that shrinks for a short prompt. What is **not yet measured** is whether
+resident memory grows further across a long-running conversation's turns; that needs a live
+authenticated session this environment has no subscription credential to run (see
+[10-roadmap.md](10-roadmap.md#open-questions) for the full method and the open half of the
+question). Budget the measured ~245 MB as a floor per concurrent request, not a ceiling.
+
+**Concurrency ceiling is a formula, not a fixed number**, and memory is confirmed as the binding
+constraint: on a representative Linux host, `ulimit -n` (open files) and `ulimit -u` (max
+processes) run in the hundreds of thousands to millions — far above what RAM allows once each
+process costs ~245 MB. A box breaks on memory long before it runs out of file descriptors or
+process-table slots. Concretely:
+
+```
+concurrency_ceiling ≈ (available_RAM_MB − 512_MB_baseline) / 245_MB
+```
+
+The `CLAUDE_SDK_MAX_CONCURRENCY` default of `10` costs ~2.45 GB at full occupancy — conservative on
+anything but the smallest box, and the right default precisely because it is safe everywhere before
+an operator tunes it up against their own RAM using the formula above. Cap concurrency deliberately
+rather than discovering the ceiling under load: an unbounded subprocess count is the failure mode. A
+same-dialect passthrough (the common case) does no body parsing at all; see
 [06-protocol-translation.md](06-protocol-translation.md).
 
 ## Troubleshooting
@@ -356,6 +432,7 @@ passthrough (the common case) does no body parsing at all; see
 | Claude subscription account fails every request while API-key accounts work | The `claude` CLI is missing or cannot exec in the image (a native binary built for a different libc), or `CLAUDE_CONFIG_ROOT` is not on the persistent volume | Read `checks.claudeCli` on `/readyz`: it names the resolution rung that won, or `missing`. The image stages the CLI from the SDK's own platform package and proves it execs at build time, so a custom build is the usual cause — keep builder and runtime on the same libc. Confirm the `claude-config` volume is mounted and owned by the container's uid — a fresh, empty config directory presents as an account that never authenticates. |
 | All accounts `cooling_down`, requests fail | Every candidate hit a `429` or a circuit breaker and none has reset yet | Check reset times on `/accounts`. Add another account to the pool, or move the key to a pool with a paid-API fallback via `priority-failover`. See [05-routing-and-failover.md](05-routing-and-failover.md). |
 | Clients get `401` | Key revoked, expired, wrong value, or both auth headers sent and disagreeing | Re-copy the key from `/keys`. Send exactly one of `Authorization: Bearer` or `x-api-key`. See [04-api-keys-and-access.md](04-api-keys-and-access.md). |
+| Console login says it succeeded, then every screen bounces back to the login form ("session expired") | The router is reached over plain `http://` (a LAN install, or a proxy that does not forward `X-Forwarded-Proto`), so the browser silently discarded the `Secure` session cookie. The login itself was genuinely fine, which is why no status code names the problem | `docker compose logs router` carries a `warn` from the login itself: *"login succeeded but the session cookie is Secure and this request arrived over plain HTTP"*, with the remedy in the same line. Either set `SESSION_COOKIE_INSECURE=true` (plain-HTTP install), or terminate HTTPS in front and forward `X-Forwarded-Proto` — the header is honored for this check whether or not `TRUST_PROXY` is on. See [04-api-keys-and-access.md](04-api-keys-and-access.md#session-cookie). |
 | A sweep hasn't run — the DB keeps growing, or usage rollups stop appearing | The scheduler runs in-process, so a wedged or crashed task is invisible unless you look at its last-run record | Check the task's last `ScheduledTaskRun` (admin UI, or the row directly): a stale `startedAt` with a null `finishedAt` means a run was killed halfway or is stuck holding the advisory lock; a stale `startedAt` with `outcome: failed` names the error. `outcome: partial` is normal and means the batch limit was hit and the next run continues. If every replica shows nothing, no replica is acquiring the lock — check Postgres connectivity and `JANITOR_INTERVAL_MINUTES`. |
 | `/readyz` red, `/healthz` green | Postgres unreachable or zero healthy accounts | `/healthz` is liveness only, by design — zero healthy accounts is an operator problem, not a reason to restart a working process. Check `docker compose ps postgres` and account health. See [08-observability.md](08-observability.md). |
 

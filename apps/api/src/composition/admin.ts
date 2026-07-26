@@ -3,6 +3,7 @@ import {
   type ApiKeyRepository,
   type AuditRepository,
   createUsageReadRepository,
+  createUsageRecentRepository,
   type Database,
   type OauthStateRepository,
   type PoolRepository,
@@ -12,6 +13,7 @@ import {
 } from "@multi-ai-router/db"
 import type { Env } from "../config/env"
 import type { Logger } from "../logging/logger"
+import { createSdkTestProbe } from "../providers"
 import { createAccountConfigDirs } from "../providers/claude-sdk/config-dir"
 import { scheduledTaskIntervals } from "../scheduler"
 import {
@@ -20,6 +22,7 @@ import {
   connectFromEnv,
   createAccountsService,
   createRecheckService,
+  createTestNowService,
   refresherFromEnv,
   withAvailability,
 } from "../services/accounts"
@@ -122,6 +125,20 @@ export function createAdminPlane(deps: AdminPlaneDeps): AdminPlane {
     now,
   })
 
+  // "Test now": one real, opt-in completion against one account. Its own cooldown and its own
+  // audit kind — see `services/accounts/test-now.ts` for why it is never folded into `recheck`.
+  const testNow = createTestNowService({
+    accounts,
+    cipher,
+    audit,
+    cooldownSeconds: env.accountTestNowCooldownSeconds,
+    timeoutMs: env.failover.upstreamTimeoutMs,
+    now,
+    // Re-resolved per call inside the probe itself (`resolveClaudeCli`), for the same reason
+    // `claudeCliFromEnv` re-resolves rather than resolving once at boot.
+    sdkProbe: createSdkTestProbe({ cliPathOverride: env.claudeCliPath }),
+  })
+
   const accountsService = createAccountsService({ accounts, keys, cipher, configDirs, audit, now })
 
   return {
@@ -137,6 +154,7 @@ export function createAdminPlane(deps: AdminPlaneDeps): AdminPlane {
           adminLoginMaxAttempts: env.adminAuth.loginMaxAttempts,
           adminLoginAttemptWindowMinutes: env.adminAuth.loginAttemptWindowMinutes,
           adminLoginLockoutMinutes: env.adminAuth.loginLockoutMinutes,
+          adminSessionSlideFraction: env.adminAuth.sessionSlideFraction,
         }),
         audit,
       }),
@@ -159,6 +177,7 @@ export function createAdminPlane(deps: AdminPlaneDeps): AdminPlane {
       ),
       usage: createUsageService({
         usage: createUsageReadRepository(deps.database),
+        recent: createUsageRecentRepository(deps.database),
         daily: deps.usageDaily,
         scheduledTasks: deps.scheduledTasks,
         labels: catalogLabels({ keys, catalog }),
@@ -179,6 +198,7 @@ export function createAdminPlane(deps: AdminPlaneDeps): AdminPlane {
         onPricesChanged: () => deps.prices.refresh(),
       }),
       recheck,
+      testNow,
       connect,
     },
   }

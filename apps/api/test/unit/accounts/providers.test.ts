@@ -64,12 +64,48 @@ describe("transport", () => {
     expect(claude.reason).toContain("claude-agent-sdk")
   })
 
-  test("an unimplemented provider is described, not hidden, and cannot be created", () => {
+  test("every declared provider is implemented, so the console greys none of them out", () => {
+    // `unimplemented` is still a transport a descriptor can carry — it is where an id declared in
+    // `packages/core` ahead of its driver lands. No provider sits there today, and this says so.
+    for (const provider of describeProviders()) {
+      expect(provider.transport).not.toBe("unimplemented")
+      expect(provider.creatable).toBe(true)
+    }
+  })
+
+  test("gemini is an HTTP key provider on one OpenAI surface, with a pinned endpoint", () => {
     const gemini = describeProvider("gemini")
-    expect(gemini.transport).toBe("unimplemented")
-    expect(gemini.creatable).toBe(false)
-    expect(gemini.reason).toBeString()
-    expect(gemini.authKind).toBeNull()
+    expect(gemini.transport).toBe("http")
+    expect(gemini.authKind).toBe("api-key")
+    expect(gemini.nativeDialect).toBe("openai-chat")
+    expect(gemini.supportedDialects).toEqual(["openai-chat"])
+    expect(gemini.requiresBaseUrl).toBe(false)
+    expect(gemini.connectFlow).toBeNull()
+  })
+
+  test("the six OpenAI-shaped vendors render as one-surface key providers, nothing to connect", () => {
+    for (const id of ["groq", "deepseek", "xai", "mistral", "together", "cerebras"] as const) {
+      const provider = describeProvider(id)
+
+      expect(provider.transport).toBe("http")
+      expect(provider.authKind).toBe("api-key")
+      expect(provider.supportedDialects).toEqual(["openai-chat"])
+      expect(provider.requiresBaseUrl).toBe(false)
+      expect(provider.requiresConfigDir).toBe(false)
+      expect(provider.connectFlow).toBeNull()
+    }
+  })
+
+  test("ollama renders as a local endpoint: an address to fill in, and no auth style to satisfy", () => {
+    const ollama = describeProvider("ollama")
+
+    expect(ollama.transport).toBe("http")
+    expect(ollama.authKind).toBe("none")
+    expect(ollama.supportedDialects).toEqual(["openai-chat"])
+    // Both halves of what the form must render differently: ask for the URL, do not demand a key.
+    expect(ollama.requiresBaseUrl).toBe(true)
+    expect(ollama.requiresConfigDir).toBe(false)
+    expect(ollama.connectFlow).toBeNull()
   })
 
   test("an HTTP provider reports the auth style its driver declares", () => {

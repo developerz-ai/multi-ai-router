@@ -76,6 +76,13 @@ const enums = [
       "kimi",
       "minimax",
       "gemini",
+      "groq",
+      "deepseek",
+      "xai",
+      "mistral",
+      "together",
+      "cerebras",
+      "ollama",
       "openai-compatible",
       "anthropic-compatible",
     ],
@@ -84,8 +91,10 @@ const enums = [
   {
     name: "AuthKind",
     schema: AuthKind,
-    valid: ["oauth", "api-key"],
-    invalid: ["api_key", "apiKey", "sdk", "none", ""],
+    // `none` is the local-endpoint case, and the only one under which an Account may hold no
+    // credential at all — see `domain/provider.ts`.
+    valid: ["oauth", "api-key", "none"],
+    invalid: ["api_key", "apiKey", "sdk", "no-auth", ""],
   },
 ] as const
 

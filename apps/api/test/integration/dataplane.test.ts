@@ -145,11 +145,82 @@ describe("same-dialect passthrough", () => {
   })
 })
 
+describe("a local endpoint that authenticates nobody", () => {
+  const CHAT = JSON.stringify({ model: "llama3.2", messages: [{ role: "user", content: "hi" }] })
+
+  function ollama(credential: string | null): RoutableAccount {
+    const base = account("ollama-1", {
+      provider: "ollama",
+      dialect: "openai-chat",
+      baseUrl: "http://ollama.internal:11434/v1",
+      cipher: CRYPTOR,
+      ...(credential === null ? {} : { apiKey: credential }),
+    })
+    return credential === null ? { ...base, authMaterial: null } : base
+  }
+
+  test("an account holding no credential still serves, with no auth header invented", async () => {
+    const { app, upstream, usage } = harness({
+      accounts: [ollama(null)],
+      responses: [() => jsonResponse(200, { usage: { prompt_tokens: 4, completion_tokens: 6 } })],
+    })
+
+    const res = await app.request("/v1/chat/completions", post(CHAT, bearer()))
+    await res.text()
+    await settle()
+    const call = upstream.calls[0]
+
+    expect(res.status).toBe(200)
+    expect(call?.url).toBe("http://ollama.internal:11434/v1/chat/completions")
+    expect(call?.headers.get("authorization")).toBeNull()
+    expect(call?.headers.get("x-api-key")).toBeNull()
+    // The router key that opened the door never travels onward, credential or not.
+    expect(JSON.stringify([...(call?.headers.entries() ?? [])])).not.toContain(KEY)
+    expect(usage.rows).toHaveLength(1)
+    expect(usage.rows[0]).toMatchObject({ outcome: "success", provider: "ollama", tokensIn: 4 })
+  })
+
+  test("the same account behind a proxy presents the credential it was given", async () => {
+    const { app, upstream } = harness({
+      accounts: [ollama("proxy-token")],
+      responses: [() => jsonResponse(200, {})],
+    })
+
+    await app.request("/v1/chat/completions", post(CHAT, bearer()))
+
+    expect(upstream.calls[0]?.headers.get("authorization")).toBe("Bearer proxy-token")
+  })
+
+  test("a model the node has not pulled is the client's answer, not another account's turn", async () => {
+    const notPulled = {
+      error: { message: 'model "llama3.2" not found, try pulling it first', type: "api_error" },
+    }
+    const { app, upstream, usage } = harness({
+      accounts: [ollama(null), ollama(null)],
+      responses: [() => jsonResponse(404, notPulled)],
+    })
+
+    const res = await app.request("/v1/chat/completions", post(CHAT, bearer()))
+    await res.text()
+    await settle()
+
+    expect(res.status).toBe(404)
+    expect(upstream.calls).toHaveLength(1)
+    expect(usage.rows).toHaveLength(1)
+  })
+})
+
 describe("failover", () => {
   const twoAccounts = [
     account("acct-1", { apiKey: "sk-one", cipher: CRYPTOR }),
     account("acct-2", { apiKey: "sk-two", cipher: CRYPTOR }),
   ]
+
+  const geminiAccount = [account("acct-1", { provider: "gemini", apiKey: "sk-g", cipher: CRYPTOR })]
+  const OPENAI_CHAT = JSON.stringify({
+    model: "gemini-2.5-flash",
+    messages: [{ role: "user", content: "hello" }],
+  })
 
   test("advances to the next candidate on 429", async () => {
     const { app, upstream } = harness({
@@ -218,6 +289,115 @@ describe("failover", () => {
     expect(usage.rows[0]).toMatchObject({ accountId: "acct-1", streamed: true })
   })
 
+  test("two frames then an upstream break is a truncation relayed to the client, not a retry", async () => {
+    const slow = slowStream(["data: one\n\n", "data: two\n\n"])
+    const { app, upstream, usage } = harness({
+      accounts: twoAccounts,
+      responses: [() => slow.response, () => jsonResponse(200, { shouldNotBeReached: true })],
+    })
+
+    const res = await app.request("/v1/messages", post(MESSAGE, bearer()))
+    if (res.body === null) throw new Error("expected a body")
+    const reader = res.body.getReader()
+
+    slow.release(0)
+    expect(new TextDecoder().decode((await reader.read()).value)).toContain("one")
+    slow.release(1)
+    expect(new TextDecoder().decode((await reader.read()).value)).toContain("two")
+
+    // The upstream errors after two frames are already on the wire. The client gets a truncated
+    // stream — the honest answer — never a silent restart on the account behind it.
+    slow.abort()
+    const tail = await reader.read().catch(() => undefined)
+    expect(tail === undefined || tail.done).toBe(true)
+    await settle()
+
+    expect(upstream.calls).toHaveLength(1)
+    expect(upstream.calls[0]?.headers.get("x-api-key")).toBe("sk-one")
+    expect(usage.rows).toHaveLength(1)
+    expect(usage.rows[0]).toMatchObject({ accountId: "acct-1", streamed: true })
+  })
+
+  test("fails over when the upstream never answers at all, and the failover is bounded", async () => {
+    // A connect failure before any headers exist — `fetch` itself rejects, the same shape a DNS
+    // failure or a dropped TCP handshake produces. Unlike a partial stream, no byte has reached
+    // the client, so failover is not merely allowed, it is expected.
+    const { app, upstream } = harness({
+      accounts: twoAccounts,
+      responses: [
+        () => {
+          throw new Error("connect failed")
+        },
+        () => jsonResponse(200, { served: true }),
+      ],
+    })
+
+    const res = await app.request("/v1/messages", post(MESSAGE, bearer()))
+
+    expect(res.status).toBe(200)
+    expect(await res.json()).toEqual({ served: true })
+    expect(upstream.calls).toHaveLength(2)
+    expect(upstream.calls[1]?.headers.get("x-api-key")).toBe("sk-two")
+  })
+
+  test("connect failures on every candidate still stop well short of exhausting the pool", async () => {
+    const five = ["a", "b", "c", "d", "e"].map((id) =>
+      account(id, { apiKey: `sk-${id}`, cipher: CRYPTOR }),
+    )
+    const { app, upstream } = harness({
+      accounts: five,
+      responses: [
+        () => {
+          throw new Error("connect failed")
+        },
+      ],
+    })
+
+    const res = await app.request("/v1/messages", post(MESSAGE, bearer()))
+
+    expect(res.status).toBeGreaterThanOrEqual(500)
+    expect(upstream.calls).toHaveLength(3)
+  })
+
+  test("a client that disconnects mid-stream releases the upstream call, with no orphan", async () => {
+    const slow = slowStream(["data: partial\n\n"])
+    const { app, upstream, usage } = harness({
+      accounts: twoAccounts,
+      responses: [() => slow.response, () => jsonResponse(200, { shouldNotBeReached: true })],
+    })
+
+    const client = new AbortController()
+    const res = await app.request("/v1/messages", {
+      ...post(MESSAGE, bearer()),
+      signal: client.signal,
+    })
+    if (res.body === null) throw new Error("expected a body")
+    const reader = res.body.getReader()
+
+    slow.release(0)
+    expect(new TextDecoder().decode((await reader.read()).value)).toContain("partial")
+
+    const upstreamSignal = upstream.calls[0]?.signal
+    expect(upstreamSignal?.aborted).toBe(false)
+    // What a real transport does when its request signal fires mid-stream: the connection drops
+    // and the body it was reading errors. The stub upstream has no real socket to drop, so this
+    // wires the same reaction by hand — the fixture-level equivalent of unplugging the cable.
+    upstreamSignal?.addEventListener("abort", () => slow.abort())
+
+    // The client goes away. The upstream call's own signal — the one `fetch` was actually sent
+    // with — must fire too, or the request keeps running on the account with nothing left to
+    // consume it: an orphaned upstream call charged to no one's response.
+    client.abort()
+    await reader.read().catch(() => undefined)
+    await settle()
+
+    expect(upstreamSignal?.aborted).toBe(true)
+    // No second account is ever tried for a client that left mid-stream.
+    expect(upstream.calls).toHaveLength(1)
+    expect(usage.rows).toHaveLength(1)
+    expect(usage.rows[0]).toMatchObject({ accountId: "acct-1", streamed: true })
+  })
+
   test("bounds the attempts well under the candidate count", async () => {
     const five = ["a", "b", "c", "d", "e"].map((id) =>
       account(id, { apiKey: `sk-${id}`, cipher: CRYPTOR }),
@@ -254,6 +434,61 @@ describe("failover", () => {
     const outOfCredits = await drained.app.request("/v1/messages", post(MESSAGE, bearer()))
 
     expect(outOfCredits.status).toBe(402)
+  })
+
+  test("Gemini's throttle names billing and is still a cooldown, timed off the body", async () => {
+    // The trap this driver exists for: `RESOURCE_EXHAUSTED` covers a per-minute limit *and* a spent
+    // free-tier day, and its message says "check your plan and billing details". Read the word and a
+    // healthy key is parked at 402 forever. The reset is in `RetryInfo` — Gemini sends no headers.
+    const { app, health, usage } = harness({
+      accounts: geminiAccount,
+      responses: [
+        () =>
+          jsonResponse(429, {
+            error: {
+              code: 429,
+              message:
+                "You exceeded your current quota, please check your plan and billing details.",
+              status: "RESOURCE_EXHAUSTED",
+              details: [{ "@type": "type.googleapis.com/google.rpc.RetryInfo", retryDelay: "31s" }],
+            },
+          }),
+      ],
+    })
+
+    const res = await app.request("/v1/chat/completions", post(OPENAI_CHAT, bearer()))
+    await settle()
+
+    expect(res.status).toBe(429)
+    expect(res.headers.get("Retry-After")).toBe("31")
+    expect(health.stateOf("acct-1").breaker.status).toBe("cooling_down")
+    expect(health.stateOf("acct-1").breaker.cooldownSource).toBe("provider-reported")
+    expect(usage.rows[0]?.outcome).toBe("quota_exhausted")
+  })
+
+  test("Gemini with billing off is a 402 — the one refusal no clock undoes", async () => {
+    const { app, health, usage } = harness({
+      accounts: geminiAccount,
+      responses: [
+        () =>
+          jsonResponse(400, {
+            error: {
+              code: 400,
+              message: "Please enable billing on your project in Google AI Studio.",
+              status: "FAILED_PRECONDITION",
+            },
+          }),
+      ],
+    })
+
+    const res = await app.request("/v1/chat/completions", post(OPENAI_CHAT, bearer()))
+    await settle()
+
+    // 402 out of a 400 in: Google never answers 402, so the status alone would read this as a
+    // client mistake and keep selecting a credential that cannot serve a request.
+    expect(res.status).toBe(402)
+    expect(health.stateOf("acct-1").breaker.status).toBe("exhausted")
+    expect(usage.rows[0]?.outcome).toBe("credits_exhausted")
   })
 
   test("marks the failed account so the next request skips it", async () => {
@@ -775,6 +1010,93 @@ describe("GET /v1/models", () => {
   test("requires a key like every other data-plane route", async () => {
     const { app } = harness({ responses: [() => jsonResponse(200, {})] })
     expect((await app.request("/v1/models")).status).toBe(401)
+  })
+})
+
+describe("GET /v1/models/:id", () => {
+  const aliased = [
+    account("acct-1", {
+      apiKey: "sk-one",
+      cipher: CRYPTOR,
+      modelAliases: { sonnet: "glm-4.7" },
+      // `modelAliases` also has to land on the routing snapshot, not just the driver — that is
+      // what `filterCandidates` actually reads (`resolveModel` is judged after alias mapping),
+      // and what the display listing and the reachability check agreeing depends on.
+      snapshot: {
+        modelAliases: { sonnet: "glm-4.7" },
+        supportedModels: ["claude-opus-5", "glm-4.7"],
+      },
+    }),
+  ]
+
+  test("answers a reachable id in the OpenAI shape for a bearer client", async () => {
+    const { app } = harness({ accounts: aliased, responses: [() => jsonResponse(200, {})] })
+
+    const res = await app.request("/v1/models/sonnet", { headers: bearer() })
+    const body = (await res.json()) as { id: string; object: string; owned_by: string }
+
+    expect(res.status).toBe(200)
+    expect(body).toMatchObject({ id: "sonnet", object: "model" })
+  })
+
+  test("answers an x-api-key client in the Anthropic shape", async () => {
+    const { app } = harness({ accounts: aliased, responses: [() => jsonResponse(200, {})] })
+
+    const res = await app.request("/v1/models/claude-opus-5", { headers: { "x-api-key": KEY } })
+    const body = (await res.json()) as { type: string; id: string }
+
+    expect(res.status).toBe(200)
+    expect(body).toEqual({ type: "model", id: "claude-opus-5", display_name: "claude-opus-5" })
+  })
+
+  test("404s an id no account in the key's scope serves", async () => {
+    const { app } = harness({ accounts: aliased, responses: [() => jsonResponse(200, {})] })
+
+    const res = await app.request("/v1/models/no-such-model", {
+      headers: { "x-api-key": KEY },
+    })
+    const body = (await res.json()) as { error: { message: string } }
+
+    expect(res.status).toBe(404)
+    expect(body.error.message).toContain("no-such-model")
+  })
+
+  test("404s an id outside the presenting key's scope, never leaking it exists", async () => {
+    const { app } = harness({
+      accounts: aliased,
+      scope: "accounts",
+      accountIds: [],
+      responses: [() => jsonResponse(200, {})],
+    })
+
+    const res = await app.request("/v1/models/sonnet", { headers: bearer() })
+    expect(res.status).toBe(404)
+  })
+
+  test("requires a key like every other data-plane route", async () => {
+    const { app } = harness({ responses: [() => jsonResponse(200, {})] })
+    expect((await app.request("/v1/models/sonnet")).status).toBe(401)
+  })
+
+  test("writes no UsageRecord — it is a reachability probe, not a dispatched request", async () => {
+    const { app, usage, upstream } = harness({ accounts: aliased, responses: [] })
+
+    const res = await app.request("/v1/models/sonnet", { headers: bearer() })
+    await settle()
+
+    expect(res.status).toBe(200)
+    // No upstream call either: `selectAccounts` alone decides reachability.
+    expect(upstream.calls).toHaveLength(0)
+    expect(usage.rows).toHaveLength(0)
+  })
+
+  test("writes no UsageRecord on a miss either", async () => {
+    const { app, usage } = harness({ accounts: aliased, responses: [] })
+
+    await app.request("/v1/models/no-such-model", { headers: bearer() })
+    await settle()
+
+    expect(usage.rows).toHaveLength(0)
   })
 })
 

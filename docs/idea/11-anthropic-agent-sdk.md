@@ -64,7 +64,7 @@ injecting subscription OAuth tokens into raw HTTP is the fast path to a banned a
 
 | Cost | What it means | Evidence |
 |---|---|---|
-| Subprocess per request | Every `query()` spawns `node` running the `claude` CLI (a ~200 MB native binary). A process, not a socket | `query.ts:252` |
+| Subprocess per request | Every `query()` spawns `node` running the `claude` CLI (a ~245 MB native binary, measured — see [09-deployment.md](09-deployment.md#sizing) and [10-roadmap.md](10-roadmap.md#open-questions)). A process, not a socket | `query.ts:252` |
 | Concurrency is memory-bound | A semaphore, not a connection pool. Meridian defaults to 10 in flight, queues the rest | `server.ts:599-623` |
 | The `claude` CLI ships in the image | Plus a libc-matching native binary and a PATH shim (§9) | `Dockerfile` |
 | Protocol re-synthesis | The SDK yields its own message objects; responses are **rebuilt**, not relayed — even same-dialect | §6 |
@@ -165,6 +165,7 @@ neither write body has a field for one; `CLAUDE_CONFIG_ROOT` is the only knob, a
 | Provision | `<CLAUDE_CONFIG_ROOT>/<accountId>` at `0700`, created with the Account row — see above. Idempotent, so re-provisioning is never a way to lose a login |
 | Connect | Drive the `claude` CLI's own login against the Account's dir — see [§3.1](#31-connect-driving-the-clis-login). The CLI mints the PKCE verifier and `state`, exchanges the pasted code, and writes `.credentials.json` itself; the router scrapes the authorize URL out of its output and writes the pasted `code#state` back to its stdin |
 | Health probe | `claude auth status --json` with the dir set returns `{loggedIn, email, subscriptionType}` — cheap, first-party, no token handling. Implemented in `providers/claude-sdk/login/status.ts`; it rides on **Re-check now** rather than getting a button of its own — see [§3.2](#32-the-credential-probe) |
+| Completion probe | **Test now** (`services/accounts/test-now.ts`) is the other end of the spectrum from the health probe above: a real, opt-in `query()` turn that actually spends a turn and a subprocess. Never fires without `confirmed: true` on the request, and its own cooldown, longer than Re-check now's — see [05-routing-and-failover.md](05-routing-and-failover.md#test-now) |
 | Refresh | **Not ours.** The SDK / `claude` CLI refreshes inside the config directory. The router does **not** schedule, mint, or write subscription tokens — see the box below |
 | Reconnect | Re-run login against the **same** directory: Account id, Pool membership, and usage history survive |
 | Delete | Remove the directory with the Account row |
@@ -490,6 +491,7 @@ before response.completed" though every event was sent (`openaiResponses.ts:343-
 | `tool_result.is_error` | OpenAI's `tool` role has no error channel; failures read as successes |
 | Anthropic **server** tools, citations, code execution, computer use | The SDK cannot emit `server_tool_use`. Reject `400` naming the field — and do **not** advertise these in `GET /v1/models` |
 | Beta opt-ins | The SDK owns the request; only a filtered subset passes as `betas` (§7) |
+| `POST /v1/messages/count_tokens` | The SDK exposes no token-count call, and the one way to get one — forging an `api.anthropic.com` request out of the subscription's own credentials — is the thing this whole document exists to refuse. A subscription account is therefore **not planned** for that route: a mixed pool answers off an Anthropic-dialect account, and a subscription-only pool gets a `503` naming this row. Never an estimate — see [06-protocol-translation.md](06-protocol-translation.md#counting-tokens) |
 
 Meridian injects a canned fallback sentence when the SDK returns no content (`server.ts:2068-2074`).
 **A router must never fabricate model output** — return an empty completion with an honest stop reason.

@@ -5,12 +5,14 @@ import type {
   UsageGroupRow,
   UsageGroupSeriesPoint,
   UsageReadRepository,
+  UsageRecentRepository,
   UsageSeriesPoint,
   UsageTotals,
 } from "@multi-ai-router/db"
 import { type AdminResult, ok } from "../admin/result"
 import { readBreakdown, readTotals } from "./aggregate"
 import { buildAxis, densify } from "./axis"
+import { outcomesFor, type RecentQuery, type RecentView, toRecentAttemptView } from "./recent"
 import { resolveWindow, type UsageWindowQuery } from "./window"
 
 /**
@@ -91,6 +93,12 @@ export interface UsageLabelSets {
 
 export interface UsageServiceDeps {
   readonly usage: UsageReadRepository
+  /**
+   * The raw attempt rows behind the live feed. Separate from `usage`, which only
+   * aggregates: the feed asks a question no `GROUP BY` can answer — *which*
+   * request failed, not how many.
+   */
+  readonly recent: UsageRecentRepository
   /** The rolled days. Every closed day in a window is answered from here, never by scanning raw rows. */
   readonly daily: Pick<UsageDailyRepository, "totals" | "breakdown">
   /**
@@ -105,6 +113,8 @@ export interface UsageServiceDeps {
 
 export interface UsageService {
   summary(query: UsageWindowQuery): Promise<AdminResult<UsageSummary>>
+  /** Individual attempts, newest first — the feed the summary cannot answer for. */
+  recent(query: RecentQuery): Promise<AdminResult<RecentView>>
 }
 
 export function createUsageService(deps: UsageServiceDeps): UsageService {
@@ -157,6 +167,27 @@ export function createUsageService(deps: UsageServiceDeps): UsageService {
           label: row.id,
           note: null,
         })),
+      })
+    },
+
+    recent: async (query) => {
+      // The label sets and the rows are independent, so they are issued together
+      // rather than in sequence — the same reason the summary's aggregates are.
+      const [labels, rows] = await Promise.all([
+        deps.labels(),
+        deps.recent.recent({
+          limit: query.limit,
+          outcomes: outcomesFor(query),
+          requestId: query.requestId,
+        }),
+      ])
+
+      // `limit` is echoed as asked for, never as `rows.length`: a quiet router
+      // returning four rows has truncated nothing, and a caption reading "at
+      // most 4" would be describing the traffic rather than the page.
+      return ok({
+        attempts: rows.map((row) => toRecentAttemptView(row, labels)),
+        limit: query.limit,
       })
     },
   }

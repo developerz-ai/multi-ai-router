@@ -27,7 +27,11 @@ export interface AttemptTiming {
   readonly latencyMs: number
   /** Router-observed time for the whole request so far. */
   readonly totalMs: number
-  /** Time spent waiting on upstreams for the whole request so far. */
+  /**
+   * Time spent waiting on upstreams for the whole request so far, **this attempt included**. On a
+   * streamed success that is the drain too: relaying is waiting, not working, and excluding it
+   * would put the entire generation into `routerOverheadMs`.
+   */
   readonly upstreamMs: number
   /**
    * Time to the first relayed byte, when one was relayed.

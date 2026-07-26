@@ -58,7 +58,12 @@ export {
   type SessionKeySource,
 } from "./body/session"
 export { accountCredential } from "./egress/credential"
-export { upstreamModelsUrl, upstreamUrl } from "./egress/endpoint"
+export {
+  upstreamCountTokensUrl,
+  upstreamEmbeddingsUrl,
+  upstreamModelsUrl,
+  upstreamUrl,
+} from "./egress/endpoint"
 export { clientHeaders, upstreamHeaders } from "./egress/headers"
 export {
   type AgentSdkEgress,
@@ -87,7 +92,7 @@ export {
   type RateLimiter,
   type RateLimiterOptions,
 } from "./limits"
-export { type ReachableModel, reachableModels } from "./models"
+export { type ReachableModel, reachableModel, reachableModels } from "./models"
 export {
   createDispatcher,
   DEFAULT_UPSTREAM_TIMEOUT_MS,
@@ -125,4 +130,5 @@ export {
   type RoutingCatalog,
   routingView,
   SYSTEM_CLOCK,
+  type UpstreamOperation,
 } from "./types"

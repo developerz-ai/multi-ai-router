@@ -8,6 +8,7 @@ import { TableSkeleton } from "../components/TableSkeleton"
 import { errorMessage } from "../lib/api/errors"
 import type { ApiKeyView } from "../lib/api/types"
 import { createNow } from "../lib/clock"
+import { routerBaseUrl } from "../lib/onboarding"
 import { useAllAccounts } from "../lib/queries/accounts"
 import { usePools } from "../lib/queries/pools"
 import {
@@ -17,6 +18,7 @@ import {
   useRevealKey,
   useRevokeKey,
 } from "../lib/queries/router-keys"
+import { useSettings } from "../lib/queries/settings"
 import { useTableUsage } from "../lib/queries/table-usage"
 import styles from "./KeysRoute.module.scss"
 import { KeyFormDialog } from "./keys/KeyFormDialog"
@@ -51,6 +53,12 @@ export default function KeysRoute() {
   const keys = useKeys()
   const pools = usePools()
   const accounts = useAllAccounts()
+  const settings = useSettings()
+
+  // The address the snippets tell a client to call. `PUBLIC_URL` wins when the operator set one —
+  // this tab's origin can be a private hostname, a port-forward, or an SSH tunnel that no agent
+  // machine can resolve. Falls back to the origin, which is right for the common single-host case.
+  const baseUrl = () => routerBaseUrl(settings.data?.publicUrl ?? null, window.location.origin)
 
   const usage = useTableUsage("key")
 
@@ -144,6 +152,7 @@ export default function KeysRoute() {
       <Show when={shown()}>
         {(key) => (
           <KeyValueDialog
+            baseUrl={baseUrl()}
             minted={key().minted}
             name={key().name}
             onClose={() => setShown(null)}

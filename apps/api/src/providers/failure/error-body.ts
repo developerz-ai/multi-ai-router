@@ -23,6 +23,21 @@ const ErrorEnvelope = z.object({
   ]),
 })
 
+/**
+ * The other envelope in the wild: the same four fields with **no `error` wrapper**. Mistral
+ * publishes it (`{object:"error", message, type, param, code}`) and Cerebras answers in it, so two
+ * drivers would otherwise each carry a copy of this parse.
+ *
+ * `message` is required rather than optional, and that is the whole safety argument: no successful
+ * OpenAI-shaped body — a completion, an embedding list, a model listing — carries a top-level
+ * `message`, so a success can never be read as a failure through this shape.
+ */
+const FlatErrorEnvelope = z.object({
+  message: z.string(),
+  type: z.string().optional(),
+  code: z.union([z.string(), z.number()]).nullish(),
+})
+
 function textOf(value: string | number | null | undefined): string | undefined {
   if (value === null || value === undefined) return undefined
   return String(value)
@@ -51,4 +66,27 @@ export function readErrorFacts(body: unknown): UpstreamErrorFacts {
   if (typeof error === "string") return { message: error }
 
   return { type: error.type, code: textOf(error.code), message: error.message }
+}
+
+function hasFacts(facts: UpstreamErrorFacts): boolean {
+  return facts.type !== undefined || facts.code !== undefined || facts.message !== undefined
+}
+
+/**
+ * The shared envelope first, then the unwrapped one. In that order because a provider that answers
+ * both — a gateway relaying an OpenAI-shaped body in front of a flat-shaped vendor — should be read
+ * as what it sent, and because the flat shape is the looser match of the two.
+ */
+export function readFlatErrorFacts(body: unknown): UpstreamErrorFacts {
+  const nested = readErrorFacts(body)
+  if (hasFacts(nested)) return nested
+
+  const parsed = FlatErrorEnvelope.safeParse(body)
+  if (!parsed.success) return nested
+
+  return {
+    type: parsed.data.type,
+    code: textOf(parsed.data.code),
+    message: parsed.data.message,
+  }
 }

@@ -17,7 +17,7 @@ and programmatic access.
 
 | Actor | What they might try | Mitigation |
 |---|---|---|
-| **Client key holder** (a developer, an agent) | Use a key beyond its pools; enumerate other keys or accounts; read an upstream credential | Keys are bound to pools; the data plane exposes no admin routes; no endpoint returns a credential; `GET /v1/models` is scoped to the key's reachable accounts; per-key rate limit and body cap |
+| **Client key holder** (a developer, an agent) | Use a key beyond its pools; enumerate other keys or accounts; read an upstream credential | Keys are bound to pools; the data plane exposes no admin routes; no endpoint returns a credential; `GET /v1/models` and `GET /v1/models/:id` are scoped to the key's reachable accounts — an out-of-scope id renders the same `404` as one that does not exist anywhere, never a distinguishable "exists but not yours"; per-key rate limit and body cap |
 | **Any router key holder, against the Agent-SDK path** | Induce the model to call a host-executing built-in tool (`bash`, `read`, `write`, `edit`, `glob`, `grep`) and run commands on the router host — reading `ENCRYPTION_KEY` and the Postgres credentials out of the environment, and every Account's `CLAUDE_CONFIG_DIR` off the volume | The SDK is invoked in **passthrough-only tool mode**: host-executing built-ins are disabled by an **explicit allowlist naming them**, and tool calls are forwarded to the client to execute. See [Tool execution on the Agent-SDK path](#tool-execution-on-the-agent-sdk-path) — this is the highest-severity item in this document |
 | **Compromised agent** (its key is stolen) | Burn subscription quota; exfiltrate the upstream credential it is using | Revoke that one key — no upstream credential rotates. The agent never holds one: credentials exist only inside the driver's outbound request, or inside the SDK subprocess's own config directory. Per-key rate limits bound the burn |
 | **Read access to the Postgres database** (dump, replica, stolen volume) | Lift upstream tokens and router keys | Every credential column and every key value is AES-256-GCM ciphertext. The key is `ENCRYPTION_KEY` from the environment, never in the database, never in a dump |
@@ -112,7 +112,7 @@ field; the implementation is the compact string above and it is what the code do
 |---|---|
 | Front door | HTTPS terminated by a reverse proxy in front. The container speaks plain HTTP on its own port and is not meant to be published directly |
 | `TRUST_PROXY` | When set, `X-Forwarded-For` / `X-Forwarded-Proto` are honored for client IP (rate limiting, throttling, audit) and scheme. Off by default — an untrusted forwarded header is a rate-limit bypass |
-| Cookies | `Secure` always, `httpOnly`, `SameSite=Strict`, host-only, no cookie on data-plane routes |
+| Cookies | `httpOnly` + `SameSite=Strict` always; `Secure` + `__Host-` by default, dropped together only under `SESSION_COOKIE_INSECURE` for a plain-HTTP LAN install (warned at boot — see [04-api-keys-and-access.md](04-api-keys-and-access.md#session-cookie)). No cookie on data-plane routes |
 | Upstream | TLS to the pinned base URLs in [03-providers.md](03-providers.md). No plaintext upstream, no proxy-through of client-supplied upstream URLs |
 
 ## Router API keys
@@ -144,9 +144,10 @@ inline with a copy button — retrieval is the recovery path, not the normal one
 | Identity | A single admin, from the environment. No user table in v1 |
 | Credentials | `ADMIN_USERNAME` + `ADMIN_PASSWORD` (plaintext in env, hashed with argon2id at boot, never persisted in plaintext), or `ADMIN_PASSWORD_HASH` (pre-computed argon2id). **`ADMIN_PASSWORD_HASH` takes precedence when both are set.** Exactly one form must be present or boot fails |
 | Hashing | argon2id, with parameters pinned in one place |
-| Session | Login issues an httpOnly, `SameSite=Strict`, `Secure` cookie with a bounded lifetime. Logout invalidates server-side |
+| Session | Login issues an httpOnly, `SameSite=Strict`, `Secure`, `__Host-` cookie with a bounded lifetime. Logout invalidates server-side. `SESSION_COOKIE_INSECURE` drops `Secure`+`__Host-` for a plain-HTTP install and nothing else |
 | CSRF | A token is required on every mutating admin request. `SameSite=Strict` is the belt; the token is the braces |
 | Throttling | Per-IP and per-account login attempt throttling with backoff. Failed logins are audit events |
+| Console assets | The built SPA is served from `WEB_ROOT` at the root, mounted **last** and never for a path under `/api`, `/v1`, `/healthz`, `/readyz` or `/metrics`. The history-API fallback reads one fixed filename, so the request path never reaches it. A path that escapes the root, or that the filesystem cannot name at all (a NUL byte, past `PATH_MAX`), gets the shell — never a file outside the root, and never a `500` an unauthenticated caller can mint on demand |
 | 2FA | `ADMIN_TOTP_SECRET` is **DEFERRED** |
 
 **The two credential spaces are completely separate.** A router key authenticates the data plane and
@@ -159,8 +160,10 @@ key into the admin plane. Conversely, an admin session is not accepted on `/v1/*
 | Rule | |
 |---|---|
 | Default-on | The redactor runs on every log record, not at call sites. Forgetting to redact is not a possible mistake |
-| What it catches | `mar_live_…` values, `Authorization` / `x-api-key` / `Cookie` headers, provider token and API-key shapes, OAuth `code`, `state`, `code_verifier`, refresh tokens |
-| Tested unit | Pure function, its own test file, with fixtures per secret shape. A new provider credential shape means a new fixture |
+| Catches by field name | `Authorization` / `Proxy-Authorization` / `Cookie` / `Set-Cookie` / `x-api-key` / `x-goog-api-key` / `x-goog-user-project`, anything containing `password`, `secret`, `token`, `credential`, `verifier`, OAuth `code`, `state`, `code_verifier` |
+| Catches by value shape | `mar_live_…`, `sk-…`, `Bearer …`, any JWT (`eyJ….….…` — a ChatGPT/Codex access token is one), URL userinfo (`postgres://user:pass@host`), a credential in a query string (`?…key=` / `?…token=` / `?…secret=` / `?code=` / `?code_verifier=` / `?state=` — a whole OAuth callback URL logged as one value), `AIza…`, `gh[pousr]_…` / `github_pat_…`, `xai-…`, `gsk_…` |
+| Keeps the diagnostic | A connection string keeps its host and a URL keeps its path — only the credential inside is replaced. Everything else is replaced whole |
+| Tested unit | Pure function, its own test file, with one assertion per secret shape and a nested case three levels deep. A new provider credential shape means a new fixture |
 | Bodies | Request and response bodies are never logged, at any level. Prompts are user data |
 | Client-facing errors | No credential, no token fragment, no decrypted material, and no upstream account identity ever appears in an error returned to a client — see [06-protocol-translation.md](06-protocol-translation.md) |
 
@@ -225,6 +228,11 @@ For operators, at deploy time:
   tree, owned by the non-root container user, excluded from any log or metrics collection path.
 - Do not expose the Postgres port outside the compose network; run the container as a non-root user.
 - Set `TRUST_PROXY` only when a proxy you control is actually in front.
+- Leave `SESSION_COOKIE_INSECURE` unset. It is only for a plain-HTTP LAN install, where the
+  hardened session cookie is discarded by the browser and login silently fails; the moment HTTPS
+  is in front, unset it. The router logs a `warn` naming the risk on every boot while it is on —
+  and, in the other direction, a `warn` naming the variable when it sets a `Secure` cookie on a
+  request that arrived over plain `http://`, so neither mistake is silent.
 - Give every key a name and the narrowest pool binding that works. Revoke keys you no longer
   recognize — see [04-api-keys-and-access.md](04-api-keys-and-access.md).
 - Watch the audit log and the account health panel; an unexpected `needs_reauth` or `exhausted`

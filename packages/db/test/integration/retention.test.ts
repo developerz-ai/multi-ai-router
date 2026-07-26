@@ -1,6 +1,4 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test"
-import { existsSync } from "node:fs"
-import { fileURLToPath } from "node:url"
 import { eq, inArray } from "drizzle-orm"
 import { createDatabase, type Database, type DatabaseHandle } from "../../src/client"
 import { defaultMigrationsFolder, runMigrations } from "../../src/migrate"
@@ -24,9 +22,10 @@ import { usageRecords } from "../../src/schema/usage-records"
  * against a shared development database can only ever reach its own rows.
  * It never talks to a provider, only to the database.
  */
+// `DATABASE_URL` and nothing else: `bin/check` refuses to run without one and
+// `bin/test` names this file when it skips, so the skip can no longer be silent.
 const url = process.env.DATABASE_URL ?? ""
-const journal = fileURLToPath(new URL("../../migrations/meta/_journal.json", import.meta.url))
-const runnable = url !== "" && existsSync(journal)
+const runnable = url !== ""
 
 /** Older than any row the router could have written. */
 const ANCIENT = new Date("1999-01-01T00:00:00.000Z")

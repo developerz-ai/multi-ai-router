@@ -128,6 +128,153 @@ describe("redact — the OAuth connect and refresh flows", () => {
   })
 })
 
+describe("redact — self-identifying credential shapes", () => {
+  /**
+   * The field-name list only helps when the caller named the field honestly. These are the shapes
+   * that must not survive a log line whatever they are called: an upstream is free to quote a key
+   * back at us inside an error message, and `services/translate/shared/errors.ts` puts exactly that
+   * message on a client-facing surface after running it through `redactValue`.
+   */
+
+  test("a JWT is scrubbed under an innocent field name", () => {
+    // ChatGPT/Codex access tokens are JWTs — the shape, not the field name, is what catches them.
+    const jwt =
+      "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJ1c2VyLTEiLCJleHAiOjE3MDAwMDAwMDB9.c2lnbmF0dXJl"
+    const safe = redact({ note: `upstream returned ${jwt} again` })
+
+    expect(safe.note).toBe(`upstream returned ${REDACTED} again`)
+  })
+
+  test("a connection string loses its credentials and keeps its host", () => {
+    const safe = redact({
+      error: "connect failed: postgres://router:s3cr3t-pw@db.internal:5432/app",
+    })
+
+    expect(safe.error).toBe(`connect failed: postgres://${REDACTED}@db.internal:5432/app`)
+  })
+
+  test("a Google API key is scrubbed", () => {
+    const googleKey = `AIzaSy${"0".repeat(33)}`
+    const safe = redact({ detail: `rejected ${googleKey}` })
+
+    expect(safe.detail).toBe(`rejected ${REDACTED}`)
+  })
+
+  test("GitHub tokens are scrubbed, classic and fine-grained", () => {
+    const safe = redact({
+      classic: `ghp_${"a".repeat(36)}`,
+      fineGrained: `github_pat_${"B".repeat(30)}`,
+    })
+
+    expect(safe).toEqual({ classic: REDACTED, fineGrained: REDACTED })
+  })
+
+  test("an xAI key is scrubbed", () => {
+    const safe = redact({ detail: `xai-${"b".repeat(40)}` })
+
+    expect(safe.detail).toBe(REDACTED)
+  })
+
+  test("a Groq key is scrubbed", () => {
+    const safe = redact({ detail: `gsk_${"c".repeat(32)}` })
+
+    expect(safe.detail).toBe(REDACTED)
+  })
+
+  test("a Cerebras key is scrubbed, and a DeepSeek one by the shared sk- shape", () => {
+    const safe = redact({
+      cerebras: `csk-${"d".repeat(40)}`,
+      deepseek: `sk-${"e".repeat(32)}`,
+    })
+
+    expect(safe).toEqual({ cerebras: REDACTED, deepseek: REDACTED })
+  })
+
+  test("a credential in a query string is scrubbed, and the endpoint survives", () => {
+    const safe = redact({
+      keyed: `https://generativelanguage.googleapis.com/v1beta/models?key=AIzaSy${"0".repeat(33)}&alt=sse`,
+      hyphenated: "https://example.test/v1/chat?api-key=abcdef123456",
+      underscored: "https://example.test/v1/chat?api_key=abcdef123456",
+    })
+
+    expect(safe.keyed).toBe(
+      `https://generativelanguage.googleapis.com/v1beta/models?key=${REDACTED}&alt=sse`,
+    )
+    expect(safe.hyphenated).toBe(`https://example.test/v1/chat?api-key=${REDACTED}`)
+    expect(safe.underscored).toBe(`https://example.test/v1/chat?api_key=${REDACTED}`)
+  })
+
+  test("a whole OAuth callback URL logged as one string keeps nothing redeemable", () => {
+    // The field-name list cannot help here: the `code` and the `state` are inside a value called
+    // `url`. They are one-shot, but a log line outlives the ten-minute window that binds them.
+    const safe = redact({
+      url: "https://router.test/admin/accounts/oauth/callback?code=ac_live_x1&state=s-9f2c&error=access_denied",
+    })
+
+    expect(safe.url).toBe(
+      `https://router.test/admin/accounts/oauth/callback?code=${REDACTED}&state=${REDACTED}&error=access_denied`,
+    )
+  })
+
+  test("a refresh token in a query string is scrubbed despite the prefix", () => {
+    const safe = redact({ url: "https://example.test/oauth/token?refresh_token=rt_live_abc&x=1" })
+
+    expect(safe.url).toBe(`https://example.test/oauth/token?refresh_token=${REDACTED}&x=1`)
+  })
+
+  test("vendor credential headers are scrubbed by name", () => {
+    const safe = redact({
+      "x-goog-api-key": "not-a-real-key",
+      "x-goog-user-project": "some-gcp-project",
+      // `anthropic-auth-token`, `access_token`, `refresh_token`, and `id_token` all carry the
+      // `token` marker — this pins that the marker really is what covers them.
+      "anthropic-auth-token": "not-a-real-token",
+      "x-request-id": "req-1",
+    })
+
+    expect(safe).toEqual({
+      "x-goog-api-key": REDACTED,
+      "x-goog-user-project": REDACTED,
+      "anthropic-auth-token": REDACTED,
+      "x-request-id": "req-1",
+    })
+  })
+
+  test("a URL with no credentials in it is left alone", () => {
+    const safe = redact({
+      base: "https://api.example.test:8443/v1/messages",
+      query: "https://api.example.test/v1/models?limit=20&after=acct-1",
+    })
+
+    expect(safe).toEqual({
+      base: "https://api.example.test:8443/v1/messages",
+      query: "https://api.example.test/v1/models?limit=20&after=acct-1",
+    })
+  })
+
+  test("a failed-attempt record nested three deep is still scrubbed, name and shape", () => {
+    const safe = redact({
+      attempt: {
+        upstream: {
+          headers: { "x-goog-api-key": "not-a-real-key", "x-request-id": "up-1" },
+          url: `https://example.test/v1?api-key=AIzaSy${"0".repeat(33)}`,
+          note: `retried with ghp_${"a".repeat(36)}`,
+        },
+      },
+    })
+
+    expect(safe).toEqual({
+      attempt: {
+        upstream: {
+          headers: { "x-goog-api-key": REDACTED, "x-request-id": "up-1" },
+          url: `https://example.test/v1?api-key=${REDACTED}`,
+          note: `retried with ${REDACTED}`,
+        },
+      },
+    })
+  })
+})
+
 describe("createLogger", () => {
   test("emits one redacted JSON line per event, with the bound fields", () => {
     const lines: string[] = []

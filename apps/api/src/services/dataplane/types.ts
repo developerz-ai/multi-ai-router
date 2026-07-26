@@ -42,6 +42,24 @@ export type FetchLike = (request: Request) => Promise<Response>
 /** The ingress dialect a data-plane route speaks. Fixed per path, never sniffed from a body. */
 export type IngressDialect = Dialect
 
+/**
+ * What a data-plane request asks an Account to *do*, as distinct from which dialect it speaks.
+ *
+ * `messages` is inference — three of the five POST paths. The other two ask for something that is
+ * not a completion at all, which is why the operation travels beside the dialect instead of being
+ * derived from it:
+ *
+ *  - `count-tokens` is Anthropic's `POST /v1/messages/count_tokens`, which Claude Code calls before
+ *    a turn to decide when to compact — same body shape, a different endpoint below the base URL,
+ *    and an answer that is a measurement rather than a completion;
+ *  - `embeddings` is OpenAI's `POST /v1/embeddings`, which every RAG toolchain calls beside its
+ *    chat traffic — a body that names no chat surface, and an answer that spends input tokens and
+ *    produces no output ones.
+ *
+ * Fixed per route like the dialect is, and for the same reason — the path is the contract.
+ */
+export type UpstreamOperation = "messages" | "count-tokens" | "embeddings"
+
 export interface DataPlaneClock {
   /** Wall clock, for timestamps and for every routing decision that reads `now`. */
   readonly now: () => Date

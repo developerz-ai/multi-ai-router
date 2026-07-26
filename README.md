@@ -1,10 +1,8 @@
 <h1 align="center">multi-ai-router</h1>
 
-**Self-hosted API router that lets a team of developers and AI agents share one pool of AI subscriptions and API keys behind a single endpoint.** 🔀
+<p align="center"><strong>your tools → multi-ai-router → providers</strong></p>
 
-You log in as the single admin, attach upstream accounts (Claude Max/Pro OAuth, ChatGPT/Codex OAuth, Anthropic API, OpenAI API, OpenRouter, z.ai, Kimi, MiniMax, Gemini, or any OpenAI-/Anthropic-compatible endpoint), then mint API keys and bind each key to the accounts it may use. Clients — Claude Code, Cursor, OpenCode, Codex CLI, Cline, Aider, anything speaking the OpenAI or Anthropic wire protocol — point at the router with one of its keys. **The client picks the model. The router picks the account.**
-
-**Pooling is the point.** Many accounts of the *same* provider is the normal case, not an edge case — five Claude Max subscriptions, three z.ai keys, two ChatGPT subs, side by side. A pool turns "my five Claude subs plus the OpenRouter key as a safety net" into one addressable thing a key points at, and makes it behave like a single, more reliable account than any of its members.
+**A self-hosted web app that turns your scattered API keys and AI subscriptions into one endpoint.** 🔀 Add accounts (Claude Max/Pro, ChatGPT/Codex, Anthropic API, OpenAI API, OpenRouter, z.ai, Kimi, MiniMax, Gemini, or any OpenAI-/Anthropic-compatible endpoint) once, in the admin console. Mint a router key, bind it to the accounts it may use, and point every tool you own — Claude Code, Cursor, OpenCode, Codex CLI, Cline, Aider, anything speaking the OpenAI or Anthropic wire protocol — at that one key. It's a proxy: your tools never see the upstream credential, and the upstream never sees more than one caller.
 
 ```
 Claude Code / OpenCode / Codex / any OpenAI|Anthropic client
@@ -15,6 +13,10 @@ Claude Code / OpenCode / Codex / any OpenAI|Anthropic client
         ▼
 Claude Max sub · ChatGPT sub · Anthropic API · OpenRouter · z.ai · Kimi · …
 ```
+
+## What it is
+
+multi-ai-router is the thing that sits between your tools and your providers so you don't have to paste a different key into every one of them. Log in as the single admin, attach as many upstream accounts as you have — **many accounts of the same provider is the normal case, not an edge case**: five Claude Max subscriptions, three z.ai keys, two ChatGPT subs, side by side — group them into pools with load balancing and failover, and mint one named, revocable router key per human or agent. Clients keep speaking the OpenAI or Anthropic wire protocol they already speak; the router picks which account answers, refreshes OAuth for them, and records what it cost. **The client picks the model. The router picks the account.**
 
 ---
 
@@ -43,60 +45,16 @@ Why: a router that makes a team's subscriptions usable only works if the account
 
 Marked ⏳ where the design is settled but the code is not — see [Status](#-status).
 
-- 🔀 **Two ingress dialects** — `POST /v1/messages` (Anthropic Messages), `POST /v1/chat/completions` and `POST /v1/responses` (OpenAI), `GET /v1/models` scoped to the presenting key.
+- 🔀 **Two ingress dialects** — `POST /v1/messages` (Anthropic Messages), `POST /v1/chat/completions` and `POST /v1/responses` (OpenAI), `GET /v1/models` scoped to the presenting key, plus `POST /v1/messages/count_tokens` so Claude Code can size its context before a turn and `POST /v1/embeddings` so a RAG toolchain indexes through the same endpoint it chats through.
 - 🔁 **Passthrough first** — same-dialect requests swap headers and forward the body byte-for-byte, streaming included. Cross-dialect translation is implemented for every crossing between the three dialects (Anthropic, OpenAI Chat Completions, OpenAI Responses), including streaming and tool calls; its lossy edges are documented and a request that cannot be translated faithfully is refused with a `400` naming the reason, rather than approximated.
 - 🧩 **Subscriptions as first-class upstreams** — Claude subscriptions via the Agent SDK (a `CLAUDE_CONFIG_DIR` per account), ChatGPT/Codex via OAuth + PKCE, connected from the admin UI by redirect capture *or* manual code paste, with background refresh ahead of expiry for both.
 - ⚖️ **Six load-balancing policies per pool** — sticky, round-robin, weighted, least-used, priority-failover, quota-aware — plus an optional overflow account, bounded failover, and a circuit breaker.
 - 🔑 **Named, retrievable keys with full or limited scope** — every key has a human-chosen name and a scope: `all` accounts, one or more pools, or an explicit account list. Stored encrypted, not hashed, so you can look a key up again without rotating it. A per-key rate limit is enforced on the request path.
 - 📊 **Usage** — one record per upstream **attempt** (key, account, pool, session, model, tokens, cost, latency, TTFB, router overhead, outcome), queued in memory and batch-written off the request path, and read back by the console over any window, broken down by key, account, pool or model — with daily rollups behind it, cost estimation from an operator-editable price table, and a Prometheus `/metrics` exposition in front.
 - ⏱️ **Reset visibility** — every unavailable account shows its reset as an absolute time *and* a countdown, per window for Claude subs (5-hour, 7-day, per-model), labeled as reported / estimated / unknown. Plus a manual **Re-check now**, per account or for all: providers sometimes reset early or lift a limit for everyone, and the router shouldn't sit on a stale timestamp.
-- ⚡ **Performance as a stated goal** — under 5 ms added p99 on the passthrough path and zero added time-to-first-token. Streams are never buffered, passthrough bodies are never parsed, and nothing touches Postgres on the critical path: accounts and pools are read from a warm catalog, keys from a bounded cache, usage is written off-path.
-- 🖥️ **SolidJS operator console** — overview, accounts, pools, keys, usage and settings all render live data: key reveal with no shown-once flow, destructive actions that name exactly what they break, reset shown as absolute time *and* countdown labelled by how far it can be trusted, a red banner for any account out of credits, and a settings screen with live price overrides, retention knobs, scheduled-task health, and the audit feed.
+- ⚡ **Performance as a stated goal** — under 5 ms added p99 on the passthrough path and zero added time-to-first-token. Streams are never buffered, passthrough bodies are never parsed, and nothing touches Postgres on the critical path: accounts and pools are read from a warm catalog, keys from a bounded cache, usage is written off-path. `bin/bench` checks both claims against a stub upstream and exits non-zero when either breaks.
+- 🖥️ **SolidJS operator console** — overview, accounts, pools, keys, usage and settings all render live data: key reveal with no shown-once flow, destructive actions that name exactly what they break, reset shown as absolute time *and* countdown labelled by how far it can be trusted, a red banner for any account out of credits, a live request feed that names the failing request by id, account and error class, and a settings screen with live price overrides, retention knobs, scheduled-task health, and the audit feed.
 - 🐳 **`docker compose up -d`** — the router plus PostgreSQL 16, a healthcheck gating startup, three env vars you set by hand.
-
----
-
-## 🚧 Status
-
-**Every milestone in the roadmap has shipped: the admin API, the full data plane (same-dialect
-passthrough, cross-dialect translation, and the Claude Agent SDK path), and the operator console are
-all live.** The table is honest rather than aspirational — the one remaining gap (Gemini's native
-dialect) is named explicitly, not silently approximated.
-
-| Capability | State |
-|---|---|
-| Boot: Zod-validated env, migrations before the listener opens, `/healthz` + `/readyz` | ✅ |
-| Admin auth: login, sliding session under an absolute cap, CSRF, login throttling | ✅ |
-| Admin API: accounts, pools (incl. overflow account), keys, provider registry | ✅ |
-| Router keys: minted, named, encrypted, **retrievable** (`POST /api/admin/keys/:id/reveal`), revocable | ✅ |
-| Data plane, **same-dialect passthrough**: `/v1/messages`, `/v1/chat/completions`, `/v1/responses`, `/v1/models` | ✅ |
-| Routing: scope intersection, the six policies, overflow, bounded failover, circuit breaker | ✅ |
-| Warm routing catalog + off-path batched `UsageRecord` writer | ✅ |
-| HTTP provider drivers: Anthropic API, OpenAI API, ChatGPT/Codex OAuth, OpenRouter, z.ai, Kimi, MiniMax, and the two compatible escape hatches | ✅ |
-| **Cross-dialect translation** — every crossing between `anthropic`, `openai-chat`, `openai-responses`, request/response/streaming, tool calls included | ✅ an untranslatable request is refused with a `400` naming the reason |
-| **Claude subscriptions via the Agent SDK** | ✅ `anthropic-oauth` accounts are served — login, per-account `CLAUDE_CONFIG_DIR`, sessions, quota, tool passthrough, SDK-output re-synthesis |
-| **ChatGPT/Codex OAuth** | ✅ authorization code + PKCE, redirect *and* paste capture, and background token refresh ahead of expiry |
-| **Gemini native** | ❌ no driver — reachable today through `openai-compatible` |
-| **Operator console screens** — overview, accounts, pools, keys, usage | ✅ live data end to end |
-| **Operator console** — settings | ✅ session, provider registry, price overrides, retention knobs, scheduled-task health, and the audit feed are all live |
-| Background tasks: janitor/retention sweeps, usage rollups, OAuth-state purge, quota floor — in-process timers, one advisory lock per task | ✅ |
-| **`/metrics`** | ✅ Prometheus exposition, token-gated when `METRICS_TOKEN` is set |
-| **Cost estimation and per-key rate-limit enforcement** | ✅ operator-editable price table plus a per-key sliding-window limiter on the request path |
-
-The contract is [`docs/idea/`](docs/idea/): entity names, endpoints, policies, env vars, and invariants
-described there are what gets built, and are the reference for any implementation work. Sections below
-describing an unbuilt capability are marked. Track progress in
-[`docs/idea/10-roadmap.md`](docs/idea/10-roadmap.md).
-
-### Working on it
-
-`bin/` is the interface — three commands are the whole contract:
-
-```bash
-bin/setup     # fresh clone: prereqs, install, .env with a generated ENCRYPTION_KEY, dev Postgres, migrate
-bin/dev       # each session: API + web, watch mode
-bin/check     # before committing: lint, typecheck, test — the CI job list, in order
-```
 
 ---
 
@@ -114,24 +72,32 @@ Not for you if you want a semantic model picker, an agent framework, multi-tenan
 
 Three env vars you set by hand and one command. No hash-generation step. `docker compose up -d` brings up two services — the router and PostgreSQL 16 — with a healthcheck gating the router's start and `DATABASE_URL` wired in for you.
 
+**First, copy the env template and fill in the three required vars:**
+
+```bash
+cp .env.example .env
+# Edit .env: set ADMIN_PASSWORD and ENCRYPTION_KEY (generate: openssl rand -base64 32)
+# ADMIN_USERNAME defaults to "admin" if you leave it as-is
+```
+
+The bundled `docker-compose.yml` reads from `.env` and supplies `DATABASE_URL` automatically:
+
 ```yaml
-# compose.yaml
+# docker-compose.yml (bundled)
 services:
   router:
-    image: ghcr.io/developerz-ai/multi-ai-router:latest
-    ports: ["8080:8080"]
+    image: ghcr.io/developerz-ai/multi-ai-router:1.0.0
+    ports: ["127.0.0.1:8080:8080"]
+    env_file: [{ path: .env, required: false }]  # reads ADMIN_*, ENCRYPTION_KEY from .env
     environment:
-      ADMIN_USERNAME: admin
-      ADMIN_PASSWORD: change-me
-      ENCRYPTION_KEY: REPLACE_ME     # 32 random bytes: openssl rand -base64 32
-      DATABASE_URL: postgres://router:router@db:5432/router
+      DATABASE_URL: postgres://router:router@postgres:5432/router
     # per-Account CLAUDE_CONFIG_DIR — live credentials, treat as secret material
     volumes: ["claude-config:/data/claude"]
-    depends_on: { db: { condition: service_healthy } }
+    depends_on: { postgres: { condition: service_healthy } }
     restart: unless-stopped
 
-  db:
-    image: postgres:16-alpine
+  postgres:
+    image: postgres:16
     environment: { POSTGRES_USER: router, POSTGRES_PASSWORD: router, POSTGRES_DB: router }
     healthcheck: { test: ["CMD-SHELL", "pg_isready -U router"], interval: 5s, retries: 10 }
     volumes: ["pgdata:/var/lib/postgresql/data"]
@@ -142,13 +108,15 @@ volumes:
   claude-config:
 ```
 
+**Then:**
+
 ```bash
 docker compose up -d
 ```
 
-Migrations run at boot, are idempotent, and fail the boot loudly rather than starting on a half-migrated schema. Pointing `DATABASE_URL` at an existing or managed Postgres and dropping the bundled `db` service is a one-line change.
+Migrations run at boot, are idempotent, and fail the boot loudly rather than starting on a half-migrated schema. Pointing `DATABASE_URL` at an existing or managed Postgres and dropping the bundled `postgres` service is a one-line change.
 
-Then log in and add an account, a pool, and a key — the SolidJS console at `/` handles all three end to end ([Status](#-status)); `/api/admin/**` is also there directly if you'd rather script it. **Give the key a name; you can view and copy its value again at any time** via `POST /api/admin/keys/:id/reveal` — keys are stored encrypted, not hashed, because an operator running a fleet of agents needs to look one up later without rotating it.
+Then open **<http://localhost:8080>** and log in. The router process serves the SolidJS console itself, at the same origin as the API — no second container, no static host, no CORS to configure. Add an account, a pool, and a key; the console handles all three end to end ([Status](#-status)), and `/api/admin/**` is there directly if you'd rather script it. **Give the key a name; you can view and copy its value again at any time** via `POST /api/admin/keys/:id/reveal` — keys are stored encrypted, not hashed, because an operator running a fleet of agents needs to look one up later without rotating it.
 
 | Env var | Required | Notes |
 |---|---|---|
@@ -166,9 +134,69 @@ Env is validated by Zod at boot; a bad config exits non-zero naming the offendin
 
 ---
 
+## 🚧 Status
+
+**Every milestone in the roadmap has shipped: the admin API, the full data plane (same-dialect
+passthrough, cross-dialect translation, and the Claude Agent SDK path), and the operator console are
+all live.** The table is honest rather than aspirational — every declared provider has a driver, and
+the one deliberate scope line (Gemini's *native* GenAI dialect, as opposed to its OpenAI-compatible
+one) is named explicitly rather than silently approximated.
+
+| Capability | State |
+|---|---|
+| Boot: Zod-validated env, migrations before the listener opens, `/healthz` + `/readyz` | ✅ |
+| Admin auth: login, sliding session under an absolute cap, CSRF, login throttling | ✅ |
+| Admin API: accounts, pools (incl. overflow account), keys, provider registry | ✅ |
+| Router keys: minted, named, encrypted, **retrievable** (`POST /api/admin/keys/:id/reveal`), revocable | ✅ |
+| Data plane, **same-dialect passthrough**: `/v1/messages`, `/v1/chat/completions`, `/v1/responses`, `/v1/models` | ✅ |
+| `POST /v1/messages/count_tokens` — routed, scoped and failed over like any request | ✅ passthrough to an Anthropic-dialect account, or a `503` naming why none can count; never an estimate |
+| `POST /v1/embeddings` — routed, scoped and failed over like any request | ✅ passthrough to an OpenAI-dialect account (either surface), or a `503` naming why none can embed; never another model's vectors |
+| Routing: scope intersection, the six policies, overflow, bounded failover, circuit breaker | ✅ |
+| Warm routing catalog + off-path batched `UsageRecord` writer | ✅ |
+| HTTP provider drivers: Anthropic API, OpenAI API, ChatGPT/Codex OAuth, OpenRouter, z.ai, Kimi, MiniMax, Gemini, Groq, DeepSeek, xAI, Mistral, Together, Cerebras, and the two compatible escape hatches | ✅ |
+| **Cross-dialect translation** — every crossing between `anthropic`, `openai-chat`, `openai-responses`, request/response/streaming, tool calls included | ✅ an untranslatable request is refused with a `400` naming the reason |
+| **Claude subscriptions via the Agent SDK** | ✅ `anthropic-oauth` accounts are served — login, per-account `CLAUDE_CONFIG_DIR`, sessions, quota, tool passthrough, SDK-output re-synthesis |
+| **ChatGPT/Codex OAuth** | ✅ authorization code + PKCE, redirect *and* paste capture, and background token refresh ahead of expiry |
+| **Gemini native GenAI dialect** | ⏳ deliberately deferred — the `gemini` driver ships and serves Google's OpenAI-compatibility surface; the native protocol would be a fourth dialect in the translation matrix |
+| **Operator console screens** — overview, accounts, pools, keys, usage | ✅ live data end to end, including a live request feed: the last N upstream attempts with outcome, account, model and latency, so "why did my request fail" is answerable without a log tail |
+| **Operator console** — settings | ✅ session, provider registry, price overrides, retention knobs, scheduled-task health, and the audit feed are all live |
+| Background tasks: janitor/retention sweeps, usage rollups, OAuth-state purge, quota floor — in-process timers, one advisory lock per task | ✅ |
+| **`/metrics`** | ✅ Prometheus exposition, token-gated when `METRICS_TOKEN` is set |
+| **Cost estimation and per-key rate-limit enforcement** | ✅ operator-editable price table plus a per-key sliding-window limiter on the request path |
+
+The contract is [`docs/idea/`](docs/idea/): entity names, endpoints, policies, env vars, and invariants
+described there are what gets built, and are the reference for any implementation work. Sections below
+describing an unbuilt capability are marked. Track progress in
+[`docs/idea/10-roadmap.md`](docs/idea/10-roadmap.md).
+
+### Working on it
+
+`bin/` is the interface — three commands are the whole contract:
+
+```bash
+bin/setup     # fresh clone: prereqs, install, .env with a generated ENCRYPTION_KEY + DATABASE_URL, dev Postgres, migrate
+bin/dev       # each session: API + web, watch mode
+bin/check     # before committing: lint, typecheck, test — the CI job list, in order
+```
+
+`bin/check` needs a database and refuses to start without one, because CI's test job has a real
+Postgres 16 and the migration, advisory-lock, retention and readiness-probe suites gate themselves on
+`DATABASE_URL`. Without it they skip, `bun test` folds the skips into the same green summary as a
+pass, and the gate goes green having proved less than the PR will. `bin/setup` writes the dev
+`DATABASE_URL` into `.env`, which is all it takes. A bare `bin/test` still runs on a machine with no
+Docker — it just names, after the summary, the files that did not run.
+
+One more when you touch the request path: `bin/bench` drives the real router against an in-process
+stub upstream and reports what its own `router_overhead_seconds` histogram recorded, plus added
+time-to-first-token measured separately. It exits non-zero when either half of the budget breaks.
+
+---
+
 ## 🔌 Pointing your client at it
 
 Router keys are accepted in both dialects: `Authorization: Bearer mar_live_…` and `x-api-key: mar_live_…`. Anything that can set a base URL and a key works; these are the tested targets.
+
+**The console says all of this too, filled in.** Mint or reveal a key and the dialog carries a **Point your tool at it** panel — tabs for Claude Code, Cursor, Codex CLI, Aider, the OpenAI SDKs and `curl`, each block already containing this deployment's base URL (`PUBLIC_URL`, else the console's own origin) and that key's real value. The table below is the same content for someone who never opened the console.
 
 | Client | How you point it at the router |
 |---|---|
@@ -197,7 +225,11 @@ Send whatever model name you normally send. It passes through unchanged unless t
 
 ## 🌐 Supported providers
 
-Each provider is a code-defined driver behind one interface; adding one is a single new file.
+Each provider is a code-defined driver behind one interface. Adding one touches **one new driver
+file plus two registration lines** (the `ProviderId` union in `packages/core`, the entry in
+`providers/registry.ts`) — not the single file the phrase suggests. See
+[`docs/idea/03-providers.md#adding-a-provider`](docs/idea/03-providers.md#adding-a-provider) for
+why the extra two lines are load-bearing rather than boilerplate.
 
 The registry is a **total** record, so every provider id is either a driver or a recorded reason it is not — never silently absent, never stubbed into something that looks like it works.
 
@@ -209,11 +241,18 @@ The registry is a **total** record, so every provider id is either a driver or a
 | `zai` | API key, `Bearer` | ✅ | Two surfaces (Anthropic **or** OpenAI); the account picks one. Alias map typically needed. |
 | `kimi` | API key, `Bearer` | ✅ | Anthropic-shaped. Alias map typically needed. **Not `x-api-key`.** |
 | `minimax` | API key, `Bearer` | ✅ | Anthropic-shaped, and reports some failures in a `base_resp` envelope on an HTTP `200`. |
+| `groq` | API key, `Bearer` | ✅ | GroqCloud. Its `error.type` names the *limit* that was hit, not the error kind, so classification keys on `code`; a spend limit is a **`400 blocked_api_access`**, and `498` (flex-tier capacity) fails over instead of failing the request. |
+| `deepseek` | API key, `Bearer` | ✅ | The one vendor whose statuses mean what they say — a spent balance is a real **`402`**. Its `type`/`code` are inverted, so the driver reads neither. |
+| `xai` | API key, `Bearer` | ✅ | Grok. Two error shapes, one flat with an English sentence in `code`. xAI publishes no status for a depleted balance, so the driver encodes no guess. |
+| `mistral` | API key, `Bearer` | ✅ | **Error body has no `error` wrapper.** Keys on the four published `type` categories, never on `code` (a numeric string). "Service tier capacity exceeded" is a cooldown, not a billing stop. |
+| `together` | API key, `Bearer` | ✅ | **`403` means the prompt exceeded the context length**, not a rejected key — so an oversized request never flags the credential. `503` is the platform's capacity, `429` your dynamic rate, `402` the monthly spend cap. |
+| `cerebras` | API key, `Bearer` | ✅ | Shares Mistral's unwrapped error envelope. A spent free-tier **day** is a `429` that refills on a clock, never `exhausted`. |
+| `ollama` | **None** (key optional) | ✅ | A local or self-hosted Ollama on its OpenAI-compatible surface. The one provider that authenticates nobody: an account may be created with **no credential at all**, and one supplied is sent as `Bearer` for the same endpoint behind a proxy. Operator-supplied base URL — inside a container `localhost` is the router itself. |
 | `openai-compatible` | API key, `Bearer` | ✅ | Any third-party OpenAI-shaped endpoint. Operator-supplied base URL. |
 | `anthropic-compatible` | API key | ✅ | Any third-party Anthropic-shaped endpoint. Keeps Anthropic's own header rules. |
 | `anthropic-oauth` | Claude Agent SDK | ✅ | Claude Max/Pro subscription. Login and credential refresh run through the `claude` CLI into a per-account `CLAUDE_CONFIG_DIR`; the router never mints or stores a subscription token. Requests are served through `@anthropic-ai/claude-agent-sdk`'s `query()`, with session stickiness, quota from SDK `rate_limit_event`s, tool passthrough, and SDK-output re-synthesized back into Anthropic (and, via translation, OpenAI) wire format. |
 | `openai-oauth` | OAuth + PKCE | ✅ | ChatGPT/Codex subscription via `auth.openai.com`, `offline_access` scope, `chatgpt-account-id` derived from the token claims. An account is created with no credential, connected through `POST /:id/connect` by redirect or paste capture, and refreshed in the background ahead of expiry — a failed refresh parks it at `needs_reauth` rather than failing a request. |
-| `gemini` | API key | ⏳ | Deferred in v1: reachable through `openai-compatible`; native endpoint constants are not pinned. |
+| `gemini` | API key, `Bearer` | ✅ | Google's **OpenAI-compatibility** surface (`generativelanguage.googleapis.com/v1beta/openai`) — chat, embeddings and the model listing. Failures come back as canonical gRPC statuses, and `RESOURCE_EXHAUSTED` is a **cooldown**, not a dead balance, even though its message names billing. The retry delay rides `error.details[].RetryInfo`, since Gemini sends no rate-limit headers. Native GenAI dialect deliberately deferred. |
 
 **z.ai, Kimi, and MiniMax take their key as `Authorization: Bearer`, never `x-api-key`** — they share the Anthropic *dialect*, not its auth scheme, and they must not receive the Anthropic OAuth beta header either.
 
@@ -277,6 +316,7 @@ Cache-aware by design: total prompt size is the sum of `input_tokens`, `cache_cr
 | [`docs/idea/10-roadmap.md`](docs/idea/10-roadmap.md) | Milestones M1–M8 and what's deferred |
 | [`docs/idea/11-anthropic-agent-sdk.md`](docs/idea/11-anthropic-agent-sdk.md) | Claude subscriptions via the Agent SDK: `query()`, per-account `CLAUDE_CONFIG_DIR`, quota events, costs |
 | [`docs/reusable-code.md`](docs/reusable-code.md) | Shared helpers, services, and components that already exist — and where a new shared thing belongs |
+| [`SECURITY.md`](SECURITY.md) | Supported versions, private vulnerability reporting, response SLA, scope |
 
 ---
 

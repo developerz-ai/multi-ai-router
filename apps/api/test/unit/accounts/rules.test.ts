@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test"
+import { ProviderId } from "@multi-ai-router/core"
 import { type AccountShape, checkAccountShape } from "../../../src/services/accounts"
 
 /**
@@ -27,11 +28,17 @@ describe("provider implementation", () => {
     expect(checkAccountShape(shape()).ok).toBe(true)
   })
 
-  test("a provider with no driver cannot back an account, and the answer says why", () => {
-    const result = checkAccountShape(shape({ provider: "gemini" }))
-    expect(result.ok).toBe(false)
-    expect(reason(result)).toStartWith("provider_unimplemented:")
-    expect(reason(result)).toContain("gemini")
+  test("every declared provider can back an account — none is refused as unimplemented", () => {
+    // The `provider_unimplemented` rule stays: it is what an id declared ahead of its driver hits.
+    // Nothing hits it today, and asserting that is how the claim stays honest.
+    for (const provider of ProviderId.options) {
+      const result = checkAccountShape(shape({ provider, configDir: null }))
+      expect(reason(result)).not.toStartWith("provider_unimplemented:")
+    }
+  })
+
+  test("a gemini account needs nothing but its key", () => {
+    expect(checkAccountShape(shape({ provider: "gemini" })).ok).toBe(true)
   })
 })
 
@@ -58,6 +65,55 @@ describe("credentials versus config dirs", () => {
   test("an HTTP account with no credential is rejected", () => {
     const result = checkAccountShape(shape({ hasCredential: false }))
     expect(reason(result)).toStartWith("credential_required:")
+  })
+
+  test("a local endpoint may be created with no credential at all", () => {
+    const result = checkAccountShape(
+      shape({
+        provider: "ollama",
+        hasCredential: false,
+        baseUrl: "http://ollama.internal:11434/v1",
+      }),
+    )
+
+    expect(result.ok).toBe(true)
+  })
+
+  test("it accepts one anyway — the same endpoint behind a proxy takes a key", () => {
+    const result = checkAccountShape(
+      shape({
+        provider: "ollama",
+        hasCredential: true,
+        baseUrl: "http://ollama.internal:11434/v1",
+      }),
+    )
+
+    expect(result.ok).toBe(true)
+  })
+
+  test("its address is still required: no credential is not no configuration", () => {
+    const result = checkAccountShape(shape({ provider: "ollama", hasCredential: false }))
+
+    expect(reason(result)).toStartWith("base_url_required:")
+  })
+
+  test("the providers that may exist empty are exactly the three with a reason to", () => {
+    // A subscription the SDK owns the credentials for, an account a login will fill in, and an
+    // upstream that authenticates nobody. Any fourth id here would be an account quietly addressing
+    // a paid upstream with no key, so the set is asserted whole rather than sampled.
+    const mayBeEmpty = ProviderId.options.filter(
+      (provider) =>
+        checkAccountShape(
+          shape({
+            provider,
+            hasCredential: false,
+            baseUrl: "https://upstream.test/v1",
+            configDir: provider === "anthropic-oauth" ? "/data/claude/seb" : null,
+          }),
+        ).ok,
+    )
+
+    expect(mayBeEmpty).toEqual(["anthropic-oauth", "openai-oauth", "ollama"])
   })
 
   test("a Claude subscription must never be handed a router-held credential", () => {

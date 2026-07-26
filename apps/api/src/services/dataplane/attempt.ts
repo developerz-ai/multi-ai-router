@@ -67,7 +67,7 @@ export type AttemptOutcome =
 
 export async function runAttempt(input: AttemptInput): Promise<AttemptOutcome> {
   const { plan } = input
-  const credential = accountCredential(plan.account, input.cipher)
+  const credential = accountCredential(plan.account, input.cipher, plan.driver.authKind)
   const headers = upstreamHeaders(
     input.clientHeaders,
     plan.driver.buildHeaders(plan.account.driver, credential),

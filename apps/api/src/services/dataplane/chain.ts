@@ -16,7 +16,7 @@ import {
   recordAttempt,
 } from "../routing"
 import type { TranslationContext } from "../translate"
-import { createTokenObserver } from "../usage"
+import { createTokenObserver, NO_TOKEN_OBSERVER } from "../usage"
 import { type AttemptOutcome, runAttempt, type UpstreamError } from "./attempt"
 import { rewriteModel } from "./body/read"
 import type { ByteSpan } from "./body/scanner"
@@ -230,16 +230,29 @@ function relaySuccess(
   response: Response,
   at: AttemptClock,
 ): Response {
-  const tokens = createTokenObserver()
+  // A count-tokens answer states `input_tokens` for a prompt that was never run. Reading it would
+  // record — and price — a measurement as though it were a completion, so that one response shape
+  // is relayed and observed for bytes only. See `usage/tokens.ts`. An embeddings answer is the
+  // opposite case and takes the ordinary observer: its `prompt_tokens` were genuinely spent, and
+  // the absent completion count lands as the zero it truthfully is.
+  const tokens =
+    ctx.runtime.operation === "count-tokens" ? NO_TOKEN_OBSERVER : createTokenObserver()
   let firstByteAt: number | undefined
   const settle = (streamed: boolean): void => {
+    // Everything this attempt spent — the call and every byte relayed off it — is time the router
+    // waited on the upstream, not time it worked. The failure path adds its attempt before
+    // recording; the success path has to add its own here, at the moment the last byte lands,
+    // because a stream settles long after the loop returned. Passing only the *previous* attempts'
+    // wait would fold a whole generation into `router_overhead_seconds`, the one series that must
+    // never contain upstream time (CLAUDE.md non-negotiable 8).
+    const upstreamMs = at.upstreamMs + (ctx.runtime.clock.elapsed() - at.started)
     const counts = tokens.counts()
     ctx.runtime.health.endAttempt(servable.account.id, counts.tokensOut)
     ctx.runtime.record(
       attemptRecord({
         ...ctx.runtime.attribution(attempt, servable),
         tokens: counts,
-        timing: ctx.runtime.timing(at.startedAt, at.started, at.upstreamMs, firstByteAt),
+        timing: ctx.runtime.timing(at.startedAt, at.started, upstreamMs, firstByteAt),
         outcome: SUCCESS_OUTCOME,
         streamed,
         httpStatus: response.status,

@@ -114,7 +114,30 @@ Measures, identical in every dimension × window cell:
 | `/accounts` table | Same live per-row totals, plus current quota utilization and reset ([below](#quota-resets-and-manual-re-check)) |
 | Account detail | Full measure set, plus per-window quota history |
 | `/pools` | Per-pool totals and the observed split across members — the answer to "is my policy doing what I set it to" |
-| `/usage` | The dedicated screen: any dimension, any window, charts and leaderboards |
+| `/usage` | The dedicated screen: any dimension, any window, charts and leaderboards, plus the live request feed below them |
+
+### The live request feed
+
+Every aggregate above answers *how much* and *how often*. None of them answers **which request
+failed** — and that is the question an operator arrives with after a tool errored. Before the feed
+existed the answer was only in the process logs, which an operator running a container cannot grep.
+
+`GET /api/admin/usage/recent` returns individual `UsageRecord` rows, newest first, and the `/usage`
+screen renders them as one row per **attempt**: a failover chain of three shows as three rows under
+one request id, with the attempt number on each. Merging them would hide exactly the failover the
+router exists to perform.
+
+| Property | Rule |
+|---|---|
+| Filter | `failed=true` (every non-success outcome, derived from the `UsageOutcome` enum so a new outcome is never quietly excluded), or `outcome=<one outcome>`. Never both — that pairing is a `400`, not a silently-resolved preference. `quota_exhausted` and `credits_exhausted` stay separately selectable |
+| Lookup | `requestId` matches the router's `correlation_id` **and** the caller's `x-request-id`. An operator holding an id off a failed run cannot know which of the two they have, so asking them to pick would be asking them to guess |
+| `limit` | 1..200, default 50. Out of range is a `400`, never a silent clamp — a console that asked for 1000 and got 200 without being told would render a truncated page as a complete one |
+| Columns | Named individually by the repository. `sessionKey` and the cost columns are deliberately absent, so a column added to the table never silently appears on an admin screen |
+| Ordering | `created_at desc, id desc`. The tiebreaker is load-bearing: attempts of one chain are written from one batch and can share a millisecond, and a page that reshuffles between two refreshes reads as traffic that did not happen |
+| Colour | The row's dot takes its token from `usageOutcomeFault` — whose problem the failure is. The outcome is always spelt out beside it, so colour is never the only carrier |
+
+Nothing on the feed can carry credential material: `errorClass` is a class name rather than a
+message, and no request or response body is stored anywhere to leak.
 
 ### Charts — data shapes, not a renderer
 
@@ -188,14 +211,23 @@ immediately if it is healthy.
 
 | Endpoint | Auth | Meaning | Codes |
 |---|---|---|---|
-| `GET /healthz` | none | Liveness. The process is up and serving | `200` always while serving |
+| `GET /healthz` | none | Liveness. The process is up and serving, and the build it is: `{"status":"ok","version":"1.0.0"}` | `200` always while serving |
 | `GET /readyz` | none | Readiness: **database reachable**. Two dimensions are reported without gating the answer: the account pool (`ok` / `none` / `blocked`) and the `claude` CLI (the resolution rung that won, or `missing`) | `200` ready, `503` with a short reason when the database is unreachable |
 | `GET /metrics` | `METRICS_TOKEN` when set, none when not | Prometheus text exposition | `200`, `401` when the token is set and not presented |
 | `GET /v1/usage/quota` | router key or admin session | Per-Account, per-window utilization, `resetsAt`, `resetSource`, `status`, `lastCheckedAt` — the same shape the UI renders, so an operator can alert on it externally | `200` |
 | `POST /api/admin/accounts/:id/recheck` | admin session | Manual re-check. `POST /api/admin/accounts/recheck` re-checks every account. For Claude subscriptions it also carries the credential probe, reported as `auth` | `200` always — a cooldown refusal is `rechecked: false`, not `429` |
 | `GET /api/admin/usage` | admin session | Totals, series and breakdowns per key / account / pool / model over a window | `200` |
+| `GET /api/admin/usage/recent` | admin session | The [live request feed](#the-live-request-feed): individual attempts, newest first. `limit` (1..200), `failed` or `outcome` (never both), `requestId` (matches either id) | `200`, `400` on a limit out of range or both filters at once |
 
 `/healthz` never touches the database.
+
+**The version is one string with five outlets** — `/healthz`, `router_build_info{version}`, the
+`router listening` boot log line, `GET /api/admin/settings`, and the console footer. All five read
+the `VERSION` constant in `packages/core`, which every workspace `package.json` restates and a unit
+test holds them to. It is on `/healthz` because that is the one surface a deploy pipeline can reach
+without a credential, so "did the new image actually roll out" has an answer that is not a log tail;
+it is on the settings endpoint because the console footer must report *the server's* build, not the
+one the loaded bundle was cut from.
 
 **`/readyz` deliberately does not gate on healthy accounts**, though the obvious design says it
 should. A fresh install has zero accounts, so gating would mean it is never ready, so an
@@ -240,6 +272,7 @@ identity beyond its label.
 
 | Name | Type | Labels | Meaning |
 |---|---|---|---|
+| `router_build_info` | gauge | `version` | Always `1`; the label is the payload. First in the exposition. Join on it — `router_build_info * on() group_left(version) …` — to annotate a graph with the build that produced it, instead of putting a `version` label on every other series and multiplying their cardinality to say the same thing once |
 | `router_requests_total` | counter | `ingress_dialect`, `model`, `key_id`, `outcome` | Client-facing requests |
 | `router_request_duration_seconds` | histogram | `ingress_dialect`, `model`, `streamed` | End-to-end client request latency, upstream time included |
 | **`router_overhead_seconds`** | histogram | `ingress_dialect`, `path` (`passthrough`\|`translate`\|`agent_sdk`) | **Time spent in the router, excluding upstream.** First-class: shown on the dashboard next to upstream latency, because "the router is slow" and "the provider is slow" are different problems. A regression here is a bug, not a tuning opportunity ([06-protocol-translation.md](06-protocol-translation.md)) |
@@ -281,6 +314,79 @@ translation. And `router_failovers_total` counts a hop only once a **later** att
 request proves the router moved on, so a chain that gave up leaves its final failure uncounted:
 it moved nowhere. Requests that failed outright are counted by `router_requests_total{outcome}`.
 
+### What "excluding upstream" excludes
+
+`router_overhead_seconds` is `totalMs - upstreamMs` for the request so far, and on a streamed reply
+**the drain counts as upstream time**. Relaying is waiting, not working: the router is a pipe from
+the first byte to the last, and charging a two-minute completion's stream to the router would put
+generation time in the one series that exists to keep generation time out. What is left is the work
+either side of the wire — key verification, session resolution, the health snapshot, selection, the
+egress plan, header swapping, relay set-up, and the usage enqueue.
+
+The invariant that follows is what the tests assert: a request whose upstream took 400 ms records a
+`routerOverheadMs` in single digits, not 400-and-change. `router_overhead_seconds` and
+`router_upstream_duration_seconds` are complements over one wall clock, never two views of the same
+milliseconds — and if they ever start to double-count, the overhead number is the one that has gone
+wrong, because upstream time is the number with an independent witness.
+
+### Verifying the budget
+
+The budget in [01-architecture.md](01-architecture.md) is two claims, and they need two
+measurements, so `bin/bench` reports them as two tables:
+
+| Claim | Measured as |
+|---|---|
+| **< 5 ms added p99** | Read straight off `router_overhead_seconds` via `GET /metrics`, after driving concurrent requests through the real router against an in-process stub upstream. Nothing external is timed — the series that alerts is the series that is checked |
+| **Zero added time-to-first-token** | The stub records when it released its first byte; the driver records when the client saw one. The difference is what the router added. A first client byte arriving *after* the upstream's last is a relay that buffered, which fails the run by name rather than showing up as a slow percentile |
+
+Both non-SDK egress paths are covered, streamed and not. The Agent-SDK path is excluded: it spawns a
+subprocess per request and is the budget's labeled exception.
+
+Two honesty notes the tool prints for itself. The series is fed whole-millisecond samples
+(`routerOverheadMs` is an integer column), so every percentile below 1 ms is a bucket bound rather
+than a measurement and the **mean** is the number with sub-millisecond resolution. And concurrency
+against a fast stub is load-shaping, not realism: an upstream that answers instantly saturates the
+event loop, and the queueing that follows is genuinely time in the router, so it lands in the
+histogram. The defaults sit well under saturation; raising `--concurrency` or dropping
+`--first-byte-ms` measures the saturation point instead, which is a fair thing to want and a
+different thing to read.
+
+`bin/bench` exits non-zero when either claim breaks, which makes it usable as a gate. It is
+deliberately **not** part of `bin/check`: a timing measurement on a shared CI runner is a flaky
+test, and a flaky gate is one people learn to skip.
+
+### CI: a report, not a gate
+
+`.github/workflows/ci.yml` runs a `bench` job after `test`, on the same shared `blacksmith-*`
+runner as everything else. It never fails the build — the step is `continue-on-error: true` — for
+the same reason `bin/bench` stays out of `bin/check`: a shared runner's jitter is not a signal
+worth blocking a merge over, and a gate nobody trusts gets ignored.
+
+What it produces instead:
+
+- **`bin/bench --json --baseline bench/baseline.json`** — runs the harness and prints its normal
+  verdict plus a `delta` block comparing every scenario's mean and p99 against the numbers
+  committed in `bench/baseline.json`.
+- The JSON is written to the job's **summary** (visible on the PR, no log-diving) and uploaded as
+  the `bench-report` **artifact** (30-day retention), so a trend across PRs is one download away.
+
+`bench/baseline.json` is a committed, versioned file (`{"version": 1, "budgetMs", "rows": [...]}`)
+— not derived at CI time — so the delta is against a number a human chose to keep, not against
+whatever the previous run on a possibly-noisier runner happened to produce.
+
+**Re-baselining**, after an intentional performance change (or before cutting a release, alongside
+a `bin/bench` smoke run):
+
+```
+bin/bench --write-baseline bench/baseline.json
+git add bench/baseline.json
+git commit -m "bench: re-baseline after <why>"
+```
+
+Run it locally, not in CI — the same "shared runner is noisy" reasoning that keeps the job
+non-blocking means a runner-generated baseline would just be next week's false regression. State
+*why* the numbers moved in the commit message; the diff itself only ever shows *that* they did.
+
 ## Structured logging
 
 JSON lines to stdout, one object per event. The container logs; shipping them is the operator's job.
@@ -301,9 +407,11 @@ JSON lines to stdout, one object per event. The container logs; shipping them is
 | `trace` | **DEFERRED** |
 
 **Never logged, at any level:** prompts, completions, request or response bodies, router key values,
-upstream credentials or tokens, OAuth `code` / `state` / `code_verifier`, cookies, `Authorization`
-and `x-api-key` headers. Redaction is default-on and is a tested unit — see
-[07-security.md](07-security.md).
+upstream credentials or tokens, OAuth `code` / `state` / `code_verifier`, cookies, `Authorization`,
+`x-api-key`, and `x-goog-api-key` headers. The redactor also catches a credential that arrives under
+an honest-looking field name — JWTs, `postgres://user:pass@host` connection strings, a key in a
+query string, and the vendor key shapes (`sk-`, `AIza`, `ghp_`, `xai-`, `gsk_`). Redaction is
+default-on and is a tested unit — see [07-security.md](07-security.md).
 
 ## Audit events
 

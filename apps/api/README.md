@@ -74,7 +74,7 @@ production wiring lives in `composition.ts`, and a `Database` becomes a service 
 
 | Endpoint | Auth | Status | Behavior |
 |---|---|---|---|
-| `GET /healthz` | none | shipped | **Liveness.** 200 whenever the process is serving. Never touches the database — zero healthy accounts is an operator problem, not a reason to restart a working process |
+| `GET /healthz` | none | shipped | **Liveness.** `200` with `{"status":"ok","version":"1.0.0"}` whenever the process is serving. Never touches the database — zero healthy accounts is an operator problem, not a reason to restart a working process. The `version` is here because this is the one endpoint a deploy pipeline reaches without a credential |
 | `GET /readyz` | none | shipped | **Readiness.** 200 only when the database answered **and** at least one Account is healthy; otherwise 503 with `checks` and a short `reason` |
 | `POST /api/admin/auth/login`, `/logout`, `GET /session` | cookie (login issues it) | shipped | Session + CSRF. Login is throttled per IP and per username |
 | `/api/admin/accounts/**` | session cookie | shipped | CRUD, disable, delete, `POST /recheck` and `POST /:id/recheck`. The OAuth connect/reconnect flows are **not** built |
@@ -82,6 +82,7 @@ production wiring lives in `composition.ts`, and a `Database` becomes a service 
 | `/api/admin/keys/**` | session cookie | shipped | List, create, `POST /:id/reveal`, edit, `POST /:id/revoke`, delete |
 | `GET /api/admin/providers` | session cookie | shipped | The static registry, so the console never keeps a second copy of it |
 | `POST /v1/messages`, `/v1/chat/completions`, `/v1/responses` | router key | shipped, **passthrough only** | Same-dialect relay. Cross-dialect and the Agent-SDK path are refused by name in `services/dataplane/egress/mode.ts`, before any upstream call |
+| `POST /v1/messages/count_tokens`, `/v1/embeddings` | router key | shipped, **passthrough only** | Routed, scoped and failed over like any request. A candidate whose provider states no such endpoint is dropped by name in `services/dataplane/egress/mode.ts`; a pool where none can answer gets a `503` saying which — never an estimated count or another model's vectors |
 | `GET /v1/models` | router key | shipped | Exactly the models reachable within the presenting key's scope, shaped by the credential style the client authenticated with |
 | `/api/admin/usage/**`, `/api/admin/settings/**` | session cookie | not built | M7–M8 |
 | `GET /metrics` | `METRICS_TOKEN` when set | shipped | Prometheus exposition. Mounted beside health, guarded by neither plane's credential |
@@ -101,7 +102,7 @@ explicitly, before an upstream call, rather than degrading into a lossy approxim
 |---|---|---|
 | `no-translator` | `400` `translation_failed` | The dialects differ and this build has no conversion pair for them (the `openai-responses` rows today). That is a fact about the request, so the caller is told |
 | `agent-sdk` | `503` `no_healthy_account` | A Claude subscription is served by `query()`, not by any HTTP driver. The caller did nothing wrong and can change nothing, so a `400` would send them looking in the wrong place |
-| `unimplemented` | `503` `no_healthy_account` | The provider is declared in the domain and has no driver yet |
+| `unimplemented` | `503` `no_healthy_account` | The provider is declared in the domain and has no driver yet. No id sits there today; it is what an id added to `packages/core` ahead of its driver lands on |
 
 ## Configuration
 

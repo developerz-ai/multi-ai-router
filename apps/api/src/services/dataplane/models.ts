@@ -1,5 +1,5 @@
-import { isStandingBlock, type ProviderId } from "@multi-ai-router/core"
-import { resolveScope } from "../routing"
+import { isStandingBlock, ModelNotFoundError, type ProviderId } from "@multi-ai-router/core"
+import { resolveScope, selectAccounts } from "../routing"
 import type { VerifiedKey } from "./auth/verifier"
 import { buildSnapshot, type HealthStore } from "./health"
 import type { RoutingCatalog } from "./types"
@@ -65,6 +65,43 @@ export function reachableModels(
   return [...owners]
     .map(([id, owner]) => ({ id, owner }))
     .sort((left, right) => left.id.localeCompare(right.id))
+}
+
+/**
+ * `GET /v1/models/:id` — the single-model probe the listing above exists to answer without
+ * enumerating everything. "Reachable" is decided the same way an actual request would be routed,
+ * not by re-deriving the list and checking membership: {@link selectAccounts} already runs scope
+ * intersection, filtering, and the model match (including passthrough accounts, which advertise
+ * no enumerable name yet legitimately serve any id) — reusing it means this answers "would a real
+ * request for this id find an account" rather than a narrower "is it in the display catalog".
+ *
+ * A miss throws {@link ModelNotFoundError} (`404`) carrying the same scope-aware reason
+ * `services/routing/no-candidates.ts` would have put on a failed inference attempt, so an
+ * operator debugging "why can't my key reach model X" gets one explanation either way.
+ */
+export function reachableModel(
+  catalog: RoutingCatalog,
+  health: HealthStore,
+  key: VerifiedKey,
+  id: string,
+  now: Date,
+): ReachableModel {
+  const snapshot = buildSnapshot(catalog, health, now)
+  const selection = selectAccounts(snapshot, { sessionKey: "", model: id, keyScope: key.scope })
+
+  if (!selection.ok) {
+    throw new ModelNotFoundError(`model "${id}" is not reachable: ${selection.error.message}`, {
+      cause: selection.error,
+    })
+  }
+
+  // `SelectionSuccess.candidates` is documented never-empty; the check only satisfies
+  // `noUncheckedIndexedAccess` rather than covering a real code path.
+  const head = selection.candidates[0]
+  if (head === undefined) {
+    throw new ModelNotFoundError(`model "${id}" is not reachable: no eligible account`)
+  }
+  return { id, owner: head.account.provider }
 }
 
 function advertisedNames(

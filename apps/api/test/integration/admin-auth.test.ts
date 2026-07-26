@@ -8,7 +8,11 @@ import { requestLogger } from "../../src/middleware/logger"
 import { requestId } from "../../src/middleware/requestId"
 import { ADMIN_AUTH_BASE_PATH, adminAuthRoutes } from "../../src/routes/admin/auth"
 import type { AdminAuthConfig } from "../../src/services/admin-auth"
-import { CSRF_HEADER, SESSION_COOKIE_FULL_NAME } from "../../src/services/admin-auth"
+import {
+  CSRF_HEADER,
+  SESSION_COOKIE_NAME,
+  sessionCookieFullName,
+} from "../../src/services/admin-auth"
 import { ARGON2ID_PARAMS } from "../../src/services/admin-auth/password"
 import { createAdminAuthService } from "../../src/services/admin-auth/service"
 import type { AppEnv } from "../../src/types"
@@ -27,8 +31,10 @@ const LOGOUT = `${ADMIN_AUTH_BASE_PATH}/logout`
 const SESSION = `${ADMIN_AUTH_BASE_PATH}/session`
 /** Stands in for the admin route groups that land later. Behind the same guard. */
 const KEYS = "/api/admin/keys"
+/** The default, hardened wire name. `__Host-mar_admin_session`. */
+const HARDENED_NAME = sessionCookieFullName(false)
 
-function harness(config: Partial<AdminAuthConfig> = {}) {
+function harness(config: Partial<AdminAuthConfig> = {}, sessionCookieInsecure = false) {
   const clock = { nowMs: 1_700_000_000_000 }
   const service = createAdminAuthService({
     env: {
@@ -40,23 +46,33 @@ function harness(config: Partial<AdminAuthConfig> = {}) {
     now: () => clock.nowMs,
   })
 
-  const logger = createLogger({ level: "error", write: () => undefined })
+  // Captured rather than discarded: one behavior here — the plain-HTTP diagnosis — is a log line
+  // and nothing else, because the request it concerns is a legitimate `200`.
+  const logs: LogLine[] = []
+  const logger = createLogger({
+    level: "warn",
+    write: (line) => logs.push(JSON.parse(line) as LogLine),
+  })
   const app = new Hono<AppEnv>()
   app.use("*", requestId())
   app.use("*", requestLogger(logger))
   app.onError(errorHandler(logger))
   app.notFound(notFoundHandler())
-  app.route(ADMIN_AUTH_BASE_PATH, adminAuthRoutes({ service, trustProxy: false }))
+  app.route(
+    ADMIN_AUTH_BASE_PATH,
+    adminAuthRoutes({ service, trustProxy: false, sessionCookieInsecure }),
+  )
 
   const keys = new Hono<AdminAuthEnv>()
-  keys.use("*", adminAuth(service))
+  keys.use("*", adminAuth(service, sessionCookieInsecure))
   keys.get("/", (c) => c.json({ username: c.get("adminSession").username }))
   keys.post("/", (c) => c.json({ minted: true }, 201))
   app.route(KEYS, keys)
 
-  return { app, clock }
+  return { app, clock, logs }
 }
 
+type LogLine = { level: string; msg: string } & Record<string, unknown>
 type App = ReturnType<typeof harness>["app"]
 
 function get(app: App, path: string, headers: Record<string, string> = {}): Promise<Response> {
@@ -96,7 +112,7 @@ describe("POST /api/admin/auth/login", () => {
 
     expect(res.status).toBe(200)
     const cookie = setCookieValue(res)
-    expect(cookie).toStartWith(`${SESSION_COOKIE_FULL_NAME}=`)
+    expect(cookie).toStartWith(`${HARDENED_NAME}=`)
     expect(cookie).toContain("HttpOnly")
     expect(cookie).toContain("Secure")
     expect(cookie).toContain("SameSite=Strict")
@@ -168,6 +184,134 @@ describe("POST /api/admin/auth/login", () => {
   })
 })
 
+describe("SESSION_COOKIE_INSECURE", () => {
+  test("drops Secure and __Host- and keeps everything that does not need HTTPS", async () => {
+    const { app } = harness({}, true)
+    const res = await login(app, { username: "admin", password: PASSWORD })
+
+    expect(res.status).toBe(200)
+    const cookie = setCookieValue(res)
+    expect(cookie).toStartWith(`${sessionCookieFullName(true)}=`)
+    expect(cookie).not.toContain("__Host-")
+    expect(cookie).not.toContain("Secure")
+    // Everything that is not a property of the transport survives.
+    expect(cookie).toContain("HttpOnly")
+    expect(cookie).toContain("SameSite=Strict")
+    expect(cookie).toContain("Path=/")
+    expect(cookie).toContain("Max-Age=")
+  })
+
+  test("the guard reads the cookie back — which is the whole point of the flag", async () => {
+    const { app } = harness({}, true)
+    const { cookie, csrfToken } = await loggedIn(app)
+
+    expect(cookie).toStartWith(`${SESSION_COOKIE_NAME}=`)
+    expect((await get(app, SESSION, { cookie })).status).toBe(200)
+    expect((await get(app, KEYS, { cookie })).status).toBe(200)
+    // CSRF is unaffected: it never depended on the cookie's transport attributes.
+    expect((await post(app, KEYS, { cookie })).status).toBe(403)
+    expect((await post(app, KEYS, { cookie, [CSRF_HEADER]: csrfToken })).status).toBe(201)
+  })
+
+  test("logout still clears the cookie it actually set", async () => {
+    const { app } = harness({}, true)
+    const { cookie, csrfToken } = await loggedIn(app)
+
+    const res = await post(app, LOGOUT, { cookie, [CSRF_HEADER]: csrfToken })
+
+    expect(res.status).toBe(200)
+    const cleared = setCookieValue(res)
+    expect(cleared).toStartWith(`${SESSION_COOKIE_NAME}=`)
+    expect(cleared).toContain("Max-Age=0")
+    expect((await get(app, SESSION, { cookie })).status).toBe(401)
+  })
+
+  test("a hardened-mode cookie is not accepted by an insecure-mode guard, or the reverse", async () => {
+    const hardened = await loggedIn(harness().app)
+    const insecure = await loggedIn(harness({}, true).app)
+
+    // The names differ, so neither name is even looked up by the other mode's guard. This is a
+    // property worth pinning: flipping the flag invalidates live sessions rather than silently
+    // downgrading them.
+    expect(hardened.cookie).toStartWith(`${HARDENED_NAME}=`)
+    expect(insecure.cookie).toStartWith(`${SESSION_COOKIE_NAME}=`)
+    expect((await get(harness({}, true).app, SESSION, { cookie: hardened.cookie })).status).toBe(
+      401,
+    )
+    expect((await get(harness().app, SESSION, { cookie: insecure.cookie })).status).toBe(401)
+  })
+})
+
+/**
+ * The failure this flag exists for is invisible from the outside — the login is a real `200` and
+ * the browser throws the cookie away — so the only place it can be diagnosed is the router's log.
+ * These pin that it is diagnosed, and that it stays quiet on the deployments that are fine.
+ */
+describe("the plain-HTTP diagnosis", () => {
+  const CSRF_SAFE_LOGIN = { username: "admin", password: PASSWORD }
+
+  function warnings(logs: LogLine[]): LogLine[] {
+    return logs.filter((line) => line.level === "warn" && line.msg.includes("session cookie"))
+  }
+
+  test("names SESSION_COOKIE_INSECURE when the cookie it just set cannot survive", async () => {
+    const { app, logs } = harness()
+
+    expect((await login(app, CSRF_SAFE_LOGIN)).status).toBe(200)
+
+    const [warned] = warnings(logs)
+    expect(warned?.msg).toContain("plain HTTP")
+    expect(warned?.remedy).toContain("SESSION_COOKIE_INSECURE=true")
+    // The whole point is that the operator can act on it, so it carries the variable's name and
+    // the request id every other line carries.
+    expect(warned?.component).toBe("admin-auth")
+    expect(typeof warned?.requestId).toBe("string")
+  })
+
+  test("stays quiet over HTTPS, which is what the default is written for", async () => {
+    const { app, logs } = harness()
+
+    const res = await app.request(`https://router.example.com${LOGIN}`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(CSRF_SAFE_LOGIN),
+    })
+
+    expect(res.status).toBe(200)
+    expect(warnings(logs)).toEqual([])
+  })
+
+  test("stays quiet behind a proxy that terminated TLS, which reaches us over plain HTTP", async () => {
+    const { app, logs } = harness()
+
+    const res = await app.request(LOGIN, {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-forwarded-proto": "https" },
+      body: JSON.stringify(CSRF_SAFE_LOGIN),
+    })
+
+    expect(res.status).toBe(200)
+    // Honored without TRUST_PROXY on purpose: a forged value silences an advisory line and buys
+    // nothing else, while ignoring it would warn on every correctly-proxied install.
+    expect(warnings(logs)).toEqual([])
+  })
+
+  test("stays quiet once the escape hatch is on — the cookie is deliverable", async () => {
+    const { app, logs } = harness({}, true)
+
+    expect((await login(app, CSRF_SAFE_LOGIN)).status).toBe(200)
+    expect(warnings(logs)).toEqual([])
+  })
+
+  test("is a log line only — the response body the console reads is unchanged", async () => {
+    const { app } = harness()
+
+    const body = (await (await login(app, CSRF_SAFE_LOGIN)).json()) as Record<string, unknown>
+
+    expect(Object.keys(body).sort()).toEqual(["csrfToken", "expiresAt", "issuedAt", "username"])
+  })
+})
+
 describe("GET /api/admin/auth/session", () => {
   test("a valid session reports who it belongs to", async () => {
     const { app } = harness()
@@ -182,13 +326,9 @@ describe("GET /api/admin/auth/session", () => {
   test("no cookie, a garbage cookie, and a forged one are all 401", async () => {
     const { app } = harness()
     const { cookie } = await loggedIn(app)
-    const forged = `${SESSION_COOKIE_FULL_NAME}=${cookie.split("=")[1]?.slice(0, -2)}xx`
+    const forged = `${HARDENED_NAME}=${cookie.split("=")[1]?.slice(0, -2)}xx`
 
-    for (const headers of [
-      {},
-      { cookie: `${SESSION_COOKIE_FULL_NAME}=garbage` },
-      { cookie: forged },
-    ]) {
+    for (const headers of [{}, { cookie: `${HARDENED_NAME}=garbage` }, { cookie: forged }]) {
       expect((await get(app, SESSION, headers)).status).toBe(401)
     }
   })

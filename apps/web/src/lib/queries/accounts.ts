@@ -11,6 +11,9 @@ import {
   type RecheckResult,
   recheckAccount,
   recheckAllAccounts,
+  type TestAccountInput,
+  type TestNowResult,
+  testAccount,
   type UpdateAccountInput,
   updateAccount,
 } from "../api/accounts"
@@ -114,6 +117,36 @@ export function useRecheckAllAccounts() {
 }
 
 /**
+ * "Test now": one real, opt-in completion against one account. The result is cached under its own
+ * key, same pattern as `useRecheckAccount` — a row shows the last press regardless of which
+ * mutation wrote it last.
+ */
+export function useTestAccount() {
+  const client = useQueryClient()
+  return useMutation(() => ({
+    mutationFn: (input: TestAccountInput) => testAccount(input),
+    onSuccess: async (result: TestNowResult) => {
+      client.setQueryData(queryKeys.accounts.test(result.accountId), result)
+      await invalidateAccountReaders(client)
+    },
+  }))
+}
+
+/**
+ * The last "Test now" this console knows about for one account. Cache-only, same reasoning as
+ * `useLastRecheck`: `AccountView` carries no such field, so a cold load says nothing was tested in
+ * this session rather than inventing a result.
+ */
+export function useLastTest(id: Accessor<string>) {
+  return useQuery(() => ({
+    queryKey: queryKeys.accounts.test(id()),
+    queryFn: (): TestNowResult | null => null,
+    enabled: false,
+    staleTime: Number.POSITIVE_INFINITY,
+  }))
+}
+
+/**
  * The last re-check this console knows about for one account.
  *
  * **Cache-only, and that is a gap, not a design.** `AccountView` carries no
@@ -139,8 +172,10 @@ export function useLastRecheck(id: Accessor<string>) {
  * then announce that a login which had already succeeded had expired.
  *
  * The interval is a parameter and `false` is a normal value for it: this polls only while a
- * redirect capture is actually outstanding, and stops the moment it lands. Nothing else in this
- * console polls, and nothing else should.
+ * redirect capture is actually outstanding, and stops the moment it lands. It is the only
+ * *conditional* poll in the console — the two unconditional ones (scheduled-task health and the
+ * live request feed) are surfaces whose whole point is being current, and nothing else should poll
+ * at all.
  */
 export function useWatchedAccount(
   id: Accessor<string | null>,

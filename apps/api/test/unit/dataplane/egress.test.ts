@@ -10,10 +10,12 @@ import {
   clientHeaders,
   egressRejectionError,
   resolveEgress,
+  upstreamCountTokensUrl,
+  upstreamEmbeddingsUrl,
   upstreamHeaders,
   upstreamUrl,
 } from "../../../src/services/dataplane"
-import { account, cipher } from "./fixtures"
+import { account, cipher, subscriptionAccount } from "./fixtures"
 
 /** The egress decision, the endpoint it addresses, and the headers it swaps. */
 
@@ -57,13 +59,24 @@ describe("egress mode", () => {
   })
 
   test("an unimplemented provider is a capacity failure, not a bad request", () => {
-    const decision = resolveEgress("openai-responses", account("a", { provider: "gemini" }))
+    // Every declared provider has a driver today, so this rejection — like `no-translator` above —
+    // is reachable only through the mapping. 503, not 400: the caller did nothing wrong and there
+    // is nothing they can change, so a 400 would send them looking in the wrong place.
+    const rejection = {
+      mode: "rejected",
+      reason: "unimplemented",
+      message: "provider x has no driver",
+    } as const
 
-    expect(decision.mode).toBe("rejected")
-    if (decision.mode !== "rejected") return
-    expect(decision.reason).toBe("unimplemented")
-    // 503, not 400: the caller did nothing wrong and there is nothing they can change.
-    expect(egressRejectionError(decision)).toBeInstanceOf(NoHealthyAccountError)
+    expect(egressRejectionError(rejection)).toBeInstanceOf(NoHealthyAccountError)
+  })
+
+  test("gemini speaks Google's OpenAI-compatibility surface, so a chat client passes through", () => {
+    const gemini = account("g", { provider: "gemini" })
+
+    expect(resolveEgress("openai-chat", gemini).mode).toBe("passthrough")
+    // Its native GenAI dialect is still deferred, so an Anthropic client is translated, not refused.
+    expect(resolveEgress("anthropic", gemini).mode).toBe("translate")
   })
 
   test("an account's chosen surface decides the dialect, not the provider default", () => {
@@ -71,6 +84,111 @@ describe("egress mode", () => {
     expect(resolveEgress("openai-chat", zaiOpenAi).mode).toBe("passthrough")
     // The same account on the other surface is a conversion, not a passthrough.
     expect(resolveEgress("anthropic", zaiOpenAi).mode).toBe("translate")
+  })
+})
+
+describe("counting tokens", () => {
+  test("an anthropic-dialect account passes the count straight through", () => {
+    const decision = resolveEgress("anthropic", account("a"), "count-tokens")
+    expect(decision.mode).toBe("passthrough")
+  })
+
+  test("the same account still translates ordinary inference — only counting is narrowed", () => {
+    expect(resolveEgress("anthropic", account("o", { provider: "openai-api" })).mode).toBe(
+      "translate",
+    )
+  })
+
+  test("an openai account cannot count, and is never estimated for", () => {
+    const openAi = account("o", { provider: "openai-api" })
+    const decision = resolveEgress("anthropic", openAi, "count-tokens")
+
+    expect(decision.mode).toBe("rejected")
+    if (decision.mode !== "rejected") return
+    expect(decision.reason).toBe("unsupported-operation")
+    expect(decision.message).toContain("openai-chat")
+    // 503, not 400: the body is a valid anthropic request and only the operator can fix the pool.
+    expect(egressRejectionError(decision)).toBeInstanceOf(NoHealthyAccountError)
+  })
+
+  test("a Claude subscription says so by name — the Agent SDK exposes no token count", () => {
+    const decision = resolveEgress("anthropic", subscriptionAccount("sub"), "count-tokens")
+
+    expect(decision.mode).toBe("rejected")
+    if (decision.mode !== "rejected") return
+    expect(decision.reason).toBe("unsupported-operation")
+    expect(decision.message).toContain("Claude Agent SDK")
+  })
+
+  test("a gemini account cannot count either — Google's surface states no such endpoint", () => {
+    const decision = resolveEgress(
+      "anthropic",
+      account("g", { provider: "gemini" }),
+      "count-tokens",
+    )
+
+    expect(decision.mode).toBe("rejected")
+    if (decision.mode !== "rejected") return
+    expect(decision.reason).toBe("unsupported-operation")
+  })
+})
+
+describe("embeddings", () => {
+  test("an openai-chat account passes the body straight through", () => {
+    const decision = resolveEgress(
+      "openai-chat",
+      account("o", { provider: "openai-api" }),
+      "embeddings",
+    )
+    expect(decision.mode).toBe("passthrough")
+  })
+
+  test("an account pinned to the other OpenAI surface embeds too — the chat surface does not decide it", () => {
+    // Ordinary inference across the two OpenAI dialects is a documented downgrade...
+    const responses = account("r", { provider: "openai-api", dialect: "openai-responses" })
+    expect(resolveEgress("openai-chat", responses).mode).toBe("translate")
+    // ...but an embeddings body names no chat surface, so both reach the same endpoint untouched.
+    const decision = resolveEgress("openai-chat", responses, "embeddings")
+
+    expect(decision.mode).toBe("passthrough")
+    if (decision.mode !== "passthrough") return
+    expect(decision.dialect).toBe("openai-responses")
+  })
+
+  test("an anthropic account cannot embed, and is never answered with another model's vectors", () => {
+    const decision = resolveEgress("openai-chat", account("a"), "embeddings")
+
+    expect(decision.mode).toBe("rejected")
+    if (decision.mode !== "rejected") return
+    expect(decision.reason).toBe("unsupported-operation")
+    expect(decision.message).toContain("anthropic")
+    // 503, not 400: the body is a valid embeddings request and only the operator can fix the pool.
+    expect(egressRejectionError(decision)).toBeInstanceOf(NoHealthyAccountError)
+  })
+
+  test("the same anthropic account still serves ordinary inference — only embedding is narrowed", () => {
+    expect(resolveEgress("openai-chat", account("a")).mode).toBe("translate")
+  })
+
+  test("a Claude subscription says so by name — the Agent SDK is a completion transport", () => {
+    const decision = resolveEgress("openai-chat", subscriptionAccount("sub"), "embeddings")
+
+    expect(decision.mode).toBe("rejected")
+    if (decision.mode !== "rejected") return
+    expect(decision.reason).toBe("unsupported-operation")
+    expect(decision.message).toContain("Claude Agent SDK")
+  })
+
+  test("a gemini account embeds — its compatibility surface serves the same OpenAI path", () => {
+    const decision = resolveEgress(
+      "openai-chat",
+      account("g", { provider: "gemini" }),
+      "embeddings",
+    )
+
+    expect(decision.mode).toBe("passthrough")
+    if (decision.mode !== "passthrough") return
+    expect(decision.dialect).toBe("openai-chat")
   })
 })
 
@@ -95,6 +213,42 @@ describe("endpoint", () => {
 
     expect(upstreamUrl(driver, { ...entry.driver, baseUrl: null }, "openai-chat").toString()).toBe(
       "https://api.openai.com/v1/chat/completions",
+    )
+  })
+
+  test("the token count sits below the same base, on Anthropic's own suffix", () => {
+    const driver = httpDriver("anthropic-compatible")
+    if (driver === null) throw new Error("expected a driver")
+    const entry = account("a", {
+      provider: "anthropic-compatible",
+      baseUrl: "https://proxy.test/api",
+    })
+
+    expect(upstreamCountTokensUrl(driver, entry.driver).toString()).toBe(
+      "https://proxy.test/api/v1/messages/count_tokens",
+    )
+  })
+
+  test("embeddings sit below the OpenAI base, which already carries /v1", () => {
+    const driver = httpDriver("openai-api")
+    if (driver === null) throw new Error("expected a driver")
+    const entry = account("o", { provider: "openai-api" })
+
+    expect(upstreamEmbeddingsUrl(driver, { ...entry.driver, baseUrl: null }).toString()).toBe(
+      "https://api.openai.com/v1/embeddings",
+    )
+  })
+
+  test("a self-hosted OpenAI-compatible endpoint keeps the path its base URL carries", () => {
+    const driver = httpDriver("openai-compatible")
+    if (driver === null) throw new Error("expected a driver")
+    const entry = account("v", {
+      provider: "openai-compatible",
+      baseUrl: "https://vllm.internal/openai/v1",
+    })
+
+    expect(upstreamEmbeddingsUrl(driver, entry.driver).toString()).toBe(
+      "https://vllm.internal/openai/v1/embeddings",
     )
   })
 })
@@ -150,7 +304,10 @@ describe("credential", () => {
   test("decrypts an API key", () => {
     const cryptor = cipher()
     const entry = account("a", { apiKey: "sk-live-123", cipher: cryptor })
-    expect(accountCredential(entry, cryptor)).toEqual({ kind: "api-key", apiKey: "sk-live-123" })
+    expect(accountCredential(entry, cryptor, "api-key")).toEqual({
+      kind: "api-key",
+      apiKey: "sk-live-123",
+    })
   })
 
   test("recognizes a stored OAuth token pair by shape", () => {
@@ -159,12 +316,34 @@ describe("credential", () => {
       apiKey: JSON.stringify({ accessToken: "at-1", refreshToken: "rt-1" }),
       cipher: cryptor,
     })
-    expect(accountCredential(entry, cryptor)).toEqual({ kind: "oauth", accessToken: "at-1" })
+    expect(accountCredential(entry, cryptor, "oauth")).toEqual({
+      kind: "oauth",
+      accessToken: "at-1",
+    })
   })
 
   test("an account with no material fails without naming any ciphertext", () => {
     const cryptor = cipher()
     const entry = { ...account("a", { cipher: cryptor }), authMaterial: null }
-    expect(() => accountCredential(entry, cryptor)).toThrow(CredentialDecryptError)
+    expect(() => accountCredential(entry, cryptor, "api-key")).toThrow(CredentialDecryptError)
+  })
+
+  test("an empty account is only ever allowed where the provider authenticates nobody", () => {
+    const cryptor = cipher()
+    const entry = { ...account("a", { provider: "ollama", cipher: cryptor }), authMaterial: null }
+
+    expect(accountCredential(entry, cryptor, "none")).toBeNull()
+  })
+
+  test("that provider still presents a credential it was given", () => {
+    // A local endpoint put behind a reverse proxy is the normal reason to have one, so `none` is
+    // "optional", never "ignored" — a key stored here must reach the upstream.
+    const cryptor = cipher()
+    const entry = account("a", { provider: "ollama", apiKey: "proxy-token", cipher: cryptor })
+
+    expect(accountCredential(entry, cryptor, "none")).toEqual({
+      kind: "api-key",
+      apiKey: "proxy-token",
+    })
   })
 })

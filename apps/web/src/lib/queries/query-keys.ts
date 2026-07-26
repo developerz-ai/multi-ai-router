@@ -1,6 +1,7 @@
 import type { AccountListFilter } from "../api/accounts"
 import type { AuditQuery } from "../api/audit"
 import type { UsageWindow } from "../api/usage"
+import type { RecentQuery } from "../api/usage-recent"
 
 // Every cache key in the console, built here and nowhere else.
 //
@@ -23,6 +24,8 @@ export const queryKeys = {
     detail: (id: string) => ["accounts", "detail", id] as const,
     /** Last re-check per account. Written by the mutation, read by the row. */
     recheck: (id: string) => ["accounts", "recheck", id] as const,
+    /** Last "Test now" per account. Own key, own cache-only read — see `useLastTest`. */
+    test: (id: string) => ["accounts", "test", id] as const,
   },
 
   pools: {
@@ -45,6 +48,9 @@ export const queryKeys = {
   usage: {
     root: () => ["usage"] as const,
     summary: (window: UsageWindow) => ["usage", "summary", window] as const,
+    /** The live feed. Every filter is part of the key, so switching one is a fetch, not a stale table. */
+    recent: (query: RecentQuery) =>
+      ["usage", "recent", query.limit, query.filter, query.requestId ?? null] as const,
   },
 
   /** One body carries retention, log level and the price table, so one detail key holds all of it. */

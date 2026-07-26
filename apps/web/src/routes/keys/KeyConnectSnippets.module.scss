@@ -1,0 +1,103 @@
+@use "../../styles/mixins" as *;
+
+.root {
+  display: grid;
+  gap: var(--space-3);
+  padding-block-start: var(--space-4);
+  border-block-start: 1px solid var(--border);
+}
+
+.title {
+  font-size: var(--text-md);
+  font-weight: var(--weight-semibold);
+}
+
+.lead {
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+  line-height: var(--line-snug);
+  text-wrap: pretty;
+}
+
+// Wraps to a second row rather than scrolling sideways: six labels do not fit
+// on one line at 320px, and a horizontally scrolling tablist hides its own tabs.
+.tablist {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+}
+
+.tab {
+  @include tappable(2rem);
+
+  padding-inline: var(--space-3);
+  background: none;
+  border: 1px solid transparent;
+  border-radius: var(--radius-full);
+  color: var(--text-muted);
+  font: inherit;
+  font-size: var(--text-sm);
+  cursor: pointer;
+}
+
+.tab:hover {
+  background: var(--surface-sunken);
+  color: var(--text);
+}
+
+.tab:focus-visible {
+  @include focus-ring;
+
+  border-radius: var(--radius-full);
+}
+
+// The border, not colour alone, carries the selection: `--accent` against
+// `--surface-overlay` is a hue difference, and hue alone is not a state.
+.tab[aria-selected="true"] {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+  color: var(--accent);
+  font-weight: var(--weight-medium);
+}
+
+.panel {
+  display: grid;
+  gap: var(--space-3);
+}
+
+.panelLead {
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+  line-height: var(--line-snug);
+  text-wrap: pretty;
+}
+
+.steps {
+  display: grid;
+  gap: var(--space-2);
+  margin: 0;
+  padding-inline-start: var(--space-5);
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+  line-height: var(--line-snug);
+}
+
+.snippet {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.snippetLabel {
+  @include eyebrow;
+
+  color: var(--text-muted);
+}
+
+.caveat {
+  padding-inline-start: var(--space-3);
+  border-inline-start: 2px solid var(--border-strong);
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+  line-height: var(--line-snug);
+  text-wrap: pretty;
+}

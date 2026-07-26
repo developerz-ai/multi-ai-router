@@ -29,6 +29,13 @@ export interface AdminAuthConfig {
   readonly attemptWindowSeconds: number
   /** How long a key stays locked once it trips. */
   readonly lockoutSeconds: number
+  /**
+   * Share of `idleTtlSeconds` a session must have advanced since its last persisted
+   * `lastSeenAtMs` before `authenticate` writes the slide back to the store. In-memory
+   * `lastSeenAtMs` on the returned session is always current — only the store write is
+   * throttled, so a Postgres-backed store isn't hit on every authenticated request.
+   */
+  readonly sessionSlideFraction: number
 }
 
 /**
@@ -43,6 +50,7 @@ export interface AdminAuthConfig {
  * | `adminLoginMaxAttempts` | `ADMIN_LOGIN_MAX_ATTEMPTS` |
  * | `adminLoginAttemptWindowMinutes` | `ADMIN_LOGIN_ATTEMPT_WINDOW_MINUTES` |
  * | `adminLoginLockoutMinutes` | `ADMIN_LOGIN_LOCKOUT_MINUTES` |
+ * | `adminSessionSlideFraction` | `ADMIN_SESSION_SLIDE_FRACTION` |
  */
 export interface AdminAuthEnvConfig {
   readonly adminSessionIdleMinutes: number
@@ -50,6 +58,7 @@ export interface AdminAuthEnvConfig {
   readonly adminLoginMaxAttempts: number
   readonly adminLoginAttemptWindowMinutes: number
   readonly adminLoginLockoutMinutes: number
+  readonly adminSessionSlideFraction: number
 }
 
 /** The documented defaults — the values `config/env.ts` applies when a variable is unset. */
@@ -59,6 +68,7 @@ export const DEFAULT_ADMIN_AUTH_ENV: AdminAuthEnvConfig = {
   adminLoginMaxAttempts: 5,
   adminLoginAttemptWindowMinutes: 15,
   adminLoginLockoutMinutes: 15,
+  adminSessionSlideFraction: 0.1,
 }
 
 const SECONDS_PER_MINUTE = 60
@@ -71,6 +81,7 @@ export function adminAuthConfigFromEnv(env: AdminAuthEnvConfig): AdminAuthConfig
     maxFailedAttempts: env.adminLoginMaxAttempts,
     attemptWindowSeconds: env.adminLoginAttemptWindowMinutes * SECONDS_PER_MINUTE,
     lockoutSeconds: env.adminLoginLockoutMinutes * SECONDS_PER_MINUTE,
+    sessionSlideFraction: env.adminSessionSlideFraction,
   }
 }
 

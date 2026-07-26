@@ -4,9 +4,10 @@ import { createLogger } from "../../src/logging/logger"
 import { createDatabaseProbe } from "../../src/services/health/databaseProbe"
 
 /**
- * The one test that wants a real PostgreSQL. It skips cleanly when `DATABASE_URL` is unset, so
- * the suite runs on a laptop with no database and still proves the probe against a real one in
- * CI and in compose.
+ * The one test in this app that wants a real PostgreSQL. It skips when `DATABASE_URL` is unset, so
+ * the suite still runs on a laptop with no database — but the skip is never silent: `bin/test`
+ * names this file on the way out and `bin/check` refuses to run at all, so the probe is always
+ * proven against a real database before anything is committed.
  */
 
 const databaseUrl = process.env.DATABASE_URL

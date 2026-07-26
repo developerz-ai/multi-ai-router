@@ -5,26 +5,34 @@ import { ResetIndicator } from "../../components/ResetIndicator"
 import { StatusDot } from "../../components/StatusDot"
 import { type Column, Table } from "../../components/Table"
 import { UsageCell } from "../../components/UsageCell"
-import type { AccountView, ProviderConnectFlow } from "../../lib/api/types"
+import type { TestAccountInput } from "../../lib/api/accounts"
+import type { AccountView, ProviderDescriptor } from "../../lib/api/types"
 import { formatDate } from "../../lib/format"
 import type { UsageRowSummary } from "../../lib/usage-index"
 import { usageFor } from "../../lib/usage-index"
 import { AccountRecheck } from "./AccountRecheck"
 import styles from "./AccountsTable.module.scss"
+import { AccountTestNow } from "./AccountTestNow"
 
 export interface AccountsTableProps {
   readonly accounts: readonly AccountView[]
   readonly nowMs: number
   /** The id currently being re-checked, if any. */
   readonly recheckingId: string | null
-  /** Which login this account's provider takes, or null for one that takes none. */
-  readonly connectFlowFor: (account: AccountView) => ProviderConnectFlow | null
+  /** The id currently being tested, if any. */
+  readonly testingId: string | null
+  /**
+   * This account's provider as `GET /providers` describes it — which login it takes, and whether it
+   * needs a credential at all. Asked of the descriptor so no provider fact is restated here.
+   */
+  readonly providerFor: (account: AccountView) => ProviderDescriptor | undefined
   /** Per-account usage for the selected window, indexed by account id. */
   readonly usage: ReadonlyMap<string, UsageRowSummary>
   readonly usageBucket: "hour" | "day"
   readonly usageLoading: boolean
   readonly usageWindowLabel: string
   readonly onRecheck: (id: string) => void
+  readonly onTest: (input: TestAccountInput) => void
   readonly onConnect: (account: AccountView) => void
   readonly onDisable: (account: AccountView) => void
   readonly onEnable: (account: AccountView) => void
@@ -95,10 +103,10 @@ export function AccountsTable(props: AccountsTableProps) {
         <Show
           fallback={
             <Badge
-              tone={account.hasCredential ? "ok" : "warn"}
-              title={credentialHint(account, props.connectFlowFor(account))}
+              tone={credentialTone(account, props.providerFor(account))}
+              title={credentialHint(account, props.providerFor(account))}
             >
-              {credentialLabel(account, props.connectFlowFor(account))}
+              {credentialLabel(account, props.providerFor(account))}
             </Badge>
           }
           when={account.configDir}
@@ -131,6 +139,19 @@ export function AccountsTable(props: AccountsTableProps) {
       ),
     },
     {
+      id: "test",
+      header: "Test",
+      cell: (account) => (
+        <AccountTestNow
+          accountId={account.id}
+          busy={props.testingId === account.id}
+          nowMs={props.nowMs}
+          onTest={props.onTest}
+          transport={props.providerFor(account)?.transport}
+        />
+      ),
+    },
+    {
       id: "created",
       header: "Added",
       cell: (account) => <span class={styles.muted}>{formatDate(account.createdAt)}</span>,
@@ -142,7 +163,7 @@ export function AccountsTable(props: AccountsTableProps) {
         <div class={styles.actions}>
           {/* Re-authorising is the same row, not a delete and re-add: the id, the config
               directory, the pool membership and the usage history all survive it. */}
-          <Show when={props.connectFlowFor(account) !== null}>
+          <Show when={props.providerFor(account)?.connectFlow}>
             <Button
               onClick={() => props.onConnect(account)}
               size="sm"
@@ -182,19 +203,31 @@ export function AccountsTable(props: AccountsTableProps) {
 }
 
 /**
- * "Missing" and "not connected" are different problems with different fixes. An API-key account
- * with no credential needs someone to paste one; a subscription with none needs a login run. The
- * word decides which button the operator reaches for.
+ * "Missing", "not connected", and "not needed" are three problems with three different fixes — a
+ * paste, a login, and nothing at all. The word decides which button the operator reaches for, and
+ * the third one exists so a fully configured local endpoint is never dressed up as a broken account.
  */
-function credentialLabel(account: AccountView, flow: ProviderConnectFlow | null): string {
+function credentialLabel(account: AccountView, provider: ProviderDescriptor | undefined): string {
   if (account.hasCredential) return "stored"
-  return flow === null ? "missing" : "not connected"
+  if (provider?.authKind === "none") return "not needed"
+  return (provider?.connectFlow ?? null) === null ? "missing" : "not connected"
 }
 
-function credentialHint(account: AccountView, flow: ProviderConnectFlow | null): string {
+function credentialHint(account: AccountView, provider: ProviderDescriptor | undefined): string {
   if (account.hasCredential) return "A credential is stored, encrypted. No endpoint returns it."
-  if (flow === null) return "No credential stored — this account cannot serve a request."
+  if (provider?.authKind === "none") {
+    return "This upstream authenticates nobody, so none is stored. Add one only if something in front of it checks."
+  }
+  if ((provider?.connectFlow ?? null) === null) {
+    return "No credential stored — this account cannot serve a request."
+  }
   return "No authorization yet — run Connect. Nothing is pasted by hand for this provider."
+}
+
+/** A local endpoint with nothing stored is configured, not half-finished. Never a warning. */
+function credentialTone(account: AccountView, provider: ProviderDescriptor | undefined) {
+  if (account.hasCredential) return "ok" as const
+  return provider?.authKind === "none" ? ("neutral" as const) : ("warn" as const)
 }
 
 /**

@@ -22,6 +22,10 @@ step "Installing dependencies"
 bun install
 ok "dependencies installed"
 
+DEV_DB_PORT="${DEV_DB_PORT:-5433}"
+export DEV_DB_PORT
+DEV_DATABASE_URL="postgres://router:router@localhost:${DEV_DB_PORT}/router"
+
 step "Environment"
 if [ -f .env ]; then
   ok ".env already exists — leaving it alone"
@@ -33,18 +37,38 @@ else
   sed -e "s|^ADMIN_USERNAME=.*|ADMIN_USERNAME=admin|" \
       -e "s|^ADMIN_PASSWORD=.*|ADMIN_PASSWORD=dev-only-change-me|" \
       -e "s|^ENCRYPTION_KEY=.*|ENCRYPTION_KEY=${key}|" \
+      -e "s|^# DATABASE_URL=.*|DATABASE_URL=postgres://router:router@localhost:${DEV_DB_PORT}/router|" \
       .env.example > .env
   ok ".env created with a freshly generated ENCRYPTION_KEY"
 fi
 
-DEV_DB_PORT="${DEV_DB_PORT:-5433}"
-export DEV_DB_PORT
+# .env.example leaves DATABASE_URL commented out because the shipped compose file
+# supplies it — true in a deployment, false in a checkout, where the database is
+# the dev container started below and nothing else names it. Without it here
+# `bin/dev` cannot boot and the live-Postgres suites skip themselves, so
+# `bin/check` refuses to run. Appended, never substituted: a file that already
+# names a database keeps the one it names.
+if grep -Eq '^[[:space:]]*DATABASE_URL[[:space:]]*=[[:space:]]*[^[:space:]]' .env; then
+  ok "DATABASE_URL already set in .env — leaving it alone"
+else
+  printf '\n# Written by bin/setup: the dev database from docker-compose.dev.yml.\nDATABASE_URL=%s\n' \
+    "$DEV_DATABASE_URL" >> .env
+  ok "DATABASE_URL written to .env — ${DEV_DATABASE_URL}"
+fi
 
 step "Starting the dev database"
 # A developer very often already runs Postgres — a system install, or another
 # project's container. Detect the collision here with an actionable message
 # instead of letting docker fail with "port is already allocated".
-if command -v ss >/dev/null && ss -lnt "sport = :${DEV_DB_PORT}" 2>/dev/null | grep -q LISTEN; then
+#
+# Our own container holding the port is not a collision, and treating it as one
+# broke the promise at the top of this file: a second `bin/setup` — exactly what
+# `bin/check` tells you to run — died on the database it had itself started.
+# `docker compose up -d` against a running service is a no-op, so let it through.
+if docker compose -f docker-compose.dev.yml ps --services --status running 2>/dev/null |
+     grep -qx postgres; then
+  ok "the dev postgres container is already running"
+elif command -v ss >/dev/null && ss -lnt "sport = :${DEV_DB_PORT}" 2>/dev/null | grep -q LISTEN; then
   die "port ${DEV_DB_PORT} is already in use. Re-run with a free one: DEV_DB_PORT=5434 bin/setup"
 fi
 docker compose -f docker-compose.dev.yml up -d
@@ -62,7 +86,7 @@ docker compose -f docker-compose.dev.yml exec -T postgres pg_isready -U router -
 step "Applying migrations"
 # Migrations also run at boot; doing them here means `bin/dev` starts clean and
 # a failure shows up now, attached to this step, rather than in the server log.
-DATABASE_URL="postgres://router:router@localhost:${DEV_DB_PORT}/router" bun run --cwd packages/db migrate
+DATABASE_URL="$DEV_DATABASE_URL" bun run --cwd packages/db migrate
 ok "schema up to date"
 
 printf '\n'

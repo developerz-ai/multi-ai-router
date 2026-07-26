@@ -11,6 +11,14 @@ const PINNED: ReadonlyArray<readonly [ProviderId, string]> = [
   ["zai", "https://api.z.ai/api/anthropic"],
   ["kimi", "https://api.kimi.com/coding"],
   ["minimax", "https://api.minimax.io/anthropic"],
+  ["gemini", "https://generativelanguage.googleapis.com/v1beta/openai"],
+  ["groq", "https://api.groq.com/openai/v1"],
+  // The bare host is DeepSeek's own OpenAI-format base; `/v1` is an alias it also accepts.
+  ["deepseek", "https://api.deepseek.com/"],
+  ["xai", "https://api.x.ai/v1"],
+  ["mistral", "https://api.mistral.ai/v1"],
+  ["together", "https://api.together.ai/v1"],
+  ["cerebras", "https://api.cerebras.ai/v1"],
 ]
 
 describe("resolveBaseUrl", () => {
@@ -36,6 +44,20 @@ describe("resolveBaseUrl", () => {
     expect(() => httpDriver("openai-compatible")?.resolveBaseUrl(subject)).toThrow(
       NoHealthyAccountError,
     )
+  })
+
+  test("ollama pins nothing either: a loopback default would address the router itself", () => {
+    expect(() => httpDriver("ollama")?.resolveBaseUrl(account({ provider: "ollama" }))).toThrow(
+      NoHealthyAccountError,
+    )
+  })
+
+  test("ollama runs on the address the operator states, container hop and all", () => {
+    const url = httpDriver("ollama")?.resolveBaseUrl(
+      account({ provider: "ollama", baseUrl: "http://host.docker.internal:11434/v1" }),
+    )
+
+    expect(url?.toString()).toBe("http://host.docker.internal:11434/v1")
   })
 
   test("the escape hatches work on the operator's URL alone", () => {

@@ -1,6 +1,4 @@
 import { afterAll, describe, expect, test } from "bun:test"
-import { existsSync } from "node:fs"
-import { fileURLToPath } from "node:url"
 import { eq, inArray } from "drizzle-orm"
 import { createDatabase, type Database, type DatabaseHandle } from "../../src/client"
 import { defaultMigrationsFolder, runMigrations } from "../../src/migrate"
@@ -21,13 +19,19 @@ import { usageDaily } from "../../src/schema/usage-daily"
 import { usageRecords } from "../../src/schema/usage-records"
 
 /**
- * Needs a real PostgreSQL 16+. CI sets `DATABASE_URL`; a local run may not, and
- * the generated SQL may not exist yet — either way this skips cleanly instead of
- * failing. It never talks to a provider, only to the database.
+ * Needs a real PostgreSQL 16+. CI always sets `DATABASE_URL` and `bin/check`
+ * refuses to run without one, so this can only skip on a deliberately
+ * database-less `bin/test` — which names the gap on its way out. It never talks
+ * to a provider, only to the database.
+ *
+ * The skip turns on `DATABASE_URL` and nothing else. An earlier version also
+ * required `migrations/meta/_journal.json` to exist, which made a checkout that
+ * had lost its generated SQL skip the very tests that would have caught it.
+ * That file is committed: if it goes missing, `runMigrations` throws and this
+ * run goes red, which is the point.
  */
 const url = process.env.DATABASE_URL ?? ""
-const journal = fileURLToPath(new URL("../../migrations/meta/_journal.json", import.meta.url))
-const runnable = url !== "" && existsSync(journal)
+const runnable = url !== ""
 
 let handle: DatabaseHandle | undefined
 let db: Database

@@ -127,10 +127,25 @@ export interface PricesView {
 }
 
 export interface SettingsView {
+  /**
+   * The build serving this request — `VERSION`, the same string `/healthz`, the boot log and
+   * `router_build_info` carry. It rides on this endpoint rather than on the session because it is a
+   * fact about the deployment, which is what this screen is for, and because the console footer
+   * showing the *server's* version is the only way an operator on a stale cached SPA finds out.
+   */
+  readonly version: string
   readonly retention: RetentionConfig
   readonly logLevel: LogLevel
   readonly janitorIntervalMinutes: number
   readonly prices: PricesView
+  /**
+   * The configured `PUBLIC_URL`, or null when unset. Read-only for the same reason the rest of
+   * this view is: it is environment configuration, not a stored setting. Rides on this endpoint so
+   * the console's onboarding panel can hand the operator the router's real base URL instead of
+   * guessing one — `window.location.origin` is the fallback everywhere this is null, since the
+   * console and the API are always the same origin (no CORS, CLAUDE.md non-negotiable 8).
+   */
+  readonly publicUrl: string | null
 }
 
 export interface TaskRunView {

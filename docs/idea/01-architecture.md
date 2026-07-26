@@ -1,16 +1,18 @@
 # Architecture
 
 Status: the layering, dependency rules, performance budget, warm catalog, composition root, and
-scheduler are **implemented and enforced**. Step 8's cross-dialect half is implemented for the
-`anthropic` ⇄ `openai-chat` pair; the `openai-responses` pairs and step 8b (Agent SDK) are not, and
-both are refused explicitly rather than approximated. See [00-overview.md](00-overview.md) for the
-product boundary and [02-domain-model.md](02-domain-model.md) for the entities named below.
+scheduler are **implemented and enforced**. Step 8's cross-dialect half is implemented for every
+crossing between `anthropic`, `openai-chat`, and `openai-responses`, and step 8b (Agent SDK) is
+implemented and served end to end; an untranslatable request is still refused explicitly rather than
+approximated. See [00-overview.md](00-overview.md) for the product boundary and
+[02-domain-model.md](02-domain-model.md) for the entities named below.
 
 ## Request lifecycle
 
-1. **Ingress.** Hono receives `POST /v1/messages`, `POST /v1/chat/completions`,
-   `POST /v1/responses`, or `GET /v1/models`. The request id is assigned here and propagated end to
-   end. Body size caps apply before anything is parsed; per-key rate limits are specified and **not
+1. **Ingress.** Hono receives `POST /v1/messages`, `POST /v1/messages/count_tokens`,
+   `POST /v1/chat/completions`, `POST /v1/responses`, `POST /v1/embeddings`, or `GET /v1/models`.
+   The path fixes both the dialect and the operation; neither is ever sniffed from a body. The request id is assigned here
+   and propagated end to end. Body size caps apply before anything is parsed; per-key rate limits are specified and **not
    yet enforced**.
 2. **Key verification.** The router key arrives as `Authorization: Bearer mar_live_…` or
    `x-api-key: mar_live_…`. Verification is served from an in-memory cache; on a miss, a short
@@ -73,7 +75,7 @@ product boundary and [02-domain-model.md](02-domain-model.md) for the entities n
 
 ```
  client
-   │  POST /v1/messages | /v1/chat/completions | /v1/responses
+   │  POST /v1/messages | /v1/chat/completions | /v1/responses | /v1/embeddings
    ▼
 ┌──────────────┐   ┌──────────────┐   ┌──────────────┐
 │  transport   │──▶│     auth     │──▶│   session    │
@@ -197,6 +199,7 @@ time-to-first-token** beyond the one extra network hop.
 | Reuse connections | Keep-alive pools per upstream host, warmed at boot, so a request never pays TLS setup. Same for the Postgres pool |
 | Routing math is pure and allocation-light | Rendezvous hashing over a small candidate array; no I/O and no locks on the read path |
 | Measure it | `router_overhead_seconds` (time inside the router, excluding upstream) is a first-class metric, shown next to upstream latency. A regression is a bug |
+| Reproduce it on demand | `bin/bench` drives the real router against an in-process stub upstream and reads both claims back off its own metrics — p50/p95/p99 overhead per egress path, and added time-to-first-token measured separately. Non-zero exit when either breaks. See [08-observability.md](08-observability.md#verifying-the-budget) |
 
 **The Agent-SDK path is the labeled exception.** A subprocess per request is inherently heavier than
 an HTTP hop; the budget does not apply to it uniformly and the docs say so rather than pretending

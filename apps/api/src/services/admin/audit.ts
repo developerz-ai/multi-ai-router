@@ -64,6 +64,13 @@ export const AUDIT_KINDS = {
    * server-side cooldown — writes nothing, because nothing happened.
    */
   accountRechecked: "account.rechecked",
+  /**
+   * An operator pressed "Test now" and it ran — a real, opt-in completion against the account's own
+   * credential, distinct from a re-check because it actually spends a request (and, on the
+   * Agent-SDK path, a subprocess turn). A refused test — inside its cooldown, or declined for lack
+   * of confirmation — writes nothing, same as a refused re-check.
+   */
+  accountTested: "account.tested",
   keyCreated: "key.created",
   keyUpdated: "key.updated",
   keyRevealed: "key.revealed",

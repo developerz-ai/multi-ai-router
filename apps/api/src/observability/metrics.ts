@@ -1,5 +1,5 @@
 import type { EgressMode, ProviderId, QuotaWindowState, UsageOutcome } from "@multi-ai-router/core"
-import { AccountStatus, USAGE_OUTCOME_SUCCESS } from "@multi-ai-router/core"
+import { AccountStatus, USAGE_OUTCOME_SUCCESS, VERSION } from "@multi-ai-router/core"
 import type { TickResult } from "../scheduler"
 import type { RequestSample } from "../services/dataplane"
 import type { UsageRecord } from "../services/usage"
@@ -97,6 +97,10 @@ export function createMetrics(options: MetricsOptions = {}): RouterMetrics {
   const pending = new Map<string, PendingHop>()
   const consecutiveFailures = new Map<string, number>()
   let droppedSeen = 0
+
+  // Set once, here, rather than from a per-scrape collector: the version cannot change while the
+  // process runs, and `setAccounts` clears only the gauges it rebuilds, so this one survives.
+  s.buildInfo.set({ version: VERSION }, 1)
 
   /** Counts the hop the previous failed attempt of this request turned out to be. */
   const settleFailover = (record: UsageRecord): void => {

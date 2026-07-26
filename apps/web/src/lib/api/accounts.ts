@@ -64,6 +64,35 @@ export interface RecheckResult {
   readonly rechecked: boolean
 }
 
+/**
+ * What "Test now" answers — a different question than a re-check, and a different shape.
+ *
+ * `tested: false` is the same kind of success `rechecked: false` is: the server-side cooldown
+ * declined the press. When `tested` is true, `outcome` is the one real completion's verdict —
+ * never invented, never a guess about whether the account "should" work.
+ */
+export interface TestNowResult {
+  readonly accountId: string
+  readonly lastCheckedAt: string
+  readonly nextAllowedAt: string
+  readonly tested: boolean
+  readonly outcome?: "ok" | "failed"
+  /** Safe to render as-is — the server never sends raw upstream or credential text here. */
+  readonly message?: string
+  readonly latencyMs?: number
+}
+
+export interface TestAccountInput {
+  readonly id: string
+  /** The router has no model catalog for an upstream, so the operator names one, as a client would. */
+  readonly model: string
+  /**
+   * Required for a Claude subscription account — it spawns a real `claude` subprocess and bills a
+   * turn — and ignored everywhere else. See `AccountTestNow.tsx`.
+   */
+  readonly confirmed?: boolean
+}
+
 export function listAccounts(filter: AccountListFilter): Promise<readonly AccountView[]> {
   return request<readonly AccountView[]>({
     method: "GET",
@@ -103,4 +132,12 @@ export function recheckAccount(id: string): Promise<RecheckResult> {
 
 export function recheckAllAccounts(): Promise<readonly RecheckResult[]> {
   return request<readonly RecheckResult[]>({ method: "POST", path: "/accounts/recheck" })
+}
+
+export function testAccount(input: TestAccountInput): Promise<TestNowResult> {
+  return request<TestNowResult>({
+    method: "POST",
+    path: `/accounts/${input.id}/test`,
+    body: { model: input.model, confirmed: input.confirmed },
+  })
 }

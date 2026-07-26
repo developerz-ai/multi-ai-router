@@ -25,8 +25,8 @@ Each shipped on its own.
 | **M4b — ChatGPT/Codex subscriptions** | Authorization-code + PKCE against `auth.openai.com`, both capture modes, background refresh ahead of expiry, `needs_reauth` | A ChatGPT subscription can be connected from the UI and keeps working across token expiry unattended. |
 | **M5 — Pools & load balancing** | Pools, all six policies, session affinity, bounded failover, circuit breaker, `cooling_down` vs `exhausted` as distinct outcomes, reset visibility (per-window, labeled reported/estimated/unknown) and the manual re-check probe | Traffic spreads across a pool per policy; a session sticks to its account; a rate-limited account cools down, shows when it returns, and is skipped; an out-of-credits account is surfaced loudly and never retried on a timer; **Re-check now** returns a recovered account to `active` immediately. |
 | **M6 — Translation** | Cross-dialect conversion including streaming SSE, tool/function calls, system prompts, stop reasons, usage fields | An Anthropic-dialect client reaches an OpenAI-dialect account (and the reverse) with tool calls and streaming intact; known lossy edges are documented and tested. |
-| **M7 — Admin UI** | SolidJS SPA, overview, accounts, pools, keys, usage totals and charts, the reset/health surface (per-window countdowns, `exhausted` banner, **Re-check now**), settings | The whole operator experience is the browser — no config file, no CLI, no DB surgery. "When does it come back?" and "is it back yet?" are both answerable without reading logs. |
-| **M8 — Ops** | Janitor + retention sweeps, `/metrics` including `router_overhead_seconds`, cost table, per-key rate limits | The DB stops growing without bound, Prometheus scrapes cleanly, the router's own added latency is measured next to upstream latency, and spend is attributable per key and per account. |
+| **M7 — Admin UI** | SolidJS SPA, overview, accounts, pools, keys, usage totals and charts, the reset/health surface (per-window countdowns, `exhausted` banner, **Re-check now**, **Test now**), settings | The whole operator experience is the browser — no config file, no CLI, no DB surgery. "When does it come back?" and "is it back yet?" are both answerable without reading logs, and "does this credential actually work?" is one confirmed button press away. |
+| **M8 — Ops** | Janitor + retention sweeps, `/metrics` including `router_overhead_seconds`, `bin/bench` to reproduce the overhead budget on demand, cost table, per-key rate limits | The DB stops growing without bound, Prometheus scrapes cleanly, the router's own added latency is measured next to upstream latency and can be re-measured by anyone in one command, and spend is attributable per key and per account. |
 
 ## Deferred
 
@@ -42,7 +42,7 @@ Named, with the reason. Not "someday" — a deliberate not-now.
 | **Response caching** | Explicit non-goal for v1. Prompt caching is the upstream's job and is per-account — which is exactly why routing is sticky by default. |
 | **OAuth encryption-key rotation** | Rotating `ENCRYPTION_KEY` means re-encrypting every stored OAuth credential in place, online, with a rollback that survives a crash mid-rotation — a migration with a live data plane on top of it. Worth doing; not worth doing before the credentials it protects exist in the field. (The reverse-engineered client ids are a separate matter and are handled by editing one provider file — see Maintenance posture.) |
 | **Chart library choice** | The usage data shape is specified; the renderer is not. Picking a charting library before the dashboard's real queries exist is a bet placed blind. |
-| **Gemini native dialect** | v1 reaches Gemini through its OpenAI-compatibility layer. A native Google GenAI driver is a third dialect in the translation matrix and must wait until the two-dialect matrix is solid. |
+| **Gemini native GenAI dialect** | The `gemini` driver ships and serves Google's OpenAI-compatibility surface, so Gemini accounts route, fail over, and are accounted for like any other. The *native* GenAI protocol is what is deferred: it is a fourth dialect in the translation matrix, and the existing matrix earns that first. |
 | **Admin TOTP (`ADMIN_TOTP_SECRET`)** | The admin plane is not meant to be publicly exposed. Second-factor on a single env-configured account is worth doing, but after the planes it protects exist. |
 
 ## Maintenance posture
@@ -70,18 +70,40 @@ Detail: [03-providers.md](03-providers.md) for the per-provider constants,
 
 Genuinely unsettled. Listed so they are not mistaken for decided.
 
-- **The Agent-SDK path's concurrency ceiling.** Claude subscription requests are one `claude`
-  subprocess each. How many concurrent ones does a normal box actually sustain — tens, or low
-  hundreds? Where does it break first: memory, process table, file descriptors, or the provider's
-  own per-account limits? Until that number is measured, the router has no principled place to set a
-  concurrency cap, and an unbounded subprocess count is the failure mode.
-- **Per-request memory cost of an SDK subprocess.** Everything else in the router scales with
-  concurrent streams at roughly a socket and a buffer each; this one path scales with resident
-  memory per in-flight request. What is the real figure, how much of it is fixed startup versus
-  context size, and does it grow with a long conversation? The sizing guidance in
-  [09-deployment.md](09-deployment.md) is deliberately shaped around "budget one subprocess per
-  concurrent Claude request" precisely because the constant is not yet known — and it is also what
-  decides whether pooling is worth its hazards.
+- **The Agent-SDK path's concurrency ceiling — measured for fixed cost, open for the ceiling
+  itself.** Method: spawned the real `claude` CLI binary (the same one the SDK execs — see
+  [11-anthropic-agent-sdk.md](11-anthropic-agent-sdk.md)) locally, single-process and in
+  concurrent batches of 30 and 60, and polled `/proc/<pid>/status` for `VmRSS` at ~5 ms
+  resolution until exit. A single uncontended process peaks at **~245 MB resident** (three runs:
+  244.8 / 245.7 / 244.3 MB) — startup and runtime init, no live query. Under 30- and 60-way
+  concurrent fan-out the same box averaged 170–195 MB sampled mid-run, consistent with the same
+  fixed cost under scheduling contention. On the test host (12 cores, 45 GB RAM), `ulimit -n` is
+  1,048,576 and `ulimit -u` is 65,535, and `/proc/sys/fs/file-max` / `kernel.pid_max` are 2,097,152
+  / 4,194,304 — orders of magnitude above what memory allows at ~245 MB/process. **Conclusion: it
+  breaks on memory first, not the process table or file descriptors**, on any host with normal
+  Linux defaults, confirming the assumption `CLAUDE_SDK_MAX_CONCURRENCY`'s doc comment already made.
+  What remains genuinely unmeasured is the ceiling **number** itself — "tens or low hundreds" was
+  never a real constraint independent of available RAM. It doesn't need to be: capacity planning is
+  `(available_RAM_MB − 512_MB_baseline) / ~245_MB`, a formula, not a constant — see
+  [09-deployment.md](09-deployment.md#sizing). The measurement above did not exercise a live,
+  authenticated `query()` session (this environment has no subscription credential to spend, and
+  policy — see `CLAUDE.md` non-negotiable 1 and the testing rules — forbids hitting a real
+  provider from CI or a shared test run); a manual, human-run session against a real account is the
+  remaining method to confirm the ceiling holds under actual generation load, not just process
+  startup.
+- **Per-request memory cost of an SDK subprocess — fixed-startup portion measured, growth-with-
+  conversation portion still open.** Same method as above: **~245 MB resident per process is the
+  measured figure**, and it is fixed startup/runtime cost, not context size — a bare `--version`
+  invocation reaches it before doing any conversational work. That retires half the question and
+  confirms the "~200 MB" figure quoted elsewhere in the spec
+  ([09-deployment.md](09-deployment.md), [11-anthropic-agent-sdk.md](11-anthropic-agent-sdk.md),
+  `apps/api/src/config/env.ts`) as measured rather than guessed. Still open, and honestly
+  measured-unknown rather than answered: **whether resident memory grows with a long-running
+  conversation's context.** Measuring that needs a live authenticated `query()` session carried
+  across many turns while sampling `VmRSS` over time — this environment has no subscription
+  credential to spend on it, and project policy keeps real providers out of CI. Until someone runs
+  that session manually, size for the fixed ~245 MB per concurrent request and treat any additional
+  growth as unbudgeted headroom, not zero.
 - **Is advisory-lock leader election enough at multi-replica scale?** Each periodic task takes a
   Postgres advisory lock, so exactly one replica runs a given sweep and the rest skip. That is
   correct and nearly free at two or three replicas. Unsettled at more: a session-scoped lock is

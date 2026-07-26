@@ -8,7 +8,7 @@ import type { HealthStore } from "./health"
 import type { ServableCandidate } from "./plan"
 import type { AttemptRecordInput, AttemptTiming } from "./records"
 import type { SdkSessionContext } from "./sdk-attempt"
-import type { DataPlaneClock, FetchLike } from "./types"
+import type { DataPlaneClock, FetchLike, UpstreamOperation } from "./types"
 
 /**
  * Everything one client request carries through its failover chain, bundled once.
@@ -63,6 +63,8 @@ export interface RuntimeInput {
   readonly clientRequestId: string | null
   /** Which ingress surface the client called. Fixed per route, never sniffed from the body. */
   readonly ingressDialect: Dialect
+  /** What that surface asks of an Account. Fixed per route, for the same reason. */
+  readonly operation: UpstreamOperation
   /** Monotonic reading taken the instant the request entered the router. */
   readonly requestStarted: number
 }
@@ -78,6 +80,10 @@ export interface DispatchRuntime extends RuntimeInput {
   attribution(attempt: number, servable: ServableCandidate): AttemptAttribution
   /**
    * Router overhead is total router time minus time spent waiting on upstreams.
+   *
+   * `upstreamMs` is that wait accumulated across the whole request, **including the attempt being
+   * recorded** — the caller adds its own before calling, because only the caller knows when its
+   * attempt stopped waiting (a stream settles well after the chain returned).
    *
    * `firstByteAt` is a monotonic reading taken when the first byte was relayed, or undefined when
    * none was. Undefined records as NULL, never as zero: a TTFB of 0 ms is a claim nobody measured.

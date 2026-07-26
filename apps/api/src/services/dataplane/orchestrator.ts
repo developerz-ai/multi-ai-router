@@ -29,6 +29,7 @@ import {
   type RequestObserver,
   type RoutingCatalog,
   SYSTEM_CLOCK,
+  type UpstreamOperation,
 } from "./types"
 
 /**
@@ -109,6 +110,14 @@ export interface DispatcherDeps {
 
 export interface DispatchInput {
   readonly ingress: Dialect
+  /**
+   * What the called route asks of an Account. Omitted is `messages` — inference, which is what
+   * every ingress path but `POST /v1/messages/count_tokens` and `POST /v1/embeddings` performs. It
+   * travels with the request rather than being derived from the URL because the URL is the *route's*
+   * to know: everything below this line addresses an upstream, and an upstream's path is not the
+   * client's.
+   */
+  readonly operation?: UpstreamOperation
   readonly request: Request
   readonly key: VerifiedKey
   /** The correlation id assigned at ingress and propagated end to end. */
@@ -134,6 +143,7 @@ export function createDispatcher(deps: DispatcherDeps): Dispatcher {
    */
   const serve = async (input: DispatchInput, progress: RequestProgress): Promise<Response> => {
     const { startedAt, requestStarted } = progress
+    const operation = input.operation ?? "messages"
 
     // Before the body: refusing a key over its ceiling must cost less than serving it, and no
     // usage row is written because nothing was attempted — the refusal is counted on
@@ -178,6 +188,7 @@ export function createDispatcher(deps: DispatcherDeps): Dispatcher {
       sessionKey: session.key,
       model,
       ingressDialect: input.ingress,
+      operation,
       requestStarted,
     })
 
@@ -208,7 +219,7 @@ export function createDispatcher(deps: DispatcherDeps): Dispatcher {
     }
     if (!selection.ok) return fail(selection.error)
 
-    const plan = planCandidates(selection.candidates, deps.catalog, input.ingress)
+    const plan = planCandidates(selection.candidates, deps.catalog, input.ingress, operation)
     if (plan.servable.length === 0) {
       return fail(
         plan.rejection !== null

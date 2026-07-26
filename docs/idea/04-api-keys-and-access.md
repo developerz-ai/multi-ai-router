@@ -49,9 +49,38 @@ verification.
 |---|---|---|
 | `httpOnly` | always | no script can read it |
 | `SameSite` | `Strict` | no cross-site submission carries it |
-| `Secure` | always | HTTPS is assumed in front (reverse proxy) |
 | `Path` | `/` | SPA and API share an origin |
+| `Secure` | default | HTTPS is assumed in front (reverse proxy) |
+| `__Host-` prefix | default | host-only, `Path=/`, `Secure` — enforced by the *browser*. What stops a sibling subdomain planting a session cookie on this origin |
 | Lifetime | sliding idle window (`ADMIN_SESSION_IDLE_MINUTES`, default 480) under a hard absolute cap (`ADMIN_SESSION_ABSOLUTE_HOURS`, default 24) | Sliding alone means a stolen cookie is renewable forever by the thief; the cap turns "forever" into a bounded window. A session dies at whichever bound comes first |
+| `SESSION_COOKIE_INSECURE` | `false` | The escape hatch. Set `true` to drop `Secure` **and** `__Host-`, and nothing else |
+
+**Why the escape hatch exists.** A self-hosted router reached at `http://192.168.1.50:8080` — a
+LAN install with no proxy, which is a normal way this is run — is *unusable* with the hardened
+cookie: a browser silently discards a `Secure` cookie delivered over `http://`, so `POST /login`
+answers `200` and every request after it is `401`. `SESSION_COOKIE_INSECURE=true`
+([09-deployment.md](09-deployment.md#environment-reference)) is the one supported answer.
+
+**And the router says so.** This is the only misconfiguration on the admin plane with no HTTP
+answer available: the login is a legitimate `200` and the `401` lands on the *next* request, which
+did nothing wrong. The server is the only party that sees both halves, so `POST /login` emits a
+`warn` naming `SESSION_COOKIE_INSECURE` whenever it sets a `Secure` cookie on a request that
+arrived over plain `http://`. `X-Forwarded-Proto: https` suppresses it, **whether or not
+`TRUST_PROXY` is set** — the asymmetry with the login throttle is deliberate: a forged
+`X-Forwarded-For` earns a fresh throttle bucket, while a forged `X-Forwarded-Proto` earns only the
+silencing of an advisory line, and reading it under `TRUST_PROXY` alone would warn on every
+correctly-proxied install whose operator left that default off. The line is a log line and not a
+field in the response body, because the wire shape of `/login` is a contract with the console.
+
+The two attributes come off **together**, because they cannot come off separately: the `__Host-`
+prefix is honored only on a cookie that also carries `Secure`. Everything that does not depend on
+the transport stays on — `httpOnly`, `SameSite=Strict`, `Path=/`, the server-side session record,
+and the CSRF token on every mutation. What is given up is confidentiality on the wire and the
+sibling-host injection defence, which is why it defaults to off and the router logs a `warn`
+naming the risk on every boot while it is on.
+
+Flipping the flag renames the cookie, so live sessions do not survive the change — the operator
+logs in again, which is the honest outcome rather than a session silently downgraded.
 
 ### CSRF and throttling
 
@@ -184,6 +213,19 @@ CSRF token like every other console action.
 There is still no shown-once flow and no rotate endpoint — the verb is about *how* the value is
 fetched, never about *whether* it can be fetched again. It always can.
 
+#### The value is shown with somewhere to put it
+
+Both the mint and the reveal render the key inside a **Point your tool at it** panel: one tab per
+client (Claude Code, Cursor, Codex CLI, Aider, the OpenAI SDKs, `curl`), each block pre-filled with
+this deployment's base URL — `PUBLIC_URL` when the operator set one, otherwise the console's own
+origin — and the key's real value. A snippet containing `YOUR_KEY_HERE` is a snippet that gets
+pasted containing `YOUR_KEY_HERE`.
+
+The suffix rule is the reason this is generated rather than written out six times: an
+OpenAI-dialect client appends `/chat/completions` to what it is given and so needs `/v1` already
+there, while an Anthropic-dialect one appends `/v1/messages` itself and must be handed the bare
+origin. One helper owns that (`apps/web/src/lib/client-snippets.ts`), so the two cannot disagree.
+
 ### What a key cannot do
 
 | Cannot | Because |
@@ -235,7 +277,7 @@ Paths and purpose only. Handler detail belongs in [01-architecture.md](01-archit
 | `/api/admin/keys/**` | list, create, reveal, edit limits and bindings, revoke | yes |
 | `/api/admin/providers` | the static provider registry, so the console's account form is never a second copy of it | yes |
 | `GET /api/admin/usage` | totals, series and breakdowns by key, account, pool, model, over a window | yes |
-| `GET`/`PATCH` `/api/admin/settings` | retention knobs, log level and janitor cadence read from the environment; price table overrides read and written | yes — the `PATCH` takes the price overrides as one complete set, so the table is never half-applied, and the warm price book is refreshed before the response is written |
+| `GET`/`PATCH` `/api/admin/settings` | the running build's `version`; retention knobs, log level, janitor cadence and the configured `PUBLIC_URL` (or null) read from the environment; price table overrides read and written | yes — the `PATCH` takes the price overrides as one complete set, so the table is never half-applied, and the warm price book is refreshed before the response is written |
 | `GET /api/admin/tasks` | the latest run of every scheduled task, and whether it is overdue | yes |
 | `GET /api/admin/audit` | the append-only admin-plane audit feed, newest first | yes |
 
@@ -255,7 +297,8 @@ guard — `GET /admin/accounts/oauth/callback`, the redirect capture, authorized
 `state` and reasoned about in [07-security.md](07-security.md). No response, log, or error on any of
 them carries an authorization code, a `state`, or a token.
 
-Data-plane routes (`/v1/messages`, `/v1/chat/completions`, `/v1/responses`, `/v1/models`) are in
+Data-plane routes (`/v1/messages`, `/v1/messages/count_tokens`, `/v1/chat/completions`,
+`/v1/responses`, `/v1/embeddings`, `/v1/models`) are in
 [06-protocol-translation.md](06-protocol-translation.md). Operational endpoints (`/healthz`,
 `/readyz`, `/metrics`) are unauthenticated liveness surfaces and are covered in
 [08-observability.md](08-observability.md).

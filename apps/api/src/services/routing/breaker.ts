@@ -42,8 +42,22 @@ export interface BreakerOptions {
   readonly failureThreshold?: number
   /** Jitter fraction in `[0, 1)`, supplied by the caller. 0 keeps the math deterministic. */
   readonly jitter?: number
-  /** Decides where an auth failure lands: `api-key` -> `disabled`, `oauth` -> `needs_reauth`. */
+  /** Decides where an auth failure lands — see {@link AUTH_FAILURE_STATUS}. */
   readonly authKind?: AuthKind
+}
+
+/**
+ * Where an auth failure parks the account, by what it authenticates with. Only a refreshable token
+ * can be *re*-authorized; a key — or a local endpoint that presents no credential at all and is
+ * suddenly behind something that checks one — needs an operator to change the configuration, which
+ * is what `disabled` says. No timer revives either.
+ *
+ * Total over `AuthKind`, so a new one is decided here rather than defaulting into the wrong state.
+ */
+const AUTH_FAILURE_STATUS: Readonly<Record<AuthKind, AccountStatus>> = {
+  oauth: "needs_reauth",
+  "api-key": "disabled",
+  none: "disabled",
 }
 
 export const DEFAULT_BASE_BACKOFF_MS = 1_000
@@ -92,7 +106,9 @@ export function recordFailure(
 
     case "auth":
       return {
-        status: options.authKind === "api-key" ? "disabled" : "needs_reauth",
+        // Unstated is the conservative read: an account that may hold a token to refresh.
+        status:
+          options.authKind === undefined ? "needs_reauth" : AUTH_FAILURE_STATUS[options.authKind],
         cooldownSource: "unknown",
         consecutiveFailures: state.consecutiveFailures + 1,
       }
