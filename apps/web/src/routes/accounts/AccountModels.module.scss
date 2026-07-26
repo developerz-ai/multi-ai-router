@@ -1,0 +1,27 @@
+.root {
+  display: grid;
+  gap: var(--space-1);
+  justify-items: start;
+  min-width: 11rem;
+}
+
+.passthrough {
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+}
+
+.preview {
+  max-width: 14rem;
+  overflow: hidden;
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+  line-height: var(--line-snug);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.note {
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+  line-height: var(--line-snug);
+}

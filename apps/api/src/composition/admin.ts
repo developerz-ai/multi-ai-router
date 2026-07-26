@@ -21,6 +21,7 @@ import {
   claudeCliFromEnv,
   connectFromEnv,
   createAccountsService,
+  createDiscoverModelsService,
   createRecheckService,
   createTestNowService,
   refresherFromEnv,
@@ -154,6 +155,24 @@ export function createAdminPlane(deps: AdminPlaneDeps): AdminPlane {
   })
 
   const accountsService = createAccountsService({ accounts, keys, cipher, configDirs, audit, now })
+  // Decorated once, and shared: "Discover models" writes through the same service the route does,
+  // so its write refreshes the warm catalog exactly like an operator's edit would.
+  const decoratedAccounts = withAvailability(withCatalogRefresh(accountsService, deps.coherence), {
+    catalog,
+    health,
+    recheck,
+    now,
+  })
+
+  // "Discover models": one GET at the provider's own listing, written into `supportedModels`. No
+  // cooldown and no confirmation — it bills nothing (`services/accounts/discover-models.ts`).
+  const discoverModels = createDiscoverModelsService({
+    accounts,
+    write: decoratedAccounts,
+    cipher,
+    audit,
+    timeoutMs: env.failover.upstreamTimeoutMs,
+  })
 
   return {
     refresher,
@@ -175,12 +194,7 @@ export function createAdminPlane(deps: AdminPlaneDeps): AdminPlane {
       // Two decorators in the order they must run: `withCatalogRefresh` makes a write land on the
       // request path, `withAvailability` answers a read with what the router currently observes
       // rather than with the row the operator last wrote.
-      accounts: withAvailability(withCatalogRefresh(accountsService, deps.coherence), {
-        catalog,
-        health,
-        recheck,
-        now,
-      }),
+      accounts: decoratedAccounts,
       pools: withPoolCatalogRefresh(
         createPoolsService({ pools: deps.pools, accounts, keys, audit, now }),
         deps.coherence,
@@ -213,6 +227,7 @@ export function createAdminPlane(deps: AdminPlaneDeps): AdminPlane {
       }),
       recheck,
       testNow,
+      discoverModels,
       connect,
     },
   }

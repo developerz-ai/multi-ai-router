@@ -18,6 +18,7 @@ import {
   useCreateAccount,
   useDeleteAccount,
   useDisableAccount,
+  useDiscoverAccountModels,
   useRecheckAccount,
   useRecheckAllAccounts,
   useTestAccount,
@@ -77,6 +78,7 @@ export default function AccountsRoute() {
   const recheck = useRecheckAccount()
   const recheckAll = useRecheckAllAccounts()
   const test = useTestAccount()
+  const discover = useDiscoverAccountModels()
 
   const closeForm = () => {
     create.reset()
@@ -110,6 +112,20 @@ export default function AccountsRoute() {
       <Show when={recheckAll.isError}>
         <Banner title="Re-check all failed" tone="danger">
           {errorMessage(recheckAll.error)}
+        </Banner>
+      </Show>
+
+      {/* A failed discovery has to say so somewhere: the button's own cell has room for a state,
+          not for a reason, and "could not read the model listing: …" is the whole diagnosis. */}
+      <Show when={discover.isError}>
+        <Banner title="Model discovery failed" tone="danger">
+          {errorMessage(discover.error)}
+        </Banner>
+      </Show>
+
+      <Show when={discover.isSuccess && discover.data?.saved === false}>
+        <Banner title="The upstream listed no models" tone="warn">
+          {discover.data?.message}
         </Banner>
       </Show>
 
@@ -174,9 +190,11 @@ export default function AccountsRoute() {
               onConnect={setConnecting}
               onDelete={setPendingDelete}
               onDisable={(account) => disable.mutate(account.id)}
+              onDiscoverModels={(id) => discover.mutate(id)}
               onEnable={(account) => update.mutate({ id: account.id, patch: { status: "active" } })}
               onRecheck={(id) => recheck.mutate(id)}
               onTest={(input) => test.mutate(input)}
+              discoveringId={discover.isPending ? (discover.variables ?? null) : null}
               providerFor={providerFor}
               recheckingId={recheck.isPending ? (recheck.variables ?? null) : null}
               testingId={test.isPending ? (test.variables?.id ?? null) : null}

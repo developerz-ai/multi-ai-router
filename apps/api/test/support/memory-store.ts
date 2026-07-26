@@ -93,6 +93,7 @@ export function createMemoryStore(): MemoryStore {
           baseUrl: input.baseUrl ?? null,
           dialect: input.dialect ?? null,
           modelAliases: input.modelAliases ?? null,
+          supportedModels: input.supportedModels ?? null,
           weight: input.weight ?? 100,
           priority: input.priority ?? 0,
           createdAt: EPOCH,

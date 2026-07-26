@@ -60,7 +60,7 @@ export {
   filterCandidates,
 } from "./filter"
 export { rendezvousRank, rendezvousScore, scoreWithSeed, sessionSeed } from "./hash"
-export { type ModelResolution, resolveModel } from "./model"
+export { advertisedModels, type ModelResolution, resolveModel } from "./model"
 export { type NoCandidatesInput, noCandidatesError } from "./no-candidates"
 export {
   leastUsed,

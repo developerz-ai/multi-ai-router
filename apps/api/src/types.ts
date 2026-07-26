@@ -2,6 +2,7 @@ import type { Logger } from "./logging/logger"
 import type {
   AccountsService,
   ConnectService,
+  DiscoverModelsService,
   RecheckService,
   TestNowService,
 } from "./services/accounts"
@@ -52,6 +53,12 @@ export interface AdminServices {
    * from `recheck` because it actually spends a request (`services/accounts/test-now.ts`).
    */
   readonly testNow: TestNowService
+  /**
+   * "Discover models": reads the upstream's own listing into `supportedModels`. The one button of
+   * the three that changes the row, which is why it writes through `accounts` rather than beside it
+   * (`services/accounts/discover-models.ts`).
+   */
+  readonly discoverModels: DiscoverModelsService
   /** Connect and reconnect, both flows: the `claude` CLI's login, and the router's own PKCE one. */
   readonly connect: ConnectService
 }

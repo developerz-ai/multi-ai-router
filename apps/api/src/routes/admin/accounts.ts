@@ -6,6 +6,7 @@ import {
   type ConnectService,
   completeConnectBody,
   createAccountBody,
+  type DiscoverModelsService,
   type RecheckService,
   type TestNowService,
   testNowBody,
@@ -34,6 +35,11 @@ import { render } from "./render"
  * on purpose — a fan-out button that spends a real request per account, and on the Agent-SDK path
  * a subprocess turn per account, is not a button this console offers (`services/accounts/test-now.ts`).
  *
+ * `POST /:id/models/discover` is the third and cheapest: it reads the provider's own model listing
+ * and writes it into the account's `supportedModels`. It spends no tokens, so unlike "Test now" it
+ * carries no cooldown and no confirmation — and unlike either of the other two it changes the row,
+ * which is why the write goes back through the accounts service (`services/accounts/discover-models.ts`).
+ *
  * **Connect is two calls with an authorization in between.** `POST /:id/connect`
  * answers with an authorization URL — the `claude` CLI's own for a Claude
  * subscription, one this router built for an OAuth provider — and
@@ -57,6 +63,7 @@ export interface AdminAccountRoutesDeps {
   readonly service: AccountsService
   readonly recheck: RecheckService
   readonly testNow: TestNowService
+  readonly discoverModels: DiscoverModelsService
   readonly connect: ConnectService
   /** `adminAuth(adminAuthService)`. Required, so no mount can forget the guard. */
   readonly guard: MiddlewareHandler<AdminAuthEnv>
@@ -113,6 +120,13 @@ export function adminAccountRoutes(deps: AdminAccountRoutesDeps): Hono<AdminAuth
     const body = validate(testNowBody, await readJsonBody(c.req.raw))
     if (!body.ok) return render(c, body)
     return render(c, await deps.testNow.test(id.value, body.value))
+  })
+
+  // No body: the account already says which upstream to ask and on which dialect.
+  routes.post("/:id/models/discover", async (c) => {
+    const id = validateId(c.req.param("id"))
+    if (!id.ok) return render(c, id)
+    return render(c, await deps.discoverModels.discover(id.value))
   })
 
   // Same service call as `/:id/connect`; the mode is only what the operator called it.

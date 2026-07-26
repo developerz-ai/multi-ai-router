@@ -440,6 +440,23 @@ outbound-only — the `UsageRecord` stores both names and `GET /v1/models` repor
 An Account that cannot serve the requested model is filtered *out* of the candidate set, never
 silently swapped.
 
+**Two sides of one map, and `GET /v1/models` sits between them.** An Account's `supportedModels`
+is stated **upstream-side** — the names the provider itself answers to, the side the alias map points
+*at*, and the side a provider's own listing returns — while the alias map's *keys* are what a client
+sends. Support is therefore judged **after** the rename: an Account declaring `glm-4.7` and mapping
+`sonnet → glm-4.7` serves both names. The listing publishes exactly the requested-side names for
+which that judgement is yes, derived from the same function (`advertisedModels`, next to
+`resolveModel`) rather than restated. That is not tidiness — a naive union of the two fields is wrong
+in both directions: an alias onto a model the Account does not serve would be advertised and then
+filtered out as `model-unsupported` (a listing promising a `503`), and a declared name whose own
+alias entry points somewhere unserved is not requestable under that name at all.
+
+An Account declaring **nothing** serves everything: unknown is passthrough, not exclusion. It
+contributes no enumerable name beyond its alias keys, so a deployment of only such Accounts lists
+nothing rather than inventing a catalog it cannot stand behind — which is why the operator is given
+`POST /api/admin/accounts/:id/models/discover`, one free `GET` at the provider's own listing, to fill
+the declaration in.
+
 ## Performance rules (hard requirements, not preferences)
 
 The router is in the hot path of every request every developer and every agent makes. These are

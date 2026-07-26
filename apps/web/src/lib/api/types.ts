@@ -36,6 +36,12 @@ export interface AccountView {
   readonly baseUrl: string | null
   readonly dialect: Dialect | null
   readonly modelAliases: Readonly<Record<string, string>> | null
+  /**
+   * Upstream-side model ids, as declared. `null` is *unknown*, which the router reads as "accepts
+   * any model name" — never as "serves nothing". What a client may actually ask for is this list
+   * seen through the alias map, which is what `GET /v1/models` publishes.
+   */
+  readonly supportedModels: readonly string[] | null
   readonly weight: number
   readonly priority: number
   readonly tokenExpiresAt: string | null

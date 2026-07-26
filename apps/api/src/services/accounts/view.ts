@@ -1,5 +1,5 @@
 import type { AccountStatus, Dialect, ProviderId } from "@multi-ai-router/core"
-import type { AccountRow, ModelAliasMap } from "@multi-ai-router/db"
+import type { AccountRow, ModelAliasMap, SupportedModelList } from "@multi-ai-router/db"
 import type { AccountAvailability } from "./availability"
 
 /**
@@ -31,6 +31,12 @@ export interface AccountView {
   readonly baseUrl: string | null
   readonly dialect: Dialect | null
   readonly modelAliases: ModelAliasMap | null
+  /**
+   * Upstream-side model ids, as declared. `null` is *unknown*, which routing reads as passthrough
+   * — not "serves nothing". What a client may actually **ask** for is this list filtered through
+   * the alias map, which is what `GET /v1/models` publishes (`services/routing/model.ts`).
+   */
+  readonly supportedModels: SupportedModelList | null
   readonly weight: number
   readonly priority: number
   readonly tokenExpiresAt: string | null
@@ -55,6 +61,7 @@ export function toAccountView(row: AccountRow): AccountView {
     baseUrl: row.baseUrl,
     dialect: row.dialect ?? null,
     modelAliases: row.modelAliases,
+    supportedModels: row.supportedModels,
     weight: row.weight,
     priority: row.priority,
     tokenExpiresAt: row.tokenExpiresAt?.toISOString() ?? null,

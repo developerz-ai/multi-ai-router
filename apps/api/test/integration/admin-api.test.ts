@@ -21,6 +21,7 @@ import {
   createAccountsService,
   createClaudeConnectService,
   createConnectService,
+  createDiscoverModelsService,
   createOAuthConnectService,
   createRecheckService,
   createTestNowService,
@@ -60,6 +61,8 @@ interface HarnessOptions {
   readonly oauthFetch?: typeof fetch
   /** The upstream "Test now" addresses. Defaults to a stub that fails any test hitting it by name. */
   readonly testNowFetch?: typeof fetch
+  /** The upstream "Discover models" reads its listing from. Same default, same reason. */
+  readonly discoverFetch?: typeof fetch
 }
 
 function harness(
@@ -116,18 +119,22 @@ function harness(
   // would refuse every real callback (`routes/admin/oauth-callback.ts`).
   app.route("/", oauthCallbackRoutes({ connect }))
 
+  // One instance, shared: "Discover models" writes through the same service the route reads, which
+  // is what `composition/admin.ts` does and what keeps the warm catalog coherent in production.
+  const accountsService = createAccountsService({
+    accounts: store.accounts,
+    keys: store.keys,
+    cipher,
+    configDirs: configDirs.dirs,
+    audit,
+    now,
+  })
+
   app.route(
     ADMIN_ACCOUNTS_BASE_PATH,
     adminAccountRoutes({
       guard,
-      service: createAccountsService({
-        accounts: store.accounts,
-        keys: store.keys,
-        cipher,
-        configDirs: configDirs.dirs,
-        audit,
-        now,
-      }),
+      service: accountsService,
       // The dispatching service `app.ts` mounts, not one backend of it: which login an account
       // takes is decided from the provider registry, and that decision is part of the surface.
       connect,
@@ -147,6 +154,15 @@ function harness(
         now,
         fetch:
           options.testNowFetch ?? (() => Promise.reject(new Error("no upstream in this harness"))),
+      }),
+      discoverModels: createDiscoverModelsService({
+        accounts: store.accounts,
+        write: accountsService,
+        cipher,
+        audit,
+        timeoutMs: 1_000,
+        fetch:
+          options.discoverFetch ?? (() => Promise.reject(new Error("no upstream in this harness"))),
       }),
     }),
   )
@@ -422,6 +438,105 @@ describe("POST /:id/test — Test now", () => {
     expect(
       (await call(app, "POST", `${ADMIN_ACCOUNTS_BASE_PATH}/${account.id}/test`, {})).status,
     ).toBe(400)
+  })
+})
+
+describe("POST /:id/models/discover — the model catalog", () => {
+  const listing = (ids: readonly string[]) => async () =>
+    new Response(JSON.stringify({ data: ids.map((id) => ({ type: "model", id })) }), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    })
+
+  test("reads the upstream's listing and persists it onto the account", async () => {
+    const { app } = harness(undefined, { discoverFetch: listing(["glm-4.7", "glm-4.6"]) })
+    const account = await newAccount(app, { provider: "zai", credential: SECRET })
+
+    const result = await call(
+      app,
+      "POST",
+      `${ADMIN_ACCOUNTS_BASE_PATH}/${account.id}/models/discover`,
+    )
+
+    expect(result.status).toBe(200)
+    const body = result.body as { models: string[]; saved: boolean }
+    expect(body.models).toEqual(["glm-4.6", "glm-4.7"])
+    expect(body.saved).toBe(true)
+
+    // Persisted, and visible on the account the console re-reads — the whole point of the button.
+    const reread = await call(app, "GET", `${ADMIN_ACCOUNTS_BASE_PATH}/${account.id}`)
+    expect((reread.body as { supportedModels: string[] }).supportedModels).toEqual([
+      "glm-4.6",
+      "glm-4.7",
+    ])
+  })
+
+  test("an empty listing leaves the account a passthrough rather than declaring it serves nothing", async () => {
+    const { app } = harness(undefined, { discoverFetch: listing([]) })
+    const account = await newAccount(app, { provider: "zai", credential: SECRET })
+
+    const result = await call(
+      app,
+      "POST",
+      `${ADMIN_ACCOUNTS_BASE_PATH}/${account.id}/models/discover`,
+    )
+
+    expect(result.status).toBe(200)
+    expect((result.body as { saved: boolean }).saved).toBe(false)
+    const reread = await call(app, "GET", `${ADMIN_ACCOUNTS_BASE_PATH}/${account.id}`)
+    expect((reread.body as { supportedModels: unknown }).supportedModels).toBeNull()
+  })
+
+  test("refuses a Claude subscription by name and never opens a socket", async () => {
+    let called = false
+    const { app } = harness(undefined, {
+      discoverFetch: async () => {
+        called = true
+        return new Response(null, { status: 200 })
+      },
+    })
+    const account = await newAccount(app, {
+      label: "claude-sub",
+      provider: "anthropic-oauth",
+      credential: undefined,
+    })
+
+    const result = await call(
+      app,
+      "POST",
+      `${ADMIN_ACCOUNTS_BASE_PATH}/${account.id}/models/discover`,
+    )
+
+    expect(result.status).toBe(400)
+    expect((result.body as { error: { code: string } }).error.code).toBe("models_not_listable")
+    expect(called).toBe(false)
+  })
+
+  test("an account can also be given its model set by hand, on create and on edit", async () => {
+    const { app } = harness()
+    const created = await call(app, "POST", ADMIN_ACCOUNTS_BASE_PATH, {
+      label: "typed",
+      provider: "zai",
+      credential: SECRET,
+      supportedModels: ["glm-4.7"],
+    })
+    expect(created.status).toBe(201)
+    const account = created.body as { id: string; supportedModels: string[] }
+    expect(account.supportedModels).toEqual(["glm-4.7"])
+
+    // `null` clears it, which returns the account to passthrough.
+    const cleared = await call(app, "PATCH", `${ADMIN_ACCOUNTS_BASE_PATH}/${account.id}`, {
+      supportedModels: null,
+    })
+    expect((cleared.body as { supportedModels: unknown }).supportedModels).toBeNull()
+  })
+
+  test("does not exist for an account that does not", async () => {
+    const { app } = harness()
+    const missing = "11111111-1111-4111-8111-111111111111"
+    expect(
+      (await call(app, "POST", `${ADMIN_ACCOUNTS_BASE_PATH}/${missing}/models/discover`)).status,
+    ).toBe(404)
   })
 })
 

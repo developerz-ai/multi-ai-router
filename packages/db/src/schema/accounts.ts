@@ -15,6 +15,13 @@ import { accountStatus, providerId } from "./enums"
 export type ModelAliasMap = Record<string, string>
 
 /**
+ * The model ids an account's upstream accepts, **as the upstream names them** — the same side of
+ * the alias map `model_aliases` points *at*. Discovered from the provider's own `/v1/models`, or
+ * typed by the operator.
+ */
+export type SupportedModelList = string[]
+
+/**
  * One credential to one provider. Many accounts per provider is the normal case
  * — five Claude subscriptions side by side is the point of the product — so
  * nothing here may key on `provider` alone. `label` is the human disambiguator.
@@ -72,6 +79,20 @@ export const accounts = pgTable(
 
     /** Absent means the client's model name passes through unchanged. */
     modelAliases: jsonb("model_aliases").$type<ModelAliasMap>(),
+
+    /**
+     * The model ids this account's upstream accepts, upstream-side. NULL (and
+     * `[]`) mean *unknown*, and unknown is passthrough, not exclusion: the
+     * account serves whatever the client names. A non-empty list is a claim the
+     * router will act on — it filters the account out of selection for anything
+     * else, and it is what `GET /v1/models` enumerates.
+     *
+     * Populated by the operator, or by `POST /:id/models/discover`, which reads
+     * the provider's own listing. Deliberately not refreshed on a timer: a model
+     * catalog that changes under a running deployment would change routing
+     * without an operator ever asking for it.
+     */
+    supportedModels: jsonb("supported_models").$type<SupportedModelList>(),
 
     /** Bias for the `weighted` policy. */
     weight: integer("weight").notNull().default(100),

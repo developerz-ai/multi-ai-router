@@ -26,6 +26,8 @@ export const queryKeys = {
     recheck: (id: string) => ["accounts", "recheck", id] as const,
     /** Last "Test now" per account. Own key, own cache-only read — see `useLastTest`. */
     test: (id: string) => ["accounts", "test", id] as const,
+    /** Last "Discover models" per account, for the note the row shows after a press. */
+    models: (id: string) => ["accounts", "models", id] as const,
   },
 
   pools: {

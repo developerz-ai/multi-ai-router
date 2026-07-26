@@ -4,8 +4,10 @@ import {
   type AccountListFilter,
   type CreateAccountInput,
   createAccount,
+  type DiscoverModelsResult,
   deleteAccount,
   disableAccount,
+  discoverAccountModels,
   getAccount,
   listAccounts,
   type RecheckResult,
@@ -127,6 +129,22 @@ export function useTestAccount() {
     mutationFn: (input: TestAccountInput) => testAccount(input),
     onSuccess: async (result: TestNowResult) => {
       client.setQueryData(queryKeys.accounts.test(result.accountId), result)
+      await invalidateAccountReaders(client)
+    },
+  }))
+}
+
+/**
+ * "Discover models": one GET at the provider's own listing, written into the account. It changes
+ * the row, so the account readers are invalidated — the model set the table shows has to be the one
+ * that was just written, not the one the row held a moment ago.
+ */
+export function useDiscoverAccountModels() {
+  const client = useQueryClient()
+  return useMutation(() => ({
+    mutationFn: (id: string) => discoverAccountModels(id),
+    onSuccess: async (result: DiscoverModelsResult) => {
+      client.setQueryData(queryKeys.accounts.models(result.accountId), result)
       await invalidateAccountReaders(client)
     },
   }))

@@ -89,7 +89,12 @@ export { createUsageRecentRepository } from "./repositories/usage-recent-reposit
 export type { UsageRecordRepository } from "./repositories/usage-repository"
 export { createUsageRecordRepository } from "./repositories/usage-repository"
 // --- row types --------------------------------------------------------------
-export type { AccountRow, ModelAliasMap, NewAccountRow } from "./schema/accounts"
+export type {
+  AccountRow,
+  ModelAliasMap,
+  NewAccountRow,
+  SupportedModelList,
+} from "./schema/accounts"
 
 // --- tables -----------------------------------------------------------------
 export { accounts } from "./schema/accounts"

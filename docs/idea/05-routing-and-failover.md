@@ -118,6 +118,13 @@ An account with **no** declared model set supports everything: unknown means pas
 exclusion. Filtering never falls back to "try it anyway" — an empty candidate set is an honest,
 specific error, and which error depends on *why* it is empty.
 
+The declared set (`supportedModels`) is stated **upstream-side**, which is why the check runs after
+the rename. `GET /v1/models` publishes the requested-side inverse of exactly this check, derived
+from the same function rather than restated — see
+[06-protocol-translation.md](06-protocol-translation.md#model-names). Nothing populates the set on a
+timer: an operator types it, or presses **Discover models**, and a catalog that refreshed itself
+would move traffic off an account the moment a provider retired one name.
+
 ## The six load-balancing policies
 
 **This is the centerpiece.** A Pool exists so that N accounts of the same kind behave like one
@@ -546,9 +553,20 @@ can make.
 | Cost | Real, every time. An HTTP account spends a token or two of a real quota window; a Claude subscription spends a turn **and** spawns a `claude` subprocess. |
 | Confirmation | The Agent-SDK path refuses to run without an explicit `confirmed: true` on the request — the console shows a confirmation dialog naming the subprocess and the spend before it ever fires. Every other provider's press goes straight through. |
 | Throttled | Its own **server-side** per-account cooldown, longer than Re-check now's and never shared with it — a free button's presses must never spend a paid one's window, or the reverse. |
-| Model | The operator names it, same as a client would; the router keeps no model catalog for an upstream to guess from. |
+| Model | The operator names it, same as a client would. The account's declared set is not a substitute: it says what the upstream *accepts*, not which name this press should spend. |
 | Outcome | `ok` or `failed`, plus a short, safe message — a router-authored sentence, the account's own one-word reply, or a failure signal, never a raw upstream body or credential material. |
 | No fan-out | There is no all-accounts form. A button that spends a real request — and on the Agent-SDK path a subprocess — per account in a pool is not one this console offers. |
+
+### Discover models — the third button, and the free one
+
+| Property | Behavior |
+|---|---|
+| What it does | One `GET` at the provider's own model listing, on this account's own dialect and credential, through the same attempt path — then writes the ids into `supportedModels` so selection and `GET /v1/models` both see them. |
+| Cost | None. A listing bills no tokens and spends no quota window, which is why it carries neither a cooldown nor a confirmation — the opposite of Test now on both counts. |
+| Not a poll | Nothing schedules it. A catalog that refreshed itself would change routing without an operator asking, and an upstream retiring one name would quietly take an account out of selection mid-deployment. |
+| Empty answer | Written as *nothing*, never as `[]`. An upstream that listed no models has told the router nothing; declaring "serves no model" would turn a config gap into a `503` per request. |
+| Refused for | Claude subscriptions — the Agent SDK owns that catalog and there is no listing endpoint to ask — and any provider with no implementation. Refused by name, before a socket is opened. |
+| Where the write goes | Through the accounts service, so it audits the field change and refreshes the warm routing catalog exactly like an operator's edit would. A second audit row, `account.models_discovered`, records that the question was asked at all. |
 
 ## Worked example
 
