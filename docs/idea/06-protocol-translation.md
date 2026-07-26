@@ -325,6 +325,19 @@ boundaries" by breaking every client that uses the SDK's final-response accessor
 stopped early the terminal event is `response.incomplete`, which is the same fact stated in the
 field Responses reserves for it.
 
+**A streamed tool call that cannot have a block yet waits for one; it is never dropped.** openai-chat
+keys a streamed call by a `tool_calls[].index` it is free to revisit — a chunk carrying
+`[{index:0},{index:1}]` followed by more arguments for index 0 is well-formed there, and vLLM,
+SGLang, Fireworks and Together all emit it for parallel calls. Anthropic and Responses hold **one
+open block or item at a time** and have no event that reopens a closed one, so the second call is
+held until the live one closes and then given a block of its own, arguments and all. A reader that
+kept only the block it opened last would answer with a `tool_use` whose `input` is truncated, under a
+`stop_reason` saying the call was complete — a wrong tool invocation no client could detect. Holding
+those fragments is not stream buffering: text is never touched, and the live call's deltas leave as
+they arrive. The same rule covers an upstream that omits `index` altogether (LM Studio, Ollama): an
+entry naming an `id` or a function name starts a call of its own, one naming neither continues the
+call the entry before it addressed, and nothing is folded into whatever came last.
+
 **A truncated stream is never given a synthesized ending.** If the upstream dies before its finish
 reason, the translator emits no `message_delta`, no `message_stop`, and no `[DONE]` — the client
 learns the truth from the abrupt close. Manufacturing a clean terminator would report a completion

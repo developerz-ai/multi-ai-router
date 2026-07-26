@@ -806,6 +806,98 @@ describe("openai-chat -> openai-responses stream", () => {
     })
     expect(stream.flush()).toEqual([])
   })
+
+  /**
+   * The `tool_calls[].index` a compatible upstream may revisit, or never send at all — the same
+   * looseness `stream-openai-anthropic.test.ts` covers toward Anthropic, and the same silent
+   * truncation of `arguments` if the reader keeps only the item it opened last.
+   */
+  describe("tool calls the upstream keys loosely", () => {
+    const chunk = (calls: Record<string, unknown>[]): SseFrame => ({
+      event: null,
+      data: JSON.stringify({
+        id: "chatcmpl-1",
+        choices: [{ index: 0, delta: { tool_calls: calls }, finish_reason: null }],
+      }),
+    })
+    const finish: SseFrame = {
+      event: null,
+      data: JSON.stringify({
+        id: "chatcmpl-1",
+        choices: [{ index: 0, delta: {}, finish_reason: "tool_calls" }],
+      }),
+    }
+
+    /** The finished `function_call` items, which is what a Responses client actually executes. */
+    function calls(events: readonly SseEvent[]): { name: string; arguments: string }[] {
+      const completed = payloads(events).find(
+        (event) => (event as { type: string }).type === "response.completed",
+      ) as { response: { output: { type: string; name: string; arguments: string }[] } } | undefined
+      return (completed?.response.output ?? [])
+        .filter((item) => item.type === "function_call")
+        .map((item) => ({ name: item.name, arguments: item.arguments }))
+    }
+
+    function run(frames: readonly SseFrame[]): SseEvent[] {
+      const stream = translator()
+      const events: SseEvent[] = []
+      for (const frame of frames) events.push(...stream.push(frame))
+      events.push(...stream.flush())
+      return events
+    }
+
+    test("arguments revisiting an earlier index after a later call opened still arrive", () => {
+      const events = run([
+        chunk([
+          { index: 0, id: "call_1", function: { name: "get_weather", arguments: "" } },
+          { index: 1, id: "call_2", function: { name: "lookup", arguments: "" } },
+        ]),
+        chunk([{ index: 0, function: { arguments: '{"city":"NY"}' } }]),
+        chunk([{ index: 1, function: { arguments: '{"q":"x"}' } }]),
+        finish,
+        { event: null, data: "[DONE]" },
+      ])
+      expect(calls(events)).toEqual([
+        { name: "get_weather", arguments: '{"city":"NY"}' },
+        { name: "lookup", arguments: '{"q":"x"}' },
+      ])
+    })
+
+    test("calls that state no index at all stay distinct rather than collapsing into one", () => {
+      const events = run([
+        chunk([{ id: "call_1", function: { name: "get_weather", arguments: '{"city":"NY"}' } }]),
+        chunk([{ id: "call_2", function: { name: "lookup", arguments: '{"q":"x"}' } }]),
+        finish,
+        { event: null, data: "[DONE]" },
+      ])
+      expect(calls(events)).toEqual([
+        { name: "get_weather", arguments: '{"city":"NY"}' },
+        { name: "lookup", arguments: '{"q":"x"}' },
+      ])
+    })
+
+    test("a held item is announced and closed like any other, never overlapping the live one", () => {
+      const events = run([
+        chunk([
+          { index: 0, id: "call_1", function: { name: "get_weather", arguments: "{}" } },
+          { index: 1, id: "call_2", function: { name: "lookup", arguments: "{}" } },
+        ]),
+        finish,
+        { event: null, data: "[DONE]" },
+      ])
+      const names = events
+        .map((event) => event.event)
+        .filter(
+          (name) => name === "response.output_item.added" || name === "response.output_item.done",
+        )
+      expect(names).toEqual([
+        "response.output_item.added",
+        "response.output_item.done",
+        "response.output_item.added",
+        "response.output_item.done",
+      ])
+    })
+  })
 })
 
 describe("openai-responses -> openai-chat request (the downgrade)", () => {

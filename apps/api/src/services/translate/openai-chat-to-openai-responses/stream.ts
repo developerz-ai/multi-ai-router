@@ -1,4 +1,5 @@
 import { z } from "zod"
+import { createOpenAiChatToolCallReader } from "../shared/openai-chat-tool-calls"
 import { createResponsesStreamEmitter } from "../shared/responses-stream"
 import { readOpenAiFinishReason, toResponsesCompletion } from "../shared/stop-reason"
 import type { OpenAiChatUsage } from "../shared/usage"
@@ -16,6 +17,8 @@ import { frameJson } from "../sse/parse"
  * item concept at all — text arrives as `delta.content`, calls as `delta.tool_calls[]` keyed by an
  * index that counts only calls, with no start, no stop, and no ordering between the two — so item
  * boundaries are **invented**: one open item at a time, closed the moment the content switches kind.
+ * That index an upstream may revisit, or omit entirely; `shared/openai-chat-tool-calls.ts` owns the
+ * keying that survives both.
  *
  * **The terminal event waits for the end of the stream, and only the terminal event.** openai-chat
  * puts `finish_reason` on one chunk and — with `stream_options.include_usage` — the token counts on
@@ -73,6 +76,7 @@ export function openAiChatToOpenAiResponsesStream(
   options: OpenAiChatToOpenAiResponsesStreamOptions,
 ): StreamTranslator {
   const emitter = createResponsesStreamEmitter(options)
+  const toolCalls = createOpenAiChatToolCallReader()
   let finishReason: string | null = null
   let usage: OpenAiChatUsage | null = null
   let unrecognized: string | null = null
@@ -114,8 +118,8 @@ export function openAiChatToOpenAiResponsesStream(
 
       emitter.start(out)
       emitter.text(out, choice.delta?.content ?? "")
-      for (const [position, call] of (choice.delta?.tool_calls ?? []).entries()) {
-        const key = call.index ?? position
+      for (const call of choice.delta?.tool_calls ?? []) {
+        const key = toolCalls.key(call)
         emitter.toolStart(out, key, { id: call.id, name: call.function?.name })
         emitter.toolArgs(out, key, call.function?.arguments ?? "")
       }

@@ -1,5 +1,6 @@
 import { z } from "zod"
 import { createAnthropicStreamEmitter } from "../shared/anthropic-stream"
+import { createOpenAiChatToolCallReader } from "../shared/openai-chat-tool-calls"
 import { toAnthropicStopReason } from "../shared/stop-reason"
 import type { OpenAiChatUsage } from "../shared/usage"
 import { anthropicUsageCounts, parseOpenAiChatUsage } from "../shared/usage"
@@ -13,7 +14,8 @@ import { frameJson } from "../sse/parse"
  * The block structure Anthropic requires is invented by `shared/anthropic-stream.ts`, which owns the
  * verified event order for every dialect translated into it. What lives here is the openai-chat half
  * of the reading: text arrives as `delta.content`, calls as `delta.tool_calls[]` keyed by an index
- * that counts only calls, with no start, no stop, and no ordering between the two.
+ * that counts only calls, with no start, no stop, and no ordering between the two — and which an
+ * upstream may revisit, or omit entirely. `shared/openai-chat-tool-calls.ts` owns that keying.
  *
  * **The terminal events wait for the end of the stream, and only the terminal events.** openai-chat
  * puts `finish_reason` on one chunk and — with `stream_options.include_usage` — the token counts on
@@ -70,6 +72,7 @@ export function openAiChatToAnthropicStream(
   options: OpenAiChatToAnthropicStreamOptions = {},
 ): StreamTranslator {
   const emitter = createAnthropicStreamEmitter(options)
+  const toolCalls = createOpenAiChatToolCallReader()
   let finishReason: string | null = null
   let usage: OpenAiChatUsage | null = null
   let unrecognized: string | null = null
@@ -108,8 +111,8 @@ export function openAiChatToAnthropicStream(
 
       emitter.start(out)
       emitter.text(out, choice.delta?.content ?? "")
-      for (const [position, call] of (choice.delta?.tool_calls ?? []).entries()) {
-        const key = call.index ?? position
+      for (const call of choice.delta?.tool_calls ?? []) {
+        const key = toolCalls.key(call)
         emitter.toolStart(out, key, { id: call.id, name: call.function?.name })
         emitter.toolArgs(out, key, call.function?.arguments ?? "")
       }

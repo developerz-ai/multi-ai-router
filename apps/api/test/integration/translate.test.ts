@@ -69,6 +69,56 @@ describe("cross-dialect streaming (translate egress)", () => {
     expect(usage.rows[0]?.tokensOut).toBeGreaterThan(0)
   })
 
+  /**
+   * The shape vLLM, SGLang, Fireworks and Together emit for parallel calls — both announced in one
+   * chunk, arguments streamed per index afterwards — on the bytes a client actually reads. A reader
+   * keeping only the block it opened last hands back `get_weather` with an empty `input` under
+   * `"stop_reason":"tool_use"`, which no client can tell from a model that meant it.
+   */
+  test("parallel tool calls arrive whole when the upstream revisits an earlier index", async () => {
+    const call = (index: number, args: string, named?: Record<string, unknown>) => ({
+      index,
+      ...named,
+      function: { ...(named?.name === undefined ? {} : { name: named.name }), arguments: args },
+    })
+    const body =
+      openAiChunk({
+        choices: [
+          {
+            index: 0,
+            delta: {
+              role: "assistant",
+              tool_calls: [
+                call(0, "", { id: "call_1", name: "get_weather" }),
+                call(1, "", { id: "call_2", name: "lookup" }),
+              ],
+            },
+          },
+        ],
+      }) +
+      openAiChunk({ choices: [{ index: 0, delta: { tool_calls: [call(0, '{"city":"NY"}')] } }] }) +
+      openAiChunk({ choices: [{ index: 0, delta: { tool_calls: [call(1, '{"q":"x"}')] } }] }) +
+      openAiChunk({ choices: [{ index: 0, delta: {}, finish_reason: "tool_calls" }] }) +
+      DONE
+    const slow = slowStream([body])
+    const { app } = harness({ accounts: [openRouterAccount()], responses: [() => slow.response] })
+
+    const res = await app.request("/v1/messages", post(MESSAGE, bearer()))
+    slow.release(0)
+    slow.finish()
+    const text = await res.text()
+    await settle()
+
+    expect(text).toContain('"name":"get_weather"')
+    expect(text).toContain('"name":"lookup"')
+    expect(text).toContain('"partial_json":"{\\"city\\":\\"NY\\"}"')
+    expect(text).toContain('"partial_json":"{\\"q\\":\\"x\\"}"')
+    expect(text).toContain('"stop_reason":"tool_use"')
+    // One open block at a time: every start is closed before the next one opens.
+    const boundaries = [...text.matchAll(/event: content_block_(start|stop)/g)].map((hit) => hit[1])
+    expect(boundaries).toEqual(["start", "stop", "start", "stop"])
+  })
+
   test("streams without buffering: the first translated event reaches the client before the upstream sends its next chunk", async () => {
     const first = openAiChunk({
       choices: [{ index: 0, delta: { role: "assistant", content: "partial" } }],

@@ -250,17 +250,33 @@ describe("tool calls", () => {
     expect(eventNames(stream.push(opening))).toEqual(["content_block_stop", "content_block_start"])
   })
 
-  test("parallel calls get their own contiguous block indices", () => {
+  const second = openAiChatChunk({
+    tool_calls: [{ index: 1, id: "call_2", type: "function", function: { name: "lookup" } }],
+  })
+
+  test("a second call waits rather than closing the block the first is still streaming into", () => {
     const stream = translator()
     stream.push(opening)
-    const second = stream.push(
-      openAiChatChunk({
-        tool_calls: [{ index: 1, id: "call_2", type: "function", function: { name: "lookup" } }],
-      }),
+    expect(stream.push(second)).toEqual([])
+  })
+
+  test("parallel calls get their own contiguous block indices", () => {
+    const { events } = run([opening, second, finish("tool_calls"), DONE])
+    const starts = (payloads(events) as AnthropicEvent[]).filter(
+      (event) => event.type === "content_block_start",
     )
-    const payload = payloads(second) as AnthropicEvent[]
-    expect(payload[0]).toEqual({ type: "content_block_stop", index: 0 })
-    expect(payload[1]).toMatchObject({ type: "content_block_start", index: 1 })
+    expect(starts).toEqual([
+      {
+        type: "content_block_start",
+        index: 0,
+        content_block: { type: "tool_use", id: "call_1", name: "get_weather", input: {} },
+      },
+      {
+        type: "content_block_start",
+        index: 1,
+        content_block: { type: "tool_use", id: "call_2", name: "lookup", input: {} },
+      },
+    ])
   })
 
   test("the whole tool sequence closes and terminates in order", () => {
@@ -277,6 +293,131 @@ describe("tool calls", () => {
       "content_block_stop",
       "message_delta",
       "message_stop",
+    ])
+  })
+})
+
+/**
+ * The shapes a compatible upstream is entitled to send and OpenAI's own never does.
+ *
+ * `index` may be revisited after a later call has been announced (vLLM, SGLang, Fireworks,
+ * Together) or omitted altogether (LM Studio, Ollama), and a reader that keeps only the block it
+ * opened last answers either with a `tool_use` whose `input` is truncated — under a `stop_reason`
+ * saying the call was complete, which no client can tell from the real thing.
+ */
+describe("tool calls the upstream keys loosely", () => {
+  const call = (index: number | null, id: string | null, name: string | null, args: string) =>
+    openAiChatChunk({
+      tool_calls: [
+        {
+          ...(index === null ? {} : { index }),
+          ...(id === null ? {} : { id }),
+          function: { ...(name === null ? {} : { name }), arguments: args },
+        },
+      ],
+    })
+
+  /** Every `input_json_delta` for a block, concatenated — the `input` the client ends up parsing. */
+  function toolInput(events: readonly SseEvent[]): Record<number, string> {
+    const input: Record<number, string> = {}
+    for (const event of payloads(events) as AnthropicEvent[]) {
+      if (event.type !== "content_block_delta" || event.delta?.type !== "input_json_delta") continue
+      const index = event.index ?? 0
+      input[index] = `${input[index] ?? ""}${String(event.delta.partial_json)}`
+    }
+    return input
+  }
+
+  function toolNames(events: readonly SseEvent[]): unknown[] {
+    return (payloads(events) as AnthropicEvent[])
+      .filter((event) => event.content_block?.type === "tool_use")
+      .map((event) => event.content_block?.name)
+  }
+
+  test("arguments revisiting an earlier index after a later call opened still arrive", () => {
+    const { events } = run([
+      call(0, "call_1", "get_weather", ""),
+      call(1, "call_2", "lookup", ""),
+      call(0, null, null, '{"city":"NY"}'),
+      call(1, null, null, '{"q":"x"}'),
+      finish("tool_calls"),
+      DONE,
+    ])
+    expect(toolInput(events)).toEqual({ 0: '{"city":"NY"}', 1: '{"q":"x"}' })
+  })
+
+  test("one chunk announcing both calls does not cost the first one its arguments", () => {
+    const { events } = run([
+      openAiChatChunk({
+        tool_calls: [
+          { index: 0, id: "call_1", function: { name: "get_weather", arguments: "" } },
+          { index: 1, id: "call_2", function: { name: "lookup", arguments: "" } },
+        ],
+      }),
+      call(0, null, null, '{"city":"NY"}'),
+      call(1, null, null, '{"q":"x"}'),
+      finish("tool_calls"),
+      DONE,
+    ])
+    expect(toolNames(events)).toEqual(["get_weather", "lookup"])
+    expect(toolInput(events)).toEqual({ 0: '{"city":"NY"}', 1: '{"q":"x"}' })
+  })
+
+  test("held calls are still emitted as one open block at a time, never overlapping", () => {
+    const { events } = run([
+      call(0, "call_1", "get_weather", ""),
+      call(1, "call_2", "lookup", ""),
+      call(0, null, null, "{}"),
+      call(1, null, null, "{}"),
+      finish("tool_calls"),
+      DONE,
+    ])
+    expect(eventNames(events)).toEqual([
+      "message_start",
+      "content_block_start",
+      "content_block_delta",
+      "content_block_stop",
+      "content_block_start",
+      "content_block_delta",
+      "content_block_stop",
+      "message_delta",
+      "message_stop",
+    ])
+  })
+
+  test("calls that state no index at all stay distinct rather than collapsing into one", () => {
+    const { events } = run([
+      call(null, "call_1", "get_weather", '{"city":"NY"}'),
+      call(null, "call_2", "lookup", '{"q":"x"}'),
+      finish("tool_calls"),
+      DONE,
+    ])
+    expect(toolNames(events)).toEqual(["get_weather", "lookup"])
+    expect(toolInput(events)).toEqual({ 0: '{"city":"NY"}', 1: '{"q":"x"}' })
+  })
+
+  test("an unkeyed delta naming neither an id nor a function continues the call before it", () => {
+    const { events } = run([
+      call(null, "call_1", "get_weather", '{"city"'),
+      call(null, null, null, ':"NY"}'),
+      finish("tool_calls"),
+      DONE,
+    ])
+    expect(toolNames(events)).toEqual(["get_weather"])
+    expect(toolInput(events)).toEqual({ 0: '{"city":"NY"}' })
+  })
+
+  test("a truncated stream is given no held call: nothing claims a completion that never came", () => {
+    const stream = translator()
+    const events: SseEvent[] = []
+    for (const frame of [call(0, "call_1", "get_weather", "{}"), call(1, "call_2", "lookup", "{}")])
+      events.push(...stream.push(frame))
+    events.push(...stream.flush())
+    expect(toolNames(events)).toEqual(["get_weather"])
+    expect(eventNames(events)).toEqual([
+      "message_start",
+      "content_block_start",
+      "content_block_delta",
     ])
   })
 })
