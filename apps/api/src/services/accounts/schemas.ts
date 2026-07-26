@@ -45,7 +45,11 @@ export type CreateAccountBody = z.infer<typeof createAccountBody>
 export const updateAccountBody = z
   .object({
     label: LABEL.optional(),
-    /** Rotates the stored credential. Never clearable: an account with no credential is broken. */
+    /**
+     * Rotates the stored credential. Not clearable: for every provider but the local endpoint an
+     * account with none is broken, and dropping the one a local endpoint was given is a delete and
+     * re-add away — a `null` here would be a second way to strand a working account.
+     */
     credential: CREDENTIAL.optional(),
     baseUrl: BASE_URL.nullable().optional(),
     dialect: Dialect.nullable().optional(),

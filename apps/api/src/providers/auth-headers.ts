@@ -49,11 +49,19 @@ function secretOf(credential: ProviderCredential): string {
   return credential.kind === "api-key" ? credential.apiKey : credential.accessToken
 }
 
+/**
+ * A `null` credential is an Account of a provider that authenticates nobody (`authKind: "none"`),
+ * holding nothing. Both builders below answer it the same way: **every mandated header still goes,
+ * and only the auth header is left off**. Dropping `anthropic-version` along with the key would
+ * turn "unauthenticated" into "malformed", which is a different failure and a worse message.
+ */
+
 export function anthropicAuthHeaders(
-  credential: ProviderCredential,
+  credential: ProviderCredential | null,
   form: AnthropicAuthForm = "anthropic",
 ): Headers {
   const headers = new Headers({ "anthropic-version": ANTHROPIC_VERSION })
+  if (credential === null) return headers
 
   if (form === "vendor-bearer") {
     // One correct header, not two hopeful ones: a vendor that rejects — or logs — an unexpected
@@ -75,6 +83,7 @@ export function anthropicAuthHeaders(
 }
 
 /** Every OpenAI-dialect provider, for both credential forms. */
-export function bearerAuthHeaders(credential: ProviderCredential): Headers {
+export function bearerAuthHeaders(credential: ProviderCredential | null): Headers {
+  if (credential === null) return new Headers()
   return new Headers({ authorization: `Bearer ${secretOf(credential)}` })
 }

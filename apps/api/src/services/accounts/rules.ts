@@ -16,6 +16,8 @@ import { describeProvider, type ProviderDescriptor } from "./providers"
  *   (`providers/base-url.ts` raises `NoHealthyAccountError` at selection time);
  * - a Claude subscription account with a router-held credential would be a
  *   token this router must never hold (CLAUDE.md non-negotiable 1);
+ * - a local endpoint that authenticates nobody would otherwise be unusable
+ *   without inventing a key to satisfy the form;
  * - a dialect the provider does not serve silently falls back to its default,
  *   so the operator's choice would be quietly ignored.
  */
@@ -83,14 +85,25 @@ function credentialRule(provider: ProviderDescriptor, shape: AccountShape): Admi
       "config_dir_not_accepted",
     )
   }
-  // A provider the router logs in to *itself* starts without one: `POST /:id/connect` mints the
-  // credential, and the row has to exist before the authorization so the one-shot `state` has
-  // something to bind to (docs/idea/07-security.md, "Pending rows"). Pasting a token set by hand
-  // is still allowed — that is an import, not a second way to authenticate.
-  if (!shape.hasCredential && provider.connectFlow === null) {
-    return failure(`provider "${provider.id}" requires "credential"`, "credential_required")
-  }
-  return null
+  if (shape.hasCredential || optionalCredential(provider)) return null
+  return failure(`provider "${provider.id}" requires "credential"`, "credential_required")
+}
+
+/**
+ * The two providers that may be created empty, both asked of the descriptor rather than listed by
+ * id — a provider gaining either property becomes creatable that way the day its driver file lands
+ * (CLAUDE.md non-negotiable 12):
+ *
+ * - one the router logs in to *itself*. `POST /:id/connect` mints the credential, and the row has to
+ *   exist before the authorization so the one-shot `state` has something to bind to
+ *   (docs/idea/07-security.md, "Pending rows"). Pasting a token set by hand is still allowed — that
+ *   is an import, not a second way to authenticate.
+ * - one whose upstream authenticates nobody (`authKind: "none"`, a local `ollama`). A credential is
+ *   accepted here too, for the same endpoint behind a reverse proxy that does check one; what this
+ *   permits is its *absence*.
+ */
+function optionalCredential(provider: ProviderDescriptor): boolean {
+  return provider.connectFlow !== null || provider.authKind === "none"
 }
 
 function baseUrlRule(provider: ProviderDescriptor, shape: AccountShape): AdminFailure | null {

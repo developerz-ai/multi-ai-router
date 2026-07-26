@@ -304,7 +304,10 @@ describe("credential", () => {
   test("decrypts an API key", () => {
     const cryptor = cipher()
     const entry = account("a", { apiKey: "sk-live-123", cipher: cryptor })
-    expect(accountCredential(entry, cryptor)).toEqual({ kind: "api-key", apiKey: "sk-live-123" })
+    expect(accountCredential(entry, cryptor, "api-key")).toEqual({
+      kind: "api-key",
+      apiKey: "sk-live-123",
+    })
   })
 
   test("recognizes a stored OAuth token pair by shape", () => {
@@ -313,12 +316,34 @@ describe("credential", () => {
       apiKey: JSON.stringify({ accessToken: "at-1", refreshToken: "rt-1" }),
       cipher: cryptor,
     })
-    expect(accountCredential(entry, cryptor)).toEqual({ kind: "oauth", accessToken: "at-1" })
+    expect(accountCredential(entry, cryptor, "oauth")).toEqual({
+      kind: "oauth",
+      accessToken: "at-1",
+    })
   })
 
   test("an account with no material fails without naming any ciphertext", () => {
     const cryptor = cipher()
     const entry = { ...account("a", { cipher: cryptor }), authMaterial: null }
-    expect(() => accountCredential(entry, cryptor)).toThrow(CredentialDecryptError)
+    expect(() => accountCredential(entry, cryptor, "api-key")).toThrow(CredentialDecryptError)
+  })
+
+  test("an empty account is only ever allowed where the provider authenticates nobody", () => {
+    const cryptor = cipher()
+    const entry = { ...account("a", { provider: "ollama", cipher: cryptor }), authMaterial: null }
+
+    expect(accountCredential(entry, cryptor, "none")).toBeNull()
+  })
+
+  test("that provider still presents a credential it was given", () => {
+    // A local endpoint put behind a reverse proxy is the normal reason to have one, so `none` is
+    // "optional", never "ignored" — a key stored here must reach the upstream.
+    const cryptor = cipher()
+    const entry = account("a", { provider: "ollama", apiKey: "proxy-token", cipher: cryptor })
+
+    expect(accountCredential(entry, cryptor, "none")).toEqual({
+      kind: "api-key",
+      apiKey: "proxy-token",
+    })
   })
 })

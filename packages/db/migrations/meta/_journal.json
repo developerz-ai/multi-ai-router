@@ -57,6 +57,13 @@
       "when": 1785051932301,
       "tag": "0007_far_namorita",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1785053595349,
+      "tag": "0008_woozy_umar",
+      "breakpoints": true
     }
   ]
 }

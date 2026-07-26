@@ -55,7 +55,8 @@ admin UI, in usage breakdowns, and in logs; the credential itself never appears 
 | `mistral` | API key, `Authorization: Bearer` | OpenAI Chat Completions | `https://api.mistral.ai/v1` | **Error body has no `error` wrapper** — `{object:"error", message, type, param, code}` at the top level. Keys on `type` (four published categories) and never on `code`, which is a numeric string the docs describe as symbolic. |
 | `together` | API key, `Authorization: Bearer` | OpenAI Chat Completions | `https://api.together.ai/v1` | Namespaced model ids, so an alias map is usually required. **`403` means the prompt exceeded the context length, not a rejected credential**, and `503` is the platform's capacity rather than this account's budget. |
 | `cerebras` | API key, `Authorization: Bearer` | OpenAI Chat Completions | `https://api.cerebras.ai/v1` | Shares Mistral's unwrapped error envelope. A spent free-tier **day** is a `429`, not a billing state — it refills on a clock. |
-| `openai-compatible` | API key | OpenAI Chat Completions | operator-supplied | Escape hatch. Any vLLM / Ollama / LiteLLM / vendor endpoint. |
+| `ollama` | **none** — a credential is optional, and sent as `Authorization: Bearer` when there is one | OpenAI Chat Completions | operator-supplied | A local or self-hosted Ollama. The only provider whose Account may hold **no credential at all**. No pinned endpoint on purpose: Ollama's own default is `http://localhost:11434`, and in a container that address is the *router*. |
+| `openai-compatible` | API key | OpenAI Chat Completions | operator-supplied | Escape hatch. Any vLLM / LiteLLM / vendor endpoint that speaks OpenAI and takes a key. |
 | `anthropic-compatible` | API key | Anthropic Messages | operator-supplied | Escape hatch for Anthropic-shaped endpoints. |
 
 Base URLs are defaults. Every Account may override its base URL — that is what makes a
@@ -71,7 +72,9 @@ interface ProviderDriver {
   readonly id: ProviderId;
   // The surface used when the Account expresses no preference.
   readonly dialect: 'anthropic' | 'openai-chat' | 'openai-responses';
-  readonly authKind: 'api-key' | 'oauth';
+  // `none` is the local endpoint that authenticates nobody — the only value under which a
+  // driver will address an upstream with no credential at all.
+  readonly authKind: 'api-key' | 'oauth' | 'none';
 
   // Where this Account's requests go. Account override wins over the pinned default.
   resolveBaseUrl(account: DriverAccount): URL;
@@ -80,7 +83,9 @@ interface ProviderDriver {
   resolveDialect(account: DriverAccount): Dialect;
 
   // Auth + provider-mandated headers for one upstream request. Never mutates the Account.
-  buildHeaders(account: DriverAccount, credential: ProviderCredential): Headers;
+  // `null` only where `authKind` is `none`: the mandated headers still go, the auth header
+  // does not. Any other provider handed `null` is refused, never sent unauthenticated.
+  buildHeaders(account: DriverAccount, credential: ProviderCredential | null): Headers;
 
   // Client model name -> upstream model id, via the Account's alias map.
   // Identity when the Account has no entry for that name.
@@ -123,7 +128,7 @@ absent or stubbed into something that looks like it works:
 
 | Transport | Ids | Meaning |
 |---|---|---|
-| `http` | `anthropic-api`, `openai-api`, `openai-oauth`, `openrouter`, `zai`, `kimi`, `minimax`, `gemini`, `groq`, `deepseek`, `xai`, `mistral`, `together`, `cerebras`, `openai-compatible`, `anthropic-compatible` | A driver in `providers/drivers/`, satisfying the interface above |
+| `http` | `anthropic-api`, `openai-api`, `openai-oauth`, `openrouter`, `zai`, `kimi`, `minimax`, `gemini`, `groq`, `deepseek`, `xai`, `mistral`, `together`, `cerebras`, `ollama`, `openai-compatible`, `anthropic-compatible` | A driver in `providers/drivers/`, satisfying the interface above |
 | `agent-sdk` | `anthropic-oauth` | Served by `query()`. Its own driver interface in `providers/claude-sdk/driver.ts`, not a `ProviderDriver`: there is no base URL to resolve, no headers to build, and failures arrive as strings |
 | `unimplemented` | *(none today)* | Where an id declared in `packages/core` ahead of its driver lands. Selecting one is a configuration error, refused by name before any upstream call. Kept rather than deleted because that is the whole point of a total registry — the alternative is a new id compiling into a half-wired provider |
 
@@ -385,6 +390,7 @@ and the router keeps selecting a credential that can no longer serve a request.
 | `together` | HTTP `402` — a monthly spending cap | Documented and unambiguous. What is *not* documented is the status a zero prepaid balance returns, and Together is fully prepaid, so the shared wording rule stands behind the status |
 | `cerebras` | HTTP `402`, and nothing else | Cerebras' error page lists statuses only. A spent free-tier **day**, by contrast, is a `429` — clock-recoverable, never `exhausted` |
 | `xai`, `mistral` | one shared wording rule, behind a guard that reads any `429` as a cooldown | Neither publishes a status for a depleted balance or a spend-suspended workspace. Encoding a guess is how a healthy account gets parked at `402`, so neither driver encodes one; the shared phrasing is the whole of it, and the signal it records says so |
+| `ollama` | the same shared wording rule, behind the `429` throttle guard | A local endpoint has no balance to drain, so nothing here is Ollama's own vocabulary — but a hosted or proxied surface reached through this id can refuse one, and its limits are hourly and daily. The throttle guard leads so a spent hour can never read as a dead balance |
 | `openai-compatible`, `anthropic-compatible` | one shared wording rule — `insufficient quota/credits/balance`, `out of credits`, `quota exceeded/exhausted` — guarded by an error status | The endpoint behind these is unknown. Guessing at a vendor's error vocabulary produces confident misclassifications, so this is deliberately the *only* wording either matches. The status guard is what stops a completion containing the word "quota" reading as a billing stop. **No 429 guard here**, unlike the pinned vendors: behind an escape hatch may sit an OpenAI-shaped endpoint, where a `429` genuinely *is* a spent balance |
 
 Each classification also records **which signal decided it** (`openai:insufficient_quota`,
@@ -414,6 +420,35 @@ Rules:
   when the Account declares an explicit model set. See [05-routing-and-failover.md](05-routing-and-failover.md).
 - Aliasing is a name swap only. It never rewrites the body — that is
   [06-protocol-translation.md](06-protocol-translation.md)'s job.
+
+## `ollama` — a local endpoint, and the credential that is not required
+
+Every other provider here is a key. Ollama, on the machine an operator already owns, is not: it
+listens on a trusted network and authenticates nobody. So its driver declares `authKind: 'none'`,
+and that single value is what the rest of the system reads:
+
+| Layer | What `none` changes |
+|---|---|
+| Account writes (`services/accounts/rules.ts`) | An Account of this provider may be created with **no credential**. Nothing else may — the rule is asked of the descriptor, never of an id |
+| Egress (`dataplane/egress/credential.ts`) | An empty Account yields `null` instead of raising. Every other empty Account is still a hard failure, because an anonymous request to a paid upstream is worse than a loud one |
+| Headers (`providers/driver.ts`) | `null` builds no auth header. A `null` reaching a driver whose `authKind` is anything else is refused there too, so the permission cannot leak by accident |
+| Breaker (`services/routing/breaker.ts`) | An auth failure lands on `disabled`, not `needs_reauth`: there is no login to re-run, and something has appeared in front of the endpoint that the operator has to configure |
+| Console (`AccountFormDialog.tsx`) | The credential field stays, labelled optional. It is read off `authKind`, so no provider list lives in the SPA |
+
+A credential is still **accepted**, and that is the point of "optional" rather than "forbidden": the
+same Ollama put behind a reverse proxy, or a hosted surface, does check one, and it is presented as
+`Authorization: Bearer` exactly like every other OpenAI-dialect provider.
+
+Two more decisions worth stating out loud:
+
+- **No pinned base URL.** Ollama's default is `http://localhost:11434`, and inside a container that
+  address is the router itself — a pinned default would quietly address the wrong machine. The
+  operator supplies the endpoint (`http://host.docker.internal:11434/v1`, `http://ollama:11434/v1`,
+  a remote box), which is also what makes every one of those work with no driver change.
+- **A model the node has not pulled is a `404`, and stays the client's answer.** The driver names the
+  signal (`ollama:model-not-pulled`) but does not turn it into a retry onto some other account:
+  deciding which node should serve a model is what an Account's declared model set is for
+  ([05-routing-and-failover.md](05-routing-and-failover.md)), not something to infer from an error.
 
 ## Generic `openai-compatible` / `anthropic-compatible`
 

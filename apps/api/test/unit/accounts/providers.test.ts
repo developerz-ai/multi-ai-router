@@ -96,6 +96,18 @@ describe("transport", () => {
     }
   })
 
+  test("ollama renders as a local endpoint: an address to fill in, and no auth style to satisfy", () => {
+    const ollama = describeProvider("ollama")
+
+    expect(ollama.transport).toBe("http")
+    expect(ollama.authKind).toBe("none")
+    expect(ollama.supportedDialects).toEqual(["openai-chat"])
+    // Both halves of what the form must render differently: ask for the URL, do not demand a key.
+    expect(ollama.requiresBaseUrl).toBe(true)
+    expect(ollama.requiresConfigDir).toBe(false)
+    expect(ollama.connectFlow).toBeNull()
+  })
+
   test("an HTTP provider reports the auth style its driver declares", () => {
     expect(describeProvider("kimi").transport).toBe("http")
     expect(describeProvider("kimi").authKind).toBe("api-key")

@@ -145,6 +145,71 @@ describe("same-dialect passthrough", () => {
   })
 })
 
+describe("a local endpoint that authenticates nobody", () => {
+  const CHAT = JSON.stringify({ model: "llama3.2", messages: [{ role: "user", content: "hi" }] })
+
+  function ollama(credential: string | null): RoutableAccount {
+    const base = account("ollama-1", {
+      provider: "ollama",
+      dialect: "openai-chat",
+      baseUrl: "http://ollama.internal:11434/v1",
+      cipher: CRYPTOR,
+      ...(credential === null ? {} : { apiKey: credential }),
+    })
+    return credential === null ? { ...base, authMaterial: null } : base
+  }
+
+  test("an account holding no credential still serves, with no auth header invented", async () => {
+    const { app, upstream, usage } = harness({
+      accounts: [ollama(null)],
+      responses: [() => jsonResponse(200, { usage: { prompt_tokens: 4, completion_tokens: 6 } })],
+    })
+
+    const res = await app.request("/v1/chat/completions", post(CHAT, bearer()))
+    await res.text()
+    await settle()
+    const call = upstream.calls[0]
+
+    expect(res.status).toBe(200)
+    expect(call?.url).toBe("http://ollama.internal:11434/v1/chat/completions")
+    expect(call?.headers.get("authorization")).toBeNull()
+    expect(call?.headers.get("x-api-key")).toBeNull()
+    // The router key that opened the door never travels onward, credential or not.
+    expect(JSON.stringify([...(call?.headers.entries() ?? [])])).not.toContain(KEY)
+    expect(usage.rows).toHaveLength(1)
+    expect(usage.rows[0]).toMatchObject({ outcome: "success", provider: "ollama", tokensIn: 4 })
+  })
+
+  test("the same account behind a proxy presents the credential it was given", async () => {
+    const { app, upstream } = harness({
+      accounts: [ollama("proxy-token")],
+      responses: [() => jsonResponse(200, {})],
+    })
+
+    await app.request("/v1/chat/completions", post(CHAT, bearer()))
+
+    expect(upstream.calls[0]?.headers.get("authorization")).toBe("Bearer proxy-token")
+  })
+
+  test("a model the node has not pulled is the client's answer, not another account's turn", async () => {
+    const notPulled = {
+      error: { message: 'model "llama3.2" not found, try pulling it first', type: "api_error" },
+    }
+    const { app, upstream, usage } = harness({
+      accounts: [ollama(null), ollama(null)],
+      responses: [() => jsonResponse(404, notPulled)],
+    })
+
+    const res = await app.request("/v1/chat/completions", post(CHAT, bearer()))
+    await res.text()
+    await settle()
+
+    expect(res.status).toBe(404)
+    expect(upstream.calls).toHaveLength(1)
+    expect(usage.rows).toHaveLength(1)
+  })
+})
+
 describe("failover", () => {
   const twoAccounts = [
     account("acct-1", { apiKey: "sk-one", cipher: CRYPTOR }),

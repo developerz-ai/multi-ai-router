@@ -54,9 +54,13 @@ export default function AccountsRoute() {
   const providerList = () => (providers.isSuccess ? (providers.data ?? []) : [])
 
   // Asked of the descriptor, never of a list kept here: a provider that grows a login becomes
-  // connectable the day its driver file lands (CLAUDE.md non-negotiable 12).
+  // connectable the day its driver file lands (CLAUDE.md non-negotiable 12). The same lookup
+  // answers whether it needs a credential at all, so the table reads one object rather than two
+  // parallel callbacks.
+  const providerFor = (account: AccountView) => findProvider(providerList(), account.provider)
+
   const connectFlowFor = (account: AccountView): ProviderConnectFlow | null =>
-    findProvider(providerList(), account.provider)?.connectFlow ?? null
+    providerFor(account)?.connectFlow ?? null
 
   const connectingFlow = createMemo(() => {
     const account = connecting()
@@ -164,13 +168,13 @@ export default function AccountsRoute() {
           >
             <AccountsTable
               accounts={rows}
-              connectFlowFor={connectFlowFor}
               nowMs={now()}
               onConnect={setConnecting}
               onDelete={setPendingDelete}
               onDisable={(account) => disable.mutate(account.id)}
               onEnable={(account) => update.mutate({ id: account.id, patch: { status: "active" } })}
               onRecheck={(id) => recheck.mutate(id)}
+              providerFor={providerFor}
               recheckingId={recheck.isPending ? (recheck.variables ?? null) : null}
               {...usage()}
             />

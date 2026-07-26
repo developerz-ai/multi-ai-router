@@ -46,6 +46,20 @@ describe("resolveBaseUrl", () => {
     )
   })
 
+  test("ollama pins nothing either: a loopback default would address the router itself", () => {
+    expect(() => httpDriver("ollama")?.resolveBaseUrl(account({ provider: "ollama" }))).toThrow(
+      NoHealthyAccountError,
+    )
+  })
+
+  test("ollama runs on the address the operator states, container hop and all", () => {
+    const url = httpDriver("ollama")?.resolveBaseUrl(
+      account({ provider: "ollama", baseUrl: "http://host.docker.internal:11434/v1" }),
+    )
+
+    expect(url?.toString()).toBe("http://host.docker.internal:11434/v1")
+  })
+
   test("the escape hatches work on the operator's URL alone", () => {
     const url = httpDriver("anthropic-compatible")?.resolveBaseUrl(
       account({ provider: "anthropic-compatible", baseUrl: "http://localhost:11434/v1" }),

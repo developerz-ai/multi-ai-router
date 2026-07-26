@@ -67,6 +67,55 @@ describe("credentials versus config dirs", () => {
     expect(reason(result)).toStartWith("credential_required:")
   })
 
+  test("a local endpoint may be created with no credential at all", () => {
+    const result = checkAccountShape(
+      shape({
+        provider: "ollama",
+        hasCredential: false,
+        baseUrl: "http://ollama.internal:11434/v1",
+      }),
+    )
+
+    expect(result.ok).toBe(true)
+  })
+
+  test("it accepts one anyway — the same endpoint behind a proxy takes a key", () => {
+    const result = checkAccountShape(
+      shape({
+        provider: "ollama",
+        hasCredential: true,
+        baseUrl: "http://ollama.internal:11434/v1",
+      }),
+    )
+
+    expect(result.ok).toBe(true)
+  })
+
+  test("its address is still required: no credential is not no configuration", () => {
+    const result = checkAccountShape(shape({ provider: "ollama", hasCredential: false }))
+
+    expect(reason(result)).toStartWith("base_url_required:")
+  })
+
+  test("the providers that may exist empty are exactly the three with a reason to", () => {
+    // A subscription the SDK owns the credentials for, an account a login will fill in, and an
+    // upstream that authenticates nobody. Any fourth id here would be an account quietly addressing
+    // a paid upstream with no key, so the set is asserted whole rather than sampled.
+    const mayBeEmpty = ProviderId.options.filter(
+      (provider) =>
+        checkAccountShape(
+          shape({
+            provider,
+            hasCredential: false,
+            baseUrl: "https://upstream.test/v1",
+            configDir: provider === "anthropic-oauth" ? "/data/claude/seb" : null,
+          }),
+        ).ok,
+    )
+
+    expect(mayBeEmpty).toEqual(["anthropic-oauth", "openai-oauth", "ollama"])
+  })
+
   test("a Claude subscription must never be handed a router-held credential", () => {
     const result = checkAccountShape(
       shape({ provider: "anthropic-oauth", hasCredential: true, configDir: "/data/claude/seb" }),

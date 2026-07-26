@@ -37,6 +37,11 @@ export interface AccountFormDialogProps {
  * binary into this account's own `CLAUDE_CONFIG_DIR`. Offering a paste box for
  * either would invite an operator to hand-extract a token, which is the thing
  * CLAUDE.md's first non-negotiable exists to prevent.
+ *
+ * **A provider whose `authKind` is `none` takes one and does not need it.** A
+ * local endpoint authenticates nobody, so the field stays — the same endpoint
+ * behind a reverse proxy takes a key — and says it may be left empty. Read off
+ * the descriptor like everything else here, never off an id.
  */
 export function AccountFormDialog(props: AccountFormDialogProps) {
   const [label, setLabel] = createSignal("")
@@ -46,6 +51,8 @@ export function AccountFormDialog(props: AccountFormDialogProps) {
   const [dialect, setDialect] = createSignal("")
 
   const selected = createMemo(() => findProvider(props.providers, providerId()))
+  /** An upstream that authenticates nobody: the key is an option, not a requirement. */
+  const credentialOptional = createMemo(() => selected()?.authKind === "none")
 
   const providerOptions = createMemo<readonly SelectOption[]>(() => [
     { value: "", label: "Choose a provider…" },
@@ -142,11 +149,25 @@ export function AccountFormDialog(props: AccountFormDialogProps) {
           </div>
         </Show>
 
+        <Show when={credentialOptional()}>
+          <div class={styles.providerNote}>
+            <p>
+              A local endpoint: it authenticates nobody, so the credential below is optional. Give
+              it an address this router can reach — inside a container <code>localhost</code> is the
+              router itself, not the machine you are sitting at.
+            </p>
+          </div>
+        </Show>
+
         <Show when={selected() !== undefined && selected()?.connectFlow === null}>
           <TextField
             autocomplete="off"
-            hint="Encrypted at rest and never returned by any endpoint, in any form."
-            label="Credential"
+            hint={
+              credentialOptional()
+                ? "Optional — this endpoint authenticates nobody. Fill it in only if you put something in front of it that does. Encrypted at rest and never returned by any endpoint, in any form."
+                : "Encrypted at rest and never returned by any endpoint, in any form."
+            }
+            label={credentialOptional() ? "Credential (optional)" : "Credential"}
             onInput={(event) => setCredential(event.currentTarget.value)}
             type="password"
             value={credential()}

@@ -512,6 +512,63 @@ describe("cerebras", () => {
   })
 })
 
+describe("ollama", () => {
+  const ollama = httpDriver("ollama")
+
+  test("a model the node has not pulled is named, and is still the client's problem", () => {
+    // The verdict is what a 404 already means; the signal is what makes it readable. Retrying this
+    // onto another account would be the router deciding which node should serve a model — the
+    // Account's declared model set is where that belongs.
+    const result = ollama?.classifyFailure(
+      response(404, {
+        body: { error: { message: 'model "llama3.2" not found, try pulling it first' } },
+      }),
+    )
+
+    expect(result?.kind).toBe("invalid-request")
+    expect(result?.signal).toBe("ollama:model-not-pulled")
+    expect(result?.retryable).toBe(false)
+  })
+
+  test("the same words in a completion are not a failure", () => {
+    expect(
+      ollama?.classifyFailure(
+        response(200, { body: { error: { message: "not found, try pulling it first" } } }),
+      ),
+    ).toBeNull()
+  })
+
+  test("a hosted surface's hourly limit cools down — never a dead balance", () => {
+    const result = ollama?.classifyFailure(
+      response(429, { body: { error: { message: "You have exceeded your hourly quota" } } }),
+    )
+
+    expect(result?.kind).toBe("rate-limited")
+    expect(result?.signal).toBe("vendor:http-429")
+    expect(result?.retryable).toBe(true)
+  })
+
+  test("out-of-credits wording on an error status still reaches a human", () => {
+    const result = ollama?.classifyFailure(
+      response(402, { body: { error: { message: "insufficient credits" } } }),
+    )
+
+    expect(result?.kind).toBe("credits-exhausted")
+    expect(result?.signal).toBe("compatible:out-of-credits-wording")
+  })
+
+  test("a model that will not load is the node's problem, and the next account gets a turn", () => {
+    const result = ollama?.classifyFailure(
+      response(500, {
+        body: { error: { message: "model requires more system memory than is available" } },
+      }),
+    )
+
+    expect(result?.kind).toBe("server-error")
+    expect(result?.retryable).toBe(true)
+  })
+})
+
 describe("the generic escape hatches", () => {
   const compatible = httpDriver("openai-compatible")
 

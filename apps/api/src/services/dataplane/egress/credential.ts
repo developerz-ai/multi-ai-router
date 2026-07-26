@@ -1,4 +1,4 @@
-import { CredentialDecryptError } from "@multi-ai-router/core"
+import { type AuthKind, CredentialDecryptError } from "@multi-ai-router/core"
 import type { ProviderCredential } from "../../../providers"
 import type { CredentialCipher } from "../../crypto/cipher"
 import type { RoutableAccount } from "../types"
@@ -15,10 +15,15 @@ import type { RoutableAccount } from "../types"
  * **The Agent-SDK path never reaches here.** A Claude subscription Account holds
  * `authMaterial === null` by construction (`services/accounts/rules.ts`): its credentials live
  * inside the Account's `CLAUDE_CONFIG_DIR` and only the `claude` CLI reads them
- * (docs/idea/11-anthropic-agent-sdk.md §3). That is why the null case below is a hard error and not
- * a "no credential needed" fallback — reaching it means an HTTP attempt was planned for an Account
+ * (docs/idea/11-anthropic-agent-sdk.md §3). That is why an empty account is a hard error and not a
+ * "no credential needed" fallback — reaching it means an HTTP attempt was planned for an Account
  * that has nothing to authenticate with, which must fail loudly rather than send an anonymous
  * request upstream.
+ *
+ * The single exception is stated by the driver, never guessed here: a provider whose `authKind` is
+ * `none` addresses an endpoint that authenticates nobody (a local `ollama`), so *its* empty account
+ * yields `null` and the attempt goes out with no auth header. A credential it does hold is still
+ * read and presented — a local endpoint put behind a proxy is the normal reason to have one.
  */
 
 interface StoredOAuth {
@@ -29,19 +34,25 @@ interface StoredOAuth {
 const NO_MATERIAL = "account holds no credential material"
 const UNREADABLE = "stored credential is not in a form this router recognizes"
 
-/** @throws CredentialDecryptError — the message never carries ciphertext or plaintext. */
+/**
+ * `null` only ever for `authKind: "none"` — see above.
+ *
+ * @throws CredentialDecryptError — the message never carries ciphertext or plaintext.
+ */
 export function accountCredential(
   account: RoutableAccount,
   cipher: Pick<CredentialCipher, "decrypt">,
-): ProviderCredential {
-  if (account.authMaterial === null || account.authMaterial.length === 0) {
+  authKind: AuthKind,
+): ProviderCredential | null {
+  const empty = (): ProviderCredential | null => {
+    if (authKind === "none") return null
     throw new CredentialDecryptError(`account ${account.id}: ${NO_MATERIAL}`)
   }
 
+  if (account.authMaterial === null || account.authMaterial.length === 0) return empty()
+
   const plaintext = cipher.decrypt(account.authMaterial).trim()
-  if (plaintext.length === 0) {
-    throw new CredentialDecryptError(`account ${account.id}: ${NO_MATERIAL}`)
-  }
+  if (plaintext.length === 0) return empty()
   if (!plaintext.startsWith("{")) {
     return { kind: "api-key", apiKey: plaintext }
   }

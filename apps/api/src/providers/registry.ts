@@ -9,6 +9,7 @@ import { groqDriver } from "./drivers/groq"
 import { kimiDriver } from "./drivers/kimi"
 import { miniMaxDriver } from "./drivers/minimax"
 import { mistralDriver } from "./drivers/mistral"
+import { ollamaDriver } from "./drivers/ollama"
 import { openAiApiDriver } from "./drivers/openai-api"
 import { openAiCompatibleDriver } from "./drivers/openai-compatible"
 import { openAiOAuthDriver } from "./drivers/openai-oauth"
@@ -69,6 +70,9 @@ export const PROVIDER_REGISTRY: Readonly<Record<ProviderId, ProviderSupport>> = 
   mistral: http(mistralDriver),
   together: http(togetherDriver),
   cerebras: http(cerebrasDriver),
+  // The local one: an operator-supplied endpoint and no credential required, which is what makes an
+  // Account on somebody's own machine expressible without inventing a key to satisfy a form.
+  ollama: http(ollamaDriver),
   "openai-compatible": http(openAiCompatibleDriver),
   "anthropic-compatible": http(anthropicCompatibleDriver),
 

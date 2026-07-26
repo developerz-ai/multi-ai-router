@@ -217,8 +217,15 @@ export interface ProviderDriver {
   /** The Account's chosen surface, for the passthrough-vs-translate decision. */
   resolveDialect(account: DriverAccount): Dialect
 
-  /** Auth plus every provider-mandated header. Never mutates the Account, never logs. */
-  buildHeaders(account: DriverAccount, credential: ProviderCredential): Headers
+  /**
+   * Auth plus every provider-mandated header. Never mutates the Account, never logs.
+   *
+   * `null` is an Account of a provider whose `authKind` is `none` holding no credential — a local
+   * endpoint that authenticates nobody. The mandated headers still go; the auth header does not.
+   * Every other provider receiving `null` here is a bug, and is refused rather than sent
+   * unauthenticated (`driver.ts`).
+   */
+  buildHeaders(account: DriverAccount, credential: ProviderCredential | null): Headers
 
   /** Client model name -> upstream model id. Identity when the Account has no entry. */
   mapModelAlias(account: DriverAccount, requestedModel: string): string

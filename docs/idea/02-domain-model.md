@@ -52,9 +52,9 @@ for it. Adding one is a code change; see [03-providers.md](03-providers.md).
 
 | Field | Type | Notes |
 |---|---|---|
-| `id` | enum | `anthropic-oauth`, `anthropic-api`, `openai-oauth`, `openai-api`, `openrouter`, `zai`, `kimi`, `minimax`, `gemini`, `groq`, `deepseek`, `xai`, `mistral`, `together`, `cerebras`, `openai-compatible`, `anthropic-compatible` |
+| `id` | enum | `anthropic-oauth`, `anthropic-api`, `openai-oauth`, `openai-api`, `openrouter`, `zai`, `kimi`, `minimax`, `gemini`, `groq`, `deepseek`, `xai`, `mistral`, `together`, `cerebras`, `ollama`, `openai-compatible`, `anthropic-compatible` |
 | `dialect` | enum | Native wire protocol the driver speaks; drives passthrough vs. translation |
-| `authKind` | enum | `oauth` (refreshable) or `api-key` (valid until revoked upstream) |
+| `authKind` | enum | `oauth` (refreshable), `api-key` (valid until revoked upstream), or `none` (a local endpoint that authenticates nobody — the credential is optional, and its **absence** is what this value permits) |
 | `constants` | code | Endpoints, client id, scopes, required headers — pinned in one file per provider |
 
 ## Account
@@ -70,7 +70,7 @@ account per provider. The `label` is what distinguishes them to a human.
 | `id` | id | Stable across reconnects — a `needs_reauth` account keeps its id, pool membership, and usage history |
 | `label` | string | Required, human-chosen. The disambiguator between same-provider accounts: `claude-max-seb`, `claude-max-team-2` |
 | `provider` | enum | Provider id |
-| `authMaterial` | encrypted blob | API key, or OAuth access + refresh token. AES-256-GCM. Never returned by any endpoint. **Empty for Claude subscription accounts** — those hold a `CLAUDE_CONFIG_DIR` path instead, and the SDK owns the credentials inside it ([11-anthropic-agent-sdk.md](11-anthropic-agent-sdk.md)) |
+| `authMaterial` | encrypted blob | API key, or OAuth access + refresh token. AES-256-GCM. Never returned by any endpoint. **Empty for Claude subscription accounts** — those hold a `CLAUDE_CONFIG_DIR` path instead, and the SDK owns the credentials inside it ([11-anthropic-agent-sdk.md](11-anthropic-agent-sdk.md)). Also legitimately empty for an `authKind: none` provider (`ollama`), whose upstream authenticates nobody; the request then carries no auth header, and every other provider's empty account is refused at write time |
 | `configDir` | path, optional | Claude subscription accounts only. One isolated `CLAUDE_CONFIG_DIR` per Account so N subscriptions coexist without cross-contamination. Its contents are live credential material. **Assigned by the router, never by the operator**: `<CLAUDE_CONFIG_ROOT>/<id>`, created `0700` with the row and deleted with it. Keyed on `id` because a `label` is renameable and a rename would strand a logged-in directory; a unique index on the column makes "two Accounts, one directory" a write that cannot land |
 | `tokenExpiresAt` | timestamp, optional | OAuth accounts only. Drives the per-account refresh schedule; refresh fires at a fraction of the remaining lifetime, never on a `401`, and is re-scheduled each time a new token lands |
 | `refreshState` | in-memory | This account's armed timer and its single-flight guard: every trigger for one account awaits one shared promise, never N racing writes. Plus the backoff counter for failed refreshes. A *request* is never a trigger — it neither starts nor waits on a refresh |
