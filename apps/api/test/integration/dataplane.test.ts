@@ -842,6 +842,27 @@ describe("GET /v1/models/:id", () => {
     const { app } = harness({ responses: [() => jsonResponse(200, {})] })
     expect((await app.request("/v1/models/sonnet")).status).toBe(401)
   })
+
+  test("writes no UsageRecord — it is a reachability probe, not a dispatched request", async () => {
+    const { app, usage, upstream } = harness({ accounts: aliased, responses: [] })
+
+    const res = await app.request("/v1/models/sonnet", { headers: bearer() })
+    await settle()
+
+    expect(res.status).toBe(200)
+    // No upstream call either: `selectAccounts` alone decides reachability.
+    expect(upstream.calls).toHaveLength(0)
+    expect(usage.rows).toHaveLength(0)
+  })
+
+  test("writes no UsageRecord on a miss either", async () => {
+    const { app, usage } = harness({ accounts: aliased, responses: [] })
+
+    await app.request("/v1/models/no-such-model", { headers: bearer() })
+    await settle()
+
+    expect(usage.rows).toHaveLength(0)
+  })
 })
 
 describe("request validation", () => {
