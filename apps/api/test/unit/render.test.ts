@@ -96,6 +96,10 @@ describe("dialectForPath", () => {
     expect(dialectForPath("/v1/responses")).toBe("openai-responses")
   })
 
+  test("the token count is an Anthropic path, so its failures wear the Anthropic shape", () => {
+    expect(dialectForPath("/v1/messages/count_tokens")).toBe("anthropic")
+  })
+
   test("everything else has no dialect", () => {
     expect(dialectForPath("/api/admin/keys")).toBeNull()
     expect(dialectForPath("/healthz")).toBeNull()

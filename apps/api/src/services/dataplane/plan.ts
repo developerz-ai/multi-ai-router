@@ -7,9 +7,9 @@ import {
 import type { ClaudeSdkDriver, ProviderDriver } from "../../providers"
 import type { Candidate } from "../routing"
 import type { TranslationPair } from "../translate"
-import { upstreamUrl } from "./egress/endpoint"
+import { upstreamCountTokensUrl, upstreamUrl } from "./egress/endpoint"
 import { type EgressRejection, resolveEgress } from "./egress/mode"
-import type { RoutableAccount, RoutingCatalog } from "./types"
+import type { RoutableAccount, RoutingCatalog, UpstreamOperation } from "./types"
 
 /**
  * Turning routing's ordered candidates into attempts this build can actually dispatch.
@@ -25,6 +25,11 @@ import type { RoutableAccount, RoutingCatalog } from "./types"
  * one OpenAI-compatible account plans a passthrough attempt followed by a translated one, in the
  * order routing chose — which is why the conversion is carried per candidate rather than decided
  * once for the request.
+ *
+ * The `operation` narrows the same walk rather than forking it: a `count-tokens` request plans over
+ * exactly the candidates that can count, and one that cannot is dropped here like any other
+ * unservable candidate — so a pool holding one Anthropic account and four Claude subscriptions
+ * still answers, off the one account that can.
  *
  * It is also free to mix **transports**. `kind` is the seam: an HTTP candidate carries the URL it is
  * addressed at, a Claude subscription carries the `CLAUDE_CONFIG_DIR` its subprocess runs against,
@@ -91,6 +96,7 @@ export function planCandidates(
   candidates: readonly Candidate[],
   catalog: RoutingCatalog,
   ingress: Dialect,
+  operation: UpstreamOperation = "messages",
 ): CandidatePlan {
   const accounts = new Map(catalog.accounts().map((account) => [account.id, account]))
   const servable: ServableCandidate[] = []
@@ -101,7 +107,7 @@ export function planCandidates(
     const account = accounts.get(candidate.account.id)
     if (account === undefined) continue
 
-    const egress = resolveEgress(ingress, account)
+    const egress = resolveEgress(ingress, account, operation)
     if (egress.mode === "rejected") {
       rejection ??= egress
       continue
@@ -132,7 +138,13 @@ export function planCandidates(
               ...plan,
               kind: "http",
               driver: egress.driver,
-              url: upstreamUrl(egress.driver, account.driver, plan.dialect),
+              // Only a passthrough candidate reaches here on the count-tokens path — `resolveEgress`
+              // refuses every other mode — so the account is known to speak the one dialect that
+              // states the endpoint.
+              url:
+                operation === "count-tokens"
+                  ? upstreamCountTokensUrl(egress.driver, account.driver)
+                  : upstreamUrl(egress.driver, account.driver, plan.dialect),
             },
       )
     } catch (error) {

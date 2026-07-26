@@ -274,7 +274,8 @@ guard — `GET /admin/accounts/oauth/callback`, the redirect capture, authorized
 `state` and reasoned about in [07-security.md](07-security.md). No response, log, or error on any of
 them carries an authorization code, a `state`, or a token.
 
-Data-plane routes (`/v1/messages`, `/v1/chat/completions`, `/v1/responses`, `/v1/models`) are in
+Data-plane routes (`/v1/messages`, `/v1/messages/count_tokens`, `/v1/chat/completions`,
+`/v1/responses`, `/v1/models`) are in
 [06-protocol-translation.md](06-protocol-translation.md). Operational endpoints (`/healthz`,
 `/readyz`, `/metrics`) are unauthenticated liveness surfaces and are covered in
 [08-observability.md](08-observability.md).

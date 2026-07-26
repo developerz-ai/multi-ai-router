@@ -58,7 +58,7 @@ export {
   type SessionKeySource,
 } from "./body/session"
 export { accountCredential } from "./egress/credential"
-export { upstreamModelsUrl, upstreamUrl } from "./egress/endpoint"
+export { upstreamCountTokensUrl, upstreamModelsUrl, upstreamUrl } from "./egress/endpoint"
 export { clientHeaders, upstreamHeaders } from "./egress/headers"
 export {
   type AgentSdkEgress,
@@ -125,4 +125,5 @@ export {
   type RoutingCatalog,
   routingView,
   SYSTEM_CLOCK,
+  type UpstreamOperation,
 } from "./types"

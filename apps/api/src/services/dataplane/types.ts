@@ -42,6 +42,18 @@ export type FetchLike = (request: Request) => Promise<Response>
 /** The ingress dialect a data-plane route speaks. Fixed per path, never sniffed from a body. */
 export type IngressDialect = Dialect
 
+/**
+ * What a data-plane request asks an Account to *do*, as distinct from which dialect it speaks.
+ *
+ * `messages` is inference — every ingress path but one. `count-tokens` is Anthropic's
+ * `POST /v1/messages/count_tokens`, which Claude Code calls before a turn to decide when to
+ * compact: same body shape, same routing, same failover, a different endpoint below the base URL
+ * and an answer that is a measurement rather than a completion.
+ *
+ * Fixed per route like the dialect is, and for the same reason — the path is the contract.
+ */
+export type UpstreamOperation = "messages" | "count-tokens"
+
 export interface DataPlaneClock {
   /** Wall clock, for timestamps and for every routing decision that reads `now`. */
   readonly now: () => Date

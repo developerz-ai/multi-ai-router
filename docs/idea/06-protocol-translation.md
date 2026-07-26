@@ -31,16 +31,51 @@ leftmost one that applies.
 
 ## Ingress surface
 
-| Path | Dialect |
-|---|---|
-| `POST /v1/messages` | Anthropic Messages (`anthropic`) |
-| `POST /v1/chat/completions` | OpenAI Chat Completions (`openai-chat`) |
-| `POST /v1/responses` | OpenAI Responses (`openai-responses`) |
-| `GET /v1/models` | union of models reachable by the presenting key — [04-api-keys-and-access.md](04-api-keys-and-access.md) |
+| Path | Dialect | Operation |
+|---|---|---|
+| `POST /v1/messages` | Anthropic Messages (`anthropic`) | inference |
+| `POST /v1/messages/count_tokens` | Anthropic Messages (`anthropic`) | count tokens — below |
+| `POST /v1/chat/completions` | OpenAI Chat Completions (`openai-chat`) | inference |
+| `POST /v1/responses` | OpenAI Responses (`openai-responses`) | inference |
+| `GET /v1/models` | union of models reachable by the presenting key — [04-api-keys-and-access.md](04-api-keys-and-access.md) | — |
 
 **Both OpenAI paths are first-class, and that is not redundancy.** `POST /v1/responses` is OpenAI's
 current recommended primitive and where new clients are going; `POST /v1/chat/completions` is what the
 installed base sends today. The router accepts both; neither is deprecated here.
+
+## Counting tokens
+
+`POST /v1/messages/count_tokens` is on the surface because **Claude Code calls it unprompted**,
+before a turn, to decide when to compact its context. A router that 404s it is a router that client
+half-works against.
+
+It is an ordinary data-plane request: same router key, same scope intersection, same health
+snapshot, same failover chain, one `UsageRecord` per attempt. Two things about it are not ordinary.
+
+**It is passthrough or nothing.** A count is a statement about *one provider's tokenizer* for *one
+prompt*, so the only honest answer is the number that provider returns. Neither alternative
+survives contact with what a client does with it:
+
+| Candidate | Answer | Why |
+|---|---|---|
+| Anthropic-dialect account (API key, or a compatible vendor's Anthropic surface) | **passthrough** to `{baseUrl}/v1/messages/count_tokens` | the provider's own number |
+| `openai-chat` / `openai-responses` account | **not planned** | neither dialect exposes a counting endpoint, and a different tokenizer's count is not an answer to the question asked |
+| Claude subscription (Agent SDK) | **not planned** | the SDK exposes no token-count call, and the router will never forge an `api.anthropic.com` request out of a subscription's credentials — [11-anthropic-agent-sdk.md](11-anthropic-agent-sdk.md) |
+
+The refusal is **per candidate**, so a pool holding one Anthropic API key and four Claude
+subscriptions still answers, off the one account that can. Only when *no* in-scope account can
+count does it surface, and then as a **`503`** — the body was a valid Anthropic request and there is
+no other ingress path to send it down, so what is missing is an Anthropic-dialect account, which
+only the operator can add. That is the same reasoning that makes an unimplemented provider a `503`
+rather than the `400` a missing *translator* gets. **The router never estimates.** A fabricated
+integer is indistinguishable from a measured one at the client, which is the objection that already
+forbids substituting a model. An Anthropic-compatible vendor that never implemented the endpoint
+answers its own `404`, and that `404` is relayed unchanged.
+
+**Its `input_tokens` is never accounted.** The response measures a prompt that was never run, so the
+relay observes bytes and no tokens on this path: the `UsageRecord` carries the request, the account,
+and the latency, with all four token columns at zero and no cost. Reading the number would price a
+question as though it were a completion and inflate every report that sums the column.
 
 ## Translation matrix
 

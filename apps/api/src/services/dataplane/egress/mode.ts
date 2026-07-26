@@ -6,7 +6,7 @@ import {
 } from "@multi-ai-router/core"
 import { type ClaudeSdkDriver, PROVIDER_REGISTRY, type ProviderDriver } from "../../../providers"
 import { type TranslationPair, translationPair } from "../../translate"
-import type { RoutableAccount } from "../types"
+import type { RoutableAccount, UpstreamOperation } from "../types"
 
 /**
  * Which egress mode a (ingress dialect, selected Account) pair takes.
@@ -75,6 +75,8 @@ export type EgressRejectionReason =
   | "no-translator"
   /** The provider is declared in the domain but has no driver yet. */
   | "unimplemented"
+  /** The account can serve inference, but not the operation this route performs. */
+  | "unsupported-operation"
 
 export interface EgressRejection {
   readonly mode: "rejected"
@@ -84,7 +86,16 @@ export interface EgressRejection {
 
 export type EgressDecision = PassthroughEgress | TranslateEgress | AgentSdkEgress | EgressRejection
 
-export function resolveEgress(ingress: Dialect, account: RoutableAccount): EgressDecision {
+export function resolveEgress(
+  ingress: Dialect,
+  account: RoutableAccount,
+  operation: UpstreamOperation = "messages",
+): EgressDecision {
+  const decision = resolveTransport(ingress, account)
+  return operation === "count-tokens" ? countable(decision) : decision
+}
+
+function resolveTransport(ingress: Dialect, account: RoutableAccount): EgressDecision {
   const support = PROVIDER_REGISTRY[account.driver.provider]
 
   if (support.transport === "agent-sdk") {
@@ -126,6 +137,47 @@ function noTranslator(ingress: Dialect, egress: Dialect): EgressRejection {
   }
 }
 
+const NEVER_ESTIMATED =
+  "and this router answers a token count with the provider's own number or with nothing at all — an estimate of ours would be budgeted against as though a provider had stated it"
+
+/**
+ * Counting tokens is **passthrough or nothing**.
+ *
+ * `POST /v1/messages/count_tokens` asks a specific tokenizer what a specific prompt costs *on that
+ * provider*, so the only honest answer is the one the account itself returns. Neither alternative
+ * survives contact with what the number is used for — a client compacting its context at a
+ * threshold:
+ *
+ *  - **Translating** it is meaningless. Two providers tokenize differently, so an OpenAI account's
+ *    count is not an answer to the question the caller asked, and neither OpenAI dialect exposes a
+ *    counting endpoint to ask in the first place.
+ *  - **Estimating** it is worse than failing. A fabricated integer is indistinguishable from a
+ *    measured one at the client, which is the same objection that makes substituting a model
+ *    forbidden (docs/idea/06-protocol-translation.md#counting-tokens).
+ *
+ * A Claude subscription lands here too: the Agent SDK exposes no token-count call, and the one
+ * thing this router will never do to get one is forge an `api.anthropic.com` request out of a
+ * subscription's credentials (docs/idea/11-anthropic-agent-sdk.md).
+ *
+ * The refusal is per candidate, so a mixed pool still serves the request off whichever account
+ * *can* count. Only when none can does it surface — as a `503`, because the caller's request is
+ * fine and it is the operator who would fix this by adding an Anthropic-dialect account.
+ */
+function countable(decision: EgressDecision): EgressDecision {
+  if (decision.mode === "passthrough" || decision.mode === "rejected") return decision
+
+  const what =
+    decision.mode === "agent-sdk"
+      ? "is a Claude subscription served through the Claude Agent SDK, which exposes no token-count call"
+      : `speaks ${decision.to}, which states no token-count endpoint`
+
+  return {
+    mode: "rejected",
+    reason: "unsupported-operation",
+    message: `this account cannot count tokens: it ${what}, ${NEVER_ESTIMATED}`,
+  }
+}
+
 /**
  * The client-facing failure when no candidate could be served.
  *
@@ -134,6 +186,11 @@ function noTranslator(ingress: Dialect, egress: Dialect): EgressRejection {
  * caller can act on it by calling a different ingress path. An unimplemented provider is a `503`:
  * the caller did nothing wrong and there is nothing they can change, so answering `400` would send
  * them looking in the wrong place.
+ *
+ * An unsupported *operation* is a `503` for that second reason and not the first, even though it
+ * also refuses a request before any upstream call. A `count_tokens` body is a perfectly valid
+ * Anthropic request and there is no other ingress path to send it down — what is missing is an
+ * Anthropic-dialect account in this key's scope, which only the operator can add.
  */
 export function egressRejectionError(rejection: EgressRejection): RouterError {
   return rejection.reason === "no-translator"

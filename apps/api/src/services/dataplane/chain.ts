@@ -16,7 +16,7 @@ import {
   recordAttempt,
 } from "../routing"
 import type { TranslationContext } from "../translate"
-import { createTokenObserver } from "../usage"
+import { createTokenObserver, NO_TOKEN_OBSERVER } from "../usage"
 import { type AttemptOutcome, runAttempt, type UpstreamError } from "./attempt"
 import { rewriteModel } from "./body/read"
 import type { ByteSpan } from "./body/scanner"
@@ -230,7 +230,11 @@ function relaySuccess(
   response: Response,
   at: AttemptClock,
 ): Response {
-  const tokens = createTokenObserver()
+  // A count-tokens answer states `input_tokens` for a prompt that was never run. Reading it would
+  // record — and price — a measurement as though it were a completion, so that one response shape
+  // is relayed and observed for bytes only. See `usage/tokens.ts`.
+  const tokens =
+    ctx.runtime.operation === "count-tokens" ? NO_TOKEN_OBSERVER : createTokenObserver()
   let firstByteAt: number | undefined
   const settle = (streamed: boolean): void => {
     const counts = tokens.counts()

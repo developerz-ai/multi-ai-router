@@ -10,10 +10,11 @@ import {
   clientHeaders,
   egressRejectionError,
   resolveEgress,
+  upstreamCountTokensUrl,
   upstreamHeaders,
   upstreamUrl,
 } from "../../../src/services/dataplane"
-import { account, cipher } from "./fixtures"
+import { account, cipher, subscriptionAccount } from "./fixtures"
 
 /** The egress decision, the endpoint it addresses, and the headers it swaps. */
 
@@ -74,6 +75,52 @@ describe("egress mode", () => {
   })
 })
 
+describe("counting tokens", () => {
+  test("an anthropic-dialect account passes the count straight through", () => {
+    const decision = resolveEgress("anthropic", account("a"), "count-tokens")
+    expect(decision.mode).toBe("passthrough")
+  })
+
+  test("the same account still translates ordinary inference — only counting is narrowed", () => {
+    expect(resolveEgress("anthropic", account("o", { provider: "openai-api" })).mode).toBe(
+      "translate",
+    )
+  })
+
+  test("an openai account cannot count, and is never estimated for", () => {
+    const openAi = account("o", { provider: "openai-api" })
+    const decision = resolveEgress("anthropic", openAi, "count-tokens")
+
+    expect(decision.mode).toBe("rejected")
+    if (decision.mode !== "rejected") return
+    expect(decision.reason).toBe("unsupported-operation")
+    expect(decision.message).toContain("openai-chat")
+    // 503, not 400: the body is a valid anthropic request and only the operator can fix the pool.
+    expect(egressRejectionError(decision)).toBeInstanceOf(NoHealthyAccountError)
+  })
+
+  test("a Claude subscription says so by name — the Agent SDK exposes no token count", () => {
+    const decision = resolveEgress("anthropic", subscriptionAccount("sub"), "count-tokens")
+
+    expect(decision.mode).toBe("rejected")
+    if (decision.mode !== "rejected") return
+    expect(decision.reason).toBe("unsupported-operation")
+    expect(decision.message).toContain("Claude Agent SDK")
+  })
+
+  test("an unimplemented provider keeps its own reason instead of being relabelled", () => {
+    const decision = resolveEgress(
+      "anthropic",
+      account("g", { provider: "gemini" }),
+      "count-tokens",
+    )
+
+    expect(decision.mode).toBe("rejected")
+    if (decision.mode !== "rejected") return
+    expect(decision.reason).toBe("unimplemented")
+  })
+})
+
 describe("endpoint", () => {
   test("each dialect addresses its own path below the account's base URL", () => {
     const driver = httpDriver("anthropic-compatible")
@@ -95,6 +142,19 @@ describe("endpoint", () => {
 
     expect(upstreamUrl(driver, { ...entry.driver, baseUrl: null }, "openai-chat").toString()).toBe(
       "https://api.openai.com/v1/chat/completions",
+    )
+  })
+
+  test("the token count sits below the same base, on Anthropic's own suffix", () => {
+    const driver = httpDriver("anthropic-compatible")
+    if (driver === null) throw new Error("expected a driver")
+    const entry = account("a", {
+      provider: "anthropic-compatible",
+      baseUrl: "https://proxy.test/api",
+    })
+
+    expect(upstreamCountTokensUrl(driver, entry.driver).toString()).toBe(
+      "https://proxy.test/api/v1/messages/count_tokens",
     )
   })
 })

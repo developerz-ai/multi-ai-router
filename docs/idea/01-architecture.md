@@ -8,9 +8,10 @@ product boundary and [02-domain-model.md](02-domain-model.md) for the entities n
 
 ## Request lifecycle
 
-1. **Ingress.** Hono receives `POST /v1/messages`, `POST /v1/chat/completions`,
-   `POST /v1/responses`, or `GET /v1/models`. The request id is assigned here and propagated end to
-   end. Body size caps apply before anything is parsed; per-key rate limits are specified and **not
+1. **Ingress.** Hono receives `POST /v1/messages`, `POST /v1/messages/count_tokens`,
+   `POST /v1/chat/completions`, `POST /v1/responses`, or `GET /v1/models`. The path fixes both the
+   dialect and the operation; neither is ever sniffed from a body. The request id is assigned here
+   and propagated end to end. Body size caps apply before anything is parsed; per-key rate limits are specified and **not
    yet enforced**.
 2. **Key verification.** The router key arrives as `Authorization: Bearer mar_live_…` or
    `x-api-key: mar_live_…`. Verification is served from an in-memory cache; on a miss, a short

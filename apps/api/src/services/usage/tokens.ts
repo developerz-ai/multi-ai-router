@@ -79,6 +79,19 @@ function apply(slots: Slots, field: string, value: number): void {
   }
 }
 
+/**
+ * An observer that reads nothing and reports zero.
+ *
+ * For the responses whose token fields are **not** a statement of what was spent. A
+ * `count_tokens` answer is exactly that: `{"input_tokens": 4531}` is a measurement of a prompt
+ * nobody ran, and scanning it would price a question as though it were a completion and inflate
+ * every spend report that sums the column.
+ */
+export const NO_TOKEN_OBSERVER: TokenObserver = {
+  observe: () => undefined,
+  counts: () => ZERO_TOKENS,
+}
+
 export function createTokenObserver(): TokenObserver {
   const decoder = new TextDecoder("utf-8")
   const slots: Slots = {

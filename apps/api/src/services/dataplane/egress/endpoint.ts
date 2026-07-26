@@ -27,8 +27,28 @@ const DIALECT_MODEL_PATHS: Readonly<Record<Dialect, string>> = {
   "openai-responses": "/models",
 }
 
+/**
+ * Anthropic's token-count endpoint, which has **no counterpart in either OpenAI dialect** — hence
+ * a function of its own rather than a third row on the table above. A dialect with no entry there
+ * would be a gap someone could index into and get `undefined`; a request this router cannot count
+ * is refused by name in `egress/mode.ts`, before a URL is ever asked for.
+ */
+const ANTHROPIC_COUNT_TOKENS_PATH = "/v1/messages/count_tokens"
+
 export function upstreamUrl(driver: ProviderDriver, account: DriverAccount, dialect: Dialect): URL {
   return join(driver.resolveBaseUrl(account), DIALECT_PATHS[dialect])
+}
+
+/**
+ * Where `POST /v1/messages/count_tokens` goes on an Anthropic-dialect Account.
+ *
+ * Takes no dialect on purpose: only `anthropic` states this operation at all, so the caller having
+ * chosen this function *is* the proof its candidate speaks it. An Anthropic-compatible vendor that
+ * does not implement the endpoint answers its own `404`, which is relayed unchanged — the router
+ * never substitutes a number of its own for a provider's answer.
+ */
+export function upstreamCountTokensUrl(driver: ProviderDriver, account: DriverAccount): URL {
+  return join(driver.resolveBaseUrl(account), ANTHROPIC_COUNT_TOKENS_PATH)
 }
 
 export function upstreamModelsUrl(

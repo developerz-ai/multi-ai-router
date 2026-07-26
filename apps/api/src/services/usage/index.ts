@@ -31,4 +31,10 @@ export {
   type UsageStats,
   type UsageWriter,
 } from "./recorder"
-export { createTokenObserver, type TokenCounts, type TokenObserver, ZERO_TOKENS } from "./tokens"
+export {
+  createTokenObserver,
+  NO_TOKEN_OBSERVER,
+  type TokenCounts,
+  type TokenObserver,
+  ZERO_TOKENS,
+} from "./tokens"

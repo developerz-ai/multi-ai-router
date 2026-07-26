@@ -6,24 +6,32 @@ import type {
   HealthStore,
   RouterKeyVerifier,
   RoutingCatalog,
+  UpstreamOperation,
 } from "../../services/dataplane"
 import { reachableModels } from "../../services/dataplane"
 import { renderModels } from "./models"
 
 /**
- * The data-plane ingress surface — the four routes a client actually talks to
+ * The data-plane ingress surface — the five routes a client actually talks to
  * (docs/idea/06-protocol-translation.md#ingress-surface):
  *
- * | Path | Dialect |
- * |---|---|
- * | `POST /v1/messages` | Anthropic Messages |
- * | `POST /v1/chat/completions` | OpenAI Chat Completions |
- * | `POST /v1/responses` | OpenAI Responses |
- * | `GET /v1/models` | the models reachable by the presenting key |
+ * | Path | Dialect | Operation |
+ * |---|---|---|
+ * | `POST /v1/messages` | Anthropic Messages | inference |
+ * | `POST /v1/messages/count_tokens` | Anthropic Messages | count tokens |
+ * | `POST /v1/chat/completions` | OpenAI Chat Completions | inference |
+ * | `POST /v1/responses` | OpenAI Responses | inference |
+ * | `GET /v1/models` | the models reachable by the presenting key | — |
  *
  * **Both OpenAI paths are first-class, and that is not redundancy.** `/v1/responses` is where new
  * clients are going; `/v1/chat/completions` is what the installed base sends today. Neither is
  * deprecated.
+ *
+ * `count_tokens` is on the list because Claude Code calls it unprompted, before a turn, to decide
+ * when to compact its context — a router that 404s it is a router that client half-works against.
+ * It takes the same key, the same scope intersection, and the same failover chain as inference;
+ * only the operation differs, and only accounts that can answer it are planned
+ * (`services/dataplane/egress/mode.ts`).
  *
  * Thin, as the conventions require: a handler names its ingress dialect and calls one service. The
  * dialect is fixed **per path** and never sniffed from a body — the path is the contract.
@@ -44,10 +52,18 @@ export interface DataPlaneRoutesDeps {
 /** Where these routes mount. Absolute paths, so the mount point is the root. */
 export const DATA_PLANE_BASE_PATH = "/"
 
-const INGRESS: readonly (readonly [string, Dialect])[] = [
-  ["/v1/messages", "anthropic"],
-  ["/v1/chat/completions", "openai-chat"],
-  ["/v1/responses", "openai-responses"],
+interface IngressRoute {
+  readonly path: string
+  readonly dialect: Dialect
+  /** Omitted is inference, which is what every path but the token count performs. */
+  readonly operation?: UpstreamOperation
+}
+
+const INGRESS: readonly IngressRoute[] = [
+  { path: "/v1/messages", dialect: "anthropic" },
+  { path: "/v1/messages/count_tokens", dialect: "anthropic", operation: "count-tokens" },
+  { path: "/v1/chat/completions", dialect: "openai-chat" },
+  { path: "/v1/responses", dialect: "openai-responses" },
 ]
 
 export function dataPlaneRoutes(deps: DataPlaneRoutesDeps): Hono<RouterKeyEnv> {
@@ -55,10 +71,11 @@ export function dataPlaneRoutes(deps: DataPlaneRoutesDeps): Hono<RouterKeyEnv> {
   const guard = routerKeyAuth(deps.verifier)
   const now = deps.now ?? (() => new Date())
 
-  for (const [path, ingress] of INGRESS) {
-    routes.post(path, guard, (c) =>
+  for (const route of INGRESS) {
+    routes.post(route.path, guard, (c) =>
       deps.dispatcher.dispatch({
-        ingress,
+        ingress: route.dialect,
+        ...(route.operation === undefined ? {} : { operation: route.operation }),
         request: c.req.raw,
         key: c.get("routerKey"),
         requestId: c.get("requestId"),

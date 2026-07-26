@@ -490,6 +490,7 @@ before response.completed" though every event was sent (`openaiResponses.ts:343-
 | `tool_result.is_error` | OpenAI's `tool` role has no error channel; failures read as successes |
 | Anthropic **server** tools, citations, code execution, computer use | The SDK cannot emit `server_tool_use`. Reject `400` naming the field — and do **not** advertise these in `GET /v1/models` |
 | Beta opt-ins | The SDK owns the request; only a filtered subset passes as `betas` (§7) |
+| `POST /v1/messages/count_tokens` | The SDK exposes no token-count call, and the one way to get one — forging an `api.anthropic.com` request out of the subscription's own credentials — is the thing this whole document exists to refuse. A subscription account is therefore **not planned** for that route: a mixed pool answers off an Anthropic-dialect account, and a subscription-only pool gets a `503` naming this row. Never an estimate — see [06-protocol-translation.md](06-protocol-translation.md#counting-tokens) |
 
 Meridian injects a canned fallback sentence when the SDK returns no content (`server.ts:2068-2074`).
 **A router must never fabricate model output** — return an empty completion with an honest stop reason.
