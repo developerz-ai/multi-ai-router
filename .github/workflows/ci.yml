@@ -94,6 +94,12 @@ jobs:
       # run and a production boot resolve their connection the same way. Points
       # at the mapped host port above, not a compose network alias — the service
       # container is reachable on localhost from the job.
+      #
+      # Load-bearing, not a convenience: the migration, advisory-lock, retention
+      # and readiness-probe suites gate themselves on this variable and would
+      # otherwise skip into a green summary. `bin/test` fails the job outright
+      # when CI is set and this is missing, rather than reporting a pass it did
+      # not earn — deleting this line breaks the build instead of the coverage.
       DATABASE_URL: postgres://router:router@localhost:5432/router
     steps:
       - uses: actions/checkout@v5

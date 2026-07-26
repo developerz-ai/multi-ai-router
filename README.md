@@ -96,10 +96,17 @@ describing an unbuilt capability are marked. Track progress in
 `bin/` is the interface — three commands are the whole contract:
 
 ```bash
-bin/setup     # fresh clone: prereqs, install, .env with a generated ENCRYPTION_KEY, dev Postgres, migrate
+bin/setup     # fresh clone: prereqs, install, .env with a generated ENCRYPTION_KEY + DATABASE_URL, dev Postgres, migrate
 bin/dev       # each session: API + web, watch mode
 bin/check     # before committing: lint, typecheck, test — the CI job list, in order
 ```
+
+`bin/check` needs a database and refuses to start without one, because CI's test job has a real
+Postgres 16 and the migration, advisory-lock, retention and readiness-probe suites gate themselves on
+`DATABASE_URL`. Without it they skip, `bun test` folds the skips into the same green summary as a
+pass, and the gate goes green having proved less than the PR will. `bin/setup` writes the dev
+`DATABASE_URL` into `.env`, which is all it takes. A bare `bin/test` still runs on a machine with no
+Docker — it just names, after the summary, the files that did not run.
 
 One more when you touch the request path: `bin/bench` drives the real router against an in-process
 stub upstream and reports what its own `router_overhead_seconds` histogram recorded, plus added

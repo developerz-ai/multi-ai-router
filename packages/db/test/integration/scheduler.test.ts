@@ -1,6 +1,4 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test"
-import { existsSync } from "node:fs"
-import { fileURLToPath } from "node:url"
 import { inArray } from "drizzle-orm"
 import { advisoryLockKey, withAdvisoryLock } from "../../src/advisory-lock"
 import { createDatabase, type Database, type DatabaseHandle } from "../../src/client"
@@ -22,9 +20,10 @@ import { scheduledTaskRuns } from "../../src/schema/scheduled-task-runs"
  * written as `janitor_sweep` (a real enum member is required), but every
  * assertion below filters to the ids these tests themselves created.
  */
+// `DATABASE_URL` and nothing else: `bin/check` refuses to run without one and
+// `bin/test` names this file when it skips, so the skip can no longer be silent.
 const url = process.env.DATABASE_URL ?? ""
-const journal = fileURLToPath(new URL("../../migrations/meta/_journal.json", import.meta.url))
-const runnable = url !== "" && existsSync(journal)
+const runnable = url !== ""
 
 const MARKER = new Date("1999-06-15T00:00:00.000Z")
 

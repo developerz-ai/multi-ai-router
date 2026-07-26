@@ -15,4 +15,44 @@ cd "$(dirname "$0")/.."
 # being excluded.
 #
 # An explicit argument still works: `bin/test apps/api`, `bin/test --watch`.
-exec bun test --path-ignore-patterns='**/tmp/**' "$@"
+
+# The suites that need a real Postgres gate themselves on DATABASE_URL, and
+# `bun test` folds their skips into the same green summary as a pass — a run
+# that proved less looks exactly like a run that proved more. Say what was not
+# covered instead, printed after the summary it is correcting so it cannot
+# scroll away. `bin/check` refuses outright; a bare `bin/test` still runs, since
+# it is the loop you use on a laptop with no Docker, but it stops implying it
+# covered the database.
+#
+# `bun -e` resolves the variable exactly the way `bun test` does — environment
+# first, then .env / .env.local — so the warning can never disagree with the run.
+database_url="$(bun -e 'process.stdout.write(process.env.DATABASE_URL ?? "")')"
+
+skipped_suites() {
+  # Derived, never a hand-kept list: a new DB-gated file is named here the day
+  # it is written, and a deleted one stops being claimed.
+  grep -rl 'process\.env\.DATABASE_URL' apps/*/test packages/*/test 2>/dev/null | sort
+}
+
+# A human can choose to run without a database and read the warning below. CI
+# cannot read anything, and a green CI run is what a merge is decided on, so a
+# missing service container has to be a failure there rather than a note nobody
+# sees. GitHub Actions sets CI=true; ci.yml gives the test job a real Postgres.
+if [ -z "$database_url" ] && [ -n "${CI:-}" ]; then
+  printf '\033[0;31m✘\033[0m  DATABASE_URL is not set in CI: %s\n' \
+    "these suites would skip and the run would still go green." >&2
+  skipped_suites | sed 's/^/     /' >&2
+  exit 1
+fi
+
+status=0
+bun test --path-ignore-patterns='**/tmp/**' "$@" || status=$?
+
+if [ -z "$database_url" ]; then
+  printf '\n\033[0;33m⚠  DATABASE_URL is unset — these suites SKIPPED, they did not pass:\033[0m\n' >&2
+  skipped_suites | sed 's/^/     /' >&2
+  printf '   Migrations, advisory-lock contention, retention deletes and the readiness\n' >&2
+  printf '   probe are unproven by this run. Give it a database with: bin/setup\n\n' >&2
+fi
+
+exit "$status"

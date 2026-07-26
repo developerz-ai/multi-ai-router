@@ -57,7 +57,7 @@ Postgres is the house standard and the current decision — earlier drafts said 
 
 `bin/` is the interface. Never write an ad-hoc invocation where a wrapper exists, and never document a raw command in its place — if something is worth running twice, it belongs in `bin/`.
 
-**Fresh clone: `bin/setup`** (prereqs → install → `.env` with a generated `ENCRYPTION_KEY` → dev Postgres → migrate). Then `bin/dev` each session, `bin/check` before committing. Those three are the house contract and mean this repo behaves like every other one.
+**Fresh clone: `bin/setup`** (prereqs → install → `.env` with a generated `ENCRYPTION_KEY` and the dev `DATABASE_URL` → dev Postgres → migrate). Then `bin/dev` each session, `bin/check` before committing. Those three are the house contract and mean this repo behaves like every other one.
 
 | Task | Command |
 |---|---|
@@ -67,7 +67,7 @@ Postgres is the house standard and the current decision — earlier drafts said 
 | Lint (biome check + `tsc --noEmit`) | `bin/lint` |
 | Format | `bin/fmt` |
 | Fresh clone → running stack | `bin/setup` |
-| The gate (lint + typecheck + test), before committing | `bin/check` |
+| The gate (lint + typecheck + test), before committing | `bin/check` — refuses to run without a `DATABASE_URL`, so it can never pass on fewer tests than CI |
 | Overhead budget: p50/p95/p99 + added TTFT vs a stub upstream | `bin/bench` |
 | Dev database shell / migrate / reset | `bin/db psql` · `bin/db migrate` · `bin/db reset` |
 | Build release image locally | `docker build -t multi-ai-router:dev .` |
