@@ -5,8 +5,8 @@ import { z } from "zod"
  * The OpenAI Chat Completions request, in the two shapes translation needs — same split as
  * `shared/anthropic.ts`: `Parsed*` is what arrives, the unsuffixed family is what we emit.
  *
- * Three fields are declared here purely so they can be **refused by name** (`n`, `logprobs`,
- * `top_logprobs`); `shared/reject.ts` owns that call. The documented hints — `seed`,
+ * Four fields are declared here purely so they can be **refused by name** (`n`, `logprobs`,
+ * `top_logprobs`, `response_format`); `shared/reject.ts` owns that call. The documented hints — `seed`,
  * `frequency_penalty`, `presence_penalty`, `logit_bias`, `user`, `parallel_tool_calls` — are
  * deliberately absent instead, because "not in the schema" is exactly what dropping them means
  * (docs/idea/06-protocol-translation.md#known-lossy-edges).
@@ -88,6 +88,9 @@ export const openAiChatRequestSchema = z.object({
   n: z.number().int().nullish(),
   logprobs: z.boolean().nullish(),
   top_logprobs: z.number().int().nullish(),
+  // Structured output, declared only so it can be refused by name. Loose because the refusal reads
+  // `type` and nothing else — a schema this build never carries is not worth validating.
+  response_format: z.looseObject({ type: z.string() }).nullish(),
 })
 
 export type ParsedOpenAiChatRequest = z.infer<typeof openAiChatRequestSchema>

@@ -151,8 +151,10 @@ Legend: **passthrough** = bytes untouched · translate = pure conversion pair, l
 re-synthesize = rendered from Agent SDK output, never proxied (below).
 
 **Unsupported**, returning `4xx` rather than a degraded call: a stateful Responses request
-(`previous_response_id`, `store: true`, `include`, `reasoning` and `item_reference` input items)
-against non-Responses egress — `400`, the router holds no conversation state; and any request whose
+(`previous_response_id`, `store: true`, `include`, `conversation`, `prompt`, `background: true`, and
+`reasoning` / `item_reference` input items) against non-Responses egress — `400`, the router holds no
+conversation state; a structured-output constraint (`response_format`, `text.format`) on any
+cross-dialect hop — `400`, the shape is a contract the caller will parse; and any request whose
 required feature has no faithful target representation — `400`, naming the field.
 
 Gemini is **not** an unsupported egress: the `gemini` driver speaks `openai-chat` over Google's
@@ -440,6 +442,8 @@ Be suspicious of any cell not listed here — if it is not documented, it is not
 | OpenAI built-in tools (`web_search_preview`, `file_search`, `code_interpreter`, …) | `openai-responses` → any | unsupported; `400`. Served inside OpenAI's own inference, so nothing on the other side of the seam runs one |
 | `stop` / `stop_sequences` | → `openai-responses` | no counterpart — the dialect has no stop parameter at all; **rejected** `400`, because a stop sequence decides where the answer ends and dropping it returns text past the delimiter the caller drew |
 | `text.format` (structured output / JSON Schema) | `openai-responses` → any | `{"type":"text"}` passes; anything else is **rejected** `400`. A schema-constrained answer is a contract the caller will parse, and prose in its place is a different answer, not a degraded one |
+| `response_format` (structured output / JSON mode) | `openai-chat` → any | `{"type":"text"}` passes; `json_object` and `json_schema` are **rejected** `400`. The same rule as `text.format` under openai-chat's older name for the same feature — including toward `openai-responses`, which *does* state it, because honoring it one direction and refusing it the other would make "servable" depend on which way the request pointed. Dropped instead, an OpenAI SDK `.parse()`, LangChain `withStructuredOutput()`, Instructor, or `generateObject` call gets prose and fails at its own `JSON.parse`, with nothing on the wire naming the cause |
+| `conversation`, `prompt`, `background: true` | `openai-responses` → any | **rejected** `400`, the same class as `previous_response_id` under three later names: turns the provider would prepend, instruction text stored provider-side, and a queued response to poll by id. `background: false` passes |
 | Responses `reasoning` output items | → `anthropic`, `openai-chat` | dropped. An Anthropic `thinking` block a client can replay needs a `signature` the router cannot produce, and openai-chat has no field at all |
 | Anthropic `thinking` blocks | → `openai-responses` | carried as a reasoning **summary** item; the encrypted reasoning handle is not synthesized |
 | `reasoning.effort` | `openai-responses` → `anthropic`, `openai-chat` | dropped. Anthropic's thinking budget is a token count, not an effort word, and inventing one would change what the caller pays for |

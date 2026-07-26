@@ -48,6 +48,7 @@ export interface RawOpenAiChatRequest {
   n?: number | null
   logprobs?: boolean | null
   top_logprobs?: number | null
+  response_format?: unknown
 }
 
 export function openAiChatRequest(
@@ -73,6 +74,9 @@ export interface RawOpenAiResponsesRequest {
   previous_response_id?: string
   store?: boolean
   include?: string[]
+  conversation?: unknown
+  prompt?: unknown
+  background?: boolean
   reasoning?: unknown
   text?: unknown
 }

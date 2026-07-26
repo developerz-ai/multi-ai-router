@@ -447,6 +447,35 @@ describe("openai-responses -> anthropic request", () => {
     ).toThrow(TranslationError)
   })
 
+  test("conversation is refused: the turns it names are the provider's, not this router's", () => {
+    expect(() =>
+      openAiResponsesToAnthropicRequest(openAiResponsesRequest({ conversation: "conv_abc" })),
+    ).toThrow(/conversation/)
+    expect(() =>
+      openAiResponsesToAnthropicRequest(openAiResponsesRequest({ conversation: { id: "conv_a" } })),
+    ).toThrow(/conversation/)
+  })
+
+  test("prompt is refused: a stored template's text is never seen here", () => {
+    expect(() =>
+      openAiResponsesToAnthropicRequest(
+        openAiResponsesRequest({ prompt: { id: "pmpt_1", version: "3" } }),
+      ),
+    ).toThrow(/prompt/)
+  })
+
+  test("background: true is refused: there is no id to poll and nothing holding the result", () => {
+    expect(() =>
+      openAiResponsesToAnthropicRequest(openAiResponsesRequest({ background: true })),
+    ).toThrow(/background/)
+  })
+
+  test("background: false passes, like store: false — it states the stateless case", () => {
+    expect(() =>
+      openAiResponsesToAnthropicRequest(openAiResponsesRequest({ background: false })),
+    ).not.toThrow()
+  })
+
   test("an absent max_output_tokens falls back to the injected default", () => {
     const out = openAiResponsesToAnthropicRequest(openAiResponsesRequest(), {
       defaultMaxTokens: 2048,
@@ -654,6 +683,27 @@ describe("openai-chat -> openai-responses request", () => {
 
   test("store is always false", () => {
     expect(openAiChatToOpenAiResponsesRequest(openAiChatRequest()).store).toBe(false)
+  })
+
+  /**
+   * openai-responses *does* state this feature, as `text.format`. It is refused anyway, so the rule
+   * reads the same whichever way a request happens to point: the reverse pair already refuses
+   * `text.format`, and honoring the constraint here alone would make "servable" a direction.
+   */
+  test("response_format is refused even though this target has the feature under another name", () => {
+    expect(() =>
+      openAiChatToOpenAiResponsesRequest(
+        openAiChatRequest({
+          response_format: { type: "json_schema", json_schema: { name: "person" } },
+        }),
+      ),
+    ).toThrow(/response_format\.type/)
+  })
+
+  test("response_format: text passes: it constrains nothing", () => {
+    expect(() =>
+      openAiChatToOpenAiResponsesRequest(openAiChatRequest({ response_format: { type: "text" } })),
+    ).not.toThrow()
   })
 })
 
@@ -959,6 +1009,26 @@ describe("openai-responses -> openai-chat request (the downgrade)", () => {
         openAiResponsesRequest({ input: [{ type: "reasoning" }] }),
       ),
     ).toThrow(TranslationError)
+  })
+
+  test("conversation, prompt and background are refused: the same statefulness, later names", () => {
+    expect(() =>
+      openAiResponsesToOpenAiChatRequest(openAiResponsesRequest({ conversation: "conv_abc" })),
+    ).toThrow(/conversation/)
+    expect(() =>
+      openAiResponsesToOpenAiChatRequest(openAiResponsesRequest({ prompt: { id: "pmpt_1" } })),
+    ).toThrow(/prompt/)
+    expect(() =>
+      openAiResponsesToOpenAiChatRequest(openAiResponsesRequest({ background: true })),
+    ).toThrow(/background/)
+  })
+
+  test("a structured-output text.format is refused on this direction too", () => {
+    expect(() =>
+      openAiResponsesToOpenAiChatRequest(
+        openAiResponsesRequest({ text: { format: { type: "json_object" } } }),
+      ),
+    ).toThrow(/text\.format\.type/)
   })
 
   test("an input_image naming only a file_id is refused", () => {

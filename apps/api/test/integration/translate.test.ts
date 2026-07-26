@@ -291,3 +291,64 @@ describe("the openai-chat output ceiling (translate egress)", () => {
     expect(upstream.calls[0]?.body).toBe(upstream.calls[1]?.body ?? "")
   })
 })
+
+/**
+ * Structured output end to end: the refusal a *client library* is the one that notices.
+ *
+ * An OpenAI SDK `.parse()`, LangChain's `withStructuredOutput()`, Instructor, and `generateObject`
+ * all send `response_format` and then parse the reply as the schema they sent. Dropped in
+ * translation the call succeeds, prose comes back, and the failure lands at the caller's own
+ * `JSON.parse` with nothing on the wire naming the cause. These assert the `400` arrives instead —
+ * **before a socket is opened**, in the client's own dialect, naming the field to remove.
+ */
+describe("response_format on translate egress (the structured-output contract)", () => {
+  const CHAT = (responseFormat: unknown) =>
+    JSON.stringify({
+      model: "claude-opus-5",
+      messages: [{ role: "user", content: "who won?" }],
+      response_format: responseFormat,
+    })
+
+  const ok = () =>
+    jsonResponse(200, {
+      id: "msg_01",
+      content: [{ type: "text", text: "hi" }],
+      stop_reason: "end_turn",
+      usage: { input_tokens: 1, output_tokens: 2 },
+    })
+
+  test("a json_schema request is refused 400 naming the field, and no upstream is called", async () => {
+    // An anthropic-dialect account: openai-chat ingress, so the body goes through a translator.
+    const { app, upstream, usage } = harness({ responses: [ok] })
+
+    const res = await app.request(
+      "/v1/chat/completions",
+      post(CHAT({ type: "json_schema", json_schema: { name: "winner", strict: true } }), bearer()),
+    )
+    const body = (await res.json()) as { error?: { type?: string; message?: string } }
+    await settle()
+
+    expect(res.status).toBe(400)
+    // The client's own dialect, since openai-chat is what it spoke.
+    expect(body.error?.type).toBe("invalid_request_error")
+    expect(body.error?.message).toContain("response_format.type")
+    expect(upstream.calls).toHaveLength(0)
+    // The schema the caller sent is never quoted back — `shared/reject.ts` interpolates no value
+    // out of a body it refused, and this one is a client-facing surface.
+    expect(body.error?.message).not.toContain("winner")
+    // A refused request is still a request: one row, priced at nothing, named a client error.
+    expect(usage.rows).toHaveLength(1)
+    expect(usage.rows[0]).toMatchObject({ outcome: "client_error", tokensIn: 0, tokensOut: 0 })
+  })
+
+  test("response_format: text is served: it is the default and constrains nothing", async () => {
+    const { app, upstream } = harness({ responses: [ok] })
+
+    const res = await app.request("/v1/chat/completions", post(CHAT({ type: "text" }), bearer()))
+    await res.text()
+    await settle()
+
+    expect(res.status).toBe(200)
+    expect(upstream.calls).toHaveLength(1)
+  })
+})

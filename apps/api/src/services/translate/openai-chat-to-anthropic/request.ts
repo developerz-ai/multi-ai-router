@@ -14,7 +14,12 @@ import type {
   ParsedOpenAiChatToolCall,
 } from "../shared/openai-chat"
 import { openAiChatRequestSchema } from "../shared/openai-chat"
-import { assertTranslatableToAnthropic, parseRequest, rejectField } from "../shared/reject"
+import {
+  assertPlainResponseFormat,
+  assertTranslatableToAnthropic,
+  parseRequest,
+  rejectField,
+} from "../shared/reject"
 import { inputFromArguments, toolChoiceToAnthropic, toolsToAnthropic } from "../shared/tools"
 
 /**
@@ -28,9 +33,10 @@ import { inputFromArguments, toolChoiceToAnthropic, toolsToAnthropic } from "../
  * `role:"tool"` message becomes a `tool_result` block on a **user** turn, which is where Anthropic
  * puts results — several in a row therefore merge into one turn, exactly as Anthropic expects.
  *
- * Refused: `logprobs`, `top_logprobs`, `n > 1`, audio and file parts, and a `tool_call_id` matching
- * no call earlier in the transcript. Dropped, as documented: `seed`, `frequency_penalty`,
- * `presence_penalty`, `logit_bias`, `user`, `parallel_tool_calls`, `strict`, and image `detail`.
+ * Refused: `logprobs`, `top_logprobs`, `n > 1`, a `response_format` constraining the answer's shape,
+ * audio and file parts, and a `tool_call_id` matching no call earlier in the transcript. Dropped, as
+ * documented: `seed`, `frequency_penalty`, `presence_penalty`, `logit_bias`, `user`,
+ * `parallel_tool_calls`, `strict`, and image `detail`.
  */
 
 export interface OpenAiChatToAnthropicOptions {
@@ -44,6 +50,7 @@ export function openAiChatToAnthropicRequest(
 ): AnthropicRequest {
   const request = parseRequest(openAiChatRequestSchema, body, "openai-chat")
   assertTranslatableToAnthropic(request)
+  assertPlainResponseFormat(request)
 
   const system: string[] = []
   const turns: AnthropicTurn[] = []

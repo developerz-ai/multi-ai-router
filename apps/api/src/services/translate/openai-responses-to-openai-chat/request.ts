@@ -32,8 +32,9 @@ import { toolChoiceFromOpenAiResponses, toolsFromOpenAiResponses } from "../shar
  * a documented drop, and none of it is quietly approximated.
  *
  * **The stateful half is a `400` before any upstream call, and that is the headline of this
- * direction.** `previous_response_id`, `store: true`, `include`, and `reasoning` / `item_reference`
- * items all mean "continue from something the provider remembers", and this router remembers
+ * direction.** `previous_response_id`, `store: true`, `include`, `conversation`, `prompt`,
+ * `background: true`, and `reasoning` / `item_reference` items all mean "continue from, or leave
+ * behind, something the provider remembers", and this router remembers
  * nothing — it picks an account per request. Served anyway, a `previous_response_id` would become a
  * call carrying only the newest turn and the model would answer a conversation it was never shown,
  * so the refusal names the field and the client learns to send the whole transcript instead.
