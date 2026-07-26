@@ -19,6 +19,15 @@ import { type PoolView, toPoolView } from "./view"
  * unresolvable ids in it: selection would quietly skip them and the operator
  * would debug an empty candidate set instead of reading an error at the moment
  * they made the mistake.
+ *
+ * The overflow carries a second rule: **it must be one of the pool's members**.
+ * Candidates are `pool_members ∩ key_scope` and nothing widens that
+ * (CLAUDE.md non-negotiable 6), so an overflow outside the membership would let
+ * a key scoped to this pool spend an account it never named. Designating one is
+ * therefore a property of a membership — the pool holds that member back from
+ * the policy — and both writes check it against the pool *as it will be after
+ * the write*, which is why an edit that drops the overflow's membership is
+ * refused rather than silently leaving a reference routing never honors.
  */
 
 export interface PoolsService {
@@ -75,7 +84,12 @@ export function createPoolsService(deps: PoolsServiceDeps): PoolsService {
 
     create: async (body) => {
       const accounts = await accountIndex()
-      const checked = checkReferences(body.members, body.overflowAccountId ?? null, accounts)
+      const checked = checkReferences({
+        members: body.members,
+        memberIds: idsOf(body.members ?? []),
+        overflowAccountId: body.overflowAccountId ?? null,
+        accounts,
+      })
       if (!checked.ok) return checked
 
       const taken = await deps.pools.findByName(body.name)
@@ -108,8 +122,19 @@ export function createPoolsService(deps: PoolsServiceDeps): PoolsService {
       if (current === undefined) return notFound(`no pool with id "${id}"`)
 
       const accounts = await accountIndex()
-      const overflow = body.overflowAccountId === undefined ? null : body.overflowAccountId
-      const checked = checkReferences(body.members, overflow, accounts)
+      // The pool as it will be *after* this patch: an absent `members` leaves the set alone and an
+      // absent `overflowAccountId` leaves the current one, so "this edit drops the overflow's
+      // membership" is only visible against the stored row, never against the body.
+      const checked = checkReferences({
+        members: body.members,
+        memberIds:
+          body.members === undefined
+            ? idsOf(await deps.pools.listMembers(id))
+            : idsOf(body.members),
+        overflowAccountId:
+          body.overflowAccountId === undefined ? current.overflowAccountId : body.overflowAccountId,
+        accounts,
+      })
       if (!checked.ok) return checked
 
       if (body.name !== undefined && body.name !== current.name) {
@@ -193,12 +218,23 @@ export function createPoolsService(deps: PoolsServiceDeps): PoolsService {
   }
 }
 
-/** Membership and overflow must both name real accounts, and a member may appear once. */
-function checkReferences(
-  members: readonly PoolMemberInputBody[] | undefined,
-  overflowAccountId: string | null,
-  accounts: ReadonlyMap<string, AccountRow>,
-): AdminResult<null> {
+interface ReferenceCheck {
+  /** The membership the write carries, or `undefined` when it leaves the set alone. */
+  readonly members: readonly PoolMemberInputBody[] | undefined
+  /** The membership the pool will hold once the write lands. */
+  readonly memberIds: ReadonlySet<string>
+  /** The overflow the pool will hold once the write lands. */
+  readonly overflowAccountId: string | null
+  readonly accounts: ReadonlyMap<string, AccountRow>
+}
+
+/**
+ * Membership and overflow must both name real accounts, a member may appear
+ * once, and the overflow must be one of the members.
+ */
+function checkReferences(check: ReferenceCheck): AdminResult<null> {
+  const { members, memberIds, overflowAccountId, accounts } = check
+
   if (members !== undefined) {
     const seen = new Set<string>()
     const unknown: string[] = []
@@ -220,12 +256,28 @@ function checkReferences(
     }
   }
 
-  if (overflowAccountId !== null && !accounts.has(overflowAccountId)) {
+  if (overflowAccountId === null) return ok(null)
+
+  if (!accounts.has(overflowAccountId)) {
     return invalid(
       `overflow account "${overflowAccountId}" does not exist`,
       "unknown_overflow_account",
     )
   }
 
+  if (!memberIds.has(overflowAccountId)) {
+    return invalid(
+      `overflow account "${overflowAccountId}" is not a member of this pool. The overflow is a ` +
+        `member held back from the policy, not a way out of the pool: a key scoped to this pool ` +
+        `must never reach an account the pool does not hold. Add it as a member, or clear the ` +
+        `overflow.`,
+      "overflow_not_member",
+    )
+  }
+
   return ok(null)
+}
+
+function idsOf(members: readonly { readonly accountId: string }[]): ReadonlySet<string> {
+  return new Set(members.map((member) => member.accountId))
 }

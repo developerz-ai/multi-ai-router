@@ -463,6 +463,55 @@ describe("pools", () => {
     }
     expect(store.rows.pools).toHaveLength(0)
   })
+
+  test("refuses an overflow account the pool does not hold, and says how to fix it", async () => {
+    const { app, store } = harness()
+    const member = await newAccount(app)
+    const outsider = await newAccount(app, { label: "corp-key" })
+
+    const rejected = await call(app, "POST", ADMIN_POOLS_BASE_PATH, {
+      name: "team",
+      members: [{ accountId: member.id }],
+      overflowAccountId: outsider.id,
+    })
+    expect(rejected.status).toBe(400)
+    expect(rejected.body).toMatchObject({ error: { code: "overflow_not_member" } })
+    expect(store.rows.pools).toHaveLength(0)
+
+    // The fix the message names: hold it as a member, and the same write lands.
+    const accepted = await call(app, "POST", ADMIN_POOLS_BASE_PATH, {
+      name: "team",
+      members: [{ accountId: member.id }, { accountId: outsider.id }],
+      overflowAccountId: outsider.id,
+    })
+    expect(accepted.status).toBe(201)
+    expect(accepted.body).toMatchObject({ overflowAccountId: outsider.id })
+  })
+
+  test("refuses an edit that would strand the overflow outside the membership", async () => {
+    const { app } = harness()
+    const member = await newAccount(app)
+    const paid = await newAccount(app, { label: "paid-key" })
+
+    const created = await call(app, "POST", ADMIN_POOLS_BASE_PATH, {
+      name: "team",
+      members: [{ accountId: member.id }, { accountId: paid.id }],
+      overflowAccountId: paid.id,
+    })
+    expect(created.status).toBe(201)
+    const pool = created.body as { id: string }
+
+    const stranded = await call(app, "PATCH", `${ADMIN_POOLS_BASE_PATH}/${pool.id}`, {
+      members: [{ accountId: member.id }],
+    })
+    expect(stranded.status).toBe(400)
+    expect(stranded.body).toMatchObject({ error: { code: "overflow_not_member" } })
+
+    // Unchanged: a refused write leaves the pool exactly as it was.
+    const after = await call(app, "GET", `${ADMIN_POOLS_BASE_PATH}/${pool.id}`)
+    expect(after.body).toMatchObject({ overflowAccountId: paid.id })
+    expect((after.body as { members: unknown[] }).members).toHaveLength(2)
+  })
 })
 
 describe("keys", () => {

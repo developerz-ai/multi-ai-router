@@ -115,10 +115,56 @@ describe("grouping", () => {
   })
 
   test("a pool's overflow member is resolved but kept out of the member list", () => {
-    const state = snapshot(accounts, [pool("team", ["a"], { overflowAccountId: "d" })])
+    const state = snapshot(accounts, [pool("team", ["a", "d"], { overflowAccountId: "d" })])
     const group = resolveScope(state, request({ kind: "pools", poolIds: ["team"] })).groups[0]
 
     expect(group?.members.map((m) => m.account.id)).toEqual(["a"])
     expect(group?.overflow?.account.id).toBe("d")
+  })
+})
+
+/**
+ * `pool_members ∩ key_scope` has no exception for the overflow. An overflow that is not a member
+ * sits outside the intersection, so honoring it would hand a key scoped to `team` an account the
+ * pool does not hold — the leak this whole group exists to keep closed.
+ */
+describe("overflow stays inside the intersection", () => {
+  test("an overflow the pool does not hold is not admitted, in the group or in scope", () => {
+    const state = snapshot(accounts, [pool("team", ["a"], { overflowAccountId: "d" })])
+    const resolved = resolveScope(state, request({ kind: "pools", poolIds: ["team"] }))
+
+    expect(resolved.groups[0]?.overflow).toBeNull()
+    expect(resolved.groups[0]?.members.map((m) => m.account.id)).toEqual(["a"])
+    expect(resolved.diagnostics.inScopeAccountIds).toEqual(["a"])
+  })
+
+  test("the overflow keeps its own membership's weight and priority", () => {
+    const state = snapshot(
+      [account("a"), account("d", { weight: 100, priority: 0 })],
+      [
+        {
+          ...pool("team", []),
+          members: [{ accountId: "a" }, { accountId: "d", weight: 300, priority: 7 }],
+          overflowAccountId: "d",
+        },
+      ],
+    )
+    const group = resolveScope(state, request({ kind: "pools", poolIds: ["team"] })).groups[0]
+
+    expect(group?.overflow?.weight).toBe(300)
+    expect(group?.overflow?.priority).toBe(7)
+    // Held back behind the primary set rather than interleaved into it.
+    expect(group?.overflow?.order).toBe(1)
+  })
+
+  test("an overflow whose account has vanished is reported, not invented", () => {
+    const state = snapshot(
+      [account("a")],
+      [pool("team", ["a", "ghost"], { overflowAccountId: "ghost" })],
+    )
+    const resolved = resolveScope(state, request({ kind: "pools", poolIds: ["team"] }))
+
+    expect(resolved.groups[0]?.overflow).toBeNull()
+    expect(resolved.diagnostics.unresolvedTargetIds).toEqual(["ghost"])
   })
 })

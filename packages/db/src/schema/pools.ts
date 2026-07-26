@@ -12,9 +12,17 @@ export const pools = pgTable(
 
     /**
      * The pool's member of last resort — typically a paid API key — engaged only
-     * when every ordinary member has filtered out. Invisible to the policy until
-     * then, and still subject to the presenting key's scope
-     * (docs/idea/05-routing-and-failover.md#overflow-optional-opt-in).
+     * when every other member has filtered out. Invisible to the policy until
+     * then (docs/idea/05-routing-and-failover.md#overflow-optional-opt-in).
+     *
+     * It must be one of the pool's `pool_members`. Candidates are
+     * `pool_members ∩ key_scope` and nothing widens that, so an overflow outside
+     * the membership would let a key scoped to this pool reach an account the
+     * pool does not hold. The rule is enforced by `services/pools` at write time
+     * and by `services/routing/scope.ts` at read time; a composite foreign key
+     * would state it here, but `replaceMembers` empties the membership mid
+     * transaction and the cascade a dropped membership needs is `set null` on
+     * one column of two, which a composite reference cannot express.
      *
      * `ON DELETE SET NULL`: deleting the overflow account must drop the pool's
      * fallback, never the pool.

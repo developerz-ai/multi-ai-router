@@ -13,6 +13,7 @@ import { createUsageRecordRepository } from "../../src/repositories/usage-reposi
 import { accounts } from "../../src/schema/accounts"
 import { apiKeys } from "../../src/schema/api-keys"
 import { oauthStates } from "../../src/schema/oauth-states"
+import { pools } from "../../src/schema/pools"
 import { priceOverrides } from "../../src/schema/price-overrides"
 import { scheduledTaskRuns } from "../../src/schema/scheduled-task-runs"
 import { usageDaily } from "../../src/schema/usage-daily"
@@ -38,11 +39,15 @@ let db: Database
 
 const accountIds: string[] = []
 const apiKeyIds: string[] = []
+const poolIds: string[] = []
 const scheduledTaskRunIds: string[] = []
 
 afterAll(async () => {
   if (handle !== undefined) {
     if (apiKeyIds.length > 0) await db.delete(apiKeys).where(inArray(apiKeys.id, apiKeyIds))
+    // Before the accounts: `pools.overflow_account_id` is `set null`, but a `pool_members` row
+    // cascades, and leaving a half-torn pool behind would poison the next run.
+    if (poolIds.length > 0) await db.delete(pools).where(inArray(pools.id, poolIds))
     if (accountIds.length > 0) await db.delete(accounts).where(inArray(accounts.id, accountIds))
     if (scheduledTaskRunIds.length > 0) {
       await db.delete(scheduledTaskRuns).where(inArray(scheduledTaskRuns.id, scheduledTaskRunIds))
@@ -246,6 +251,54 @@ describe.skipIf(!runnable)("migrations against a live database", () => {
 
     expect(await repository.replaceAll([], new Date("2026-07-24T12:00:00.000Z"))).toEqual([])
     expect(await repository.list()).toEqual([])
+  })
+
+  /**
+   * 0010 backfills the rule "the overflow account is one of the pool's members". Rows written
+   * before it could name any account at all, which let a key scoped to that pool reach an account
+   * the pool does not hold — so routing now ignores such a reference, and this migration is what
+   * keeps an existing deployment's paid fallback working instead of quietly going inert.
+   *
+   * The shipped SQL is executed here rather than restated: a test that re-types the statement
+   * proves only that the test is self-consistent. It is already applied by the run above, so a
+   * fresh unbacked row exercises exactly the re-run path the file promises is a no-op.
+   */
+  test("0010 makes a pre-rule overflow a member, and running it again changes nothing", async () => {
+    db = (handle as DatabaseHandle).db
+    const live = handle as DatabaseHandle
+    const backfill = await Bun.file(
+      new URL("../../migrations/0010_overflow_is_a_member.sql", import.meta.url),
+    ).text()
+
+    const accountRepository = createAccountRepository(db)
+    const member = await accountRepository.create({ label: "test-0010-member", provider: "zai" })
+    const outsider = await accountRepository.create({ label: "test-0010-corp", provider: "zai" })
+    accountIds.push(member.id, outsider.id)
+
+    const [pool] = await live.sql<{ id: string }[]>`
+      insert into pools (name, overflow_account_id)
+      values ('test-0010-pool', ${outsider.id}::uuid)
+      returning id
+    `
+    const poolId = (pool as { id: string }).id
+    poolIds.push(poolId)
+    await live.sql`insert into pool_members (pool_id, account_id) values (${poolId}::uuid, ${member.id}::uuid)`
+
+    const memberIds = async (): Promise<string[]> => {
+      const rows = await live.sql<{ account_id: string }[]>`
+        select account_id from pool_members where pool_id = ${poolId}::uuid order by account_id
+      `
+      return rows.map((row) => row.account_id).sort()
+    }
+
+    expect(await memberIds()).toEqual([member.id].sort())
+
+    await live.sql.unsafe(backfill)
+    expect(await memberIds()).toEqual([member.id, outsider.id].sort())
+
+    // Idempotent: a second replica, a restart mid-upgrade, or a re-run must converge.
+    await live.sql.unsafe(backfill)
+    expect(await memberIds()).toEqual([member.id, outsider.id].sort())
   })
 
   test("usage daily rollup round-trips from raw usage records", async () => {

@@ -68,8 +68,9 @@ export interface PoolSnapshot {
   /** Declared order. It is the tiebreak for `priority-failover` and for every stable sort here. */
   readonly members: readonly PoolMembership[]
   /**
-   * Optional member of last resort — typically a paid API key. Used only when every primary
-   * member is filtered out, and still subject to the key's scope. Designating one *is* the
+   * Optional member of last resort — typically a paid API key. It must be one of {@link members}:
+   * the designation withholds that membership from the policy, it does not admit an account from
+   * outside the pool. Used only when every other member is filtered out. Designating one *is* the
    * opt-in; there is no second switch.
    */
   readonly overflowAccountId?: string

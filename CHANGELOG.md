@@ -45,7 +45,7 @@ your tooling config.
   — usage rollup, OAuth-state purge, quota-floor recovery — every task
   idempotent, resumable, bounded-batch, with `ScheduledTaskRun` visibility.
   No broker, no cron, no refresh timer for Claude subscription tokens.
-- 7 Drizzle migrations, Postgres 16+ via `postgres.js`.
+- 11 Drizzle migrations, Postgres 16+ via `postgres.js`.
 - Observability: structured JSON logs with request-id propagation and a
   tested credential redactor, Prometheus-style `/metrics` including
   `router_overhead_seconds`, `/healthz` and `/readyz`.
@@ -60,6 +60,20 @@ your tooling config.
 
 ### Fixed
 
+- **A pool's overflow account can no longer sit outside the pool.** A key
+  scoped to a pool used to reach that pool's overflow even when the account
+  belonged to no pool the key names — spending it once every member cooled
+  down, and advertising its models in `/v1/models`. Candidates are
+  `pool_members ∩ key_scope` with no exception: the overflow is now one of the
+  pool's own members, held back from the policy. The admin plane refuses a
+  write that breaks the rule (`overflow_not_member`, `400`), including an edit
+  that would drop the overflow's own membership; routing ignores a reference
+  that predates it; migration `0010` backfills existing rows as memberships, so
+  behavior is unchanged and the reach becomes visible in the pool's member
+  list.
+- A `<select>` in the console rendered its first option instead of the stored
+  one — a pool on `round-robin` read as `sticky`, and one with an overflow read
+  as "None".
 - `router_overhead_seconds` no longer double-counts a successful attempt's
   own upstream wait time.
 - Session-slide writes to the store throttled instead of firing on every
