@@ -30,8 +30,9 @@ import {
  * (docs/idea/06-protocol-translation.md#design-rules).
  *
  * **The stateful half of openai-responses is refused here, before any upstream call.**
- * `previous_response_id`, `store: true`, `include`, and `reasoning` / `item_reference` items all say
- * "continue from something the provider is holding for me", and this router holds nothing: it picks
+ * `previous_response_id`, `store: true`, `include`, `conversation`, `prompt`, `background: true`,
+ * and `reasoning` / `item_reference` items all say "continue from, or leave behind, something the
+ * provider is holding for me", and this router holds nothing: it picks
  * an account per request and keeps no conversation state, so on non-Responses egress there is no
  * stored response to continue from at any account it could choose. A `400` naming the field is the
  * only honest answer (`06-protocol-translation.md#translation-matrix`, "Unsupported") — serving the

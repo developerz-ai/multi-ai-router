@@ -1,6 +1,7 @@
 import { z } from "zod"
 import { createAnthropicStreamEmitter } from "../shared/anthropic-stream"
-import { toAnthropicStopReason } from "../shared/stop-reason"
+import { createOpenAiChatToolCallReader } from "../shared/openai-chat-tool-calls"
+import { CONSERVATIVE_STOP_REASON, toAnthropicStopReason } from "../shared/stop-reason"
 import type { OpenAiChatUsage } from "../shared/usage"
 import { anthropicUsageCounts, parseOpenAiChatUsage } from "../shared/usage"
 import type { SseEvent, StreamTranslator } from "../sse/emit"
@@ -13,13 +14,21 @@ import { frameJson } from "../sse/parse"
  * The block structure Anthropic requires is invented by `shared/anthropic-stream.ts`, which owns the
  * verified event order for every dialect translated into it. What lives here is the openai-chat half
  * of the reading: text arrives as `delta.content`, calls as `delta.tool_calls[]` keyed by an index
- * that counts only calls, with no start, no stop, and no ordering between the two.
+ * that counts only calls, with no start, no stop, and no ordering between the two — and which an
+ * upstream may revisit, or omit entirely. `shared/openai-chat-tool-calls.ts` owns that keying.
  *
  * **The terminal events wait for the end of the stream, and only the terminal events.** openai-chat
  * puts `finish_reason` on one chunk and — with `stream_options.include_usage` — the token counts on
  * a *later* chunk carrying no choices at all, so `message_delta` cannot be emitted the instant a
  * finish reason lands without reporting a completion with no tokens. Content deltas are never held:
  * every one leaves as it arrives.
+ *
+ * **A reasoning model's thinking is dropped here, and carried toward openai-responses.** DeepSeek-R1,
+ * QwQ and GLM stream it beside the answer under names `shared/openai-chat-reasoning.ts` lists, and
+ * Anthropic states a `thinking` block that would hold the text — but a client is entitled to replay
+ * an assistant turn verbatim, and Anthropic refuses a `thinking` block whose `signature` this router
+ * cannot produce. Synthesizing one would answer this turn and break the next
+ * (`06-protocol-translation.md#known-lossy-edges`).
  */
 
 /** Neither field is required: a compatible upstream always names both on its first chunk. */
@@ -70,12 +79,21 @@ export function openAiChatToAnthropicStream(
   options: OpenAiChatToAnthropicStreamOptions = {},
 ): StreamTranslator {
   const emitter = createAnthropicStreamEmitter(options)
+  const toolCalls = createOpenAiChatToolCallReader()
   let finishReason: string | null = null
   let usage: OpenAiChatUsage | null = null
   let unrecognized: string | null = null
 
   function terminate(out: SseEvent[]): void {
-    const mapped = toAnthropicStopReason(finishReason)
+    // `[DONE]` says the upstream is finished talking, even on the rare broken stream that never sent
+    // a `finish_reason` chunk — and real Anthropic never states a `message_delta` with a null
+    // `stop_reason`. `toAnthropicStopReason(null)` reads as "not finished yet" mid-stream, which is
+    // the wrong claim once termination is unconditional here; the conservative fallback is used
+    // directly instead, the same value an unrecognized reason would fall back to.
+    const mapped =
+      finishReason === null
+        ? { value: CONSERVATIVE_STOP_REASON, unrecognized: null }
+        : toAnthropicStopReason(finishReason)
     unrecognized = mapped.unrecognized ?? unrecognized
     emitter.terminate(out, { stopReason: mapped.value, usage: anthropicUsageCounts(usage) })
   }
@@ -108,8 +126,8 @@ export function openAiChatToAnthropicStream(
 
       emitter.start(out)
       emitter.text(out, choice.delta?.content ?? "")
-      for (const [position, call] of (choice.delta?.tool_calls ?? []).entries()) {
-        const key = call.index ?? position
+      for (const call of choice.delta?.tool_calls ?? []) {
+        const key = toolCalls.key(call)
         emitter.toolStart(out, key, { id: call.id, name: call.function?.name })
         emitter.toolArgs(out, key, call.function?.arguments ?? "")
       }

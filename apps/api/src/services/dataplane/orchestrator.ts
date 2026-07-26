@@ -1,9 +1,4 @@
-import {
-  type Dialect,
-  NoHealthyAccountError,
-  type RouterError,
-  TranslationError,
-} from "@multi-ai-router/core"
+import { type Dialect, type RouterError, TranslationError } from "@multi-ai-router/core"
 import type { Logger } from "../../logging/logger"
 import type { SdkInvoker, SdkQuotaStore, SessionStore } from "../../providers"
 import type { RateLookup } from "../cost"
@@ -14,7 +9,7 @@ import type { VerifiedKey } from "./auth/verifier"
 import { type BodyReadOptions, readRequestBody } from "./body/read"
 import { DEFAULT_SESSION_HEADERS, resolveSessionKey } from "./body/session"
 import { runChain } from "./chain"
-import { egressRejectionError } from "./egress/mode"
+import { resolveEgress } from "./egress/mode"
 import type { HealthStore } from "./health"
 import { keyRateLimitedError, type RateLimiter } from "./limits"
 import { outcomeForResponse, type RequestProgress, sampleOf, streamed } from "./observe"
@@ -32,6 +27,7 @@ import {
   SYSTEM_CLOCK,
   type UpstreamOperation,
 } from "./types"
+import { unservableError } from "./unservable"
 
 /**
  * The request lifecycle, steps 3-12 of `docs/idea/01-architecture.md`:
@@ -130,7 +126,6 @@ export interface Dispatcher {
 }
 
 const NO_MODEL = "The request body must name a model"
-const NO_CANDIDATE = "No candidate account can serve this request"
 
 export function createDispatcher(deps: DispatcherDeps): Dispatcher {
   const clock = deps.clock ?? SYSTEM_CLOCK
@@ -152,7 +147,7 @@ export function createDispatcher(deps: DispatcherDeps): Dispatcher {
     const limit = deps.limiter?.check(input.key, startedAt.getTime())
     if (limit !== undefined && !limit.allowed) throw keyRateLimitedError(input.key, limit)
 
-    const body = await readRequestBody(input.request.body, options.body)
+    const body = await readRequestBody(input.request, options.body)
     const model = body.fields.model
     if (model === null) throw new TranslationError(NO_MODEL)
     progress.model = model
@@ -222,10 +217,20 @@ export function createDispatcher(deps: DispatcherDeps): Dispatcher {
 
     const plan = planCandidates(selection.candidates, deps.catalog, input.ingress, operation)
     if (plan.servable.length === 0) {
+      // Off the served path entirely, so the second catalog read this costs is free: it only
+      // happens once the chain is already known to be empty.
+      const accounts = new Map(deps.catalog.accounts().map((one) => [one.id, one]))
       return fail(
-        plan.rejection !== null
-          ? egressRejectionError(plan.rejection)
-          : (plan.endpointError ?? new NoHealthyAccountError(NO_CANDIDATE)),
+        unservableError({
+          plan,
+          decision: selection.decision,
+          capable: (accountId) => {
+            const account = accounts.get(accountId)
+            if (account === undefined) return false
+            return resolveEgress(input.ingress, account, operation).mode !== "rejected"
+          },
+          now: clock.now(),
+        }),
       )
     }
 

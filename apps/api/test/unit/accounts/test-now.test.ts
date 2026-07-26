@@ -93,6 +93,46 @@ describe("createTestNowService — HTTP accounts", () => {
     expect(audited[0]?.kind).toBe("account.tested")
   })
 
+  test("probes an openai-chat account under the ceiling name its provider states", async () => {
+    const sent: Record<string, unknown>[] = []
+    const capture = async (request: Request) => {
+      sent.push(JSON.parse(await request.text()) as Record<string, unknown>)
+      return jsonResponse(200, { choices: [] })
+    }
+
+    // OpenAI refuses `max_tokens` on every reasoning model it sells, so a probe carrying it would
+    // report a healthy account as broken.
+    const openAi = harness({
+      row: accountRow({ provider: "openai-api", dialect: "openai-chat" }),
+      fetch: capture,
+    })
+    await openAi.service.test("acc-1", { model: "gpt-5" })
+
+    // …and a vendor that never adopted the new name would drop the field and ignore the ceiling.
+    const openRouter = harness({ row: accountRow({ provider: "openrouter" }), fetch: capture })
+    await openRouter.service.test("acc-1", { model: "gpt-4o" })
+
+    expect(sent[0]).toHaveProperty("max_completion_tokens", 1)
+    expect(sent[0]).not.toHaveProperty("max_tokens")
+    expect(sent[1]).toHaveProperty("max_tokens", 1)
+    expect(sent[1]).not.toHaveProperty("max_completion_tokens")
+  })
+
+  test("an anthropic-dialect probe keeps max_tokens: the dialect requires that field", async () => {
+    let sent: Record<string, unknown> = {}
+    const { service } = harness({
+      fetch: async (request) => {
+        sent = JSON.parse(await request.text()) as Record<string, unknown>
+        return jsonResponse(200, { id: "msg_1", content: [] })
+      },
+    })
+
+    await service.test("acc-1", { model: "glm-4.7" })
+
+    expect(sent).toHaveProperty("max_tokens", 1)
+    expect(sent).not.toHaveProperty("max_completion_tokens")
+  })
+
   test("reports the real failure classification, not a generic error", async () => {
     const { service } = harness({
       fetch: async () => jsonResponse(401, { error: { code: "1001", message: "bad token" } }),

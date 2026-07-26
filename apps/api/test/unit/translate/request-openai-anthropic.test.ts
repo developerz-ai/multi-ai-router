@@ -224,6 +224,63 @@ describe("rejected fields with no anthropic counterpart", () => {
   })
 })
 
+/**
+ * Structured output is the refusal a *client library* depends on. An OpenAI SDK `.parse()`,
+ * LangChain's `withStructuredOutput()`, Instructor, and `generateObject` all send
+ * `response_format` and then parse the answer as the schema they sent. Dropped, the request
+ * succeeds and the failure surfaces at the caller's own `JSON.parse` with nothing naming the cause;
+ * refused, the client is told which field to drop. The `openai-responses` sibling already refuses
+ * the same feature under its own name (`text.format`), and these are its openai-chat half.
+ */
+describe("response_format: a schema-constrained answer is a contract, not a hint", () => {
+  test("json_schema is refused by name, before any upstream call", () => {
+    expect(() =>
+      openAiChatToAnthropicRequest(
+        openAiChatRequest({
+          response_format: {
+            type: "json_schema",
+            json_schema: { name: "person", schema: { type: "object" }, strict: true },
+          },
+        }),
+      ),
+    ).toThrow(/response_format\.type/)
+  })
+
+  test("json_object is refused too: a caller in JSON mode will parse the answer", () => {
+    expect(() =>
+      openAiChatToAnthropicRequest(openAiChatRequest({ response_format: { type: "json_object" } })),
+    ).toThrow(TranslationError)
+  })
+
+  test("the refusal quotes the type back and never the schema the caller sent", () => {
+    let message = ""
+    try {
+      openAiChatToAnthropicRequest(
+        openAiChatRequest({
+          response_format: { type: "json_schema", json_schema: { name: "secret_shape" } },
+        }),
+      )
+    } catch (error) {
+      message = (error as Error).message
+    }
+    expect(message).toContain("json_schema")
+    expect(message).not.toContain("secret_shape")
+  })
+
+  test("type: text passes: it is the default, and it constrains nothing", () => {
+    expect(() =>
+      openAiChatToAnthropicRequest(openAiChatRequest({ response_format: { type: "text" } })),
+    ).not.toThrow()
+  })
+
+  test("an absent response_format passes: refusing a field nobody sent unservables every client", () => {
+    expect(() => openAiChatToAnthropicRequest(openAiChatRequest())).not.toThrow()
+    expect(() =>
+      openAiChatToAnthropicRequest(openAiChatRequest({ response_format: null })),
+    ).not.toThrow()
+  })
+})
+
 describe("stop sequences", () => {
   test("a single stop string becomes a one-element array", () => {
     const out = openAiChatToAnthropicRequest(openAiChatRequest({ stop: "STOP" }))

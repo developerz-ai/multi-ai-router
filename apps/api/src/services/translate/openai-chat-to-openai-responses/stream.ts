@@ -1,4 +1,6 @@
 import { z } from "zod"
+import { openAiChatReasoningSchema, readOpenAiChatReasoning } from "../shared/openai-chat-reasoning"
+import { createOpenAiChatToolCallReader } from "../shared/openai-chat-tool-calls"
 import { createResponsesStreamEmitter } from "../shared/responses-stream"
 import { readOpenAiFinishReason, toResponsesCompletion } from "../shared/stop-reason"
 import type { OpenAiChatUsage } from "../shared/usage"
@@ -16,12 +18,20 @@ import { frameJson } from "../sse/parse"
  * item concept at all — text arrives as `delta.content`, calls as `delta.tool_calls[]` keyed by an
  * index that counts only calls, with no start, no stop, and no ordering between the two — so item
  * boundaries are **invented**: one open item at a time, closed the moment the content switches kind.
+ * That index an upstream may revisit, or omit entirely; `shared/openai-chat-tool-calls.ts` owns the
+ * keying that survives both.
  *
  * **The terminal event waits for the end of the stream, and only the terminal event.** openai-chat
  * puts `finish_reason` on one chunk and — with `stream_options.include_usage` — the token counts on
  * a *later* chunk carrying no choices at all, so `response.completed` cannot be emitted the instant
  * a finish reason lands without reporting a response with no tokens. Content deltas are never held:
  * every one leaves as it arrives.
+ *
+ * **This is the direction a reasoning model's thinking survives.** DeepSeek-R1, QwQ, GLM and every
+ * other reasoning model reached over openai-chat stream their thinking beside the answer, under a
+ * name OpenAI never published; `shared/openai-chat-reasoning.ts` owns which names those are, and
+ * Responses has an item type waiting for the text. Toward `anthropic` the same deltas are dropped,
+ * because a `thinking` block a client can replay needs a `signature` this router cannot produce.
  */
 
 export interface OpenAiChatToOpenAiResponsesStreamOptions {
@@ -57,6 +67,7 @@ const chunkSchema = z.looseObject({
         delta: z
           .looseObject({
             content: z.string().nullish().catch(null),
+            ...openAiChatReasoningSchema,
             tool_calls: z.array(toolCallSchema).nullish().catch(null),
           })
           .nullish()
@@ -73,6 +84,7 @@ export function openAiChatToOpenAiResponsesStream(
   options: OpenAiChatToOpenAiResponsesStreamOptions,
 ): StreamTranslator {
   const emitter = createResponsesStreamEmitter(options)
+  const toolCalls = createOpenAiChatToolCallReader()
   let finishReason: string | null = null
   let usage: OpenAiChatUsage | null = null
   let unrecognized: string | null = null
@@ -113,9 +125,13 @@ export function openAiChatToOpenAiResponsesStream(
       if (choice === undefined) return out
 
       emitter.start(out)
+      // Before the text, which is the order a reasoning model produces the two in and the order
+      // Responses states its items: an upstream that thinks out loud has already finished doing so
+      // by the time it starts answering.
+      emitter.reasoning(out, readOpenAiChatReasoning(choice.delta))
       emitter.text(out, choice.delta?.content ?? "")
-      for (const [position, call] of (choice.delta?.tool_calls ?? []).entries()) {
-        const key = call.index ?? position
+      for (const call of choice.delta?.tool_calls ?? []) {
+        const key = toolCalls.key(call)
         emitter.toolStart(out, key, { id: call.id, name: call.function?.name })
         emitter.toolArgs(out, key, call.function?.arguments ?? "")
       }

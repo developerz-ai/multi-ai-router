@@ -1472,6 +1472,95 @@ describe("request validation", () => {
 })
 
 /**
+ * The configured body ceiling, end to end.
+ *
+ * The status is the assertion that matters: a `400` here would tell a developer their request was
+ * malformed and send them hunting a bad field in a body that was merely long. Both dialects get the
+ * refusal in their own error shape, no account is dialed, and no `UsageRecord` is written — nothing
+ * was attempted, so there is no attempt to account for.
+ */
+describe("the request body ceiling", () => {
+  const oversized = () =>
+    JSON.stringify({
+      model: "claude-opus-5",
+      max_tokens: 64,
+      messages: [{ role: "user", content: "x".repeat(2_048) }],
+    })
+
+  test("refuses an oversized body with 413 in the Anthropic error shape", async () => {
+    const { app, upstream, usage } = harness({
+      responses: [() => jsonResponse(200, {})],
+      maxBodyBytes: 512,
+    })
+
+    const res = await app.request("/v1/messages", post(oversized(), bearer()))
+    const body = await res.json()
+    await settle()
+
+    expect(res.status).toBe(413)
+    expect(body).toMatchObject({ type: "error", error: { type: "request_too_large" } })
+    expect(upstream.calls).toHaveLength(0)
+    expect(usage.rows).toHaveLength(0)
+  })
+
+  test("refuses an oversized body with 413 in the OpenAI error shape", async () => {
+    const { app, upstream } = harness({
+      responses: [() => jsonResponse(200, {})],
+      maxBodyBytes: 512,
+    })
+
+    const res = await app.request("/v1/chat/completions", post(oversized(), bearer()))
+    const body = await res.json()
+
+    expect(res.status).toBe(413)
+    expect(body).toMatchObject({ error: { code: "request_too_large", param: null } })
+    expect(upstream.calls).toHaveLength(0)
+  })
+
+  test("counts the refusal on router_requests_total under its own outcome", async () => {
+    const { app } = harness({ responses: [() => jsonResponse(200, {})], maxBodyBytes: 512 })
+
+    await app.request("/v1/messages", post(oversized(), bearer()))
+    await settle()
+
+    // Not folded into `client_error`: an operator looking at a spike of these needs to see that the
+    // remedy is a bigger ceiling, not a caller sending bad JSON.
+    const exposition = await (await app.request("/metrics")).text()
+    expect(exposition).toMatch(/router_requests_total\{[^}]*outcome="request_too_large"\} 1/)
+  })
+
+  test("serves a body the ceiling admits", async () => {
+    const { app, upstream } = harness({
+      responses: [() => jsonResponse(200, { usage: { input_tokens: 1, output_tokens: 1 } })],
+      maxBodyBytes: 4_096,
+    })
+
+    const res = await app.request("/v1/messages", post(oversized(), bearer()))
+    await res.text()
+
+    expect(res.status).toBe(200)
+    expect(upstream.calls).toHaveLength(1)
+  })
+
+  test("refuses a declared Content-Length over the ceiling without reading the body", async () => {
+    const { app, upstream } = harness({
+      responses: [() => jsonResponse(200, {})],
+      maxBodyBytes: 512,
+    })
+
+    // A short body announcing a long one: the header alone is enough to refuse, which is the point
+    // — a hostile client never gets the ceiling's worth of buffering out of the router.
+    const res = await app.request(
+      "/v1/messages",
+      post(MESSAGE, { ...bearer(), "content-length": "4294967296" }),
+    )
+
+    expect(res.status).toBe(413)
+    expect(upstream.calls).toHaveLength(0)
+  })
+})
+
+/**
  * One pool, three egress modes: a Claude subscription, a cross-dialect account, and an ordinary
  * passthrough account, side by side. Everything above this point proves each transport works in
  * isolation; this proves the pool doesn't care which one served the request — failover walks

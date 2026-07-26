@@ -14,7 +14,12 @@ export {
   ResetSource,
   UtilizationSource,
 } from "./domain/account"
-export { Dialect, EgressMode } from "./domain/dialect"
+export {
+  DEFAULT_OPENAI_CHAT_CEILING,
+  Dialect,
+  EgressMode,
+  OpenAiChatCeiling,
+} from "./domain/dialect"
 export { KeyScope } from "./domain/key"
 export { AuthKind, ProviderId } from "./domain/provider"
 export { DEFAULT_ROUTING_POLICY, RoutingPolicy } from "./domain/routing"
@@ -38,6 +43,7 @@ export {
   ModelNotFoundError,
   NoHealthyAccountError,
   QuotaExhaustedError,
+  RequestTooLargeError,
   RetryableRouterError,
   ROUTER_ERROR_CODES,
   RouterError,

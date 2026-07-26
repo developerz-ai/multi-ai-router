@@ -73,6 +73,37 @@ export function responsesTextPart(text: string): Record<string, unknown> {
   return { type: "output_text", text, annotations: [] }
 }
 
+/**
+ * An item the streaming half is still filling in.
+ *
+ * Every field a finished item states, and none it does not — one mutable shape, because a Responses
+ * item is announced before it is known and restated once it is, and the emitter would otherwise
+ * carry three near-identical partials. `key` is the source dialect's own name for the call it
+ * carries, or null for anything that is not one.
+ */
+export interface ResponsesItemDraft {
+  readonly kind: ResponsesOutputItem["type"]
+  readonly index: number
+  readonly id: string
+  readonly key: string | number | null
+  text: string
+  callId: string
+  name: string
+}
+
+/** The finished item a draft describes, in whatever state it has reached. */
+export function responsesDraftItem(draft: ResponsesItemDraft): ResponsesOutputItem {
+  if (draft.kind === "message") return { type: "message", id: draft.id, text: draft.text }
+  if (draft.kind === "reasoning") return { type: "reasoning", id: draft.id, summary: draft.text }
+  return {
+    type: "function_call",
+    id: draft.id,
+    call_id: draft.callId,
+    name: draft.name,
+    arguments: draft.text,
+  }
+}
+
 export function responsesItemJson(
   item: ResponsesOutputItem,
   status: "in_progress" | "completed",

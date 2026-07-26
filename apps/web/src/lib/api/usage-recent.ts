@@ -64,6 +64,7 @@ export const RECENT_OUTCOME_FILTERS = [
   "success",
   "client_error",
   "translation_failed",
+  "request_too_large",
   "key_revoked",
   "scope_violation",
   "key_rate_limited",

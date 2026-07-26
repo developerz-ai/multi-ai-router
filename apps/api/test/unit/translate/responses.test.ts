@@ -447,6 +447,35 @@ describe("openai-responses -> anthropic request", () => {
     ).toThrow(TranslationError)
   })
 
+  test("conversation is refused: the turns it names are the provider's, not this router's", () => {
+    expect(() =>
+      openAiResponsesToAnthropicRequest(openAiResponsesRequest({ conversation: "conv_abc" })),
+    ).toThrow(/conversation/)
+    expect(() =>
+      openAiResponsesToAnthropicRequest(openAiResponsesRequest({ conversation: { id: "conv_a" } })),
+    ).toThrow(/conversation/)
+  })
+
+  test("prompt is refused: a stored template's text is never seen here", () => {
+    expect(() =>
+      openAiResponsesToAnthropicRequest(
+        openAiResponsesRequest({ prompt: { id: "pmpt_1", version: "3" } }),
+      ),
+    ).toThrow(/prompt/)
+  })
+
+  test("background: true is refused: there is no id to poll and nothing holding the result", () => {
+    expect(() =>
+      openAiResponsesToAnthropicRequest(openAiResponsesRequest({ background: true })),
+    ).toThrow(/background/)
+  })
+
+  test("background: false passes, like store: false — it states the stateless case", () => {
+    expect(() =>
+      openAiResponsesToAnthropicRequest(openAiResponsesRequest({ background: false })),
+    ).not.toThrow()
+  })
+
   test("an absent max_output_tokens falls back to the injected default", () => {
     const out = openAiResponsesToAnthropicRequest(openAiResponsesRequest(), {
       defaultMaxTokens: 2048,
@@ -655,6 +684,27 @@ describe("openai-chat -> openai-responses request", () => {
   test("store is always false", () => {
     expect(openAiChatToOpenAiResponsesRequest(openAiChatRequest()).store).toBe(false)
   })
+
+  /**
+   * openai-responses *does* state this feature, as `text.format`. It is refused anyway, so the rule
+   * reads the same whichever way a request happens to point: the reverse pair already refuses
+   * `text.format`, and honoring the constraint here alone would make "servable" a direction.
+   */
+  test("response_format is refused even though this target has the feature under another name", () => {
+    expect(() =>
+      openAiChatToOpenAiResponsesRequest(
+        openAiChatRequest({
+          response_format: { type: "json_schema", json_schema: { name: "person" } },
+        }),
+      ),
+    ).toThrow(/response_format\.type/)
+  })
+
+  test("response_format: text passes: it constrains nothing", () => {
+    expect(() =>
+      openAiChatToOpenAiResponsesRequest(openAiChatRequest({ response_format: { type: "text" } })),
+    ).not.toThrow()
+  })
 })
 
 describe("openai-chat -> openai-responses response (non-streaming)", () => {
@@ -806,6 +856,98 @@ describe("openai-chat -> openai-responses stream", () => {
     })
     expect(stream.flush()).toEqual([])
   })
+
+  /**
+   * The `tool_calls[].index` a compatible upstream may revisit, or never send at all — the same
+   * looseness `stream-openai-anthropic.test.ts` covers toward Anthropic, and the same silent
+   * truncation of `arguments` if the reader keeps only the item it opened last.
+   */
+  describe("tool calls the upstream keys loosely", () => {
+    const chunk = (calls: Record<string, unknown>[]): SseFrame => ({
+      event: null,
+      data: JSON.stringify({
+        id: "chatcmpl-1",
+        choices: [{ index: 0, delta: { tool_calls: calls }, finish_reason: null }],
+      }),
+    })
+    const finish: SseFrame = {
+      event: null,
+      data: JSON.stringify({
+        id: "chatcmpl-1",
+        choices: [{ index: 0, delta: {}, finish_reason: "tool_calls" }],
+      }),
+    }
+
+    /** The finished `function_call` items, which is what a Responses client actually executes. */
+    function calls(events: readonly SseEvent[]): { name: string; arguments: string }[] {
+      const completed = payloads(events).find(
+        (event) => (event as { type: string }).type === "response.completed",
+      ) as { response: { output: { type: string; name: string; arguments: string }[] } } | undefined
+      return (completed?.response.output ?? [])
+        .filter((item) => item.type === "function_call")
+        .map((item) => ({ name: item.name, arguments: item.arguments }))
+    }
+
+    function run(frames: readonly SseFrame[]): SseEvent[] {
+      const stream = translator()
+      const events: SseEvent[] = []
+      for (const frame of frames) events.push(...stream.push(frame))
+      events.push(...stream.flush())
+      return events
+    }
+
+    test("arguments revisiting an earlier index after a later call opened still arrive", () => {
+      const events = run([
+        chunk([
+          { index: 0, id: "call_1", function: { name: "get_weather", arguments: "" } },
+          { index: 1, id: "call_2", function: { name: "lookup", arguments: "" } },
+        ]),
+        chunk([{ index: 0, function: { arguments: '{"city":"NY"}' } }]),
+        chunk([{ index: 1, function: { arguments: '{"q":"x"}' } }]),
+        finish,
+        { event: null, data: "[DONE]" },
+      ])
+      expect(calls(events)).toEqual([
+        { name: "get_weather", arguments: '{"city":"NY"}' },
+        { name: "lookup", arguments: '{"q":"x"}' },
+      ])
+    })
+
+    test("calls that state no index at all stay distinct rather than collapsing into one", () => {
+      const events = run([
+        chunk([{ id: "call_1", function: { name: "get_weather", arguments: '{"city":"NY"}' } }]),
+        chunk([{ id: "call_2", function: { name: "lookup", arguments: '{"q":"x"}' } }]),
+        finish,
+        { event: null, data: "[DONE]" },
+      ])
+      expect(calls(events)).toEqual([
+        { name: "get_weather", arguments: '{"city":"NY"}' },
+        { name: "lookup", arguments: '{"q":"x"}' },
+      ])
+    })
+
+    test("a held item is announced and closed like any other, never overlapping the live one", () => {
+      const events = run([
+        chunk([
+          { index: 0, id: "call_1", function: { name: "get_weather", arguments: "{}" } },
+          { index: 1, id: "call_2", function: { name: "lookup", arguments: "{}" } },
+        ]),
+        finish,
+        { event: null, data: "[DONE]" },
+      ])
+      const names = events
+        .map((event) => event.event)
+        .filter(
+          (name) => name === "response.output_item.added" || name === "response.output_item.done",
+        )
+      expect(names).toEqual([
+        "response.output_item.added",
+        "response.output_item.done",
+        "response.output_item.added",
+        "response.output_item.done",
+      ])
+    })
+  })
 })
 
 describe("openai-responses -> openai-chat request (the downgrade)", () => {
@@ -869,6 +1011,26 @@ describe("openai-responses -> openai-chat request (the downgrade)", () => {
     ).toThrow(TranslationError)
   })
 
+  test("conversation, prompt and background are refused: the same statefulness, later names", () => {
+    expect(() =>
+      openAiResponsesToOpenAiChatRequest(openAiResponsesRequest({ conversation: "conv_abc" })),
+    ).toThrow(/conversation/)
+    expect(() =>
+      openAiResponsesToOpenAiChatRequest(openAiResponsesRequest({ prompt: { id: "pmpt_1" } })),
+    ).toThrow(/prompt/)
+    expect(() =>
+      openAiResponsesToOpenAiChatRequest(openAiResponsesRequest({ background: true })),
+    ).toThrow(/background/)
+  })
+
+  test("a structured-output text.format is refused on this direction too", () => {
+    expect(() =>
+      openAiResponsesToOpenAiChatRequest(
+        openAiResponsesRequest({ text: { format: { type: "json_object" } } }),
+      ),
+    ).toThrow(/text\.format\.type/)
+  })
+
   test("an input_image naming only a file_id is refused", () => {
     expect(() =>
       openAiResponsesToOpenAiChatRequest(
@@ -882,6 +1044,35 @@ describe("openai-responses -> openai-chat request (the downgrade)", () => {
   test("stream requests include_usage: an omitted count would leave the terminal chunk null forever", () => {
     const out = openAiResponsesToOpenAiChatRequest(openAiResponsesRequest({ stream: true }))
     expect(out.stream_options).toEqual({ include_usage: true })
+  })
+
+  test("max_output_tokens lands under max_tokens by default", () => {
+    const out = openAiResponsesToOpenAiChatRequest(
+      openAiResponsesRequest({ max_output_tokens: 512 }),
+    )
+    expect(out.max_tokens).toBe(512)
+    expect(out).not.toHaveProperty("max_completion_tokens")
+  })
+
+  test("max_output_tokens lands under max_completion_tokens where the account states that name", () => {
+    const out = openAiResponsesToOpenAiChatRequest(
+      openAiResponsesRequest({ max_output_tokens: 512 }),
+      { ceiling: "max_completion_tokens" },
+    )
+    expect(out.max_completion_tokens).toBe(512)
+    expect(out).not.toHaveProperty("max_tokens")
+  })
+
+  test("an absent max_output_tokens emits neither name: openai-chat's ceiling is optional", () => {
+    const out = JSON.parse(
+      JSON.stringify(
+        openAiResponsesToOpenAiChatRequest(openAiResponsesRequest(), {
+          ceiling: "max_completion_tokens",
+        }),
+      ),
+    )
+    expect(out).not.toHaveProperty("max_tokens")
+    expect(out).not.toHaveProperty("max_completion_tokens")
   })
 })
 

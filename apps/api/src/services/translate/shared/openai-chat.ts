@@ -1,14 +1,20 @@
+import { DEFAULT_OPENAI_CHAT_CEILING, type OpenAiChatCeiling } from "@multi-ai-router/core"
 import { z } from "zod"
 
 /**
  * The OpenAI Chat Completions request, in the two shapes translation needs — same split as
  * `shared/anthropic.ts`: `Parsed*` is what arrives, the unsuffixed family is what we emit.
  *
- * Three fields are declared here purely so they can be **refused by name** (`n`, `logprobs`,
- * `top_logprobs`); `shared/reject.ts` owns that call. The documented hints — `seed`,
- * `frequency_penalty`, `presence_penalty`, `logit_bias`, `user`, `parallel_tool_calls` — are
- * deliberately absent instead, because "not in the schema" is exactly what dropping them means
+ * Four fields are declared here purely so they can be **refused by name** (`n`, `logprobs`,
+ * `top_logprobs`, `response_format`); `shared/reject.ts` owns that call. The documented hints — `seed`,
+ * `frequency_penalty`, `presence_penalty`, `logit_bias`, `user` — are deliberately absent instead,
+ * because "not in the schema" is exactly what dropping them means
  * (docs/idea/06-protocol-translation.md#known-lossy-edges).
+ *
+ * `reasoning_effort` and `parallel_tool_calls` are named in both shapes because openai-responses
+ * states the same two dials — `reasoning.effort` and `parallel_tool_calls` — so between those two
+ * dialects they are carried rather than dropped. Toward `anthropic` they have no counterpart and
+ * fall back to being a documented drop, which is why neither is required anywhere.
  */
 
 /** A content part this build cannot represent, kept as data so it can be refused by name. */
@@ -84,9 +90,19 @@ export const openAiChatRequestSchema = z.object({
   stream: z.boolean().nullish(),
   tools: z.array(openAiChatToolSchema).optional(),
   tool_choice: openAiChatToolChoiceSchema.optional(),
+  parallel_tool_calls: z.boolean().nullish(),
+  // Kept as a free string rather than an enum: the effort words are the *provider's* vocabulary and
+  // it has already grown twice past the four everyone remembers — OpenAI's published set is
+  // `none | minimal | low | medium | high | xhigh | max`, and `none` means "do not think", not
+  // "invalid". An enum here would `400` a dial the upstream accepts, which is the router picking the
+  // model's behaviour — the one thing it never does.
+  reasoning_effort: z.string().nullish(),
   n: z.number().int().nullish(),
   logprobs: z.boolean().nullish(),
   top_logprobs: z.number().int().nullish(),
+  // Structured output, declared only so it can be refused by name. Loose because the refusal reads
+  // `type` and nothing else — a schema this build never carries is not worth validating.
+  response_format: z.looseObject({ type: z.string() }).nullish(),
 })
 
 export type ParsedOpenAiChatRequest = z.infer<typeof openAiChatRequestSchema>
@@ -141,7 +157,9 @@ export type OpenAiChatToolChoice =
 export interface OpenAiChatRequest {
   readonly model: string
   readonly messages: readonly OpenAiChatMessage[]
+  /** Never emitted beside `max_completion_tokens`: see {@link chatCeiling}. */
   readonly max_tokens?: number | undefined
+  readonly max_completion_tokens?: number | undefined
   readonly temperature?: number | undefined
   readonly top_p?: number | undefined
   readonly stop?: readonly string[] | undefined
@@ -149,4 +167,26 @@ export interface OpenAiChatRequest {
   readonly stream_options?: { readonly include_usage: true } | undefined
   readonly tools?: readonly OpenAiChatTool[] | undefined
   readonly tool_choice?: OpenAiChatToolChoice | undefined
+  readonly parallel_tool_calls?: boolean | undefined
+  /** The caller's own word, never one this router picked. See the schema above. */
+  readonly reasoning_effort?: string | undefined
+}
+
+/**
+ * The output ceiling under the one name this target accepts, as an object to spread into an emitted
+ * body.
+ *
+ * **Exactly one of the two names is ever present, and emitting both is not the safe middle.** OpenAI
+ * refuses `max_tokens` on a reasoning model whether or not the new name sits beside it, so a body
+ * carrying both fails on precisely the models the new name exists for. Which one an upstream takes
+ * is its driver's answer, defaulted here to the name every compatible vendor states — a translator
+ * handed no answer still emits a ceiling rather than dropping the one the caller set.
+ */
+export function chatCeiling(
+  value: number | undefined,
+  ceiling: OpenAiChatCeiling = DEFAULT_OPENAI_CHAT_CEILING,
+): Pick<OpenAiChatRequest, "max_tokens" | "max_completion_tokens"> {
+  return ceiling === "max_completion_tokens"
+    ? { max_completion_tokens: value }
+    : { max_tokens: value }
 }

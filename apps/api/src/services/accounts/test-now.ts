@@ -1,4 +1,4 @@
-import { type Dialect, isRouterError } from "@multi-ai-router/core"
+import { type Dialect, isRouterError, type OpenAiChatCeiling } from "@multi-ai-router/core"
 import type { AccountRepository, AccountRow } from "@multi-ai-router/db"
 import { type DriverAccount, httpDriver, type SdkTestProbe } from "../../providers"
 import { AUDIT_KINDS, AUDIT_SUBJECTS, type AuditRecorder } from "../admin/audit"
@@ -228,7 +228,7 @@ async function runHttpProbe(
     plan: { account: routable, driver, dialect, url, upstreamModel },
     method: "POST",
     clientHeaders: new Headers(),
-    body: probeBody(dialect, upstreamModel),
+    body: probeBody(dialect, upstreamModel, driver.resolveChatCeiling(driverAccount)),
     fetch: call,
     cipher: deps.cipher,
     timeoutMs: deps.timeoutMs,
@@ -246,13 +246,28 @@ async function runHttpProbe(
   }
 }
 
-function probeBody(dialect: Dialect, model: string): Uint8Array {
+/**
+ * The smallest real call each dialect states. openai-chat's ceiling is the one field two vendors
+ * name differently, and the account's own driver says which — an OpenAI reasoning model answers the
+ * other name with a `400` the operator would read as "this account is broken"
+ * (docs/idea/06-protocol-translation.md#the-output-ceiling-one-field-two-names).
+ */
+function probeBody(dialect: Dialect, model: string, ceiling: OpenAiChatCeiling): Uint8Array {
   const text = new TextEncoder()
   if (dialect === "openai-responses") {
     return text.encode(JSON.stringify({ model, input: "ping", max_output_tokens: 16 }))
   }
+  if (dialect === "anthropic") {
+    return text.encode(
+      JSON.stringify({ model, max_tokens: 1, messages: [{ role: "user", content: "ping" }] }),
+    )
+  }
   return text.encode(
-    JSON.stringify({ model, max_tokens: 1, messages: [{ role: "user", content: "ping" }] }),
+    JSON.stringify({
+      model,
+      [ceiling]: 1,
+      messages: [{ role: "user", content: "ping" }],
+    }),
   )
 }
 

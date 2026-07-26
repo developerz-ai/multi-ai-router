@@ -1,9 +1,11 @@
+import type { OpenAiChatCeiling } from "@multi-ai-router/core"
 import type {
   OpenAiChatMessage,
   OpenAiChatPart,
   OpenAiChatRequest,
   OpenAiChatToolCall,
 } from "../shared/openai-chat"
+import { chatCeiling } from "../shared/openai-chat"
 import type {
   ParsedOpenAiResponsesContent,
   ParsedOpenAiResponsesItem,
@@ -30,8 +32,9 @@ import { toolChoiceFromOpenAiResponses, toolsFromOpenAiResponses } from "../shar
  * a documented drop, and none of it is quietly approximated.
  *
  * **The stateful half is a `400` before any upstream call, and that is the headline of this
- * direction.** `previous_response_id`, `store: true`, `include`, and `reasoning` / `item_reference`
- * items all mean "continue from something the provider remembers", and this router remembers
+ * direction.** `previous_response_id`, `store: true`, `include`, `conversation`, `prompt`,
+ * `background: true`, and `reasoning` / `item_reference` items all mean "continue from, or leave
+ * behind, something the provider remembers", and this router remembers
  * nothing — it picks an account per request. Served anyway, a `previous_response_id` would become a
  * call carrying only the newest turn and the model would answer a conversation it was never shown,
  * so the refusal names the field and the client learns to send the whole transcript instead.
@@ -44,8 +47,13 @@ import { toolChoiceFromOpenAiResponses, toolsFromOpenAiResponses } from "../shar
  * transcript the caller composed. The sibling merges because Anthropic states several content blocks
  * per turn — the opposite problem.
  *
- * Dropped, as documented: `reasoning.effort`. This build's openai-chat emit shape carries no effort
- * field, and a dropped *hint* is a documented loss where a dropped *contract* would be a bug.
+ * **`reasoning.effort` and `parallel_tool_calls` survive the downgrade**, because they are the two
+ * dials openai-chat states too — `reasoning_effort` is the same word one level flatter. The effort
+ * word travels **verbatim**: the two dialects share one vocabulary, and remapping it through a table
+ * of ours would let a value OpenAI adds later arrive as one it already understood. `reasoning.summary`
+ * has no counterpart and is dropped — it asks the provider to *write* a summary of its own reasoning,
+ * which openai-chat cannot request.
+ *
  * Refused: built-in tools, an image the caller only stored a `file_id` for, a `function_call_output`
  * naming a call that never happened, and any item or content part with no chat counterpart.
  */
@@ -71,8 +79,16 @@ interface ParsedMessageItem {
   readonly content: ParsedOpenAiResponsesContent
 }
 
+export interface OpenAiResponsesToOpenAiChatOptions {
+  /** Which spelling of the output ceiling the selected Account accepts. Defaults to `max_tokens`. */
+  readonly ceiling?: OpenAiChatCeiling | undefined
+}
+
 /** @throws TranslationError (400) naming the field that has no openai-chat representation. */
-export function openAiResponsesToOpenAiChatRequest(body: unknown): OpenAiChatRequest {
+export function openAiResponsesToOpenAiChatRequest(
+  body: unknown,
+  options: OpenAiResponsesToOpenAiChatOptions = {},
+): OpenAiChatRequest {
   const request = parseRequest(openAiResponsesRequestSchema, body, "openai-responses")
   assertStatelessResponses(request)
   assertPlainTextFormat(request)
@@ -102,7 +118,9 @@ export function openAiResponsesToOpenAiChatRequest(body: unknown): OpenAiChatReq
   return {
     model: request.model,
     messages,
-    max_tokens: request.max_output_tokens ?? undefined,
+    // `max_output_tokens` is Responses' name for the same ceiling; which of openai-chat's two names
+    // it lands under is the target's answer, not ours.
+    ...chatCeiling(request.max_output_tokens ?? undefined, options.ceiling),
     temperature: request.temperature ?? undefined,
     top_p: request.top_p ?? undefined,
     stream: request.stream ?? undefined,
@@ -114,6 +132,9 @@ export function openAiResponsesToOpenAiChatRequest(body: unknown): OpenAiChatReq
       request.tool_choice === undefined
         ? undefined
         : toolChoiceFromOpenAiResponses(request.tool_choice),
+    parallel_tool_calls: request.parallel_tool_calls ?? undefined,
+    // The nesting is the only difference between the two spellings, so the word itself is untouched.
+    reasoning_effort: request.reasoning?.effort ?? undefined,
   }
 }
 

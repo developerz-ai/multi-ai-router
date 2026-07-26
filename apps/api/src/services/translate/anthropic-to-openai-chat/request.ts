@@ -1,3 +1,4 @@
+import type { OpenAiChatCeiling } from "@multi-ai-router/core"
 import type { ParsedAnthropicBlock, ParsedAnthropicMessage } from "../shared/anthropic"
 import { anthropicRequestSchema } from "../shared/anthropic"
 import { imageUrlFromSource, systemText, toolResultText } from "../shared/anthropic-blocks"
@@ -8,6 +9,7 @@ import type {
   OpenAiChatRole,
   OpenAiChatToolCall,
 } from "../shared/openai-chat"
+import { chatCeiling } from "../shared/openai-chat"
 import { parseRequest, rejectField } from "../shared/reject"
 import { argumentsFromInput, toolChoiceToOpenAiChat, toolsToOpenAiChat } from "../shared/tools"
 
@@ -27,10 +29,19 @@ import { argumentsFromInput, toolChoiceToOpenAiChat, toolsToOpenAiChat } from ".
  * `metadata`, and any `anthropic-beta` opt-in (a header, handled by the transport). Refused:
  * server-side tools, `document` blocks, and anything else with no target representation — a
  * contract field is never dropped quietly.
+ *
+ * Anthropic **requires** `max_tokens`, so every request through here carries a ceiling the caller
+ * chose, and which of openai-chat's two names it is emitted under is the target's answer, not
+ * ours — see {@link chatCeiling}.
  */
 
 /** What a refusal calls the thing an Anthropic `tool_result` lands in on this side. */
 const TOOL_CARRIER = 'an openai-chat `role:"tool"` message'
+
+export interface AnthropicToOpenAiChatOptions {
+  /** Which spelling of the output ceiling the selected Account accepts. Defaults to `max_tokens`. */
+  readonly ceiling?: OpenAiChatCeiling | undefined
+}
 
 interface Draft {
   readonly role: OpenAiChatRole
@@ -40,7 +51,10 @@ interface Draft {
 }
 
 /** @throws TranslationError (400) naming the field that has no openai-chat representation. */
-export function anthropicToOpenAiChatRequest(body: unknown): OpenAiChatRequest {
+export function anthropicToOpenAiChatRequest(
+  body: unknown,
+  options: AnthropicToOpenAiChatOptions = {},
+): OpenAiChatRequest {
   const request = parseRequest(anthropicRequestSchema, body, "anthropic")
   const drafts: Draft[] = []
 
@@ -58,7 +72,7 @@ export function anthropicToOpenAiChatRequest(body: unknown): OpenAiChatRequest {
   return {
     model: request.model,
     messages: merge(drafts).map(finalize),
-    max_tokens: request.max_tokens,
+    ...chatCeiling(request.max_tokens, options.ceiling),
     temperature: request.temperature,
     top_p: request.top_p,
     stop: request.stop_sequences,

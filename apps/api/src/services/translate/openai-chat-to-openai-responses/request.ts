@@ -9,7 +9,12 @@ import type {
   OpenAiResponsesPart,
   OpenAiResponsesRequest,
 } from "../shared/openai-responses"
-import { assertNoStopSequence, parseRequest, rejectField } from "../shared/reject"
+import {
+  assertNoStopSequence,
+  assertPlainResponseFormat,
+  parseRequest,
+  rejectField,
+} from "../shared/reject"
 import { toolChoiceToOpenAiResponses, toolsToOpenAiResponses } from "../shared/tools"
 
 /**
@@ -27,10 +32,16 @@ import { toolChoiceToOpenAiResponses, toolsToOpenAiResponses } from "../shared/t
  * model's own earlier output spells it `output_text`. Responses states the two apart, so this
  * translator has to as well.
  *
- * Refused: `logprobs`, `top_logprobs`, `n > 1`, `stop`, audio and file parts, a non-text part in a
- * system message or a tool result, and a `tool_call_id` matching no call earlier in the transcript.
- * Dropped, as documented: `seed`, `frequency_penalty`, `presence_penalty`, `logit_bias`, `user`,
- * `parallel_tool_calls`, `strict`, and image `detail`.
+ * **`reasoning_effort` and `parallel_tool_calls` are carried, not dropped**, because this is the one
+ * pair where both sides state them: openai-chat's `reasoning_effort` is openai-responses'
+ * `reasoning.effort` under a flatter name, and `parallel_tool_calls` is spelled identically. The
+ * effort word travels **verbatim** — the two dialects share one vocabulary, and mapping it through a
+ * table of ours would let a value OpenAI adds later arrive as one it already understood.
+ *
+ * Refused: `logprobs`, `top_logprobs`, `n > 1`, `stop`, `response_format`, audio and file parts, a
+ * non-text part in a system message or a tool result, and a `tool_call_id` matching no call earlier
+ * in the transcript. Dropped, as documented: `seed`, `frequency_penalty`, `presence_penalty`,
+ * `logit_bias`, `user`, `strict`, and image `detail`.
  */
 
 /** Several system turns become one `instructions` string, and multi-part text joins the same way. */
@@ -98,6 +109,12 @@ export function openAiChatToOpenAiResponsesRequest(body: unknown): OpenAiRespons
       request.tool_choice === undefined
         ? undefined
         : toolChoiceToOpenAiResponses(request.tool_choice),
+    parallel_tool_calls: request.parallel_tool_calls ?? undefined,
+    // The nesting is the only difference between the two spellings, so the word itself is untouched.
+    reasoning:
+      typeof request.reasoning_effort === "string"
+        ? { effort: request.reasoning_effort }
+        : undefined,
     // Never the caller's value: an openai-chat client has no way to name a stored response on its
     // next turn, so one left behind is litter on the provider that nobody can reference or delete.
     store: false,
@@ -108,12 +125,17 @@ const NO_COUNTERPART =
   "has no openai-responses counterpart; it is refused rather than silently ignored"
 
 /**
- * The four openai-chat fields that cannot reach openai-responses at all.
+ * The five openai-chat fields this direction refuses.
  *
  * Each is a *contract* rather than a hint: a caller that asked for `logprobs` and got a body without
  * them was answered a different question than the one it asked, and `n > 1` is the same in a louder
  * way — a caller expecting four completions cannot use one. `stop` is the fourth and is refused by
  * `shared/reject.ts`, which states the rule once for both dialects that spell it.
+ *
+ * `response_format` is the odd one out, because openai-responses *does* state the same feature —
+ * under `text.format`, nested differently. It is refused all the same: the doctrine is one rule in
+ * both directions (`06-protocol-translation.md#known-lossy-edges`), and honoring it here while the
+ * reverse pair refuses it would make "servable" depend on which way the request happened to point.
  */
 function assertTranslatableToOpenAiResponses(request: ParsedOpenAiChatRequest): void {
   if (request.logprobs === true) rejectField("logprobs", NO_COUNTERPART)
@@ -125,6 +147,7 @@ function assertTranslatableToOpenAiResponses(request: ParsedOpenAiChatRequest): 
     )
   }
   assertNoStopSequence(request.stop, "stop")
+  assertPlainResponseFormat(request)
 }
 
 function functionCall(call: ParsedOpenAiChatToolCall): OpenAiResponsesItem {

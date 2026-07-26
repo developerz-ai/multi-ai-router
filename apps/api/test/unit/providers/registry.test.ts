@@ -140,3 +140,45 @@ describe("PROVIDER_REGISTRY", () => {
     }
   })
 })
+
+/**
+ * `max_tokens` and `max_completion_tokens` are two names for one openai-chat field, and no upstream
+ * takes both. Which one a provider states is declared in its driver and asserted here, because
+ * guessing it wrong is invisible in one direction — a vendor that never heard of the new name
+ * ignores it and generates to its own default, dropping the ceiling the caller set.
+ */
+describe("the openai-chat output ceiling", () => {
+  /** OpenAI deprecated `max_tokens` and its reasoning models refuse it outright. Nobody else has. */
+  const NEW_NAME: readonly string[] = ["openai-api"]
+
+  test("only OpenAI's own platform states max_completion_tokens", () => {
+    const renamed = HTTP_DRIVERS.filter(
+      (driver) =>
+        driver.resolveChatCeiling({ id: "probe", provider: driver.id, dialect: "openai-chat" }) ===
+        "max_completion_tokens",
+    ).map((driver) => driver.id)
+
+    expect(renamed).toEqual([...NEW_NAME])
+  })
+
+  test("every other driver states max_tokens, the name every compatible vendor knows", () => {
+    for (const driver of HTTP_DRIVERS) {
+      if (NEW_NAME.includes(driver.id)) continue
+      const account = { id: "probe", provider: driver.id, dialect: driver.dialect }
+
+      expect(driver.resolveChatCeiling(account)).toBe("max_tokens")
+    }
+  })
+
+  test("it is a fact about the surface: openai-api's Responses surface states nothing new", () => {
+    const driver = httpDriver("openai-api")
+    const account = { id: "probe", provider: "openai-api" } as const
+
+    expect(driver?.resolveChatCeiling({ ...account, dialect: "openai-chat" })).toBe(
+      "max_completion_tokens",
+    )
+    expect(driver?.resolveChatCeiling({ ...account, dialect: "openai-responses" })).toBe(
+      "max_tokens",
+    )
+  })
+})

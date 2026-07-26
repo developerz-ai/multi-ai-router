@@ -7,10 +7,11 @@ import { z } from "zod"
  * family is what a translator **emits** when Responses is the target, and it is narrow.
  *
  * Responses is the **stateful** dialect, and that is why this file names fields it has no intention
- * of translating. `previous_response_id`, `store: true`, `include`, and `reasoning` /
- * `item_reference` items all mean "continue from something the server remembers", and the router
- * remembers nothing: it picks an account per request and holds no conversation state. They are
- * declared here so `shared/reject.ts` can refuse them **by name**
+ * of translating. `previous_response_id`, `store: true`, `include`, `conversation`, `prompt`,
+ * `background: true`, and `reasoning` / `item_reference` items all mean "continue from, or leave
+ * behind, something the server remembers", and the router remembers nothing: it picks an account per
+ * request and holds no conversation state. They are declared here so `shared/reject.ts` can refuse
+ * them **by name**
  * (docs/idea/06-protocol-translation.md#translation-matrix), which is the difference between a
  * client learning what to change and a client getting a silently truncated transcript.
  *
@@ -137,12 +138,20 @@ export const openAiResponsesRequestSchema = z.object({
   stream: z.boolean().nullish(),
   tools: z.array(openAiResponsesToolSchema).optional(),
   tool_choice: openAiResponsesToolChoiceSchema.optional(),
+  parallel_tool_calls: z.boolean().nullish(),
+  // `summary` is read loosely and never carried: it asks the provider to *write* a summary of its own
+  // reasoning, which no other dialect can ask for. `effort` is the half openai-chat also states.
   reasoning: z.looseObject({ effort: z.string().nullish() }).nullish(),
   text: z.looseObject({ format: z.looseObject({ type: z.string() }).nullish() }).nullish(),
-  // The three stateful fields. Declared only so they can be refused by name.
+  // The six stateful fields. Declared only so they can be refused by name, and read loosely for the
+  // same reason: a value this build never carries onto another dialect is not worth validating, and
+  // a refusal naming the field beats a parse error naming a path inside it.
   previous_response_id: z.string().nullish(),
   store: z.boolean().nullish(),
   include: z.array(z.string()).nullish(),
+  conversation: z.unknown().optional(),
+  prompt: z.unknown().optional(),
+  background: z.boolean().nullish(),
 })
 
 export type ParsedOpenAiResponsesRequest = z.infer<typeof openAiResponsesRequestSchema>
@@ -214,6 +223,8 @@ export interface OpenAiResponsesRequest {
   readonly stream?: boolean | undefined
   readonly tools?: readonly OpenAiResponsesTool[] | undefined
   readonly tool_choice?: OpenAiResponsesToolChoice | undefined
+  readonly parallel_tool_calls?: boolean | undefined
+  /** Only `effort`, and only ever the caller's own word: `summary` has no source to come from. */
   readonly reasoning?: { readonly effort: string } | undefined
   /**
    * Always `false` on a translated request, never the caller's value.

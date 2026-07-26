@@ -1,7 +1,9 @@
 import { describe, expect, test } from "bun:test"
-import { TranslationError } from "@multi-ai-router/core"
+import { RequestTooLargeError } from "@multi-ai-router/core"
 import {
   createRoutingScanner,
+  declaredBodyBytes,
+  type RequestBodySource,
   readRequestBody,
   resolveSessionKey,
   rewriteModel,
@@ -33,6 +35,38 @@ function stream(body: string, chunkSize: number): ReadableStream<Uint8Array> {
       controller.close()
     },
   })
+}
+
+/** A request as the reader sees one: the bytes, plus whatever the client claimed about them. */
+function sent(body: string | null, chunkSize = 32, headers: Record<string, string> = {}) {
+  return {
+    body: body === null ? null : stream(body, chunkSize),
+    headers: new Headers(headers),
+  } satisfies RequestBodySource
+}
+
+/** A body that reports whether anyone actually pulled a byte out of it. */
+function watched(declared: string): {
+  readonly source: RequestBodySource
+  readonly pulled: () => boolean
+} {
+  let pulled = false
+  // `highWaterMark: 0` so the stream does not pull a chunk before anyone reads it — otherwise the
+  // flag says "read" the moment this function returns and proves nothing.
+  const body = new ReadableStream<Uint8Array>(
+    {
+      pull(controller) {
+        pulled = true
+        controller.enqueue(encoder.encode('{"model":"m"}'))
+        controller.close()
+      },
+    },
+    { highWaterMark: 0 },
+  )
+  return {
+    source: { body, headers: new Headers({ "content-length": declared }) },
+    pulled: () => pulled,
+  }
 }
 
 describe("routing scanner", () => {
@@ -83,24 +117,81 @@ describe("routing scanner", () => {
 describe("reading a request body", () => {
   test("returns the exact bytes the client sent, however they arrived", async () => {
     const body = '{"model":"claude-opus-5","messages":[{"role":"user","content":"hi"}]}'
-    const read = await readRequestBody(stream(body, 5))
+    const read = await readRequestBody(sent(body, 5))
 
     expect(new TextDecoder().decode(read.bytes)).toBe(body)
     expect(read.fields.model).toBe("claude-opus-5")
   })
 
-  test("refuses a body past the configured ceiling", async () => {
+  test("refuses a body past the configured ceiling as 413, not as a malformed request", async () => {
     const body = `{"model":"m","padding":"${"x".repeat(400)}"}`
-    await expect(readRequestBody(stream(body, 32), { maxBytes: 64 })).rejects.toThrow(
-      TranslationError,
-    )
+    const read = readRequestBody(sent(body), { maxBytes: 64 })
+
+    await expect(read).rejects.toThrow(RequestTooLargeError)
+    await expect(read).rejects.toMatchObject({ status: 413, code: "request_too_large" })
+  })
+
+  test("serves a body exactly at the ceiling", async () => {
+    const body = '{"model":"m"}'
+    const read = await readRequestBody(sent(body, 4), { maxBytes: body.length })
+
+    expect(read.bytes.length).toBe(body.length)
+    expect(read.fields.model).toBe("m")
   })
 
   test("handles an absent body", async () => {
-    const read = await readRequestBody(null)
+    const read = await readRequestBody(sent(null))
     expect(read.bytes.length).toBe(0)
     expect(read.fields.model).toBeNull()
   })
+
+  test("refuses a declared length over the ceiling without reading a byte of it", async () => {
+    const { source, pulled } = watched("999999999")
+
+    await expect(readRequestBody(source, { maxBytes: 64 })).rejects.toThrow(RequestTooLargeError)
+    // The whole point of the short-circuit: a hostile body is not streamed and buffered to the
+    // limit before being rejected.
+    expect(pulled()).toBe(false)
+  })
+
+  test("reads a body whose declared length fits", async () => {
+    const { source, pulled } = watched("13")
+    const read = await readRequestBody(source, { maxBytes: 64 })
+
+    expect(read.fields.model).toBe("m")
+    expect(pulled()).toBe(true)
+  })
+
+  test("still catches a body that lied about its length", async () => {
+    const body = `{"model":"m","padding":"${"x".repeat(400)}"}`
+    // Under-declared on purpose: the header short-circuit passes and the streaming ceiling holds.
+    const source = sent(body, 32, { "content-length": "8" })
+
+    await expect(readRequestBody(source, { maxBytes: 64 })).rejects.toThrow(RequestTooLargeError)
+  })
+})
+
+describe("the length a client declared", () => {
+  const declared = (value: string | null) =>
+    declaredBodyBytes(new Headers(value === null ? {} : { "content-length": value }))
+
+  test("is the number when the header is one", () => {
+    expect(declared("0")).toBe(0)
+    expect(declared("33554432")).toBe(33_554_432)
+  })
+
+  test("is absent when the client sent no header", () => {
+    expect(declared(null)).toBeNull()
+  })
+
+  // Surrounding whitespace is absent from the list because `Headers` trims it before this ever
+  // sees the value — a case that tests the platform, not this function.
+  test.each(["-1", "1.5", "+12", "1e6", "0x10", "twelve", "", "12, 12"])(
+    "ignores %p rather than refusing over a header it cannot trust",
+    (value) => {
+      expect(declared(value)).toBeNull()
+    },
+  )
 })
 
 describe("model rewriting", () => {

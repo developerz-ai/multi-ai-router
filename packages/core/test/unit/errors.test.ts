@@ -10,6 +10,7 @@ import {
   ModelNotFoundError,
   NoHealthyAccountError,
   QuotaExhaustedError,
+  RequestTooLargeError,
   RetryableRouterError,
   ROUTER_ERROR_CODES,
   RouterError,
@@ -71,6 +72,12 @@ const cases: readonly ErrorCase[] = [
   },
   { name: "TranslationError", ctor: TranslationError, code: "translation_failed", status: 400 },
   { name: "ModelNotFoundError", ctor: ModelNotFoundError, code: "model_not_found", status: 404 },
+  {
+    name: "RequestTooLargeError",
+    ctor: RequestTooLargeError,
+    code: "request_too_large",
+    status: 413,
+  },
 ]
 
 describe("error hierarchy", () => {
@@ -151,6 +158,22 @@ describe("rate limited is not out of credits", () => {
     expect(rateLimited.resetsAt).toBeUndefined()
     expect(Object.hasOwn(outOfCredits, "resetsAt")).toBe(false)
     expect(Object.hasOwn(outOfCredits, "retryAfterSeconds")).toBe(false)
+  })
+})
+
+describe("a body too long is not a body malformed", () => {
+  const tooLarge = new RequestTooLargeError("body exceeds the configured size limit")
+  const malformed = new TranslationError("unsupported field: response_format")
+
+  test("they do not share a status, because they do not share a remedy", () => {
+    // 400 sends a developer looking for a bad field; 413 says send less, or ask for a bigger cap.
+    expect(tooLarge.status).toBe(413)
+    expect(malformed.status).toBe(400)
+  })
+
+  test("neither is retried on a timer", () => {
+    expect(tooLarge).not.toBeInstanceOf(RetryableRouterError)
+    expect(malformed).not.toBeInstanceOf(RetryableRouterError)
   })
 })
 

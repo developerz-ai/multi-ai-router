@@ -39,8 +39,10 @@ export {
 export {
   type BodyReadOptions,
   DEFAULT_MAX_BODY_BYTES,
+  declaredBodyBytes,
   fingerprintSessionKey,
   type RequestBody,
+  type RequestBodySource,
   readRequestBody,
   rewriteModel,
 } from "./body/read"
@@ -151,3 +153,4 @@ export {
   SYSTEM_CLOCK,
   type UpstreamOperation,
 } from "./types"
+export { type UnservableInput, unservableError } from "./unservable"

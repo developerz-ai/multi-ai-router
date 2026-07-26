@@ -12,6 +12,10 @@ import { anthropicUsageCounts, parseOpenAiChatUsage } from "../shared/usage"
  * separate `tool_calls[]`, while Anthropic states an ordered array of blocks. Text is emitted
  * first, then one `tool_use` block per call, which is the order the two arrived in on the wire.
  *
+ * A reasoning model's thinking is **dropped**, the same row as its streaming half: Anthropic refuses
+ * a replayed `thinking` block whose `signature` this router cannot produce, so synthesizing one would
+ * answer this turn and break the next (`06-protocol-translation.md#known-lossy-edges`).
+ *
  * **Nothing here throws.** The upstream already answered, so a malformed field is reported as
  * absent rather than turned into a failure on a request that cannot be retried
  * (`docs/idea/06-protocol-translation.md`, "Rejected: nothing at stream time"). That is the one

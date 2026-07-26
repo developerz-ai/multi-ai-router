@@ -134,6 +134,15 @@ export interface DataPlaneConfig {
    * the breaker holds the verdict either way.
    */
   readonly accountStatusWriteIntervalMs: number
+  /**
+   * The largest request body the router will read, in bytes. Over it: `413`, before any account is
+   * asked and before the ceiling's worth of bytes has been buffered.
+   *
+   * A property of the deployment, not of the code: a router fronting agents that paste whole
+   * repositories into a prompt needs a different number from one serving chat, and the memory this
+   * bounds is per in-flight request.
+   */
+  readonly maxRequestBodyBytes: number
 }
 
 /**
@@ -374,6 +383,7 @@ const envSchema = z
     USAGE_FLUSH_INTERVAL_MS: wholeNumber.optional(),
     QUOTA_WRITE_INTERVAL_MS: atLeastOne.optional(),
     ACCOUNT_STATUS_WRITE_INTERVAL_MS: atLeastOne.optional(),
+    MAX_REQUEST_BODY_BYTES: atLeastOne.optional(),
     ROUTING_MAX_ATTEMPTS: wholeNumber.optional(),
     ROUTING_FAILURE_THRESHOLD: wholeNumber.optional(),
     ROUTING_BASE_BACKOFF_MS: wholeNumber.optional(),
@@ -468,6 +478,7 @@ const envSchema = z
         usageFlushIntervalMs: raw.USAGE_FLUSH_INTERVAL_MS ?? 1_000,
         quotaWriteIntervalMs: raw.QUOTA_WRITE_INTERVAL_MS ?? 5_000,
         accountStatusWriteIntervalMs: raw.ACCOUNT_STATUS_WRITE_INTERVAL_MS ?? 1_000,
+        maxRequestBodyBytes: raw.MAX_REQUEST_BODY_BYTES ?? 32 * 1024 * 1024,
       },
       failover: {
         maxAttempts: raw.ROUTING_MAX_ATTEMPTS ?? 3,

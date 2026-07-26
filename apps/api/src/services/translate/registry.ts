@@ -1,4 +1,4 @@
-import type { Dialect } from "@multi-ai-router/core"
+import type { Dialect, OpenAiChatCeiling } from "@multi-ai-router/core"
 import { anthropicToOpenAiChatRequest } from "./anthropic-to-openai-chat/request"
 import { anthropicToOpenAiChatResponse } from "./anthropic-to-openai-chat/response"
 import { anthropicToOpenAiChatStream } from "./anthropic-to-openai-chat/stream"
@@ -59,6 +59,15 @@ export interface TranslationContext {
    * somewhere when a client omits it. The operator's configured value; see `request.ts`.
    */
   readonly defaultMaxTokens?: number | undefined
+  /**
+   * Which spelling of the openai-chat output ceiling the **selected Account** accepts.
+   *
+   * The one member of this context that varies per *candidate* rather than per request, because it
+   * is a fact about the upstream rather than about what the client sent: two openai-chat accounts in
+   * one pool can want different names, so a failover between them re-converts (`translate-body.ts`).
+   * Absent means the default — see `OpenAiChatCeiling`.
+   */
+  readonly chatCeiling?: OpenAiChatCeiling | undefined
 }
 
 export interface TranslationPair {
@@ -88,8 +97,9 @@ const ANTHROPIC_TO_OPENAI_CHAT: TranslationPair = {
   ingress: "anthropic",
   egress: "openai-chat",
   // No `defaultMaxTokens` in this direction: Anthropic requires `max_tokens` on the way in, so a
-  // request that reached here already carries the ceiling the client chose.
-  request: (body) => anthropicToOpenAiChatRequest(body),
+  // request that reached here already carries the ceiling the client chose. Which of openai-chat's
+  // two names it is emitted under is the target account's answer.
+  request: (body, context) => anthropicToOpenAiChatRequest(body, { ceiling: context.chatCeiling }),
   response: (body, context) =>
     openAiChatToAnthropicResponse(body, {
       id: `${ANTHROPIC_ID_PREFIX}${context.fallbackId}`,
@@ -179,7 +189,8 @@ const OPENAI_CHAT_TO_OPENAI_RESPONSES: TranslationPair = {
 const OPENAI_RESPONSES_TO_OPENAI_CHAT: TranslationPair = {
   ingress: "openai-responses",
   egress: "openai-chat",
-  request: (body) => openAiResponsesToOpenAiChatRequest(body),
+  request: (body, context) =>
+    openAiResponsesToOpenAiChatRequest(body, { ceiling: context.chatCeiling }),
   response: (body, context) =>
     openAiChatToOpenAiResponsesResponse(body, {
       created: context.created,

@@ -1,7 +1,9 @@
 import {
   type AuthKind,
   CredentialDecryptError,
+  DEFAULT_OPENAI_CHAT_CEILING,
   type Dialect,
+  type OpenAiChatCeiling,
   type ProviderId,
 } from "@multi-ai-router/core"
 import { type AnthropicAuthForm, anthropicAuthHeaders, bearerAuthHeaders } from "./auth-headers"
@@ -43,6 +45,13 @@ export interface ProviderSurface {
    * OAuth beta. Defaults to Anthropic's own rules. See `auth-headers.ts`.
    */
   readonly anthropicAuth?: AnthropicAuthForm
+  /**
+   * openai-chat surfaces only: which spelling of the output ceiling this endpoint accepts. Defaults
+   * to `max_tokens`, the name every OpenAI-compatible vendor states — a provider states the other
+   * one here only where its own reference does, because guessing wrong drops the caller's ceiling
+   * silently in one direction and `400`s in the other (`OpenAiChatCeiling`).
+   */
+  readonly chatCeiling?: OpenAiChatCeiling
 }
 
 export interface HttpDriverConfig {
@@ -101,6 +110,7 @@ export function createHttpDriver(config: HttpDriverConfig): ProviderDriver {
     authKind: config.authKind ?? "api-key",
     resolveBaseUrl: (account) => resolveBaseUrl(account, surfaceFor(account).baseUrl),
     resolveDialect: (account) => surfaceFor(account).dialect,
+    resolveChatCeiling: (account) => surfaceFor(account).chatCeiling ?? DEFAULT_OPENAI_CHAT_CEILING,
     buildHeaders: (account, credential) => {
       requireCredential(config, account, credential)
       return surfaceHeaders(surfaceFor(account), credential)

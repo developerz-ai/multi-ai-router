@@ -204,6 +204,70 @@ describe("accounts that cannot count", () => {
   })
 })
 
+describe("an account that could count, held back by its health", () => {
+  test("is a 429 with Retry-After, not a 503 saying no account can count", async () => {
+    // The pool holds exactly one account that can count and one that never could. The countable one
+    // cools down; the other is dropped at planning, so the chain empties. Reporting the *plan's*
+    // reason there tells the operator to add an Anthropic account they already have, and hands the
+    // client a permanent-looking refusal for a condition a clock fixes — the `cooling_down` vs
+    // `exhausted` conflation non-negotiable 7 forbids, one layer up.
+    const { app, usage } = harness({
+      accounts: [
+        account("anth", { apiKey: "sk-anth", cipher: CRYPTOR }),
+        account("oai", { provider: "openai-api", apiKey: "sk-oai", cipher: CRYPTOR }),
+      ],
+      responses: [() => jsonResponse(429, {}, { "retry-after": "37" })],
+    })
+
+    // First request cools the countable account down.
+    await (await app.request("/v1/messages/count_tokens", post(COUNT, bearer()))).text()
+    await settle()
+
+    const res = await app.request("/v1/messages/count_tokens", post(COUNT, bearer()))
+    const body = (await res.json()) as { error: { message: string; type: string } }
+    await settle()
+
+    expect(res.status).toBe(429)
+    expect(res.status).not.toBe(503)
+    expect(res.headers.get("Retry-After")).toBe("37")
+    expect(body.error.type).toBe("rate_limit_error")
+    // Names the account the operator would wait on, not the one that was never able to count.
+    expect(body.error.message).toContain("anth")
+    expect(body.error.message).not.toContain("cannot count tokens")
+    expect(usage.rows.map((row) => row.outcome)).toEqual(["quota_exhausted", "quota_exhausted"])
+  })
+
+  test("inference over that same cooling account still reports the same 429", async () => {
+    const { app } = harness({
+      accounts: [account("anth", { apiKey: "sk-anth", cipher: CRYPTOR })],
+      responses: [() => jsonResponse(429, {}, { "retry-after": "37" })],
+    })
+
+    await (await app.request("/v1/messages/count_tokens", post(COUNT, bearer()))).text()
+    await settle()
+
+    const res = await app.request("/v1/messages", post(MESSAGE, bearer()))
+    expect(res.status).toBe(429)
+    expect(res.headers.get("Retry-After")).toBe("37")
+  })
+
+  test("but a pool that genuinely cannot count still gets the named 503", async () => {
+    // The regression guard for the fix above: an OpenAI account that is perfectly healthy must
+    // still surface the operation gap, not be reinterpreted as a capacity problem.
+    const { app } = harness({
+      accounts: [account("oai", { provider: "openai-api", apiKey: "sk-oai", cipher: CRYPTOR })],
+      responses: [COUNTED],
+    })
+
+    const res = await app.request("/v1/messages/count_tokens", post(COUNT, bearer()))
+    const body = (await res.json()) as { error: { message: string } }
+
+    expect(res.status).toBe(503)
+    expect(res.headers.get("Retry-After")).toBeNull()
+    expect(body.error.message).toContain("cannot count tokens")
+  })
+})
+
 describe("accounting", () => {
   test("counts as a request, but never as tokens spent", async () => {
     const { app, usage } = harness({ responses: [COUNTED] })
@@ -223,6 +287,72 @@ describe("accounting", () => {
       tokensOut: 0,
       costEstimate: null,
     })
+  })
+
+  test("records no cost even on a model the price table knows", async () => {
+    // The guard the assertion above cannot make: `claude-opus-5` is priced nowhere, so a row for it
+    // comes back `null` whether or not anything decided it should. `claude-sonnet-5` *is* in the
+    // shipped table, and zeroed counts against a known rate price as `metered $0.000000` — a free
+    // completion, which is not what happened. Nothing was completed at all.
+    const priced = JSON.stringify({
+      model: "claude-sonnet-5",
+      messages: [{ role: "user", content: "how many tokens is this" }],
+    })
+    const { app, usage } = harness({ responses: [COUNTED] })
+
+    await (await app.request("/v1/messages/count_tokens", post(priced, bearer()))).text()
+    await settle()
+
+    expect(usage.rows[0]).toMatchObject({
+      model: "claude-sonnet-5",
+      outcome: "success",
+      costEstimate: null,
+      costBasis: "unknown",
+    })
+  })
+
+  test("does not price a count that failed either", async () => {
+    const priced = JSON.stringify({
+      model: "claude-sonnet-5",
+      messages: [{ role: "user", content: "how many tokens is this" }],
+    })
+    const { app, usage } = harness({
+      responses: [() => jsonResponse(500, { type: "error", error: { type: "api_error" } })],
+    })
+
+    await (await app.request("/v1/messages/count_tokens", post(priced, bearer()))).text()
+    await settle()
+
+    expect(usage.rows[0]).toMatchObject({ costEstimate: null, costBasis: "unknown" })
+  })
+
+  test("an ordinary completion on that same model is still priced", async () => {
+    // The other half of the rule: this is a narrowing of `count_tokens`, not of pricing.
+    const { app, usage } = harness({
+      responses: [
+        () =>
+          jsonResponse(200, {
+            id: "msg_1",
+            type: "message",
+            role: "assistant",
+            model: "claude-sonnet-5",
+            content: [{ type: "text", text: "hi" }],
+            stop_reason: "end_turn",
+            usage: { input_tokens: 11, output_tokens: 22 },
+          }),
+      ],
+    })
+
+    const message = JSON.stringify({
+      model: "claude-sonnet-5",
+      max_tokens: 64,
+      messages: [{ role: "user", content: "hello" }],
+    })
+    await (await app.request("/v1/messages", post(message, bearer()))).text()
+    await settle()
+
+    expect(usage.rows[0]?.costBasis).toBe("metered")
+    expect(usage.rows[0]?.costEstimate).not.toBeNull()
   })
 
   test("writes a row even when no account could count", async () => {

@@ -1,4 +1,5 @@
 import { z } from "zod"
+import { openAiChatReasoningSchema, readOpenAiChatReasoning } from "../shared/openai-chat-reasoning"
 import type { TranslatedResponse } from "../shared/response"
 import type { ResponsesOutputItem } from "../shared/responses-body"
 import { responsesBodyJson, responsesItemId } from "../shared/responses-body"
@@ -10,10 +11,10 @@ import { openAiChatUsageToResponses, parseOpenAiChatUsage } from "../shared/usag
  *
  * The mirror of `stream.ts` for the request that did not ask to stream, and — like it — this is the
  * direction that has to **invent structure**: openai-chat states one flat `content` string and a
- * separate `tool_calls[]`, while Responses states an ordered array of *items*, each with an id.
- * Text becomes one `message` item, then one `function_call` item per call, which is the order the
- * two arrived in on the wire. The item ids are ours, derived from the response id by
- * `shared/responses-body.ts`, because openai-chat names none.
+ * separate `tool_calls[]`, while Responses states an ordered array of *items*, each with an id. A
+ * reasoning model's thinking becomes one `reasoning` item, then text becomes one `message` item,
+ * then one `function_call` item per call — the order the model produced them in. The item ids are
+ * ours, derived from the response id by `shared/responses-body.ts`, because openai-chat names none.
  *
  * The finish reason splits in two here: Responses says "the model stopped early" with a `status`
  * plus an `incomplete_details.reason`, and `shared/stop-reason.ts` owns that table so the streaming
@@ -47,6 +48,7 @@ const completionSchema = z.looseObject({
         message: z
           .looseObject({
             content: z.string().nullish().catch(null),
+            ...openAiChatReasoningSchema,
             tool_calls: z.array(toolCallSchema).nullish().catch(null),
           })
           .nullish()
@@ -83,6 +85,13 @@ export function openAiChatToOpenAiResponsesResponse(
   const choice = (completion?.choices ?? []).find((entry) => (entry.index ?? 0) === 0)
 
   const items: ResponsesOutputItem[] = []
+  // First, as the streaming half emits it and as a native Responses body orders it: a model that
+  // thought out loud had finished doing so before it began answering. Carried as a *summary* item —
+  // the encrypted reasoning handle a native upstream also states cannot be synthesized, and is not.
+  const summary = readOpenAiChatReasoning(choice?.message)
+  if (summary.length > 0) {
+    items.push({ type: "reasoning", id: responsesItemId("reasoning", id, items.length), summary })
+  }
   const text = choice?.message?.content ?? ""
   // A completion that was only a tool call said nothing out loud, and an empty message item would
   // claim it answered with an empty string.
