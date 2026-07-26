@@ -25,7 +25,12 @@ const proxyToApi = {
 //   /v1       — apps/api/src/routes/v1/, mounted at `DATA_PLANE_BASE_PATH`.
 //   /healthz  — apps/api/src/routes/health.ts. Unguarded by design.
 //   /readyz   — likewise.
-const API_PREFIXES = ["/api", "/v1", "/healthz", "/readyz"] as const
+//   /metrics  — apps/api/src/routes/metrics.ts.
+//
+// The same list, for the same reason, is `API_PREFIXES` in
+// apps/api/src/routes/spa.ts: there the API is what must not be swallowed by
+// the SPA's history-API fallback, here by Vite's. The two must agree.
+const API_PREFIXES = ["/api", "/v1", "/healthz", "/readyz", "/metrics"] as const
 
 export default defineConfig({
   plugins: [solid()],

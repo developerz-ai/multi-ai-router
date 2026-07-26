@@ -173,6 +173,13 @@ export interface Env {
   readonly logLevel: LogLevel
   readonly trustProxy: boolean
   readonly publicUrl: string | null
+  /**
+   * Directory holding the built admin SPA, which this process serves at the root. Null means the
+   * default location beside the bundled entrypoint — `main.ts` resolves it, because only it knows
+   * where this module was loaded from. Set means *exactly this*: a directory with no `index.html`
+   * fails boot rather than quietly serving an API-only router that looks like a broken web app.
+   */
+  readonly webRoot: string | null
   /** Parent of the per-Account `CLAUDE_CONFIG_DIR`s — `providers/claude-sdk/config-dir.ts`. */
   readonly claudeConfigRoot: string
   /**
@@ -260,6 +267,7 @@ const envSchema = z
     LOG_LEVEL: z.enum(LOG_LEVELS).optional(),
     TRUST_PROXY: flag.optional(),
     PUBLIC_URL: absoluteUrl.optional(),
+    WEB_ROOT: nonEmpty.optional(),
     CLAUDE_CONFIG_ROOT: nonEmpty.refine(isAbsolute, "must be an absolute path").optional(),
     CLAUDE_CLI_PATH: nonEmpty.optional(),
     CLAUDE_SDK_MAX_CONCURRENCY: atLeastOne.optional(),
@@ -331,6 +339,7 @@ const envSchema = z
       logLevel: raw.LOG_LEVEL ?? "info",
       trustProxy: raw.TRUST_PROXY ?? false,
       publicUrl: raw.PUBLIC_URL ?? null,
+      webRoot: raw.WEB_ROOT ?? null,
       claudeConfigRoot: raw.CLAUDE_CONFIG_ROOT ?? "/data/claude",
       claudeCliPath: raw.CLAUDE_CLI_PATH ?? null,
       claudeSdkMaxConcurrency: raw.CLAUDE_SDK_MAX_CONCURRENCY ?? 10,

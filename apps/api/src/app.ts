@@ -21,6 +21,7 @@ import {
 import { ADMIN_USAGE_BASE_PATH, adminUsageRoutes } from "./routes/admin/usage"
 import { healthRoutes } from "./routes/health"
 import { type MetricsRouteDeps, metricsRoutes } from "./routes/metrics"
+import { spaRoutes } from "./routes/spa"
 import { DATA_PLANE_BASE_PATH, dataPlaneRoutes } from "./routes/v1"
 import type {
   Dispatcher,
@@ -46,6 +47,9 @@ import type { AdminServices, AppEnv } from "./types"
  * `dataPlane` is optional so a deployment (and a test) can boot the console alone. Health checks
  * are unguarded by design — a probe that needs a credential is a probe that fails during exactly
  * the incident it exists to report.
+ *
+ * The built SPA, when there is one, mounts **last** and at the root: it is the only thing here
+ * that answers a path no route claimed, so it must be the last one asked — see `routes/spa.ts`.
  */
 
 export interface AppDeps {
@@ -58,6 +62,11 @@ export interface AppDeps {
   readonly metrics?: MetricsRouteDeps
   /** `Env.trustProxy`. Off by default: an unvetted `X-Forwarded-For` is a login-throttle bypass. */
   readonly trustProxy?: boolean
+  /**
+   * Directory holding the built SPA. Absent means no static mount at all — an API-only process,
+   * which is what a test boots and what `bin/dev` runs while Vite serves the console itself.
+   */
+  readonly webRoot?: string
 }
 
 export interface DataPlaneDeps {
@@ -90,6 +99,12 @@ export function createApp(deps: AppDeps): Hono<AppEnv> {
 
   if (deps.dataPlane !== undefined) {
     app.route(DATA_PLANE_BASE_PATH, dataPlaneRoutes(deps.dataPlane))
+  }
+
+  // Last. Every API route above is already registered, so the SPA's history-API fallback can only
+  // ever answer a path none of them claimed.
+  if (deps.webRoot !== undefined) {
+    app.route("/", spaRoutes({ root: deps.webRoot }))
   }
 
   return app

@@ -29,6 +29,7 @@ describe("parseEnv", () => {
     expect(env.logLevel).toBe("info")
     expect(env.trustProxy).toBe(false)
     expect(env.publicUrl).toBeNull()
+    expect(env.webRoot).toBeNull()
     expect(env.claudeConfigRoot).toBe("/data/claude")
     expect(env.accountRecheckCooldownSeconds).toBe(60)
     expect(env.janitorIntervalMinutes).toBe(60)
@@ -55,6 +56,7 @@ describe("parseEnv", () => {
       LOG_LEVEL: "debug",
       TRUST_PROXY: "true",
       PUBLIC_URL: "https://router.example.com",
+      WEB_ROOT: "/srv/console",
       CLAUDE_CONFIG_ROOT: "/srv/claude",
       ACCOUNT_RECHECK_COOLDOWN_SECONDS: "30",
       RETENTION_SESSIONS_HOURS: "6",
@@ -74,6 +76,7 @@ describe("parseEnv", () => {
     expect(env.logLevel).toBe("debug")
     expect(env.trustProxy).toBe(true)
     expect(env.publicUrl).toBe("https://router.example.com")
+    expect(env.webRoot).toBe("/srv/console")
     expect(env.claudeConfigRoot).toBe("/srv/claude")
     expect(env.accountRecheckCooldownSeconds).toBe(30)
     expect(env.retention.sessionsHours).toBe(6)
