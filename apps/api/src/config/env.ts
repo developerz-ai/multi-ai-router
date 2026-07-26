@@ -206,9 +206,10 @@ export interface Env {
    */
   readonly claudeCliPath: string | null
   /**
-   * `claude` subprocesses in flight on this replica — every `query()` spawns a ~200 MB native
-   * binary, so this is a memory bound, not a throughput one. Excess requests queue rather than
-   * fail. The per-account ceiling is what stops one Account's burst starving the pool.
+   * `claude` subprocesses in flight on this replica — every `query()` spawns a ~245 MB native
+   * binary (measured, see docs/idea/09-deployment.md#sizing), so this is a memory bound, not a
+   * throughput one. Excess requests queue rather than fail. The per-account ceiling is what stops
+   * one Account's burst starving the pool.
    */
   readonly claudeSdkMaxConcurrency: number
   readonly claudeSdkMaxConcurrencyPerAccount: number

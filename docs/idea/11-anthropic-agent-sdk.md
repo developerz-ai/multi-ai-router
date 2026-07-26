@@ -64,7 +64,7 @@ injecting subscription OAuth tokens into raw HTTP is the fast path to a banned a
 
 | Cost | What it means | Evidence |
 |---|---|---|
-| Subprocess per request | Every `query()` spawns `node` running the `claude` CLI (a ~200 MB native binary). A process, not a socket | `query.ts:252` |
+| Subprocess per request | Every `query()` spawns `node` running the `claude` CLI (a ~245 MB native binary, measured — see [09-deployment.md](09-deployment.md#sizing) and [10-roadmap.md](10-roadmap.md#open-questions)). A process, not a socket | `query.ts:252` |
 | Concurrency is memory-bound | A semaphore, not a connection pool. Meridian defaults to 10 in flight, queues the rest | `server.ts:599-623` |
 | The `claude` CLI ships in the image | Plus a libc-matching native binary and a PATH shim (§9) | `Dockerfile` |
 | Protocol re-synthesis | The SDK yields its own message objects; responses are **rebuilt**, not relayed — even same-dialect | §6 |

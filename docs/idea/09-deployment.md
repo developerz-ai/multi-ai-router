@@ -92,7 +92,7 @@ naming the offending variable — the process never starts half-configured.
 | `PORT` | no | `8080` | Listen port inside the container. |
 | `CLAUDE_CONFIG_ROOT` | no | `/data/claude` | Parent directory holding one `CLAUDE_CONFIG_DIR` per Claude subscription Account. Must sit on the persistent `claude-config` volume. Secret material — see [Persistence & backup](#persistence--backup). |
 | `CLAUDE_CLI_PATH` | no | — | Pins the `claude` binary the Agent SDK spawns, bypassing resolution. Unset is right: the image stages one on `PATH` and `/readyz` reports which rung of the ladder won. A set-but-unusable path **fails** rather than falling back, so the router never spawns a binary you did not name — see [11-anthropic-agent-sdk.md](11-anthropic-agent-sdk.md#9-operational-notes). |
-| `CLAUDE_SDK_MAX_CONCURRENCY` | no | `10` | `claude` subprocesses in flight on this replica. Every subscription request spawns one (~200 MB native binary), so this is a **memory** bound, not a throughput one — size against RAM, not CPUs. Requests over the ceiling queue rather than fail. |
+| `CLAUDE_SDK_MAX_CONCURRENCY` | no | `10` | `claude` subprocesses in flight on this replica. Every subscription request spawns one (~245 MB native binary, measured — see [Sizing](#sizing)), so this is a **memory** bound, not a throughput one — size against RAM, not CPUs. Requests over the ceiling queue rather than fail. |
 | `CLAUDE_SDK_MAX_CONCURRENCY_PER_ACCOUNT` | no | `4` | The same ceiling for any one subscription Account — what stops one Account's burst starving the pool. Values above `CLAUDE_SDK_MAX_CONCURRENCY` are legal and simply never bind. |
 | `ACCOUNT_RECHECK_COOLDOWN_SECONDS` | no | `60` | Minimum interval between manual **Re-check now** probes of the same account. The button re-queries the provider's live quota signal; this is what stops it being used to hammer an upstream. |
 | `PUBLIC_URL` | no | — | Externally reachable base URL. Only used to build the OAuth redirect-capture callback (`PUBLIC_URL + /admin/accounts/oauth/callback`). Unset → paste-back capture only. |
@@ -345,12 +345,34 @@ Sizing guidance follows directly from that split:
 | Workload | Baseline |
 |---|---|
 | API-key / passthrough accounts only (no Claude subscriptions) | 1 vCPU, 512 MB for the router. Watch open connections; you will run out of file descriptors long before CPU. |
-| Claude subscriptions in the pool | Size the router's memory around **peak concurrent subscription requests**, not total accounts or total traffic: budget for one `claude` subprocess each, plus the 512 MB baseline. Ten idle Claude accounts cost nothing; ten simultaneous Claude requests do. |
+| Claude subscriptions in the pool | Size the router's memory around **peak concurrent subscription requests**, not total accounts or total traffic: budget **~245 MB per concurrent `claude` subprocess** (measured, see below), plus the 512 MB baseline. Ten idle Claude accounts cost nothing; ten simultaneous Claude requests cost ~2.45 GB. |
 | Postgres | Modest. The working set is small and the critical path does not touch it — the default container settings are fine until retained usage history gets large. |
 
-Cap concurrency deliberately rather than discovering the ceiling under load: a subscription-heavy
-deployment is memory-bound, and an unbounded subprocess count is the failure mode. A same-dialect
-passthrough (the common case) does no body parsing at all; see
+**The per-subprocess figure is measured, not guessed.** Spawning the real `claude` CLI binary
+locally (single process and in 30-/60-way concurrent batches) and polling `/proc/<pid>/status` for
+`VmRSS` at ~5 ms resolution puts a single uncontended process at **~245 MB resident** (three runs:
+244.8 / 245.7 / 244.3 MB), reached during startup before any conversational turn — so it is fixed
+cost, not something that shrinks for a short prompt. What is **not yet measured** is whether
+resident memory grows further across a long-running conversation's turns; that needs a live
+authenticated session this environment has no subscription credential to run (see
+[10-roadmap.md](10-roadmap.md#open-questions) for the full method and the open half of the
+question). Budget the measured ~245 MB as a floor per concurrent request, not a ceiling.
+
+**Concurrency ceiling is a formula, not a fixed number**, and memory is confirmed as the binding
+constraint: on a representative Linux host, `ulimit -n` (open files) and `ulimit -u` (max
+processes) run in the hundreds of thousands to millions — far above what RAM allows once each
+process costs ~245 MB. A box breaks on memory long before it runs out of file descriptors or
+process-table slots. Concretely:
+
+```
+concurrency_ceiling ≈ (available_RAM_MB − 512_MB_baseline) / 245_MB
+```
+
+The `CLAUDE_SDK_MAX_CONCURRENCY` default of `10` costs ~2.45 GB at full occupancy — conservative on
+anything but the smallest box, and the right default precisely because it is safe everywhere before
+an operator tunes it up against their own RAM using the formula above. Cap concurrency deliberately
+rather than discovering the ceiling under load: an unbounded subprocess count is the failure mode. A
+same-dialect passthrough (the common case) does no body parsing at all; see
 [06-protocol-translation.md](06-protocol-translation.md).
 
 ## Troubleshooting

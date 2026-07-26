@@ -70,18 +70,40 @@ Detail: [03-providers.md](03-providers.md) for the per-provider constants,
 
 Genuinely unsettled. Listed so they are not mistaken for decided.
 
-- **The Agent-SDK path's concurrency ceiling.** Claude subscription requests are one `claude`
-  subprocess each. How many concurrent ones does a normal box actually sustain — tens, or low
-  hundreds? Where does it break first: memory, process table, file descriptors, or the provider's
-  own per-account limits? Until that number is measured, the router has no principled place to set a
-  concurrency cap, and an unbounded subprocess count is the failure mode.
-- **Per-request memory cost of an SDK subprocess.** Everything else in the router scales with
-  concurrent streams at roughly a socket and a buffer each; this one path scales with resident
-  memory per in-flight request. What is the real figure, how much of it is fixed startup versus
-  context size, and does it grow with a long conversation? The sizing guidance in
-  [09-deployment.md](09-deployment.md) is deliberately shaped around "budget one subprocess per
-  concurrent Claude request" precisely because the constant is not yet known — and it is also what
-  decides whether pooling is worth its hazards.
+- **The Agent-SDK path's concurrency ceiling — measured for fixed cost, open for the ceiling
+  itself.** Method: spawned the real `claude` CLI binary (the same one the SDK execs — see
+  [11-anthropic-agent-sdk.md](11-anthropic-agent-sdk.md)) locally, single-process and in
+  concurrent batches of 30 and 60, and polled `/proc/<pid>/status` for `VmRSS` at ~5 ms
+  resolution until exit. A single uncontended process peaks at **~245 MB resident** (three runs:
+  244.8 / 245.7 / 244.3 MB) — startup and runtime init, no live query. Under 30- and 60-way
+  concurrent fan-out the same box averaged 170–195 MB sampled mid-run, consistent with the same
+  fixed cost under scheduling contention. On the test host (12 cores, 45 GB RAM), `ulimit -n` is
+  1,048,576 and `ulimit -u` is 65,535, and `/proc/sys/fs/file-max` / `kernel.pid_max` are 2,097,152
+  / 4,194,304 — orders of magnitude above what memory allows at ~245 MB/process. **Conclusion: it
+  breaks on memory first, not the process table or file descriptors**, on any host with normal
+  Linux defaults, confirming the assumption `CLAUDE_SDK_MAX_CONCURRENCY`'s doc comment already made.
+  What remains genuinely unmeasured is the ceiling **number** itself — "tens or low hundreds" was
+  never a real constraint independent of available RAM. It doesn't need to be: capacity planning is
+  `(available_RAM_MB − 512_MB_baseline) / ~245_MB`, a formula, not a constant — see
+  [09-deployment.md](09-deployment.md#sizing). The measurement above did not exercise a live,
+  authenticated `query()` session (this environment has no subscription credential to spend, and
+  policy — see `CLAUDE.md` non-negotiable 1 and the testing rules — forbids hitting a real
+  provider from CI or a shared test run); a manual, human-run session against a real account is the
+  remaining method to confirm the ceiling holds under actual generation load, not just process
+  startup.
+- **Per-request memory cost of an SDK subprocess — fixed-startup portion measured, growth-with-
+  conversation portion still open.** Same method as above: **~245 MB resident per process is the
+  measured figure**, and it is fixed startup/runtime cost, not context size — a bare `--version`
+  invocation reaches it before doing any conversational work. That retires half the question and
+  confirms the "~200 MB" figure quoted elsewhere in the spec
+  ([09-deployment.md](09-deployment.md), [11-anthropic-agent-sdk.md](11-anthropic-agent-sdk.md),
+  `apps/api/src/config/env.ts`) as measured rather than guessed. Still open, and honestly
+  measured-unknown rather than answered: **whether resident memory grows with a long-running
+  conversation's context.** Measuring that needs a live authenticated `query()` session carried
+  across many turns while sampling `VmRSS` over time — this environment has no subscription
+  credential to spend on it, and project policy keeps real providers out of CI. Until someone runs
+  that session manually, size for the fixed ~245 MB per concurrent request and treat any additional
+  growth as unbudgeted headroom, not zero.
 - **Is advisory-lock leader election enough at multi-replica scale?** Each periodic task takes a
   Postgres advisory lock, so exactly one replica runs a given sweep and the rest skip. That is
   correct and nearly free at two or three replicas. Unsettled at more: a session-scoped lock is
