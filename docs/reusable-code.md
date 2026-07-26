@@ -209,6 +209,7 @@ error hierarchy, in `UsageOutcome`, and on `router_requests_total`.
 | `translationPair(ingress, egress)` → `TranslationPair \| null` | `services/translate/registry.ts` | Asking whether a dialect pair can be served, and getting the three converters that serve it. Null is the honest answer for the diagonal (that is a byte relay, not a translation) and for a pair with no entry. Adding a pair touches this file and nothing else |
 | `createSseParser()` → `SseParser` | `services/translate/sse/parse.ts` | Reading SSE. The repo's **only** parser: frames come back the instant their blank line lands, carrying partial lines and split CRLFs across chunk boundaries. Never used on the passthrough path, which parses nothing at all |
 | `relayTranslatedResponse(input)` | `services/dataplane/relay-translate.ts` | Writing a converted response. A sibling of `relay.ts`, never a mode inside it, so no edit here can put a parser on the passthrough path. Same `RelayObserver` contract, so token counting and TTFB are unchanged |
+| `chatCeiling(value, ceiling?)` | `services/translate/shared/openai-chat.ts` | Emitting an openai-chat output ceiling. One field, two vendor names (`max_tokens` / `max_completion_tokens`), and no upstream accepts both — spread this instead of naming either, so exactly one is ever written and the default stays the name every compatible vendor states |
 
 `request` and `response` on a pair run in **opposite directions** — a body converted toward the
 account, an answer converted back toward the client. The `created` stamp and the fallback id are

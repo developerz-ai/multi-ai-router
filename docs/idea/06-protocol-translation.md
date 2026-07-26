@@ -431,6 +431,7 @@ Be suspicious of any cell not listed here — if it is not documented, it is not
 | Anthropic `thinking` blocks | → `openai-responses` | carried as a reasoning **summary** item; the encrypted reasoning handle is not synthesized |
 | `reasoning.effort` | `openai-responses` → `anthropic`, `openai-chat` | dropped. Anthropic's thinking budget is a token count, not an effort word, and inventing one would change what the caller pays for |
 | `input_image` naming only a `file_id` | `openai-responses` → any | rejected `400`: a stored file is provider-side state this router cannot resolve into bytes |
+| `max_tokens` / `max_completion_tokens` | → `openai-chat` | not lossy, but **not one name either** — emitted under whichever of the two the selected Account accepts. See [The output ceiling](#the-output-ceiling-one-field-two-names) |
 | Responses item ids | → `openai-responses` | minted by the router from the response id and the item's position — deterministic, but not the provider's own |
 | Beta headers (`anthropic-beta`) | → non-Anthropic, and on the Agent-SDK path | dropped |
 | `temperature`, `top_p`, `top_k`, `max_tokens`, `stop`, `seed`, `n`, `logprobs`, penalties | → `agent-sdk` | **accepted and silently inert** — `query()` has no equivalent for any of them, so a value the caller set has no effect on the request. `reasoning_effort` is the exception, mapped onto the SDK's effort scale (`low`…`max`; OpenAI's `minimal` has no target) |
@@ -442,6 +443,46 @@ carries it — a response-level warning field, a header, a logged and counted ev
 **DEFERRED**; that it is surfaced is not. It also compounds: current Anthropic models reject
 `temperature` / `top_p` / `top_k` outright, so the same field is a `400` on the HTTP path and a
 silent no-op here.
+
+## The output ceiling: one field, two names
+
+`openai-chat` has one output ceiling and two names for it, and **no upstream accepts both**. OpenAI
+renamed `max_tokens` to `max_completion_tokens`, marked the old name `deprecated` in its own
+published schema, and made it *incompatible* with the reasoning models — `o1`, `o3`, `o4-mini`,
+`gpt-5` answer it with `400 Unsupported parameter`. Most compatible vendors never followed: five of
+the providers this router drives (DeepSeek, Mistral, Together, Ollama, z.ai) state no
+`max_completion_tokens` at all.
+
+Sending the wrong one fails in two different ways, and the quiet one is worse:
+
+- the **new** name at a vendor that does not know it — Ollama drops the field and generates to its
+  own default. The ceiling the caller set disappears with no error anyone can see. Mistral's schema
+  forbids unknown fields outright, so the same body is a hard refusal there;
+- the **old** name at OpenAI — a `400` on every reasoning model it sells, which is what an Anthropic
+  or Responses client reaching an `openai-api` account used to get on every single request.
+
+So the name is a fact about the **provider**, declared once in its driver (`chatCeiling` on the
+surface, defaulting to `max_tokens` — the name every compatible vendor states) and resolved per
+candidate exactly like the model is. It is never guessed from a model name: `openai/o3` reached
+through OpenRouter is addressed the way OpenRouter states, not the way the model's own vendor does.
+Vendors that accept **both** and merely deprecate the old one (Groq, xAI, Cerebras, Kimi, MiniMax)
+stay on `max_tokens`; the declaration is where they move the day one of them removes it.
+
+Two consequences worth stating out loud:
+
+- **exactly one name is ever emitted.** Sending both is not the safe middle — OpenAI refuses
+  `max_tokens` whether or not the new name sits beside it, so a body carrying both fails on
+  precisely the models the new name exists for;
+- **the cached conversion is keyed by target *shape*, not target dialect**
+  (`services/dataplane/translate-body.ts`). Two `openai-chat` accounts in one chain can disagree, so
+  a failover across them converts twice and hands each the name it reads. A chain of accounts that
+  agree — the ordinary case — still converts once.
+
+None of this touches a **passthrough**. A client that speaks `openai-chat` to an `openai-chat`
+account sends bytes the router does not open, under whichever name it chose; that request is between
+the client and its provider, and the error it gets back is honest and actionable
+([The core rule](#the-core-rule)). Inbound, both names are read wherever the router converts *away*
+from `openai-chat`, and `max_completion_tokens` wins when a body carries both.
 
 ## Model names
 

@@ -1,6 +1,7 @@
 import type {
   AuthKind,
   Dialect,
+  OpenAiChatCeiling,
   ProviderId,
   QuotaWindowState,
   ResetSource,
@@ -232,6 +233,15 @@ export interface ProviderDriver {
 
   /** The Account's chosen surface, for the passthrough-vs-translate decision. */
   resolveDialect(account: DriverAccount): Dialect
+
+  /**
+   * Which spelling of the openai-chat output ceiling this Account's surface accepts — the one field
+   * of that dialect two vendors name differently (`OpenAiChatCeiling`).
+   *
+   * Read only when the router *writes* an openai-chat body, so a driver whose surfaces speak
+   * something else answers with the default and is never asked again.
+   */
+  resolveChatCeiling(account: DriverAccount): OpenAiChatCeiling
 
   /**
    * Auth plus every provider-mandated header. Never mutates the Account, never logs.

@@ -1,7 +1,9 @@
 import {
+  DEFAULT_OPENAI_CHAT_CEILING,
   type Dialect,
   type EgressMode,
   isRouterError,
+  type OpenAiChatCeiling,
   type RouterError,
 } from "@multi-ai-router/core"
 import type { ClaudeSdkDriver, DriverAccount, ProviderDriver } from "../../providers"
@@ -50,6 +52,12 @@ interface ServablePlan {
   readonly dialect: Dialect
   /** The model name this account expects. Identity unless its alias map renames it. */
   readonly upstreamModel: string
+  /**
+   * Which spelling of the openai-chat output ceiling this account accepts, for the conversion that
+   * writes one. Resolved here beside the model because it is the same kind of fact — what this
+   * particular upstream calls something — and because two accounts in one chain can disagree.
+   */
+  readonly chatCeiling: OpenAiChatCeiling
   /**
    * The conversion this attempt runs, or null when the client already speaks the dialect this
    * attempt answers in. On the passthrough path that null is load-bearing: there is deliberately no
@@ -146,6 +154,12 @@ export function planCandidates(
       dialect: egress.mode === "passthrough" ? egress.dialect : egress.to,
       // The alias map is the operator's, applied by the driver, outbound-only, identity on a miss.
       upstreamModel: egress.driver.mapModelAlias(account.driver, candidate.upstreamModel),
+      // The SDK renders into Anthropic Messages and never into openai-chat, so it is asked nothing
+      // here and carries the default rather than a value some later reader might believe.
+      chatCeiling:
+        egress.mode === "agent-sdk"
+          ? DEFAULT_OPENAI_CHAT_CEILING
+          : egress.driver.resolveChatCeiling(account.driver),
       translation: egress.mode === "passthrough" ? null : egress.pair,
       egressMode: egress.mode,
     }

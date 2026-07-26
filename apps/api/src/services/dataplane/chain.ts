@@ -256,7 +256,9 @@ function dispatch(
  */
 function bodyFor(ctx: ChainContext, servable: ServableCandidate): Uint8Array | null {
   const pair = servable.translation
-  if (pair !== null) return ctx.translated.bodyFor(pair, servable.upstreamModel)
+  if (pair !== null) {
+    return ctx.translated.bodyFor(pair, servable.upstreamModel, servable.chatCeiling)
+  }
   if (ctx.bodyBytes.length === 0) return null
   if (ctx.modelSpan === null || servable.upstreamModel === ctx.runtime.model) return ctx.bodyBytes
   return rewriteModel(ctx.bodyBytes, ctx.modelSpan, servable.upstreamModel)

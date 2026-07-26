@@ -1,9 +1,11 @@
+import type { OpenAiChatCeiling } from "@multi-ai-router/core"
 import type {
   OpenAiChatMessage,
   OpenAiChatPart,
   OpenAiChatRequest,
   OpenAiChatToolCall,
 } from "../shared/openai-chat"
+import { chatCeiling } from "../shared/openai-chat"
 import type {
   ParsedOpenAiResponsesContent,
   ParsedOpenAiResponsesItem,
@@ -71,8 +73,16 @@ interface ParsedMessageItem {
   readonly content: ParsedOpenAiResponsesContent
 }
 
+export interface OpenAiResponsesToOpenAiChatOptions {
+  /** Which spelling of the output ceiling the selected Account accepts. Defaults to `max_tokens`. */
+  readonly ceiling?: OpenAiChatCeiling | undefined
+}
+
 /** @throws TranslationError (400) naming the field that has no openai-chat representation. */
-export function openAiResponsesToOpenAiChatRequest(body: unknown): OpenAiChatRequest {
+export function openAiResponsesToOpenAiChatRequest(
+  body: unknown,
+  options: OpenAiResponsesToOpenAiChatOptions = {},
+): OpenAiChatRequest {
   const request = parseRequest(openAiResponsesRequestSchema, body, "openai-responses")
   assertStatelessResponses(request)
   assertPlainTextFormat(request)
@@ -102,7 +112,9 @@ export function openAiResponsesToOpenAiChatRequest(body: unknown): OpenAiChatReq
   return {
     model: request.model,
     messages,
-    max_tokens: request.max_output_tokens ?? undefined,
+    // `max_output_tokens` is Responses' name for the same ceiling; which of openai-chat's two names
+    // it lands under is the target's answer, not ours.
+    ...chatCeiling(request.max_output_tokens ?? undefined, options.ceiling),
     temperature: request.temperature ?? undefined,
     top_p: request.top_p ?? undefined,
     stream: request.stream ?? undefined,

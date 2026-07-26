@@ -1,3 +1,4 @@
+import { DEFAULT_OPENAI_CHAT_CEILING, type OpenAiChatCeiling } from "@multi-ai-router/core"
 import { z } from "zod"
 
 /**
@@ -141,7 +142,9 @@ export type OpenAiChatToolChoice =
 export interface OpenAiChatRequest {
   readonly model: string
   readonly messages: readonly OpenAiChatMessage[]
+  /** Never emitted beside `max_completion_tokens`: see {@link chatCeiling}. */
   readonly max_tokens?: number | undefined
+  readonly max_completion_tokens?: number | undefined
   readonly temperature?: number | undefined
   readonly top_p?: number | undefined
   readonly stop?: readonly string[] | undefined
@@ -149,4 +152,23 @@ export interface OpenAiChatRequest {
   readonly stream_options?: { readonly include_usage: true } | undefined
   readonly tools?: readonly OpenAiChatTool[] | undefined
   readonly tool_choice?: OpenAiChatToolChoice | undefined
+}
+
+/**
+ * The output ceiling under the one name this target accepts, as an object to spread into an emitted
+ * body.
+ *
+ * **Exactly one of the two names is ever present, and emitting both is not the safe middle.** OpenAI
+ * refuses `max_tokens` on a reasoning model whether or not the new name sits beside it, so a body
+ * carrying both fails on precisely the models the new name exists for. Which one an upstream takes
+ * is its driver's answer, defaulted here to the name every compatible vendor states — a translator
+ * handed no answer still emits a ceiling rather than dropping the one the caller set.
+ */
+export function chatCeiling(
+  value: number | undefined,
+  ceiling: OpenAiChatCeiling = DEFAULT_OPENAI_CHAT_CEILING,
+): Pick<OpenAiChatRequest, "max_tokens" | "max_completion_tokens"> {
+  return ceiling === "max_completion_tokens"
+    ? { max_completion_tokens: value }
+    : { max_tokens: value }
 }

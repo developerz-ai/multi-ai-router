@@ -883,6 +883,35 @@ describe("openai-responses -> openai-chat request (the downgrade)", () => {
     const out = openAiResponsesToOpenAiChatRequest(openAiResponsesRequest({ stream: true }))
     expect(out.stream_options).toEqual({ include_usage: true })
   })
+
+  test("max_output_tokens lands under max_tokens by default", () => {
+    const out = openAiResponsesToOpenAiChatRequest(
+      openAiResponsesRequest({ max_output_tokens: 512 }),
+    )
+    expect(out.max_tokens).toBe(512)
+    expect(out).not.toHaveProperty("max_completion_tokens")
+  })
+
+  test("max_output_tokens lands under max_completion_tokens where the account states that name", () => {
+    const out = openAiResponsesToOpenAiChatRequest(
+      openAiResponsesRequest({ max_output_tokens: 512 }),
+      { ceiling: "max_completion_tokens" },
+    )
+    expect(out.max_completion_tokens).toBe(512)
+    expect(out).not.toHaveProperty("max_tokens")
+  })
+
+  test("an absent max_output_tokens emits neither name: openai-chat's ceiling is optional", () => {
+    const out = JSON.parse(
+      JSON.stringify(
+        openAiResponsesToOpenAiChatRequest(openAiResponsesRequest(), {
+          ceiling: "max_completion_tokens",
+        }),
+      ),
+    )
+    expect(out).not.toHaveProperty("max_tokens")
+    expect(out).not.toHaveProperty("max_completion_tokens")
+  })
 })
 
 describe("openai-responses -> openai-chat response (the downgrade)", () => {

@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test"
+import type { PoolSnapshot } from "../../src/services/routing"
 import { account, jsonResponse, slowStream } from "../unit/dataplane/fixtures"
 import { bearer, CRYPTOR, harness, MESSAGE, post, settle } from "./harness"
 
@@ -125,5 +126,118 @@ describe("cross-dialect streaming (translate egress)", () => {
     expect(rendered).not.toContain("secret-account-id")
     expect(rendered).not.toContain("sk-shh")
     expect(upstream.calls).toHaveLength(1)
+  })
+})
+
+/**
+ * The output ceiling is one field with two names, and no upstream accepts both. OpenAI renamed
+ * `max_tokens` to `max_completion_tokens` and refuses the old one on every reasoning model it
+ * sells; five of the compatible vendors here have never heard of the new one, and the ones that
+ * merely ignore it generate unbounded instead of answering an error anybody can see.
+ *
+ * So the name is the **account's**, resolved per candidate like the model is
+ * (docs/idea/06-protocol-translation.md#known-lossy-edges). These are the assertions that say the
+ * caller's ceiling survives the conversion, whichever account answers.
+ */
+describe("the openai-chat output ceiling (translate egress)", () => {
+  const CEILING_POOL_ID = "ceiling-pool"
+
+  /** Priority order, so the failover walk below is the chain the test says it is. */
+  const ceilingPool = (): PoolSnapshot => ({
+    id: CEILING_POOL_ID,
+    name: "ceiling",
+    policy: "priority-failover",
+    members: [
+      { accountId: "oa", priority: 0 },
+      { accountId: "or-1", priority: 1 },
+    ],
+  })
+
+  const openAiAccount = (id = "oa") =>
+    account(id, { provider: "openai-api", apiKey: "sk-o", cipher: CRYPTOR })
+
+  const ok = () => jsonResponse(200, { usage: { prompt_tokens: 1, completion_tokens: 2 } })
+
+  function sent(body: string | undefined): Record<string, unknown> {
+    return JSON.parse(body ?? "{}") as Record<string, unknown>
+  }
+
+  test("an openai-api account is sent max_completion_tokens, and never the name it refuses", async () => {
+    const { app, upstream } = harness({ accounts: [openAiAccount()], responses: [ok] })
+
+    const res = await app.request("/v1/messages", post(MESSAGE, bearer()))
+    await res.text()
+    await settle()
+
+    expect(res.status).toBe(200)
+    const body = sent(upstream.calls[0]?.body)
+    // 64 is `MESSAGE`'s own `max_tokens` — the caller's ceiling, under the target's name for it.
+    expect(body.max_completion_tokens).toBe(64)
+    expect(body).not.toHaveProperty("max_tokens")
+  })
+
+  test("every other openai-chat vendor keeps max_tokens: the new name would drop the ceiling silently", async () => {
+    const { app, upstream } = harness({ accounts: [openRouterAccount()], responses: [ok] })
+
+    const res = await app.request("/v1/messages", post(MESSAGE, bearer()))
+    await res.text()
+    await settle()
+
+    expect(res.status).toBe(200)
+    const body = sent(upstream.calls[0]?.body)
+    expect(body.max_tokens).toBe(64)
+    expect(body).not.toHaveProperty("max_completion_tokens")
+  })
+
+  test("a failover between two openai-chat accounts converts twice: each gets the name it reads", async () => {
+    const { app, upstream, usage } = harness({
+      accounts: [openAiAccount(), openRouterAccount()],
+      pools: [ceilingPool()],
+      scope: "pools",
+      poolIds: [CEILING_POOL_ID],
+      // The openai-api account's turn: a plain 429 is retryable, so the chain walks on.
+      responses: [() => jsonResponse(429, {}), ok],
+    })
+
+    const res = await app.request("/v1/messages", post(MESSAGE, bearer()))
+    await res.text()
+    await settle()
+
+    expect(res.status).toBe(200)
+    expect(upstream.calls).toHaveLength(2)
+    // The conversion is cached per target *shape*, not per target dialect. Cached by dialect alone,
+    // the second account would be handed the first account's body — a field OpenRouter's upstream
+    // model may never see, and no ceiling at all under the name it does read.
+    expect(sent(upstream.calls[0]?.body).max_completion_tokens).toBe(64)
+    expect(sent(upstream.calls[0]?.body)).not.toHaveProperty("max_tokens")
+    expect(sent(upstream.calls[1]?.body).max_tokens).toBe(64)
+    expect(sent(upstream.calls[1]?.body)).not.toHaveProperty("max_completion_tokens")
+    expect(usage.rows.map((row) => row.accountId)).toEqual(["oa", "or-1"])
+  })
+
+  test("two accounts that agree are handed the same bytes: the ceiling adds no per-attempt drift", async () => {
+    const { app, upstream } = harness({
+      accounts: [openRouterAccount("or-1"), openRouterAccount("or-2")],
+      pools: [
+        {
+          ...ceilingPool(),
+          members: [
+            { accountId: "or-1", priority: 0 },
+            { accountId: "or-2", priority: 1 },
+          ],
+        },
+      ],
+      scope: "pools",
+      poolIds: [CEILING_POOL_ID],
+      responses: [() => jsonResponse(429, {}), ok],
+    })
+
+    const res = await app.request("/v1/messages", post(MESSAGE, bearer()))
+    await res.text()
+    await settle()
+
+    expect(res.status).toBe(200)
+    expect(upstream.calls).toHaveLength(2)
+    expect(upstream.calls[0]?.body).toBe(upstream.calls[1]?.body ?? "")
   })
 })

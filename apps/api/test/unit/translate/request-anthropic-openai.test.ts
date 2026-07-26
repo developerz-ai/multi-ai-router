@@ -39,6 +39,37 @@ describe("sampling parameters and passthrough fields", () => {
   })
 })
 
+/**
+ * One ceiling, two field names, and no upstream takes both — the target's driver says which one
+ * (`OpenAiChatCeiling`). Anthropic *requires* `max_tokens` on the way in, so this direction always
+ * carries a ceiling and there is no absent case to fall back for.
+ */
+describe("the output ceiling", () => {
+  test("takes max_tokens by default: the name every compatible vendor states", () => {
+    const out = anthropicToOpenAiChatRequest(anthropicRequest())
+    expect(out.max_tokens).toBe(1024)
+    expect(out).not.toHaveProperty("max_completion_tokens")
+  })
+
+  test("takes max_completion_tokens where the account's provider states that name", () => {
+    const out = anthropicToOpenAiChatRequest(anthropicRequest(), {
+      ceiling: "max_completion_tokens",
+    })
+    expect(out.max_completion_tokens).toBe(1024)
+    expect(out).not.toHaveProperty("max_tokens")
+  })
+
+  test("never emits both: OpenAI refuses max_tokens beside it on a reasoning model", () => {
+    for (const ceiling of ["max_tokens", "max_completion_tokens"] as const) {
+      const out = anthropicToOpenAiChatRequest(anthropicRequest(), { ceiling })
+      const named = ["max_tokens", "max_completion_tokens"].filter((field) =>
+        Object.hasOwn(out, field),
+      )
+      expect(named).toEqual([ceiling])
+    }
+  })
+})
+
 describe("system prompt", () => {
   test("a string system becomes a leading role:system message", () => {
     const out = anthropicToOpenAiChatRequest(anthropicRequest({ system: "be terse" }))
