@@ -5,7 +5,7 @@
 
 import { describe, expect, test } from "bun:test"
 import type { SelectionRequest } from "../../../src/services/routing"
-import { resolveScope } from "../../../src/services/routing"
+import { isInScope, resolveScope } from "../../../src/services/routing"
 import { account, pool, snapshot } from "./fixtures"
 
 const request = (keyScope: SelectionRequest["keyScope"]): SelectionRequest => ({
@@ -166,5 +166,37 @@ describe("overflow stays inside the intersection", () => {
 
     expect(resolved.groups[0]?.overflow).toBeNull()
     expect(resolved.diagnostics.unresolvedTargetIds).toEqual(["ghost"])
+  })
+
+  test("a pool's own overflow is not a candidate when the key's scope is an explicit account list that excludes it", () => {
+    // `paid` is a legitimate member of `team`, designated as its overflow — nothing wrong with the
+    // pool. The leak is scope-shaped: an `accounts`-scoped key ignores pool membership entirely
+    // (`resolveAccountList`), so `paid` never enters a group and is never in scope, regardless of
+    // what any pool says about it.
+    const state = snapshot(
+      [account("a"), account("paid")],
+      [pool("team", ["a", "paid"], { overflowAccountId: "paid" })],
+    )
+    const resolved = resolveScope(state, request({ kind: "accounts", accountIds: ["a"] }))
+
+    expect(isInScope(resolved, "paid")).toBe(false)
+    expect(isInScope(resolved, "a")).toBe(true)
+    expect(resolved.groups).toHaveLength(1)
+    expect(resolved.groups[0]?.overflow).toBeNull()
+    expect(resolved.diagnostics.inScopeAccountIds).toEqual(["a"])
+  })
+
+  test("a pool's overflow reached only through a pool the key does not name is not a candidate", () => {
+    // Two real pools, two real overflows. A key scoped to `team` alone must never see `burst`'s
+    // overflow — the intersection is per named pool, not "any pool this account happens to sit in".
+    const state = snapshot(
+      [account("a"), account("b"), account("paid")],
+      [pool("team", ["a"]), pool("burst", ["b", "paid"], { overflowAccountId: "paid" })],
+    )
+    const resolved = resolveScope(state, request({ kind: "pools", poolIds: ["team"] }))
+
+    expect(isInScope(resolved, "paid")).toBe(false)
+    expect(resolved.groups).toHaveLength(1)
+    expect(resolved.groups[0]?.overflow).toBeNull()
   })
 })
