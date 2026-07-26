@@ -307,8 +307,9 @@ Rules:
   Replaying a partially delivered stream would produce a response the client cannot reconcile —
   duplicated tokens, a second `message_start`, a tool call emitted twice. The router surfaces the
   truncation as an error and lets the client decide. This is a hard rule, not a tunable.
-- The failure that surfaces is the **last** attempt's, with the attempt count in the error
-  metadata and in the `UsageRecord`.
+- The failure that surfaces is the **most actionable** attempt's — never simply the last one — with
+  the attempt count in the error metadata and in the `UsageRecord`. Every attempt is still recorded;
+  only one of them answers the client. See [Which failure the client hears](#which-failure-the-client-hears).
 
 ### Failover mid-conversation — the two paths are not the same operation
 
@@ -402,6 +403,36 @@ code follows the cause:
 | Mixed causes | the code for the **soonest recoverable** one, `429` if any account has a reset | per-account breakdown |
 
 Never a generic upstream `500`. Never a silent fallback outside the key's scope.
+
+### Which failure the client hears
+
+The table above decides a chain that never started. A chain that *did* start has the same problem
+one attempt at a time: three candidates, three different reasons, one status to return. It is
+resolved by the same rule — **the most actionable failure wins, never simply the last one.**
+
+| Rank | Failure | The caller's next step |
+|---|---|---|
+| 1 | A clock fixes it — `429` | Wait the `Retry-After`, then the pool serves. |
+| 2 | A human fixes it — `402` top up, `502` re-authenticate the Account | One named action, by the operator. |
+| 3 | The upstream answered — relayed verbatim | Whatever the provider said, in the provider's own words. |
+| 4 | *This one Account* could not take *this request* — `400` no faithful conversion into its dialect, `500` a credential this router cannot read | Nothing the caller can use. |
+
+Two arguments produce that order, and they are the same argument twice:
+
+- **A pool is serviceable again at its earliest reset.** So one account's `429` outranks any verdict
+  a *different* account gave. Answering `402` — "no timer will fix this" — while another candidate
+  cools down for thirty seconds is false, and it is non-negotiable 7 read from the caller's side.
+- **An Account that answered has proved the request itself was fine.** So a refusal specific to one
+  Account never speaks for the chain. A mis-encrypted credential on candidate 3 is the *router's*
+  broken state; surfacing it as a `500` erased candidate 1's honest `429` and the wait that came
+  with it, leaving the client to retry blind.
+
+Ties keep the earliest attempt's, so the account named is the first one that failed that way —
+except between two spent windows, where the **sooner** wait wins, for the same reason the
+"every candidate unavailable" table reports the soonest reset.
+
+Every attempt still writes its own `UsageRecord`, so the account that could not be dispatched to
+stays visible to the operator. It just does not answer the client.
 
 ### Overflow (optional, opt-in)
 

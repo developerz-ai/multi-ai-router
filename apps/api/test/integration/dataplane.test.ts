@@ -581,6 +581,92 @@ describe("failover", () => {
     expect(health.stateOf("acct-1").breaker.status).toBe("cooling_down")
     expect(health.stateOf("acct-2").breaker.status).toBe("active")
   })
+
+  /**
+   * An account whose stored credential the router cannot read: a rotated `ENCRYPTION_KEY`, or a row
+   * written by another deployment. The cipher refuses the envelope, so the attempt dies before a
+   * socket is opened.
+   */
+  const misEncrypted: RoutableAccount = {
+    ...account("acct-2", { apiKey: "sk-two", cipher: CRYPTOR }),
+    authMaterial: "not-a-credential-envelope",
+  }
+
+  test("a mis-encrypted account cannot turn a pool-wide 429 into a 500", async () => {
+    const { app, upstream, usage } = harness({
+      accounts: [account("acct-1", { apiKey: "sk-one", cipher: CRYPTOR }), misEncrypted],
+      responses: [() => jsonResponse(429, {}, { "retry-after": "30" })],
+    })
+
+    const res = await app.request("/v1/messages", post(MESSAGE, bearer()))
+    await settle()
+
+    // The chain reports the most actionable failure, not the last one. Candidate 1 said "come back
+    // in 30 seconds"; candidate 2 said "this router cannot read its own row", which is true and
+    // useless to a caller. Surfacing the second erased the wait and handed back a bare `500`.
+    expect(res.status).toBe(429)
+    expect(res.headers.get("Retry-After")).toBe("30")
+    // Both attempts are recorded — the broken account is still visible to the operator, it just no
+    // longer speaks for the pool. Only one of them reached a socket.
+    expect(upstream.calls).toHaveLength(1)
+    expect(usage.rows.map((row) => row.outcome)).toEqual(["quota_exhausted", "upstream_error"])
+  })
+
+  test("a mis-encrypted account is still reported when it is all that went wrong", async () => {
+    // The fold ranks it last; it must not swallow it. One candidate, nothing more actionable to
+    // hold, so the router's own broken state is the honest answer — and the caller's key was fine.
+    const { app, upstream } = harness({
+      accounts: [misEncrypted],
+      responses: [() => jsonResponse(200, {})],
+    })
+
+    const res = await app.request("/v1/messages", post(MESSAGE, bearer()))
+    await settle()
+
+    expect(res.status).toBe(500)
+    expect(upstream.calls).toHaveLength(0)
+  })
+
+  test("a later candidate's bare 5xx cannot erase an earlier one's Retry-After", async () => {
+    // Same defect, different mask: a `503` produces no router-shaped verdict, so relaying it lost
+    // candidate 1's `429` and the wait that came with it.
+    const { app, usage } = harness({
+      accounts: twoAccounts,
+      responses: [
+        () => jsonResponse(429, {}, { "retry-after": "30" }),
+        () => jsonResponse(503, { error: { message: "overloaded" } }),
+      ],
+    })
+
+    const res = await app.request("/v1/messages", post(MESSAGE, bearer()))
+    await settle()
+
+    expect(res.status).toBe(429)
+    expect(res.headers.get("Retry-After")).toBe("30")
+    expect(usage.rows.map((row) => row.outcome)).toEqual(["quota_exhausted", "upstream_error"])
+  })
+
+  test("a drained balance never speaks over an account a clock will revive", async () => {
+    const { app } = harness({
+      accounts: twoAccounts,
+      responses: [
+        () => jsonResponse(429, {}, { "retry-after": "30" }),
+        () =>
+          jsonResponse(402, {
+            type: "error",
+            error: { type: "billing_error", message: "credit balance is too low" },
+          }),
+      ],
+    })
+
+    const res = await app.request("/v1/messages", post(MESSAGE, bearer()))
+    await settle()
+
+    // `402` says "no timer will fix this". With acct-1 back in thirty seconds, that is false about
+    // the pool (CLAUDE.md non-negotiable 7 read from the caller's side).
+    expect(res.status).toBe(429)
+    expect(res.headers.get("Retry-After")).toBe("30")
+  })
 })
 
 describe("scope enforcement", () => {

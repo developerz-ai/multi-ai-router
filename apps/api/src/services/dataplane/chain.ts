@@ -1,11 +1,5 @@
-import {
-  type Dialect,
-  isRouterError,
-  NoHealthyAccountError,
-  type RouterError,
-} from "@multi-ai-router/core"
+import { isRouterError, NoHealthyAccountError } from "@multi-ai-router/core"
 import type { Logger } from "../../logging/logger"
-import { toRouterError } from "../../providers"
 import {
   type AttemptFailure,
   type Candidate,
@@ -20,6 +14,7 @@ import { createTokenObserver, NO_TOKEN_OBSERVER } from "../usage"
 import { type AttemptOutcome, runAttempt, type UpstreamError } from "./attempt"
 import { rewriteModel } from "./body/read"
 import type { ByteSpan } from "./body/scanner"
+import { answeredFailure, type ChainFailure, foldChainFailure, routerFailure } from "./chain-error"
 import { breakerOptionsFor } from "./health"
 import type { ServableCandidate } from "./plan"
 import { attemptRecord, failureOutcome, SUCCESS_OUTCOME } from "./records"
@@ -40,6 +35,10 @@ import type { TranslatedRequestBody } from "./translate-body"
  *
  * Attempts are bounded, each one a distinct account — except the single in-place replay a stale SDK
  * session earns — and every one writes its own `UsageRecord`, sharing the request's correlation id.
+ *
+ * When several attempts fail, the one the client hears about is the **most actionable**, not the
+ * last: `chain-error.ts` ranks them, so a broken account late in the chain cannot bury the honest
+ * answer an account earlier in it already gave.
  */
 
 export interface ChainContext {
@@ -64,10 +63,8 @@ export async function runChain(ctx: ChainContext): Promise<Response> {
 
   let progress = NO_ATTEMPTS
   let lastFailure: AttemptFailure | null = null
-  let lastUpstream: UpstreamError | null = null
-  /** The dialect the last upstream error must be re-rendered into, or null when it already is. */
-  let lastUpstreamDialect: Dialect | null = null
-  let lastError: RouterError | null = null
+  /** The most actionable failure any attempt has produced so far. See `chain-error.ts`. */
+  let held: ChainFailure | null = null
   let upstreamMs = 0
 
   for (;;) {
@@ -95,7 +92,7 @@ export async function runChain(ctx: ChainContext): Promise<Response> {
     } catch (error) {
       runtime.health.endAttempt(accountId)
       if (!isRouterError(error)) throw error
-      lastError = error
+      held = foldChainFailure(held, routerFailure(error))
       lastFailure = { kind: "client-error", message: error.message }
       recordFailure(ctx, servable, decision.attempt, lastFailure, null, { ...at, upstreamMs })
       continue
@@ -106,10 +103,12 @@ export async function runChain(ctx: ChainContext): Promise<Response> {
       outcome = await dispatch(ctx, servable, upstreamBody)
     } catch (error) {
       // A credential that will not decrypt, or a driver that refused to build the request. This
-      // account cannot serve; the next one still can, and the reason is kept in case none can.
+      // account cannot serve; the next one still can, and the reason is kept in case none can —
+      // *kept*, not promoted: this account never reached an upstream, so it has no verdict on the
+      // request and cannot speak over one an account that did reach its upstream already gave.
       runtime.health.endAttempt(accountId)
       upstreamMs += runtime.clock.elapsed() - attemptStarted
-      lastError = isRouterError(error) ? error : null
+      held = foldChainFailure(held, isRouterError(error) ? routerFailure(error) : null)
       lastFailure = { kind: "server-error", message: "the account could not be dispatched to" }
       recordFailure(ctx, servable, decision.attempt, lastFailure, null, { ...at, upstreamMs })
       continue
@@ -151,19 +150,30 @@ export async function runChain(ctx: ChainContext): Promise<Response> {
     })
 
     lastFailure = outcome.failure
-    lastUpstream = outcome.upstream
-    // A translated attempt's error body is the *account's* dialect. The client is owed its own.
-    lastUpstreamDialect = servable.translation === null ? null : runtime.ingressDialect
-    lastError = outcome.classification === null ? null : toRouterError(outcome.classification)
+    held = foldChainFailure(
+      held,
+      // A translated attempt's error body is the *account's* dialect. The client is owed its own.
+      answeredFailure(
+        outcome.classification,
+        outcome.upstream,
+        servable.translation === null ? null : runtime.ingressDialect,
+      ),
+    )
   }
 
-  // The failure that surfaces is the **last** attempt's. A router-shaped one — 429 with a reset,
-  // 402 saying a human must top up, 502 saying the *account's* credential failed rather than the
-  // caller's — is thrown so it renders in the ingress dialect. Anything else is the upstream's own
-  // answer, relayed unchanged: a bad request is bad at every account, and the provider's reply is
-  // the honest one.
-  if (lastError !== null) throw lastError
-  if (lastUpstream !== null) return relayUpstreamError(lastUpstream, lastUpstreamDialect)
+  // The failure that surfaces is the **most actionable** attempt's, not the last one: `chain-error.ts`
+  // owns that ranking, and the reason it is a ranking rather than an assignment is that a credential
+  // the router cannot read on candidate 3 must never overwrite candidate 1's honest `429`.
+  //
+  // A router-shaped failure — a 429 carrying the wait, a 402 saying a human must top up, a 502
+  // saying the *account's* credential was rejected rather than the caller's — is thrown, so it
+  // renders in the ingress dialect with the status its class fixes. Anything else is the upstream's
+  // own answer, relayed unchanged: a bad request is bad at every account, and the provider's reply
+  // is the honest one.
+  if (held !== null) {
+    if (held.kind === "router") throw held.error
+    return relayUpstreamError(held.upstream, held.dialect)
+  }
   if (lastFailure !== null) {
     throw new NoHealthyAccountError(`every attempt failed: ${lastFailure.message}`)
   }

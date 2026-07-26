@@ -280,6 +280,7 @@ in a test as on the wire.
 | `runAttempt(input)` / `runSdkAttempt(input)` → `AttemptOutcome` | `services/dataplane/attempt.ts`, `sdk-attempt.ts` | Dispatching one attempt. Two transports, **one** outcome type, so health, records, and relay are written once. Siblings, never modes inside one function |
 | `attemptDeadline(timeoutMs, clientSignal?)` | `services/dataplane/attempt.ts` | Bounding an upstream call. Shared by both transports: on the SDK path the same signal terminates the subprocess, so a client that disconnects never orphans one |
 | `relayUpstreamError(upstream, ingress)` | `services/dataplane/relay-error.ts` | Rendering an upstream's own error. `null` ingress relays it unchanged (passthrough); a dialect re-renders it into the client's shape, naming no account |
+| `foldChainFailure(held, next)`, `routerFailure(error)`, `answeredFailure(classification, upstream, dialect)`, `ChainFailure` | `services/dataplane/chain-error.ts` | Deciding which of several failed attempts answers the client. Pure, and a ranking rather than an assignment: a clock-recoverable `429` outranks every verdict another account gave, and a refusal specific to one account (an unreadable credential, a body its dialect cannot represent) is the floor. Total over `RouterErrorCode`, so a new error class does not compile until someone ranks it. The pre-attempt twin is `routing/no-candidates.ts` |
 
 ### Test support — `apps/api/test/`
 

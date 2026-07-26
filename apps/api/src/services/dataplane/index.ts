@@ -57,6 +57,7 @@ export {
   resolveSessionKey,
   type SessionKeySource,
 } from "./body/session"
+export { answeredFailure, type ChainFailure, foldChainFailure, routerFailure } from "./chain-error"
 export { accountCredential } from "./egress/credential"
 export {
   upstreamCountTokensUrl,
