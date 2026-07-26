@@ -72,24 +72,32 @@ Not for you if you want a semantic model picker, an agent framework, multi-tenan
 
 Three env vars you set by hand and one command. No hash-generation step. `docker compose up -d` brings up two services — the router and PostgreSQL 16 — with a healthcheck gating the router's start and `DATABASE_URL` wired in for you.
 
+**First, copy the env template and fill in the three required vars:**
+
+```bash
+cp .env.example .env
+# Edit .env: set ADMIN_PASSWORD and ENCRYPTION_KEY (generate: openssl rand -base64 32)
+# ADMIN_USERNAME defaults to "admin" if you leave it as-is
+```
+
+The bundled `docker-compose.yml` reads from `.env` and supplies `DATABASE_URL` automatically:
+
 ```yaml
-# compose.yaml
+# docker-compose.yml (bundled)
 services:
   router:
-    image: ghcr.io/developerz-ai/multi-ai-router:latest
-    ports: ["8080:8080"]
+    image: ghcr.io/developerz-ai/multi-ai-router:1.0.0
+    ports: ["127.0.0.1:8080:8080"]
+    env_file: [{ path: .env, required: false }]  # reads ADMIN_*, ENCRYPTION_KEY from .env
     environment:
-      ADMIN_USERNAME: admin
-      ADMIN_PASSWORD: change-me
-      ENCRYPTION_KEY: REPLACE_ME     # 32 random bytes: openssl rand -base64 32
-      DATABASE_URL: postgres://router:router@db:5432/router
+      DATABASE_URL: postgres://router:router@postgres:5432/router
     # per-Account CLAUDE_CONFIG_DIR — live credentials, treat as secret material
     volumes: ["claude-config:/data/claude"]
-    depends_on: { db: { condition: service_healthy } }
+    depends_on: { postgres: { condition: service_healthy } }
     restart: unless-stopped
 
-  db:
-    image: postgres:16-alpine
+  postgres:
+    image: postgres:16
     environment: { POSTGRES_USER: router, POSTGRES_PASSWORD: router, POSTGRES_DB: router }
     healthcheck: { test: ["CMD-SHELL", "pg_isready -U router"], interval: 5s, retries: 10 }
     volumes: ["pgdata:/var/lib/postgresql/data"]
@@ -100,11 +108,13 @@ volumes:
   claude-config:
 ```
 
+**Then:**
+
 ```bash
 docker compose up -d
 ```
 
-Migrations run at boot, are idempotent, and fail the boot loudly rather than starting on a half-migrated schema. Pointing `DATABASE_URL` at an existing or managed Postgres and dropping the bundled `db` service is a one-line change.
+Migrations run at boot, are idempotent, and fail the boot loudly rather than starting on a half-migrated schema. Pointing `DATABASE_URL` at an existing or managed Postgres and dropping the bundled `postgres` service is a one-line change.
 
 Then open **<http://localhost:8080>** and log in. The router process serves the SolidJS console itself, at the same origin as the API — no second container, no static host, no CORS to configure. Add an account, a pool, and a key; the console handles all three end to end ([Status](#-status)), and `/api/admin/**` is there directly if you'd rather script it. **Give the key a name; you can view and copy its value again at any time** via `POST /api/admin/keys/:id/reveal` — keys are stored encrypted, not hashed, because an operator running a fleet of agents needs to look one up later without rotating it.
 

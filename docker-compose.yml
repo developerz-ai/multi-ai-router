@@ -8,19 +8,20 @@
 
 services:
   router:
-    image: ghcr.io/developerz-ai/multi-ai-router:latest
+    image: ghcr.io/developerz-ai/multi-ai-router:1.0.0
     # Pin at least the minor in production (e.g. :1.2) — `latest` moves under you.
 
     ports:
       # Host:container. The admin plane lives on this same port, so publish it on
       # 127.0.0.1 (or a private interface) and let a reverse proxy expose only what
       # you mean to expose. See the "Reverse proxy" section in docs/idea/09-deployment.md.
-      - "8080:8080"
+      - "127.0.0.1:8080:8080"
 
     # Admin credentials + ENCRYPTION_KEY come from .env. Nothing secret belongs in
     # this file.
     env_file:
-      - .env
+      - path: .env
+        required: false
 
     environment:
       # Connection string for the bundled Postgres below. The credentials are
