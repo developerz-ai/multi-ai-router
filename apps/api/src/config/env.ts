@@ -24,6 +24,13 @@ export interface RetentionConfig {
   readonly auditDays: number
   readonly revokedKeysDays: number
   readonly oauthStateMinutes: number
+  /**
+   * How long a `CLAUDE_CONFIG_DIR` under `CLAUDE_CONFIG_ROOT` that no account claims is kept before
+   * the reaper removes it. A grace, not a schedule: a directory is provisioned *before* its account
+   * row is inserted, so anything shorter than the widest gap between those two would delete a
+   * directory an account is about to name (`scheduler/tasks/config-dir-reap.ts`).
+   */
+  readonly orphanConfigDirHours: number
 }
 
 /**
@@ -149,6 +156,8 @@ export interface SchedulerConfig {
   readonly oauthStatePurgeIntervalMinutes: number
   /** Account quota floor probe interval, in minutes. */
   readonly quotaFloorIntervalMinutes: number
+  /** Orphaned `CLAUDE_CONFIG_DIR` reap interval, in minutes. The window itself is `retention`. */
+  readonly configDirReapIntervalMinutes: number
   /** Max rows per bounded-delete sweep. */
   readonly sweepBatchSize: number
   /** Jitter applied to task intervals as a fraction of the interval. E.g., 0.2 means ±20%. */
@@ -305,10 +314,12 @@ const envSchema = z
     RETENTION_AUDIT_DAYS: wholeNumber.optional(),
     RETENTION_REVOKED_KEYS_DAYS: wholeNumber.optional(),
     RETENTION_OAUTH_STATE_MINUTES: wholeNumber.optional(),
+    RETENTION_ORPHAN_CONFIG_DIR_HOURS: wholeNumber.optional(),
     JANITOR_INTERVAL_MINUTES: wholeNumber.optional(),
     USAGE_ROLLUP_INTERVAL_MINUTES: wholeNumber.optional(),
     OAUTH_STATE_PURGE_INTERVAL_MINUTES: wholeNumber.optional(),
     QUOTA_FLOOR_INTERVAL_MINUTES: wholeNumber.optional(),
+    CONFIG_DIR_REAP_INTERVAL_MINUTES: wholeNumber.optional(),
     SWEEP_BATCH_SIZE: wholeNumber.optional(),
     SCHEDULER_JITTER_FRACTION: fraction.optional(),
     // Exclusive bounds: `0` would refresh in a loop and `1` would refresh at the instant of
@@ -383,12 +394,19 @@ const envSchema = z
         auditDays: raw.RETENTION_AUDIT_DAYS ?? 365,
         revokedKeysDays: raw.RETENTION_REVOKED_KEYS_DAYS ?? 30,
         oauthStateMinutes: raw.RETENTION_OAUTH_STATE_MINUTES ?? 10,
+        // A day, because the failure it covers is a crash between provisioning a directory and
+        // inserting the row that names it, and the operator who notices at all notices the next
+        // morning. Shortening it buys a little disk and risks deleting a live login.
+        orphanConfigDirHours: raw.RETENTION_ORPHAN_CONFIG_DIR_HOURS ?? 24,
       },
       janitorIntervalMinutes: raw.JANITOR_INTERVAL_MINUTES ?? 60,
       scheduler: {
         usageRollupIntervalMinutes: raw.USAGE_ROLLUP_INTERVAL_MINUTES ?? 60,
         oauthStatePurgeIntervalMinutes: raw.OAUTH_STATE_PURGE_INTERVAL_MINUTES ?? 5,
         quotaFloorIntervalMinutes: raw.QUOTA_FLOOR_INTERVAL_MINUTES ?? 30,
+        // Hours, not minutes: an orphan is a crash artifact, so a router that never crashes sweeps
+        // an empty root forever and one that did leaves a directory nobody is racing to reclaim.
+        configDirReapIntervalMinutes: raw.CONFIG_DIR_REAP_INTERVAL_MINUTES ?? 360,
         sweepBatchSize: raw.SWEEP_BATCH_SIZE ?? 1_000,
         jitterFraction: raw.SCHEDULER_JITTER_FRACTION ?? 0.2,
       },

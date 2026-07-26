@@ -84,6 +84,15 @@ The threat model changes shape rather than disappearing — there is no token co
 forged request to get an account banned, but the config-directory volume becomes live credential
 material with the same handling requirements as the database.
 
+That is also why a directory outliving its Account is a security defect and not a housekeeping one.
+Deleting an Account removes its directory, but a crash between provisioning the directory and
+inserting the row cannot — and what stays behind is a live subscription's credentials that nothing
+will ever rotate, revoke, or notice. The `config_dir_reap` scheduled task removes them, guarded so
+the sweep can never cost more than the leak it prevents: only names that are account ids are ever
+candidates, only after `RETENTION_ORPHAN_CONFIG_DIR_HOURS` unclaimed, and the volume is surveyed
+before the accounts table is read, so a row written mid-sweep can only ever *save* a directory.
+See [11-anthropic-agent-sdk.md](11-anthropic-agent-sdk.md#credential-lifecycle-per-account).
+
 Envelope format — every ciphertext record carries its own metadata. Five dot-separated segments,
 unpadded base64url (`.` never occurs in base64url, so the split is unambiguous):
 
@@ -226,6 +235,9 @@ For operators, at deploy time:
 - **Back up the `CLAUDE_CONFIG_DIR` volume as secret material, not as data.** It holds live Claude
   subscription credentials, and `ENCRYPTION_KEY` does not protect it. Mode `0700` on the directory
   tree, owned by the non-root container user, excluded from any log or metrics collection path.
+  Restoring such a backup onto a database that no longer has those Accounts re-creates exactly the
+  orphans `config_dir_reap` exists for; leave `RETENTION_ORPHAN_CONFIG_DIR_HOURS` long enough to
+  notice, not so long the credentials sit there indefinitely.
 - Do not expose the Postgres port outside the compose network; run the container as a non-root user.
 - Set `TRUST_PROXY` only when a proxy you control is actually in front.
 - Leave `SESSION_COOKIE_INSECURE` unset. It is only for a plain-HTTP LAN install, where the

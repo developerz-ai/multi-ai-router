@@ -1,6 +1,7 @@
 import type { Options, PermissionResult } from "@anthropic-ai/claude-agent-sdk"
 import { isPermittedTool, PERMITTED_TOOLS, toolDenial } from "./allowlist"
 import { subprocessEnv } from "./env"
+import type { SessionPlan } from "./session"
 import type { Passthrough } from "./tools"
 
 /**
@@ -20,6 +21,8 @@ import type { Passthrough } from "./tools"
  * | `maxTurns` | The SDK is an autonomous agent with a 200-turn internal budget; we are a single-turn endpoint. After a denied tool call it still runs a fully billed "digest" turn, so the budget is what bounds the loop (§7) |
  * | `cwd` | Server-controlled. The client's own working directory does not exist on this host, and passing it fails the spawn with an error that reads like anything but the cause (§8) |
  * | `mcpServers` + `hooks` | Present only when the client sent tools. The server declares them so the model emits well-formed calls; the hook denies every one and hands it to the client (`tools/`). Neither grants execution — the allowlist above is still the only thing that can (§7) |
+ * | `systemPrompt` | The **client's**, or nothing. Omitted, the SDK runs with no system prompt at all, which is what a client that sent none asked for; the Claude Code preset is a per-Account setting, never a substituted default (§8) |
+ * | `resume` / `forkSession` / `resumeSessionAt` | The lineage plan, applied verbatim. `fresh` is the absence of all three, not a value of one (§4) |
  *
  * **The abort path is the reason this returns more than an object.** The SDK takes an
  * `AbortController`, the data plane produces an `AbortSignal` already composed from the attempt
@@ -62,6 +65,21 @@ export interface QueryLaunchInput {
    * both gates are somehow passed (docs/idea/07-security.md).
    */
   readonly passthrough?: Passthrough
+  /**
+   * The client's own system prompt, already flattened (`request.ts`). Absent leaves the option
+   * unset, which is what a client that sent none asked for: the SDK's default is *no* system
+   * prompt, and substituting the Claude Code preset would put ~28 KB of instructions the caller
+   * never wrote into their turn — a per-Account setting at most, never a default
+   * (docs/idea/11-anthropic-agent-sdk.md §8).
+   */
+  readonly systemPrompt?: string | readonly string[]
+  /**
+   * Whether this turn rejoins an SDK session, and how. Applied verbatim: the decision is a pure
+   * function over stored hashes (`session/lineage.ts`) and re-deriving it here would put one
+   * correctness decision in two places. `fresh` sets nothing, because a session the SDK has never
+   * held is the absence of these options rather than a value of them.
+   */
+  readonly session?: SessionPlan
 }
 
 export interface QueryLaunch {
@@ -105,6 +123,10 @@ export function createQueryLaunch(input: QueryLaunchInput): QueryLaunch {
     // assembled from the same events — one renderer, not one per response shape.
     includePartialMessages: true,
     ...(input.onStderr === undefined ? {} : { stderr: input.onStderr }),
+    ...(input.systemPrompt === undefined
+      ? {}
+      : { systemPrompt: systemPromptOf(input.systemPrompt) }),
+    ...sessionOptions(input.session),
     ...(input.passthrough === undefined
       ? {}
       : { mcpServers: input.passthrough.mcpServers, hooks: input.passthrough.hooks }),
@@ -118,6 +140,25 @@ export function createQueryLaunch(input: QueryLaunchInput): QueryLaunch {
     },
     detach,
   }
+}
+
+/**
+ * The three session fields, from the one plan that decided them.
+ *
+ * `fork` is `resume` plus a rewind point: the SDK re-reads the stored transcript up to the named
+ * assistant message and continues under a **new** session id, which is exactly what an undo is —
+ * the old branch stays where it was, so a client that undoes and redoes does not destroy the
+ * history it may go back to (docs/idea/11-anthropic-agent-sdk.md §4).
+ */
+function sessionOptions(plan: SessionPlan | undefined): Partial<Options> {
+  if (plan === undefined || plan.kind === "fresh") return {}
+  if (plan.kind === "resume") return { resume: plan.sdkSessionId }
+  return { resume: plan.sdkSessionId, forkSession: true, resumeSessionAt: plan.resumeSessionAt }
+}
+
+/** The SDK takes a mutable array; ours is readonly, and a copy is cheaper than widening the type. */
+function systemPromptOf(prompt: string | readonly string[]): string | string[] {
+  return typeof prompt === "string" ? prompt : [...prompt]
 }
 
 /**

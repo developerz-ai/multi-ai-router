@@ -1,21 +1,44 @@
 import { describe, expect, test } from "bun:test"
-import { createSdkQuotaStore, renderSdkResponse, type SdkInvocation } from "../../src/providers"
+import { createApp } from "../../src/app"
+import { createLogger } from "../../src/logging/logger"
+import { createMetrics } from "../../src/observability"
+import {
+  type CliResolution,
+  createSdkConcurrency,
+  createSdkInvoker,
+  createSdkQuotaStore,
+} from "../../src/providers"
+import {
+  createDispatcher,
+  createHealthStore,
+  createRateLimiter,
+  createRouterKeyVerifier,
+} from "../../src/services/dataplane"
 import { sdkQueryStream, sdkTurn } from "../unit/claude-sdk/fixtures"
 import {
   account,
+  apiKeyRow,
+  catalog,
+  clock,
   jsonResponse,
+  keyRepository,
   NOW,
   slowStream,
   subscriptionAccount,
+  usageSink,
 } from "../unit/dataplane/fixtures"
-import { bearer, CRYPTOR, harness, post, settle } from "./harness"
+import { bearer, CRYPTOR, harness, KEY, post, settle } from "./harness"
 
 /**
  * The Agent-SDK transport end to end: `harness()` (`dataplane.test.ts:70-92`) extended with an
- * SDK-backed account whose `invokeSdk` stub is the same seam a real launcher would fill — it reads
- * the client's `stream` flag off the converted body, drives `renderSdkResponse` with a `query()`-
- * shaped fixture stream, and answers with exactly what that renderer produces. Nothing here spawns
- * a `claude` subprocess and no fixture carries a real credential.
+ * SDK-backed account served by the **real** `createSdkInvoker` — the same object `composition/`
+ * builds in production, with only the two pieces that touch this host injected: `query()` itself
+ * and the executable-resolution ladder. Nothing here spawns a `claude` subprocess and no fixture
+ * carries a real credential.
+ *
+ * That the launcher is real is the point. A stand-in that reads the `stream` flag and drives the
+ * renderer would assert the renderer twice and the transport never once, which is exactly how a
+ * dispatch path can be green in tests and `503` in production.
  *
  * `dataplane.test.ts`'s "the Agent-SDK transport" suite already covers the failover, session-replay,
  * and error-mapping properties at the `SdkInvoker` boundary with a pre-built `Response`. This file
@@ -37,17 +60,6 @@ function streamMessage(stream: boolean): string {
   })
 }
 
-/** What a real launcher reads off the converted body to decide which shape to render. */
-function wantsStream(body: Uint8Array | null): boolean {
-  if (body === null) return false
-  const parsed: unknown = JSON.parse(new TextDecoder().decode(body))
-  return (
-    typeof parsed === "object" &&
-    parsed !== null &&
-    (parsed as { stream?: unknown }).stream === true
-  )
-}
-
 function sdkTextTurn(rateLimitInfo?: Record<string, unknown>) {
   return sdkQueryStream({
     turns: [sdkTurn({ blocks: [TEXT_BLOCK] })],
@@ -56,25 +68,27 @@ function sdkTextTurn(rateLimitInfo?: Record<string, unknown>) {
   })
 }
 
+/** The rung `resolve-cli.ts` would have reported, so no filesystem is walked and none is needed. */
+const CLI: CliResolution = {
+  ok: true,
+  source: "platform_package",
+  path: "/opt/claude/claude",
+  bytes: 245_000_000,
+}
+
 /**
- * The stand-in for a real launcher: reads `stream` off the converted body, drives
- * `renderSdkResponse` with a `query()`-shaped fixture stream, and forwards the renderer's own
- * observer callbacks to the ones `runSdkAttempt` passed in — the same bridge a real launcher owns
- * between `query()`'s messages and the invocation's `onSession`/`onRateLimit`.
+ * The production invoker, with the subprocess replaced by a `query()`-shaped fixture stream.
+ *
+ * Everything between the client's bytes and that stream is real: the body is read once, the prompt
+ * is built from the lineage plan, the concurrency slot is taken and released, the launch carries
+ * every isolation flag, and the renderer's observers are bridged to `onSession`/`onRateLimit`.
  */
 function invoker(rateLimitInfo?: Record<string, unknown>) {
-  return (invocation: SdkInvocation) =>
-    renderSdkResponse({
-      messages: sdkTextTurn(rateLimitInfo),
-      model: invocation.model,
-      stream: wantsStream(invocation.body),
-      observer: {
-        onSession: invocation.onSession
-          ? (id) => invocation.onSession?.({ sdkSessionId: id })
-          : undefined,
-        onRateLimit: invocation.onRateLimit,
-      },
-    })
+  return createSdkInvoker({
+    concurrency: createSdkConcurrency({ global: 4, perAccount: 2 }),
+    resolveCli: () => CLI,
+    runQuery: () => sdkTextTurn(rateLimitInfo),
+  })
 }
 
 /** `event: <type>` frame names, in order — the SSE grammar both transports emit. */
@@ -146,6 +160,41 @@ describe("a streaming SDK response", () => {
   })
 })
 
+describe("an OpenAI-dialect client against the same subscription account", () => {
+  /**
+   * §6's "one renderer, not one per dialect", proven end to end: the request is translated into
+   * Anthropic on the way in, the SDK is rendered into Anthropic **once**, and the ordinary
+   * Anthropic → openai-chat translator carries it the rest of the way. A second SDK → OpenAI
+   * renderer would be a second place for the loss to happen differently.
+   */
+  const CHAT = JSON.stringify({
+    model: "claude-opus-5",
+    stream: true,
+    messages: [{ role: "user", content: "hello" }],
+  })
+
+  test("gets chat.completion chunks, never Anthropic frames", async () => {
+    const { app, usage } = harness({
+      accounts: [subscriptionAccount("sub")],
+      responses: [],
+      invokeSdk: invoker(),
+    })
+
+    const res = await app.request("/v1/chat/completions", post(CHAT, bearer()))
+    const text = await res.text()
+    await settle()
+
+    expect(res.status).toBe(200)
+    expect(res.headers.get("content-type")).toContain("text/event-stream")
+    expect(text).toContain('"object":"chat.completion.chunk"')
+    expect(text).toContain('"content":"hi"')
+    expect(text).toContain("data: [DONE]")
+    // The SDK's own event names never survive the crossing.
+    expect(text).not.toContain("event: content_block_delta")
+    expect(usage.rows[0]).toMatchObject({ egressMode: "agent-sdk", outcome: "success" })
+  })
+})
+
 describe("usage accounting", () => {
   test("a UsageRecord lands with egressMode agent-sdk for a streaming turn", async () => {
     const { app, usage } = harness({
@@ -210,5 +259,125 @@ describe("a rate-limit event mid-stream", () => {
 
     expect(res.status).toBe(200)
     expect(health.stateOf("sub").breaker.status).toBe("active")
+  })
+})
+
+/**
+ * Every suite above answers through `harness()` (`./harness.ts`) — a purpose-built Hono instance
+ * that mounts `dataPlaneRoutes` directly, hand-assembling its own `createDispatcher` call. That is
+ * the right shape for asserting routing/translation/breaker properties in isolation, but it is a
+ * second, parallel implementation of the wiring `composition/index.ts` does for real: a different
+ * function builds the app, and a different call to `createDispatcher` passes a different, narrower
+ * set of options.
+ *
+ * That gap is exactly how the flagship feature shipped 503 on every request while every test in
+ * this repo stayed green (docs/idea/11-anthropic-agent-sdk.md's own postmortem, and Session 38's
+ * fix): `composition/index.ts` never called `createDispatcher` with an `invokeSdk` at all, and
+ * nothing here would have noticed, because nothing here calls `createApp` — the actual factory
+ * `main.ts` boots — or builds the dispatcher the way `createRuntime` does (`limiter`, `prices`,
+ * `translation`, `upstreamTimeoutMs` all present, not omitted).
+ *
+ * This suite closes that gap: it calls the real `createApp` (`src/app.ts`, `AppDeps.dataPlane`) and
+ * builds the dispatcher with the same shape `createRuntime` builds it with. Only the two seams that
+ * must never touch this host in a test are stood in for — `query()` and Postgres — exactly as
+ * `composition/index.ts`'s own doc comments name them as the injected exceptions.
+ */
+describe("a subscription request through the real composition root, not a hand-wired harness", () => {
+  function bootRealApp(invokeSdk: ReturnType<typeof invoker>) {
+    const accounts = [subscriptionAccount("sub-1")]
+    const testClock = clock()
+    const metrics = createMetrics({ now: testClock.now })
+    const store = catalog(accounts, [])
+    const health = createHealthStore()
+    const usage = usageSink()
+    const usageWithMetrics = {
+      record: (record: (typeof usage.rows)[number]) => {
+        usage.record(record)
+        metrics.observeUsage(record)
+      },
+    }
+
+    const verifier = createRouterKeyVerifier({
+      repository: keyRepository([apiKeyRow(KEY, CRYPTOR, { scope: "all" })]),
+      cipher: CRYPTOR,
+      loadScope: async () => ({ kind: "all" }),
+      now: testClock.now,
+    })
+
+    // The same options composition/index.ts's createDispatcher call carries — a limiter, a
+    // translation default, and an upstream timeout — none of which `./harness.ts` passes.
+    const dispatcher = createDispatcher({
+      catalog: store,
+      health,
+      cipher: CRYPTOR,
+      usage: usageWithMetrics,
+      limiter: createRateLimiter({ maxKeys: 16 }),
+      invokeSdk,
+      clock: testClock,
+      onRequest: (sample) => metrics.observeRequest(sample),
+      options: {
+        failover: { maxAttempts: 3 },
+        upstreamTimeoutMs: 30_000,
+        translation: { defaultMaxTokens: 4096 },
+      },
+    })
+
+    // `createApp` itself: the same factory `main.ts` calls with production deps. No `webRoot`, no
+    // `admin` — a data-plane-only boot, which is what a router with no console build still serves.
+    const app = createApp({
+      logger: createLogger({ level: "error", write: () => {} }),
+      probes: {
+        database: () => Promise.resolve(true),
+        accounts: () => Promise.resolve("ok"),
+        claudeCli: () => Promise.resolve("platform_package"),
+      },
+      dataPlane: { verifier, dispatcher, catalog: store, health },
+    })
+
+    return { app, usage, health }
+  }
+
+  test("answers 200, not the 503 a missing invokeSdk wire would have produced", async () => {
+    const { app, usage } = bootRealApp(invoker())
+
+    const res = await app.request("/v1/messages", post(streamMessage(false), bearer()))
+    const body = (await res.json()) as { type?: string; content?: unknown[] }
+    await settle()
+
+    expect(res.status).toBe(200)
+    expect(body.type).toBe("message")
+    expect(usage.rows).toHaveLength(1)
+    expect(usage.rows[0]).toMatchObject({ egressMode: "agent-sdk", outcome: "success" })
+  })
+
+  test("streams through the real app exactly as it does through the hand-wired one", async () => {
+    const { app } = bootRealApp(invoker())
+
+    const res = await app.request("/v1/messages", post(streamMessage(true), bearer()))
+    const text = await res.text()
+
+    expect(res.status).toBe(200)
+    expect(res.headers.get("content-type")).toBe("text/event-stream; charset=utf-8")
+    expect(frameNames(text)).toEqual([
+      "message_start",
+      "content_block_start",
+      "content_block_delta",
+      "content_block_stop",
+      "message_delta",
+      "message_stop",
+    ])
+  })
+
+  test("an unauthenticated request never reaches the SDK invoker at all", async () => {
+    const attempts: string[] = []
+    const { app } = bootRealApp(async (invocation) => {
+      attempts.push(invocation.accountId)
+      throw new Error("must never be called")
+    })
+
+    const res = await app.request("/v1/messages", post(streamMessage(false)))
+
+    expect(res.status).toBe(401)
+    expect(attempts).toEqual([])
   })
 })

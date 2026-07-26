@@ -8,6 +8,7 @@ export {
   createPassthrough,
   DEFER_LOADING_THRESHOLD,
   readDeclaredTools,
+  readToolList,
   TOOL_SEARCH,
 } from "./register"
 export type { ToolInputRepair } from "./repair"

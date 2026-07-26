@@ -17,6 +17,7 @@ const RETENTION: RetentionConfig = {
   auditDays: 1,
   revokedKeysDays: 1,
   oauthStateMinutes: 10,
+  orphanConfigDirHours: 1,
 }
 
 /** Older than every cutoff `RETENTION` computes off `NOW`. */

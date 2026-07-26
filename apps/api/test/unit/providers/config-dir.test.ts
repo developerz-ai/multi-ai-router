@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { chmod, mkdtemp, rm, stat, writeFile } from "node:fs/promises"
+import { chmod, mkdtemp, rm, stat, symlink, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import {
@@ -44,6 +44,14 @@ function recorder(): { fs: ConfigDirFs; calls: string[]; modes: number[] } {
       },
       removeDir: async (path) => {
         calls.push(`rm ${path}`)
+      },
+      listDirs: async (path) => {
+        calls.push(`ls ${path}`)
+        return []
+      },
+      statDir: async (path) => {
+        calls.push(`stat ${path}`)
+        return 0
       },
     },
   }
@@ -131,6 +139,39 @@ describe("provisioning", () => {
   })
 })
 
+describe("surveying the root", () => {
+  /** A volume with the given names on it, each dated by the map. */
+  function volume(dated: Readonly<Record<string, number>>): ConfigDirFs {
+    return {
+      ...recorder().fs,
+      listDirs: async (path) => (path === ROOT ? Object.keys(dated) : []),
+      statDir: async (path) => dated[path.slice(ROOT.length + 1)] ?? null,
+    }
+  }
+
+  test("names an account id as one, and anything else as not ours", async () => {
+    const entries = await dirs(
+      volume({ [ONE]: 10, [TWO]: 20, "lost+found": 30, ".tmp": 40 }),
+    ).list()
+
+    expect(entries).toEqual([
+      { name: ONE, accountId: ONE, changedAtMs: 10 },
+      { name: TWO, accountId: TWO, changedAtMs: 20 },
+      { name: "lost+found", accountId: null, changedAtMs: 30 },
+      { name: ".tmp", accountId: null, changedAtMs: 40 },
+    ])
+  })
+
+  test("drops an entry that vanished between the listing and the stat", async () => {
+    const fs: ConfigDirFs = {
+      ...recorder().fs,
+      listDirs: async () => [ONE, TWO],
+      statDir: async (path) => (path.endsWith(ONE) ? 7 : null),
+    }
+    expect(await dirs(fs).list()).toEqual([{ name: ONE, accountId: ONE, changedAtMs: 7 }])
+  })
+})
+
 describe("against a real filesystem", () => {
   test("the directory is 0700 and its contents go with it", async () => {
     const root = await mkdtemp(join(tmpdir(), "mar-config-dir-"))
@@ -165,6 +206,38 @@ describe("against a real filesystem", () => {
       expect((await stat(path)).mode & 0o777).toBe(CONFIG_DIR_MODE)
     } finally {
       await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  test("the survey sees directories only, never a file and never through a symlink", async () => {
+    const root = await mkdtemp(join(tmpdir(), "mar-config-dir-"))
+    const outside = await mkdtemp(join(tmpdir(), "mar-config-outside-"))
+    try {
+      const layout = createAccountConfigDirs({ root, homeDir: null })
+      await layout.provision(ONE)
+      await writeFile(join(root, "notes.txt"), "not a config directory")
+      // A link out of the root: following it would put another tree's mtime on an entry the
+      // reaper may then remove — so it must not be an entry at all.
+      await symlink(outside, join(root, TWO), "dir")
+
+      const entries = await layout.list()
+      expect(entries.map((entry) => entry.name)).toEqual([ONE])
+      const only = entries[0]
+      expect(only?.accountId).toBe(ONE)
+      expect(only?.changedAtMs).toBeGreaterThan(0)
+    } finally {
+      await rm(root, { recursive: true, force: true })
+      await rm(outside, { recursive: true, force: true })
+    }
+  })
+
+  test("a root nothing has provisioned yet is an empty survey, not a failure", async () => {
+    const parent = await mkdtemp(join(tmpdir(), "mar-config-dir-"))
+    try {
+      const layout = createAccountConfigDirs({ root: join(parent, "never-created"), homeDir: null })
+      expect(await layout.list()).toEqual([])
+    } finally {
+      await rm(parent, { recursive: true, force: true })
     }
   })
 })

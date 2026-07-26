@@ -40,11 +40,13 @@ describe("parseEnv", () => {
       auditDays: 365,
       revokedKeysDays: 30,
       oauthStateMinutes: 10,
+      orphanConfigDirHours: 24,
     })
     expect(env.scheduler).toEqual({
       usageRollupIntervalMinutes: 60,
       oauthStatePurgeIntervalMinutes: 5,
       quotaFloorIntervalMinutes: 30,
+      configDirReapIntervalMinutes: 360,
       sweepBatchSize: 1_000,
       jitterFraction: 0.2,
     })
@@ -75,10 +77,12 @@ describe("parseEnv", () => {
       RETENTION_AUDIT_DAYS: "30",
       RETENTION_REVOKED_KEYS_DAYS: "1",
       RETENTION_OAUTH_STATE_MINUTES: "5",
+      RETENTION_ORPHAN_CONFIG_DIR_HOURS: "3",
       JANITOR_INTERVAL_MINUTES: "15",
       USAGE_ROLLUP_INTERVAL_MINUTES: "120",
       OAUTH_STATE_PURGE_INTERVAL_MINUTES: "10",
       QUOTA_FLOOR_INTERVAL_MINUTES: "45",
+      CONFIG_DIR_REAP_INTERVAL_MINUTES: "90",
       SWEEP_BATCH_SIZE: "500",
       SCHEDULER_JITTER_FRACTION: "0.5",
       ADMIN_SESSION_IDLE_MINUTES: "60",
@@ -99,11 +103,13 @@ describe("parseEnv", () => {
     expect(env.accountRecheckCooldownSeconds).toBe(30)
     expect(env.accountTestNowCooldownSeconds).toBe(45)
     expect(env.retention.sessionsHours).toBe(6)
+    expect(env.retention.orphanConfigDirHours).toBe(3)
     expect(env.janitorIntervalMinutes).toBe(15)
     expect(env.scheduler).toEqual({
       usageRollupIntervalMinutes: 120,
       oauthStatePurgeIntervalMinutes: 10,
       quotaFloorIntervalMinutes: 45,
+      configDirReapIntervalMinutes: 90,
       sweepBatchSize: 500,
       jitterFraction: 0.5,
     })

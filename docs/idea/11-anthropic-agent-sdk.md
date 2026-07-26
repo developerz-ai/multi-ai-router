@@ -21,13 +21,18 @@ and the router's own secrets before the spawn, then sets `CLAUDE_CONFIG_DIR` las
 `concurrency.ts` is the semaphore pair — per-Account acquired **before** global, so a bursting
 Account queues on its own budget instead of parking global capacity and starving the Pool.
 
-The `SdkInvoker` behind `providers/claude-sdk/invoke.ts` calls `query()` and, together with the
-renderer in §6, turns SDK messages back into Anthropic Messages — streaming and non-streaming alike.
-§4 (sessions), §5 (quota), §6 (re-synthesis), §7 (tools), and login/reconnect are all implemented and
-covered by integration tests (`test/integration/claude-sdk.test.ts`) that assert the streaming byte
-shape, `UsageRecord.egressMode: "agent-sdk"`, and a `rate_limit_event` driving `cooling_down` — with
-no HTTP call and no credential ever touching the wire. This page remains the contract that
-implementation must continue to satisfy.
+The **transport** half: `providers/claude-sdk/invoker.ts` implements the `SdkInvoker` seam that
+`invoke.ts` declares, and it is where every piece above is finally held at once — one body read
+(`request.ts`), one prompt built from the lineage plan (`prompt.ts`), one concurrency slot, one
+launch, one render. `composition/index.ts` builds it, so a subscription Account selected by routing
+is dispatched rather than refused. Together with the renderer in §6 it turns SDK messages back into
+Anthropic Messages — streaming and non-streaming alike. §4 (sessions), §5 (quota), §6
+(re-synthesis), §7 (tools), and login/reconnect are all implemented and covered by integration tests
+(`test/integration/claude-sdk.test.ts`) that drive the **real** invoker with `query()` and the
+executable ladder injected, asserting the streaming byte shape, `UsageRecord.egressMode:
+"agent-sdk"`, and a `rate_limit_event` driving `cooling_down` — with no HTTP call, no subprocess,
+and no credential ever touching the wire. This page remains the contract that implementation must
+continue to satisfy.
 
 Two decisions the seam already commits to, both taken from §6:
 
@@ -116,6 +121,23 @@ Walkthrough, grounded in `server.ts` (`handleMessages`, from :625):
 10. **Stream** — discriminate on `message.type`, re-synthesize (§6). The retry ladder applies **only before any byte reaches the client** (`server.ts:2333`).
 11. **Finalize** — persist the Session mapping, write the `UsageRecord`, emit terminal frames.
 
+### As built
+
+`createSdkInvoker` (`providers/claude-sdk/invoker.ts`) is steps 5 through 11 in one function, and
+the order above is the order it runs in. Decisions taken while building it, each narrower than the
+walkthrough:
+
+| Decision | Why |
+|---|---|
+| The body is decoded **once**, into the four things a launch needs — prompt, tools, system prompt, response shape (`request.ts`) | This path is the labeled exception to "never parse a passthrough body" (CLAUDE.md non-negotiable 8), and an exception that costs four parses of the same megabyte is a different exception than the one that was granted |
+| The prompt is one **user** message, sent as streaming input rather than a string | A string prompt cannot carry an image, and degrading a client's images to a text note is a fidelity loss nothing forces on us. The SDK closes the subprocess's stdin once the iterable is exhausted, which is what makes a single-turn endpoint out of a bidirectional protocol |
+| A conversation the SDK has never held is replayed **framed**, and a single user turn is not (`prompt.ts`) | The framing is the anti-imitation guard §4 and §10 both name; applying it to a turn that needs no replay would put a transcript preamble in front of every first message |
+| The executable ladder is walked **once** per process, and only a *successful* resolution is cached | A binary does not move under a live container, so re-walking it per request is a filesystem walk on every subscription turn. A failed resolution is not cached, so an operator who fixes a mount recovers without a restart |
+| The concurrency slot, the abort bridge, and the session report are all tied to the end of the **message stream**, not to `query()` returning | `query()` returns immediately; the answer arrives over the following seconds. Releasing on return would make the semaphore count calls rather than subprocesses, leak an abort listener per request, and write a session binding before the SDK had named one |
+| The session is reported **once**, at the end, carrying the assistant uuid | The id arrives in `system`/`init` and the uuid only once the turn produced one, so reporting on arrival would write the row twice and the first write would have no rollback point (§4) |
+| The subprocess's stderr tail is attached to a throw that carries none, never replacing one that does | It is what `errors.ts` reads to tell a crash from an auth failure, and a crash misread as an auth failure marks a working Account `needs_reauth` until a human logs in (§9) |
+| A router with no usable `claude` binary fails the attempt as `unknown` → `502` + failover, before taking a slot | It is a router misconfiguration, not this Account's fault, and another transport in the same Pool may still serve the request |
+
 ---
 
 ## 3. Multi-account via config directories — the crux
@@ -145,6 +167,7 @@ neither write body has a field for one; `CLAUDE_CONFIG_ROOT` is the only knob, a
 | Created `0700` | The contents are cleartext OAuth credentials the CLI owns. `mkdir` applies its mode only to what it creates and the umask can clear bits from it, so the mode is re-asserted on every provision — a directory left behind with looser permissions is tightened, not trusted |
 | Created **before** the row, removed **before** the row | A row naming a directory that does not exist is a login that cannot happen, so provisioning comes first and an insert that never lands takes its directory back. Deletion is the mirror: credentials outliving their Account is the worse half of the failure, while a row whose subscription is logged out is visible and fixable by re-login |
 | Removal names `<root>/<id>`, not the stored path | Bounded by construction. A path this router did not mint is not this router's to `rm -rf` |
+| A directory no Account claims is reaped | The ordinary delete takes the directory with the row, but a crash between provisioning and the insert cannot. What is left is cleartext OAuth credentials nothing will ever rotate, revoke, or notice — so `config_dir_reap` sweeps them. See below |
 | Unique index on `accounts.config_dir` | Two Accounts sharing a directory is exactly the cross-contamination isolation exists to prevent, so it is a write the database refuses rather than an invariant code has to remember |
 
 ### Traps, all load-bearing
@@ -169,6 +192,7 @@ neither write body has a field for one; `CLAUDE_CONFIG_ROOT` is the only knob, a
 | Refresh | **Not ours.** The SDK / `claude` CLI refreshes inside the config directory. The router does **not** schedule, mint, or write subscription tokens — see the box below |
 | Reconnect | Re-run login against the **same** directory: Account id, Pool membership, and usage history survive |
 | Delete | Remove the directory with the Account row |
+| Reap | A scheduled task (`scheduler/tasks/config-dir-reap.ts`) removes what a crash left on the volume: a directory named after an account id that no row claims, once it is older than `RETENTION_ORPHAN_CONFIG_DIR_HOURS`. It surveys the directories *before* it reads the accounts — a directory minted after the survey cannot be in it, while a row inserted after it is still read — and it never touches a name that is not an account id. Both rules exist because the failure it prevents (a stale credential nobody will rotate) is milder than the failure a careless sweep would cause (a working subscription logged out for good) |
 
 > **Credential refresh for subscription Accounts is not ours to do.** Meridian implements its own
 > refresh loop — proactive expiry timers, a background scheduler, direct `.credentials.json` writes
@@ -196,6 +220,8 @@ them:
 | The **CLI** mints the PKCE `code_verifier` and the `state` | The verifier never crosses back to the router — there is no field on this side that could hold it, which is a stronger guarantee than "kept server-side" ([07-security.md](07-security.md)). The router never builds an authorize URL, never calls a token endpoint, and never holds a subscription token (CLAUDE.md non-negotiable 1) |
 | The **router** owns the `state`, read out of the URL | One-shot, TTL-bounded, and bound to one Account row are checks nobody downstream performs. A mismatched paste *burns* the pending login rather than allowing a retry |
 | Pending logins live in memory | A pending login *is* a running subprocess. A restart kills it, so persisting the `state` would preserve a value no CLI is waiting for |
+| `begin`, `complete`, and `cancel` are **serialized per Account** (`connect/turns.ts`) | Each reads this Account's one pending login and then replaces it, with a directory provision, a subprocess handshake, or a stdin write in between. Overlapping calls interleaved through that window: two CLIs against one `CLAUDE_CONFIG_DIR`, the first **orphaned** — nothing held its handle, so no cancel, no shutdown and no TTL could reach it — and its expiry timer still armed, firing later against the login that replaced it. A queue, not a single-flight: a second `begin` *supersedes* the first, which is only well defined if it runs after it. Per Account, because five subscriptions side by side must still connect at once |
+| A `begin` still starting when the router stops is refused (`409 shutting_down`) | `stop()` is synchronous and cannot reach a CLI that has not printed its URL yet, so that login reads the flag when its handle appears and terminates itself. Otherwise the one subprocess shutdown cannot see is the one that outlives the router |
 | TTL is `RETENTION_OAUTH_STATE_MINUTES` | The same 10-minute window as the reverse-engineered flows, and config rather than a constant (non-negotiable 11). Its timer terminates the subprocess, so an abandoned login is not a leaked process |
 | Manual paste is the **only** mode here | The CLI owns its redirect URI; a router callback would mean intercepting a code meant for the CLI. The mode that needs no reachable `PUBLIC_URL` is the mode that gets the checks |
 | `.credentials.json` is settled afterwards | Absent means the login did not land. Pretty-printed is re-minified in place, because the CLI's parser reads indentation as *logged out* — the worst shape a bug can take here, since the tokens are valid and every request still fails |
@@ -677,7 +703,7 @@ not returned: `/readyz` is unauthenticated. Implementation:
 
 | Concern | Design |
 |---|---|
-| Concurrency | A semaphore over `query()`, sized to memory not CPU. Ours is **global and per-Account** (`CLAUDE_SDK_MAX_CONCURRENCY`, `…_PER_ACCOUNT`) — `concurrency.ts`. The per-Account gate is taken **first**: reversed, a bursting Account would hold global capacity while it waited and starve the Pool, which is the failure the per-Account limit exists to prevent. Excess callers queue FIFO; a caller aborted while queued throws the signal's own reason, so a deadline stays a `TimeoutError` and a disconnect stays an `AbortError` |
+| Concurrency | A semaphore over `query()`, sized to memory not CPU. Ours is **global and per-Account** (`CLAUDE_SDK_MAX_CONCURRENCY`, `…_PER_ACCOUNT`) — `concurrency.ts`. The per-Account gate is taken **first**: reversed, a bursting Account would hold global capacity while it waited and starve the Pool, which is the failure the per-Account limit exists to prevent. Excess callers queue FIFO; a caller aborted while queued throws the signal's own reason, so a deadline stays a `TimeoutError` and a disconnect stays an `AbortError`. **One instance per replica, shared by every path that spawns** — the dispatcher's invoker and the console's "Test now" probe (`test-probe.ts`) both take slots from it, because the ceiling bounds this container's memory and a bound only one caller honours is not a bound. "Test now" has its own cooldown but that cooldown is per Account, so it would not stop ten Accounts being tested at once. Occupancy and queue depth are exported — `router_sdk_subprocesses`, `router_sdk_subprocess_queue_depth` ([08-observability.md](08-observability.md#metrics)) |
 | Cancellation | One `AbortController` per request, wired to the HTTP signal and the SDK; aborting terminates the subprocess. No separate `interrupt()`/`kill()` in Meridian. Ours is bridged in `options.ts`: the data plane's composed signal (deadline ∪ client) drives a controller the SDK owns |
 | Client disconnect | Detect closed-stream writes, stop the loop, abort, detach. Never orphan a subprocess — and never retain the signal either, which is why `QueryLaunch` exposes `detach()` alongside `abort()` |
 | Timeouts | Client keep-alive ≈ 15 s; **upstream** idle guard ≈ 90 s → 504. Independent, both needed |

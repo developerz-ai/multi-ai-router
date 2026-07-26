@@ -29,6 +29,13 @@ export interface AccountRepository {
   /** Existence check for a set of ids, in one query. Order is not guaranteed. */
   findByIds(ids: readonly string[]): Promise<AccountRow[]>
   /**
+   * Every account id, and nothing else. Deliberately not `list().map(row => row.id)`: the caller
+   * is the config-directory reaper, which needs the whole table's identity to decide what on the
+   * volume is orphaned, and hauling every `authMaterial` envelope through a filesystem sweep to
+   * answer "does this id exist" is credential material read for no reason.
+   */
+  listIds(): Promise<string[]>
+  /**
    * Field-wise edit. `input.authMaterial`, when present, must already be an
    * encryption envelope — rotating a credential is an update like any other and
    * the plaintext never reaches this layer. `undefined` when no account has that id.
@@ -186,6 +193,11 @@ export function createAccountRepository(db: Database): AccountRepository {
         .select()
         .from(accounts)
         .where(inArray(accounts.id, [...ids]))
+    },
+
+    listIds: async () => {
+      const rows = await db.select({ id: accounts.id }).from(accounts)
+      return rows.map((row) => row.id)
     },
 
     // Spread-per-field rather than a loop: an absent key must stay absent (never

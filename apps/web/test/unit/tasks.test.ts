@@ -46,6 +46,7 @@ describe("task health", () => {
     expect(taskLabel("usage_rollup")).toBe("Usage rollup")
     expect(taskLabel("oauth_state_purge")).toBe("OAuth state purge")
     expect(taskLabel("quota_floor_refresh")).toBe("Quota floor refresh")
+    expect(taskLabel("config_dir_reap")).toBe("Orphaned config directory reap")
     expect(taskLabel("some_new_sweep")).toBe("Some new sweep")
   })
 })

@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import type { AccountRow } from "@multi-ai-router/db"
-import type { SdkTestProbe, SdkTestProbeResult } from "../../../src/providers"
+import type { SdkTestProbe, SdkTestProbeInput, SdkTestProbeResult } from "../../../src/providers"
 import { createTestNowService } from "../../../src/services/accounts"
 import type { AuditEventInput } from "../../../src/services/admin"
 
@@ -162,8 +162,12 @@ describe("createTestNowService — Agent-SDK accounts", () => {
   })
 
   test("runs the real probe once confirmed", async () => {
+    const seen: SdkTestProbeInput[] = []
     const probe: SdkTestProbe = {
-      run: async (): Promise<SdkTestProbeResult> => ({ ok: true, message: "pong" }),
+      run: async (input): Promise<SdkTestProbeResult> => {
+        seen.push(input)
+        return { ok: true, message: "pong" }
+      },
     }
     const { service, audited } = harness({ row: subscriptionRow(), sdkProbe: probe })
 
@@ -173,6 +177,10 @@ describe("createTestNowService — Agent-SDK accounts", () => {
     expect(result.value.outcome).toBe("ok")
     expect(result.value.message).toBe("pong")
     expect(audited).toHaveLength(1)
+    // The account id is what the probe's per-Account subprocess slot is taken under: without it the
+    // gate would bound every "Test now" press as if it were the same Account.
+    expect(seen.map((input) => input.accountId)).toEqual(["acc-1"])
+    expect(seen[0]?.configDir).toBe("/data/claude/acc-1")
   })
 
   test("reports the probe's own failure verbatim", async () => {

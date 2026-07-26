@@ -135,7 +135,20 @@ export function readDeclaredTools(body: Uint8Array | null): DeclaredTool[] {
   }
   const result = toolsSchema.safeParse(parsed)
   if (!result.success) return []
-  return result.data.tools ?? []
+  return readToolList(result.data.tools)
+}
+
+/**
+ * The same read, for the caller that already decoded the body — `request.ts`, which decodes it once
+ * for the prompt and hands the `tools` value straight here. It exists so the megabyte is parsed
+ * once rather than twice; the schema stays private because the shape is this module's.
+ *
+ * @returns an empty list for anything that is not a list of declared tools.
+ */
+export function readToolList(value: unknown): DeclaredTool[] {
+  if (value === null || value === undefined) return []
+  const result = z.array(declaredToolSchema).safeParse(value)
+  return result.success ? result.data : []
 }
 
 /** Deduplicated, then sorted by code point — the same set always yields the same system prompt. */

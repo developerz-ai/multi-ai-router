@@ -1,4 +1,5 @@
 import type { Logger } from "../logging/logger"
+import type { SdkConcurrency } from "../providers"
 import { type HealthStore, overlayHealth, type RoutingCatalog } from "../services/dataplane"
 import type { UsageRecorder } from "../services/usage"
 import { createMetrics, type RouterMetrics } from "./metrics"
@@ -7,10 +8,11 @@ import { createMetrics, type RouterMetrics } from "./metrics"
  * The router's metrics as the running process wires them: the registry, plus the gauges that
  * describe *state* rather than events and are therefore sampled once per scrape.
  *
- * Account status, quota utilization and usage-queue depth are all already held in warm memory for
- * the request path. Mirroring every change into a gauge as it happened would put bookkeeping on
- * that path for a number nobody reads until Prometheus asks; reading the same warm state when it
- * does ask costs one pass over the account list, on the scrape's own thread of control.
+ * Account status, quota utilization, usage-queue depth and the `claude` subprocess gate's occupancy
+ * are all already held in warm memory for the request path. Mirroring every change into a gauge as
+ * it happened would put bookkeeping on that path for a number nobody reads until Prometheus asks;
+ * reading the same warm state when it does ask costs one pass over the account list, on the
+ * scrape's own thread of control.
  *
  * The snapshot is read through `overlayHealth`, the same function the routing snapshot is built
  * with, so `router_accounts{status="cooling_down"}` cannot disagree with the router about which
@@ -25,6 +27,12 @@ export interface RuntimeMetricsDeps {
    * `observeUsage` from its drain, so it is constructed *after* the metrics it reports into.
    */
   readonly usage: () => Pick<UsageRecorder, "stats">
+  /**
+   * The replica's `claude` subprocess gate. Optional so a build with no SDK wiring still exports
+   * every other series — the two gauges are simply absent, which is honest, rather than reporting a
+   * ceiling of zero that nothing is holding.
+   */
+  readonly sdkConcurrency?: Pick<SdkConcurrency, "inFlight" | "queued">
   readonly logger: Logger
   readonly now?: () => Date
 }
@@ -53,6 +61,11 @@ export function createRuntimeMetrics(deps: RuntimeMetricsDeps): RouterMetrics {
 
     const stats = deps.usage().stats()
     metrics.setUsageQueue({ depth: stats.depth, dropped: stats.dropped })
+
+    const sdk = deps.sdkConcurrency
+    if (sdk !== undefined) {
+      metrics.setSdkConcurrency({ inFlight: sdk.inFlight, queued: sdk.queued })
+    }
   })
 
   return metrics

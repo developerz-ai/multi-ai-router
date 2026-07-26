@@ -50,6 +50,8 @@ const sdkMessageSchema = z.looseObject({
   /** `result` only: the authoritative aggregate. An `assistant`'s covers one internal turn. */
   usage: usageSchema.nullish().catch(null),
   stop_reason: z.string().nullish(),
+  /** `assistant` only: the SDK's own id for this message, which is what an undo rewinds to (§4). */
+  uuid: z.string().nullish(),
 })
 
 export interface SdkMessageView {
@@ -62,6 +64,8 @@ export interface SdkMessageView {
   readonly rateLimitInfo: unknown
   readonly usage: SdkUsage | null
   readonly stopReason: string | null
+  /** The SDK message id an `assistant` message carries. Null on every other type. */
+  readonly uuid: string | null
 }
 
 export interface SdkUsage {
@@ -85,6 +89,7 @@ export function readSdkMessage(value: unknown): SdkMessageView | null {
     rateLimitInfo: data.rate_limit_info,
     usage: readUsage(data.usage),
     stopReason: data.stop_reason ?? null,
+    uuid: data.uuid ?? null,
   }
 }
 

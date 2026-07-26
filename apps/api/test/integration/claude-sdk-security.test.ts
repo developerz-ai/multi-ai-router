@@ -2,12 +2,15 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test"
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import type { PermissionResult } from "@anthropic-ai/claude-agent-sdk"
+import type { Options, PermissionResult } from "@anthropic-ai/claude-agent-sdk"
 import { createApp } from "../../src/app"
 import { createLogger } from "../../src/logging/logger"
 import {
+  type CliResolution,
   createPassthrough,
   createQueryLaunch,
+  createSdkConcurrency,
+  createSdkInvoker,
   PASSTHROUGH_SERVER_NAME,
   PERMITTED_TOOLS,
   qualifyToolName,
@@ -17,6 +20,7 @@ import {
   subprocessEnv,
 } from "../../src/providers"
 import { createMemoryConfigDirs } from "../support/config-dirs"
+import { sdkQueryStream, sdkTurn } from "../unit/claude-sdk/fixtures"
 import { jsonResponse, subscriptionAccount } from "../unit/dataplane/fixtures"
 import { bearer, harness, MESSAGE, post, settle } from "./harness"
 
@@ -297,6 +301,110 @@ describe("the request path never spawns a host process", () => {
     expect(usage.rows).toHaveLength(1)
     expect(usage.rows[0]?.accountId).toBe("sub-1")
     expect(usage.rows[0]?.egressMode).toBe("agent-sdk")
+  })
+})
+
+describe("the launch the production invoker actually builds", () => {
+  /**
+   * Everything above this line asserts a launch a *test* constructed. This asserts the one
+   * `createSdkInvoker` builds — the object `composition/index.ts` wires into the dispatcher — with
+   * only `query()` and the executable ladder injected, because `bin/test` may never spawn a
+   * `claude` CLI. A guarantee that holds in `launchFor()` and not here would be no guarantee at all.
+   */
+  const CLI: CliResolution = {
+    ok: true,
+    source: "platform_package",
+    path: "/opt/claude/claude",
+    bytes: 245_000_000,
+  }
+
+  /** Serves one turn through the real transport and hands back the options it launched with. */
+  async function launchedOptions(inherited: Record<string, string> = {}): Promise<Options> {
+    const captured: Options[] = []
+    const restore = new Map<string, string | undefined>()
+    for (const [name, value] of Object.entries(inherited)) {
+      restore.set(name, process.env[name])
+      process.env[name] = value
+    }
+
+    try {
+      const { app, upstream } = harness({
+        accounts: [subscriptionAccount("sub-1", { configDir: "/data/accounts/sub-1" })],
+        responses: [],
+        invokeSdk: createSdkInvoker({
+          concurrency: createSdkConcurrency({ global: 2, perAccount: 1 }),
+          resolveCli: () => CLI,
+          runQuery: ({ options }) => {
+            captured.push(options)
+            return sdkQueryStream({
+              turns: [
+                sdkTurn({
+                  blocks: [
+                    [
+                      { type: "text", text: "" },
+                      { type: "text_delta", text: "hi" },
+                    ],
+                  ],
+                }),
+              ],
+            })
+          },
+        }),
+      })
+
+      const res = await app.request("/v1/messages", post(MESSAGE, bearer()))
+      await res.text()
+      await settle()
+
+      expect(res.status).toBe(200)
+      // The other half of "no host process is spawned": no CLI, and no HTTP fallback either.
+      expect(upstream.calls).toHaveLength(0)
+
+      const options = captured[0]
+      if (options === undefined) throw new Error("the invoker must have launched a query()")
+      return options
+    } finally {
+      for (const [name, value] of restore) {
+        if (value === undefined) delete process.env[name]
+        else process.env[name] = value
+      }
+    }
+  }
+
+  test("names the empty allowlist, the empty base tool set, and every isolation flag", async () => {
+    const options = await launchedOptions()
+
+    expect(options.allowedTools).toEqual([...PERMITTED_TOOLS])
+    expect(options.tools).toEqual([])
+    expect(options.permissionMode).toBe("dontAsk")
+    expect(options.settingSources).toEqual([])
+    expect(options.strictMcpConfig).toBe(true)
+    expect(options.skills).toEqual([])
+  })
+
+  test("denies every host-executing built-in through its own canUseTool gate", async () => {
+    const options = await launchedOptions()
+    const canUseTool = options.canUseTool
+    if (canUseTool === undefined) throw new Error("canUseTool must be set on every launch")
+
+    for (const toolName of [...HOST_TOOLS, "SomeFutureBuiltin"]) {
+      const result = await canUseTool(toolName, {}, { signal: new AbortController().signal })
+      expect(result.behavior).toBe("deny")
+    }
+  })
+
+  test("runs in this account's own directory, with the router's ANTHROPIC_* stripped for real", async () => {
+    const options = await launchedOptions({
+      ANTHROPIC_API_KEY: "sk-ant-leaked",
+      ANTHROPIC_BASE_URL: "https://router.internal",
+      CLAUDE_CODE_OAUTH_TOKEN: "leaked-oauth",
+    })
+    const env = options.env as Record<string, string>
+
+    expect(options.cwd).toBe("/data/accounts/sub-1")
+    expect(env.CLAUDE_CONFIG_DIR).toBe("/data/accounts/sub-1")
+    expect(Object.keys(env).some((key) => key.toUpperCase().startsWith("ANTHROPIC_"))).toBe(false)
+    expect(env.CLAUDE_CODE_OAUTH_TOKEN).toBeUndefined()
   })
 })
 
