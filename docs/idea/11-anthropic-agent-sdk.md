@@ -21,13 +21,18 @@ and the router's own secrets before the spawn, then sets `CLAUDE_CONFIG_DIR` las
 `concurrency.ts` is the semaphore pair — per-Account acquired **before** global, so a bursting
 Account queues on its own budget instead of parking global capacity and starving the Pool.
 
-The `SdkInvoker` behind `providers/claude-sdk/invoke.ts` calls `query()` and, together with the
-renderer in §6, turns SDK messages back into Anthropic Messages — streaming and non-streaming alike.
-§4 (sessions), §5 (quota), §6 (re-synthesis), §7 (tools), and login/reconnect are all implemented and
-covered by integration tests (`test/integration/claude-sdk.test.ts`) that assert the streaming byte
-shape, `UsageRecord.egressMode: "agent-sdk"`, and a `rate_limit_event` driving `cooling_down` — with
-no HTTP call and no credential ever touching the wire. This page remains the contract that
-implementation must continue to satisfy.
+The **transport** half: `providers/claude-sdk/invoker.ts` implements the `SdkInvoker` seam that
+`invoke.ts` declares, and it is where every piece above is finally held at once — one body read
+(`request.ts`), one prompt built from the lineage plan (`prompt.ts`), one concurrency slot, one
+launch, one render. `composition/index.ts` builds it, so a subscription Account selected by routing
+is dispatched rather than refused. Together with the renderer in §6 it turns SDK messages back into
+Anthropic Messages — streaming and non-streaming alike. §4 (sessions), §5 (quota), §6
+(re-synthesis), §7 (tools), and login/reconnect are all implemented and covered by integration tests
+(`test/integration/claude-sdk.test.ts`) that drive the **real** invoker with `query()` and the
+executable ladder injected, asserting the streaming byte shape, `UsageRecord.egressMode:
+"agent-sdk"`, and a `rate_limit_event` driving `cooling_down` — with no HTTP call, no subprocess,
+and no credential ever touching the wire. This page remains the contract that implementation must
+continue to satisfy.
 
 Two decisions the seam already commits to, both taken from §6:
 
@@ -115,6 +120,23 @@ Walkthrough, grounded in `server.ts` (`handleMessages`, from :625):
 9. **`query()`** — `includePartialMessages: true` when streaming.
 10. **Stream** — discriminate on `message.type`, re-synthesize (§6). The retry ladder applies **only before any byte reaches the client** (`server.ts:2333`).
 11. **Finalize** — persist the Session mapping, write the `UsageRecord`, emit terminal frames.
+
+### As built
+
+`createSdkInvoker` (`providers/claude-sdk/invoker.ts`) is steps 5 through 11 in one function, and
+the order above is the order it runs in. Decisions taken while building it, each narrower than the
+walkthrough:
+
+| Decision | Why |
+|---|---|
+| The body is decoded **once**, into the four things a launch needs — prompt, tools, system prompt, response shape (`request.ts`) | This path is the labeled exception to "never parse a passthrough body" (CLAUDE.md non-negotiable 8), and an exception that costs four parses of the same megabyte is a different exception than the one that was granted |
+| The prompt is one **user** message, sent as streaming input rather than a string | A string prompt cannot carry an image, and degrading a client's images to a text note is a fidelity loss nothing forces on us. The SDK closes the subprocess's stdin once the iterable is exhausted, which is what makes a single-turn endpoint out of a bidirectional protocol |
+| A conversation the SDK has never held is replayed **framed**, and a single user turn is not (`prompt.ts`) | The framing is the anti-imitation guard §4 and §10 both name; applying it to a turn that needs no replay would put a transcript preamble in front of every first message |
+| The executable ladder is walked **once** per process, and only a *successful* resolution is cached | A binary does not move under a live container, so re-walking it per request is a filesystem walk on every subscription turn. A failed resolution is not cached, so an operator who fixes a mount recovers without a restart |
+| The concurrency slot, the abort bridge, and the session report are all tied to the end of the **message stream**, not to `query()` returning | `query()` returns immediately; the answer arrives over the following seconds. Releasing on return would make the semaphore count calls rather than subprocesses, leak an abort listener per request, and write a session binding before the SDK had named one |
+| The session is reported **once**, at the end, carrying the assistant uuid | The id arrives in `system`/`init` and the uuid only once the turn produced one, so reporting on arrival would write the row twice and the first write would have no rollback point (§4) |
+| The subprocess's stderr tail is attached to a throw that carries none, never replacing one that does | It is what `errors.ts` reads to tell a crash from an auth failure, and a crash misread as an auth failure marks a working Account `needs_reauth` until a human logs in (§9) |
+| A router with no usable `claude` binary fails the attempt as `unknown` → `502` + failover, before taking a slot | It is a router misconfiguration, not this Account's fault, and another transport in the same Pool may still serve the request |
 
 ---
 

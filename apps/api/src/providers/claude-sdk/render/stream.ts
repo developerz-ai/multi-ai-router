@@ -25,7 +25,8 @@ import { createMessageFold } from "./message"
  * | `system` (`init`) | `session_id` to the observer, for the Session mapping (§4) |
  * | `rate_limit_event` | Account quota state via the observer (§5). Never forwarded |
  * | `result` | The **authoritative** usage and stop reason for the terminal `message_delta` |
- * | `assistant` / `user` | Nothing: already seen as `stream_event`s, and an `assistant`'s `usage` covers one internal iteration rather than the turn |
+ * | `assistant` | Its `uuid` to the observer, for the undo fork point (§4). No frame: the content was already seen as `stream_event`s, and its `usage` covers one internal iteration rather than the turn |
+ * | `user` | Nothing: the SDK's own internal tool results, which `tools/` accounts for |
  *
  * **The status is decided before the first byte.** The response is not constructed until the first
  * client frame exists, so a stall or a subprocess death on the way to it surfaces as a real HTTP
@@ -49,6 +50,13 @@ export interface SdkRenderObserver {
   onSession?(sessionId: string): void
   /** `rate_limit_info` from a `rate_limit_event`. Account state, never a client-visible frame (§5). */
   onRateLimit?(info: unknown): void
+  /**
+   * The uuid of an `assistant` message this turn produced — the point a later undo forks at (§4).
+   * Reported for the main turn only: a subagent's message names a turn the client never asked for,
+   * and rewinding to it would resume someone else's branch. Called once per assistant message; the
+   * last one wins, since that is the message the client will send back next turn.
+   */
+  onAssistantUuid?(uuid: string): void
 }
 
 export interface SdkRenderInput {
@@ -195,6 +203,15 @@ function createPump(input: SdkRenderInput): Pump {
       case "rate_limit_event":
         observe(() => input.observer?.onRateLimit?.(message.rateLimitInfo))
         return NO_FRAMES
+      case "assistant": {
+        // Nothing here reaches the client — the content was already seen as `stream_event`s. The
+        // uuid is the one fact this message type carries that no other one does (§6).
+        const uuid = message.uuid
+        if (uuid !== null && message.parentToolUseId === null) {
+          observe(() => input.observer?.onAssistantUuid?.(uuid))
+        }
+        return NO_FRAMES
+      }
       case "result":
         completion = { stopReason: message.stopReason, usage: message.usage }
         return NO_FRAMES

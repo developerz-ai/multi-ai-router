@@ -21,9 +21,13 @@ export {
 } from "./claude-sdk/env"
 export type { SdkFailure, SdkFailureText } from "./claude-sdk/errors"
 export { classifySdkFailure, readSdkFailure, STDERR_TAIL_LIMIT } from "./claude-sdk/errors"
-export type { SdkInvocation, SdkInvoker } from "./claude-sdk/invoke"
+export type { SdkInvocation, SdkInvoker, SdkSessionReport } from "./claude-sdk/invoke"
+export type { SdkInvokerDeps, SdkQueryFn } from "./claude-sdk/invoker"
+export { createSdkInvoker } from "./claude-sdk/invoker"
 export type { QueryLaunch, QueryLaunchInput } from "./claude-sdk/options"
 export { createQueryLaunch, MAX_TURNS } from "./claude-sdk/options"
+export type { PromptBlock, PromptImageSource, PromptInput } from "./claude-sdk/prompt"
+export { buildSdkPrompt } from "./claude-sdk/prompt"
 export type {
   SdkQuotaSnapshot,
   SdkQuotaStore,
@@ -52,6 +56,8 @@ export {
   renderSdkResponse,
   systemTicker,
 } from "./claude-sdk/render"
+export type { SdkRequest, SdkRequestMessage, SdkRequestRole } from "./claude-sdk/request"
+export { readSdkRequest } from "./claude-sdk/request"
 export type {
   CliAttempt,
   CliProbe,
@@ -122,6 +128,7 @@ export {
   passthroughToolDefinition,
   qualifyToolName,
   readDeclaredTools,
+  readToolList,
   readToolSchema,
   repairToolInput,
   TOOL_SEARCH,

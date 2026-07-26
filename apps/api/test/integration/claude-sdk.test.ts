@@ -1,5 +1,10 @@
 import { describe, expect, test } from "bun:test"
-import { createSdkQuotaStore, renderSdkResponse, type SdkInvocation } from "../../src/providers"
+import {
+  type CliResolution,
+  createSdkConcurrency,
+  createSdkInvoker,
+  createSdkQuotaStore,
+} from "../../src/providers"
 import { sdkQueryStream, sdkTurn } from "../unit/claude-sdk/fixtures"
 import {
   account,
@@ -12,10 +17,14 @@ import { bearer, CRYPTOR, harness, post, settle } from "./harness"
 
 /**
  * The Agent-SDK transport end to end: `harness()` (`dataplane.test.ts:70-92`) extended with an
- * SDK-backed account whose `invokeSdk` stub is the same seam a real launcher would fill — it reads
- * the client's `stream` flag off the converted body, drives `renderSdkResponse` with a `query()`-
- * shaped fixture stream, and answers with exactly what that renderer produces. Nothing here spawns
- * a `claude` subprocess and no fixture carries a real credential.
+ * SDK-backed account served by the **real** `createSdkInvoker` — the same object `composition/`
+ * builds in production, with only the two pieces that touch this host injected: `query()` itself
+ * and the executable-resolution ladder. Nothing here spawns a `claude` subprocess and no fixture
+ * carries a real credential.
+ *
+ * That the launcher is real is the point. A stand-in that reads the `stream` flag and drives the
+ * renderer would assert the renderer twice and the transport never once, which is exactly how a
+ * dispatch path can be green in tests and `503` in production.
  *
  * `dataplane.test.ts`'s "the Agent-SDK transport" suite already covers the failover, session-replay,
  * and error-mapping properties at the `SdkInvoker` boundary with a pre-built `Response`. This file
@@ -37,17 +46,6 @@ function streamMessage(stream: boolean): string {
   })
 }
 
-/** What a real launcher reads off the converted body to decide which shape to render. */
-function wantsStream(body: Uint8Array | null): boolean {
-  if (body === null) return false
-  const parsed: unknown = JSON.parse(new TextDecoder().decode(body))
-  return (
-    typeof parsed === "object" &&
-    parsed !== null &&
-    (parsed as { stream?: unknown }).stream === true
-  )
-}
-
 function sdkTextTurn(rateLimitInfo?: Record<string, unknown>) {
   return sdkQueryStream({
     turns: [sdkTurn({ blocks: [TEXT_BLOCK] })],
@@ -56,25 +54,27 @@ function sdkTextTurn(rateLimitInfo?: Record<string, unknown>) {
   })
 }
 
+/** The rung `resolve-cli.ts` would have reported, so no filesystem is walked and none is needed. */
+const CLI: CliResolution = {
+  ok: true,
+  source: "platform_package",
+  path: "/opt/claude/claude",
+  bytes: 245_000_000,
+}
+
 /**
- * The stand-in for a real launcher: reads `stream` off the converted body, drives
- * `renderSdkResponse` with a `query()`-shaped fixture stream, and forwards the renderer's own
- * observer callbacks to the ones `runSdkAttempt` passed in — the same bridge a real launcher owns
- * between `query()`'s messages and the invocation's `onSession`/`onRateLimit`.
+ * The production invoker, with the subprocess replaced by a `query()`-shaped fixture stream.
+ *
+ * Everything between the client's bytes and that stream is real: the body is read once, the prompt
+ * is built from the lineage plan, the concurrency slot is taken and released, the launch carries
+ * every isolation flag, and the renderer's observers are bridged to `onSession`/`onRateLimit`.
  */
 function invoker(rateLimitInfo?: Record<string, unknown>) {
-  return (invocation: SdkInvocation) =>
-    renderSdkResponse({
-      messages: sdkTextTurn(rateLimitInfo),
-      model: invocation.model,
-      stream: wantsStream(invocation.body),
-      observer: {
-        onSession: invocation.onSession
-          ? (id) => invocation.onSession?.({ sdkSessionId: id })
-          : undefined,
-        onRateLimit: invocation.onRateLimit,
-      },
-    })
+  return createSdkInvoker({
+    concurrency: createSdkConcurrency({ global: 4, perAccount: 2 }),
+    resolveCli: () => CLI,
+    runQuery: () => sdkTextTurn(rateLimitInfo),
+  })
 }
 
 /** `event: <type>` frame names, in order — the SSE grammar both transports emit. */
@@ -143,6 +143,41 @@ describe("a streaming SDK response", () => {
     const sdkText = await sdkRes.text()
 
     expect(frameNames(sdkText)).toEqual(frameNames(passthroughText))
+  })
+})
+
+describe("an OpenAI-dialect client against the same subscription account", () => {
+  /**
+   * §6's "one renderer, not one per dialect", proven end to end: the request is translated into
+   * Anthropic on the way in, the SDK is rendered into Anthropic **once**, and the ordinary
+   * Anthropic → openai-chat translator carries it the rest of the way. A second SDK → OpenAI
+   * renderer would be a second place for the loss to happen differently.
+   */
+  const CHAT = JSON.stringify({
+    model: "claude-opus-5",
+    stream: true,
+    messages: [{ role: "user", content: "hello" }],
+  })
+
+  test("gets chat.completion chunks, never Anthropic frames", async () => {
+    const { app, usage } = harness({
+      accounts: [subscriptionAccount("sub")],
+      responses: [],
+      invokeSdk: invoker(),
+    })
+
+    const res = await app.request("/v1/chat/completions", post(CHAT, bearer()))
+    const text = await res.text()
+    await settle()
+
+    expect(res.status).toBe(200)
+    expect(res.headers.get("content-type")).toContain("text/event-stream")
+    expect(text).toContain('"object":"chat.completion.chunk"')
+    expect(text).toContain('"content":"hi"')
+    expect(text).toContain("data: [DONE]")
+    // The SDK's own event names never survive the crossing.
+    expect(text).not.toContain("event: content_block_delta")
+    expect(usage.rows[0]).toMatchObject({ egressMode: "agent-sdk", outcome: "success" })
   })
 })
 

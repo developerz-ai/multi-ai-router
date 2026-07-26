@@ -15,6 +15,7 @@ import {
 import type { Env } from "../config/env"
 import type { Logger } from "../logging/logger"
 import { createRuntimeMetrics, type RouterMetrics } from "../observability"
+import { createSdkConcurrency, createSdkInvoker, createSdkQuotaStore } from "../providers"
 import { type Scheduler, schedulerFromEnv } from "../scheduler"
 import { createRoutingCatalog, loadCatalog, type RoutingCatalogStore } from "../services/catalog"
 import { createPriceBook } from "../services/cost"
@@ -164,12 +165,33 @@ export function createRuntime(deps: RuntimeDeps): Runtime {
   // conversation physically lives upstream, so no policy may overrule it and no hash recomputes it.
   const sessionStore = sessionStoreFromEnv({ env, repository: sessions, logger, now })
 
+  // The Claude subscription transport. Two long-lived pieces and one invoker over them:
+  //
+  // - the semaphore pair is a **memory** bound on `claude` subprocesses, so it is per replica and
+  //   shared by every request — one per dispatcher, never one per call;
+  // - the quota store is keyed by Account and lives as long as this runtime, because a
+  //   `rate_limit_event` on one turn is what cools the account down on the next (§5). A
+  //   module-level one would bleed between runtimes inside a single process.
+  //
+  // Built unconditionally: whether a deployment serves subscriptions is a question about its
+  // accounts, not about its wiring, and an operator who connects one must not need a restart.
+  const sdkQuota = createSdkQuotaStore()
+  const invokeSdk = createSdkInvoker({
+    concurrency: createSdkConcurrency({
+      global: env.claudeSdkMaxConcurrency,
+      perAccount: env.claudeSdkMaxConcurrencyPerAccount,
+    }),
+    cliPathOverride: env.claudeCliPath,
+  })
+
   const dispatcher = createDispatcher({
     catalog,
     health,
     cipher,
     usage,
     limiter,
+    invokeSdk,
+    quota: sdkQuota,
     sessions: sessionStore,
     // Synchronous, warm, and the whole reason the book exists: an attempt is priced on the request
     // path, so a lookup that could await a query would put Postgres on it.
