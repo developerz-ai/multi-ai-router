@@ -106,7 +106,7 @@ docker compose up -d
 
 Migrations run at boot, are idempotent, and fail the boot loudly rather than starting on a half-migrated schema. Pointing `DATABASE_URL` at an existing or managed Postgres and dropping the bundled `db` service is a one-line change.
 
-Then log in and add an account, a pool, and a key — the SolidJS console at `/` handles all three end to end ([Status](#-status)); `/api/admin/**` is also there directly if you'd rather script it. **Give the key a name; you can view and copy its value again at any time** via `POST /api/admin/keys/:id/reveal` — keys are stored encrypted, not hashed, because an operator running a fleet of agents needs to look one up later without rotating it.
+Then open **<http://localhost:8080>** and log in. The router process serves the SolidJS console itself, at the same origin as the API — no second container, no static host, no CORS to configure. Add an account, a pool, and a key; the console handles all three end to end ([Status](#-status)), and `/api/admin/**` is there directly if you'd rather script it. **Give the key a name; you can view and copy its value again at any time** via `POST /api/admin/keys/:id/reveal` — keys are stored encrypted, not hashed, because an operator running a fleet of agents needs to look one up later without rotating it.
 
 | Env var | Required | Notes |
 |---|---|---|

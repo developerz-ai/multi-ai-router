@@ -53,6 +53,24 @@ const IMMUTABLE_CACHE_CONTROL = "public, max-age=31536000, immutable"
  */
 const DOCUMENT_CACHE_CONTROL = "no-cache"
 
+/**
+ * Errors that mean *this path is not a filename*, rather than *this server is broken*.
+ *
+ * A path carrying a NUL byte or overrunning the platform's `PATH_MAX` cannot name a file, so the
+ * read throws before it can look — and the throw escaped `serveStatic`, so an unauthenticated
+ * `GET /%00` answered `500` and wrote a stack to the error log, one crafted URL at a time. It is a
+ * request for a document that does not exist, which is exactly what the shell answers.
+ *
+ * Named rather than caught wholesale, and the list is deliberately short: an `EACCES` on a real
+ * asset or an `EIO` off a failing volume is a fault the operator has to see, so it is rethrown and
+ * rendered as the `500` it genuinely is. Deferring to the platform's own errno beats guessing its
+ * limits — `PATH_MAX` is not ours to hard-code.
+ */
+const UNNAMEABLE_PATH_CODES: ReadonlySet<string> = new Set([
+  "ERR_INVALID_ARG_VALUE",
+  "ENAMETOOLONG",
+])
+
 export interface SpaRoutesDeps {
   /** Directory holding the Vite build — `index.html` plus `assets/`. */
   readonly root: string
@@ -81,10 +99,32 @@ export function spaRoutes(deps: SpaRoutesDeps): Hono<AppEnv> {
 
   // Two registrations, in this order: the file server answers what exists, and hands anything
   // missing to the shell by calling `next()`.
-  routes.on(DOCUMENT_METHODS, "*", exceptApiPaths(file))
+  routes.on(DOCUMENT_METHODS, "*", exceptApiPaths(unnameableFallsThrough(file)))
   routes.on(DOCUMENT_METHODS, "*", exceptApiPaths(shell))
 
   return routes
+}
+
+/**
+ * Wraps the file server so a path the filesystem cannot name is treated as a miss — `next()`, on
+ * to the shell — instead of a `500`. The lookup throws before it calls `next()`, so the shell is
+ * still reached exactly once.
+ */
+function unnameableFallsThrough(handler: MiddlewareHandler): MiddlewareHandler {
+  return async (c, next) => {
+    try {
+      return await handler(c, next)
+    } catch (error) {
+      if (!isUnnameablePath(error)) throw error
+      return next()
+    }
+  }
+}
+
+function isUnnameablePath(error: unknown): boolean {
+  if (!(error instanceof Error) || !("code" in error)) return false
+  const { code } = error
+  return typeof code === "string" && UNNAMEABLE_PATH_CODES.has(code)
 }
 
 /** Wraps a static handler so a path the API owns is passed straight through, never answered. */

@@ -147,6 +147,7 @@ inline with a copy button — retrieval is the recovery path, not the normal one
 | Session | Login issues an httpOnly, `SameSite=Strict`, `Secure`, `__Host-` cookie with a bounded lifetime. Logout invalidates server-side. `SESSION_COOKIE_INSECURE` drops `Secure`+`__Host-` for a plain-HTTP install and nothing else |
 | CSRF | A token is required on every mutating admin request. `SameSite=Strict` is the belt; the token is the braces |
 | Throttling | Per-IP and per-account login attempt throttling with backoff. Failed logins are audit events |
+| Console assets | The built SPA is served from `WEB_ROOT` at the root, mounted **last** and never for a path under `/api`, `/v1`, `/healthz`, `/readyz` or `/metrics`. The history-API fallback reads one fixed filename, so the request path never reaches it. A path that escapes the root, or that the filesystem cannot name at all (a NUL byte, past `PATH_MAX`), gets the shell — never a file outside the root, and never a `500` an unauthenticated caller can mint on demand |
 | 2FA | `ADMIN_TOTP_SECRET` is **DEFERRED** |
 
 **The two credential spaces are completely separate.** A router key authenticates the data plane and

@@ -53,7 +53,13 @@ const INDEX_HTML = "<!doctype html><html><head><title>multi-ai-router</title></h
 const BUNDLE_JS = 'export const version = "test"\n'
 const ASSET_PATH = "/assets/index-abc123.js"
 
+/** Stands in for anything on the host that is not the console — `ENCRYPTION_KEY`, a token file. */
+const SECRET = "ENCRYPTION_KEY=must-never-be-served\n"
+
 let root: string
+/** A sibling of the web root, so escaping the root by one segment is enough to reach it. */
+let secretDir: string
+let secretPath: string
 
 function harness(options: { readonly webRoot?: string } = {}) {
   const deps: AppDeps = {
@@ -73,10 +79,15 @@ beforeAll(() => {
   mkdirSync(join(root, "assets"))
   writeFileSync(join(root, "index.html"), INDEX_HTML)
   writeFileSync(join(root, ASSET_PATH.slice(1)), BUNDLE_JS)
+
+  secretDir = mkdtempSync(join(tmpdir(), "router-secret-"))
+  secretPath = join(secretDir, "env")
+  writeFileSync(secretPath, SECRET)
 })
 
 afterAll(() => {
   rmSync(root, { recursive: true, force: true })
+  rmSync(secretDir, { recursive: true, force: true })
 })
 
 describe("the built console", () => {
@@ -128,18 +139,90 @@ describe("history-API fallback", () => {
     expect(await res.text()).toBe(INDEX_HTML)
   })
 
-  test("hands out the shell, never a file, for a traversal attempt", async () => {
-    const res = await harness().request("/%2e%2e/%2e%2e/etc/passwd")
-
-    expect(res.status).toBe(200)
-    expect(await res.text()).toBe(INDEX_HTML)
-  })
-
   test("does not answer a non-document method — a wrong-method API call still gets JSON", async () => {
     const res = await harness().request("/accounts", { method: "POST" })
 
     expect(res.status).toBe(404)
     expect(res.headers.get("Content-Type")).toContain("application/json")
+  })
+})
+
+/**
+ * The fallback answers *every* unclaimed document path, so it is the one handler an unauthenticated
+ * caller can aim anything at. Two ways that goes wrong, and both are asserted below rather than
+ * assumed from the middleware's documentation:
+ *
+ * - It reads a file outside the web root, which on this host is a credential.
+ * - It is handed a path the filesystem cannot name and *throws*, which reaches the client as a
+ *   `500` with a stack in the error log — a log flood and a fingerprinting oracle, one URL at a
+ *   time. A path that cannot name a file names no document either: the shell is the honest answer.
+ */
+describe("a path that could never be a client route", () => {
+  /** Every spelling of "leave the web root" a proxy or a browser might not normalise away. */
+  function traversals(): readonly string[] {
+    const secretBase = secretDir.split("/").filter(Boolean).slice(-1)[0] ?? ""
+    return [
+      "/../../etc/passwd",
+      "/%2e%2e/%2e%2e/etc/passwd",
+      "/..%2f..%2fetc%2fpasswd",
+      "/%2e%2e%2f%2e%2e%2fetc%2fpasswd",
+      "/%252e%252e%252f%252e%252e%252fetc%252fpasswd",
+      "/..\\..\\etc\\passwd",
+      "/%5c..%5c..%5cetc%5cpasswd",
+      "/....//....//etc/passwd",
+      "/assets/%2e%2e/%2e%2e/etc/passwd",
+      // Aimed at the real file this test wrote, one directory up from the root.
+      `/../${secretBase}/env`,
+      `/%2e%2e%2f${secretBase}%2fenv`,
+      `/assets/..%2f..%2f${secretBase}%2fenv`,
+      // Absolute, on the chance the join treats it as one and discards the root.
+      `${secretPath}`,
+    ]
+  }
+
+  test("hands out the shell, never a file outside the root, for every traversal spelling", async () => {
+    const app = harness()
+
+    for (const path of traversals()) {
+      const res = await app.request(path)
+      const body = await res.text()
+
+      expect(body).not.toContain(SECRET)
+      expect({ path, status: res.status, body }).toEqual({ path, status: 200, body: INDEX_HTML })
+    }
+  })
+
+  test("answers the shell for a path the filesystem cannot name, never a 500", async () => {
+    const app = harness()
+    const unnameable = [
+      // A NUL byte: `Bun.file` rejects the argument outright rather than reporting a miss.
+      "/%00",
+      "/config%00",
+      // NUL truncation — a server that passed this through would open `index.html` and mislabel it.
+      "/index.html%00.js",
+      "/assets/%00.js",
+      // Past PATH_MAX: the open fails with ENAMETOOLONG before any lookup happens.
+      `/${"a".repeat(5_000)}`,
+      `/assets/${"b".repeat(5_000)}.js`,
+    ]
+
+    for (const path of unnameable) {
+      const res = await app.request(path)
+      const body = await res.text()
+
+      expect({ path, status: res.status, body }).toEqual({ path, status: 200, body: INDEX_HTML })
+    }
+  })
+
+  test("keeps a malformed API path on the API's error shape, not the shell", async () => {
+    const app = harness()
+
+    for (const path of ["/api/admin/%00", "/v1/messages%00", `/v1/${"a".repeat(5_000)}`]) {
+      const res = await app.request(path)
+
+      expect({ path, status: res.status }).toEqual({ path, status: 404 })
+      expect(res.headers.get("Content-Type")).toContain("application/json")
+    }
   })
 })
 
