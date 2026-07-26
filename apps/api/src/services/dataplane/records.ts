@@ -1,5 +1,5 @@
 import type { Dialect, EgressMode, ProviderId, UsageOutcome } from "@multi-ai-router/core"
-import { estimateCost, type RateLookup } from "../cost"
+import { estimateCost, type RateLookup, UNKNOWN_COST } from "../cost"
 import type { FailureKind } from "../routing"
 import type { UsageRecord } from "../usage"
 import { errorClassOf, NO_TOKENS, outcomeOf, type TokenCounts, USAGE_SUCCESS } from "../usage"
@@ -64,6 +64,16 @@ export interface AttemptRecordInput {
   readonly ingressDialect?: Dialect | null
   readonly egressMode?: EgressMode | null
   readonly tokens?: TokenCounts
+  /**
+   * Whether this attempt is priced at all. Default true.
+   *
+   * `false` is not "it cost zero" — it is "there is no completion here to price". A `count_tokens`
+   * answer measures a prompt nobody ran, and zeroed counts against a model the table *does* price
+   * come back as `metered $0.000000`, which reads as a free completion rather than as no completion
+   * at all. That the shape of the answer depended on whether the model happened to be in the price
+   * book was the bug: the same request recorded `NULL` on one model and `0.000000` on the next.
+   */
+  readonly priced?: boolean
   /** The operator's price book, when one is wired. Absent prices off the shipped table. */
   readonly prices?: RateLookup
   readonly timing: AttemptTiming
@@ -95,7 +105,9 @@ export function attemptRecord(input: AttemptRecordInput): UsageRecord {
     cacheWriteTokens: tokens.cacheWriteTokens,
     // Priced on the model that went upstream, not on the one the client asked for: the account's
     // alias map decides which name the upstream billed.
-    ...estimateCost(input.provider, input.upstreamModel, tokens, input.prices),
+    ...(input.priced === false
+      ? UNKNOWN_COST
+      : estimateCost(input.provider, input.upstreamModel, tokens, input.prices)),
     latencyMs: Math.max(0, Math.round(input.timing.latencyMs)),
     ttfbMs: ttfbMs === undefined ? null : Math.max(0, Math.round(ttfbMs)),
     routerOverheadMs: Math.max(0, Math.round(input.timing.totalMs - input.timing.upstreamMs)),

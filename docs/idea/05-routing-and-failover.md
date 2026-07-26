@@ -478,6 +478,31 @@ code follows the cause:
 
 Never a generic upstream `500`. Never a silent fallback outside the key's scope.
 
+### When the chain is empty
+
+The table above is only half the ways a chain empties. Selection drops an account for its **health**
+("cooling down until 14:32"); planning then drops one for its **shape** — no translator for the
+dialect pair, no driver for the provider, or no endpoint for the operation the route performs
+(`POST /v1/messages/count_tokens` on an OpenAI-dialect account). Selection can hand planning a
+candidate and planning can drop it, and neither layer sees the other's answer. So a request can end
+with candidates found, none planned, and two competing explanations for it:
+
+    pool = [ anthropic-api (cooling down, 90s), openai-api (active) ]
+    POST /v1/messages/count_tokens
+
+**The verdict on an account that could have served the operation wins.** Reporting the plan's
+reason here — `503`, "no account can count tokens" — is wrong twice over: it tells the operator to
+add an Anthropic-dialect account they already have, and it hands the client a permanent-looking
+refusal for a condition a clock fixes in ninety seconds. That is non-negotiable 7's
+`cooling_down` ≠ `exhausted` rule, made one layer above where it usually is. So the answer is the
+`429` and `Retry-After` from the table above, naming the cooling account.
+
+Only a verdict a clock or a human resolves takes precedence — `cooling_down`, a spent quota window,
+a probe in flight, `exhausted`. A capable account dropped as `disabled`, `needs_reauth`, or
+`model-unsupported` leaves the plan's own message standing, because that message is the more useful
+of the two. And when nothing capable was held back — a healthy OpenAI-only pool asked to count
+tokens — the shape gap is the whole truth and is reported as such.
+
 ### Which failure the client hears
 
 The table above decides a chain that never started. A chain that *did* start has the same problem

@@ -151,3 +151,4 @@ export {
   SYSTEM_CLOCK,
   type UpstreamOperation,
 } from "./types"
+export { type UnservableInput, unservableError } from "./unservable"

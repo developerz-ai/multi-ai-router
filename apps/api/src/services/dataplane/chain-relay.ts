@@ -49,8 +49,8 @@ export function relaySuccess(
   // is relayed and observed for bytes only. See `usage/tokens.ts`. An embeddings answer is the
   // opposite case and takes the ordinary observer: its `prompt_tokens` were genuinely spent, and
   // the absent completion count lands as the zero it truthfully is.
-  const tokens =
-    ctx.runtime.operation === "count-tokens" ? NO_TOKEN_OBSERVER : createTokenObserver()
+  const counting = ctx.runtime.operation === "count-tokens"
+  const tokens = counting ? NO_TOKEN_OBSERVER : createTokenObserver()
   let firstByteAt: number | undefined
   const settle = (streamed: boolean): void => {
     // Everything this attempt spent — the call and every byte relayed off it — is time the router
@@ -66,6 +66,9 @@ export function relaySuccess(
       attemptRecord({
         ...ctx.runtime.attribution(attempt, servable),
         tokens: counts,
+        // Zeroed counts are not a zero *bill*: on a model the table prices they would record
+        // `metered $0.000000`, which sums into a spend report as a completion that cost nothing.
+        priced: !counting,
         timing: ctx.runtime.timing(at.startedAt, at.started, upstreamMs, firstByteAt),
         outcome: SUCCESS_OUTCOME,
         streamed,
@@ -113,6 +116,8 @@ export function recordAttemptFailure(
   ctx.runtime.record(
     attemptRecord({
       ...ctx.runtime.attribution(attempt, servable),
+      // Same rule on the way down: a count that never landed is no more priceable than one that did.
+      priced: ctx.runtime.operation !== "count-tokens",
       timing: ctx.runtime.timing(at.startedAt, at.started, at.upstreamMs),
       outcome: failureOutcome(failure.kind),
       streamed: false,

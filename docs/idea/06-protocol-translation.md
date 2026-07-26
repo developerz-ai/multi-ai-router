@@ -74,10 +74,25 @@ integer is indistinguishable from a measured one at the client, which is the obj
 forbids substituting a model. An Anthropic-compatible vendor that never implemented the endpoint
 answers its own `404`, and that `404` is relayed unchanged.
 
-**Its `input_tokens` is never accounted.** The response measures a prompt that was never run, so the
-relay observes bytes and no tokens on this path: the `UsageRecord` carries the request, the account,
-and the latency, with all four token columns at zero and no cost. Reading the number would price a
-question as though it were a completion and inflate every report that sums the column.
+That `503` says *no account can count*, and it must only be said when that is true. **A health
+verdict on an account that could have counted outranks it** — see
+[05-routing-and-failover.md](05-routing-and-failover.md#when-the-chain-is-empty). A pool holding one
+Anthropic account that is cooling down and one OpenAI account that is fine has not run out of
+counters; it has one, and it is back at 14:32. Answering `503` there would tell the operator to add
+an account they already have, and hand the client a permanent-looking refusal for a condition a
+clock fixes — the `cooling_down` versus `exhausted` conflation non-negotiable 7 forbids, one layer
+above where it is usually made. So that request is a `429` with a `Retry-After` naming the cooling
+account, and the operation gap is reported only when nothing held back could have answered it.
+
+**Its `input_tokens` is never accounted, and it is never priced.** The response measures a prompt
+that was never run, so the relay observes bytes and no tokens on this path: the `UsageRecord`
+carries the request, the account, and the latency, with all four token columns at zero and **no
+cost** — `cost_estimate` NULL, `cost_basis` `unknown`. Both halves are deliberate. Reading the
+number would price a question as though it were a completion; recording a *zero* cost would be no
+better, because zeroed counts against a model the price table knows come back as
+`metered $0.000000`, which sums into a spend report as a completion that was free rather than as no
+completion at all. Whether the model happens to be in the table may not change the shape of the
+answer.
 
 ## Embeddings
 
