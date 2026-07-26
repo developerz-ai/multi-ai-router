@@ -16,6 +16,7 @@ const HTTP_PROVIDERS = [
   "zai",
   "kimi",
   "minimax",
+  "gemini",
   "openai-compatible",
   "anthropic-compatible",
 ] as const
@@ -61,9 +62,25 @@ describe("PROVIDER_REGISTRY", () => {
     )
   })
 
-  test("the unimplemented providers name themselves as such", () => {
-    expect(PROVIDER_REGISTRY.gemini.transport).toBe("unimplemented")
-    expect(httpDriver("gemini")).toBeNull()
+  test("no declared provider is left without an implementation", () => {
+    // The `unimplemented` transport still exists — it is where an id declared in `packages/core`
+    // ahead of its driver lands, and what lets the data plane refuse it by name. Nothing sits
+    // there today, and this is the assertion that says so out loud rather than by omission.
+    const undriven = ProviderId.options.filter(
+      (id) => PROVIDER_REGISTRY[id].transport === "unimplemented",
+    )
+
+    expect(undriven).toEqual([])
+  })
+
+  test("gemini is reached on Google's OpenAI-compatibility surface, not the native protocol", () => {
+    const driver = httpDriver("gemini")
+
+    expect(driver?.dialect).toBe("openai-chat")
+    expect(driver?.authKind).toBe("api-key")
+    expect(driver?.resolveBaseUrl({ id: "g", provider: "gemini" }).toString()).toBe(
+      "https://generativelanguage.googleapis.com/v1beta/openai",
+    )
   })
 
   test("every registered driver declares a dialect the translation layer knows", () => {

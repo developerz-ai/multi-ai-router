@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test"
+import { ProviderId } from "@multi-ai-router/core"
 import { type AccountShape, checkAccountShape } from "../../../src/services/accounts"
 
 /**
@@ -27,11 +28,17 @@ describe("provider implementation", () => {
     expect(checkAccountShape(shape()).ok).toBe(true)
   })
 
-  test("a provider with no driver cannot back an account, and the answer says why", () => {
-    const result = checkAccountShape(shape({ provider: "gemini" }))
-    expect(result.ok).toBe(false)
-    expect(reason(result)).toStartWith("provider_unimplemented:")
-    expect(reason(result)).toContain("gemini")
+  test("every declared provider can back an account — none is refused as unimplemented", () => {
+    // The `provider_unimplemented` rule stays: it is what an id declared ahead of its driver hits.
+    // Nothing hits it today, and asserting that is how the claim stays honest.
+    for (const provider of ProviderId.options) {
+      const result = checkAccountShape(shape({ provider, configDir: null }))
+      expect(reason(result)).not.toStartWith("provider_unimplemented:")
+    }
+  })
+
+  test("a gemini account needs nothing but its key", () => {
+    expect(checkAccountShape(shape({ provider: "gemini" })).ok).toBe(true)
   })
 })
 

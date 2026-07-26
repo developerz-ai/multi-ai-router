@@ -376,7 +376,7 @@ the mistake that makes a pool look broken when it is fine, or fine when it is br
 | Condition | Meaning | Status | Recovery |
 |---|---|---|---|
 | **Rate limited / quota window hit** | Temporary. A subscription's 5-hour or 7-day window is spent; it refills on a clock. | `cooling_down` | Automatic at the reported reset time; a half-open probe confirms. |
-| **Out of credits / balance exhausted** | Hard stop. A prepaid balance (OpenRouter, z.ai, Kimi, MiniMax) hit zero, a plan expired, or billing failed. **No clock will fix it.** | `exhausted` | **Human action only** — top up, fix billing, replace the key. The router never retries it on a timer. |
+| **Out of credits / balance exhausted** | Hard stop. A prepaid balance (OpenRouter, z.ai, Kimi, MiniMax) hit zero, a billing account went away (Gemini), a plan expired, or billing failed. **No clock will fix it.** | `exhausted` | **Human action only** — top up, fix billing, replace the key. The router never retries it on a timer. |
 
 Rules:
 

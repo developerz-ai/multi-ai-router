@@ -1,9 +1,9 @@
 # Providers
 
-Status: the driver contract, the total registry, and nine HTTP drivers are **implemented**
-(`apps/api/src/providers/`). `anthropic-oauth` is served by the Agent SDK; only `gemini` carries a
-recorded reason instead of a driver. Every constant below is pinned in code with a provenance
-comment; where this page and a driver file disagree, the driver file is the truth.
+Status: the driver contract, the total registry, and ten HTTP drivers are **implemented**
+(`apps/api/src/providers/`). `anthropic-oauth` is served by the Agent SDK; every other declared id
+has an HTTP driver. Every constant below is pinned in code with a provenance comment; where this
+page and a driver file disagree, the driver file is the truth.
 
 ## Provider vs Account
 
@@ -48,7 +48,7 @@ admin UI, in usage breakdowns, and in logs; the credential itself never appears 
 | `zai` | API key, `Authorization: Bearer` | Anthropic **or** OpenAI | `https://api.z.ai/api/anthropic` (Anthropic) · `https://api.z.ai/api/coding/paas/v4` (OpenAI) | Two compatible surfaces; the Account picks one, and the choice decides the endpoint *and* the header form. Own model ids (`glm-5.2`, `glm-4.7`). |
 | `kimi` | API key, `Authorization: Bearer` | Anthropic | `https://api.kimi.com/coding` | Own model ids (`k3`). **Never `x-api-key`** — see below. |
 | `minimax` | API key, `Authorization: Bearer` | Anthropic | `https://api.minimax.io/anthropic` | Anthropic-compatible surface. Reports some failures in a `base_resp` envelope on an HTTP `200`. Own model ids, so an alias map is usually required. |
-| `gemini` | API key | **DEFERRED** — v1 reaches it through the OpenAI-compatible layer | **DEFERRED** | A native Google GenAI driver is not in v1; endpoint constants not yet pinned. |
+| `gemini` | API key, `Authorization: Bearer` | OpenAI Chat Completions | `https://generativelanguage.googleapis.com/v1beta/openai` | Google's **OpenAI-compatibility** surface. Own model ids (`gemini-2.5-pro`, `gemini-2.5-flash`), so an alias map is usually required. Words failures as canonical gRPC statuses and reports the retry delay in the body, not a header — see below. The **native Google GenAI dialect stays deferred** ([10-roadmap.md](10-roadmap.md)): it is a fourth column in the translation matrix. |
 | `openai-compatible` | API key | OpenAI Chat Completions | operator-supplied | Escape hatch. Any vLLM / Ollama / LiteLLM / vendor endpoint. |
 | `anthropic-compatible` | API key | Anthropic Messages | operator-supplied | Escape hatch for Anthropic-shaped endpoints. |
 
@@ -117,9 +117,9 @@ absent or stubbed into something that looks like it works:
 
 | Transport | Ids | Meaning |
 |---|---|---|
-| `http` | `anthropic-api`, `openai-api`, `openai-oauth`, `openrouter`, `zai`, `kimi`, `minimax`, `openai-compatible`, `anthropic-compatible` | A driver in `providers/drivers/`, satisfying the interface above |
+| `http` | `anthropic-api`, `openai-api`, `openai-oauth`, `openrouter`, `zai`, `kimi`, `minimax`, `gemini`, `openai-compatible`, `anthropic-compatible` | A driver in `providers/drivers/`, satisfying the interface above |
 | `agent-sdk` | `anthropic-oauth` | Served by `query()`. Its own driver interface in `providers/claude-sdk/driver.ts`, not a `ProviderDriver`: there is no base URL to resolve, no headers to build, and failures arrive as strings |
-| `unimplemented` | `gemini` | Declared in the domain, no implementation. Selecting one is a configuration error and is refused by name, before any upstream call |
+| `unimplemented` | *(none today)* | Where an id declared in `packages/core` ahead of its driver lands. Selecting one is a configuration error, refused by name before any upstream call. Kept rather than deleted because that is the whole point of a total registry — the alternative is a new id compiling into a half-wired provider |
 
 That three-way split is what lets the data plane refuse honestly, and it is also the **transport
 seam**: `transport` is the discriminant every caller narrows on, so "is this HTTP or the Agent SDK"
@@ -291,15 +291,46 @@ Every rejection — unknown, consumed, expired, unbound, or bound to a different
 one sentence, because a callback that explains *why* it refused is a probe oracle. Rules in
 [07-security.md](07-security.md).
 
-## API-key providers — z.ai, Kimi, MiniMax, OpenRouter
+## `gemini` — Google's OpenAI-compatibility surface
+
+Gemini is reached over the endpoint Google publishes for stock OpenAI clients, **not** the native
+Google GenAI protocol. That is a scope line, not an oversight: a native dialect is a fourth column in
+the [translation matrix](06-protocol-translation.md) and the two-dialect matrix earns it first
+([10-roadmap.md](10-roadmap.md)). Everything else about the account is ordinary — one `openai-chat`
+surface, the key on `Authorization: Bearer`, an alias map for Google's own model ids.
+
+| Property | Value |
+|---|---|
+| Base URL | `https://generativelanguage.googleapis.com/v1beta/openai` — already carries its version segment the way OpenAI's `/v1` does, so `{base}/chat/completions`, `{base}/embeddings`, and `{base}/models` are the addresses built |
+| Auth header | `Authorization: Bearer <api key>`. No `x-goog-api-key`, no query-string key |
+| Dialect | `openai-chat` only. An account pinned to `openai-responses` is refused at write time — Google's compatibility layer states no Responses endpoint |
+| Vertex / regional | an Account base-URL override, not a second pinned constant |
+
+Two things make this more than a base URL, and both are the difference between a correct verdict and
+a plausible one:
+
+| Google's shape | Why the shared reader is not enough |
+|---|---|
+| `error.status` carries the canonical gRPC status (`RESOURCE_EXHAUSTED`, `UNAUTHENTICATED`, `FAILED_PRECONDITION`, `UNAVAILABLE`, …) beside a numeric `error.code` that only restates the HTTP status | No OpenAI-shaped client reads `status`, so the shared envelope does not carry it. Without lifting it into the facts, every Gemini failure classifies on the HTTP status alone — and `RESOURCE_EXHAUSTED` then reads as a bare `429` with no way to tell it from the wording trap below |
+| the retry delay rides `error.details[]` as a `google.rpc.RetryInfo` protobuf Duration (`"31s"`) | Gemini sends **no** `x-ratelimit-*` family and **no** `Retry-After`. That body field is the only reset it ever reports, so without reading it every Gemini `429` has a reset of `unknown` and the breaker backs off on its own guess instead of the provider's number |
+
+`RetryInfo` is attached **only** to a reading that already says `limited`. It rides an `UNAVAILABLE`
+too, where it is a backoff hint about the service and says nothing about this credential's window.
+
+A rejected key arrives in two forms and both are `auth`: `UNAUTHENTICATED` (401) on the
+compatibility surface, and `INVALID_ARGUMENT` (400) with the message `API key not valid` from the
+Generative Language API behind it. Classified on the status alone, the second reads as a client
+mistake — the operator then debugs the request instead of the credential.
+
+## API-key providers — z.ai, Kimi, MiniMax, OpenRouter, Gemini
 
 No refresh, no expiry, no OAuth state. An Account is a base URL, a key, and an alias map.
 Valid until revoked upstream; a 401 moves the Account to `disabled`, not `needs_reauth`.
 
-These are the **prepaid-balance** providers, so their drivers carry the other half of the job:
-recognizing an out-of-credits response — each words it differently — and reporting it as
-`exhausted` rather than a cooldown, because no clock refills a dead balance. See
-[05-routing-and-failover.md](05-routing-and-failover.md).
+These are the providers whose money can run out — a prepaid balance for four of them, a billing
+account for Gemini — so their drivers carry the other half of the job: recognizing that response,
+which each words differently, and reporting it as `exhausted` rather than a cooldown, because no
+clock refills a dead balance. See [05-routing-and-failover.md](05-routing-and-failover.md).
 
 ### Credit exhaustion, per provider — what the upstream actually says
 
@@ -317,6 +348,7 @@ and the router keeps selecting a credential that can no longer serve a request.
 | `zai` | `error.code` in `1113`, `1112`; or message matches `insufficient balance` / `balance is insufficient` / `account balance` | Numeric vendor codes on both surfaces. `130x` is throttling and `100x` is auth — three families that all arrive as one HTTP status |
 | `kimi` | `error.type` is `exceeded_current_quota_error`; or message matches `insufficient balance` / `account … not active` | Anthropic-shaped body, Moonshot's own `type` vocabulary. Without it the account cools down on a timer instead of being flagged for a human |
 | `minimax` | `base_resp.status_code` is `1008` | **MiniMax reports failures in a `base_resp` envelope that can arrive with HTTP 200.** A driver reading only the status sees a success and hands an error body to the client as a completion |
+| `gemini` | message matches `enable billing` / `requires billing` / `billing account … not found` / `has been suspended` — and **nothing else** | Google's `RESOURCE_EXHAUSTED` (429) covers a per-minute limit *and* a spent free-tier day, and its message says "check your plan and billing details". Both refill on a clock, so both are `cooling_down`. Keying on the word "billing" would flip every throttled request to `exhausted` and pull a healthy key out of the pool. Only a project with billing off, a billing account that no longer resolves, or a suspended project is permanent |
 | `openai-compatible`, `anthropic-compatible` | one shared wording rule — `insufficient quota/credits/balance`, `out of credits`, `quota exceeded/exhausted` — guarded by an error status | The endpoint behind these is unknown. Guessing at a vendor's error vocabulary produces confident misclassifications, so this is deliberately the *only* wording either matches. The status guard is what stops a completion containing the word "quota" reading as a billing stop |
 
 Each classification also records **which signal decided it** (`openai:insufficient_quota`,
@@ -334,6 +366,7 @@ that name means this id upstream."
 | `sonnet` | `sonnet → glm-4.7` (a z.ai Account) | `glm-4.7` |
 | `opus` | `opus → glm-5.2` (a z.ai Account) | `glm-5.2` |
 | `sonnet` | `sonnet → k3` (a Kimi Account) | `k3` |
+| `sonnet` | `sonnet → gemini-2.5-flash` (a Gemini Account) | `gemini-2.5-flash` |
 | `sonnet` | *no entry* | `sonnet`, unchanged |
 
 Rules:

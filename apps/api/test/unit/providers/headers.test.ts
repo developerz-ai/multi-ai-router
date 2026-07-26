@@ -95,7 +95,12 @@ describe("compatible vendors on their Anthropic surfaces", () => {
 })
 
 describe("OpenAI-dialect drivers", () => {
-  const openAiDialect: readonly ProviderId[] = ["openai-api", "openrouter", "openai-compatible"]
+  const openAiDialect: readonly ProviderId[] = [
+    "openai-api",
+    "openrouter",
+    "gemini",
+    "openai-compatible",
+  ]
 
   for (const id of openAiDialect) {
     test(`${id} authenticates with a Bearer token and no Anthropic headers`, () => {

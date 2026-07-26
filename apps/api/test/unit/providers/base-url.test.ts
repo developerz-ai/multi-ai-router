@@ -11,6 +11,7 @@ const PINNED: ReadonlyArray<readonly [ProviderId, string]> = [
   ["zai", "https://api.z.ai/api/anthropic"],
   ["kimi", "https://api.kimi.com/coding"],
   ["minimax", "https://api.minimax.io/anthropic"],
+  ["gemini", "https://generativelanguage.googleapis.com/v1beta/openai"],
 ]
 
 describe("resolveBaseUrl", () => {

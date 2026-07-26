@@ -138,8 +138,12 @@ re-synthesize = rendered from Agent SDK output, never proxied (below).
 **Unsupported**, returning `4xx` rather than a degraded call: a stateful Responses request
 (`previous_response_id`, `store: true`, `include`, `reasoning` and `item_reference` input items)
 against non-Responses egress — `400`, the router holds no conversation state; and any request whose
-required feature has no faithful target representation — `400`, naming the field. Native Google
-GenAI egress is **DEFERRED**; Gemini goes through an OpenAI-compatible layer in v1.
+required feature has no faithful target representation — `400`, naming the field.
+
+Gemini is **not** an unsupported egress: the `gemini` driver speaks `openai-chat` over Google's
+OpenAI-compatibility surface, so a Gemini account sits in the `OpenAI Chat Completions` column above
+like any other. Only the **native Google GenAI protocol** is deferred — it would be a fourth
+dialect, and a fourth row and column of pairs to write ([10-roadmap.md](10-roadmap.md)).
 
 Statefulness is refused rather than approximated because the alternative is silent: a
 `previous_response_id` the router cannot resolve would become a request carrying only the newest

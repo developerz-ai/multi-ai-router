@@ -151,6 +151,12 @@ describe("failover", () => {
     account("acct-2", { apiKey: "sk-two", cipher: CRYPTOR }),
   ]
 
+  const geminiAccount = [account("acct-1", { provider: "gemini", apiKey: "sk-g", cipher: CRYPTOR })]
+  const OPENAI_CHAT = JSON.stringify({
+    model: "gemini-2.5-flash",
+    messages: [{ role: "user", content: "hello" }],
+  })
+
   test("advances to the next candidate on 429", async () => {
     const { app, upstream } = harness({
       accounts: twoAccounts,
@@ -254,6 +260,61 @@ describe("failover", () => {
     const outOfCredits = await drained.app.request("/v1/messages", post(MESSAGE, bearer()))
 
     expect(outOfCredits.status).toBe(402)
+  })
+
+  test("Gemini's throttle names billing and is still a cooldown, timed off the body", async () => {
+    // The trap this driver exists for: `RESOURCE_EXHAUSTED` covers a per-minute limit *and* a spent
+    // free-tier day, and its message says "check your plan and billing details". Read the word and a
+    // healthy key is parked at 402 forever. The reset is in `RetryInfo` — Gemini sends no headers.
+    const { app, health, usage } = harness({
+      accounts: geminiAccount,
+      responses: [
+        () =>
+          jsonResponse(429, {
+            error: {
+              code: 429,
+              message:
+                "You exceeded your current quota, please check your plan and billing details.",
+              status: "RESOURCE_EXHAUSTED",
+              details: [{ "@type": "type.googleapis.com/google.rpc.RetryInfo", retryDelay: "31s" }],
+            },
+          }),
+      ],
+    })
+
+    const res = await app.request("/v1/chat/completions", post(OPENAI_CHAT, bearer()))
+    await settle()
+
+    expect(res.status).toBe(429)
+    expect(res.headers.get("Retry-After")).toBe("31")
+    expect(health.stateOf("acct-1").breaker.status).toBe("cooling_down")
+    expect(health.stateOf("acct-1").breaker.cooldownSource).toBe("provider-reported")
+    expect(usage.rows[0]?.outcome).toBe("quota_exhausted")
+  })
+
+  test("Gemini with billing off is a 402 — the one refusal no clock undoes", async () => {
+    const { app, health, usage } = harness({
+      accounts: geminiAccount,
+      responses: [
+        () =>
+          jsonResponse(400, {
+            error: {
+              code: 400,
+              message: "Please enable billing on your project in Google AI Studio.",
+              status: "FAILED_PRECONDITION",
+            },
+          }),
+      ],
+    })
+
+    const res = await app.request("/v1/chat/completions", post(OPENAI_CHAT, bearer()))
+    await settle()
+
+    // 402 out of a 400 in: Google never answers 402, so the status alone would read this as a
+    // client mistake and keep selecting a credential that cannot serve a request.
+    expect(res.status).toBe(402)
+    expect(health.stateOf("acct-1").breaker.status).toBe("exhausted")
+    expect(usage.rows[0]?.outcome).toBe("credits_exhausted")
   })
 
   test("marks the failed account so the next request skips it", async () => {

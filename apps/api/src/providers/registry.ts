@@ -2,6 +2,7 @@ import type { ProviderId } from "@multi-ai-router/core"
 import { type ClaudeSdkDriver, claudeSdkDriver } from "./claude-sdk/driver"
 import { anthropicApiDriver } from "./drivers/anthropic-api"
 import { anthropicCompatibleDriver } from "./drivers/anthropic-compatible"
+import { geminiDriver } from "./drivers/gemini"
 import { kimiDriver } from "./drivers/kimi"
 import { miniMaxDriver } from "./drivers/minimax"
 import { openAiApiDriver } from "./drivers/openai-api"
@@ -17,7 +18,9 @@ import type { ProviderDriver } from "./types"
  * with a compiler behind it.
  *
  * Every id is present, and the ones with no implementation say why rather than being silently
- * absent or stubbed into something that looks like it works.
+ * absent or stubbed into something that looks like it works. **No id sits there today**; the
+ * `unimplemented` transport is what an id declared in `packages/core` ahead of its driver lands on,
+ * and the reason the data plane can refuse it by name instead of failing somewhere downstream.
  *
  * `transport` is also the **transport seam**: two transports, two driver interfaces, one
  * discriminated union. Every caller that needs to know how a provider is reached narrows on it, so
@@ -48,6 +51,9 @@ export const PROVIDER_REGISTRY: Readonly<Record<ProviderId, ProviderSupport>> = 
   zai: http(zaiDriver),
   kimi: http(kimiDriver),
   minimax: http(miniMaxDriver),
+  // Google's OpenAI-compatibility surface, not the native GenAI protocol — that dialect is still
+  // deferred (docs/idea/10-roadmap.md), and this driver is what makes the id reachable meanwhile.
+  gemini: http(geminiDriver),
   "openai-compatible": http(openAiCompatibleDriver),
   "anthropic-compatible": http(anthropicCompatibleDriver),
 
@@ -56,11 +62,6 @@ export const PROVIDER_REGISTRY: Readonly<Record<ProviderId, ProviderSupport>> = 
     driver: claudeSdkDriver,
     reason:
       "Claude Max/Pro subscriptions go through @anthropic-ai/claude-agent-sdk, one isolated CLAUDE_CONFIG_DIR per account. No subscription token is ever extracted or attached to an HTTP request — docs/idea/11-anthropic-agent-sdk.md.",
-  },
-  gemini: {
-    transport: "unimplemented",
-    reason:
-      "DEFERRED in v1: reachable through openai-compatible; native endpoint constants are not pinned — docs/idea/03-providers.md.",
   },
 }
 

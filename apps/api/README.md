@@ -102,7 +102,7 @@ explicitly, before an upstream call, rather than degrading into a lossy approxim
 |---|---|---|
 | `no-translator` | `400` `translation_failed` | The dialects differ and this build has no conversion pair for them (the `openai-responses` rows today). That is a fact about the request, so the caller is told |
 | `agent-sdk` | `503` `no_healthy_account` | A Claude subscription is served by `query()`, not by any HTTP driver. The caller did nothing wrong and can change nothing, so a `400` would send them looking in the wrong place |
-| `unimplemented` | `503` `no_healthy_account` | The provider is declared in the domain and has no driver yet |
+| `unimplemented` | `503` `no_healthy_account` | The provider is declared in the domain and has no driver yet. No id sits there today; it is what an id added to `packages/core` ahead of its driver lands on |
 
 ## Configuration
 

@@ -64,12 +64,23 @@ describe("transport", () => {
     expect(claude.reason).toContain("claude-agent-sdk")
   })
 
-  test("an unimplemented provider is described, not hidden, and cannot be created", () => {
+  test("every declared provider is implemented, so the console greys none of them out", () => {
+    // `unimplemented` is still a transport a descriptor can carry — it is where an id declared in
+    // `packages/core` ahead of its driver lands. No provider sits there today, and this says so.
+    for (const provider of describeProviders()) {
+      expect(provider.transport).not.toBe("unimplemented")
+      expect(provider.creatable).toBe(true)
+    }
+  })
+
+  test("gemini is an HTTP key provider on one OpenAI surface, with a pinned endpoint", () => {
     const gemini = describeProvider("gemini")
-    expect(gemini.transport).toBe("unimplemented")
-    expect(gemini.creatable).toBe(false)
-    expect(gemini.reason).toBeString()
-    expect(gemini.authKind).toBeNull()
+    expect(gemini.transport).toBe("http")
+    expect(gemini.authKind).toBe("api-key")
+    expect(gemini.nativeDialect).toBe("openai-chat")
+    expect(gemini.supportedDialects).toEqual(["openai-chat"])
+    expect(gemini.requiresBaseUrl).toBe(false)
+    expect(gemini.connectFlow).toBeNull()
   })
 
   test("an HTTP provider reports the auth style its driver declares", () => {

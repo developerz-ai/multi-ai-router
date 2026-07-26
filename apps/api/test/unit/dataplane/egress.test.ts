@@ -59,13 +59,24 @@ describe("egress mode", () => {
   })
 
   test("an unimplemented provider is a capacity failure, not a bad request", () => {
-    const decision = resolveEgress("openai-responses", account("a", { provider: "gemini" }))
+    // Every declared provider has a driver today, so this rejection — like `no-translator` above —
+    // is reachable only through the mapping. 503, not 400: the caller did nothing wrong and there
+    // is nothing they can change, so a 400 would send them looking in the wrong place.
+    const rejection = {
+      mode: "rejected",
+      reason: "unimplemented",
+      message: "provider x has no driver",
+    } as const
 
-    expect(decision.mode).toBe("rejected")
-    if (decision.mode !== "rejected") return
-    expect(decision.reason).toBe("unimplemented")
-    // 503, not 400: the caller did nothing wrong and there is nothing they can change.
-    expect(egressRejectionError(decision)).toBeInstanceOf(NoHealthyAccountError)
+    expect(egressRejectionError(rejection)).toBeInstanceOf(NoHealthyAccountError)
+  })
+
+  test("gemini speaks Google's OpenAI-compatibility surface, so a chat client passes through", () => {
+    const gemini = account("g", { provider: "gemini" })
+
+    expect(resolveEgress("openai-chat", gemini).mode).toBe("passthrough")
+    // Its native GenAI dialect is still deferred, so an Anthropic client is translated, not refused.
+    expect(resolveEgress("anthropic", gemini).mode).toBe("translate")
   })
 
   test("an account's chosen surface decides the dialect, not the provider default", () => {
@@ -109,7 +120,7 @@ describe("counting tokens", () => {
     expect(decision.message).toContain("Claude Agent SDK")
   })
 
-  test("an unimplemented provider keeps its own reason instead of being relabelled", () => {
+  test("a gemini account cannot count either — Google's surface states no such endpoint", () => {
     const decision = resolveEgress(
       "anthropic",
       account("g", { provider: "gemini" }),
@@ -118,7 +129,7 @@ describe("counting tokens", () => {
 
     expect(decision.mode).toBe("rejected")
     if (decision.mode !== "rejected") return
-    expect(decision.reason).toBe("unimplemented")
+    expect(decision.reason).toBe("unsupported-operation")
   })
 })
 
@@ -168,16 +179,16 @@ describe("embeddings", () => {
     expect(decision.message).toContain("Claude Agent SDK")
   })
 
-  test("an unimplemented provider keeps its own reason instead of being relabelled", () => {
+  test("a gemini account embeds — its compatibility surface serves the same OpenAI path", () => {
     const decision = resolveEgress(
       "openai-chat",
       account("g", { provider: "gemini" }),
       "embeddings",
     )
 
-    expect(decision.mode).toBe("rejected")
-    if (decision.mode !== "rejected") return
-    expect(decision.reason).toBe("unimplemented")
+    expect(decision.mode).toBe("passthrough")
+    if (decision.mode !== "passthrough") return
+    expect(decision.dialect).toBe("openai-chat")
   })
 })
 

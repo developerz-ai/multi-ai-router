@@ -60,8 +60,9 @@ Marked ⏳ where the design is settled but the code is not — see [Status](#-st
 
 **Every milestone in the roadmap has shipped: the admin API, the full data plane (same-dialect
 passthrough, cross-dialect translation, and the Claude Agent SDK path), and the operator console are
-all live.** The table is honest rather than aspirational — the one remaining gap (Gemini's native
-dialect) is named explicitly, not silently approximated.
+all live.** The table is honest rather than aspirational — every declared provider has a driver, and
+the one deliberate scope line (Gemini's *native* GenAI dialect, as opposed to its OpenAI-compatible
+one) is named explicitly rather than silently approximated.
 
 | Capability | State |
 |---|---|
@@ -74,11 +75,11 @@ dialect) is named explicitly, not silently approximated.
 | `POST /v1/embeddings` — routed, scoped and failed over like any request | ✅ passthrough to an OpenAI-dialect account (either surface), or a `503` naming why none can embed; never another model's vectors |
 | Routing: scope intersection, the six policies, overflow, bounded failover, circuit breaker | ✅ |
 | Warm routing catalog + off-path batched `UsageRecord` writer | ✅ |
-| HTTP provider drivers: Anthropic API, OpenAI API, ChatGPT/Codex OAuth, OpenRouter, z.ai, Kimi, MiniMax, and the two compatible escape hatches | ✅ |
+| HTTP provider drivers: Anthropic API, OpenAI API, ChatGPT/Codex OAuth, OpenRouter, z.ai, Kimi, MiniMax, Gemini, and the two compatible escape hatches | ✅ |
 | **Cross-dialect translation** — every crossing between `anthropic`, `openai-chat`, `openai-responses`, request/response/streaming, tool calls included | ✅ an untranslatable request is refused with a `400` naming the reason |
 | **Claude subscriptions via the Agent SDK** | ✅ `anthropic-oauth` accounts are served — login, per-account `CLAUDE_CONFIG_DIR`, sessions, quota, tool passthrough, SDK-output re-synthesis |
 | **ChatGPT/Codex OAuth** | ✅ authorization code + PKCE, redirect *and* paste capture, and background token refresh ahead of expiry |
-| **Gemini native** | ❌ no driver — reachable today through `openai-compatible` |
+| **Gemini native GenAI dialect** | ⏳ deliberately deferred — the `gemini` driver ships and serves Google's OpenAI-compatibility surface; the native protocol would be a fourth dialect in the translation matrix |
 | **Operator console screens** — overview, accounts, pools, keys, usage | ✅ live data end to end |
 | **Operator console** — settings | ✅ session, provider registry, price overrides, retention knobs, scheduled-task health, and the audit feed are all live |
 | Background tasks: janitor/retention sweeps, usage rollups, OAuth-state purge, quota floor — in-process timers, one advisory lock per task | ✅ |
@@ -215,7 +216,7 @@ The registry is a **total** record, so every provider id is either a driver or a
 | `anthropic-compatible` | API key | ✅ | Any third-party Anthropic-shaped endpoint. Keeps Anthropic's own header rules. |
 | `anthropic-oauth` | Claude Agent SDK | ✅ | Claude Max/Pro subscription. Login and credential refresh run through the `claude` CLI into a per-account `CLAUDE_CONFIG_DIR`; the router never mints or stores a subscription token. Requests are served through `@anthropic-ai/claude-agent-sdk`'s `query()`, with session stickiness, quota from SDK `rate_limit_event`s, tool passthrough, and SDK-output re-synthesized back into Anthropic (and, via translation, OpenAI) wire format. |
 | `openai-oauth` | OAuth + PKCE | ✅ | ChatGPT/Codex subscription via `auth.openai.com`, `offline_access` scope, `chatgpt-account-id` derived from the token claims. An account is created with no credential, connected through `POST /:id/connect` by redirect or paste capture, and refreshed in the background ahead of expiry — a failed refresh parks it at `needs_reauth` rather than failing a request. |
-| `gemini` | API key | ⏳ | Deferred in v1: reachable through `openai-compatible`; native endpoint constants are not pinned. |
+| `gemini` | API key, `Bearer` | ✅ | Google's **OpenAI-compatibility** surface (`generativelanguage.googleapis.com/v1beta/openai`) — chat, embeddings and the model listing. Failures come back as canonical gRPC statuses, and `RESOURCE_EXHAUSTED` is a **cooldown**, not a dead balance, even though its message names billing. The retry delay rides `error.details[].RetryInfo`, since Gemini sends no rate-limit headers. Native GenAI dialect deliberately deferred. |
 
 **z.ai, Kimi, and MiniMax take their key as `Authorization: Bearer`, never `x-api-key`** — they share the Anthropic *dialect*, not its auth scheme, and they must not receive the Anthropic OAuth beta header either.
 

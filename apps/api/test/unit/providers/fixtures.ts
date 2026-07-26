@@ -174,3 +174,72 @@ export const miniMaxSuccessBody = {
   type: "message",
   base_resp: { status_code: 0, status_msg: "success" },
 }
+
+// --- Gemini -----------------------------------------------------------------
+
+/**
+ * Google words a failure as a canonical gRPC status beside a numeric `code` that only restates the
+ * HTTP status — and it puts the retry delay in `details`, because it sends no rate-limit headers.
+ */
+export const geminiRateLimitBody = {
+  error: {
+    code: 429,
+    // The trap: a *throttle* message that names billing. Reading the word alone marks the account
+    // `exhausted` and no clock ever revives it.
+    message:
+      "You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits.",
+    status: "RESOURCE_EXHAUSTED",
+    details: [
+      {
+        "@type": "type.googleapis.com/google.rpc.QuotaFailure",
+        violations: [
+          { quotaMetric: "generativelanguage.googleapis.com/generate_content_requests" },
+        ],
+      },
+      { "@type": "type.googleapis.com/google.rpc.RetryInfo", retryDelay: "31s" },
+    ],
+  },
+}
+
+/** Free tier unavailable until the project is on billing — permanent until a human acts. */
+export const geminiBillingBody = {
+  error: {
+    code: 400,
+    message:
+      "Gemini API free tier is not available in your country. Please enable billing on your project in Google AI Studio.",
+    status: "FAILED_PRECONDITION",
+  },
+}
+
+/** A rejected key on the compatibility surface: the canonical status carries it. */
+export const geminiUnauthenticatedBody = {
+  error: {
+    code: 401,
+    message: "Request had invalid authentication credentials.",
+    status: "UNAUTHENTICATED",
+  },
+}
+
+/** The other form: the Generative Language API calls a malformed key a *client* mistake. */
+export const geminiBadKeyBody = {
+  error: {
+    code: 400,
+    message: "API key not valid. Please pass a valid API key.",
+    status: "INVALID_ARGUMENT",
+    details: [
+      {
+        "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+        reason: "API_KEY_INVALID",
+        domain: "googleapis.com",
+      },
+    ],
+  },
+}
+
+export const geminiOverloadBody = {
+  error: {
+    code: 503,
+    message: "The model is overloaded. Please try again later.",
+    status: "UNAVAILABLE",
+  },
+}

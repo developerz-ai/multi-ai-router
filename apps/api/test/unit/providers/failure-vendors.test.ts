@@ -1,6 +1,11 @@
 import { describe, expect, test } from "bun:test"
 import { httpDriver } from "../../../src/providers"
 import {
+  geminiBadKeyBody,
+  geminiBillingBody,
+  geminiOverloadBody,
+  geminiRateLimitBody,
+  geminiUnauthenticatedBody,
   kimiQuotaBody,
   kimiRateLimitBody,
   miniMaxBalanceBody,
@@ -20,6 +25,7 @@ import {
 const zai = httpDriver("zai")
 const kimi = httpDriver("kimi")
 const minimax = httpDriver("minimax")
+const gemini = httpDriver("gemini")
 
 describe("zai", () => {
   test("code 1113 is a drained balance, whatever the status says", () => {
@@ -98,6 +104,97 @@ describe("minimax", () => {
     )
 
     expect(result?.kind).toBe("auth")
+  })
+})
+
+/**
+ * Gemini is the one vendor here that words a failure as a canonical gRPC status rather than an
+ * error code, and the one whose *throttle* message names billing. Reading either wrong costs the
+ * account: the first classifies everything on the HTTP status, the second parks a healthy key at
+ * `402` where no clock will revive it.
+ */
+describe("gemini", () => {
+  test("RESOURCE_EXHAUSTED is a cooldown, even though its message names billing", () => {
+    const result = gemini?.classifyFailure(response(429, { body: geminiRateLimitBody }))
+
+    expect(result?.kind).toBe("rate-limited")
+    expect(result?.signal).toBe("gemini:RESOURCE_EXHAUSTED")
+    expect(result?.retryable).toBe(true)
+  })
+
+  test("a billing stop is permanent, and arrives as a 400 rather than a 402", () => {
+    const result = gemini?.classifyFailure(response(400, { body: geminiBillingBody }))
+
+    expect(result?.kind).toBe("credits-exhausted")
+    expect(result?.signal).toBe("gemini:billing-stopped")
+  })
+
+  test("UNAUTHENTICATED is the credential's problem", () => {
+    const result = gemini?.classifyFailure(response(401, { body: geminiUnauthenticatedBody }))
+
+    expect(result?.kind).toBe("auth")
+    expect(result?.signal).toBe("gemini:auth-status")
+    expect(result?.retryable).toBe(false)
+  })
+
+  test("a rejected key dressed as a client mistake is still an auth failure", () => {
+    const result = gemini?.classifyFailure(response(400, { body: geminiBadKeyBody }))
+
+    expect(result?.kind).toBe("auth")
+    expect(result?.signal).toBe("gemini:api-key-invalid")
+  })
+
+  test("an overloaded model is transient", () => {
+    expect(gemini?.classifyFailure(response(503, { body: geminiOverloadBody }))?.kind).toBe(
+      "server-error",
+    )
+  })
+
+  test("an OpenAI-shaped body from the compatibility layer still reads", () => {
+    const result = gemini?.classifyFailure(
+      response(400, { body: { error: { message: "Unsupported value", type: "invalid_request" } } }),
+    )
+
+    expect(result?.kind).toBe("invalid-request")
+    expect(result?.signal).toBe("http-status:400")
+  })
+
+  test("a successful completion is not a failure, whatever words it contains", () => {
+    const body = {
+      choices: [{ message: { content: "To use Vertex you must enable billing on the project." } }],
+    }
+
+    expect(gemini?.classifyFailure(response(200, { body }))).toBeNull()
+  })
+
+  test("the retry delay comes out of the body: Gemini sends no rate-limit headers", () => {
+    const result = gemini?.classifyFailure(response(429, { body: geminiRateLimitBody }))
+
+    expect(result?.rateLimit?.limited).toBe(true)
+    expect(result?.rateLimit?.retryAfterSeconds).toBe(31)
+    expect(result?.rateLimit?.resetSource).toBe("provider-reported")
+  })
+
+  test("a 429 with no RetryInfo reports an unknown reset rather than a guess", () => {
+    const result = gemini?.classifyFailure(
+      response(429, { body: { error: { code: 429, status: "RESOURCE_EXHAUSTED" } } }),
+    )
+
+    expect(result?.rateLimit?.limited).toBe(true)
+    expect(result?.rateLimit?.retryAfterSeconds).toBeUndefined()
+    expect(result?.rateLimit?.resetSource).toBe("unknown")
+  })
+
+  test("RetryInfo on a service failure is not read as this credential's window", () => {
+    const body = {
+      error: {
+        code: 503,
+        status: "UNAVAILABLE",
+        details: [{ "@type": "type.googleapis.com/google.rpc.RetryInfo", retryDelay: "8s" }],
+      },
+    }
+
+    expect(gemini?.classifyFailure(response(503, { body }))?.rateLimit).toBeNull()
   })
 })
 
