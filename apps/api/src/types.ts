@@ -1,5 +1,10 @@
 import type { Logger } from "./logging/logger"
-import type { AccountsService, ConnectService, RecheckService } from "./services/accounts"
+import type {
+  AccountsService,
+  ConnectService,
+  RecheckService,
+  TestNowService,
+} from "./services/accounts"
 import type { AdminAuthService } from "./services/admin-auth"
 import type { KeysService } from "./services/keys"
 import type { PoolsService } from "./services/pools"
@@ -42,6 +47,11 @@ export interface AdminServices {
   readonly settings: SettingsService
   /** The "Re-check now" button's server side, per account and for all of them. */
   readonly recheck: RecheckService
+  /**
+   * The "Test now" button's server side: one real, opt-in completion against one account, distinct
+   * from `recheck` because it actually spends a request (`services/accounts/test-now.ts`).
+   */
+  readonly testNow: TestNowService
   /** Connect and reconnect, both flows: the `claude` CLI's login, and the router's own PKCE one. */
   readonly connect: ConnectService
 }

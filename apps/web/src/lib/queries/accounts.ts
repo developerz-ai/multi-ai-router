@@ -11,6 +11,9 @@ import {
   type RecheckResult,
   recheckAccount,
   recheckAllAccounts,
+  type TestAccountInput,
+  type TestNowResult,
+  testAccount,
   type UpdateAccountInput,
   updateAccount,
 } from "../api/accounts"
@@ -110,6 +113,36 @@ export function useRecheckAllAccounts() {
       }
       await invalidateAccountReaders(client)
     },
+  }))
+}
+
+/**
+ * "Test now": one real, opt-in completion against one account. The result is cached under its own
+ * key, same pattern as `useRecheckAccount` — a row shows the last press regardless of which
+ * mutation wrote it last.
+ */
+export function useTestAccount() {
+  const client = useQueryClient()
+  return useMutation(() => ({
+    mutationFn: (input: TestAccountInput) => testAccount(input),
+    onSuccess: async (result: TestNowResult) => {
+      client.setQueryData(queryKeys.accounts.test(result.accountId), result)
+      await invalidateAccountReaders(client)
+    },
+  }))
+}
+
+/**
+ * The last "Test now" this console knows about for one account. Cache-only, same reasoning as
+ * `useLastRecheck`: `AccountView` carries no such field, so a cold load says nothing was tested in
+ * this session rather than inventing a result.
+ */
+export function useLastTest(id: Accessor<string>) {
+  return useQuery(() => ({
+    queryKey: queryKeys.accounts.test(id()),
+    queryFn: (): TestNowResult | null => null,
+    enabled: false,
+    staleTime: Number.POSITIVE_INFINITY,
   }))
 }
 

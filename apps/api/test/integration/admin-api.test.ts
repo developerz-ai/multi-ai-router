@@ -23,6 +23,7 @@ import {
   createConnectService,
   createOAuthConnectService,
   createRecheckService,
+  createTestNowService,
   OAUTH_CALLBACK_PATH,
 } from "../../src/services/accounts"
 import { createAuditRecorder } from "../../src/services/admin"
@@ -57,6 +58,8 @@ interface HarnessOptions {
   readonly pendingLoginMinutes?: number
   /** The OAuth token-endpoint stand-in the callback route's exchange calls. */
   readonly oauthFetch?: typeof fetch
+  /** The upstream "Test now" addresses. Defaults to a stub that fails any test hitting it by name. */
+  readonly testNowFetch?: typeof fetch
 }
 
 function harness(
@@ -134,6 +137,16 @@ function harness(
         audit,
         cooldownSeconds: 60,
         now,
+      }),
+      testNow: createTestNowService({
+        accounts: store.accounts,
+        cipher,
+        audit,
+        cooldownSeconds: 60,
+        timeoutMs: 1_000,
+        now,
+        fetch:
+          options.testNowFetch ?? (() => Promise.reject(new Error("no upstream in this harness"))),
       }),
     }),
   )
@@ -356,6 +369,59 @@ describe("accounts", () => {
       (await call(app, "GET", `${ADMIN_ACCOUNTS_BASE_PATH}/11111111-1111-4111-8111-111111111111`))
         .status,
     ).toBe(404)
+  })
+})
+
+describe("POST /:id/test — Test now", () => {
+  test("sends one real completion via the account's own driver and reports the answer", async () => {
+    const { app } = harness(undefined, {
+      testNowFetch: async () =>
+        new Response(JSON.stringify({ id: "msg_1", content: [] }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+    })
+    const account = await newAccount(app, { provider: "zai", credential: SECRET })
+
+    const result = await call(app, "POST", `${ADMIN_ACCOUNTS_BASE_PATH}/${account.id}/test`, {
+      model: "glm-4.7",
+    })
+
+    expect(result.status).toBe(200)
+    const body = result.body as { tested: boolean; outcome: string }
+    expect(body.tested).toBe(true)
+    expect(body.outcome).toBe("ok")
+  })
+
+  test("refuses a Claude subscription's test without confirmed, and never spends a request", async () => {
+    let called = false
+    const { app } = harness(undefined, {
+      testNowFetch: async () => {
+        called = true
+        return new Response(null, { status: 200 })
+      },
+    })
+    const account = await newAccount(app, {
+      label: "claude-sub",
+      provider: "anthropic-oauth",
+      credential: undefined,
+    })
+
+    const result = await call(app, "POST", `${ADMIN_ACCOUNTS_BASE_PATH}/${account.id}/test`, {
+      model: "claude-sonnet-4-5",
+    })
+
+    expect(result.status).toBe(400)
+    expect(called).toBe(false)
+  })
+
+  test("rejects a malformed body without touching the account", async () => {
+    const { app } = harness()
+    const account = await newAccount(app)
+
+    expect(
+      (await call(app, "POST", `${ADMIN_ACCOUNTS_BASE_PATH}/${account.id}/test`, {})).status,
+    ).toBe(400)
   })
 })
 

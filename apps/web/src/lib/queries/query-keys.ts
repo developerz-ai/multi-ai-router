@@ -24,6 +24,8 @@ export const queryKeys = {
     detail: (id: string) => ["accounts", "detail", id] as const,
     /** Last re-check per account. Written by the mutation, read by the row. */
     recheck: (id: string) => ["accounts", "recheck", id] as const,
+    /** Last "Test now" per account. Own key, own cache-only read — see `useLastTest`. */
+    test: (id: string) => ["accounts", "test", id] as const,
   },
 
   pools: {

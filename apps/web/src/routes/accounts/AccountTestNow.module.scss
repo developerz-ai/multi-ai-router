@@ -1,0 +1,32 @@
+.root {
+  display: grid;
+  gap: var(--space-2);
+  justify-items: start;
+  min-width: 12rem;
+}
+
+.modelInput {
+  width: 10rem;
+  padding: var(--space-1) var(--space-2);
+  font-size: var(--text-xs);
+}
+
+.note {
+  display: grid;
+  gap: var(--space-1);
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+  line-height: var(--line-snug);
+}
+
+.line {
+  display: block;
+}
+
+.line[data-outcome="failed"] {
+  color: var(--danger);
+}
+
+.line[data-outcome="ok"] {
+  color: var(--ok);
+}

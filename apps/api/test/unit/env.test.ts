@@ -32,6 +32,7 @@ describe("parseEnv", () => {
     expect(env.webRoot).toBeNull()
     expect(env.claudeConfigRoot).toBe("/data/claude")
     expect(env.accountRecheckCooldownSeconds).toBe(60)
+    expect(env.accountTestNowCooldownSeconds).toBe(120)
     expect(env.janitorIntervalMinutes).toBe(60)
     expect(env.retention).toEqual({
       sessionsHours: 24,
@@ -68,6 +69,7 @@ describe("parseEnv", () => {
       WEB_ROOT: "/srv/console",
       CLAUDE_CONFIG_ROOT: "/srv/claude",
       ACCOUNT_RECHECK_COOLDOWN_SECONDS: "30",
+      ACCOUNT_TEST_NOW_COOLDOWN_SECONDS: "45",
       RETENTION_SESSIONS_HOURS: "6",
       RETENTION_USAGE_DAYS: "7",
       RETENTION_AUDIT_DAYS: "30",
@@ -95,6 +97,7 @@ describe("parseEnv", () => {
     expect(env.webRoot).toBe("/srv/console")
     expect(env.claudeConfigRoot).toBe("/srv/claude")
     expect(env.accountRecheckCooldownSeconds).toBe(30)
+    expect(env.accountTestNowCooldownSeconds).toBe(45)
     expect(env.retention.sessionsHours).toBe(6)
     expect(env.janitorIntervalMinutes).toBe(15)
     expect(env.scheduler).toEqual({

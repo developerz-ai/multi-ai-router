@@ -465,6 +465,24 @@ computed itself** while capacity is available.
 Reset instants and utilization are also exposed on the API so an operator can alert on them
 externally; see [08-observability.md](08-observability.md).
 
+### "Test now"
+
+A second, distinct button, per account. **Re-check now sends nothing** — it re-queries a quota
+signal and clears breaker marks, so it can never answer "does this credential actually complete a
+request?" Test now answers exactly that: it addresses this one account directly, bypassing pool
+membership, key scope, and failover, and sends the smallest real completion the account's dialect
+can make.
+
+| Property | Behavior |
+|---|---|
+| What it does | One real, minimal completion (capped output) against this account's own credential, via the exact same attempt path a live request takes — same headers, same failure classification. |
+| Cost | Real, every time. An HTTP account spends a token or two of a real quota window; a Claude subscription spends a turn **and** spawns a `claude` subprocess. |
+| Confirmation | The Agent-SDK path refuses to run without an explicit `confirmed: true` on the request — the console shows a confirmation dialog naming the subprocess and the spend before it ever fires. Every other provider's press goes straight through. |
+| Throttled | Its own **server-side** per-account cooldown, longer than Re-check now's and never shared with it — a free button's presses must never spend a paid one's window, or the reverse. |
+| Model | The operator names it, same as a client would; the router keeps no model catalog for an upstream to guess from. |
+| Outcome | `ok` or `failed`, plus a short, safe message — a router-authored sentence, the account's own one-word reply, or a failure signal, never a raw upstream body or credential material. |
+| No fan-out | There is no all-accounts form. A button that spends a real request — and on the Agent-SDK path a subprocess — per account in a pool is not one this console offers. |
+
 ## Worked example
 
 Pool `default`, policy `priority-failover`. Four accounts — note that three are the *same

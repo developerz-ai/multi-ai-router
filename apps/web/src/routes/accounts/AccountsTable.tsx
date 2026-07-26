@@ -5,18 +5,22 @@ import { ResetIndicator } from "../../components/ResetIndicator"
 import { StatusDot } from "../../components/StatusDot"
 import { type Column, Table } from "../../components/Table"
 import { UsageCell } from "../../components/UsageCell"
+import type { TestAccountInput } from "../../lib/api/accounts"
 import type { AccountView, ProviderDescriptor } from "../../lib/api/types"
 import { formatDate } from "../../lib/format"
 import type { UsageRowSummary } from "../../lib/usage-index"
 import { usageFor } from "../../lib/usage-index"
 import { AccountRecheck } from "./AccountRecheck"
 import styles from "./AccountsTable.module.scss"
+import { AccountTestNow } from "./AccountTestNow"
 
 export interface AccountsTableProps {
   readonly accounts: readonly AccountView[]
   readonly nowMs: number
   /** The id currently being re-checked, if any. */
   readonly recheckingId: string | null
+  /** The id currently being tested, if any. */
+  readonly testingId: string | null
   /**
    * This account's provider as `GET /providers` describes it — which login it takes, and whether it
    * needs a credential at all. Asked of the descriptor so no provider fact is restated here.
@@ -28,6 +32,7 @@ export interface AccountsTableProps {
   readonly usageLoading: boolean
   readonly usageWindowLabel: string
   readonly onRecheck: (id: string) => void
+  readonly onTest: (input: TestAccountInput) => void
   readonly onConnect: (account: AccountView) => void
   readonly onDisable: (account: AccountView) => void
   readonly onEnable: (account: AccountView) => void
@@ -130,6 +135,19 @@ export function AccountsTable(props: AccountsTableProps) {
           lastCheckedAt={account.availability?.lastCheckedAt ?? null}
           nowMs={props.nowMs}
           onRecheck={props.onRecheck}
+        />
+      ),
+    },
+    {
+      id: "test",
+      header: "Test",
+      cell: (account) => (
+        <AccountTestNow
+          accountId={account.id}
+          busy={props.testingId === account.id}
+          nowMs={props.nowMs}
+          onTest={props.onTest}
+          transport={props.providerFor(account)?.transport}
         />
       ),
     },

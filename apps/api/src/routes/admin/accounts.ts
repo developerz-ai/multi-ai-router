@@ -7,6 +7,8 @@ import {
   completeConnectBody,
   createAccountBody,
   type RecheckService,
+  type TestNowService,
+  testNowBody,
   updateAccountBody,
 } from "../../services/accounts"
 import { readJsonBody, validate, validateId } from "../../services/admin"
@@ -26,6 +28,11 @@ import { render } from "./render"
  *
  * `POST /recheck` and `POST /:id/recheck` are the operator's "Re-check now" — the
  * all-accounts form is first so it cannot be shadowed by the `/:id` pattern.
+ *
+ * `POST /:id/test` is the second, distinct button: "Test now" sends one real, opt-in completion
+ * against this one account rather than clearing breaker marks. No all-accounts form exists for it
+ * on purpose — a fan-out button that spends a real request per account, and on the Agent-SDK path
+ * a subprocess turn per account, is not a button this console offers (`services/accounts/test-now.ts`).
  *
  * **Connect is two calls with an authorization in between.** `POST /:id/connect`
  * answers with an authorization URL — the `claude` CLI's own for a Claude
@@ -49,6 +56,7 @@ export const ADMIN_ACCOUNTS_BASE_PATH = "/api/admin/accounts"
 export interface AdminAccountRoutesDeps {
   readonly service: AccountsService
   readonly recheck: RecheckService
+  readonly testNow: TestNowService
   readonly connect: ConnectService
   /** `adminAuth(adminAuthService)`. Required, so no mount can forget the guard. */
   readonly guard: MiddlewareHandler<AdminAuthEnv>
@@ -97,6 +105,14 @@ export function adminAccountRoutes(deps: AdminAccountRoutesDeps): Hono<AdminAuth
     const id = validateId(c.req.param("id"))
     if (!id.ok) return render(c, id)
     return render(c, await deps.recheck.recheck(id.value))
+  })
+
+  routes.post("/:id/test", async (c) => {
+    const id = validateId(c.req.param("id"))
+    if (!id.ok) return render(c, id)
+    const body = validate(testNowBody, await readJsonBody(c.req.raw))
+    if (!body.ok) return render(c, body)
+    return render(c, await deps.testNow.test(id.value, body.value))
   })
 
   // Same service call as `/:id/connect`; the mode is only what the operator called it.

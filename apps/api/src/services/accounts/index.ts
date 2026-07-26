@@ -77,15 +77,19 @@ export type {
   AccountListQuery,
   CompleteConnectBody,
   CreateAccountBody,
+  TestNowBody,
   UpdateAccountBody,
 } from "./schemas"
 export {
   accountListQuery,
   completeConnectBody,
   createAccountBody,
+  testNowBody,
   updateAccountBody,
 } from "./schemas"
 export type { AccountsService, AccountsServiceDeps } from "./service"
 export { createAccountsService } from "./service"
+export type { TestNowResult, TestNowService, TestNowServiceDeps } from "./test-now"
+export { createTestNowService } from "./test-now"
 export type { AccountView } from "./view"
 export { toAccountView } from "./view"

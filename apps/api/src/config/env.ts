@@ -219,6 +219,13 @@ export interface Env {
    */
   readonly metricsToken: string | null
   readonly accountRecheckCooldownSeconds: number
+  /**
+   * "Test now"'s own cooldown — deliberately not shared with `accountRecheckCooldownSeconds`. A
+   * re-check is free and clears breaker marks; a test sends a real, billed request (an Agent-SDK
+   * one spawns a subprocess and spends a turn), so pressing one must never consume the other's
+   * window (`services/accounts/test-now.ts`).
+   */
+  readonly accountTestNowCooldownSeconds: number
   readonly retention: RetentionConfig
   readonly janitorIntervalMinutes: number
   readonly adminAuth: AdminAuthConfig
@@ -292,6 +299,7 @@ const envSchema = z
     CLAUDE_SDK_MAX_CONCURRENCY_PER_ACCOUNT: atLeastOne.optional(),
     METRICS_TOKEN: nonEmpty.optional(),
     ACCOUNT_RECHECK_COOLDOWN_SECONDS: wholeNumber.optional(),
+    ACCOUNT_TEST_NOW_COOLDOWN_SECONDS: wholeNumber.optional(),
     RETENTION_SESSIONS_HOURS: wholeNumber.optional(),
     RETENTION_USAGE_DAYS: wholeNumber.optional(),
     RETENTION_AUDIT_DAYS: wholeNumber.optional(),
@@ -366,6 +374,9 @@ const envSchema = z
       claudeSdkMaxConcurrencyPerAccount: raw.CLAUDE_SDK_MAX_CONCURRENCY_PER_ACCOUNT ?? 4,
       metricsToken: raw.METRICS_TOKEN ?? null,
       accountRecheckCooldownSeconds: raw.ACCOUNT_RECHECK_COOLDOWN_SECONDS ?? 60,
+      // Longer than the re-check default on purpose: this one costs money (and, on the Agent-SDK
+      // path, a subprocess), so the button that spends it should not be as cheap to lean on.
+      accountTestNowCooldownSeconds: raw.ACCOUNT_TEST_NOW_COOLDOWN_SECONDS ?? 120,
       retention: {
         sessionsHours: raw.RETENTION_SESSIONS_HOURS ?? 24,
         usageDays: raw.RETENTION_USAGE_DAYS ?? 90,

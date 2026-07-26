@@ -92,3 +92,21 @@ export type AccountListQuery = z.infer<typeof accountListQuery>
 export const completeConnectBody = z.object({ pasted: z.string().trim().min(1).max(4096) }).strict()
 
 export type CompleteConnectBody = z.infer<typeof completeConnectBody>
+
+/**
+ * "Test now"'s body. The router has no model catalog for an upstream — discovering one is itself a
+ * live request — so the operator names the model the same way a client would, and the account's own
+ * alias map still applies on top of it (`test-now.ts`).
+ *
+ * `confirmed` gates the Agent-SDK path only: a subscription test spawns a real subprocess and bills
+ * a turn, so the console must send it back deliberately, never as a request an operator only
+ * *thought* was free. Absent (or `false`) is the safe default everywhere else, where it is ignored.
+ */
+export const testNowBody = z
+  .object({
+    model: z.string().trim().min(1).max(200),
+    confirmed: z.boolean().optional(),
+  })
+  .strict()
+
+export type TestNowBody = z.infer<typeof testNowBody>

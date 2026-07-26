@@ -150,6 +150,7 @@ function mountAdmin(app: Hono<AppEnv>, admin: AdminServices, options: AdminMount
       guard,
       service: admin.accounts,
       recheck: admin.recheck,
+      testNow: admin.testNow,
       connect: admin.connect,
     }),
   )

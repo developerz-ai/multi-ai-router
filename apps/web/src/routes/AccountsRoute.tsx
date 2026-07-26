@@ -20,6 +20,7 @@ import {
   useDisableAccount,
   useRecheckAccount,
   useRecheckAllAccounts,
+  useTestAccount,
   useUpdateAccount,
 } from "../lib/queries/accounts"
 import { useProviders } from "../lib/queries/providers"
@@ -75,6 +76,7 @@ export default function AccountsRoute() {
   const remove = useDeleteAccount()
   const recheck = useRecheckAccount()
   const recheckAll = useRecheckAllAccounts()
+  const test = useTestAccount()
 
   const closeForm = () => {
     create.reset()
@@ -174,8 +176,10 @@ export default function AccountsRoute() {
               onDisable={(account) => disable.mutate(account.id)}
               onEnable={(account) => update.mutate({ id: account.id, patch: { status: "active" } })}
               onRecheck={(id) => recheck.mutate(id)}
+              onTest={(input) => test.mutate(input)}
               providerFor={providerFor}
               recheckingId={recheck.isPending ? (recheck.variables ?? null) : null}
+              testingId={test.isPending ? (test.variables?.id ?? null) : null}
               {...usage()}
             />
           </Show>
