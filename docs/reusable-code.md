@@ -126,7 +126,7 @@ Each is a Zod schema **and** its `z.infer` type under one name. These are the si
 | `requestLogger(logger)` | `middleware/logger.ts` | Already mounted. Read the request-scoped logger via `c.get("log")` — never build a second one |
 | `errorHandler(logger)`, `notFoundHandler()` | `middleware/errorHandler.ts` | The only place a throw becomes a response |
 | `createLogger({ level, write?, now? })`, `Logger`, `LogFields` | `logging/logger.ts` | Any logging. `child(fields)` for scoped context. No `console.log`, ever |
-| `redact(fields)`, `redactValue(s)`, `isSecretFieldName(name)`, `REDACTED` | `logging/redact.ts` | Anywhere a value could carry credential material. The logger already applies it |
+| `redact(fields)`, `redactValue(s)`, `isSecretFieldName(name)`, `REDACTED` | `logging/redact.ts` | Anywhere a value could carry credential material. The logger already applies it. Two lists: secret field names/markers, and self-identifying value shapes (router keys, `sk-`, `Bearer`, JWTs, URL userinfo, query-string keys, `AIza`/`gh*_`/`xai-`/`gsk_`). A new provider credential shape belongs here, not in a second scrubber |
 | `toErrorResponse(error, dialect)`, `notFoundResponse(dialect)`, `renderErrorBody(...)`, `dialectForPath(path)` | `errors/render.ts` | Rendering a failure. Pure — no Hono, no I/O. The dialect shapes the **body**, never the status |
 | `parseEnv(raw)`, `Env`, `EnvValidationError`, `decodeEncryptionKey(value)`, `LOG_LEVELS` | `config/env.ts` | Reading configuration. Pure over a raw map; `main.ts` owns the one `process.env` read |
 | `AppEnv` | `types.ts` | Typing a Hono route or middleware. Transport-only — it never leaves that layer |

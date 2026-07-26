@@ -17,6 +17,10 @@ const SECRET_FIELD_NAMES = new Set([
   "x-api-key",
   "api-key",
   "apikey",
+  // Google's API-key header, and the quota project it is billed against. The project id is not a
+  // credential, but it names a tenant, and a log line is the wrong place to learn one.
+  "x-goog-api-key",
+  "x-goog-user-project",
   "code",
   "code_verifier",
   "state",
@@ -26,7 +30,13 @@ const SECRET_FIELD_NAMES = new Set([
   "completion",
 ])
 
-/** Substrings that make a field name secret wherever they appear. */
+/**
+ * Substrings that make a field name secret wherever they appear.
+ *
+ * `token` is doing more work than it looks: it is what covers `access_token`, `refresh_token`,
+ * `id_token`, `accessToken`, and `anthropic-auth-token` — every OAuth token wire name this router
+ * handles — so none of them needs its own entry above, and `redact.test.ts` pins that.
+ */
 const SECRET_FIELD_MARKERS = [
   "password",
   "secret",
@@ -38,11 +48,47 @@ const SECRET_FIELD_MARKERS = [
   "verifier",
 ]
 
-/** Values that are self-identifying secrets even under an innocent field name. */
-const SECRET_VALUE_PATTERNS = [
-  new RegExp(`${ROUTER_KEY_PREFIX}[A-Za-z0-9_-]+`, "g"),
-  /\bsk-[A-Za-z0-9_-]{8,}/g,
-  /\bBearer\s+[A-Za-z0-9._~+/-]{8,}=*/gi,
+type ValuePattern = { readonly pattern: RegExp; readonly replacement: string }
+
+/**
+ * Values that are self-identifying secrets even under an innocent field name — the backstop for a
+ * credential an upstream quoted back at us, or one a caller stuffed into a field called `note`.
+ *
+ * Two shapes carry a diagnostic half worth keeping: a connection string's host and a URL's path say
+ * *what* the router was talking to, and only the credential inside them is secret. Those entries
+ * keep a capture group; every other entry replaces the whole match. A pattern that is unsure
+ * redacts — a scrubbed log line costs a debugging session, a leaked one costs a credential.
+ */
+const SECRET_VALUE_PATTERNS: readonly ValuePattern[] = [
+  { pattern: new RegExp(`${ROUTER_KEY_PREFIX}[A-Za-z0-9_-]+`, "g"), replacement: REDACTED },
+  // OpenAI and Anthropic API keys (`sk-…`, `sk-ant-…`, `sk-proj-…`).
+  { pattern: /\bsk-[A-Za-z0-9_-]{8,}/g, replacement: REDACTED },
+  { pattern: /\bBearer\s+[A-Za-z0-9._~+/-]{8,}=*/gi, replacement: REDACTED },
+  // Any JWT — three base64url segments whose header starts `{"`. ChatGPT/Codex access tokens are
+  // JWTs, so without this they travel unscrubbed under any field name the `token` marker misses.
+  { pattern: /\beyJ[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]*/g, replacement: REDACTED },
+  // URL userinfo — `postgres://user:pass@host/db` is how `DATABASE_URL` reaches a boot error.
+  { pattern: /\b([a-z][a-z0-9+.-]*:)\/\/[^\s/:@]+:[^\s/@]+@/gi, replacement: `$1//${REDACTED}@` },
+  // A credential passed in a query string, keeping the endpoint and the parameter that carried it.
+  // `code`/`code_verifier`/`state` are here because a whole OAuth callback URL logged as one string
+  // is not covered by the field-name list — nothing in this router reads a query parameter by those
+  // names except that callback, so scrubbing them costs no diagnostic.
+  {
+    pattern:
+      /([?&](?:[a-z0-9_-]*(?:key|token|secret|password)|code(?:[-_]?verifier)?|state)=)[^&\s#"']+/gi,
+    replacement: `$1${REDACTED}`,
+  },
+  // Google API keys: `AIza` + 35 base64url characters.
+  { pattern: /\bAIza[0-9A-Za-z_-]{35}/g, replacement: REDACTED },
+  // GitHub — classic tokens (`ghp_`, `gho_`, `ghu_`, `ghs_`, `ghr_`) and fine-grained PATs.
+  {
+    pattern: /\b(?:gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,})/g,
+    replacement: REDACTED,
+  },
+  // xAI.
+  { pattern: /\bxai-[A-Za-z0-9_-]{16,}/g, replacement: REDACTED },
+  // Groq.
+  { pattern: /\bgsk_[A-Za-z0-9]{20,}/g, replacement: REDACTED },
 ]
 
 const MAX_DEPTH = 4
@@ -56,8 +102,8 @@ export function isSecretFieldName(name: string): boolean {
 /** Scrubs secret-looking substrings out of a value that is otherwise safe to log. */
 export function redactValue(value: string): string {
   let scrubbed = value
-  for (const pattern of SECRET_VALUE_PATTERNS) {
-    scrubbed = scrubbed.replace(pattern, REDACTED)
+  for (const { pattern, replacement } of SECRET_VALUE_PATTERNS) {
+    scrubbed = scrubbed.replace(pattern, replacement)
   }
   return scrubbed
 }

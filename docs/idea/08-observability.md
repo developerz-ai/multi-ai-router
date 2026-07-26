@@ -310,9 +310,11 @@ JSON lines to stdout, one object per event. The container logs; shipping them is
 | `trace` | **DEFERRED** |
 
 **Never logged, at any level:** prompts, completions, request or response bodies, router key values,
-upstream credentials or tokens, OAuth `code` / `state` / `code_verifier`, cookies, `Authorization`
-and `x-api-key` headers. Redaction is default-on and is a tested unit — see
-[07-security.md](07-security.md).
+upstream credentials or tokens, OAuth `code` / `state` / `code_verifier`, cookies, `Authorization`,
+`x-api-key`, and `x-goog-api-key` headers. The redactor also catches a credential that arrives under
+an honest-looking field name — JWTs, `postgres://user:pass@host` connection strings, a key in a
+query string, and the vendor key shapes (`sk-`, `AIza`, `ghp_`, `xai-`, `gsk_`). Redaction is
+default-on and is a tested unit — see [07-security.md](07-security.md).
 
 ## Audit events
 
