@@ -6,6 +6,7 @@ import {
   type BreakerOptions,
   type BreakerState,
   HEALTHY,
+  phase,
   recordFailure,
   recordSuccess,
 } from "../routing"
@@ -61,7 +62,10 @@ export interface HealthStore {
     now: Date,
     options?: BreakerOptions,
   ): void
-  /** Folds one response's rate-limit reading in. A reported limit cools the account down. */
+  /**
+   * Folds one response's rate-limit reading in. A reported limit cools the account down — unless
+   * the account already holds a verdict no clock undoes, which this never overwrites.
+   */
   applyRateLimit(accountId: string, signal: RateLimitSignal | null, now: Date): void
   /** Drops every mark for an account — the operator's "Re-check now", and account deletion. */
   reset(accountId: string): void
@@ -101,15 +105,28 @@ export function createHealthStore(): HealthStore {
 
     applyRateLimit(accountId, signal, now) {
       if (signal === null) return
+      const before = read(accountId).breaker
+      // The reading itself is a fact and is kept either way — the console renders these windows,
+      // and an operator inspecting a dead account still deserves to see what its limiter said.
       write(accountId, { limiterWindows: signal.windows, lastSignalAt: now })
       if (!signal.limited) return
+
+      // A terminal verdict outranks a header. `exhausted` and `needs_reauth` mean a human must act;
+      // a cooldown means a clock will fix it, and the two are never conflated (CLAUDE.md
+      // non-negotiable 7). Providers routinely ship `x-ratelimit-remaining-*: 0` *alongside* the
+      // `402` that drained the balance — this is a header riding a response, not a verdict about
+      // it — so folding it in would rewrite "top this account up" as "retry at 14:32", put a dead
+      // balance back in the rotation on a timer, and answer the client `429 + Retry-After` for it.
+      // `blocked` is the breaker's own name for "no timer will change this", so the two definitions
+      // cannot drift apart.
+      if (phase(before, now) === "blocked") return
 
       // A limited signal on an otherwise fine response is still the account saying "not now".
       // Routing it through the breaker's own transition keeps one implementation of the
       // never-shorten rule and of provider-reported-reset preference.
       write(accountId, {
         breaker: recordFailure(
-          read(accountId).breaker,
+          before,
           {
             kind: "rate-limited",
             resetsAt: signal.resetsAt,

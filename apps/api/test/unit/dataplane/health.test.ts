@@ -68,6 +68,90 @@ describe("health store", () => {
     expect(store.stateOf("a").breaker.status).toBe("cooling_down")
   })
 
+  test("a limited header never downgrades exhausted — a dead balance is not a cooldown", () => {
+    const store = createHealthStore()
+    // The common shape: a 402 whose response still carries `x-ratelimit-remaining-requests: 0`.
+    store.recordFailure("a", { kind: "credits-exhausted", message: "402" }, NOW)
+    store.applyRateLimit(
+      "a",
+      signal({
+        limited: true,
+        resetsAt: new Date(NOW.getTime() + 60_000),
+        resetSource: "provider-reported",
+      }),
+      NOW,
+    )
+
+    const state = store.stateOf("a")
+    expect(state.breaker.status).toBe("exhausted")
+    expect(state.breaker.cooldownUntil).toBeUndefined()
+  })
+
+  test("a limited header never downgrades needs_reauth or disabled", () => {
+    const store = createHealthStore()
+    store.recordFailure("oauth", { kind: "auth", message: "401" }, NOW, { authKind: "oauth" })
+    store.recordFailure("key", { kind: "auth", message: "401" }, NOW, { authKind: "api-key" })
+
+    const limited = signal({
+      limited: true,
+      retryAfterSeconds: 30,
+      resetSource: "provider-reported",
+    })
+    store.applyRateLimit("oauth", limited, NOW)
+    store.applyRateLimit("key", limited, NOW)
+
+    expect(store.stateOf("oauth").breaker.status).toBe("needs_reauth")
+    expect(store.stateOf("oauth").breaker.cooldownUntil).toBeUndefined()
+    expect(store.stateOf("key").breaker.status).toBe("disabled")
+    expect(store.stateOf("key").breaker.cooldownUntil).toBeUndefined()
+  })
+
+  test("still records the reading of an exhausted account — refused, not discarded", () => {
+    const store = createHealthStore()
+    store.recordFailure("a", { kind: "credits-exhausted", message: "402" }, NOW)
+    store.applyRateLimit(
+      "a",
+      signal({
+        limited: true,
+        windows: [
+          {
+            limiter: "requests",
+            limit: 100,
+            remaining: 0,
+            utilization: 1,
+            utilizationSource: "continuous",
+            resetSource: "unknown",
+          },
+        ],
+      }),
+      NOW,
+    )
+
+    const state = store.stateOf("a")
+    expect(state.limiterWindows[0]?.remaining).toBe(0)
+    expect(state.lastSignalAt).toEqual(NOW)
+    expect(state.breaker.status).toBe("exhausted")
+  })
+
+  test("a limited header still extends an account that is only cooling down", () => {
+    const store = createHealthStore()
+    const near = new Date(NOW.getTime() + 10_000)
+    const far = new Date(NOW.getTime() + 90_000)
+
+    store.recordFailure(
+      "a",
+      { kind: "rate-limited", resetsAt: near, resetSource: "provider-reported", message: "429" },
+      NOW,
+    )
+    store.applyRateLimit(
+      "a",
+      signal({ limited: true, resetsAt: far, resetSource: "provider-reported" }),
+      NOW,
+    )
+
+    expect(store.stateOf("a").breaker.cooldownUntil).toEqual(far)
+  })
+
   test("keeps the limiter windows the provider reported, under its own names", () => {
     const store = createHealthStore()
     store.applyRateLimit(

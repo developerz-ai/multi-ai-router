@@ -436,6 +436,82 @@ describe("failover", () => {
     expect(outOfCredits.status).toBe(402)
   })
 
+  test("a 402 carrying spent rate-limit headers stays exhausted — no timer revives it", async () => {
+    // The common shape, and the one that used to lose the distinction: the drained balance answers
+    // `402`, and the *same* response still carries the limiter headers every response carries, with
+    // the window spent. Folding those in downgraded the account to `cooling_down` and handed the
+    // client `429 + Retry-After` for a balance no clock refills (CLAUDE.md non-negotiable 7).
+    const { app, health, upstream, usage } = harness({
+      responses: [
+        () =>
+          jsonResponse(
+            402,
+            {
+              type: "error",
+              error: { type: "billing_error", message: "credit balance is too low" },
+            },
+            {
+              "x-ratelimit-limit-requests": "1000",
+              "x-ratelimit-remaining-requests": "0",
+              "x-ratelimit-reset-requests": "60s",
+            },
+          ),
+        () => jsonResponse(200, {}),
+      ],
+    })
+
+    const first = await app.request("/v1/messages", post(MESSAGE, bearer()))
+    await settle()
+
+    expect(first.status).toBe(402)
+    expect(health.stateOf("acct-1").breaker.status).toBe("exhausted")
+    // `exhausted` carries no reset **by definition** — that is what makes it un-retryable.
+    expect(health.stateOf("acct-1").breaker.cooldownUntil).toBeUndefined()
+    // Refused, not discarded: the operator still sees what the limiter said.
+    expect(health.stateOf("acct-1").limiterWindows[0]).toMatchObject({
+      limiter: "requests",
+      remaining: 0,
+    })
+
+    const second = await app.request("/v1/messages", post(MESSAGE, bearer()))
+    await settle()
+
+    // 402 again, naming the top-up — never a 429 with a countdown, and never a second upstream call.
+    expect(second.status).toBe(402)
+    expect(second.headers.get("Retry-After")).toBeNull()
+    expect(upstream.calls).toHaveLength(1)
+    expect(usage.rows.map((row) => row.outcome)).toEqual(["credits_exhausted", "credits_exhausted"])
+  })
+
+  test("a 401 carrying spent rate-limit headers still needs a human, not a timer", async () => {
+    const { app, health, upstream } = harness({
+      responses: [
+        () =>
+          jsonResponse(
+            401,
+            { type: "error", error: { type: "authentication_error", message: "invalid key" } },
+            { "x-ratelimit-remaining-requests": "0", "x-ratelimit-reset-requests": "60s" },
+          ),
+        () => jsonResponse(200, {}),
+      ],
+    })
+
+    await app.request("/v1/messages", post(MESSAGE, bearer()))
+    await settle()
+
+    // An `api-key` account whose key was rejected needs the operator to change it: `disabled`, with
+    // no cooldown a header could have written over it.
+    expect(health.stateOf("acct-1").breaker.status).toBe("disabled")
+    expect(health.stateOf("acct-1").breaker.cooldownUntil).toBeUndefined()
+
+    const second = await app.request("/v1/messages", post(MESSAGE, bearer()))
+    await settle()
+
+    expect(second.status).toBe(503)
+    expect(second.headers.get("Retry-After")).toBeNull()
+    expect(upstream.calls).toHaveLength(1)
+  })
+
   test("Gemini's throttle names billing and is still a cooldown, timed off the body", async () => {
     // The trap this driver exists for: `RESOURCE_EXHAUSTED` covers a per-minute limit *and* a spent
     // free-tier day, and its message says "check your plan and billing details". Read the word and a

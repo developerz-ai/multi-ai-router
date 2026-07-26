@@ -358,7 +358,7 @@ earlier one never shortens it, so two concurrent failures cannot un-learn the lo
 
 | Signal | Source |
 |---|---|
-| Rate-limit headers and reset instants | `parseRateLimit` on every upstream response |
+| Rate-limit headers and reset instants | `parseRateLimit` on every upstream response. A *reading*, not a verdict — see the precedence rule below |
 | Subscription quota windows and utilization | Two kinds, never conflated. **Threshold-triggered**: the SDK's `rate_limit_event` events for Claude subs — fires only near the limit, so it is what trips the breaker but cannot rank headroom. **Continuous**: provider usage endpoints (Anthropic's OAuth usage endpoint for Claude subs, equivalents elsewhere) — a real percentage at any time, and the only thing `quota-aware` can rank on. Short-TTL cached, deduped per account |
 | Consecutive failure streak | attempt outcomes |
 | Auth failures | `401`/`403` → `needs_reauth` / `disabled`, not a cooldown |
@@ -383,6 +383,7 @@ Rules:
 | Rule | Statement |
 |---|---|
 | **Detect, don't guess** | The classification comes from the upstream signal — status code plus the provider's error body. This is a **driver-level** concern ([03-providers.md](03-providers.md)), because every provider words it differently. The router records *which* signal produced the classification, so a misclassification is debuggable. |
+| **A verdict outranks a header** | Limiter headers ride *every* response, including the `402` that says the balance is dead — a drained account very often answers `402` **and** `x-ratelimit-remaining-requests: 0` in the same breath. The classified failure is the verdict and lands first; the parsed headers are a reading and land second, where they may extend a cooldown but **never** overwrite `exhausted`, `needs_reauth`, or `disabled`. Without this, a dead balance becomes a countdown, gets retried on a timer, and the client is told `429 + Retry-After` for something no clock fixes. The reading is still recorded — refused, not discarded — so the console can show what the limiter said. |
 | **Remove immediately** | An `exhausted` account leaves every candidate set at once, for every key and every pool. |
 | **Surface loudly** | `exhausted` gets a **red banner on the dashboard**, not a status buried on a detail page. This is the failure an operator most needs to see, because it silently shrinks the pool while everything still appears to work. |
 | **Warn before it dies** | Where a provider exposes a balance at all, a low-balance threshold flags the account *before* it hits zero. |

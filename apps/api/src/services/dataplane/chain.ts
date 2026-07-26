@@ -124,6 +124,11 @@ export async function runChain(ctx: ChainContext): Promise<Response> {
       return relaySuccess(ctx, servable, decision.attempt, outcome.response, at)
     }
 
+    // Order is load-bearing. The classified failure is this response's *verdict* and lands first;
+    // the parsed headers are a reading that rode along with it and land second, where
+    // `applyRateLimit` can see the verdict already in place and decline to overwrite a terminal one.
+    // Reversed, a `402` carrying `x-ratelimit-remaining-requests: 0` would cool the account down
+    // before anything knew its balance was dead.
     runtime.health.recordFailure(
       accountId,
       outcome.failure,
