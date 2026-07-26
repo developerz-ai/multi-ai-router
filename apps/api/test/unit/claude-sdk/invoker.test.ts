@@ -395,6 +395,58 @@ describe("the subprocess slot", () => {
     await expect(queued).rejects.toMatchObject({ name: "TimeoutError" })
     expect(spy.options).toHaveLength(1)
   })
+
+  test("two accounts invoked concurrently never share a directory or a slot", async () => {
+    const concurrency = createSdkConcurrency({ global: 4, perAccount: 2 })
+    const launchedCwd: Record<string, string> = {}
+    let releaseA: (() => void) | undefined
+    let releaseB: (() => void) | undefined
+
+    const invoke = createSdkInvoker({
+      concurrency,
+      resolveCli: () => CLI,
+      runQuery: ({ options }) => {
+        const cwd = options.cwd as string
+        const accountId = cwd.endsWith("/acct-a") ? "acct-a" : "acct-b"
+        launchedCwd[accountId] = cwd
+        return {
+          async *[Symbol.asyncIterator]() {
+            // Stalls until the test releases it, so both calls are provably in flight together —
+            // not merely serialized by an event loop that never actually overlapped them.
+            await new Promise<void>((resolve) => {
+              if (accountId === "acct-a") releaseA = resolve
+              else releaseB = resolve
+            })
+            for (const event of ONE_TURN) yield event
+          },
+        }
+      },
+    })
+
+    const a = invoke(invocation({ accountId: "acct-a", configDir: "/data/accounts/acct-a" }))
+    const b = invoke(invocation({ accountId: "acct-b", configDir: "/data/accounts/acct-b" }))
+    await Promise.resolve()
+    await Promise.resolve()
+    await Promise.resolve()
+
+    // Overlap is real: both accounts hold their own slot and were launched in their own directory
+    // at the same time, not one after the other.
+    expect(concurrency.inFlightFor("acct-a")).toBe(1)
+    expect(concurrency.inFlightFor("acct-b")).toBe(1)
+    expect(concurrency.inFlight).toBe(2)
+    expect(launchedCwd["acct-a"]).toBe("/data/accounts/acct-a")
+    expect(launchedCwd["acct-b"]).toBe("/data/accounts/acct-b")
+
+    releaseA?.()
+    releaseB?.()
+    const [resA, resB] = await Promise.all([a, b])
+    await resA.text()
+    await resB.text()
+
+    expect(concurrency.inFlight).toBe(0)
+    expect(concurrency.inFlightFor("acct-a")).toBe(0)
+    expect(concurrency.inFlightFor("acct-b")).toBe(0)
+  })
 })
 
 describe("a router with no usable claude binary", () => {

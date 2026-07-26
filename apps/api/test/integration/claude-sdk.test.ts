@@ -1,19 +1,33 @@
 import { describe, expect, test } from "bun:test"
+import { createApp } from "../../src/app"
+import { createLogger } from "../../src/logging/logger"
+import { createMetrics } from "../../src/observability"
 import {
   type CliResolution,
   createSdkConcurrency,
   createSdkInvoker,
   createSdkQuotaStore,
 } from "../../src/providers"
+import {
+  createDispatcher,
+  createHealthStore,
+  createRateLimiter,
+  createRouterKeyVerifier,
+} from "../../src/services/dataplane"
 import { sdkQueryStream, sdkTurn } from "../unit/claude-sdk/fixtures"
 import {
   account,
+  apiKeyRow,
+  catalog,
+  clock,
   jsonResponse,
+  keyRepository,
   NOW,
   slowStream,
   subscriptionAccount,
+  usageSink,
 } from "../unit/dataplane/fixtures"
-import { bearer, CRYPTOR, harness, post, settle } from "./harness"
+import { bearer, CRYPTOR, harness, KEY, post, settle } from "./harness"
 
 /**
  * The Agent-SDK transport end to end: `harness()` (`dataplane.test.ts:70-92`) extended with an
@@ -245,5 +259,125 @@ describe("a rate-limit event mid-stream", () => {
 
     expect(res.status).toBe(200)
     expect(health.stateOf("sub").breaker.status).toBe("active")
+  })
+})
+
+/**
+ * Every suite above answers through `harness()` (`./harness.ts`) — a purpose-built Hono instance
+ * that mounts `dataPlaneRoutes` directly, hand-assembling its own `createDispatcher` call. That is
+ * the right shape for asserting routing/translation/breaker properties in isolation, but it is a
+ * second, parallel implementation of the wiring `composition/index.ts` does for real: a different
+ * function builds the app, and a different call to `createDispatcher` passes a different, narrower
+ * set of options.
+ *
+ * That gap is exactly how the flagship feature shipped 503 on every request while every test in
+ * this repo stayed green (docs/idea/11-anthropic-agent-sdk.md's own postmortem, and Session 38's
+ * fix): `composition/index.ts` never called `createDispatcher` with an `invokeSdk` at all, and
+ * nothing here would have noticed, because nothing here calls `createApp` — the actual factory
+ * `main.ts` boots — or builds the dispatcher the way `createRuntime` does (`limiter`, `prices`,
+ * `translation`, `upstreamTimeoutMs` all present, not omitted).
+ *
+ * This suite closes that gap: it calls the real `createApp` (`src/app.ts`, `AppDeps.dataPlane`) and
+ * builds the dispatcher with the same shape `createRuntime` builds it with. Only the two seams that
+ * must never touch this host in a test are stood in for — `query()` and Postgres — exactly as
+ * `composition/index.ts`'s own doc comments name them as the injected exceptions.
+ */
+describe("a subscription request through the real composition root, not a hand-wired harness", () => {
+  function bootRealApp(invokeSdk: ReturnType<typeof invoker>) {
+    const accounts = [subscriptionAccount("sub-1")]
+    const testClock = clock()
+    const metrics = createMetrics({ now: testClock.now })
+    const store = catalog(accounts, [])
+    const health = createHealthStore()
+    const usage = usageSink()
+    const usageWithMetrics = {
+      record: (record: (typeof usage.rows)[number]) => {
+        usage.record(record)
+        metrics.observeUsage(record)
+      },
+    }
+
+    const verifier = createRouterKeyVerifier({
+      repository: keyRepository([apiKeyRow(KEY, CRYPTOR, { scope: "all" })]),
+      cipher: CRYPTOR,
+      loadScope: async () => ({ kind: "all" }),
+      now: testClock.now,
+    })
+
+    // The same options composition/index.ts's createDispatcher call carries — a limiter, a
+    // translation default, and an upstream timeout — none of which `./harness.ts` passes.
+    const dispatcher = createDispatcher({
+      catalog: store,
+      health,
+      cipher: CRYPTOR,
+      usage: usageWithMetrics,
+      limiter: createRateLimiter({ maxKeys: 16 }),
+      invokeSdk,
+      clock: testClock,
+      onRequest: (sample) => metrics.observeRequest(sample),
+      options: {
+        failover: { maxAttempts: 3 },
+        upstreamTimeoutMs: 30_000,
+        translation: { defaultMaxTokens: 4096 },
+      },
+    })
+
+    // `createApp` itself: the same factory `main.ts` calls with production deps. No `webRoot`, no
+    // `admin` — a data-plane-only boot, which is what a router with no console build still serves.
+    const app = createApp({
+      logger: createLogger({ level: "error", write: () => {} }),
+      probes: {
+        database: () => Promise.resolve(true),
+        accounts: () => Promise.resolve("ok"),
+        claudeCli: () => Promise.resolve("platform_package"),
+      },
+      dataPlane: { verifier, dispatcher, catalog: store, health },
+    })
+
+    return { app, usage, health }
+  }
+
+  test("answers 200, not the 503 a missing invokeSdk wire would have produced", async () => {
+    const { app, usage } = bootRealApp(invoker())
+
+    const res = await app.request("/v1/messages", post(streamMessage(false), bearer()))
+    const body = (await res.json()) as { type?: string; content?: unknown[] }
+    await settle()
+
+    expect(res.status).toBe(200)
+    expect(body.type).toBe("message")
+    expect(usage.rows).toHaveLength(1)
+    expect(usage.rows[0]).toMatchObject({ egressMode: "agent-sdk", outcome: "success" })
+  })
+
+  test("streams through the real app exactly as it does through the hand-wired one", async () => {
+    const { app } = bootRealApp(invoker())
+
+    const res = await app.request("/v1/messages", post(streamMessage(true), bearer()))
+    const text = await res.text()
+
+    expect(res.status).toBe(200)
+    expect(res.headers.get("content-type")).toBe("text/event-stream; charset=utf-8")
+    expect(frameNames(text)).toEqual([
+      "message_start",
+      "content_block_start",
+      "content_block_delta",
+      "content_block_stop",
+      "message_delta",
+      "message_stop",
+    ])
+  })
+
+  test("an unauthenticated request never reaches the SDK invoker at all", async () => {
+    const attempts: string[] = []
+    const { app } = bootRealApp(async (invocation) => {
+      attempts.push(invocation.accountId)
+      throw new Error("must never be called")
+    })
+
+    const res = await app.request("/v1/messages", post(streamMessage(false)))
+
+    expect(res.status).toBe(401)
+    expect(attempts).toEqual([])
   })
 })
