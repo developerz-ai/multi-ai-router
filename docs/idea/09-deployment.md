@@ -194,12 +194,19 @@ Two operational consequences:
 ## Reverse proxy
 
 Run HTTPS in front. Cookies are always `Secure`, so the admin UI will not work over plain HTTP
-from anything but `localhost`.
+from anything but `localhost`. Every example below disables response buffering explicitly — the
+router streams SSE bytes as they arrive (non-negotiable: never buffer a stream), and a proxy that
+buffers by default turns a live completion into a multi-second stall before the first token
+appears, or a hard cutoff on a long-running one.
 
 ```caddyfile
-# Caddyfile — TLS is automatic
+# Caddyfile — TLS is automatic. Caddy does not buffer reverse-proxied responses by
+# default, so no extra streaming directive is needed, but keep the timeouts open —
+# a completion can legitimately run for the full UPSTREAM_TIMEOUT_MS.
 router.example.com {
-    reverse_proxy localhost:8080
+    reverse_proxy localhost:8080 {
+        flush_interval -1   # stream bytes immediately, never batch
+    }
 }
 ```
 
@@ -225,8 +232,42 @@ server {
 }
 ```
 
+```yaml
+# Traefik — dynamic (file provider) config. Static/router.yml wires the entrypoint
+# and cert resolver; this is the piece specific to this router.
+http:
+  routers:
+    multi-ai-router:
+      rule: "Host(`router.example.com`)"
+      service: multi-ai-router
+      tls:
+        certResolver: letsencrypt
+  services:
+    multi-ai-router:
+      loadBalancer:
+        servers:
+          - url: "http://127.0.0.1:8080"
+        # Traefik does not buffer proxied responses and has no buffering flag to
+        # disable — SSE streams through unmodified by default. The only knob that
+        # matters is the transport's response timeout, which defaults to no limit.
+```
+
+If you run Traefik via Docker labels instead of the file provider, the equivalent is
+`traefik.http.routers.multi-ai-router.rule=Host(\`router.example.com\`)` plus a
+`tls.certresolver` label — no buffering label exists to set because there is nothing to disable.
+
 Set `TRUST_PROXY=true` once a proxy is in front, and `PUBLIC_URL=https://router.example.com` if you
 want OAuth redirect capture.
+
+**`SESSION_COOKIE_INSECURE` and a reverse proxy don't mix.** The escape hatch exists for a
+plain-HTTP install with no proxy in front at all (`http://192.168.1.50:8080` on a LAN) — once any
+of the proxies above is terminating TLS, the browser reaches the router over `https://` and the
+admin cookie's normal `Secure` + `__Host-` attributes work as designed, so leave
+`SESSION_COOKIE_INSECURE` unset (`false`). Setting it **and** running behind a TLS-terminating
+proxy gets you the worst of both: no confidentiality benefit (the browser already speaks HTTPS)
+and a weaker cookie than you need. It is acceptable only on the bare, proxy-less LAN case above,
+and only until HTTPS is put in front — see the env reference above and
+[04-api-keys-and-access.md](04-api-keys-and-access.md#session-cookie).
 
 **Do not publicly expose the admin plane.** `/api/admin/**` and the SPA are protected by one
 password. Keep them on a private network, a VPN, or behind an IP allowlist in the proxy, and expose
