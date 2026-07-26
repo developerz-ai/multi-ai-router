@@ -18,6 +18,18 @@
   }
 }
 
+// A block value keeps the stacked layout at every width: a six-line snippet
+// beside a button column is a snippet wrapping at 30 characters.
+.rootBlock {
+  @include bp.respond-to("sidebar") {
+    grid-template-areas:
+      "value"
+      "actions"
+      "status";
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
 .value {
   @include tabular-figures;
 
@@ -30,6 +42,14 @@
   // A 40-character key must wrap rather than widen the dialog at 320px.
   overflow-wrap: anywhere;
   user-select: all;
+}
+
+// `pre-wrap`, not `pre`: the line breaks are the value's, but a 60-character
+// key inside one of those lines still has to wrap rather than scroll away.
+.block {
+  white-space: pre-wrap;
+  line-height: var(--line-snug);
+  tab-size: 2;
 }
 
 .actions {

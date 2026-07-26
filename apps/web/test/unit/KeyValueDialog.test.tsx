@@ -2,6 +2,8 @@ import { describe, expect, test } from "bun:test"
 import { render } from "solid-js/web"
 import { KeyValueDialog } from "../../src/routes/keys/KeyValueDialog"
 
+const BASE = "https://router.example.com"
+
 /**
  * Rendered through the real `Modal`/`Portal` stack, not a shallow prop check —
  * `Portal` renders as an empty string under Solid's server build (see
@@ -28,13 +30,27 @@ function withMount(props: Parameters<typeof KeyValueDialog>[0], run: () => void)
 describe("KeyValueDialog", () => {
   test("shows the router key's value in full, on both the mint and the later reveal", () => {
     withMount(
-      { open: true, name: "ci-runner", value: "sk-abc123", minted: true, onClose: () => {} },
+      {
+        open: true,
+        name: "ci-runner",
+        value: "sk-abc123",
+        minted: true,
+        baseUrl: BASE,
+        onClose: () => {},
+      },
       () => {
         expect(document.body.textContent).toContain("sk-abc123")
       },
     )
     withMount(
-      { open: true, name: "ci-runner", value: "sk-abc123", minted: false, onClose: () => {} },
+      {
+        open: true,
+        name: "ci-runner",
+        value: "sk-abc123",
+        minted: false,
+        baseUrl: BASE,
+        onClose: () => {},
+      },
       () => {
         expect(document.body.textContent).toContain("sk-abc123")
       },
@@ -44,7 +60,14 @@ describe("KeyValueDialog", () => {
   test("never warns the value is shown once — keys are retrievable by design", () => {
     for (const minted of [true, false]) {
       withMount(
-        { open: true, name: "ci-runner", value: "sk-abc123", minted, onClose: () => {} },
+        {
+          open: true,
+          name: "ci-runner",
+          value: "sk-abc123",
+          minted,
+          baseUrl: BASE,
+          onClose: () => {},
+        },
         () => {
           const text = (document.body.textContent ?? "").toLowerCase()
           // The component states the opposite as reassurance ("Nothing here is
@@ -61,7 +84,14 @@ describe("KeyValueDialog", () => {
 
   test("the value is copyable — a Copy control sits next to it", () => {
     withMount(
-      { open: true, name: "ci-runner", value: "sk-abc123", minted: true, onClose: () => {} },
+      {
+        open: true,
+        name: "ci-runner",
+        value: "sk-abc123",
+        minted: true,
+        baseUrl: BASE,
+        onClose: () => {},
+      },
       () => {
         const copyButton = Array.from(document.body.querySelectorAll("button")).find(
           (button) => button.textContent === "Copy",
@@ -73,9 +103,33 @@ describe("KeyValueDialog", () => {
     )
   })
 
+  test("says where to send the key, not just what it is", () => {
+    withMount(
+      {
+        open: true,
+        name: "ci-runner",
+        value: "sk-abc123",
+        minted: true,
+        baseUrl: BASE,
+        onClose: () => {},
+      },
+      () => {
+        expect(document.body.textContent).toContain("Point your tool at it")
+        expect(document.body.textContent).toContain(`ANTHROPIC_BASE_URL="${BASE}"`)
+      },
+    )
+  })
+
   test("renders nothing when closed", () => {
     withMount(
-      { open: false, name: "ci-runner", value: "sk-abc123", minted: true, onClose: () => {} },
+      {
+        open: false,
+        name: "ci-runner",
+        value: "sk-abc123",
+        minted: true,
+        baseUrl: BASE,
+        onClose: () => {},
+      },
       () => {
         expect(document.body.textContent).toBe("")
       },

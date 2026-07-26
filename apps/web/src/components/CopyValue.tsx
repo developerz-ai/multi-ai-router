@@ -1,5 +1,6 @@
 import { createSignal, Show } from "solid-js"
 import { copyText } from "../lib/clipboard"
+import { cx } from "../lib/cx"
 import { Button } from "./Button"
 import styles from "./CopyValue.module.scss"
 
@@ -7,6 +8,12 @@ export interface CopyValueProps {
   readonly value: string
   /** Names the value for assistive tech — "Router key value". */
   readonly label: string
+  /**
+   * The value is a block — a config file, a shell snippet — so its line breaks
+   * are part of it. Without this the default `white-space` collapses a six-line
+   * `config.toml` into one unusable line.
+   */
+  readonly multiline?: boolean
 }
 
 /**
@@ -26,8 +33,11 @@ export function CopyValue(props: CopyValueProps) {
   }
 
   return (
-    <div class={styles.root}>
-      <output aria-label={props.label} class={styles.value}>
+    <div class={cx(styles.root, props.multiline === true && styles.rootBlock)}>
+      <output
+        aria-label={props.label}
+        class={cx(styles.value, props.multiline === true && styles.block)}
+      >
         {props.value}
       </output>
       <div class={styles.actions}>

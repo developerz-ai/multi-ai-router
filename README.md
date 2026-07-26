@@ -184,6 +184,8 @@ Env is validated by Zod at boot; a bad config exits non-zero naming the offendin
 
 Router keys are accepted in both dialects: `Authorization: Bearer mar_live_…` and `x-api-key: mar_live_…`. Anything that can set a base URL and a key works; these are the tested targets.
 
+**The console says all of this too, filled in.** Mint or reveal a key and the dialog carries a **Point your tool at it** panel — tabs for Claude Code, Cursor, Codex CLI, Aider, the OpenAI SDKs and `curl`, each block already containing this deployment's base URL (`PUBLIC_URL`, else the console's own origin) and that key's real value. The table below is the same content for someone who never opened the console.
+
 | Client | How you point it at the router |
 |---|---|
 | **Claude Code** | `ANTHROPIC_BASE_URL` + `ANTHROPIC_AUTH_TOKEN` |

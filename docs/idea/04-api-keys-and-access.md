@@ -203,6 +203,19 @@ CSRF token like every other console action.
 There is still no shown-once flow and no rotate endpoint — the verb is about *how* the value is
 fetched, never about *whether* it can be fetched again. It always can.
 
+#### The value is shown with somewhere to put it
+
+Both the mint and the reveal render the key inside a **Point your tool at it** panel: one tab per
+client (Claude Code, Cursor, Codex CLI, Aider, the OpenAI SDKs, `curl`), each block pre-filled with
+this deployment's base URL — `PUBLIC_URL` when the operator set one, otherwise the console's own
+origin — and the key's real value. A snippet containing `YOUR_KEY_HERE` is a snippet that gets
+pasted containing `YOUR_KEY_HERE`.
+
+The suffix rule is the reason this is generated rather than written out six times: an
+OpenAI-dialect client appends `/chat/completions` to what it is given and so needs `/v1` already
+there, while an Anthropic-dialect one appends `/v1/messages` itself and must be handed the bare
+origin. One helper owns that (`apps/web/src/lib/client-snippets.ts`), so the two cannot disagree.
+
 ### What a key cannot do
 
 | Cannot | Because |

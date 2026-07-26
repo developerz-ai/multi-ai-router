@@ -304,6 +304,8 @@ itself — it drives traffic and reads `router_overhead_seconds` off `GET /metri
 | `describeQuotaWindows(input, nowMs)`, `quotaWindowLabel/Title`, `formatUtilization`, `quotaWindowTone`, `QUOTA_WINDOW_DISPLAY_ORDER` | `lib/quota-windows.ts` | Rendering per-window quota anywhere. Windows are never collapsed into one reset; `exhausted` never yields a countdown; a null utilization stays null, never `0` |
 | `indexUsage(rows)`, `usageFor(index, id)`, `NO_USAGE`, `topN`, `shareOf`, `topNMeasure*` | `lib/usage-index.ts` | Joining usage onto a table row, or ranking one. Ranks on **one** measure at a time — metered and notional are never summed |
 | `classifyPaste`, `isSubmittablePaste`, `describePasteShape`, `connectExpiry` | `lib/connect-capture.ts` | Client-side pre-validation of an authorization paste. Mirrors the server's `parseAuthorizationPaste` acceptance; never echoes the pasted value |
+| `onboardingComplete(counts)`, `routerBaseUrl(publicUrl, origin)` | `lib/onboarding.ts` | Deciding whether the guided first-run walk is done, and the address to hand a client. `PUBLIC_URL` wins over the tab's origin — never re-derive that precedence per surface |
+| `clientRecipes(baseUrl, key)`, `routerOrigin`, `openAiBaseUrl` | `lib/client-snippets.ts` | Telling an operator how to point a client at the router. **`openAiBaseUrl` owns the `/v1` suffix rule** — OpenAI-dialect clients append `/chat/completions`, Anthropic-dialect ones append `/v1/messages`, and hand-writing that per snippet is how one of them ends up wrong |
 | `parseTheme`, `nextTheme`, `themeLabel`, `THEME_PREFERENCES`, `THEME_STORAGE_KEY` | `lib/theme.ts` | Theme logic (pure half) |
 | `applyTheme`, `loadTheme`, `storeTheme` | `lib/theme-dom.ts` | Theme DOM/storage half, kept apart so the rules stay testable without a browser |
 | `Table<T>`, `Column<T>` | `components/Table.tsx` | Every list surface. Structure, alignment, empty state — no sorting or fetching until a second caller needs it |
@@ -355,7 +357,8 @@ never a `fetch` call inline in a route component.
 | `Banner` | `components/Banner.tsx` | Page-level notices — the `exhausted` red banner, a settings-screen warning |
 | `Modal` | `components/Modal.tsx` | Any overlay dialog. Wraps the focus trap and scroll lock so a new dialog doesn't reinvent either |
 | `ConfirmDialog` | `components/ConfirmDialog.tsx` | Every destructive action's confirmation, naming exactly what breaks — never a bare `confirm()` |
-| `CopyValue` | `components/CopyValue.tsx` | Displaying a copyable secret (a router key, a value from key reveal) with a copy button wired to `lib/clipboard.ts` |
+| `CopyValue` | `components/CopyValue.tsx` | Displaying a copyable secret (a router key, a value from key reveal) with a copy button wired to `lib/clipboard.ts`. `multiline` for a block whose line breaks are part of it — a `config.toml`, a shell snippet |
+| `KeyConnectSnippets` | `routes/keys/KeyConnectSnippets.tsx` | The "point your tool at it" tabs, pre-filled with a real base URL and key. Shown wherever a key's value is — never a second, drifting copy of the client table |
 | `Field`, `TextField` | `components/Field.tsx` | Form inputs across every admin dialog — one label/error/hint layout, not a per-form one-off |
 | `Icon`, `IconName` | `components/Icon.tsx` | Any icon in the console. Closed set of names, so a typo is a type error, not a blank glyph |
 | `EmptyState` | `components/EmptyState.tsx` | A list/table with nothing in it yet |
