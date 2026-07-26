@@ -487,6 +487,33 @@ the shared body is not a framework.
 That is the Open/Closed rule from [01-architecture.md](01-architecture.md) in practice: adding a
 provider touches one new file plus two registration lines, and nothing else.
 
+### "Exactly one file" vs. three — why the non-negotiable isn't wrong
+
+The repo's `CLAUDE.md` states the rule as **"adding a provider touches exactly one file in
+`providers/`."** Taken literally against steps 1–4 above, that's three touches, not one:
+
+| Touch | File | Why it can't be folded into the driver file |
+|---|---|---|
+| 1 | `providers/drivers/<id>.ts` (new) | The driver itself — surfaces, headers, alias mapping, failure vocabulary. |
+| 2 | `packages/core`'s `ProviderId` union | The id has to exist as a *type* before anything can key a record on it. |
+| 3 | `providers/registry.ts` | Wires the id to its driver (or to a recorded `unimplemented` reason). |
+
+This is deliberate, not drift, and the reason is the same one that makes the registry worth having:
+**`PROVIDER_REGISTRY` is a `Readonly<Record<ProviderId, ProviderSupport>>` — a total function from
+the id type to its support.** A `Record` type in TypeScript is exhaustive by construction: if
+`ProviderId` gains a member and `PROVIDER_REGISTRY` doesn't grow a matching key, the assignment
+fails to compile. That totality is *why* an unimplemented id can never silently fall through to a
+generic error at request time — the compiler refuses to link a provider id that has nothing wired
+to it, before the router ever boots. Collapsing the union and the registry into the driver file
+would remove the second party to that check: a single file has nothing to be exhaustive *against*.
+
+So the non-negotiable's "one file" is the file that carries the provider's actual behavior — the
+driver — and is true in the sense that matters: nothing about routing, keys, pools, usage, or the
+admin UI changes, and no *existing* file's logic is touched. The other two touches are one line
+each, mechanical, and fail loudly (a compile error, not a runtime surprise) if skipped. Read
+"exactly one file" as "exactly one place where behavior is decided," with two one-line compiler
+checkpoints that make skipping step 3 impossible rather than merely discouraged.
+
 ## Reverse-engineering posture
 
 **Claude subscriptions are exempt** — they run on the first-party Claude Agent SDK, so there is

@@ -200,7 +200,11 @@ Send whatever model name you normally send. It passes through unchanged unless t
 
 ## 🌐 Supported providers
 
-Each provider is a code-defined driver behind one interface; adding one is a single new file.
+Each provider is a code-defined driver behind one interface. Adding one touches **one new driver
+file plus two registration lines** (the `ProviderId` union in `packages/core`, the entry in
+`providers/registry.ts`) — not the single file the phrase suggests. See
+[`docs/idea/03-providers.md#adding-a-provider`](docs/idea/03-providers.md#adding-a-provider) for
+why the extra two lines are load-bearing rather than boilerplate.
 
 The registry is a **total** record, so every provider id is either a driver or a recorded reason it is not — never silently absent, never stubbed into something that looks like it works.
 
