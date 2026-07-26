@@ -245,6 +245,45 @@ describe("parseEnv", () => {
     })
   })
 
+  describe("failover and breaker knobs", () => {
+    test("every one of them has a documented default", () => {
+      expect(parseEnv(base).failover).toEqual({
+        maxAttempts: 3,
+        failureThreshold: 3,
+        baseBackoffMs: 1_000,
+        maxBackoffMs: 300_000,
+        halfOpenHoldMs: 30_000,
+        upstreamTimeoutMs: 600_000,
+      })
+    })
+
+    test("the operator's numbers are the ones parsed, not the module's", () => {
+      // These three were parsed at boot and read by nothing for the whole life of the breaker.
+      // The assertion that matters is downstream — `health.test.ts` proves they reach a transition —
+      // but this is the half that proves the operator's value survives the parse at all.
+      const env = parseEnv({
+        ...base,
+        ROUTING_FAILURE_THRESHOLD: "7",
+        ROUTING_BASE_BACKOFF_MS: "250",
+        ROUTING_MAX_BACKOFF_MS: "90000",
+        ROUTING_HALF_OPEN_HOLD_MS: "5000",
+      })
+
+      expect(env.failover).toMatchObject({
+        failureThreshold: 7,
+        baseBackoffMs: 250,
+        maxBackoffMs: 90_000,
+        halfOpenHoldMs: 5_000,
+      })
+    })
+
+    test("a zero half-open hold is refused: a gate that never holds is not a gate", () => {
+      expect(expectEnvError({ ...base, ROUTING_HALF_OPEN_HOLD_MS: "0" }).variables).toEqual([
+        "ROUTING_HALF_OPEN_HOLD_MS",
+      ])
+    })
+  })
+
   describe("scheduler knobs", () => {
     test("names USAGE_ROLLUP_INTERVAL_MINUTES when it is not a whole number", () => {
       expect(expectEnvError({ ...base, USAGE_ROLLUP_INTERVAL_MINUTES: "soon" }).variables).toEqual([

@@ -193,6 +193,171 @@ describe("health store", () => {
   })
 })
 
+/**
+ * `breaker.ts` reads no configuration and no randomness of its own, so a store that supplies
+ * neither runs the module defaults and returns every account tripped in the same second in the
+ * same millisecond. These pin that the operator's numbers actually arrive.
+ */
+describe("the breaker's configured numbers reach it", () => {
+  const cool = (store: ReturnType<typeof createHealthStore>, times: number): void => {
+    for (let index = 0; index < times; index += 1) {
+      store.recordFailure("a", { kind: "server-error", message: "500" }, NOW)
+    }
+  }
+
+  test("the configured failure threshold decides when the breaker trips", () => {
+    const store = createHealthStore({ failureThreshold: 5, jitter: () => 0 })
+
+    cool(store, 4)
+    expect(store.stateOf("a").breaker.status).toBe("active")
+
+    cool(store, 1)
+    expect(store.stateOf("a").breaker.status).toBe("cooling_down")
+  })
+
+  test("the configured backoff decides how long, and the ceiling caps it", () => {
+    const store = createHealthStore({
+      failureThreshold: 1,
+      baseBackoffMs: 7_000,
+      maxBackoffMs: 9_000,
+      jitter: () => 0,
+    })
+
+    cool(store, 1)
+    expect(store.stateOf("a").breaker.cooldownUntil).toEqual(new Date(NOW.getTime() + 7_000))
+
+    cool(store, 1)
+    expect(store.stateOf("a").breaker.cooldownUntil).toEqual(new Date(NOW.getTime() + 9_000))
+  })
+
+  test("a caller's authKind still wins — it is the only fact the store does not have", () => {
+    const store = createHealthStore({ baseBackoffMs: 7_000, jitter: () => 0 })
+    store.recordFailure("a", { kind: "auth", message: "401" }, NOW, { authKind: "api-key" })
+
+    expect(store.stateOf("a").breaker.status).toBe("disabled")
+  })
+
+  test("jitter widens the estimated step, so accounts tripped together do not return together", () => {
+    const wide = createHealthStore({ failureThreshold: 1, baseBackoffMs: 1_000, jitter: () => 1 })
+    const none = createHealthStore({ failureThreshold: 1, baseBackoffMs: 1_000, jitter: () => 0 })
+    cool(wide, 1)
+    cool(none, 1)
+
+    const widened = wide.stateOf("a").breaker.cooldownUntil?.getTime() ?? 0
+    expect(widened).toBeGreaterThan(none.stateOf("a").breaker.cooldownUntil?.getTime() ?? 0)
+  })
+
+  test("jitter never moves a reset the provider actually reported", () => {
+    const store = createHealthStore({ jitter: () => 1 })
+    const resetsAt = new Date(NOW.getTime() + 60_000)
+    store.recordFailure("a", { kind: "rate-limited", resetsAt, message: "429" }, NOW)
+
+    expect(store.stateOf("a").breaker.cooldownUntil).toEqual(resetsAt)
+  })
+
+  test("a header-only limit takes the same numbers — that call site used to pass none", () => {
+    const store = createHealthStore({ baseBackoffMs: 7_000, jitter: () => 0 })
+    // No reset reported anywhere in the signal, so the estimate is the configured backoff.
+    store.applyRateLimit("a", signal({ limited: true }), NOW)
+
+    expect(store.stateOf("a").breaker.cooldownUntil).toEqual(new Date(NOW.getTime() + 7_000))
+  })
+})
+
+/**
+ * "One request is allowed through as a probe" — the spec's words, and until this gate existed
+ * nothing implemented them: a cooldown expiring made the account eligible to every waiting request
+ * at once.
+ */
+describe("the half-open probe gate", () => {
+  const cooling = (holdMs = 30_000): ReturnType<typeof createHealthStore> => {
+    const store = createHealthStore({ probeHoldMs: holdMs, jitter: () => 0 })
+    store.recordFailure(
+      "a",
+      { kind: "rate-limited", resetsAt: new Date(NOW.getTime() + 60_000), message: "429" },
+      NOW,
+    )
+    return store
+  }
+
+  const recovered = new Date(NOW.getTime() + 60_000)
+
+  test("the first request through takes the probe; the rest are refused", () => {
+    const store = cooling()
+
+    expect(store.admitProbe("a", recovered)).toEqual({ admitted: true, held: true })
+    expect(store.admitProbe("a", recovered)).toEqual({ admitted: false, held: false })
+    expect(store.admitProbe("a", recovered)).toEqual({ admitted: false, held: false })
+  })
+
+  test("the hold is visible to the pure filter, carrying its own expiry", () => {
+    const store = cooling(15_000)
+    store.admitProbe("a", recovered)
+
+    const overlaid = buildSnapshot(catalog([account("a")]), store, recovered).accounts[0]
+    expect(overlaid?.health.probeHeldUntil).toEqual(new Date(recovered.getTime() + 15_000))
+  })
+
+  test("releasing hands the gate to the next request", () => {
+    const store = cooling()
+    store.admitProbe("a", recovered)
+    store.releaseProbe("a")
+
+    expect(store.admitProbe("a", recovered).admitted).toBe(true)
+    expect(store.stateOf("a").probeHeldUntil).not.toBeNull()
+  })
+
+  test("a probe that never reports expires — a lost probe cannot park an account", () => {
+    const store = cooling(15_000)
+    store.admitProbe("a", recovered)
+
+    expect(store.admitProbe("a", new Date(recovered.getTime() + 14_999)).admitted).toBe(false)
+    expect(store.admitProbe("a", new Date(recovered.getTime() + 15_000)).admitted).toBe(true)
+  })
+
+  test("an account still cooling is refused: no probe is due yet", () => {
+    expect(cooling().admitProbe("a", NOW)).toEqual({ admitted: false, held: false })
+  })
+
+  test("an account a human must fix is refused: no probe will change it", () => {
+    const store = createHealthStore()
+    store.recordFailure("a", { kind: "credits-exhausted", message: "402" }, NOW)
+
+    expect(store.admitProbe("a", new Date(NOW.getTime() + 86_400_000)).admitted).toBe(false)
+  })
+
+  test("an account that recovered under us is admitted, and owes no release", () => {
+    // Another request's probe already succeeded. Refusing here would drop a healthy account from a
+    // chain for nothing, and releasing a hold it never took could free somebody else's.
+    const store = cooling()
+    store.recordSuccess("a")
+
+    expect(store.admitProbe("a", recovered)).toEqual({ admitted: true, held: false })
+  })
+
+  test("per account, never global — many accounts of one provider is the normal case", () => {
+    const store = cooling()
+    store.recordFailure(
+      "b",
+      { kind: "rate-limited", resetsAt: new Date(NOW.getTime() + 60_000), message: "429" },
+      NOW,
+    )
+
+    expect(store.admitProbe("a", recovered).admitted).toBe(true)
+    expect(store.admitProbe("b", recovered).admitted).toBe(true)
+  })
+
+  test("Re-check now clears the hold with the marks — one recovery path, one gate", () => {
+    // `services/accounts/recheck.ts` calls exactly this. A hold left behind would make the operator's
+    // button wait out a probe nobody is running.
+    const store = cooling()
+    store.admitProbe("a", recovered)
+    store.reset("a")
+
+    expect(store.stateOf("a").probeHeldUntil).toBeNull()
+  })
+})
+
 describe("snapshot", () => {
   test("overlays live breaker state onto the account's routing view", () => {
     const store = createHealthStore()

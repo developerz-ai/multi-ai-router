@@ -95,6 +95,26 @@ describe("the empty candidate set fails by cause", () => {
     expect(result.error.message).toContain("pool team")
   })
 
+  test("a pool whose only account is being probed is 429, never a 503 or a stampede", () => {
+    // The bug this pins: the reset instant passing made the account eligible to every waiting
+    // request at once. Now one holds the probe and the rest are told to come back — with a wait,
+    // because a clock fixes this in milliseconds and nothing here needs a human.
+    const state = snapshot(
+      [
+        account("a", {
+          status: "cooling_down",
+          health: health({ cooldownUntil: at(-1_000), probeHeldUntil: at(20_000) }),
+        }),
+      ],
+      [pool("team", ["a"])],
+    )
+    const result = expectFailure(selectAccounts(state, ask()))
+
+    expect(result.error.status).toBe(429)
+    expect(result.error.message).toContain(at(20_000).toISOString())
+    expect(result.decision.rejected[0]?.reason).toBe("probe-in-flight")
+  })
+
   test("everything out of credits is 402 and names who needs a top-up", () => {
     const state = snapshot(
       [account("a", { status: "exhausted" }), account("b", { status: "exhausted" })],

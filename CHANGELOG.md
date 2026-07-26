@@ -60,6 +60,22 @@ your tooling config.
 
 ### Fixed
 
+- **A recovering account now takes exactly one probe, not the whole backlog.**
+  The circuit breaker's half-open state promised "one request through as a
+  probe", but nothing admitted one: the reset instant passing made the account
+  eligible to every waiting request at the same millisecond, so everything that
+  queued up during a five-minute cooldown dispatched at it together and rate
+  limited it again. One request is now admitted; the rest are dropped as
+  `probe-in-flight` and answered `429` with the hold's expiry. The operator's
+  **Re-check now** joins the same gate rather than adding a second recovery
+  path.
+- **`ROUTING_FAILURE_THRESHOLD`, `ROUTING_BASE_BACKOFF_MS`, and
+  `ROUTING_MAX_BACKOFF_MS` now reach the breaker.** All three were parsed at
+  boot, documented in the environment reference, and read by nothing — the
+  breaker silently ran its module defaults. Backoff is also jittered now, so
+  accounts tripped in the same second no longer return in the same millisecond
+  and re-stampede whatever knocked them over. New `ROUTING_HALF_OPEN_HOLD_MS`
+  bounds a probe that never reports.
 - **A pool's overflow account can no longer sit outside the pool.** A key
   scoped to a pool used to reach that pool's overflow even when the account
   belonged to no pool the key names — spending it once every member cooled

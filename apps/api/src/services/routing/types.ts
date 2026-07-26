@@ -27,6 +27,16 @@ export interface AccountHealth {
   readonly cooldownSource?: ResetSource
   /** Consecutive upstream failures — the exponential backoff step. */
   readonly consecutiveFailures: number
+  /**
+   * Deadline of the one half-open probe currently testing this account, absent when none is.
+   *
+   * The breaker says a recovering account may take **one** request as a probe; this is how that
+   * "one" is visible to a pure filter. While it is set and ahead of the clock the account is
+   * somebody else's to test, so every other request is dropped as `probe-in-flight` — which is
+   * clock-recoverable and therefore a `429` with this instant, never a stampede onto an account
+   * that just came back.
+   */
+  readonly probeHeldUntil?: Date
   /** Requests currently in flight. The default `least-used` measure. */
   readonly inFlight: number
   /** Tokens spent in the recent rolling window. The alternative `least-used` measure. */

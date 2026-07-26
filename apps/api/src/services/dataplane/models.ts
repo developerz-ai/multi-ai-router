@@ -1,7 +1,8 @@
 import { isStandingBlock, ModelNotFoundError, type ProviderId } from "@multi-ai-router/core"
 import { resolveScope, selectAccounts } from "../routing"
 import type { VerifiedKey } from "./auth/verifier"
-import { buildSnapshot, type HealthStore } from "./health"
+import type { HealthStore } from "./health"
+import { buildSnapshot } from "./snapshot"
 import type { RoutingCatalog } from "./types"
 
 /**

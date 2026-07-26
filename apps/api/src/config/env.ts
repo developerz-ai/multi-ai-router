@@ -138,6 +138,14 @@ export interface FailoverConfig {
   readonly baseBackoffMs: number
   /** Ceiling on that doubling, so a long outage does not park an account for hours. */
   readonly maxBackoffMs: number
+  /**
+   * How long the one admitted half-open probe holds a recovering account before the gate reopens.
+   *
+   * A backstop for a probe that never reports — the chain releases the hold the instant its attempt
+   * reaches a verdict. While it is held, every other request is told `429` with this instant rather
+   * than being dispatched onto an account that has answered nobody yet.
+   */
+  readonly halfOpenHoldMs: number
   /** How long the router waits on one upstream. Long, because a long completion is normal. */
   readonly upstreamTimeoutMs: number
 }
@@ -350,6 +358,7 @@ const envSchema = z
     ROUTING_FAILURE_THRESHOLD: wholeNumber.optional(),
     ROUTING_BASE_BACKOFF_MS: wholeNumber.optional(),
     ROUTING_MAX_BACKOFF_MS: wholeNumber.optional(),
+    ROUTING_HALF_OPEN_HOLD_MS: atLeastOne.optional(),
     UPSTREAM_TIMEOUT_MS: wholeNumber.optional(),
     TRANSLATE_DEFAULT_MAX_TOKENS: wholeNumber.optional(),
   })
@@ -443,6 +452,7 @@ const envSchema = z
         failureThreshold: raw.ROUTING_FAILURE_THRESHOLD ?? 3,
         baseBackoffMs: raw.ROUTING_BASE_BACKOFF_MS ?? 1_000,
         maxBackoffMs: raw.ROUTING_MAX_BACKOFF_MS ?? 300_000,
+        halfOpenHoldMs: raw.ROUTING_HALF_OPEN_HOLD_MS ?? 30_000,
         upstreamTimeoutMs: raw.UPSTREAM_TIMEOUT_MS ?? 600_000,
       },
       translation: {

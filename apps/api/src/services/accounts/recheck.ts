@@ -18,6 +18,13 @@ import type { AccountAuthProbe, ClaudeAuthReport } from "../health/claudeAuthPro
  * than adding a second — a dedicated synthetic probe would be a second code path that could
  * disagree with the first, plus an unbilled request to a provider on a button press.
  *
+ * Joining that path means joining its **gate**, which is the other half of the sentence above and
+ * the reason this clears the marks through `HealthStore.reset` rather than by hand: exactly one
+ * request is admitted onto the recovering account (`services/dataplane/probe.ts`), and the rest are
+ * told to come back. Without it, a button that returns an account to eligibility during an outage
+ * is a button that dispatches the whole waiting backlog at it. Clearing the marks also clears any
+ * hold left over from a previous probe, so the operator never waits out a probe nobody is running.
+ *
  * Consequently a re-check never reports "it worked" or "it is still down". It reports that the
  * account is eligible again. The honest answer to "is it back" arrives with the next request,
  * and pretending otherwise would mean fabricating a result from a probe we deliberately do not

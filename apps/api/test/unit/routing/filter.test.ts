@@ -78,6 +78,56 @@ describe("the breaker's half-open probe", () => {
   })
 })
 
+describe("exactly one probe — the gate, not the label", () => {
+  const probe = (overrides: Parameters<typeof health>[0] = {}) =>
+    account("a", {
+      status: "cooling_down",
+      health: health({ cooldownUntil: at(-1_000), ...overrides }),
+    })
+
+  test("a probe another request already holds is dropped, not handed out a second time", () => {
+    const result = run([probe({ probeHeldUntil: at(20_000) })])
+
+    expect(result.eligible).toHaveLength(0)
+    expect(result.rejected[0]?.reason).toBe("probe-in-flight")
+  })
+
+  test("the drop carries the hold's expiry, labeled as the router's own arithmetic", () => {
+    const rejected = run([probe({ probeHeldUntil: at(20_000) })]).rejected[0]
+
+    expect(rejected?.resetsAt).toEqual(at(20_000))
+    // Never `provider-reported`: no provider said anything about this instant.
+    expect(rejected?.resetSource).toBe("estimated")
+  })
+
+  test("a hold that has expired lets the next request probe — a lost probe parks nothing", () => {
+    const result = run([probe({ probeHeldUntil: at(-1) })])
+
+    expect(result.eligible[0]?.halfOpen).toBe(true)
+  })
+
+  test("the hold never outranks the cooldown it sits inside", () => {
+    // Still cooling: the account is not recovering yet, so the honest reason is the cooldown and
+    // the reset the provider reported — not a gate that has no bearing on it.
+    const result = run([
+      account("a", {
+        status: "cooling_down",
+        health: health({ cooldownUntil: at(60_000), probeHeldUntil: at(20_000) }),
+      }),
+    ])
+
+    expect(result.rejected[0]?.reason).toBe("cooling-down")
+    expect(result.rejected[0]?.resetsAt).toEqual(at(60_000))
+  })
+
+  test("a healthy account is never gated, whatever stale hold it carries", () => {
+    const result = run([account("a", { health: health({ probeHeldUntil: at(20_000) }) })])
+
+    expect(result.eligible.map((c) => c.account.id)).toEqual(["a"])
+    expect(result.eligible[0]?.halfOpen).toBe(false)
+  })
+})
+
 describe("quota headroom", () => {
   test("a spent window drops the account and names the window", () => {
     const spent = account("a", { quotaWindows: [continuous(1, "seven_day_opus")] })

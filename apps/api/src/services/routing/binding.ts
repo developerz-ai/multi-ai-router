@@ -52,9 +52,15 @@ export function decideBinding(
   return { state: "invalidated", accountId: boundAccountId, reason: invalidationFor(reason) }
 }
 
-/** A window that refills on a clock keeps its binding; anything else drops it. */
+/**
+ * A window that refills on a clock keeps its binding; anything else drops it. A probe already in
+ * flight on the bound account is the shortest of those clocks — the account is back or cooling
+ * again within one request — so dropping a resumable conversation over it would be absurd.
+ */
 function isClockRecoverable(reason: FilterReason): boolean {
-  return reason === "cooling-down" || reason === "quota-window-spent"
+  return (
+    reason === "cooling-down" || reason === "probe-in-flight" || reason === "quota-window-spent"
+  )
 }
 
 function invalidationFor(reason: FilterReason): BindingInvalidationReason {

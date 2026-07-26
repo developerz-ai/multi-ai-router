@@ -174,8 +174,14 @@ export interface UpstreamCall {
   readonly signal: AbortSignal
 }
 
-/** A scripted upstream. Each entry answers one call, in order; the last one repeats. */
-export function mockUpstream(responses: readonly (() => Response)[]): {
+/**
+ * A scripted upstream. Each entry answers one call, in order; the last one repeats.
+ *
+ * An entry may return a promise, which is how a test holds a call *in flight* rather than merely
+ * slow: a `slowStream` has already answered — status and headers are on the wire — so it cannot
+ * stand in for the window between dispatch and verdict that the half-open gate covers.
+ */
+export function mockUpstream(responses: readonly (() => Response | Promise<Response>)[]): {
   fetch: (request: Request) => Promise<Response>
   readonly calls: UpstreamCall[]
 } {

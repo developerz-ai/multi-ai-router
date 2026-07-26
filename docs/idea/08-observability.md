@@ -254,6 +254,12 @@ real request tests it. One recovery path, not two that can disagree — and no u
 provider on a button press. The consequence is that a re-check reports eligibility, never a verdict
 on whether the account is back.
 
+Joining that path means joining its gate: exactly one request is admitted onto the account, and the
+rest are told `429` until it reports
+([05-routing-and-failover.md](05-routing-and-failover.md#exactly-one-half-open-probe)). Otherwise a
+button that restores eligibility mid-outage is a button that throws the whole waiting backlog at the
+account.
+
 **Claude subscriptions get one extra answer, and it costs nothing.** For those accounts the re-check
 also runs `claude auth status` against the account's own config directory — a local file read, no
 provider contacted — and returns `auth: {loggedIn, email, subscriptionType}` beside the eligibility

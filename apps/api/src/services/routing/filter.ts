@@ -11,6 +11,11 @@
  * One exception, and it is a state rather than a relaxation: an account whose cooldown instant
  * has passed comes back as a **half-open probe**. It is eligible, and it is labeled, so the
  * caller can gate the probe and the policies can rank it behind healthy accounts.
+ *
+ * That gate is `health.probeHeldUntil`, and this is where its "exactly one" is enforced: the one
+ * request holding it sees an eligible probe, and every other request sees the account dropped as
+ * `probe-in-flight`. A recovering account takes one request, not the whole backlog that piled up
+ * while it was down.
  */
 
 import { resolveModel } from "./model"
@@ -74,6 +79,20 @@ export function evaluateCandidate(
         ? { resetSource: account.health.cooldownSource }
         : {}),
     })
+  }
+
+  // The cooldown passed, so the breaker is half-open — but the one probe it earns is already out
+  // with another request. Clock-recoverable and measured in milliseconds, so this renders as a
+  // `429` carrying the hold's expiry: nothing here needs a human, and nothing here may pile 500
+  // requests onto an account that has answered exactly none of them yet.
+  const heldUntil = account.health.probeHeldUntil
+  if (
+    account.status === "cooling_down" &&
+    heldUntil !== undefined &&
+    heldUntil.getTime() > now.getTime()
+  ) {
+    // `estimated`: the instant is the router's own hold, not anything the provider said.
+    return drop({ reason: "probe-in-flight", resetsAt: heldUntil, resetSource: "estimated" })
   }
 
   const spent = findSpentWindow(
