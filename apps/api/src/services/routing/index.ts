@@ -82,6 +82,7 @@ export {
   earliestReset,
   findSpentWindow,
   isWindowSpent,
+  mergeQuotaWindows,
 } from "./quota"
 export type {
   BindingDecision,
@@ -106,6 +107,7 @@ export type {
   Candidate,
   KeyScopeSnapshot,
   LeastUsedMeasure,
+  LimiterReading,
   PoolMembership,
   PoolSnapshot,
   RoutingSnapshot,

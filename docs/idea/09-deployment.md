@@ -143,6 +143,7 @@ naming the offending variable — the process never starts half-configured.
 | `UPSTREAM_TIMEOUT_MS` | no | `600000` | How long the router waits on one upstream. Long, because a long completion is a normal response and not a hung one. |
 | `TRANSLATE_DEFAULT_MAX_TOKENS` | no | `4096` | The `max_tokens` an Anthropic account is given when the client spoke a dialect that makes it optional and sent none. Anthropic requires the field; the default is generous on purpose, because a low value truncates answers nobody asked to truncate. |
 | `USAGE_FLUSH_INTERVAL_MS` | no | `1000` | Drain cadence. Raising it widens the window in which a crash loses unwritten usage rows; it never affects request latency. |
+| `QUOTA_WRITE_INTERVAL_MS` | no | `5000` | How often quota readings observed on responses are persisted to `quota_windows`. Not a poll — a reading only exists once a response reported one. Raising it widens the window in which a crash loses the freshest reading, and how stale the gauges are on a replica that did not serve the request. Never affects request latency: the write is coalesced per account and never awaited by one. |
 
 The last two groups are the request path's own tunables: nothing there queries Postgres, so those
 values are what decide how quickly it learns about a change and how much memory it spends not

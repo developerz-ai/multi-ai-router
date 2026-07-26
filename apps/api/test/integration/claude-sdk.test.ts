@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test"
+import type { QuotaWindowState } from "@multi-ai-router/core"
 import { createApp } from "../../src/app"
 import { createLogger } from "../../src/logging/logger"
 import { createMetrics } from "../../src/observability"
@@ -242,6 +243,58 @@ describe("a rate-limit event mid-stream", () => {
     expect(second.status).toBe(429)
     expect(second.headers.get("retry-after")).not.toBeNull()
     expect(Number(second.headers.get("retry-after"))).toBeGreaterThan(0)
+  })
+
+  test("a spent window filters the account out even while its breaker is fine", async () => {
+    // The whole point of `quotaWindows` having a data source. This account is *not* limited — the
+    // event is a warning, the breaker stays active, no cooldown is set — but its five-hour window
+    // is full. Before a writer existed the router served straight into it; now the pure filter
+    // drops it as `quota-window-spent` and the client is told which window and when it refills.
+    const quota = createSdkQuotaStore()
+    const persisted: { accountId: string; windows: readonly QuotaWindowState[] }[] = []
+    const resetsAt = new Date(NOW.getTime() + 3_600_000)
+
+    const { app, health } = harness({
+      accounts: [subscriptionAccount("sub")],
+      responses: [() => jsonResponse(500, {})],
+      invokeSdk: invoker({
+        status: "allowed_warning",
+        rateLimitType: "five_hour",
+        utilization: 1,
+        resetsAt: resetsAt.getTime(),
+      }),
+      sdkQuota: quota,
+      health: { onQuotaWindows: (accountId, windows) => persisted.push({ accountId, windows }) },
+    })
+
+    const first = await app.request("/v1/messages", post(streamMessage(false), bearer()))
+    await first.text()
+    await settle()
+
+    expect(first.status).toBe(200)
+    expect(health.stateOf("sub").breaker.status).toBe("active")
+    expect(health.stateOf("sub").quotaWindows).toEqual([
+      {
+        window: "five_hour",
+        utilization: 1,
+        utilizationSource: "threshold-triggered",
+        resetsAt,
+        resetSource: "provider-reported",
+        lastCheckedAt: expect.any(Date),
+      },
+    ])
+    // The reading reached the durable writer, so a restart renders the same gauge.
+    expect(persisted[0]?.accountId).toBe("sub")
+    expect(persisted[0]?.windows[0]?.window).toBe("five_hour")
+
+    const second = await app.request("/v1/messages", post(streamMessage(false), bearer()))
+    const body = (await second.json()) as { error?: { message?: string } }
+    await settle()
+
+    // Clock-recoverable, so a 429 carrying the provider's own reset — never a 402, and never a 500.
+    expect(second.status).toBe(429)
+    expect(Number(second.headers.get("retry-after"))).toBeGreaterThan(0)
+    expect(body.error?.message).toContain("out of quota")
   })
 
   test("an accompanying warning never cools the account down on its own", async () => {

@@ -391,7 +391,7 @@ limits it again before it has answered any of them.
 | Signal | Source |
 |---|---|
 | Rate-limit headers and reset instants | `parseRateLimit` on every upstream response. A *reading*, not a verdict — see the precedence rule below |
-| Subscription quota windows and utilization | Two kinds, never conflated. **Threshold-triggered**: the SDK's `rate_limit_event` events for Claude subs — fires only near the limit, so it is what trips the breaker but cannot rank headroom. **Continuous**: provider usage endpoints (Anthropic's OAuth usage endpoint for Claude subs, equivalents elsewhere) — a real percentage at any time, and the only thing `quota-aware` can rank on. Short-TTL cached, deduped per account |
+| Subscription quota windows and utilization | Two kinds, never conflated. **Threshold-triggered**: the SDK's `rate_limit_event` events for Claude subs — fires only near the limit, so it is what trips the breaker but cannot rank headroom. **Continuous**: HTTP limiter headers on every response, and provider usage endpoints (Anthropic's OAuth usage endpoint for Claude subs, equivalents elsewhere) — a real percentage at any time, and the only thing `quota-aware` can rank on. Short-TTL cached, deduped per account |
 | Consecutive failure streak | attempt outcomes |
 | Auth failures | `401`/`403` → `needs_reauth` / `disabled`, not a cooldown |
 | Balance / credit signals | `402` and provider-specific out-of-credits bodies → `exhausted` |
@@ -399,6 +399,36 @@ limits it again before it has answered any of them.
 
 All of it is folded into one **health snapshot**, held in memory, which is the only thing the
 pure selection functions read.
+
+### Where a quota window comes from
+
+Two vocabularies, and keeping them apart is what stops the router recording a fact no provider
+stated.
+
+| Reading | Named by | Written by | Read by |
+|---|---|---|---|
+| **Quota window** — `five_hour`, `seven_day`, `seven_day_opus`, `seven_day_sonnet`, `overage` | The provider, in a vocabulary the router shares | `RateLimitSignal.quotaWindows`, folded by the health store. Today only the Claude subscription transport speaks it ([11-anthropic-agent-sdk.md](11-anthropic-agent-sdk.md) §5) | `quota-window-spent` in the filter, `quota-aware`, `router_quota_utilization`, the console's per-window gauges |
+| **Limiter reading** — `requests`, `input-tokens`, `tokens`, … | The provider, in its own words | `RateLimitSignal.windows`, parsed off every HTTP response | `quota-aware` only. It never filters an account: a limiter that hit zero has already cooled the breaker down |
+
+An HTTP limiter has no `QuotaWindowKind` equivalent, so it never becomes a quota window — but it is
+the fleet's *continuous* reading, published on every response, and `quota-aware` ranks on both.
+Reading only the named windows means ranking nothing on every API-key account there is and silently
+degrading to round-robin exactly where the policy is most useful.
+
+Three merge rules hold everywhere a window is folded:
+
+| Rule | Statement |
+|---|---|
+| **Per kind, never wholesale** | A reading replaces the windows it names and leaves the ones it does not standing. A turn reporting `five_hour` says nothing about `seven_day`, and reading that silence as a refill puts traffic back onto an account a seven-day window still blocks. |
+| **The fresher `lastCheckedAt` wins** | Freshness decides, not provenance. A live reading is newer than a stored row almost always — but not when another replica observed one since, and not when the quota floor retired an expired window, which is exactly the reading a stale in-memory copy would otherwise re-assert as a full gauge. |
+| **Absent ≠ empty** | A provider that names no window has said nothing, and what is already known stands. `[]` is the different claim that the account holds no windows — on a fresh process, that claim would overwrite everything the last one persisted. |
+
+Quota state is durable as well as warm: the replica that observed a reading persists it to
+`quota_windows` on a `QUOTA_WRITE_INTERVAL_MS` timer, off the request path, coalesced per account.
+The catalog hydrates those rows at boot and `overlayHealth` merges this process's own readings over
+them, so a restarted replica renders the last known gauge instead of an empty one. It is not a
+scheduled task — an advisory lock would let one replica persist its readings and drop everyone
+else's — and it is not a queue: a window is state, so the newest reading supersedes the older one.
 
 ## Running out — two different failures, never conflated
 

@@ -15,7 +15,12 @@ import {
 import type { Env } from "../config/env"
 import type { Logger } from "../logging/logger"
 import { createRuntimeMetrics, type RouterMetrics } from "../observability"
-import { createSdkConcurrency, createSdkInvoker, createSdkQuotaStore } from "../providers"
+import {
+  createSdkConcurrency,
+  createSdkInvoker,
+  createSdkQuotaStore,
+  type SdkQuotaStore,
+} from "../providers"
 import { createAccountConfigDirs } from "../providers/claude-sdk/config-dir"
 import { type Scheduler, schedulerFromEnv } from "../scheduler"
 import { createRoutingCatalog, loadCatalog, type RoutingCatalogStore } from "../services/catalog"
@@ -24,10 +29,12 @@ import { createCredentialCipherFromEnv } from "../services/crypto/fromEnv"
 import {
   createDispatcher,
   createHealthStore,
+  createQuotaWindowWriter,
   createRateLimiter,
   createRouterKeyVerifier,
   type Dispatcher,
   type HealthStore,
+  type QuotaWindowWriter,
   type RouterKeyVerifier,
   repositoryScopeLoader,
   sessionStoreFromEnv,
@@ -68,6 +75,13 @@ export interface Runtime {
   readonly dispatcher: Dispatcher
   readonly catalog: RoutingCatalogStore
   readonly health: HealthStore
+  /**
+   * The two halves of quota state, exposed for the same reason {@link health} is: they are warm,
+   * per-runtime, and invalidated from outside the request that wrote them. One holds what the Agent
+   * SDK reported for each Account, the other makes an observed reading durable off the request path.
+   */
+  readonly sdkQuota: SdkQuotaStore
+  readonly quotaWriter: QuotaWindowWriter
   /** Exposed for the admin plane's "run now" and for shutdown ordering; the timers are internal. */
   readonly scheduler: Scheduler
   /** What `GET /metrics` renders. Fed from the usage drain, the scheduler, and per-scrape gauges. */
@@ -99,6 +113,22 @@ export function createRuntime(deps: RuntimeDeps): Runtime {
   const scheduledTasks = createScheduledTaskRepository(database)
 
   // --- warm state -----------------------------------------------------------
+  // The Claude subscription transport's quota state: keyed by Account and living as long as this
+  // runtime, because a `rate_limit_event` on one turn is what cools the account down on the next
+  // (docs/idea/11-anthropic-agent-sdk.md §5) and a module-level one would bleed between runtimes
+  // inside a single process.
+  //
+  // Built unconditionally: whether a deployment serves subscriptions is a question about its
+  // accounts, not about its wiring, and an operator who connects one must not need a restart.
+  const sdkQuota = createSdkQuotaStore()
+  // The durable half of quota state. A reading is observed by whichever replica served the request,
+  // so it is written by that replica, off its request path — never by a scheduled task, whose
+  // advisory lock would persist one replica's readings and silently drop everyone else's.
+  const quotaWriter = createQuotaWindowWriter({
+    accounts,
+    logger,
+    flushIntervalMs: env.dataPlane.quotaWriteIntervalMs,
+  })
   // The breaker's numbers reach it from exactly one place: `breaker.ts` reads no configuration and
   // no randomness of its own, so a store built without them silently runs the module defaults and
   // returns every account tripped in the same second in the same millisecond. `probeHoldMs` is the
@@ -108,6 +138,13 @@ export function createRuntime(deps: RuntimeDeps): Runtime {
     baseBackoffMs: env.failover.baseBackoffMs,
     maxBackoffMs: env.failover.maxBackoffMs,
     probeHoldMs: env.failover.halfOpenHoldMs,
+    // Both transports fold a reading in here and nowhere else, which is what makes one hook enough
+    // to make every observed window durable.
+    onQuotaWindows: (accountId, windows) => quotaWriter.record(accountId, windows),
+    // "Re-check now" and account deletion clear this store; the SDK's own per-Account buckets are
+    // the same request path's memory of the same fact and have to go with them, or the next
+    // `rate_limit_event` re-publishes the window the operator just dismissed.
+    onReset: (accountId) => sdkQuota.forget(accountId),
   })
   const catalog = createRoutingCatalog({
     load: () => loadCatalog({ accounts, pools }),
@@ -199,14 +236,8 @@ export function createRuntime(deps: RuntimeDeps): Runtime {
   // conversation physically lives upstream, so no policy may overrule it and no hash recomputes it.
   const sessionStore = sessionStoreFromEnv({ env, repository: sessions, logger, now })
 
-  // The Claude subscription transport. The semaphore pair above and one quota store, keyed by
-  // Account and living as long as this runtime — a `rate_limit_event` on one turn is what cools the
-  // account down on the next (§5), and a module-level one would bleed between runtimes inside a
-  // single process.
-  //
-  // Built unconditionally: whether a deployment serves subscriptions is a question about its
-  // accounts, not about its wiring, and an operator who connects one must not need a restart.
-  const sdkQuota = createSdkQuotaStore()
+  // The Claude subscription transport, over the semaphore pair above. Its quota store is built
+  // with the rest of the warm state, since `HealthStore.reset` has to be able to clear it.
   const invokeSdk = createSdkInvoker({
     concurrency: sdkConcurrency,
     cliPathOverride: env.claudeCliPath,
@@ -272,6 +303,8 @@ export function createRuntime(deps: RuntimeDeps): Runtime {
     dispatcher,
     catalog,
     health,
+    sdkQuota,
+    quotaWriter,
     scheduler,
     metrics,
     start: async () => {
@@ -284,6 +317,7 @@ export function createRuntime(deps: RuntimeDeps): Runtime {
       await prices.refresh()
       prices.start()
       usage.start()
+      quotaWriter.start()
       // Synchronous by design: the first sweep is not a boot precondition.
       scheduler.start()
       // Awaited: rebuilt from `tokenExpiresAt`, so a token that expired during downtime is due now.
@@ -302,6 +336,9 @@ export function createRuntime(deps: RuntimeDeps): Runtime {
       catalog.stop()
       prices.stop()
       await usage.stop()
+      // Last, and awaited: a reading observed a second before shutdown is the freshest thing anyone
+      // knows about that account's quota, and losing it means the next boot renders a stale gauge.
+      await quotaWriter.stop()
     },
   }
 }

@@ -3,6 +3,7 @@ import { createDatabase, type DatabaseHandle } from "@multi-ai-router/db"
 import { createRuntime, type Runtime } from "../../src/composition"
 import { parseEnv } from "../../src/config/env"
 import { createLogger } from "../../src/logging/logger"
+import type { RateLimitSignal } from "../../src/providers"
 import { JITTER_FRACTION } from "../../src/services/routing"
 
 /**
@@ -99,6 +100,60 @@ describe("the breaker's environment reaches the breaker", () => {
     }
 
     expect(resets.size).toBeGreaterThan(1)
+  })
+})
+
+/**
+ * Quota state has two halves and both hang off `createHealthStore`'s options. A hook that silently
+ * goes unwired reads exactly like the bug this task fixed — readings observed, nothing persisted,
+ * every gauge empty after a restart — and it typechecks, which is why it is asserted here rather
+ * than only where the store is unit-tested.
+ */
+describe("an observed quota reading reaches the durable writer", () => {
+  const reading = (utilization: number): RateLimitSignal => ({
+    limited: false,
+    resetSource: "provider-reported",
+    windows: [],
+    quotaWindows: [
+      {
+        window: "five_hour",
+        utilization,
+        utilizationSource: "threshold-triggered",
+        resetsAt: new Date(NOW.getTime() + 3_600_000),
+        resetSource: "provider-reported",
+        lastCheckedAt: NOW,
+      },
+    ],
+  })
+
+  test("folding a named window queues it for the writer", () => {
+    const { health, quotaWriter } = runtimeWith({})
+    expect(quotaWriter.stats().pending).toBe(0)
+
+    health.applyRateLimit("a", reading(0.9), NOW)
+
+    // Queued, not written: nothing has touched the (deliberately unreachable) database, which is
+    // the property that keeps this off the request path in the first place.
+    expect(quotaWriter.stats()).toMatchObject({ pending: 1, written: 0 })
+  })
+
+  test("a reading with no named window queues nothing — every HTTP driver, every response", () => {
+    const { health, quotaWriter } = runtimeWith({})
+    health.applyRateLimit("a", { limited: true, resetSource: "unknown", windows: [] }, NOW)
+
+    expect(quotaWriter.stats().pending).toBe(0)
+  })
+
+  test("Re-check now clears the Agent SDK's own buckets with the breaker marks", () => {
+    // Without the wire, the operator dismisses a spent window and the next `rate_limit_event`
+    // re-publishes it out of a bucket nobody cleared.
+    const { health, sdkQuota } = runtimeWith({})
+    sdkQuota.ingest("a", { status: "rejected", rateLimitType: "five_hour" }, NOW)
+    expect(sdkQuota.snapshot("a")).not.toBeNull()
+
+    health.reset("a")
+
+    expect(sdkQuota.snapshot("a")).toBeNull()
   })
 })
 

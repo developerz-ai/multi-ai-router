@@ -1,4 +1,4 @@
-import type { AuthKind } from "@multi-ai-router/core"
+import type { AuthKind, QuotaWindowState } from "@multi-ai-router/core"
 import type { RateLimitSignal, RateLimitWindow } from "../../providers"
 import {
   type AttemptFailure,
@@ -9,6 +9,7 @@ import {
   recordFailure,
   recordSuccess,
 } from "../routing"
+import { foldRateLimit } from "./health-reading"
 
 /**
  * The in-memory health state the pure selection functions read, through `snapshot.ts`.
@@ -41,6 +42,14 @@ export interface AccountHealthState {
    * inventing one would record a fact the provider never stated.
    */
   readonly limiterWindows: readonly RateLimitWindow[]
+  /**
+   * The same readings in the router's own window vocabulary, for the providers that speak it —
+   * today the Claude subscription transport (docs/idea/11-anthropic-agent-sdk.md §5). Every
+   * quota-driven surface reads these, through `overlayHealth`: `quota-window-spent`, `quota-aware`,
+   * `/metrics`, the console's countdowns. Empty means this process has heard nothing yet, so the
+   * stored rows stand rather than being erased by a claim we cannot make.
+   */
+  readonly quotaWindows: readonly QuotaWindowState[]
   readonly lastSignalAt: Date | null
   /**
    * Deadline of the one half-open probe testing this account, or null when none is. Set by
@@ -56,6 +65,7 @@ const FRESH: AccountHealthState = {
   inFlight: 0,
   recentTokens: 0,
   limiterWindows: [],
+  quotaWindows: [],
   lastSignalAt: null,
   probeHeldUntil: null,
 }
@@ -96,6 +106,20 @@ export interface HealthStoreOptions {
   readonly jitter?: () => number
   /** {@link DEFAULT_PROBE_HOLD_MS}. */
   readonly probeHoldMs?: number
+  /**
+   * Fired whenever a signal carried named quota windows, with the whole reading afterwards. The
+   * durable side of quota state hangs off here because this is the one place both transports fold
+   * a reading into. It must not block and must not throw: `applyRateLimit` runs on the request
+   * path, and a reading is worth zero milliseconds of a client's latency (non-negotiable 8).
+   */
+  readonly onQuotaWindows?: (accountId: string, windows: readonly QuotaWindowState[]) => void
+  /**
+   * Fired by {@link HealthStore.reset}, after the marks are dropped. Everything this store holds
+   * goes; state the same request path keeps *elsewhere* — the Agent SDK's per-Account quota
+   * buckets — has to go with it, or the next `rate_limit_event` re-publishes the window the
+   * operator just dismissed.
+   */
+  readonly onReset?: (accountId: string) => void
 }
 
 /** Whether this caller may probe, and whether it took the hold it therefore has to release. */
@@ -211,41 +235,15 @@ export function createHealthStore(options: HealthStoreOptions = {}): HealthStore
 
     applyRateLimit(accountId, signal, now) {
       if (signal === null) return
-      const before = read(accountId).breaker
-      // The reading itself is a fact and is kept either way — the console renders these windows,
-      // and an operator inspecting a dead account still deserves to see what its limiter said.
-      write(accountId, { limiterWindows: signal.windows, lastSignalAt: now })
-      if (!signal.limited) return
-
-      // A terminal verdict outranks a header. `exhausted` and `needs_reauth` mean a human must act;
-      // a cooldown means a clock will fix it, and the two are never conflated (CLAUDE.md
-      // non-negotiable 7). Providers routinely ship `x-ratelimit-remaining-*: 0` *alongside* the
-      // `402` that drained the balance — this is a header riding a response, not a verdict about
-      // it — so folding it in would rewrite "top this account up" as "retry at 14:32", put a dead
-      // balance back in the rotation on a timer, and answer the client `429 + Retry-After` for it.
-      // `blocked` is the breaker's own name for "no timer will change this", so the two definitions
-      // cannot drift apart.
-      if (phase(before, now) === "blocked") return
-
-      // A limited signal on an otherwise fine response is still the account saying "not now".
-      // Routing it through the breaker's own transition keeps one implementation of the
-      // never-shorten rule and of provider-reported-reset preference — and, since the options are
-      // the store's, one set of configured numbers rather than the module defaults this call site
-      // used to fall back to silently.
-      write(accountId, {
-        breaker: recordFailure(
-          before,
-          {
-            kind: "rate-limited",
-            resetsAt: signal.resetsAt,
-            retryAfterSeconds: signal.retryAfterSeconds,
-            resetSource: signal.resetSource,
-            message: "upstream reported the limit was reached",
-          },
-          now,
-          breakerOptions(),
-        ),
-      })
+      // The whole rule — record the reading, never let it overwrite a terminal verdict, otherwise
+      // cool down through the breaker's own transition — lives in `health-reading.ts`, pure.
+      const folded = foldRateLimit(read(accountId), signal, now, breakerOptions())
+      states.set(accountId, folded)
+      // Fired on the reading rather than the verdict: an account whose window just filled is
+      // exactly the one whose gauge has to say so, tripped breaker or not.
+      if (signal.quotaWindows !== undefined) {
+        options.onQuotaWindows?.(accountId, folded.quotaWindows)
+      }
     },
 
     admitProbe(accountId, now) {
@@ -272,6 +270,7 @@ export function createHealthStore(options: HealthStoreOptions = {}): HealthStore
 
     reset(accountId) {
       states.delete(accountId)
+      options.onReset?.(accountId)
     },
 
     entries: () => states,
