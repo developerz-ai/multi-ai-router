@@ -289,6 +289,115 @@ describe("failover", () => {
     expect(usage.rows[0]).toMatchObject({ accountId: "acct-1", streamed: true })
   })
 
+  test("two frames then an upstream break is a truncation relayed to the client, not a retry", async () => {
+    const slow = slowStream(["data: one\n\n", "data: two\n\n"])
+    const { app, upstream, usage } = harness({
+      accounts: twoAccounts,
+      responses: [() => slow.response, () => jsonResponse(200, { shouldNotBeReached: true })],
+    })
+
+    const res = await app.request("/v1/messages", post(MESSAGE, bearer()))
+    if (res.body === null) throw new Error("expected a body")
+    const reader = res.body.getReader()
+
+    slow.release(0)
+    expect(new TextDecoder().decode((await reader.read()).value)).toContain("one")
+    slow.release(1)
+    expect(new TextDecoder().decode((await reader.read()).value)).toContain("two")
+
+    // The upstream errors after two frames are already on the wire. The client gets a truncated
+    // stream — the honest answer — never a silent restart on the account behind it.
+    slow.abort()
+    const tail = await reader.read().catch(() => undefined)
+    expect(tail === undefined || tail.done).toBe(true)
+    await settle()
+
+    expect(upstream.calls).toHaveLength(1)
+    expect(upstream.calls[0]?.headers.get("x-api-key")).toBe("sk-one")
+    expect(usage.rows).toHaveLength(1)
+    expect(usage.rows[0]).toMatchObject({ accountId: "acct-1", streamed: true })
+  })
+
+  test("fails over when the upstream never answers at all, and the failover is bounded", async () => {
+    // A connect failure before any headers exist — `fetch` itself rejects, the same shape a DNS
+    // failure or a dropped TCP handshake produces. Unlike a partial stream, no byte has reached
+    // the client, so failover is not merely allowed, it is expected.
+    const { app, upstream } = harness({
+      accounts: twoAccounts,
+      responses: [
+        () => {
+          throw new Error("connect failed")
+        },
+        () => jsonResponse(200, { served: true }),
+      ],
+    })
+
+    const res = await app.request("/v1/messages", post(MESSAGE, bearer()))
+
+    expect(res.status).toBe(200)
+    expect(await res.json()).toEqual({ served: true })
+    expect(upstream.calls).toHaveLength(2)
+    expect(upstream.calls[1]?.headers.get("x-api-key")).toBe("sk-two")
+  })
+
+  test("connect failures on every candidate still stop well short of exhausting the pool", async () => {
+    const five = ["a", "b", "c", "d", "e"].map((id) =>
+      account(id, { apiKey: `sk-${id}`, cipher: CRYPTOR }),
+    )
+    const { app, upstream } = harness({
+      accounts: five,
+      responses: [
+        () => {
+          throw new Error("connect failed")
+        },
+      ],
+    })
+
+    const res = await app.request("/v1/messages", post(MESSAGE, bearer()))
+
+    expect(res.status).toBeGreaterThanOrEqual(500)
+    expect(upstream.calls).toHaveLength(3)
+  })
+
+  test("a client that disconnects mid-stream releases the upstream call, with no orphan", async () => {
+    const slow = slowStream(["data: partial\n\n"])
+    const { app, upstream, usage } = harness({
+      accounts: twoAccounts,
+      responses: [() => slow.response, () => jsonResponse(200, { shouldNotBeReached: true })],
+    })
+
+    const client = new AbortController()
+    const res = await app.request("/v1/messages", {
+      ...post(MESSAGE, bearer()),
+      signal: client.signal,
+    })
+    if (res.body === null) throw new Error("expected a body")
+    const reader = res.body.getReader()
+
+    slow.release(0)
+    expect(new TextDecoder().decode((await reader.read()).value)).toContain("partial")
+
+    const upstreamSignal = upstream.calls[0]?.signal
+    expect(upstreamSignal?.aborted).toBe(false)
+    // What a real transport does when its request signal fires mid-stream: the connection drops
+    // and the body it was reading errors. The stub upstream has no real socket to drop, so this
+    // wires the same reaction by hand — the fixture-level equivalent of unplugging the cable.
+    upstreamSignal?.addEventListener("abort", () => slow.abort())
+
+    // The client goes away. The upstream call's own signal — the one `fetch` was actually sent
+    // with — must fire too, or the request keeps running on the account with nothing left to
+    // consume it: an orphaned upstream call charged to no one's response.
+    client.abort()
+    await reader.read().catch(() => undefined)
+    await settle()
+
+    expect(upstreamSignal?.aborted).toBe(true)
+    // No second account is ever tried for a client that left mid-stream.
+    expect(upstream.calls).toHaveLength(1)
+    expect(usage.rows).toHaveLength(1)
+    expect(usage.rows[0]).toMatchObject({ accountId: "acct-1", streamed: true })
+  })
+
   test("bounds the attempts well under the candidate count", async () => {
     const five = ["a", "b", "c", "d", "e"].map((id) =>
       account(id, { apiKey: `sk-${id}`, cipher: CRYPTOR }),

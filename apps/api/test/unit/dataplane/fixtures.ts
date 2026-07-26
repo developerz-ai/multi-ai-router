@@ -168,6 +168,10 @@ export interface UpstreamCall {
   readonly method: string
   readonly headers: Headers
   readonly body: string
+  /** The signal this attempt's own fetch was sent with — timeout-bound, and abort-linked to the
+   *  client's own signal. Lets a test prove a client's disconnect actually reaches the upstream
+   *  call rather than orphaning it. */
+  readonly signal: AbortSignal
 }
 
 /** A scripted upstream. Each entry answers one call, in order; the last one repeats. */
@@ -185,6 +189,7 @@ export function mockUpstream(responses: readonly (() => Response)[]): {
         method: request.method,
         headers: new Headers(request.headers),
         body,
+        signal: request.signal,
       })
       const make = responses[Math.min(calls.length - 1, responses.length - 1)]
       if (make === undefined) throw new Error("mockUpstream: no response scripted")
