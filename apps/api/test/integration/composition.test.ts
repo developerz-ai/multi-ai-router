@@ -46,7 +46,16 @@ const logger = createLogger({ level: "error", write: () => undefined })
 function composed(overrides: Record<string, string>): { env: Env; runtime: Runtime } {
   const env = parseEnv({ ...base, ...overrides })
   handle = createDatabase({ url: env.databaseUrl })
-  return { env, runtime: createRuntime({ env, database: handle.db, sql: handle.sql, logger }) }
+  return {
+    env,
+    runtime: createRuntime({
+      env,
+      database: handle.db,
+      sql: handle.sql,
+      dbPoolStats: handle.poolStats,
+      logger,
+    }),
+  }
 }
 
 function runtimeWith(overrides: Record<string, string>): Runtime {

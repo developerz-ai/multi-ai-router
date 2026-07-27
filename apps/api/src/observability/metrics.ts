@@ -35,6 +35,24 @@ export interface AccountMetric {
   /** Health-overlaid, not the stored row: what the router currently believes. */
   readonly status: string
   readonly quotaWindows?: readonly QuotaWindowState[]
+  /** The breaker's own `phase()` — `closed`, `open`, `half-open`, or `blocked`. */
+  readonly breakerPhase: string
+}
+
+/** Every value `phase()` can return, so the gauge can zero the ones an account is not in. */
+const BREAKER_PHASES = ["closed", "open", "half-open", "blocked"] as const
+
+/** Cumulative admits/refusals off `HealthStore.probeStats()`, read once per scrape. */
+export interface ProbeAdmissionSample {
+  readonly admitted: number
+  readonly refused: number
+}
+
+/** postgres.js connections by state — `packages/db/src/pool-metrics.ts` computes the sample. */
+export interface DbPoolSample {
+  readonly inUse: number
+  readonly idle: number
+  readonly waiting: number
 }
 
 export interface UsageQueueSample {
@@ -67,6 +85,10 @@ export interface RouterMetrics {
    * semaphore that reported every acquire would put bookkeeping on the path it is bounding.
    */
   setSdkConcurrency(sample: SdkConcurrencySample): void
+  /** Cumulative-to-delta off `HealthStore.probeStats()`, read per scrape like the two above. */
+  setProbeAdmissions(sample: ProbeAdmissionSample): void
+  /** Per scrape, from the pool wrapper's own in-flight count — see `DbPoolSample`. */
+  setDbPool(sample: DbPoolSample): void
   /**
    * When the operator's price overrides were last loaded, from the warm book's own `loadedAt()`.
    * `null` before the first successful load leaves the gauge absent rather than reporting the
@@ -131,6 +153,8 @@ export function createMetrics(options: MetricsOptions = {}): RouterMetrics {
   let droppedSeen = 0
   let retriedSeen = 0
   let discardedSeen = 0
+  let probeAdmittedSeen = 0
+  let probeRefusedSeen = 0
 
   // Set once, here, rather than from a per-scrape collector: neither label can change while the
   // process runs, and `setAccounts` clears only the gauges it rebuilds, so this one survives.
@@ -252,6 +276,7 @@ export function createMetrics(options: MetricsOptions = {}): RouterMetrics {
       s.quotaUtilization.clear()
       s.quotaReset.clear()
       s.quotaLastChecked.clear()
+      s.breakerState.clear()
       const at = now().getTime()
 
       const counts = new Map<string, number>()
@@ -259,6 +284,12 @@ export function createMetrics(options: MetricsOptions = {}): RouterMetrics {
         const key = `${account.provider} ${account.status}`
         counts.set(key, (counts.get(key) ?? 0) + 1)
         setQuota(s, account, at)
+        for (const phase of BREAKER_PHASES) {
+          s.breakerState.set(
+            { account_id: account.id, phase },
+            phase === account.breakerPhase ? 1 : 0,
+          )
+        }
       }
       // Every status of every provider present, zeros included: an alert on `exhausted` must see
       // the number fall to zero, not watch the series vanish.
@@ -292,6 +323,21 @@ export function createMetrics(options: MetricsOptions = {}): RouterMetrics {
     setSdkConcurrency(sample) {
       s.sdkSubprocesses.set({}, sample.inFlight)
       s.sdkSubprocessQueueDepth.set({}, sample.queued)
+    },
+
+    setProbeAdmissions(sample) {
+      probeAdmittedSeen = advance(probeAdmittedSeen, sample.admitted, (delta) =>
+        s.breakerProbeAdmissions.inc({ result: "admitted" }, delta),
+      )
+      probeRefusedSeen = advance(probeRefusedSeen, sample.refused, (delta) =>
+        s.breakerProbeAdmissions.inc({ result: "refused" }, delta),
+      )
+    },
+
+    setDbPool(sample) {
+      s.dbPoolConnections.set({ state: "in_use" }, sample.inUse)
+      s.dbPoolConnections.set({ state: "idle" }, sample.idle)
+      s.dbPoolConnections.set({ state: "waiting" }, sample.waiting)
     },
 
     onCollect: (collect) => s.registry.onCollect(collect),

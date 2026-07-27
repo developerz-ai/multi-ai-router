@@ -10,6 +10,7 @@ import {
   createUsageDailyRepository,
   createUsageRecordRepository,
   type Database,
+  type PoolSample,
   type SqlConnection,
 } from "@multi-ai-router/db"
 import type { Env } from "../config/env"
@@ -69,6 +70,8 @@ export interface RuntimeDeps {
   readonly database: Database
   /** The pool behind `database`. One consumer, `schedulerFromEnv` — see the note on its deps. */
   readonly sql: SqlConnection
+  /** The same pool's own occupancy sample, for `router_db_pool_connections` — `main.ts`. */
+  readonly dbPoolStats: () => PoolSample
   readonly logger: Logger
 }
 
@@ -209,6 +212,7 @@ export function createRuntime(deps: RuntimeDeps): Runtime {
     health,
     usage: () => usage,
     sdkConcurrency,
+    dbPool: { sample: deps.dbPoolStats },
     prices,
     logger,
     now,

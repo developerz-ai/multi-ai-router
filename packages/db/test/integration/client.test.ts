@@ -99,4 +99,36 @@ describe("createDatabase", () => {
       closeTimeoutSeconds: 5,
     })
   })
+
+  describe("poolStats", () => {
+    test.skipIf(skip)("reports idle equal to the ceiling when nothing is running", async () => {
+      const handle = createDatabase({ url: databaseUrl ?? "", maxConnections: 3 })
+      try {
+        expect(handle.poolStats()).toEqual({ inUse: 0, idle: 3, waiting: 0, max: 3 })
+      } finally {
+        await handle.close()
+      }
+    })
+
+    test.skipIf(skip)(
+      "counts overlapping statements as in_use, and the excess as waiting",
+      async () => {
+        const handle = createDatabase({ url: databaseUrl ?? "", maxConnections: 2 })
+        try {
+          // Five overlapping statements on a pool of two: two run, three queue behind them — the same
+          // thing postgres.js's own internal queue is doing, seen from the outside.
+          const inFlight = Array.from({ length: 5 }, () => handle.sql`select pg_sleep(0.2)`)
+          // Let every statement actually dispatch before sampling.
+          await Bun.sleep(50)
+
+          expect(handle.poolStats()).toEqual({ inUse: 2, idle: 0, waiting: 3, max: 2 })
+
+          await Promise.all(inFlight)
+          expect(handle.poolStats()).toEqual({ inUse: 0, idle: 2, waiting: 0, max: 2 })
+        } finally {
+          await handle.close()
+        }
+      },
+    )
+  })
 })

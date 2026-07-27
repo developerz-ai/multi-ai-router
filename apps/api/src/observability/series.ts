@@ -179,6 +179,42 @@ export function createSeries(options: RegistryOptions = {}) {
     }),
 
     /**
+     * The breaker's own `phase()` (docs/idea/05-routing-and-failover.md), not the stored `status` —
+     * `router_accounts{status="cooling_down"}` only implies whether a timer or a human recovers an
+     * account, never whether it is still counting down or already eligible for a probe. One series
+     * per account per phase, zeroed for the phases it is not in, so an alert on `phase="blocked"`
+     * falling to zero is a fact about the account, not a vanished series.
+     */
+    breakerState: registry.gauge({
+      name: "router_breaker_state",
+      help: "1 for an account's current circuit-breaker phase (closed, open, half-open, blocked), 0 for the others.",
+      labels: ["account_id", "phase"],
+    }),
+
+    /**
+     * The gate `HealthStore.admitProbe` enforces — see its own doc comment. Sustained `refused` is
+     * exactly the traffic the gate exists to describe: a recovering account with more requests
+     * queued behind it than the one probe it allows through.
+     */
+    breakerProbeAdmissions: registry.counter({
+      name: "router_breaker_probe_admissions_total",
+      help: "Half-open probes admitted vs refused. refused is other requests finding the one probe already taken, not an error.",
+      labels: ["result"],
+    }),
+
+    /**
+     * postgres.js does not expose reserved/idle/waiting counts (`packages/db/src/pool-metrics.ts`),
+     * so this counts concurrently in-flight statements instead: below `max` that is exactly the
+     * number of connections doing work, and at or beyond it the excess is the driver's own internal
+     * queue admitting them one at a time — the same thing it would call `waiting` if it said so.
+     */
+    dbPoolConnections: registry.gauge({
+      name: "router_db_pool_connections",
+      help: "Postgres connections by state — in_use, idle, waiting. Approximated from in-flight statements; the fixed pool ceiling is DB_POOL_MAX.",
+      labels: ["state"],
+    }),
+
+    /**
      * The `claude` subprocess ceiling, seen from inside. Unlabelled by Account on purpose: the thing
      * being bounded is this container's memory, which is one number, and a per-Account series would
      * grow with the inventory to say something the queue depth already says.

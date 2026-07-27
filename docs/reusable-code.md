@@ -158,6 +158,7 @@ Each is a Zod schema **and** its `z.infer` type under one name. These are the si
 | `createSeries(options)` → `RouterSeries` | `observability/series.ts` | Adding or renaming a series. **Every** exported metric is declared here and nowhere else; the mapping code never names a metric |
 | `createMetrics(options)` → `RouterMetrics` | `observability/metrics.ts` | Turning a `UsageRecord`, a finished request, or a scheduler tick into numbers. Never measures anything itself |
 | `createRuntimeMetrics(deps)` → `RouterMetrics` | `observability/runtime.ts` | The production wiring: the registry plus the per-scrape gauges read from the warm catalog and health store. `composition.ts` is its one caller |
+| `trackPool(sql, max)` → `{ sql, sample() }` | `packages/db/src/pool-metrics.ts` | Counting in-flight/idle/waiting connections against a postgres.js pool, when the driver itself exposes no such stat. Wraps tagged-template calls, `.unsafe` (how Drizzle issues every query), `.begin`, and `.reserve` via one `Proxy` — wrap the raw client with this before handing it to `drizzle(...)`, never after |
 
 Recording is off the critical path by construction: attempt series ride the usage recorder's
 `onRecord` drain, state gauges are sampled per scrape, and the only per-request call is a single
