@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test"
+import { generateRouterKey, ROUTER_KEY_PREFIX } from "@multi-ai-router/core"
 import {
   DATABASE_POOL_DEFAULTS,
   PG_MAX_BIND_PARAMETERS,
@@ -7,6 +8,7 @@ import {
 } from "@multi-ai-router/db"
 import type { z } from "zod"
 import { ENV_FIELDS, EnvValidationError, parseEnv, ZERO_IS_LEGAL } from "../../src/config/env"
+import { ADMIN_API_TOKEN_MIN_LENGTH } from "../../src/services/admin-auth"
 import { DEFAULT_MAX_BODY_BYTES } from "../../src/services/dataplane"
 
 const ENCRYPTION_KEY = Buffer.alloc(32, 7).toString("base64")
@@ -188,6 +190,42 @@ describe("parseEnv", () => {
 
       expect(error.variables).toEqual(["ADMIN_PASSWORD", "ADMIN_PASSWORD_HASH"])
       expect(error.message).toContain("exactly one of ADMIN_PASSWORD or ADMIN_PASSWORD_HASH")
+    })
+  })
+
+  /**
+   * The admin plane's non-browser credential. Both rules are boot failures rather than warnings
+   * for the same reason: each produces a control plane that *looks* configured. A short token is
+   * one nothing rate-limits and anything can guess; a router-prefixed one is refused by the admin
+   * guard before it is ever compared, so it authenticates nothing while reading as correct.
+   */
+  describe("ADMIN_API_TOKEN", () => {
+    const token = "a".repeat(ADMIN_API_TOKEN_MIN_LENGTH)
+
+    test("is null unless the operator sets one — the plane stays browser-only by default", () => {
+      expect(parseEnv(base).adminApiToken).toBeNull()
+      expect(parseEnv({ ...base, ADMIN_API_TOKEN: "" }).adminApiToken).toBeNull()
+    })
+
+    test("is taken as given when it clears both rules", () => {
+      expect(parseEnv({ ...base, ADMIN_API_TOKEN: token }).adminApiToken).toBe(token)
+    })
+
+    test("boot refuses a token short enough to guess, naming the variable", () => {
+      const error = expectEnvError({
+        ...base,
+        ADMIN_API_TOKEN: "a".repeat(ADMIN_API_TOKEN_MIN_LENGTH - 1),
+      })
+
+      expect(error.variables).toEqual(["ADMIN_API_TOKEN"])
+      expect(error.message).toContain(`at least ${ADMIN_API_TOKEN_MIN_LENGTH} characters`)
+    })
+
+    test("boot refuses a token wearing the router-key prefix", () => {
+      const error = expectEnvError({ ...base, ADMIN_API_TOKEN: generateRouterKey() })
+
+      expect(error.variables).toEqual(["ADMIN_API_TOKEN"])
+      expect(error.message).toContain(ROUTER_KEY_PREFIX)
     })
   })
 

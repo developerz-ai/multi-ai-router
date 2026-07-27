@@ -9,6 +9,8 @@ import { requestId } from "../../src/middleware/requestId"
 import { ADMIN_AUTH_BASE_PATH, adminAuthRoutes } from "../../src/routes/admin/auth"
 import type { AdminAuthConfig } from "../../src/services/admin-auth"
 import {
+  ADMIN_API_TOKEN_ACTOR,
+  ADMIN_API_TOKEN_MIN_LENGTH,
   CSRF_HEADER,
   SESSION_COOKIE_NAME,
   sessionCookieFullName,
@@ -34,7 +36,11 @@ const KEYS = "/api/admin/keys"
 /** The default, hardened wire name. `__Host-mar_admin_session`. */
 const HARDENED_NAME = sessionCookieFullName(false)
 
-function harness(config: Partial<AdminAuthConfig> = {}, sessionCookieInsecure = false) {
+function harness(
+  config: Partial<AdminAuthConfig> = {},
+  sessionCookieInsecure = false,
+  apiToken: string | null = null,
+) {
   const clock = { nowMs: 1_700_000_000_000 }
   const service = createAdminAuthService({
     env: {
@@ -60,11 +66,11 @@ function harness(config: Partial<AdminAuthConfig> = {}, sessionCookieInsecure = 
   app.notFound(notFoundHandler())
   app.route(
     ADMIN_AUTH_BASE_PATH,
-    adminAuthRoutes({ service, trustProxy: false, sessionCookieInsecure }),
+    adminAuthRoutes({ service, trustProxy: false, sessionCookieInsecure, apiToken }),
   )
 
   const keys = new Hono<AdminAuthEnv>()
-  keys.use("*", adminAuth(service, sessionCookieInsecure))
+  keys.use("*", adminAuth(service, sessionCookieInsecure, apiToken))
   keys.get("/", (c) => c.json({ username: c.get("adminSession").username }))
   keys.post("/", (c) => c.json({ minted: true }, 201))
   app.route(KEYS, keys)
@@ -445,5 +451,102 @@ describe("the two credential spaces never overlap", () => {
       expect(res.status).toBe(401)
       expect(await res.json()).toMatchObject(refused)
     }
+  })
+})
+
+/**
+ * `ADMIN_API_TOKEN` — the non-browser way into the admin plane. The plane was always a REST API;
+ * what it could not accept was a caller with no cookie jar. These pin the boundary that makes that
+ * safe: the token opens the admin plane and only the admin plane, a router key never becomes one,
+ * and the plane stays exactly as it was when no token is configured.
+ */
+describe("admin api token", () => {
+  const TOKEN = "z".repeat(ADMIN_API_TOKEN_MIN_LENGTH)
+
+  test("reads and writes with a bearer token, and needs no CSRF token to do it", async () => {
+    const { app } = harness({}, false, TOKEN)
+    const headers = { authorization: `Bearer ${TOKEN}` }
+
+    const read = await get(app, KEYS, headers)
+    expect(read.status).toBe(200)
+    expect(await read.json()).toEqual({ username: ADMIN_API_TOKEN_ACTOR })
+
+    // The mutation is the point: a script holds no session, so it can never mint a CSRF token.
+    expect((await post(app, KEYS, headers)).status).toBe(201)
+  })
+
+  test("the plane is closed to it when no token is configured", async () => {
+    const { app } = harness()
+
+    expect((await get(app, KEYS, { authorization: `Bearer ${TOKEN}` })).status).toBe(401)
+  })
+
+  test("a wrong token is a 401, not a fallback to some other credential", async () => {
+    const { app } = harness({}, false, TOKEN)
+
+    expect((await get(app, KEYS, { authorization: `Bearer ${"y".repeat(48)}` })).status).toBe(401)
+    expect((await get(app, KEYS, { authorization: "Bearer " })).status).toBe(401)
+  })
+
+  /**
+   * The ordering rule in the guard, asserted rather than assumed: the router-key rejection runs
+   * first, so no value beginning `mar_live_` can reach the token comparison — however the operator
+   * configured it. `env.ts` refuses such a token at boot for the same reason; this is the backstop
+   * under it.
+   */
+  test("a router key is still refused outright, even when it IS the configured token", async () => {
+    const key = generateRouterKey()
+    const { app } = harness({}, false, key)
+
+    const res = await get(app, KEYS, { authorization: `Bearer ${key}` })
+    expect(res.status).toBe(401)
+    expect(await res.json()).toMatchObject({ error: { code: "admin_auth_failed" } })
+  })
+
+  test("the token does not reach the data plane's own header slot", async () => {
+    const { app } = harness({}, false, TOKEN)
+
+    expect((await get(app, KEYS, { "x-api-key": TOKEN })).status).toBe(401)
+  })
+
+  /** The call a script makes to check its credential — and the one an infinite expiry could 500. */
+  test("GET /session answers the token holder with a null expiry, not a RangeError", async () => {
+    const { app } = harness({}, false, TOKEN)
+
+    const res = await get(app, SESSION, { authorization: `Bearer ${TOKEN}` })
+
+    expect(res.status).toBe(200)
+    expect(await res.json()).toMatchObject({
+      username: ADMIN_API_TOKEN_ACTOR,
+      csrfToken: "",
+      expiresAt: null,
+    })
+  })
+
+  test("logout says a static token is not a session rather than reporting a revocation", async () => {
+    const { app } = harness({}, false, TOKEN)
+
+    const res = await post(app, LOGOUT, { authorization: `Bearer ${TOKEN}` })
+
+    expect(res.status).toBe(400)
+    // Still valid afterwards — which is exactly what the 400 said would happen.
+    expect((await get(app, KEYS, { authorization: `Bearer ${TOKEN}` })).status).toBe(200)
+  })
+
+  test("a cookie session still works, and still needs its CSRF token, alongside a token", async () => {
+    const { app } = harness({}, false, TOKEN)
+    const { cookie, csrfToken } = await loggedIn(app)
+
+    expect((await get(app, KEYS, { cookie })).status).toBe(200)
+    expect((await post(app, KEYS, { cookie })).status).toBe(403)
+    expect((await post(app, KEYS, { cookie, [CSRF_HEADER]: csrfToken })).status).toBe(201)
+  })
+
+  /** An empty `csrfToken` on the synthesized session must never be a token that *matches*. */
+  test("an empty CSRF header cannot borrow the token session's empty token", async () => {
+    const { app } = harness({}, false, TOKEN)
+    const { cookie } = await loggedIn(app)
+
+    expect((await post(app, KEYS, { cookie, [CSRF_HEADER]: "" })).status).toBe(403)
   })
 })

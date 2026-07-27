@@ -200,7 +200,8 @@ export interface SessionView {
   readonly username: string
   readonly csrfToken: string
   readonly issuedAt: string
-  readonly expiresAt: string
+  /** Null for a session with no expiry — a static `ADMIN_API_TOKEN`, which the console never uses. */
+  readonly expiresAt: string | null
 }
 
 /** What every `DELETE` answers with. */

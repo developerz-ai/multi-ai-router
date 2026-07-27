@@ -5,6 +5,7 @@ import { z } from "zod"
 import { renderErrorBody } from "../../errors/render"
 import { type AdminAuthEnv, adminAuth } from "../../middleware/adminAuth"
 import {
+  ADMIN_API_TOKEN_ACTOR,
   type AdminAuthService,
   type AdminSession,
   SESSION_COOKIE_NAME,
@@ -37,6 +38,12 @@ export interface AdminAuthRoutesDeps {
    * that answers `200` and a session nothing ever sees again.
    */
   readonly sessionCookieInsecure: boolean
+  /**
+   * `Env.adminApiToken`, handed to the guard this factory builds so `/session` answers a
+   * token-authenticated caller too — which is how a script checks its credential is live without
+   * mutating anything. Null leaves the plane browser-only.
+   */
+  readonly apiToken?: string | null
 }
 
 const loginSchema = z.object({
@@ -48,7 +55,7 @@ const loginSchema = z.object({
 
 export function adminAuthRoutes(deps: AdminAuthRoutesDeps): Hono<AdminAuthEnv> {
   const routes = new Hono<AdminAuthEnv>()
-  const guard = adminAuth(deps.service, deps.sessionCookieInsecure)
+  const guard = adminAuth(deps.service, deps.sessionCookieInsecure, deps.apiToken ?? null)
 
   routes.post("/login", async (c) => {
     const body = await readJson(c.req.raw)
@@ -77,9 +84,26 @@ export function adminAuthRoutes(deps: AdminAuthRoutesDeps): Hono<AdminAuthEnv> {
   })
 
   routes.post("/logout", guard, async (c) => {
+    const session = c.get("adminSession")
+    // A static token is not a session and cannot be ended by a request. Saying so is the point:
+    // answering `logged_out` would report a revocation that did not happen, and the caller would
+    // go on holding a credential it believes it just surrendered. Revoking this one means changing
+    // the variable and restarting.
+    if (session.username === ADMIN_API_TOKEN_ACTOR) {
+      return c.json(
+        renderErrorBody(
+          null,
+          400,
+          "ADMIN_API_TOKEN is a static credential, not a session — it is revoked by changing the variable and restarting the router",
+          "invalid_request",
+        ),
+        400,
+      )
+    }
+
     // The source address rides along for the same reason login's does: the audit row for a
     // session ending is only useful next to the one that started it.
-    await deps.service.logout(c.get("adminSession").id, clientIp(c, deps.trustProxy))
+    await deps.service.logout(session.id, clientIp(c, deps.trustProxy))
     deleteCookie(c, SESSION_COOKIE_NAME, sessionCookieOptions(0, deps.sessionCookieInsecure))
     return c.json({ status: "logged_out" })
   })
@@ -121,12 +145,17 @@ function warnIfCookieUndeliverable(c: Context<AdminAuthEnv>, insecure: boolean):
  * body and unsafe in a readable cookie for the same reason: the body is protected by the same
  * origin policy, a cookie is shared with every sibling host — see `services/admin-auth/csrf.ts`.
  */
-function sessionBody(session: AdminSession): Record<string, string> {
+function sessionBody(session: AdminSession): Record<string, string | null> {
+  const expiry = sessionExpiryMs(session)
   return {
     username: session.username,
     csrfToken: session.csrfToken,
     issuedAt: new Date(session.createdAtMs).toISOString(),
-    expiresAt: new Date(sessionExpiryMs(session)).toISOString(),
+    // `null`, not an instant: a static `ADMIN_API_TOKEN` has no expiry at all, and its session
+    // says so with an infinite bound (`admin-auth/apiToken.ts`). Rendering that through `Date`
+    // would throw `RangeError`, turning `GET /session` — the call a script makes precisely to
+    // check its credential — into a 500.
+    expiresAt: Number.isFinite(expiry) ? new Date(expiry).toISOString() : null,
   }
 }
 

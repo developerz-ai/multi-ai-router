@@ -417,6 +417,28 @@ Each classification also records **which signal decided it** (`openai:insufficie
 `minimax:base_resp-1008`, …) so a misclassification is debuggable rather than a mystery. Expect
 drift: a vendor renaming a code is a one-file fix, and that is the whole point of pinning them.
 
+### The mirror image: a spent *plan window* that reads like something permanent
+
+The table above is about not mistaking a dead balance for a cooldown. These two are the same
+mistake pointing the other way — a window a clock refills, announced with a status that classifies
+as permanent. Both were **observed live against the vendor endpoints on 2026-07-27**, and both are
+in the same driver files.
+
+| Provider | What arrives | What the status alone would do | What the driver does |
+|---|---|---|---|
+| `kimi` | `403` · `error.type: permission_error` · *"You've reached your usage limit for this billing cycle. Your quota will be refreshed in the next cycle."* | `403` defaults to `auth`, and an `api-key` account's auth failure parks at **`disabled`** — a state no timer lifts. A cycle Kimi itself refills would need an operator to re-enable a credential that was never broken | Matches the **wording**, not the type — `permission_error` is also Kimi's genuine "this key may not do that", which really is an auth failure and must keep falling through. Signal: `kimi:billing-cycle-limit` → `rate-limited` |
+| `zai` | `429` · `error.code: 1310` · *"Weekly/Monthly Limit Exhausted. Your limit will reset at 2026-08-01 10:03:40"* | `429` already reads as `rate-limited`, so the *kind* was never wrong. The **reset** was: z.ai sends no `retry-after` and no `x-ratelimit-*` at all, so the breaker fell back to its exponential backoff, capped at five minutes. A **weekly** window would be re-probed every five minutes for the days it had left to run | Reads the instant out of the message and reports it as `provider-reported`. Signal: `zai:window-exhausted` |
+
+The z.ai stamp carries no offset and is **UTC+8**, established by comparing z.ai's own request-id
+prefix against the UTC instant the response was received — an eight-hour lead, i.e. Asia/Shanghai,
+where Zhipu operates. If that ever drifts it is one constant in `drivers/zai.ts`, and the direction
+the router is wrong in was chosen deliberately: reading a UTC+8 stamp as UTC would park a recovered
+account for eight extra hours, where probing early costs one more `429`.
+
+Both are the same rule as the table above, and the same one as
+[non-negotiable 7](../../CLAUDE.md): **`cooling_down` is not `exhausted`, and neither is `auth`.**
+A window that a clock reopens must never land in a state only a human can leave.
+
 The interesting part is the **model alias map**. These providers expect their own model ids,
 while a client like Claude Code sends `opus`, `sonnet`, or `haiku` and has no idea it is
 talking to anything else. The router honors the client's model name (that is the central

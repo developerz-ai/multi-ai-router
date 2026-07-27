@@ -6,6 +6,8 @@ import {
   geminiOverloadBody,
   geminiRateLimitBody,
   geminiUnauthenticatedBody,
+  kimiCycleLimitBody,
+  kimiPermissionDeniedBody,
   kimiQuotaBody,
   kimiRateLimitBody,
   miniMaxBalanceBody,
@@ -14,6 +16,7 @@ import {
   response,
   zaiBalanceBody,
   zaiThrottleBody,
+  zaiWindowExhaustedBody,
 } from "./fixtures"
 
 /**
@@ -64,6 +67,38 @@ describe("zai", () => {
 
     expect(result?.signal).toBe("zai:insufficient-balance")
   })
+
+  /**
+   * A spent plan window, as the live endpoint reports it: `1310`, no headers at all, and the reset
+   * stated once inside the message. Reading it is what keeps a *weekly* window from being re-probed
+   * on the breaker's five-minute backoff for the four days it has left to run.
+   */
+  test("1310 is a cooldown the plan's own clock lifts, not a drained balance", () => {
+    const result = zai?.classifyFailure(response(429, { body: zaiWindowExhaustedBody }))
+
+    expect(result?.kind).toBe("rate-limited")
+    expect(result?.signal).toBe("zai:window-exhausted")
+    expect(result?.retryable).toBe(true)
+  })
+
+  test("the reset buried in the 1310 message is read as UTC+8 and reported, not estimated", () => {
+    const result = zai?.classifyFailure(response(429, { body: zaiWindowExhaustedBody }))
+
+    // 2026-08-01 10:03:40 in Asia/Shanghai is 02:03:40Z.
+    expect(result?.rateLimit?.resetsAt?.toISOString()).toBe("2026-08-01T02:03:40.000Z")
+    expect(result?.rateLimit?.resetSource).toBe("provider-reported")
+    expect(result?.rateLimit?.limited).toBe(true)
+    expect(result?.rateLimit?.windows.map((window) => window.limiter)).toContain("weekly-monthly")
+  })
+
+  test("a throttle carrying no reset still reads its headers, and invents nothing", () => {
+    const result = zai?.classifyFailure(
+      response(429, { headers: { "retry-after": "30" }, body: zaiThrottleBody }),
+    )
+
+    expect(result?.rateLimit?.retryAfterSeconds).toBe(30)
+    expect(result?.rateLimit?.windows).toHaveLength(0)
+  })
 })
 
 describe("kimi", () => {
@@ -72,6 +107,26 @@ describe("kimi", () => {
 
     expect(result?.kind).toBe("credits-exhausted")
     expect(result?.signal).toBe("kimi:exceeded_current_quota_error")
+  })
+
+  /**
+   * The live shape of a spent plan, and the one that used to be silently destructive: a 403 falls
+   * to the status default `auth`, and an `api-key` account's auth failure parks at `disabled`
+   * (`routing/breaker.ts`) — permanently, for a cycle Kimi itself refills.
+   */
+  test("a spent billing cycle is a cooldown, though Kimi announces it as a 403", () => {
+    const result = kimi?.classifyFailure(response(403, { body: kimiCycleLimitBody }))
+
+    expect(result?.kind).toBe("rate-limited")
+    expect(result?.signal).toBe("kimi:billing-cycle-limit")
+    expect(result?.retryable).toBe(true)
+  })
+
+  test("the other permission_error is still a real auth failure", () => {
+    const result = kimi?.classifyFailure(response(403, { body: kimiPermissionDeniedBody }))
+
+    expect(result?.kind).toBe("auth")
+    expect(result?.signal).toBe("http-status:403")
   })
 
   test("rate_limit_reached_error is a cooldown", () => {

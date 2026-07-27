@@ -128,6 +128,7 @@ one) is named explicitly rather than silently approximated.
 | **Operator console** — settings | ✅ session, provider registry, price overrides, retention knobs, scheduled-task health, and the audit feed are all live |
 | Background tasks: janitor/retention sweeps, usage rollups, OAuth-state purge, quota floor — in-process timers, one advisory lock per task | ✅ |
 | **`/metrics`** | ✅ Prometheus exposition, token-gated when `METRICS_TOKEN` is set |
+| **Admin API without a browser** | ✅ set `ADMIN_API_TOKEN` and every `/api/admin/**` route takes `Authorization: Bearer …` — accounts, pools, keys, usage, settings, all scriptable. Unset leaves the plane browser-only |
 | **Cost estimation and per-key rate-limit enforcement** | ✅ operator-editable price table plus a per-key sliding-window limiter on the request path |
 
 The contract is [`docs/idea/`](docs/idea/): entity names, endpoints, policies, env vars, and invariants

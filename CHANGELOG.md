@@ -5,6 +5,35 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.0] — 2026-07-27
+
+### Added
+
+- `ADMIN_API_TOKEN` — a bearer credential for `/api/admin/**`, so the admin API
+  can be driven by a script, a CI job, or an agent rather than only a browser
+  session. Unset by default, which leaves the plane browser-only. Boot refuses a
+  token under 32 characters (nothing rate-limits this credential the way the
+  login form is throttled) or one wearing the `mar_live_` router-key prefix (the
+  admin guard rejects that prefix outright, so it would authenticate nothing).
+  Router keys still cannot reach the admin plane under any configuration.
+
+### Fixed
+
+- **Kimi: a spent billing cycle disabled the account permanently.** Kimi
+  announces it as `403 permission_error`, which fell through to the status
+  default `auth` — and an `api-key` account's auth failure parks at `disabled`,
+  a state no timer lifts. An operator had to re-enable a credential that was
+  never broken, for a quota Kimi refills on its own clock. Now classified
+  `rate-limited` off the wording, so the genuine `permission_error` still reads
+  as an auth failure.
+- **z.ai: a spent weekly plan window was re-probed every five minutes.** z.ai
+  reports the reset instant only inside the error message — no `retry-after`, no
+  `x-ratelimit-*` — so the breaker fell back to its backoff, capped at five
+  minutes, against a window with days left to run. The instant is now parsed and
+  reported as `provider-reported`, and `1310` is pinned as its own signal.
+- `GET /api/admin/auth/session` no longer risks a `RangeError` when rendering a
+  session with no expiry.
+
 ## [1.0.0] — 2026-07-26
 
 First stable release. Multi AI Router is a self-hosted proxy: point your tools

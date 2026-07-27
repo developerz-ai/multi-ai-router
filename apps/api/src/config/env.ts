@@ -2,6 +2,7 @@ import { isAbsolute } from "node:path"
 import { UNKNOWN_REVISION } from "@multi-ai-router/core"
 import { DATABASE_POOL_DEFAULTS } from "@multi-ai-router/db"
 import { z } from "zod"
+import { adminApiTokenProblem } from "../services/admin-auth"
 import {
   absoluteUrl,
   atLeastOne,
@@ -367,6 +368,12 @@ export interface Env {
    * a deployment whose metrics port is not routable; see `routes/metrics.ts`.
    */
   readonly metricsToken: string | null
+  /**
+   * Bearer token that authenticates `/api/admin/**` without a browser login, or null to leave the
+   * admin plane browser-only. Null is the default and the conservative one — this adds a
+   * credential rather than enabling one (`services/admin-auth/apiToken.ts`).
+   */
+  readonly adminApiToken: string | null
   readonly accountRecheckCooldownSeconds: number
   /**
    * "Test now"'s own cooldown — deliberately not shared with `accountRecheckCooldownSeconds`. A
@@ -440,6 +447,15 @@ export const ENV_FIELDS = {
   CLAUDE_SDK_MAX_CONCURRENCY: atLeastOne.optional(),
   CLAUDE_SDK_MAX_CONCURRENCY_PER_ACCOUNT: atLeastOne.optional(),
   METRICS_TOKEN: nonEmpty.optional(),
+  // Refused by name at boot when too short to resist guessing, or when it wears the router-key
+  // prefix — the admin guard rejects that prefix outright, so such a token would authenticate
+  // nothing and look correct while doing it. Both rules live in `admin-auth/apiToken.ts`.
+  ADMIN_API_TOKEN: nonEmpty
+    .superRefine((value, ctx) => {
+      const problem = adminApiTokenProblem(value)
+      if (problem !== null) ctx.addIssue({ code: "custom", message: problem })
+    })
+    .optional(),
   ACCOUNT_RECHECK_COOLDOWN_SECONDS: wholeNumber.optional(),
   ACCOUNT_TEST_NOW_COOLDOWN_SECONDS: wholeNumber.optional(),
   RETENTION_SESSIONS_HOURS: atLeastOne.optional(),
@@ -566,6 +582,7 @@ const envSchema = z.object(ENV_FIELDS).transform((raw, ctx): Env => {
     claudeSdkMaxConcurrency: raw.CLAUDE_SDK_MAX_CONCURRENCY ?? 10,
     claudeSdkMaxConcurrencyPerAccount: raw.CLAUDE_SDK_MAX_CONCURRENCY_PER_ACCOUNT ?? 4,
     metricsToken: raw.METRICS_TOKEN ?? null,
+    adminApiToken: raw.ADMIN_API_TOKEN ?? null,
     accountRecheckCooldownSeconds: raw.ACCOUNT_RECHECK_COOLDOWN_SECONDS ?? 60,
     // Longer than the re-check default on purpose: this one costs money (and, on the Agent-SDK
     // path, a subprocess), so the button that spends it should not be as cheap to lean on.

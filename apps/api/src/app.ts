@@ -69,16 +69,24 @@ export interface AppDeps {
    */
   readonly sessionCookieInsecure?: boolean
   /**
+   * `Env.adminApiToken`. Absent — the default — means the admin plane accepts a browser session
+   * and nothing else; set, it also accepts that bearer token, which is what lets a script, a CI
+   * job, or an agent drive the same REST API the console uses
+   * (`services/admin-auth/apiToken.ts`).
+   */
+  readonly adminApiToken?: string | null
+  /**
    * Directory holding the built SPA. Absent means no static mount at all — an API-only process,
    * which is what a test boots and what `bin/dev` runs while Vite serves the console itself.
    */
   readonly webRoot?: string
 }
 
-/** The two transport-shaped settings the admin plane needs, resolved to a value, never absent. */
+/** The transport-shaped settings the admin plane needs, resolved to a value, never absent. */
 interface AdminMountOptions {
   readonly trustProxy: boolean
   readonly sessionCookieInsecure: boolean
+  readonly apiToken: string | null
 }
 
 export interface DataPlaneDeps {
@@ -109,6 +117,7 @@ export function createApp(deps: AppDeps): Hono<AppEnv> {
     mountAdmin(app, deps.admin, {
       trustProxy: deps.trustProxy ?? false,
       sessionCookieInsecure: deps.sessionCookieInsecure ?? false,
+      apiToken: deps.adminApiToken ?? null,
     })
   }
 
@@ -137,12 +146,12 @@ export function createApp(deps: AppDeps): Hono<AppEnv> {
  * wrote it in.
  */
 function mountAdmin(app: Hono<AppEnv>, admin: AdminServices, options: AdminMountOptions): void {
-  const { trustProxy, sessionCookieInsecure } = options
-  const guard = adminAuth(admin.auth, sessionCookieInsecure)
+  const { trustProxy, sessionCookieInsecure, apiToken } = options
+  const guard = adminAuth(admin.auth, sessionCookieInsecure, apiToken)
 
   app.route(
     ADMIN_AUTH_BASE_PATH,
-    adminAuthRoutes({ service: admin.auth, trustProxy, sessionCookieInsecure }),
+    adminAuthRoutes({ service: admin.auth, trustProxy, sessionCookieInsecure, apiToken }),
   )
   app.route(
     ADMIN_ACCOUNTS_BASE_PATH,
