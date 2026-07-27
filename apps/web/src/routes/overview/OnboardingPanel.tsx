@@ -1,6 +1,5 @@
 import { createMemo, createSignal, type JSX, Show } from "solid-js"
 import { Button } from "../../components/Button"
-import { CopyValue } from "../../components/CopyValue"
 import { EmptyState } from "../../components/EmptyState"
 import type { IconName } from "../../components/Icon"
 import { findProvider } from "../../lib/api/providers"
@@ -19,6 +18,7 @@ import { useCreateKey } from "../../lib/queries/router-keys"
 import { AccountConnect } from "../accounts/AccountConnect"
 import { AccountFormDialog } from "../accounts/AccountFormDialog"
 import { KeyFormDialog, toCreateKeyInput } from "../keys/KeyFormDialog"
+import { KeyValueDialog } from "../keys/KeyValueDialog"
 import { PoolFormDialog } from "../pools/PoolFormDialog"
 import styles from "./OnboardingPanel.module.scss"
 
@@ -50,7 +50,12 @@ interface Minted {
  *
  * The three creation dialogs are the exact ones `AccountsRoute`/`PoolsRoute`/`KeysRoute` use —
  * this is the same gesture, not a shortcut form, so a provider that needs a login still gets
- * `AccountConnect` afterward rather than being left an unauthorised, unusable row.
+ * `AccountConnect` afterward rather than being left an unauthorised, unusable row. The mint's
+ * payoff is `KeyValueDialog` for the same reason: the fourth step of the walk is *pointing a tool
+ * at the thing*, and an operator who arrives here — the one who has never seen this router before —
+ * is precisely the one who must not be handed a bare URL and left to guess which clients want the
+ * `/v1` suffix. Rebuilding a lesser version of that block here would put the newcomer on the worse
+ * surface and the operator who already knows the answer on the better one.
  */
 export function OnboardingPanel(props: OnboardingPanelProps) {
   const now = createNow()
@@ -110,6 +115,16 @@ export function OnboardingPanel(props: OnboardingPanelProps) {
     setKeyOpen(false)
   }
 
+  /**
+   * Same discipline as `KeysRoute`: the plaintext lives exactly as long as the dialog showing it.
+   * Dropping the signal is only half — the mint result sits in TanStack's mutation cache until the
+   * mutation is reset, and a mounted screen never detaches an observer on its own.
+   */
+  const dismissMinted = () => {
+    setMinted(null)
+    createKey.reset()
+  }
+
   return (
     <Show when={visible()}>
       <EmptyState
@@ -147,55 +162,25 @@ export function OnboardingPanel(props: OnboardingPanelProps) {
               title="Create a pool"
             />
 
-            <li class={styles.step} data-done={hasKey() ? "true" : "false"}>
-              <span aria-hidden="true" class={styles.marker}>
-                <Show fallback={3} when={hasKey()}>
-                  ✓
-                </Show>
-              </span>
-              <div class={styles.body}>
-                <p class={styles.title}>Mint a key</p>
-                <Show
-                  fallback={
-                    <Button
-                      busy={createKey.isPending}
-                      disabled={!hasPool()}
-                      onClick={() => setKeyOpen(true)}
-                      tone="primary"
-                    >
-                      Mint key
-                    </Button>
-                  }
-                  when={hasKey()}
+            <OnboardingStep
+              action={
+                <Button
+                  busy={createKey.isPending}
+                  disabled={!hasPool()}
+                  onClick={() => setKeyOpen(true)}
+                  tone="primary"
                 >
-                  <Show
-                    fallback={<p class={styles.note}>{keysDoneNote(props.keys)}</p>}
-                    when={minted()}
-                  >
-                    {(key) => (
-                      <div class={styles.result}>
-                        <p class={styles.resultLead}>
-                          Live — point any OpenAI- or Anthropic-compatible client at the router:
-                        </p>
-                        <CopyValue label="Router base URL" value={baseUrl()} />
-                        <CopyValue
-                          label={`Value of router key ${key().name}`}
-                          value={key().value}
-                        />
-                        <div class={styles.resultActions}>
-                          <Button onClick={() => setMinted(null)} tone="primary">
-                            Done
-                          </Button>
-                        </div>
-                      </div>
-                    )}
-                  </Show>
-                </Show>
-              </div>
-            </li>
+                  Mint key
+                </Button>
+              }
+              done={minted() !== null || hasKey()}
+              doneNote={keysDoneNote(props.keys, minted())}
+              index={3}
+              title="Mint a key"
+            />
           </ol>
         }
-        description="Add an upstream account, pool it, then mint a key your tools can call — three steps, all of them here."
+        description="Add an upstream account, pool it, then mint a key — the mint hands you this deployment's base URL and a ready-to-paste block for whichever client you point at it."
         icon={icon()}
         title="Get your first working key"
       />
@@ -253,6 +238,20 @@ export function OnboardingPanel(props: OnboardingPanelProps) {
         open={keyOpen()}
         pools={props.pools}
       />
+
+      {/* The walk's fourth step, and the reason the panel holds itself open past `complete()`. */}
+      <Show when={minted()}>
+        {(key) => (
+          <KeyValueDialog
+            baseUrl={baseUrl()}
+            minted
+            name={key().name}
+            onClose={dismissMinted}
+            open
+            value={key().value}
+          />
+        )}
+      </Show>
     </Show>
   )
 }
@@ -294,6 +293,12 @@ function poolsDoneNote(pools: readonly PoolView[]): string {
   return pools.length === 1 ? `"${pools[0]?.name ?? ""}" created` : `${pools.length} pools created`
 }
 
-function keysDoneNote(keys: readonly ApiKeyView[]): string {
+/**
+ * The mint's own response outruns the keys query it invalidates, so for the beat between the two
+ * this step reads its name off the value in hand rather than briefly re-offering the mint button
+ * to an operator who has already minted.
+ */
+function keysDoneNote(keys: readonly ApiKeyView[], justMinted: Minted | null): string {
+  if (keys.length === 0 && justMinted !== null) return `"${justMinted.name}" minted`
   return keys.length === 1 ? `"${keys[0]?.name ?? ""}" minted` : `${keys.length} keys minted`
 }

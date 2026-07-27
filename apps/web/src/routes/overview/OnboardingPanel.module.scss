@@ -53,20 +53,3 @@
   font-size: var(--text-sm);
   text-align: start;
 }
-
-.result {
-  display: grid;
-  gap: var(--space-3);
-  width: 100%;
-  margin-block-start: var(--space-1);
-}
-
-.resultLead {
-  color: var(--text-muted);
-  font-size: var(--text-sm);
-  text-align: start;
-}
-
-.resultActions {
-  justify-self: start;
-}

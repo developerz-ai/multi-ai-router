@@ -221,6 +221,13 @@ this deployment's base URL — `PUBLIC_URL` when the operator set one, otherwise
 origin — and the key's real value. A snippet containing `YOUR_KEY_HERE` is a snippet that gets
 pasted containing `YOUR_KEY_HERE`.
 
+This holds for **every** surface that mints, not just the Keys screen. A key can also be minted
+from the Overview screen's first-run walk (add an account → pool it → mint a key), and that walk
+shows the same dialog rather than a reduced version of it. The operator arriving there is the one
+who has never seen this router before — the one who most needs to be told which clients want the
+`/v1` suffix — so putting the newcomer on a lesser block and the experienced operator on the good
+one would be exactly backwards.
+
 The suffix rule is the reason this is generated rather than written out six times: an
 OpenAI-dialect client appends `/chat/completions` to what it is given and so needs `/v1` already
 there, while an Anthropic-dialect one appends `/v1/messages` itself and must be handed the bare
