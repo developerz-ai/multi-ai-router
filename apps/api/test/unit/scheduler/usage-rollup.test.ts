@@ -1,15 +1,16 @@
 import { describe, expect, test } from "bun:test"
 import { startOfNextUtcDay, startOfUtcDay } from "@multi-ai-router/db"
 import type { RetentionConfig } from "../../../src/config/env"
-import { createUsageRollupTask, rollupFrom } from "../../../src/scheduler"
-import { silentLogger } from "./fixtures"
+import { createUsageRollupTask, rollupDays, rollupFrom } from "../../../src/scheduler"
+import { silentLogger, successRun } from "./fixtures"
 
 /**
- * `rollupFrom` is tested directly first — it is a pure function of a clock and
- * a row, exactly the "no mocks, inject the snapshot" shape the house style
- * asks for. `createUsageRollupTask` is then tested for the two things that
- * are not about window arithmetic: the abort-before-work `partial`, and the
- * from >= now `success, itemsProcessed: 0` no-op.
+ * `rollupFrom` and `rollupDays` are tested directly first — pure functions of a
+ * clock and a row, exactly the "no mocks, inject the snapshot" shape the house
+ * style asks for. `createUsageRollupTask` is then tested for what is not window
+ * arithmetic: that the window is issued one statement per day rather than one
+ * across all of them, that a shutdown lands between two of them, and that the
+ * no-op stays a no-op.
  *
  * A time that is not UTC midnight, deliberately — `NOW` at 00:00:00.000Z would
  * make "yesterday" and "today" collide and hide the boundary this task exists
@@ -50,16 +51,52 @@ describe("rollupFrom: the scan window", () => {
   })
 })
 
+describe("rollupDays: the batches, and their order", () => {
+  test("a backfill is one day per statement, oldest first, ending on today", () => {
+    const from = new Date("2026-07-22T00:00:00.000Z")
+
+    expect(rollupDays(from, NOW)).toEqual([
+      new Date("2026-07-22T00:00:00.000Z"),
+      new Date("2026-07-23T00:00:00.000Z"),
+      new Date("2026-07-24T00:00:00.000Z"),
+      new Date("2026-07-25T00:00:00.000Z"),
+    ])
+  })
+
+  test("a `from` inside today still yields today, not nothing", () => {
+    // The steady state: the cursor sits a few minutes back, and today is still
+    // rescanned in full because the day is the unit that can be replaced.
+    expect(rollupDays(new Date(NOW.getTime() - 5 * 60_000), NOW)).toEqual([
+      startOfUtcDay(NOW),
+    ] as readonly Date[])
+  })
+
+  test("a `from` at or past `now` yields no statement at all", () => {
+    expect(rollupDays(NOW, NOW)).toEqual([])
+    expect(rollupDays(new Date(NOW.getTime() + DAY_MS), NOW)).toEqual([])
+  })
+})
+
+/** Records every day the task asked for, and answers with a fixed row count. */
+function recordingRollup(rowsPerDay: number, onDay?: (day: Date) => void) {
+  const days: Date[] = []
+  return {
+    days,
+    usageDaily: {
+      rollupDay: async (day: Date) => {
+        days.push(day)
+        onDay?.(day)
+        return rowsPerDay
+      },
+    },
+  }
+}
+
 describe("the usage rollup task", () => {
   test("an already-aborted signal reports partial without touching the rollup", async () => {
-    let called = 0
+    const rollup = recordingRollup(0)
     const task = createUsageRollupTask({
-      usageDaily: {
-        rollup: async () => {
-          called += 1
-          return 0
-        },
-      },
+      usageDaily: rollup.usageDaily,
       scheduledTasks: { lastSuccess: async () => undefined },
       retention: { usageDays: 30 },
       intervalMs: 60_000,
@@ -70,18 +107,13 @@ describe("the usage rollup task", () => {
     const result = await task.run({ now: NOW, logger: silentLogger(), signal: controller.signal })
 
     expect(result).toEqual({ outcome: "partial", itemsProcessed: 0 })
-    expect(called).toBe(0)
+    expect(rollup.days).toEqual([])
   })
 
   test("a floor past `now` is a genuine no-op, not an empty scan", async () => {
-    let called = 0
+    const rollup = recordingRollup(5)
     const task = createUsageRollupTask({
-      usageDaily: {
-        rollup: async () => {
-          called += 1
-          return 5
-        },
-      },
+      usageDaily: rollup.usageDaily,
       scheduledTasks: { lastSuccess: async () => undefined },
       // usageDays: 0 pushes the floor to the start of *tomorrow*, past `now`.
       retention: { usageDays: 0 },
@@ -95,42 +127,82 @@ describe("the usage rollup task", () => {
     })
 
     expect(result).toEqual({ outcome: "success", itemsProcessed: 0 })
-    expect(called).toBe(0)
+    expect(rollup.days).toEqual([])
   })
 
-  test("rolls the computed window, and re-running it recomputes rather than accumulates", async () => {
-    const calls: Array<{ from: Date; to: Date }> = []
+  test("a backfill is issued one bounded statement per day, never one across the window", async () => {
+    const rollup = recordingRollup(2)
     const task = createUsageRollupTask({
-      usageDaily: {
-        rollup: async (from, to) => {
-          calls.push({ from, to })
-          return 42
-        },
-      },
+      usageDaily: rollup.usageDaily,
       scheduledTasks: { lastSuccess: async () => undefined },
       retention: { usageDays: 30 },
       intervalMs: 60_000,
     })
 
+    const result = await task.run({
+      now: NOW,
+      logger: silentLogger(),
+      signal: new AbortController().signal,
+    })
+
+    // The floor is the start of the day after `now - 30d`, so the walk covers it
+    // through today inclusive: 30 days, 30 statements, and the count is their sum.
+    const floor = startOfNextUtcDay(new Date(NOW.getTime() - 30 * DAY_MS))
+    expect(rollup.days).toHaveLength(30)
+    expect(rollup.days[0]).toEqual(floor)
+    expect(rollup.days.at(-1)).toEqual(startOfUtcDay(NOW))
+    expect(result).toEqual({ outcome: "success", itemsProcessed: 60 })
+  })
+
+  test("a shutdown mid-backfill stops between days and reports partial", async () => {
+    const controller = new AbortController()
+    // Abort while the third day's statement is in flight: it finishes, the
+    // fourth is never issued.
+    const rollup = recordingRollup(2, (_day) => {
+      if (rollup.days.length === 3) controller.abort()
+    })
+    const task = createUsageRollupTask({
+      usageDaily: rollup.usageDaily,
+      scheduledTasks: { lastSuccess: async () => undefined },
+      retention: { usageDays: 30 },
+      intervalMs: 60_000,
+    })
+
+    const result = await task.run({ now: NOW, logger: silentLogger(), signal: controller.signal })
+
+    expect(rollup.days).toHaveLength(3)
+    expect(result).toEqual({ outcome: "partial", itemsProcessed: 6 })
+  })
+
+  test("the steady state re-closes yesterday and today, and recomputes rather than accumulates", async () => {
+    const rollup = recordingRollup(42)
+    const task = createUsageRollupTask({
+      usageDaily: rollup.usageDaily,
+      scheduledTasks: {
+        lastSuccess: async () => successRun("usage_rollup", new Date(NOW.getTime() - 60_000)),
+      },
+      retention: { usageDays: 30 },
+      intervalMs: 60_000,
+    })
+
+    const yesterday = new Date(startOfUtcDay(NOW).getTime() - DAY_MS)
     const first = await task.run({
       now: NOW,
       logger: silentLogger(),
       signal: new AbortController().signal,
     })
-    expect(first).toEqual({ outcome: "success", itemsProcessed: 42 })
-    expect(calls).toHaveLength(1)
-    expect(calls[0]?.to).toEqual(NOW)
+    expect(rollup.days).toEqual([yesterday, startOfUtcDay(NOW)])
+    expect(first).toEqual({ outcome: "success", itemsProcessed: 84 })
 
-    // Same clock, no new success recorded in between: the window recomputes
-    // identically. `usageDaily.rollup` replaces a day rather than adding to
-    // it, so a duplicate tick reports the same total, never double it.
+    // Same clock, same cursor: the window recomputes identically. `rollupDay`
+    // replaces a day rather than adding to it, so a duplicate tick reports the
+    // same total, never double it.
     const second = await task.run({
       now: NOW,
       logger: silentLogger(),
       signal: new AbortController().signal,
     })
-    expect(second).toEqual({ outcome: "success", itemsProcessed: 42 })
-    expect(calls).toHaveLength(2)
-    expect(calls[1]).toEqual(calls[0])
+    expect(rollup.days).toEqual([yesterday, startOfUtcDay(NOW), yesterday, startOfUtcDay(NOW)])
+    expect(second).toEqual(first)
   })
 })

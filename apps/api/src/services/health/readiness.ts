@@ -22,6 +22,11 @@ import type { CliSource } from "../../providers"
  * because "the wrong `claude` got picked" is otherwise indistinguishable from any other Agent SDK
  * failure (docs/idea/11-anthropic-agent-sdk.md#9-operational-notes).
  *
+ * **A draining router is the one case that gates without probing.** Once a shutdown has been
+ * accepted the answer is already no, and it is no before the listener stops accepting rather than
+ * after — see `services/shutdown/lifecycle.ts`. Asking the database at that point would only add a
+ * query to a pool that is about to close, so nothing is probed and the report says so.
+ *
  * Probes are injected, so the service stays free of I/O and of any Hono type.
  */
 
@@ -32,6 +37,8 @@ export interface ReadinessProbes {
   readonly accounts: () => Promise<AccountReadiness>
   /** Which rung of the `claude` CLI resolution ladder won, or `missing` when none did. */
   readonly claudeCli: () => Promise<ClaudeCliReadiness>
+  /** True once a shutdown was accepted — `Lifecycle.shuttingDown` in production. */
+  readonly shuttingDown: () => boolean
 }
 
 /**
@@ -55,13 +62,18 @@ export type ClaudeCliReadiness = CliSource | "missing"
 
 export type CheckState = "ok" | "fail" | AccountReadiness | ClaudeCliReadiness
 
+export interface ReadinessChecks {
+  readonly database: CheckState
+  readonly accounts: CheckState
+  readonly claudeCli: CheckState
+}
+
 export interface ReadinessReport {
   readonly ready: boolean
-  readonly checks: {
-    readonly database: CheckState
-    readonly accounts: CheckState
-    readonly claudeCli: CheckState
-  }
+  /** True once a shutdown was accepted. Never ready, and nothing below was asked. */
+  readonly shuttingDown: boolean
+  /** `null` exactly when shutting down: no probe ran, so there is nothing honest to report. */
+  readonly checks: ReadinessChecks | null
   /**
    * Short operator-facing reason. Present whenever something is wrong, **including when the
    * router is still ready** — an account problem is worth saying out loud even though it does
@@ -71,6 +83,17 @@ export interface ReadinessReport {
 }
 
 export async function checkReadiness(probes: ReadinessProbes): Promise<ReadinessReport> {
+  // First, and before anything is awaited: this is what makes the endpoint fail *before* the drain
+  // begins rather than once the pool is already going.
+  if (probes.shuttingDown()) {
+    return {
+      ready: false,
+      shuttingDown: true,
+      checks: null,
+      reason: "shutting down — draining in-flight requests",
+    }
+  }
+
   const [database, accounts, claudeCli] = await Promise.all([
     settleDatabase(probes.database),
     settleAccounts(probes.accounts),
@@ -85,6 +108,7 @@ export async function checkReadiness(probes: ReadinessProbes): Promise<Readiness
 
   return {
     ready: database,
+    shuttingDown: false,
     checks: { database: database ? "ok" : "fail", accounts, claudeCli },
     reason: reasons.length > 0 ? reasons.join("; ") : null,
   }

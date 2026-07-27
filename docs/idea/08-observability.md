@@ -42,8 +42,26 @@ Postgres in batches by a background writer. A request never waits on an insert, 
 transaction, and never fails because the database is slow. **A slow or unavailable database degrades
 reporting, never traffic** — the queue is bounded, and on overflow it drops the oldest records and
 increments a counter rather than applying backpressure to live requests (`router_usage_queue_depth`
-and `router_usage_records_dropped_total`, plus a throttled log line — a drop is never silent). No
-prompt content, no completion content, and no credential material is ever stored on a record.
+and `router_usage_records_dropped_total`, plus a throttled log line — a drop is never silent).
+Shedding is also *cheap*: an enqueue costs the same whether the queue is empty or full and shedding,
+because the queue advances a head rather than moving its contents. A queue that copied itself to
+make room would charge every request during an outage for the whole ceiling — backpressure by
+another name. No prompt content, no completion content, and no credential material is ever stored on
+a record.
+
+**A refused batch gets one more try, and both fates are exported.** Postgres is unavailable for a
+second — a failover, a restart, a saturated connection pool — far more often than it is unavailable
+at all, so a rejected batch is held and retried on the next flush rather than deleted on the spot.
+It is held *beside* the queue, not pushed back into it: overflow sheds the oldest, and the batch
+waiting for its retry is precisely the oldest. One retry is the whole ladder — a batch the writer
+can never accept (a row it rejects, a statement past the bind ceiling) would otherwise come back
+forever and starve every record behind it — after which it is discarded. Both steps land on
+`router_usage_write_failures_total`, under `disposition="retried"` and `disposition="discarded"`,
+because "the database blinked" and "rows no longer exist" are different incidents and alert
+differently. The retry is logged at `warn` and the discard at `error`, throttled. The pass stops at
+the first refusal rather than burning the rest of the queue against the same database, and a retried
+batch is **not** re-counted into the attempt series: a blip must not show up on a dashboard as
+upstream calls the router never made.
 
 One request writes no record at all: a key refused for exceeding **its own** rate limit
 ([04-api-keys-and-access.md](04-api-keys-and-access.md#per-key-controls)). The check runs before the
@@ -248,7 +266,7 @@ immediately if it is healthy.
 | Endpoint | Auth | Meaning | Codes |
 |---|---|---|---|
 | `GET /healthz` | none | Liveness. The process is up and serving, and the build it is: `{"status":"ok","version":"1.0.0"}` | `200` always while serving |
-| `GET /readyz` | none | Readiness: **database reachable**. Two dimensions are reported without gating the answer: the account pool (`ok` / `none` / `blocked`) and the `claude` CLI (the resolution rung that won, or `missing`) | `200` ready, `503` with a short reason when the database is unreachable |
+| `GET /readyz` | none | Readiness: **database reachable, and no shutdown started**. Two dimensions are reported without gating the answer: the account pool (`ok` / `none` / `blocked`) and the `claude` CLI (the resolution rung that won, or `missing`) | `200` `ready`; `503` `not_ready` with a short reason when the database is unreachable; `503` `shutting_down` while draining |
 | `GET /metrics` | `METRICS_TOKEN` when set, none when not | Prometheus text exposition | `200`, `401` when the token is set and not presented |
 | `GET /v1/usage/quota` | router key or admin session | Per-Account, per-window utilization, `resetsAt`, `resetSource`, `status`, `lastCheckedAt` — the same shape the UI renders, so an operator can alert on it externally | `200` |
 | `POST /api/admin/accounts/:id/recheck` | admin session | Manual re-check. `POST /api/admin/accounts/recheck` re-checks every account. For Claude subscriptions it also carries the credential probe, reported as `auth` | `200` always — a cooldown refusal is `rechecked: false`, not `429` |
@@ -256,6 +274,15 @@ immediately if it is healthy.
 | `GET /api/admin/usage/recent` | admin session | The [live request feed](#the-live-request-feed): individual attempts, newest first. `limit` (1..200), `failed` or `outcome` (never both), `requestId` (matches either id) | `200`, `400` on a limit out of range or both filters at once |
 
 `/healthz` never touches the database.
+
+**`/readyz` turns before the listener does.** On `SIGTERM` the shutdown latches first and the
+endpoint answers `503 shutting_down` — with `checks: null`, because nothing was probed and a stale
+`ok` would be a lie — *then* the drain begins
+([09-deployment.md](09-deployment.md#shutdown--draining)). That ordering is the point: an
+orchestrator polling readiness gets one honest refusal instead of learning about the shutdown from a
+refused connection, which it would report as an error against whoever was mid-request. `/healthz`
+stays `200` throughout — the process is up and finishing what it has, and restarting it now would
+truncate exactly what the drain protects.
 
 **The version is one string with five outlets** — `/healthz`, `router_build_info{version}`, the
 `router listening` boot log line, `GET /api/admin/settings`, and the console footer. All five read
@@ -340,8 +367,9 @@ identity beyond its label.
 | `router_quota_utilization` | gauge | `account_id`, `window` (`five_hour`\|`seven_day`\|`seven_day_opus`\|`seven_day_sonnet`\|`provider_specific`) | Fraction of a quota window consumed |
 | `router_quota_reset_seconds` | gauge | `account_id`, `window`, `source` (`provider-reported`\|`estimated`\|`unknown`) | Seconds until reset. Absent for `exhausted` accounts — there is no reset to report |
 | `router_quota_last_checked_timestamp_seconds` | gauge | `account_id` | When the utilization above was last refreshed. Read the two together or you are alerting on a stale number |
-| `router_usage_queue_depth` | gauge | — | Pending `UsageRecord`s awaiting batch write. Rising depth means reporting lag, not request lag |
-| `router_usage_records_dropped_total` | counter | — | Records shed on queue overflow. Non-zero means the reporting path is behind; traffic is unaffected |
+| `router_usage_queue_depth` | gauge | — | Pending `UsageRecord`s awaiting batch write, the batch held for its retry included. Rising depth means reporting lag, not request lag |
+| `router_usage_records_dropped_total` | counter | — | Records shed on queue overflow. Non-zero means the reporting path is behind; traffic is unaffected. A **different** failure from the one below, with a different fix: a bigger queue, versus a database that is up |
+| `router_usage_write_failures_total` | counter | `disposition` (`retried`\|`discarded`) | Records in a batch the database refused. `retried` went back for one more try on the next flush — reporting is late, nothing is lost. `discarded` was refused twice and is **gone**. **Never summed**: a deployment where the first is occasionally noisy and the second is flat zero is working exactly as designed, and an alert on the sum pages for every blip. Alert on `discarded` |
 | `router_sdk_subprocesses` | gauge | — | `claude` subprocesses running on this replica right now. Against `CLAUDE_SDK_MAX_CONCURRENCY` this is **memory in use**, not throughput — every one of them is a ~245 MB native binary ([09-deployment.md](09-deployment.md#sizing)). Per replica, like the gate itself. Counts the console's "Test now" probe too: it spawns the same process and takes the same slot |
 | `router_sdk_subprocess_queue_depth` | gauge | — | Subscription requests **waiting** for a subprocess slot. Zero at any occupancy is a ceiling that fits; sustained depth is the signal to raise `CLAUDE_SDK_MAX_CONCURRENCY` (if RAM allows) or add a replica. Read it with the gauge above: full-and-empty is saturated-but-sufficient, full-and-queuing is not |
 | `router_task_*` | — | `task` | Background task health — see [Scheduled task visibility](#scheduled-task-visibility) |
@@ -585,10 +613,15 @@ in a single-replica deployment the interval is nearly irrelevant. Detail:
 
 ## Retention
 
-Usage records, audit events, sessions, and OAuth state all expire on operator-tunable windows swept
-by the janitor; raw usage rows roll up to daily aggregates in Postgres before they expire, which is
-what keeps lifetime totals correct after the raw rows are gone. Defaults, batching rules, and the env
-knobs are in [09-deployment.md](09-deployment.md).
+Usage records, daily aggregates, audit events, sessions, scheduled-task runs, and OAuth state all
+expire on operator-tunable windows swept by the janitor; raw usage rows roll up to daily aggregates
+in Postgres before they expire, which is what keeps lifetime totals correct after the raw rows are
+gone. The aggregates outlive the raw rows by design and are swept on their own, much wider window —
+never a shorter one, which boot refuses, because the janitor and the rollup would then delete and
+re-insert the same days forever. The rollup itself writes **one statement per UTC day**, so a
+first-boot catch-up across the retention floor is a bounded, resumable walk rather than one
+transaction. Defaults, batching rules, and the env knobs are in
+[09-deployment.md](09-deployment.md).
 
 ## Read next
 

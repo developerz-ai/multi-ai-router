@@ -50,6 +50,7 @@ export {
   type ByteSpan,
   createRoutingScanner,
   DEFAULT_CONVERSATION_PREFIX_BYTES,
+  MODEL_NAME_MAX_BYTES,
   type RoutingScanner,
   type ScanResult,
 } from "./body/scanner"

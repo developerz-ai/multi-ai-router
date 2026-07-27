@@ -15,6 +15,12 @@ export interface MigrateOptions {
   readonly url: string
   /** Defaults to the `migrations/` directory shipped beside this package. */
   readonly migrationsFolder?: string
+  /**
+   * Seconds the migration connection waits to be accepted, so an operator who raised
+   * `DB_POOL_CONNECT_TIMEOUT_SECONDS` for a slow managed instance does not still fail the boot
+   * one step earlier, on the migration that runs before the pool exists.
+   */
+  readonly connectTimeoutSeconds?: number
 }
 
 /**
@@ -32,7 +38,11 @@ export async function runMigrations(options: MigrateOptions): Promise<void> {
   const folder = options.migrationsFolder ?? defaultMigrationsFolder()
   // max: 1 pins every statement below to one connection, which is what makes
   // the session-scoped advisory lock actually cover the migration.
-  const handle = createDatabase({ url: options.url, maxConnections: 1 })
+  const handle = createDatabase({
+    url: options.url,
+    maxConnections: 1,
+    connectTimeoutSeconds: options.connectTimeoutSeconds,
+  })
 
   try {
     await handle.sql`select pg_advisory_lock(${MIGRATION_LOCK_ID})`

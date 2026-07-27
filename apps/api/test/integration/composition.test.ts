@@ -318,6 +318,7 @@ describe("the build's identity reaches the exposition", () => {
         database: () => Promise.resolve(true),
         accounts: () => Promise.resolve("ok"),
         claudeCli: () => Promise.resolve("platform_package"),
+        shuttingDown: () => false,
       },
       metrics: { metrics: runtime.metrics, token: env.metricsToken },
     })
@@ -350,6 +351,7 @@ describe("the build's identity reaches the exposition", () => {
         database: () => Promise.resolve(true),
         accounts: () => Promise.resolve("ok"),
         claudeCli: () => Promise.resolve("platform_package"),
+        shuttingDown: () => false,
       },
       metrics: { metrics: runtime.metrics, token: env.metricsToken },
     })

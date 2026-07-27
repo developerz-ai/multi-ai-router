@@ -97,6 +97,30 @@ export function memoryTaskRepository(): MemoryTaskRepository {
 
     lastSuccess: async (task: ScheduledTaskName) =>
       [...rows].reverse().find((row) => row.task === task && row.outcome === "success"),
+
+    // The real sweep's two rules, kept here so a test can assert them without a database: oldest
+    // first up to `limit`, and a run with no `finishedAt` is never taken however old it is.
+    deleteOlderThan: async (cutoff: Date, limit: number) => {
+      const doomed = rows
+        .filter((row) => row.finishedAt !== null && row.startedAt.getTime() < cutoff.getTime())
+        .sort((a, b) => a.startedAt.getTime() - b.startedAt.getTime())
+        .slice(0, limit)
+      for (const row of doomed) rows.splice(rows.indexOf(row), 1)
+      return doomed.length
+    },
+  }
+}
+
+/** One finished, successful run — the shape `lastSuccess` hands the rollup's cursor. */
+export function successRun(task: ScheduledTaskName, startedAt: Date): ScheduledTaskRunRow {
+  return {
+    id: crypto.randomUUID(),
+    task,
+    startedAt,
+    finishedAt: startedAt,
+    outcome: "success",
+    itemsProcessed: 0,
+    error: null,
   }
 }
 

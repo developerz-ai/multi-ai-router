@@ -24,7 +24,13 @@ approximated. See [00-overview.md](00-overview.md) for the product boundary and
    cap (`MAX_REQUEST_BODY_BYTES`, 32 MiB by default) applies here and nothing is ever parsed to
    enforce it: a declared `Content-Length` over the ceiling is refused unread, and a body that lies
    about its length is refused as it streams, in both cases with `413` `request_too_large` and never
-   the `400` that would send a caller hunting a malformed field. A full Zod parse into the ingress
+   the `400` that would send a caller hunting a malformed field. The **model name has its own
+   ceiling** — 256 bytes, a constant rather than a knob, because how long a model id may be is a
+   property of the providers and not of the deployment. It is the one client-supplied string the
+   router *stores*, on every attempt row and on a rolled-up row that outlives it, so an unbounded
+   one is a write any key holder can make into two tables forever. Over it is a `400` naming the
+   ceiling; it is never truncated, because a shortened model name is a substituted model. A full
+   Zod parse into the ingress
    dialect's shape happens only when cross-dialect translation turns out to be required; on the
    passthrough path the body stays opaque. See the performance budget below.
 4. **Session resolution.** The sticky key is taken from the client-supplied session header, else
@@ -254,10 +260,12 @@ system can be *seen* in one place rather than inferred from twenty:
 `createApp` stays a pure factory a test calls with stubs; composition is the production wiring and
 the only place a `Database` becomes a service. It also owns start and stop: the catalog is loaded
 and the background writers are running *before* the listener opens, and on shutdown the queue is
-flushed before the connection it needs is closed. The flush is reached by a **bounded drain**: the
-listener closes, in-flight responses get `SHUTDOWN_DRAIN_MS` to finish, and then the flush runs
-whether or not they did — an unbounded wait would hand the exit to the orchestrator's `SIGKILL` and
-lose the queue along with the streams
+flushed before the connection it needs is closed. The flush is reached by a **bounded drain**:
+`/readyz` starts refusing, the listener closes, in-flight responses get `SHUTDOWN_DRAIN_MS` to
+finish, and then the flush runs whether or not they did — an unbounded wait would hand the exit to
+the orchestrator's `SIGKILL` and lose the queue along with the streams. The pool close that follows
+is bounded too, by `DB_POOL_CLOSE_TIMEOUT_SECONDS`, so a wedged query cannot hold the exit open past
+work the flush has already written
 ([09-deployment.md](09-deployment.md#shutdown--draining)).
 
 The [scheduler](#background-work-and-scheduling) is built here too, and it is the one thing given

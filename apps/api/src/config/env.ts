@@ -1,6 +1,17 @@
 import { isAbsolute } from "node:path"
 import { UNKNOWN_REVISION } from "@multi-ai-router/core"
+import { DATABASE_POOL_DEFAULTS } from "@multi-ai-router/db"
 import { z } from "zod"
+import {
+  absoluteUrl,
+  atLeastOne,
+  encryptionKey,
+  flag,
+  fraction,
+  nonEmpty,
+  usageBatchSize,
+  wholeNumber,
+} from "./fields"
 
 /**
  * Boot-time environment validation — the reference is
@@ -9,6 +20,11 @@ import { z } from "zod"
  * `parseEnv` is pure: it never reads `process.env` itself, so it is unit-testable
  * and `main.ts` owns the single impure call. A failure names the offending
  * variable; boot exits non-zero rather than starting half-configured.
+ *
+ * Which parser a numeric variable takes is a decision, not a formality: `atLeastOne` where zero
+ * would stop a mechanism without saying so, `wholeNumber` only where zero is a setting an
+ * operator could mean. `fields.ts` states the rule and lists the exceptions; a drift guard holds
+ * this schema to it.
  */
 
 export const LOG_LEVELS = ["debug", "info", "warn", "error"] as const
@@ -22,7 +38,16 @@ export type AdminCredential =
 export interface RetentionConfig {
   readonly sessionsHours: number
   readonly usageDays: number
+  /**
+   * How long the *daily aggregates* are kept — the long half of the two-tier retention the rollup
+   * exists for, and necessarily wider than {@link RetentionConfig.usageDays}: a window narrower
+   * than the raw one would have the janitor delete days the rollup re-inserts on its very next
+   * tick, forever. Boot refuses that rather than letting the two sweeps fight.
+   */
+  readonly usageDailyDays: number
   readonly auditDays: number
+  /** How long a *finished* scheduled-task run is kept. An unfinished one is never swept. */
+  readonly taskRunsDays: number
   readonly revokedKeysDays: number
   readonly oauthStateMinutes: number
   /**
@@ -32,6 +57,42 @@ export interface RetentionConfig {
    * directory an account is about to name (`scheduler/tasks/config-dir-reap.ts`).
    */
   readonly orphanConfigDirHours: number
+}
+
+/**
+ * The Postgres connection pool — one pool, shared by everything that is not the request path.
+ *
+ * Nothing here is reachable from a client request (non-negotiable 8 keeps Postgres off the hot
+ * path), which is exactly why the ceiling matters: the admin console, every scheduler sweep, the
+ * off-path usage/quota/status writers and `/readyz` all queue behind the same `maxConnections`.
+ * A pool sized for one router is wrong for a deployment running four replicas against a managed
+ * instance with a connection cap, or for one whose sweeps run long — so it is config, not a
+ * constant (non-negotiable 11).
+ *
+ * The three timeouts are seconds because postgres.js counts in seconds. Two of them accept `0`
+ * and it does not mean "immediately": postgres.js treats a falsy interval as a timer that never
+ * fires, so `0` reads as *never* — `fields.ts` records which.
+ *
+ * Defaults come from `DATABASE_POOL_DEFAULTS` in `@multi-ai-router/db`, so an unset variable and
+ * one set to the documented default are the same value, not two that happen to agree.
+ */
+export interface DatabasePoolConfig {
+  /** Connections this replica may hold open at once. */
+  readonly maxConnections: number
+  /** How long an idle connection is kept. `0` keeps it forever. */
+  readonly idleTimeoutSeconds: number
+  /** How long a dial waits to be accepted before it fails. */
+  readonly connectTimeoutSeconds: number
+  /** Age at which a connection is recycled, so a rolling failover drains cleanly. `0` never recycles. */
+  readonly maxLifetimeSeconds: number
+  /**
+   * How long the shutdown's pool close waits for in-flight queries before destroying them.
+   *
+   * The last step of a shutdown that is already racing the orchestrator's kill, so it is bounded
+   * for the same reason `SHUTDOWN_DRAIN_MS` is: an unbounded wait here hands the exit to a
+   * `SIGKILL`. `0` destroys the pool at once.
+   */
+  readonly closeTimeoutSeconds: number
 }
 
 /**
@@ -115,6 +176,10 @@ export interface DataPlaneConfig {
   readonly sessionCacheNegativeTtlSeconds: number
   /** Usage records held in memory before the writer sheds the oldest. Reporting degrades; traffic does not. */
   readonly usageQueueMax: number
+  /**
+   * Rows per insert. Validated into `1..USAGE_RECORD_MAX_BATCH_ROWS` at boot — outside that
+   * range every flush loses its whole batch and reporting goes silently empty.
+   */
   readonly usageBatchSize: number
   readonly usageFlushIntervalMs: number
   /**
@@ -244,7 +309,23 @@ export interface Env {
    * `0` closes in-flight responses immediately. See `services/shutdown/drain.ts`.
    */
   readonly shutdownDrainMs: number
+  /**
+   * How long the router keeps serving *after* `/readyz` starts refusing and *before* the listener
+   * closes — the window a load balancer has to notice and stop sending it work.
+   *
+   * Without it the readiness flip is nearly inert, and that is measured, not assumed: once
+   * `Bun.serve().stop()` is called the listener refuses new connections *and* stops dispatching on
+   * the keep-alive connections it already had, so the honest `503` has nobody left to tell. This
+   * window is when it can be told.
+   *
+   * `0` — the default — closes the listener at once, which is right for the bundled compose
+   * deployment: nothing there polls readiness, so the wait would be pure added shutdown time. A
+   * Kubernetes deployment wants roughly two readiness periods here (`periodSeconds`, default 10s),
+   * and its `terminationGracePeriodSeconds` has to cover this *plus* `SHUTDOWN_DRAIN_MS`.
+   */
+  readonly shutdownReadyGraceMs: number
   readonly databaseUrl: string
+  readonly databasePool: DatabasePoolConfig
   readonly adminUsername: string
   readonly adminCredential: AdminCredential
   readonly encryptionKey: string
@@ -319,216 +400,249 @@ export class EnvValidationError extends Error {
   }
 }
 
-const ENCRYPTION_KEY_BYTES = 32
-const BASE64_SHAPE = /^[A-Za-z0-9+/_-]+={0,2}$/
+// Re-exported so a caller that already depends on this module for `Env` does not have to learn
+// where the field vocabulary moved to.
+export { decodeEncryptionKey, ZERO_IS_LEGAL } from "./fields"
 
-/** Decodes a base64 (or base64url) `ENCRYPTION_KEY`, or null when it is not 32 bytes. */
-export function decodeEncryptionKey(value: string): Uint8Array | null {
-  const normalized = value.trim()
-  if (normalized.length === 0 || !BASE64_SHAPE.test(normalized)) return null
-  const bytes = Buffer.from(normalized, "base64")
-  return bytes.byteLength === ENCRYPTION_KEY_BYTES ? new Uint8Array(bytes) : null
-}
+/**
+ * Every variable this module parses, deliberately kept as a flat list of names and parsers: the
+ * *reason* a given knob is bounded the way it is belongs in
+ * docs/idea/09-deployment.md#environment-reference, which is where an operator reading the error
+ * message will go, and restating it here is how the two start to disagree.
+ *
+ * Which parser each numeric field takes is not free choice — `fields.ts` states the rule and
+ * `ZERO_IS_LEGAL` lists its exceptions. Exported as the shape rather than only as the built
+ * schema so the drift guard in `test/unit/env.test.ts` can walk it field by field and refuse a
+ * numeric knob that is neither bounded nor explained. Adding one below is therefore a decision
+ * about zero, whether or not anyone remembered to make one.
+ */
+export const ENV_FIELDS = {
+  PORT: wholeNumber.optional(),
+  SHUTDOWN_DRAIN_MS: wholeNumber.optional(),
+  SHUTDOWN_READY_GRACE_MS: wholeNumber.optional(),
+  DATABASE_URL: nonEmpty,
+  DB_POOL_MAX: atLeastOne.optional(),
+  DB_POOL_IDLE_TIMEOUT_SECONDS: wholeNumber.optional(),
+  DB_POOL_CONNECT_TIMEOUT_SECONDS: atLeastOne.optional(),
+  DB_POOL_MAX_LIFETIME_SECONDS: wholeNumber.optional(),
+  DB_POOL_CLOSE_TIMEOUT_SECONDS: wholeNumber.optional(),
+  ADMIN_USERNAME: nonEmpty,
+  ADMIN_PASSWORD: nonEmpty.optional(),
+  ADMIN_PASSWORD_HASH: nonEmpty.optional(),
+  ENCRYPTION_KEY: encryptionKey,
+  LOG_LEVEL: z.enum(LOG_LEVELS).optional(),
+  TRUST_PROXY: flag.optional(),
+  PUBLIC_URL: absoluteUrl.optional(),
+  ROUTER_REVISION: nonEmpty.optional(),
+  WEB_ROOT: nonEmpty.optional(),
+  CLAUDE_CONFIG_ROOT: nonEmpty.refine(isAbsolute, "must be an absolute path").optional(),
+  CLAUDE_CLI_PATH: nonEmpty.optional(),
+  CLAUDE_SDK_MAX_CONCURRENCY: atLeastOne.optional(),
+  CLAUDE_SDK_MAX_CONCURRENCY_PER_ACCOUNT: atLeastOne.optional(),
+  METRICS_TOKEN: nonEmpty.optional(),
+  ACCOUNT_RECHECK_COOLDOWN_SECONDS: wholeNumber.optional(),
+  ACCOUNT_TEST_NOW_COOLDOWN_SECONDS: wholeNumber.optional(),
+  RETENTION_SESSIONS_HOURS: atLeastOne.optional(),
+  RETENTION_USAGE_DAYS: atLeastOne.optional(),
+  RETENTION_USAGE_DAILY_DAYS: atLeastOne.optional(),
+  RETENTION_AUDIT_DAYS: atLeastOne.optional(),
+  RETENTION_TASK_RUNS_DAYS: atLeastOne.optional(),
+  RETENTION_REVOKED_KEYS_DAYS: atLeastOne.optional(),
+  RETENTION_OAUTH_STATE_MINUTES: atLeastOne.optional(),
+  RETENTION_ORPHAN_CONFIG_DIR_HOURS: atLeastOne.optional(),
+  JANITOR_INTERVAL_MINUTES: atLeastOne.optional(),
+  USAGE_ROLLUP_INTERVAL_MINUTES: atLeastOne.optional(),
+  OAUTH_STATE_PURGE_INTERVAL_MINUTES: atLeastOne.optional(),
+  QUOTA_FLOOR_INTERVAL_MINUTES: atLeastOne.optional(),
+  CONFIG_DIR_REAP_INTERVAL_MINUTES: atLeastOne.optional(),
+  ADMIN_SESSION_PURGE_INTERVAL_MINUTES: atLeastOne.optional(),
+  SWEEP_BATCH_SIZE: atLeastOne.optional(),
+  SCHEDULER_JITTER_FRACTION: fraction.optional(),
+  // Exclusive bounds: `0` would refresh in a loop and `1` would refresh at the instant of
+  // expiry, so both are misconfigurations rather than extreme-but-valid settings.
+  // The one field whose bounds are not the shared `fraction`'s: `0` would refresh in a loop and
+  // `1` would refresh at the instant of expiry, so both ends are excluded rather than clamped.
+  OAUTH_REFRESH_LEAD_FRACTION: fraction
+    .refine((v) => v > 0 && v < 1, "must be between 0 and 1, exclusive")
+    .optional(),
+  OAUTH_REFRESH_MIN_DELAY_SECONDS: atLeastOne.optional(),
+  OAUTH_REFRESH_MAX_ATTEMPTS: atLeastOne.optional(),
+  ADMIN_SESSION_IDLE_MINUTES: atLeastOne.optional(),
+  ADMIN_SESSION_ABSOLUTE_HOURS: atLeastOne.optional(),
+  ADMIN_LOGIN_MAX_ATTEMPTS: atLeastOne.optional(),
+  ADMIN_LOGIN_ATTEMPT_WINDOW_MINUTES: atLeastOne.optional(),
+  ADMIN_LOGIN_LOCKOUT_MINUTES: atLeastOne.optional(),
+  ADMIN_SESSION_SLIDE_FRACTION: fraction.optional(),
+  SESSION_COOKIE_INSECURE: flag.optional(),
+  CATALOG_REFRESH_SECONDS: atLeastOne.optional(),
+  KEY_CACHE_MAX: atLeastOne.optional(),
+  KEY_CACHE_TTL_SECONDS: atLeastOne.optional(),
+  KEY_CACHE_NEGATIVE_TTL_SECONDS: wholeNumber.optional(),
+  SESSION_CACHE_MAX: atLeastOne.optional(),
+  SESSION_CACHE_TTL_SECONDS: atLeastOne.optional(),
+  SESSION_CACHE_NEGATIVE_TTL_SECONDS: wholeNumber.optional(),
+  USAGE_QUEUE_MAX: atLeastOne.optional(),
+  USAGE_BATCH_SIZE: usageBatchSize.optional(),
+  USAGE_FLUSH_INTERVAL_MS: atLeastOne.optional(),
+  QUOTA_WRITE_INTERVAL_MS: atLeastOne.optional(),
+  ACCOUNT_STATUS_WRITE_INTERVAL_MS: atLeastOne.optional(),
+  MAX_REQUEST_BODY_BYTES: atLeastOne.optional(),
+  ROUTING_MAX_ATTEMPTS: atLeastOne.optional(),
+  ROUTING_FAILURE_THRESHOLD: atLeastOne.optional(),
+  ROUTING_BASE_BACKOFF_MS: atLeastOne.optional(),
+  ROUTING_MAX_BACKOFF_MS: atLeastOne.optional(),
+  ROUTING_HALF_OPEN_HOLD_MS: atLeastOne.optional(),
+  UPSTREAM_TIMEOUT_MS: atLeastOne.optional(),
+  TRANSLATE_DEFAULT_MAX_TOKENS: atLeastOne.optional(),
+} as const
 
-const nonEmpty = z.string().min(1)
-const wholeNumber = z.string().regex(/^\d+$/, "must be a whole number").transform(Number)
-/** For a ceiling where zero is not "unlimited" but "nothing ever runs". */
-const atLeastOne = wholeNumber.refine((v) => v >= 1, "must be at least 1")
-const flag = z.enum(["true", "false", "1", "0"]).transform((v) => v === "true" || v === "1")
-/** A share of something, written as a decimal in 0..1. */
-const fraction = z
-  .string()
-  .regex(/^\d+(\.\d+)?$/, "must be a number")
-  .transform(Number)
-  .refine((v) => v >= 0 && v <= 1, "must be between 0 and 1")
-const absoluteUrl = z.string().refine((v) => URL.canParse(v), "must be an absolute URL")
-const encryptionKey = z
-  .string()
-  .refine(
-    (v) => decodeEncryptionKey(v) !== null,
-    `must decode to ${ENCRYPTION_KEY_BYTES} bytes — generate with: openssl rand -base64 32`,
-  )
+const envSchema = z.object(ENV_FIELDS).transform((raw, ctx): Env => {
+  // Precedence: ADMIN_PASSWORD_HASH wins when both are set; exactly one is required.
+  const hash = raw.ADMIN_PASSWORD_HASH
+  const password = raw.ADMIN_PASSWORD
+  let adminCredential: AdminCredential
+  if (hash !== undefined) {
+    adminCredential = { kind: "hash", value: hash }
+  } else if (password !== undefined) {
+    adminCredential = { kind: "password", value: password }
+  } else {
+    const message = "exactly one of ADMIN_PASSWORD or ADMIN_PASSWORD_HASH must be set"
+    ctx.addIssue({ code: "custom", path: ["ADMIN_PASSWORD"], message })
+    ctx.addIssue({ code: "custom", path: ["ADMIN_PASSWORD_HASH"], message })
+    return z.NEVER
+  }
 
-const envSchema = z
-  .object({
-    PORT: wholeNumber.optional(),
-    SHUTDOWN_DRAIN_MS: wholeNumber.optional(),
-    DATABASE_URL: nonEmpty,
-    ADMIN_USERNAME: nonEmpty,
-    ADMIN_PASSWORD: nonEmpty.optional(),
-    ADMIN_PASSWORD_HASH: nonEmpty.optional(),
-    ENCRYPTION_KEY: encryptionKey,
-    LOG_LEVEL: z.enum(LOG_LEVELS).optional(),
-    TRUST_PROXY: flag.optional(),
-    PUBLIC_URL: absoluteUrl.optional(),
-    ROUTER_REVISION: nonEmpty.optional(),
-    WEB_ROOT: nonEmpty.optional(),
-    CLAUDE_CONFIG_ROOT: nonEmpty.refine(isAbsolute, "must be an absolute path").optional(),
-    CLAUDE_CLI_PATH: nonEmpty.optional(),
-    CLAUDE_SDK_MAX_CONCURRENCY: atLeastOne.optional(),
-    CLAUDE_SDK_MAX_CONCURRENCY_PER_ACCOUNT: atLeastOne.optional(),
-    METRICS_TOKEN: nonEmpty.optional(),
-    ACCOUNT_RECHECK_COOLDOWN_SECONDS: wholeNumber.optional(),
-    ACCOUNT_TEST_NOW_COOLDOWN_SECONDS: wholeNumber.optional(),
-    RETENTION_SESSIONS_HOURS: wholeNumber.optional(),
-    RETENTION_USAGE_DAYS: wholeNumber.optional(),
-    RETENTION_AUDIT_DAYS: wholeNumber.optional(),
-    RETENTION_REVOKED_KEYS_DAYS: wholeNumber.optional(),
-    RETENTION_OAUTH_STATE_MINUTES: wholeNumber.optional(),
-    RETENTION_ORPHAN_CONFIG_DIR_HOURS: wholeNumber.optional(),
-    JANITOR_INTERVAL_MINUTES: wholeNumber.optional(),
-    USAGE_ROLLUP_INTERVAL_MINUTES: wholeNumber.optional(),
-    OAUTH_STATE_PURGE_INTERVAL_MINUTES: wholeNumber.optional(),
-    QUOTA_FLOOR_INTERVAL_MINUTES: wholeNumber.optional(),
-    CONFIG_DIR_REAP_INTERVAL_MINUTES: wholeNumber.optional(),
-    ADMIN_SESSION_PURGE_INTERVAL_MINUTES: wholeNumber.optional(),
-    SWEEP_BATCH_SIZE: wholeNumber.optional(),
-    SCHEDULER_JITTER_FRACTION: fraction.optional(),
-    // Exclusive bounds: `0` would refresh in a loop and `1` would refresh at the instant of
-    // expiry, so both are misconfigurations rather than extreme-but-valid settings.
-    OAUTH_REFRESH_LEAD_FRACTION: fraction
-      .refine((v) => v > 0 && v < 1, "must be between 0 and 1, exclusive")
-      .optional(),
-    OAUTH_REFRESH_MIN_DELAY_SECONDS: atLeastOne.optional(),
-    OAUTH_REFRESH_MAX_ATTEMPTS: atLeastOne.optional(),
-    ADMIN_SESSION_IDLE_MINUTES: wholeNumber.optional(),
-    ADMIN_SESSION_ABSOLUTE_HOURS: wholeNumber.optional(),
-    ADMIN_LOGIN_MAX_ATTEMPTS: wholeNumber.optional(),
-    ADMIN_LOGIN_ATTEMPT_WINDOW_MINUTES: wholeNumber.optional(),
-    ADMIN_LOGIN_LOCKOUT_MINUTES: wholeNumber.optional(),
-    ADMIN_SESSION_SLIDE_FRACTION: fraction.optional(),
-    SESSION_COOKIE_INSECURE: flag.optional(),
-    CATALOG_REFRESH_SECONDS: wholeNumber.optional(),
-    KEY_CACHE_MAX: wholeNumber.optional(),
-    KEY_CACHE_TTL_SECONDS: wholeNumber.optional(),
-    KEY_CACHE_NEGATIVE_TTL_SECONDS: wholeNumber.optional(),
-    SESSION_CACHE_MAX: wholeNumber.optional(),
-    SESSION_CACHE_TTL_SECONDS: wholeNumber.optional(),
-    SESSION_CACHE_NEGATIVE_TTL_SECONDS: wholeNumber.optional(),
-    USAGE_QUEUE_MAX: wholeNumber.optional(),
-    USAGE_BATCH_SIZE: wholeNumber.optional(),
-    USAGE_FLUSH_INTERVAL_MS: wholeNumber.optional(),
-    QUOTA_WRITE_INTERVAL_MS: atLeastOne.optional(),
-    ACCOUNT_STATUS_WRITE_INTERVAL_MS: atLeastOne.optional(),
-    MAX_REQUEST_BODY_BYTES: atLeastOne.optional(),
-    ROUTING_MAX_ATTEMPTS: wholeNumber.optional(),
-    ROUTING_FAILURE_THRESHOLD: wholeNumber.optional(),
-    ROUTING_BASE_BACKOFF_MS: wholeNumber.optional(),
-    ROUTING_MAX_BACKOFF_MS: wholeNumber.optional(),
-    ROUTING_HALF_OPEN_HOLD_MS: atLeastOne.optional(),
-    UPSTREAM_TIMEOUT_MS: wholeNumber.optional(),
-    TRANSLATE_DEFAULT_MAX_TOKENS: wholeNumber.optional(),
-  })
-  .transform((raw, ctx): Env => {
-    // Precedence: ADMIN_PASSWORD_HASH wins when both are set; exactly one is required.
-    const hash = raw.ADMIN_PASSWORD_HASH
-    const password = raw.ADMIN_PASSWORD
-    let adminCredential: AdminCredential
-    if (hash !== undefined) {
-      adminCredential = { kind: "hash", value: hash }
-    } else if (password !== undefined) {
-      adminCredential = { kind: "password", value: password }
-    } else {
-      const message = "exactly one of ADMIN_PASSWORD or ADMIN_PASSWORD_HASH must be set"
-      ctx.addIssue({ code: "custom", path: ["ADMIN_PASSWORD"], message })
-      ctx.addIssue({ code: "custom", path: ["ADMIN_PASSWORD_HASH"], message })
-      return z.NEVER
-    }
+  const usageDays = raw.RETENTION_USAGE_DAYS ?? 90
+  // Two years of daily aggregates: long enough that "what did this cost me last year" is still
+  // answerable, and the first bound this table has ever had.
+  const usageDailyDays = raw.RETENTION_USAGE_DAILY_DAYS ?? 730
+  if (usageDailyDays < usageDays) {
+    // Not clamped, because either value could be the one the operator meant and guessing which
+    // silently discards history. The two sweeps would otherwise fight forever: the janitor deletes
+    // a rolled day, the rollup re-inserts it on the next tick because its raw rows are still there.
+    ctx.addIssue({
+      code: "custom",
+      path: ["RETENTION_USAGE_DAILY_DAYS"],
+      message:
+        `must be at least RETENTION_USAGE_DAYS (${usageDays}): daily aggregates are the long ` +
+        `half of usage retention, and a shorter window would delete days the rollup immediately ` +
+        `writes back`,
+    })
+    return z.NEVER
+  }
 
-    return {
-      port: raw.PORT ?? 8080,
-      // Fifteen seconds: long enough for the ordinary streamed answer in flight at deploy time to
-      // land, short enough to leave the flush room inside the 30s stop grace the bundled compose
-      // file declares. Neither number is a guess the other has to match by luck — an image-pins
-      // test holds the compose grace above this default.
-      shutdownDrainMs: raw.SHUTDOWN_DRAIN_MS ?? 15_000,
-      databaseUrl: raw.DATABASE_URL,
-      adminUsername: raw.ADMIN_USERNAME,
-      adminCredential,
-      encryptionKey: raw.ENCRYPTION_KEY,
-      logLevel: raw.LOG_LEVEL ?? "info",
-      trustProxy: raw.TRUST_PROXY ?? false,
-      publicUrl: raw.PUBLIC_URL ?? null,
-      revision: raw.ROUTER_REVISION ?? UNKNOWN_REVISION,
-      webRoot: raw.WEB_ROOT ?? null,
-      claudeConfigRoot: raw.CLAUDE_CONFIG_ROOT ?? "/data/claude",
-      claudeCliPath: raw.CLAUDE_CLI_PATH ?? null,
-      claudeSdkMaxConcurrency: raw.CLAUDE_SDK_MAX_CONCURRENCY ?? 10,
-      claudeSdkMaxConcurrencyPerAccount: raw.CLAUDE_SDK_MAX_CONCURRENCY_PER_ACCOUNT ?? 4,
-      metricsToken: raw.METRICS_TOKEN ?? null,
-      accountRecheckCooldownSeconds: raw.ACCOUNT_RECHECK_COOLDOWN_SECONDS ?? 60,
-      // Longer than the re-check default on purpose: this one costs money (and, on the Agent-SDK
-      // path, a subprocess), so the button that spends it should not be as cheap to lean on.
-      accountTestNowCooldownSeconds: raw.ACCOUNT_TEST_NOW_COOLDOWN_SECONDS ?? 120,
-      retention: {
-        sessionsHours: raw.RETENTION_SESSIONS_HOURS ?? 24,
-        usageDays: raw.RETENTION_USAGE_DAYS ?? 90,
-        auditDays: raw.RETENTION_AUDIT_DAYS ?? 365,
-        revokedKeysDays: raw.RETENTION_REVOKED_KEYS_DAYS ?? 30,
-        oauthStateMinutes: raw.RETENTION_OAUTH_STATE_MINUTES ?? 10,
-        // A day, because the failure it covers is a crash between provisioning a directory and
-        // inserting the row that names it, and the operator who notices at all notices the next
-        // morning. Shortening it buys a little disk and risks deleting a live login.
-        orphanConfigDirHours: raw.RETENTION_ORPHAN_CONFIG_DIR_HOURS ?? 24,
-      },
-      janitorIntervalMinutes: raw.JANITOR_INTERVAL_MINUTES ?? 60,
-      scheduler: {
-        usageRollupIntervalMinutes: raw.USAGE_ROLLUP_INTERVAL_MINUTES ?? 60,
-        oauthStatePurgeIntervalMinutes: raw.OAUTH_STATE_PURGE_INTERVAL_MINUTES ?? 5,
-        quotaFloorIntervalMinutes: raw.QUOTA_FLOOR_INTERVAL_MINUTES ?? 30,
-        // Hours, not minutes: an orphan is a crash artifact, so a router that never crashes sweeps
-        // an empty root forever and one that did leaves a directory nobody is racing to reclaim.
-        configDirReapIntervalMinutes: raw.CONFIG_DIR_REAP_INTERVAL_MINUTES ?? 360,
-        // Minutes, not hours: an idle console session outlives its own expiry by up to one tick's
-        // worth of memory, and a login-heavy operator day should not let that pile up for hours.
-        adminSessionPurgeIntervalMinutes: raw.ADMIN_SESSION_PURGE_INTERVAL_MINUTES ?? 30,
-        sweepBatchSize: raw.SWEEP_BATCH_SIZE ?? 1_000,
-        jitterFraction: raw.SCHEDULER_JITTER_FRACTION ?? 0.2,
-      },
-      oauthRefresh: {
-        leadFraction: raw.OAUTH_REFRESH_LEAD_FRACTION ?? 0.75,
-        minDelaySeconds: raw.OAUTH_REFRESH_MIN_DELAY_SECONDS ?? 30,
-        maxAttempts: raw.OAUTH_REFRESH_MAX_ATTEMPTS ?? 5,
-      },
-      adminAuth: {
-        sessionIdleMinutes: raw.ADMIN_SESSION_IDLE_MINUTES ?? 480,
-        sessionAbsoluteHours: raw.ADMIN_SESSION_ABSOLUTE_HOURS ?? 24,
-        loginMaxAttempts: raw.ADMIN_LOGIN_MAX_ATTEMPTS ?? 5,
-        loginAttemptWindowMinutes: raw.ADMIN_LOGIN_ATTEMPT_WINDOW_MINUTES ?? 15,
-        loginLockoutMinutes: raw.ADMIN_LOGIN_LOCKOUT_MINUTES ?? 15,
-        sessionSlideFraction: raw.ADMIN_SESSION_SLIDE_FRACTION ?? 0.1,
-        sessionCookieInsecure: raw.SESSION_COOKIE_INSECURE ?? false,
-      },
-      // Defaults mirror the layer constants they override, so an unset variable
-      // and a variable set to the default behave identically.
-      dataPlane: {
-        catalogRefreshSeconds: raw.CATALOG_REFRESH_SECONDS ?? 30,
-        keyCacheMax: raw.KEY_CACHE_MAX ?? 4_096,
-        keyCacheTtlSeconds: raw.KEY_CACHE_TTL_SECONDS ?? 60,
-        keyCacheNegativeTtlSeconds: raw.KEY_CACHE_NEGATIVE_TTL_SECONDS ?? 5,
-        sessionCacheMax: raw.SESSION_CACHE_MAX ?? 4_096,
-        sessionCacheTtlSeconds: raw.SESSION_CACHE_TTL_SECONDS ?? 300,
-        sessionCacheNegativeTtlSeconds: raw.SESSION_CACHE_NEGATIVE_TTL_SECONDS ?? 30,
-        usageQueueMax: raw.USAGE_QUEUE_MAX ?? 10_000,
-        usageBatchSize: raw.USAGE_BATCH_SIZE ?? 200,
-        usageFlushIntervalMs: raw.USAGE_FLUSH_INTERVAL_MS ?? 1_000,
-        quotaWriteIntervalMs: raw.QUOTA_WRITE_INTERVAL_MS ?? 5_000,
-        accountStatusWriteIntervalMs: raw.ACCOUNT_STATUS_WRITE_INTERVAL_MS ?? 1_000,
-        maxRequestBodyBytes: raw.MAX_REQUEST_BODY_BYTES ?? 32 * 1024 * 1024,
-      },
-      failover: {
-        maxAttempts: raw.ROUTING_MAX_ATTEMPTS ?? 3,
-        failureThreshold: raw.ROUTING_FAILURE_THRESHOLD ?? 3,
-        baseBackoffMs: raw.ROUTING_BASE_BACKOFF_MS ?? 1_000,
-        maxBackoffMs: raw.ROUTING_MAX_BACKOFF_MS ?? 300_000,
-        halfOpenHoldMs: raw.ROUTING_HALF_OPEN_HOLD_MS ?? 30_000,
-        upstreamTimeoutMs: raw.UPSTREAM_TIMEOUT_MS ?? 600_000,
-      },
-      translation: {
-        defaultMaxTokens: raw.TRANSLATE_DEFAULT_MAX_TOKENS ?? 4_096,
-      },
-    }
-  })
+  return {
+    port: raw.PORT ?? 8080,
+    // Fifteen seconds: long enough for the ordinary streamed answer in flight at deploy time to
+    // land, short enough to leave the flush room inside the 30s stop grace the bundled compose
+    // file declares. Neither number is a guess the other has to match by luck — an image-pins
+    // test holds the compose grace above this default.
+    shutdownDrainMs: raw.SHUTDOWN_DRAIN_MS ?? 15_000,
+    // Zero, so the bundled compose deployment shuts down exactly as fast as it used to: nothing
+    // there polls readiness, so the window would buy an operator nothing and cost them seconds.
+    shutdownReadyGraceMs: raw.SHUTDOWN_READY_GRACE_MS ?? 0,
+    databaseUrl: raw.DATABASE_URL,
+    databasePool: {
+      maxConnections: raw.DB_POOL_MAX ?? DATABASE_POOL_DEFAULTS.maxConnections,
+      idleTimeoutSeconds:
+        raw.DB_POOL_IDLE_TIMEOUT_SECONDS ?? DATABASE_POOL_DEFAULTS.idleTimeoutSeconds,
+      connectTimeoutSeconds:
+        raw.DB_POOL_CONNECT_TIMEOUT_SECONDS ?? DATABASE_POOL_DEFAULTS.connectTimeoutSeconds,
+      maxLifetimeSeconds:
+        raw.DB_POOL_MAX_LIFETIME_SECONDS ?? DATABASE_POOL_DEFAULTS.maxLifetimeSeconds,
+      closeTimeoutSeconds:
+        raw.DB_POOL_CLOSE_TIMEOUT_SECONDS ?? DATABASE_POOL_DEFAULTS.closeTimeoutSeconds,
+    },
+    adminUsername: raw.ADMIN_USERNAME,
+    adminCredential,
+    encryptionKey: raw.ENCRYPTION_KEY,
+    logLevel: raw.LOG_LEVEL ?? "info",
+    trustProxy: raw.TRUST_PROXY ?? false,
+    publicUrl: raw.PUBLIC_URL ?? null,
+    revision: raw.ROUTER_REVISION ?? UNKNOWN_REVISION,
+    webRoot: raw.WEB_ROOT ?? null,
+    claudeConfigRoot: raw.CLAUDE_CONFIG_ROOT ?? "/data/claude",
+    claudeCliPath: raw.CLAUDE_CLI_PATH ?? null,
+    claudeSdkMaxConcurrency: raw.CLAUDE_SDK_MAX_CONCURRENCY ?? 10,
+    claudeSdkMaxConcurrencyPerAccount: raw.CLAUDE_SDK_MAX_CONCURRENCY_PER_ACCOUNT ?? 4,
+    metricsToken: raw.METRICS_TOKEN ?? null,
+    accountRecheckCooldownSeconds: raw.ACCOUNT_RECHECK_COOLDOWN_SECONDS ?? 60,
+    // Longer than the re-check default on purpose: this one costs money (and, on the Agent-SDK
+    // path, a subprocess), so the button that spends it should not be as cheap to lean on.
+    accountTestNowCooldownSeconds: raw.ACCOUNT_TEST_NOW_COOLDOWN_SECONDS ?? 120,
+    retention: {
+      sessionsHours: raw.RETENTION_SESSIONS_HOURS ?? 24,
+      usageDays,
+      usageDailyDays,
+      auditDays: raw.RETENTION_AUDIT_DAYS ?? 365,
+      // A month of run rows: long enough to answer "has this task been failing all week", short
+      // enough that six tasks ticking as often as every five minutes stay a table nobody notices.
+      taskRunsDays: raw.RETENTION_TASK_RUNS_DAYS ?? 30,
+      revokedKeysDays: raw.RETENTION_REVOKED_KEYS_DAYS ?? 30,
+      oauthStateMinutes: raw.RETENTION_OAUTH_STATE_MINUTES ?? 10,
+      // A day, because the failure it covers is a crash between provisioning a directory and
+      // inserting the row that names it, and the operator who notices at all notices the next
+      // morning. Shortening it buys a little disk and risks deleting a live login.
+      orphanConfigDirHours: raw.RETENTION_ORPHAN_CONFIG_DIR_HOURS ?? 24,
+    },
+    janitorIntervalMinutes: raw.JANITOR_INTERVAL_MINUTES ?? 60,
+    scheduler: {
+      usageRollupIntervalMinutes: raw.USAGE_ROLLUP_INTERVAL_MINUTES ?? 60,
+      oauthStatePurgeIntervalMinutes: raw.OAUTH_STATE_PURGE_INTERVAL_MINUTES ?? 5,
+      quotaFloorIntervalMinutes: raw.QUOTA_FLOOR_INTERVAL_MINUTES ?? 30,
+      // Hours, not minutes: an orphan is a crash artifact, so a router that never crashes sweeps
+      // an empty root forever and one that did leaves a directory nobody is racing to reclaim.
+      configDirReapIntervalMinutes: raw.CONFIG_DIR_REAP_INTERVAL_MINUTES ?? 360,
+      // Minutes, not hours: an idle console session outlives its own expiry by up to one tick's
+      // worth of memory, and a login-heavy operator day should not let that pile up for hours.
+      adminSessionPurgeIntervalMinutes: raw.ADMIN_SESSION_PURGE_INTERVAL_MINUTES ?? 30,
+      sweepBatchSize: raw.SWEEP_BATCH_SIZE ?? 1_000,
+      jitterFraction: raw.SCHEDULER_JITTER_FRACTION ?? 0.2,
+    },
+    oauthRefresh: {
+      leadFraction: raw.OAUTH_REFRESH_LEAD_FRACTION ?? 0.75,
+      minDelaySeconds: raw.OAUTH_REFRESH_MIN_DELAY_SECONDS ?? 30,
+      maxAttempts: raw.OAUTH_REFRESH_MAX_ATTEMPTS ?? 5,
+    },
+    adminAuth: {
+      sessionIdleMinutes: raw.ADMIN_SESSION_IDLE_MINUTES ?? 480,
+      sessionAbsoluteHours: raw.ADMIN_SESSION_ABSOLUTE_HOURS ?? 24,
+      loginMaxAttempts: raw.ADMIN_LOGIN_MAX_ATTEMPTS ?? 5,
+      loginAttemptWindowMinutes: raw.ADMIN_LOGIN_ATTEMPT_WINDOW_MINUTES ?? 15,
+      loginLockoutMinutes: raw.ADMIN_LOGIN_LOCKOUT_MINUTES ?? 15,
+      sessionSlideFraction: raw.ADMIN_SESSION_SLIDE_FRACTION ?? 0.1,
+      sessionCookieInsecure: raw.SESSION_COOKIE_INSECURE ?? false,
+    },
+    // Defaults mirror the layer constants they override, so an unset variable
+    // and a variable set to the default behave identically.
+    dataPlane: {
+      catalogRefreshSeconds: raw.CATALOG_REFRESH_SECONDS ?? 30,
+      keyCacheMax: raw.KEY_CACHE_MAX ?? 4_096,
+      keyCacheTtlSeconds: raw.KEY_CACHE_TTL_SECONDS ?? 60,
+      keyCacheNegativeTtlSeconds: raw.KEY_CACHE_NEGATIVE_TTL_SECONDS ?? 5,
+      sessionCacheMax: raw.SESSION_CACHE_MAX ?? 4_096,
+      sessionCacheTtlSeconds: raw.SESSION_CACHE_TTL_SECONDS ?? 300,
+      sessionCacheNegativeTtlSeconds: raw.SESSION_CACHE_NEGATIVE_TTL_SECONDS ?? 30,
+      usageQueueMax: raw.USAGE_QUEUE_MAX ?? 10_000,
+      usageBatchSize: raw.USAGE_BATCH_SIZE ?? 200,
+      usageFlushIntervalMs: raw.USAGE_FLUSH_INTERVAL_MS ?? 1_000,
+      quotaWriteIntervalMs: raw.QUOTA_WRITE_INTERVAL_MS ?? 5_000,
+      accountStatusWriteIntervalMs: raw.ACCOUNT_STATUS_WRITE_INTERVAL_MS ?? 1_000,
+      maxRequestBodyBytes: raw.MAX_REQUEST_BODY_BYTES ?? 32 * 1024 * 1024,
+    },
+    failover: {
+      maxAttempts: raw.ROUTING_MAX_ATTEMPTS ?? 3,
+      failureThreshold: raw.ROUTING_FAILURE_THRESHOLD ?? 3,
+      baseBackoffMs: raw.ROUTING_BASE_BACKOFF_MS ?? 1_000,
+      maxBackoffMs: raw.ROUTING_MAX_BACKOFF_MS ?? 300_000,
+      halfOpenHoldMs: raw.ROUTING_HALF_OPEN_HOLD_MS ?? 30_000,
+      upstreamTimeoutMs: raw.UPSTREAM_TIMEOUT_MS ?? 600_000,
+    },
+    translation: {
+      defaultMaxTokens: raw.TRANSLATE_DEFAULT_MAX_TOKENS ?? 4_096,
+    },
+  }
+})
 
 /**
  * Validates a raw environment map into `Env`.

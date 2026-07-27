@@ -1,6 +1,10 @@
 import { VERSION } from "@multi-ai-router/core"
 import { Hono } from "hono"
-import { checkReadiness, type ReadinessProbes } from "../services/health/readiness"
+import {
+  checkReadiness,
+  type ReadinessProbes,
+  type ReadinessReport,
+} from "../services/health/readiness"
 import type { AppEnv } from "../types"
 
 /**
@@ -11,10 +15,14 @@ import type { AppEnv } from "../types"
  *   orchestrator to restart a working process. It also names the build, because this is the one
  *   endpoint a deploy pipeline can already reach without a credential, and "did the new image
  *   actually roll out" is otherwise a question only a log tail answers.
- * `GET /readyz` — the database is reachable. `503` with a short reason otherwise.
- *   The account pool is **reported** here but does not gate the answer: requiring a healthy
- *   account would deadlock a fresh install, which has none and needs traffic routed to its
- *   console in order to get one. See `services/health/readiness.ts`.
+ * `GET /readyz` — the database is reachable, and a shutdown has not begun. `503` with a short
+ *   reason otherwise. The account pool is **reported** here but does not gate the answer:
+ *   requiring a healthy account would deadlock a fresh install, which has none and needs traffic
+ *   routed to its console in order to get one. See `services/health/readiness.ts`.
+ *
+ * `shutting_down` is a third status rather than a second flavour of `not_ready`, because the
+ * remedy differs: not-ready wants somebody to look at the database, draining wants nothing at all
+ * — it is the expected answer to a deploy, and the response carries no checks because none ran.
  *
  * docs/idea/08-observability.md#endpoints
  */
@@ -27,7 +35,7 @@ export function healthRoutes(probes: ReadinessProbes): Hono<AppEnv> {
     const report = await checkReadiness(probes)
     return c.json(
       {
-        status: report.ready ? "ready" : "not_ready",
+        status: readinessStatus(report),
         checks: report.checks,
         reason: report.reason,
       },
@@ -36,4 +44,9 @@ export function healthRoutes(probes: ReadinessProbes): Hono<AppEnv> {
   })
 
   return routes
+}
+
+function readinessStatus(report: ReadinessReport): "ready" | "not_ready" | "shutting_down" {
+  if (report.shuttingDown) return "shutting_down"
+  return report.ready ? "ready" : "not_ready"
 }

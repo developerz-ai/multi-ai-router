@@ -84,6 +84,15 @@ a router answering requests against a schema it does not understand is worse tha
 Env is validated by **Zod at boot**. A missing or malformed value exits **non-zero** with a message
 naming the offending variable — the process never starts half-configured.
 
+**Zero is not a way to turn something off.** On a numeric knob it is usually a sweep that deletes
+the table it was pointed at, an interval that re-arms every millisecond, a cache that answers
+nothing, or a breaker that never holds — none of which log anything, none of which stop traffic,
+and all of which show up only as an absence somebody eventually notices. So every numeric variable
+here **refuses `0` at boot** unless the row below says otherwise; the handful where zero is a real
+setting say what it means. That split is enforced, not documented: a drift guard walks the schema
+and fails the build for any numeric knob that is neither refused nor explained
+(`apps/api/src/config/fields.ts`).
+
 | Variable | Required | Default | Purpose |
 |---|---|---|---|
 | `ADMIN_USERNAME` | yes | — | The single admin identity. No user table in v1. |
@@ -91,61 +100,69 @@ naming the offending variable — the process never starts half-configured.
 | `ADMIN_PASSWORD_HASH` | one of | — | Pre-computed argon2id hash, for operators who refuse a plaintext secret in an env store. |
 | `ENCRYPTION_KEY` | yes | — | 32 bytes, base64. AES-256-GCM key for upstream credentials and router keys. Boot fails loudly if missing or short. |
 | `DATABASE_URL` | yes | — | PostgreSQL 16+ connection string. **Supplied by the bundled compose file**, so it is not one of the three you set by hand. Set it yourself only when pointing at an existing/managed instance. |
-| `PORT` | no | `8080` | Listen port inside the container. |
-| `SHUTDOWN_DRAIN_MS` | no | `15000` | How long a shutdown lets in-flight responses finish before it stops waiting. Must stay **under** whatever grace the orchestrator gives the container (`stop_grace_period`, `terminationGracePeriodSeconds`) — see [Shutdown & draining](#shutdown--draining). `0` waits for nothing. |
+| `DB_POOL_MAX` | no | `10` | Connections this replica holds open. **One pool serves everything that is not the request path** — the admin console, every scheduler sweep, the off-path usage/quota/status writers and `/readyz` — so it is the ceiling on all of them at once, and a long sweep holding a connection is one fewer for the console. Raise it for a busy console or long sweeps; lower it when several replicas share a managed instance with its own connection cap (`max_connections`), remembering each replica opens its own pool. **`0` refused at boot**: it opens nothing and queues every query forever. |
+| `DB_POOL_IDLE_TIMEOUT_SECONDS` | no | `30` | How long an idle pooled connection is kept before it is closed. `0` is legal and means *never* close one — postgres.js reads a falsy interval as a timer that never fires, not as "immediately". |
+| `DB_POOL_CONNECT_TIMEOUT_SECONDS` | no | `10` | How long a dial waits to be accepted before it fails. Raise it for a managed instance that is slow to accept; the boot migration uses the same value, so a raise covers the connection that runs before the pool exists. **`0` refused at boot**: by the rule above it would mean *wait forever*, turning an unreachable database from a failure into a hang. |
+| `DB_POOL_MAX_LIFETIME_SECONDS` | no | `1800` | Age at which a pooled connection is recycled, so a failover behind a connection proxy drains onto the new primary instead of pinning to the old one. `0` is legal and never recycles. |
+| `DB_POOL_CLOSE_TIMEOUT_SECONDS` | no | `5` | How long the shutdown's pool close waits for in-flight queries before destroying them — see [Shutdown & draining](#shutdown--draining). It runs after the flush, so an unbounded wait here buys nothing and risks the `SIGKILL`. `0` is legal and destroys the pool at once. |
+| `PORT` | no | `8080` | Listen port inside the container. `0` is legal and lets the kernel pick an ephemeral port; the boot log names the one it bound. |
+| `SHUTDOWN_READY_GRACE_MS` | no | `0` | How long the router keeps serving after `/readyz` starts answering `503 shutting_down` and before the listener closes — the window a load balancer has to notice. `0` skips it, which is right under the bundled compose file (nothing there polls readiness). On Kubernetes set about two readiness periods (`periodSeconds` default `10s` → `20000`). `0` is legal and means close the listener at once. |
+| `SHUTDOWN_DRAIN_MS` | no | `15000` | How long a shutdown lets in-flight responses finish before it stops waiting. This plus `SHUTDOWN_READY_GRACE_MS` plus `DB_POOL_CLOSE_TIMEOUT_SECONDS` must stay **under** whatever grace the orchestrator gives the container (`stop_grace_period`, `terminationGracePeriodSeconds`) — see [Shutdown & draining](#shutdown--draining). `0` waits for nothing. |
 | `CLAUDE_CONFIG_ROOT` | no | `/data/claude` | Parent directory holding one `CLAUDE_CONFIG_DIR` per Claude subscription Account. Must sit on the persistent `claude-config` volume. Secret material — see [Persistence & backup](#persistence--backup). |
 | `CLAUDE_CLI_PATH` | no | — | Pins the `claude` binary the Agent SDK spawns, bypassing resolution. Unset is right: the image stages one on `PATH` and `/readyz` reports which rung of the ladder won. A set-but-unusable path **fails** rather than falling back, so the router never spawns a binary you did not name — see [11-anthropic-agent-sdk.md](11-anthropic-agent-sdk.md#9-operational-notes). |
 | `CLAUDE_SDK_MAX_CONCURRENCY` | no | `10` | `claude` subprocesses in flight on this replica. Every subscription request spawns one (~245 MB native binary, measured — see [Sizing](#sizing)), so this is a **memory** bound, not a throughput one — size against RAM, not CPUs. Requests over the ceiling queue rather than fail. Bounds every spawner, including the console's **Test now** button. Watch `router_sdk_subprocesses` and `router_sdk_subprocess_queue_depth` to size it against real traffic. |
 | `CLAUDE_SDK_MAX_CONCURRENCY_PER_ACCOUNT` | no | `4` | The same ceiling for any one subscription Account — what stops one Account's burst starving the pool. Values above `CLAUDE_SDK_MAX_CONCURRENCY` are legal and simply never bind. |
-| `ACCOUNT_RECHECK_COOLDOWN_SECONDS` | no | `60` | Minimum interval between manual **Re-check now** probes of the same account. The button re-queries the provider's live quota signal; this is what stops it being used to hammer an upstream. |
-| `ACCOUNT_TEST_NOW_COOLDOWN_SECONDS` | no | `120` | Minimum interval between manual **Test now** presses of the same account. Distinct from the re-check cooldown above and deliberately longer: this button sends one real, billed completion, and on a Claude subscription it spawns a `claude` subprocess and spends a turn. |
+| `ACCOUNT_RECHECK_COOLDOWN_SECONDS` | no | `60` | Minimum interval between manual **Re-check now** probes of the same account. The button re-queries the provider's live quota signal; this is what stops it being used to hammer an upstream. `0` is legal and means no cooldown. |
+| `ACCOUNT_TEST_NOW_COOLDOWN_SECONDS` | no | `120` | Minimum interval between manual **Test now** presses of the same account. Distinct from the re-check cooldown above and deliberately longer: this button sends one real, billed completion, and on a Claude subscription it spawns a `claude` subprocess and spends a turn. `0` is legal and means no cooldown. |
 | `PUBLIC_URL` | no | — | Externally reachable base URL. Only used to build the OAuth redirect-capture callback (`PUBLIC_URL + /admin/accounts/oauth/callback`). Unset → paste-back capture only. |
 | `WEB_ROOT` | no | `dist/web` beside the bundled entrypoint | Directory holding the built admin console, which the router serves at `/` on its own origin. The default is correct in the image; set it only when the assets live elsewhere. Set-but-missing an `index.html` **fails boot** rather than quietly serving an API-only router that looks like a broken web app. Absent assets at the default path are not fatal — that is what running from source looks like, and Vite serves the console itself in dev. |
 | `LOG_LEVEL` | no | `info` | `debug` \| `info` \| `warn` \| `error`. Structured JSON either way. |
 | `METRICS_TOKEN` | no | — | Bearer token `GET /metrics` demands (`Authorization: Bearer …`). Unset leaves the endpoint open, which is right only where its port is not routable from outside the host. The exposition carries account, key and pool ids — never a credential. |
 | `ROUTER_REVISION` | no | `unknown` | Which commit this build is, reported by `router_build_info{revision}` and the `router listening` boot log line. The published image bakes in the tagged commit's sha (`--build-arg ROUTER_REVISION=…`); a version alone cannot separate a rebuilt `latest` from the tag it was cut for. Set it by hand only when you build your own image. |
 | `TRUST_PROXY` | no | `false` | Honor `X-Forwarded-For` / `-Proto`. Set `true` **only** behind a proxy you control — otherwise clients can forge their own IP past the rate limiter. |
-| `RETENTION_SESSIONS_HOURS` | no | `24` | Idle sticky-session and fingerprint TTL. |
-| `RETENTION_USAGE_DAYS` | no | `90` | Raw `UsageRecord` retention before roll-up to daily aggregates. |
-| `RETENTION_AUDIT_DAYS` | no | `365` | `AuditEvent` retention. |
-| `RETENTION_REVOKED_KEYS_DAYS` | no | `30` | How long a revoked/expired `ApiKey` row survives before purge. |
-| `RETENTION_OAUTH_STATE_MINUTES` | no | `10` | TTL for one-shot OAuth `state` + PKCE verifiers. |
-| `RETENTION_ORPHAN_CONFIG_DIR_HOURS` | no | `24` | Grace before a `CLAUDE_CONFIG_DIR` under `CLAUDE_CONFIG_ROOT` that no account claims is removed. A directory is provisioned just *before* its account row is inserted, so this must comfortably exceed that gap — too short and the reaper deletes a login still being made. |
-| `JANITOR_INTERVAL_MINUTES` | no | `60` | Base sweep interval; the janitor jitters around it. |
-| `USAGE_ROLLUP_INTERVAL_MINUTES` | no | `60` | Usage record rollup interval, in minutes. Raw records older than `RETENTION_USAGE_DAYS` are summarized into daily aggregates. |
-| `OAUTH_STATE_PURGE_INTERVAL_MINUTES` | no | `5` | OAuth state (and PKCE verifier) purge interval, in minutes. One-shot values older than `RETENTION_OAUTH_STATE_MINUTES` are deleted. |
-| `QUOTA_FLOOR_INTERVAL_MINUTES` | no | `30` | Account quota floor probe interval, in minutes. Periodic refresh of cached quota state. |
-| `CONFIG_DIR_REAP_INTERVAL_MINUTES` | no | `360` | How often the orphaned-`CLAUDE_CONFIG_DIR` reap runs. Hours rather than minutes: an orphan is a crash artifact. *How long* one may linger is `RETENTION_ORPHAN_CONFIG_DIR_HOURS`, not this. |
-| `ADMIN_SESSION_PURGE_INTERVAL_MINUTES` | no | `30` | How often expired admin console sessions are dropped from the in-memory `SessionStore`. Runs on every replica independently — the store is process memory, not a table, so there is nothing for the advisory lock to coordinate. |
-| `SWEEP_BATCH_SIZE` | no | `1000` | Max rows per bounded-delete sweep (usage, session, revoked keys, audit, OAuth state), and directories per orphaned-config-dir reap. Larger trades memory and latency for fewer sweeps; smaller means more passes. |
+| `RETENTION_SESSIONS_HOURS` | no | `24` | Idle sticky-session and fingerprint TTL. Retention is *keep for*, never *keep nothing*: at `0` the cutoff is the sweep's own clock, so the janitor empties the table on its next tick and every tick after. **Refused at boot.** |
+| `RETENTION_USAGE_DAYS` | no | `90` | Raw `UsageRecord` retention before roll-up to daily aggregates. **`0` refused at boot** — see `RETENTION_SESSIONS_HOURS`. |
+| `RETENTION_USAGE_DAILY_DAYS` | no | `730` | Daily aggregate (`usage_daily`) retention — the long half of usage retention, and one row per distinct (day, key, account, pool, model). **Must be ≥ `RETENTION_USAGE_DAYS`, refused at boot otherwise**: a shorter window has the janitor delete rolled days whose raw rows still exist, and the rollup writes them straight back on its next tick. **`0` refused at boot** — see `RETENTION_SESSIONS_HOURS`. |
+| `RETENTION_AUDIT_DAYS` | no | `365` | `AuditEvent` retention. **`0` refused at boot** — see `RETENTION_SESSIONS_HOURS`. |
+| `RETENTION_TASK_RUNS_DAYS` | no | `30` | How long a **finished** `ScheduledTaskRun` row is kept. Six tasks ticking as often as every five minutes write on the order of a thousand rows a day between them. A run with no `finishedAt` is never swept however old it is — that row is the only evidence a task wedged or a process died holding the lock. **`0` refused at boot** — see `RETENTION_SESSIONS_HOURS`. |
+| `RETENTION_REVOKED_KEYS_DAYS` | no | `30` | How long a revoked/expired `ApiKey` row survives before purge. **`0` refused at boot** — see `RETENTION_SESSIONS_HOURS`. |
+| `RETENTION_OAUTH_STATE_MINUTES` | no | `10` | TTL for one-shot OAuth `state` + PKCE verifiers. **`0` refused at boot**: it would expire a one-shot `state` at the instant it is minted, so no OAuth connect could ever complete. |
+| `RETENTION_ORPHAN_CONFIG_DIR_HOURS` | no | `24` | Grace before a `CLAUDE_CONFIG_DIR` under `CLAUDE_CONFIG_ROOT` that no account claims is removed. A directory is provisioned just *before* its account row is inserted, so this must comfortably exceed that gap — too short and the reaper deletes a login still being made. **`0` refused at boot**: a grace of nothing deletes the login being made right now. |
+| `JANITOR_INTERVAL_MINUTES` | no | `60` | Base sweep interval; the janitor jitters around it. **`0` refused at boot** — every interval below re-arms at 1 ms and becomes a busy loop against Postgres. |
+| `USAGE_ROLLUP_INTERVAL_MINUTES` | no | `60` | Usage record rollup interval, in minutes. Raw records older than `RETENTION_USAGE_DAYS` are summarized into daily aggregates. **`0` refused at boot.** |
+| `OAUTH_STATE_PURGE_INTERVAL_MINUTES` | no | `5` | OAuth state (and PKCE verifier) purge interval, in minutes. One-shot values older than `RETENTION_OAUTH_STATE_MINUTES` are deleted. **`0` refused at boot.** |
+| `QUOTA_FLOOR_INTERVAL_MINUTES` | no | `30` | Account quota floor probe interval, in minutes. Periodic refresh of cached quota state. **`0` refused at boot.** |
+| `CONFIG_DIR_REAP_INTERVAL_MINUTES` | no | `360` | How often the orphaned-`CLAUDE_CONFIG_DIR` reap runs. Hours rather than minutes: an orphan is a crash artifact. *How long* one may linger is `RETENTION_ORPHAN_CONFIG_DIR_HOURS`, not this. **`0` refused at boot.** |
+| `ADMIN_SESSION_PURGE_INTERVAL_MINUTES` | no | `30` | How often expired admin console sessions are dropped from the in-memory `SessionStore`. Runs on every replica independently — the store is process memory, not a table, so there is nothing for the advisory lock to coordinate. **`0` refused at boot.** |
+| `SWEEP_BATCH_SIZE` | no | `1000` | Max rows per bounded-delete sweep (usage, session, revoked keys, audit, OAuth state), and directories per orphaned-config-dir reap. Larger trades memory and latency for fewer sweeps; smaller means more passes. **`0` refused at boot**, and not because it would delete nothing: a drain learns a category is caught up from a batch shorter than the limit, and nothing is shorter than zero, so the tick spins forever holding its advisory lock. |
 | `SCHEDULER_JITTER_FRACTION` | no | `0.2` | Jitter applied to task intervals as a fraction of the interval. E.g., `0.2` means ±20% around the base value, spreading load after a restart. |
 | `OAUTH_REFRESH_LEAD_FRACTION` | no | `0.75` | Share of a router-held OAuth token's remaining lifetime allowed to elapse before it is refreshed — `0.75` refreshes with a quarter of the lifetime in hand. Not an interval: refresh is per account and expiry-driven, never a poll. Claude subscriptions are unaffected; the Agent SDK owns those tokens. |
 | `OAUTH_REFRESH_MIN_DELAY_SECONDS` | no | `30` | Floor on any refresh delay, and the first step of the retry backoff. What stops an already-expired token from re-arming at zero and hammering the provider. |
 | `OAUTH_REFRESH_MAX_ATTEMPTS` | no | `5` | Attempts against an unreachable token endpoint before the account is parked at `needs_reauth`. A *refused* refresh is never retried — only a clock fixes an outage. |
-| `ADMIN_SESSION_IDLE_MINUTES` | no | `480` | Sliding idle window, and the session cookie's `Max-Age`. Raising it leaves an abandoned browser a live credential for longer. |
-| `ADMIN_SESSION_ABSOLUTE_HOURS` | no | `24` | Hard ceiling on a session's total life regardless of activity. A purely sliding session is one a thief renews forever. |
-| `ADMIN_LOGIN_MAX_ATTEMPTS` | no | `5` | Failed logins per throttle key (per IP, per username) before it locks. |
-| `ADMIN_LOGIN_ATTEMPT_WINDOW_MINUTES` | no | `15` | Failures older than this stop counting toward the lock. |
-| `ADMIN_LOGIN_LOCKOUT_MINUTES` | no | `15` | How long a tripped throttle key stays locked. |
+| `ADMIN_SESSION_IDLE_MINUTES` | no | `480` | Sliding idle window, and the session cookie's `Max-Age`. Raising it leaves an abandoned browser a live credential for longer. **`0` refused at boot**: it expires a session at the instant it is issued, so login answers `200` and everything after it answers `401`. |
+| `ADMIN_SESSION_ABSOLUTE_HOURS` | no | `24` | Hard ceiling on a session's total life regardless of activity. A purely sliding session is one a thief renews forever. **`0` refused at boot** — same failure as the idle window. |
+| `ADMIN_LOGIN_MAX_ATTEMPTS` | no | `5` | Failed logins per throttle key (per IP, per username) before it locks. **`0` refused at boot**: it locks a key on its zeroth failure, so nobody can log in at all. |
+| `ADMIN_LOGIN_ATTEMPT_WINDOW_MINUTES` | no | `15` | Failures older than this stop counting toward the lock. **`0` refused at boot**: a failure counted in a window of nothing means the throttle can never trip, and brute-force protection is off with no sign of it. |
+| `ADMIN_LOGIN_LOCKOUT_MINUTES` | no | `15` | How long a tripped throttle key stays locked. **`0` refused at boot** — a lockout that has already elapsed is the same silent hole. |
 | `ADMIN_SESSION_SLIDE_FRACTION` | no | `0.1` | Share of the idle window a session must advance since its last persisted `lastSeenAtMs` before the slide is written back to the session store. The in-memory value is authoritative for every response regardless; this only throttles the store write, so a Postgres-backed store sees roughly one write per fraction-of-idle-window instead of one per authenticated request. |
 | `SESSION_COOKIE_INSECURE` | no | `false` | Drops `Secure` and the `__Host-` prefix from the admin session cookie. The escape hatch for a **plain-HTTP install** (`http://192.168.1.50:8080` on a LAN), which is otherwise unusable: a browser silently discards a `Secure` cookie sent over `http://`, so login answers `200` and every request after it is `401`. `HttpOnly`, `SameSite=Strict` and the CSRF token are unaffected. What you give up is confidentiality on the wire and the `__Host-` guarantee that no sibling host under this domain can plant a session cookie — so unset it once HTTPS is in front. Leaving it unset on a plain-HTTP install is diagnosed for you: the login logs a `warn` naming this variable. Turning it on logs a `warn` on every boot while it is on. See [04-api-keys-and-access.md](04-api-keys-and-access.md#session-cookie). |
-| `CATALOG_REFRESH_SECONDS` | no | `30` | How long the warm routing catalog may lag a write made by **another replica**. A write by this replica refreshes it immediately, so this bounds only the multi-replica case. |
-| `KEY_CACHE_MAX` | no | `4096` | Verified router keys held in memory. The ceiling is memory, not correctness — an evicted key costs one indexed lookup. |
-| `KEY_CACHE_TTL_SECONDS` | no | `60` | How long a successful verification is reused. Revocation invalidates immediately on the replica that served the admin request, so on a single-replica deployment this bounds staleness of a key's limits and scope, not of its revocation — on several replicas it bounds both, for every replica but that one. |
-| `KEY_CACHE_NEGATIVE_TTL_SECONDS` | no | `5` | How long a failed lookup is remembered. Short on purpose: it stops a flood of bad keys becoming a flood of queries, and a just-minted key must start working quickly. |
-| `SESSION_CACHE_MAX` | no | `4096` | Session → Account bindings held in memory, plus their fingerprint aliases. Only Claude subscription accounts ever create one. |
-| `SESSION_CACHE_TTL_SECONDS` | no | `300` | How long a binding is reused before its row is re-read. Bounds only how long this replica may lag another one's rebind; the row itself never expires, because an SDK session outlives any cache. |
-| `SESSION_CACHE_NEGATIVE_TTL_SECONDS` | no | `30` | How long "this session has no binding" is remembered. Short, and for the opposite reason: it keeps plain HTTP traffic on a subscription-serving router from re-asking Postgres every request. |
-| `USAGE_QUEUE_MAX` | no | `10000` | `UsageRecord` rows queued before the writer sheds the oldest. Overflow degrades reporting, never traffic. |
-| `USAGE_BATCH_SIZE` | no | `200` | Rows per insert. Larger means fewer round trips and a bigger loss if the process dies mid-queue. |
-| `ROUTING_MAX_ATTEMPTS` | no | `3` | Distinct accounts tried for one client request before the honest failure. Never overrides the rule that an attempt is not retried once bytes are on the wire. |
-| `ROUTING_FAILURE_THRESHOLD` | no | `3` | Consecutive 5xx or connection failures before an account's breaker trips. |
-| `ROUTING_BASE_BACKOFF_MS` | no | `1000` | First cooldown step; doubles per consecutive failure. |
-| `ROUTING_MAX_BACKOFF_MS` | no | `300000` | Ceiling on that doubling, so a long outage does not park an account for hours. |
+| `CATALOG_REFRESH_SECONDS` | no | `30` | How long the warm routing catalog may lag a write made by **another replica**. A write by this replica refreshes it immediately, so this bounds only the multi-replica case. **`0` refused at boot**: it puts the catalog query on a 1 ms loop, and the request path's budget forbids Postgres anywhere near it. |
+| `KEY_CACHE_MAX` | no | `4096` | Verified router keys held in memory. The ceiling is memory, not correctness — an evicted key costs one indexed lookup. **`0` refused at boot**: a cache of no entries answers nothing and every request pays the lookup it exists to avoid. |
+| `KEY_CACHE_TTL_SECONDS` | no | `60` | How long a successful verification is reused. Revocation invalidates immediately on the replica that served the admin request, so on a single-replica deployment this bounds staleness of a key's limits and scope, not of its revocation — on several replicas it bounds both, for every replica but that one. **`0` refused at boot** — entries expiring at the instant they are written is the same cache, differently disabled. |
+| `KEY_CACHE_NEGATIVE_TTL_SECONDS` | no | `5` | How long a failed lookup is remembered. Short on purpose: it stops a flood of bad keys becoming a flood of queries, and a just-minted key must start working quickly. `0` is legal and means *do not cache a miss at all*. |
+| `SESSION_CACHE_MAX` | no | `4096` | Session → Account bindings held in memory, plus their fingerprint aliases. Only Claude subscription accounts ever create one. **`0` refused at boot** — see `KEY_CACHE_MAX`. |
+| `SESSION_CACHE_TTL_SECONDS` | no | `300` | How long a binding is reused before its row is re-read. Bounds only how long this replica may lag another one's rebind; the row itself never expires, because an SDK session outlives any cache. **`0` refused at boot** — see `KEY_CACHE_TTL_SECONDS`. |
+| `SESSION_CACHE_NEGATIVE_TTL_SECONDS` | no | `30` | How long "this session has no binding" is remembered. Short, and for the opposite reason: it keeps plain HTTP traffic on a subscription-serving router from re-asking Postgres every request. `0` is legal and means *do not cache an absent binding at all*. |
+| `USAGE_QUEUE_MAX` | no | `10000` | `UsageRecord` rows queued before the writer sheds the oldest. Overflow degrades reporting, never traffic. **`0` refused at boot**: a queue that holds nothing sheds every record on the way in. |
+| `USAGE_BATCH_SIZE` | no | `200` | Rows per insert. Larger means fewer round trips and a bigger loss if the process dies mid-queue. **Bounded `1..2520`, refused at boot outside it**: a usage row spends 26 of the 65 535 bind parameters Postgres allows per statement (65 535 / 26 = 2520), and a batch past that is rejected on every flush — forever, with traffic unaffected and the usage table empty. |
+| `ROUTING_MAX_ATTEMPTS` | no | `3` | Distinct accounts tried for one client request before the honest failure. Never overrides the rule that an attempt is not retried once bytes are on the wire. **`0` refused at boot**, because it is silently clamped to `1` downstream — an operator who writes `0` meaning *do not retry* gets one attempt and no sign the number was ignored. |
+| `ROUTING_FAILURE_THRESHOLD` | no | `3` | Consecutive 5xx or connection failures before an account's breaker trips. **`0` refused at boot**: a breaker that trips on the zeroth failure parks every account. |
+| `ROUTING_BASE_BACKOFF_MS` | no | `1000` | First cooldown step; doubles per consecutive failure. **`0` refused at boot**: a cooldown of nothing lets a dead upstream be retried as fast as it can refuse. |
+| `ROUTING_MAX_BACKOFF_MS` | no | `300000` | Ceiling on that doubling, so a long outage does not park an account for hours. **`0` refused at boot** — it clamps every step of the doubling to zero, which is the same hole. |
 | `ROUTING_HALF_OPEN_HOLD_MS` | no | `30000` | How long the one request admitted onto a recovering account holds it. Everyone else gets `429` with this instant until the probe reports, so the backlog built up during a cooldown cannot stampede the account the moment it returns. Released on the probe's verdict, so this only governs a probe that never reports. |
-| `UPSTREAM_TIMEOUT_MS` | no | `600000` | How long the router waits on one upstream. Long, because a long completion is a normal response and not a hung one. |
-| `TRANSLATE_DEFAULT_MAX_TOKENS` | no | `4096` | The `max_tokens` an Anthropic account is given when the client spoke a dialect that makes it optional and sent none. Anthropic requires the field; the default is generous on purpose, because a low value truncates answers nobody asked to truncate. |
-| `USAGE_FLUSH_INTERVAL_MS` | no | `1000` | Drain cadence. Raising it widens the window in which a crash loses unwritten usage rows; it never affects request latency. |
+| `UPSTREAM_TIMEOUT_MS` | no | `600000` | How long the router waits on one upstream. Long, because a long completion is a normal response and not a hung one. **`0` refused at boot**: `AbortSignal.timeout(0)` fires before the socket does, aborting every upstream request. |
+| `TRANSLATE_DEFAULT_MAX_TOKENS` | no | `4096` | The `max_tokens` an Anthropic account is given when the client spoke a dialect that makes it optional and sent none. Anthropic requires the field; the default is generous on purpose, because a low value truncates answers nobody asked to truncate. **`0` refused at boot**: Anthropic requires `max_tokens >= 1`, so zero turns every translated request that omitted it into a `400` that looks like a client bug. |
+| `USAGE_FLUSH_INTERVAL_MS` | no | `1000` | Drain cadence. Raising it widens the window in which a crash loses unwritten usage rows; it never affects request latency. **`0` refused at boot**: `setInterval(…, 0)` is a busy loop flushing an empty queue. |
 | `QUOTA_WRITE_INTERVAL_MS` | no | `5000` | How often quota readings observed on responses are persisted to `quota_windows`. Not a poll — a reading only exists once a response reported one. Raising it widens the window in which a crash loses the freshest reading, and how stale the gauges are on a replica that did not serve the request. Never affects request latency: the write is coalesced per account and never awaited by one. |
 | `MAX_REQUEST_BODY_BYTES` | no | `33554432` (32 MiB) | The largest request body the router will read. Over it: `413` `request_too_large`, refused before any account is dialed. A declared `Content-Length` over the ceiling is turned away without reading a byte, so a hostile body never gets the ceiling's worth of buffering; a body that lies about its length is still caught as it streams. Raise it for agents that paste whole repositories into a prompt, lower it to bound what one in-flight request can cost in memory. |
 | `ACCOUNT_STATUS_WRITE_INTERVAL_MS` | no | `1000` | How often a standing block the breaker just formed — `exhausted`, `needs_reauth` — is written through to `accounts.status`. Not a poll, and not a cooldown: a cooldown is clock-recoverable and deliberately stays in memory. Shorter than the quota interval because what it bounds is worse — a lost reading costs a stale gauge, a lost block costs the operator the banner telling them an account needs topping up. Routing is unaffected at any setting; the breaker holds the verdict either way. |
@@ -170,7 +187,9 @@ One background janitor service, one schedule, every window env-tunable.
 | Idle sessions (sticky map + fingerprints) | 24 h since last use | `RETENTION_SESSIONS_HOURS` | Unbounded growth otherwise; Claude-Code-style long-lived sessions must expire. |
 | In-memory LRU caches (session, fingerprint, health) | bounded size, coordinated eviction | — | A fingerprint entry must die with its session. |
 | Usage records | 90 days raw → rolled up to daily aggregates | `RETENTION_USAGE_DAYS` | Keeps the dashboard fast and the DB small. |
+| Daily usage aggregates | 730 days | `RETENTION_USAGE_DAILY_DAYS` | Outliving the raw rows is the point of the rollup; outliving them *forever* is not. Must never be shorter than the raw window — boot refuses it, because the janitor and the rollup would otherwise delete and re-insert the same days on every tick. |
 | Audit events | 365 days | `RETENTION_AUDIT_DAYS` | Compliance-ish; never contains secrets. |
+| Scheduled task runs | 30 days, finished runs only | `RETENTION_TASK_RUNS_DAYS` | ~1000 rows/day across six tasks. An **unfinished** run is never swept: it is the only evidence a task wedged or a process died mid-sweep. |
 | Expired/consumed OAuth state & PKCE verifiers | 10 min | `RETENTION_OAUTH_STATE_MINUTES` | One-shot values. |
 | Revoked / expired API keys | 30 days after revocation, then purged | `RETENTION_REVOKED_KEYS_DAYS` | Keeps historical usage joinable for a while. |
 | Rate-limit & circuit-breaker state | expires with its reset window | — | Derived state, not durable state. |
@@ -183,6 +202,7 @@ Janitor rules:
 | **Idempotent** | A sweep that runs twice deletes nothing extra. Safe to re-run, safe to crash mid-sweep. |
 | **Jittered interval** | Sweeps never land on a round number, so they do not pile onto request spikes or onto each other after a restart. |
 | **Bounded batch deletes** | Fixed-size batches in a loop, never one giant transaction — a 90-day purge in one statement bloats the WAL, holds row locks, and gives autovacuum nothing to reclaim until it commits. The data plane must not feel a sweep. |
+| **Bounded batch *writes*, too** | The rule is about statement size, not about deleting: the usage rollup's catch-up window is up to the whole retention floor wide, so it is issued **one statement per UTC day**, oldest first, with the shutdown signal checked between days. A day is the smallest window that can be *replaced* rather than accumulated, which is what keeps each batch idempotent. |
 | **One-line summary log per sweep** | What was deleted, per category, with counts and duration. One line, structured. |
 | **Windows are configuration** | Every retention number above is an env var, not a constant in code. |
 
@@ -385,27 +405,45 @@ the encryption key itself:
 
 | Step | What it does | Bounded by |
 |---|---|---|
-| 1. Stop accepting | The listener closes. Connections already open keep being served; new ones are refused, so a load balancer's next request goes to another replica. | immediate |
-| 2. Drain | In-flight responses — including a completion that is still streaming — get time to finish. | `SHUTDOWN_DRAIN_MS` |
-| 3. Flush | Scheduler ticks and the OAuth refresher stop, pending `claude` logins are cancelled, then the queued `UsageRecord`s, quota readings and account statuses are written. | the work in hand |
-| 4. Close | The Postgres pool closes and the process exits `0`. | — |
+| 1. Stop being ready | `GET /readyz` starts answering `503 shutting_down` — with `checks: null`, because nothing was probed. Traffic is still served; only the answer to "should you send me more" changed. | immediate |
+| 2. Let the balancer notice | Keep serving while whatever routes to this replica reads that `503` and stops. Skipped entirely at the default of `0`. | `SHUTDOWN_READY_GRACE_MS` |
+| 3. Stop accepting | The listener closes. In-flight responses keep streaming; new connections are refused. | immediate |
+| 4. Drain | In-flight responses — including a completion that is still streaming — get time to finish. | `SHUTDOWN_DRAIN_MS` |
+| 5. Flush | Scheduler ticks and the OAuth refresher stop, pending `claude` logins are cancelled, then the queued `UsageRecord`s, quota readings and account statuses are written. | the work in hand |
+| 6. Close | The Postgres pool closes and the process exits `0`. A query still running is destroyed at the deadline rather than holding the exit open until the kill lands. | `DB_POOL_CLOSE_TIMEOUT_SECONDS` |
 
-**Step 2 is the one with a deadline, and that is the whole point.** `Bun.serve().stop()` waits for
+`/healthz` is unaffected and stays `200` throughout. Liveness is not readiness: the process is up
+and finishing what it has, and restarting it now would truncate exactly what the drain is protecting.
+
+**Step 2 is what makes step 1 worth doing, and it is off by default.** Once the listener closes, bun
+refuses new connections *and* stops dispatching on the keep-alive connections it already had — so
+the honest `503` has nobody left to ask for it. The window is when it can be read. The bundled
+compose deployment has no readiness gate, so `0` is right there and the step is skipped; on
+Kubernetes set roughly two readiness periods (`periodSeconds`, default 10s → `20000`) and raise
+`terminationGracePeriodSeconds` to cover it *plus* the drain.
+
+**Step 4 is the one with the deadline that matters, and that is the whole point.** `Bun.serve().stop()` waits for
 the last byte of the last response and never gives up, so a shutdown that simply awaited it would
 hang for as long as the longest generation in flight — until the orchestrator's `SIGKILL` landed,
-which truncates every stream *and* discards everything step 3 was still holding. The drain caps that
+which truncates every stream *and* discards everything step 5 was still holding. The drain caps that
 wait instead: inside the deadline every response finishes and the flush records what they earned;
 past it the wait ends anyway, the flush still runs, and the responses still open are truncated by the
 exit — counted and logged (`drain deadline expired — closing responses still in flight`, with
 `pending`, `abandoned` and `waitedMs`) rather than lost silently.
 
-So **the container's stop grace must exceed `SHUTDOWN_DRAIN_MS`**, or the kill arrives mid-drain and
-you are back to losing the flush:
+Step 6 is bounded for the same reason and one step later: the pool close runs *after* the flush, so
+a connection wedged in a long query would hold the exit open past everything the flush just wrote —
+with nothing left to gain. `DB_POOL_CLOSE_TIMEOUT_SECONDS` (default `5`) caps it; past that the pool
+is destroyed and whatever was still running is rejected.
+
+So **the container's stop grace must exceed the whole budget** — `SHUTDOWN_READY_GRACE_MS` +
+`SHUTDOWN_DRAIN_MS` + `DB_POOL_CLOSE_TIMEOUT_SECONDS` — or the kill arrives mid-shutdown and you are
+back to losing the flush. A test holds the bundled compose file above the sum of the defaults:
 
 | Runtime | Setting | Default | Ours |
 |---|---|---|---|
 | Docker / Compose | `stop_grace_period` | 10s — **shorter than the drain** | `30s`, set in the bundled `docker-compose.yml` |
-| Kubernetes | `terminationGracePeriodSeconds` | 30s | leave it, or raise both together |
+| Kubernetes | `terminationGracePeriodSeconds` | 30s | raise it alongside `SHUTDOWN_READY_GRACE_MS`; the default covers the drain but not a 20s readiness window on top of it |
 
 A **second** signal during the drain means "stop waiting": the process logs it and exits non-zero
 immediately, rather than re-entering and running the flush twice against a closing pool.

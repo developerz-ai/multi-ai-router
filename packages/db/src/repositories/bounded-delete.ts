@@ -32,8 +32,13 @@ export interface BoundedDeleteOptions {
    * reading: a row with no timestamp has no measurable age.
    */
   readonly agedBy: PgColumn
-  /** Rows strictly older than this go. */
-  readonly cutoff: Date
+  /**
+   * Rows strictly older than this go.
+   *
+   * A string where the age column is a `date` rather than a `timestamptz` — drizzle binds the
+   * value through the column's own encoder, and a `date` column's encoder speaks `YYYY-MM-DD`.
+   */
+  readonly cutoff: Date | string
   /** Ceiling on one batch. */
   readonly limit: number
   /** Extra narrowing ANDed onto the age predicate, e.g. `revoked = true`. */

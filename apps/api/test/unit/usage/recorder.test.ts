@@ -121,20 +121,6 @@ describe("usage recorder", () => {
     expect(shed).toHaveLength(3)
   })
 
-  test("a failing writer is counted, not retried into a loop", async () => {
-    const failures: unknown[] = []
-    const recorder = createUsageRecorder(
-      { write: () => Promise.reject(new Error("database is down")) },
-      { batchSize: 2, onWriteError: (error) => void failures.push(error) },
-    )
-
-    for (let attempt = 1; attempt <= 4; attempt += 1) recorder.record(record({ attempt }))
-    await recorder.flush()
-
-    expect(recorder.stats()).toMatchObject({ depth: 0, writeFailures: 4 })
-    expect(failures).toHaveLength(2)
-  })
-
   test("stop flushes what is left", async () => {
     const writer = collectingWriter()
     const recorder = createUsageRecorder(writer)
@@ -144,6 +130,134 @@ describe("usage recorder", () => {
     await recorder.stop()
 
     expect(writer.batches).toHaveLength(1)
+  })
+})
+
+/**
+ * A rejected write used to be the end of two hundred records: counted into a stat nothing exported
+ * and dropped. Postgres is unavailable for a second far more often than it is unavailable at all,
+ * so a batch now gets one more try on the next flush — and both fates are counted separately,
+ * because "the database blinked" and "rows are gone" are different incidents.
+ */
+describe("a write the database refuses", () => {
+  /** Fails the first `failures` writes, then behaves. A restart, a failover, a full disk clearing. */
+  function flaky(failures: number): UsageWriter & { readonly batches: UsageRecord[][] } {
+    const writer = collectingWriter()
+    let remaining = failures
+    return {
+      batches: writer.batches,
+      write(batch) {
+        if (remaining > 0) {
+          remaining -= 1
+          return Promise.reject(new Error("write CONNECTION_CLOSED"))
+        }
+        return writer.write(batch)
+      },
+    }
+  }
+
+  test("goes back for one more try, so a blip loses nothing", async () => {
+    const writer = flaky(1)
+    const recorder = createUsageRecorder(writer, { batchSize: 2 })
+
+    for (let attempt = 1; attempt <= 2; attempt += 1) recorder.record(record({ attempt }))
+    await recorder.flush()
+
+    // Refused. The records are still held — reporting is late, not lost.
+    expect(writer.batches).toHaveLength(0)
+    expect(recorder.stats()).toMatchObject({ depth: 2, written: 0, writeDiscarded: 0 })
+
+    await recorder.flush()
+
+    expect(writer.batches.flat().map((held) => held.attempt)).toEqual([1, 2])
+    expect(recorder.stats()).toMatchObject({
+      depth: 0,
+      written: 2,
+      writeFailures: 2,
+      writeDiscarded: 0,
+    })
+  })
+
+  test("is retried before anything queued since, so attempts land in the order they happened", async () => {
+    const writer = flaky(1)
+    const recorder = createUsageRecorder(writer, { batchSize: 2 })
+
+    for (let attempt = 1; attempt <= 2; attempt += 1) recorder.record(record({ attempt }))
+    await recorder.flush()
+    for (let attempt = 3; attempt <= 4; attempt += 1) recorder.record(record({ attempt }))
+    await recorder.flush()
+
+    expect(writer.batches.flat().map((held) => held.attempt)).toEqual([1, 2, 3, 4])
+  })
+
+  test("is discarded when the retry is refused too — one retry, never a loop", async () => {
+    const fates: boolean[] = []
+    const recorder = createUsageRecorder(
+      { write: () => Promise.reject(new Error("database is down")) },
+      { batchSize: 2, onWriteError: ({ discarded }) => void fates.push(discarded) },
+    )
+
+    for (let attempt = 1; attempt <= 4; attempt += 1) recorder.record(record({ attempt }))
+
+    await recorder.flush()
+    expect(recorder.stats()).toMatchObject({ depth: 4, writeFailures: 2, writeDiscarded: 0 })
+
+    await recorder.flush()
+    // The head gave up its place: a batch the writer will never accept must not starve the ones
+    // behind it, which is what re-queueing without a ceiling on tries would do.
+    expect(recorder.stats()).toMatchObject({ depth: 2, writeFailures: 4, writeDiscarded: 2 })
+
+    await recorder.flush()
+    await recorder.flush()
+    expect(recorder.stats()).toMatchObject({ depth: 0, writeFailures: 8, writeDiscarded: 4 })
+    expect(fates).toEqual([false, true, false, true])
+  })
+
+  test("ends the pass rather than burning the whole queue against the same writer", async () => {
+    let attempts = 0
+    const recorder = createUsageRecorder(
+      {
+        write: () => {
+          attempts += 1
+          return Promise.reject(new Error("database is down"))
+        },
+      },
+      { batchSize: 2 },
+    )
+
+    for (let attempt = 1; attempt <= 10; attempt += 1) recorder.record(record({ attempt }))
+    await recorder.flush()
+
+    // The writer just refused; the next batch would meet the same database this millisecond.
+    expect(attempts).toBe(1)
+    expect(recorder.stats().depth).toBe(10)
+  })
+
+  test("does not re-observe the retry — a blip must not invent attempts on the dashboard", async () => {
+    const observed: number[] = []
+    const recorder = createUsageRecorder(flaky(1), {
+      batchSize: 2,
+      onRecord: (held) => void observed.push(held.attempt),
+    })
+
+    for (let attempt = 1; attempt <= 2; attempt += 1) recorder.record(record({ attempt }))
+    await recorder.flush()
+    await recorder.flush()
+
+    // Every attempt-level metric is fed from this hook. Twice would be two upstream calls.
+    expect(observed).toEqual([1, 2])
+  })
+
+  test("counts the batch it is holding as queued, so the depth gauge stays honest", async () => {
+    const recorder = createUsageRecorder(flaky(1), { batchSize: 2, maxQueued: 4 })
+
+    for (let attempt = 1; attempt <= 2; attempt += 1) recorder.record(record({ attempt }))
+    await recorder.flush()
+    for (let attempt = 3; attempt <= 4; attempt += 1) recorder.record(record({ attempt }))
+
+    // Held beside the queue rather than in it: overflow sheds the oldest, and the oldest here is
+    // precisely the batch that has not had its retry yet.
+    expect(recorder.stats()).toMatchObject({ depth: 4, dropped: 0 })
   })
 })
 

@@ -31,7 +31,13 @@ export const scheduledTaskRuns = pgTable(
     /** Message only, redacted. Never credential material. */
     error: text("error"),
   },
-  (table) => [index("scheduled_task_runs_task_started_idx").on(table.task, table.startedAt)],
+  (table) => [
+    index("scheduled_task_runs_task_started_idx").on(table.task, table.startedAt),
+    // The retention sweep drains oldest-first across every task at once, which the composite
+    // index above cannot serve: it is ordered by task before age, so a global "oldest N" is a
+    // sort of the whole table.
+    index("scheduled_task_runs_started_at_idx").on(table.startedAt),
+  ],
 )
 
 export type ScheduledTaskRunRow = typeof scheduledTaskRuns.$inferSelect

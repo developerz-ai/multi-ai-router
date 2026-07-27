@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test"
+import { MODEL_NAME_MAX_BYTES } from "../../src/services/dataplane"
 import type { PoolSnapshot } from "../../src/services/routing"
 import type { UsageRecord } from "../../src/services/usage"
 import {
@@ -1525,6 +1526,49 @@ describe("request validation", () => {
 
     expect(res.status).toBe(400)
     expect(upstream.calls).toHaveLength(0)
+  })
+
+  /**
+   * The model name is the one client-supplied string the router stores, on every attempt row and on
+   * a `usage_daily` row that never expires — so an unbounded one is a write any key holder can make
+   * into two tables forever. It is refused at the edge and never truncated: a shortened model name
+   * is a substituted model (non-negotiable 4).
+   */
+  test("a model name past the ceiling is refused before any account is dialed", async () => {
+    const { app, upstream, usage } = harness({ responses: [() => jsonResponse(200, {})] })
+    const body = JSON.stringify({
+      model: "m".repeat(MODEL_NAME_MAX_BYTES + 1),
+      max_tokens: 16,
+      messages: [{ role: "user", content: "hi" }],
+    })
+
+    const res = await app.request("/v1/messages", post(body, bearer()))
+    await settle()
+
+    expect(res.status).toBe(400)
+    // Named, so a caller reading the message knows which field and what the ceiling is — rather
+    // than the "must name a model" answer that would send them looking for a missing field.
+    expect(await res.json()).toMatchObject({
+      error: { message: expect.stringContaining(`${MODEL_NAME_MAX_BYTES} bytes`) },
+    })
+    expect(upstream.calls).toHaveLength(0)
+    // Nothing was attempted, so there is no attempt to account for — and, the point of the
+    // ceiling, the unbounded name never reaches a `usage_records.model` column.
+    expect(usage.rows).toHaveLength(0)
+  })
+
+  test("a model name exactly at the ceiling is served", async () => {
+    const name = "m".repeat(MODEL_NAME_MAX_BYTES)
+    const { app, upstream } = harness({
+      accounts: [account({ id: "acct-long-model", modelAliases: {} })],
+      responses: [() => jsonResponse(200, { ok: true })],
+    })
+    const body = JSON.stringify({ model: name, max_tokens: 16, messages: [] })
+
+    const res = await app.request("/v1/messages", post(body, bearer()))
+
+    expect(res.status).toBe(200)
+    expect(upstream.calls).toHaveLength(1)
   })
 })
 
