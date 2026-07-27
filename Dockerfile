@@ -246,6 +246,16 @@ RUN claude --version
 # VOLUME so the directories — and the live credentials the CLI manages inside
 # them — survive image upgrades. 0700: this tree is secret material and is NOT
 # encrypted by ENCRYPTION_KEY the way the database is.
+#
+# CAUTION: a bare `VOLUME` creates an anonymous volume. In production, bind-mount
+# this path to a named volume (docker-compose.yml example: `volumes:
+# claude-config:/data/claude`) or a host directory for credential persistence
+# across restarts. An anonymous volume is not automatically cleaned up and may
+# accumulate as a separate orphan volume per container; the operator is
+# responsible for either using a named volume or running `docker volume prune`.
+# This bare declaration is provided for development and for operators who do not
+# want Claude subscription accounts at all (in which case the volume is never
+# written to and can be safely ignored).
 ENV CLAUDE_CONFIG_ROOT=/data/claude
 RUN mkdir -p /data/claude && chown -R bun:bun /data && chmod 700 /data/claude
 VOLUME ["/data/claude"]

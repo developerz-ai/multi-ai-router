@@ -108,6 +108,12 @@ jobs:
           cache-from: type=gha,scope=${{ env.PLATFORM_PAIR }}
           cache-to: type=gha,mode=max,scope=${{ env.PLATFORM_PAIR }}
           outputs: type=image,name=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }},push-by-digest=true,name-canonical=true,push=true
+          # Supply-chain security: provenance and SBOM attestations, signed with
+          # the workflow identity. The image digest is already deterministic
+          # (pinned bun base + locked dependencies); attestations make the build
+          # lineage and component list verifiable outside the registry.
+          provenance: true
+          sbom: true
       - name: export digest
         run: |
           mkdir -p "${{ runner.temp }}/digests"
