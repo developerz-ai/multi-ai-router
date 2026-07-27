@@ -147,6 +147,13 @@ identically — there is no second source of truth to drift.
 - **`ENCRYPTION_KEY` is decoded, not merely present**: base64/base64url in, must yield exactly 32
   bytes. A 16-byte key fails the boot instead of producing a weak cipher later.
 - An empty string means unset — `PORT=` takes the default rather than failing.
+- **Zero is not an off switch.** On a numeric knob it is normally a sweep that empties the table it
+  was pointed at, an interval that re-arms every millisecond, a cache that answers nothing, or a
+  breaker that never holds — none of which log anything and none of which stop traffic. Every
+  numeric variable therefore **refuses `0` at boot** except the few where zero is a real setting:
+  `PORT` (ephemeral), `SHUTDOWN_DRAIN_MS` (wait for nothing), the two `*_COOLDOWN_SECONDS` (no
+  cooldown), the two `*_NEGATIVE_TTL_SECONDS` (do not cache a miss) and the two fractions. The
+  split lives in `config/fields.ts` and a drift guard holds the schema to it.
 
 ## Working on it
 

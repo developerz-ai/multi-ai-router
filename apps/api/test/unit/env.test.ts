@@ -4,7 +4,8 @@ import {
   USAGE_RECORD_BIND_PARAMETERS_PER_ROW,
   USAGE_RECORD_MAX_BATCH_ROWS,
 } from "@multi-ai-router/db"
-import { EnvValidationError, parseEnv } from "../../src/config/env"
+import type { z } from "zod"
+import { ENV_FIELDS, EnvValidationError, parseEnv, ZERO_IS_LEGAL } from "../../src/config/env"
 import { DEFAULT_MAX_BODY_BYTES } from "../../src/services/dataplane"
 
 const ENCRYPTION_KEY = Buffer.alloc(32, 7).toString("base64")
@@ -423,6 +424,72 @@ describe("parseEnv", () => {
     test("accepts SCHEDULER_JITTER_FRACTION at each boundary", () => {
       expect(parseEnv({ ...base, SCHEDULER_JITTER_FRACTION: "0" }).scheduler.jitterFraction).toBe(0)
       expect(parseEnv({ ...base, SCHEDULER_JITTER_FRACTION: "1" }).scheduler.jitterFraction).toBe(1)
+    })
+  })
+
+  /**
+   * The drift guard behind `fields.ts`'s zero policy.
+   *
+   * A numeric knob at zero is rarely "off" — it is a sweep that deletes the table it was pointed
+   * at, an interval that re-arms every millisecond, a cache that answers nothing, a breaker that
+   * never holds. None of those log anything, and traffic keeps flowing, so the only symptom is an
+   * absence somebody eventually notices. This walks every numeric field in the schema and demands
+   * each one either refuse zero at boot or appear in `ZERO_IS_LEGAL` with what zero means there.
+   *
+   * It is deliberately derived from the schema rather than a list kept beside it: a knob added
+   * without a thought about zero fails here, which is the only moment anyone is looking.
+   */
+  describe("zero is a decision, never an accident", () => {
+    /**
+     * A field is numeric when *some* legal value parses to a number — the flags, enums and
+     * strings drop out. Two probes, not one: a whole-number field refuses `0.5`, and a fraction
+     * with an exclusive upper bound refuses `1`, so either alone would quietly under-count and
+     * leave the knobs it missed unguarded.
+     */
+    const numericVariables = Object.entries(ENV_FIELDS)
+      .filter(([, field]) =>
+        ["1", "0.5"].some((probe) => {
+          const parsed = (field as z.ZodType).safeParse(probe)
+          return parsed.success && typeof parsed.data === "number"
+        }),
+      )
+      .map(([name]) => name)
+
+    test("finds the numeric knobs it is supposed to be guarding", () => {
+      // A guard that silently matched nothing would pass forever. The exact count is not the
+      // point; that it is the bulk of the schema is.
+      expect(numericVariables.length).toBeGreaterThan(30)
+      expect(numericVariables).toContain("SWEEP_BATCH_SIZE")
+      expect(numericVariables).toContain("ADMIN_SESSION_SLIDE_FRACTION")
+      // The one a single probe misses: it is a fraction, so `0.5` reaches it, and its upper
+      // bound is exclusive, so `1` does not.
+      expect(numericVariables).toContain("OAUTH_REFRESH_LEAD_FRACTION")
+      expect(numericVariables).not.toContain("TRUST_PROXY")
+      expect(numericVariables).not.toContain("LOG_LEVEL")
+    })
+
+    for (const name of numericVariables) {
+      const zeroMeansSomething = ZERO_IS_LEGAL.get(name)
+
+      if (zeroMeansSomething === undefined) {
+        test(`${name} refuses 0, because there it is a kill switch`, () => {
+          expect(expectEnvError({ ...base, [name]: "0" }).variables).toEqual([name])
+        })
+        continue
+      }
+
+      test(`${name} accepts 0: ${zeroMeansSomething}`, () => {
+        expect(() => parseEnv({ ...base, [name]: "0" })).not.toThrow()
+      })
+    }
+
+    test("every documented exception is a variable this schema still parses as a number", () => {
+      // Keeps the list from outliving its entries: renaming a knob, or tightening one to
+      // `atLeastOne`, has to take its exception with it.
+      for (const [name, reason] of ZERO_IS_LEGAL) {
+        expect(numericVariables).toContain(name)
+        expect(reason.length).toBeGreaterThan(0)
+      }
     })
   })
 })
