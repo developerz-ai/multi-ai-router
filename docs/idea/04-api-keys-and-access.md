@@ -16,11 +16,45 @@ The router has exactly two credential spaces. They never overlap.
 | Plane | Who | Credential | Surface | Protects |
 |---|---|---|---|---|
 | **Admin plane** | the single operator, through a browser | session cookie, issued at login | `/api/admin/**` + the SPA | configuration: accounts, pools, keys, settings |
+| **Admin plane, no browser** | scripts, CI, agents | `ADMIN_API_TOKEN` bearer | `/api/admin/**` | the same configuration, driven programmatically |
 | **Data plane** | clients and agents (Claude Code, Codex CLI, Cline, …) | router API key `mar_live_…` | `/v1/**` | inference traffic |
 
 A router API key **cannot** reach the admin plane, ever — not with a scope, not with a flag, not
 under any configuration. A session cookie is not accepted on `/v1/**`. Separate credential
 spaces, separate middleware, separate failure modes.
+
+The middle row is two credentials into **one** plane, not a third plane: same routes, same
+services, same audit trail. Only how the caller proves who it is differs.
+
+### Driving the admin API without a browser
+
+The admin plane has always been an ordinary REST API — what it had no way to accept was a caller
+with no cookie jar. `ADMIN_API_TOKEN` is that credential, and it is the same answer `METRICS_TOKEN`
+gives Prometheus: one static bearer the operator sets, compared in constant time.
+
+```bash
+export MAR=https://router.example.com
+export TOK=$ADMIN_API_TOKEN
+
+curl -s $MAR/api/admin/auth/session -H "Authorization: Bearer $TOK"
+# {"username":"admin-api-token","csrfToken":"","issuedAt":"…","expiresAt":null}
+
+curl -s -X POST $MAR/api/admin/accounts -H "Authorization: Bearer $TOK" \
+  -H 'content-type: application/json' \
+  -d '{"label":"glm-prod","provider":"zai","credential":"…"}'
+```
+
+Every route in [Admin API route groups](#admin-api-route-groups) accepts it, reads and writes
+alike.
+
+| Rule | Why |
+|---|---|
+| **Unset by default** | No token means the plane is browser-only, exactly as it was. This adds a credential; it does not enable one. |
+| **Refused under 32 characters, at boot** | Every other way in is rate-limited — `POST /login` is throttled per username and per IP, with a lockout. A static bearer is not: it is checked and answered on every request, forever, at whatever rate the network allows. Length is the only thing bounding that budget. |
+| **Refused if it begins `mar_live_`, at boot** | The guard rejects that prefix as a data-plane credential *before* any comparison, so such a token would authenticate nothing while looking correct. Refusing it at boot turns a silent dead end into a message naming the variable. |
+| **No CSRF token required** | CSRF defends against a browser attaching *ambient* authority to a request the user did not intend. A bearer token is not ambient — no browser sends it cross-site on its own — and demanding one would be unsatisfiable anyway, since minting a CSRF token requires the login this credential exists to avoid. |
+| **Never expires; `POST /logout` refuses it** | It is a variable, not a session. Answering `logged_out` would report a revocation that did not happen and leave the caller holding a credential it believes it surrendered. Rotation is: change the value, restart. |
+| **Audited as `admin-api-token`** | Not as `ADMIN_USERNAME`. An operator reading the audit feed has to be able to tell a console login from a script, because revoking the two is a different action. |
 
 ## Admin authentication
 
@@ -302,6 +336,11 @@ Paths and purpose only. Handler detail belongs in [01-architecture.md](01-archit
 | `GET`/`PATCH` `/api/admin/settings` | the running build's `version`; retention knobs, log level, janitor cadence and the configured `PUBLIC_URL` (or null) read from the environment; the shipped price table with the date it was verified (`prices.shippedAsOf`) so an override is edited against the rows it replaces, and the overrides themselves read and written | yes — the `PATCH` takes the price overrides as one complete set, so the table is never half-applied, and the warm price book is refreshed before the response is written |
 | `GET /api/admin/tasks` | the latest run of every scheduled task, and whether it is overdue | yes |
 | `GET /api/admin/audit` | the append-only admin-plane audit feed, newest first | yes |
+
+Every group above accepts either admin credential — the console's session cookie, or the
+`ADMIN_API_TOKEN` bearer described in [Driving the admin API without a
+browser](#driving-the-admin-api-without-a-browser). The one route that distinguishes them is
+`POST /api/admin/auth/logout`, which refuses the token because there is no session to end.
 
 The connect flow under `/api/admin/accounts` is four calls, all guarded like the rest of the plane:
 `POST /:id/connect` answers with an authorization URL, `POST /:id/connect/complete` takes back the

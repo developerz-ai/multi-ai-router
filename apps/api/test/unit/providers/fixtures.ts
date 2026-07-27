@@ -143,6 +143,16 @@ export const zaiThrottleBody = {
   error: { code: "1302", message: "API request rate limit reached, please try again later." },
 }
 
+/** Recorded live, 2026-07-27. The reset instant exists only here — the 429 carries no headers. */
+export const zaiWindowExhaustedBody = {
+  error: {
+    type: "rate_limit_error",
+    code: "1310",
+    message:
+      "[1310][Weekly/Monthly Limit Exhausted. Your limit will reset at 2026-08-01 10:03:40][202607280616391a9088331cb844d2]",
+  },
+}
+
 // --- Kimi -------------------------------------------------------------------
 
 export const kimiQuotaBody = {
@@ -156,6 +166,22 @@ export const kimiQuotaBody = {
 export const kimiRateLimitBody = {
   type: "error",
   error: { type: "rate_limit_reached_error", message: "Your request exceeded model token limit" },
+}
+
+/** Recorded live, 2026-07-27: a spent billing cycle, announced as a `403 permission_error`. */
+export const kimiCycleLimitBody = {
+  type: "error",
+  error: {
+    type: "permission_error",
+    message:
+      "You've reached your usage limit for this billing cycle. Your quota will be refreshed in the next cycle. To continue now, purchase extra usage or upgrade your plan: https://www.kimi.com/code/#pricing",
+  },
+}
+
+/** The other `permission_error`: a genuine refusal, which must stay an auth failure. */
+export const kimiPermissionDeniedBody = {
+  type: "error",
+  error: { type: "permission_error", message: "You do not have access to model k3-preview" },
 }
 
 // --- MiniMax ----------------------------------------------------------------

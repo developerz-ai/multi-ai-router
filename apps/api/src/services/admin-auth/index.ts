@@ -4,6 +4,14 @@
  */
 
 export {
+  ADMIN_API_TOKEN_ACTOR,
+  ADMIN_API_TOKEN_MIN_LENGTH,
+  adminApiTokenMatches,
+  adminApiTokenProblem,
+  adminApiTokenSession,
+  isAdminApiTokenConfigured,
+} from "./apiToken"
+export {
   type AdminAuthConfig,
   type AdminAuthEnvConfig,
   adminAuthConfigFromEnv,

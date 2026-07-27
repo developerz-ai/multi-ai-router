@@ -71,6 +71,7 @@ async function main(): Promise<void> {
     },
     trustProxy: env.trustProxy,
     sessionCookieInsecure: env.adminAuth.sessionCookieInsecure,
+    adminApiToken: env.adminApiToken,
     webRoot: resolveWebRoot(env, logger),
   })
 
