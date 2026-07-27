@@ -122,10 +122,11 @@ jobs:
     needs: test
     permissions:
       contents: read
-    # Report, not a gate: CLAUDE.md non-negotiable 8 makes the <5ms p99 overhead budget a promise,
-    # but a shared runner's noise is not a regression signal worth blocking a merge over (see
-    # docs/idea/08-observability.md, "Verifying the budget"). `continue-on-error` keeps a slow-runner
-    # day from failing CI while the numbers — and their delta from the committed bench/baseline.json
+    # Report, not a gate: CLAUDE.md non-negotiable 8 makes both the <5ms p99 overhead budget and the
+    # zero-added-TTFT promise real ceilings that `bin/bench` exits non-zero on, but a shared runner's
+    # noise is not a regression signal worth blocking a merge over (see docs/idea/08-observability.md,
+    # "Verifying the budget"). `continue-on-error` keeps a slow-runner day from failing CI while the
+    # numbers — and their delta from the committed bench/baseline.json, for both halves of the budget
     # — stay visible in the job summary and as a downloadable artifact for every PR.
     continue-on-error: true
     steps:

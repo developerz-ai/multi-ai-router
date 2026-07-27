@@ -314,6 +314,8 @@ in a test as on the wire.
 | `benchApp(options)` → the router booted in memory | `bench/harness.ts` | Measuring the request path. The composition root's wiring with three substitutions a benchmark forces: the stub upstream, an array key repository, and a log sink that serializes and discards |
 | `stubUpstream(options)` → `fetch` + per-request `Trip` | `bench/upstream.ts` | Answering in either dialect, streamed or not, with a controlled time to first byte and per-request timestamps for both ends of the relay |
 | `parseHistogram()`, `histogramQuantile()`, `histogramMean()`, `sampleQuantile()` | `bench/quantiles.ts` | Reading a Prometheus exposition back as numbers. Pure; `histogramQuantile` matches Prometheus' own interpolation, so a printed number is the number a dashboard shows |
+| `verdict(results, budgets)` → rows + violations | `bench/report.ts` | Turning driven scenarios into a pass/fail against both halves of the budget: overhead p99 and added-TTFT p95. Pure — no app, no clock, no printing |
+| `toBaseline()`, `compareToBaseline()`, `renderDelta()` | `bench/baseline.ts` | Diffing a run against a committed `bench/baseline.json`. Pure; `run.ts` owns the file I/O so the comparison is unit-testable without a disk |
 
 Driven by `bin/bench`, guarded by `test/integration/bench.test.ts`, and explained in
 [`docs/idea/08-observability.md`](idea/08-observability.md#verifying-the-budget). It measures nothing

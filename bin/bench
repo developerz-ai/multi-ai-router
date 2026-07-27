@@ -3,9 +3,10 @@
 #
 # CLAUDE.md non-negotiable 8 promises two things: under 5 ms added p99 on the
 # passthrough path, and zero added time-to-first-token on a stream. This drives
-# the real router against an in-process stub upstream, reads the numbers back off
-# its own `router_overhead_seconds` histogram via GET /metrics, and exits 1 when
-# either promise is broken.
+# the real router against an in-process stub upstream and exits 1 when either
+# promise is broken — the first read off its own `router_overhead_seconds`
+# histogram via GET /metrics, the second from the gap between the stub releasing
+# a first byte and the client seeing one, held to `--ttft-budget-ms` at p95.
 #
 # Deliberately not part of bin/check: a timing measurement on a shared runner is
 # a flaky test, and a flaky gate is one people learn to ignore. Run it when you
@@ -14,6 +15,7 @@
 #   bin/bench                          # defaults
 #   bin/bench --requests 10000         # a longer run
 #   bin/bench --json                   # machine-readable
+#   bin/bench --baseline bench/baseline.json   # delta vs the committed numbers
 #   bin/bench --help                   # every option
 set -eu
 

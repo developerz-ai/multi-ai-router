@@ -195,7 +195,8 @@ run will use if you ever need to see it.
 
 One more when you touch the request path: `bin/bench` drives the real router against an in-process
 stub upstream and reports what its own `router_overhead_seconds` histogram recorded, plus added
-time-to-first-token measured separately. It exits non-zero when either half of the budget breaks.
+time-to-first-token measured separately. It exits non-zero when either half of the budget breaks —
+overhead p99 over `--budget-ms`, or added TTFT p95 over `--ttft-budget-ms`.
 
 ---
 
