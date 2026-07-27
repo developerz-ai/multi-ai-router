@@ -31,6 +31,25 @@ import { request } from "./client"
 export const USAGE_WINDOWS = ["today", "7d", "30d", "lifetime"] as const
 export type UsageWindow = (typeof USAGE_WINDOWS)[number]
 
+/**
+ * A custom `from`/`to` range, both ISO-8601. The server already accepts this
+ * (`services/usage-read/window.ts`) — it was only ever unreachable from the console.
+ */
+export interface UsageRangeInput {
+  readonly from: string
+  readonly to: string
+}
+
+/** What a caller may ask for: one of the four named windows, or an explicit range. */
+export type UsageRange = UsageWindow | UsageRangeInput
+
+/** What the server actually resolved the request to — `"custom"` is its own label, not a window. */
+export type UsageWindowLabel = UsageWindow | "custom"
+
+export function isCustomRange(range: UsageRange): range is UsageRangeInput {
+  return typeof range === "object"
+}
+
 export function usageWindowLabel(window: UsageWindow): string {
   switch (window) {
     case "today":
@@ -42,6 +61,11 @@ export function usageWindowLabel(window: UsageWindow): string {
     case "lifetime":
       return "Lifetime"
   }
+}
+
+/** Same as `usageWindowLabel`, widened to the label a *resolved* summary can carry. */
+export function usageSummaryWindowLabel(window: UsageWindowLabel): string {
+  return window === "custom" ? "Custom range" : usageWindowLabel(window)
 }
 
 /** The measures every total and every breakdown row carries, in one shape. */
@@ -63,6 +87,10 @@ export interface UsageTotals {
   readonly latencyP95Ms: number
   /** The router's own added time. Budgeted at <5 ms p99; a regression is a bug. */
   readonly routerOverheadP95Ms: number
+  /** Time to first byte. Budgeted at zero added TTFT — the number that catches a stream bug the
+   *  overhead figure above cannot, because overhead is measured off the critical path and this is
+   *  measured on it. */
+  readonly ttfbP95Ms: number
 }
 
 /** One row of a leaderboard: a dimension member and its totals. */
@@ -74,6 +102,19 @@ export interface UsageBreakdownRow {
   readonly totals: UsageTotals
   /** Requests per bucket, for the inline sparkline. Same length as the series. */
   readonly series: readonly number[]
+}
+
+/**
+ * One bucket of the headline series, undiscarded: `at` names the bucket so a chart can draw a
+ * real x-axis, and `attempts`/`errors` ride beside `requests` so the chart can show a failover
+ * chain running (attempts diverging from requests) or a bad window (errors climbing) — not just
+ * request volume.
+ */
+export interface UsageChartPoint {
+  readonly at: string
+  readonly requests: number
+  readonly attempts: number
+  readonly errors: number
 }
 
 export type UsageDimension = "key" | "account" | "pool" | "model"
@@ -122,15 +163,15 @@ export interface UsageFailureSplit {
 }
 
 export interface UsageSummary {
-  readonly window: UsageWindow
-  /** `hour` for today, `day` for everything else. */
+  readonly window: UsageWindowLabel
+  /** `hour` for today (or any custom range under ~2 days), `day` for everything else. */
   readonly bucket: "hour" | "day"
   readonly from: string
   readonly to: string
   readonly totals: UsageTotals
   readonly failures: UsageFailureSplit
-  /** Requests per bucket across the window. */
-  readonly series: readonly number[]
+  /** One entry per bucket across the window, dense — a quiet bucket is a zero, not a gap. */
+  readonly series: readonly UsageChartPoint[]
   readonly byKey: readonly UsageBreakdownRow[]
   readonly byAccount: readonly UsageBreakdownRow[]
   readonly byPool: readonly UsageBreakdownRow[]
@@ -171,6 +212,7 @@ export const EMPTY_TOTALS: UsageTotals = {
   latencyP50Ms: 0,
   latencyP95Ms: 0,
   routerOverheadP95Ms: 0,
+  ttfbP95Ms: 0,
 }
 
 /**
@@ -192,6 +234,7 @@ function addTotals(a: UsageTotals, b: UsageTotals): UsageTotals {
     latencyP50Ms: Math.max(a.latencyP50Ms, b.latencyP50Ms),
     latencyP95Ms: Math.max(a.latencyP95Ms, b.latencyP95Ms),
     routerOverheadP95Ms: Math.max(a.routerOverheadP95Ms, b.routerOverheadP95Ms),
+    ttfbP95Ms: Math.max(a.ttfbP95Ms, b.ttfbP95Ms),
   }
 }
 
@@ -240,18 +283,26 @@ interface WireSummary {
     readonly byOutcome: readonly { readonly outcome: UsageOutcome; readonly attempts: number }[]
   }
   readonly axis: readonly string[]
-  readonly series: readonly { readonly at: string; readonly requests: number }[]
+  readonly series: readonly {
+    readonly at: string
+    readonly requests: number
+    readonly attempts: number
+    readonly errors: number
+  }[]
   readonly byKey: readonly WireRow[]
   readonly byAccount: readonly WireRow[]
   readonly byPool: readonly WireRow[]
   readonly byModel: readonly WireRow[]
 }
 
-export async function fetchUsageSummary(window: UsageWindow): Promise<UsageSummary> {
-  const wire = await request<WireSummary>({ method: "GET", path: "/usage", query: { window } })
+export async function fetchUsageSummary(range: UsageRange): Promise<UsageSummary> {
+  const query = isCustomRange(range) ? { from: range.from, to: range.to } : { window: range }
+  const wire = await request<WireSummary>({ method: "GET", path: "/usage", query })
 
   return {
-    window,
+    // The server is the one source of truth for what it actually resolved the request to — a
+    // custom range comes back labelled `"custom"`, a named window echoes its own name.
+    window: wire.window as UsageWindowLabel,
     bucket: wire.bucket,
     from: wire.from,
     to: wire.to,
@@ -260,9 +311,15 @@ export async function fetchUsageSummary(window: UsageWindow): Promise<UsageSumma
       latencyP50Ms: wire.latency.p50Ms ?? 0,
       latencyP95Ms: wire.latency.p95Ms ?? 0,
       routerOverheadP95Ms: wire.latency.routerOverheadP95Ms ?? 0,
+      ttfbP95Ms: wire.latency.ttfbP95Ms ?? 0,
     },
     failures: parseFailures(wire.failures),
-    series: wire.series.map((point) => point.requests),
+    series: wire.series.map((point) => ({
+      at: point.at,
+      requests: point.requests,
+      attempts: point.attempts,
+      errors: point.errors,
+    })),
     byKey: wire.byKey.map(toRow),
     byAccount: wire.byAccount.map(toRow),
     byPool: wire.byPool.map(toRow),
@@ -292,7 +349,7 @@ function parseFailures(failures: WireSummary["failures"]): UsageFailureSplit {
 
 function parseTotals(
   totals: WireTotals,
-): Omit<UsageTotals, "latencyP50Ms" | "latencyP95Ms" | "routerOverheadP95Ms"> {
+): Omit<UsageTotals, "latencyP50Ms" | "latencyP95Ms" | "routerOverheadP95Ms" | "ttfbP95Ms"> {
   return {
     requests: totals.requests,
     attempts: totals.attempts,
@@ -321,6 +378,9 @@ function toRow(row: WireRow): UsageBreakdownRow {
       latencyP50Ms: row.latencyP50Ms ?? 0,
       latencyP95Ms: row.latencyP95Ms ?? 0,
       routerOverheadP95Ms: row.routerOverheadP95Ms ?? 0,
+      // Not tracked per breakdown row on the wire, only for the summary as a whole — a per-row
+      // TTFT would need a percentile scan per key/account/pool/model, which nobody has asked for.
+      ttfbP95Ms: 0,
     },
   }
 }

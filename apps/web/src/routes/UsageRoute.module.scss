@@ -51,6 +51,52 @@
   font-weight: var(--weight-medium);
 }
 
+// The fifth window: a `from`/`to` the server has always accepted, newly reachable from the
+// console. A `<form>` rather than a live-updating pair of inputs — nothing fires until the
+// operator presses Apply, so a half-typed date never sends a request for a nonsense range.
+.customRange {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2) var(--space-3);
+  align-items: center;
+  margin-block-end: var(--space-3);
+}
+
+.customCaption {
+  @include eyebrow;
+
+  color: var(--text-muted);
+}
+
+.customField {
+  display: flex;
+  gap: var(--space-1);
+  align-items: center;
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+}
+
+.customInput {
+  @include tappable(1.875rem);
+
+  padding-inline: var(--space-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-1);
+  background: var(--surface-raised);
+  color: var(--text);
+  font-size: var(--text-sm);
+}
+
+.customActive {
+  color: var(--accent);
+  font-size: var(--text-sm);
+}
+
+.customErr {
+  color: var(--danger);
+  font-size: var(--text-sm);
+}
+
 .tiles {
   display: grid;
   gap: var(--space-3);

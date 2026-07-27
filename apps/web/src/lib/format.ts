@@ -62,6 +62,14 @@ export function formatDate(iso: string | null, locale?: string): string {
   return new Date(parsed).toLocaleDateString(locale, { dateStyle: "medium" })
 }
 
+/** Time only, viewer's zone — for an hourly-bucketed chart axis, where the date is implied. */
+export function formatTime(iso: string | null, locale?: string): string {
+  if (iso === null) return "—"
+  const parsed = Date.parse(iso)
+  if (Number.isNaN(parsed)) return "—"
+  return new Date(parsed).toLocaleTimeString(locale, { timeStyle: "short" })
+}
+
 /**
  * `3m ago`, `in 2h`, `just now`. Always rendered *beside* the absolute time,
  * never instead of it — a relative stamp alone cannot be compared to a log.

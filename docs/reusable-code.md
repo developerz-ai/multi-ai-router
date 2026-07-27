@@ -343,6 +343,7 @@ itself — it drives traffic and reads `router_overhead_seconds` off `GET /metri
 | `UsageCell` | `components/UsageCell.tsx` | Per-row usage in a table: sparkline, requests, and metered/notional printed apart |
 | `RecentAttemptsTable` | `routes/usage/RecentAttemptsTable.tsx` | One upstream attempt per row. Pure and prop-driven — the clock is injected, so what a row reads is assertable at a fixed time. A row is an **attempt**, not a request; `null` status reads as "never reached", not as a blank |
 | `Sparkline` | `components/Sparkline.tsx` | Trend inside a table cell. `currentColor` throughout — introduces no colour of its own |
+| `UsageChart`, `buildChartSeries`, `pickChartTicks` | `routes/usage/UsageChart.tsx`, `lib/usage-chart.ts` | The `/usage` headline chart: requests, attempts and errors on one shared scale, with an axis. The geometry (`lib/usage-chart.ts`) is pure and unit-tested apart from the component, same split as `theme.ts`/`theme-dom.ts` |
 | `PageHeader` | `components/PageHeader.tsx` | Title, subtitle, page-level actions |
 | `Placeholder` | `components/Placeholder.tsx` | A screen that is scaffold, so nothing looks implemented when it is not |
 | `ThemeToggle` | `components/ThemeToggle.tsx` | The header toggle. The one sanctioned `createEffect` in the app |

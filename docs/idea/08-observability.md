@@ -166,17 +166,26 @@ router exists to perform.
 Nothing on the feed can carry credential material: `errorClass` is a class name rather than a
 message, and no request or response body is stored anywhere to leak.
 
-### Charts — data shapes, not a renderer
+### Charts — data shapes and a renderer
 
-The renderer is **DEFERRED**. What is *not* deferred is the shape each chart consumes, because that
-is the API contract.
+| Chart | Data shape | Renderer |
+|---|---|---|
+| `/usage` time series | Bucketed series, one entry per axis point: `{ at, requests, attempts, errors }`, at an interval chosen from the range — hour for ≤ 2 days, day beyond | `UsageChart` — requests, attempts and errors on one shared y-scale (so a failover chain shows up as attempts drawing away from requests), with an axis labelled from the bucket's own `at`, not a synthetic index |
+| Time series **stacked by key or by account** | One series per member, with an "other" series capping the series count | **DEFERRED** |
+| Quota-utilization gauge | Per Account per window: `{ window, utilization 0..1, resetsAt, resetSource }` | Shipped — `QuotaWindowRow` |
+| Top-N leaderboard | Ranked `{ dimension, label, measure }` rows — keys by spend, models by volume, accounts by errors. N is a parameter, ties broken by label | Shipped — `UsageTopN` |
+| Inline sparkline | A bare `number[]` for the row's window, no axes, no labels — enough to see a shape in a table cell | Shipped — `Sparkline`, used in `UsageBreakdown` and the keys/accounts tables |
 
-| Chart | Data shape |
-|---|---|
-| Time series | Bucketed series (`bucket`, `value`) at an interval chosen from the range — hour for ≤ 2 days, day beyond — **stacked by key or by account**, one series per member, with an "other" series capping the series count |
-| Quota-utilization gauge | Per Account per window: `{ window, utilization 0..1, resetsAt, resetSource }` |
-| Top-N leaderboard | Ranked `{ dimension, label, measure }` rows — keys by spend, models by volume, accounts by errors. N is a parameter, ties broken by label |
-| Inline sparkline | A bare `number[]` for the row's window, no axes, no labels — enough to see a shape in a table cell |
+The window itself was reachable only as one of four named presets from the console until this was
+closed: `GET /api/admin/usage` has taken a custom `from`/`to` since `services/usage-read/window.ts`
+was written, and `/usage` now has the form that reaches it, alongside the four named buttons. A
+custom range resolves to `window: "custom"` in the response, distinct from the four named labels.
+
+`latency.ttfbP95Ms` — time to first byte — is part of the response and rendered as its own stat
+tile (`Time to first byte p95`) beside router overhead. The two answer different questions: overhead
+is the router's own added time, measured off the request's critical path; TTFT is measured on it, and
+is the only one of the two that can catch a regression in the "never buffer a stream" rule
+([non-negotiable 8](../../CLAUDE.md)).
 
 ### Why it stays fast
 

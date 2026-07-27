@@ -1,3 +1,55 @@
+@use "../styles/mixins" as *;
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  align-items: center;
+}
+
+// Same shape as the Usage screen's window picker (`UsageRoute.module.scss`), so the two read as
+// the same control. Overview had no way to change its window before this — pinned to "today" —
+// which is how it and Usage could disagree with no way to reconcile.
+.windows {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+  min-width: 0;
+  margin: 0;
+  padding: var(--space-1);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-1);
+  background: var(--surface-raised);
+}
+
+.groupLabel {
+  @include visually-hidden;
+}
+
+.window {
+  @include tappable(1.875rem);
+
+  padding-inline: var(--space-3);
+  background: none;
+  border: 0;
+  border-radius: var(--radius-1);
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+  cursor: pointer;
+  transition: background var(--duration-fast) var(--ease-out);
+}
+
+.window:hover {
+  background: var(--surface-sunken);
+  color: var(--text);
+}
+
+.window[aria-pressed="true"] {
+  background: var(--accent);
+  color: var(--accent-contrast);
+  font-weight: var(--weight-medium);
+}
+
 // Auto-fit rather than fixed columns: one tile per row on a phone, several
 // across on a desktop, with no breakpoint of its own to keep in sync.
 .tiles {

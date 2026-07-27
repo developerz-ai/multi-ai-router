@@ -1,24 +1,29 @@
-import { createSignal, For } from "solid-js"
+import { createSignal, For, Show } from "solid-js"
+import { Button } from "../components/Button"
 import { PageHeader } from "../components/PageHeader"
 import { QueryBoundary } from "../components/QueryBoundary"
-import { Sparkline } from "../components/Sparkline"
 import { StatTile } from "../components/StatTile"
 import { TableSkeleton } from "../components/TableSkeleton"
 import {
   breakdownFor,
+  isCustomRange,
   USAGE_DIMENSIONS,
   USAGE_WINDOWS,
   type UsageDimension,
+  type UsageRange,
   type UsageWindow,
   usageDimensionLabel,
+  usageSummaryWindowLabel,
   usageWindowLabel,
 } from "../lib/api/usage"
 import { createNow } from "../lib/clock"
+import { fromDateTimeInput } from "../lib/datetime-input"
 import { formatCost, formatCount, formatPercent } from "../lib/format"
 import { useAllAccounts } from "../lib/queries/accounts"
 import { useUsageSummary } from "../lib/queries/usage"
 import styles from "./UsageRoute.module.scss"
 import { UsageBreakdown } from "./usage/UsageBreakdown"
+import { UsageChart } from "./usage/UsageChart"
 import { UsageFailures } from "./usage/UsageFailures"
 import { UsageQuota } from "./usage/UsageQuota"
 import { UsageRecent } from "./usage/UsageRecent"
@@ -52,10 +57,36 @@ const TOP_N = 5
  */
 export default function UsageRoute() {
   const now = createNow(30_000)
-  const [window, setWindow] = createSignal<UsageWindow>("7d")
+  const [range, setRange] = createSignal<UsageRange>("7d")
   const [dimension, setDimension] = createSignal<UsageDimension>("key")
-  const summary = useUsageSummary(window)
+  const [customFrom, setCustomFrom] = createSignal("")
+  const [customTo, setCustomTo] = createSignal("")
+  const [customError, setCustomError] = createSignal<string | null>(null)
+  const summary = useUsageSummary(range)
   const accounts = useAllAccounts()
+
+  function selectWindow(value: UsageWindow) {
+    setCustomError(null)
+    setRange(value)
+  }
+
+  // A custom range is its own explicit action, not a side effect of typing: nothing is sent
+  // until Apply is pressed, so a half-edited `from` never fires a request for a nonsense window.
+  function applyCustomRange(event: SubmitEvent) {
+    event.preventDefault()
+    const from = fromDateTimeInput(customFrom())
+    const to = fromDateTimeInput(customTo())
+    if (from === null || to === null) {
+      setCustomError("Both from and to are required.")
+      return
+    }
+    if (Date.parse(from) >= Date.parse(to)) {
+      setCustomError("From must be before to.")
+      return
+    }
+    setCustomError(null)
+    setRange({ from, to })
+  }
 
   return (
     <>
@@ -69,9 +100,9 @@ export default function UsageRoute() {
             <For each={USAGE_WINDOWS}>
               {(value) => (
                 <button
-                  aria-pressed={window() === value ? "true" : "false"}
+                  aria-pressed={!isCustomRange(range()) && range() === value ? "true" : "false"}
                   class={styles.window}
-                  onClick={() => setWindow(value)}
+                  onClick={() => selectWindow(value)}
                   type="button"
                 >
                   {usageWindowLabel(value)}
@@ -84,6 +115,41 @@ export default function UsageRoute() {
         title="Usage"
       />
 
+      {/* A custom range is the fifth window CLAUDE.md asks for, not a special case: the server
+          has taken `from`/`to` since `services/usage-read/window.ts` was written, and this is the
+          one place in the console that was never wired to ask for it. Overview's own window
+          picker (`OverviewRoute`) is named-window only — a custom range is answered here. */}
+      <form class={styles.customRange} onSubmit={applyCustomRange}>
+        <span class={styles.customCaption}>Custom range</span>
+        <label class={styles.customField}>
+          From
+          <input
+            class={styles.customInput}
+            onInput={(event) => setCustomFrom(event.currentTarget.value)}
+            type="datetime-local"
+            value={customFrom()}
+          />
+        </label>
+        <label class={styles.customField}>
+          To
+          <input
+            class={styles.customInput}
+            onInput={(event) => setCustomTo(event.currentTarget.value)}
+            type="datetime-local"
+            value={customTo()}
+          />
+        </label>
+        <Button size="sm" tone="neutral" type="submit">
+          Apply
+        </Button>
+        <Show when={isCustomRange(range())}>
+          <span class={styles.customActive}>Showing a custom range</span>
+        </Show>
+        <Show when={customError()}>
+          {(message) => <span class={styles.customErr}>{message()}</span>}
+        </Show>
+      </form>
+
       <QueryBoundary
         errorTitle="Usage could not be loaded"
         loading={<TableSkeleton label="Loading usage" rows={5} />}
@@ -94,7 +160,7 @@ export default function UsageRoute() {
             <section aria-label="Headline figures" class={styles.tiles}>
               <StatTile
                 label="Requests"
-                note={`Client-facing · ${usageWindowLabel(data.window).toLowerCase()}`}
+                note={`Client-facing · ${usageSummaryWindowLabel(data.window).toLowerCase()}`}
                 value={formatCount(data.totals.requests)}
               />
               <StatTile
@@ -131,22 +197,29 @@ export default function UsageRoute() {
                 note="Budgeted under 5 ms — a regression is a bug"
                 value={`${data.totals.routerOverheadP95Ms} ms`}
               />
+              {/* Fetched and rendered nowhere before this: the router's own budget is zero *added*
+                  TTFT (CLAUDE.md non-negotiable 8), and this is the only figure that can catch a
+                  regression there — overhead is measured off the critical path, this is on it. */}
+              <StatTile
+                label="Time to first byte p95"
+                note="Budgeted at zero added TTFT"
+                value={`${data.totals.ttfbP95Ms} ms`}
+              />
             </section>
 
             {/* Directly under the tiles, above the charts: the error-rate tile is the figure an
                 operator stops on, and this is the sentence that follows it. */}
-            <UsageFailures failures={data.failures} windowLabel={usageWindowLabel(data.window)} />
+            <UsageFailures
+              failures={data.failures}
+              windowLabel={usageSummaryWindowLabel(data.window)}
+            />
 
-            <section aria-label="Requests over time" class={styles.chart}>
+            <section aria-label="Requests, attempts and errors over time" class={styles.chart}>
               <p class={styles.chartLabel}>
-                Requests per {data.bucket} · {usageWindowLabel(data.window)}
+                Requests, attempts and errors per {data.bucket} ·{" "}
+                {usageSummaryWindowLabel(data.window)}
               </p>
-              <Sparkline
-                height={72}
-                label={`Requests per ${data.bucket} across the window`}
-                points={data.series}
-                width={640}
-              />
+              <UsageChart bucket={data.bucket} points={data.series} />
             </section>
 
             <fieldset class={styles.dimensions}>
