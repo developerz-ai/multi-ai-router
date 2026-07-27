@@ -220,6 +220,7 @@ async function runHttpProbe(
       health: { consecutiveFailures: 0, inFlight: 0, recentTokens: 0 },
     },
     driver: driverAccount,
+    billing: account.billing,
     authMaterial: account.authMaterial,
     configDir: account.configDir,
   }

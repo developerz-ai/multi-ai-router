@@ -1,6 +1,11 @@
 import { describe, expect, test } from "bun:test"
 import { ProviderId } from "@multi-ai-router/core"
-import { type AccountShape, checkAccountShape } from "../../../src/services/accounts"
+import {
+  type AccountShape,
+  checkAccountShape,
+  describeProvider,
+  resolveBilling,
+} from "../../../src/services/accounts"
 
 /**
  * Write-time validation of an account's shape. Each rejection here is a failure
@@ -153,5 +158,93 @@ describe("dialect", () => {
   test("either of z.ai's two surfaces is accepted", () => {
     expect(checkAccountShape(shape({ provider: "zai", dialect: "anthropic" })).ok).toBe(true)
     expect(checkAccountShape(shape({ provider: "zai", dialect: "openai-chat" })).ok).toBe(true)
+  })
+})
+
+describe("billing", () => {
+  test("a metered provider takes either answer, because only the operator knows which was bought", () => {
+    // The whole reason this is an account property. z.ai, Kimi and MiniMax each sell a flat-fee
+    // coding plan behind the same endpoint and the same key shape as their metered API, and no
+    // request the router can make tells them apart.
+    for (const provider of ["zai", "kimi", "minimax"] as const) {
+      expect(checkAccountShape(shape({ provider, billing: "metered" })).ok).toBe(true)
+      expect(checkAccountShape(shape({ provider, billing: "subscription" })).ok).toBe(true)
+    }
+  })
+
+  test("a subscription-only provider refuses to be called metered", () => {
+    // There is no per-token price behind a Claude Max or ChatGPT plan, so `metered` would put an
+    // invented charge in a spend column rather than record one.
+    const result = checkAccountShape(
+      shape({
+        provider: "anthropic-oauth",
+        hasCredential: false,
+        configDir: "/data/claude/seb",
+        billing: "metered",
+      }),
+    )
+    expect(result.ok).toBe(false)
+    expect(reason(result)).toStartWith("billing_fixed:")
+    expect(reason(result)).toContain("subscription")
+  })
+
+  test("agreeing with a subscription-only provider is accepted, not refused for redundancy", () => {
+    expect(
+      checkAccountShape(
+        shape({
+          provider: "anthropic-oauth",
+          hasCredential: false,
+          configDir: "/data/claude/seb",
+          billing: "subscription",
+        }),
+      ).ok,
+    ).toBe(true)
+  })
+
+  test("saying nothing is always accepted — the provider's default answers", () => {
+    for (const id of ProviderId.options) {
+      const result = checkAccountShape(shape({ provider: id, billing: undefined }))
+      if (!result.ok) expect(result.failure.code).not.toBe("billing_fixed")
+    }
+  })
+})
+
+describe("resolving what an account is billed as", () => {
+  const describeOf = (id: ProviderId) => describeProvider(id)
+
+  test("a metered provider takes the operator's answer", () => {
+    expect(resolveBilling(describeOf("zai"), "subscription")).toBe("subscription")
+    expect(resolveBilling(describeOf("zai"), "metered")).toBe("metered")
+  })
+
+  test("silence takes the provider's default rather than the column's", () => {
+    // Written explicitly on every create: the column default is right for a metered provider and
+    // wrong for a subscription-only one, and which of those this is comes off the driver.
+    expect(resolveBilling(describeOf("zai"), undefined)).toBe("metered")
+    expect(resolveBilling(describeOf("anthropic-oauth"), undefined)).toBe("subscription")
+    expect(resolveBilling(describeOf("openai-oauth"), undefined)).toBe("subscription")
+  })
+
+  test("a subscription-only provider is its own answer, whatever was asked for", () => {
+    // Belt and braces with `checkAccountShape`, which refuses the contradiction first. This is what
+    // makes a caller that skipped the check still unable to write a metered Claude subscription.
+    expect(resolveBilling(describeOf("anthropic-oauth"), "metered")).toBe("subscription")
+    expect(resolveBilling(describeOf("openai-oauth"), "metered")).toBe("subscription")
+  })
+
+  test("exactly the two providers sold only as a plan are fixed there", () => {
+    // A provider that grows a flat-fee plan alongside its API must not become fixed by accident:
+    // fixed means "the operator cannot say otherwise", which is only true with no per-token price.
+    const fixed = ProviderId.options.filter((id) => describeProvider(id).billingFixed)
+    expect(fixed.sort()).toEqual(["anthropic-oauth", "openai-oauth"])
+    for (const id of fixed) expect(describeProvider(id).defaultBilling).toBe("subscription")
+  })
+
+  test("every other provider defaults to metered", () => {
+    for (const id of ProviderId.options) {
+      const provider = describeProvider(id)
+      if (provider.billingFixed) continue
+      expect(provider.defaultBilling).toBe("metered")
+    }
   })
 })

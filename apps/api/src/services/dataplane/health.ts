@@ -181,6 +181,13 @@ export interface HealthStore {
   /** Releases the hold, whatever the probe's verdict was. Only the caller that took it may call. */
   releaseProbe(accountId: string): void
   /**
+   * Cumulative half-open gate decisions since boot, for `router_breaker_probe_admissions_total`.
+   * Counts only the gate itself — `admitted` is a hold taken, `refused` is another caller finding
+   * one already there. An account that was never half-open (already `closed`, or still `blocked`)
+   * never reaches the gate and moves neither number.
+   */
+  probeStats(): { readonly admitted: number; readonly refused: number }
+  /**
    * Drops every mark for an account — the operator's "Re-check now", and account deletion.
    *
    * The probe hold goes with them, deliberately: `recheck` clears the breaker precisely so the
@@ -195,6 +202,8 @@ export function createHealthStore(options: HealthStoreOptions = {}): HealthStore
   const states = new Map<string, AccountHealthState>()
   const jitter = options.jitter ?? Math.random
   const probeHoldMs = options.probeHoldMs ?? DEFAULT_PROBE_HOLD_MS
+  let probeAdmitted = 0
+  let probeRefused = 0
 
   const configured: BreakerOptions = {
     ...(options.failureThreshold === undefined
@@ -275,15 +284,21 @@ export function createHealthStore(options: HealthStoreOptions = {}): HealthStore
       if (live !== "half-open") return REFUSED
 
       const held = state.probeHeldUntil
-      if (held !== null && held.getTime() > now.getTime()) return REFUSED
+      if (held !== null && held.getTime() > now.getTime()) {
+        probeRefused += 1
+        return REFUSED
+      }
 
       write(accountId, { probeHeldUntil: new Date(now.getTime() + probeHoldMs) })
+      probeAdmitted += 1
       return { admitted: true, held: true }
     },
 
     releaseProbe(accountId) {
       if (states.has(accountId)) write(accountId, { probeHeldUntil: null })
     },
+
+    probeStats: () => ({ admitted: probeAdmitted, refused: probeRefused }),
 
     reset(accountId) {
       states.delete(accountId)

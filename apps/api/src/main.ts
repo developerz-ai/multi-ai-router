@@ -30,7 +30,13 @@ async function main(): Promise<void> {
   await migrate(env, logger)
 
   const database = createDatabase({ url: env.databaseUrl, ...env.databasePool })
-  const runtime = buildRuntime({ env, database: database.db, sql: database.sql, logger })
+  const runtime = buildRuntime({
+    env,
+    database: database.db,
+    sql: database.sql,
+    dbPoolStats: database.poolStats,
+    logger,
+  })
 
   // One latch, read by `/readyz` and by the signal handlers, so readiness cannot go on answering
   // `ready` through a drain nobody told it about — `services/shutdown/lifecycle.ts`.

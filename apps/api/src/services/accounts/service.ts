@@ -4,7 +4,7 @@ import { AUDIT_KINDS, AUDIT_SUBJECTS, type AuditRecorder } from "../admin/audit"
 import { type AdminResult, conflict, notFound, ok } from "../admin/result"
 import type { CredentialCipher } from "../crypto/cipher"
 import { describeProvider } from "./providers"
-import { checkAccountShape } from "./rules"
+import { checkAccountShape, resolveBilling } from "./rules"
 import type { AccountListQuery, CreateAccountBody, UpdateAccountBody } from "./schemas"
 import { type AccountView, toAccountView } from "./view"
 
@@ -79,6 +79,7 @@ export function createAccountsService(deps: AccountsServiceDeps): AccountsServic
         configDir,
         baseUrl: body.baseUrl ?? null,
         dialect: body.dialect ?? null,
+        ...(body.billing === undefined ? {} : { billing: body.billing }),
       })
       if (!checked.ok) return checked
 
@@ -103,6 +104,10 @@ export function createAccountsService(deps: AccountsServiceDeps): AccountsServic
           supportedModels: body.supportedModels ?? null,
           ...(body.weight === undefined ? {} : { weight: body.weight }),
           ...(body.priority === undefined ? {} : { priority: body.priority }),
+          // Always written, never left to the column default: the default is right for a metered
+          // provider and wrong for a subscription-only one, and which of those this is comes from
+          // the driver rather than from the shape of the request.
+          billing: resolveBilling(checked.value, body.billing),
         })
         .catch(async (error: unknown) => {
           // An insert that never landed leaves a directory no row will ever name again — and the
@@ -120,6 +125,7 @@ export function createAccountsService(deps: AccountsServiceDeps): AccountsServic
           label: row.label,
           provider: row.provider,
           hasCredential: row.authMaterial !== null,
+          billing: row.billing,
         },
       })
 
@@ -138,6 +144,7 @@ export function createAccountsService(deps: AccountsServiceDeps): AccountsServic
         configDir: current.configDir,
         baseUrl: resolve(body.baseUrl, current.baseUrl),
         dialect: resolve(body.dialect, current.dialect ?? null),
+        ...(body.billing === undefined ? {} : { billing: body.billing }),
       })
       if (!checked.ok) return checked
 
@@ -154,6 +161,7 @@ export function createAccountsService(deps: AccountsServiceDeps): AccountsServic
           ...(body.supportedModels === undefined ? {} : { supportedModels: body.supportedModels }),
           ...(body.weight === undefined ? {} : { weight: body.weight }),
           ...(body.priority === undefined ? {} : { priority: body.priority }),
+          ...(body.billing === undefined ? {} : { billing: body.billing }),
           ...(body.status === undefined ? {} : { status: body.status }),
         },
         deps.now(),

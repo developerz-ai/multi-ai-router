@@ -96,6 +96,46 @@ export function createSeries(options: RegistryOptions = {}) {
       labels: ["provider", "account_id", "model", "direction"],
     }),
 
+    /**
+     * How much of this deployment's traffic the price table can actually see.
+     *
+     * Counted per attempt rather than in dollars, because the question it answers is a coverage
+     * one: `basis="unknown"` is spend nobody here can report, and a ratio against the other two is
+     * the only way an operator learns that a provider they added is invisible in every cost column.
+     * A dollar sum would answer it with the very number that is missing.
+     *
+     * Labelled by provider and model so the answer names what to price next, and so a table that
+     * has gone stale against a renamed model family shows up as one model going unknown rather
+     * than as a total quietly drifting.
+     */
+    costBasis: registry.counter({
+      name: "router_cost_basis_total",
+      help: "Upstream attempts by how they were priced. unknown is spend this deployment cannot see; notional is a subscription attribution, never summed with metered.",
+      labels: ["provider", "model", "basis"],
+    }),
+
+    /**
+     * When the shipped price table was last checked against its vendors, as a Unix timestamp.
+     * `time() - router_price_table_asof_timestamp_seconds` is the age, and an age past what a
+     * deployment tolerates is the alert — a price table nobody can date is a table nobody can judge.
+     */
+    priceTableAsOf: registry.gauge({
+      name: "router_price_table_asof_timestamp_seconds",
+      help: "Unix time the shipped price table was last verified against its vendors. Age is the staleness signal.",
+      labels: [],
+    }),
+
+    /**
+     * When the operator's price overrides were last loaded, or absent before the first successful
+     * load. Read beside the gauge above: the shipped table's age says how stale the defaults are,
+     * this one says whether the corrections layered over them are arriving at all.
+     */
+    priceOverridesLoadedAt: registry.gauge({
+      name: "router_price_overrides_loaded_timestamp_seconds",
+      help: "Unix time the operator's price overrides were last loaded. Absent until the first successful load.",
+      labels: [],
+    }),
+
     upstreamErrors: registry.counter({
       name: "router_upstream_errors_total",
       help: "Upstream failures by kind. status is none when the upstream was never reached.",
@@ -136,6 +176,42 @@ export function createSeries(options: RegistryOptions = {}) {
       name: "router_usage_queue_depth",
       help: "Usage records awaiting batch write. Rising depth is reporting lag, not request lag.",
       labels: [],
+    }),
+
+    /**
+     * The breaker's own `phase()` (docs/idea/05-routing-and-failover.md), not the stored `status` —
+     * `router_accounts{status="cooling_down"}` only implies whether a timer or a human recovers an
+     * account, never whether it is still counting down or already eligible for a probe. One series
+     * per account per phase, zeroed for the phases it is not in, so an alert on `phase="blocked"`
+     * falling to zero is a fact about the account, not a vanished series.
+     */
+    breakerState: registry.gauge({
+      name: "router_breaker_state",
+      help: "1 for an account's current circuit-breaker phase (closed, open, half-open, blocked), 0 for the others.",
+      labels: ["account_id", "phase"],
+    }),
+
+    /**
+     * The gate `HealthStore.admitProbe` enforces — see its own doc comment. Sustained `refused` is
+     * exactly the traffic the gate exists to describe: a recovering account with more requests
+     * queued behind it than the one probe it allows through.
+     */
+    breakerProbeAdmissions: registry.counter({
+      name: "router_breaker_probe_admissions_total",
+      help: "Half-open probes admitted vs refused. refused is other requests finding the one probe already taken, not an error.",
+      labels: ["result"],
+    }),
+
+    /**
+     * postgres.js does not expose reserved/idle/waiting counts (`packages/db/src/pool-metrics.ts`),
+     * so this counts concurrently in-flight statements instead: below `max` that is exactly the
+     * number of connections doing work, and at or beyond it the excess is the driver's own internal
+     * queue admitting them one at a time — the same thing it would call `waiting` if it said so.
+     */
+    dbPoolConnections: registry.gauge({
+      name: "router_db_pool_connections",
+      help: "Postgres connections by state — in_use, idle, waiting. Approximated from in-flight statements; the fixed pool ceiling is DB_POOL_MAX.",
+      labels: ["state"],
     }),
 
     /**

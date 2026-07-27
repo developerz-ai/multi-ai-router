@@ -1,13 +1,20 @@
 import { type Dialect, isRouterError, RetryableRouterError } from "@multi-ai-router/core"
+import { redactValue } from "../logging/redact"
 
 /**
  * Turns a thrown value into the HTTP status and the dialect-appropriate JSON body the client
  * gets. Pure — no Hono, no logging, no I/O — so the mapping is unit-testable on its own.
+ * (`redactValue` is a pure string scrub that happens to live under `logging/`; it emits nothing.)
  *
  * The status and code come from the `RouterError` instance itself (`packages/core` owns that
  * table); this module only decides how the failure is *rendered*. Anything that is not a
  * `RouterError` is a generic `500`: the real detail is logged, never returned.
  * Shapes: docs/idea/06-protocol-translation.md#error-shapes.
+ *
+ * Every message leaves through `renderErrorBody`, and it scrubs — one choke point rather than a
+ * rule each of its eight callers has to remember. Router-authored messages interpolate upstream
+ * text (`services/dataplane/chain.ts` folds a failure's message into "every attempt failed: …"),
+ * and an upstream is free to quote a credential back at us inside one.
  */
 
 /** An error body is one of two shapes; every OpenAI dialect shares the second. */
@@ -69,9 +76,10 @@ export function dialectForPath(path: string): Dialect | null {
 export function renderErrorBody(
   dialect: Dialect | null,
   status: number,
-  message: string,
+  rawMessage: string,
   code: string | null,
 ): ErrorBody {
+  const message = redactValue(rawMessage)
   if (dialect === "anthropic") {
     return { type: "error", error: { type: anthropicErrorType(status), message } }
   }

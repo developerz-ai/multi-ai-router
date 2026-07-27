@@ -25,6 +25,7 @@ const accountRow = [
   "claude-max-seb",
   "anthropic-oauth",
   "active",
+  "subscription",
   ENVELOPE,
   null,
   null,

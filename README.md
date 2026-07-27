@@ -280,7 +280,9 @@ The recurring operator question is "who burned what", and the console answers it
 - **Charts** — request and token/cost time series stacked by key or account, per-account quota-utilization gauges, top-N leaderboards (keys by spend, models by volume), inline sparklines in the keys and accounts tables.
 - Aggregates read rolled-up daily rows, not raw records, so the dashboard stays fast after rollup. Failover means one client request can emit several records, one per upstream attempt, joined by a correlation id — the UI labels which number is the request and which is the attempt.
 
-Cache-aware by design: total prompt size is the sum of `input_tokens`, `cache_creation_input_tokens`, and `cache_read_input_tokens` — reporting `input_tokens` alone badly under-reports cached traffic. Cost comes from a static, user-overridable price table. See [`docs/idea/08-observability.md`](docs/idea/08-observability.md).
+Cache-aware by design: total prompt size is the sum of `input_tokens`, `cache_creation_input_tokens`, and `cache_read_input_tokens` — reporting `input_tokens` alone badly under-reports cached traffic.
+
+Cost comes from a price table shipped with the image and overridable per provider + model in the console. Twelve vendor tables cover fourteen providers — Anthropic, OpenAI, Google, z.ai, Kimi, MiniMax, Groq, DeepSeek, xAI, Mistral, Together, Cerebras — and the table carries the date its rows were last checked, so a number nobody can date is never mistaken for a current one. Four providers ship no price on purpose (OpenRouter prices per route, Ollama is your own hardware, and the two `*-compatible` escape hatches are your own contract), and an unpriced request reports **no cost rather than a zero** — a zero in a spend column is the claim that a request was free. Each account is marked `metered` or `subscription`; a subscription's usage is valued at the vendor's public API rate and reported as a **separate, notional** total, never summed with real spend. See [`docs/idea/08-observability.md`](docs/idea/08-observability.md).
 
 ---
 

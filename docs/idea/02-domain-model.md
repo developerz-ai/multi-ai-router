@@ -75,6 +75,7 @@ account per provider. The `label` is what distinguishes them to a human.
 | `tokenExpiresAt` | timestamp, optional | OAuth accounts only. Drives the per-account refresh schedule; refresh fires at a fraction of the remaining lifetime, never on a `401`, and is re-scheduled each time a new token lands |
 | `refreshState` | in-memory | This account's armed timer and its single-flight guard: every trigger for one account awaits one shared promise, never N racing writes. Plus the backoff counter for failed refreshes. A *request* is never a trigger — it neither starts nor waits on a refresh |
 | `status` | enum | `active` \| `disabled` \| `cooling_down` \| `exhausted` \| `needs_reauth`. Two kinds of writer share the column, which is why every observed write is guarded — see below |
+| `billing` | enum | `metered` \| `subscription`. **How this Account is billed, which decides how its usage is priced and nothing else** — see below. Defaults to the provider's own answer; fixed where that answer is `subscription` |
 | *(quota windows)* | separate `quota_windows` table | Per-window quota state — see below. A Claude subscription has several concurrent windows that reset independently, so they are rows keyed `(account_id, window)`, not a JSON blob on the account: each window is upserted and expires on its own clock, and one refresh must not rewrite the others. Two writers, both idempotent on that key: the replica that *observed* a reading upserts it off its request path (`QUOTA_WRITE_INTERVAL_MS`), and the quota floor clears rows whose own reset has passed |
 | `modelAliases` | json, optional | Maps the client's model name to the account's (`sonnet` → `glm-4.7`, `sonnet` → `k3`). Absent means pass the name through unchanged. Keys are **requested-side** — what a client sends |
 | `supportedModels` | json, optional | The model ids this account's upstream accepts, **upstream-side** — the side `modelAliases` points *at*, and the side a provider's own `/v1/models` returns. Absent (and `[]`) mean *unknown*, which routing reads as passthrough: the account serves whatever the client names. A non-empty list filters selection and is what `GET /v1/models` enumerates. Filled by the operator or by `POST /api/admin/accounts/:id/models/discover`; never on a timer, because a catalog that refreshed itself would change routing without anyone asking |
@@ -115,6 +116,28 @@ accounts have neither either**: their tokens live in `configDir` and are refresh
 so the router has no token lifecycle to model, schedule, or persist for them. It only observes an
 SDK-reported auth failure and sets `needs_reauth`. Refresh is expiry-driven and single-flighted,
 never a poll — see [01-architecture.md](01-architecture.md#credential-refresh-is-not-a-cron-job).
+
+**`billing` is a property of the Account, not of the Provider.** The same provider sells both:
+z.ai, Kimi and MiniMax each sell a flat-fee coding plan behind the same endpoint and the same key
+shape as their pay-per-token API, and no request the router can make tells the two apart. Only the
+operator knows which they bought, so they record it here. Two Accounts of one Provider may
+legitimately disagree — one z.ai key on a coding plan and another on the metered API sit in the same
+pool — which follows from many Accounts per Provider being the normal case, above.
+
+| Value | Means | Usage prices as |
+|---|---|---|
+| `metered` | A per-token bill | Real spend, `costBasis: "metered"` |
+| `subscription` | A flat fee for the period, with no per-request charge at all | An *attribution* — what those tokens would have cost on that vendor's public API — reported as `costBasis: "notional"` and never summed with metered spend |
+
+The **default** comes from the provider's driver, and where that default is `subscription` it is
+also the only answer: `anthropic-oauth` and `openai-oauth` are sold only that way, have no per-token
+price to meter, and their Accounts are **fixed** there. A write asking for `metered` on one of them
+is refused (`billing_fixed`), and the console omits the control rather than offering a choice that
+cannot be made. Every other provider defaults to `metered` and the operator may mark an Account as a
+plan. Deriving this from the provider id instead — the way a hardcoded set of "subscription
+providers" inside the cost estimator once did — answered two different questions the same way, and
+priced a coding-plan account exactly as it priced a pay-per-token one. Pricing rules:
+[08-observability.md](08-observability.md#cost-estimation).
 
 ### Quota window state
 

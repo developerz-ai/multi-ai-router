@@ -43,6 +43,20 @@ export const RATE_FIELDS: readonly RateField[] = [
 export interface PriceRate extends ModelRates {
   readonly provider: ProviderId
   readonly model: string
+  /**
+   * Present on a **long-context row** in `shipped`: the prompt size at which this card replaces the
+   * standard one, so a tiered model arrives as two entries under the same name.
+   *
+   * Never sent on an override, and never editable. An override is one rate for one provider +
+   * model — writing one is the operator saying "this is the price, whatever the prompt" — so the
+   * merge below folds the tier onto its model as a read-only annotation rather than a second row.
+   */
+  readonly fromPromptTokens?: number
+}
+
+/** A model's long-context tier, as the table displays it. */
+export interface LongContextRates extends ModelRates {
+  readonly fromPromptTokens: number
 }
 
 /** The operator's row for that pair. It wins over the shipped rate; it never merges with it. */
@@ -51,6 +65,12 @@ export interface PriceOverride extends PriceRate {
 }
 
 export interface PriceTable {
+  /**
+   * The day the shipped rows were last checked against their vendors, `YYYY-MM-DD`. Rendered
+   * beside the table: vendors reprice without asking, and a price table nobody can date is a table
+   * nobody can judge.
+   */
+  readonly shippedAsOf: string
   readonly shipped: readonly PriceRate[]
   readonly overrides: readonly PriceOverride[]
 }
@@ -88,6 +108,11 @@ export interface PriceRow {
   readonly shipped: ModelRates | null
   /** What cost estimation uses: the override when there is one, the shipped rate otherwise. */
   readonly rates: ModelRates
+  /**
+   * The shipped long-context tier for this model, when it has one. Display only: an override on
+   * this row replaces it, which is what makes it worth showing beside the editable numbers.
+   */
+  readonly longContext: LongContextRates | null
   readonly updatedAt: string | null
 }
 
@@ -126,7 +151,11 @@ export function mergePriceRows(
 ): readonly PriceRow[] {
   const rows = new Map<string, PriceRow>()
 
+  // Two passes over `shipped`, because a tiered model arrives as two entries under one name and
+  // only the standard one is a row: keying both by `provider:model` would have the second silently
+  // replace the first, and the table would show a long-context rate as if it were the ordinary one.
   for (const rate of shipped) {
+    if (rate.fromPromptTokens !== undefined) continue
     const id = priceRowId(rate.provider, rate.model)
     rows.set(id, {
       id,
@@ -135,13 +164,23 @@ export function mergePriceRows(
       origin: "shipped",
       shipped: ratesOf(rate),
       rates: ratesOf(rate),
+      longContext: null,
       updatedAt: null,
     })
   }
 
+  for (const rate of shipped) {
+    const from = rate.fromPromptTokens
+    if (from === undefined) continue
+    const row = rows.get(priceRowId(rate.provider, rate.model))
+    if (row !== undefined)
+      rows.set(row.id, { ...row, longContext: { ...ratesOf(rate), fromPromptTokens: from } })
+  }
+
   for (const override of overrides) {
     const id = priceRowId(override.provider, override.model)
-    const base = rows.get(id)?.shipped ?? null
+    const held = rows.get(id)
+    const base = held?.shipped ?? null
     rows.set(id, {
       id,
       provider: override.provider,
@@ -149,6 +188,7 @@ export function mergePriceRows(
       origin: classify(base, ratesOf(override)),
       shipped: base,
       rates: ratesOf(override),
+      longContext: held?.longContext ?? null,
       updatedAt: override.updatedAt,
     })
   }

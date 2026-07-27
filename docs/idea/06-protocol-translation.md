@@ -126,10 +126,11 @@ implemented embeddings answers its own `404`, and that `404` is relayed unchange
 **Its `prompt_tokens` *are* accounted, as input alone.** Unlike a token count, an embedding spends
 what it reports: `tokensIn` takes `prompt_tokens`, `tokensOut` is the zero it truthfully is, and
 `total_tokens` is read nowhere — it restates a sum this router already holds in a column that means
-something else. Embedding models are absent from the shipped price table, so the cost estimate is
-`NULL` and the basis `unknown` (see [08-observability.md](08-observability.md#cost-estimation)) —
-which is what every OpenAI-priced request reports today, and honest rather than a zero that reads as
-free.
+something else. **Embedding models are absent from every shipped vendor table** — the tables price
+completion models, and the ones an embedding request names are not in them — so the cost estimate is
+`NULL` and the basis `unknown` (see [08-observability.md](08-observability.md#cost-estimation)),
+which is honest rather than a zero that reads as free. An operator who wants their embedding traffic
+costed prices it with an override, the same way they would correct any other row.
 
 **Its ingress dialect is `openai-chat` for one purpose: the error shape.** The path is dialect-neutral
 on the wire, and `openai-chat` is what a client calling `/v1/embeddings` expects a failure to look
@@ -450,6 +451,11 @@ receives an Anthropic-shaped error even when the account that failed was an Open
 Agent-SDK one. Router-origin errors (`NoHealthyAccountError`, `QuotaExhaustedError`, …) use the same
 shape with a stable HTTP status. `param` and `code` are best-effort and may be null. No error body
 ever carries credential material or the identity of the account that failed.
+
+That last rule is enforced, not trusted: every message leaves through one function, and it runs the
+same value-level scrub the log redactor uses ([08-observability.md](08-observability.md)). Both
+halves of a body need it — a relayed upstream message can quote a key back at us, and a
+router-authored one interpolates upstream text (`"every attempt failed: …"`).
 
 One router-origin status is worth naming because it is easy to get wrong: a body over
 `MAX_REQUEST_BODY_BYTES` renders as `413` — `request_too_large` in the Anthropic vocabulary,

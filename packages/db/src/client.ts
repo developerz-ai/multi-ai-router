@@ -1,5 +1,6 @@
 import { drizzle, type PostgresJsDatabase } from "drizzle-orm/postgres-js"
 import postgres from "postgres"
+import { type PoolSample, trackPool } from "./pool-metrics"
 import * as schema from "./schema/index"
 
 /** The postgres.js connection pool backing a `Database`. */
@@ -54,6 +55,8 @@ export interface DatabaseHandle {
   readonly sql: SqlConnection
   /** Drains the pool. Call on shutdown; never on a request path. */
   close(): Promise<void>
+  /** In-flight/idle/waiting connections, for `router_db_pool_connections` — `pool-metrics.ts`. */
+  poolStats(): PoolSample
 }
 
 /**
@@ -84,8 +87,9 @@ export function createDatabase(options: DatabaseOptions): DatabaseHandle {
     throw new Error("createDatabase: `url` is empty — DATABASE_URL is required")
   }
 
-  const sql = postgres(options.url, {
-    max: options.maxConnections ?? DATABASE_POOL_DEFAULTS.maxConnections,
+  const maxConnections = options.maxConnections ?? DATABASE_POOL_DEFAULTS.maxConnections
+  const raw = postgres(options.url, {
+    max: maxConnections,
     idle_timeout: options.idleTimeoutSeconds ?? DATABASE_POOL_DEFAULTS.idleTimeoutSeconds,
     connect_timeout: options.connectTimeoutSeconds ?? DATABASE_POOL_DEFAULTS.connectTimeoutSeconds,
     max_lifetime: options.maxLifetimeSeconds ?? DATABASE_POOL_DEFAULTS.maxLifetimeSeconds,
@@ -94,6 +98,10 @@ export function createDatabase(options: DatabaseOptions): DatabaseHandle {
     prepare: true,
     onnotice: () => undefined,
   })
+  // Wrapped before Drizzle ever sees it, so `db.execute` (which calls `client.unsafe` under the
+  // hood) is tracked exactly like the raw `sql\`...\`` calls the repositories and the advisory lock
+  // make directly — one wrapper, every statement this process issues through this pool.
+  const { sql, sample } = trackPool(raw, maxConnections)
 
   const db = drizzle(sql, { schema, logger: options.logQueries ?? false })
   const closeTimeout = options.closeTimeoutSeconds ?? DATABASE_POOL_DEFAULTS.closeTimeoutSeconds
@@ -101,6 +109,7 @@ export function createDatabase(options: DatabaseOptions): DatabaseHandle {
   return {
     db,
     sql,
+    poolStats: sample,
     close: async () => {
       await sql.end({ timeout: closeTimeout })
     },

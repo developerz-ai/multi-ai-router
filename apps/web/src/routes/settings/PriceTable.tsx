@@ -18,6 +18,11 @@ export interface PriceTableProps {
   readonly onRevert: (row: PriceRow) => void
 }
 
+/** `272000` -> `272k`. A threshold is read as a magnitude, never counted digit by digit. */
+function tokenFloor(tokens: number): string {
+  return tokens >= 1_000 ? `${Math.round(tokens / 1_000)}k` : String(tokens)
+}
+
 /**
  * Every priced `(provider, model)` pair, with its four rates editable in place.
  *
@@ -30,6 +35,11 @@ export interface PriceTableProps {
  * change" is the question an operator opens this table with. When a row is
  * overridden, the shipped number stays beside it: an override is only readable
  * against what it replaced.
+ *
+ * A model with a **long-context tier** shows that tier beside its name rather than as a second
+ * row: the tier is not separately editable, because an override is one rate for one model and
+ * writing one is the operator saying "this is the price, whatever the prompt". Showing it is what
+ * makes that consequence visible before they save.
  */
 export function PriceTable(props: PriceTableProps) {
   const columns = (): readonly Column<PriceRow>[] => [
@@ -43,6 +53,13 @@ export function PriceTable(props: PriceTableProps) {
           <Badge tone={ORIGIN_TONE[row.origin]}>{row.origin}</Badge>
           <Show when={row.origin === "overridden" ? row.shipped : null}>
             {(shipped) => <span class={styles.shipped}>shipped {rateSummary(shipped())}</span>}
+          </Show>
+          <Show when={row.longContext}>
+            {(tier) => (
+              <span class={styles.shipped}>
+                from {tokenFloor(tier().fromPromptTokens)} tokens {rateSummary(tier())}
+              </span>
+            )}
           </Show>
         </div>
       ),

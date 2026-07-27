@@ -30,7 +30,7 @@ client request that hits a rate-limited account, fails over, and succeeds on the
 | `tokensIn` / `tokensOut` | int | Upstream's own numbers, never the translated ones |
 | `cacheReadTokens` / `cacheWriteTokens` | int | Where the provider reports them. Anthropic always does |
 | `costEstimate` | decimal? | See below. Null for an unknown model — never silently zero |
-| `costBasis` | enum | `metered` \| `notional` \| `unknown` |
+| `costBasis` | enum | `metered` \| `notional` \| `unknown`. Which of the first two a priced attempt takes comes from the **Account's** `billing`, not from its provider — see below |
 | `latencyMs` / `ttfbMs` | int / int? | Router-observed wall time for the attempt; time to the first relayed byte. **TTFB is what makes "zero added time-to-first-token" a measurement** — `latencyMs` is dominated by generation time and hides a buffering regression completely |
 | `routerOverheadMs` | int | Time in the router, excluding upstream — the per-record twin of `router_overhead_seconds` |
 | `outcome` | enum | `success` \| `client_error` \| `translation_failed` \| `request_too_large` \| `key_revoked` \| `scope_violation` \| `key_rate_limited` \| `no_healthy_account` \| `quota_exhausted` \| `credits_exhausted` \| `upstream_error` \| `upstream_timeout` \| `upstream_auth_failed` \| `credential_decrypt_failed` \| `router_error`. Grouped by *whose problem it is* (`packages/core/src/domain/usage.ts`). Three that share a status but never fold together: `quota_exhausted` (a window a clock refills), `credits_exhausted` (a balance a human refills), and `key_rate_limited` (one key spent its own ceiling — not the operator's capacity) |
@@ -78,19 +78,52 @@ allocated a record per attempt would be an amplifier rather than a limit. It is 
 
 | | |
 |---|---|
-| Source | A static price table shipped with the image (`services/cost/prices.ts`), keyed by `provider + model`, with input/output/cache rates. Every entry carries its provenance |
+| Source | A static price table shipped with the image: one file per vendor under `services/cost/tables/`, assembled by `services/cost/prices.ts` and keyed by `provider + model`. Four numbers per model, per million tokens — input, output, cache read, cache write. Every file records where its numbers came from and what a stale row costs |
+| Dated | `PRICE_TABLE_AS_OF` is the day every row was last checked against its vendor's published price, and it travels with the numbers: `prices.shippedAsOf` on `GET /api/admin/settings`, `router_price_table_asof_timestamp_seconds` on `/metrics`. **Update it in the same commit as any edit under `tables/`, and never without one** — a table nobody can date is a table nobody can judge, and its age is the only staleness signal an operator has |
+| Coverage | Twelve vendor tables answer for fourteen providers. `anthropic-api` and `anthropic-oauth` share the Anthropic table; `openai-api` and `openai-oauth` share the OpenAI one; `gemini`, `zai`, `kimi`, `minimax`, `groq`, `deepseek`, `xai`, `mistral`, `together` and `cerebras` each have their own. **Four providers ship no price on purpose** — [below](#the-four-providers-that-ship-no-price) |
 | Override | The operator edits or extends it in `/settings`, stored in `price_overrides` and held in a warm book beside the routing catalog. An override wins for the provider + model it names; the shipped table stays the fallback for everything else, so correcting one stale rate never costs the rest of the table. Same staleness bound as the catalog, because a price edited on another replica reaches this one the same way |
-| Which model | The **upstream** model, after the Account's alias map — that is the name the upstream billed. A dated snapshot (`…-20251001`) prices as its family, which is how the provider prices the pin |
-| Unknown model | `costEstimate` is null and `costBasis` is `unknown` — never silently zero, never guessed. Same for a provider with no published per-model list: an aggregator's price depends on the route it chose, and a `*-compatible` endpoint is the operator's own contract |
+| Which model | The **upstream** model, after the Account's alias map — that is the name the upstream billed. A dated snapshot (`…-20251001`, `…-2025-04-14`) prices as its family, which is how the provider prices the pin. A snapshot the vendor prices apart from its family is named in full in its table, and the exact name is tried first |
+| Long-context tiers | A model whose vendor publishes a long-context rate carries a second card that **replaces** the standard one once the prompt reaches its threshold — OpenAI above 272k, Google and xAI above 200k. Replaces, not tops up: those vendors bill the *entire* request at the higher rate once the prompt crosses the line, and charging only the excess would understate a long-context request by roughly half. The prompt measured is `tokensIn + cacheReadTokens + cacheWriteTokens` — how much context the request carried, not how much of it missed the cache. An **override is deliberately flat**: one written for a tiered model replaces both tiers, which is the operator saying "this is the rate, whatever the prompt" |
+| Unknown model | `costEstimate` is null and `costBasis` is `unknown` — never silently zero, never guessed. A family released after the image was built, or an older snapshot the vendor no longer lists, prices as unknown rather than as the nearest thing to it |
 | Priced, no tokens | `0` with a real basis. Zero tokens against a known rate is a measurement, not an admission |
-| Cache rates | Where a provider states them as multiples of its input rate, they are derived, not restated. A response never says which cache TTL was written, so the cheaper default is assumed — cache writes read low, never high |
+| Cache rates | A model whose vendor publishes no cached-input price bills cached tokens at the **full input rate** — a discount nobody published is not assumed. A missing cache-*write* price is zero, because every vendor here except Anthropic bills the write as ordinary input on the call that created it, and charging again would double-count it. Anthropic's two are derived from its published multiples of input (0.1× read, 1.25× write) rather than restated per row; a response never says which cache TTL was written, so the 5-minute default is assumed and writes read low, never high |
 | Estimated where computed | On the attempt, when the attempt ran. The price table and the alias map both change; a report needs what it cost then, not what the same tokens would cost today |
 
-**Subscription accounts have no per-token price.** A Claude Max or ChatGPT/Codex account is a flat
-monthly fee, so any per-request "cost" is an attribution, not a charge. Those rows are marked
-`costBasis: "notional"` and valued at the equivalent public API price ("what this would have cost on
-the API"). Metered and notional spend are shown as **separate totals**, never summed; notional figures
-are marked with a one-line explanation, and "most expensive key" rankings default to metered.
+### The four providers that ship no price
+
+Absent from the table and staying absent, because for each of them a shipped number would be a
+fiction rather than a stale fact. Their attempts report `costBasis: "unknown"`, and the operator's
+own override is the way to price them.
+
+| Provider | Why no shipped rate |
+|---|---|
+| `openrouter` | The price is whichever upstream it routed to, decided per request. One table would price every route as one |
+| `ollama` | The operator's own hardware. There is no per-token price to state, and `0` would claim electricity is free rather than that nobody billed for tokens |
+| `openai-compatible` / `anthropic-compatible` | The operator's own contract with whatever sits behind the base URL they supplied. Only they know the rate — which is what overrides are for |
+
+### Metered, notional, unknown
+
+Three bases, and the third is a feature.
+
+| Basis | When | Reported as |
+|---|---|---|
+| `metered` | A priced model on a pay-per-token account | Real spend |
+| `notional` | A priced model on a **subscription** account. A flat fee has no per-request charge, so the figure is an attribution — "what these tokens would have cost on that vendor's API" | A separate total, **never summed with metered** |
+| `unknown` | No rate for that provider + model, or no provider at all | NULL, never zero |
+
+**The basis comes from the Account, not from the provider.** `accounts.billing` is either `metered`
+or `subscription` ([02-domain-model.md](02-domain-model.md#account)), because the same provider sells
+both: z.ai, Kimi and MiniMax each sell a flat-fee coding plan behind the same endpoint and the same
+key shape as their metered API, and nothing on the wire tells them apart. Only the operator can say
+which they bought. The two providers sold *only* as a subscription (`anthropic-oauth`,
+`openai-oauth`) declare it on their driver and their accounts are fixed there — there is no
+per-token price to meter, so the API refuses a `metered` write with `billing_fixed`. Everything else
+defaults to `metered`.
+
+A subscription account's tokens are valued against that vendor's public API table — the Anthropic
+table for Claude subs, the OpenAI one for ChatGPT/Codex. Metered and notional spend are shown as
+**separate totals**, never summed; notional figures are marked with a one-line explanation, and
+"most expensive key" rankings default to metered.
 
 ## Usage reporting
 
@@ -361,9 +394,14 @@ identity beyond its label.
 | `router_upstream_duration_seconds` | histogram | `provider`, `account_id`, `streamed` | Upstream time alone. Together with the above, the two halves always add up |
 | `router_upstream_attempts_total` | counter | `provider`, `account_id`, `outcome` | Upstream attempts — one per `UsageRecord` row |
 | `router_tokens_total` | counter | `provider`, `account_id`, `model`, `direction` (`input`\|`output`\|`cache_read`\|`cache_creation`) | Tokens consumed. `input` is the uncached remainder — sum all three input directions for prompt size |
+| `router_cost_basis_total` | counter | `provider`, `model`, `basis` (`metered`\|`notional`\|`unknown`) | **How much of this deployment's traffic the price table can see.** Every attempt that reached an account, priced or not — a counter that moved only for the priced ones would report 100% coverage of whatever it happened to cover. `basis="unknown"` over the total is the coverage ratio: the fraction of spend nobody here can report. Counted per attempt rather than in dollars, because a dollar sum would answer the question with the very number that is missing. Labelled by model (the name the client asked for, as on `router_tokens_total`) so a table gone stale against a renamed family shows up as one model going unknown rather than as a total quietly drifting |
+| `router_price_table_asof_timestamp_seconds` | gauge | — | Unix time the shipped price table was last verified against its vendors (`PRICE_TABLE_AS_OF`). **Age is the signal** — `time() - router_price_table_asof_timestamp_seconds` past what the deployment tolerates is the alert. Fixed for the life of the process; absent rather than zero if the date fails to parse, because an epoch timestamp would claim the table was verified in 1970 |
+| `router_price_overrides_loaded_timestamp_seconds` | gauge | — | Unix time the operator's price overrides were last loaded. **Absent until the first successful load.** Read it beside the gauge above: that one says how stale the shipped defaults are, this one says whether the corrections layered over them are arriving at all |
 | `router_upstream_errors_total` | counter | `provider`, `account_id`, `status`, `error_class` | Upstream failures by kind |
 | `router_failovers_total` | counter | `pool_id`, `from_provider`, `reason` (`rate_limited`\|`exhausted`\|`upstream_error`\|`timeout`) | Times a request moved to the next candidate |
 | `router_accounts` | gauge | `provider`, `status` (`active`\|`disabled`\|**`cooling_down`**\|**`exhausted`**\|`needs_reauth`) | Accounts by status. `cooling_down` and `exhausted` are **separate label values and never summed** — one comes back on a clock, the other needs a human. Alert on them differently |
+| `router_breaker_state` | gauge | `account_id`, `phase` (`closed`\|`open`\|`half-open`\|`blocked`) | The breaker's own `phase()`, not the stored `status` above: `router_accounts{status="cooling_down"}` cannot say whether the reset has already passed. One series per account per phase, `1` for the current one and `0` for the rest, cleared and rebuilt every scrape so a deleted account stops reporting rather than reads stale |
+| `router_breaker_probe_admissions_total` | counter | `result` (`admitted`\|`refused`) | Half-open gate decisions (`HealthStore.admitProbe`, pairs with `phase="half-open"` above). `admitted` is the one request that got the hold; `refused` is every other request behind it finding it already taken — not an error, the gate working as designed. Sustained `refused` under sustained `half-open` means requests are queuing behind one probe per recovering account |
 | `router_quota_utilization` | gauge | `account_id`, `window` (`five_hour`\|`seven_day`\|`seven_day_opus`\|`seven_day_sonnet`\|`provider_specific`) | Fraction of a quota window consumed |
 | `router_quota_reset_seconds` | gauge | `account_id`, `window`, `source` (`provider-reported`\|`estimated`\|`unknown`) | Seconds until reset. Absent for `exhausted` accounts — there is no reset to report |
 | `router_quota_last_checked_timestamp_seconds` | gauge | `account_id` | When the utilization above was last refreshed. Read the two together or you are alerting on a stale number |
@@ -372,6 +410,7 @@ identity beyond its label.
 | `router_usage_write_failures_total` | counter | `disposition` (`retried`\|`discarded`) | Records in a batch the database refused. `retried` went back for one more try on the next flush — reporting is late, nothing is lost. `discarded` was refused twice and is **gone**. **Never summed**: a deployment where the first is occasionally noisy and the second is flat zero is working exactly as designed, and an alert on the sum pages for every blip. Alert on `discarded` |
 | `router_sdk_subprocesses` | gauge | — | `claude` subprocesses running on this replica right now. Against `CLAUDE_SDK_MAX_CONCURRENCY` this is **memory in use**, not throughput — every one of them is a ~245 MB native binary ([09-deployment.md](09-deployment.md#sizing)). Per replica, like the gate itself. Counts the console's "Test now" probe too: it spawns the same process and takes the same slot |
 | `router_sdk_subprocess_queue_depth` | gauge | — | Subscription requests **waiting** for a subprocess slot. Zero at any occupancy is a ceiling that fits; sustained depth is the signal to raise `CLAUDE_SDK_MAX_CONCURRENCY` (if RAM allows) or add a replica. Read it with the gauge above: full-and-empty is saturated-but-sufficient, full-and-queuing is not |
+| `router_db_pool_connections` | gauge | `state` (`in_use`\|`idle`\|`waiting`) | Postgres connections against the fixed pool ceiling (`DB_POOL_MAX`, one pool for the admin plane, the scheduler's sweeps, and the off-path writers at once). **Approximated**, not read from the driver: postgres.js exposes no reserved/idle/waiting counts, so this counts concurrently in-flight statements instead (`packages/db/src/pool-metrics.ts`) — below the ceiling that is exactly the connections doing work, at or beyond it the excess is the driver's own internal queue admitting them one at a time. Sustained `waiting` is the signal to raise `DB_POOL_MAX` or find the query holding a connection too long |
 | `router_task_*` | — | `task` | Background task health — see [Scheduled task visibility](#scheduled-task-visibility) |
 
 Label discipline: no unbounded label values. `key_id` and `account_id` are bounded by the
@@ -387,9 +426,10 @@ knowing which clock each one is on:
 
 | Series | Fed from | Reads as |
 |---|---|---|
-| Everything per **attempt** (`router_upstream_*`, `router_tokens_total`, `router_overhead_seconds`, `router_failovers_total`) | The usage recorder's **batch drain** — the same background pass that writes the rows | Lags a scrape by at most one flush interval. Never costs a request anything |
+| Everything per **attempt** (`router_upstream_*`, `router_tokens_total`, `router_cost_basis_total`, `router_overhead_seconds`, `router_failovers_total`) | The usage recorder's **batch drain** — the same background pass that writes the rows | Lags a scrape by at most one flush interval. Never costs a request anything |
 | `router_requests_total`, `router_request_duration_seconds` | Once per client request, where the request ends | Duration is measured to the response being handed back. A **streamed** body drains after that, so a streamed sample is time-to-response, not time-to-last-token — never average the two `streamed` label values together |
-| `router_accounts`, `router_quota_*`, `router_usage_queue_depth`, `router_sdk_subprocess*` | Sampled **per scrape** from the same warm state the request path reads | Cannot disagree with the router about which accounts are cooling down, or about how many subprocesses it is holding. A gauge mirrored on every acquire would put bookkeeping on the path the gate exists to bound |
+| `router_accounts`, `router_quota_*`, `router_usage_queue_depth`, `router_sdk_subprocess*`, `router_price_overrides_loaded_timestamp_seconds` | Sampled **per scrape** from the same warm state the request path reads | Cannot disagree with the router about which accounts are cooling down, or about how many subprocesses it is holding. A gauge mirrored on every acquire would put bookkeeping on the path the gate exists to bound |
+| `router_price_table_asof_timestamp_seconds` | Set once at construction | The date is compiled into the image; nothing at runtime can move it |
 | `router_task_*` | Each settled scheduler tick | `skipped_locked` records a run that never happened: no duration, no items, and the failure streak is left alone |
 
 Two deliberate absences. `router_overhead_seconds` has no sample for a request rejected before an
@@ -529,8 +569,22 @@ JSON lines to stdout, one object per event. The container logs; shipping them is
 upstream credentials or tokens, OAuth `code` / `state` / `code_verifier`, cookies, `Authorization`,
 `x-api-key`, and `x-goog-api-key` headers. The redactor also catches a credential that arrives under
 an honest-looking field name — JWTs, `postgres://user:pass@host` connection strings, a key in a
-query string, and the vendor key shapes (`sk-`, `AIza`, `ghp_`, `xai-`, `gsk_`). Redaction is
-default-on and is a tested unit — see [07-security.md](07-security.md).
+query string, `Bearer` and `Basic` header values, and the vendor key shapes (`sk-`, `AIza`, `ghp_`,
+`xai-`, `gsk_`). Redaction is default-on and is a tested unit — see
+[07-security.md](07-security.md).
+
+Three properties of the redactor are load-bearing enough to state:
+
+- **The whole line is covered, `msg` included.** Every call site passes a constant message today;
+  the scrub is there so the day one interpolates an upstream's reply, the guarantee above still
+  holds.
+- **Field names match with `-` and `_` stripped.** `api-key`, `api_key`, and `apiKey` are one
+  field, and so are `encryption_key` and `encryptionKey` — a call site cannot open a hole by
+  picking the separator the list happens not to carry. There is deliberately no bare `key` marker:
+  `keyId` and `keyName` are on every request-scoped line and are how an operator reads it.
+- **It fails closed.** The walk stops at four levels of nesting and redacts whatever is below.
+  `Error`, `Map`, and `Set` values keep their payload somewhere `Object.entries` cannot see, so
+  each is unwrapped and scrubbed rather than serialized as an empty object.
 
 ## Audit events
 

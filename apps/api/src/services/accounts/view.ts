@@ -1,4 +1,4 @@
-import type { AccountStatus, Dialect, ProviderId } from "@multi-ai-router/core"
+import type { AccountBilling, AccountStatus, Dialect, ProviderId } from "@multi-ai-router/core"
 import type { AccountRow, ModelAliasMap, SupportedModelList } from "@multi-ai-router/db"
 import type { AccountAvailability } from "./availability"
 
@@ -39,6 +39,12 @@ export interface AccountView {
   readonly supportedModels: SupportedModelList | null
   readonly weight: number
   readonly priority: number
+  /**
+   * Per-token bill or flat fee — the one input to whether this account's usage is reported as spend
+   * or as an attribution. Not a credential fact and not a routing one: it changes a cost column and
+   * nothing else.
+   */
+  readonly billing: AccountBilling
   readonly tokenExpiresAt: string | null
   readonly createdAt: string
   readonly updatedAt: string
@@ -64,6 +70,7 @@ export function toAccountView(row: AccountRow): AccountView {
     supportedModels: row.supportedModels,
     weight: row.weight,
     priority: row.priority,
+    billing: row.billing,
     tokenExpiresAt: row.tokenExpiresAt?.toISOString() ?? null,
     createdAt: row.createdAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),

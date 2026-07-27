@@ -11,13 +11,12 @@ export type { AdvisoryLockRun } from "./advisory-lock"
 // --- leader election --------------------------------------------------------
 export { advisoryLockKey, advisoryUnlock, tryAdvisoryLock, withAdvisoryLock } from "./advisory-lock"
 export type { Database, DatabaseHandle, DatabaseOptions, SqlConnection } from "./client"
-
 // --- connection -------------------------------------------------------------
 export { createDatabase, DATABASE_POOL_DEFAULTS } from "./client"
 export type { MigrateOptions } from "./migrate"
-
 // --- migrations -------------------------------------------------------------
 export { defaultMigrationsFolder, runMigrations } from "./migrate"
+export type { PoolSample } from "./pool-metrics"
 export type {
   AccountListFilter,
   AccountRepository,

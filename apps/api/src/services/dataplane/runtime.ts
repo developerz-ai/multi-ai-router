@@ -138,6 +138,10 @@ export function createRuntime(input: RuntimeInput): DispatchRuntime {
       provider: servable.account.driver.provider,
       upstreamModel: servable.upstreamModel,
       egressMode: servable.egressMode,
+      // The selected account's own billing mode, which is what decides whether this attempt's cost
+      // is spend or an attribution. Read here rather than at write time for the same reason the
+      // price book is: every attempt of one request is priced against the world as it was.
+      billing: servable.account.billing,
     }),
 
     preflightAttribution: () => ({

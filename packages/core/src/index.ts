@@ -7,7 +7,9 @@
  */
 
 export {
+  AccountBilling,
   AccountStatus,
+  DEFAULT_ACCOUNT_BILLING,
   isStandingBlock,
   QuotaWindowKind,
   QuotaWindowState,

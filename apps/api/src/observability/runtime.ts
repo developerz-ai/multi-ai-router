@@ -1,8 +1,10 @@
 import type { Logger } from "../logging/logger"
 import type { SdkConcurrency } from "../providers"
+import type { PriceBook } from "../services/cost"
 import { type HealthStore, overlayHealth, type RoutingCatalog } from "../services/dataplane"
+import { phase } from "../services/routing"
 import type { UsageRecorder } from "../services/usage"
-import { createMetrics, type RouterMetrics } from "./metrics"
+import { createMetrics, type DbPoolSample, type RouterMetrics } from "./metrics"
 
 /**
  * The router's metrics as the running process wires them: the registry, plus the gauges that
@@ -33,6 +35,18 @@ export interface RuntimeMetricsDeps {
    * ceiling of zero that nothing is holding.
    */
   readonly sdkConcurrency?: Pick<SdkConcurrency, "inFlight" | "queued">
+  /**
+   * The warm override book, for its load timestamp. Optional so a build without a database-backed
+   * book still exports every other series: the gauge is absent, which says "no overrides here"
+   * rather than claiming a load that never happened.
+   */
+  readonly prices?: Pick<PriceBook, "loadedAt">
+  /**
+   * The pool wrapper's own sample (`packages/db/src/pool-metrics.ts`). Optional for the same reason
+   * as `sdkConcurrency`: a build wired against a stub `Database` in a test still exports every other
+   * series, with this one simply absent rather than claiming a pool that was never measured.
+   */
+  readonly dbPool?: { sample(): DbPoolSample }
   readonly logger: Logger
   readonly now?: () => Date
   /** Stamped onto `router_build_info{revision}`; `env.revision`, which defaults to `unknown`. */
@@ -49,25 +63,35 @@ export function createRuntimeMetrics(deps: RuntimeMetricsDeps): RouterMetrics {
       deps.logger.warn("metric stopped adding series", { component: "observability", metric }),
   })
 
+  const at = deps.now ?? (() => new Date())
+
   metrics.onCollect(() => {
+    const now = at()
     metrics.setAccounts(
       deps.catalog.accounts().map((account) => {
-        const snapshot = overlayHealth(account.snapshot, deps.health.stateOf(account.id))
+        const state = deps.health.stateOf(account.id)
+        const snapshot = overlayHealth(account.snapshot, state)
         return {
           id: account.id,
           provider: snapshot.provider,
           status: snapshot.status,
           quotaWindows: snapshot.quotaWindows,
+          breakerPhase: phase(state.breaker, now),
         }
       }),
     )
 
     metrics.setUsageQueue(deps.usage().stats())
+    metrics.setProbeAdmissions(deps.health.probeStats())
 
     const sdk = deps.sdkConcurrency
     if (sdk !== undefined) {
       metrics.setSdkConcurrency({ inFlight: sdk.inFlight, queued: sdk.queued })
     }
+
+    if (deps.dbPool !== undefined) metrics.setDbPool(deps.dbPool.sample())
+
+    if (deps.prices !== undefined) metrics.setPriceOverridesLoadedAt(deps.prices.loadedAt())
   })
 
   return metrics

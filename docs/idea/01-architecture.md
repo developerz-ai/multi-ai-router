@@ -131,10 +131,11 @@ approximated. See [00-overview.md](00-overview.md) for the product boundary and
 | providers (HTTP driver) | One driver per HTTP Provider: dialect, endpoints, headers, failure classification | `apps/api/src/providers/**` |
 | providers (SDK driver) | Claude subscriptions only: `claude-agent-sdk` subprocess per request, per-Account `CLAUDE_CONFIG_DIR`, SDK-event → wire-format re-synthesis, `rate_limit_event` quota signals — [11-anthropic-agent-sdk.md](11-anthropic-agent-sdk.md) | `apps/api/src/providers/claude-sdk/**` |
 | translation | Ingress ⇄ egress dialect conversion, streaming and non-streaming | `apps/api/src/services/translate/**` |
-| usage | Usage records, cost estimation, rollups, metrics exposition | `apps/api/src/services/usage/**` |
+| usage | Usage records, rollups, metrics exposition | `apps/api/src/services/usage/**` |
+| cost | The shipped price table (one file per vendor), the operator's warm override book, and the pure pricing arithmetic | `apps/api/src/services/cost/**` |
 | scheduler | Every periodic task: jittered in-process interval timers, Postgres advisory-lock leader election, retention sweeps, usage rollup, OAuth-state purge, last-run/outcome recording | `apps/api/src/scheduler/**` |
 | db | Drizzle schema over **PostgreSQL 16+** (postgres.js), migrations, repositories — the only place with SQL | `packages/db/**` |
-| config | Zod-validated env, retention knobs, price table | `packages/core/**`, `apps/api/src/config/**` |
+| config | Zod-validated env, retention knobs, shared types and errors | `packages/core/**`, `apps/api/src/config/**` |
 
 Everything is wired together in `apps/api/src/composition.ts` — see
 [The composition root](#the-composition-root).

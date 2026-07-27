@@ -1,4 +1,5 @@
 import type {
+  AccountBilling,
   AuthKind,
   Dialect,
   OpenAiChatCeiling,
@@ -221,6 +222,15 @@ export interface ProviderDriver {
   /** The surface used when the Account expresses no preference. */
   readonly dialect: Dialect
   readonly authKind: AuthKind
+  /**
+   * What an Account of this provider is billed as unless the operator says otherwise — the default
+   * a new Account takes, and a fixed answer where the value is `subscription`.
+   *
+   * Here rather than in a set inside the cost estimator for the reason non-negotiable 12 gives:
+   * adding a provider is a driver file, and "how is this one sold" is a fact about the provider,
+   * not a branch in a shared module that has to be edited every time one is added.
+   */
+  readonly billing: AccountBilling
   /**
    * Present only where the router connects an account by driving an authorization-code flow
    * itself. Absent for API-key providers, and absent for Claude subscriptions for a stronger

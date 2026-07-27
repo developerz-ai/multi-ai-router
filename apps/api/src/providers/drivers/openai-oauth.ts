@@ -270,6 +270,9 @@ const DEACTIVATED_CODES = ["account_deactivated"]
 const codex = createHttpDriver({
   id: "openai-oauth",
   authKind: "oauth",
+  // A ChatGPT plan is the flat monthly fee itself: there is no per-token price on this surface at
+  // all, so its usage prices as an attribution against the OpenAI API table, never as spend.
+  billing: "subscription",
   surfaces: [{ dialect: "openai-responses", baseUrl: CHATGPT_CODEX_BASE_URL }],
   readFacts: readCodexFacts,
   parseRateLimit: parseCodexRateLimit,

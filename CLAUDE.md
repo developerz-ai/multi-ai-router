@@ -87,7 +87,8 @@ One reason to change per layer. Don't blur.
 | Providers | Per-upstream drivers, OAuth flows, pinned constants | `apps/api/src/providers/` |
 | Claude SDK | Agent SDK `query()` calls, per-Account `CLAUDE_CONFIG_DIR` lifecycle, `rate_limit_event` → quota state, SDK-output → wire-format re-synthesis | `apps/api/src/providers/claude-sdk/` |
 | Translation | Ingress dialect × egress dialect conversion, streaming, tool calls | `apps/api/src/services/translate/` |
-| Usage | UsageRecord writes, cost estimation, rollups | `apps/api/src/usage/` |
+| Usage | UsageRecord writes, rollups | `apps/api/src/services/usage/` |
+| Cost | Shipped price tables, operator overrides, per-attempt estimation | `apps/api/src/services/cost/` |
 | Scheduler | Every periodic task — jittered in-process timers, `pg_try_advisory_lock` per task, `ScheduledTaskRun` last-run records. Retention sweeps (the janitor) are one task among several: usage rollup, OAuth-state purge, quota floor | `apps/api/src/scheduler/` |
 | DB | Drizzle schema, migrations, repositories | `packages/db/` |
 | Config | Zod env schema, boot validation, shared types + errors | `packages/core/` |

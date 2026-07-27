@@ -75,6 +75,9 @@ interface ProviderDriver {
   // `none` is the local endpoint that authenticates nobody — the only value under which a
   // driver will address an upstream with no credential at all.
   readonly authKind: 'api-key' | 'oauth' | 'none';
+  // How an Account of this provider is billed unless the operator says otherwise. `subscription`
+  // means sold *only* that way, and its Accounts are fixed there — see below.
+  readonly billing: 'metered' | 'subscription';
 
   // Where this Account's requests go. Account override wins over the pinned default.
   resolveBaseUrl(account: DriverAccount): URL;
@@ -119,6 +122,17 @@ interface ProviderDriver {
 Every member is **pure**: no clock, no store, no logger, no network. `RateLimitSignal` carries at
 minimum whether the account is limited now, the reported reset instant (if any), and per-window
 utilization (if any), each labeled with its source.
+
+**`billing` is a default, not the answer.** It says how this provider is *sold*, which is a fact
+about the provider and therefore belongs in its one file
+([non-negotiable 12](../../CLAUDE.md)) — not in a list somewhere else that has to be edited every
+time a driver lands. It is a **default** because the reverse implication does not hold: a metered
+provider's key may be attached to a flat-fee coding plan (z.ai, Kimi and MiniMax all sell one behind
+the same endpoint and key shape), and only the operator knows. Where the value is `subscription` the
+provider is sold *only* that way, has no per-token price to meter, and its Accounts are fixed there.
+What an individual Account is billed as lives on the Account
+([02-domain-model.md](02-domain-model.md#account)), and it decides how usage is priced and nothing
+else — never routing, never a model choice.
 
 Two members from the original design are **deliberately absent**: `probeHealth` (I/O, owned by the
 half-open probe) and `refreshCredentials` (I/O as well). `openai-oauth` is what settles the second
