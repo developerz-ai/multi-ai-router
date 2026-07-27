@@ -65,9 +65,9 @@ endpoint behind them.
 |---|---|---|
 | `/login` | Sign-in | Outside the shell. Posts to `/api/admin/auth/login`; `?next=` returns you to the surface your session expired on |
 | `/` | Overview | Live account/pool/key counts, accounts-by-status, and a **red banner naming every `exhausted` account** |
-| `/accounts` | Accounts | Status, availability, credential kind, re-check per account and for all, add, disable, delete |
+| `/accounts` | Accounts | Status, availability, credential kind, re-check per account and for all, add, **edit** (label, credential rotation, endpoint, dialect, model set and aliases, weight, priority), disable, delete |
 | `/pools` | Pools | Membership, policy, overflow account, and how many members are routable *now* |
-| `/keys` | Keys | Named, scoped, mint, revoke, delete — and **reveal, any time, no shown-once flow** |
+| `/keys` | Keys | Named, scoped, mint, **edit** (name, scope, rate limit, expiry — never the value), revoke, delete — and **reveal, any time, no shown-once flow** |
 | `/usage` | Usage | Any dimension × any window, from `GET /api/admin/usage`. Requests and attempts, and metered and notional spend, are shown as separate measures and never summed |
 | `/settings` | Settings | Live session and provider registry; prices, retention, task health and audit still unbuilt |
 | `*` | Not found | Inside the layout |

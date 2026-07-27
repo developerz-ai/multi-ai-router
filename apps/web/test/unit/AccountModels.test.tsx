@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import { render } from "solid-js/web"
+import { parseModelList } from "../../src/lib/account-models"
 import type { ProviderTransport } from "../../src/lib/api/types"
-import { parseModelList } from "../../src/routes/accounts/AccountFormDialog"
 import { AccountModels } from "../../src/routes/accounts/AccountModels"
 
 /**

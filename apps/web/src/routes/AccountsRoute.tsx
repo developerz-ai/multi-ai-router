@@ -28,6 +28,7 @@ import { useProviders } from "../lib/queries/providers"
 import { useTableUsage } from "../lib/queries/table-usage"
 import styles from "./AccountsRoute.module.scss"
 import { AccountConnect } from "./accounts/AccountConnect"
+import { AccountEditDialog } from "./accounts/AccountEditDialog"
 import { AccountFormDialog } from "./accounts/AccountFormDialog"
 import { AccountsTable } from "./accounts/AccountsTable"
 
@@ -43,6 +44,7 @@ export default function AccountsRoute() {
   const [status, setStatus] = createSignal<AccountStatus | "">("")
   const [provider, setProvider] = createSignal<ProviderId | "">("")
   const [adding, setAdding] = createSignal(false)
+  const [editing, setEditing] = createSignal<AccountView | null>(null)
   const [pendingDelete, setPendingDelete] = createSignal<AccountView | null>(null)
   const [connecting, setConnecting] = createSignal<AccountView | null>(null)
 
@@ -69,6 +71,13 @@ export default function AccountsRoute() {
     return account === null ? null : connectFlowFor(account)
   })
 
+  // The edit form reads every one of its rules off the descriptor — which login this
+  // provider takes, whether it needs an address, which dialects it serves.
+  const editingProvider = createMemo(() => {
+    const account = editing()
+    return account === null ? undefined : providerFor(account)
+  })
+
   const usage = useTableUsage("account")
 
   const create = useCreateAccount()
@@ -83,6 +92,16 @@ export default function AccountsRoute() {
   const closeForm = () => {
     create.reset()
     setAdding(false)
+  }
+
+  const openEdit = (account: AccountView) => {
+    update.reset()
+    setEditing(account)
+  }
+
+  const closeEdit = () => {
+    update.reset()
+    setEditing(null)
   }
 
   const closeDelete = () => {
@@ -191,6 +210,7 @@ export default function AccountsRoute() {
               onDelete={setPendingDelete}
               onDisable={(account) => disable.mutate(account.id)}
               onDiscoverModels={(id) => discover.mutate(id)}
+              onEdit={openEdit}
               onEnable={(account) => update.mutate({ id: account.id, patch: { status: "active" } })}
               onRecheck={(id) => recheck.mutate(id)}
               onTest={(input) => test.mutate(input)}
@@ -221,6 +241,20 @@ export default function AccountsRoute() {
         }
         open={adding()}
         providers={providerList()}
+      />
+
+      <AccountEditDialog
+        account={editing()}
+        busy={update.isPending}
+        error={update.error}
+        onClose={closeEdit}
+        onSubmit={(patch) => {
+          const target = editing()
+          if (target === null) return
+          update.mutate({ id: target.id, patch }, { onSuccess: closeEdit })
+        }}
+        open={editing() !== null}
+        provider={editingProvider()}
       />
 
       <AccountConnect

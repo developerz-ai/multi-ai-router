@@ -18,63 +18,45 @@
 // A field is a grid of label/control/hint, and a grid row stretches to its
 // tallest sibling — so a two-line hint on one side pushes the *other* side's
 // input down the cell to fill the slack, and the pair renders visibly stepped.
-// The rows are content-height; only the cell is tall.
 .pair > * {
   align-content: start;
 }
 
-.targets {
-  display: grid;
-  gap: var(--space-2);
-  padding: 0;
-  border: 0;
-}
-
-.legend {
-  @include eyebrow;
-
-  padding: 0;
-  color: var(--text-muted);
-}
-
-.list {
-  display: grid;
-  gap: var(--space-1);
-  max-height: 13rem;
-  overflow-y: auto;
-  overscroll-behavior: contain;
-  padding: var(--space-2);
+// A fact about this account the form cannot change, stated where the operator
+// would otherwise go looking for a control.
+.note {
+  padding: var(--space-3);
   border: 1px solid var(--border);
   border-radius: var(--radius-1);
   background: var(--surface-sunken);
-}
-
-.target {
-  @include tappable(2rem);
-
-  display: flex;
-  gap: var(--space-2);
-  align-items: center;
-  padding-inline: var(--space-2);
-  border-radius: var(--radius-1);
-  font-size: var(--text-sm);
-  cursor: pointer;
-}
-
-.target:hover {
-  background: var(--surface-raised);
-}
-
-.checkbox {
-  flex: none;
-  width: 1rem;
-  height: 1rem;
-  accent-color: var(--accent);
-}
-
-.empty {
   color: var(--text-muted);
+  font-size: var(--text-xs);
+  line-height: var(--line-snug);
+}
+
+// Monospaced: an alias map is aligned pairs, and a proportional font hides a
+// stray space on one side of the `=`.
+.aliases {
+  width: 100%;
+  min-height: 4.5rem;
+  padding: var(--space-2) var(--space-3);
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-1);
+  color: var(--text);
+  font-family: var(--font-mono);
   font-size: var(--text-sm);
+  line-height: var(--line-snug);
+  resize: vertical;
+  transition: border-color var(--duration-fast) var(--ease-out);
+}
+
+.aliases:hover {
+  border-color: var(--accent);
+}
+
+.aliases:focus-visible {
+  @include focus-ring;
 }
 
 .blocked {
@@ -93,4 +75,10 @@
   background: color-mix(in srgb, var(--danger) 10%, var(--surface-overlay));
   font-size: var(--text-sm);
   line-height: var(--line-snug);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .aliases {
+    transition: none;
+  }
 }

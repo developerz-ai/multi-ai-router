@@ -1,11 +1,12 @@
 import type { KeyScope } from "@multi-ai-router/core"
-import { createSignal, For, Show } from "solid-js"
+import { createEffect, createSignal, For, on, Show } from "solid-js"
 import { Button } from "../../components/Button"
 import { SelectField, TextField } from "../../components/Field"
 import { Modal } from "../../components/Modal"
 import { errorMessage } from "../../lib/api/errors"
-import type { CreateKeyInput, KeyScopeInput } from "../../lib/api/router-keys"
-import type { AccountView, PoolView } from "../../lib/api/types"
+import type { CreateKeyInput, KeyScopeInput, RateLimitInput } from "../../lib/api/router-keys"
+import type { AccountView, ApiKeyView, PoolView } from "../../lib/api/types"
+import { fromDateTimeInput, toDateTimeInput } from "../../lib/datetime-input"
 import styles from "./KeyFormDialog.module.scss"
 
 const SCOPES: readonly (readonly [KeyScope, string])[] = [
@@ -14,18 +15,37 @@ const SCOPES: readonly (readonly [KeyScope, string])[] = [
   ["accounts", "accounts — an explicit account list, ignoring pools"],
 ]
 
+/**
+ * The form's whole answer, with every optional field **stated** rather than
+ * omitted.
+ *
+ * On a mint an absent ceiling and an absent expiry are the same thing as `null`,
+ * so the route drops them. On an edit they are not: `null` is what *clears* a
+ * ceiling or makes a key non-expiring, and a form that omitted them could only
+ * ever add one. Saying both explicitly here is what makes the edit path able to
+ * express a removal at all.
+ */
+export interface KeyFormValues {
+  readonly name: string
+  readonly scope: KeyScopeInput
+  readonly rateLimit: RateLimitInput | null
+  readonly expiresAt: string | null
+}
+
 export interface KeyFormDialogProps {
   readonly open: boolean
+  /** `null` mints a new key; a key edits that one. The value is never touched either way. */
+  readonly apiKey: ApiKeyView | null
   readonly pools: readonly PoolView[]
   readonly accounts: readonly AccountView[]
   readonly busy: boolean
   readonly error: unknown
-  readonly onSubmit: (input: CreateKeyInput) => void
+  readonly onSubmit: (values: KeyFormValues) => void
   readonly onClose: () => void
 }
 
 /**
- * Mint a router key.
+ * Mint or edit a router key.
  *
  * The name is required rather than optional-with-a-default: it is how the key is
  * found later and how its usage is attributed, and a fleet of keys called
@@ -33,6 +53,11 @@ export interface KeyFormDialogProps {
  *
  * Scope is enforced upstream as an **intersection** — candidates are always pool
  * members ∩ key scope. Naming a pool here does not widen anything; it narrows.
+ *
+ * **Editing never changes the value.** There is no field for one and no rotate
+ * endpoint behind this form: keys are stored encrypted rather than hashed, so a
+ * key that needs different limits or a different scope is edited in place and
+ * every client holding it keeps working.
  */
 export function KeyFormDialog(props: KeyFormDialogProps) {
   const [name, setName] = createSignal("")
@@ -42,6 +67,25 @@ export function KeyFormDialog(props: KeyFormDialogProps) {
   const [windowSeconds, setWindowSeconds] = createSignal("")
   const [expiresAt, setExpiresAt] = createSignal("")
 
+  // Re-seeded whenever the dialog opens, on the key it opened on — `on` with the
+  // key as its source keeps this a sync-from-props effect rather than a place
+  // where state is derived. Opening the mint form (`apiKey: null`) clears it,
+  // so a mint never inherits the last edited key's scope.
+  createEffect(
+    on(
+      () => (props.open ? props.apiKey : null),
+      (key) => {
+        setName(key?.name ?? "")
+        setScope(key?.scope.kind ?? "all")
+        setTargets(scopeTargets(key))
+        setRequests(key?.rateLimit ? String(key.rateLimit.requests) : "")
+        setWindowSeconds(key?.rateLimit ? String(key.rateLimit.windowSeconds) : "")
+        setExpiresAt(toDateTimeInput(key?.expiresAt ?? null))
+      },
+    ),
+  )
+
+  const editing = () => props.apiKey !== null
   const options = () => (scope() === "pools" ? props.pools : props.accounts)
 
   const toggle = (id: string) => {
@@ -63,44 +107,53 @@ export function KeyFormDialog(props: KeyFormDialogProps) {
       : { kind: "accounts", accountIds: targets() }
   }
 
-  const rateLimit = () => {
+  /**
+   * Both halves or neither: a count with no window is not a rate limit, and the
+   * API refuses one. An empty pair is `null` — no ceiling — which on an edit is
+   * how an existing one is removed.
+   */
+  const rateLimit = (): RateLimitInput | null => {
     const count = Number.parseInt(requests(), 10)
     const seconds = Number.parseInt(windowSeconds(), 10)
-    if (!Number.isFinite(count) || !Number.isFinite(seconds)) return undefined
+    if (!Number.isFinite(count) || !Number.isFinite(seconds)) return null
     return { requests: count, windowSeconds: seconds }
   }
+
+  /** Named, not silent: a submit that does nothing reads as a broken button. */
+  const blocker = () =>
+    buildScope() === undefined
+      ? `Choose at least one ${scope() === "pools" ? "pool" : "account"}, or set the scope to "all".`
+      : null
 
   const submit = (event: SubmitEvent) => {
     event.preventDefault()
     const resolved = buildScope()
     if (resolved === undefined) return
 
-    const limit = rateLimit()
-    const expiry = expiresAt()
     props.onSubmit({
       name: name().trim(),
       scope: resolved,
-      ...(limit === undefined ? {} : { rateLimit: limit }),
-      ...(expiry.length === 0 ? {} : { expiresAt: new Date(expiry).toISOString() }),
+      rateLimit: rateLimit(),
+      expiresAt: fromDateTimeInput(expiresAt()),
     })
   }
 
   return (
     <Modal
-      description="Keys are named, stored encrypted, and readable again whenever you need them."
+      description="Keys are named, stored encrypted, and readable again whenever you need them. Editing one never changes its value."
       footer={
         <>
           <Button onClick={() => props.onClose()} tone="ghost">
             Cancel
           </Button>
           <Button busy={props.busy} form="key-form" tone="primary" type="submit">
-            Mint key
+            {editing() ? "Save key" : "Mint key"}
           </Button>
         </>
       }
       onClose={() => props.onClose()}
       open={props.open}
-      title="Mint a router key"
+      title={props.apiKey === null ? "Mint a router key" : `Edit ${props.apiKey.name}`}
     >
       <form class={styles.form} id="key-form" onSubmit={submit}>
         <TextField
@@ -165,7 +218,7 @@ export function KeyFormDialog(props: KeyFormDialogProps) {
             value={requests()}
           />
           <TextField
-            hint="Window in seconds. Both halves or neither."
+            hint="Window in seconds. Both halves or neither — empty both to remove the ceiling."
             inputmode="numeric"
             label="Per (seconds)"
             min="1"
@@ -176,12 +229,20 @@ export function KeyFormDialog(props: KeyFormDialogProps) {
         </div>
 
         <TextField
-          hint="Optional. A key minted already expired serves exactly no requests, and the router says so."
+          hint="Optional, in this browser's timezone. Empty means it never expires. A key set to expire in the past serves exactly no requests, and the router says so."
           label="Expires at"
           onInput={(event) => setExpiresAt(event.currentTarget.value)}
           type="datetime-local"
           value={expiresAt()}
         />
+
+        <Show when={blocker()}>
+          {(message) => (
+            <p class={styles.blocked} role="status">
+              {message()}
+            </p>
+          )}
+        </Show>
 
         <Show when={props.error !== undefined && props.error !== null}>
           <p class={styles.error} role="alert">
@@ -191,4 +252,32 @@ export function KeyFormDialog(props: KeyFormDialogProps) {
       </form>
     </Modal>
   )
+}
+
+/**
+ * The mint's body: the same values with the `null`s dropped.
+ *
+ * `createKeyBody` is `.strict()` and its optional fields are not nullable, so an
+ * explicit `rateLimit: null` is a `400` rather than "no ceiling". On the mint,
+ * absent *is* the way to say it — the removal spelling only exists on `PATCH`.
+ */
+export function toCreateKeyInput(values: KeyFormValues): CreateKeyInput {
+  return {
+    name: values.name,
+    scope: values.scope,
+    ...(values.rateLimit === null ? {} : { rateLimit: values.rateLimit }),
+    ...(values.expiresAt === null ? {} : { expiresAt: values.expiresAt }),
+  }
+}
+
+/** The ids a stored scope already names, so an edit opens on the key's own selection. */
+function scopeTargets(key: ApiKeyView | null): readonly string[] {
+  switch (key?.scope.kind) {
+    case "pools":
+      return key.scope.poolIds
+    case "accounts":
+      return key.scope.accountIds
+    default:
+      return []
+  }
 }

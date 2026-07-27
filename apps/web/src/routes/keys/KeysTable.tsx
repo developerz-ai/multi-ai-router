@@ -21,6 +21,7 @@ export interface KeysTableProps {
   /** The window these figures cover, for the column header — "7 days". */
   readonly usageWindowLabel: string
   readonly onReveal: (key: ApiKeyView) => void
+  readonly onEdit: (key: ApiKeyView) => void
   readonly onRevoke: (key: ApiKeyView) => void
   readonly onDelete: (key: ApiKeyView) => void
 }
@@ -118,6 +119,11 @@ export function KeysTable(props: KeysTableProps) {
             tone="neutral"
           >
             Reveal
+          </Button>
+          {/* Name, scope, ceiling and expiry are editable in place — the value never
+              changes, so every client holding this key keeps working across the edit. */}
+          <Button onClick={() => props.onEdit(key)} size="sm" tone="neutral">
+            Edit
           </Button>
           <Show when={!key.revoked}>
             <Button onClick={() => props.onRevoke(key)} size="sm" tone="danger">

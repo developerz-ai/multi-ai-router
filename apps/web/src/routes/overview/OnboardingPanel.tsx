@@ -18,7 +18,7 @@ import { useCreatePool } from "../../lib/queries/pools"
 import { useCreateKey } from "../../lib/queries/router-keys"
 import { AccountConnect } from "../accounts/AccountConnect"
 import { AccountFormDialog } from "../accounts/AccountFormDialog"
-import { KeyFormDialog } from "../keys/KeyFormDialog"
+import { KeyFormDialog, toCreateKeyInput } from "../keys/KeyFormDialog"
 import { PoolFormDialog } from "../pools/PoolFormDialog"
 import styles from "./OnboardingPanel.module.scss"
 
@@ -238,11 +238,12 @@ export function OnboardingPanel(props: OnboardingPanelProps) {
 
       <KeyFormDialog
         accounts={props.accounts}
+        apiKey={null}
         busy={createKey.isPending}
         error={createKey.error}
         onClose={closeKey}
-        onSubmit={(input) =>
-          createKey.mutate(input, {
+        onSubmit={(values) =>
+          createKey.mutate(toCreateKeyInput(values), {
             onSuccess: (key) => {
               closeKey()
               setMinted({ name: key.name, value: key.value })
