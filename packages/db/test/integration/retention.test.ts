@@ -5,10 +5,14 @@ import { defaultMigrationsFolder, runMigrations } from "../../src/migrate"
 import { createAccountRepository } from "../../src/repositories/account-repository"
 import { createApiKeyRepository } from "../../src/repositories/api-key-repository"
 import { createAuditRepository } from "../../src/repositories/audit-repository"
+import { createScheduledTaskRepository } from "../../src/repositories/scheduled-task-repository"
+import { createUsageDailyRepository } from "../../src/repositories/usage-daily-repository"
 import { createUsageRecordRepository } from "../../src/repositories/usage-repository"
 import { accounts } from "../../src/schema/accounts"
 import { apiKeys } from "../../src/schema/api-keys"
 import { auditEvents } from "../../src/schema/audit-events"
+import { scheduledTaskRuns } from "../../src/schema/scheduled-task-runs"
+import { usageDaily } from "../../src/schema/usage-daily"
 import { usageRecords } from "../../src/schema/usage-records"
 
 /**
@@ -52,6 +56,7 @@ afterAll(async () => {
     if (accountIds.length > 0) await db.delete(accounts).where(inArray(accounts.id, accountIds))
     await db.delete(auditEvents).where(eq(auditEvents.kind, "test.retention"))
     await db.delete(usageRecords).where(eq(usageRecords.model, "test-retention-model"))
+    await db.delete(usageDaily).where(eq(usageDaily.model, "test-retention-daily"))
   }
   await handle?.close()
 })
@@ -137,6 +142,62 @@ describe.skipIf(!runnable)("bounded retention deletes against a live database", 
     expect(await repository.findById(swept.id)).toBeUndefined()
     expect(await repository.findById(liveButStamped.id)).toBeDefined()
     expect(await repository.findById(noStamp.id)).toBeDefined()
+  })
+
+  test("daily usage: aggregates go by day, and the cutoff's own day stays", async () => {
+    const repository = createUsageDailyRepository(db)
+    const accountId = "55555555-5555-5555-5555-555555555555"
+    const apiKeyId = "66666666-6666-6666-6666-666666666666"
+    // No foreign key on either column — a lifetime total outlives the key that earned it — so
+    // these rows need no fixtures beyond themselves.
+    const rows = ["1999-01-01", "1999-06-15", "1999-12-31", "2000-01-01"].map((day) => ({
+      day,
+      apiKeyId,
+      accountId,
+      model: "test-retention-daily",
+    }))
+    await db.insert(usageDaily).values(rows)
+
+    // Three days are older than the cutoff; the batch stops at two of them.
+    expect(await repository.deleteOlderThan(CUTOFF, 2)).toBe(2)
+    expect(await repository.deleteOlderThan(CUTOFF, 2)).toBe(1)
+    expect(await repository.deleteOlderThan(CUTOFF, 2)).toBe(0)
+
+    // The cutoff's own day survives: "older than 2000-01-01" is not "up to and including it".
+    const left = await db
+      .select({ day: usageDaily.day })
+      .from(usageDaily)
+      .where(eq(usageDaily.accountId, accountId))
+    expect(left.map((row) => row.day)).toEqual(["2000-01-01"])
+  })
+
+  test("scheduled task runs: finished runs go by age, an unfinished one never does", async () => {
+    const repository = createScheduledTaskRepository(db)
+    const finished = await Promise.all(
+      [1, 2, 3].map(async () => {
+        const id = await repository.begin("janitor_sweep", ANCIENT)
+        await repository.finish(id, { outcome: "success", itemsProcessed: 0 }, ANCIENT)
+        return id
+      }),
+    )
+    // Ancient and still running: the one row that says a task wedged or a process died holding
+    // the lock. A sweep that took it would delete the only evidence of the failure.
+    const wedged = await repository.begin("janitor_sweep", ANCIENT)
+    // Finished, but inside the window.
+    const recent = await repository.begin("janitor_sweep", new Date())
+    await repository.finish(recent, { outcome: "success" }, new Date())
+
+    expect(await repository.deleteOlderThan(CUTOFF, 2)).toBe(2)
+    expect(await repository.deleteOlderThan(CUTOFF, 2)).toBe(1)
+    expect(await repository.deleteOlderThan(CUTOFF, 2)).toBe(0)
+
+    const left = await db
+      .select({ id: scheduledTaskRuns.id })
+      .from(scheduledTaskRuns)
+      .where(inArray(scheduledTaskRuns.id, [...finished, wedged, recent]))
+    expect(left.map((row) => row.id).sort()).toEqual([wedged, recent].sort())
+
+    await db.delete(scheduledTaskRuns).where(inArray(scheduledTaskRuns.id, [wedged, recent]))
   })
 
   test("quota windows are read back per account, ordered and complete", async () => {

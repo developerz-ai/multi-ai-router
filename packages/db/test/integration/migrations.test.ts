@@ -334,10 +334,9 @@ describe.skipIf(!runnable)("migrations against a live database", () => {
       },
     ])
 
-    const rolled = await dailyRepository.rollup(
-      new Date("2026-07-24T00:00:00.000Z"),
-      new Date("2026-07-25T00:00:00.000Z"),
-    )
+    // Mid-day, to prove the statement widens to the day the instant falls in rather than
+    // scanning forward from it.
+    const rolled = await dailyRepository.rollupDay(new Date("2026-07-24T09:15:00.000Z"))
     expect(rolled).toBeGreaterThan(0)
 
     const totals = await dailyRepository.totals({ fromDay: "2026-07-24", toDay: "2026-07-25" })

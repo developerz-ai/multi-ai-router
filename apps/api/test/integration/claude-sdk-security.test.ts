@@ -459,6 +459,7 @@ describe("the static SPA mount cannot serve anything outside its web root", () =
         database: () => Promise.resolve(true),
         accounts: () => Promise.resolve("ok"),
         claudeCli: () => Promise.resolve("platform_package"),
+        shuttingDown: () => false,
       },
       webRoot,
     })

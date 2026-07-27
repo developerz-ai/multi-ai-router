@@ -1,5 +1,12 @@
 import { describe, expect, test } from "bun:test"
-import { EnvValidationError, parseEnv } from "../../src/config/env"
+import {
+  DATABASE_POOL_DEFAULTS,
+  PG_MAX_BIND_PARAMETERS,
+  USAGE_RECORD_BIND_PARAMETERS_PER_ROW,
+  USAGE_RECORD_MAX_BATCH_ROWS,
+} from "@multi-ai-router/db"
+import type { z } from "zod"
+import { ENV_FIELDS, EnvValidationError, parseEnv, ZERO_IS_LEGAL } from "../../src/config/env"
 import { DEFAULT_MAX_BODY_BYTES } from "../../src/services/dataplane"
 
 const ENCRYPTION_KEY = Buffer.alloc(32, 7).toString("base64")
@@ -28,6 +35,10 @@ describe("parseEnv", () => {
 
     expect(env.port).toBe(8080)
     expect(env.shutdownDrainMs).toBe(15_000)
+    expect(env.shutdownReadyGraceMs).toBe(0)
+    // Restated from the package that opens the pool, so an unset variable and the documented
+    // default cannot become two numbers that merely used to agree.
+    expect(env.databasePool).toEqual(DATABASE_POOL_DEFAULTS)
     expect(env.logLevel).toBe("info")
     expect(env.trustProxy).toBe(false)
     expect(env.publicUrl).toBeNull()
@@ -39,7 +50,9 @@ describe("parseEnv", () => {
     expect(env.retention).toEqual({
       sessionsHours: 24,
       usageDays: 90,
+      usageDailyDays: 730,
       auditDays: 365,
+      taskRunsDays: 30,
       revokedKeysDays: 30,
       oauthStateMinutes: 10,
       orphanConfigDirHours: 24,
@@ -77,7 +90,9 @@ describe("parseEnv", () => {
       ACCOUNT_TEST_NOW_COOLDOWN_SECONDS: "45",
       RETENTION_SESSIONS_HOURS: "6",
       RETENTION_USAGE_DAYS: "7",
+      RETENTION_USAGE_DAILY_DAYS: "400",
       RETENTION_AUDIT_DAYS: "30",
+      RETENTION_TASK_RUNS_DAYS: "14",
       RETENTION_REVOKED_KEYS_DAYS: "1",
       RETENTION_OAUTH_STATE_MINUTES: "5",
       RETENTION_ORPHAN_CONFIG_DIR_HOURS: "3",
@@ -96,6 +111,12 @@ describe("parseEnv", () => {
       ADMIN_LOGIN_LOCKOUT_MINUTES: "30",
       ADMIN_SESSION_SLIDE_FRACTION: "0.25",
       SESSION_COOKIE_INSECURE: "true",
+      DB_POOL_MAX: "25",
+      DB_POOL_IDLE_TIMEOUT_SECONDS: "120",
+      DB_POOL_CONNECT_TIMEOUT_SECONDS: "20",
+      DB_POOL_MAX_LIFETIME_SECONDS: "600",
+      DB_POOL_CLOSE_TIMEOUT_SECONDS: "9",
+      SHUTDOWN_READY_GRACE_MS: "20000",
     })
 
     expect(env.port).toBe(9000)
@@ -106,7 +127,17 @@ describe("parseEnv", () => {
     expect(env.claudeConfigRoot).toBe("/srv/claude")
     expect(env.accountRecheckCooldownSeconds).toBe(30)
     expect(env.accountTestNowCooldownSeconds).toBe(45)
+    expect(env.shutdownReadyGraceMs).toBe(20_000)
+    expect(env.databasePool).toEqual({
+      maxConnections: 25,
+      idleTimeoutSeconds: 120,
+      connectTimeoutSeconds: 20,
+      maxLifetimeSeconds: 600,
+      closeTimeoutSeconds: 9,
+    })
     expect(env.retention.sessionsHours).toBe(6)
+    expect(env.retention.usageDailyDays).toBe(400)
+    expect(env.retention.taskRunsDays).toBe(14)
     expect(env.retention.orphanConfigDirHours).toBe(3)
     expect(env.janitorIntervalMinutes).toBe(15)
     expect(env.scheduler).toEqual({
@@ -328,6 +359,49 @@ describe("parseEnv", () => {
     })
   })
 
+  describe("USAGE_BATCH_SIZE", () => {
+    test("the operator's number is the one parsed", () => {
+      expect(parseEnv({ ...base, USAGE_BATCH_SIZE: "500" }).dataPlane.usageBatchSize).toBe(500)
+    })
+
+    test("accepts the largest batch Postgres can bind", () => {
+      const env = parseEnv({ ...base, USAGE_BATCH_SIZE: String(USAGE_RECORD_MAX_BATCH_ROWS) })
+      expect(env.dataPlane.usageBatchSize).toBe(USAGE_RECORD_MAX_BATCH_ROWS)
+    })
+
+    test("refuses one row past it, rather than losing every usage record forever", () => {
+      const over = String(USAGE_RECORD_MAX_BATCH_ROWS + 1)
+      expect(expectEnvError({ ...base, USAGE_BATCH_SIZE: over }).variables).toEqual([
+        "USAGE_BATCH_SIZE",
+      ])
+    })
+
+    test("shows the arithmetic, so the ceiling is a fact and not a magic number", () => {
+      const error = expectEnvError({
+        ...base,
+        USAGE_BATCH_SIZE: String(USAGE_RECORD_MAX_BATCH_ROWS + 1),
+      })
+
+      expect(error.message).toContain(String(PG_MAX_BIND_PARAMETERS))
+      expect(error.message).toContain(String(USAGE_RECORD_BIND_PARAMETERS_PER_ROW))
+      expect(error.message).toContain(
+        `${PG_MAX_BIND_PARAMETERS} / ${USAGE_RECORD_BIND_PARAMETERS_PER_ROW} = ${USAGE_RECORD_MAX_BATCH_ROWS}`,
+      )
+    })
+
+    test("refuses a batch of zero: the drain takes nothing and the queue only sheds", () => {
+      expect(expectEnvError({ ...base, USAGE_BATCH_SIZE: "0" }).variables).toEqual([
+        "USAGE_BATCH_SIZE",
+      ])
+    })
+
+    test("names it when it is not a whole number of rows", () => {
+      expect(expectEnvError({ ...base, USAGE_BATCH_SIZE: "2k" }).variables).toEqual([
+        "USAGE_BATCH_SIZE",
+      ])
+    })
+  })
+
   describe("scheduler knobs", () => {
     test("names USAGE_ROLLUP_INTERVAL_MINUTES when it is not a whole number", () => {
       expect(expectEnvError({ ...base, USAGE_ROLLUP_INTERVAL_MINUTES: "soon" }).variables).toEqual([
@@ -375,6 +449,108 @@ describe("parseEnv", () => {
     test("accepts SCHEDULER_JITTER_FRACTION at each boundary", () => {
       expect(parseEnv({ ...base, SCHEDULER_JITTER_FRACTION: "0" }).scheduler.jitterFraction).toBe(0)
       expect(parseEnv({ ...base, SCHEDULER_JITTER_FRACTION: "1" }).scheduler.jitterFraction).toBe(1)
+    })
+  })
+
+  /**
+   * The drift guard behind `fields.ts`'s zero policy.
+   *
+   * A numeric knob at zero is rarely "off" — it is a sweep that deletes the table it was pointed
+   * at, an interval that re-arms every millisecond, a cache that answers nothing, a breaker that
+   * never holds. None of those log anything, and traffic keeps flowing, so the only symptom is an
+   * absence somebody eventually notices. This walks every numeric field in the schema and demands
+   * each one either refuse zero at boot or appear in `ZERO_IS_LEGAL` with what zero means there.
+   *
+   * It is deliberately derived from the schema rather than a list kept beside it: a knob added
+   * without a thought about zero fails here, which is the only moment anyone is looking.
+   */
+  /**
+   * The two-tier usage retention only works while the tiers are the right way round: raw rows
+   * expire first and the daily aggregates outlive them. Reversed, the janitor deletes rolled days
+   * whose raw rows are still there and the rollup writes them straight back on its next tick —
+   * two sweeps fighting forever, with no symptom an operator would connect to either variable.
+   */
+  describe("RETENTION_USAGE_DAILY_DAYS", () => {
+    test("refuses a window narrower than the raw one, and names both", () => {
+      const error = expectEnvError({
+        ...base,
+        RETENTION_USAGE_DAYS: "90",
+        RETENTION_USAGE_DAILY_DAYS: "30",
+      })
+
+      expect(error.variables).toEqual(["RETENTION_USAGE_DAILY_DAYS"])
+      expect(error.message).toContain("RETENTION_USAGE_DAYS (90)")
+    })
+
+    test("refuses a raw window widened past the default aggregate one", () => {
+      // The same conflict written the other way round: the operator moved only the raw window,
+      // and nothing warned them the aggregates it feeds are the shorter of the two.
+      expect(expectEnvError({ ...base, RETENTION_USAGE_DAYS: "800" }).variables).toEqual([
+        "RETENTION_USAGE_DAILY_DAYS",
+      ])
+    })
+
+    test("accepts the two windows equal — the aggregates need only not be shorter", () => {
+      const env = parseEnv({
+        ...base,
+        RETENTION_USAGE_DAYS: "60",
+        RETENTION_USAGE_DAILY_DAYS: "60",
+      })
+      expect(env.retention.usageDailyDays).toBe(60)
+    })
+  })
+
+  describe("zero is a decision, never an accident", () => {
+    /**
+     * A field is numeric when *some* legal value parses to a number — the flags, enums and
+     * strings drop out. Two probes, not one: a whole-number field refuses `0.5`, and a fraction
+     * with an exclusive upper bound refuses `1`, so either alone would quietly under-count and
+     * leave the knobs it missed unguarded.
+     */
+    const numericVariables = Object.entries(ENV_FIELDS)
+      .filter(([, field]) =>
+        ["1", "0.5"].some((probe) => {
+          const parsed = (field as z.ZodType).safeParse(probe)
+          return parsed.success && typeof parsed.data === "number"
+        }),
+      )
+      .map(([name]) => name)
+
+    test("finds the numeric knobs it is supposed to be guarding", () => {
+      // A guard that silently matched nothing would pass forever. The exact count is not the
+      // point; that it is the bulk of the schema is.
+      expect(numericVariables.length).toBeGreaterThan(30)
+      expect(numericVariables).toContain("SWEEP_BATCH_SIZE")
+      expect(numericVariables).toContain("ADMIN_SESSION_SLIDE_FRACTION")
+      // The one a single probe misses: it is a fraction, so `0.5` reaches it, and its upper
+      // bound is exclusive, so `1` does not.
+      expect(numericVariables).toContain("OAUTH_REFRESH_LEAD_FRACTION")
+      expect(numericVariables).not.toContain("TRUST_PROXY")
+      expect(numericVariables).not.toContain("LOG_LEVEL")
+    })
+
+    for (const name of numericVariables) {
+      const zeroMeansSomething = ZERO_IS_LEGAL.get(name)
+
+      if (zeroMeansSomething === undefined) {
+        test(`${name} refuses 0, because there it is a kill switch`, () => {
+          expect(expectEnvError({ ...base, [name]: "0" }).variables).toEqual([name])
+        })
+        continue
+      }
+
+      test(`${name} accepts 0: ${zeroMeansSomething}`, () => {
+        expect(() => parseEnv({ ...base, [name]: "0" })).not.toThrow()
+      })
+    }
+
+    test("every documented exception is a variable this schema still parses as a number", () => {
+      // Keeps the list from outliving its entries: renaming a knob, or tightening one to
+      // `atLeastOne`, has to take its exception with it.
+      for (const [name, reason] of ZERO_IS_LEGAL) {
+        expect(numericVariables).toContain(name)
+        expect(reason.length).toBeGreaterThan(0)
+      }
     })
   })
 })

@@ -25,7 +25,9 @@ function harness(sdkConcurrency?: SdkConcurrency) {
   const deps: RuntimeMetricsDeps = {
     catalog: EMPTY,
     health: createHealthStore(),
-    usage: () => ({ stats: () => ({ depth: 0, dropped: 0 }) }),
+    usage: () => ({
+      stats: () => ({ depth: 0, dropped: 0, written: 0, writeFailures: 0, writeDiscarded: 0 }),
+    }),
     ...(sdkConcurrency === undefined ? {} : { sdkConcurrency }),
     logger: SILENT,
   }

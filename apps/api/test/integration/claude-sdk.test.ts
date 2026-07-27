@@ -383,6 +383,7 @@ describe("a subscription request through the real composition root, not a hand-w
         database: () => Promise.resolve(true),
         accounts: () => Promise.resolve("ok"),
         claudeCli: () => Promise.resolve("platform_package"),
+        shuttingDown: () => false,
       },
       dataPlane: { verifier, dispatcher, catalog: store, health },
     })

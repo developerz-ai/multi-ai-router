@@ -25,16 +25,29 @@ export function createBoundedQueue<T>(maxItems: number): BoundedQueue<T> {
     throw new Error(`createBoundedQueue: maxItems must be at least 1, got ${maxItems}`)
   }
 
-  // A plain array with a moving head: shift() on a large array is O(n), and this runs on the
-  // request path. The head advances instead, and the buffer is compacted on drain.
+  /**
+   * A plain array with a moving head: `shift()` on a large array is O(n), and `push` runs on the
+   * request path. The head advances instead, and the dead prefix it leaves behind is reclaimed
+   * **lazily** — never once per call.
+   *
+   * Reclaiming eagerly would put an O(n) copy exactly where it must not be: a queue at its ceiling
+   * sheds on every push, so every request during a database outage would copy the whole buffer, and
+   * the slower the database the more the router charges its own clients for it.
+   *
+   * The rule instead is *reclaim once the dead prefix is at least as long as the live one*. That
+   * costs one copy of n elements per n advances — O(1) amortized — and keeps the array under twice
+   * the ceiling. It has to run on `push` as well as on `drain`, because a wedged writer stops
+   * draining entirely, and a prefix reclaimed only on drain would then grow with traffic until the
+   * process ran out of memory.
+   */
   let items: T[] = []
   let head = 0
   let dropped = 0
 
   const depth = (): number => items.length - head
 
-  const compact = (): void => {
-    if (head === 0) return
+  const reclaim = (): void => {
+    if (head === 0 || head < depth()) return
     items = items.slice(head)
     head = 0
   }
@@ -47,8 +60,8 @@ export function createBoundedQueue<T>(maxItems: number): BoundedQueue<T> {
         dropped += 1
         shed = true
       }
-      compact()
       items.push(item)
+      reclaim()
       return !shed
     },
 
@@ -57,7 +70,7 @@ export function createBoundedQueue<T>(maxItems: number): BoundedQueue<T> {
       if (take === 0) return []
       const batch = items.slice(head, head + take)
       head += take
-      compact()
+      reclaim()
       return batch
     },
 

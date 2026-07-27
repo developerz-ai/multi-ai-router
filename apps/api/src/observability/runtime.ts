@@ -62,8 +62,7 @@ export function createRuntimeMetrics(deps: RuntimeMetricsDeps): RouterMetrics {
       }),
     )
 
-    const stats = deps.usage().stats()
-    metrics.setUsageQueue({ depth: stats.depth, dropped: stats.dropped })
+    metrics.setUsageQueue(deps.usage().stats())
 
     const sdk = deps.sdkConcurrency
     if (sdk !== undefined) {

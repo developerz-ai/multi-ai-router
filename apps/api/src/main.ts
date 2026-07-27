@@ -12,6 +12,7 @@ import { createAccountProbe } from "./services/health/accountProbe"
 import { createClaudeCliProbe } from "./services/health/claudeCliProbe"
 import { createDatabaseProbe } from "./services/health/databaseProbe"
 import { type DrainableServer, drainServer } from "./services/shutdown/drain"
+import { createLifecycle, type Lifecycle } from "./services/shutdown/lifecycle"
 
 /**
  * The only module that boots: it reads the environment, migrates, builds the app, and opens the
@@ -28,8 +29,12 @@ async function main(): Promise<void> {
   // traffic on a half-migrated schema — docs/idea/09-deployment.md#migrations.
   await migrate(env, logger)
 
-  const database = createDatabase({ url: env.databaseUrl })
+  const database = createDatabase({ url: env.databaseUrl, ...env.databasePool })
   const runtime = buildRuntime({ env, database: database.db, sql: database.sql, logger })
+
+  // One latch, read by `/readyz` and by the signal handlers, so readiness cannot go on answering
+  // `ready` through a drain nobody told it about — `services/shutdown/lifecycle.ts`.
+  const lifecycle = createLifecycle()
 
   // Before the listener opens: the catalog is loaded and the background writers are
   // running, so the first request is served against real state rather than an empty one.
@@ -48,6 +53,7 @@ async function main(): Promise<void> {
       // disagree with the router about what is routable.
       accounts: createAccountProbe({ catalog: runtime.catalog, health: runtime.health }),
       claudeCli,
+      shuttingDown: lifecycle.shuttingDown,
     },
     admin: runtime.admin,
     metrics: { metrics: runtime.metrics, token: env.metricsToken },
@@ -74,14 +80,37 @@ async function main(): Promise<void> {
     trustProxy: env.trustProxy,
   })
 
-  // Order on the way out mirrors the way in: stop taking traffic and let it finish, flush what is
-  // queued, then close the connection the flush needs. The first step is the one with a deadline —
-  // everything after it is bounded by the work already in hand.
-  installShutdownHandlers(logger, async () => {
+  // Order on the way out mirrors the way in: stop being ready, stop taking traffic and let what is
+  // in flight finish, flush what is queued, then close the connection the flush needs. Three of the
+  // four carry a deadline — `SHUTDOWN_READY_GRACE_MS`, `SHUTDOWN_DRAIN_MS`,
+  // `DB_POOL_CLOSE_TIMEOUT_SECONDS` — and the flush is bounded by the work already in hand. Their
+  // sum is what the orchestrator's stop grace has to exceed.
+  installShutdownHandlers(lifecycle, logger, async () => {
+    await announceUnready(env, logger)
     await drain(server, env, logger)
     await runtime.stop()
     await database.close()
   })
+}
+
+/**
+ * Keep serving for a moment while the load balancer reads the `503` `/readyz` already returns.
+ *
+ * The latch is set the instant the signal arrives, so the endpoint is honest from that moment — but
+ * an honest answer only helps somebody who can still ask. Once `Bun.serve().stop()` runs the
+ * listener refuses new connections *and* stops dispatching on the keep-alive connections it already
+ * had (measured against bun 1.3), so without this window the flip has nobody left to tell.
+ *
+ * Zero by default and therefore skipped entirely: the bundled compose deployment has no readiness
+ * gate, and a wait that helps nobody there is just a slower shutdown.
+ */
+async function announceUnready(env: Env, logger: Logger): Promise<void> {
+  if (env.shutdownReadyGraceMs === 0) return
+  logger.info("readiness withdrawn — still serving while the load balancer notices", {
+    component: "transport",
+    graceMs: env.shutdownReadyGraceMs,
+  })
+  await Bun.sleep(env.shutdownReadyGraceMs)
 }
 
 /**
@@ -190,7 +219,10 @@ function buildRuntime(deps: RuntimeDeps): Runtime {
 
 async function migrate(env: Env, logger: Logger): Promise<void> {
   try {
-    await runMigrations({ url: env.databaseUrl })
+    await runMigrations({
+      url: env.databaseUrl,
+      connectTimeoutSeconds: env.databasePool.connectTimeoutSeconds,
+    })
     logger.info("migrations applied", { component: "db" })
   } catch (error) {
     logger.error("migration failed — refusing to serve a half-migrated schema", {
@@ -209,19 +241,25 @@ async function migrate(env: Env, logger: Logger): Promise<void> {
  * or an operator pressing Ctrl-C again. Re-entering would run the flush twice and close the pool
  * underneath the first pass, so the second signal does the only thing it can honestly mean —
  * stop waiting, now — and exits non-zero, because work was abandoned.
+ *
+ * `lifecycle.begin()` is what recognises the second one, and it latches before a byte of the
+ * shutdown runs: the same instant makes `/readyz` answer `503`, which is the point of doing it
+ * here rather than inside the drain.
  */
-function installShutdownHandlers(logger: Logger, shutdown: () => Promise<void>): void {
-  let shuttingDown = false
+function installShutdownHandlers(
+  lifecycle: Lifecycle,
+  logger: Logger,
+  shutdown: () => Promise<void>,
+): void {
   for (const signal of ["SIGTERM", "SIGINT"] as const) {
     process.on(signal, () => {
-      if (shuttingDown) {
+      if (!lifecycle.begin()) {
         logger.warn("second signal while shutting down — exiting without finishing the drain", {
           component: "transport",
           signal,
         })
         process.exit(1)
       }
-      shuttingDown = true
       logger.info("shutting down", { component: "transport", signal })
       void shutdown().finally(() => process.exit(0))
     })

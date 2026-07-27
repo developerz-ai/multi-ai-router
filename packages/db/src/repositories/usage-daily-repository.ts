@@ -3,6 +3,7 @@ import type { Database } from "../client"
 import { USAGE_OUTCOME_SUCCESS } from "../schema/enums"
 import { usageDaily } from "../schema/usage-daily"
 import { usageRecords } from "../schema/usage-records"
+import { deleteOldestBatch } from "./bounded-delete"
 import type { UsageDimension, UsageTotals } from "./usage-read-repository"
 
 /**
@@ -24,15 +25,22 @@ import type { UsageDimension, UsageTotals } from "./usage-read-repository"
  */
 export interface UsageDailyRepository {
   /**
-   * Recomputes every UTC day the `[from, to)` window touches, from raw rows, and
+   * Recomputes **one** UTC day — the day `day` falls in — from raw rows, and
    * returns how many rollup rows were written.
    *
-   * **Whole days, always — that is what makes it idempotent.** The window is
-   * widened to UTC day boundaries and each day is aggregated in full, so the
-   * conflict update *replaces* the row rather than adding to it. Rolling up only
-   * the last hour and accumulating would double-count the moment a run repeated,
-   * and there is no third option that survives both a retry and a restart. The
-   * cost is rescanning the current day on every run, bounded by one day's volume.
+   * **A whole day, always — that is what makes it idempotent.** The day is
+   * aggregated in full, so the conflict update *replaces* the row rather than
+   * adding to it. Rolling up only the last hour and accumulating would
+   * double-count the moment a run repeated, and there is no third option that
+   * survives both a retry and a restart.
+   *
+   * **One day, and never a range, is what makes it bounded.** A catch-up window
+   * is up to the whole retention floor wide, and a single `insert … select …
+   * group by` across it is one transaction over 90 days of the write-heaviest
+   * table in the schema — the exact unbounded statement non-negotiable 13 rules
+   * out. A day is the smallest unit that can still be *replaced* instead of
+   * accumulated, so it is the batch: the caller loops, each day commits on its
+   * own, and a shutdown lands between two of them.
    *
    * **Never call this for a day whose raw rows have been swept.** Recomputing a
    * day from raw rows that no longer exist would overwrite a correct lifetime
@@ -44,7 +52,20 @@ export interface UsageDailyRepository {
    * no place at this grain and are skipped; they stay visible in `usage_records`
    * for the retention window.
    */
-  rollup(from: Date, to: Date): Promise<number>
+  rollupDay(day: Date): Promise<number>
+  /**
+   * Deletes one bounded batch of rolled days older than the UTC day `cutoff`
+   * falls in, oldest first, and returns how many went.
+   *
+   * This table is the long half of the two-tier retention the rollup exists for:
+   * raw rows expire on `RETENTION_USAGE_DAYS` and these aggregates outlive them
+   * by design, which is not the same as living forever. One row per distinct
+   * `(day, key, account, pool, model)` is small per day and unbounded over
+   * years, so `RETENTION_USAGE_DAILY_DAYS` is the far edge of it —
+   * necessarily wider than the raw window, or the rollup would spend every tick
+   * re-inserting days this sweep had just deleted.
+   */
+  deleteOlderThan(cutoff: Date, limit: number): Promise<number>
   /** Totals over closed days. Metered and notional spend stay apart, never summed. */
   totals(window: UsageDayRange): Promise<UsageTotals>
   /** Totals grouped by one dimension, biggest first. */
@@ -126,12 +147,25 @@ export function createUsageDailyRepository(db: Database): UsageDailyRepository {
   }
 
   return {
-    rollup: async (from, to) => {
+    rollupDay: async (day) => {
+      const start = startOfUtcDay(day)
       const rows = await db.execute<{ id: string }>(
-        rollupStatement(startOfUtcDay(from), startOfNextUtcDay(to)),
+        rollupStatement(start, new Date(start.getTime() + MILLIS_PER_DAY)),
       )
       return rows.length
     },
+
+    deleteOlderThan: (cutoff, limit) =>
+      deleteOldestBatch({
+        db,
+        table: usageDaily,
+        id: usageDaily.id,
+        agedBy: usageDaily.day,
+        // The column is a `date`, so the cutoff crosses as the day it names rather than as an
+        // instant: `< '2026-04-01'` keeps that whole day, which is the intent of "older than".
+        cutoff: toUtcDay(cutoff),
+        limit,
+      }),
 
     totals: async (window) => {
       const [row] = await db.select(aggregates).from(usageDaily).where(inRange(window))

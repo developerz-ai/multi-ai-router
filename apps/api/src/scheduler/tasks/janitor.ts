@@ -1,7 +1,9 @@
 import type {
   ApiKeyRepository,
   AuditRepository,
+  ScheduledTaskRepository,
   SessionRepository,
+  UsageDailyRepository,
   UsageRecordRepository,
 } from "@multi-ai-router/db"
 import type { RetentionConfig } from "../../config/env"
@@ -9,9 +11,9 @@ import type { ScheduledTask } from "../types"
 import { runSweeps } from "./sweep"
 
 /**
- * The janitor: the retention sweep for the four tables that grow without bound.
+ * The janitor: the retention sweep for the six tables that grow without bound.
  *
- * One task rather than four, because they share a schedule and an operator reads
+ * One task rather than six, because they share a schedule and an operator reads
  * them as one answer — "the janitor ran 4 min ago and deleted 812 rows"
  * (docs/idea/09-deployment.md, "Cleanups & retention"). The per-category counts
  * are in the summary line, so "deleted 812 rows" can still be broken down.
@@ -20,7 +22,14 @@ import { runSweeps } from "./sweep"
  * non-negotiable 11). What is decided here is only the *order*, and it is
  * deliberate: revoked keys go last, because deleting one cascades to its
  * sessions and nulls the key on its usage rows, and doing that first would make
- * the two sweeps in front of it race their own cascade for no reason.
+ * the sweeps in front of it race their own cascade for no reason.
+ *
+ * Two of the six grow slowly enough to have been overlooked rather than
+ * excluded, and both are here for the same reason the other four are: `usage_daily`
+ * banks one row per distinct `(day, key, account, pool, model)` and outlives the
+ * raw rows by design, which is not the same as outliving them forever; and
+ * `scheduled_task_runs` takes a row per task per tick, about a thousand a day,
+ * for as long as the process runs.
  *
  * Idempotency comes free from the shape of the work: the cutoff is computed from
  * the tick's clock and the predicate is an age, so a sweep that runs twice finds
@@ -36,7 +45,9 @@ import { runSweeps } from "./sweep"
 export interface JanitorDeps {
   readonly sessions: Pick<SessionRepository, "deleteIdleBefore">
   readonly usageRecords: Pick<UsageRecordRepository, "deleteOlderThan">
+  readonly usageDaily: Pick<UsageDailyRepository, "deleteOlderThan">
   readonly auditEvents: Pick<AuditRepository, "deleteOlderThan">
+  readonly taskRuns: Pick<ScheduledTaskRepository, "deleteOlderThan">
   readonly apiKeys: Pick<ApiKeyRepository, "deleteRevokedOlderThan">
   /** Every retention window, straight from `env.retention`. */
   readonly retention: RetentionConfig
@@ -62,7 +73,9 @@ export function createJanitorTask(deps: JanitorDeps): ScheduledTask {
       // the same instant however long the sweep runs.
       const idleSessions = before(now, retention.sessionsHours * HOUR_MS)
       const staleUsage = before(now, retention.usageDays * DAY_MS)
+      const staleDailyUsage = before(now, retention.usageDailyDays * DAY_MS)
       const staleAudit = before(now, retention.auditDays * DAY_MS)
+      const staleTaskRuns = before(now, retention.taskRunsDays * DAY_MS)
       const purgeableKeys = before(now, retention.revokedKeysDays * DAY_MS)
 
       const report = await runSweeps(
@@ -75,9 +88,21 @@ export function createJanitorTask(deps: JanitorDeps): ScheduledTask {
             category: "usageRecords",
             deleteBatch: (limit) => deps.usageRecords.deleteOlderThan(staleUsage, limit),
           },
+          // After the raw rows and never before them: the rollup reads raw and writes daily, so
+          // sweeping daily first would only widen the window in which a day exists in neither.
+          {
+            category: "usageDaily",
+            deleteBatch: (limit) => deps.usageDaily.deleteOlderThan(staleDailyUsage, limit),
+          },
           {
             category: "auditEvents",
             deleteBatch: (limit) => deps.auditEvents.deleteOlderThan(staleAudit, limit),
+          },
+          // Including this task's own row, in principle — except that it is hours old at most and
+          // has no `finishedAt` yet, and the sweep takes neither.
+          {
+            category: "taskRuns",
+            deleteBatch: (limit) => deps.taskRuns.deleteOlderThan(staleTaskRuns, limit),
           },
           {
             category: "revokedKeys",

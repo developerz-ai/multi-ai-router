@@ -29,6 +29,7 @@ export {
   type UsageRecorder,
   type UsageRecorderOptions,
   type UsageStats,
+  type UsageWriteFailure,
   type UsageWriter,
 } from "./recorder"
 export {

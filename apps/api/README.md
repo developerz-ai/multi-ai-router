@@ -121,7 +121,9 @@ explicitly, before an upstream call, rather than degrading into a lossy approxim
 | `ACCOUNT_RECHECK_COOLDOWN_SECONDS` | no | `60` | Floor between manual **Re-check now** probes |
 | `RETENTION_SESSIONS_HOURS` | no | `24` | Idle session + fingerprint TTL |
 | `RETENTION_USAGE_DAYS` | no | `90` | Raw `UsageRecord` retention before rollup |
+| `RETENTION_USAGE_DAILY_DAYS` | no | `730` | Daily aggregate retention. Must be ≥ `RETENTION_USAGE_DAYS` |
 | `RETENTION_AUDIT_DAYS` | no | `365` | `AuditEvent` retention |
+| `RETENTION_TASK_RUNS_DAYS` | no | `30` | Finished `ScheduledTaskRun` retention. An unfinished run is never swept |
 | `RETENTION_REVOKED_KEYS_DAYS` | no | `30` | Revoked key survival before purge |
 | `RETENTION_OAUTH_STATE_MINUTES` | no | `10` | One-shot OAuth `state` + PKCE verifier TTL |
 | `JANITOR_INTERVAL_MINUTES` | no | `60` | Base sweep interval, jittered |
@@ -135,7 +137,7 @@ explicitly, before an upstream call, rather than degrading into a lossy approxim
 | `KEY_CACHE_TTL_SECONDS` | no | `60` | Reuse window for a successful verification. Revocation invalidates immediately on the replica that served it; every other replica accepts the key until this elapses |
 | `KEY_CACHE_NEGATIVE_TTL_SECONDS` | no | `5` | Reuse window for a *failed* lookup. Short: it stops a bad-key flood becoming a query flood, and a fresh key must work quickly |
 | `USAGE_QUEUE_MAX` | no | `10000` | Queued `UsageRecord`s before the oldest are shed. Reporting degrades; traffic does not |
-| `USAGE_BATCH_SIZE` | no | `200` | Rows per insert |
+| `USAGE_BATCH_SIZE` | no | `200` | Rows per insert. Bounded `1..2520` — a row costs 26 of Postgres' 65535 bind parameters per statement, and a batch past that is rejected on every flush |
 | `USAGE_FLUSH_INTERVAL_MS` | no | `1000` | Drain cadence. Widening it widens the crash-loss window; it never affects latency |
 
 The last two groups are the request path's own tunables. Their defaults **mirror the layer
@@ -147,6 +149,13 @@ identically — there is no second source of truth to drift.
 - **`ENCRYPTION_KEY` is decoded, not merely present**: base64/base64url in, must yield exactly 32
   bytes. A 16-byte key fails the boot instead of producing a weak cipher later.
 - An empty string means unset — `PORT=` takes the default rather than failing.
+- **Zero is not an off switch.** On a numeric knob it is normally a sweep that empties the table it
+  was pointed at, an interval that re-arms every millisecond, a cache that answers nothing, or a
+  breaker that never holds — none of which log anything and none of which stop traffic. Every
+  numeric variable therefore **refuses `0` at boot** except the few where zero is a real setting:
+  `PORT` (ephemeral), `SHUTDOWN_DRAIN_MS` (wait for nothing), the two `*_COOLDOWN_SECONDS` (no
+  cooldown), the two `*_NEGATIVE_TTL_SECONDS` (do not cache a miss) and the two fractions. The
+  split lives in `config/fields.ts` and a drift guard holds the schema to it.
 
 ## Working on it
 
