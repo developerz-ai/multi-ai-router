@@ -65,15 +65,17 @@ jobs:
           # Build context is `.`; keep the checkout token out of the build
           # workspace (matches ci.yml's image job).
           persist-credentials: false
-      - name: verify tag version matches package.json
-        run: |
-          tag_version="${{ github.ref_name }}"
-          tag_version="${tag_version#v}"
-          package_version=$(jq -r '.version' package.json)
-          if [ "$tag_version" != "$package_version" ]; then
-            echo "Tag version ($tag_version) does not match package.json version ($package_version)"
-            exit 1
-          fi
+      # First real step, before buildx and before a single layer: a tag that does
+      # not name the version this tree reports must not reach the registry.
+      #
+      # It checks `packages/core/src/version.ts` — the constant `/healthz`,
+      # `router_build_info`, the boot log and the console footer all read — and
+      # every workspace manifest against it. Reading only the root `package.json`
+      # would check the copy and not the source, and nothing else in this workflow
+      # would catch the difference: release.yml never runs the test suite, so the
+      # drift test that normally holds the two together does not gate a tag.
+      - name: verify the tag names the version this build reports
+        run: bin/verify-version "${GITHUB_REF_NAME}"
       - uses: docker/setup-buildx-action@v3
       - name: log in to ghcr
         uses: docker/login-action@v3
@@ -94,6 +96,13 @@ jobs:
           context: .
           platforms: ${{ matrix.platform }}
           labels: ${{ steps.meta.outputs.labels }}
+          # Baked into the image as ROUTER_REVISION, so the running process can
+          # report which commit it is (`router_build_info{revision}`, boot log).
+          # The OCI label docker/metadata-action adds carries the same sha, but a
+          # label is only readable from outside the container — an operator
+          # reading a dashboard or a log line cannot see it.
+          build-args: |
+            ROUTER_REVISION=${{ github.sha }}
           # Same gha cache scopes as ci.yml, so a release tag cut from a green
           # main reuses the layers that main's build already warmed.
           cache-from: type=gha,scope=${{ env.PLATFORM_PAIR }}

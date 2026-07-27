@@ -3,7 +3,7 @@ import { readdirSync, readFileSync } from "node:fs"
 import { join } from "node:path"
 import { fileURLToPath } from "node:url"
 import { z } from "zod"
-import { VERSION } from "../../src/version"
+import { UNKNOWN_REVISION, VERSION } from "../../src/version"
 
 /**
  * `VERSION` is the source and every workspace manifest is a copy of it (`src/version.ts`), so the
@@ -45,8 +45,13 @@ function manifestPaths(): readonly string[] {
 }
 
 describe("the version constant", () => {
-  test("is a plain semver, and never the unreleased placeholder", () => {
-    expect(VERSION).toMatch(/^\d+\.\d+\.\d+$/)
+  test("is a semver a container tag can carry, and never the unreleased placeholder", () => {
+    // A pre-release suffix is allowed because the release pipeline supports rc tags
+    // (docs/RELEASING.md#pre-releases) and the rc's router must say it is an rc rather than
+    // impersonating the release it precedes. Build metadata (`+sha`) is not: `+` is illegal in a
+    // container tag, so a version carrying one would produce an image nobody can name. That fact
+    // belongs in `router_build_info{revision}`.
+    expect(VERSION).toMatch(/^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$/)
     expect(VERSION).not.toBe("0.0.0")
   })
 
@@ -55,5 +60,13 @@ describe("the version constant", () => {
 
     expect(paths.length).toBeGreaterThan(1)
     for (const path of paths) expect(read(path).version).toBe(VERSION)
+  })
+
+  test("has a revision sentinel that is not mistakable for a real one", () => {
+    // `router_build_info{revision}` and the boot log fall back to this when nothing stamped the
+    // build. It has to be obviously not a sha, or an operator reads it as one and chases a commit
+    // that does not exist.
+    expect(UNKNOWN_REVISION).toBe("unknown")
+    expect(UNKNOWN_REVISION).not.toMatch(/^[0-9a-f]{7,}$/)
   })
 })

@@ -211,6 +211,7 @@ export function createRuntime(deps: RuntimeDeps): Runtime {
     sdkConcurrency,
     logger,
     now,
+    revision: env.revision,
   })
 
   // Queued in memory, batch-written off-path. Both loss modes reach a log line — see fromEnv.ts.

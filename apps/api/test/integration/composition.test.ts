@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test"
+import { VERSION } from "@multi-ai-router/core"
 import { createDatabase, type DatabaseHandle } from "@multi-ai-router/db"
 import { createRuntime, type Runtime } from "../../src/composition"
 import { parseEnv } from "../../src/config/env"
@@ -291,5 +292,31 @@ describe("the body ceiling reaches the reader", () => {
     // The catalog is empty because nothing loaded it, so selection is what refuses. The point is
     // that the read succeeded and the request got as far as selection at all.
     expect(response).toMatchObject({ code: "scope_violation" })
+  })
+})
+
+describe("the build's identity reaches the exposition", () => {
+  /**
+   * `ROUTER_REVISION` is parsed at boot and documented in the environment reference — the same
+   * shape as the three routing knobs above, which were read by nothing at all until a composition
+   * test looked. The label is the only place an operator can see which commit is serving, so a
+   * wire that quietly went missing would look exactly like a build nobody stamped.
+   */
+  test("ROUTER_REVISION reaches router_build_info", () => {
+    const { metrics } = runtimeWith({ ROUTER_REVISION: "0f1e2d3c" })
+
+    expect(metrics.expose()).toContain(`revision="0f1e2d3c"`)
+  })
+
+  test("an unstamped build says `unknown` rather than nothing at all", () => {
+    const { metrics } = runtimeWith({})
+
+    expect(metrics.expose()).toContain(`revision="unknown"`)
+  })
+
+  test("the version label is the constant every other surface reports", () => {
+    const { metrics } = runtimeWith({})
+
+    expect(metrics.expose()).toContain(`router_build_info{version="${VERSION}",revision=`)
   })
 })

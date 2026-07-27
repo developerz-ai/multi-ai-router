@@ -7,21 +7,30 @@ nothing — a release is a deliberate, separate act.
 
 ## 1. Bump versions
 
-The version string is restated in a few places; all of them must move
-together (a drift test in `packages/core` walks the workspace `package.json`
-globs and fails the build if they diverge):
+`packages/core/src/version.ts` holds the `VERSION` constant — the string
+surfaced at `/healthz`, in the `router_build_info` metric, the boot log, the
+admin settings endpoint, and the console footer. Every workspace
+`package.json` restates it, and all of them must move together:
 
+- `packages/core/src/version.ts` — **the source**
 - `package.json` (root)
 - `apps/api/package.json`
 - `apps/web/package.json`
 - `packages/core/package.json`
 - `packages/db/package.json`
-- `packages/core/src/version.ts` — the `VERSION` constant surfaced at
-  `/healthz`, the `router_build_info` metric, the boot log, the admin
-  settings endpoint, and the console footer
 
-Bump every one to the same semver. `bin/check` will catch a mismatch before
-you get to the tag.
+Bump every one to the same semver, then prove it:
+
+```
+bin/verify-version          # the tree agrees with itself
+bin/verify-version v1.0.0   # …and the tag you are about to push names it
+```
+
+`bin/check` catches a mismatch too (a drift test in `packages/core` walks the
+workspace globs), and `release.yml` runs `bin/verify-version` against the tag
+before it builds a single layer — so a tag that does not name the version the
+code reports fails the release instead of publishing an image that lies about
+what it is.
 
 ## 2. Update the changelog
 
@@ -89,10 +98,16 @@ Nothing here is manual or ad hoc — if a step needs to change, it changes in
 
 ## Pre-releases
 
-For a release candidate, tag `vX.Y.Z-rc.N` instead. The pipeline runs
-identically, publishes the versioned image tag, and creates a GitHub
+For a release candidate, bump the version to `X.Y.Z-rc.N` — the constant and
+every manifest, exactly as in step 1 — and tag `vX.Y.Z-rc.N`. The pipeline
+runs identically, publishes the versioned image tag, and creates a GitHub
 pre-release, but never touches `latest` — safe to cut without affecting
 anyone pulling the default tag.
+
+The rc carries its pre-release suffix in `VERSION` on purpose: an rc whose
+`/healthz` says `1.3.0` is indistinguishable from the release it precedes, and
+that is precisely the build an operator most needs to identify. `bin/verify-version`
+enforces the match, so an rc tag on a tree bumped to plain `1.3.0` fails.
 
 ### Promoting an `-rc` to stable
 
