@@ -13,7 +13,7 @@ export { advisoryLockKey, advisoryUnlock, tryAdvisoryLock, withAdvisoryLock } fr
 export type { Database, DatabaseHandle, DatabaseOptions, SqlConnection } from "./client"
 
 // --- connection -------------------------------------------------------------
-export { createDatabase } from "./client"
+export { createDatabase, DATABASE_POOL_DEFAULTS } from "./client"
 export type { MigrateOptions } from "./migrate"
 
 // --- migrations -------------------------------------------------------------

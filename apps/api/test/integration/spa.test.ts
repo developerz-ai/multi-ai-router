@@ -68,6 +68,7 @@ function harness(options: { readonly webRoot?: string } = {}) {
       database: () => Promise.resolve(true),
       accounts: () => Promise.resolve("ok"),
       claudeCli: () => Promise.resolve("platform_package"),
+      shuttingDown: () => false,
     },
     webRoot: "webRoot" in options ? options.webRoot : root,
   }
@@ -311,6 +312,7 @@ describe("the full app, mounted end to end", () => {
         database: () => Promise.resolve(true),
         accounts: () => Promise.resolve("ok"),
         claudeCli: () => Promise.resolve("platform_package"),
+        shuttingDown: () => false,
       },
       webRoot: root,
       dataPlane: { verifier, dispatcher, catalog: routingCatalog, health },

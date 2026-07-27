@@ -106,7 +106,7 @@ Each is a Zod schema **and** its `z.infer` type under one name. These are the si
 
 | Thing | Where | Use it when |
 |---|---|---|
-| `createDatabase(options)` → `{ db, sql, close }` | `packages/db/src/client.ts` | Opening a pool. A factory, not a singleton — no side effects at import; the owner closes it |
+| `createDatabase(options)` → `{ db, sql, close }`, `DATABASE_POOL_DEFAULTS` | `packages/db/src/client.ts` | Opening a pool. A factory, not a singleton — no side effects at import; the owner closes it. Size, the three timeouts and the `close()` deadline are all options, and the API's `DB_POOL_*` schema defaults to the exported constants so an unset variable and the documented default cannot drift |
 | `Database`, `DatabaseHandle`, `SqlConnection`, `DatabaseOptions` | same | Typing anything that takes a handle. `databaseProbe.ts` takes `Pick<DatabaseHandle, "sql">` |
 | `runMigrations({ url })`, `defaultMigrationsFolder()` | `packages/db/src/migrate.ts` | Boot, tests, `bun run migrate`. Advisory-locked and idempotent |
 | `createAccountRepository(db)` → `AccountRepository` | `repositories/account-repository.ts` | Any `accounts` query — CRUD, and the `list` the catalog loads from |
@@ -144,6 +144,7 @@ Each is a Zod schema **and** its `z.infer` type under one name. These are the si
 | `AppEnv` | `types.ts` | Typing a Hono route or middleware. Transport-only — it never leaves that layer |
 | `createApp(deps)` | `app.ts` | Integration tests. Pure factory: no listener, no timers, no `process.env` |
 | `checkReadiness(probes)`, `ReadinessProbes`, `createDatabaseProbe(...)`, `createClaudeCliProbe(...)`, `assumeHealthyAccounts` | `services/health/` | Health surfaces. Probes are injected, so the service needs no I/O |
+| `createLifecycle()` → `Lifecycle` | `services/shutdown/lifecycle.ts` | Anything that has to know a shutdown started. One latch, two readers: `/readyz` answers `503 shutting_down` from it, and the signal handlers use `begin()`'s `false` to recognise a second SIGTERM instead of running the flush twice. Two booleans would drift — readiness would keep answering `ready` through a drain nobody told it about |
 | `drainServer({ server, timeoutMs, now? })` → `DrainOutcome`, `DrainableServer` | `services/shutdown/drain.ts` | Stopping a listener without hanging on it. `Bun.serve().stop()` waits for the last byte of the last response and never gives up; this stops accepting, bounds that wait, and reports what was still in flight when it gave up. Pure over an injected server and clock — no `Bun` import, no listener in a test |
 | `resolveClaudeCli(probe)`, `createCliProbe(options)`, `CliResolution`, `CliSource` | `providers/claude-sdk/` | Anywhere the `claude` binary's path is needed — the SDK driver's `pathToClaudeCodeExecutable`, `/readyz`, the image build. The ladder is pure over an injected probe; `cli-probe.ts` is the only part that touches the filesystem |
 | `createRuntime(deps)` → `Runtime` | `composition.ts` | The composition root. Every long-lived object is built here once and injected downward — never construct a repository, cache, or recorder anywhere else |

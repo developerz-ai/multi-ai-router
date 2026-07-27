@@ -100,8 +100,14 @@ and fails the build for any numeric knob that is neither refused nor explained
 | `ADMIN_PASSWORD_HASH` | one of | — | Pre-computed argon2id hash, for operators who refuse a plaintext secret in an env store. |
 | `ENCRYPTION_KEY` | yes | — | 32 bytes, base64. AES-256-GCM key for upstream credentials and router keys. Boot fails loudly if missing or short. |
 | `DATABASE_URL` | yes | — | PostgreSQL 16+ connection string. **Supplied by the bundled compose file**, so it is not one of the three you set by hand. Set it yourself only when pointing at an existing/managed instance. |
+| `DB_POOL_MAX` | no | `10` | Connections this replica holds open. **One pool serves everything that is not the request path** — the admin console, every scheduler sweep, the off-path usage/quota/status writers and `/readyz` — so it is the ceiling on all of them at once, and a long sweep holding a connection is one fewer for the console. Raise it for a busy console or long sweeps; lower it when several replicas share a managed instance with its own connection cap (`max_connections`), remembering each replica opens its own pool. **`0` refused at boot**: it opens nothing and queues every query forever. |
+| `DB_POOL_IDLE_TIMEOUT_SECONDS` | no | `30` | How long an idle pooled connection is kept before it is closed. `0` is legal and means *never* close one — postgres.js reads a falsy interval as a timer that never fires, not as "immediately". |
+| `DB_POOL_CONNECT_TIMEOUT_SECONDS` | no | `10` | How long a dial waits to be accepted before it fails. Raise it for a managed instance that is slow to accept; the boot migration uses the same value, so a raise covers the connection that runs before the pool exists. **`0` refused at boot**: by the rule above it would mean *wait forever*, turning an unreachable database from a failure into a hang. |
+| `DB_POOL_MAX_LIFETIME_SECONDS` | no | `1800` | Age at which a pooled connection is recycled, so a failover behind a connection proxy drains onto the new primary instead of pinning to the old one. `0` is legal and never recycles. |
+| `DB_POOL_CLOSE_TIMEOUT_SECONDS` | no | `5` | How long the shutdown's pool close waits for in-flight queries before destroying them — see [Shutdown & draining](#shutdown--draining). It runs after the flush, so an unbounded wait here buys nothing and risks the `SIGKILL`. `0` is legal and destroys the pool at once. |
 | `PORT` | no | `8080` | Listen port inside the container. `0` is legal and lets the kernel pick an ephemeral port; the boot log names the one it bound. |
-| `SHUTDOWN_DRAIN_MS` | no | `15000` | How long a shutdown lets in-flight responses finish before it stops waiting. Must stay **under** whatever grace the orchestrator gives the container (`stop_grace_period`, `terminationGracePeriodSeconds`) — see [Shutdown & draining](#shutdown--draining). `0` waits for nothing. |
+| `SHUTDOWN_READY_GRACE_MS` | no | `0` | How long the router keeps serving after `/readyz` starts answering `503 shutting_down` and before the listener closes — the window a load balancer has to notice. `0` skips it, which is right under the bundled compose file (nothing there polls readiness). On Kubernetes set about two readiness periods (`periodSeconds` default `10s` → `20000`). `0` is legal and means close the listener at once. |
+| `SHUTDOWN_DRAIN_MS` | no | `15000` | How long a shutdown lets in-flight responses finish before it stops waiting. This plus `SHUTDOWN_READY_GRACE_MS` plus `DB_POOL_CLOSE_TIMEOUT_SECONDS` must stay **under** whatever grace the orchestrator gives the container (`stop_grace_period`, `terminationGracePeriodSeconds`) — see [Shutdown & draining](#shutdown--draining). `0` waits for nothing. |
 | `CLAUDE_CONFIG_ROOT` | no | `/data/claude` | Parent directory holding one `CLAUDE_CONFIG_DIR` per Claude subscription Account. Must sit on the persistent `claude-config` volume. Secret material — see [Persistence & backup](#persistence--backup). |
 | `CLAUDE_CLI_PATH` | no | — | Pins the `claude` binary the Agent SDK spawns, bypassing resolution. Unset is right: the image stages one on `PATH` and `/readyz` reports which rung of the ladder won. A set-but-unusable path **fails** rather than falling back, so the router never spawns a binary you did not name — see [11-anthropic-agent-sdk.md](11-anthropic-agent-sdk.md#9-operational-notes). |
 | `CLAUDE_SDK_MAX_CONCURRENCY` | no | `10` | `claude` subprocesses in flight on this replica. Every subscription request spawns one (~245 MB native binary, measured — see [Sizing](#sizing)), so this is a **memory** bound, not a throughput one — size against RAM, not CPUs. Requests over the ceiling queue rather than fail. Bounds every spawner, including the console's **Test now** button. Watch `router_sdk_subprocesses` and `router_sdk_subprocess_queue_depth` to size it against real traffic. |
@@ -394,27 +400,45 @@ the encryption key itself:
 
 | Step | What it does | Bounded by |
 |---|---|---|
-| 1. Stop accepting | The listener closes. Connections already open keep being served; new ones are refused, so a load balancer's next request goes to another replica. | immediate |
-| 2. Drain | In-flight responses — including a completion that is still streaming — get time to finish. | `SHUTDOWN_DRAIN_MS` |
-| 3. Flush | Scheduler ticks and the OAuth refresher stop, pending `claude` logins are cancelled, then the queued `UsageRecord`s, quota readings and account statuses are written. | the work in hand |
-| 4. Close | The Postgres pool closes and the process exits `0`. | — |
+| 1. Stop being ready | `GET /readyz` starts answering `503 shutting_down` — with `checks: null`, because nothing was probed. Traffic is still served; only the answer to "should you send me more" changed. | immediate |
+| 2. Let the balancer notice | Keep serving while whatever routes to this replica reads that `503` and stops. Skipped entirely at the default of `0`. | `SHUTDOWN_READY_GRACE_MS` |
+| 3. Stop accepting | The listener closes. In-flight responses keep streaming; new connections are refused. | immediate |
+| 4. Drain | In-flight responses — including a completion that is still streaming — get time to finish. | `SHUTDOWN_DRAIN_MS` |
+| 5. Flush | Scheduler ticks and the OAuth refresher stop, pending `claude` logins are cancelled, then the queued `UsageRecord`s, quota readings and account statuses are written. | the work in hand |
+| 6. Close | The Postgres pool closes and the process exits `0`. A query still running is destroyed at the deadline rather than holding the exit open until the kill lands. | `DB_POOL_CLOSE_TIMEOUT_SECONDS` |
 
-**Step 2 is the one with a deadline, and that is the whole point.** `Bun.serve().stop()` waits for
+`/healthz` is unaffected and stays `200` throughout. Liveness is not readiness: the process is up
+and finishing what it has, and restarting it now would truncate exactly what the drain is protecting.
+
+**Step 2 is what makes step 1 worth doing, and it is off by default.** Once the listener closes, bun
+refuses new connections *and* stops dispatching on the keep-alive connections it already had — so
+the honest `503` has nobody left to ask for it. The window is when it can be read. The bundled
+compose deployment has no readiness gate, so `0` is right there and the step is skipped; on
+Kubernetes set roughly two readiness periods (`periodSeconds`, default 10s → `20000`) and raise
+`terminationGracePeriodSeconds` to cover it *plus* the drain.
+
+**Step 4 is the one with the deadline that matters, and that is the whole point.** `Bun.serve().stop()` waits for
 the last byte of the last response and never gives up, so a shutdown that simply awaited it would
 hang for as long as the longest generation in flight — until the orchestrator's `SIGKILL` landed,
-which truncates every stream *and* discards everything step 3 was still holding. The drain caps that
+which truncates every stream *and* discards everything step 5 was still holding. The drain caps that
 wait instead: inside the deadline every response finishes and the flush records what they earned;
 past it the wait ends anyway, the flush still runs, and the responses still open are truncated by the
 exit — counted and logged (`drain deadline expired — closing responses still in flight`, with
 `pending`, `abandoned` and `waitedMs`) rather than lost silently.
 
-So **the container's stop grace must exceed `SHUTDOWN_DRAIN_MS`**, or the kill arrives mid-drain and
-you are back to losing the flush:
+Step 6 is bounded for the same reason and one step later: the pool close runs *after* the flush, so
+a connection wedged in a long query would hold the exit open past everything the flush just wrote —
+with nothing left to gain. `DB_POOL_CLOSE_TIMEOUT_SECONDS` (default `5`) caps it; past that the pool
+is destroyed and whatever was still running is rejected.
+
+So **the container's stop grace must exceed the whole budget** — `SHUTDOWN_READY_GRACE_MS` +
+`SHUTDOWN_DRAIN_MS` + `DB_POOL_CLOSE_TIMEOUT_SECONDS` — or the kill arrives mid-shutdown and you are
+back to losing the flush. A test holds the bundled compose file above the sum of the defaults:
 
 | Runtime | Setting | Default | Ours |
 |---|---|---|---|
 | Docker / Compose | `stop_grace_period` | 10s — **shorter than the drain** | `30s`, set in the bundled `docker-compose.yml` |
-| Kubernetes | `terminationGracePeriodSeconds` | 30s | leave it, or raise both together |
+| Kubernetes | `terminationGracePeriodSeconds` | 30s | raise it alongside `SHUTDOWN_READY_GRACE_MS`; the default covers the drain but not a 20s readiness window on top of it |
 
 A **second** signal during the drain means "stop waiting": the process logs it and exits non-zero
 immediately, rather than re-entering and running the flush twice against a closing pool.

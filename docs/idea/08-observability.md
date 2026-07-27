@@ -266,7 +266,7 @@ immediately if it is healthy.
 | Endpoint | Auth | Meaning | Codes |
 |---|---|---|---|
 | `GET /healthz` | none | Liveness. The process is up and serving, and the build it is: `{"status":"ok","version":"1.0.0"}` | `200` always while serving |
-| `GET /readyz` | none | Readiness: **database reachable**. Two dimensions are reported without gating the answer: the account pool (`ok` / `none` / `blocked`) and the `claude` CLI (the resolution rung that won, or `missing`) | `200` ready, `503` with a short reason when the database is unreachable |
+| `GET /readyz` | none | Readiness: **database reachable, and no shutdown started**. Two dimensions are reported without gating the answer: the account pool (`ok` / `none` / `blocked`) and the `claude` CLI (the resolution rung that won, or `missing`) | `200` `ready`; `503` `not_ready` with a short reason when the database is unreachable; `503` `shutting_down` while draining |
 | `GET /metrics` | `METRICS_TOKEN` when set, none when not | Prometheus text exposition | `200`, `401` when the token is set and not presented |
 | `GET /v1/usage/quota` | router key or admin session | Per-Account, per-window utilization, `resetsAt`, `resetSource`, `status`, `lastCheckedAt` — the same shape the UI renders, so an operator can alert on it externally | `200` |
 | `POST /api/admin/accounts/:id/recheck` | admin session | Manual re-check. `POST /api/admin/accounts/recheck` re-checks every account. For Claude subscriptions it also carries the credential probe, reported as `auth` | `200` always — a cooldown refusal is `rechecked: false`, not `429` |
@@ -274,6 +274,15 @@ immediately if it is healthy.
 | `GET /api/admin/usage/recent` | admin session | The [live request feed](#the-live-request-feed): individual attempts, newest first. `limit` (1..200), `failed` or `outcome` (never both), `requestId` (matches either id) | `200`, `400` on a limit out of range or both filters at once |
 
 `/healthz` never touches the database.
+
+**`/readyz` turns before the listener does.** On `SIGTERM` the shutdown latches first and the
+endpoint answers `503 shutting_down` — with `checks: null`, because nothing was probed and a stale
+`ok` would be a lie — *then* the drain begins
+([09-deployment.md](09-deployment.md#shutdown--draining)). That ordering is the point: an
+orchestrator polling readiness gets one honest refusal instead of learning about the shutdown from a
+refused connection, which it would report as an error against whoever was mid-request. `/healthz`
+stays `200` throughout — the process is up and finishing what it has, and restarting it now would
+truncate exactly what the drain protects.
 
 **The version is one string with five outlets** — `/healthz`, `router_build_info{version}`, the
 `router listening` boot log line, `GET /api/admin/settings`, and the console footer. All five read

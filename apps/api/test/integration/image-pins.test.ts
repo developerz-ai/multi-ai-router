@@ -179,14 +179,18 @@ describe("the shutdown grace", () => {
     const grace = COMPOSE.match(/^\s*stop_grace_period:\s*(?<seconds>\d+)s\s*$/m)?.groups?.seconds
     expect(grace).toMatch(/^\d+$/)
 
-    const drainMs = parseEnv({
+    const env = parseEnv({
       DATABASE_URL: "postgres://router:router@postgres:5432/router",
       ADMIN_USERNAME: "admin",
       ADMIN_PASSWORD: "hunter2",
       ENCRYPTION_KEY: Buffer.alloc(32, 7).toString("base64"),
-    }).shutdownDrainMs
+    })
+    // The whole budget, not just the drain: the readiness window runs first and the pool close runs
+    // last, so a grace that only covers the middle step still kills mid-shutdown.
+    const budgetMs =
+      env.shutdownReadyGraceMs + env.shutdownDrainMs + env.databasePool.closeTimeoutSeconds * 1_000
 
-    expect(Number(grace) * 1_000).toBeGreaterThan(drainMs)
+    expect(Number(grace) * 1_000).toBeGreaterThan(budgetMs)
   })
 })
 

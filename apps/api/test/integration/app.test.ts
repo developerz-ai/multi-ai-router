@@ -4,6 +4,7 @@ import { type AppDeps, createApp } from "../../src/app"
 import { createLogger } from "../../src/logging/logger"
 import { REQUEST_ID_HEADER } from "../../src/middleware/requestId"
 import type { ReadinessProbes } from "../../src/services/health/readiness"
+import { createLifecycle } from "../../src/services/shutdown/lifecycle"
 
 /**
  * Exercises the real Hono app through `app.request(...)`. No database and no upstream: the
@@ -23,6 +24,7 @@ function harness(probes: Partial<ReadinessProbes> = {}): Harness {
       database: probes.database ?? (() => Promise.resolve(true)),
       accounts: probes.accounts ?? (() => Promise.resolve("ok")),
       claudeCli: probes.claudeCli ?? (() => Promise.resolve("platform_package")),
+      shuttingDown: probes.shuttingDown ?? (() => false),
     },
   }
   return { app: createApp(deps), lines }
@@ -91,6 +93,38 @@ describe("GET /readyz", () => {
       checks: { database: "fail", accounts: "ok" },
       reason: "database unreachable",
     })
+  })
+
+  test("is 503 shutting_down once a drain has been accepted, while /healthz stays 200", async () => {
+    // The endpoint an orchestrator polls has to turn before the listener does, or the first thing
+    // the load balancer learns is a refused connection. Liveness is unaffected: the process is up
+    // and finishing what it has — restarting it now would truncate exactly what the drain protects.
+    const lifecycle = createLifecycle()
+    const { app } = harness({ shuttingDown: lifecycle.shuttingDown })
+
+    expect((await app.request("/readyz")).status).toBe(200)
+
+    lifecycle.begin()
+    const res = await app.request("/readyz")
+
+    expect(res.status).toBe(503)
+    expect(await res.json()).toEqual({
+      status: "shutting_down",
+      // No probe ran, so there is nothing to report — a stale `ok` here would be a lie.
+      checks: null,
+      reason: "shutting down — draining in-flight requests",
+    })
+    expect((await app.request("/healthz")).status).toBe(200)
+  })
+
+  test("is 503 while draining even with every check green", async () => {
+    const { app } = harness({
+      shuttingDown: () => true,
+      database: () => Promise.resolve(true),
+      accounts: () => Promise.resolve("ok"),
+    })
+
+    expect((await app.request("/readyz")).status).toBe(503)
   })
 
   test("names the claude cli rung that won — two hosts can both 'find it' and differ", async () => {

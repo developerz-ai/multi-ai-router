@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import {
+  DATABASE_POOL_DEFAULTS,
   PG_MAX_BIND_PARAMETERS,
   USAGE_RECORD_BIND_PARAMETERS_PER_ROW,
   USAGE_RECORD_MAX_BATCH_ROWS,
@@ -34,6 +35,10 @@ describe("parseEnv", () => {
 
     expect(env.port).toBe(8080)
     expect(env.shutdownDrainMs).toBe(15_000)
+    expect(env.shutdownReadyGraceMs).toBe(0)
+    // Restated from the package that opens the pool, so an unset variable and the documented
+    // default cannot become two numbers that merely used to agree.
+    expect(env.databasePool).toEqual(DATABASE_POOL_DEFAULTS)
     expect(env.logLevel).toBe("info")
     expect(env.trustProxy).toBe(false)
     expect(env.publicUrl).toBeNull()
@@ -102,6 +107,12 @@ describe("parseEnv", () => {
       ADMIN_LOGIN_LOCKOUT_MINUTES: "30",
       ADMIN_SESSION_SLIDE_FRACTION: "0.25",
       SESSION_COOKIE_INSECURE: "true",
+      DB_POOL_MAX: "25",
+      DB_POOL_IDLE_TIMEOUT_SECONDS: "120",
+      DB_POOL_CONNECT_TIMEOUT_SECONDS: "20",
+      DB_POOL_MAX_LIFETIME_SECONDS: "600",
+      DB_POOL_CLOSE_TIMEOUT_SECONDS: "9",
+      SHUTDOWN_READY_GRACE_MS: "20000",
     })
 
     expect(env.port).toBe(9000)
@@ -112,6 +123,14 @@ describe("parseEnv", () => {
     expect(env.claudeConfigRoot).toBe("/srv/claude")
     expect(env.accountRecheckCooldownSeconds).toBe(30)
     expect(env.accountTestNowCooldownSeconds).toBe(45)
+    expect(env.shutdownReadyGraceMs).toBe(20_000)
+    expect(env.databasePool).toEqual({
+      maxConnections: 25,
+      idleTimeoutSeconds: 120,
+      connectTimeoutSeconds: 20,
+      maxLifetimeSeconds: 600,
+      closeTimeoutSeconds: 9,
+    })
     expect(env.retention.sessionsHours).toBe(6)
     expect(env.retention.orphanConfigDirHours).toBe(3)
     expect(env.janitorIntervalMinutes).toBe(15)

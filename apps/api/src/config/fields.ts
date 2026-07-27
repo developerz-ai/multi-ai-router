@@ -91,6 +91,19 @@ export const encryptionKey = z
 export const ZERO_IS_LEGAL: ReadonlyMap<string, string> = new Map([
   ["PORT", "let the kernel pick an ephemeral port; the boot log names the one it bound"],
   ["SHUTDOWN_DRAIN_MS", "close in-flight responses immediately instead of waiting for them"],
+  [
+    "SHUTDOWN_READY_GRACE_MS",
+    "close the listener as soon as /readyz starts refusing, without waiting for a load balancer to notice",
+  ],
+  // postgres.js treats a falsy timer interval as one that never fires (`src/connection.js#timer`),
+  // so zero on either of these reads as *never*, not *at once*. Both leave the router routing,
+  // recording and recovering — they only give up a courtesy the pool does for long-lived processes.
+  ["DB_POOL_IDLE_TIMEOUT_SECONDS", "keep an idle connection open forever instead of closing it"],
+  ["DB_POOL_MAX_LIFETIME_SECONDS", "never recycle a pooled connection on age"],
+  [
+    "DB_POOL_CLOSE_TIMEOUT_SECONDS",
+    "destroy the pool at shutdown instead of waiting for in-flight queries",
+  ],
   ["ACCOUNT_RECHECK_COOLDOWN_SECONDS", "no cooldown between manual Re-check now probes"],
   ["ACCOUNT_TEST_NOW_COOLDOWN_SECONDS", "no cooldown between manual Test now presses"],
   ["KEY_CACHE_NEGATIVE_TTL_SECONDS", "do not cache a failed key lookup at all"],

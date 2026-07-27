@@ -254,10 +254,12 @@ system can be *seen* in one place rather than inferred from twenty:
 `createApp` stays a pure factory a test calls with stubs; composition is the production wiring and
 the only place a `Database` becomes a service. It also owns start and stop: the catalog is loaded
 and the background writers are running *before* the listener opens, and on shutdown the queue is
-flushed before the connection it needs is closed. The flush is reached by a **bounded drain**: the
-listener closes, in-flight responses get `SHUTDOWN_DRAIN_MS` to finish, and then the flush runs
-whether or not they did — an unbounded wait would hand the exit to the orchestrator's `SIGKILL` and
-lose the queue along with the streams
+flushed before the connection it needs is closed. The flush is reached by a **bounded drain**:
+`/readyz` starts refusing, the listener closes, in-flight responses get `SHUTDOWN_DRAIN_MS` to
+finish, and then the flush runs whether or not they did — an unbounded wait would hand the exit to
+the orchestrator's `SIGKILL` and lose the queue along with the streams. The pool close that follows
+is bounded too, by `DB_POOL_CLOSE_TIMEOUT_SECONDS`, so a wedged query cannot hold the exit open past
+work the flush has already written
 ([09-deployment.md](09-deployment.md#shutdown--draining)).
 
 The [scheduler](#background-work-and-scheduling) is built here too, and it is the one thing given

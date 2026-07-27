@@ -56,11 +56,12 @@ services:
     # Survive host reboots and crashes, but stay down after an explicit `docker compose stop`.
     restart: unless-stopped
 
-    # Longer than SHUTDOWN_DRAIN_MS (default 15s), on purpose. On SIGTERM the router stops
-    # accepting, lets in-flight responses finish for up to that long, and only then flushes the
-    # usage rows, quota readings and account statuses it is holding. Docker's default grace is 10s,
-    # which would SIGKILL the process mid-drain: streams truncated *and* the bookkeeping lost. Raise
-    # both together, never one alone.
+    # Longer than the router's whole shutdown budget, on purpose: SHUTDOWN_READY_GRACE_MS (0 here —
+    # nothing in this file polls readiness) + SHUTDOWN_DRAIN_MS (15s) + DB_POOL_CLOSE_TIMEOUT_SECONDS
+    # (5s). On SIGTERM /readyz starts refusing, the router stops accepting, lets in-flight responses
+    # finish, and only then flushes the usage rows, quota readings and account statuses it is
+    # holding. Docker's default grace is 10s, which would SIGKILL the process mid-drain: streams
+    # truncated *and* the bookkeeping lost. Raise these together, never one alone.
     stop_grace_period: 30s
 
     # Resource limits (09-deployment.md §Sizing). Budget 512 MB baseline + ~245 MB per

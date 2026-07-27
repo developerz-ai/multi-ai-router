@@ -1,5 +1,6 @@
 import { isAbsolute } from "node:path"
 import { UNKNOWN_REVISION } from "@multi-ai-router/core"
+import { DATABASE_POOL_DEFAULTS } from "@multi-ai-router/db"
 import { z } from "zod"
 import {
   absoluteUrl,
@@ -47,6 +48,42 @@ export interface RetentionConfig {
    * directory an account is about to name (`scheduler/tasks/config-dir-reap.ts`).
    */
   readonly orphanConfigDirHours: number
+}
+
+/**
+ * The Postgres connection pool — one pool, shared by everything that is not the request path.
+ *
+ * Nothing here is reachable from a client request (non-negotiable 8 keeps Postgres off the hot
+ * path), which is exactly why the ceiling matters: the admin console, every scheduler sweep, the
+ * off-path usage/quota/status writers and `/readyz` all queue behind the same `maxConnections`.
+ * A pool sized for one router is wrong for a deployment running four replicas against a managed
+ * instance with a connection cap, or for one whose sweeps run long — so it is config, not a
+ * constant (non-negotiable 11).
+ *
+ * The three timeouts are seconds because postgres.js counts in seconds. Two of them accept `0`
+ * and it does not mean "immediately": postgres.js treats a falsy interval as a timer that never
+ * fires, so `0` reads as *never* — `fields.ts` records which.
+ *
+ * Defaults come from `DATABASE_POOL_DEFAULTS` in `@multi-ai-router/db`, so an unset variable and
+ * one set to the documented default are the same value, not two that happen to agree.
+ */
+export interface DatabasePoolConfig {
+  /** Connections this replica may hold open at once. */
+  readonly maxConnections: number
+  /** How long an idle connection is kept. `0` keeps it forever. */
+  readonly idleTimeoutSeconds: number
+  /** How long a dial waits to be accepted before it fails. */
+  readonly connectTimeoutSeconds: number
+  /** Age at which a connection is recycled, so a rolling failover drains cleanly. `0` never recycles. */
+  readonly maxLifetimeSeconds: number
+  /**
+   * How long the shutdown's pool close waits for in-flight queries before destroying them.
+   *
+   * The last step of a shutdown that is already racing the orchestrator's kill, so it is bounded
+   * for the same reason `SHUTDOWN_DRAIN_MS` is: an unbounded wait here hands the exit to a
+   * `SIGKILL`. `0` destroys the pool at once.
+   */
+  readonly closeTimeoutSeconds: number
 }
 
 /**
@@ -263,7 +300,23 @@ export interface Env {
    * `0` closes in-flight responses immediately. See `services/shutdown/drain.ts`.
    */
   readonly shutdownDrainMs: number
+  /**
+   * How long the router keeps serving *after* `/readyz` starts refusing and *before* the listener
+   * closes — the window a load balancer has to notice and stop sending it work.
+   *
+   * Without it the readiness flip is nearly inert, and that is measured, not assumed: once
+   * `Bun.serve().stop()` is called the listener refuses new connections *and* stops dispatching on
+   * the keep-alive connections it already had, so the honest `503` has nobody left to tell. This
+   * window is when it can be told.
+   *
+   * `0` — the default — closes the listener at once, which is right for the bundled compose
+   * deployment: nothing there polls readiness, so the wait would be pure added shutdown time. A
+   * Kubernetes deployment wants roughly two readiness periods here (`periodSeconds`, default 10s),
+   * and its `terminationGracePeriodSeconds` has to cover this *plus* `SHUTDOWN_DRAIN_MS`.
+   */
+  readonly shutdownReadyGraceMs: number
   readonly databaseUrl: string
+  readonly databasePool: DatabasePoolConfig
   readonly adminUsername: string
   readonly adminCredential: AdminCredential
   readonly encryptionKey: string
@@ -357,7 +410,13 @@ export { decodeEncryptionKey, ZERO_IS_LEGAL } from "./fields"
 export const ENV_FIELDS = {
   PORT: wholeNumber.optional(),
   SHUTDOWN_DRAIN_MS: wholeNumber.optional(),
+  SHUTDOWN_READY_GRACE_MS: wholeNumber.optional(),
   DATABASE_URL: nonEmpty,
+  DB_POOL_MAX: atLeastOne.optional(),
+  DB_POOL_IDLE_TIMEOUT_SECONDS: wholeNumber.optional(),
+  DB_POOL_CONNECT_TIMEOUT_SECONDS: atLeastOne.optional(),
+  DB_POOL_MAX_LIFETIME_SECONDS: wholeNumber.optional(),
+  DB_POOL_CLOSE_TIMEOUT_SECONDS: wholeNumber.optional(),
   ADMIN_USERNAME: nonEmpty,
   ADMIN_PASSWORD: nonEmpty.optional(),
   ADMIN_PASSWORD_HASH: nonEmpty.optional(),
@@ -449,7 +508,21 @@ const envSchema = z.object(ENV_FIELDS).transform((raw, ctx): Env => {
     // file declares. Neither number is a guess the other has to match by luck — an image-pins
     // test holds the compose grace above this default.
     shutdownDrainMs: raw.SHUTDOWN_DRAIN_MS ?? 15_000,
+    // Zero, so the bundled compose deployment shuts down exactly as fast as it used to: nothing
+    // there polls readiness, so the window would buy an operator nothing and cost them seconds.
+    shutdownReadyGraceMs: raw.SHUTDOWN_READY_GRACE_MS ?? 0,
     databaseUrl: raw.DATABASE_URL,
+    databasePool: {
+      maxConnections: raw.DB_POOL_MAX ?? DATABASE_POOL_DEFAULTS.maxConnections,
+      idleTimeoutSeconds:
+        raw.DB_POOL_IDLE_TIMEOUT_SECONDS ?? DATABASE_POOL_DEFAULTS.idleTimeoutSeconds,
+      connectTimeoutSeconds:
+        raw.DB_POOL_CONNECT_TIMEOUT_SECONDS ?? DATABASE_POOL_DEFAULTS.connectTimeoutSeconds,
+      maxLifetimeSeconds:
+        raw.DB_POOL_MAX_LIFETIME_SECONDS ?? DATABASE_POOL_DEFAULTS.maxLifetimeSeconds,
+      closeTimeoutSeconds:
+        raw.DB_POOL_CLOSE_TIMEOUT_SECONDS ?? DATABASE_POOL_DEFAULTS.closeTimeoutSeconds,
+    },
     adminUsername: raw.ADMIN_USERNAME,
     adminCredential,
     encryptionKey: raw.ENCRYPTION_KEY,
