@@ -2,7 +2,7 @@
 
 <p align="center"><strong>your tools → multi-ai-router → providers</strong></p>
 
-**A self-hosted web app that turns your scattered API keys and AI subscriptions into one endpoint.** 🔀 Add accounts (Claude Max/Pro, ChatGPT/Codex, Anthropic API, OpenAI API, OpenRouter, z.ai, Kimi, MiniMax, Gemini, or any OpenAI-/Anthropic-compatible endpoint) once, in the admin console. Mint a router key, bind it to the accounts it may use, and point every tool you own — Claude Code, Cursor, OpenCode, Codex CLI, Cline, Aider, anything speaking the OpenAI or Anthropic wire protocol — at that one key. It's a proxy: your tools never see the upstream credential, and the upstream never sees more than one caller.
+**It's a proxy: your tools → multi-ai-router → providers.** A self-hosted web app where you add the API keys and subscription accounts you already pay for (Claude Max/Pro, ChatGPT/Codex, Anthropic API, OpenAI API, OpenRouter, z.ai, Kimi, MiniMax, Gemini, or any OpenAI-/Anthropic-compatible endpoint) once, in the admin console — and get back one OpenAI- and Anthropic-compatible URL. Mint a router key, bind it to the accounts it may use, and point every tool you own — Claude Code, Cursor, OpenCode, Codex CLI, Cline, Aider, anything speaking the OpenAI or Anthropic wire protocol — at that one key. Your tools never see the upstream credential, and the upstream never sees more than one caller.
 
 ```
 Claude Code / OpenCode / Codex / any OpenAI|Anthropic client
@@ -52,7 +52,7 @@ Marked ⏳ where the design is settled but the code is not — see [Status](#-st
 - 🔑 **Named, retrievable keys with full or limited scope** — every key has a human-chosen name and a scope: `all` accounts, one or more pools, or an explicit account list. Stored encrypted, not hashed, so you can look a key up again without rotating it. A per-key rate limit is enforced on the request path.
 - 📊 **Usage** — one record per upstream **attempt** (key, account, pool, session, model, tokens, cost, latency, TTFB, router overhead, outcome), queued in memory and batch-written off the request path, and read back by the console over any window, broken down by key, account, pool or model — with daily rollups behind it, cost estimation from an operator-editable price table, and a Prometheus `/metrics` exposition in front.
 - ⏱️ **Reset visibility** — every unavailable account shows its reset as an absolute time *and* a countdown, per window for Claude subs (5-hour, 7-day, per-model), labeled as reported / estimated / unknown. Plus a manual **Re-check now**, per account or for all: providers sometimes reset early or lift a limit for everyone, and the router shouldn't sit on a stale timestamp.
-- ⚡ **Performance as a stated goal** — under 5 ms added p99 on the passthrough path and zero added time-to-first-token. Streams are never buffered, passthrough bodies are never parsed, and nothing touches Postgres on the critical path: accounts and pools are read from a warm catalog, keys from a bounded cache, usage is written off-path. `bin/bench` checks both claims against a stub upstream and exits non-zero when either breaks.
+- ⚡ **Performance as a stated goal** — under 5 ms added p99 on the passthrough path and zero added time-to-first-token. Streams are never buffered, passthrough bodies are never parsed, and nothing touches Postgres on the critical path: accounts and pools are read from a warm catalog, keys from a bounded cache, usage is written off-path. `bin/bench` checks both claims against a stub upstream and exits non-zero when either breaks; CI runs it and reports the delta against a committed baseline on every PR, but the job is `continue-on-error` — a shared runner's noise isn't a regression signal worth blocking a merge over, so it doesn't fail the build (yet).
 - 🖥️ **SolidJS operator console** — overview, accounts, pools, keys, usage and settings all render live data: key reveal with no shown-once flow, destructive actions that name exactly what they break, reset shown as absolute time *and* countdown labelled by how far it can be trusted, a red banner for any account out of credits, a live request feed that names the failing request by id, account and error class, and a settings screen with live price overrides, retention knobs, scheduled-task health, and the audit feed.
 - 🐳 **`docker compose up -d`** — the router plus PostgreSQL 16, a healthcheck gating startup, three env vars you set by hand.
 
@@ -70,51 +70,17 @@ Not for you if you want a semantic model picker, an agent framework, multi-tenan
 
 ## 🚀 Quick start
 
-Three env vars you set by hand and one command. No hash-generation step. `docker compose up -d` brings up two services — the router and PostgreSQL 16 — with a healthcheck gating the router's start and `DATABASE_URL` wired in for you.
-
-**First, copy the env template and fill in the three required vars:**
+Three env vars you set by hand, then two commands. No hash-generation step. The bundled [`docker-compose.yml`](docker-compose.yml) brings up two services — the router and PostgreSQL 16 — with a healthcheck gating the router's start and `DATABASE_URL` wired in for you; it reads its secrets from `.env`, which is gitignored, so there's a copy step first:
 
 ```bash
 cp .env.example .env
 # Edit .env: set ADMIN_PASSWORD and ENCRYPTION_KEY (generate: openssl rand -base64 32)
 # ADMIN_USERNAME defaults to "admin" if you leave it as-is
-```
 
-The bundled `docker-compose.yml` reads from `.env` and supplies `DATABASE_URL` automatically:
-
-```yaml
-# docker-compose.yml (bundled)
-services:
-  router:
-    image: ghcr.io/developerz-ai/multi-ai-router:1.0.0
-    ports: ["127.0.0.1:8080:8080"]
-    env_file: [{ path: .env, required: false }]  # reads ADMIN_*, ENCRYPTION_KEY from .env
-    environment:
-      DATABASE_URL: postgres://router:router@postgres:5432/router
-    # per-Account CLAUDE_CONFIG_DIR — live credentials, treat as secret material
-    volumes: ["claude-config:/data/claude"]
-    depends_on: { postgres: { condition: service_healthy } }
-    restart: unless-stopped
-
-  postgres:
-    image: postgres:16
-    environment: { POSTGRES_USER: router, POSTGRES_PASSWORD: router, POSTGRES_DB: router }
-    healthcheck: { test: ["CMD-SHELL", "pg_isready -U router"], interval: 5s, retries: 10 }
-    volumes: ["pgdata:/var/lib/postgresql/data"]
-    restart: unless-stopped
-
-volumes:
-  pgdata:
-  claude-config:
-```
-
-**Then:**
-
-```bash
 docker compose up -d
 ```
 
-Migrations run at boot, are idempotent, and fail the boot loudly rather than starting on a half-migrated schema. Pointing `DATABASE_URL` at an existing or managed Postgres and dropping the bundled `postgres` service is a one-line change.
+Migrations run at boot, are idempotent, and fail the boot loudly rather than starting on a half-migrated schema. Pointing `DATABASE_URL` at an existing or managed Postgres and dropping the bundled `postgres` service is a one-line change — see [`docs/idea/09-deployment.md`](docs/idea/09-deployment.md#using-an-existing-or-managed-postgres). The compose file itself is the reference, not a copy of it here: it's commented inline, and a snippet reproduced in docs would just be one more place for the two to drift apart.
 
 Then open **<http://localhost:8080>** and log in. The router process serves the SolidJS console itself, at the same origin as the API — no second container, no static host, no CORS to configure. An empty deployment lands on a three-step walk — **add an account → pool it → mint a key** — and the mint hands you a **Point your tool at it** block already filled in with this deployment's base URL and that key's real value, one tab per client. `/api/admin/**` is there directly if you'd rather script it. **Give the key a name; you can view and copy its value again at any time** via `POST /api/admin/keys/:id/reveal` — keys are stored encrypted, not hashed, because an operator running a fleet of agents needs to look one up later without rotating it.
 
@@ -202,7 +168,7 @@ overhead p99 over `--budget-ms`, or added TTFT p95 over `--ttft-budget-ms`.
 
 ## 🔌 Pointing your client at it
 
-Router keys are accepted in both dialects: `Authorization: Bearer mar_live_…` and `x-api-key: mar_live_…`. Anything that can set a base URL and a key works; these are the tested targets.
+Router keys are accepted in both dialects: `Authorization: Bearer mar_live_…` and `x-api-key: mar_live_…`. Anything that can set a base URL and a key works; the table below is what the console's own client snippets cover today — there's no automated integration test against each of these clients, so treat it as a documented, not verified, list.
 
 **The console says all of this too, filled in.** Mint or reveal a key and the dialog carries a **Point your tool at it** panel — tabs for Claude Code, Cursor, Codex CLI, Aider, the OpenAI SDKs and `curl`, each block already containing this deployment's base URL (`PUBLIC_URL`, else the console's own origin) and that key's real value. The table below is the same content for someone who never opened the console.
 
