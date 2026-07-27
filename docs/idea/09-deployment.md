@@ -137,7 +137,7 @@ naming the offending variable — the process never starts half-configured.
 | `SESSION_CACHE_TTL_SECONDS` | no | `300` | How long a binding is reused before its row is re-read. Bounds only how long this replica may lag another one's rebind; the row itself never expires, because an SDK session outlives any cache. |
 | `SESSION_CACHE_NEGATIVE_TTL_SECONDS` | no | `30` | How long "this session has no binding" is remembered. Short, and for the opposite reason: it keeps plain HTTP traffic on a subscription-serving router from re-asking Postgres every request. |
 | `USAGE_QUEUE_MAX` | no | `10000` | `UsageRecord` rows queued before the writer sheds the oldest. Overflow degrades reporting, never traffic. |
-| `USAGE_BATCH_SIZE` | no | `200` | Rows per insert. Larger means fewer round trips and a bigger loss if the process dies mid-queue. |
+| `USAGE_BATCH_SIZE` | no | `200` | Rows per insert. Larger means fewer round trips and a bigger loss if the process dies mid-queue. **Bounded `1..2520`, refused at boot outside it**: a usage row spends 26 of the 65 535 bind parameters Postgres allows per statement (65 535 / 26 = 2520), and a batch past that is rejected on every flush — forever, with traffic unaffected and the usage table empty. |
 | `ROUTING_MAX_ATTEMPTS` | no | `3` | Distinct accounts tried for one client request before the honest failure. Never overrides the rule that an attempt is not retried once bytes are on the wire. |
 | `ROUTING_FAILURE_THRESHOLD` | no | `3` | Consecutive 5xx or connection failures before an account's breaker trips. |
 | `ROUTING_BASE_BACKOFF_MS` | no | `1000` | First cooldown step; doubles per consecutive failure. |

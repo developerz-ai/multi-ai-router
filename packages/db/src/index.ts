@@ -88,7 +88,12 @@ export type {
 } from "./repositories/usage-recent-repository"
 export { createUsageRecentRepository } from "./repositories/usage-recent-repository"
 export type { UsageRecordRepository } from "./repositories/usage-repository"
-export { createUsageRecordRepository } from "./repositories/usage-repository"
+export {
+  createUsageRecordRepository,
+  PG_MAX_BIND_PARAMETERS,
+  USAGE_RECORD_BIND_PARAMETERS_PER_ROW,
+  USAGE_RECORD_MAX_BATCH_ROWS,
+} from "./repositories/usage-repository"
 // --- row types --------------------------------------------------------------
 export type {
   AccountRow,

@@ -3,6 +3,40 @@ import { type NewUsageRecordRow, usageRecords } from "../schema/usage-records"
 import { deleteOldestBatch } from "./bounded-delete"
 
 /**
+ * Postgres' bind ceiling. The extended protocol's Bind message counts parameters
+ * in an Int16, so no statement may carry more than this — a protocol constant,
+ * not a server setting an operator can raise.
+ */
+export const PG_MAX_BIND_PARAMETERS = 65_535
+
+/**
+ * Bind parameters one row of `insertMany` spends: one per column the writer sets.
+ * `usage_records.id` is not among them — Drizzle emits `default` for it, which is
+ * a keyword, not a parameter.
+ *
+ * Stated rather than derived from the table, because "how many columns does the
+ * writer set" is not a property the schema knows: a new nullable column costs a
+ * parameter only once something fills it in. `test/unit/repositories/usage-batch-limit.test.ts`
+ * builds the real statement and fails when this drifts, so the number cannot go
+ * stale quietly.
+ */
+export const USAGE_RECORD_BIND_PARAMETERS_PER_ROW = 26
+
+/**
+ * Rows `insertMany` may carry in one statement.
+ *
+ * This is a hard edge, not a tuning suggestion. One row past it and Postgres
+ * rejects the *statement* — every time, for the same reason, forever — and the
+ * recorder deliberately never re-queues a batch its writer refused (see
+ * `apps/api/src/services/usage/recorder.ts`). So a `USAGE_BATCH_SIZE` above this
+ * does not degrade reporting: it loses all of it, from boot, while traffic looks
+ * perfectly healthy. `config/env.ts` refuses such a value at boot.
+ */
+export const USAGE_RECORD_MAX_BATCH_ROWS = Math.floor(
+  PG_MAX_BIND_PARAMETERS / USAGE_RECORD_BIND_PARAMETERS_PER_ROW,
+)
+
+/**
  * Usage persistence. One row per upstream attempt.
  *
  * Every method here is **off the request path** — the recorder in
@@ -22,6 +56,9 @@ export interface UsageRecordRepository {
    *
    * An empty batch is a no-op rather than an error: the flush timer fires on a
    * schedule, not on demand, so it routinely has nothing to do.
+   *
+   * Caller-bounded at {@link USAGE_RECORD_MAX_BATCH_ROWS} rows — see there for why
+   * exceeding it is a total loss rather than a slow path.
    */
   insertMany(rows: readonly NewUsageRecordRow[]): Promise<number>
   /**

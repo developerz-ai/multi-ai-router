@@ -1,5 +1,10 @@
 import { isAbsolute } from "node:path"
 import { UNKNOWN_REVISION } from "@multi-ai-router/core"
+import {
+  PG_MAX_BIND_PARAMETERS,
+  USAGE_RECORD_BIND_PARAMETERS_PER_ROW,
+  USAGE_RECORD_MAX_BATCH_ROWS,
+} from "@multi-ai-router/db"
 import { z } from "zod"
 
 /**
@@ -115,6 +120,10 @@ export interface DataPlaneConfig {
   readonly sessionCacheNegativeTtlSeconds: number
   /** Usage records held in memory before the writer sheds the oldest. Reporting degrades; traffic does not. */
   readonly usageQueueMax: number
+  /**
+   * Rows per insert. Validated into `1..USAGE_RECORD_MAX_BATCH_ROWS` at boot — outside that
+   * range every flush loses its whole batch and reporting goes silently empty.
+   */
   readonly usageBatchSize: number
   readonly usageFlushIntervalMs: number
   /**
@@ -334,6 +343,25 @@ const nonEmpty = z.string().min(1)
 const wholeNumber = z.string().regex(/^\d+$/, "must be a whole number").transform(Number)
 /** For a ceiling where zero is not "unlimited" but "nothing ever runs". */
 const atLeastOne = wholeNumber.refine((v) => v >= 1, "must be at least 1")
+/**
+ * Rows per usage insert, bounded at both ends because both ends lose *all* usage data
+ * silently while traffic keeps flowing.
+ *
+ * Above the ceiling, the batch outgrows Postgres' bind-parameter limit, so the server
+ * rejects the statement — every flush, identically, forever — and the recorder never
+ * re-queues a batch its writer refused (that would starve the queue behind it). At zero,
+ * the drain takes nothing and the queue simply sheds until it overflows. Either way the
+ * only symptom is an empty usage table, which is why this is a boot failure and not a
+ * clamp: a router that quietly records nothing is worse than one that will not start.
+ */
+const usageBatchSize = atLeastOne.refine(
+  (v) => v <= USAGE_RECORD_MAX_BATCH_ROWS,
+  `must be at most ${USAGE_RECORD_MAX_BATCH_ROWS}: Postgres binds at most ` +
+    `${PG_MAX_BIND_PARAMETERS} parameters per statement and one usage row costs ` +
+    `${USAGE_RECORD_BIND_PARAMETERS_PER_ROW} of them ` +
+    `(${PG_MAX_BIND_PARAMETERS} / ${USAGE_RECORD_BIND_PARAMETERS_PER_ROW} = ` +
+    `${USAGE_RECORD_MAX_BATCH_ROWS})`,
+)
 const flag = z.enum(["true", "false", "1", "0"]).transform((v) => v === "true" || v === "1")
 /** A share of something, written as a decimal in 0..1. */
 const fraction = z
@@ -406,7 +434,7 @@ const envSchema = z
     SESSION_CACHE_TTL_SECONDS: wholeNumber.optional(),
     SESSION_CACHE_NEGATIVE_TTL_SECONDS: wholeNumber.optional(),
     USAGE_QUEUE_MAX: wholeNumber.optional(),
-    USAGE_BATCH_SIZE: wholeNumber.optional(),
+    USAGE_BATCH_SIZE: usageBatchSize.optional(),
     USAGE_FLUSH_INTERVAL_MS: wholeNumber.optional(),
     QUOTA_WRITE_INTERVAL_MS: atLeastOne.optional(),
     ACCOUNT_STATUS_WRITE_INTERVAL_MS: atLeastOne.optional(),

@@ -135,7 +135,7 @@ explicitly, before an upstream call, rather than degrading into a lossy approxim
 | `KEY_CACHE_TTL_SECONDS` | no | `60` | Reuse window for a successful verification. Revocation invalidates immediately on the replica that served it; every other replica accepts the key until this elapses |
 | `KEY_CACHE_NEGATIVE_TTL_SECONDS` | no | `5` | Reuse window for a *failed* lookup. Short: it stops a bad-key flood becoming a query flood, and a fresh key must work quickly |
 | `USAGE_QUEUE_MAX` | no | `10000` | Queued `UsageRecord`s before the oldest are shed. Reporting degrades; traffic does not |
-| `USAGE_BATCH_SIZE` | no | `200` | Rows per insert |
+| `USAGE_BATCH_SIZE` | no | `200` | Rows per insert. Bounded `1..2520` — a row costs 26 of Postgres' 65535 bind parameters per statement, and a batch past that is rejected on every flush |
 | `USAGE_FLUSH_INTERVAL_MS` | no | `1000` | Drain cadence. Widening it widens the crash-loss window; it never affects latency |
 
 The last two groups are the request path's own tunables. Their defaults **mirror the layer

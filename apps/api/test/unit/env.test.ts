@@ -1,4 +1,9 @@
 import { describe, expect, test } from "bun:test"
+import {
+  PG_MAX_BIND_PARAMETERS,
+  USAGE_RECORD_BIND_PARAMETERS_PER_ROW,
+  USAGE_RECORD_MAX_BATCH_ROWS,
+} from "@multi-ai-router/db"
 import { EnvValidationError, parseEnv } from "../../src/config/env"
 import { DEFAULT_MAX_BODY_BYTES } from "../../src/services/dataplane"
 
@@ -324,6 +329,49 @@ describe("parseEnv", () => {
     test("names it when it is not a whole number of bytes", () => {
       expect(expectEnvError({ ...base, MAX_REQUEST_BODY_BYTES: "32MB" }).variables).toEqual([
         "MAX_REQUEST_BODY_BYTES",
+      ])
+    })
+  })
+
+  describe("USAGE_BATCH_SIZE", () => {
+    test("the operator's number is the one parsed", () => {
+      expect(parseEnv({ ...base, USAGE_BATCH_SIZE: "500" }).dataPlane.usageBatchSize).toBe(500)
+    })
+
+    test("accepts the largest batch Postgres can bind", () => {
+      const env = parseEnv({ ...base, USAGE_BATCH_SIZE: String(USAGE_RECORD_MAX_BATCH_ROWS) })
+      expect(env.dataPlane.usageBatchSize).toBe(USAGE_RECORD_MAX_BATCH_ROWS)
+    })
+
+    test("refuses one row past it, rather than losing every usage record forever", () => {
+      const over = String(USAGE_RECORD_MAX_BATCH_ROWS + 1)
+      expect(expectEnvError({ ...base, USAGE_BATCH_SIZE: over }).variables).toEqual([
+        "USAGE_BATCH_SIZE",
+      ])
+    })
+
+    test("shows the arithmetic, so the ceiling is a fact and not a magic number", () => {
+      const error = expectEnvError({
+        ...base,
+        USAGE_BATCH_SIZE: String(USAGE_RECORD_MAX_BATCH_ROWS + 1),
+      })
+
+      expect(error.message).toContain(String(PG_MAX_BIND_PARAMETERS))
+      expect(error.message).toContain(String(USAGE_RECORD_BIND_PARAMETERS_PER_ROW))
+      expect(error.message).toContain(
+        `${PG_MAX_BIND_PARAMETERS} / ${USAGE_RECORD_BIND_PARAMETERS_PER_ROW} = ${USAGE_RECORD_MAX_BATCH_ROWS}`,
+      )
+    })
+
+    test("refuses a batch of zero: the drain takes nothing and the queue only sheds", () => {
+      expect(expectEnvError({ ...base, USAGE_BATCH_SIZE: "0" }).variables).toEqual([
+        "USAGE_BATCH_SIZE",
+      ])
+    })
+
+    test("names it when it is not a whole number of rows", () => {
+      expect(expectEnvError({ ...base, USAGE_BATCH_SIZE: "2k" }).variables).toEqual([
+        "USAGE_BATCH_SIZE",
       ])
     })
   })
