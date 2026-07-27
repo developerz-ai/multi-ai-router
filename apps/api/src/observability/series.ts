@@ -161,6 +161,17 @@ export function createSeries(options: RegistryOptions = {}) {
       labels: [],
     }),
 
+    /**
+     * Two dispositions, never summed into one alert: `retried` is a database that blinked and a
+     * batch that went back for one more try, `discarded` is rows that no longer exist anywhere.
+     * A deployment where the first is noisy and the second is zero is working as designed.
+     */
+    usageWriteFailures: registry.counter({
+      name: "router_usage_write_failures_total",
+      help: "Usage records in a batch the database refused. disposition=retried went back for one more try; discarded was lost.",
+      labels: ["disposition"],
+    }),
+
     taskLastSuccess: registry.gauge({
       name: "router_task_last_success_timestamp_seconds",
       help: "Unix time of a background task's last successful run. Age beyond its cadence alerts.",

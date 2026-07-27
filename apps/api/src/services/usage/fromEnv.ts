@@ -7,14 +7,16 @@ import { createUsageRecorder, type UsageRecorder } from "./recorder"
 
 /**
  * The one place the usage recorder becomes a *production* recorder: a repository behind the writer,
- * the queue's shape from env, and — the reason this module exists — a voice for the two ways
- * reporting can fail quietly.
+ * the queue's shape from env, and — the reason this module exists — a voice for the ways reporting
+ * can fail quietly.
  *
  * `recorder.ts` stays a pure queue with hooks because every test there runs against an array. What
- * a running deployment adds is policy: a shed record and a rejected batch are **data loss**, and
- * data loss that only shows up as a gauge nobody scrapes is data loss nobody notices. Both now log.
+ * a running deployment adds is policy: a shed record is **data loss**, and data loss that only
+ * shows up as a gauge nobody scrapes is data loss nobody notices. So three things speak, and they
+ * speak at the level they deserve — a refused batch that is going back for its retry is a `warn`
+ * (reporting is late), the same batch refused twice is an `error` (rows are gone).
  *
- * Both log **throttled**, though, because the failure mode is a flood by definition: a queue that
+ * They log **throttled**, though, because the failure mode is a flood by definition: a queue that
  * overflows sheds thousands of records a second, and one line each would push the very logs an
  * operator needs to read out of the buffer. One line per window, carrying the count since the last
  * one, says the same thing without becoming the incident.
@@ -22,7 +24,13 @@ import { createUsageRecorder, type UsageRecorder } from "./recorder"
 
 export interface UsageRecorderFromEnvDeps {
   readonly records: Pick<UsageRecordRepository, "insertMany">
-  readonly env: Pick<Env, "dataPlane">
+  /** Only the queue's own three knobs: this module has no business reading the rest of the env. */
+  readonly env: {
+    readonly dataPlane: Pick<
+      Env["dataPlane"],
+      "usageQueueMax" | "usageBatchSize" | "usageFlushIntervalMs"
+    >
+  }
   readonly logger: Logger
   /**
    * Forwarded to the recorder's `onRecord`, which fires on the background drain. Metrics are fed
@@ -47,11 +55,18 @@ export function createUsageRecorderFromEnv(deps: UsageRecorderFromEnvDeps): Usag
   const reportShed = throttled<void>(now, (dropped) => {
     log.warn("usage records dropped on queue overflow", { dropped, queueMax: usageQueueMax })
   })
-  const reportWriteError = throttled<WriteFailure>(now, (batches, latest) => {
-    log.error("usage batch write failed — records lost, traffic unaffected", {
+  const reportRetry = throttled<WriteFailure>(now, (batches, latest) => {
+    log.warn("usage batch write failed — retrying it on the next flush, traffic unaffected", {
       batches,
       records: latest.size,
-      reason: latest.error instanceof Error ? latest.error.message : String(latest.error),
+      reason: latest.reason,
+    })
+  })
+  const reportDiscard = throttled<WriteFailure>(now, (batches, latest) => {
+    log.error("usage batch write failed twice — records lost, traffic unaffected", {
+      batches,
+      records: latest.size,
+      reason: latest.reason,
     })
   })
 
@@ -66,15 +81,31 @@ export function createUsageRecorderFromEnv(deps: UsageRecorderFromEnvDeps): Usag
       batchSize: usageBatchSize,
       flushIntervalMs: usageFlushIntervalMs,
       onShed: () => reportShed(undefined),
-      onWriteError: (error, batch) => reportWriteError({ error, size: batch.length }),
+      onWriteError: ({ error, batch, discarded }) => {
+        const failure = { reason: reasonOf(error), size: batch.length }
+        if (discarded) reportDiscard(failure)
+        else reportRetry(failure)
+      },
       ...(deps.onRecord === undefined ? {} : { onRecord: deps.onRecord }),
     },
   )
 }
 
 interface WriteFailure {
-  readonly error: unknown
+  readonly reason: string
   readonly size: number
+}
+
+/**
+ * Ceiling on how much of a rejection's message is quoted. A driver names the statement it refused,
+ * and a batch's statement is thousands of bind parameters long: unbounded, the one line an operator
+ * needs to read becomes the reason they cannot read any of them.
+ */
+const MAX_REASON_CHARS = 200
+
+function reasonOf(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error)
+  return message.length <= MAX_REASON_CHARS ? message : `${message.slice(0, MAX_REASON_CHARS)}…`
 }
 
 /**

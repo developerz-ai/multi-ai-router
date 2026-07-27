@@ -40,6 +40,10 @@ export interface UsageQueueSample {
   readonly depth: number
   /** Cumulative shed count since boot. The delta is what reaches the counter. */
   readonly dropped: number
+  /** Cumulative records the writer refused, both tries of a batch that failed twice included. */
+  readonly writeFailures: number
+  /** Cumulative records lost because their retry was refused too. A subset of the above. */
+  readonly writeDiscarded: number
 }
 
 /** The subprocess gate's own two numbers, read per scrape — `providers/claude-sdk/concurrency.ts`. */
@@ -118,6 +122,8 @@ export function createMetrics(options: MetricsOptions = {}): RouterMetrics {
   const pending = new Map<string, PendingHop>()
   const consecutiveFailures = new Map<string, number>()
   let droppedSeen = 0
+  let retriedSeen = 0
+  let discardedSeen = 0
 
   // Set once, here, rather than from a per-scrape collector: neither label can change while the
   // process runs, and `setAccounts` clears only the gauges it rebuilds, so this one survives.
@@ -245,10 +251,18 @@ export function createMetrics(options: MetricsOptions = {}): RouterMetrics {
 
     setUsageQueue(sample) {
       s.usageQueueDepth.set({}, sample.depth)
-      if (sample.dropped > droppedSeen) {
-        s.usageRecordsDropped.inc({}, sample.dropped - droppedSeen)
-        droppedSeen = sample.dropped
-      }
+      droppedSeen = advance(droppedSeen, sample.dropped, (delta) =>
+        s.usageRecordsDropped.inc({}, delta),
+      )
+      // Every refused record is one or the other, so the two dispositions sum to the failures the
+      // recorder counted. `retried` is the remainder rather than a number of its own: the recorder
+      // learns a batch was lost one flush *after* it learns the write failed.
+      retriedSeen = advance(retriedSeen, sample.writeFailures - sample.writeDiscarded, (delta) =>
+        s.usageWriteFailures.inc({ disposition: "retried" }, delta),
+      )
+      discardedSeen = advance(discardedSeen, sample.writeDiscarded, (delta) =>
+        s.usageWriteFailures.inc({ disposition: "discarded" }, delta),
+      )
     },
 
     setSdkConcurrency(sample) {
@@ -282,6 +296,17 @@ function setQuota(s: ReturnType<typeof createSeries>, account: AccountMetric, at
     lastChecked = lastChecked === null ? checkedAt : Math.max(lastChecked, checkedAt)
   }
   if (lastChecked !== null) s.quotaLastChecked.set({ account_id: account.id }, lastChecked / 1_000)
+}
+
+/**
+ * Cumulative-to-delta. The recorder counts running totals; a counter takes increments. Returns the
+ * new watermark, and adds nothing when the total went backwards — which it does the moment a
+ * process restarts, and a counter that fell would be read as a negative rate.
+ */
+function advance(seen: number, total: number, add: (delta: number) => void): number {
+  if (total <= seen) return seen
+  add(total - seen)
+  return total
 }
 
 /** Client-supplied text, bounded. Empty reads as unknown so a series is never label-less. */
