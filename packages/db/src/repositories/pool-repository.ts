@@ -39,6 +39,11 @@ export interface PoolRepository {
    * Membership is edited as a whole set, never row by row: the console sends the
    * intended member list and the two statements run in one transaction, so a
    * pool is never briefly empty or half-updated.
+   *
+   * Delete-then-insert, so a member whose input omits `weight`/`priority` takes
+   * the column default rather than what it carried a moment ago. That is why
+   * `services/pools` resolves both before calling this and never passes a
+   * half-stated member through.
    */
   replaceMembers(poolId: string, members: readonly PoolMemberInput[]): Promise<PoolMemberRow[]>
 }
@@ -58,6 +63,7 @@ export interface UpdatePoolInput {
 
 export interface PoolMemberInput {
   readonly accountId: string
+  /** Absent takes the column default — this row is written fresh, not patched. */
   readonly weight?: number
   readonly priority?: number
 }

@@ -407,6 +407,7 @@ never a `fetch` call inline in a route component.
 | Which conversion serves a dialect pair | `services/translate/registry.ts`. A second lookup — in a route, a driver, or the relay — is how a request gets converted one way on the way out and a different way on the way back |
 | How the `claude` binary is located | `providers/claude-sdk/resolve-cli.ts`. The Dockerfile stages the binary by *running* that resolver, never by hard-coding a store path: a second answer means the image ships one binary and the router spawns another, and the symptom is an unreadable SDK stderr string |
 | Which transport serves a provider | `PROVIDER_REGISTRY[id].transport`, narrowed. A `provider === "anthropic-oauth"` check anywhere else is a second registry that will disagree with the first the moment a provider moves transports |
+| The untuned `weight` / `priority` (`DEFAULT_ACCOUNT_WEIGHT`, `DEFAULT_ACCOUNT_PRIORITY` in core) | Restated by two Postgres column defaults, the pool write path, and the console's member form. A literal `100` in one of them is a router where "unbiased" means two different things and traffic splits on a number nobody chose |
 
 ## Conventions for new shared code
 

@@ -159,7 +159,17 @@ An `exhausted` Account has **no** reset by definition — that is what separates
 | `name` | string | Human-chosen |
 | `policy` | enum | `sticky` (default) \| `round-robin` \| `weighted` \| `least-used` \| `priority-failover` \| `quota-aware` — see [05-routing-and-failover.md](05-routing-and-failover.md). On a Pool containing Claude subscription Accounts, `round-robin` / `weighted` / `least-used` are **unsafe as-is**: they ignore the Session → Account binding, which on that path breaks the conversation rather than just the cache |
 | `members` | Account[] | Ordered/weighted set. An Account may sit in several Pools |
+| `members[].weight` | number | Bias for `weighted`, **within this Pool only**. Defaults to the Account's own when the membership is created |
+| `members[].priority` | number | Order for `priority-failover`, within this Pool only; lower is tried first. Same default |
 | `overflowAccountId` | id, optional | The Pool's **member of last resort** — typically a paid API key — engaged only once every *other* member has filtered out, and invisible to the policy until then. **Must be one of `members`.** Absent means the Pool simply fails when its members are unavailable, which is the default: spending real money is opted into, never inferred. See [05-routing-and-failover.md](05-routing-and-failover.md#overflow-optional-opt-in) |
+
+**`weight` and `priority` belong to the membership, not to the Account.** The same Account can be
+the first choice in one Pool and the last in another, which is the whole point of "many accounts of
+the same provider". Membership is written as a whole set, so every write restates every member —
+and a member whose `weight`/`priority` the write **omits keeps what it already carries**, falling
+back to the Account's own only when the membership is new. Without that rule, renaming a Pool would
+re-flatten a `weighted` one and re-order a `priority-failover` one: routing changing because someone
+fixed a typo. Sending a number is the only way to change one.
 
 **The overflow is a designation on a membership, not an escape from it.** Candidates are
 `pool_members ∩ key_scope` and nothing widens that ([04](04-api-keys-and-access.md)), so an

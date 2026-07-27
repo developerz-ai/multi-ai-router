@@ -22,7 +22,12 @@ export {
 } from "./domain/dialect"
 export { KeyScope } from "./domain/key"
 export { AuthKind, ProviderId } from "./domain/provider"
-export { DEFAULT_ROUTING_POLICY, RoutingPolicy } from "./domain/routing"
+export {
+  DEFAULT_ACCOUNT_PRIORITY,
+  DEFAULT_ACCOUNT_WEIGHT,
+  DEFAULT_ROUTING_POLICY,
+  RoutingPolicy,
+} from "./domain/routing"
 export {
   isSuccessOutcome,
   USAGE_OUTCOME_SUCCESS,

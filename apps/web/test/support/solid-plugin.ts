@@ -72,13 +72,30 @@ const preExisting = new Map(
   ]),
 )
 
+let domEvent: typeof Event = globalThis.Event
+
 if (!GlobalRegistrator.isRegistered) {
   await GlobalRegistrator.register()
+  // Captured before the restore below puts Bun's `Event` back — see `DomEvent`.
+  domEvent = globalThis.Event
   for (const [key, descriptor] of preExisting) {
     if (descriptor !== undefined) Object.defineProperty(globalThis, key, descriptor)
   }
   patchTemplateInnerHtmlForTableFragments()
 }
+
+/**
+ * happy-dom's own `Event` constructor, which `globalThis.Event` is *not*: the
+ * restore above deliberately hands that name back to Bun.
+ *
+ * `dispatchEvent` given a foreign Event instance fires the target's own
+ * listeners and then stops — it never bubbles. Solid **delegates** `input`,
+ * `keydown`, `pointerdown` and friends to a single listener on `document`, so
+ * an `onInput` handler simply never runs, and a test that types into a field
+ * passes against an interaction that did not happen. Use `test/support/dom.ts`
+ * rather than this directly.
+ */
+export const DomEvent = domEvent
 
 /** See point 4 in the file-top comment. */
 function patchTemplateInnerHtmlForTableFragments(): void {

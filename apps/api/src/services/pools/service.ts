@@ -1,7 +1,10 @@
+import { DEFAULT_ACCOUNT_PRIORITY, DEFAULT_ACCOUNT_WEIGHT } from "@multi-ai-router/core"
 import type {
   AccountRepository,
   AccountRow,
   ApiKeyRepository,
+  PoolMemberInput,
+  PoolMemberRow,
   PoolRepository,
   PoolRow,
 } from "@multi-ai-router/db"
@@ -28,6 +31,16 @@ import { type PoolView, toPoolView } from "./view"
  * the policy — and both writes check it against the pool *as it will be after
  * the write*, which is why an edit that drops the overflow's membership is
  * refused rather than silently leaving a reference routing never honors.
+ *
+ * The third rule is about what a write does *not* say. Membership is replaced as
+ * a whole set, so every write restates every member — and `weight`/`priority`
+ * are optional on each one. Letting an absent field fall through to the column
+ * default would mean a body naming only `accountId` silently re-flattens a
+ * `weighted` pool and re-orders a `priority-failover` one; renaming a pool would
+ * change where its traffic goes. So an absent field is *resolved*, never
+ * defaulted: to what the membership already carries, and to the account's own
+ * value when there is no membership yet. Sending a number is the only way to
+ * change one.
  */
 
 export interface PoolsService {
@@ -62,9 +75,11 @@ export function createPoolsService(deps: PoolsServiceDeps): PoolsService {
   const applyMembers = async (
     poolId: string,
     members: readonly PoolMemberInputBody[] | undefined,
+    accounts: ReadonlyMap<string, AccountRow>,
+    held: readonly PoolMemberRow[],
   ): Promise<void> => {
     if (members === undefined) return
-    await deps.pools.replaceMembers(poolId, members)
+    await deps.pools.replaceMembers(poolId, members.map(resolveTuning(accounts, held)))
   }
 
   return {
@@ -100,7 +115,9 @@ export function createPoolsService(deps: PoolsServiceDeps): PoolsService {
         ...(body.policy === undefined ? {} : { policy: body.policy }),
         overflowAccountId: body.overflowAccountId ?? null,
       })
-      await applyMembers(pool.id, body.members)
+      // A pool that did not exist a statement ago holds no membership, so every absent
+      // weight/priority here resolves to the account's own.
+      await applyMembers(pool.id, body.members, accounts, [])
 
       await deps.audit.record({
         kind: AUDIT_KINDS.poolCreated,
@@ -121,16 +138,17 @@ export function createPoolsService(deps: PoolsServiceDeps): PoolsService {
       const current = await deps.pools.findById(id)
       if (current === undefined) return notFound(`no pool with id "${id}"`)
 
+      // The membership the pool holds right now, read whether or not the patch names one: it
+      // decides both what the overflow is checked against and what an omitted weight/priority
+      // resolves to.
+      const held = await deps.pools.listMembers(id)
       const accounts = await accountIndex()
       // The pool as it will be *after* this patch: an absent `members` leaves the set alone and an
       // absent `overflowAccountId` leaves the current one, so "this edit drops the overflow's
       // membership" is only visible against the stored row, never against the body.
       const checked = checkReferences({
         members: body.members,
-        memberIds:
-          body.members === undefined
-            ? idsOf(await deps.pools.listMembers(id))
-            : idsOf(body.members),
+        memberIds: body.members === undefined ? idsOf(held) : idsOf(body.members),
         overflowAccountId:
           body.overflowAccountId === undefined ? current.overflowAccountId : body.overflowAccountId,
         accounts,
@@ -154,7 +172,7 @@ export function createPoolsService(deps: PoolsServiceDeps): PoolsService {
         deps.now(),
       )
       if (pool === undefined) return notFound(`no pool with id "${id}"`)
-      await applyMembers(id, body.members)
+      await applyMembers(id, body.members, accounts, held)
 
       await deps.audit.record({
         kind: AUDIT_KINDS.poolUpdated,
@@ -280,4 +298,30 @@ function checkReferences(check: ReferenceCheck): AdminResult<null> {
 
 function idsOf(members: readonly { readonly accountId: string }[]): ReadonlySet<string> {
   return new Set(members.map((member) => member.accountId))
+}
+
+/**
+ * Fills in what the write left unsaid, so `replaceMembers` is handed a fully
+ * stated membership and the column defaults never decide routing.
+ *
+ * Precedence is: the number the body sent → the number this membership already
+ * carries → the account's own. The middle step is the one that keeps a rename
+ * from re-flattening a `weighted` pool, and the last is what makes "absent
+ * inherits the account's own" (`schemas.ts`) true for a member being added.
+ */
+function resolveTuning(
+  accounts: ReadonlyMap<string, AccountRow>,
+  held: readonly PoolMemberRow[],
+): (member: PoolMemberInputBody) => PoolMemberInput {
+  const current = new Map(held.map((member) => [member.accountId, member]))
+  return (member) => {
+    const membership = current.get(member.accountId)
+    const account = accounts.get(member.accountId)
+    return {
+      accountId: member.accountId,
+      weight: member.weight ?? membership?.weight ?? account?.weight ?? DEFAULT_ACCOUNT_WEIGHT,
+      priority:
+        member.priority ?? membership?.priority ?? account?.priority ?? DEFAULT_ACCOUNT_PRIORITY,
+    }
+  }
 }

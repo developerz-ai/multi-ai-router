@@ -17,6 +17,15 @@
   white-space: nowrap;
 }
 
+/* The one membership number this pool's policy reads. Trails the label, never competes with it. */
+.tuning {
+  margin-inline-start: auto;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  font-variant-numeric: tabular-nums;
+}
+
 .muted {
   color: var(--text-muted);
 }
