@@ -18,8 +18,9 @@
 # v1.0.1 from a tree where only the manifests were bumped and you publish an
 # image whose /healthz says 1.0.0 — passing the old check, and wrong.
 #
-# So this checks the source, and checks every manifest against it, and checks
-# the tag against the source. All three or nothing.
+# So this checks the source, checks every manifest against it, checks the OCI
+# `version` label the image carries against it, and checks the tag against the
+# source. All four or nothing.
 #
 # Pure shell (jq, sed and grep, all present on any runner) rather than
 # `bun test`: it runs before install, on a cold checkout, in about a second.
@@ -88,6 +89,25 @@ for manifest in $manifests; do
     die "$manifest says $found; $source_file says $version"
 done
 
+# One more copy, and the one nobody reads until they are holding an image they
+# cannot place: the OCI `version` label baked into the runtime stage. It is what
+# `docker inspect` answers without running the container, so an image whose label
+# disagrees with its own /healthz is a provenance trap.
+#
+# release.yml overrides the label with the tag's semver (docker/metadata-action),
+# which is exactly why the default has to be gated here — drift is invisible on a
+# published image and shows up only on the local build nobody is checking.
+#
+# Required, never skipped: a gate that waves through a missing Dockerfile is a
+# gate that reports a pass it did not earn.
+dockerfile="Dockerfile"
+[ -f "$dockerfile" ] || die "$dockerfile is missing — nothing to verify the image label against"
+
+label=$(sed -n 's/.*org\.opencontainers\.image\.version="\([^"]*\)".*/\1/p' "$dockerfile")
+[ -n "$label" ] || die "$dockerfile carries no org.opencontainers.image.version label"
+[ "$label" = "$version" ] ||
+  die "$dockerfile labels the image $label; $source_file says $version"
+
 if [ $# -gt 0 ]; then
   # vX.Y.Z is the tag convention (release.yml triggers on `v*`); the published
   # image tags and this constant both drop the v.
@@ -97,5 +117,5 @@ if [ $# -gt 0 ]; then
 fi
 
 count=$(printf '%s\n' $manifests | wc -l | tr -d ' ')
-printf '\033[0;32m✔\033[0m  version %s — %s manifests%s\n' \
+printf '\033[0;32m✔\033[0m  version %s — %s manifests, image label%s\n' \
   "$version" "$count" "${1:+, tag $1}"

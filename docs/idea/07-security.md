@@ -249,6 +249,23 @@ For operators, at deploy time:
   recognize — see [04-api-keys-and-access.md](04-api-keys-and-access.md).
 - Watch the audit log and the account health panel; an unexpected `needs_reauth` or `exhausted`
   account is worth a look ([08-observability.md](08-observability.md)).
+- Pin the router image by **digest**, not by tag, if your orchestrator supports it. `1.0.0` is
+  immutable by convention; a digest is immutable by construction. `docker buildx imagetools inspect`
+  prints the one you pulled, and the image's own `org.opencontainers.image.revision` label names the
+  commit it was built from — the same sha `router_build_info{revision}` reports from inside.
+
+### What the build itself does
+
+Not operator actions — properties of the image, listed so a reviewer can check they still hold:
+
+| Control | Why |
+|---|---|
+| `bun install --ignore-scripts`, both passes | A `postinstall` in any transitive dependency would run with the build's full context. Nothing this image ships needs one — the `claude` binary arrives as a prebuilt platform package, not as a postinstall download |
+| `--frozen-lockfile` | The image resolves the dependency tree CI tested, or it fails. Never a silently different one |
+| `oven/bun` pinned by version **and** index digest, both stages | A floating `:1` ships a runtime nothing tested; a mutable version tag makes a rebuild of an old release tag non-reproducible. `ci.yml`'s `BUN_VERSION` is held to the same value by a test, and each stage re-asks its base `bun --version` so a mismatched digest/tag pair fails the build |
+| Non-root (`USER bun`), `CLAUDE_CONFIG_ROOT` at `0700` | See the Agent-SDK section above — that tree is cleartext subscription credentials |
+| `.dockerignore` excludes `.env*`, `*.sql`/`*.dump`, `.git/`, `.claude-config/` | A build context is not a private place: everything in it is readable from the resulting image's layers |
+| OCI labels declared in the `Dockerfile`, not only in CI | A locally built image still names its source, licence, version and revision — that is the image least able to explain itself later |
 
 ## Read next
 

@@ -142,6 +142,7 @@ Each is a Zod schema **and** its `z.infer` type under one name. These are the si
 | `AppEnv` | `types.ts` | Typing a Hono route or middleware. Transport-only — it never leaves that layer |
 | `createApp(deps)` | `app.ts` | Integration tests. Pure factory: no listener, no timers, no `process.env` |
 | `checkReadiness(probes)`, `ReadinessProbes`, `createDatabaseProbe(...)`, `createClaudeCliProbe(...)`, `assumeHealthyAccounts` | `services/health/` | Health surfaces. Probes are injected, so the service needs no I/O |
+| `drainServer({ server, timeoutMs, now? })` → `DrainOutcome`, `DrainableServer` | `services/shutdown/drain.ts` | Stopping a listener without hanging on it. `Bun.serve().stop()` waits for the last byte of the last response and never gives up; this stops accepting, bounds that wait, and reports what was still in flight when it gave up. Pure over an injected server and clock — no `Bun` import, no listener in a test |
 | `resolveClaudeCli(probe)`, `createCliProbe(options)`, `CliResolution`, `CliSource` | `providers/claude-sdk/` | Anywhere the `claude` binary's path is needed — the SDK driver's `pathToClaudeCodeExecutable`, `/readyz`, the image build. The ladder is pure over an injected probe; `cli-probe.ts` is the only part that touches the filesystem |
 | `createRuntime(deps)` → `Runtime` | `composition.ts` | The composition root. Every long-lived object is built here once and injected downward — never construct a repository, cache, or recorder anywhere else |
 

@@ -15,9 +15,14 @@ concurrency:
 env:
   # Pinned once here so lint/typecheck/test/build all agree on a runtime. Bun
   # minor releases change `bun test` and bundler behaviour often enough that
-  # `latest` would make CI non-reproducible; bump this deliberately, and keep it
-  # inside the `oven/bun:1` family the Dockerfile builds against so the image
-  # and CI never diverge on runtime semantics.
+  # `latest` would make CI non-reproducible.
+  #
+  # THE DOCKERFILE PINS THE SAME VERSION, and that is enforced rather than asked
+  # for: apps/api/test/integration/image-pins.test.ts reads this line and both
+  # `FROM oven/bun:…` lines and fails when they disagree. Bumping this without
+  # the Dockerfile — or the reverse — turns the `test` job red, so the image can
+  # no longer ship a bun the suite never ran. Moving the pin is one commit across
+  # both files plus a re-resolved digest; docs/RELEASING.md has the procedure.
   BUN_VERSION: "1.3.0"
   # Biome/Vite colourise when they detect a TTY; Actions is not one, so force it
   # for readable log output.

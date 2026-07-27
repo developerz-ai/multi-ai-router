@@ -35,6 +35,10 @@ interface Tree {
   readonly manifests?: Readonly<Record<string, string>>
   /** Extra workspace members, discovered by the globs rather than named by the script. */
   readonly extraMembers?: readonly string[]
+  /** The image's `org.opencontainers.image.version` label. Omitted matches `constant`. */
+  readonly label?: string
+  /** Omit the Dockerfile entirely — the gate must refuse rather than skip. */
+  readonly noDockerfile?: boolean
 }
 
 const BASE_MEMBERS = ["apps/api", "apps/web", "packages/core", "packages/db"] as const
@@ -71,6 +75,18 @@ async function fixture(tree: Tree): Promise<string> {
     "packages/core/src/version.ts",
     `/** doc comment quoting 9.9.9, which must not be matched */\nexport const VERSION = "${tree.constant}"\n`,
   )
+  if (!tree.noDockerfile) {
+    await write(
+      root,
+      "Dockerfile",
+      [
+        "FROM scratch",
+        `LABEL org.opencontainers.image.licenses="MIT" \\`,
+        `      org.opencontainers.image.version="${tree.label ?? tree.constant}"`,
+        "",
+      ].join("\n"),
+    )
+  }
   // The script resolves its own location, so it has to live where it would really live.
   await write(root, "bin/verify-version", await Bun.file(SCRIPT).text())
   await Bun.$`chmod +x ${join(root, "bin/verify-version")}`.quiet()
@@ -176,6 +192,41 @@ describe("bin/verify-version", () => {
 
     expect(ran.exitCode).toBe(1)
     expect(ran.output).toContain("0.0.0")
+  })
+
+  test("refuses an image label that disagrees with the version the code reports", async () => {
+    // `docker inspect` answers with the label, without running the container, so an image whose
+    // label says one thing and whose /healthz says another is a provenance trap. release.yml
+    // overrides the label with the tag's semver, which is why the drift only ever surfaces on the
+    // local build nobody checks — and why the gate has to catch it before the tag builds.
+    const root = await fixture({ constant: "1.0.0", label: "0.9.0" })
+
+    const ran = await verify(root, "v1.0.0")
+
+    expect(ran.exitCode).toBe(1)
+    expect(ran.output).toContain("Dockerfile")
+    expect(ran.output).toContain("0.9.0")
+  })
+
+  test("refuses a Dockerfile carrying no version label at all", async () => {
+    const root = await fixture({ constant: "1.0.0", noDockerfile: true })
+    await write(root, "Dockerfile", 'FROM scratch\nLABEL org.opencontainers.image.licenses="MIT"\n')
+
+    const ran = await verify(root, "v1.0.0")
+
+    expect(ran.exitCode).toBe(1)
+    expect(ran.output).toContain("org.opencontainers.image.version")
+  })
+
+  test("refuses a missing Dockerfile rather than skipping the label check", async () => {
+    // A gate that waves through the absent file reports a pass it did not earn — the same
+    // silent-skip trapdoor removed from the database gate.
+    const root = await fixture({ constant: "1.0.0", noDockerfile: true })
+
+    const ran = await verify(root, "v1.0.0")
+
+    expect(ran.exitCode).toBe(1)
+    expect(ran.output).toContain("Dockerfile")
   })
 
   test("refuses to pass by finding nothing — an empty sweep is not agreement", async () => {

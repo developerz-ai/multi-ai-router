@@ -50,3 +50,22 @@ docs/
 # Test/coverage output.
 coverage/
 *.log
+
+# Task orchestrator state — never a build input, regenerated per task.
+.claude-task-master/
+
+# MCP server config (local development tooling).
+.mcp.json
+.ui-debugger-mcp.json
+
+# Project documentation — shipped separately, not baked into the image.
+README.md
+CLAUDE.md
+CONTRIBUTING.md
+SECURITY.md
+CHANGELOG.md
+
+# Compose configurations — operator is responsible for their deployment,
+# not the image. Reduce context size and avoid stale copies in the image layer.
+docker-compose.yml
+docker-compose.*.yml

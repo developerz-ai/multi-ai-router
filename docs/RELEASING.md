@@ -18,6 +18,8 @@ admin settings endpoint, and the console footer. Every workspace
 - `apps/web/package.json`
 - `packages/core/package.json`
 - `packages/db/package.json`
+- `Dockerfile` — the `org.opencontainers.image.version` label, which is what
+  `docker inspect` answers without running the container
 
 Bump every one to the same semver, then prove it:
 
@@ -95,6 +97,38 @@ Nothing here is manual or ad hoc — if a step needs to change, it changes in
 - Confirm `docker compose up -d` against the freshly tagged image boots
   clean (migrations run at boot, healthcheck gates the router) — this is the
   same path a new operator takes from `README.md`.
+- Confirm the image can explain itself without being run:
+
+  ```sh
+  docker buildx imagetools inspect --format '{{json .Manifest.Annotations}}' \
+    ghcr.io/developerz-ai/multi-ai-router:X.Y.Z
+  ```
+
+  `org.opencontainers.image.version` must be `X.Y.Z` and
+  `org.opencontainers.image.revision` the tagged commit's sha — the same sha
+  `router_build_info{revision}` reports from inside.
+
+## Moving the base image pin
+
+The `Dockerfile` pins `oven/bun` by **version and index digest** on both
+stages, and `.github/workflows/ci.yml` pins `BUN_VERSION` to the same version.
+That is what makes the image run the bun the suite was tested on, and what
+makes a rebuild of an old tag reproduce the old image rather than whatever
+`:1` resolves to today.
+
+To move it — one commit, all four places:
+
+```sh
+docker buildx imagetools inspect oven/bun:X.Y.Z        # copy the top-level Digest:
+docker buildx imagetools inspect oven/bun:X.Y.Z-slim   # …and this one
+```
+
+Use the **top-level** `Digest:` (the manifest list), never a per-arch entry: a
+per-arch digest resolves on one release runner and fails on the other. Then
+update `BUN_VERSION` in `ci.yml`, and `engines.bun` in the root `package.json`
+if the floor moves. `bin/check` fails until all of them agree
+(`apps/api/test/integration/image-pins.test.ts`), and the build itself fails if
+a digest turns out to name a bun other than the tag beside it.
 
 ## Pre-releases
 
