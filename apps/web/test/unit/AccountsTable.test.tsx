@@ -68,6 +68,7 @@ function withMount(
           onDelete={() => {}}
           onDisable={() => {}}
           onDiscoverModels={() => {}}
+          onEdit={() => {}}
           onEnable={() => {}}
           onRecheck={() => {}}
           onTest={() => {}}
@@ -156,6 +157,27 @@ describe("AccountsTable", () => {
         expect(container.textContent).toContain("acc-a")
         expect(container.textContent).toContain("acc-b")
         expect(container.querySelectorAll("tbody tr").length).toBe(2)
+      },
+    )
+  })
+
+  test("every row offers an edit action and hands back the account it belongs to", () => {
+    // Without this the only way to change a label, rotate a credential or retune an
+    // account's weight is a delete and re-add, which takes its history with it.
+    let edited: AccountView | undefined
+    withMount(
+      [account({ id: "a", label: "acc-a" }), account({ id: "b", label: "acc-b" })],
+      { onEdit: (target) => (edited = target) },
+      (container) => {
+        const buttons = Array.from(container.querySelectorAll("tbody button")).filter(
+          (button) => button.textContent?.trim() === "Edit",
+        )
+        expect(buttons.length).toBe(2)
+
+        const second = buttons[1]
+        if (!(second instanceof HTMLButtonElement)) throw new Error("no edit button")
+        second.click()
+        expect(edited?.id).toBe("b")
       },
     )
   })

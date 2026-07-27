@@ -12,6 +12,7 @@ import type {
 import { type AdminResult, ok } from "../admin/result"
 import { readBreakdown, readTotals } from "./aggregate"
 import { buildAxis, densify } from "./axis"
+import { foldFailures, type UsageFailures } from "./failures"
 import { outcomesFor, type RecentQuery, type RecentView, toRecentAttemptView } from "./recent"
 import { resolveWindow, type UsageWindowQuery } from "./window"
 
@@ -47,6 +48,12 @@ export interface UsageSummary {
     readonly routerOverheadP95Ms: number | null
     readonly ttfbP95Ms: number | null
   }
+  /**
+   * `totals.errors` taken apart by outcome — which of `429`, `402` and `403` that error rate
+   * actually was. One percentage cannot tell an operator whether to wait, to top up, or to widen a
+   * scope, and those are the three answers (`failures.ts`).
+   */
+  readonly failures: UsageFailures
   /** Bucket starts every series is plotted against, dense — a quiet bucket is a zero, not a gap. */
   readonly axis: readonly string[]
   /** One entry per axis point, always. A bucket with no traffic is zeros, never a missing entry. */
@@ -137,10 +144,11 @@ export function createUsageService(deps: UsageServiceDeps): UsageService {
       // the screen costs one round trip's latency instead of seven.
       const dimensions: readonly UsageDimension[] = ["apiKeyId", "accountId", "poolId", "model"]
 
-      const [totals, latency, series, breakdowns, groupSeries] = await Promise.all([
+      const [totals, latency, series, outcomes, breakdowns, groupSeries] = await Promise.all([
         readTotals(deps, window, now, rolledAt),
         deps.usage.latency(window),
         deps.usage.series(window, window.bucket),
+        deps.usage.outcomes(window),
         Promise.all(dimensions.map((d) => readBreakdown(deps, window, now, rolledAt, d))),
         Promise.all(dimensions.map((d) => deps.usage.seriesByDimension(window, window.bucket, d))),
       ])
@@ -156,6 +164,9 @@ export function createUsageService(deps: UsageServiceDeps): UsageService {
         to: window.to.toISOString(),
         totals,
         latency,
+        // Folded against the stitched total rather than its own sum, so the summary can say when
+        // the window reaches past the raw rows these counts came from.
+        failures: foldFailures(outcomes, totals.attempts),
         axis,
         series: alignSeries(axis, series),
         byKey: label(keyRows ?? [], labels.keys, axis, keySeries ?? []),

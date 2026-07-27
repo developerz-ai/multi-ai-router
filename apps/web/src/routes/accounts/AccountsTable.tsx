@@ -38,6 +38,7 @@ export interface AccountsTableProps {
   readonly onTest: (input: TestAccountInput) => void
   readonly onDiscoverModels: (id: string) => void
   readonly onConnect: (account: AccountView) => void
+  readonly onEdit: (account: AccountView) => void
   readonly onDisable: (account: AccountView) => void
   readonly onEnable: (account: AccountView) => void
   readonly onDelete: (account: AccountView) => void
@@ -189,6 +190,11 @@ export function AccountsTable(props: AccountsTableProps) {
               {connectLabel(account)}
             </Button>
           </Show>
+          {/* Label, credential rotation, endpoint, dialect, model set and routing numbers —
+              all of it editable in place, so a rotated key is not a delete and re-add. */}
+          <Button onClick={() => props.onEdit(account)} size="sm" tone="neutral">
+            Edit
+          </Button>
           <Show
             fallback={
               <Button onClick={() => props.onEnable(account)} size="sm" tone="neutral">

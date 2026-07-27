@@ -1,0 +1,84 @@
+@use "../../styles/breakpoints" as bp;
+@use "../../styles/mixins" as *;
+
+.form {
+  display: grid;
+  gap: var(--space-4);
+}
+
+.pair {
+  display: grid;
+  gap: var(--space-4);
+
+  @include bp.respond-to("sidebar") {
+    grid-template-columns: 1fr 1fr;
+  }
+}
+
+// A field is a grid of label/control/hint, and a grid row stretches to its
+// tallest sibling — so a two-line hint on one side pushes the *other* side's
+// input down the cell to fill the slack, and the pair renders visibly stepped.
+.pair > * {
+  align-content: start;
+}
+
+// A fact about this account the form cannot change, stated where the operator
+// would otherwise go looking for a control.
+.note {
+  padding: var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-1);
+  background: var(--surface-sunken);
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+  line-height: var(--line-snug);
+}
+
+// Monospaced: an alias map is aligned pairs, and a proportional font hides a
+// stray space on one side of the `=`.
+.aliases {
+  width: 100%;
+  min-height: 4.5rem;
+  padding: var(--space-2) var(--space-3);
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-1);
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  line-height: var(--line-snug);
+  resize: vertical;
+  transition: border-color var(--duration-fast) var(--ease-out);
+}
+
+.aliases:hover {
+  border-color: var(--accent);
+}
+
+.aliases:focus-visible {
+  @include focus-ring;
+}
+
+.blocked {
+  padding: var(--space-3);
+  border: 1px solid var(--warn);
+  border-radius: var(--radius-1);
+  background: color-mix(in srgb, var(--warn) 10%, var(--surface-overlay));
+  font-size: var(--text-sm);
+  line-height: var(--line-snug);
+}
+
+.error {
+  padding: var(--space-3);
+  border: 1px solid var(--danger);
+  border-radius: var(--radius-1);
+  background: color-mix(in srgb, var(--danger) 10%, var(--surface-overlay));
+  font-size: var(--text-sm);
+  line-height: var(--line-snug);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .aliases {
+    transition: none;
+  }
+}

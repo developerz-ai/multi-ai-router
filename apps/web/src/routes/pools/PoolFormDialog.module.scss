@@ -32,6 +32,9 @@
 }
 
 .member {
+  display: flex;
+  gap: var(--space-2);
+  align-items: center;
   min-width: 0;
 }
 
@@ -39,8 +42,10 @@
   @include tappable(2rem);
 
   display: flex;
+  flex: 1;
   gap: var(--space-2);
   align-items: center;
+  min-width: 0;
   padding-inline: var(--space-2);
   border-radius: var(--radius-1);
   cursor: pointer;
@@ -70,9 +75,59 @@
   white-space: nowrap;
 }
 
+/* The membership's own weight and priority, on the row they belong to. */
+.tuning {
+  display: flex;
+  flex: none;
+  gap: var(--space-2);
+  align-items: center;
+}
+
+.tune {
+  display: flex;
+  gap: var(--space-1);
+  align-items: center;
+  cursor: pointer;
+}
+
+.tuneLabel {
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+}
+
+/* The one the pool's current policy actually reads. */
+.tuneLabelActive {
+  color: var(--accent);
+  font-size: var(--text-xs);
+  font-weight: var(--weight-medium);
+}
+
+.number {
+  width: 4.5rem;
+  padding: var(--space-1) var(--space-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-1);
+  background: var(--surface);
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  font-variant-numeric: tabular-nums;
+}
+
+.number:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
 .empty {
   color: var(--text-muted);
   font-size: var(--text-sm);
+}
+
+.hint {
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+  line-height: var(--line-snug);
 }
 
 .error {

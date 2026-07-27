@@ -3,6 +3,7 @@ import { createMemo, createSignal, Show } from "solid-js"
 import { Button } from "../../components/Button"
 import { SelectField, type SelectOption, TextField } from "../../components/Field"
 import { Modal } from "../../components/Modal"
+import { parseModelList } from "../../lib/account-models"
 import type { CreateAccountInput } from "../../lib/api/accounts"
 import { errorMessage } from "../../lib/api/errors"
 import { findProvider } from "../../lib/api/providers"
@@ -222,18 +223,6 @@ export function AccountFormDialog(props: AccountFormDialogProps) {
  * grows an OAuth flow becomes connectable the day its driver file lands, with nothing to change
  * in this file (CLAUDE.md non-negotiable 12).
  */
-/**
- * A comma-separated list as the operator typed it. Deduplicated but **not sorted or renamed**:
- * these are the upstream's own ids, and the router's job is to carry a name through unchanged.
- */
-export function parseModelList(raw: string): readonly string[] {
-  const names = raw
-    .split(",")
-    .map((name) => name.trim())
-    .filter((name) => name.length > 0)
-  return [...new Set(names)]
-}
-
 function providerOptionLabel(provider: ProviderDescriptor): string {
   if (!provider.creatable) return `${provider.id} — not implemented`
   return provider.connectFlow === null ? provider.id : `${provider.id} — connect after adding`

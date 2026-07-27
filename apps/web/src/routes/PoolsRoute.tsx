@@ -9,7 +9,7 @@ import { StatusDot } from "../components/StatusDot"
 import { type Column, Table } from "../components/Table"
 import { TableSkeleton } from "../components/TableSkeleton"
 import { isRoutable } from "../lib/account-status"
-import type { PoolView } from "../lib/api/types"
+import type { PoolMemberView, PoolView } from "../lib/api/types"
 import { useAllAccounts } from "../lib/queries/accounts"
 import { useCreatePool, useDeletePool, usePools, useUpdatePool } from "../lib/queries/pools"
 import styles from "./PoolsRoute.module.scss"
@@ -94,6 +94,9 @@ export default function PoolsRoute() {
                 <li class={styles.member}>
                   <StatusDot compact status={member.status} />
                   <span>{member.label}</span>
+                  <Show when={tuning(pool, member)}>
+                    {(label) => <span class={styles.tuning}>{label()}</span>}
+                  </Show>
                 </li>
               )}
             </For>
@@ -207,6 +210,19 @@ export default function PoolsRoute() {
 
 function routableCount(pool: PoolView): number {
   return pool.members.filter((member) => isRoutable(member.status)).length
+}
+
+/**
+ * The membership number this pool's policy actually reads, or nothing.
+ *
+ * Only two of the six read one, and printing a weight next to a `sticky` pool's members would be
+ * four characters of noise on every row claiming to explain a choice it has no part in. Members
+ * arrive ordered by priority, so on a `priority-failover` pool the list is the failover order.
+ */
+function tuning(pool: PoolView, member: PoolMemberView): string | null {
+  if (pool.policy === "weighted") return `w ${member.weight}`
+  if (pool.policy === "priority-failover") return `p ${member.priority}`
+  return null
 }
 
 /** Exactly what breaks. The 409 the server may answer with names the keys. */

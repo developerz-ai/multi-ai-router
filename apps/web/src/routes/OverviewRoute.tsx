@@ -1,6 +1,6 @@
 import type { AccountStatus } from "@multi-ai-router/core"
 import { A } from "@solidjs/router"
-import { createMemo, Show } from "solid-js"
+import { createMemo, createSignal, For, Show } from "solid-js"
 import { Banner } from "../components/Banner"
 import { Button } from "../components/Button"
 import { PageHeader } from "../components/PageHeader"
@@ -11,7 +11,7 @@ import { type Column, Table } from "../components/Table"
 import { TableSkeleton } from "../components/TableSkeleton"
 import { isRoutable, STATUS_DISPLAY_ORDER, statusPresentation } from "../lib/account-status"
 import type { AccountView } from "../lib/api/types"
-import { usageWindowLabel } from "../lib/api/usage"
+import { USAGE_WINDOWS, type UsageWindow, usageWindowLabel } from "../lib/api/usage"
 import { formatCost, formatCount, formatPercent } from "../lib/format"
 import { useAllAccounts, useRecheckAllAccounts } from "../lib/queries/accounts"
 import { usePools } from "../lib/queries/pools"
@@ -51,7 +51,11 @@ export default function OverviewRoute() {
   const keys = useKeys()
   const providers = useProviders()
   const settings = useSettings()
-  const usage = useUsageSummary(() => "today")
+  // Its own window, not a hardcoded "today": the same four named windows the Usage screen offers,
+  // so the two can be pointed at the same range and reconciled — before this, Overview was pinned
+  // to "today" with no control and the two screens could silently disagree.
+  const [window, setWindow] = createSignal<UsageWindow>("today")
+  const usage = useUsageSummary(window)
   const recheckAll = useRecheckAllAccounts()
 
   const list = () => (accounts.isSuccess ? (accounts.data ?? []) : [])
@@ -95,11 +99,28 @@ export default function OverviewRoute() {
     <>
       <PageHeader
         actions={
-          <Button busy={recheckAll.isPending} onClick={() => recheckAll.mutate()} tone="neutral">
-            Re-check all
-          </Button>
+          <div class={styles.actions}>
+            <fieldset class={styles.windows}>
+              <legend class={styles.groupLabel}>Window</legend>
+              <For each={USAGE_WINDOWS}>
+                {(value) => (
+                  <button
+                    aria-pressed={window() === value ? "true" : "false"}
+                    class={styles.window}
+                    onClick={() => setWindow(value)}
+                    type="button"
+                  >
+                    {usageWindowLabel(value)}
+                  </button>
+                )}
+              </For>
+            </fieldset>
+            <Button busy={recheckAll.isPending} onClick={() => recheckAll.mutate()} tone="neutral">
+              Re-check all
+            </Button>
+          </div>
         }
-        subtitle="Fleet health at a glance: exhausted accounts, degraded pools, today's traffic."
+        subtitle="Fleet health at a glance: exhausted accounts, degraded pools, traffic for the chosen window."
         title="Overview"
       />
 
@@ -150,8 +171,8 @@ export default function OverviewRoute() {
             value={keys.isSuccess ? String((keys.data ?? []).length) : undefined}
           />
           <StatTile
-            label="Requests today"
-            note={usageWindowLabel("today").toLowerCase()}
+            label="Requests"
+            note={usageWindowLabel(window()).toLowerCase()}
             value={usage.isSuccess ? formatCount(usage.data?.totals.requests ?? 0) : undefined}
           />
           <StatTile
@@ -161,7 +182,7 @@ export default function OverviewRoute() {
           />
           <StatTile
             label="Error rate"
-            note={usageWindowLabel("today").toLowerCase()}
+            note={usageWindowLabel(window()).toLowerCase()}
             value={
               usage.isSuccess
                 ? formatPercent(usage.data?.totals.errors ?? 0, usage.data?.totals.attempts ?? 0)

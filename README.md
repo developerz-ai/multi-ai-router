@@ -116,7 +116,7 @@ docker compose up -d
 
 Migrations run at boot, are idempotent, and fail the boot loudly rather than starting on a half-migrated schema. Pointing `DATABASE_URL` at an existing or managed Postgres and dropping the bundled `postgres` service is a one-line change.
 
-Then open **<http://localhost:8080>** and log in. The router process serves the SolidJS console itself, at the same origin as the API — no second container, no static host, no CORS to configure. Add an account, a pool, and a key; the console handles all three end to end ([Status](#-status)), and `/api/admin/**` is there directly if you'd rather script it. **Give the key a name; you can view and copy its value again at any time** via `POST /api/admin/keys/:id/reveal` — keys are stored encrypted, not hashed, because an operator running a fleet of agents needs to look one up later without rotating it.
+Then open **<http://localhost:8080>** and log in. The router process serves the SolidJS console itself, at the same origin as the API — no second container, no static host, no CORS to configure. An empty deployment lands on a three-step walk — **add an account → pool it → mint a key** — and the mint hands you a **Point your tool at it** block already filled in with this deployment's base URL and that key's real value, one tab per client. `/api/admin/**` is there directly if you'd rather script it. **Give the key a name; you can view and copy its value again at any time** via `POST /api/admin/keys/:id/reveal` — keys are stored encrypted, not hashed, because an operator running a fleet of agents needs to look one up later without rotating it.
 
 | Env var | Required | Notes |
 |---|---|---|
@@ -125,7 +125,7 @@ Then open **<http://localhost:8080>** and log in. The router process serves the 
 | `ADMIN_PASSWORD_HASH` | — | Pre-computed argon2id hash. Takes precedence over `ADMIN_PASSWORD`. Exactly one of the two must be set or boot fails. |
 | `ENCRYPTION_KEY` | ✅ | 32 bytes, base64. Boot fails loudly if missing or short. Encrypts upstream credentials and router keys. |
 | `DATABASE_URL` | ✅ | PostgreSQL 16+ connection string. Supplied by the bundled compose file, so you don't set it by hand. |
-| `PORT`, `LOG_LEVEL`, `TRUST_PROXY`, `PUBLIC_URL` | — | `PUBLIC_URL` is the OAuth callback base — only needed for redirect capture. |
+| `PORT`, `LOG_LEVEL`, `TRUST_PROXY`, `PUBLIC_URL` | — | `PUBLIC_URL` is the router's own public address: the OAuth callback base, and the base URL the console fills into every client snippet. Set it when the console's own origin is not what an agent machine should call — a port-forward, a tunnel, a private hostname. Falls back to that origin. |
 | `ADMIN_SESSION_*`, `ADMIN_LOGIN_*` | — | Session idle/absolute windows and login-throttle limits. |
 | `CATALOG_REFRESH_SECONDS`, `KEY_CACHE_*`, `USAGE_*` | — | The request path's staleness and memory bounds. Nothing there queries Postgres, so these decide how fast it learns about a change. |
 | `RETENTION_*`, `JANITOR_INTERVAL_MINUTES`, `CLAUDE_CONFIG_ROOT`, `ACCOUNT_RECHECK_COOLDOWN_SECONDS` | — | Retention windows and background-work knobs. Every one is config, never a constant. |

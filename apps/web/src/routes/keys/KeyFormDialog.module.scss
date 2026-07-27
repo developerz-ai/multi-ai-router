@@ -15,6 +15,14 @@
   }
 }
 
+// A field is a grid of label/control/hint, and a grid row stretches to its
+// tallest sibling — so a two-line hint on one side pushes the *other* side's
+// input down the cell to fill the slack, and the pair renders visibly stepped.
+// The rows are content-height; only the cell is tall.
+.pair > * {
+  align-content: start;
+}
+
 .targets {
   display: grid;
   gap: var(--space-2);
@@ -67,6 +75,15 @@
 .empty {
   color: var(--text-muted);
   font-size: var(--text-sm);
+}
+
+.blocked {
+  padding: var(--space-3);
+  border: 1px solid var(--warn);
+  border-radius: var(--radius-1);
+  background: color-mix(in srgb, var(--warn) 10%, var(--surface-overlay));
+  font-size: var(--text-sm);
+  line-height: var(--line-snug);
 }
 
 .error {

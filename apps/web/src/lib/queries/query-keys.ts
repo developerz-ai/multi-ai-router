@@ -1,6 +1,6 @@
 import type { AccountListFilter } from "../api/accounts"
 import type { AuditQuery } from "../api/audit"
-import type { UsageWindow } from "../api/usage"
+import { isCustomRange, type UsageRange } from "../api/usage"
 import type { RecentQuery } from "../api/usage-recent"
 
 // Every cache key in the console, built here and nowhere else.
@@ -49,7 +49,12 @@ export const queryKeys = {
 
   usage: {
     root: () => ["usage"] as const,
-    summary: (window: UsageWindow) => ["usage", "summary", window] as const,
+    /** A custom range is flattened into the key by its own bounds — two different ranges must
+     *  never collide on one cache entry just because they are both "custom". */
+    summary: (range: UsageRange) =>
+      isCustomRange(range)
+        ? (["usage", "summary", "custom", range.from, range.to] as const)
+        : (["usage", "summary", range] as const),
     /** The live feed. Every filter is part of the key, so switching one is a fetch, not a stale table. */
     recent: (query: RecentQuery) =>
       ["usage", "recent", query.limit, query.filter, query.requestId ?? null] as const,

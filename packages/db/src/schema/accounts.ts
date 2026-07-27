@@ -1,4 +1,8 @@
-import type { Dialect } from "@multi-ai-router/core"
+import {
+  DEFAULT_ACCOUNT_PRIORITY,
+  DEFAULT_ACCOUNT_WEIGHT,
+  type Dialect,
+} from "@multi-ai-router/core"
 import {
   index,
   integer,
@@ -95,9 +99,9 @@ export const accounts = pgTable(
     supportedModels: jsonb("supported_models").$type<SupportedModelList>(),
 
     /** Bias for the `weighted` policy. */
-    weight: integer("weight").notNull().default(100),
+    weight: integer("weight").notNull().default(DEFAULT_ACCOUNT_WEIGHT),
     /** Strict order for the `priority-failover` policy; lower is tried first. */
-    priority: integer("priority").notNull().default(0),
+    priority: integer("priority").notNull().default(DEFAULT_ACCOUNT_PRIORITY),
 
     createdAt: timestamp("created_at", { withTimezone: true, mode: "date" }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true, mode: "date" }).notNull().defaultNow(),

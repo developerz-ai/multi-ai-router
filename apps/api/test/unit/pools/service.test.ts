@@ -310,6 +310,96 @@ describe("delete", () => {
   })
 })
 
+/**
+ * `members` replaces the whole set, so every write restates every member — and both numbers are
+ * optional on each one. Letting an omitted field fall to the column default would mean a body
+ * naming only `accountId` silently re-flattens a `weighted` pool and re-orders a
+ * `priority-failover` one: routing moving because someone renamed a pool.
+ */
+describe("membership weight and priority", () => {
+  const tuningOf = (store: MemoryStore, accountId: string) => {
+    const row = store.rows.poolMembers.find((member) => member.accountId === accountId)
+    return row === undefined ? undefined : { weight: row.weight, priority: row.priority }
+  }
+
+  async function tunedPool() {
+    const { service, store } = harness()
+    const account = await store.accounts.create({ label: "zai-1", provider: "zai" })
+    const spare = await store.accounts.create({ label: "openrouter-1", provider: "openrouter" })
+    const pool = await service.create({
+      name: "team",
+      policy: "weighted",
+      members: [
+        { accountId: account.id, weight: 300, priority: 1 },
+        { accountId: spare.id, weight: 25, priority: 2 },
+      ],
+    })
+    if (!pool.ok) throw new Error("setup failed")
+    return { service, store, account, spare, poolId: pool.value.id }
+  }
+
+  test("a rename leaves every member's weight and priority exactly as they were", async () => {
+    const { service, store, account, spare, poolId } = await tunedPool()
+
+    const renamed = await service.update(poolId, { name: "team-eu" })
+
+    expect(renamed.ok).toBe(true)
+    expect(tuningOf(store, account.id)).toEqual({ weight: 300, priority: 1 })
+    expect(tuningOf(store, spare.id)).toEqual({ weight: 25, priority: 2 })
+  })
+
+  test("a members array that omits both numbers keeps what each membership carries", async () => {
+    const { service, store, account, spare, poolId } = await tunedPool()
+
+    const updated = await service.update(poolId, {
+      members: [{ accountId: account.id }, { accountId: spare.id }],
+    })
+
+    expect(updated.ok).toBe(true)
+    if (updated.ok) {
+      expect(updated.value.members.map((member) => member.weight).sort()).toEqual([25, 300])
+    }
+    expect(tuningOf(store, account.id)).toEqual({ weight: 300, priority: 1 })
+  })
+
+  test("one stated number changes only that one; the other is still preserved", async () => {
+    const { service, store, account, spare, poolId } = await tunedPool()
+
+    await service.update(poolId, {
+      members: [{ accountId: account.id, weight: 450 }, { accountId: spare.id }],
+    })
+
+    expect(tuningOf(store, account.id)).toEqual({ weight: 450, priority: 1 })
+    expect(tuningOf(store, spare.id)).toEqual({ weight: 25, priority: 2 })
+  })
+
+  test("a member added with no numbers inherits the account's own, not the column default", async () => {
+    const { service, store } = harness()
+    const heavy = await store.accounts.create({
+      label: "max-20x",
+      provider: "anthropic",
+      weight: 500,
+      priority: 4,
+    })
+
+    const pool = await service.create({ name: "team", members: [{ accountId: heavy.id }] })
+
+    expect(pool.ok).toBe(true)
+    expect(tuningOf(store, heavy.id)).toEqual({ weight: 500, priority: 4 })
+  })
+
+  test("a member dropped and re-added starts from the account again, not from the pool it left", async () => {
+    // The membership is gone by then, so there is nothing to preserve — and inventing continuity
+    // across a removal would make "remove it and add it back" a no-op the operator did not ask for.
+    const { service, store, account, spare, poolId } = await tunedPool()
+
+    await service.update(poolId, { members: [{ accountId: spare.id }] })
+    await service.update(poolId, { members: [{ accountId: spare.id }, { accountId: account.id }] })
+
+    expect(tuningOf(store, account.id)).toEqual({ weight: 100, priority: 0 })
+  })
+})
+
 describe("policy validation", () => {
   test("accepts each of core's six policies and nothing else", () => {
     for (const policy of RoutingPolicy.options) {

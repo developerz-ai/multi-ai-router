@@ -191,7 +191,7 @@ created (named)  ──▶  active  ──▶  revoked  ──▶  purged
 | Transition | Semantics |
 |---|---|
 | created → active | Immediate. The key works on the next request. |
-| active | The value can be decrypted and re-copied from the admin UI whenever the operator needs it. Editing name, limits, or scope never changes the value. |
+| active | The value can be decrypted and re-copied from the admin UI whenever the operator needs it. Editing name, limits, or scope never changes the value — **Edit** on any key row is the console's door to `PATCH /api/admin/keys/:id`, so a wrong scope or a missing ceiling is fixed in place rather than by minting a replacement and re-issuing a value to every client holding the old one. A rate limit is not a mint-time decision: both halves are set, changed, and removed (`rateLimit: null`) from that same form. |
 | active → revoked | **Immediate** for new requests — the next one gets `401`. **In-flight requests finish**: the router does not tear down a stream mid-response, because a half-written response is worse than one extra completed call. Revocation is one-way; a revoked key is never reactivated. |
 | revoked → purged | 30 days after revocation (configurable), so historical usage stays joinable for a while. See [09-deployment.md](09-deployment.md). |
 
@@ -221,10 +221,31 @@ this deployment's base URL — `PUBLIC_URL` when the operator set one, otherwise
 origin — and the key's real value. A snippet containing `YOUR_KEY_HERE` is a snippet that gets
 pasted containing `YOUR_KEY_HERE`.
 
+This holds for **every** surface that mints, not just the Keys screen. A key can also be minted
+from the Overview screen's first-run walk (add an account → pool it → mint a key), and that walk
+shows the same dialog rather than a reduced version of it. The operator arriving there is the one
+who has never seen this router before — the one who most needs to be told which clients want the
+`/v1` suffix — so putting the newcomer on a lesser block and the experienced operator on the good
+one would be exactly backwards.
+
 The suffix rule is the reason this is generated rather than written out six times: an
 OpenAI-dialect client appends `/chat/completions` to what it is given and so needs `/v1` already
 there, while an Anthropic-dialect one appends `/v1/messages` itself and must be handed the bare
 origin. One helper owns that (`apps/web/src/lib/client-snippets.ts`), so the two cannot disagree.
+
+#### …and the console forgets it when that panel closes
+
+Retrievable is not the same as retained. Closing the dialog drops the plaintext from the console
+entirely: the signal feeding the dialog is cleared, and the mutation that produced the value — the
+mint or the reveal — is reset so TanStack's *mutation* cache stops holding its result too. That
+second half is not automatic. A mutation result lives in that cache for `gcTime` (five minutes by
+default) after its last observer detaches, and a mounted screen never detaches on its own, so the
+two reveal-carrying mutations declare `gcTime: 0` **and** the screen resets them on close. Either
+one alone leaves a live credential readable in the tab.
+
+This costs nothing, because the value was never the scarce thing: reading it again is one more
+audited `POST`, which is the intended price and the reason there is no shown-once flow to begin
+with.
 
 ### What a key cannot do
 

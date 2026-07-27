@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import { AdminAuthError } from "@multi-ai-router/core"
-import type { RecentAttemptRow } from "@multi-ai-router/db"
+import type { RecentAttemptRow, UsageOutcomeCount, UsageTotals } from "@multi-ai-router/db"
 import { Hono, type MiddlewareHandler } from "hono"
 import { createLogger } from "../../src/logging/logger"
 import type { AdminAuthEnv, AdminAuthGuardService } from "../../src/middleware/adminAuth"
@@ -11,12 +11,13 @@ import { ADMIN_USAGE_BASE_PATH, adminUsageRoutes } from "../../src/routes/admin/
 import { createUsageService } from "../../src/services/usage-read"
 
 /**
- * `GET /api/admin/usage/recent` — the live request feed, driven through a real Hono mount.
+ * The two halves of the *"why did my request fail"* surface, driven through a real Hono mount:
+ * the live request feed, and the failure split on the summary beside it.
  *
- * The route is thin, so what this proves is the wiring around it: the guard is carried, the query
- * is validated at the edge rather than in the service, and a rejected query is a `400` with a
- * reason instead of a page that quietly means something else. The service's own behaviour is a
- * unit test (`test/unit/usage/usage-recent.test.ts`) because it needs no HTTP to be true.
+ * The routes are thin, so what this proves is the wiring around them: the guard is carried, the
+ * query is validated at the edge rather than in the service, and a rejected query is a `400` with
+ * a reason instead of a page that quietly means something else. The services' own behaviour is a
+ * unit test (`test/unit/usage/`) because it needs no HTTP to be true.
  */
 
 const NOW = new Date("2026-07-24T12:00:00.000Z")
@@ -61,6 +62,7 @@ function harness(rows: readonly RecentAttemptRow[] = [attemptRow()], guard = stu
       series: unreached,
       seriesByDimension: unreached,
       breakdown: unreached,
+      outcomes: unreached,
     },
     recent: { recent: async () => [...rows] },
     daily: { totals: unreached, breakdown: unreached },
@@ -142,6 +144,115 @@ describe("GET /api/admin/usage/recent", () => {
     expect(response.status).toBe(401)
   })
 })
+
+describe("GET /api/admin/usage — the failure split", () => {
+  test("carries the error rate taken apart, with quota and credits as two numbers", async () => {
+    const response = await summaryHarness([
+      { outcome: "success", attempts: 90 },
+      { outcome: "quota_exhausted", attempts: 6 },
+      { outcome: "credits_exhausted", attempts: 3 },
+      { outcome: "scope_violation", attempts: 1 },
+    ]).request("/api/admin/usage?window=today")
+
+    expect(response.status).toBe(200)
+    const body = (await response.json()) as { failures: Record<string, unknown> }
+    expect(body.failures).toEqual({
+      attempts: 100,
+      errors: 10,
+      partial: false,
+      // Biggest first, and never one "capacity" figure: waiting fixes the first, only a
+      // top-up fixes the second, and an operator reading one number cannot tell which.
+      byOutcome: [
+        { outcome: "quota_exhausted", attempts: 6 },
+        { outcome: "credits_exhausted", attempts: 3 },
+        { outcome: "scope_violation", attempts: 1 },
+      ],
+    })
+  })
+
+  test("never reports success as a failure, while still counting it in the denominator", async () => {
+    const response = await summaryHarness([{ outcome: "success", attempts: 12 }]).request(
+      "/api/admin/usage?window=today",
+    )
+
+    const body = (await response.json()) as {
+      failures: { attempts: number; errors: number; byOutcome: readonly { outcome: string }[] }
+    }
+    expect(body.failures.attempts).toBe(12)
+    expect(body.failures.errors).toBe(0)
+    expect(body.failures.byOutcome).toEqual([])
+  })
+
+  test("is unreachable without an admin session", async () => {
+    const app = summaryHarness([], adminAuth(refusingAuth(), true))
+
+    expect((await app.request("/api/admin/usage?window=today")).status).toBe(401)
+  })
+})
+
+/**
+ * The summary mount. Separate from the feed's harness because the two read opposite halves of the
+ * service: this one serves aggregates and refuses to touch raw attempt rows, the other the
+ * reverse — and a harness that answered both would prove neither stayed on its own side.
+ *
+ * Only `outcomes` and `totals` carry data; every other aggregate is empty, because the split is
+ * the one thing under test and an empty series still renders a dense axis.
+ */
+function summaryHarness(outcomes: readonly UsageOutcomeCount[], guard = stubSession()) {
+  const attempts = outcomes.reduce((sum, row) => sum + row.attempts, 0)
+  const service = createUsageService({
+    usage: {
+      totals: async () => ({ ...ZERO_TOTALS, attempts }),
+      latency: async () => ({
+        p50Ms: null,
+        p95Ms: null,
+        routerOverheadP95Ms: null,
+        ttfbP95Ms: null,
+      }),
+      series: async () => [],
+      seriesByDimension: async () => [],
+      breakdown: async () => [],
+      outcomes: async () => [...outcomes],
+    },
+    recent: {
+      recent: async () => {
+        throw new Error("the summary must not read raw attempt rows")
+      },
+    },
+    // `today` has no closed days, so the rolled table is never the right answer here.
+    daily: {
+      totals: async () => {
+        throw new Error("the rolled table must not be read for a same-day window")
+      },
+      breakdown: async () => {
+        throw new Error("the rolled table must not be read for a same-day window")
+      },
+    },
+    scheduledTasks: { lastSuccess: async () => undefined },
+    labels: async () => ({ keys: new Map(), accounts: new Map(), pools: new Map() }),
+    now: () => NOW,
+  })
+
+  const app = new Hono<AdminAuthEnv>()
+  const logger = createLogger({ level: "error", write: () => {} })
+  app.use("*", requestId())
+  app.onError(errorHandler(logger))
+  app.notFound(notFoundHandler())
+  app.route(ADMIN_USAGE_BASE_PATH, adminUsageRoutes({ guard, service }))
+  return app
+}
+
+const ZERO_TOTALS: UsageTotals = {
+  requests: 0,
+  attempts: 0,
+  errors: 0,
+  tokensIn: 0,
+  tokensOut: 0,
+  cacheReadTokens: 0,
+  cacheWriteTokens: 0,
+  costMetered: "0",
+  costNotional: "0",
+}
 
 function stubSession(): MiddlewareHandler<AdminAuthEnv> {
   return async (c, next) => {

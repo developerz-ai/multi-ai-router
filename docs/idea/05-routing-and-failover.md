@@ -212,8 +212,10 @@ Even rotation across the eligible candidates, one request at a time, ignoring se
 
 ### `weighted`
 
-Round-robin biased by each Account's `weight`. An account with weight 3 gets roughly three times
-the share of one with weight 1.
+Round-robin biased by each **membership's** `weight` — the Account's own value is only the default a
+new membership starts from, so the same Account can be heavy in one Pool and light in another. An
+account with weight 300 gets roughly three times the share of one with weight 100. Set per member in
+the Pool form.
 
 | When to use | Trade-off |
 |---|---|
@@ -230,8 +232,9 @@ token spend. **DEFERRED**: which of the two is the default measure, and the exac
 
 ### `priority-failover`
 
-Strict order by each Account's `priority`. Always take the highest-priority eligible account;
-descend **only** when everything above it is filtered out.
+Strict order by each **membership's** `priority`, lower first — again per Pool, defaulting to the
+Account's own. Always take the highest-priority eligible account; descend **only** when everything
+above it is filtered out. Set per member in the Pool form.
 
 | When to use | Trade-off |
 |---|---|

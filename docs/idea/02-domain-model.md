@@ -70,7 +70,7 @@ account per provider. The `label` is what distinguishes them to a human.
 | `id` | id | Stable across reconnects — a `needs_reauth` account keeps its id, pool membership, and usage history |
 | `label` | string | Required, human-chosen. The disambiguator between same-provider accounts: `claude-max-seb`, `claude-max-team-2` |
 | `provider` | enum | Provider id |
-| `authMaterial` | encrypted blob | API key, or OAuth access + refresh token. AES-256-GCM. Never returned by any endpoint. **Empty for Claude subscription accounts** — those hold a `CLAUDE_CONFIG_DIR` path instead, and the SDK owns the credentials inside it ([11-anthropic-agent-sdk.md](11-anthropic-agent-sdk.md)). Also legitimately empty for an `authKind: none` provider (`ollama`), whose upstream authenticates nobody; the request then carries no auth header, and every other provider's empty account is refused at write time |
+| `authMaterial` | encrypted blob | API key, or OAuth access + refresh token. AES-256-GCM. Never returned by any endpoint, so the console's **Edit** dialog carries a write-only box: an empty one leaves the stored value alone and typing into it rotates. That box is absent entirely for a provider with a connect flow — pasting a token by hand is not how a subscription or an OAuth account is authorized. **Empty for Claude subscription accounts** — those hold a `CLAUDE_CONFIG_DIR` path instead, and the SDK owns the credentials inside it ([11-anthropic-agent-sdk.md](11-anthropic-agent-sdk.md)). Also legitimately empty for an `authKind: none` provider (`ollama`), whose upstream authenticates nobody; the request then carries no auth header, and every other provider's empty account is refused at write time |
 | `configDir` | path, optional | Claude subscription accounts only. One isolated `CLAUDE_CONFIG_DIR` per Account so N subscriptions coexist without cross-contamination. Its contents are live credential material. **Assigned by the router, never by the operator**: `<CLAUDE_CONFIG_ROOT>/<id>`, created `0700` with the row and deleted with it. Keyed on `id` because a `label` is renameable and a rename would strand a logged-in directory; a unique index on the column makes "two Accounts, one directory" a write that cannot land |
 | `tokenExpiresAt` | timestamp, optional | OAuth accounts only. Drives the per-account refresh schedule; refresh fires at a fraction of the remaining lifetime, never on a `401`, and is re-scheduled each time a new token lands |
 | `refreshState` | in-memory | This account's armed timer and its single-flight guard: every trigger for one account awaits one shared promise, never N racing writes. Plus the backoff counter for failed refreshes. A *request* is never a trigger — it neither starts nor waits on a refresh |
@@ -78,8 +78,8 @@ account per provider. The `label` is what distinguishes them to a human.
 | *(quota windows)* | separate `quota_windows` table | Per-window quota state — see below. A Claude subscription has several concurrent windows that reset independently, so they are rows keyed `(account_id, window)`, not a JSON blob on the account: each window is upserted and expires on its own clock, and one refresh must not rewrite the others. Two writers, both idempotent on that key: the replica that *observed* a reading upserts it off its request path (`QUOTA_WRITE_INTERVAL_MS`), and the quota floor clears rows whose own reset has passed |
 | `modelAliases` | json, optional | Maps the client's model name to the account's (`sonnet` → `glm-4.7`, `sonnet` → `k3`). Absent means pass the name through unchanged. Keys are **requested-side** — what a client sends |
 | `supportedModels` | json, optional | The model ids this account's upstream accepts, **upstream-side** — the side `modelAliases` points *at*, and the side a provider's own `/v1/models` returns. Absent (and `[]`) mean *unknown*, which routing reads as passthrough: the account serves whatever the client names. A non-empty list filters selection and is what `GET /v1/models` enumerates. Filled by the operator or by `POST /api/admin/accounts/:id/models/discover`; never on a timer, because a catalog that refreshed itself would change routing without anyone asking |
-| `weight` | number | Bias for the `weighted` policy |
-| `priority` | number | Strict order for the `priority-failover` policy |
+| `weight` | number | Bias for the `weighted` policy. The account's own default; a Pool membership carries its own and wins where it is set |
+| `priority` | number | Strict order for the `priority-failover` policy. Same relationship to a membership's own value |
 | `health` | in-memory | Cooldown expiry, recent failures, in-flight count, quota headroom. Snapshotted and injected into selection |
 
 **Who writes `status`, and what may overwrite what.** The column holds two different kinds of fact.
@@ -159,7 +159,17 @@ An `exhausted` Account has **no** reset by definition — that is what separates
 | `name` | string | Human-chosen |
 | `policy` | enum | `sticky` (default) \| `round-robin` \| `weighted` \| `least-used` \| `priority-failover` \| `quota-aware` — see [05-routing-and-failover.md](05-routing-and-failover.md). On a Pool containing Claude subscription Accounts, `round-robin` / `weighted` / `least-used` are **unsafe as-is**: they ignore the Session → Account binding, which on that path breaks the conversation rather than just the cache |
 | `members` | Account[] | Ordered/weighted set. An Account may sit in several Pools |
+| `members[].weight` | number | Bias for `weighted`, **within this Pool only**. Defaults to the Account's own when the membership is created |
+| `members[].priority` | number | Order for `priority-failover`, within this Pool only; lower is tried first. Same default |
 | `overflowAccountId` | id, optional | The Pool's **member of last resort** — typically a paid API key — engaged only once every *other* member has filtered out, and invisible to the policy until then. **Must be one of `members`.** Absent means the Pool simply fails when its members are unavailable, which is the default: spending real money is opted into, never inferred. See [05-routing-and-failover.md](05-routing-and-failover.md#overflow-optional-opt-in) |
+
+**`weight` and `priority` belong to the membership, not to the Account.** The same Account can be
+the first choice in one Pool and the last in another, which is the whole point of "many accounts of
+the same provider". Membership is written as a whole set, so every write restates every member —
+and a member whose `weight`/`priority` the write **omits keeps what it already carries**, falling
+back to the Account's own only when the membership is new. Without that rule, renaming a Pool would
+re-flatten a `weighted` one and re-order a `priority-failover` one: routing changing because someone
+fixed a typo. Sending a number is the only way to change one.
 
 **The overflow is a designation on a membership, not an escape from it.** Candidates are
 `pool_members ∩ key_scope` and nothing widens that ([04](04-api-keys-and-access.md)), so an

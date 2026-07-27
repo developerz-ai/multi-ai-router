@@ -17,11 +17,12 @@ import {
   useKeys,
   useRevealKey,
   useRevokeKey,
+  useUpdateKey,
 } from "../lib/queries/router-keys"
 import { useSettings } from "../lib/queries/settings"
 import { useTableUsage } from "../lib/queries/table-usage"
 import styles from "./KeysRoute.module.scss"
-import { KeyFormDialog } from "./keys/KeyFormDialog"
+import { KeyFormDialog, type KeyFormValues, toCreateKeyInput } from "./keys/KeyFormDialog"
 import { KeysTable } from "./keys/KeysTable"
 import { KeyValueDialog } from "./keys/KeyValueDialog"
 
@@ -39,9 +40,11 @@ interface ShownKey {
  * decrypts and returns the value; there is no shown-once flow anywhere here and
  * no warning that implies one.
  *
- * The revealed value is held in a component signal and never written to the
- * query cache — caching it would leave a live credential in memory for the rest
- * of the tab's life for no benefit, since re-reading it is one click.
+ * The value a mint or a reveal returns lives exactly as long as the dialog
+ * showing it: closing that dialog drops it from the signal feeding the dialog
+ * *and* from the mutation result TanStack parks in its cache. Leaving it there
+ * would keep a live credential in memory for the rest of the tab's life for no
+ * benefit, since re-reading it is one audited click.
  *
  * Usage rides along as its own query rather than being folded into the keys
  * list: the two have different shapes of staleness — a key row changes when an
@@ -63,22 +66,65 @@ export default function KeysRoute() {
   const usage = useTableUsage("key")
 
   const create = useCreateKey()
+  const update = useUpdateKey()
   const reveal = useRevealKey()
   const revoke = useRevokeKey()
   const remove = useDeleteKey()
 
-  const [minting, setMinting] = createSignal(false)
+  const [formOpen, setFormOpen] = createSignal(false)
+  const [editing, setEditing] = createSignal<ApiKeyView | null>(null)
   const [shown, setShown] = createSignal<ShownKey | null>(null)
   const [pendingRevoke, setPendingRevoke] = createSignal<ApiKeyView | null>(null)
   const [pendingDelete, setPendingDelete] = createSignal<ApiKeyView | null>(null)
 
-  const closeMint = () => {
+  const openForm = (key: ApiKeyView | null) => {
     create.reset()
-    setMinting(false)
+    update.reset()
+    setEditing(key)
+    setFormOpen(true)
+  }
+
+  const closeForm = () => {
+    setFormOpen(false)
+    setEditing(null)
+  }
+
+  /**
+   * Dismissing the value dialog drops the plaintext from both places it landed:
+   * this screen's signal, and the mutation result TanStack holds in its cache
+   * until the mutation is reset. Which mutation is holding it depends on how the
+   * value got here — a mint or a later reveal — and resetting the one that did
+   * costs nothing, because neither result is read anywhere else once the dialog
+   * is gone.
+   */
+  const dismissValue = (minted: boolean) => {
+    setShown(null)
+    if (minted) create.reset()
+    else reveal.reset()
+  }
+
+  /**
+   * The form always states a ceiling and an expiry; a mint drops the `null`s and an
+   * edit sends them, because on `PATCH` that is the only way to *remove* either one.
+   */
+  const submit = (values: KeyFormValues) => {
+    const target = editing()
+    if (target === null) {
+      create.mutate(toCreateKeyInput(values), {
+        onSuccess: (key) => {
+          closeForm()
+          setShown({ name: key.name, value: key.value, minted: true })
+        },
+      })
+      return
+    }
+    // `KeyFormValues` states every field, which is exactly what `UpdateKeyInput` wants:
+    // a `null` ceiling or expiry is a removal, not an omission.
+    update.mutate({ id: target.id, patch: values }, { onSuccess: closeForm })
   }
 
   const mintButton = () => (
-    <Button onClick={() => setMinting(true)} tone="primary">
+    <Button onClick={() => openForm(null)} tone="primary">
       Mint key
     </Button>
   )
@@ -118,6 +164,7 @@ export default function KeysRoute() {
               keys={rows}
               nowMs={now()}
               onDelete={setPendingDelete}
+              onEdit={(key) => openForm(key)}
               onReveal={(key) =>
                 reveal.mutate(key.id, {
                   onSuccess: (revealed) =>
@@ -134,18 +181,12 @@ export default function KeysRoute() {
 
       <KeyFormDialog
         accounts={accounts.isSuccess ? (accounts.data ?? []) : []}
-        busy={create.isPending}
-        error={create.error}
-        onClose={closeMint}
-        onSubmit={(input) =>
-          create.mutate(input, {
-            onSuccess: (key) => {
-              closeMint()
-              setShown({ name: key.name, value: key.value, minted: true })
-            },
-          })
-        }
-        open={minting()}
+        apiKey={editing()}
+        busy={create.isPending || update.isPending}
+        error={editing() === null ? create.error : update.error}
+        onClose={closeForm}
+        onSubmit={submit}
+        open={formOpen()}
         pools={pools.isSuccess ? (pools.data ?? []) : []}
       />
 
@@ -155,7 +196,7 @@ export default function KeysRoute() {
             baseUrl={baseUrl()}
             minted={key().minted}
             name={key().name}
-            onClose={() => setShown(null)}
+            onClose={() => dismissValue(key().minted)}
             open
             value={key().value}
           />

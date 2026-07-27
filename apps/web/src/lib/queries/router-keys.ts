@@ -13,12 +13,22 @@ import { queryKeys } from "./query-keys"
 
 // Server state for router keys.
 //
-// **Reveal is a mutation with no cache write.** It is audited server-side and
-// returns a live credential; caching that value would leave it sitting in the
-// query cache for the rest of the tab's life, readable by anything that can
-// reach the client. The value goes straight to the component that asked for it
-// and is dropped when that dialog closes. Keys stay retrievable — pressing
-// reveal again is one more audited call, which is exactly the intended cost.
+// **The two calls that return a live credential do not leave it lying around.**
+// Reveal and mint are audited server-side and answer with the value in the
+// clear. Nothing writes that into the query cache, but being a mutation is not
+// the same as being cache-free: TanStack parks a mutation's result in the
+// client's *mutation* cache, and the default `gcTime` keeps it there for five
+// minutes after the last observer detaches — long after the dialog showing it
+// closed, readable by anything that can reach the client.
+//
+// So both carry `gcTime: 0`, which drops the entry as soon as nothing is
+// observing it. The other half of the rule lives in `KeysRoute`, which resets
+// whichever mutation produced the value when its dialog closes: a mounted
+// screen never stops observing on its own, so without the reset the timer would
+// never start. Neither half works alone.
+//
+// Keys stay retrievable through all of this — pressing reveal again is one more
+// audited call, which is exactly the intended cost.
 
 export function useKeys() {
   return useQuery(() => ({
@@ -27,10 +37,12 @@ export function useKeys() {
   }))
 }
 
+/** Carries the minted value — see the note above on `gcTime`. */
 export function useCreateKey() {
   const client = useQueryClient()
   return useMutation(() => ({
     mutationFn: (input: CreateKeyInput) => createKey(input),
+    gcTime: 0,
     onSuccess: () => client.invalidateQueries({ queryKey: queryKeys.keys.root() }),
   }))
 }
@@ -43,9 +55,11 @@ export function useUpdateKey() {
   }))
 }
 
+/** The other one that carries a value. Same rule. */
 export function useRevealKey() {
   return useMutation(() => ({
     mutationFn: (id: string) => revealKey(id),
+    gcTime: 0,
   }))
 }
 

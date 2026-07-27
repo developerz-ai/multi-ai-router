@@ -1,4 +1,8 @@
-import { DEFAULT_ROUTING_POLICY } from "@multi-ai-router/core"
+import {
+  DEFAULT_ACCOUNT_PRIORITY,
+  DEFAULT_ACCOUNT_WEIGHT,
+  DEFAULT_ROUTING_POLICY,
+} from "@multi-ai-router/core"
 import { index, integer, pgTable, text, timestamp, uniqueIndex, uuid } from "drizzle-orm/pg-core"
 import { accounts } from "./accounts"
 import { routingPolicy } from "./enums"
@@ -41,6 +45,13 @@ export const pools = pgTable(
  * Account <-> Pool is many-to-many: an account may sit in several pools, and the
  * weight/priority it carries are properties of *that membership*, not of the
  * account globally.
+ *
+ * The two defaults below are only ever reached by a row this schema writes on
+ * its own — a `pool_members` row written through `services/pools` always states
+ * both, resolved from the write, the membership it replaces, or the account
+ * (see that service's `resolveTuning`). Membership is replaced as a whole set,
+ * so a default that could win would mean every pool edit silently re-flattened
+ * the pool's tuning.
  */
 export const poolMembers = pgTable(
   "pool_members",
@@ -52,8 +63,8 @@ export const poolMembers = pgTable(
     accountId: uuid("account_id")
       .notNull()
       .references(() => accounts.id, { onDelete: "cascade" }),
-    weight: integer("weight").notNull().default(100),
-    priority: integer("priority").notNull().default(0),
+    weight: integer("weight").notNull().default(DEFAULT_ACCOUNT_WEIGHT),
+    priority: integer("priority").notNull().default(DEFAULT_ACCOUNT_PRIORITY),
     createdAt: timestamp("created_at", { withTimezone: true, mode: "date" }).notNull().defaultNow(),
   },
   (table) => [
