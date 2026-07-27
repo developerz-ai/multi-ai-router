@@ -176,7 +176,7 @@ describing an unbuilt capability are marked. Track progress in
 ```bash
 bin/setup     # fresh clone: prereqs, install, .env with a generated ENCRYPTION_KEY + DATABASE_URL, dev Postgres, migrate
 bin/dev       # each session: API + web, watch mode
-bin/check     # before committing: lint, typecheck, test — the CI job list, in order
+bin/check     # before committing: lint, typecheck, test, build — the CI job list, in order
 ```
 
 `bin/check` needs a database and refuses to start without one, because CI's test job has a real

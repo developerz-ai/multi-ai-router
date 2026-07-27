@@ -14,7 +14,7 @@ guess at.
 ```
 bin/setup   # fresh clone → prereqs, install, .env, dev Postgres, migrate
 bin/dev     # each session: API + web, watch mode
-bin/check   # before every commit: lint + typecheck + full test suite
+bin/check   # before every commit: lint + typecheck + test + build
 ```
 
 Those three commands are the house contract. If a task is worth running
@@ -65,7 +65,7 @@ Other commands you'll use often:
   --oneline` is the style guide.
 - PR description explains *why*, not just *what* — the diff already shows
   what changed.
-- CI (lint, typecheck, test) must be green before merge. `bin/check` runs
+- CI (lint, typecheck, test, build) must be green before merge. `bin/check` runs
   the same gate locally in the same order, so there should be no surprises.
 
 ## Non-negotiables

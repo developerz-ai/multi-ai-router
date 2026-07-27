@@ -2,7 +2,7 @@
   "$schema": "https://json.schemastore.org/tsconfig",
   "compilerOptions": {
     // Bun runs TypeScript directly; tsc is used only as a type checker
-    // (`--noEmit` in CI), never as a build step. See bin/lint.
+    // (`tsc --build` in CI), never as a build step. See bin/lint.
     "target": "ESNext",
     "lib": ["ESNext"],
     "module": "Preserve",
