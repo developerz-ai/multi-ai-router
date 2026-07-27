@@ -14,7 +14,7 @@ guess at.
 ```
 bin/setup   # fresh clone → prereqs, install, .env, dev Postgres, migrate
 bin/dev     # each session: API + web, watch mode
-bin/check   # before every commit: lint + typecheck + full test suite
+bin/check   # before every commit: lint + typecheck + test + build
 ```
 
 Those three commands are the house contract. If a task is worth running
@@ -46,6 +46,11 @@ Other commands you'll use often:
   repositories own all SQL.
 - Run `bin/check` before every commit. It refuses to run without a
   `DATABASE_URL`, so it can never pass locally on fewer tests than CI runs.
+  The refusal is enforced from inside the run — `bun test` reads `.env.test`
+  and ignores `.env.local`, the reverse of every other `bun` invocation, so a
+  shell-side check would police a value the suites never see. If the gate says
+  you have no database and `.env` says otherwise, `bin/lib/database-url` prints
+  the one the run actually uses.
 - New unit tests are pure — no mocks, no clock, no network; inject the
   snapshot. New integration tests boot a real server over real HTTP against
   **mocked** upstreams — never a real provider, real OAuth, a live `claude`
@@ -60,7 +65,7 @@ Other commands you'll use often:
   --oneline` is the style guide.
 - PR description explains *why*, not just *what* — the diff already shows
   what changed.
-- CI (lint, typecheck, test) must be green before merge. `bin/check` runs
+- CI (lint, typecheck, test, build) must be green before merge. `bin/check` runs
   the same gate locally in the same order, so there should be no surprises.
 
 ## Non-negotiables

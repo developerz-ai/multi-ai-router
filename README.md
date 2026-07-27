@@ -176,7 +176,7 @@ describing an unbuilt capability are marked. Track progress in
 ```bash
 bin/setup     # fresh clone: prereqs, install, .env with a generated ENCRYPTION_KEY + DATABASE_URL, dev Postgres, migrate
 bin/dev       # each session: API + web, watch mode
-bin/check     # before committing: lint, typecheck, test — the CI job list, in order
+bin/check     # before committing: lint, typecheck, test, build — the CI job list, in order
 ```
 
 `bin/check` needs a database and refuses to start without one, because CI's test job has a real
@@ -186,9 +186,17 @@ pass, and the gate goes green having proved less than the PR will. `bin/setup` w
 `DATABASE_URL` into `.env`, which is all it takes. A bare `bin/test` still runs on a machine with no
 Docker — it just names, after the summary, the files that did not run.
 
+The refusal is decided **inside** the test process, not by the shell that starts it, because the two
+do not read the same files: `bun test` always loads `.env.test` and never loads `.env.local`, while
+every other `bun` invocation does the opposite. A `DATABASE_URL` blanked in `.env.test` — or present
+only in `.env.local` — is not the value the run sees, and a gate that checked the wrong one would
+wave through exactly the silent skip it exists to stop. `bin/lib/database-url` prints the value the
+run will use if you ever need to see it.
+
 One more when you touch the request path: `bin/bench` drives the real router against an in-process
 stub upstream and reports what its own `router_overhead_seconds` histogram recorded, plus added
-time-to-first-token measured separately. It exits non-zero when either half of the budget breaks.
+time-to-first-token measured separately. It exits non-zero when either half of the budget breaks —
+overhead p99 over `--budget-ms`, or added TTFT p95 over `--ttft-budget-ms`.
 
 ---
 

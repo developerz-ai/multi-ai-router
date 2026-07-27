@@ -1,42 +1,49 @@
 {
-  "version": 1,
-  "budgetMs": 5,
+  "version": 2,
+  "budgets": {
+    "overheadP99Ms": 5,
+    "addedTtftP95Ms": 2
+  },
   "rows": [
     {
       "scenario": "passthrough",
       "path": "passthrough",
-      "overheadMeanMs": 0.04950000000000003,
-      "overheadP50Ms": 0.26068821689259647,
-      "overheadP95Ms": 0.49530761209593327,
-      "overheadP99Ms": 0.9366197183098591,
-      "addedTtftP50Ms": null
+      "overheadMeanMs": 0.1580000000000001,
+      "overheadP50Ms": 0.2885170225043278,
+      "overheadP95Ms": 0.8408163265306123,
+      "overheadP99Ms": 1.25,
+      "addedTtftP50Ms": null,
+      "addedTtftP95Ms": null
     },
     {
       "scenario": "passthrough (stream)",
       "path": "passthrough",
-      "overheadMeanMs": 0.09000000000000007,
-      "overheadP50Ms": 0.2717391304347826,
-      "overheadP95Ms": 0.6986754966887417,
-      "overheadP99Ms": 0.9635761589403974,
-      "addedTtftP50Ms": 0.029612499999529973
+      "overheadMeanMs": 0.33100000000000024,
+      "overheadP50Ms": 0.34989503149055284,
+      "overheadP95Ms": 0.932904411764706,
+      "overheadP99Ms": 1.6363636363636362,
+      "addedTtftP50Ms": 0.03560849999939819,
+      "addedTtftP95Ms": 0.19362549999768813
     },
     {
       "scenario": "translate",
       "path": "translate",
-      "overheadMeanMs": 0.053500000000000034,
-      "overheadP50Ms": 0.26246719160104987,
-      "overheadP95Ms": 0.4986876640419948,
-      "overheadP99Ms": 0.936046511627907,
-      "addedTtftP50Ms": null
+      "overheadMeanMs": 0.08950000000000005,
+      "overheadP50Ms": 0.2704164413196322,
+      "overheadP95Ms": 0.6861313868613139,
+      "overheadP99Ms": 0.9781021897810218,
+      "addedTtftP50Ms": null,
+      "addedTtftP95Ms": null
     },
     {
       "scenario": "translate (stream)",
       "path": "translate",
-      "overheadMeanMs": 0.07100000000000004,
-      "overheadP50Ms": 0.26413100898045433,
-      "overheadP95Ms": 0.5357142857142857,
-      "overheadP99Ms": 0.9438775510204082,
-      "addedTtftP50Ms": 0.0979029999980412
+      "overheadMeanMs": 0.20400000000000015,
+      "overheadP50Ms": 0.30413625304136255,
+      "overheadP95Ms": 0.8809523809523809,
+      "overheadP99Ms": 1,
+      "addedTtftP50Ms": 0.11245950000011362,
+      "addedTtftP95Ms": 0.3741550499955335
     }
   ]
 }

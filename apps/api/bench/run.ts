@@ -1,5 +1,5 @@
 import { type Baseline, compareToBaseline, renderDelta, toBaseline } from "./baseline"
-import { render, verdict } from "./report"
+import { type Budgets, render, verdict } from "./report"
 import { type DriveOptions, runScenario, SCENARIOS, type ScenarioResult } from "./scenarios"
 
 /**
@@ -7,8 +7,10 @@ import { type DriveOptions, runScenario, SCENARIOS, type ScenarioResult } from "
  *
  * CLAUDE.md non-negotiable 8 calls a regression in `router_overhead_seconds` a bug. A number nobody
  * can reproduce on demand is not a budget, so this drives the real router against an in-process stub
- * upstream, scrapes its own `/metrics`, and exits non-zero when the p99 is over budget or a stream
- * came back buffered. That makes it usable as a gate; it is deliberately *not* part of `bin/check`,
+ * upstream, scrapes its own `/metrics`, and exits non-zero when *either* half of the promise breaks:
+ * the overhead p99 over its budget, or the added time-to-first-token p95 over its ceiling (a
+ * buffered relay being the extreme case of the latter, still named separately because it has its
+ * own explanation). That makes it usable as a gate; it is deliberately *not* part of `bin/check`,
  * because a timing measurement on a shared CI runner is a flaky test, and a flaky gate is a gate
  * people learn to ignore.
  *
@@ -25,7 +27,7 @@ import { type DriveOptions, runScenario, SCENARIOS, type ScenarioResult } from "
  * or dropping `--first-byte-ms` measures the saturation point instead, which is a fair thing to
  * want and a different thing to read.
  */
-const DEFAULTS: DriveOptions & { readonly budgetMs: number } = {
+const DEFAULTS: DriveOptions & { readonly budgetMs: number; readonly ttftBudgetMs: number } = {
   requests: 2_000,
   concurrency: 8,
   warmup: 200,
@@ -34,6 +36,17 @@ const DEFAULTS: DriveOptions & { readonly budgetMs: number } = {
   chunkGapMs: 1,
   firstByteDelayMs: 20,
   budgetMs: 5,
+  /**
+   * "Zero added TTFT" needs an operational number, because literal zero is not measurable: the
+   * figure is a difference between two `performance.now()` reads across an async relay, and the
+   * scheduling cost of the relay itself is never 0. On an idle box this harness measures a p95 of
+   * 0.15 ms passthrough and 0.36–0.42 ms translated, so 2 ms is roughly 5× the worst honest reading
+   * — loose enough that a slower runner does not cry wolf, and still an order of magnitude under
+   * every regression worth catching (a buffered relay costs the whole generation, a Postgres round
+   * trip on the critical path costs milliseconds). A knob rather than a constant, per
+   * non-negotiable 11, so a smaller machine can widen it without editing code.
+   */
+  ttftBudgetMs: 2,
 }
 
 const USAGE = `Usage: bin/bench [options]
@@ -46,6 +59,7 @@ const USAGE = `Usage: bin/bench [options]
   --chunk-gap-ms N   the stub's think time per chunk (default ${DEFAULTS.chunkGapMs})
   --first-byte-ms N  the stub's time to first byte   (default ${DEFAULTS.firstByteDelayMs})
   --budget-ms N      p99 overhead ceiling            (default ${DEFAULTS.budgetMs})
+  --ttft-budget-ms N p95 added-TTFT ceiling          (default ${DEFAULTS.ttftBudgetMs})
   --json             emit the report as JSON
   --baseline PATH    print the delta vs a committed bench/baseline.json (report only, never fails)
   --write-baseline PATH
@@ -55,6 +69,7 @@ const USAGE = `Usage: bin/bench [options]
 
 interface Options extends DriveOptions {
   readonly budgetMs: number
+  readonly ttftBudgetMs: number
   readonly json: boolean
   readonly baselinePath: string | undefined
   readonly writeBaselinePath: string | undefined
@@ -69,6 +84,7 @@ const NUMERIC = {
   "--chunk-gap-ms": "chunkGapMs",
   "--first-byte-ms": "firstByteDelayMs",
   "--budget-ms": "budgetMs",
+  "--ttft-budget-ms": "ttftBudgetMs",
 } as const
 
 export function parseArgs(argv: readonly string[]): Options {
@@ -110,6 +126,7 @@ export function parseArgs(argv: readonly string[]): Options {
     chunkGapMs: numbers.chunkGapMs ?? DEFAULTS.chunkGapMs,
     firstByteDelayMs: numbers.firstByteDelayMs ?? DEFAULTS.firstByteDelayMs,
     budgetMs: numbers.budgetMs ?? DEFAULTS.budgetMs,
+    ttftBudgetMs: numbers.ttftBudgetMs ?? DEFAULTS.ttftBudgetMs,
     json,
     baselinePath,
     writeBaselinePath,
@@ -125,6 +142,9 @@ export async function bench(options: Options): Promise<ScenarioResult[]> {
   return results
 }
 
+/** Bumped when the file gains a number the comparison needs — see `./baseline`. */
+const BASELINE_VERSION = 2
+
 /**
  * Loads a `bench/baseline.json` written by a prior `--write-baseline` run. Missing file or a
  * version this build doesn't understand is a usage error, not a silent no-comparison — a typo'd
@@ -135,9 +155,12 @@ async function loadBaseline(path: string): Promise<Baseline> {
   if (
     typeof parsed !== "object" ||
     parsed === null ||
-    (parsed as { version?: unknown }).version !== 1
+    (parsed as { version?: unknown }).version !== BASELINE_VERSION
   ) {
-    throw new Error(`${path} is not a version-1 bench baseline`)
+    throw new Error(
+      `${path} is not a version-${BASELINE_VERSION} bench baseline — re-record it with ` +
+        `\`bin/bench --write-baseline ${path}\``,
+    )
   }
   return parsed as Baseline
 }
@@ -149,8 +172,12 @@ async function main(argv: readonly string[]): Promise<number> {
   }
 
   const options = parseArgs(argv)
+  const budgets: Budgets = {
+    overheadP99Ms: options.budgetMs,
+    addedTtftP95Ms: options.ttftBudgetMs,
+  }
   const results = await bench(options)
-  const outcome = verdict(results, options.budgetMs)
+  const outcome = verdict(results, budgets)
 
   if (options.writeBaselinePath !== undefined) {
     await Bun.write(options.writeBaselinePath, `${JSON.stringify(toBaseline(outcome), null, 2)}\n`)

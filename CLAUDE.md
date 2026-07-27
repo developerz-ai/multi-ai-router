@@ -64,10 +64,10 @@ Postgres is the house standard and the current decision — earlier drafts said 
 | Local dev (API + web, watch) | `bin/dev` |
 | Full test (unit + integration) | `bin/test` |
 | Single test by pattern | `bun test <pattern>` |
-| Lint (biome check + `tsc --noEmit`) | `bin/lint` |
+| Lint and typecheck only | `bin/lint` |
 | Format | `bin/fmt` |
 | Fresh clone → running stack | `bin/setup` |
-| The gate (lint + typecheck + test), before committing | `bin/check` — refuses to run without a `DATABASE_URL`, so it can never pass on fewer tests than CI |
+| The gate (lint + typecheck + test + build), before committing | `bin/check` — refuses to run without a `DATABASE_URL`, so it can never pass on fewer tests than CI |
 | Overhead budget: p50/p95/p99 + added TTFT vs a stub upstream | `bin/bench` |
 | Dev database shell / migrate / reset | `bin/db psql` · `bin/db migrate` · `bin/db reset` |
 | Build release image locally | `docker build -t multi-ai-router:dev .` |

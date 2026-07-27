@@ -381,10 +381,28 @@ measurements, so `bin/bench` reports them as two tables:
 | Claim | Measured as |
 |---|---|
 | **< 5 ms added p99** | Read straight off `router_overhead_seconds` via `GET /metrics`, after driving concurrent requests through the real router against an in-process stub upstream. Nothing external is timed — the series that alerts is the series that is checked |
-| **Zero added time-to-first-token** | The stub records when it released its first byte; the driver records when the client saw one. The difference is what the router added. A first client byte arriving *after* the upstream's last is a relay that buffered, which fails the run by name rather than showing up as a slow percentile |
+| **Zero added time-to-first-token** | The stub records when it released its first byte; the driver records when the client saw one. The difference is what the router added, and its **p95 is held to `--ttft-budget-ms` (default 2 ms)**. A first client byte arriving *after* the upstream's last is the extreme case — a relay that buffered — and fails by that name instead of as a slow percentile |
 
 Both non-SDK egress paths are covered, streamed and not. The Agent-SDK path is excluded: it spawns a
 subprocess per request and is the budget's labeled exception.
+
+**Why the two claims are read at different quantiles.** `router_overhead_seconds` is a bucketed
+histogram fed whole-millisecond samples, so its tail is bounded by the bucket edges and a p99 read
+off it is stable run to run. Added TTFT is a raw sample series timed across an async relay on one
+event loop: its p50 and p95 move under 15% between runs on an idle box, while its **p99 was measured
+moving 0.56 → 4.03 ms across four consecutive runs of identical code**. That tail is the scheduler,
+not the router, and gating it would fail runs for being unlucky. p95 gives up nothing, because every
+way the router can actually add time to a first token — buffering the relay, awaiting Postgres or a
+body parse before forwarding, a translation that accumulates before it emits — charges *every*
+stream and moves p50 and p95 together.
+
+One sensitivity worth knowing before reading a pass as proof: work the router does **before** the
+upstream's first byte exists is absorbed, not measured, because the client was going to wait anyway.
+The stub's `--first-byte-ms` (default 20) is therefore the floor on what a pre-relay delay has to
+exceed to register. That matches what a client actually experiences — a real upstream's first token
+is hundreds of milliseconds out, so the router has at least that much slack — but it means the
+number answers "did the client wait longer", not "did the router do more work". The latter is what
+`router_overhead_seconds` is for, which is why both are reported.
 
 Two honesty notes the tool prints for itself. The series is fed whole-millisecond samples
 (`routerOverheadMs` is an integer column), so every percentile below 1 ms is a bucket bound rather
@@ -409,14 +427,19 @@ worth blocking a merge over, and a gate nobody trusts gets ignored.
 What it produces instead:
 
 - **`bin/bench --json --baseline bench/baseline.json`** — runs the harness and prints its normal
-  verdict plus a `delta` block comparing every scenario's mean and p99 against the numbers
-  committed in `bench/baseline.json`.
+  verdict plus a `delta` block comparing every scenario's overhead mean and p99, and every streamed
+  scenario's added-TTFT p95, against the numbers committed in `bench/baseline.json`. Both halves of
+  the budget: a regression that stays under an absolute ceiling still deserves to be visible on the
+  PR that introduced it.
 - The JSON is written to the job's **summary** (visible on the PR, no log-diving) and uploaded as
   the `bench-report` **artifact** (30-day retention), so a trend across PRs is one download away.
 
-`bench/baseline.json` is a committed, versioned file (`{"version": 1, "budgetMs", "rows": [...]}`)
+`bench/baseline.json` is a committed, versioned file (`{"version": 2, "budgets", "rows": [...]}`)
 — not derived at CI time — so the delta is against a number a human chose to keep, not against
-whatever the previous run on a possibly-noisier runner happened to produce.
+whatever the previous run on a possibly-noisier runner happened to produce. A baseline written by an
+older format is **refused**, not silently diffed: a version-1 file predates the added-TTFT ceiling
+and carries no p95 to compare, so comparing against one would report "no drift" for precisely the
+number that had until then gone unwatched.
 
 **Re-baselining**, after an intentional performance change (or before cutting a release, alongside
 a `bin/bench` smoke run):

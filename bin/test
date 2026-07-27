@@ -20,35 +20,40 @@ cd "$(dirname "$0")/.."
 # `bun test` folds their skips into the same green summary as a pass — a run
 # that proved less looks exactly like a run that proved more. Say what was not
 # covered instead, printed after the summary it is correcting so it cannot
-# scroll away. `bin/check` refuses outright; a bare `bin/test` still runs, since
-# it is the loop you use on a laptop with no Docker, but it stops implying it
-# covered the database.
+# scroll away. A bare `bin/test` still runs, since it is the loop you use on a
+# laptop with no Docker, but it stops implying it covered the database.
 #
-# `bun -e` resolves the variable exactly the way `bun test` does — environment
-# first, then .env / .env.local — so the warning can never disagree with the run.
-database_url="$(bun -e 'process.stdout.write(process.env.DATABASE_URL ?? "")')"
+# Refusing is not this script's job. CI and `bin/check` both promise a database,
+# and that promise is enforced from inside the run, where `process.env` is the
+# same one the suites read (apps/api/test/support/database-gate.ts). Doing it
+# here as well would be a second, weaker copy of the same rule.
+#
+# `bin/lib/database-url` reproduces `bun test`'s dotenv resolution — which is not
+# a plain `bun` run's — so this warning names the value the run below actually
+# used, not a different file's.
+database_url="$(bin/lib/database-url)"
 
 skipped_suites() {
   # Derived, never a hand-kept list: a new DB-gated file is named here the day
   # it is written, and a deleted one stops being claimed.
-  grep -rl 'process\.env\.DATABASE_URL' apps/*/test packages/*/test 2>/dev/null | sort
+  #
+  # Both conditions, because reading the variable is not the same as skipping on
+  # it — the suite that tests this gate mentions DATABASE_URL on nearly every
+  # line and always runs. Naming a file that did not skip is the same failure as
+  # staying quiet about one that did: either way the list stops being believed.
+  grep -rl 'process\.env\.DATABASE_URL' apps/*/test packages/*/test 2>/dev/null |
+    while IFS= read -r file; do
+      if grep -q 'skipIf' "$file"; then printf '%s\n' "$file"; fi
+    done | sort
 }
-
-# A human can choose to run without a database and read the warning below. CI
-# cannot read anything, and a green CI run is what a merge is decided on, so a
-# missing service container has to be a failure there rather than a note nobody
-# sees. GitHub Actions sets CI=true; ci.yml gives the test job a real Postgres.
-if [ -z "$database_url" ] && [ -n "${CI:-}" ]; then
-  printf '\033[0;31m✘\033[0m  DATABASE_URL is not set in CI: %s\n' \
-    "these suites would skip and the run would still go green." >&2
-  skipped_suites | sed 's/^/     /' >&2
-  exit 1
-fi
 
 status=0
 bun test --path-ignore-patterns='**/tmp/**' "$@" || status=$?
 
-if [ -z "$database_url" ]; then
+# Only when nothing promised a database. If something did, the run refused before
+# its first test file and already said why — and claiming these suites "skipped"
+# would be a second, wrong story: no suite ran at all.
+if [ -z "$database_url" ] && [ -z "${CI:-}" ] && [ "${ROUTER_TEST_REQUIRE_DATABASE:-}" != "1" ]; then
   printf '\n\033[0;33m⚠  DATABASE_URL is unset — these suites SKIPPED, they did not pass:\033[0m\n' >&2
   skipped_suites | sed 's/^/     /' >&2
   printf '   Migrations, advisory-lock contention, retention deletes and the readiness\n' >&2

@@ -34,7 +34,11 @@ import {
   withKeyInvalidation,
   withPoolCatalogRefresh,
 } from "../services/admin"
-import { adminAuthConfigFromEnv, createAdminAuthService } from "../services/admin-auth"
+import {
+  adminAuthConfigFromEnv,
+  createAdminAuthService,
+  type SessionStore,
+} from "../services/admin-auth"
 import type { RoutingCatalogStore } from "../services/catalog"
 import type { PriceBook } from "../services/cost"
 import type { CredentialCipher } from "../services/crypto/cipher"
@@ -94,6 +98,12 @@ export interface AdminPlaneDeps {
    */
   readonly configDirs: AccountConfigDirs
   readonly coherence: CoherenceHooks
+  /**
+   * Built in the composition root rather than defaulted here because the scheduler's admin-session
+   * purge task (`scheduler/tasks/admin-session-purge.ts`) sweeps this very instance — two instances
+   * would mean the task cleans a map nothing ever populates.
+   */
+  readonly sessionStore: SessionStore
 }
 
 export interface AdminPlane {
@@ -182,6 +192,7 @@ export function createAdminPlane(deps: AdminPlaneDeps): AdminPlane {
     services: {
       auth: createAdminAuthService({
         env,
+        store: deps.sessionStore,
         // The env layer speaks minutes and hours; the service speaks seconds.
         // `adminAuthConfigFromEnv` is the single conversion, so the two never drift.
         config: adminAuthConfigFromEnv({

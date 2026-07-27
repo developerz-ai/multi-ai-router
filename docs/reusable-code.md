@@ -12,6 +12,7 @@ helper — most of the small things you are about to write are already here.
 | Within one app only | that app's `src/lib/` | `apps/web/src/lib/cx.ts` |
 | Within one app, but a layer not a helper | that layer's directory | `apps/api/src/logging/`, `apps/api/src/middleware/` |
 | Across shell scripts | `bin/` | `bin/check` runs lint, typecheck, then `bin/test` — the CI job list, in order |
+| Shared *by* shell scripts, not run by hand | `bin/lib/` | `bin/lib/database-url` prints the `DATABASE_URL` a `bun test` run will see; `bin/check` and `bin/test` both ask it rather than each spelling Bun's dotenv rules out |
 
 Timing, from the org standard (`gold-standards-in-ai/docs/architecture/solid-srp.md` — "Reusable
 helpers, not copy-paste" and "No premature abstraction"):
@@ -304,6 +305,7 @@ in a test as on the wire.
 | `createMemoryStore()` → `MemoryStore` | `test/support/memory-store.ts` | Any test of an admin service or the admin API. Not a mock with expectations — the smallest honest implementation of the four repository interfaces, so the service under test runs its real code path and the test asserts on **rows**. It is what lets the admin unit *and* integration suites run with no `DATABASE_URL` |
 | `harness(options)` → app + upstream + usage + clock | `test/integration/harness.ts` | Any integration suite exercising the data plane. Real Hono, real middleware, real routing and relay; `fetch`, the key repository, and the clock injected. The clock is driven by hand, so "the upstream took 400 ms" is stated, never waited for |
 | `account()`, `catalog()`, `cipher()`, `apiKeyRow()`, `keyRepository()`, `mockUpstream()`, `slowStream()` | `test/unit/dataplane/fixtures.ts` | Building data-plane inputs anywhere — including `apps/api/bench/`, which reuses them rather than restating the shapes |
+| `databaseGateRefusal(env)`, `databaseRequired(env)` | `test/support/database-gate.ts` | Deciding whether a run that promised a database may proceed without one. Pure; the `bunfig.toml` preload beside it owns the exit. Reached from inside the run on purpose — `bun test` resolves `DATABASE_URL` from a different file set than the shell that launched it, so any check outside the process guards the wrong value |
 
 ### Overhead bench — `apps/api/bench/`
 
@@ -312,6 +314,8 @@ in a test as on the wire.
 | `benchApp(options)` → the router booted in memory | `bench/harness.ts` | Measuring the request path. The composition root's wiring with three substitutions a benchmark forces: the stub upstream, an array key repository, and a log sink that serializes and discards |
 | `stubUpstream(options)` → `fetch` + per-request `Trip` | `bench/upstream.ts` | Answering in either dialect, streamed or not, with a controlled time to first byte and per-request timestamps for both ends of the relay |
 | `parseHistogram()`, `histogramQuantile()`, `histogramMean()`, `sampleQuantile()` | `bench/quantiles.ts` | Reading a Prometheus exposition back as numbers. Pure; `histogramQuantile` matches Prometheus' own interpolation, so a printed number is the number a dashboard shows |
+| `verdict(results, budgets)` → rows + violations | `bench/report.ts` | Turning driven scenarios into a pass/fail against both halves of the budget: overhead p99 and added-TTFT p95. Pure — no app, no clock, no printing |
+| `toBaseline()`, `compareToBaseline()`, `renderDelta()` | `bench/baseline.ts` | Diffing a run against a committed `bench/baseline.json`. Pure; `run.ts` owns the file I/O so the comparison is unit-testable without a disk |
 
 Driven by `bin/bench`, guarded by `test/integration/bench.test.ts`, and explained in
 [`docs/idea/08-observability.md`](idea/08-observability.md#verifying-the-budget). It measures nothing

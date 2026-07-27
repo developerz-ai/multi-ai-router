@@ -5,8 +5,8 @@ set -eu
 cd "$(dirname "$0")/.."
 
 # Read-only: no --write. Use `bunx biome check --write .` to actually fix.
-bunx biome check .
+bun run lint
 
 # Bun never type-checks at runtime and Biome does not either, so tsc is the only
-# thing enforcing the strict/no-`any` rule.
-bunx tsc --noEmit
+# thing enforcing the strict/no-`any` rule. Must match CI's typecheck job: `tsc --build`.
+bun run typecheck

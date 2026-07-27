@@ -42,6 +42,7 @@ const TASK_LABELS: Readonly<Record<string, string>> = {
   oauth_state_purge: "OAuth state purge",
   quota_floor_refresh: "Quota floor refresh",
   config_dir_reap: "Orphaned config directory reap",
+  admin_session_purge: "Admin session purge",
 }
 
 /** An unknown name is humanised, never dropped — a task added upstream must still render. */
@@ -58,6 +59,7 @@ const TASK_ITEMS: Readonly<Record<string, string>> = {
   oauth_state_purge: "rows deleted",
   quota_floor_refresh: "accounts refreshed",
   config_dir_reap: "directories removed",
+  admin_session_purge: "sessions removed",
 }
 
 /** What this task's `itemsProcessed` counts, so the sentence reads like English. */

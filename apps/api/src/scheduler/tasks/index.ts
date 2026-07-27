@@ -13,6 +13,7 @@ import type { Env } from "../../config/env"
 import type { AccountConfigDirs } from "../../providers/claude-sdk/config-dir"
 import type { HealthStore } from "../../services/dataplane"
 import type { ScheduledTask } from "../types"
+import { type AdminSessionStoreForPurge, createAdminSessionPurgeTask } from "./admin-session-purge"
 import { createConfigDirReapTask } from "./config-dir-reap"
 import { createJanitorTask } from "./janitor"
 import { createOauthPurgeTask } from "./oauth-purge"
@@ -41,6 +42,12 @@ export interface ScheduledTaskDeps {
   readonly apiKeys: Pick<ApiKeyRepository, "deleteRevokedOlderThan">
   readonly oauthStates: Pick<OauthStateRepository, "deleteExpiredBefore">
   readonly usageDaily: Pick<UsageDailyRepository, "rollup">
+  /**
+   * The admin console's in-memory session store. Not a repository: it lives in this process's
+   * heap, so this task never needs the advisory lock's "exactly one replica" guarantee — see the
+   * task's own module comment.
+   */
+  readonly adminSessions: AdminSessionStoreForPurge
   readonly accounts: Pick<
     AccountRepository,
     "list" | "listIds" | "listQuotaWindows" | "upsertQuotaWindow"
@@ -79,6 +86,7 @@ export function scheduledTaskIntervals(
     oauth_state_purge: env.scheduler.oauthStatePurgeIntervalMinutes * MINUTE_MS,
     quota_floor_refresh: env.scheduler.quotaFloorIntervalMinutes * MINUTE_MS,
     config_dir_reap: env.scheduler.configDirReapIntervalMinutes * MINUTE_MS,
+    admin_session_purge: env.scheduler.adminSessionPurgeIntervalMinutes * MINUTE_MS,
   }
 }
 
@@ -126,9 +134,15 @@ export function createScheduledTasks(deps: ScheduledTaskDeps): readonly Schedule
       intervalMs: intervals.config_dir_reap,
       batchSize,
     }),
+    createAdminSessionPurgeTask({
+      sessions: deps.adminSessions,
+      intervalMs: intervals.admin_session_purge,
+    }),
   ]
 }
 
+export type { AdminSessionPurgeDeps, AdminSessionStoreForPurge } from "./admin-session-purge"
+export { createAdminSessionPurgeTask } from "./admin-session-purge"
 export type { ConfigDirReapDeps, OrphanConfigDir, ReapPlan, ReapPlanInput } from "./config-dir-reap"
 export { createConfigDirReapTask, planConfigDirReap } from "./config-dir-reap"
 export type { JanitorDeps } from "./janitor"
