@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import { readFileSync } from "node:fs"
 import { fileURLToPath } from "node:url"
+import { parseEnv } from "../../src/config/env"
 
 /**
  * The image and the test suite have to be running the same bun, and a rebuild of an old tag has to
@@ -24,6 +25,7 @@ const ROOT = fileURLToPath(new URL("../../../../", import.meta.url))
 
 const DOCKERFILE = readFileSync(`${ROOT}Dockerfile`, "utf8")
 const CI_WORKFLOW = readFileSync(`${ROOT}.github/workflows/ci.yml`, "utf8")
+const COMPOSE = readFileSync(`${ROOT}docker-compose.yml`, "utf8")
 const MANIFEST: { engines?: { bun?: string } } = JSON.parse(
   readFileSync(`${ROOT}package.json`, "utf8"),
 )
@@ -132,6 +134,59 @@ describe("the node_modules prune", () => {
     // A count, compared. Not a bare delete whose zero-match case is a success.
     expect(step).toMatch(/\[\s*"\$pruned"\s*-gt\s*0\s*\]/)
     expect(step).toContain("exit 1")
+  })
+})
+
+describe("the container init", () => {
+  /** `ENTRYPOINT ["…"]` — exec form only; the shell form would swallow the signal outright. */
+  function entrypoint(): readonly string[] {
+    const line = DOCKERFILE.match(/^ENTRYPOINT (?<argv>\[.*\])\s*$/m)?.groups?.argv
+    expect(line).toBeDefined()
+    const argv: unknown = JSON.parse(line as string)
+    expect(Array.isArray(argv)).toBe(true)
+    return argv as readonly string[]
+  }
+
+  test("runs the router under an init, because bun is not one", () => {
+    // Every Claude subscription request spawns a `claude` subprocess, and whatever *it* spawns is
+    // re-parented to PID 1 when it outlives its parent. A PID 1 that never calls `wait()` collects
+    // one zombie per orphan, forever, on the longest-running process in the deployment. Nothing in
+    // the router's own code can fix that: reaping belongs to PID 1.
+    const argv = entrypoint()
+
+    expect(argv[0]).toBe("/usr/bin/tini")
+    // Subreaper, so the reaping survives something putting a second init above this one —
+    // `docker run --init`, compose's `init: true`. tini silently stops reaping otherwise.
+    expect(argv).toContain("-s")
+    // And it still starts the same process it always did, after the argument separator.
+    expect(argv.slice(argv.indexOf("--") + 1)).toEqual(["bun", "run", "dist/api/index.js"])
+  })
+
+  test("stages that init as a static binary and proves it runs at build time", () => {
+    // Static: a dynamically linked copy would repeat the libc trap the `claude` COPY documents,
+    // and fail as a bare "no such file or directory" on a file that is plainly there.
+    expect(DOCKERFILE).toMatch(/^COPY --from=builder \/usr\/bin\/tini-static \/usr\/bin\/tini$/m)
+    expect(DOCKERFILE).toMatch(/^RUN tini --version$/m)
+  })
+})
+
+describe("the shutdown grace", () => {
+  test("compose allows more time than the router's drain takes", () => {
+    // The router stops accepting, waits up to SHUTDOWN_DRAIN_MS for in-flight responses, and only
+    // then flushes its usage rows, quota readings and account statuses. A stop grace shorter than
+    // that wait is a SIGKILL landing mid-drain: streams truncated *and* the bookkeeping lost.
+    // Docker's default is 10s, which is under the drain's default — hence the explicit setting.
+    const grace = COMPOSE.match(/^\s*stop_grace_period:\s*(?<seconds>\d+)s\s*$/m)?.groups?.seconds
+    expect(grace).toMatch(/^\d+$/)
+
+    const drainMs = parseEnv({
+      DATABASE_URL: "postgres://router:router@postgres:5432/router",
+      ADMIN_USERNAME: "admin",
+      ADMIN_PASSWORD: "hunter2",
+      ENCRYPTION_KEY: Buffer.alloc(32, 7).toString("base64"),
+    }).shutdownDrainMs
+
+    expect(Number(grace) * 1_000).toBeGreaterThan(drainMs)
   })
 })
 

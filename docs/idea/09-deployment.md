@@ -92,6 +92,7 @@ naming the offending variable — the process never starts half-configured.
 | `ENCRYPTION_KEY` | yes | — | 32 bytes, base64. AES-256-GCM key for upstream credentials and router keys. Boot fails loudly if missing or short. |
 | `DATABASE_URL` | yes | — | PostgreSQL 16+ connection string. **Supplied by the bundled compose file**, so it is not one of the three you set by hand. Set it yourself only when pointing at an existing/managed instance. |
 | `PORT` | no | `8080` | Listen port inside the container. |
+| `SHUTDOWN_DRAIN_MS` | no | `15000` | How long a shutdown lets in-flight responses finish before it stops waiting. Must stay **under** whatever grace the orchestrator gives the container (`stop_grace_period`, `terminationGracePeriodSeconds`) — see [Shutdown & draining](#shutdown--draining). `0` waits for nothing. |
 | `CLAUDE_CONFIG_ROOT` | no | `/data/claude` | Parent directory holding one `CLAUDE_CONFIG_DIR` per Claude subscription Account. Must sit on the persistent `claude-config` volume. Secret material — see [Persistence & backup](#persistence--backup). |
 | `CLAUDE_CLI_PATH` | no | — | Pins the `claude` binary the Agent SDK spawns, bypassing resolution. Unset is right: the image stages one on `PATH` and `/readyz` reports which rung of the ladder won. A set-but-unusable path **fails** rather than falling back, so the router never spawns a binary you did not name — see [11-anthropic-agent-sdk.md](11-anthropic-agent-sdk.md#9-operational-notes). |
 | `CLAUDE_SDK_MAX_CONCURRENCY` | no | `10` | `claude` subprocesses in flight on this replica. Every subscription request spawns one (~245 MB native binary, measured — see [Sizing](#sizing)), so this is a **memory** bound, not a throughput one — size against RAM, not CPUs. Requests over the ceiling queue rather than fail. Bounds every spawner, including the console's **Test now** button. Watch `router_sdk_subprocesses` and `router_sdk_subprocess_queue_depth` to size it against real traffic. |
@@ -377,6 +378,51 @@ the encryption key itself:
 | Back it up **encrypted**, and separately from the database dump | An unencrypted copy is a usable credential set with no second factor. |
 | Never bake it into an image, a build context, or a repo | `.dockerignore` excludes local config trees for exactly this reason. |
 | Losing it is recoverable, unlike `ENCRYPTION_KEY` | Reconnect each Claude account from `/accounts` and the CLI writes a fresh directory. Annoying, not fatal — restore-vs-reconnect is a judgment call, and reconnecting is often the safer one. |
+
+## Shutdown & draining
+
+`SIGTERM` (and `SIGINT`) start one ordered shutdown. It is the same order as boot, reversed:
+
+| Step | What it does | Bounded by |
+|---|---|---|
+| 1. Stop accepting | The listener closes. Connections already open keep being served; new ones are refused, so a load balancer's next request goes to another replica. | immediate |
+| 2. Drain | In-flight responses — including a completion that is still streaming — get time to finish. | `SHUTDOWN_DRAIN_MS` |
+| 3. Flush | Scheduler ticks and the OAuth refresher stop, pending `claude` logins are cancelled, then the queued `UsageRecord`s, quota readings and account statuses are written. | the work in hand |
+| 4. Close | The Postgres pool closes and the process exits `0`. | — |
+
+**Step 2 is the one with a deadline, and that is the whole point.** `Bun.serve().stop()` waits for
+the last byte of the last response and never gives up, so a shutdown that simply awaited it would
+hang for as long as the longest generation in flight — until the orchestrator's `SIGKILL` landed,
+which truncates every stream *and* discards everything step 3 was still holding. The drain caps that
+wait instead: inside the deadline every response finishes and the flush records what they earned;
+past it the wait ends anyway, the flush still runs, and the responses still open are truncated by the
+exit — counted and logged (`drain deadline expired — closing responses still in flight`, with
+`pending`, `abandoned` and `waitedMs`) rather than lost silently.
+
+So **the container's stop grace must exceed `SHUTDOWN_DRAIN_MS`**, or the kill arrives mid-drain and
+you are back to losing the flush:
+
+| Runtime | Setting | Default | Ours |
+|---|---|---|---|
+| Docker / Compose | `stop_grace_period` | 10s — **shorter than the drain** | `30s`, set in the bundled `docker-compose.yml` |
+| Kubernetes | `terminationGracePeriodSeconds` | 30s | leave it, or raise both together |
+
+A **second** signal during the drain means "stop waiting": the process logs it and exits non-zero
+immediately, rather than re-entering and running the flush twice against a closing pool.
+
+### PID 1 and the `claude` subprocess
+
+The image's `ENTRYPOINT` runs the router under [tini](https://github.com/krallin/tini), not directly.
+That is not ceremony. Every Claude subscription request spawns a `claude` subprocess
+([11-anthropic-agent-sdk.md](11-anthropic-agent-sdk.md)), and anything *that* process spawns is
+re-parented to PID 1 the moment it outlives its parent. PID 1 is the only process the kernel will
+hand an orphan to, and a PID 1 that never calls `wait()` accumulates one zombie entry per orphan —
+a slow leak of the process table on the longest-running process in the deployment, under a workload
+whose defining trait is a subprocess per request. `bun` is not an init and cannot fix this from
+inside; reaping is a property of PID 1. tini reaps, forwards `SIGTERM` unchanged so the drain above
+still runs, and exits with the router's own status. It runs with `-s`, so the reaping survives
+something putting a second init above it (`docker run --init`, compose's `init: true` — neither is
+needed, and neither breaks it).
 
 ## Upgrades
 

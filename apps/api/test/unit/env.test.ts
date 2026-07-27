@@ -27,6 +27,7 @@ describe("parseEnv", () => {
     const env = parseEnv(base)
 
     expect(env.port).toBe(8080)
+    expect(env.shutdownDrainMs).toBe(15_000)
     expect(env.logLevel).toBe("info")
     expect(env.trustProxy).toBe(false)
     expect(env.publicUrl).toBeNull()
@@ -284,6 +285,22 @@ describe("parseEnv", () => {
     test("a zero half-open hold is refused: a gate that never holds is not a gate", () => {
       expect(expectEnvError({ ...base, ROUTING_HALF_OPEN_HOLD_MS: "0" }).variables).toEqual([
         "ROUTING_HALF_OPEN_HOLD_MS",
+      ])
+    })
+  })
+
+  describe("SHUTDOWN_DRAIN_MS", () => {
+    test("the operator's number is the one parsed", () => {
+      expect(parseEnv({ ...base, SHUTDOWN_DRAIN_MS: "45000" }).shutdownDrainMs).toBe(45_000)
+    })
+
+    test("zero is legal: it means close in-flight responses without waiting", () => {
+      expect(parseEnv({ ...base, SHUTDOWN_DRAIN_MS: "0" }).shutdownDrainMs).toBe(0)
+    })
+
+    test("a value that is not a whole number of milliseconds is refused", () => {
+      expect(expectEnvError({ ...base, SHUTDOWN_DRAIN_MS: "30s" }).variables).toEqual([
+        "SHUTDOWN_DRAIN_MS",
       ])
     })
   })

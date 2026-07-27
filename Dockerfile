@@ -51,6 +51,14 @@ RUN [ "$(bun --version)" = "1.3.0" ] || { \
       exit 1; \
     }
 
+# The init the *runtime* stage runs as PID 1 (see its `---- PID 1 ----` block). Installed here so
+# the shipped image never carries an apt cache for it, and installed *before* the source COPY so a
+# source edit does not re-run an apt fetch. `tini-static` rather than `tini`: it is the same program
+# with no libc to trip over on the way across stages — the trap documented at the `claude` COPY.
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends tini \
+ && rm -rf /var/lib/apt/lists/*
+
 # Manifests first, source second: this layer only busts when a dependency
 # actually changes, so day-to-day source edits reuse the cached install. The
 # `packages/*/package.json` globs keep workspace resolution intact — bun needs
@@ -199,6 +207,23 @@ LABEL org.opencontainers.image.title="multi-ai-router" \
       org.opencontainers.image.version="1.0.0" \
       org.opencontainers.image.revision="${ROUTER_REVISION}"
 
+# ---- PID 1 ----
+# `bun` is not an init, and this image needs one. Every Claude subscription request spawns a
+# `claude` subprocess (spec §11, up to CLAUDE_SDK_MAX_CONCURRENCY at once), and anything *that*
+# process spawns is re-parented to PID 1 the moment it outlives its parent. PID 1 is the only
+# process the kernel will hand an orphan to, and one that never calls `wait()` leaves a zombie entry
+# per orphan: a slow leak of the process table, on the longest-running process in the deployment,
+# under a workload whose defining trait is a subprocess per request. Nothing in the router can fix
+# that from inside — reaping is a property of PID 1, not of the code it runs.
+#
+# tini reaps them and forwards SIGTERM to bun unchanged, so the bounded drain in `main.ts` still
+# runs and the exit code is still the router's. `-s` additionally registers it as a child subreaper,
+# which is what keeps the reaping working when something puts *another* init above it — `docker run
+# --init` or compose's `init: true` — since tini disables reaping when it is not PID 1 and nothing
+# else in the image would notice.
+COPY --from=builder /usr/bin/tini-static /usr/bin/tini
+RUN tini --version
+
 # ---- the `claude` CLI ----
 # The binary staged in the builder, landing on /usr/local/bin — already on PATH
 # for every user, so the CLI an operator runs (`docker exec … claude auth status`)
@@ -251,8 +276,14 @@ USER bun
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
   CMD bun -e 'const r = await fetch(`http://127.0.0.1:${process.env.PORT ?? 8080}/healthz`); process.exit(r.ok ? 0 : 1)'
 
-# Exec form (no shell): the server receives SIGTERM directly, so in-flight
-# upstream requests can be drained instead of the shell swallowing the signal.
-# The entrypoint applies Drizzle migrations against DATABASE_URL first — they are
-# idempotent, and a failure aborts the boot instead of opening the listener.
-ENTRYPOINT ["bun", "run", "dist/api/index.js"]
+# Exec form (no shell): the server receives SIGTERM directly, so in-flight upstream requests can be
+# drained instead of the shell swallowing the signal. Through tini, for the reaping described above
+# — it forwards the signal rather than absorbing it, so the drain is unaffected. The router applies
+# Drizzle migrations against DATABASE_URL first: they are idempotent, and a failure aborts the boot
+# instead of opening the listener.
+#
+# SHUTDOWN_DRAIN_MS bounds how long that drain waits for in-flight responses. Whatever stops this
+# container must allow more than that — `stop_grace_period` in docker-compose.yml,
+# `terminationGracePeriodSeconds` on Kubernetes — or the kill lands mid-drain and takes the queued
+# usage rows with it.
+ENTRYPOINT ["/usr/bin/tini", "-s", "--", "bun", "run", "dist/api/index.js"]
