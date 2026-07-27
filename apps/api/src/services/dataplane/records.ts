@@ -1,4 +1,10 @@
-import type { Dialect, EgressMode, ProviderId, UsageOutcome } from "@multi-ai-router/core"
+import type {
+  AccountBilling,
+  Dialect,
+  EgressMode,
+  ProviderId,
+  UsageOutcome,
+} from "@multi-ai-router/core"
 import { estimateCost, type RateLookup, UNKNOWN_COST } from "../cost"
 import type { FailureKind } from "../routing"
 import type { UsageRecord } from "../usage"
@@ -79,6 +85,12 @@ export interface AttemptRecordInput {
    * book was the bug: the same request recorded `NULL` on one model and `0.000000` on the next.
    */
   readonly priced?: boolean
+  /**
+   * How the selected account is billed, which decides whether a priced attempt is reported as
+   * spend or as an attribution. Absent is `metered` — the value an attempt that never selected an
+   * account would have anyway, and the one an unstated account row holds.
+   */
+  readonly billing?: AccountBilling
   /** The operator's price book, when one is wired. Absent prices off the shipped table. */
   readonly prices?: RateLookup
   readonly timing: AttemptTiming
@@ -112,7 +124,13 @@ export function attemptRecord(input: AttemptRecordInput): UsageRecord {
     // alias map decides which name the upstream billed.
     ...(input.priced === false
       ? UNKNOWN_COST
-      : estimateCost(input.provider, input.upstreamModel, tokens, input.prices)),
+      : estimateCost({
+          provider: input.provider,
+          model: input.upstreamModel,
+          tokens,
+          ...(input.billing === undefined ? {} : { billing: input.billing }),
+          ...(input.prices === undefined ? {} : { prices: input.prices }),
+        })),
     latencyMs: Math.max(0, Math.round(input.timing.latencyMs)),
     ttfbMs: ttfbMs === undefined ? null : Math.max(0, Math.round(ttfbMs)),
     routerOverheadMs: Math.max(0, Math.round(input.timing.totalMs - input.timing.upstreamMs)),

@@ -209,6 +209,7 @@ export function createRuntime(deps: RuntimeDeps): Runtime {
     health,
     usage: () => usage,
     sdkConcurrency,
+    prices,
     logger,
     now,
     revision: env.revision,

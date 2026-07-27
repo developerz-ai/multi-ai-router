@@ -1,4 +1,4 @@
-import { AccountStatus, Dialect, ProviderId } from "@multi-ai-router/core"
+import { AccountBilling, AccountStatus, Dialect, ProviderId } from "@multi-ai-router/core"
 import { z } from "zod"
 
 /**
@@ -48,6 +48,12 @@ export const createAccountBody = z
     supportedModels: SUPPORTED_MODELS.optional(),
     weight: WEIGHT.optional(),
     priority: PRIORITY.optional(),
+    /**
+     * A flat-fee plan bought under a metered provider's endpoint, which is the one cost fact the
+     * router cannot read off the wire. Absent takes the provider's own default, and stating the
+     * wrong one for a subscription-only provider is refused rather than ignored (`rules.ts`).
+     */
+    billing: AccountBilling.optional(),
   })
   .strict()
 
@@ -69,6 +75,8 @@ export const updateAccountBody = z
     supportedModels: SUPPORTED_MODELS.nullable().optional(),
     weight: WEIGHT.optional(),
     priority: PRIORITY.optional(),
+    /** Not nullable: every account is billed one of the two ways, so there is nothing to clear. */
+    billing: AccountBilling.optional(),
     /**
      * Only the two states an operator sets by hand. `cooling_down`, `exhausted`,
      * and `needs_reauth` are observations the router makes about an upstream —

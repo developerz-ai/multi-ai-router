@@ -1,4 +1,4 @@
-import type { Dialect } from "@multi-ai-router/core"
+import type { AccountBilling, Dialect } from "@multi-ai-router/core"
 import { createEffect, createMemo, createSignal, on, Show } from "solid-js"
 import { Button } from "../../components/Button"
 import { Field, SelectField, type SelectOption, TextField } from "../../components/Field"
@@ -12,6 +12,7 @@ import {
 import type { UpdateAccountInput } from "../../lib/api/accounts"
 import { errorMessage } from "../../lib/api/errors"
 import type { AccountView, ProviderDescriptor } from "../../lib/api/types"
+import { BILLING_OPTIONS, billingConsequence } from "../../lib/billing"
 import styles from "./AccountEditDialog.module.scss"
 
 export interface AccountEditDialogProps {
@@ -56,6 +57,7 @@ export function AccountEditDialog(props: AccountEditDialogProps) {
   const [aliases, setAliases] = createSignal("")
   const [weight, setWeight] = createSignal("")
   const [priority, setPriority] = createSignal("")
+  const [billing, setBilling] = createSignal<AccountBilling>("metered")
 
   // Sync-from-props, re-seeded whenever the dialog opens on a different account.
   // The credential is deliberately not among them: there is nothing to seed it
@@ -73,6 +75,7 @@ export function AccountEditDialog(props: AccountEditDialogProps) {
         setAliases(formatModelAliases(account?.modelAliases ?? null))
         setWeight(account === null ? "" : String(account.weight))
         setPriority(account === null ? "" : String(account.priority))
+        setBilling(account?.billing ?? "metered")
       },
     ),
   )
@@ -112,6 +115,11 @@ export function AccountEditDialog(props: AccountEditDialogProps) {
       modelAliases: Object.keys(aliasMap).length > 0 ? aliasMap : null,
       ...numeric("weight", weight(), account.weight),
       ...numeric("priority", priority(), account.priority),
+      // Stated every time, like every other field this form owns: `PATCH` reads an absent field as
+      // "leave it", and a control the operator can see but that sends nothing is a control that
+      // silently does not work. Withheld only where the provider is the answer — sending one there
+      // is a write the API refuses whichever value it carries.
+      ...(props.provider?.billingFixed === true ? {} : { billing: billing() }),
     })
   }
 
@@ -196,6 +204,25 @@ export function AccountEditDialog(props: AccountEditDialogProps) {
           placeholder="glm-4.6, glm-4.7"
           value={supportedModels()}
         />
+
+        <Show when={props.provider?.billingFixed === false}>
+          <SelectField
+            hint="How you pay for this account, and the only thing that decides whether its usage reports as spend or as an attribution. The router cannot read it off the wire — a coding plan and a metered key share an endpoint and a key shape."
+            label="Billing"
+            onChange={(event) => setBilling(event.currentTarget.value as AccountBilling)}
+            options={BILLING_OPTIONS}
+            value={billing()}
+          />
+          <p class={styles.note}>{billingConsequence(billing())}</p>
+        </Show>
+
+        <Show when={props.provider?.billingFixed === true}>
+          <p class={styles.note}>
+            Billing: <code>{props.account?.billing}</code> — not editable. This provider is sold
+            only as a subscription and has no per-token price to meter, so its usage is always
+            valued at the vendor's public API rate and reported apart from metered spend.
+          </p>
+        </Show>
 
         <Field
           hint="One per line, requested = upstream. The left side is what a client sends, the right is the name that goes upstream — the only rename the router is allowed to make."

@@ -5,7 +5,7 @@
 
 export type { PriceBook, PriceBookDeps } from "./book"
 export { createPriceBook } from "./book"
-export type { CostEstimate } from "./estimate"
+export type { CostEstimate, CostInput } from "./estimate"
 export { estimateCost, UNKNOWN_COST } from "./estimate"
-export type { ModelRates, RateLookup, ShippedRate } from "./prices"
-export { listShippedRates, lookupRates } from "./prices"
+export { listShippedRates, lookupRates, PRICE_TABLE_AS_OF } from "./prices"
+export type { LongContextTier, ModelRates, RateCard, RateLookup, ShippedRate } from "./rates"

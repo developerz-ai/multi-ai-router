@@ -126,10 +126,11 @@ implemented embeddings answers its own `404`, and that `404` is relayed unchange
 **Its `prompt_tokens` *are* accounted, as input alone.** Unlike a token count, an embedding spends
 what it reports: `tokensIn` takes `prompt_tokens`, `tokensOut` is the zero it truthfully is, and
 `total_tokens` is read nowhere — it restates a sum this router already holds in a column that means
-something else. Embedding models are absent from the shipped price table, so the cost estimate is
-`NULL` and the basis `unknown` (see [08-observability.md](08-observability.md#cost-estimation)) —
-which is what every OpenAI-priced request reports today, and honest rather than a zero that reads as
-free.
+something else. **Embedding models are absent from every shipped vendor table** — the tables price
+completion models, and the ones an embedding request names are not in them — so the cost estimate is
+`NULL` and the basis `unknown` (see [08-observability.md](08-observability.md#cost-estimation)),
+which is honest rather than a zero that reads as free. An operator who wants their embedding traffic
+costed prices it with an override, the same way they would correct any other row.
 
 **Its ingress dialect is `openai-chat` for one purpose: the error shape.** The path is dialect-neutral
 on the wire, and `openai-chat` is what a client calling `/v1/embeddings` expects a failure to look

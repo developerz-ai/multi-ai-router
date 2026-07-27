@@ -1142,6 +1142,10 @@ describe("the Agent-SDK transport", () => {
 })
 
 describe("usage accounting", () => {
+  /** `MESSAGE` with a different model asked for. It is a JSON string, so this rebuilds it. */
+  const asking = (model: string): string =>
+    JSON.stringify({ model, max_tokens: 64, messages: [{ role: "user", content: "hello" }] })
+
   test("writes one row per attempt, joined by one correlation id", async () => {
     const { app, usage } = harness({
       accounts: [
@@ -1163,6 +1167,86 @@ describe("usage accounting", () => {
     expect(usage.rows.map((row) => row.attempt)).toEqual([1, 2])
     expect(usage.rows[0]).toMatchObject({ outcome: "quota_exhausted", accountId: "acct-1" })
     expect(usage.rows[1]).toMatchObject({ outcome: "success", accountId: "acct-2", tokensIn: 11 })
+  })
+
+  test("prices a served request and files it under the account's own billing mode", async () => {
+    // End to end, because this is the chain the fix runs down: the account row's `billing` reaches
+    // the routing catalog, rides the selected `RoutableAccount` into the attempt, and lands in the
+    // written row. A unit test of `estimateCost` cannot tell whether any of that is wired.
+    const { app, usage } = harness({
+      accounts: [account("acct-1", { provider: "openai-api", apiKey: "sk-one", cipher: CRYPTOR })],
+      responses: [
+        () => jsonResponse(200, { usage: { input_tokens: 1_000_000, output_tokens: 0 } }),
+      ],
+    })
+
+    await (await app.request("/v1/messages", post(asking("gpt-5.6-sol"), bearer()))).text()
+    await settle()
+
+    // $10/Mtok, not $5: a 1M-token prompt is past this family's 272k long-context threshold, and a
+    // tier replaces the standard card for the whole request rather than charging only the excess.
+    // Before this table shipped every OpenAI request in this deployment recorded `null` /
+    // `unknown`, whatever it actually cost.
+    expect(usage.rows[0]).toMatchObject({
+      provider: "openai-api",
+      upstreamModel: "gpt-5.6-sol",
+      costEstimate: "10.000000",
+      costBasis: "metered",
+    })
+  })
+
+  test("a flat-fee account records the same money as an attribution, never as spend", async () => {
+    const { app, usage } = harness({
+      accounts: [
+        account("acct-1", {
+          provider: "zai",
+          apiKey: "sk-plan",
+          cipher: CRYPTOR,
+          billing: "subscription",
+        }),
+      ],
+      responses: [
+        () => jsonResponse(200, { usage: { input_tokens: 1_000_000, output_tokens: 0 } }),
+      ],
+    })
+
+    await (await app.request("/v1/messages", post(asking("glm-4.7"), bearer()))).text()
+    await settle()
+
+    // The open question this settled: a z.ai coding plan used to report `unknown` because the
+    // estimator asked the provider id, and z.ai sells both behind one endpoint.
+    expect(usage.rows[0]).toMatchObject({
+      provider: "zai",
+      costEstimate: "0.600000",
+      costBasis: "notional",
+    })
+  })
+
+  test("an upstream nobody publishes a price for still records null, never a zero", async () => {
+    // The four deliberate absences. `0.000000` here would claim the request was free.
+    const { app, usage } = harness({
+      accounts: [
+        account("acct-1", {
+          provider: "openrouter",
+          apiKey: "sk-router",
+          cipher: CRYPTOR,
+          baseUrl: "https://openrouter.test",
+        }),
+      ],
+      responses: [
+        () => jsonResponse(200, { usage: { input_tokens: 1_000_000, output_tokens: 500 } }),
+      ],
+    })
+
+    await (await app.request("/v1/messages", post(MESSAGE, bearer()))).text()
+    await settle()
+
+    expect(usage.rows[0]).toMatchObject({
+      provider: "openrouter",
+      tokensIn: 1_000_000,
+      costEstimate: null,
+      costBasis: "unknown",
+    })
   })
 
   test("captures cache read and write counts, which explain a small input count", async () => {

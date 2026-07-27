@@ -92,6 +92,11 @@ export interface AccountOptions {
   readonly cipher?: CredentialCipher
   /** Claude subscription accounts only. A path, never a credential — nothing is written to it. */
   readonly configDir?: string
+  /**
+   * How the account is billed, which decides whether its usage prices as spend or as an
+   * attribution. Defaults to `metered`, the value an unstated account row holds.
+   */
+  readonly billing?: RoutableAccount["billing"]
 }
 
 /**
@@ -121,6 +126,7 @@ export function account(id: string, options: AccountOptions = {}): RoutableAccou
       dialect: options.dialect ?? null,
       modelAliases: options.modelAliases ?? null,
     },
+    billing: options.billing ?? "metered",
     authMaterial: cryptor.encrypt(options.apiKey ?? `sk-${id}`),
     configDir: options.configDir ?? null,
   }
@@ -130,13 +136,18 @@ export function account(id: string, options: AccountOptions = {}): RoutableAccou
  * A Claude subscription account, as the catalog holds one: a config directory and **no credential
  * material at all** (`services/accounts/rules.ts` enforces the pairing). Written this way so a test
  * asserting the SDK path never decrypts anything is asserting it against the real shape.
+ *
+ * `billing` is `subscription` and cannot be overridden, for the same reason: `anthropic-oauth` is
+ * sold only that way, so `resolveBilling` writes that value on every such row and the API refuses
+ * any other. A fixture able to produce a metered Claude subscription would let a test pass against
+ * a row no deployment can hold.
  */
 export function subscriptionAccount(
   id: string,
-  options: Omit<AccountOptions, "provider" | "apiKey"> = {},
+  options: Omit<AccountOptions, "provider" | "apiKey" | "billing"> = {},
 ): RoutableAccount {
   return {
-    ...account(id, { ...options, provider: "anthropic-oauth" }),
+    ...account(id, { ...options, provider: "anthropic-oauth", billing: "subscription" }),
     authMaterial: null,
     configDir: options.configDir ?? `/data/accounts/${id}`,
   }

@@ -1,7 +1,12 @@
-import type { ProviderId } from "@multi-ai-router/core"
+import {
+  type AccountBilling,
+  DEFAULT_ACCOUNT_BILLING,
+  type ProviderId,
+} from "@multi-ai-router/core"
 import type { CostBasis } from "@multi-ai-router/db"
 import type { TokenCounts } from "../usage"
-import { lookupRates, type RateLookup } from "./prices"
+import { lookupRates } from "./prices"
+import type { RateCard, RateLookup } from "./rates"
 
 /**
  * What one attempt cost, or an honest admission that nobody knows.
@@ -14,7 +19,7 @@ import { lookupRates, type RateLookup } from "./prices"
  * | Basis | When | Reported as |
  * |---|---|---|
  * | `metered` | A priced model on a pay-per-token account | Real spend |
- * | `notional` | A priced model on a **subscription** — a flat monthly fee has no per-request charge, so this is an attribution: "what this would have cost on the API" | A separate total, never summed with metered |
+ * | `notional` | A priced model on a **subscription** account — a flat fee has no per-request charge, so this is an attribution: "what this would have cost on the API" | A separate total, never summed with metered |
  * | `unknown` | No shipped rate for that provider + model | NULL, never zero |
  *
  * docs/idea/08-observability.md#cost-estimation.
@@ -35,35 +40,55 @@ const COST_CEILING = 100_000_000
 const PER_MTOK = 1_000_000
 
 /**
- * Providers whose accounts are a flat monthly fee rather than a per-token bill.
+ * Which basis a priced attempt is reported under, from the **Account's** billing mode.
  *
- * Named per provider rather than derived from `authKind`: OAuth is an auth mechanism, and a metered
- * provider that authenticates with OAuth would be priced as an attribution by that shortcut.
+ * An account property, not a provider one. A hardcoded set of "subscription providers" was right
+ * about the two providers sold only that way and wrong about every other: z.ai, Kimi and MiniMax
+ * each sell a flat-fee coding plan behind the same endpoint and key shape as their metered API, and
+ * nothing on the wire tells them apart. The operator records which they bought
+ * (`AccountBilling`), and the two providers that are always a subscription say so through their
+ * driver rather than through a list kept here — see `providers/types.ts`.
  */
-const SUBSCRIPTION_PROVIDERS: ReadonlySet<ProviderId> = new Set(["anthropic-oauth", "openai-oauth"])
+const BASIS: Readonly<Record<AccountBilling, CostBasis>> = {
+  metered: "metered",
+  subscription: "notional",
+}
 
-/**
- * Price one attempt. `model` is the model that actually went **upstream** — after the account's
- * alias map — because that is the name the upstream billed.
- *
- * `prices` is optional so every caller that has no override book keeps pricing off the shipped table
- * unchanged, which is also what a router booted without a database-backed price book must do.
- */
-export function estimateCost(
-  provider: ProviderId | null,
-  model: string,
-  tokens: TokenCounts,
-  prices: RateLookup = lookupRates,
-): CostEstimate {
+export interface CostInput {
+  readonly provider: ProviderId | null
+  /**
+   * The model that actually went **upstream** — after the account's alias map — because that is the
+   * name the upstream billed.
+   */
+  readonly model: string
+  readonly tokens: TokenCounts
+  /** How the account is billed. Defaults to metered, the value an unstated account row holds. */
+  readonly billing?: AccountBilling
+  /**
+   * The operator's price book, when one is wired. Absent prices off the table shipped in the image,
+   * which is also what a router booted without a database-backed book must do.
+   */
+  readonly prices?: RateLookup
+}
+
+/** Price one attempt. */
+export function estimateCost(input: CostInput): CostEstimate {
+  const { provider, tokens } = input
   if (provider === null) return UNKNOWN_COST
-  const rates = prices(provider, model)
+  const rates = (input.prices ?? lookupRates)(provider, input.model)
   if (rates === null) return UNKNOWN_COST
 
+  // The prompt is every input direction, cached or not: what a long-context tier is measured
+  // against is how much context the request carried, not how much of it missed the cache.
+  const promptTokens = tokens.tokensIn + tokens.cacheReadTokens + tokens.cacheWriteTokens
+  const tier = rates.longContext
+  const card: RateCard = tier !== undefined && promptTokens >= tier.fromPromptTokens ? tier : rates
+
   const dollars =
-    (tokens.tokensIn * rates.inputPerMtok +
-      tokens.tokensOut * rates.outputPerMtok +
-      tokens.cacheReadTokens * rates.cacheReadPerMtok +
-      tokens.cacheWriteTokens * rates.cacheWritePerMtok) /
+    (tokens.tokensIn * card.inputPerMtok +
+      tokens.tokensOut * card.outputPerMtok +
+      tokens.cacheReadTokens * card.cacheReadPerMtok +
+      tokens.cacheWriteTokens * card.cacheWritePerMtok) /
     PER_MTOK
 
   // A count an upstream reported wrong can price past what the column holds. Unknown is both the
@@ -73,6 +98,6 @@ export function estimateCost(
 
   return {
     costEstimate: dollars.toFixed(COST_SCALE),
-    costBasis: SUBSCRIPTION_PROVIDERS.has(provider) ? "notional" : "metered",
+    costBasis: BASIS[input.billing ?? DEFAULT_ACCOUNT_BILLING],
   }
 }

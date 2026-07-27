@@ -32,6 +32,34 @@ export function isStandingBlock(status: AccountStatus): boolean {
 }
 
 /**
+ * How an Account is *billed* — which decides how its usage is priced, and nothing else.
+ *
+ * An **account** property rather than a provider one, because the same provider sells both. z.ai,
+ * Kimi and MiniMax all sell a flat-fee coding plan alongside their pay-per-token API, under the
+ * same endpoint and the same key shape; the router cannot tell them apart from the wire, and the
+ * operator knows which one they bought. Deriving this from the provider id — the way a hardcoded
+ * two-element set of "subscription providers" once did — priced a coding-plan account as `unknown`
+ * and a pay-per-token one identically, which is the same answer to two different questions.
+ *
+ * - `metered` — a per-token bill. Priced usage is real spend, reported as `metered`.
+ * - `subscription` — a flat fee for the period. There is no per-request charge at all, so priced
+ *   usage is an *attribution* ("what these tokens would have cost on the API"), reported as
+ *   `notional` and never summed with metered spend.
+ *
+ * The default comes from the provider's driver: a provider sold *only* as a subscription
+ * (`anthropic-oauth`, `openai-oauth`) is always `subscription` and the operator cannot say
+ * otherwise, because there is no per-token price to meter. Every other provider defaults to
+ * `metered` and the operator may mark an account as a plan they bought.
+ *
+ * docs/idea/08-observability.md#cost-estimation.
+ */
+export const AccountBilling = z.enum(["metered", "subscription"])
+export type AccountBilling = z.infer<typeof AccountBilling>
+
+/** What an Account is unless its provider forces otherwise, and what a migration backfills. */
+export const DEFAULT_ACCOUNT_BILLING: AccountBilling = "metered"
+
+/**
  * The quota windows an Account can hold. A Claude subscription has several running concurrently
  * and resetting independently, and the account is blocked by whichever one is spent.
  *

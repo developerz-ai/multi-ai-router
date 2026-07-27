@@ -1,6 +1,7 @@
 import type { ProviderId } from "@multi-ai-router/core"
 import type { PriceOverrideRow } from "@multi-ai-router/db"
-import { lookupRates, type ModelRates, modelLookupKeys } from "./prices"
+import { lookupRates } from "./prices"
+import { type ModelRates, modelLookupKeys } from "./rates"
 
 /**
  * The warm price book: the operator's price overrides, held in memory and refreshed off the request

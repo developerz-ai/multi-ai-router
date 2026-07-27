@@ -1,5 +1,6 @@
 import type { Logger } from "../logging/logger"
 import type { SdkConcurrency } from "../providers"
+import type { PriceBook } from "../services/cost"
 import { type HealthStore, overlayHealth, type RoutingCatalog } from "../services/dataplane"
 import type { UsageRecorder } from "../services/usage"
 import { createMetrics, type RouterMetrics } from "./metrics"
@@ -33,6 +34,12 @@ export interface RuntimeMetricsDeps {
    * ceiling of zero that nothing is holding.
    */
   readonly sdkConcurrency?: Pick<SdkConcurrency, "inFlight" | "queued">
+  /**
+   * The warm override book, for its load timestamp. Optional so a build without a database-backed
+   * book still exports every other series: the gauge is absent, which says "no overrides here"
+   * rather than claiming a load that never happened.
+   */
+  readonly prices?: Pick<PriceBook, "loadedAt">
   readonly logger: Logger
   readonly now?: () => Date
   /** Stamped onto `router_build_info{revision}`; `env.revision`, which defaults to `unknown`. */
@@ -68,6 +75,8 @@ export function createRuntimeMetrics(deps: RuntimeMetricsDeps): RouterMetrics {
     if (sdk !== undefined) {
       metrics.setSdkConcurrency({ inFlight: sdk.inFlight, queued: sdk.queued })
     }
+
+    if (deps.prices !== undefined) metrics.setPriceOverridesLoadedAt(deps.prices.loadedAt())
   })
 
   return metrics

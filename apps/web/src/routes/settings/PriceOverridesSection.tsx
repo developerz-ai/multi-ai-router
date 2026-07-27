@@ -149,6 +149,7 @@ export function PriceOverridesSection() {
         origin: "added",
         shipped: null,
         rates: ZERO_RATES,
+        longContext: null,
         updatedAt: null,
       },
     ])
@@ -194,6 +195,13 @@ export function PriceOverridesSection() {
       >
         {(view) => (
           <>
+            <p class={styles.note}>
+              The shipped rates were last checked against their vendors on{" "}
+              <strong>{view.prices.shippedAsOf}</strong>. They ship inside the image and a vendor
+              reprices without asking, so anything newer than that date is the operator's to correct
+              here.
+            </p>
+
             <PriceTable
               invalid={badCell}
               onEdit={edit}

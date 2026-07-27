@@ -96,6 +96,46 @@ export function createSeries(options: RegistryOptions = {}) {
       labels: ["provider", "account_id", "model", "direction"],
     }),
 
+    /**
+     * How much of this deployment's traffic the price table can actually see.
+     *
+     * Counted per attempt rather than in dollars, because the question it answers is a coverage
+     * one: `basis="unknown"` is spend nobody here can report, and a ratio against the other two is
+     * the only way an operator learns that a provider they added is invisible in every cost column.
+     * A dollar sum would answer it with the very number that is missing.
+     *
+     * Labelled by provider and model so the answer names what to price next, and so a table that
+     * has gone stale against a renamed model family shows up as one model going unknown rather
+     * than as a total quietly drifting.
+     */
+    costBasis: registry.counter({
+      name: "router_cost_basis_total",
+      help: "Upstream attempts by how they were priced. unknown is spend this deployment cannot see; notional is a subscription attribution, never summed with metered.",
+      labels: ["provider", "model", "basis"],
+    }),
+
+    /**
+     * When the shipped price table was last checked against its vendors, as a Unix timestamp.
+     * `time() - router_price_table_asof_timestamp_seconds` is the age, and an age past what a
+     * deployment tolerates is the alert — a price table nobody can date is a table nobody can judge.
+     */
+    priceTableAsOf: registry.gauge({
+      name: "router_price_table_asof_timestamp_seconds",
+      help: "Unix time the shipped price table was last verified against its vendors. Age is the staleness signal.",
+      labels: [],
+    }),
+
+    /**
+     * When the operator's price overrides were last loaded, or absent before the first successful
+     * load. Read beside the gauge above: the shipped table's age says how stale the defaults are,
+     * this one says whether the corrections layered over them are arriving at all.
+     */
+    priceOverridesLoadedAt: registry.gauge({
+      name: "router_price_overrides_loaded_timestamp_seconds",
+      help: "Unix time the operator's price overrides were last loaded. Absent until the first successful load.",
+      labels: [],
+    }),
+
     upstreamErrors: registry.counter({
       name: "router_upstream_errors_total",
       help: "Upstream failures by kind. status is none when the upstream was never reached.",

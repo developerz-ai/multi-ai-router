@@ -1,4 +1,4 @@
-import type { Dialect, ProviderId } from "@multi-ai-router/core"
+import type { AccountBilling, Dialect, ProviderId } from "@multi-ai-router/core"
 import { createMemo, createSignal, Show } from "solid-js"
 import { Button } from "../../components/Button"
 import { SelectField, type SelectOption, TextField } from "../../components/Field"
@@ -8,6 +8,7 @@ import type { CreateAccountInput } from "../../lib/api/accounts"
 import { errorMessage } from "../../lib/api/errors"
 import { findProvider } from "../../lib/api/providers"
 import type { ProviderDescriptor } from "../../lib/api/types"
+import { BILLING_OPTIONS, billingConsequence } from "../../lib/billing"
 import styles from "./AccountFormDialog.module.scss"
 
 export interface AccountFormDialogProps {
@@ -43,6 +44,13 @@ export interface AccountFormDialogProps {
  * local endpoint authenticates nobody, so the field stays — the same endpoint
  * behind a reverse proxy takes a key — and says it may be left empty. Read off
  * the descriptor like everything else here, never off an id.
+ *
+ * **How the account is billed is asked here because nothing else can answer it.**
+ * z.ai, Kimi and MiniMax sell a flat-fee coding plan behind the same endpoint and
+ * the same key shape as their metered API; no request the router makes tells the
+ * two apart. Getting it wrong puts an invented per-token charge in a spend column,
+ * so the operator states it once, at the moment they already know which they
+ * bought. A provider sold only as a subscription answers for itself.
  */
 export function AccountFormDialog(props: AccountFormDialogProps) {
   const [label, setLabel] = createSignal("")
@@ -51,10 +59,22 @@ export function AccountFormDialog(props: AccountFormDialogProps) {
   const [baseUrl, setBaseUrl] = createSignal("")
   const [dialect, setDialect] = createSignal("")
   const [supportedModels, setSupportedModels] = createSignal("")
+  const [billing, setBilling] = createSignal<AccountBilling | "">("")
 
   const selected = createMemo(() => findProvider(props.providers, providerId()))
   /** An upstream that authenticates nobody: the key is an option, not a requirement. */
   const credentialOptional = createMemo(() => selected()?.authKind === "none")
+  /**
+   * What this account will be billed as: the operator's answer where they gave one, the provider's
+   * default otherwise — and the provider's answer outright where it is the only one there is.
+   */
+  const effectiveBilling = createMemo<AccountBilling | undefined>(() => {
+    const provider = selected()
+    if (provider === undefined) return undefined
+    if (provider.billingFixed) return provider.defaultBilling
+    const chosen = billing()
+    return chosen === "" ? provider.defaultBilling : chosen
+  })
 
   const providerOptions = createMemo<readonly SelectOption[]>(() => [
     { value: "", label: "Choose a provider…" },
@@ -68,6 +88,11 @@ export function AccountFormDialog(props: AccountFormDialogProps) {
   const dialectOptions = createMemo<readonly SelectOption[]>(() => [
     { value: "", label: "Provider default" },
     ...(selected()?.supportedDialects ?? []).map((value) => ({ value, label: value })),
+  ])
+
+  const billingOptions = createMemo<readonly SelectOption[]>(() => [
+    { value: "", label: `Provider default — ${selected()?.defaultBilling ?? "metered"}` },
+    ...BILLING_OPTIONS,
   ])
 
   const submit = (event: SubmitEvent) => {
@@ -84,6 +109,12 @@ export function AccountFormDialog(props: AccountFormDialogProps) {
       ...(baseUrl().length > 0 ? { baseUrl: baseUrl() } : {}),
       ...(dialect().length > 0 ? { dialect: dialect() as Dialect } : {}),
       ...(models.length > 0 ? { supportedModels: models } : {}),
+      // Only sent when the operator overrode the provider's default. A subscription-only provider
+      // is never sent at all — the API refuses a contradicting value, and agreeing with it is the
+      // same write with an extra way to be wrong.
+      ...(provider.billingFixed || billing() === ""
+        ? {}
+        : { billing: billing() as AccountBilling }),
     })
   }
 
@@ -198,6 +229,29 @@ export function AccountFormDialog(props: AccountFormDialogProps) {
             options={dialectOptions()}
             value={dialect()}
           />
+        </Show>
+
+        <Show when={selected()?.billingFixed === false}>
+          <SelectField
+            hint="How you pay for this account, which is the only thing that decides whether its usage reports as spend or as an attribution. The router cannot see this from the wire: a coding plan and a metered key use the same endpoint and the same key shape."
+            label="Billing"
+            onChange={(event) => setBilling(event.currentTarget.value as AccountBilling | "")}
+            options={billingOptions()}
+            value={billing()}
+          />
+        </Show>
+
+        <Show when={effectiveBilling()}>
+          {(mode) => <p class={styles.providerNote}>{billingConsequence(mode())}</p>}
+        </Show>
+
+        <Show when={selected()?.billingFixed === true}>
+          <div class={styles.providerNote}>
+            <p>
+              This provider is sold only as a subscription, so there is nothing to choose: it has no
+              per-token price to meter.
+            </p>
+          </div>
         </Show>
 
         <TextField

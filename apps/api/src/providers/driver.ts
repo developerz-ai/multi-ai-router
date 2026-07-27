@@ -1,6 +1,8 @@
 import {
+  type AccountBilling,
   type AuthKind,
   CredentialDecryptError,
+  DEFAULT_ACCOUNT_BILLING,
   DEFAULT_OPENAI_CHAT_CEILING,
   type Dialect,
   type OpenAiChatCeiling,
@@ -62,6 +64,16 @@ export interface HttpDriverConfig {
    * upstream with no credential at all.
    */
   readonly authKind?: AuthKind
+  /**
+   * What an Account of this provider is billed as unless the operator says otherwise. Defaults to
+   * `metered`: every HTTP driver here except the ChatGPT/Codex one sells tokens by the token.
+   *
+   * A provider that states `subscription` is sold *only* that way and its accounts are fixed there
+   * — there is no per-token price to meter. The reverse is not true, which is why this is a default
+   * rather than the answer: a metered provider's key may be attached to a flat-fee coding plan, and
+   * that is the operator's fact to record on the Account (`services/accounts/rules.ts`).
+   */
+  readonly billing?: AccountBilling
   /** First entry is the default surface — the one an Account with no preference gets. */
   readonly surfaces: readonly [ProviderSurface, ...ProviderSurface[]]
   readonly rules?: readonly ClassificationRule[]
@@ -108,6 +120,7 @@ export function createHttpDriver(config: HttpDriverConfig): ProviderDriver {
     id: config.id,
     dialect: defaultSurface.dialect,
     authKind: config.authKind ?? "api-key",
+    billing: config.billing ?? DEFAULT_ACCOUNT_BILLING,
     resolveBaseUrl: (account) => resolveBaseUrl(account, surfaceFor(account).baseUrl),
     resolveDialect: (account) => surfaceFor(account).dialect,
     resolveChatCeiling: (account) => surfaceFor(account).chatCeiling ?? DEFAULT_OPENAI_CHAT_CEILING,

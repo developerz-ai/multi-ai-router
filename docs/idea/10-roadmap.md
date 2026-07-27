@@ -1,9 +1,9 @@
 # Roadmap
 
 Status: **M1 through M8 are all done.** The capability table in the [README](../../README.md#-status)
-is the authoritative statement of what runs today; this page is the order the work happened in and
-what remains genuinely open (see [Open questions](#open-questions) below — those are design
-uncertainties, not missing code).
+is the authoritative statement of what runs today; this page is the order the work happened in, what
+has been [decided](#decided), and what remains genuinely open (see
+[Open questions](#open-questions) below — those are design uncertainties, not missing code).
 
 ## Milestones
 
@@ -66,6 +66,50 @@ published contract. **They will drift.** Design for that instead of pretending o
 Detail: [03-providers.md](03-providers.md) for the per-provider constants,
 [09-deployment.md](09-deployment.md) for the operator-facing symptoms.
 
+## Decided
+
+Questions that were open here and are not any more. Kept so the answer is findable next to the
+question it settles, and so nobody re-opens one by reading the old wording.
+
+### Cost attribution for subscription accounts — **notional, and per Account**
+
+A Claude Max or ChatGPT/Codex request has no per-request price. The three candidates were: report a
+notional cost from the API price table, report tokens only, or model an amortized cost per token.
+
+**Decision: notional.** A subscription account's tokens are valued at that vendor's public API rate
+and reported as `costBasis: "notional"` — an attribution ("what these tokens would have cost on the
+API"), shown as a separate total and never summed with metered spend. Amortization was rejected
+because it needs a plan price, a period and a usage forecast the router does not have, and it turns
+one operator's guess into a number that reads like a bill. Tokens-only was rejected because "which
+subscription is carrying the load" and "what would this have cost us on the API" are both questions
+an operator asks, and the second is unanswerable without a figure.
+
+**The larger half of the decision: subscription-ness is a property of the *Account*, not of the
+Provider.** `accounts.billing` is `metered` or `subscription`
+([02-domain-model.md](02-domain-model.md#account)), written by the operator. The hardcoded
+two-element set of "subscription providers" that used to live inside the cost estimator was right
+about the two providers sold *only* that way and wrong about every other one: z.ai, Kimi and MiniMax
+each sell a flat-fee coding plan behind the same endpoint and the same key shape as their metered
+API, nothing on the wire distinguishes them, and a provider-derived answer priced a coding-plan
+account and a pay-per-token one identically. That set answered two different questions with one
+lookup.
+
+- Providers sold **only** as a subscription (`anthropic-oauth`, `openai-oauth`) declare
+  `billing: "subscription"` on their driver, and their Accounts are fixed there — there is no
+  per-token price to meter, so the API refuses a `metered` write with `billing_fixed`. Declared on
+  the driver rather than in a list, because "how is this one sold" is a fact about the provider and
+  adding a provider is one file ([non-negotiable 12](../../CLAUDE.md)).
+- Every other provider defaults to `metered`, and the operator may mark an Account as a plan.
+- Migration `0014_account_billing` sets those two providers' rows to `subscription` and leaves every
+  other row `metered` — exactly the set the estimator hardcoded, so no account's basis moves at the
+  migration. A flat-fee coding plan bought behind a metered provider's endpoint therefore prices as
+  ordinary `metered` spend until the operator marks the account, because the router cannot see the
+  difference and a guessed subscription would restate a bill nobody sent.
+
+Coverage of the answer is itself exported: `router_cost_basis_total{provider,model,basis}` counts
+every attempt by how it was priced, so `basis="unknown"` over the total is the fraction of spend the
+deployment cannot see ([08-observability.md](08-observability.md#cost-estimation)).
+
 ## Open questions
 
 Genuinely unsettled. Listed so they are not mistaken for decided.
@@ -113,10 +157,6 @@ Genuinely unsettled. Listed so they are not mistaken for decided.
   jittered next tick simply pick it up? Also unknown: whether the skipping replicas' lock attempts
   stay negligible as the task list grows. See
   [01-architecture.md](01-architecture.md#background-work-and-scheduling).
-- **Cost attribution for subscription accounts.** A Claude Max request has no per-request price.
-  Do we report a notional cost using the API price table, report tokens only, or model a
-  subscription's amortized cost per token? Each answer makes the dashboard mean something
-  different.
 - **Sticky sessions across restarts.** Rendezvous hashing is deterministic, so affinity survives a
   restart for an unchanged account set — but the session *identity* (fingerprint → session id) is
   in-memory. Should that map be persisted, or is a cold prompt cache after a restart acceptable?

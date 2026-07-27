@@ -78,7 +78,7 @@ export {
   writeStoredOAuth,
 } from "./refresh"
 export type { AccountShape } from "./rules"
-export { checkAccountShape } from "./rules"
+export { checkAccountShape, resolveBilling } from "./rules"
 export type {
   AccountListQuery,
   CompleteConnectBody,

@@ -6,6 +6,7 @@ import {
   VERSION,
 } from "@multi-ai-router/core"
 import type { TickResult } from "../scheduler"
+import { PRICE_TABLE_AS_OF } from "../services/cost"
 import type { RequestSample } from "../services/dataplane"
 import type { UsageRecord } from "../services/usage"
 import type { RegistryOptions } from "./registry"
@@ -66,6 +67,12 @@ export interface RouterMetrics {
    * semaphore that reported every acquire would put bookkeeping on the path it is bounding.
    */
   setSdkConcurrency(sample: SdkConcurrencySample): void
+  /**
+   * When the operator's price overrides were last loaded, from the warm book's own `loadedAt()`.
+   * `null` before the first successful load leaves the gauge absent rather than reporting the
+   * epoch, which would read as "loaded in 1970" instead of "not loaded yet".
+   */
+  setPriceOverridesLoadedAt(at: Date | null): void
   /** Registers a per-scrape sampler — see `collectors.ts`. */
   onCollect(collect: () => void): void
   expose(): string
@@ -128,6 +135,11 @@ export function createMetrics(options: MetricsOptions = {}): RouterMetrics {
   // Set once, here, rather than from a per-scrape collector: neither label can change while the
   // process runs, and `setAccounts` clears only the gauges it rebuilds, so this one survives.
   s.buildInfo.set({ version: VERSION, revision: options.revision ?? UNKNOWN_REVISION }, 1)
+  // Likewise fixed for the life of the process: the shipped table's date is compiled into the
+  // image. A parse that fails leaves the gauge absent, which reads as "undatable" rather than as
+  // an epoch timestamp claiming the table was verified in 1970.
+  const asOf = Date.parse(`${PRICE_TABLE_AS_OF}T00:00:00Z`)
+  if (Number.isFinite(asOf)) s.priceTableAsOf.set({}, asOf / 1_000)
 
   /** Counts the hop the previous failed attempt of this request turned out to be. */
   const settleFailover = (record: UsageRecord): void => {
@@ -194,6 +206,14 @@ export function createMetrics(options: MetricsOptions = {}): RouterMetrics {
         record.latencyMs / 1_000,
       )
       observeTokens(record, provider, account_id)
+      // Every attempt that reached an account, priced or not — the ratio is the point, and a
+      // counter that only moved for the priced ones would report 100% coverage of whatever it
+      // happened to cover. The attempts excluded by the early return above never chose a provider,
+      // so they have no row in any cost column to be missing from.
+      //
+      // Labelled with the **requested** model, not the upstream one: an operator reading this to
+      // decide what to price next needs the name their clients ask for.
+      s.costBasis.inc({ provider, model: label(record.model), basis: record.costBasis })
       if (record.outcome !== USAGE_OUTCOME_SUCCESS) {
         s.upstreamErrors.inc({
           provider,
@@ -263,6 +283,10 @@ export function createMetrics(options: MetricsOptions = {}): RouterMetrics {
       discardedSeen = advance(discardedSeen, sample.writeDiscarded, (delta) =>
         s.usageWriteFailures.inc({ disposition: "discarded" }, delta),
       )
+    },
+
+    setPriceOverridesLoadedAt(at) {
+      if (at !== null) s.priceOverridesLoadedAt.set({}, at.getTime() / 1_000)
     },
 
     setSdkConcurrency(sample) {

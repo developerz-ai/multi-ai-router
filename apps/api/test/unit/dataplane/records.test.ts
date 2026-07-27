@@ -105,6 +105,37 @@ describe("attempt record", () => {
     expect(record.costBasis).toBe("unknown")
   })
 
+  test("the selected account's billing decides the basis, not its provider", () => {
+    // z.ai sells a flat-fee coding plan behind the same endpoint and key shape as its metered API.
+    // Which one an account is on is a column, and this is the only place it is read.
+    const counts = { tokensIn: 1_000_000, tokensOut: 0, cacheReadTokens: 0, cacheWriteTokens: 0 }
+    const priced = input({ provider: "zai", upstreamModel: "glm-4.7", tokens: counts })
+
+    const metered = attemptRecord(priced)
+    const plan = attemptRecord({ ...priced, billing: "subscription" })
+
+    expect(metered.costBasis).toBe("metered")
+    expect(plan.costBasis).toBe("notional")
+    // The attribution is the same money, filed differently — never a second number.
+    expect(plan.costEstimate).toBe(metered.costEstimate)
+    expect(plan.costEstimate).not.toBeNull()
+  })
+
+  test("an attempt that never selected an account is metered-by-default and still unknown", () => {
+    // No account means no billing to read. `unknown` outranks the default either way: a basis is
+    // only reported for a row that was actually priced.
+    const record = attemptRecord(input({ provider: null }))
+    expect(record.costBasis).toBe("unknown")
+    expect(record.costEstimate).toBeNull()
+  })
+
+  test("a subscription attempt the table cannot price is unknown, not notional", () => {
+    // `notional` is the claim that we valued the row. Without a rate there is nothing to value.
+    const record = attemptRecord(input({ upstreamModel: "glm-4.7", billing: "subscription" }))
+    expect(record.costBasis).toBe("unknown")
+    expect(record.costEstimate).toBeNull()
+  })
+
   test("router overhead is total minus upstream, and never negative on a clock hiccup", () => {
     expect(attemptRecord(input()).routerOverheadMs).toBe(4)
     const skewed = { ...input().timing, totalMs: 100, upstreamMs: 120 }
