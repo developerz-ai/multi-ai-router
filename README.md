@@ -170,7 +170,7 @@ overhead p99 over `--budget-ms`, or added TTFT p95 over `--ttft-budget-ms`.
 
 Router keys are accepted in both dialects: `Authorization: Bearer mar_live_…` and `x-api-key: mar_live_…`. Anything that can set a base URL and a key works; the table below is what the console's own client snippets cover today — there's no automated integration test against each of these clients, so treat it as a documented, not verified, list.
 
-**The console says all of this too, filled in.** Mint or reveal a key and the dialog carries a **Point your tool at it** panel — tabs for Claude Code, Cursor, Codex CLI, Aider, the OpenAI SDKs and `curl`, each block already containing this deployment's base URL (`PUBLIC_URL`, else the console's own origin) and that key's real value. The table below is the same content for someone who never opened the console.
+**The console says all of this too, filled in.** Mint or reveal a key and the dialog carries a **Point your tool at it** panel — tabs for Claude Code, Cursor, Codex CLI, Aider, the OpenAI SDKs and `curl`, each block already containing this deployment's base URL (`PUBLIC_URL`, else the console's own origin) and that key's real value. [`docs/clients.md`](docs/clients.md) is the same content for someone who never opened the console.
 
 | Client | How you point it at the router |
 |---|---|
@@ -178,8 +178,11 @@ Router keys are accepted in both dialects: `Authorization: Bearer mar_live_…` 
 | **OpenCode** | Provider entry with the router's base URL + key, in either dialect |
 | **Codex CLI** | `model_provider` entry in `~/.codex/config.toml` with `base_url` + env key |
 | **Cursor** | Settings → Models → **Override OpenAI Base URL** = `https://router.example.com/v1` (the `/v1` suffix is required — Cursor appends `/chat/completions`), then paste the router key into the "OpenAI API Key" field. Agent and plan mode route through the override; **tab-autocomplete and inline-edit stay on Cursor's own backend** and never reach the router. |
-| **Cline / Roo Code** | "OpenAI Compatible" provider, base URL + key |
+| **Cline / Roo Code** | "OpenAI Compatible" provider, base URL + key — or the `settings.json` block below |
 | **Aider** | `OPENAI_API_BASE` / `ANTHROPIC_API_BASE` + key |
+| **OpenAI SDK (Python / Node)** | Construct the client with `base_url`/`baseURL` pointed at the router instead of `api.openai.com` |
+| **LangChain** | `ChatOpenAI`/`ChatAnthropic` constructor, same `base_url` override |
+| **LiteLLM** | `api_base` on the model entry in `config.yaml`, or `LITELLM_PROXY_API_BASE` if you're chaining proxies |
 
 ```bash
 # Claude Code, or anything reading the Anthropic env vars
@@ -191,9 +194,15 @@ export OPENAI_BASE_URL="http://localhost:8080/v1"
 export OPENAI_API_KEY="mar_live_…"
 ```
 
-Send whatever model name you normally send. It passes through unchanged unless the selected account defines an alias map. Details in [`docs/idea/06-protocol-translation.md`](docs/idea/06-protocol-translation.md).
+**Verify it landed on the router, not the real upstream**, before wiring in a real workload — a `200` with a list you recognize (or an empty `data: []` from an account that hasn't declared a catalog) is the router; a DNS error or a TLS handshake to a provider's real hostname means the base URL never took:
 
-**If your tool fills a model picker from `GET /v1/models`, tell each account what it serves.** An account that declares nothing accepts any model name you send — that is the default and it is not broken — but the router will not enumerate a catalog it was never given, so the listing comes back empty. Press **Discover** on the account's row and the router reads the provider's own `/v1/models` and fills it in; the field is editable by hand too. Nothing refreshes it on a timer, so a provider retiring a model never silently moves your traffic.
+```bash
+curl -s http://localhost:8080/v1/models -H "Authorization: Bearer mar_live_…" | jq .
+```
+
+**Config-file snippets for Codex CLI, Cline/Roo Code, the OpenAI SDKs, LangChain and LiteLLM live in [`docs/clients.md`](docs/clients.md)**, along with the per-client verification commands and the note on declaring an account's model catalog so a model picker isn't empty.
+
+Send whatever model name you normally send. It passes through unchanged unless the selected account defines an alias map. Details in [`docs/idea/06-protocol-translation.md`](docs/idea/06-protocol-translation.md).
 
 **Cross-dialect translation is live** — an Anthropic-dialect client can reach an OpenAI-dialect account and back, including streaming and tool calls. The one exception is a request shape that cannot be translated faithfully (a lossy edge documented in [`docs/idea/06-protocol-translation.md`](docs/idea/06-protocol-translation.md)): that fails with a `400` naming the reason rather than being converted approximately.
 
@@ -289,8 +298,10 @@ Cache-aware by design: total prompt size is the sum of `input_tokens`, `cache_cr
 | [`docs/idea/07-security.md`](docs/idea/07-security.md) | Encryption at rest, redaction, rate limits, threat surface |
 | [`docs/idea/08-observability.md`](docs/idea/08-observability.md) | Usage records, cost estimation, metrics, logs, health |
 | [`docs/idea/09-deployment.md`](docs/idea/09-deployment.md) | Env reference, compose, image tags, retention knobs |
+| [`docs/idea/09-deployment.md#troubleshooting`](docs/idea/09-deployment.md#troubleshooting) | Symptom → cause → fix runbook: boot failures, stuck accounts, OAuth callbacks, `401`s, stale sweeps, and more |
 | [`docs/idea/10-roadmap.md`](docs/idea/10-roadmap.md) | Milestones M1–M8 and what's deferred |
 | [`docs/idea/11-anthropic-agent-sdk.md`](docs/idea/11-anthropic-agent-sdk.md) | Claude subscriptions via the Agent SDK: `query()`, per-account `CLAUDE_CONFIG_DIR`, quota events, costs |
+| [`docs/clients.md`](docs/clients.md) | Client cookbook: config-file snippets per tool, and the `curl` that proves the base URL took |
 | [`docs/reusable-code.md`](docs/reusable-code.md) | Shared helpers, services, and components that already exist — and where a new shared thing belongs |
 | [`SECURITY.md`](SECURITY.md) | Supported versions, private vulnerability reporting, response SLA, scope |
 

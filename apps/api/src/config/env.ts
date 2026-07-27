@@ -1,4 +1,5 @@
 import { isAbsolute } from "node:path"
+import { UNKNOWN_REVISION } from "@multi-ai-router/core"
 import { z } from "zod"
 
 /**
@@ -240,6 +241,13 @@ export interface Env {
   readonly trustProxy: boolean
   readonly publicUrl: string | null
   /**
+   * Which commit this build is, for `router_build_info{revision}` and the boot log. Stamped into
+   * the released image from the tagged commit's sha; `UNKNOWN_REVISION` for anything nobody
+   * stamped. Never validated as a sha — a caller may legitimately stamp a build number instead,
+   * and refusing an operator's own label would buy nothing.
+   */
+  readonly revision: string
+  /**
    * Directory holding the built admin SPA, which this process serves at the root. Null means the
    * default location beside the bundled entrypoint — `main.ts` resolves it, because only it knows
    * where this module was loaded from. Set means *exactly this*: a directory with no `index.html`
@@ -341,6 +349,7 @@ const envSchema = z
     LOG_LEVEL: z.enum(LOG_LEVELS).optional(),
     TRUST_PROXY: flag.optional(),
     PUBLIC_URL: absoluteUrl.optional(),
+    ROUTER_REVISION: nonEmpty.optional(),
     WEB_ROOT: nonEmpty.optional(),
     CLAUDE_CONFIG_ROOT: nonEmpty.refine(isAbsolute, "must be an absolute path").optional(),
     CLAUDE_CLI_PATH: nonEmpty.optional(),
@@ -423,6 +432,7 @@ const envSchema = z
       logLevel: raw.LOG_LEVEL ?? "info",
       trustProxy: raw.TRUST_PROXY ?? false,
       publicUrl: raw.PUBLIC_URL ?? null,
+      revision: raw.ROUTER_REVISION ?? UNKNOWN_REVISION,
       webRoot: raw.WEB_ROOT ?? null,
       claudeConfigRoot: raw.CLAUDE_CONFIG_ROOT ?? "/data/claude",
       claudeCliPath: raw.CLAUDE_CLI_PATH ?? null,

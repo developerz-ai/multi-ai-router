@@ -30,6 +30,7 @@ Other commands you'll use often:
 | Format | `bin/fmt` |
 | Dev DB shell / migrate / reset | `bin/db psql` · `bin/db migrate` · `bin/db reset` |
 | Overhead budget (p50/p95/p99 + TTFT) | `bin/bench` |
+| Version agrees everywhere, and with a tag | `bin/verify-version [vX.Y.Z]` |
 
 ## Workflow
 

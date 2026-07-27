@@ -94,6 +94,14 @@ Each is a Zod schema **and** its `z.infer` type under one name. These are the si
 | `routerKeyDisplayPrefix(value)` | same | Deriving the indexed clear prefix. Returns `null` on a malformed key, never a partial slice |
 | `ROUTER_KEY_PREFIX`, `ROUTER_KEY_PATTERN`, `ROUTER_KEY_LENGTH`, `ROUTER_KEY_RANDOM_LENGTH`, `ROUTER_KEY_DISPLAY_RANDOM_LENGTH`, `ROUTER_KEY_DISPLAY_PREFIX_LENGTH` | same | Anywhere key shape matters — `logging/redact.ts` builds its scrubbing pattern from `ROUTER_KEY_PREFIX` |
 
+### Build identity — `packages/core/src/version.ts`
+
+| Thing | Where | Use it when |
+|---|---|---|
+| `VERSION` | `packages/core/src/version.ts` | Naming the build. The source; every workspace `package.json` restates it and `packages/core/test/unit/version.test.ts` fails on drift. Read by `/healthz`, `router_build_info{version}`, the boot log, `GET /api/admin/settings` and the console footer |
+| `UNKNOWN_REVISION` | same | The fallback when nothing stamped the build. Never write `"unknown"` by hand — the env default, the metrics default and the test all read this one constant |
+| `bin/verify-version [vX.Y.Z]` | `bin/` | Before a tag. Checks `VERSION` against every manifest *and* against the tag; `release.yml` runs it before the first layer, because that workflow never runs the test suite |
+
 ### DB — `packages/db/src/`
 
 | Thing | Where | Use it when |
@@ -416,6 +424,7 @@ never a `fetch` call inline in a route component.
 | Which conversion serves a dialect pair | `services/translate/registry.ts`. A second lookup — in a route, a driver, or the relay — is how a request gets converted one way on the way out and a different way on the way back |
 | How the `claude` binary is located | `providers/claude-sdk/resolve-cli.ts`. The Dockerfile stages the binary by *running* that resolver, never by hard-coding a store path: a second answer means the image ships one binary and the router spawns another, and the symptom is an unreadable SDK stderr string |
 | Which transport serves a provider | `PROVIDER_REGISTRY[id].transport`, narrowed. A `provider === "anthropic-oauth"` check anywhere else is a second registry that will disagree with the first the moment a provider moves transports |
+| The version string (`VERSION` in core) | Six surfaces restate it — five at runtime plus every workspace manifest — and a release tag is checked against it. A literal `"1.0.0"` anywhere else is a build that reports one version to `/healthz` and another to a dashboard, and a bug report that quotes the wrong one |
 | The untuned `weight` / `priority` (`DEFAULT_ACCOUNT_WEIGHT`, `DEFAULT_ACCOUNT_PRIORITY` in core) | Restated by two Postgres column defaults, the pool write path, and the console's member form. A literal `100` in one of them is a router where "unbiased" means two different things and traffic splits on a number nobody chose |
 
 ## Conventions for new shared code

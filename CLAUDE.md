@@ -69,6 +69,7 @@ Postgres is the house standard and the current decision — earlier drafts said 
 | Fresh clone → running stack | `bin/setup` |
 | The gate (lint + typecheck + test + build), before committing | `bin/check` — refuses to run without a `DATABASE_URL`, so it can never pass on fewer tests than CI |
 | Overhead budget: p50/p95/p99 + added TTFT vs a stub upstream | `bin/bench` |
+| Before cutting a tag: the tree agrees on one version, and the tag names it | `bin/verify-version` · `bin/verify-version v1.0.0` — `release.yml` runs the same check before it builds a layer |
 | Dev database shell / migrate / reset | `bin/db psql` · `bin/db migrate` · `bin/db reset` |
 | Build release image locally | `docker build -t multi-ai-router:dev .` |
 

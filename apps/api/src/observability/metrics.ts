@@ -1,5 +1,10 @@
 import type { EgressMode, ProviderId, QuotaWindowState, UsageOutcome } from "@multi-ai-router/core"
-import { AccountStatus, USAGE_OUTCOME_SUCCESS, VERSION } from "@multi-ai-router/core"
+import {
+  AccountStatus,
+  UNKNOWN_REVISION,
+  USAGE_OUTCOME_SUCCESS,
+  VERSION,
+} from "@multi-ai-router/core"
 import type { TickResult } from "../scheduler"
 import type { RequestSample } from "../services/dataplane"
 import type { UsageRecord } from "../services/usage"
@@ -64,6 +69,11 @@ export interface RouterMetrics {
 
 export interface MetricsOptions extends RegistryOptions {
   readonly now?: () => Date
+  /**
+   * The commit `router_build_info{revision}` reports. Defaults to `UNKNOWN_REVISION` so a build
+   * nobody stamped says so, rather than inheriting some other build's sha.
+   */
+  readonly revision?: string
 }
 
 /**
@@ -109,9 +119,9 @@ export function createMetrics(options: MetricsOptions = {}): RouterMetrics {
   const consecutiveFailures = new Map<string, number>()
   let droppedSeen = 0
 
-  // Set once, here, rather than from a per-scrape collector: the version cannot change while the
+  // Set once, here, rather than from a per-scrape collector: neither label can change while the
   // process runs, and `setAccounts` clears only the gauges it rebuilds, so this one survives.
-  s.buildInfo.set({ version: VERSION }, 1)
+  s.buildInfo.set({ version: VERSION, revision: options.revision ?? UNKNOWN_REVISION }, 1)
 
   /** Counts the hop the previous failed attempt of this request turned out to be. */
   const settleFailover = (record: UsageRecord): void => {

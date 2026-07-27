@@ -102,6 +102,7 @@ naming the offending variable — the process never starts half-configured.
 | `WEB_ROOT` | no | `dist/web` beside the bundled entrypoint | Directory holding the built admin console, which the router serves at `/` on its own origin. The default is correct in the image; set it only when the assets live elsewhere. Set-but-missing an `index.html` **fails boot** rather than quietly serving an API-only router that looks like a broken web app. Absent assets at the default path are not fatal — that is what running from source looks like, and Vite serves the console itself in dev. |
 | `LOG_LEVEL` | no | `info` | `debug` \| `info` \| `warn` \| `error`. Structured JSON either way. |
 | `METRICS_TOKEN` | no | — | Bearer token `GET /metrics` demands (`Authorization: Bearer …`). Unset leaves the endpoint open, which is right only where its port is not routable from outside the host. The exposition carries account, key and pool ids — never a credential. |
+| `ROUTER_REVISION` | no | `unknown` | Which commit this build is, reported by `router_build_info{revision}` and the `router listening` boot log line. The published image bakes in the tagged commit's sha (`--build-arg ROUTER_REVISION=…`); a version alone cannot separate a rebuilt `latest` from the tag it was cut for. Set it by hand only when you build your own image. |
 | `TRUST_PROXY` | no | `false` | Honor `X-Forwarded-For` / `-Proto`. Set `true` **only** behind a proxy you control — otherwise clients can forge their own IP past the rate limiter. |
 | `RETENTION_SESSIONS_HOURS` | no | `24` | Idle sticky-session and fingerprint TTL. |
 | `RETENTION_USAGE_DAYS` | no | `90` | Raw `UsageRecord` retention before roll-up to daily aggregates. |
@@ -129,7 +130,7 @@ naming the offending variable — the process never starts half-configured.
 | `SESSION_COOKIE_INSECURE` | no | `false` | Drops `Secure` and the `__Host-` prefix from the admin session cookie. The escape hatch for a **plain-HTTP install** (`http://192.168.1.50:8080` on a LAN), which is otherwise unusable: a browser silently discards a `Secure` cookie sent over `http://`, so login answers `200` and every request after it is `401`. `HttpOnly`, `SameSite=Strict` and the CSRF token are unaffected. What you give up is confidentiality on the wire and the `__Host-` guarantee that no sibling host under this domain can plant a session cookie — so unset it once HTTPS is in front. Leaving it unset on a plain-HTTP install is diagnosed for you: the login logs a `warn` naming this variable. Turning it on logs a `warn` on every boot while it is on. See [04-api-keys-and-access.md](04-api-keys-and-access.md#session-cookie). |
 | `CATALOG_REFRESH_SECONDS` | no | `30` | How long the warm routing catalog may lag a write made by **another replica**. A write by this replica refreshes it immediately, so this bounds only the multi-replica case. |
 | `KEY_CACHE_MAX` | no | `4096` | Verified router keys held in memory. The ceiling is memory, not correctness — an evicted key costs one indexed lookup. |
-| `KEY_CACHE_TTL_SECONDS` | no | `60` | How long a successful verification is reused. Revocation invalidates immediately, so this bounds staleness of a key's limits and scope, not of its revocation. |
+| `KEY_CACHE_TTL_SECONDS` | no | `60` | How long a successful verification is reused. Revocation invalidates immediately on the replica that served the admin request, so on a single-replica deployment this bounds staleness of a key's limits and scope, not of its revocation — on several replicas it bounds both, for every replica but that one. |
 | `KEY_CACHE_NEGATIVE_TTL_SECONDS` | no | `5` | How long a failed lookup is remembered. Short on purpose: it stops a flood of bad keys becoming a flood of queries, and a just-minted key must start working quickly. |
 | `SESSION_CACHE_MAX` | no | `4096` | Session → Account bindings held in memory, plus their fingerprint aliases. Only Claude subscription accounts ever create one. |
 | `SESSION_CACHE_TTL_SECONDS` | no | `300` | How long a binding is reused before its row is re-read. Bounds only how long this replica may lag another one's rebind; the row itself never expires, because an SDK session outlives any cache. |
@@ -313,6 +314,57 @@ to a dump.
 > that contains the dump and the key side by side is a single-file compromise of your entire account
 > pool.
 
+**RPO: however old your last dump is.** There is no continuous replication or WAL shipping in the
+shipped stack — a `pg_dump` is a point-in-time snapshot, not a stream, so your recovery point
+objective equals your backup interval. Run the automated job below on a schedule that matches how
+much re-work (re-minted keys, re-added accounts, lost usage history) you can tolerate losing; hourly
+for an active multi-tenant deployment, daily is often fine for a single-operator one. `claude-config`
+has no backup story at all by default (see below) — its RPO is "whatever state the volume is in right
+now," which is why reconnect-over-restore is the documented recommendation for it.
+
+**Restore drill — practice this before you need it, on a throwaway stack:**
+
+```bash
+# 1. Stand up a scratch compose project so the drill never touches the real volume.
+docker compose -p router-restore-drill up -d postgres
+
+# 2. Restore the dump into it.
+docker compose -p router-restore-drill exec -T postgres \
+  pg_restore -U router -d router --clean --if-exists < router-2026-01-01.dump
+
+# 3. Point a throwaway router container at the restored database and boot it —
+#    migrations run automatically; a restore from an older schema version
+#    proves the forward-only migrations still apply cleanly.
+#
+#    `run`, not `up`: `run` publishes none of the service's ports, so the drill
+#    cannot collide with the real stack's 127.0.0.1:8080 on a host that is
+#    already serving. `up -d router` here fails with a port conflict instead of
+#    telling you anything about your backup.
+docker compose -p router-restore-drill run --rm --no-deps -d router
+
+# 4. Verify, then tear the whole drill down.
+docker compose -p router-restore-drill exec -T postgres \
+  psql -U router -d router -c "select count(*) from accounts;"
+docker compose -p router-restore-drill down -v
+```
+
+A dump that only gets opened during a real incident is an unverified backup. Run this drill on a
+schedule (monthly is reasonable) and after every schema-changing upgrade, not just once at setup.
+
+**Automated backup**, cron on the Docker host (outside the compose project, since the janitor
+inside the router does not back up its own database — see [Cleanups & retention](#cleanups--retention)
+above for what it *does* sweep):
+
+```bash
+# /etc/cron.d/router-backup — daily at 02:00, keep 14 days, host-side crontab
+0 2 * * * root cd /opt/router && docker compose exec -T postgres \
+  pg_dump -U router -d router --format=custom > /backups/router-$(date +\%F).dump \
+  && find /backups -name 'router-*.dump' -mtime +14 -delete
+```
+
+Ship `/backups` off the host (object storage, another machine) — a backup that lives on the same disk
+as the volume it protects survives everything except the one failure mode backups exist for.
+
 ### Claude config directories
 
 The `claude-config` volume is **secret material and is not covered by `ENCRYPTION_KEY`**. It holds
@@ -342,7 +394,7 @@ Multi-arch (`linux/amd64`, `linux/arm64`), published to `ghcr.io/developerz-ai/m
 
 | Trigger | Tags | Use it for |
 |---|---|---|
-| `v*` tag | `1.2.3`, `1.2`, `1`, `latest` | Everything. Pin at least the minor. |
+| `v*` tag | `1.2.3`, `1.2`, `latest` (pre-releases like `v1.3.0-rc.1` skip `latest`) | Everything. Pin at least the minor — there is no bare-major (`1`) tag; `release.yml`'s `merge` job only emits `{version}`, `{major}.{minor}`, and `latest`. |
 
 **A tagged release is the only thing that publishes an image.** Pushing to `main` runs the quality
 gate (lint, typecheck, test, build) and stops there — it deliberately publishes nothing.
@@ -448,6 +500,8 @@ same-dialect passthrough (the common case) does no body parsing at all; see
 | Console login says it succeeded, then every screen bounces back to the login form ("session expired") | The router is reached over plain `http://` (a LAN install, or a proxy that does not forward `X-Forwarded-Proto`), so the browser silently discarded the `Secure` session cookie. The login itself was genuinely fine, which is why no status code names the problem | `docker compose logs router` carries a `warn` from the login itself: *"login succeeded but the session cookie is Secure and this request arrived over plain HTTP"*, with the remedy in the same line. Either set `SESSION_COOKIE_INSECURE=true` (plain-HTTP install), or terminate HTTPS in front and forward `X-Forwarded-Proto` — the header is honored for this check whether or not `TRUST_PROXY` is on. See [04-api-keys-and-access.md](04-api-keys-and-access.md#session-cookie). |
 | A sweep hasn't run — the DB keeps growing, or usage rollups stop appearing | The scheduler runs in-process, so a wedged or crashed task is invisible unless you look at its last-run record | Check the task's last `ScheduledTaskRun` (admin UI, or the row directly): a stale `startedAt` with a null `finishedAt` means a run was killed halfway or is stuck holding the advisory lock; a stale `startedAt` with `outcome: failed` names the error. `outcome: partial` is normal and means the batch limit was hit and the next run continues. If every replica shows nothing, no replica is acquiring the lock — check Postgres connectivity and `JANITOR_INTERVAL_MINUTES`. |
 | `/readyz` red, `/healthz` green | Postgres unreachable or zero healthy accounts | `/healthz` is liveness only, by design — zero healthy accounts is an operator problem, not a reason to restart a working process. Check `docker compose ps postgres` and account health. See [08-observability.md](08-observability.md). |
+| `GET /metrics` returns `401` | `METRICS_TOKEN` is set and Prometheus (or your scrape client) is not sending it, or is sending it as the wrong header | `/metrics` has its own credential, separate from both the admin session and router keys — neither is accepted here. Send `Authorization: Bearer <METRICS_TOKEN>`. Leaving `METRICS_TOKEN` unset removes the check entirely; that is the intended posture for a single-host deployment where `/metrics` is not reachable outside its own network — see [08-observability.md](08-observability.md). |
+| A revoked or edited router key still authenticates for a while, on some but not all replicas | Verified keys are cached in memory per process so verification does not round-trip Postgres on every request; admin revoke/edit calls `invalidate()` on the replica that served the request, and only on that one | Expected, bounded staleness: **invalidation is immediate on the serving replica, and every other replica keeps accepting the key for up to `KEY_CACHE_TTL_SECONDS` (60 seconds by default)** — that setting is the bound, so read it from your own environment rather than assuming the default. A revoked key stops working everywhere within that window with zero replica coordination, since a compromised key is not a reason to add a broker (non-negotiable: background work is in-process only, no Redis/pub-sub). If a key must be dead **immediately** on every replica, there is no faster path today than lowering the TTL — which costs a Postgres round-trip per uncached verification. See [04-api-keys-and-access.md](04-api-keys-and-access.md#verification-path). |
 
 ## Read next
 

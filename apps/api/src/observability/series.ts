@@ -42,15 +42,19 @@ export function createSeries(options: RegistryOptions = {}) {
     registry,
 
     /**
-     * Always `1`; the label is the whole payload. First in the exposition because it is the line an
-     * operator reads first — `router_build_info * on() group_left(version) <anything>` is how a
+     * Always `1`; the labels are the whole payload. First in the exposition because it is the line
+     * an operator reads first — `router_build_info * on() group_left(version) <anything>` is how a
      * dashboard annotates a graph with the build that produced it, and a `version` label on every
      * other series would multiply the cardinality of all of them to say the same thing once.
+     *
+     * `revision` is the second label because a version is not an identity: a rebuilt `:latest`, an
+     * rc cut twice and an image built from a dirty tree all report the same one. The sha is what
+     * separates them. Two labels, one series — the cardinality is one per process either way.
      */
     buildInfo: registry.gauge({
       name: "router_build_info",
-      help: "Always 1. The version label names the build; join on it to annotate other series.",
-      labels: ["version"],
+      help: "Always 1. The version and revision labels name the build; join on them to annotate other series.",
+      labels: ["version", "revision"],
     }),
 
     requests: registry.counter({
