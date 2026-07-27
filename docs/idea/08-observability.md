@@ -42,8 +42,12 @@ Postgres in batches by a background writer. A request never waits on an insert, 
 transaction, and never fails because the database is slow. **A slow or unavailable database degrades
 reporting, never traffic** — the queue is bounded, and on overflow it drops the oldest records and
 increments a counter rather than applying backpressure to live requests (`router_usage_queue_depth`
-and `router_usage_records_dropped_total`, plus a throttled log line — a drop is never silent). No
-prompt content, no completion content, and no credential material is ever stored on a record.
+and `router_usage_records_dropped_total`, plus a throttled log line — a drop is never silent).
+Shedding is also *cheap*: an enqueue costs the same whether the queue is empty or full and shedding,
+because the queue advances a head rather than moving its contents. A queue that copied itself to
+make room would charge every request during an outage for the whole ceiling — backpressure by
+another name. No prompt content, no completion content, and no credential material is ever stored on
+a record.
 
 **A refused batch gets one more try, and both fates are exported.** Postgres is unavailable for a
 second — a failover, a restart, a saturated connection pool — far more often than it is unavailable
