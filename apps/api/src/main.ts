@@ -11,6 +11,7 @@ import { ConfigDirError } from "./providers/claude-sdk/config-dir"
 import { createAccountProbe } from "./services/health/accountProbe"
 import { createClaudeCliProbe } from "./services/health/claudeCliProbe"
 import { createDatabaseProbe } from "./services/health/databaseProbe"
+import { type DrainableServer, drainServer } from "./services/shutdown/drain"
 
 /**
  * The only module that boots: it reads the environment, migrates, builds the app, and opens the
@@ -73,13 +74,43 @@ async function main(): Promise<void> {
     trustProxy: env.trustProxy,
   })
 
-  // Order on the way out mirrors the way in: stop taking traffic, flush what is
-  // queued, then close the connection the flush needs.
+  // Order on the way out mirrors the way in: stop taking traffic and let it finish, flush what is
+  // queued, then close the connection the flush needs. The first step is the one with a deadline —
+  // everything after it is bounded by the work already in hand.
   installShutdownHandlers(logger, async () => {
-    await server.stop()
+    await drain(server, env, logger)
     await runtime.stop()
     await database.close()
   })
+}
+
+/**
+ * Stop accepting, then give what is already in flight a bounded chance to finish.
+ *
+ * The bound is the point. `Bun.serve().stop()` waits for the last byte of the last response and
+ * never gives up, so awaiting it bare hands the exit to the orchestrator's `SIGKILL` — which
+ * truncates the streams the wait was protecting and loses every usage row, quota reading and
+ * standing block still queued behind it. See `services/shutdown/drain.ts`.
+ */
+async function drain(server: DrainableServer, env: Env, logger: Logger): Promise<void> {
+  const outcome = await drainServer({ server, timeoutMs: env.shutdownDrainMs })
+  const detail = {
+    component: "transport",
+    pending: outcome.pending,
+    waitedMs: Math.round(outcome.waitedMs),
+    timeoutMs: env.shutdownDrainMs,
+  }
+
+  if (outcome.timedOut) {
+    logger.warn("drain deadline expired — closing responses still in flight", {
+      ...detail,
+      abandoned: outcome.abandoned,
+      remedy:
+        "raise SHUTDOWN_DRAIN_MS, and the orchestrator's stop grace period (stop_grace_period, terminationGracePeriodSeconds) above it",
+    })
+    return
+  }
+  logger.info("in-flight requests drained", detail)
 }
 
 /**
@@ -171,9 +202,26 @@ async function migrate(env: Env, logger: Logger): Promise<void> {
   }
 }
 
+/**
+ * One shutdown, however many signals arrive.
+ *
+ * The drain is deliberately long, which makes a second signal likely: an orchestrator escalating,
+ * or an operator pressing Ctrl-C again. Re-entering would run the flush twice and close the pool
+ * underneath the first pass, so the second signal does the only thing it can honestly mean —
+ * stop waiting, now — and exits non-zero, because work was abandoned.
+ */
 function installShutdownHandlers(logger: Logger, shutdown: () => Promise<void>): void {
+  let shuttingDown = false
   for (const signal of ["SIGTERM", "SIGINT"] as const) {
     process.on(signal, () => {
+      if (shuttingDown) {
+        logger.warn("second signal while shutting down — exiting without finishing the drain", {
+          component: "transport",
+          signal,
+        })
+        process.exit(1)
+      }
+      shuttingDown = true
       logger.info("shutting down", { component: "transport", signal })
       void shutdown().finally(() => process.exit(0))
     })

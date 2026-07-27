@@ -233,6 +233,17 @@ export interface TranslationConfig {
 
 export interface Env {
   readonly port: number
+  /**
+   * How long a shutdown lets in-flight requests finish before closing what is left.
+   *
+   * A streaming completion is a request that legitimately runs for minutes, and `Bun.serve().stop()`
+   * waits for the last one of them without a bound — so this is the bound. It must stay comfortably
+   * *under* the orchestrator's own kill grace (`stop_grace_period` in the bundled compose file,
+   * `terminationGracePeriodSeconds` on Kubernetes), because everything the flush behind it writes —
+   * usage rows, quota readings, standing blocks — is lost to a `SIGKILL` that lands first.
+   * `0` closes in-flight responses immediately. See `services/shutdown/drain.ts`.
+   */
+  readonly shutdownDrainMs: number
   readonly databaseUrl: string
   readonly adminUsername: string
   readonly adminCredential: AdminCredential
@@ -341,6 +352,7 @@ const encryptionKey = z
 const envSchema = z
   .object({
     PORT: wholeNumber.optional(),
+    SHUTDOWN_DRAIN_MS: wholeNumber.optional(),
     DATABASE_URL: nonEmpty,
     ADMIN_USERNAME: nonEmpty,
     ADMIN_PASSWORD: nonEmpty.optional(),
@@ -425,6 +437,11 @@ const envSchema = z
 
     return {
       port: raw.PORT ?? 8080,
+      // Fifteen seconds: long enough for the ordinary streamed answer in flight at deploy time to
+      // land, short enough to leave the flush room inside the 30s stop grace the bundled compose
+      // file declares. Neither number is a guess the other has to match by luck — an image-pins
+      // test holds the compose grace above this default.
+      shutdownDrainMs: raw.SHUTDOWN_DRAIN_MS ?? 15_000,
       databaseUrl: raw.DATABASE_URL,
       adminUsername: raw.ADMIN_USERNAME,
       adminCredential,
