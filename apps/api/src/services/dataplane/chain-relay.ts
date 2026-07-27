@@ -28,6 +28,20 @@ export interface AttemptClock {
 }
 
 /**
+ * An `AttemptClock` plus the moment this attempt's upstream span opened — the reading the chain
+ * takes once the request body exists and before either transport is called.
+ *
+ * It is a separate reading from `started` because the two answer different questions. `started`
+ * bounds the *attempt*, so `latencyMs` includes the conversion the router ran for it;
+ * `upstreamStarted` bounds the *wait*, so `routerOverheadMs` does not. A failure closes its span in
+ * the chain; a success cannot, because the stream settles long after the chain returned — so it
+ * carries the open end here and `settle` closes it at the last relayed byte.
+ */
+export interface SuccessClock extends AttemptClock {
+  readonly upstreamStarted: number
+}
+
+/**
  * The slice of the chain's context an attempt's accounting reads. `ChainContext` satisfies it
  * structurally, so the chain passes itself and nothing has to be threaded or rebuilt.
  */
@@ -42,7 +56,7 @@ export function relaySuccess(
   servable: ServableCandidate,
   attempt: number,
   response: Response,
-  at: AttemptClock,
+  at: SuccessClock,
 ): Response {
   // A count-tokens answer states `input_tokens` for a prompt that was never run. Reading it would
   // record — and price — a measurement as though it were a completion, so that one response shape
@@ -53,13 +67,16 @@ export function relaySuccess(
   const tokens = counting ? NO_TOKEN_OBSERVER : createTokenObserver()
   let firstByteAt: number | undefined
   const settle = (streamed: boolean): void => {
-    // Everything this attempt spent — the call and every byte relayed off it — is time the router
-    // waited on the upstream, not time it worked. The failure path adds its attempt before
-    // recording; the success path has to add its own here, at the moment the last byte lands,
-    // because a stream settles long after the loop returned. Passing only the *previous* attempts'
-    // wait would fold a whole generation into `router_overhead_seconds`, the one series that must
-    // never contain upstream time (CLAUDE.md non-negotiable 8).
-    const upstreamMs = at.upstreamMs + (ctx.runtime.clock.elapsed() - at.started)
+    // Everything this attempt spent from the call onwards — including every byte relayed off it —
+    // is time the router waited on the upstream, not time it worked. The failure path closes its
+    // span in the chain; the success path has to close its own here, at the moment the last byte
+    // lands, because a stream settles long after the loop returned. Passing only the *previous*
+    // attempts' wait would fold a whole generation into `router_overhead_seconds`, the one series
+    // that must never contain upstream time (CLAUDE.md non-negotiable 8).
+    //
+    // Measured from `upstreamStarted`, not from `started`: the conversion this attempt's body needed
+    // ran between the two, and it is the router's own work.
+    const upstreamMs = at.upstreamMs + (ctx.runtime.clock.elapsed() - at.upstreamStarted)
     const counts = tokens.counts()
     ctx.runtime.health.endAttempt(servable.account.id, counts.tokensOut)
     ctx.runtime.record(

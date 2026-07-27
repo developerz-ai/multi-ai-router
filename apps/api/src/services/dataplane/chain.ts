@@ -110,12 +110,19 @@ export async function runChain(ctx: ChainContext): Promise<Response> {
       if (!isRouterError(error)) throw error
       held = foldChainFailure(held, routerFailure(error))
       lastFailure = { kind: "client-error", message: error.message }
-      recordAttemptFailure(ctx, servable, decision.attempt, lastFailure, null, {
-        ...at,
-        upstreamMs,
-      })
+      // Nothing added to `upstreamMs`: deciding the body has no faithful conversion is the router's
+      // own work, and every millisecond of it belongs in this refusal's overhead.
+      recordAttemptFailure(ctx, servable, decision.attempt, lastFailure, null, at)
       continue
     }
+
+    // The upstream span opens *here*, once the body exists — not when the attempt began. Everything
+    // above is the router working rather than waiting: the alias rewrite, and for a translated
+    // candidate a full parse and re-serialization of the client's body, which grows with the
+    // conversation. Opening the span at the attempt's start charged that conversion to the upstream,
+    // which is exactly what `path="translate"` on `router_overhead_seconds` exists to make visible —
+    // the label was reporting the router's most expensive path as its cheapest.
+    const upstreamStarted = runtime.clock.elapsed()
 
     let outcome: AttemptOutcome
     try {
@@ -125,15 +132,16 @@ export async function runChain(ctx: ChainContext): Promise<Response> {
       // account cannot serve; the next one still can, and the reason is kept in case none can —
       // *kept*, not promoted: this account never reached an upstream, so it has no verdict on the
       // request and cannot speak over one an account that did reach its upstream already gave.
+      //
+      // Nothing is added to `upstreamMs` for the same reason. Both transports answer their own
+      // transport failures with an `AttemptOutcome`, so a throw arriving here happened before a byte
+      // was sent — a slow decrypt is router time, and charging it upstream would hide it under the
+      // one budget it is measured against.
       runtime.health.endAttempt(accountId)
       probe.release()
-      upstreamMs += runtime.clock.elapsed() - attemptStarted
       held = foldChainFailure(held, isRouterError(error) ? routerFailure(error) : null)
       lastFailure = { kind: "server-error", message: "the account could not be dispatched to" }
-      recordAttemptFailure(ctx, servable, decision.attempt, lastFailure, null, {
-        ...at,
-        upstreamMs,
-      })
+      recordAttemptFailure(ctx, servable, decision.attempt, lastFailure, null, at)
       continue
     }
 
@@ -147,7 +155,12 @@ export async function runChain(ctx: ChainContext): Promise<Response> {
       // would keep a recovered account out of every other request's snapshot for minutes.
       probe.release()
       progress = markStreamed(progress)
-      return relaySuccess(ctx, servable, decision.attempt, outcome.response, at)
+      // The span stays open: a stream settles long after this returns, and every byte of the drain
+      // is still time the router spent waiting. `chain-relay.ts` closes it at the last byte.
+      return relaySuccess(ctx, servable, decision.attempt, outcome.response, {
+        ...at,
+        upstreamStarted,
+      })
     }
 
     // Order is load-bearing. The classified failure is this response's *verdict* and lands first;
@@ -166,7 +179,7 @@ export async function runChain(ctx: ChainContext): Promise<Response> {
     // After the marks, never before: the failure has already cooled the account down to its next
     // backoff step, so releasing here hands the gate to nobody rather than to the next stampede.
     probe.release()
-    upstreamMs += runtime.clock.elapsed() - attemptStarted
+    upstreamMs += runtime.clock.elapsed() - upstreamStarted
 
     recordAttemptFailure(ctx, servable, decision.attempt, outcome.failure, outcome.upstream, {
       ...at,

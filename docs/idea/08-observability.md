@@ -380,11 +380,22 @@ generation time in the one series that exists to keep generation time out. What 
 either side of the wire — key verification, session resolution, the health snapshot, selection, the
 egress plan, header swapping, relay set-up, and the usage enqueue.
 
+`upstreamMs` is the sum of one **span per attempt**, and both of its ends are exact. It opens when
+the transport is handed the request — *after* the body for that attempt exists — and closes on the
+attempt's verdict, or, for the attempt that succeeded, on its last relayed byte. So the conversion a
+`translate` candidate needs, the alias rewrite a renamed one needs, and a credential that spent time
+failing to decrypt all stay on the router's side of the subtraction. That boundary is what makes the
+`path` label mean anything: a span opened at the *attempt's* start would subtract the conversion from
+the very number `path="translate"` exists to price, and report the router's most expensive path as
+its cheapest. An attempt that never reached a transport at all — an unreadable credential, a body
+with no faithful conversion — waited on nothing and charges nothing.
+
 The invariant that follows is what the tests assert: a request whose upstream took 400 ms records a
-`routerOverheadMs` in single digits, not 400-and-change. `router_overhead_seconds` and
-`router_upstream_duration_seconds` are complements over one wall clock, never two views of the same
-milliseconds — and if they ever start to double-count, the overhead number is the one that has gone
-wrong, because upstream time is the number with an independent witness.
+`routerOverheadMs` in single digits, not 400-and-change, and one whose conversion took 30 ms records
+those 30. `router_overhead_seconds` and `router_upstream_duration_seconds` are complements over one
+wall clock, never two views of the same milliseconds — and if they ever start to double-count, the
+overhead number is the one that has gone wrong, because upstream time is the number with an
+independent witness.
 
 ### Verifying the budget
 
