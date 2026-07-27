@@ -10,7 +10,7 @@ import { scheduledTask } from "@multi-ai-router/db"
 import type { Env } from "../../config/env"
 import { AUDIT_KINDS, AUDIT_SUBJECTS, type AuditRecorder } from "../admin"
 import { type AdminResult, ok } from "../admin/result"
-import { listShippedRates } from "../cost"
+import { listShippedRates, PRICE_TABLE_AS_OF } from "../cost"
 import { diffPriceOverrides, PRICE_OVERRIDES_SETTING, priceOverrideAuditDetail } from "./audit"
 import {
   AUDIT_LIMIT_MAX,
@@ -78,6 +78,7 @@ export function createSettingsService(deps: SettingsServiceDeps): SettingsServic
     janitorIntervalMinutes: deps.env.janitorIntervalMinutes,
     publicUrl: deps.env.publicUrl,
     prices: {
+      shippedAsOf: PRICE_TABLE_AS_OF,
       shipped: listShippedRates().map(toPriceRateView),
       overrides: overrides.map(toPriceOverrideView),
     },

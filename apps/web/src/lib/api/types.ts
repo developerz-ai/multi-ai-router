@@ -1,4 +1,5 @@
 import type {
+  AccountBilling,
   AccountStatus,
   AuthKind,
   Dialect,
@@ -44,6 +45,11 @@ export interface AccountView {
   readonly supportedModels: readonly string[] | null
   readonly weight: number
   readonly priority: number
+  /**
+   * Per-token bill or flat fee. The one input to whether this account's usage shows as spend or as
+   * an attribution — it changes a cost column and nothing about routing.
+   */
+  readonly billing: AccountBilling
   readonly tokenExpiresAt: string | null
   readonly createdAt: string
   readonly updatedAt: string
@@ -167,6 +173,13 @@ export interface ProviderDescriptor {
   readonly supportedDialects: readonly Dialect[]
   readonly requiresBaseUrl: boolean
   readonly requiresConfigDir: boolean
+  /** What a new account of this provider is billed as unless the operator says otherwise. */
+  readonly defaultBilling: AccountBilling
+  /**
+   * True where the default is also the only answer: a provider sold only as a subscription has no
+   * per-token price to meter, so the control is read-only and the API refuses the write.
+   */
+  readonly billingFixed: boolean
   /**
    * Which connect flow this provider takes, or null for one that takes none. Also what makes the
    * credential field optional: an account that will be logged in exists *before* its

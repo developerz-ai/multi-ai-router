@@ -113,6 +113,14 @@ export interface PriceRateView {
   readonly outputPerMtok: number
   readonly cacheReadPerMtok: number
   readonly cacheWritePerMtok: number
+  /**
+   * Present on a **long-context row**: the prompt size at which this card replaces the standard one
+   * for the same model. A tiered model therefore appears twice in `shipped`, standard row first.
+   *
+   * Never present on an override. An override is one rate for one provider + model, and writing one
+   * for a tiered model is the operator saying "this is the price, whatever the prompt".
+   */
+  readonly fromPromptTokens?: number
 }
 
 export interface PriceOverrideView extends PriceRateView {
@@ -120,6 +128,12 @@ export interface PriceOverrideView extends PriceRateView {
 }
 
 export interface PricesView {
+  /**
+   * The day every shipped row was last checked against its vendor's published price, `YYYY-MM-DD`.
+   * A price table with no date is a table nobody can judge: vendors reprice without asking, and the
+   * honest reading of a cost column is "correct as of this date, where not overridden".
+   */
+  readonly shippedAsOf: string
   /** The table shipped in the image. Read-only: it changes when the image does. */
   readonly shipped: readonly PriceRateView[]
   /** What the operator layered over it. An entry here wins for the pair it names, and nothing else. */
@@ -192,7 +206,7 @@ export interface AuditView {
   readonly limit: number
 }
 
-/** The six rate fields and nothing else — a shipped row and a stored row both narrow through here. */
+/** The rate fields and nothing else — a shipped row and a stored row both narrow through here. */
 export function toPriceRateView(rate: PriceRateView): PriceRateView {
   return {
     provider: rate.provider,
@@ -201,6 +215,7 @@ export function toPriceRateView(rate: PriceRateView): PriceRateView {
     outputPerMtok: rate.outputPerMtok,
     cacheReadPerMtok: rate.cacheReadPerMtok,
     cacheWritePerMtok: rate.cacheWritePerMtok,
+    ...(rate.fromPromptTokens === undefined ? {} : { fromPromptTokens: rate.fromPromptTokens }),
   }
 }
 

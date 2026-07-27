@@ -1,4 +1,4 @@
-import type { Dialect, UsageOutcome } from "@multi-ai-router/core"
+import type { AccountBilling, Dialect, UsageOutcome } from "@multi-ai-router/core"
 import type { DriverAccount } from "../../providers"
 import type { AccountSnapshot, PoolSnapshot } from "../routing"
 
@@ -12,8 +12,8 @@ import type { AccountSnapshot, PoolSnapshot } from "../routing"
  */
 
 /**
- * One account, in the three views the request path needs: what routing ranks, what the driver
- * addresses, and the credential envelope the driver's headers are built from.
+ * One account, in the views the request path needs: what routing ranks, what the driver addresses,
+ * how it is billed, and the credential envelope the driver's headers are built from.
  *
  * The envelope is **ciphertext** here and is decrypted inside the attempt, on the outbound request
  * and nowhere else — upstream credentials cross exactly one boundary.
@@ -24,6 +24,11 @@ export interface RoutableAccount {
   readonly snapshot: AccountSnapshot
   /** The provider view: base URL override, chosen surface, alias map. Never the credential. */
   readonly driver: DriverAccount
+  /**
+   * Per-token bill or flat fee. Read only when a `UsageRecord` is priced, and never by routing —
+   * how an account is paid for decides nothing about whether it may serve a request.
+   */
+  readonly billing: AccountBilling
   /** AES-256-GCM envelope. Null for Claude subscription accounts, which hold a config dir. */
   readonly authMaterial: string | null
   /** Claude subscription accounts only: the isolated `CLAUDE_CONFIG_DIR`. */

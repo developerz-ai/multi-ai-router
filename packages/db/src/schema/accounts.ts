@@ -1,4 +1,5 @@
 import {
+  DEFAULT_ACCOUNT_BILLING,
   DEFAULT_ACCOUNT_PRIORITY,
   DEFAULT_ACCOUNT_WEIGHT,
   type Dialect,
@@ -13,7 +14,7 @@ import {
   uniqueIndex,
   uuid,
 } from "drizzle-orm/pg-core"
-import { accountStatus, providerId } from "./enums"
+import { accountBilling, accountStatus, providerId } from "./enums"
 
 /** Client model name -> the name this account's upstream expects (`sonnet` -> `glm-4.7`). */
 export type ModelAliasMap = Record<string, string>
@@ -37,6 +38,20 @@ export const accounts = pgTable(
     label: text("label").notNull(),
     provider: providerId("provider").notNull(),
     status: accountStatus("status").notNull().default("active"),
+
+    /**
+     * Whether this account is a per-token bill or a flat fee, which decides
+     * whether its usage prices as real spend (`metered`) or as an attribution
+     * (`notional`). Per account, because the same provider sells both: a z.ai or
+     * Kimi coding plan uses the same endpoint and the same key shape as that
+     * vendor's metered API, and only the operator knows which was bought.
+     *
+     * Defaulted from the provider's driver at write time and forced for the
+     * providers sold only as a subscription — see
+     * `services/accounts/rules.ts`. The column default is the metered case, the
+     * one an unstated row means.
+     */
+    billing: accountBilling("billing").notNull().default(DEFAULT_ACCOUNT_BILLING),
 
     /**
      * AES-256-GCM ciphertext of the API key or OAuth token pair. Never returned

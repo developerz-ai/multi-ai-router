@@ -79,17 +79,19 @@ describe("what an override changes", () => {
   })
 
   test("an override prices a provider the shipped table has no list for", async () => {
-    const book = bookOf([row({ provider: "zai", model: "glm-4.7", inputPerMtok: 0.6 })])
+    // OpenRouter's price is whichever upstream it routed to, decided per request, so the image
+    // ships none — an override is the only way one exists at all.
+    const book = bookOf([row({ provider: "openrouter", model: "some/model", inputPerMtok: 0.6 })])
     await book.refresh()
 
-    expect(book.lookup("zai", "glm-4.7")?.inputPerMtok).toBe(0.6)
+    expect(book.lookup("openrouter", "some/model")?.inputPerMtok).toBe(0.6)
   })
 
   test("a model neither table knows stays null, never zero", async () => {
     const book = bookOf([row()])
     await book.refresh()
 
-    expect(book.lookup("zai", "glm-4.7")).toBeNull()
+    expect(book.lookup("openrouter", "some/model")).toBeNull()
     expect(book.lookup("anthropic-api", "claude-not-a-model")).toBeNull()
   })
 

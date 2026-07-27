@@ -1,4 +1,4 @@
-import type { Dialect, ProviderId } from "@multi-ai-router/core"
+import type { AccountBilling, Dialect, ProviderId } from "@multi-ai-router/core"
 import { type AdminFailure, type AdminResult, ok } from "../admin/result"
 import { describeProvider, type ProviderDescriptor } from "./providers"
 
@@ -19,7 +19,9 @@ import { describeProvider, type ProviderDescriptor } from "./providers"
  * - a local endpoint that authenticates nobody would otherwise be unusable
  *   without inventing a key to satisfy the form;
  * - a dialect the provider does not serve silently falls back to its default,
- *   so the operator's choice would be quietly ignored.
+ *   so the operator's choice would be quietly ignored;
+ * - a subscription-only provider marked `metered` would put a per-token charge
+ *   in a spend column for tokens nobody was billed for.
  */
 
 /** The account state a rule judges — the row as it will be *after* the write. */
@@ -29,6 +31,8 @@ export interface AccountShape {
   readonly configDir: string | null
   readonly baseUrl: string | null
   readonly dialect: Dialect | null
+  /** What the operator asked for, or absent to take the provider's default. */
+  readonly billing?: AccountBilling
 }
 
 export function checkAccountShape(shape: AccountShape): AdminResult<ProviderDescriptor> {
@@ -38,9 +42,23 @@ export function checkAccountShape(shape: AccountShape): AdminResult<ProviderDesc
     unimplemented(provider) ??
     credentialRule(provider, shape) ??
     baseUrlRule(provider, shape) ??
-    dialectRule(provider, shape)
+    dialectRule(provider, shape) ??
+    billingRule(provider, shape)
 
   return failure === null ? ok(provider) : { ok: false, failure }
+}
+
+/**
+ * What this account is billed as, once the operator's answer and the provider's have both been
+ * heard. Only ever reached after {@link checkAccountShape} accepted the pair, so the fixed case
+ * here is a restatement, not a second rule: a subscription-only provider is its own answer.
+ */
+export function resolveBilling(
+  provider: ProviderDescriptor,
+  requested: AccountBilling | undefined,
+): AccountBilling {
+  if (provider.billingFixed) return provider.defaultBilling
+  return requested ?? provider.defaultBilling
 }
 
 function unimplemented(provider: ProviderDescriptor): AdminFailure | null {
@@ -119,6 +137,20 @@ function dialectRule(provider: ProviderDescriptor, shape: AccountShape): AdminFa
   return failure(
     `provider "${provider.id}" does not serve the "${shape.dialect}" dialect; it serves ${list(provider.supportedDialects)}`,
     "dialect_unsupported",
+  )
+}
+
+/**
+ * A flat-fee plan sold under a metered provider's endpoint is the operator's fact to record — the
+ * router cannot see it from the wire. The reverse has no meaning: a Claude Max or ChatGPT plan has
+ * no per-token price at all, so calling one `metered` would report an invented charge as spend.
+ */
+function billingRule(provider: ProviderDescriptor, shape: AccountShape): AdminFailure | null {
+  if (shape.billing === undefined || !provider.billingFixed) return null
+  if (shape.billing === provider.defaultBilling) return null
+  return failure(
+    `provider "${provider.id}" is sold only as a subscription and has no per-token price, so its accounts are always billed as "${provider.defaultBilling}"`,
+    "billing_fixed",
   )
 }
 

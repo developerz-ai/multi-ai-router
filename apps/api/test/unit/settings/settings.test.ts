@@ -18,6 +18,9 @@ const RATE_FIELDS = [
   "provider",
 ]
 
+/** A long-context row is the six above plus the prompt size its card takes over at, and nothing else. */
+const TIER_FIELDS = [...RATE_FIELDS, "fromPromptTokens"].sort()
+
 const SUBJECT = "6f1b0a3e-6d2c-4a5f-9c1e-2b7d8e4f5a60"
 const OTHER_SUBJECT = "0f0e0d0c-0b0a-4908-8706-050403020100"
 
@@ -68,7 +71,7 @@ describe("the settings read", () => {
     expect(result.value.publicUrl).toBe("https://router.example.com")
   })
 
-  test("renders the shipped price table with exactly the six rate fields", async () => {
+  test("renders the shipped price table with exactly the rate fields", async () => {
     const { service } = harness()
     const result = await service.read()
 
@@ -77,7 +80,8 @@ describe("the settings read", () => {
     const { shipped } = result.value.prices
     expect(shipped.length).toBeGreaterThan(0)
     for (const row of shipped) {
-      expect(Object.keys(row).sort()).toEqual(RATE_FIELDS)
+      const fields = Object.keys(row).sort()
+      expect(fields).toEqual(row.fromPromptTokens === undefined ? RATE_FIELDS : TIER_FIELDS)
     }
 
     const sonnet = shipped.find(
@@ -85,6 +89,35 @@ describe("the settings read", () => {
     )
     expect(sonnet?.inputPerMtok).toBe(3)
     expect(sonnet?.outputPerMtok).toBe(15)
+  })
+
+  test("dates the shipped table, so an operator can judge how stale it is", async () => {
+    const { service } = harness()
+    const result = await service.read()
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    // A price table nobody can date is a table nobody can judge: vendors reprice without asking,
+    // and the numbers ship compiled into the image.
+    expect(result.value.prices.shippedAsOf).toMatch(/^\d{4}-\d{2}-\d{2}$/)
+  })
+
+  test("a long-context tier is its own row, never a second row that hides the standard one", async () => {
+    const { service } = harness()
+    const result = await service.read()
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    const rows = result.value.prices.shipped.filter(
+      (row) => row.provider === "openai-api" && row.model === "gpt-5.6-sol",
+    )
+
+    // Two rows under one name, standard first — the console folds the second onto the first as a
+    // read-only annotation, which it can only do if both arrive.
+    expect(rows.length).toBe(2)
+    expect(rows[0]?.fromPromptTokens).toBeUndefined()
+    expect(rows[1]?.fromPromptTokens).toBe(272_000)
+    expect(rows[1]?.inputPerMtok).toBeGreaterThan(rows[0]?.inputPerMtok ?? 0)
   })
 
   test("renders each stored override with its updatedAt as an ISO string", async () => {

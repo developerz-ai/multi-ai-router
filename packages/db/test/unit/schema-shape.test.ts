@@ -15,6 +15,7 @@ const TABLE_COLUMNS: ReadonlyArray<{ table: Table; columns: readonly string[] }>
       "label",
       "provider",
       "status",
+      "billing",
       "authMaterial",
       "configDir",
       "tokenExpiresAt",
@@ -312,6 +313,16 @@ describe("accounts", () => {
     // config gap — see `services/catalog/load.ts`.
     expect(schema.accounts.supportedModels.notNull).toBe(false)
     expect(schema.accounts.supportedModels.hasDefault).toBe(false)
+  })
+
+  test("billing is required and defaults to the metered case", () => {
+    // Not nullable, because there is no third answer: an account is either billed per token or
+    // it is a flat fee, and NULL would leave the cost basis of its usage undecided. The default
+    // is the answer an unstated row means — the migration backfills the two subscription-only
+    // providers explicitly rather than leaning on it.
+    expect(schema.accounts.billing.notNull).toBe(true)
+    expect(schema.accounts.billing.hasDefault).toBe(true)
+    expect(schema.accounts.billing.getSQLType()).toBe("account_billing")
   })
 })
 

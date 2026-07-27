@@ -1,4 +1,4 @@
-import type { AccountStatus, Dialect, ProviderId } from "@multi-ai-router/core"
+import type { AccountBilling, AccountStatus, Dialect, ProviderId } from "@multi-ai-router/core"
 import { request } from "./client"
 import type { AccountView, DeletedView } from "./types"
 
@@ -31,6 +31,11 @@ export interface CreateAccountInput {
   readonly supportedModels?: readonly string[]
   readonly weight?: number
   readonly priority?: number
+  /**
+   * A flat-fee plan bought under a metered provider's endpoint — the one cost fact the router
+   * cannot read off the wire. Absent takes the provider's own default.
+   */
+  readonly billing?: AccountBilling
 }
 
 /** Only `active` and `disabled` are operator-settable — the rest are observations. */
@@ -46,6 +51,8 @@ export interface UpdateAccountInput {
   readonly supportedModels?: readonly string[] | null
   readonly weight?: number
   readonly priority?: number
+  /** Not nullable: every account is billed one of the two ways, so there is nothing to clear. */
+  readonly billing?: AccountBilling
   readonly status?: OperatorStatus
 }
 

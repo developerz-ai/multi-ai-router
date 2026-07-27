@@ -3,7 +3,7 @@ import { render } from "solid-js/web"
 import type { UpdateAccountInput } from "../../src/lib/api/accounts"
 import type { AccountView, ProviderDescriptor } from "../../src/lib/api/types"
 import { AccountEditDialog } from "../../src/routes/accounts/AccountEditDialog"
-import { fire, typeInto } from "../support/dom"
+import { fire, selectOption, typeInto } from "../support/dom"
 
 /**
  * Editing an account is the only way to rotate a credential without deleting the
@@ -40,6 +40,8 @@ const HTTP_PROVIDER: ProviderDescriptor = {
   connectFlow: null,
   creatable: true,
   reason: null,
+  defaultBilling: "metered",
+  billingFixed: false,
 }
 
 const SUBSCRIPTION: ProviderDescriptor = {
@@ -50,6 +52,10 @@ const SUBSCRIPTION: ProviderDescriptor = {
   supportedDialects: ["anthropic"],
   requiresConfigDir: true,
   connectFlow: "claude-cli",
+  // Sold only as a subscription: there is no per-token price to meter, so the operator cannot say
+  // otherwise and the API refuses the write either way.
+  defaultBilling: "subscription",
+  billingFixed: true,
 }
 
 function account(overrides: Partial<AccountView> = {}): AccountView {
@@ -66,6 +72,7 @@ function account(overrides: Partial<AccountView> = {}): AccountView {
     supportedModels: ["glm-4.6", "glm-4.7"],
     weight: 300,
     priority: 2,
+    billing: "metered",
     tokenExpiresAt: null,
     createdAt: "2026-07-24T12:00:00.000Z",
     updatedAt: "2026-07-24T12:00:00.000Z",
@@ -254,5 +261,67 @@ describe("AccountEditDialog submission", () => {
       submitForm()
       expect(patch?.modelAliases).toEqual({ "gpt-5": "glm-4.7", "claude-opus-4-1": "glm-4.6" })
     })
+  })
+})
+
+describe("AccountEditDialog billing", () => {
+  const billingSelect = (): HTMLSelectElement => {
+    const select = Array.from(document.body.querySelectorAll("select")).find((element) =>
+      element.textContent?.includes("billed per token"),
+    )
+    if (select === undefined) throw new Error("no billing select")
+    return select
+  }
+
+  test("seeds from the account's stored mode, not from the first option", () => {
+    // The same failure the dialect control had: an account already on a coding plan that reads as
+    // "metered" is one save away from having its cost basis silently flattened.
+    withMount(base({ account: account({ billing: "subscription" }) }), () => {
+      expect(billingSelect().value).toBe("subscription")
+    })
+  })
+
+  test("states the consequence, because the two words alone name no column", () => {
+    withMount(base({ account: account({ billing: "subscription" }) }), () => {
+      expect(document.body.textContent).toContain("notional")
+      expect(document.body.textContent).toContain("never summed")
+    })
+  })
+
+  test("sends the mode on every save, so an untouched control is not a silent no-op", () => {
+    // `PATCH` reads an absent field as "leave it". A control the operator can see but that sends
+    // nothing is a control that does not work — the bug this dialog already had for weights.
+    let patch: UpdateAccountInput | undefined
+    withMount(base({ onSubmit: (next) => (patch = next) }), () => {
+      submitForm()
+      expect(patch?.billing).toBe("metered")
+    })
+  })
+
+  test("carries a change through to the patch", () => {
+    let patch: UpdateAccountInput | undefined
+    withMount(base({ onSubmit: (next) => (patch = next) }), () => {
+      selectOption(billingSelect(), "subscription")
+      submitForm()
+      expect(patch?.billing).toBe("subscription")
+    })
+  })
+
+  test("offers no control for a provider sold only as a subscription, and says why", () => {
+    let patch: UpdateAccountInput | undefined
+    withMount(
+      base({
+        provider: SUBSCRIPTION,
+        account: account({ provider: "anthropic-oauth", billing: "subscription" }),
+        onSubmit: (next) => (patch = next),
+      }),
+      () => {
+        expect(document.body.textContent).toContain("no per-token price to meter")
+        // Never sent: the API refuses the field for this provider whichever value it carries.
+        submitForm()
+        expect(patch).toBeDefined()
+        expect(patch?.billing).toBeUndefined()
+      },
+    )
   })
 })

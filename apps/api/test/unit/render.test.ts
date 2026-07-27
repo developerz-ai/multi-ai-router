@@ -10,7 +10,12 @@ import {
   TranslationError,
   UpstreamTimeoutError,
 } from "@multi-ai-router/core"
-import { dialectForPath, notFoundResponse, toErrorResponse } from "../../src/errors/render"
+import {
+  dialectForPath,
+  notFoundResponse,
+  renderErrorBody,
+  toErrorResponse,
+} from "../../src/errors/render"
 
 /** Every class in the hierarchy, with the status docs/idea promises for it. */
 const cases: ReadonlyArray<readonly [RouterError, number, string]> = [
@@ -86,6 +91,62 @@ describe("toErrorResponse", () => {
 
   test("a non-Error throw is still a 500", () => {
     expect(toErrorResponse("boom", null).status).toBe(500)
+  })
+})
+
+describe("renderErrorBody — the message is a client-facing surface", () => {
+  /**
+   * Router-authored messages interpolate text the router did not write: `chain.ts` folds a
+   * failure's message into "every attempt failed: …", and `models.ts` folds a selection error into
+   * a 404. An upstream is free to quote a credential back at us inside one, so the body scrubs on
+   * the way out — at the one function every error body leaves through, not at each of its callers.
+   */
+
+  test("a credential quoted into a RouterError message never reaches the body", () => {
+    const leaked = "every attempt failed: upstream rejected Bearer at_live_abcdef123456"
+    const anthropic = toErrorResponse(new NoHealthyAccountError(leaked), "anthropic")
+    const openai = toErrorResponse(new NoHealthyAccountError(leaked), "openai-chat")
+
+    expect(anthropic.body).toEqual({
+      type: "error",
+      error: {
+        type: "overloaded_error",
+        message: "every attempt failed: upstream rejected [REDACTED]",
+      },
+    })
+    expect(JSON.stringify(openai.body)).not.toContain("at_live_abcdef123456")
+  })
+
+  test("an upstream error body quoted verbatim keeps its shape and loses its key", () => {
+    const body = renderErrorBody(
+      "openai-chat",
+      400,
+      `Incorrect API key provided: sk-${"a".repeat(32)}. You can find your API key at …`,
+      "invalid_api_key",
+    )
+
+    expect(body).toEqual({
+      error: {
+        message: "Incorrect API key provided: [REDACTED]. You can find your API key at …",
+        type: "invalid_request_error",
+        param: null,
+        code: "invalid_api_key",
+      },
+    })
+  })
+
+  test("an ordinary message is passed through untouched", () => {
+    const body = renderErrorBody(
+      "anthropic",
+      404,
+      'model "claude-sonnet-4-5" is not reachable',
+      null,
+    )
+
+    expect(body).toEqual({
+      type: "error",
+      error: { type: "not_found_error", message: 'model "claude-sonnet-4-5" is not reachable' },
+    })
   })
 })
 

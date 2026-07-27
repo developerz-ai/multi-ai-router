@@ -55,15 +55,28 @@ describe("the indexes the access patterns actually need", () => {
     expect(index.unique).toBe(false)
   })
 
-  test("usage is queried by key and by account over a time window", () => {
-    expect(indexShape(usageRecords, "usage_records_api_key_created_idx").columns).toEqual([
-      "api_key_id",
-      "created_at",
-    ])
-    expect(indexShape(usageRecords, "usage_records_account_created_idx").columns).toEqual([
-      "account_id",
-      "created_at",
-    ])
+  test("usage breakdowns filter by time window alone, never by key or account", () => {
+    // usage-read-repository.ts filters every query on createdAt only; apiKeyId/accountId are
+    // group-by dimensions applied after the window scan, never a leading predicate column. An
+    // (api_key_id, created_at) or (account_id, created_at) index can't serve that access pattern
+    // — it would just be three extra B-tree inserts per row on the write-heaviest table with
+    // nothing ever reading it. If a per-key/per-account drilldown starts filtering on the id
+    // itself, add the index back naming the query that needs it.
+    expect(
+      getTableConfig(usageRecords).indexes.some(
+        (index) => index.config.name === "usage_records_api_key_created_idx",
+      ),
+    ).toBe(false)
+    expect(
+      getTableConfig(usageRecords).indexes.some(
+        (index) => index.config.name === "usage_records_account_created_idx",
+      ),
+    ).toBe(false)
+    expect(
+      getTableConfig(usageRecords).indexes.some(
+        (index) => index.config.name === "usage_records_session_key_idx",
+      ),
+    ).toBe(false)
   })
 
   test("the attempts of one client request are retrievable together", () => {

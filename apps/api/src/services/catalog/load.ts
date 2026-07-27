@@ -112,6 +112,7 @@ function toRoutableAccount(
       dialect: row.dialect,
       modelAliases: row.modelAliases,
     },
+    billing: row.billing,
     authMaterial: row.authMaterial,
     configDir: row.configDir,
   }

@@ -1,4 +1,4 @@
-import type { AuthKind, Dialect, ProviderId } from "@multi-ai-router/core"
+import type { AccountBilling, AuthKind, Dialect, ProviderId } from "@multi-ai-router/core"
 import { NoHealthyAccountError } from "@multi-ai-router/core"
 import { mapModelAlias } from "../model-alias"
 import type { DriverAccount } from "../types"
@@ -46,6 +46,12 @@ export interface ClaudeSdkDriver {
    */
   readonly dialect: Dialect
   readonly authKind: AuthKind
+  /**
+   * Always `subscription`, and fixed: a Claude Max/Pro plan is a flat monthly fee with no
+   * per-token price behind it. Its usage is priced against the Anthropic API table as an
+   * attribution (`notional`) and never summed with metered spend.
+   */
+  readonly billing: AccountBilling
 
   /**
    * The isolated `CLAUDE_CONFIG_DIR` this account's subprocess runs against.
@@ -75,6 +81,7 @@ export const claudeSdkDriver: ClaudeSdkDriver = {
   id: "anthropic-oauth",
   dialect: "anthropic",
   authKind: "oauth",
+  billing: "subscription",
 
   resolveConfigDir(account) {
     const dir = account.configDir?.trim()

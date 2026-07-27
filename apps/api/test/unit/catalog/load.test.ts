@@ -28,6 +28,7 @@ function row(overrides: Partial<AccountRow> = {}): AccountRow {
     supportedModels: null,
     weight: 100,
     priority: 0,
+    billing: "metered",
     createdAt: EPOCH,
     updatedAt: EPOCH,
     ...overrides,
@@ -58,5 +59,27 @@ describe("loadCatalog and the declared model set", () => {
     // nothing. Carrying `[]` would take the account out of selection for every model at once.
     const { accounts } = await loadCatalog(sources([row({ supportedModels: [] })]))
     expect(accounts[0]?.snapshot.supportedModels).toBeUndefined()
+  })
+})
+
+describe("what the catalog carries off the account row", () => {
+  test("billing reaches the routable account, or every priced row files under the wrong basis", async () => {
+    // The one column pricing reads. Dropped here it fails silently and in the safe-looking
+    // direction: an operator marks a coding plan as a subscription, the console agrees, and every
+    // usage row still records `metered` — real spend invented out of a flat fee nobody was billed.
+    const { accounts } = await loadCatalog(
+      sources([row({ provider: "zai", billing: "subscription" })]),
+    )
+    expect(accounts[0]?.billing).toBe("subscription")
+  })
+
+  test("a metered row carries metered, not whatever the last row said", async () => {
+    const { accounts } = await loadCatalog(
+      sources([
+        row({ id: "11111111-1111-4111-8111-111111111111", billing: "subscription" }),
+        row({ id: "22222222-2222-4222-8222-222222222222", billing: "metered" }),
+      ]),
+    )
+    expect(accounts.map((account) => account.billing)).toEqual(["subscription", "metered"])
   })
 })

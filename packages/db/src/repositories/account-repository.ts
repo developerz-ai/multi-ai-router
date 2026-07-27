@@ -1,4 +1,10 @@
-import type { AccountStatus, Dialect, ProviderId, QuotaWindowState } from "@multi-ai-router/core"
+import type {
+  AccountBilling,
+  AccountStatus,
+  Dialect,
+  ProviderId,
+  QuotaWindowState,
+} from "@multi-ai-router/core"
 import { and, asc, eq, inArray } from "drizzle-orm"
 import type { Database } from "../client"
 import {
@@ -132,6 +138,12 @@ export interface CreateAccountInput {
   readonly supportedModels?: SupportedModelList | null
   readonly weight?: number
   readonly priority?: number
+  /**
+   * Per-token bill or flat fee. Absent takes the column default (`metered`);
+   * the service supplies the provider's own default and forces it for the
+   * providers sold only as a subscription.
+   */
+  readonly billing?: AccountBilling
   /** Defaults to `active` in the schema; set explicitly for a pending OAuth row. */
   readonly status?: AccountStatus
 }
@@ -153,6 +165,7 @@ export interface UpdateAccountInput {
   readonly supportedModels?: SupportedModelList | null
   readonly weight?: number
   readonly priority?: number
+  readonly billing?: AccountBilling
   readonly status?: AccountStatus
 }
 
@@ -195,6 +208,7 @@ export function createAccountRepository(db: Database): AccountRepository {
           supportedModels: input.supportedModels ?? null,
           ...(input.weight === undefined ? {} : { weight: input.weight }),
           ...(input.priority === undefined ? {} : { priority: input.priority }),
+          ...(input.billing === undefined ? {} : { billing: input.billing }),
         })
         .returning()
       return required(rows[0], "create")
@@ -248,6 +262,7 @@ export function createAccountRepository(db: Database): AccountRepository {
             : { supportedModels: patch.supportedModels }),
           ...(patch.weight === undefined ? {} : { weight: patch.weight }),
           ...(patch.priority === undefined ? {} : { priority: patch.priority }),
+          ...(patch.billing === undefined ? {} : { billing: patch.billing }),
           ...(patch.status === undefined ? {} : { status: patch.status }),
           updatedAt: now,
         })

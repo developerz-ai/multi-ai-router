@@ -1,4 +1,10 @@
-import { type AuthKind, Dialect, type ProviderId } from "@multi-ai-router/core"
+import {
+  type AccountBilling,
+  type AuthKind,
+  DEFAULT_ACCOUNT_BILLING,
+  Dialect,
+  type ProviderId,
+} from "@multi-ai-router/core"
 import type { ProviderDriver } from "../../providers"
 import { PROVIDER_REGISTRY } from "../../providers"
 
@@ -38,6 +44,17 @@ export interface ProviderDescriptor {
   readonly transport: ProviderTransport
   /** `null` where the provider has no implementation to have an auth style. */
   readonly authKind: AuthKind | null
+  /**
+   * What an Account of this provider is billed as when the operator says nothing — the value a
+   * create form pre-selects, and the one a create with no `billing` writes.
+   */
+  readonly defaultBilling: AccountBilling
+  /**
+   * True where {@link defaultBilling} is also the *only* answer: a provider sold only as a
+   * subscription has no per-token price to meter, so an Account of it cannot be marked otherwise.
+   * The console renders the control read-only; `rules.ts` refuses the write either way.
+   */
+  readonly billingFixed: boolean
   /** The wire protocol the provider speaks when the account states no preference. */
   readonly nativeDialect: Dialect | null
   /** Surfaces an account may pin. More than one only where the provider exposes more than one. */
@@ -73,6 +90,7 @@ export function describeProvider(id: ProviderId): ProviderDescriptor {
       id,
       transport: "http",
       authKind: driver.authKind,
+      ...billingOf(driver.billing),
       nativeDialect: driver.dialect,
       supportedDialects: supportedDialects(driver),
       requiresBaseUrl: !hasPinnedBaseUrl(driver, id),
@@ -93,6 +111,7 @@ export function describeProvider(id: ProviderId): ProviderDescriptor {
       id,
       transport: "agent-sdk",
       authKind: driver.authKind,
+      ...billingOf(driver.billing),
       nativeDialect: driver.dialect,
       supportedDialects: [driver.dialect],
       requiresBaseUrl: false,
@@ -107,6 +126,7 @@ export function describeProvider(id: ProviderId): ProviderDescriptor {
     id,
     transport: "unimplemented",
     authKind: null,
+    ...billingOf(DEFAULT_ACCOUNT_BILLING),
     nativeDialect: null,
     supportedDialects: [],
     requiresBaseUrl: false,
@@ -115,6 +135,19 @@ export function describeProvider(id: ProviderId): ProviderDescriptor {
     creatable: false,
     reason: support.reason,
   }
+}
+
+/**
+ * One driver field, two descriptor fields, and the rule that connects them stated once here:
+ * a provider sold **only** as a subscription is fixed there, and a metered one is a default the
+ * operator may change — because a metered provider's key may be attached to a flat-fee plan
+ * (a z.ai or Kimi coding plan) while a subscription has no per-token price to fall back to.
+ */
+function billingOf(billing: AccountBilling): {
+  defaultBilling: AccountBilling
+  billingFixed: boolean
+} {
+  return { defaultBilling: billing, billingFixed: billing === "subscription" }
 }
 
 /** The surfaces the driver echoes back — anything else falls through to its default. */

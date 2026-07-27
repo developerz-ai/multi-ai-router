@@ -7,6 +7,7 @@ import { type Column, Table } from "../../components/Table"
 import { UsageCell } from "../../components/UsageCell"
 import type { TestAccountInput } from "../../lib/api/accounts"
 import type { AccountView, ProviderDescriptor } from "../../lib/api/types"
+import { billingConsequence } from "../../lib/billing"
 import { formatDate } from "../../lib/format"
 import type { UsageRowSummary } from "../../lib/usage-index"
 import { usageFor } from "../../lib/usage-index"
@@ -63,6 +64,17 @@ export function AccountsTable(props: AccountsTableProps) {
         <div class={styles.identity}>
           <span class={styles.label}>{account.label}</span>
           <span class={styles.provider}>{account.provider}</span>
+          {/*
+            Only the subscription case is marked, and it rides in this cell rather than taking a
+            column of its own: `metered` is what almost every account is and a badge on all of them
+            would be noise, while a subscription changes how every cost figure on this row must be
+            read — notional, never summed with spend.
+          */}
+          <Show when={account.billing === "subscription"}>
+            <span class={styles.provider} title={billingConsequence("subscription")}>
+              subscription · notional cost
+            </span>
+          </Show>
         </div>
       ),
     },

@@ -1,4 +1,5 @@
 import {
+  AccountBilling,
   AccountStatus,
   KeyScope,
   ProviderId,
@@ -36,6 +37,14 @@ export const providerId = pgEnumFrom("provider_id", ProviderId.options)
  * on a timer. Never collapse the two.
  */
 export const accountStatus = pgEnumFrom("account_status", AccountStatus.options)
+
+/**
+ * How an Account is billed, which is the only input to whether its usage prices
+ * as real spend or as an attribution. Per account, not per provider: z.ai, Kimi
+ * and MiniMax sell a flat-fee coding plan under the same endpoint and key shape
+ * as their metered API.
+ */
+export const accountBilling = pgEnumFrom("account_billing", AccountBilling.options)
 
 /** The six pool policies. `sticky` is the default — see `DEFAULT_ROUTING_POLICY` in core. */
 export const routingPolicy = pgEnumFrom("routing_policy", RoutingPolicy.options)
