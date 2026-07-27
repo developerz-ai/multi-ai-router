@@ -1199,13 +1199,70 @@ describe("usage accounting", () => {
     expect(usage.rows[0]).toMatchObject({ accountId: null, outcome: "scope_violation" })
   })
 
-  test("carries the router's own overhead, separate from upstream time", async () => {
-    const { app, usage } = harness({ responses: [() => jsonResponse(200, {})] })
+  test("a single passthrough's overhead stays far below the upstream's own delay", async () => {
+    // `routerOverheadMs >= 0` alone would pass even if the subtraction regressed to "total time
+    // only" — that bug shipped once already (a success attempt's upstream wait was never charged to
+    // `upstreamMs`, so overhead absorbed the whole generation) and a unit test with synthetic input
+    // didn't catch it (`records.test.ts` only exercises the subtraction itself, never the wiring
+    // that feeds it). Driving a real injected delay through the real dispatch loop, and asserting
+    // against the budget rather than against "a number exists", is what would have caught it.
+    const UPSTREAM_DELAY_MS = 60
+    let advance: (ms: number) => void = () => undefined
+    const { app, usage, clock } = harness({
+      responses: [
+        () => {
+          advance(UPSTREAM_DELAY_MS)
+          return jsonResponse(200, {})
+        },
+      ],
+    })
+    advance = clock.advance
 
     await (await app.request("/v1/messages", post(MESSAGE, bearer()))).text()
     await settle()
 
-    expect(usage.rows[0]?.routerOverheadMs).toBeGreaterThanOrEqual(0)
+    const row = usage.rows[0]
+    expect(row?.latencyMs).toBeGreaterThanOrEqual(UPSTREAM_DELAY_MS)
+    // Router overhead is a small fraction of the injected delay, not equal to it — the whole request
+    // took at least UPSTREAM_DELAY_MS, and none of that belongs to the router.
+    expect(row?.routerOverheadMs).toBeLessThan(UPSTREAM_DELAY_MS / 2)
+  })
+
+  test("overhead excludes every upstream span across a multi-attempt failover chain", async () => {
+    const UPSTREAM_DELAY_MS = 40
+    let advance: (ms: number) => void = () => undefined
+    const { app, usage, clock } = harness({
+      accounts: [
+        account("acct-1", { apiKey: "sk-one", cipher: CRYPTOR }),
+        account("acct-2", { apiKey: "sk-two", cipher: CRYPTOR }),
+        account("acct-3", { apiKey: "sk-three", cipher: CRYPTOR }),
+      ],
+      responses: [
+        () => {
+          advance(UPSTREAM_DELAY_MS)
+          return jsonResponse(503, { error: {} })
+        },
+        () => {
+          advance(UPSTREAM_DELAY_MS)
+          return jsonResponse(503, { error: {} })
+        },
+        () => {
+          advance(UPSTREAM_DELAY_MS)
+          return jsonResponse(200, {})
+        },
+      ],
+    })
+    advance = clock.advance
+
+    await (await app.request("/v1/messages", post(MESSAGE, bearer()))).text()
+    await settle()
+
+    expect(usage.rows).toHaveLength(3)
+    // 3 * UPSTREAM_DELAY_MS of wall time elapsed across the whole chain — two failed attempts and
+    // the one that answered — but none of it is the router's: the final row's overhead must stay
+    // small, not accumulate into a multiple of UPSTREAM_DELAY_MS the way it would if a failed
+    // attempt's upstream wait went uncounted.
+    expect(usage.rows[2]?.routerOverheadMs).toBeLessThan(UPSTREAM_DELAY_MS / 2)
   })
 
   test("a priced model's usage row carries a non-null cost estimate", async () => {
