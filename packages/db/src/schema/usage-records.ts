@@ -149,12 +149,8 @@ export const usageRecords = pgTable(
     createdAt: timestamp("created_at", { withTimezone: true, mode: "date" }).notNull().defaultNow(),
   },
   (table) => [
-    // "Who burned what, in this window" — per key and per account, by day.
-    index("usage_records_api_key_created_idx").on(table.apiKeyId, table.createdAt),
-    index("usage_records_account_created_idx").on(table.accountId, table.createdAt),
     // Reassembling one client request from its attempts.
     index("usage_records_correlation_idx").on(table.correlationId),
-    index("usage_records_session_key_idx").on(table.sessionKey),
     // "Find me request req-42". Partial, because the column is NULL on every row
     // whose id the router minted — which is nearly all of them — and this table
     // is the write-heaviest one in the schema.
