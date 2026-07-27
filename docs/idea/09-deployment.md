@@ -408,6 +408,39 @@ To cut a release: `git tag v0.1.0 && git push origin v0.1.0`. That fires `releas
 both arches natively, pushes each by digest, merges them into one manifest list under the tags above,
 and creates the GitHub release.
 
+### What the image says about itself
+
+Every image carries OCI annotations, so an operator holding a pulled tag can answer "what is this,
+and which commit is it" without running it:
+
+```sh
+docker buildx imagetools inspect --format '{{json .Manifest.Annotations}}' \
+  ghcr.io/developerz-ai/multi-ai-router:1.0.0
+```
+
+| Label | Value |
+|---|---|
+| `org.opencontainers.image.source` / `.url` / `.documentation` | Where the code and the docs live |
+| `org.opencontainers.image.licenses` | `MIT` |
+| `org.opencontainers.image.version` | The same string `/healthz` reports — `bin/verify-version` refuses a tag whose label disagrees with `packages/core/src/version.ts` |
+| `org.opencontainers.image.revision` | The tagged commit's sha, identical to `router_build_info{revision}` inside the container. `unknown` on a local build nobody stamped |
+
+They are declared in the `Dockerfile`, not only in CI, so a local
+`docker build -t multi-ai-router:dev .` produces a labelled image too — that is the build least able
+to explain itself later. `release.yml` layers `docker/metadata-action`'s richer set (created
+timestamp, real sha) on top.
+
+### Base image pinning
+
+Both `Dockerfile` stages pin `oven/bun` by **version and index digest**, and `ci.yml`'s
+`BUN_VERSION` pins the same version. A floating `oven/bun:1` would let the image ship a bun the test
+suite never ran, and a mutable version tag would let a rebuild of an old release tag produce a
+different image from the one that shipped. Both are gated:
+`apps/api/test/integration/image-pins.test.ts` fails when the Dockerfile and the workflow disagree,
+and each build stage re-asks its base `bun --version` so a digest that does not name the version its
+tag claims fails the build rather than the release. Moving the pin: see
+[RELEASING.md](../RELEASING.md#moving-the-base-image-pin).
+
 ## Performance
 
 This is an **I/O-bound reverse proxy**, not a compute workload: it forwards bytes and waits on
