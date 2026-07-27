@@ -85,6 +85,13 @@
       "when": 1785083722174,
       "tag": "0011_supported_models",
       "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "7",
+      "when": 1785157370069,
+      "tag": "0012_keen_kronos",
+      "breakpoints": true
     }
   ]
 }

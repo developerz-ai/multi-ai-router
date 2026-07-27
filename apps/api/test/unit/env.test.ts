@@ -48,6 +48,7 @@ describe("parseEnv", () => {
       oauthStatePurgeIntervalMinutes: 5,
       quotaFloorIntervalMinutes: 30,
       configDirReapIntervalMinutes: 360,
+      adminSessionPurgeIntervalMinutes: 30,
       sweepBatchSize: 1_000,
       jitterFraction: 0.2,
     })
@@ -84,6 +85,7 @@ describe("parseEnv", () => {
       OAUTH_STATE_PURGE_INTERVAL_MINUTES: "10",
       QUOTA_FLOOR_INTERVAL_MINUTES: "45",
       CONFIG_DIR_REAP_INTERVAL_MINUTES: "90",
+      ADMIN_SESSION_PURGE_INTERVAL_MINUTES: "20",
       SWEEP_BATCH_SIZE: "500",
       SCHEDULER_JITTER_FRACTION: "0.5",
       ADMIN_SESSION_IDLE_MINUTES: "60",
@@ -111,6 +113,7 @@ describe("parseEnv", () => {
       oauthStatePurgeIntervalMinutes: 10,
       quotaFloorIntervalMinutes: 45,
       configDirReapIntervalMinutes: 90,
+      adminSessionPurgeIntervalMinutes: 20,
       sweepBatchSize: 500,
       jitterFraction: 0.5,
     })

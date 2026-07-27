@@ -12,6 +12,8 @@ export { advisoryTaskLock } from "./lock"
 export type { Scheduler, SchedulerDeps } from "./runner"
 export { createScheduler } from "./runner"
 export type {
+  AdminSessionPurgeDeps,
+  AdminSessionStoreForPurge,
   ConfigDirReapDeps,
   JanitorDeps,
   OauthPurgeDeps,
@@ -26,6 +28,7 @@ export type {
   UsageRollupDeps,
 } from "./tasks"
 export {
+  createAdminSessionPurgeTask,
   createConfigDirReapTask,
   createJanitorTask,
   createOauthPurgeTask,

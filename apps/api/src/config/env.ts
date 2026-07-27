@@ -193,6 +193,11 @@ export interface SchedulerConfig {
   readonly quotaFloorIntervalMinutes: number
   /** Orphaned `CLAUDE_CONFIG_DIR` reap interval, in minutes. The window itself is `retention`. */
   readonly configDirReapIntervalMinutes: number
+  /**
+   * Admin console session purge interval, in minutes. Sweeps the in-memory `SessionStore`, not a
+   * table, so every replica runs it against its own heap — see `scheduler/tasks/admin-session-purge.ts`.
+   */
+  readonly adminSessionPurgeIntervalMinutes: number
   /** Max rows per bounded-delete sweep. */
   readonly sweepBatchSize: number
   /** Jitter applied to task intervals as a fraction of the interval. E.g., 0.2 means ±20%. */
@@ -355,6 +360,7 @@ const envSchema = z
     OAUTH_STATE_PURGE_INTERVAL_MINUTES: wholeNumber.optional(),
     QUOTA_FLOOR_INTERVAL_MINUTES: wholeNumber.optional(),
     CONFIG_DIR_REAP_INTERVAL_MINUTES: wholeNumber.optional(),
+    ADMIN_SESSION_PURGE_INTERVAL_MINUTES: wholeNumber.optional(),
     SWEEP_BATCH_SIZE: wholeNumber.optional(),
     SCHEDULER_JITTER_FRACTION: fraction.optional(),
     // Exclusive bounds: `0` would refresh in a loop and `1` would refresh at the instant of
@@ -446,6 +452,9 @@ const envSchema = z
         // Hours, not minutes: an orphan is a crash artifact, so a router that never crashes sweeps
         // an empty root forever and one that did leaves a directory nobody is racing to reclaim.
         configDirReapIntervalMinutes: raw.CONFIG_DIR_REAP_INTERVAL_MINUTES ?? 360,
+        // Minutes, not hours: an idle console session outlives its own expiry by up to one tick's
+        // worth of memory, and a login-heavy operator day should not let that pile up for hours.
+        adminSessionPurgeIntervalMinutes: raw.ADMIN_SESSION_PURGE_INTERVAL_MINUTES ?? 30,
         sweepBatchSize: raw.SWEEP_BATCH_SIZE ?? 1_000,
         jitterFraction: raw.SCHEDULER_JITTER_FRACTION ?? 0.2,
       },

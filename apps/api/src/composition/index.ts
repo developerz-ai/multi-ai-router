@@ -23,6 +23,7 @@ import {
 } from "../providers"
 import { createAccountConfigDirs } from "../providers/claude-sdk/config-dir"
 import { type Scheduler, schedulerFromEnv } from "../scheduler"
+import { createMemorySessionStore } from "../services/admin-auth"
 import { createRoutingCatalog, loadCatalog, type RoutingCatalogStore } from "../services/catalog"
 import { createPriceBook } from "../services/cost"
 import { createCredentialCipherFromEnv } from "../services/crypto/fromEnv"
@@ -220,6 +221,11 @@ export function createRuntime(deps: RuntimeDeps): Runtime {
     onRecord: (record) => metrics.observeUsage(record),
   })
 
+  // The admin console's session state. Built here, once, rather than left to the auth service's
+  // own default — the scheduler's session-purge task and the admin plane's auth service must share
+  // this exact instance, or the task sweeps a map nothing ever populates.
+  const adminSessions = createMemorySessionStore()
+
   // --- background work ------------------------------------------------------
   // Every periodic task behind one in-process runner (non-negotiable 13). `schedulerFromEnv` binds
   // the advisory lock to `deps.sql`, so nothing below is ever handed a connection.
@@ -234,6 +240,7 @@ export function createRuntime(deps: RuntimeDeps): Runtime {
     scheduledTasks,
     health,
     configDirs,
+    adminSessions,
     env,
     sql: deps.sql,
     logger,
@@ -316,6 +323,7 @@ export function createRuntime(deps: RuntimeDeps): Runtime {
     prices,
     sdkConcurrency,
     configDirs,
+    sessionStore: adminSessions,
     coherence: {
       refreshCatalog: () => catalog.refresh(),
       // A revoked key must stop authenticating *and* stop occupying a rate-limit window.

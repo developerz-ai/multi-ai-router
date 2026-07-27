@@ -1,0 +1,1 @@
+ALTER TYPE "public"."scheduled_task" ADD VALUE 'admin_session_purge';
