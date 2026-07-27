@@ -265,6 +265,19 @@ without a credential, so "did the new image actually roll out" has an answer tha
 it is on the settings endpoint because the console footer must report *the server's* build, not the
 one the loaded bundle was cut from.
 
+**A tag cannot publish an image that disagrees with it.** `bin/verify-version` checks the tag
+against that same `VERSION` constant and against every workspace manifest, and
+[`release.yml`](../../.github/workflows/release.yml) runs it before it builds a single layer. It
+reads the constant rather than the root `package.json` deliberately: the manifest is a copy, the
+constant is what the five surfaces above report, and the release workflow never runs the test suite
+— so the drift test that normally holds the two together does not gate a tag. Run it by hand before
+cutting one ([RELEASING.md](../RELEASING.md)).
+
+**The version says what the build calls itself; `ROUTER_REVISION` says which build it is.** Two
+images can both be `1.0.0` — a rebuilt `latest`, an rc respin, an image built from a dirty tree.
+The released image bakes the tagged commit's sha in as a build arg, and it reaches an operator
+through `router_build_info{revision}` and the boot log. A build nobody stamped reports `unknown`.
+
 **`/readyz` deliberately does not gate on healthy accounts**, though the obvious design says it
 should. A fresh install has zero accounts, so gating would mean it is never ready, so an
 orchestrator never routes traffic to the admin console *served by this same process* — the only
@@ -314,7 +327,7 @@ identity beyond its label.
 
 | Name | Type | Labels | Meaning |
 |---|---|---|---|
-| `router_build_info` | gauge | `version` | Always `1`; the label is the payload. First in the exposition. Join on it — `router_build_info * on() group_left(version) …` — to annotate a graph with the build that produced it, instead of putting a `version` label on every other series and multiplying their cardinality to say the same thing once |
+| `router_build_info` | gauge | `version`, `revision` | Always `1`; the labels are the payload. First in the exposition. Join on it — `router_build_info * on() group_left(version) …` — to annotate a graph with the build that produced it, instead of putting a `version` label on every other series and multiplying their cardinality to say the same thing once. `revision` is the commit sha the image was built from, because a version is not an identity: a rebuilt `latest`, an rc cut twice and a locally built image all report the same one. `unknown` when nothing stamped the build (`ROUTER_REVISION`) — never a fabricated sha |
 | `router_requests_total` | counter | `ingress_dialect`, `model`, `key_id`, `outcome` | Client-facing requests |
 | `router_request_duration_seconds` | histogram | `ingress_dialect`, `model`, `streamed` | End-to-end client request latency, upstream time included |
 | **`router_overhead_seconds`** | histogram | `ingress_dialect`, `path` (`passthrough`\|`translate`\|`agent_sdk`) | **Time spent in the router, excluding upstream.** First-class: shown on the dashboard next to upstream latency, because "the router is slow" and "the provider is slow" are different problems. A regression here is a bug, not a tuning opportunity ([06-protocol-translation.md](06-protocol-translation.md)) |

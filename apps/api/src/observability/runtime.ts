@@ -35,11 +35,14 @@ export interface RuntimeMetricsDeps {
   readonly sdkConcurrency?: Pick<SdkConcurrency, "inFlight" | "queued">
   readonly logger: Logger
   readonly now?: () => Date
+  /** Stamped onto `router_build_info{revision}`; `env.revision`, which defaults to `unknown`. */
+  readonly revision?: string
 }
 
 export function createRuntimeMetrics(deps: RuntimeMetricsDeps): RouterMetrics {
   const metrics = createMetrics({
     ...(deps.now === undefined ? {} : { now: deps.now }),
+    ...(deps.revision === undefined ? {} : { revision: deps.revision }),
     // A metric that hit its ceiling is under-reporting from then on, silently. It is the one
     // thing about this layer worth a log line: the numbers on a dashboard stopped being whole.
     onSeriesLimit: (metric) =>

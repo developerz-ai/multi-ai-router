@@ -65,6 +65,9 @@ async function main(): Promise<void> {
   logger.info("router listening", {
     component: "transport",
     version: VERSION,
+    // Which build, not just which version: two images can call themselves 1.0.0 and be different
+    // commits. `unknown` when nothing stamped it — see `UNKNOWN_REVISION`.
+    revision: env.revision,
     port: server.port,
     logLevel: env.logLevel,
     trustProxy: env.trustProxy,

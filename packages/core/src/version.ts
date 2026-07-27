@@ -12,3 +12,15 @@
  * version quotes the same build every time.
  */
 export const VERSION = "1.0.0"
+
+/**
+ * What `router_build_info{revision}` and the boot log report when nothing told the build which
+ * commit it is — a local `docker build`, a `bun run dev`, a test.
+ *
+ * The revision is deploy metadata, not a constant: it arrives as `ROUTER_REVISION` (baked into the
+ * released image from the tagged commit's sha). A version alone cannot separate two builds that
+ * call themselves the same thing — a rebuilt `:latest`, an rc cut twice, an image built from a
+ * dirty tree — so the sha is what an operator joins on when the version is not enough. `unknown`
+ * is the honest answer for a build nobody stamped; never a fake sha, never an empty label.
+ */
+export const UNKNOWN_REVISION = "unknown"

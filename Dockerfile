@@ -96,6 +96,16 @@ WORKDIR /app
 # user (uid/gid 1000); reusing it avoids inventing a second account.
 ENV NODE_ENV=production
 
+# Which commit this image is, reported by `router_build_info{revision}` and the
+# boot log. Baked in rather than derived at runtime: the runtime stage has no
+# .git (`.dockerignore` excludes it) and, more to the point, a container has no
+# business knowing where it was built from — the builder is the only party that
+# knows. Release builds pass `--build-arg ROUTER_REVISION=<sha>`; a local
+# `docker build` gets `unknown`, which is honest. It stays an ENV so an operator
+# can override it on a re-tagged image without a rebuild.
+ARG ROUTER_REVISION=unknown
+ENV ROUTER_REVISION=${ROUTER_REVISION}
+
 # ---- the `claude` CLI ----
 # The binary staged in the builder, landing on /usr/local/bin — already on PATH
 # for every user, so the CLI an operator runs (`docker exec … claude auth status`)

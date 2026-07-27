@@ -68,4 +68,4 @@ export {
   ROUTER_KEY_RANDOM_LENGTH,
   routerKeyDisplayPrefix,
 } from "./ids"
-export { VERSION } from "./version"
+export { UNKNOWN_REVISION, VERSION } from "./version"
