@@ -19,11 +19,11 @@ import { createRegistry, type Registry, type RegistryOptions } from "./registry"
 const LATENCY_BUCKETS = [0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30, 60, 120, 300, 600] as const
 
 /**
- * Router overhead, seconds. Dense below and just above the 5 ms p99 budget, because that is the
- * number this histogram exists to defend (CLAUDE.md non-negotiable 8) — buckets that start at
- * 50 ms would report every regression as "fine".
+ * Router overhead, seconds. Dense up to and through the 5 ms p99 budget, with a 20ms ceiling to
+ * catch severe regressions (4x budget) before hitting +Inf. This histogram exists to defend
+ * CLAUDE.md non-negotiable 8 — buckets need to report every regression as distinct, not as "ok".
  */
-const OVERHEAD_BUCKETS = [0.0005, 0.001, 0.002, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 1] as const
+const OVERHEAD_BUCKETS = [0.0005, 0.001, 0.002, 0.005, 0.01, 0.02, 0.05, 0.1] as const
 
 /** Background task run time, seconds. A sweep is bounded-batch, so minutes are the outlier. */
 const TASK_BUCKETS = [0.01, 0.05, 0.1, 0.5, 1, 5, 15, 60, 300] as const
