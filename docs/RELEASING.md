@@ -93,3 +93,48 @@ For a release candidate, tag `vX.Y.Z-rc.N` instead. The pipeline runs
 identically, publishes the versioned image tag, and creates a GitHub
 pre-release, but never touches `latest` — safe to cut without affecting
 anyone pulling the default tag.
+
+### Promoting an `-rc` to stable
+
+An `-rc` is not re-tagged into a release — it is superseded by a clean tag:
+
+1. If the code changed at all since the last `-rc` (even a one-line fix),
+   go through steps 1–4 above again against the new state — an `-rc` earns
+   its stable tag by being identical to what was validated, not by renaming.
+2. If nothing changed, tag the exact same commit the last `-rc` pointed at
+   with the plain `vX.Y.Z` (no hyphen). The build runs again from source —
+   there is no promote-in-place step in `release.yml` that copies a
+   pre-release's image forward — but the digest will match if the inputs
+   didn't change.
+3. `latest` and the GitHub Release's "Latest" flag only ever land on a
+   hyphen-free tag, so this is the step where the release actually becomes
+   the one `docker compose pull` picks up by default.
+4. Leave the superseded `-rc` tag(s) and their GitHub pre-releases in place
+   — don't delete them. They're the record of what was validated along the
+   way.
+
+## Rollback
+
+A bad tag is not un-published — `docker pull` will always find it again — but
+`latest` and any environment that tracks it move back:
+
+1. **Stop pointing `latest` at the bad version.** Never force-move an
+   already-pushed tag (`git tag -f`) to make `latest` point somewhere else —
+   a tag that's been pulled is immutable here, full stop. Instead, cut a new
+   tag (`vX.Y.(Z+1)`) from the last-known-good commit — or from a revert
+   commit if the bad change already merged further work on top — and push it
+   normally. `latest` moves forward onto that tag the same way it always
+   does. A rollback is a forward release, not a rewind.
+2. **Pin deployments to the explicit last-good version** while the fix lands:
+   `image: ghcr.io/developerz-ai/multi-ai-router:X.Y.(Z-1)` in
+   `docker-compose.yml`, not `:latest` — every operator following
+   [`docs/idea/09-deployment.md`](docs/idea/09-deployment.md) is already
+   pinning a version tag for exactly this reason.
+3. **Do not roll back a database migration to un-release a version.**
+   Migrations run at boot and are additive/idempotent by convention; a
+   version bump is not expected to require a schema rollback. If a migration
+   itself is the defect, that's a `fix:` PR with its own new migration, not a
+   reverted one — see the migrations convention in `CLAUDE.md`.
+4. **Note the incident in the new release's `CHANGELOG.md` entry** — what
+   broke, who's affected, what changed. A silent respin erodes the version
+   number's meaning as a promise about what's inside.

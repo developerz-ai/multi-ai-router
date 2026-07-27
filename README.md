@@ -289,6 +289,7 @@ Cache-aware by design: total prompt size is the sum of `input_tokens`, `cache_cr
 | [`docs/idea/07-security.md`](docs/idea/07-security.md) | Encryption at rest, redaction, rate limits, threat surface |
 | [`docs/idea/08-observability.md`](docs/idea/08-observability.md) | Usage records, cost estimation, metrics, logs, health |
 | [`docs/idea/09-deployment.md`](docs/idea/09-deployment.md) | Env reference, compose, image tags, retention knobs |
+| [`docs/idea/09-deployment.md#troubleshooting`](docs/idea/09-deployment.md#troubleshooting) | Symptom → cause → fix runbook: boot failures, stuck accounts, OAuth callbacks, `401`s, stale sweeps, and more |
 | [`docs/idea/10-roadmap.md`](docs/idea/10-roadmap.md) | Milestones M1–M8 and what's deferred |
 | [`docs/idea/11-anthropic-agent-sdk.md`](docs/idea/11-anthropic-agent-sdk.md) | Claude subscriptions via the Agent SDK: `query()`, per-account `CLAUDE_CONFIG_DIR`, quota events, costs |
 | [`docs/reusable-code.md`](docs/reusable-code.md) | Shared helpers, services, and components that already exist — and where a new shared thing belongs |
