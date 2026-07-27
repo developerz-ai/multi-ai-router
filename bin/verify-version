@@ -21,8 +21,8 @@
 # So this checks the source, and checks every manifest against it, and checks
 # the tag against the source. All three or nothing.
 #
-# Pure shell (jq + sed, both present on any runner) rather than `bun test`: it
-# runs before install, on a cold checkout, in about a second.
+# Pure shell (jq, sed and grep, all present on any runner) rather than
+# `bun test`: it runs before install, on a cold checkout, in about a second.
 set -eu
 
 cd "$(dirname "$0")/.."
@@ -41,24 +41,26 @@ version=$(sed -n 's/^export const VERSION = "\([^"]*\)".*/\1/p' "$source_file")
 # (1.3.0-rc.1), and never the placeholder a never-released workspace carries.
 [ "$version" != "0.0.0" ] || die "VERSION is still the unreleased placeholder 0.0.0"
 
-core=${version%%-*}
-case "$core" in
-  *[!0-9.]* | *..* | .* | *.) die "VERSION is not semver: $version" ;;
-esac
-case "$core" in
-  *.*.*.*) die "VERSION has more than three components: $version" ;;
-  *.*.*) ;;
-  *) die "VERSION is not X.Y.Z: $version" ;;
-esac
-
 # Build metadata (`+sha`) is deliberately NOT accepted even though semver allows
 # it: `+` is illegal in a container tag, so a version carrying one produces a
-# release whose image cannot be named. That belongs in `revision`, not here.
+# release whose image cannot be named. That belongs in `revision`, not here — and
+# it gets its own message rather than reading as a typo.
 case "$version" in
-  *-) die "VERSION has an empty pre-release: $version" ;;
-  # Pre-release: dot-separated alphanumerics and hyphens, per semver §9.
-  *-*) case "${version#*-}" in *[!0-9A-Za-z.-]*) die "VERSION is not semver: $version" ;; esac ;;
+  *+*) die "VERSION carries build metadata no container tag can hold: $version" ;;
 esac
+
+# Semver 2.0.0 §2 and §9 in full, minus the build metadata refused above: three
+# numeric core identifiers with no leading zeros, and — when there is a
+# pre-release — dot-separated identifiers that are each non-empty, alphanumeric
+# or hyphenated, and free of leading zeros when they are numeric.
+#
+# One regex rather than a ladder of shell globs, because the globs asked which
+# characters appeared and never how they were arranged: `01.0.0`, `1.0.0-01` and
+# `1.0.0-rc..1` all passed, and a gate that waves a malformed version through is
+# a gate that lets one become a tag and an image name.
+printf '%s\n' "$version" | grep -Eq \
+  '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-(0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)(\.(0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*))*)?$' ||
+  die "VERSION is not semver: $version"
 
 # Every manifest the package manager sees: the root, plus one per workspace
 # member. Discovered from the root `workspaces` globs, the same way the drift

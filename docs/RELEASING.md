@@ -21,7 +21,7 @@ admin settings endpoint, and the console footer. Every workspace
 
 Bump every one to the same semver, then prove it:
 
-```
+```sh
 bin/verify-version          # the tree agrees with itself
 bin/verify-version v1.0.0   # …and the tag you are about to push names it
 ```
@@ -46,7 +46,7 @@ Add the new version's link reference at the bottom of the file
 
 ## 3. Verify the gate is green
 
-```
+```sh
 bin/check   # lint + typecheck + full test suite, same order as CI
 bin/bench   # confirm the overhead budget hasn't regressed (non-blocking in CI, but check it here)
 ```
@@ -59,7 +59,7 @@ review for a release commit.
 
 Once the version-bump PR is merged and `main` is green:
 
-```
+```sh
 git checkout main
 git pull
 git tag -a v1.0.0 -m "v1.0.0"

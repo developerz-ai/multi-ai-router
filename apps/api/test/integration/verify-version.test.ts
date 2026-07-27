@@ -190,6 +190,20 @@ describe("bin/verify-version", () => {
     expect(ran.output).toContain("no workspace manifests")
   })
 
+  test("refuses a version that only looks like semver", async () => {
+    // The shell-glob check this replaced asked which characters appeared and never how they were
+    // arranged, so each of these reached the manifest comparison and, agreeing with itself,
+    // passed — and a malformed version that passes the gate becomes a tag and an image name.
+    for (const malformed of ["01.0.0", "1.0.0-01", "1.0.0-rc..1", "1.0.0-"]) {
+      const root = await fixture({ constant: malformed })
+
+      const ran = await verify(root, `v${malformed}`)
+
+      expect(ran.exitCode).toBe(1)
+      expect(ran.output).toContain("semver")
+    }
+  })
+
   test("refuses a version no container tag could carry", async () => {
     // `+` is legal semver and illegal in an image tag: the release would build and then be
     // unnameable. Better to fail on the tag push than halfway through the pipeline.

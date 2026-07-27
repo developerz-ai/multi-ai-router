@@ -1,8 +1,9 @@
 import { afterEach, describe, expect, test } from "bun:test"
 import { VERSION } from "@multi-ai-router/core"
 import { createDatabase, type DatabaseHandle } from "@multi-ai-router/db"
+import { createApp } from "../../src/app"
 import { createRuntime, type Runtime } from "../../src/composition"
-import { parseEnv } from "../../src/config/env"
+import { type Env, parseEnv } from "../../src/config/env"
 import { createLogger } from "../../src/logging/logger"
 import type { RateLimitSignal } from "../../src/providers"
 import type { VerifiedKey } from "../../src/services/dataplane"
@@ -39,15 +40,17 @@ afterEach(async () => {
   handle = null
 })
 
-function runtimeWith(overrides: Record<string, string>): Runtime {
+const logger = createLogger({ level: "error", write: () => undefined })
+
+/** The composition root under the environment an operator would have set. */
+function composed(overrides: Record<string, string>): { env: Env; runtime: Runtime } {
   const env = parseEnv({ ...base, ...overrides })
   handle = createDatabase({ url: env.databaseUrl })
-  return createRuntime({
-    env,
-    database: handle.db,
-    sql: handle.sql,
-    logger: createLogger({ level: "error", write: () => undefined }),
-  })
+  return { env, runtime: createRuntime({ env, database: handle.db, sql: handle.sql, logger }) }
+}
+
+function runtimeWith(overrides: Record<string, string>): Runtime {
+  return composed(overrides).runtime
 }
 
 describe("the breaker's environment reaches the breaker", () => {
@@ -301,22 +304,62 @@ describe("the build's identity reaches the exposition", () => {
    * shape as the three routing knobs above, which were read by nothing at all until a composition
    * test looked. The label is the only place an operator can see which commit is serving, so a
    * wire that quietly went missing would look exactly like a build nobody stamped.
+   *
+   * Read back through `GET /metrics` rather than off `runtime.metrics`, because the registry
+   * holding the right label proves nothing an operator can use: what they scrape is the route,
+   * mounted from the composed runtime the way `main.ts` mounts it, and the two are separate
+   * wires. Nothing else in this file boots the app, so the app is built here.
    */
-  test("ROUTER_REVISION reaches router_build_info", () => {
-    const { metrics } = runtimeWith({ ROUTER_REVISION: "0f1e2d3c" })
+  async function scrape(overrides: Record<string, string>): Promise<string> {
+    const { env, runtime } = composed(overrides)
+    const app = createApp({
+      logger,
+      probes: {
+        database: () => Promise.resolve(true),
+        accounts: () => Promise.resolve("ok"),
+        claudeCli: () => Promise.resolve("platform_package"),
+      },
+      metrics: { metrics: runtime.metrics, token: env.metricsToken },
+    })
 
-    expect(metrics.expose()).toContain(`revision="0f1e2d3c"`)
+    const response = await app.request("/metrics")
+
+    expect(response.status).toBe(200)
+    return response.text()
+  }
+
+  test("ROUTER_REVISION reaches router_build_info", async () => {
+    expect(await scrape({ ROUTER_REVISION: "0f1e2d3c" })).toContain(`revision="0f1e2d3c"`)
   })
 
-  test("an unstamped build says `unknown` rather than nothing at all", () => {
-    const { metrics } = runtimeWith({})
-
-    expect(metrics.expose()).toContain(`revision="unknown"`)
+  test("an unstamped build says `unknown` rather than nothing at all", async () => {
+    expect(await scrape({})).toContain(`revision="unknown"`)
   })
 
-  test("the version label is the constant every other surface reports", () => {
-    const { metrics } = runtimeWith({})
+  test("the version label is the constant every other surface reports", async () => {
+    expect(await scrape({})).toContain(`router_build_info{version="${VERSION}",revision=`)
+  })
 
-    expect(metrics.expose()).toContain(`router_build_info{version="${VERSION}",revision=`)
+  test("a scrape carries the token the operator set, and is refused without it", async () => {
+    // `METRICS_TOKEN` is the route's own credential — neither plane's. The label is worthless if
+    // the endpoint carrying it is unreachable, so the guard is asserted on the same wire.
+    const { env, runtime } = composed({ METRICS_TOKEN: "scrape-me", ROUTER_REVISION: "0f1e2d3c" })
+    const app = createApp({
+      logger,
+      probes: {
+        database: () => Promise.resolve(true),
+        accounts: () => Promise.resolve("ok"),
+        claudeCli: () => Promise.resolve("platform_package"),
+      },
+      metrics: { metrics: runtime.metrics, token: env.metricsToken },
+    })
+
+    expect((await app.request("/metrics")).status).toBe(401)
+
+    const authorized = await app.request("/metrics", {
+      headers: { authorization: "Bearer scrape-me" },
+    })
+    expect(authorized.status).toBe(200)
+    expect(await authorized.text()).toContain(`revision="0f1e2d3c"`)
   })
 })

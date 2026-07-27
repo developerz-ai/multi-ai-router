@@ -170,7 +170,7 @@ overhead p99 over `--budget-ms`, or added TTFT p95 over `--ttft-budget-ms`.
 
 Router keys are accepted in both dialects: `Authorization: Bearer mar_live_…` and `x-api-key: mar_live_…`. Anything that can set a base URL and a key works; the table below is what the console's own client snippets cover today — there's no automated integration test against each of these clients, so treat it as a documented, not verified, list.
 
-**The console says all of this too, filled in.** Mint or reveal a key and the dialog carries a **Point your tool at it** panel — tabs for Claude Code, Cursor, Codex CLI, Aider, the OpenAI SDKs and `curl`, each block already containing this deployment's base URL (`PUBLIC_URL`, else the console's own origin) and that key's real value. The table below is the same content for someone who never opened the console.
+**The console says all of this too, filled in.** Mint or reveal a key and the dialog carries a **Point your tool at it** panel — tabs for Claude Code, Cursor, Codex CLI, Aider, the OpenAI SDKs and `curl`, each block already containing this deployment's base URL (`PUBLIC_URL`, else the console's own origin) and that key's real value. [`docs/clients.md`](docs/clients.md) is the same content for someone who never opened the console.
 
 | Client | How you point it at the router |
 |---|---|
@@ -194,118 +194,15 @@ export OPENAI_BASE_URL="http://localhost:8080/v1"
 export OPENAI_API_KEY="mar_live_…"
 ```
 
-**Verify any of the above landed on the router, not the real upstream**, before wiring in a real
-workload — `GET /v1/models` only answers once at least one account has declared a catalog (see
-below), so a `200` with a list you recognize (or an empty `data: []` from an undeclared account) is
-the router; a DNS error or TLS handshake to a provider's real hostname means the base URL never took:
+**Verify it landed on the router, not the real upstream**, before wiring in a real workload — a `200` with a list you recognize (or an empty `data: []` from an account that hasn't declared a catalog) is the router; a DNS error or a TLS handshake to a provider's real hostname means the base URL never took:
 
 ```bash
 curl -s http://localhost:8080/v1/models -H "Authorization: Bearer mar_live_…" | jq .
 ```
 
-### Client cookbook
-
-Config-file snippets for the clients above that read one, plus the OpenAI SDKs, LangChain, and
-LiteLLM. Every block uses the same base URL and key — swap in your own.
-
-**Codex CLI** — `~/.codex/config.toml`:
-
-```toml
-[model_providers.multi_ai_router]
-name = "multi-ai-router"
-base_url = "http://localhost:8080/v1"
-env_key = "MULTI_AI_ROUTER_API_KEY"   # set this env var to your mar_live_… key
-
-[profiles.router]
-model_provider = "multi_ai_router"
-model = "gpt-5"   # whatever model name the account behind it serves
-```
-
-```bash
-export MULTI_AI_ROUTER_API_KEY="mar_live_…"
-codex --profile router
-curl -s http://localhost:8080/v1/models -H "Authorization: Bearer $MULTI_AI_ROUTER_API_KEY" | jq .
-```
-
-**Cline / Roo Code** — VS Code `settings.json` (or the extension's own settings UI, same fields):
-
-```json
-{
-  "cline.apiProvider": "openai",
-  "cline.openAiBaseUrl": "http://localhost:8080/v1",
-  "cline.openAiApiKey": "mar_live_…",
-  "cline.openAiModelId": "gpt-5"
-}
-```
-
-```bash
-curl -s http://localhost:8080/v1/models -H "Authorization: Bearer mar_live_…" | jq .
-```
-
-**OpenAI SDK — Python**:
-
-```python
-from openai import OpenAI
-
-client = OpenAI(base_url="http://localhost:8080/v1", api_key="mar_live_…")
-resp = client.chat.completions.create(
-    model="gpt-5",
-    messages=[{"role": "user", "content": "hello"}],
-)
-print(resp.choices[0].message.content)
-```
-
-**OpenAI SDK — Node**:
-
-```javascript
-import OpenAI from "openai";
-
-const client = new OpenAI({ baseURL: "http://localhost:8080/v1", apiKey: "mar_live_…" });
-const resp = await client.chat.completions.create({
-  model: "gpt-5",
-  messages: [{ role: "user", content: "hello" }],
-});
-console.log(resp.choices[0].message.content);
-```
-
-```bash
-# Same verification for both SDKs — the base URL is what changed, not the wire protocol
-curl -s http://localhost:8080/v1/models -H "Authorization: Bearer mar_live_…" | jq '.data[].id'
-```
-
-**LangChain (Python)**:
-
-```python
-from langchain_openai import ChatOpenAI
-
-llm = ChatOpenAI(base_url="http://localhost:8080/v1", api_key="mar_live_…", model="gpt-5")
-print(llm.invoke("hello").content)
-```
-
-Anthropic-dialect accounts work the same way through `langchain_anthropic.ChatAnthropic(base_url=...)`
-— pick the dialect that matches the account behind the key, or rely on cross-dialect translation
-(below) and use whichever `langchain_*` package your chain already imports.
-
-**LiteLLM** — proxy `config.yaml`:
-
-```yaml
-model_list:
-  - model_name: gpt-5
-    litellm_params:
-      model: openai/gpt-5        # LiteLLM's own routing prefix, unrelated to the router's dialect
-      api_base: http://localhost:8080/v1
-      api_key: mar_live_…
-```
-
-```bash
-litellm --config config.yaml &
-curl -s http://localhost:4000/v1/models | jq .   # LiteLLM's own port, proxying through to the router
-curl -s http://localhost:8080/v1/models -H "Authorization: Bearer mar_live_…" | jq .   # the router directly
-```
+**Config-file snippets for Codex CLI, Cline/Roo Code, the OpenAI SDKs, LangChain and LiteLLM live in [`docs/clients.md`](docs/clients.md)**, along with the per-client verification commands and the note on declaring an account's model catalog so a model picker isn't empty.
 
 Send whatever model name you normally send. It passes through unchanged unless the selected account defines an alias map. Details in [`docs/idea/06-protocol-translation.md`](docs/idea/06-protocol-translation.md).
-
-**If your tool fills a model picker from `GET /v1/models`, tell each account what it serves.** An account that declares nothing accepts any model name you send — that is the default and it is not broken — but the router will not enumerate a catalog it was never given, so the listing comes back empty. Press **Discover** on the account's row and the router reads the provider's own `/v1/models` and fills it in; the field is editable by hand too. Nothing refreshes it on a timer, so a provider retiring a model never silently moves your traffic.
 
 **Cross-dialect translation is live** — an Anthropic-dialect client can reach an OpenAI-dialect account and back, including streaming and tool calls. The one exception is a request shape that cannot be translated faithfully (a lossy edge documented in [`docs/idea/06-protocol-translation.md`](docs/idea/06-protocol-translation.md)): that fails with a `400` naming the reason rather than being converted approximately.
 
@@ -404,6 +301,7 @@ Cache-aware by design: total prompt size is the sum of `input_tokens`, `cache_cr
 | [`docs/idea/09-deployment.md#troubleshooting`](docs/idea/09-deployment.md#troubleshooting) | Symptom → cause → fix runbook: boot failures, stuck accounts, OAuth callbacks, `401`s, stale sweeps, and more |
 | [`docs/idea/10-roadmap.md`](docs/idea/10-roadmap.md) | Milestones M1–M8 and what's deferred |
 | [`docs/idea/11-anthropic-agent-sdk.md`](docs/idea/11-anthropic-agent-sdk.md) | Claude subscriptions via the Agent SDK: `query()`, per-account `CLAUDE_CONFIG_DIR`, quota events, costs |
+| [`docs/clients.md`](docs/clients.md) | Client cookbook: config-file snippets per tool, and the `curl` that proves the base URL took |
 | [`docs/reusable-code.md`](docs/reusable-code.md) | Shared helpers, services, and components that already exist — and where a new shared thing belongs |
 | [`SECURITY.md`](SECURITY.md) | Supported versions, private vulnerability reporting, response SLA, scope |
 

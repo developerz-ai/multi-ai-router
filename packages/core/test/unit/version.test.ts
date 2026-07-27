@@ -25,6 +25,15 @@ const manifest = z.object({
 
 const ROOT = fileURLToPath(new URL("../../../../", import.meta.url))
 
+/**
+ * Semver 2.0.0 §2 and §9, minus build metadata — the same rule `bin/verify-version` carries in
+ * shell, and the reason it is spelled out rather than written `\d+`: a loose pattern accepts
+ * `01.0.0`, `1.0.0-01` and `1.0.0-rc..1`, none of which is a version, all of which would then be
+ * free to become a tag and an image name.
+ */
+const SEMVER_A_TAG_CAN_CARRY =
+  /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(-(0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*)(\.(0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*))*)?$/
+
 function read(path: string): z.infer<typeof manifest> {
   return manifest.parse(JSON.parse(readFileSync(path, "utf8")))
 }
@@ -51,8 +60,23 @@ describe("the version constant", () => {
     // impersonating the release it precedes. Build metadata (`+sha`) is not: `+` is illegal in a
     // container tag, so a version carrying one would produce an image nobody can name. That fact
     // belongs in `router_build_info{revision}`.
-    expect(VERSION).toMatch(/^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$/)
+    expect(VERSION).toMatch(SEMVER_A_TAG_CAN_CARRY)
     expect(VERSION).not.toBe("0.0.0")
+  })
+
+  test("the shape it is held to rejects the strings that only look like versions", () => {
+    // The pattern is the assertion here, not `VERSION`: a pattern that quietly loosened would keep
+    // passing the test above forever, because the current version is well-formed either way.
+    for (const malformed of [
+      "01.0.0", // leading zero in a core identifier
+      "1.0.0-01", // …and in a numeric pre-release identifier
+      "1.0.0-rc..1", // empty pre-release identifier
+      "1.0.0-", // empty pre-release
+      "1.0", // not three components
+      "1.0.0+deadbee", // legal semver, illegal container tag
+    ]) {
+      expect(malformed).not.toMatch(SEMVER_A_TAG_CAN_CARRY)
+    }
   })
 
   test("covers the root manifest and every workspace member", () => {
