@@ -178,8 +178,11 @@ Router keys are accepted in both dialects: `Authorization: Bearer mar_live_…` 
 | **OpenCode** | Provider entry with the router's base URL + key, in either dialect |
 | **Codex CLI** | `model_provider` entry in `~/.codex/config.toml` with `base_url` + env key |
 | **Cursor** | Settings → Models → **Override OpenAI Base URL** = `https://router.example.com/v1` (the `/v1` suffix is required — Cursor appends `/chat/completions`), then paste the router key into the "OpenAI API Key" field. Agent and plan mode route through the override; **tab-autocomplete and inline-edit stay on Cursor's own backend** and never reach the router. |
-| **Cline / Roo Code** | "OpenAI Compatible" provider, base URL + key |
+| **Cline / Roo Code** | "OpenAI Compatible" provider, base URL + key — or the `settings.json` block below |
 | **Aider** | `OPENAI_API_BASE` / `ANTHROPIC_API_BASE` + key |
+| **OpenAI SDK (Python / Node)** | Construct the client with `base_url`/`baseURL` pointed at the router instead of `api.openai.com` |
+| **LangChain** | `ChatOpenAI`/`ChatAnthropic` constructor, same `base_url` override |
+| **LiteLLM** | `api_base` on the model entry in `config.yaml`, or `LITELLM_PROXY_API_BASE` if you're chaining proxies |
 
 ```bash
 # Claude Code, or anything reading the Anthropic env vars
@@ -189,6 +192,115 @@ export ANTHROPIC_AUTH_TOKEN="mar_live_…"
 # any OpenAI-compatible client — note the /v1 suffix
 export OPENAI_BASE_URL="http://localhost:8080/v1"
 export OPENAI_API_KEY="mar_live_…"
+```
+
+**Verify any of the above landed on the router, not the real upstream**, before wiring in a real
+workload — `GET /v1/models` only answers once at least one account has declared a catalog (see
+below), so a `200` with a list you recognize (or an empty `data: []` from an undeclared account) is
+the router; a DNS error or TLS handshake to a provider's real hostname means the base URL never took:
+
+```bash
+curl -s http://localhost:8080/v1/models -H "Authorization: Bearer mar_live_…" | jq .
+```
+
+### Client cookbook
+
+Config-file snippets for the clients above that read one, plus the OpenAI SDKs, LangChain, and
+LiteLLM. Every block uses the same base URL and key — swap in your own.
+
+**Codex CLI** — `~/.codex/config.toml`:
+
+```toml
+[model_providers.multi_ai_router]
+name = "multi-ai-router"
+base_url = "http://localhost:8080/v1"
+env_key = "MULTI_AI_ROUTER_API_KEY"   # set this env var to your mar_live_… key
+
+[profiles.router]
+model_provider = "multi_ai_router"
+model = "gpt-5"   # whatever model name the account behind it serves
+```
+
+```bash
+export MULTI_AI_ROUTER_API_KEY="mar_live_…"
+codex --profile router
+curl -s http://localhost:8080/v1/models -H "Authorization: Bearer $MULTI_AI_ROUTER_API_KEY" | jq .
+```
+
+**Cline / Roo Code** — VS Code `settings.json` (or the extension's own settings UI, same fields):
+
+```json
+{
+  "cline.apiProvider": "openai",
+  "cline.openAiBaseUrl": "http://localhost:8080/v1",
+  "cline.openAiApiKey": "mar_live_…",
+  "cline.openAiModelId": "gpt-5"
+}
+```
+
+```bash
+curl -s http://localhost:8080/v1/models -H "Authorization: Bearer mar_live_…" | jq .
+```
+
+**OpenAI SDK — Python**:
+
+```python
+from openai import OpenAI
+
+client = OpenAI(base_url="http://localhost:8080/v1", api_key="mar_live_…")
+resp = client.chat.completions.create(
+    model="gpt-5",
+    messages=[{"role": "user", "content": "hello"}],
+)
+print(resp.choices[0].message.content)
+```
+
+**OpenAI SDK — Node**:
+
+```javascript
+import OpenAI from "openai";
+
+const client = new OpenAI({ baseURL: "http://localhost:8080/v1", apiKey: "mar_live_…" });
+const resp = await client.chat.completions.create({
+  model: "gpt-5",
+  messages: [{ role: "user", content: "hello" }],
+});
+console.log(resp.choices[0].message.content);
+```
+
+```bash
+# Same verification for both SDKs — the base URL is what changed, not the wire protocol
+curl -s http://localhost:8080/v1/models -H "Authorization: Bearer mar_live_…" | jq '.data[].id'
+```
+
+**LangChain (Python)**:
+
+```python
+from langchain_openai import ChatOpenAI
+
+llm = ChatOpenAI(base_url="http://localhost:8080/v1", api_key="mar_live_…", model="gpt-5")
+print(llm.invoke("hello").content)
+```
+
+Anthropic-dialect accounts work the same way through `langchain_anthropic.ChatAnthropic(base_url=...)`
+— pick the dialect that matches the account behind the key, or rely on cross-dialect translation
+(below) and use whichever `langchain_*` package your chain already imports.
+
+**LiteLLM** — proxy `config.yaml`:
+
+```yaml
+model_list:
+  - model_name: gpt-5
+    litellm_params:
+      model: openai/gpt-5        # LiteLLM's own routing prefix, unrelated to the router's dialect
+      api_base: http://localhost:8080/v1
+      api_key: mar_live_…
+```
+
+```bash
+litellm --config config.yaml &
+curl -s http://localhost:4000/v1/models | jq .   # LiteLLM's own port, proxying through to the router
+curl -s http://localhost:8080/v1/models -H "Authorization: Bearer mar_live_…" | jq .   # the router directly
 ```
 
 Send whatever model name you normally send. It passes through unchanged unless the selected account defines an alias map. Details in [`docs/idea/06-protocol-translation.md`](docs/idea/06-protocol-translation.md).

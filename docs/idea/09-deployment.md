@@ -313,6 +313,52 @@ to a dump.
 > that contains the dump and the key side by side is a single-file compromise of your entire account
 > pool.
 
+**RPO: however old your last dump is.** There is no continuous replication or WAL shipping in the
+shipped stack — a `pg_dump` is a point-in-time snapshot, not a stream, so your recovery point
+objective equals your backup interval. Run the automated job below on a schedule that matches how
+much re-work (re-minted keys, re-added accounts, lost usage history) you can tolerate losing; hourly
+for an active multi-tenant deployment, daily is often fine for a single-operator one. `claude-config`
+has no backup story at all by default (see below) — its RPO is "whatever state the volume is in right
+now," which is why reconnect-over-restore is the documented recommendation for it.
+
+**Restore drill — practice this before you need it, on a throwaway stack:**
+
+```bash
+# 1. Stand up a scratch compose project so the drill never touches the real volume.
+docker compose -p router-restore-drill up -d postgres
+
+# 2. Restore the dump into it.
+docker compose -p router-restore-drill exec -T postgres \
+  pg_restore -U router -d router --clean --if-exists < router-2026-01-01.dump
+
+# 3. Point a throwaway router container at the restored database and boot it —
+#    migrations run automatically; a restore from an older schema version
+#    proves the forward-only migrations still apply cleanly.
+docker compose -p router-restore-drill up -d router
+
+# 4. Verify, then tear the whole drill down.
+docker compose -p router-restore-drill exec -T postgres \
+  psql -U router -d router -c "select count(*) from accounts;"
+docker compose -p router-restore-drill down -v
+```
+
+A dump that only gets opened during a real incident is an unverified backup. Run this drill on a
+schedule (monthly is reasonable) and after every schema-changing upgrade, not just once at setup.
+
+**Automated backup**, cron on the Docker host (outside the compose project, since the janitor
+inside the router does not back up its own database — see [Cleanups & retention](#cleanups--retention)
+above for what it *does* sweep):
+
+```bash
+# /etc/cron.d/router-backup — daily at 02:00, keep 14 days, host-side crontab
+0 2 * * * root cd /opt/router && docker compose exec -T postgres \
+  pg_dump -U router -d router --format=custom > /backups/router-$(date +\%F).dump \
+  && find /backups -name 'router-*.dump' -mtime +14 -delete
+```
+
+Ship `/backups` off the host (object storage, another machine) — a backup that lives on the same disk
+as the volume it protects survives everything except the one failure mode backups exist for.
+
 ### Claude config directories
 
 The `claude-config` volume is **secret material and is not covered by `ENCRYPTION_KEY`**. It holds
@@ -342,7 +388,7 @@ Multi-arch (`linux/amd64`, `linux/arm64`), published to `ghcr.io/developerz-ai/m
 
 | Trigger | Tags | Use it for |
 |---|---|---|
-| `v*` tag | `1.2.3`, `1.2`, `1`, `latest` | Everything. Pin at least the minor. |
+| `v*` tag | `1.2.3`, `1.2`, `latest` (pre-releases like `v1.3.0-rc.1` skip `latest`) | Everything. Pin at least the minor — there is no bare-major (`1`) tag; `release.yml`'s `merge` job only emits `{version}`, `{major}.{minor}`, and `latest`. |
 
 **A tagged release is the only thing that publishes an image.** Pushing to `main` runs the quality
 gate (lint, typecheck, test, build) and stops there — it deliberately publishes nothing.
