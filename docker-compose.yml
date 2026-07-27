@@ -63,6 +63,40 @@ services:
     # both together, never one alone.
     stop_grace_period: 30s
 
+    # Resource limits (09-deployment.md §Sizing). Budget 512 MB baseline + ~245 MB per
+    # concurrent claude subprocess. CLAUDE_SDK_MAX_CONCURRENCY default of 10 → ~2.45 GB;
+    # raise the limit if you tune concurrency higher, or add a replica. Memory pressure
+    # halts new subprocesses; never an unbounded spawn.
+    deploy:
+      resources:
+        limits:
+          memory: 2.5G
+
+    # File descriptor limit. The sizing table notes you run out of fds long before CPU.
+    # 2048 is the default; raise if you observe "too many open files" errors at high
+    # concurrency. Postgres itself needs some; broker for the dataplane.
+    ulimits:
+      nofile:
+        soft: 8192
+        hard: 8192
+
+    # Logging: json-file produces one structured log per request. Without size/count
+    # limits, this fills the host disk across restarts. docker logs shows the buffer;
+    # see 09-deployment.md §Troubleshooting if you need persistent logs (mount a volume,
+    # or forward to a log aggregator outside the container).
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "10"
+
+    # Security: run unprivileged (no new privilege escalation paths) and drop all
+    # Linux capabilities (the router has no kernel operations to perform).
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+
     # No `init: true` needed. The image's own ENTRYPOINT is tini (see the Dockerfile), so PID 1
     # already reaps the orphans a per-request `claude` subprocess can leave behind. Setting it
     # anyway is harmless — tini runs with `-s` and keeps reaping under a second init.
