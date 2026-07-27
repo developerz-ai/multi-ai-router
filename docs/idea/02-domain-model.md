@@ -315,6 +315,11 @@ a stale `startedAt` instead of failing silently. Contract and rationale:
 | `itemsProcessed` | number | Rows deleted or aggregated, per the task's own unit. What the one-line summary log reports |
 | `error` | string, optional | Message only, redacted. Never credential material |
 
+Append-only, and swept by the janitor on `RETENTION_TASK_RUNS_DAYS` (30 days) — six tasks on
+cadences from five minutes to six hours write about a thousand rows a day between them. **A run
+with no `finishedAt` is never swept, however old it is**: that row is the only evidence a task
+wedged or a process died holding the lock, and it is also the one row with no measurable end.
+
 ## Account state machine
 
 | Transition | Trigger | Effect on routing |

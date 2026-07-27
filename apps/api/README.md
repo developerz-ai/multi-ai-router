@@ -121,7 +121,9 @@ explicitly, before an upstream call, rather than degrading into a lossy approxim
 | `ACCOUNT_RECHECK_COOLDOWN_SECONDS` | no | `60` | Floor between manual **Re-check now** probes |
 | `RETENTION_SESSIONS_HOURS` | no | `24` | Idle session + fingerprint TTL |
 | `RETENTION_USAGE_DAYS` | no | `90` | Raw `UsageRecord` retention before rollup |
+| `RETENTION_USAGE_DAILY_DAYS` | no | `730` | Daily aggregate retention. Must be ≥ `RETENTION_USAGE_DAYS` |
 | `RETENTION_AUDIT_DAYS` | no | `365` | `AuditEvent` retention |
+| `RETENTION_TASK_RUNS_DAYS` | no | `30` | Finished `ScheduledTaskRun` retention. An unfinished run is never swept |
 | `RETENTION_REVOKED_KEYS_DAYS` | no | `30` | Revoked key survival before purge |
 | `RETENTION_OAUTH_STATE_MINUTES` | no | `10` | One-shot OAuth `state` + PKCE verifier TTL |
 | `JANITOR_INTERVAL_MINUTES` | no | `60` | Base sweep interval, jittered |

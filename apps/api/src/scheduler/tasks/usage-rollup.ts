@@ -35,6 +35,20 @@ import type { ScheduledTask } from "../types"
  * losing them to the janitor. A fresh install scans nothing, because there is
  * nothing there.
  *
+ * **The window is walked one day at a time, and a day is the batch.** That
+ * backfill is up to the whole retention floor wide, so issuing it as a single
+ * statement would put 90 days of the write-heaviest table in the schema inside
+ * one transaction — the unbounded sweep non-negotiable 13 exists to forbid.
+ * A day is the smallest window that can be *replaced* rather than accumulated,
+ * so it is the smallest honest batch: each day commits on its own, the shutdown
+ * signal is checked between days and never mid-statement, and a run that stops
+ * with days left reports `partial`.
+ *
+ * `partial` here means "there is more", not "resume exactly here". The next tick
+ * recomputes from the same cursor, because a replaced day is idempotent and a
+ * durable per-day cursor would buy only the rework — the days already banked are
+ * committed and correct either way.
+ *
  * **The floor is what keeps the rollup from eating its own history.** Recomputing
  * a day the janitor has begun to sweep would replace a complete total with
  * whatever fraction of the rows survived, so the scan may never reach back past
@@ -48,7 +62,7 @@ import type { ScheduledTask } from "../types"
  */
 
 export interface UsageRollupDeps {
-  readonly usageDaily: Pick<UsageDailyRepository, "rollup">
+  readonly usageDaily: Pick<UsageDailyRepository, "rollupDay">
   /** The cursor. `lastSuccess`, never `lastRun` — see the repository's note on why. */
   readonly scheduledTasks: Pick<ScheduledTaskRepository, "lastSuccess">
   /** `RETENTION_USAGE_DAYS`: how far back raw rows are guaranteed to be complete. */
@@ -66,29 +80,58 @@ export function createUsageRollupTask(deps: UsageRollupDeps): ScheduledTask {
 
     run: async ({ now, logger, signal }) => {
       const from = rollupFrom(now, await deps.scheduledTasks.lastSuccess("usage_rollup"), deps)
+      const days = rollupDays(from, now)
 
-      // One statement, so there is no batch to resume between — the only
-      // honest report for a shutdown that lands before it is issued is that
-      // there is still work to do.
-      if (signal.aborted) return { outcome: "partial", itemsProcessed: 0 }
-
-      // Can only happen if the clock went backwards past the floor. Nothing to
-      // scan is a success with nothing rolled, never an empty-range statement.
-      if (from.getTime() >= now.getTime()) {
-        return { outcome: "success", itemsProcessed: 0 }
+      let rolled = 0
+      let remaining = false
+      for (const day of days) {
+        // Between days, never mid-statement: a day that has begun is finished,
+        // and everything after it is the next tick's to redo.
+        if (signal.aborted) {
+          remaining = true
+          break
+        }
+        rolled += await deps.usageDaily.rollupDay(day)
       }
 
-      const rolled = await deps.usageDaily.rollup(from, now)
-
-      logger.info("usage rollup", {
-        outcome: "success",
-        rolled,
-        fromDay: from.toISOString(),
-        days: Math.round((startOfNextUtcDay(now).getTime() - from.getTime()) / DAY_MS),
-      })
-      return { outcome: "success", itemsProcessed: rolled }
+      const outcome = remaining ? "partial" : "success"
+      // Silent on a tick that found nothing to do at all — a fresh install would
+      // otherwise log an empty rollup every hour forever.
+      if (days.length > 0) {
+        logger.info("usage rollup", {
+          outcome,
+          rolled,
+          fromDay: from.toISOString(),
+          days: days.length,
+        })
+      }
+      return { outcome, itemsProcessed: rolled }
     },
   }
+}
+
+/**
+ * Every UTC day the `[from, now]` window touches, oldest first — the batches, in
+ * the order they are issued.
+ *
+ * Oldest first so a backfill banks the days closest to the janitor's cutoff
+ * before the ones it has the most time left to bank, and so an interrupted run
+ * leaves the *newest* days outstanding, which the next tick would recompute
+ * anyway.
+ *
+ * Empty when `from` is not before `now`, which can only happen if the clock went
+ * backwards past the floor: nothing to scan is a genuine no-op, never an
+ * empty-range statement.
+ */
+export function rollupDays(from: Date, now: Date): readonly Date[] {
+  if (from.getTime() >= now.getTime()) return []
+
+  const days: Date[] = []
+  const today = startOfUtcDay(now).getTime()
+  for (let day = startOfUtcDay(from).getTime(); day <= today; day += DAY_MS) {
+    days.push(new Date(day))
+  }
+  return days
 }
 
 /**

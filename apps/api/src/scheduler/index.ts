@@ -36,6 +36,7 @@ export {
   createScheduledTasks,
   createUsageRollupTask,
   planConfigDirReap,
+  rollupDays,
   rollupFrom,
   runSweeps,
   scheduledTaskIntervals,

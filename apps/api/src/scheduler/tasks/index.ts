@@ -41,7 +41,7 @@ export interface ScheduledTaskDeps {
   readonly auditEvents: Pick<AuditRepository, "deleteOlderThan">
   readonly apiKeys: Pick<ApiKeyRepository, "deleteRevokedOlderThan">
   readonly oauthStates: Pick<OauthStateRepository, "deleteExpiredBefore">
-  readonly usageDaily: Pick<UsageDailyRepository, "rollup">
+  readonly usageDaily: Pick<UsageDailyRepository, "rollupDay" | "deleteOlderThan">
   /**
    * The admin console's in-memory session store. Not a repository: it lives in this process's
    * heap, so this task never needs the advisory lock's "exactly one replica" guarantee — see the
@@ -52,8 +52,11 @@ export interface ScheduledTaskDeps {
     AccountRepository,
     "list" | "listIds" | "listQuotaWindows" | "upsertQuotaWindow"
   >
-  /** The rollup's catch-up cursor. The runner uses this repository too, for its own run rows. */
-  readonly scheduledTasks: Pick<ScheduledTaskRepository, "lastSuccess">
+  /**
+   * The rollup's catch-up cursor, and the janitor's sweep of the run log itself. The runner uses
+   * this repository too, for writing those rows in the first place.
+   */
+  readonly scheduledTasks: Pick<ScheduledTaskRepository, "lastSuccess" | "deleteOlderThan">
   /** The quota floor's freshness read. It never writes health — see that task's note. */
   readonly health: Pick<HealthStore, "stateOf">
   /**
@@ -100,7 +103,9 @@ export function createScheduledTasks(deps: ScheduledTaskDeps): readonly Schedule
     createJanitorTask({
       sessions: deps.sessions,
       usageRecords: deps.usageRecords,
+      usageDaily: deps.usageDaily,
       auditEvents: deps.auditEvents,
+      taskRuns: deps.scheduledTasks,
       apiKeys: deps.apiKeys,
       retention: env.retention,
       intervalMs: intervals.janitor_sweep,
@@ -154,4 +159,4 @@ export { createQuotaFloorTask } from "./quota-floor"
 export type { Sweep, SweepOptions, SweepReport } from "./sweep"
 export { runSweeps } from "./sweep"
 export type { UsageRollupDeps } from "./usage-rollup"
-export { createUsageRollupTask, rollupFrom } from "./usage-rollup"
+export { createUsageRollupTask, rollupDays, rollupFrom } from "./usage-rollup"

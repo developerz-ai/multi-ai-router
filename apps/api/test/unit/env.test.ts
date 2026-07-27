@@ -50,7 +50,9 @@ describe("parseEnv", () => {
     expect(env.retention).toEqual({
       sessionsHours: 24,
       usageDays: 90,
+      usageDailyDays: 730,
       auditDays: 365,
+      taskRunsDays: 30,
       revokedKeysDays: 30,
       oauthStateMinutes: 10,
       orphanConfigDirHours: 24,
@@ -88,7 +90,9 @@ describe("parseEnv", () => {
       ACCOUNT_TEST_NOW_COOLDOWN_SECONDS: "45",
       RETENTION_SESSIONS_HOURS: "6",
       RETENTION_USAGE_DAYS: "7",
+      RETENTION_USAGE_DAILY_DAYS: "400",
       RETENTION_AUDIT_DAYS: "30",
+      RETENTION_TASK_RUNS_DAYS: "14",
       RETENTION_REVOKED_KEYS_DAYS: "1",
       RETENTION_OAUTH_STATE_MINUTES: "5",
       RETENTION_ORPHAN_CONFIG_DIR_HOURS: "3",
@@ -132,6 +136,8 @@ describe("parseEnv", () => {
       closeTimeoutSeconds: 9,
     })
     expect(env.retention.sessionsHours).toBe(6)
+    expect(env.retention.usageDailyDays).toBe(400)
+    expect(env.retention.taskRunsDays).toBe(14)
     expect(env.retention.orphanConfigDirHours).toBe(3)
     expect(env.janitorIntervalMinutes).toBe(15)
     expect(env.scheduler).toEqual({
@@ -458,6 +464,42 @@ describe("parseEnv", () => {
    * It is deliberately derived from the schema rather than a list kept beside it: a knob added
    * without a thought about zero fails here, which is the only moment anyone is looking.
    */
+  /**
+   * The two-tier usage retention only works while the tiers are the right way round: raw rows
+   * expire first and the daily aggregates outlive them. Reversed, the janitor deletes rolled days
+   * whose raw rows are still there and the rollup writes them straight back on its next tick —
+   * two sweeps fighting forever, with no symptom an operator would connect to either variable.
+   */
+  describe("RETENTION_USAGE_DAILY_DAYS", () => {
+    test("refuses a window narrower than the raw one, and names both", () => {
+      const error = expectEnvError({
+        ...base,
+        RETENTION_USAGE_DAYS: "90",
+        RETENTION_USAGE_DAILY_DAYS: "30",
+      })
+
+      expect(error.variables).toEqual(["RETENTION_USAGE_DAILY_DAYS"])
+      expect(error.message).toContain("RETENTION_USAGE_DAYS (90)")
+    })
+
+    test("refuses a raw window widened past the default aggregate one", () => {
+      // The same conflict written the other way round: the operator moved only the raw window,
+      // and nothing warned them the aggregates it feeds are the shorter of the two.
+      expect(expectEnvError({ ...base, RETENTION_USAGE_DAYS: "800" }).variables).toEqual([
+        "RETENTION_USAGE_DAILY_DAYS",
+      ])
+    })
+
+    test("accepts the two windows equal — the aggregates need only not be shorter", () => {
+      const env = parseEnv({
+        ...base,
+        RETENTION_USAGE_DAYS: "60",
+        RETENTION_USAGE_DAILY_DAYS: "60",
+      })
+      expect(env.retention.usageDailyDays).toBe(60)
+    })
+  })
+
   describe("zero is a decision, never an accident", () => {
     /**
      * A field is numeric when *some* legal value parses to a number — the flags, enums and

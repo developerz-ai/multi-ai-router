@@ -122,7 +122,9 @@ and fails the build for any numeric knob that is neither refused nor explained
 | `TRUST_PROXY` | no | `false` | Honor `X-Forwarded-For` / `-Proto`. Set `true` **only** behind a proxy you control — otherwise clients can forge their own IP past the rate limiter. |
 | `RETENTION_SESSIONS_HOURS` | no | `24` | Idle sticky-session and fingerprint TTL. Retention is *keep for*, never *keep nothing*: at `0` the cutoff is the sweep's own clock, so the janitor empties the table on its next tick and every tick after. **Refused at boot.** |
 | `RETENTION_USAGE_DAYS` | no | `90` | Raw `UsageRecord` retention before roll-up to daily aggregates. **`0` refused at boot** — see `RETENTION_SESSIONS_HOURS`. |
+| `RETENTION_USAGE_DAILY_DAYS` | no | `730` | Daily aggregate (`usage_daily`) retention — the long half of usage retention, and one row per distinct (day, key, account, pool, model). **Must be ≥ `RETENTION_USAGE_DAYS`, refused at boot otherwise**: a shorter window has the janitor delete rolled days whose raw rows still exist, and the rollup writes them straight back on its next tick. **`0` refused at boot** — see `RETENTION_SESSIONS_HOURS`. |
 | `RETENTION_AUDIT_DAYS` | no | `365` | `AuditEvent` retention. **`0` refused at boot** — see `RETENTION_SESSIONS_HOURS`. |
+| `RETENTION_TASK_RUNS_DAYS` | no | `30` | How long a **finished** `ScheduledTaskRun` row is kept. Six tasks ticking as often as every five minutes write on the order of a thousand rows a day between them. A run with no `finishedAt` is never swept however old it is — that row is the only evidence a task wedged or a process died holding the lock. **`0` refused at boot** — see `RETENTION_SESSIONS_HOURS`. |
 | `RETENTION_REVOKED_KEYS_DAYS` | no | `30` | How long a revoked/expired `ApiKey` row survives before purge. **`0` refused at boot** — see `RETENTION_SESSIONS_HOURS`. |
 | `RETENTION_OAUTH_STATE_MINUTES` | no | `10` | TTL for one-shot OAuth `state` + PKCE verifiers. **`0` refused at boot**: it would expire a one-shot `state` at the instant it is minted, so no OAuth connect could ever complete. |
 | `RETENTION_ORPHAN_CONFIG_DIR_HOURS` | no | `24` | Grace before a `CLAUDE_CONFIG_DIR` under `CLAUDE_CONFIG_ROOT` that no account claims is removed. A directory is provisioned just *before* its account row is inserted, so this must comfortably exceed that gap — too short and the reaper deletes a login still being made. **`0` refused at boot**: a grace of nothing deletes the login being made right now. |
@@ -185,7 +187,9 @@ One background janitor service, one schedule, every window env-tunable.
 | Idle sessions (sticky map + fingerprints) | 24 h since last use | `RETENTION_SESSIONS_HOURS` | Unbounded growth otherwise; Claude-Code-style long-lived sessions must expire. |
 | In-memory LRU caches (session, fingerprint, health) | bounded size, coordinated eviction | — | A fingerprint entry must die with its session. |
 | Usage records | 90 days raw → rolled up to daily aggregates | `RETENTION_USAGE_DAYS` | Keeps the dashboard fast and the DB small. |
+| Daily usage aggregates | 730 days | `RETENTION_USAGE_DAILY_DAYS` | Outliving the raw rows is the point of the rollup; outliving them *forever* is not. Must never be shorter than the raw window — boot refuses it, because the janitor and the rollup would otherwise delete and re-insert the same days on every tick. |
 | Audit events | 365 days | `RETENTION_AUDIT_DAYS` | Compliance-ish; never contains secrets. |
+| Scheduled task runs | 30 days, finished runs only | `RETENTION_TASK_RUNS_DAYS` | ~1000 rows/day across six tasks. An **unfinished** run is never swept: it is the only evidence a task wedged or a process died mid-sweep. |
 | Expired/consumed OAuth state & PKCE verifiers | 10 min | `RETENTION_OAUTH_STATE_MINUTES` | One-shot values. |
 | Revoked / expired API keys | 30 days after revocation, then purged | `RETENTION_REVOKED_KEYS_DAYS` | Keeps historical usage joinable for a while. |
 | Rate-limit & circuit-breaker state | expires with its reset window | — | Derived state, not durable state. |
@@ -198,6 +202,7 @@ Janitor rules:
 | **Idempotent** | A sweep that runs twice deletes nothing extra. Safe to re-run, safe to crash mid-sweep. |
 | **Jittered interval** | Sweeps never land on a round number, so they do not pile onto request spikes or onto each other after a restart. |
 | **Bounded batch deletes** | Fixed-size batches in a loop, never one giant transaction — a 90-day purge in one statement bloats the WAL, holds row locks, and gives autovacuum nothing to reclaim until it commits. The data plane must not feel a sweep. |
+| **Bounded batch *writes*, too** | The rule is about statement size, not about deleting: the usage rollup's catch-up window is up to the whole retention floor wide, so it is issued **one statement per UTC day**, oldest first, with the shutdown signal checked between days. A day is the smallest window that can be *replaced* rather than accumulated, which is what keeps each batch idempotent. |
 | **One-line summary log per sweep** | What was deleted, per category, with counts and duration. One line, structured. |
 | **Windows are configuration** | Every retention number above is an env var, not a constant in code. |
 

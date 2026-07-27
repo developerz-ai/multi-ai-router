@@ -1,7 +1,8 @@
-import { and, desc, eq } from "drizzle-orm"
+import { and, desc, eq, isNotNull } from "drizzle-orm"
 import type { Database } from "../client"
 import type { scheduledTask, scheduledTaskOutcome } from "../schema/enums"
 import { type ScheduledTaskRunRow, scheduledTaskRuns } from "../schema/scheduled-task-runs"
+import { deleteOldestBatch } from "./bounded-delete"
 
 /**
  * The scheduler's last-run record. Repositories own SQL; this file is the only
@@ -55,6 +56,24 @@ export interface ScheduledTaskRepository {
    * the conservative bound covers both.
    */
   lastSuccess(task: ScheduledTaskName): Promise<ScheduledTaskRunRow | undefined>
+  /**
+   * Deletes one bounded batch of *finished* runs older than `cutoff`, oldest
+   * first, and returns how many went.
+   *
+   * Six tasks on cadences from five minutes to six hours write on the order of a
+   * thousand rows a day between them, forever, so this table grows without bound
+   * for exactly the reason the four the janitor already sweeps do — it was simply
+   * never on the list. `RETENTION_TASK_RUNS_DAYS` is how far back an operator can
+   * still ask "when did this last fail, and how often".
+   *
+   * **A run with no `finishedAt` is never swept, however old it is.** That row is
+   * the only evidence a task wedged or a process died holding the lock
+   * (docs/idea/09-deployment.md), and a sweep that deleted it would turn the one
+   * visible failure mode into silence. It also has no measurable end, which is
+   * the same rule the revoked-key sweep applies to a key with no revocation
+   * stamp.
+   */
+  deleteOlderThan(cutoff: Date, limit: number): Promise<number>
 }
 
 /** The four periodic tasks, from the `scheduled_task` Postgres enum. */
@@ -124,5 +143,16 @@ export function createScheduledTaskRepository(db: Database): ScheduledTaskReposi
         .limit(1)
       return rows[0]
     },
+
+    deleteOlderThan: (cutoff, limit) =>
+      deleteOldestBatch({
+        db,
+        table: scheduledTaskRuns,
+        id: scheduledTaskRuns.id,
+        agedBy: scheduledTaskRuns.startedAt,
+        cutoff,
+        limit,
+        narrowedBy: isNotNull(scheduledTaskRuns.finishedAt),
+      }),
   }
 }

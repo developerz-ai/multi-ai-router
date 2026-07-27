@@ -38,7 +38,16 @@ export type AdminCredential =
 export interface RetentionConfig {
   readonly sessionsHours: number
   readonly usageDays: number
+  /**
+   * How long the *daily aggregates* are kept — the long half of the two-tier retention the rollup
+   * exists for, and necessarily wider than {@link RetentionConfig.usageDays}: a window narrower
+   * than the raw one would have the janitor delete days the rollup re-inserts on its very next
+   * tick, forever. Boot refuses that rather than letting the two sweeps fight.
+   */
+  readonly usageDailyDays: number
   readonly auditDays: number
+  /** How long a *finished* scheduled-task run is kept. An unfinished one is never swept. */
+  readonly taskRunsDays: number
   readonly revokedKeysDays: number
   readonly oauthStateMinutes: number
   /**
@@ -435,7 +444,9 @@ export const ENV_FIELDS = {
   ACCOUNT_TEST_NOW_COOLDOWN_SECONDS: wholeNumber.optional(),
   RETENTION_SESSIONS_HOURS: atLeastOne.optional(),
   RETENTION_USAGE_DAYS: atLeastOne.optional(),
+  RETENTION_USAGE_DAILY_DAYS: atLeastOne.optional(),
   RETENTION_AUDIT_DAYS: atLeastOne.optional(),
+  RETENTION_TASK_RUNS_DAYS: atLeastOne.optional(),
   RETENTION_REVOKED_KEYS_DAYS: atLeastOne.optional(),
   RETENTION_OAUTH_STATE_MINUTES: atLeastOne.optional(),
   RETENTION_ORPHAN_CONFIG_DIR_HOURS: atLeastOne.optional(),
@@ -501,6 +512,25 @@ const envSchema = z.object(ENV_FIELDS).transform((raw, ctx): Env => {
     return z.NEVER
   }
 
+  const usageDays = raw.RETENTION_USAGE_DAYS ?? 90
+  // Two years of daily aggregates: long enough that "what did this cost me last year" is still
+  // answerable, and the first bound this table has ever had.
+  const usageDailyDays = raw.RETENTION_USAGE_DAILY_DAYS ?? 730
+  if (usageDailyDays < usageDays) {
+    // Not clamped, because either value could be the one the operator meant and guessing which
+    // silently discards history. The two sweeps would otherwise fight forever: the janitor deletes
+    // a rolled day, the rollup re-inserts it on the next tick because its raw rows are still there.
+    ctx.addIssue({
+      code: "custom",
+      path: ["RETENTION_USAGE_DAILY_DAYS"],
+      message:
+        `must be at least RETENTION_USAGE_DAYS (${usageDays}): daily aggregates are the long ` +
+        `half of usage retention, and a shorter window would delete days the rollup immediately ` +
+        `writes back`,
+    })
+    return z.NEVER
+  }
+
   return {
     port: raw.PORT ?? 8080,
     // Fifteen seconds: long enough for the ordinary streamed answer in flight at deploy time to
@@ -542,8 +572,12 @@ const envSchema = z.object(ENV_FIELDS).transform((raw, ctx): Env => {
     accountTestNowCooldownSeconds: raw.ACCOUNT_TEST_NOW_COOLDOWN_SECONDS ?? 120,
     retention: {
       sessionsHours: raw.RETENTION_SESSIONS_HOURS ?? 24,
-      usageDays: raw.RETENTION_USAGE_DAYS ?? 90,
+      usageDays,
+      usageDailyDays,
       auditDays: raw.RETENTION_AUDIT_DAYS ?? 365,
+      // A month of run rows: long enough to answer "has this task been failing all week", short
+      // enough that six tasks ticking as often as every five minutes stay a table nobody notices.
+      taskRunsDays: raw.RETENTION_TASK_RUNS_DAYS ?? 30,
       revokedKeysDays: raw.RETENTION_REVOKED_KEYS_DAYS ?? 30,
       oauthStateMinutes: raw.RETENTION_OAUTH_STATE_MINUTES ?? 10,
       // A day, because the failure it covers is a crash between provisioning a directory and

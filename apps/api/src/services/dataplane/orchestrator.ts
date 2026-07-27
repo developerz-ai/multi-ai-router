@@ -7,6 +7,7 @@ import { type FailoverOptions, type SelectionOptions, selectAccounts } from "../
 import { clientRequestIdFrom, correlationIdFrom, type UsageRecorder } from "../usage"
 import type { VerifiedKey } from "./auth/verifier"
 import { type BodyReadOptions, readRequestBody } from "./body/read"
+import { MODEL_NAME_MAX_BYTES } from "./body/scanner"
 import { DEFAULT_SESSION_HEADERS, resolveSessionKey } from "./body/session"
 import { runChain } from "./chain"
 import { resolveEgress } from "./egress/mode"
@@ -126,6 +127,7 @@ export interface Dispatcher {
 }
 
 const NO_MODEL = "The request body must name a model"
+const MODEL_TOO_LONG = `The request body's model name is longer than ${MODEL_NAME_MAX_BYTES} bytes`
 
 export function createDispatcher(deps: DispatcherDeps): Dispatcher {
   const clock = deps.clock ?? SYSTEM_CLOCK
@@ -149,6 +151,10 @@ export function createDispatcher(deps: DispatcherDeps): Dispatcher {
 
     const body = await readRequestBody(input.request, options.body)
     const model = body.fields.model
+    // Before the "name a model" refusal, because the body *did* name one and saying otherwise
+    // sends a caller looking for a missing field. Refused rather than truncated: a shortened
+    // model name is a substituted model (non-negotiable 4).
+    if (body.fields.modelTooLong) throw new TranslationError(MODEL_TOO_LONG)
     if (model === null) throw new TranslationError(NO_MODEL)
     progress.model = model
 

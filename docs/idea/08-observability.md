@@ -613,10 +613,15 @@ in a single-replica deployment the interval is nearly irrelevant. Detail:
 
 ## Retention
 
-Usage records, audit events, sessions, and OAuth state all expire on operator-tunable windows swept
-by the janitor; raw usage rows roll up to daily aggregates in Postgres before they expire, which is
-what keeps lifetime totals correct after the raw rows are gone. Defaults, batching rules, and the env
-knobs are in [09-deployment.md](09-deployment.md).
+Usage records, daily aggregates, audit events, sessions, scheduled-task runs, and OAuth state all
+expire on operator-tunable windows swept by the janitor; raw usage rows roll up to daily aggregates
+in Postgres before they expire, which is what keeps lifetime totals correct after the raw rows are
+gone. The aggregates outlive the raw rows by design and are swept on their own, much wider window —
+never a shorter one, which boot refuses, because the janitor and the rollup would then delete and
+re-insert the same days forever. The rollup itself writes **one statement per UTC day**, so a
+first-boot catch-up across the retention floor is a bounded, resumable walk rather than one
+transaction. Defaults, batching rules, and the env knobs are in
+[09-deployment.md](09-deployment.md).
 
 ## Read next
 
