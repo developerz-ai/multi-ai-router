@@ -1,7 +1,8 @@
 import { describe, expect, test } from "bun:test"
-import type { UsageGroupRow, UsageTotals } from "@multi-ai-router/db"
+import type { UsageGroupRow, UsageOutcomeCount, UsageTotals } from "@multi-ai-router/db"
 import {
   createUsageService,
+  EMPTY_FAILURES,
   resolveWindow,
   usageWindowQuery,
 } from "../../../src/services/usage-read"
@@ -33,10 +34,17 @@ function groupRow(id: string | null): UsageGroupRow {
   return { id, ...ZERO, latencyP50Ms: null, latencyP95Ms: null, routerOverheadP95Ms: null }
 }
 
-function service(rows: readonly UsageGroupRow[]) {
+interface Stub {
+  /** The per-outcome scan behind the failure split. Empty unless a case cares. */
+  readonly outcomes?: readonly UsageOutcomeCount[]
+  /** The stitched total the split is folded against, for the `partial` rule. */
+  readonly totals?: UsageTotals
+}
+
+function service(rows: readonly UsageGroupRow[], stub: Stub = {}) {
   return createUsageService({
     usage: {
-      totals: async () => ZERO,
+      totals: async () => stub.totals ?? ZERO,
       latency: async () => ({
         p50Ms: null,
         p95Ms: null,
@@ -46,6 +54,7 @@ function service(rows: readonly UsageGroupRow[]) {
       series: async () => [],
       seriesByDimension: async () => [],
       breakdown: async () => [...rows],
+      outcomes: async () => [...(stub.outcomes ?? [])],
     },
     // The live feed is its own read and its own test file; a summary that
     // touched it would be reading rows no chart on the screen plots.
@@ -141,5 +150,56 @@ describe("breakdown labelling", () => {
     expect(result.ok).toBe(true)
     if (!result.ok) return
     expect(result.value.byModel[0]).toMatchObject({ id: "glm-4.7", label: "glm-4.7", note: null })
+  })
+})
+
+/**
+ * The split rides on the summary rather than on a second endpoint: it answers a
+ * question about a number already on the screen, and a separate fetch for it
+ * would let the tile and its own breakdown be read from two different windows.
+ */
+describe("the failure split", () => {
+  test("rides on the summary, with quota and credits as two numbers", async () => {
+    const result = await service([], {
+      outcomes: [
+        { outcome: "success", attempts: 90 },
+        { outcome: "quota_exhausted", attempts: 7 },
+        { outcome: "credits_exhausted", attempts: 3 },
+      ],
+      totals: { ...ZERO, attempts: 100 },
+    }).summary({ window: "today" })
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.value.failures.errors).toBe(10)
+    expect(result.value.failures.byOutcome).toEqual([
+      { outcome: "quota_exhausted", attempts: 7 },
+      { outcome: "credits_exhausted", attempts: 3 },
+    ])
+    expect(result.value.failures.partial).toBe(false)
+  })
+
+  test("is folded against the summary's own total, so it can say when it is a floor", async () => {
+    // The rollup counted a thousand attempts; the raw rows behind the split hold a hundred.
+    const result = await service([], {
+      outcomes: [
+        { outcome: "success", attempts: 98 },
+        { outcome: "upstream_timeout", attempts: 2 },
+      ],
+      totals: { ...ZERO, attempts: 1000 },
+    }).summary({ window: "today" })
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.value.failures.attempts).toBe(100)
+    expect(result.value.failures.partial).toBe(true)
+  })
+
+  test("a quiet window is an empty split, not a missing field", async () => {
+    const result = await service([]).summary({ window: "today" })
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.value.failures).toEqual(EMPTY_FAILURES)
   })
 })

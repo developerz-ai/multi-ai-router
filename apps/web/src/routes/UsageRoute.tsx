@@ -19,6 +19,7 @@ import { useAllAccounts } from "../lib/queries/accounts"
 import { useUsageSummary } from "../lib/queries/usage"
 import styles from "./UsageRoute.module.scss"
 import { UsageBreakdown } from "./usage/UsageBreakdown"
+import { UsageFailures } from "./usage/UsageFailures"
 import { UsageQuota } from "./usage/UsageQuota"
 import { UsageRecent } from "./usage/UsageRecent"
 import { UsageTopN } from "./usage/UsageTopN"
@@ -113,9 +114,11 @@ export default function UsageRoute() {
                 note="Attributed to subscriptions — never added to metered"
                 value={formatCost(data.totals.costNotional)}
               />
+              {/* One number, and deliberately not the last word on it: the panel below takes it
+                  apart into the classes an operator can actually act on. */}
               <StatTile
                 label="Error rate"
-                note="Non-success share of attempts"
+                note="Non-success share of attempts — broken down below"
                 value={formatPercent(data.totals.errors, data.totals.attempts)}
               />
               <StatTile
@@ -129,6 +132,10 @@ export default function UsageRoute() {
                 value={`${data.totals.routerOverheadP95Ms} ms`}
               />
             </section>
+
+            {/* Directly under the tiles, above the charts: the error-rate tile is the figure an
+                operator stops on, and this is the sentence that follows it. */}
+            <UsageFailures failures={data.failures} windowLabel={usageWindowLabel(data.window)} />
 
             <section aria-label="Requests over time" class={styles.chart}>
               <p class={styles.chartLabel}>

@@ -1,8 +1,10 @@
+import type { UsageOutcome } from "@multi-ai-router/core"
+import type { FailureCount } from "../failure-classes"
 import { request } from "./client"
 
 // Usage reads, backed by `GET /api/admin/usage`.
 //
-// The wire shape differs from what this module hands the console in three ways,
+// The wire shape differs from what this module hands the console in four ways,
 // and each difference is deliberate rather than incidental:
 //
 //   - **Costs arrive as strings.** They are Postgres `numeric`, and serialising
@@ -15,9 +17,16 @@ import { request } from "./client"
 //     would make the breakdown stop adding up to the total printed above it.
 //   - **Percentiles are per group** on the wire and are folded into this
 //     module\'s flat `UsageTotals`, which is the shape the tables already render.
+//   - **`failures.byOutcome` is narrowed to the failures.** The server already
+//     drops `success` from that list, and saying so in the type here means no
+//     component has to carry a branch for a case the wire cannot contain.
 //
 // Every series is dense and aligned to `axis`: a quiet bucket is a zero, not a
 // missing point, so two rows in a table are comparable at a glance.
+//
+// Core is imported **as a type only**, for the reason `api/usage-recent.ts`
+// records at length: one runtime import of its Zod-backed vocabulary pulls Zod
+// into this route's chunk.
 
 export const USAGE_WINDOWS = ["today", "7d", "30d", "lifetime"] as const
 export type UsageWindow = (typeof USAGE_WINDOWS)[number]
@@ -84,6 +93,34 @@ export function usageDimensionLabel(dimension: UsageDimension): string {
   }
 }
 
+/**
+ * `totals.errors` taken apart by outcome — the answer to *which* failure that
+ * error rate was.
+ *
+ * One percentage cannot tell an operator whether to wait for a window, top up a
+ * balance, or widen a key's scope, and those are three different jobs with three
+ * different HTTP statuses behind them (CLAUDE.md non-negotiable 7).
+ */
+export interface UsageFailureSplit {
+  /**
+   * Attempts the server's per-outcome scan covered — the denominator for every
+   * share drawn from `byOutcome`, and deliberately not `totals.attempts`, which
+   * is stitched from the rollup and would make the parts stop summing to the
+   * whole.
+   */
+  readonly attempts: number
+  /** Non-success attempts among them. The sum of `byOutcome`. */
+  readonly errors: number
+  /**
+   * True when the window reaches past the raw rows these counts came from. The
+   * counts are then a floor, and the panel says so rather than drawing a share
+   * of a number missing its older half.
+   */
+  readonly partial: boolean
+  /** One entry per failure outcome that actually occurred, biggest first. */
+  readonly byOutcome: readonly FailureCount[]
+}
+
 export interface UsageSummary {
   readonly window: UsageWindow
   /** `hour` for today, `day` for everything else. */
@@ -91,6 +128,7 @@ export interface UsageSummary {
   readonly from: string
   readonly to: string
   readonly totals: UsageTotals
+  readonly failures: UsageFailureSplit
   /** Requests per bucket across the window. */
   readonly series: readonly number[]
   readonly byKey: readonly UsageBreakdownRow[]
@@ -195,6 +233,12 @@ interface WireSummary {
     readonly routerOverheadP95Ms: number | null
     readonly ttfbP95Ms: number | null
   }
+  readonly failures: {
+    readonly attempts: number
+    readonly errors: number
+    readonly partial: boolean
+    readonly byOutcome: readonly { readonly outcome: UsageOutcome; readonly attempts: number }[]
+  }
   readonly axis: readonly string[]
   readonly series: readonly { readonly at: string; readonly requests: number }[]
   readonly byKey: readonly WireRow[]
@@ -217,11 +261,32 @@ export async function fetchUsageSummary(window: UsageWindow): Promise<UsageSumma
       latencyP95Ms: wire.latency.p95Ms ?? 0,
       routerOverheadP95Ms: wire.latency.routerOverheadP95Ms ?? 0,
     },
+    failures: parseFailures(wire.failures),
     series: wire.series.map((point) => point.requests),
     byKey: wire.byKey.map(toRow),
     byAccount: wire.byAccount.map(toRow),
     byPool: wire.byPool.map(toRow),
     byModel: wire.byModel.map(toRow),
+  }
+}
+
+/**
+ * Narrows the split to what it can actually contain.
+ *
+ * `success` is dropped rather than trusted to be absent: the server filters it,
+ * and one filter at the edge is cheaper than a `success` branch in every
+ * consumer of the type. `errors` is recomputed from the rows that survived, so
+ * the headline figure and the rows under it can never disagree.
+ */
+function parseFailures(failures: WireSummary["failures"]): UsageFailureSplit {
+  const byOutcome = failures.byOutcome.filter(
+    (row): row is FailureCount => row.outcome !== "success",
+  )
+  return {
+    attempts: failures.attempts,
+    errors: byOutcome.reduce((sum, row) => sum + row.attempts, 0),
+    partial: failures.partial,
+    byOutcome,
   }
 }
 

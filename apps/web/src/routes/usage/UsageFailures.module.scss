@@ -1,0 +1,175 @@
+@use "../../styles/breakpoints" as bp;
+@use "../../styles/mixins" as *;
+
+.panel {
+  @include card;
+
+  display: grid;
+  gap: var(--space-3);
+  padding: var(--space-4);
+}
+
+.head {
+  display: grid;
+  gap: var(--space-1);
+}
+
+.title {
+  margin: 0;
+  font-size: var(--text-lg);
+  font-weight: var(--weight-semibold);
+  line-height: var(--line-tight);
+  letter-spacing: var(--tracking-tight);
+}
+
+.lead {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+  line-height: var(--line-snug);
+}
+
+.partial {
+  margin: 0;
+  padding: var(--space-2) var(--space-3);
+  background: var(--surface-sunken);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-1);
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+  line-height: var(--line-snug);
+}
+
+.rows {
+  display: grid;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+// Small first: identity and count on one line, the hint wrapping under both. The
+// hint moves beside them at the breakpoint rather than being squeezed at every
+// width — it is a sentence, and a sentence in a 6rem column is a column of words.
+.row {
+  display: grid;
+  gap: var(--space-1) var(--space-3);
+  align-items: baseline;
+  grid-template-areas:
+    "identity count"
+    "hint hint"
+    "outcomes outcomes";
+  grid-template-columns: minmax(0, 1fr) auto;
+  padding-block: var(--space-3);
+  border-block-end: 1px solid var(--border);
+
+  @include bp.respond-to("sidebar") {
+    grid-template-areas:
+      "identity hint count"
+      "outcomes outcomes outcomes";
+    grid-template-columns: minmax(9rem, 14rem) minmax(0, 1fr) auto;
+  }
+}
+
+.row:last-child {
+  padding-block-end: 0;
+  border-block-end: 0;
+}
+
+.identity {
+  grid-area: identity;
+  display: flex;
+  gap: var(--space-2);
+  align-items: baseline;
+  min-width: 0;
+}
+
+// Colour is a second signal, never the only one: the class name and its status
+// sit next to it in words.
+.dot {
+  flex: 0 0 auto;
+  width: 0.5rem;
+  height: 0.5rem;
+  background: var(--dot-color);
+  border-radius: var(--radius-full);
+}
+
+.stack {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.label {
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+  overflow-wrap: anywhere;
+}
+
+.status {
+  @include tabular-figures;
+
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+}
+
+.count {
+  grid-area: count;
+  display: grid;
+  gap: 2px;
+  justify-items: end;
+  text-align: end;
+}
+
+.attempts {
+  @include tabular-figures;
+
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+}
+
+.share {
+  @include tabular-figures;
+
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+  white-space: nowrap;
+}
+
+// The whole point of the panel: what to do about it, in one line, on every row.
+.hint {
+  grid-area: hint;
+  margin: 0;
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+  line-height: var(--line-snug);
+}
+
+.outcomes {
+  grid-area: outcomes;
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1) var(--space-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.outcome {
+  padding: 2px var(--space-2);
+  background: var(--surface-sunken);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-1);
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+}
+
+.outcomeName {
+  font-family: var(--font-mono);
+}
+
+.outcomeCount {
+  @include tabular-figures;
+
+  color: var(--text);
+  font-weight: var(--weight-medium);
+}

@@ -5,6 +5,8 @@
 
 export type { UsageAggregateSources } from "./aggregate"
 export { readBreakdown, readTotals } from "./aggregate"
+export type { UsageFailures } from "./failures"
+export { EMPTY_FAILURES, foldFailures } from "./failures"
 export { catalogLabels } from "./labels"
 export type {
   RecentAttemptView,

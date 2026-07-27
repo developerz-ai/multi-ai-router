@@ -102,7 +102,7 @@ Measures, identical in every dimension × window cell:
 | Input / output tokens | Input is the **three-field sum** above |
 | Cache read / cache creation tokens | Broken out, because they are what explains a small `inputTokens` |
 | Estimated cost | Metered and notional as **separate** totals (below) |
-| Error rate | Share of client requests that ended in a non-success outcome |
+| Error rate | Share of client requests that ended in a non-success outcome, **and the split behind it** ([below](#the-failure-split)) — one percentage is not an answer |
 | p50 / p95 latency | Router-observed, and `router_overhead_seconds` beside it so a slow upstream is not read as a slow router |
 
 ### Where the numbers appear
@@ -114,13 +114,40 @@ Measures, identical in every dimension × window cell:
 | `/accounts` table | Same live per-row totals, plus current quota utilization and reset ([below](#quota-resets-and-manual-re-check)) |
 | Account detail | Full measure set, plus per-window quota history |
 | `/pools` | Per-pool totals and the observed split across members — the answer to "is my policy doing what I set it to" |
-| `/usage` | The dedicated screen: any dimension, any window, charts and leaderboards, plus the live request feed below them |
+| `/usage` | The dedicated screen: any dimension, any window, charts and leaderboards, the [failure split](#the-failure-split) under the error-rate tile, and the live request feed below them |
+
+### The failure split
+
+**"3% of attempts failed" is not an answer.** The three failures this router produces have three
+different remedies and three different statuses, and an operator reading one percentage cannot tell
+which of them they are looking at: a spent window is `429` and comes back on a clock, a drained
+balance is `402` and comes back when a human tops it up, and a key whose scope intersected the pool
+to nothing is `403` and comes back when the operator widens it. Collapsing them is the mistake
+[non-negotiable 7](../../CLAUDE.md) exists to prevent, and it is worth as much on the screen as it
+is in the status codes.
+
+So `GET /api/admin/usage` carries a `failures` object beside `totals`, and the console renders it
+directly under the error-rate tile.
+
+| Property | Rule |
+|---|---|
+| Source | Raw `usage_records`, grouped by `outcome` over the window. **Never `usage_daily`**: the rollup's grain is a key *and* an account, so every attempt that never reached one — nothing in scope, a revoked key, a body over the ceiling — is absent there by construction, and those are exactly the failures worth finding |
+| Denominator | `failures.attempts` is that scan's own count, **not** `totals.attempts`. The totals are stitched from the rollup plus today's raw edges, and dividing a raw numerator by a stitched denominator is a share of nothing |
+| `partial` | True when the window reaches past the raw rows the counts came from. The counts are then a **floor**, and the console says so before the numbers rather than under them |
+| Grain | One entry per outcome that occurred, biggest first, ties broken by name so a page cannot reshuffle between refreshes. An outcome that did not occur is absent, not a zero |
+| Grouping | The API reports **outcomes**; the console groups them into remedy classes. `quota_exhausted` and `credits_exhausted` are never merged at either layer |
+| Zero state | The console shows rate limited / out of credits / out of scope **even at zero**. "Nothing was rate limited today" is an answer; an absent row is a question |
+
+Each class on the screen prints its status and one line an operator can act on, so the panel reads
+as *what to do next* rather than as a second table of counts. Colour is never the only carrier: a
+row's dot takes the same `usageOutcomeFault` token the feed's dots take, and the class, the status
+and the count are all spelt out beside it.
 
 ### The live request feed
 
-Every aggregate above answers *how much* and *how often*. None of them answers **which request
-failed** — and that is the question an operator arrives with after a tool errored. Before the feed
-existed the answer was only in the process logs, which an operator running a container cannot grep.
+The split says *which kind* of failure. It still does not say **which request** — and that is the
+question an operator arrives with after a tool errored. Before the feed existed the answer was only
+in the process logs, which an operator running a container cannot grep.
 
 `GET /api/admin/usage/recent` returns individual `UsageRecord` rows, newest first, and the `/usage`
 screen renders them as one row per **attempt**: a failover chain of three shows as three rows under
@@ -216,7 +243,7 @@ immediately if it is healthy.
 | `GET /metrics` | `METRICS_TOKEN` when set, none when not | Prometheus text exposition | `200`, `401` when the token is set and not presented |
 | `GET /v1/usage/quota` | router key or admin session | Per-Account, per-window utilization, `resetsAt`, `resetSource`, `status`, `lastCheckedAt` — the same shape the UI renders, so an operator can alert on it externally | `200` |
 | `POST /api/admin/accounts/:id/recheck` | admin session | Manual re-check. `POST /api/admin/accounts/recheck` re-checks every account. For Claude subscriptions it also carries the credential probe, reported as `auth` | `200` always — a cooldown refusal is `rechecked: false`, not `429` |
-| `GET /api/admin/usage` | admin session | Totals, series and breakdowns per key / account / pool / model over a window | `200` |
+| `GET /api/admin/usage` | admin session | Totals, series and breakdowns per key / account / pool / model over a window, plus the [failure split](#the-failure-split) behind the error rate | `200` |
 | `GET /api/admin/usage/recent` | admin session | The [live request feed](#the-live-request-feed): individual attempts, newest first. `limit` (1..200), `failed` or `outcome` (never both), `requestId` (matches either id) | `200`, `400` on a limit out of range or both filters at once |
 
 `/healthz` never touches the database.

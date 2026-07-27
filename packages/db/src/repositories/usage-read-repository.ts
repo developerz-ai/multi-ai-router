@@ -1,6 +1,6 @@
 import { and, countDistinct, gte, lt, sql } from "drizzle-orm"
 import type { Database } from "../client"
-import { USAGE_OUTCOME_SUCCESS } from "../schema/enums"
+import { USAGE_OUTCOME_SUCCESS, type UsageOutcome } from "../schema/enums"
 import { usageRecords } from "../schema/usage-records"
 
 /**
@@ -40,6 +40,20 @@ export interface UsageTotals {
   readonly costNotional: string
 }
 
+/**
+ * How many attempts ended in one outcome.
+ *
+ * Read from raw rows only, and never from `usage_daily`: the rollup's grain is a key *and* an
+ * account, so every attempt that never reached one — nothing in scope, a revoked key, a body over
+ * the ceiling — is skipped there by construction. Those are exactly the failures an operator comes
+ * to this surface to find, so widening the rollup would not fix it either. The consequence is
+ * stated where it is read (`usage-read/failures.ts`), not hidden here.
+ */
+export interface UsageOutcomeCount {
+  readonly outcome: UsageOutcome
+  readonly attempts: number
+}
+
 /** One row of a breakdown, keyed by whatever dimension was grouped on. */
 export interface UsageGroupRow extends UsageTotals {
   /** Null when the dimension does not apply — no pool in scope, or an account since deleted. */
@@ -56,6 +70,14 @@ export interface UsageReadRepository {
   totals(window: UsageWindow): Promise<UsageTotals>
   /** Totals grouped by one dimension, biggest first. */
   breakdown(window: UsageWindow, dimension: UsageDimension): Promise<UsageGroupRow[]>
+  /**
+   * Attempts per outcome over the window — the split behind "3% failed, of which what?".
+   *
+   * Unordered on purpose. It is at most one row per member of `UsageOutcome`, and which of them
+   * an operator should read first is a display decision that belongs in a pure function a test can
+   * reach without a database (`usage-read/failures.ts`), not in an `ORDER BY` nobody can assert.
+   */
+  outcomes(window: UsageWindow): Promise<UsageOutcomeCount[]>
   /** Request counts per time bucket, for the sparkline. Gaps are absent, not zero-filled. */
   series(window: UsageWindow, bucket: "hour" | "day"): Promise<UsageSeriesPoint[]>
   /**
@@ -160,6 +182,13 @@ export function createUsageReadRepository(db: Database): UsageReadRepository {
         .groupBy(column)
         .orderBy(sql`count(*) desc`)
     },
+
+    outcomes: async (window) =>
+      db
+        .select({ outcome: usageRecords.outcome, attempts: sql<number>`count(*)::int` })
+        .from(usageRecords)
+        .where(inWindow(window))
+        .groupBy(usageRecords.outcome),
 
     series: async (window, bucket) =>
       db

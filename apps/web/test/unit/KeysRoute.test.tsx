@@ -227,6 +227,7 @@ function usageSummary() {
     to: "2026-07-25T00:00:00.000Z",
     totals,
     latency: { p50Ms: null, p95Ms: null, routerOverheadP95Ms: null, ttfbP95Ms: null },
+    failures: { attempts: 0, errors: 0, partial: false, byOutcome: [] },
     axis: [],
     series: [],
     byKey: [],
