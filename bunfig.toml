@@ -1,2 +1,8 @@
 [test]
-preload = ["./apps/web/test/support/solid-plugin.ts"]
+# database-gate first: it decides whether this run is allowed to proceed at all,
+# and there is no reason to pay for happy-dom and the Solid/Babel pipeline before
+# finding out. See apps/api/test/support/database-gate.ts.
+preload = [
+  "./apps/api/test/support/database-gate-preload.ts",
+  "./apps/web/test/support/solid-plugin.ts",
+]

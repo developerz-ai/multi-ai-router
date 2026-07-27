@@ -12,6 +12,7 @@ helper — most of the small things you are about to write are already here.
 | Within one app only | that app's `src/lib/` | `apps/web/src/lib/cx.ts` |
 | Within one app, but a layer not a helper | that layer's directory | `apps/api/src/logging/`, `apps/api/src/middleware/` |
 | Across shell scripts | `bin/` | `bin/check` runs lint, typecheck, then `bin/test` — the CI job list, in order |
+| Shared *by* shell scripts, not run by hand | `bin/lib/` | `bin/lib/database-url` prints the `DATABASE_URL` a `bun test` run will see; `bin/check` and `bin/test` both ask it rather than each spelling Bun's dotenv rules out |
 
 Timing, from the org standard (`gold-standards-in-ai/docs/architecture/solid-srp.md` — "Reusable
 helpers, not copy-paste" and "No premature abstraction"):
@@ -304,6 +305,7 @@ in a test as on the wire.
 | `createMemoryStore()` → `MemoryStore` | `test/support/memory-store.ts` | Any test of an admin service or the admin API. Not a mock with expectations — the smallest honest implementation of the four repository interfaces, so the service under test runs its real code path and the test asserts on **rows**. It is what lets the admin unit *and* integration suites run with no `DATABASE_URL` |
 | `harness(options)` → app + upstream + usage + clock | `test/integration/harness.ts` | Any integration suite exercising the data plane. Real Hono, real middleware, real routing and relay; `fetch`, the key repository, and the clock injected. The clock is driven by hand, so "the upstream took 400 ms" is stated, never waited for |
 | `account()`, `catalog()`, `cipher()`, `apiKeyRow()`, `keyRepository()`, `mockUpstream()`, `slowStream()` | `test/unit/dataplane/fixtures.ts` | Building data-plane inputs anywhere — including `apps/api/bench/`, which reuses them rather than restating the shapes |
+| `databaseGateRefusal(env)`, `databaseRequired(env)` | `test/support/database-gate.ts` | Deciding whether a run that promised a database may proceed without one. Pure; the `bunfig.toml` preload beside it owns the exit. Reached from inside the run on purpose — `bun test` resolves `DATABASE_URL` from a different file set than the shell that launched it, so any check outside the process guards the wrong value |
 
 ### Overhead bench — `apps/api/bench/`
 

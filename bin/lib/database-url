@@ -1,0 +1,32 @@
+#!/bin/sh
+# Print the DATABASE_URL a `bun test` run in this checkout will actually see.
+#
+# Internal: called by bin/check and bin/test, not part of the bin/ interface —
+# though running it by hand is the fastest way to answer "why did the gate say I
+# have no database when .env plainly has one?".
+#
+# `bun test` and every other `bun` invocation do NOT resolve dotenv files the
+# same way. `bun test` always loads `.env.test` (whatever NODE_ENV says) and
+# never loads `.env.local`; a bare `bun -e` does the opposite. Reading the value
+# with a bare `bun -e` therefore answers a different question than the one being
+# asked, and gets it wrong in both directions:
+#
+#   .env has a URL, .env.test blanks it   -> bare `bun -e` says yes, the run skips
+#                                            every live-Postgres suite and still
+#                                            goes green. This is the bug.
+#   .env has a URL, .env.local blanks it  -> bare `bun -e` says no, and the gate
+#                                            refuses a run that had a database.
+#
+# Forcing NODE_ENV=test reproduces `bun test`'s file set exactly, so this and the
+# run agree. It stays an emulation of Bun's rules, which is why the authoritative
+# check lives inside the run itself (apps/api/test/support/database-gate.ts);
+# this one exists to fail fast, before `bun install` and the slow gates.
+#
+# Answers for the current directory, deliberately: dotenv files are resolved
+# relative to where the process starts, so a resolver that jumped to the repo
+# root would answer a different question than the caller asked. bin/check and
+# bin/test both cd to the root before calling it, which is where they run
+# `bun test`.
+set -eu
+
+exec env NODE_ENV=test bun -e 'process.stdout.write(process.env.DATABASE_URL ?? "")'

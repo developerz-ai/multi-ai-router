@@ -97,9 +97,13 @@ jobs:
       #
       # Load-bearing, not a convenience: the migration, advisory-lock, retention
       # and readiness-probe suites gate themselves on this variable and would
-      # otherwise skip into a green summary. `bin/test` fails the job outright
-      # when CI is set and this is missing, rather than reporting a pass it did
-      # not earn — deleting this line breaks the build instead of the coverage.
+      # otherwise skip into a green summary. The test run refuses to start when
+      # CI is set and this is missing (apps/api/test/support/database-gate.ts),
+      # rather than reporting a pass it did not earn — deleting this line breaks
+      # the build instead of the coverage.
+      #
+      # It is set here as job env, which outranks every dotenv file, so this is
+      # the value the run reads no matter what a checkout's .env* say.
       DATABASE_URL: postgres://router:router@localhost:5432/router
     steps:
       - uses: actions/checkout@v5
