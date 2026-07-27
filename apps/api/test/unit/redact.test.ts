@@ -240,6 +240,12 @@ describe("redact — self-identifying credential shapes", () => {
     })
   })
 
+  test("a Basic credential is scrubbed, not just a Bearer one", () => {
+    const safe = redact({ detail: "upstream sent Authorization: Basic YWRtaW46aHVudGVyMg==" })
+
+    expect(safe.detail).toBe(`upstream sent Authorization: ${REDACTED}`)
+  })
+
   test("a URL with no credentials in it is left alone", () => {
     const safe = redact({
       base: "https://api.example.test:8443/v1/messages",
@@ -275,6 +281,106 @@ describe("redact — self-identifying credential shapes", () => {
   })
 })
 
+describe("redact — the spellings of one field name", () => {
+  /**
+   * A field name is matched with `-` and `_` stripped, so a call site cannot open a hole by
+   * choosing the separator the list happens not to carry. `Env.databaseUrl` and
+   * `Env.encryptionKey` are camelCase, and one `log.info("boot", { env })` is all it takes.
+   */
+
+  test("an API key is scrubbed hyphenated, underscored, and camelCased", () => {
+    const safe = redact({
+      "api-key": "not-a-real-key",
+      api_key: "not-a-real-key",
+      apiKey: "not-a-real-key",
+      "x-api-key": "not-a-real-key",
+    })
+
+    expect(safe).toEqual({
+      "api-key": REDACTED,
+      api_key: REDACTED,
+      apiKey: REDACTED,
+      "x-api-key": REDACTED,
+    })
+  })
+
+  test("the encryption key is scrubbed under either spelling", () => {
+    const safe = redact({ encryption_key: "base64-master", encryptionKey: "base64-master" })
+
+    expect(safe).toEqual({ encryption_key: REDACTED, encryptionKey: REDACTED })
+  })
+
+  test("the whole validated env, logged as one object, leaves nothing redeemable", () => {
+    const safe = redact({
+      env: {
+        encryptionKey: "bWFzdGVyLWtleQ==",
+        databaseUrl: "postgres://router:s3cr3t-pw@db.internal:5432/router",
+        adminUsername: "ops",
+        adminCredential: "hunter2",
+        port: 8080,
+      },
+    })
+
+    const serialized = JSON.stringify(safe)
+    expect(serialized).not.toContain("bWFzdGVyLWtleQ==")
+    expect(serialized).not.toContain("s3cr3t-pw")
+    expect(serialized).not.toContain("hunter2")
+    expect(safe.env).toEqual({
+      encryptionKey: REDACTED,
+      databaseUrl: `postgres://${REDACTED}@db.internal:5432/router`,
+      adminUsername: "ops",
+      adminCredential: REDACTED,
+      port: 8080,
+    })
+  })
+
+  test("a key's id and name survive — they are how an operator reads the line", () => {
+    // `middleware/routerKeyAuth.ts` binds both onto every request logger. A bare `key` marker
+    // would scrub them and take the only handle on *which* key a line belongs to with it.
+    const safe = redact({ keyId: "key-1", keyName: "laptop", publicKey: "not-a-secret" })
+
+    expect(safe).toEqual({ keyId: "key-1", keyName: "laptop", publicKey: "not-a-secret" })
+  })
+})
+
+describe("redact — values that hide their payload from Object.entries", () => {
+  test("an Error keeps its name and message, scrubbed", () => {
+    const safe = redact({ cause: new TypeError("upstream rejected Bearer at_live_abcdef123456") })
+
+    expect(safe.cause).toBe(`TypeError: upstream rejected ${REDACTED}`)
+  })
+
+  test("a Map is scrubbed by key name and by value, not flattened to an empty object", () => {
+    const safe = redact({
+      headers: new Map([
+        ["authorization", "Bearer at_live_abcdef123456"],
+        ["x-request-id", "up-1"],
+        ["x-note", `retried with ghp_${"a".repeat(36)}`],
+      ]),
+    })
+
+    expect(safe.headers).toEqual({
+      authorization: REDACTED,
+      "x-request-id": "up-1",
+      "x-note": `retried with ${REDACTED}`,
+    })
+  })
+
+  test("a Set keeps its members, scrubbed", () => {
+    const safe = redact({ seen: new Set([`sk-${"e".repeat(32)}`, "acct-1"]) })
+
+    expect(safe.seen).toEqual([REDACTED, "acct-1"])
+  })
+
+  test("a value nested past the depth ceiling still fails closed", () => {
+    // The walk stops at four levels rather than trusting a shape it has not seen. Unwrapping
+    // errors and maps must not become a way around that.
+    const safe = redact({ a: { b: { c: { d: { authorization: "Bearer at_live_abcdef" } } } } })
+
+    expect(safe).toEqual({ a: { b: { c: { d: REDACTED } } } })
+  })
+})
+
 describe("createLogger", () => {
   test("emits one redacted JSON line per event, with the bound fields", () => {
     const lines: string[] = []
@@ -290,6 +396,23 @@ describe("createLogger", () => {
       requestId: "req-1",
       authorization: REDACTED,
     })
+  })
+
+  test("scrubs the message too, not just the fields beside it", () => {
+    // No call site interpolates a message today, which is exactly why this is easy to lose: the
+    // guarantee `docs/idea/08-observability.md` makes covers the whole line, and `msg` is half of
+    // it.
+    const lines: string[] = []
+    const log = createLogger({ level: "info", write: (line) => lines.push(line) })
+
+    log.info("upstream rejected Bearer at_live_abcdef123456", { accountId: "acct-1" })
+
+    const entry: unknown = JSON.parse(lines[0] ?? "{}")
+    expect(entry).toMatchObject({
+      msg: `upstream rejected ${REDACTED}`,
+      accountId: "acct-1",
+    })
+    expect(lines[0]).not.toContain("at_live_abcdef123456")
   })
 
   test("drops everything below the configured level", () => {

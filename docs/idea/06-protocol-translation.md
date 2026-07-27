@@ -451,6 +451,11 @@ Agent-SDK one. Router-origin errors (`NoHealthyAccountError`, `QuotaExhaustedErr
 shape with a stable HTTP status. `param` and `code` are best-effort and may be null. No error body
 ever carries credential material or the identity of the account that failed.
 
+That last rule is enforced, not trusted: every message leaves through one function, and it runs the
+same value-level scrub the log redactor uses ([08-observability.md](08-observability.md)). Both
+halves of a body need it — a relayed upstream message can quote a key back at us, and a
+router-authored one interpolates upstream text (`"every attempt failed: …"`).
+
 One router-origin status is worth naming because it is easy to get wrong: a body over
 `MAX_REQUEST_BODY_BYTES` renders as `413` — `request_too_large` in the Anthropic vocabulary,
 `invalid_request_error` with `code: "request_too_large"` in the OpenAI one — and never as `400`. Both

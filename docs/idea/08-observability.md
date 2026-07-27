@@ -529,8 +529,22 @@ JSON lines to stdout, one object per event. The container logs; shipping them is
 upstream credentials or tokens, OAuth `code` / `state` / `code_verifier`, cookies, `Authorization`,
 `x-api-key`, and `x-goog-api-key` headers. The redactor also catches a credential that arrives under
 an honest-looking field name — JWTs, `postgres://user:pass@host` connection strings, a key in a
-query string, and the vendor key shapes (`sk-`, `AIza`, `ghp_`, `xai-`, `gsk_`). Redaction is
-default-on and is a tested unit — see [07-security.md](07-security.md).
+query string, `Bearer` and `Basic` header values, and the vendor key shapes (`sk-`, `AIza`, `ghp_`,
+`xai-`, `gsk_`). Redaction is default-on and is a tested unit — see
+[07-security.md](07-security.md).
+
+Three properties of the redactor are load-bearing enough to state:
+
+- **The whole line is covered, `msg` included.** Every call site passes a constant message today;
+  the scrub is there so the day one interpolates an upstream's reply, the guarantee above still
+  holds.
+- **Field names match with `-` and `_` stripped.** `api-key`, `api_key`, and `apiKey` are one
+  field, and so are `encryption_key` and `encryptionKey` — a call site cannot open a hole by
+  picking the separator the list happens not to carry. There is deliberately no bare `key` marker:
+  `keyId` and `keyName` are on every request-scoped line and are how an operator reads it.
+- **It fails closed.** The walk stops at four levels of nesting and redacts whatever is below.
+  `Error`, `Map`, and `Set` values keep their payload somewhere `Object.entries` cannot see, so
+  each is unwrapped and scrubbed rather than serialized as an empty object.
 
 ## Audit events
 

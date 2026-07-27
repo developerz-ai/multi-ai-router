@@ -1,10 +1,14 @@
 import type { LogLevel } from "../config/env"
-import { redact } from "./redact"
+import { redact, redactValue } from "./redact"
 
 /**
  * Structured JSON logs, one object per line on stdout. No `console.log` anywhere in the router.
  * Every field passed in is redacted before it is serialized — see `redact.ts`.
  * Field contract: docs/idea/08-observability.md#structured-logging.
+ *
+ * `msg` goes through the value-level scrub too. Every call site today passes a constant, which is
+ * exactly why this is easy to forget: the day one of them interpolates an upstream's reply, the
+ * redactor would otherwise be guarding half a line.
  */
 
 export type LogFields = Record<string, unknown>
@@ -37,7 +41,7 @@ export function createLogger(options: LoggerOptions): Logger {
     const payload = {
       ts: now().toISOString(),
       level,
-      msg,
+      msg: redactValue(msg),
       ...redact({ ...bound, ...fields }),
     }
     write(JSON.stringify(payload))
