@@ -11,17 +11,19 @@
  *    preset instead (the same one `vite-plugin-solid` runs at build time),
  *    so every `.tsx` file under this workspace is intercepted in `onLoad`
  *    and run through `babel-preset-solid` before Bun ever parses it.
- * 2. Bun resolves bare `solid-js`/`solid-js/web` imports to their *server*
- *    build under the "node" condition (no reactivity, no DOM writes —
- *    `Portal` alone renders as an empty string there, which would make a
- *    Modal-based dialog test pass on nothing rendered at all). `bun test`'s
- *    runtime loader doesn't run plugin `onResolve` for specifiers it can
- *    already resolve on its own (only `Bun.build` does), so instead of
- *    redirecting the *path* this hooks `onLoad` for the already-resolved
- *    `.../solid-js/dist/server.js` and `.../solid-js/web/dist/server.js`
- *    files and substitutes the sibling client ("dev") build's source —
- *    same resolved path, different contents, so real reactivity and real
- *    DOM mutation run.
+ * 2. Bun resolves bare `solid-js`/`solid-js/web`/`solid-js/store` imports to
+ *    their *server* build under the "node" condition (no reactivity, no DOM
+ *    writes — `Portal` alone renders as an empty string there, which would
+ *    make a Modal-based dialog test pass on nothing rendered at all).
+ *    `bun test`'s runtime loader doesn't run plugin `onResolve` for
+ *    specifiers it can already resolve on its own (only `Bun.build` does),
+ *    so instead of redirecting the *path* this hooks `onLoad` for the
+ *    already-resolved `.../dist/server.js` of all three and substitutes the
+ *    sibling client ("dev") build's source — same resolved path, different
+ *    contents, so real reactivity and real DOM mutation run. `store` belongs
+ *    in that list because `@tanstack/solid-query` returns its query and
+ *    mutation results as a store: served the server build, a mounted route
+ *    stays on its loading skeleton forever no matter what the fetch returned.
  * 3. The client build needs a DOM. `@happy-dom/global-registrator` installs
  *    `document`/`window`/etc. as globals once per test file, registered
  *    before any component module is imported.
@@ -157,9 +159,9 @@ plugin({
   name: "solid-tsx-dom",
   setup(build) {
     // Substitutes the client build's source in place of the server build
-    // that Bun's runtime resolver hands back for a bare `solid-js` /
-    // `solid-js/web` import — see point 2 above.
-    build.onLoad({ filter: /solid-js(\/web)?\/dist\/server\.js$/ }, (args) => ({
+    // that Bun's runtime resolver hands back for a bare `solid-js`,
+    // `solid-js/web` or `solid-js/store` import — see point 2 above.
+    build.onLoad({ filter: /solid-js\/(web\/|store\/)?dist\/server\.js$/ }, (args) => ({
       contents: readFileSync(join(dirname(args.path), "dev.js"), "utf8"),
       loader: "js",
     }))

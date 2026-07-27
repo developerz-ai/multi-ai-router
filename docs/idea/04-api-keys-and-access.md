@@ -226,6 +226,20 @@ OpenAI-dialect client appends `/chat/completions` to what it is given and so nee
 there, while an Anthropic-dialect one appends `/v1/messages` itself and must be handed the bare
 origin. One helper owns that (`apps/web/src/lib/client-snippets.ts`), so the two cannot disagree.
 
+#### …and the console forgets it when that panel closes
+
+Retrievable is not the same as retained. Closing the dialog drops the plaintext from the console
+entirely: the signal feeding the dialog is cleared, and the mutation that produced the value — the
+mint or the reveal — is reset so TanStack's *mutation* cache stops holding its result too. That
+second half is not automatic. A mutation result lives in that cache for `gcTime` (five minutes by
+default) after its last observer detaches, and a mounted screen never detaches on its own, so the
+two reveal-carrying mutations declare `gcTime: 0` **and** the screen resets them on close. Either
+one alone leaves a live credential readable in the tab.
+
+This costs nothing, because the value was never the scarce thing: reading it again is one more
+audited `POST`, which is the intended price and the reason there is no shown-once flow to begin
+with.
+
 ### What a key cannot do
 
 | Cannot | Because |

@@ -40,9 +40,11 @@ interface ShownKey {
  * decrypts and returns the value; there is no shown-once flow anywhere here and
  * no warning that implies one.
  *
- * The revealed value is held in a component signal and never written to the
- * query cache — caching it would leave a live credential in memory for the rest
- * of the tab's life for no benefit, since re-reading it is one click.
+ * The value a mint or a reveal returns lives exactly as long as the dialog
+ * showing it: closing that dialog drops it from the signal feeding the dialog
+ * *and* from the mutation result TanStack parks in its cache. Leaving it there
+ * would keep a live credential in memory for the rest of the tab's life for no
+ * benefit, since re-reading it is one audited click.
  *
  * Usage rides along as its own query rather than being folded into the keys
  * list: the two have different shapes of staleness — a key row changes when an
@@ -85,6 +87,20 @@ export default function KeysRoute() {
   const closeForm = () => {
     setFormOpen(false)
     setEditing(null)
+  }
+
+  /**
+   * Dismissing the value dialog drops the plaintext from both places it landed:
+   * this screen's signal, and the mutation result TanStack holds in its cache
+   * until the mutation is reset. Which mutation is holding it depends on how the
+   * value got here — a mint or a later reveal — and resetting the one that did
+   * costs nothing, because neither result is read anywhere else once the dialog
+   * is gone.
+   */
+  const dismissValue = (minted: boolean) => {
+    setShown(null)
+    if (minted) create.reset()
+    else reveal.reset()
   }
 
   /**
@@ -180,7 +196,7 @@ export default function KeysRoute() {
             baseUrl={baseUrl()}
             minted={key().minted}
             name={key().name}
-            onClose={() => setShown(null)}
+            onClose={() => dismissValue(key().minted)}
             open
             value={key().value}
           />
