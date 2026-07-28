@@ -107,7 +107,11 @@ export const QUOTA_WINDOW_SPAN_MS: Readonly<Partial<Record<QuotaWindowKind, numb
  * as configured, and it never feeds routing. Nothing in `services/routing/` reads this — a guess
  * about someone else's accounting must not decide which account serves a request.
  */
-export const WindowTokenLimits = z.record(QuotaWindowKind, z.number().int().positive())
+// `partialRecord`, not `record`: Zod treats a record keyed by an enum as EXHAUSTIVE, so
+// `z.record(QuotaWindowKind, …)` demands a ceiling for all five window kinds and rejects
+// `{ five_hour: … }` with "seven_day_opus: expected number, received undefined". An operator sets
+// ceilings for the windows they care about, and most accounts have only one or two.
+export const WindowTokenLimits = z.partialRecord(QuotaWindowKind, z.number().int().positive())
 export type WindowTokenLimits = z.infer<typeof WindowTokenLimits>
 
 /**
