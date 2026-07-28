@@ -39,6 +39,7 @@ import {
   createAdminAuthService,
   type SessionStore,
 } from "../services/admin-auth"
+import { createOIDCFlow } from "../services/admin-auth/oidc/flow"
 import type { RoutingCatalogStore } from "../services/catalog"
 import type { PriceBook } from "../services/cost"
 import type { CredentialCipher } from "../services/crypto/cipher"
@@ -219,6 +220,27 @@ export function createAdminPlane(deps: AdminPlaneDeps): AdminPlane {
           adminLoginAttemptWindowMinutes: env.adminAuth.loginAttemptWindowMinutes,
           adminLoginLockoutMinutes: env.adminAuth.loginLockoutMinutes,
           adminSessionSlideFraction: env.adminAuth.sessionSlideFraction,
+        }),
+        oidc: createOIDCFlow({
+          config: {
+            issuerUrl: env.adminOidc.issuerUrl,
+            clientId: env.adminOidc.clientId,
+            clientSecret: env.adminOidc.clientSecret,
+            redirectUri: env.adminOidc.redirectUri,
+            adminEmail: env.adminOidc.adminEmail,
+            adminSubject: env.adminOidc.adminSubject,
+            scopes: env.adminOidc.scopes,
+            clockSkewSeconds: env.adminOidc.clockSkewSeconds,
+          },
+          stateStore: {
+            // The OAuth state repository is reused — see `packages/db` for the
+            // shared schema. The cipher is the same one every other admin
+            // secret rides on.
+            states: deps.oauthStates,
+            cipher: deps.cipher,
+            stateMinutes: env.retention.oauthStateMinutes,
+            now,
+          },
         }),
         audit,
       }),

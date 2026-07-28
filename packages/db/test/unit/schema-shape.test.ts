@@ -154,6 +154,7 @@ const TABLE_COLUMNS: ReadonlyArray<{ table: Table; columns: readonly string[] }>
       "id",
       "state",
       "codeVerifier",
+      "nonce",
       "provider",
       "accountId",
       "redirectUri",

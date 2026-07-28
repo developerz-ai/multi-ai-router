@@ -34,12 +34,34 @@ else
   # example key would be the same on every developer's box, and it is the one
   # secret that protects every stored credential.
   key="$(openssl rand -base64 32)"
-  sed -e "s|^ADMIN_USERNAME=.*|ADMIN_USERNAME=admin|" \
-      -e "s|^ADMIN_PASSWORD=.*|ADMIN_PASSWORD=dev-only-change-me|" \
+  # The OIDC values are placeholders, not anything that authenticates anything.
+  # The four required fields are stubbed so a fresh checkout can boot a read-
+  # only stack and the failure mode, if OIDC is reached, is the doc-pointing
+  # error from the boot validator — not a half-set variable that says
+  # "ADMIN_OIDC_ISSUER_URL is required" alone.
+  sed -e "s|^ADMIN_OIDC_ISSUER_URL=.*|ADMIN_OIDC_ISSUER_URL=https://sso.example.invalid|" \
+      -e "s|^ADMIN_OIDC_CLIENT_ID=.*|ADMIN_OIDC_CLIENT_ID=multi-ai-router-dev|" \
+      -e "s|^ADMIN_OIDC_CLIENT_SECRET=.*|ADMIN_OIDC_CLIENT_SECRET=dev-only-not-a-real-secret|" \
+      -e "s|^ADMIN_OIDC_REDIRECT_URI=.*|ADMIN_OIDC_REDIRECT_URI=http://localhost:5173/api/admin/auth/oidc/callback|" \
+      -e "s|^ADMIN_OIDC_ADMIN_EMAIL=.*|ADMIN_OIDC_ADMIN_EMAIL=admin@example.invalid|" \
       -e "s|^ENCRYPTION_KEY=.*|ENCRYPTION_KEY=${key}|" \
       -e "s|^# DATABASE_URL=.*|DATABASE_URL=postgres://router:router@localhost:${DEV_DB_PORT}/router|" \
       .env.example > .env
   ok ".env created with a freshly generated ENCRYPTION_KEY"
+  ok "OIDC values are placeholders — point them at a real IdP before the /login screen will work. See docs/idea/13-admin-oidc.md"
+fi
+
+# OIDC config sanity check. Boot fails fast if any of the four required OIDC
+# fields is missing, but on a fresh checkout we want a quieter message that
+# points at the doc rather than at each missing variable individually.
+missing_oidc=""
+for var in ADMIN_OIDC_ISSUER_URL ADMIN_OIDC_CLIENT_ID ADMIN_OIDC_REDIRECT_URI ADMIN_OIDC_ADMIN_EMAIL; do
+  if ! grep -Eq "^[[:space:]]*${var}[[:space:]]*=[[:space:]]*[^[:space:]]" .env 2>/dev/null; then
+    missing_oidc="${missing_oidc} ${var}"
+  fi
+done
+if [ -n "${missing_oidc}" ]; then
+  printf '\n%s\n' "$(tput setaf 3 2>/dev/null || true)OIDC config is incomplete (missing:${missing_oidc}). The router will refuse to boot until you set them. See docs/idea/13-admin-oidc.md.$(tput sgr0 2>/dev/null || true)"
 fi
 
 # .env.example leaves DATABASE_URL commented out because the shipped compose file

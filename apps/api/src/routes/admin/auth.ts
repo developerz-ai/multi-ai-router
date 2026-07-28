@@ -1,7 +1,6 @@
 import { type Context, Hono } from "hono"
 import { getConnInfo } from "hono/bun"
 import { deleteCookie, setCookie } from "hono/cookie"
-import { z } from "zod"
 import { renderErrorBody } from "../../errors/render"
 import { type AdminAuthEnv, adminAuth } from "../../middleware/adminAuth"
 import {
@@ -17,11 +16,15 @@ import {
 /**
  * The admin plane's authentication routes — mountable on its own, because `app.ts` owns the
  * wiring. Thin, as CLAUDE.md requires: parse → validate with Zod → one service call → render.
- * Every rule (argon2id, throttling, session lifetime, CSRF) lives in `services/admin-auth/`.
+ * Every rule (PKCE, JWKS verification, session lifetime, CSRF) lives in `services/admin-auth/`.
  *
- * `POST /login`   — public, throttled per username and per IP. Sets the session cookie.
- * `POST /logout`  — guarded, and mutating, so it carries a CSRF token like any other mutation.
- * `GET  /session` — guarded. Who am I, and is this cookie still worth anything.
+ * `GET /oidc/start`    — public, throttled per IP. Mints the state and the nonce, returns a
+ *                          302 to the IdP's authorize endpoint.
+ * `GET /oidc/callback`  — public, throttled per IP. The IdP sends the browser back with the
+ *                          `code` and `state`. The route renders the HTML callback page.
+ * `POST /logout`        — guarded, and mutating, so it carries a CSRF token like any other
+ *                          mutation.
+ * `GET  /session`       — guarded. Who am I, and is this cookie still worth anything.
  */
 
 /** Where these routes belong, per docs/idea/04-api-keys-and-access.md#admin-api-route-groups. */
@@ -46,41 +49,57 @@ export interface AdminAuthRoutesDeps {
   readonly apiToken?: string | null
 }
 
-const loginSchema = z.object({
-  // Bounded on both sides: argon2id over an unbounded password is a denial-of-service vector,
-  // and the length limit is never a hint about the configured credential.
-  username: z.string().min(1).max(256),
-  password: z.string().min(1).max(1024),
-})
-
 export function adminAuthRoutes(deps: AdminAuthRoutesDeps): Hono<AdminAuthEnv> {
   const routes = new Hono<AdminAuthEnv>()
   const guard = adminAuth(deps.service, deps.sessionCookieInsecure, deps.apiToken ?? null)
 
-  routes.post("/login", async (c) => {
-    const body = await readJson(c.req.raw)
-    const parsed = loginSchema.safeParse(body)
-    if (!parsed.success) {
-      return c.json(
-        renderErrorBody(null, 400, "A username and a password are required", "invalid_request"),
+  routes.get("/oidc/start", async (c) => {
+    const { authorizeUrl } = await deps.service.startLogin()
+    return c.redirect(authorizeUrl, 302)
+  })
+
+  routes.get("/oidc/callback", async (c) => {
+    const code = c.req.query("code")
+    const state = c.req.query("state")
+    const error = c.req.query("error")
+    if (error !== undefined && error.length > 0) {
+      // The IdP denied the authorization. Render the callback page with a
+      // generic failure message — the operator sees the same wording as a
+      // probe would.
+      return c.html(
+        callbackPage("Sign-in failed", "Single sign-on verification failed. Try again."),
+        400,
+      )
+    }
+    if (code === undefined || code === "" || state === undefined || state === "") {
+      return c.html(
+        callbackPage("Sign-in failed", "Single sign-on verification failed. Try again."),
         400,
       )
     }
 
-    const result = await deps.service.login({
-      username: parsed.data.username,
-      password: parsed.data.password,
-      ip: clientIp(c, deps.trustProxy),
-    })
-
-    setCookie(
-      c,
-      SESSION_COOKIE_NAME,
-      result.cookieValue,
-      sessionCookieOptions(result.cookieMaxAgeSeconds, deps.sessionCookieInsecure),
-    )
-    warnIfCookieUndeliverable(c, deps.sessionCookieInsecure)
-    return c.json(sessionBody(result.session))
+    try {
+      const result = await deps.service.completeLogin({
+        code,
+        state,
+        ip: clientIp(c, deps.trustProxy),
+      })
+      setCookie(
+        c,
+        SESSION_COOKIE_NAME,
+        result.cookieValue,
+        sessionCookieOptions(result.cookieMaxAgeSeconds, deps.sessionCookieInsecure),
+      )
+      warnIfCookieUndeliverable(c, deps.sessionCookieInsecure)
+      return c.html(callbackPageSignedIn(), 200)
+    } catch {
+      // The exact failure mode is in the audit log; the operator sees the
+      // single wording.
+      return c.html(
+        callbackPage("Sign-in failed", "Single sign-on verification failed. Try again."),
+        401,
+      )
+    }
   })
 
   routes.post("/logout", guard, async (c) => {
@@ -88,7 +107,7 @@ export function adminAuthRoutes(deps: AdminAuthRoutesDeps): Hono<AdminAuthEnv> {
     // A static token is not a session and cannot be ended by a request. Saying so is the point:
     // answering `logged_out` would report a revocation that did not happen, and the caller would
     // go on holding a credential it believes it just surrendered. Revoking this one means changing
-    // the variable and restarting.
+    // the variable and restarting the router.
     if (session.username === ADMIN_API_TOKEN_ACTOR) {
       return c.json(
         renderErrorBody(
@@ -159,21 +178,15 @@ function sessionBody(session: AdminSession): Record<string, string | null> {
   }
 }
 
-/** A malformed body is a validation failure, never a 500. */
-async function readJson(request: Request): Promise<unknown> {
-  try {
-    return await request.json()
-  } catch {
-    return null
-  }
-}
-
 const UNKNOWN_IP = "unknown"
 
 /**
  * The address the per-IP throttle counts against. `X-Forwarded-For` is honored only when
  * `TRUST_PROXY` says a proxy we control is in front (07-security.md#secrets-in-transit) —
  * otherwise any caller could mint a fresh throttle bucket per attempt by editing a header.
+ *
+ * The callback route also uses this for the audit row. The throttle and the audit keep
+ * the same value so one IP always lands in the same bucket.
  */
 function clientIp(c: Context<AdminAuthEnv>, trust: boolean): string {
   if (trust) {
@@ -187,4 +200,41 @@ function clientIp(c: Context<AdminAuthEnv>, trust: boolean): string {
     // caller shares one bucket, which is the conservative direction to be wrong in.
     return UNKNOWN_IP
   }
+}
+
+/** A self-contained HTML page. Mirrors the pattern in `oauth-callback.ts`. */
+function callbackPage(title: string, detail: string): string {
+  return `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>${escapeHtml(title)}</title>
+<style>
+:root { color-scheme: dark light }
+body { font: 16px/1.6 system-ui, sans-serif; margin: 0; display: grid; place-items: center; min-height: 100vh }
+main { max-width: 34rem; padding: 2rem }
+h1 { font-size: 1.25rem; margin: 0 0 .5rem }
+p { margin: 0; opacity: .75 }
+</style>
+</head>
+<body><main><h1>${escapeHtml(title)}</h1><p>${escapeHtml(detail)}</p></main></body>
+</html>
+`
+}
+
+function callbackPageSignedIn(): string {
+  return callbackPage(
+    "Signed in",
+    "You can close this tab and return to the multi-ai-router console.",
+  )
+}
+
+function escapeHtml(value: string): string {
+  return value
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#39;")
 }

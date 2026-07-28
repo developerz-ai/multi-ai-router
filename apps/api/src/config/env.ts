@@ -31,10 +31,38 @@ import {
 export const LOG_LEVELS = ["debug", "info", "warn", "error"] as const
 export type LogLevel = (typeof LOG_LEVELS)[number]
 
-/** Which admin secret is in force. The hash wins when both are set. */
-export type AdminCredential =
-  | { readonly kind: "hash"; readonly value: string }
-  | { readonly kind: "password"; readonly value: string }
+/**
+ * The four knobs an OIDC admin login needs at boot. The router does not
+ * implement the protocol itself — it relies on the IdP's discovery document
+ * for the endpoint URLs — so the configuration here is the *identity* of the
+ * issuer and the *principal* we are willing to admit. The IdP is the source of
+ * truth for everything else.
+ *
+ * `adminSubject` is optional: the `email` is the primary check, and the
+ * `sub` is the optional stricter one. Pinning subject matters when the IdP
+ * reuses emails across tenants; the operator who needs that can set it.
+ */
+export interface AdminOidcConfig {
+  /** Exactly the issuer URL. Compared with the discovery doc and `id_token.iss`. */
+  readonly issuerUrl: string
+  /** The OAuth client id the router registered with the IdP. */
+  readonly clientId: string
+  /** The OAuth client secret. Null for a public client. */
+  readonly clientSecret: string | null
+  /** The redirect URI the IdP will return the browser to. */
+  readonly redirectUri: string
+  /** The exact email the IdP must assert for the admin to be admitted. */
+  readonly adminEmail: string
+  /** Optional stricter: the `sub` claim must equal this value. */
+  readonly adminSubject: string | null
+  /**
+   * Scopes to request. `openid` is mandatory; everything else is passed
+   * through to the IdP. Defaults to `openid profile email`.
+   */
+  readonly scopes: readonly string[]
+  /** Maximum tolerated clock skew between the router and the IdP, in seconds. */
+  readonly clockSkewSeconds: number
+}
 
 export interface RetentionConfig {
   readonly sessionsHours: number
@@ -363,8 +391,7 @@ export interface Env {
   readonly shutdownReadyGraceMs: number
   readonly databaseUrl: string
   readonly databasePool: DatabasePoolConfig
-  readonly adminUsername: string
-  readonly adminCredential: AdminCredential
+  readonly adminOidc: AdminOidcConfig
   readonly encryptionKey: string
   readonly logLevel: LogLevel
   readonly trustProxy: boolean
@@ -469,9 +496,27 @@ export const ENV_FIELDS = {
   DB_POOL_CONNECT_TIMEOUT_SECONDS: atLeastOne.optional(),
   DB_POOL_MAX_LIFETIME_SECONDS: wholeNumber.optional(),
   DB_POOL_CLOSE_TIMEOUT_SECONDS: wholeNumber.optional(),
-  ADMIN_USERNAME: nonEmpty,
-  ADMIN_PASSWORD: nonEmpty.optional(),
-  ADMIN_PASSWORD_HASH: nonEmpty.optional(),
+  // === Admin OIDC ===
+  // The router ships with no username/password path: the admin surface is a
+  // generic OIDC flow whose principal is pinned to the email the operator
+  // configures here. The four required fields fail boot if any of them is
+  // absent, with a message pointing at docs/idea/13-admin-oidc.md. The fifth
+  // (`ADMIN_OIDC_ADMIN_SUBJECT`) is optional; the sixth is a tempered default.
+  //
+  // The required fields are parsed as optional so the `.transform` step can
+  // raise a single, doc-pointing message for every missing field rather than
+  // the per-field "is required" line `nonEmpty` would otherwise emit. The
+  // `nonEmpty` would win on first write because `toEnvValidationError` keeps
+  // only the first issue per path, which is the wrong ordering for a doc
+  // pointer.
+  ADMIN_OIDC_ISSUER_URL: z.string().optional(),
+  ADMIN_OIDC_CLIENT_ID: z.string().optional(),
+  ADMIN_OIDC_CLIENT_SECRET: z.string().optional(),
+  ADMIN_OIDC_REDIRECT_URI: z.string().optional(),
+  ADMIN_OIDC_ADMIN_EMAIL: z.string().optional(),
+  ADMIN_OIDC_ADMIN_SUBJECT: z.string().optional(),
+  ADMIN_OIDC_SCOPES: z.string().optional(),
+  ADMIN_OIDC_CLOCK_SKEW_SECONDS: atLeastOne.optional(),
   ENCRYPTION_KEY: encryptionKey,
   LOG_LEVEL: z.enum(LOG_LEVELS).optional(),
   TRUST_PROXY: flag.optional(),
@@ -556,19 +601,39 @@ export const ENV_FIELDS = {
 } as const
 
 const envSchema = z.object(ENV_FIELDS).transform((raw, ctx): Env => {
-  // Precedence: ADMIN_PASSWORD_HASH wins when both are set; exactly one is required.
-  const hash = raw.ADMIN_PASSWORD_HASH
-  const password = raw.ADMIN_PASSWORD
-  let adminCredential: AdminCredential
-  if (hash !== undefined) {
-    adminCredential = { kind: "hash", value: hash }
-  } else if (password !== undefined) {
-    adminCredential = { kind: "password", value: password }
-  } else {
-    const message = "exactly one of ADMIN_PASSWORD or ADMIN_PASSWORD_HASH must be set"
-    ctx.addIssue({ code: "custom", path: ["ADMIN_PASSWORD"], message })
-    ctx.addIssue({ code: "custom", path: ["ADMIN_PASSWORD_HASH"], message })
-    return z.NEVER
+  // Boot fails if any of the four required OIDC fields is missing. The
+  // message is the same one the operator will see if they only set the
+  // secret and forgot the URL — and it points at the doc rather than the
+  // field name, because the *group* is what the operator has to read.
+  const requiredOidc: ReadonlyArray<{ key: keyof typeof raw; env: string }> = [
+    { key: "ADMIN_OIDC_ISSUER_URL", env: "ADMIN_OIDC_ISSUER_URL" },
+    { key: "ADMIN_OIDC_CLIENT_ID", env: "ADMIN_OIDC_CLIENT_ID" },
+    { key: "ADMIN_OIDC_REDIRECT_URI", env: "ADMIN_OIDC_REDIRECT_URI" },
+    { key: "ADMIN_OIDC_ADMIN_EMAIL", env: "ADMIN_OIDC_ADMIN_EMAIL" },
+  ]
+  let missingOidc: string | null = null
+  for (const { key, env } of requiredOidc) {
+    const value = raw[key]
+    if (typeof value !== "string" || value.length === 0) {
+      if (missingOidc === null) missingOidc = env
+      ctx.addIssue({
+        code: "custom",
+        path: [env],
+        message: `is required — see docs/idea/13-admin-oidc.md`,
+      })
+    }
+  }
+  if (missingOidc !== null) return z.NEVER
+
+  const adminOidc: AdminOidcConfig = {
+    issuerUrl: raw.ADMIN_OIDC_ISSUER_URL as string,
+    clientId: raw.ADMIN_OIDC_CLIENT_ID as string,
+    clientSecret: raw.ADMIN_OIDC_CLIENT_SECRET ?? null,
+    redirectUri: raw.ADMIN_OIDC_REDIRECT_URI as string,
+    adminEmail: raw.ADMIN_OIDC_ADMIN_EMAIL as string,
+    adminSubject: raw.ADMIN_OIDC_ADMIN_SUBJECT ?? null,
+    scopes: (raw.ADMIN_OIDC_SCOPES ?? "openid profile email").split(/\s+/u).filter(Boolean),
+    clockSkewSeconds: raw.ADMIN_OIDC_CLOCK_SKEW_SECONDS ?? 60,
   }
 
   const usageDays = raw.RETENTION_USAGE_DAYS ?? 90
@@ -612,8 +677,7 @@ const envSchema = z.object(ENV_FIELDS).transform((raw, ctx): Env => {
       closeTimeoutSeconds:
         raw.DB_POOL_CLOSE_TIMEOUT_SECONDS ?? DATABASE_POOL_DEFAULTS.closeTimeoutSeconds,
     },
-    adminUsername: raw.ADMIN_USERNAME,
-    adminCredential,
+    adminOidc,
     encryptionKey: raw.ENCRYPTION_KEY,
     logLevel: raw.LOG_LEVEL ?? "info",
     trustProxy: raw.TRUST_PROXY ?? false,

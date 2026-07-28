@@ -193,7 +193,6 @@ describe("ANTHROPIC_* and router secrets never reach the child environment", () 
     CLAUDE_CONFIG_DIR: "/wrong/account",
     ENCRYPTION_KEY: "leaked-encryption-key",
     DATABASE_URL: "postgres://leaked",
-    ADMIN_PASSWORD: "leaked-admin-password",
     METRICS_TOKEN: "leaked-metrics-token",
     PATH: "/usr/bin",
     HOME: "/home/router",

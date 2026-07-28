@@ -39,8 +39,8 @@ export {
   type AdminAuthDeps,
   type AdminAuthService,
   createAdminAuthService,
-  type LoginInput,
-  type LoginResult,
+  type LoginCompleteResult,
+  type LoginStartResult,
 } from "./service"
 export {
   type AdminSession,

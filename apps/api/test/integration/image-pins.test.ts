@@ -181,8 +181,10 @@ describe("the shutdown grace", () => {
 
     const env = parseEnv({
       DATABASE_URL: "postgres://router:router@postgres:5432/router",
-      ADMIN_USERNAME: "admin",
-      ADMIN_PASSWORD: "hunter2",
+      ADMIN_OIDC_ISSUER_URL: "https://sso.test",
+      ADMIN_OIDC_CLIENT_ID: "multi-ai-router-test",
+      ADMIN_OIDC_REDIRECT_URI: "https://router.test/api/admin/auth/oidc/callback",
+      ADMIN_OIDC_ADMIN_EMAIL: "admin@test",
       ENCRYPTION_KEY: Buffer.alloc(32, 7).toString("base64"),
     })
     // The whole budget, not just the drain: the readiness window runs first and the pool close runs
