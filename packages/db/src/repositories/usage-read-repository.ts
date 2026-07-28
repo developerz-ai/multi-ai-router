@@ -167,23 +167,30 @@ export function createUsageReadRepository(db: Database): UsageReadRepository {
       sql`, `,
     )
 
-    const rows = await db.execute<{ account_id: string; window: string; tokens: string | number }>(
+    // `window_kind`, never `window`: WINDOW is a reserved keyword in Postgres (it introduces a
+    // window-function clause), so an alias column named `window` makes the whole statement a
+    // syntax error. Renaming is clearer than quoting — nobody has to remember the quotes later.
+    const rows = await db.execute<{
+      account_id: string
+      window_kind: string
+      tokens: string | number
+    }>(
       sql`
-        select s.account_id, s.window, coalesce(sum(
+        select s.account_id, s.window_kind, coalesce(sum(
           ${usageRecords.tokensIn} + ${usageRecords.tokensOut}
           + ${usageRecords.cacheReadTokens} + ${usageRecords.cacheWriteTokens}
         ), 0) as tokens
-        from (values ${values}) as s(account_id, window, since)
+        from (values ${values}) as s(account_id, window_kind, since)
         left join ${usageRecords}
           on ${usageRecords.accountId} = s.account_id
          and ${usageRecords.createdAt} >= s.since
-        group by s.account_id, s.window
+        group by s.account_id, s.window_kind
       `,
     )
 
     return [...rows].map((row) => ({
       accountId: row.account_id,
-      window: row.window,
+      window: row.window_kind,
       // `sum` is bigint-shaped, which the driver hands back as a string.
       tokens: Number(row.tokens),
     }))
