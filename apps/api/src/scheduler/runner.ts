@@ -174,12 +174,14 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
    * Rescheduled only once the tick has settled, so the interval is a gap between
    * runs rather than a rate a slow sweep can fall behind.
    */
-  const schedule = (task: ScheduledTask): void => {
+  const schedule = (task: ScheduledTask, delayMs = task.intervalMs): void => {
     const timer = setTimeout(() => {
+      // Always the full interval from here on: `startupDelayMs` describes the *first* gap only,
+      // and a task that kept using it would be running on a cadence nobody configured.
       void run(task).finally(() => {
         if (started) schedule(task)
       })
-    }, jitter(task.intervalMs))
+    }, jitter(delayMs))
     // A sweep must never be the reason the process stays alive.
     timer.unref?.()
     timers.set(task.name, timer)
@@ -190,7 +192,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       if (started) return
       started = true
       if (abort.signal.aborted) abort = new AbortController()
-      for (const task of tasks.values()) schedule(task)
+      for (const task of tasks.values()) schedule(task, task.startupDelayMs ?? task.intervalMs)
       deps.logger.info("scheduler started", {
         component: "scheduler",
         tasks: [...tasks.keys()],
