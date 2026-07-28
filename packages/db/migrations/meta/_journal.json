@@ -120,6 +120,13 @@
       "when": 1785209269268,
       "tag": "0016_account_last_used_at",
       "breakpoints": true
+    },
+    {
+      "idx": 17,
+      "version": "7",
+      "when": 1785211111350,
+      "tag": "0017_window_token_limits",
+      "breakpoints": true
     }
   ]
 }

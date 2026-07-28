@@ -68,6 +68,22 @@ export type UsageDimension = "apiKeyId" | "accountId" | "poolId" | "model"
 
 export interface UsageReadRepository {
   totals(window: UsageWindow): Promise<UsageTotals>
+  /**
+   * Tokens this account consumed **inside one quota window's own span**, per (account, window).
+   *
+   * Every pair carries its own `since`, and that is the whole reason this is not a `window` query:
+   * a five-hour window resetting in twenty minutes started 4h40m ago, so "the last five hours" and
+   * "the five hours this window covers" are different ranges that diverge by however long ago the
+   * window opened. One statement for the whole set — many accounts of one provider is the normal
+   * case, and a query per row becomes a query storm the moment a fifth subscription is added.
+   *
+   * Counts every token the account was billed for — input, output, and both cache halves — because
+   * that is what a provider's own allowance meters. Rows whose account was deleted are excluded by
+   * the join, never counted as zero.
+   */
+  tokensSince(
+    spans: readonly { readonly accountId: string; readonly window: string; readonly since: Date }[],
+  ): Promise<readonly { accountId: string; window: string; tokens: number }[]>
   /** Totals grouped by one dimension, biggest first. */
   breakdown(window: UsageWindow, dimension: UsageDimension): Promise<UsageGroupRow[]>
   /**
@@ -136,6 +152,43 @@ const DIMENSION_COLUMNS = {
 } as const
 
 export function createUsageReadRepository(db: Database): UsageReadRepository {
+  /**
+   * One statement over a VALUES list of (account, window, since), so a fleet of subscriptions
+   * costs one round trip rather than one per window per account.
+   */
+  const tokensSince: UsageReadRepository["tokensSince"] = async (spans) => {
+    if (spans.length === 0) return []
+
+    const values = sql.join(
+      spans.map(
+        (span) =>
+          sql`(${span.accountId}::uuid, ${span.window}::text, ${span.since.toISOString()}::timestamptz)`,
+      ),
+      sql`, `,
+    )
+
+    const rows = await db.execute<{ account_id: string; window: string; tokens: string | number }>(
+      sql`
+        select s.account_id, s.window, coalesce(sum(
+          ${usageRecords.tokensIn} + ${usageRecords.tokensOut}
+          + ${usageRecords.cacheReadTokens} + ${usageRecords.cacheWriteTokens}
+        ), 0) as tokens
+        from (values ${values}) as s(account_id, window, since)
+        left join ${usageRecords}
+          on ${usageRecords.accountId} = s.account_id
+         and ${usageRecords.createdAt} >= s.since
+        group by s.account_id, s.window
+      `,
+    )
+
+    return [...rows].map((row) => ({
+      accountId: row.account_id,
+      window: row.window,
+      // `sum` is bigint-shaped, which the driver hands back as a string.
+      tokens: Number(row.tokens),
+    }))
+  }
+
   const inWindow = (window: UsageWindow) =>
     and(gte(usageRecords.createdAt, window.from), lt(usageRecords.createdAt, window.to))
 
@@ -168,6 +221,8 @@ export function createUsageReadRepository(db: Database): UsageReadRepository {
   }
 
   return {
+    tokensSince,
+
     totals: async (window) => {
       const [row] = await db.select(aggregates).from(usageRecords).where(inWindow(window))
       return row ?? EMPTY_TOTALS

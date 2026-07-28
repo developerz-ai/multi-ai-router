@@ -188,6 +188,10 @@ export function createAdminPlane(deps: AdminPlaneDeps): AdminPlane {
     health,
     recheck,
     now,
+    // Reads how many tokens the router itself recorded inside each configured window's span, so
+    // the console can draw a bar where the provider reports no utilization. One query, and only
+    // for accounts whose operator set a ceiling.
+    usage: createUsageReadRepository(deps.database),
   })
 
   // "Discover models": one GET at the provider's own listing, written into `supportedModels`. No

@@ -1,4 +1,10 @@
-import type { AccountBilling, AccountStatus, Dialect, ProviderId } from "@multi-ai-router/core"
+import type {
+  AccountBilling,
+  AccountStatus,
+  Dialect,
+  ProviderId,
+  WindowTokenLimits,
+} from "@multi-ai-router/core"
 import type { AccountRow, ModelAliasMap, SupportedModelList } from "@multi-ai-router/db"
 import type { AccountAvailability } from "./availability"
 
@@ -37,6 +43,13 @@ export interface AccountView {
    * the alias map, which is what `GET /v1/models` publishes (`services/routing/model.ts`).
    */
   readonly supportedModels: SupportedModelList | null
+  /**
+   * Operator-set token ceilings per quota window. Null where none were configured.
+   *
+   * Rendered as a progress bar labelled *configured* — never as a provider reading, because
+   * Anthropic publishes no numeric limit and this is the operator's own estimate.
+   */
+  readonly windowTokenLimits: WindowTokenLimits | null
   readonly weight: number
   readonly priority: number
   /**
@@ -68,6 +81,7 @@ export function toAccountView(row: AccountRow): AccountView {
     dialect: row.dialect ?? null,
     modelAliases: row.modelAliases,
     supportedModels: row.supportedModels,
+    windowTokenLimits: row.windowTokenLimits ?? null,
     weight: row.weight,
     priority: row.priority,
     billing: row.billing,

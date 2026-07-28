@@ -184,6 +184,10 @@ describe("the quota windows on an account read", () => {
         window: "five_hour",
         utilization: 1,
         utilizationSource: "continuous",
+        // Both null: no ceiling configured, so there is nothing for the console to draw a
+        // measured bar from — and inventing a zero would read as a wide-open window.
+        tokensUsed: null,
+        tokenLimit: null,
         resetsAt: LATER.toISOString(),
         resetSource: "provider-reported",
         lastCheckedAt: NOW.toISOString(),
@@ -246,5 +250,92 @@ describe("a single-account read", () => {
     const result = await decorate([routable([FIVE_HOUR])]).get(ACCOUNT_ID)
     if (!result.ok) throw new Error("the read path must not fail here")
     expect(result.value.availability?.quotaWindows).toHaveLength(1)
+  })
+})
+
+/**
+ * The measured fallback: tokens THIS ROUTER recorded, against a ceiling the OPERATOR configured.
+ *
+ * It exists because Anthropic publishes no numeric limit and its SDK reports a utilization only
+ * near a window's edge, so for most of every window the console has nothing to draw. The property
+ * that makes it correct rather than merely useful is the **span**: a window's usage is counted from
+ * `resetsAt - span`, not from "N hours ago", and those two ranges differ by however long ago the
+ * window opened.
+ */
+describe("measuring a window against a configured ceiling", () => {
+  const FIVE_HOURS_MS = 5 * 60 * 60 * 1_000
+
+  function measured(options: {
+    readonly limits?: Record<string, number> | null
+    readonly resetsAt?: Date
+  }) {
+    const spans: { accountId: string; window: string; since: Date }[] = []
+    const window = {
+      window: "five_hour" as const,
+      utilization: undefined,
+      utilizationSource: "threshold-triggered" as const,
+      resetsAt: options.resetsAt ?? new Date(NOW.getTime() + 60 * 60 * 1_000),
+      resetSource: "provider-reported" as const,
+      lastCheckedAt: NOW,
+    }
+
+    const service = withAvailability(
+      serviceOf([{ ...view(), windowTokenLimits: options.limits ?? null } as never]),
+      {
+        catalog: catalogOf([routable([window])]),
+        health: createHealthStore(),
+        recheck: { lastCheckedAt: () => undefined },
+        now: () => NOW,
+        usage: {
+          tokensSince: async (input) => {
+            spans.push(...input.map((s) => ({ ...s })))
+            return input.map((s) => ({ accountId: s.accountId, window: s.window, tokens: 1_500 }))
+          },
+        },
+      },
+    )
+
+    return { service, spans }
+  }
+
+  test("counts from the window's own start, not from N hours before now", async () => {
+    // Resets in one hour, so this five-hour window opened four hours ago. Counting "the last five
+    // hours" would sweep in an hour that belongs to the previous window.
+    const resetsAt = new Date(NOW.getTime() + 60 * 60 * 1_000)
+    const { service, spans } = measured({ limits: { five_hour: 3_000 }, resetsAt })
+
+    await service.list({})
+
+    expect(spans).toHaveLength(1)
+    expect(spans[0]?.since).toEqual(new Date(resetsAt.getTime() - FIVE_HOURS_MS))
+  })
+
+  test("reports the count and the ceiling, leaving the provider's own reading null", async () => {
+    const { service } = measured({ limits: { five_hour: 3_000 } })
+
+    const result = await service.list({})
+    if (!result.ok) throw new Error("the read path must not fail here")
+    const window = result.value[0]?.availability?.quotaWindows[0]
+
+    expect(window?.tokensUsed).toBe(1_500)
+    expect(window?.tokenLimit).toBe(3_000)
+    // Still null: this is our arithmetic, and `utilization` is reserved for what the provider said.
+    expect(window?.utilization).toBeNull()
+  })
+
+  test("an account with no configured ceiling costs no query at all", async () => {
+    const { service, spans } = measured({ limits: null })
+
+    await service.list({})
+
+    expect(spans).toEqual([])
+  })
+
+  test("a window the operator did not configure is not measured", async () => {
+    const { service, spans } = measured({ limits: { seven_day: 9_000 } })
+
+    await service.list({})
+
+    expect(spans).toEqual([])
   })
 })

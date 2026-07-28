@@ -24,6 +24,7 @@ const TABLE_COLUMNS: ReadonlyArray<{ table: Table; columns: readonly string[] }>
       "dialect",
       "modelAliases",
       "supportedModels",
+      "windowTokenLimits",
       "weight",
       "priority",
       "createdAt",

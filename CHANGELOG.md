@@ -5,6 +5,27 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.0] — 2026-07-28
+
+### Added
+
+- **A usage progress bar for windows the provider never reports on.** Anthropic
+  publishes no numeric quota limit and its SDK sends a `utilization` only when a
+  window is already near its edge — so for most of every window the console had
+  an empty gauge and an em-dash. An account can now carry operator-set token
+  ceilings per window (`windowTokenLimits`), and the console fills the bar from
+  tokens **this router measured** against them.
+
+  Two rules keep it honest. The provider's own reading always wins when it
+  exists — the measured fraction is only a fallback, never an override. And the
+  bar says what it is: measured by us, against a limit you chose, from a provider
+  that counts differently. **Nothing in routing reads it** — a guess about
+  someone else's accounting must not decide which account serves a request.
+
+  Usage is counted from the window's **own** span (`resetsAt - span`), not from
+  "N hours ago": a five-hour window resetting in twenty minutes opened 4h40m ago,
+  and the two ranges differ by exactly that much.
+
 ## [1.2.0] — 2026-07-28
 
 ### Added

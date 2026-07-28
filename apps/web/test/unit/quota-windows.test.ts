@@ -255,3 +255,73 @@ describe("the tone", () => {
     expect(quotaWindowTone(unread)).toBe("neutral")
   })
 })
+
+/**
+ * The bar the console draws when the provider reports nothing — which, for a Claude subscription,
+ * is most of every window.
+ *
+ * The rule that keeps it honest: this is the ROUTER'S measurement against a ceiling the OPERATOR
+ * typed, and both halves can be wrong. Anthropic publishes no numeric limit and meters differently
+ * than we count. So it renders only when both figures exist, it never overrides a real provider
+ * reading, and it says what it is.
+ */
+describe("the measured fallback bar", () => {
+  const measured = (extra: Record<string, unknown>) =>
+    describeQuotaWindows(
+      {
+        status: "active",
+        windows: [
+          {
+            window: "seven_day",
+            utilization: null,
+            utilizationSource: "threshold-triggered",
+            resetsAt: null,
+            resetSource: "unknown",
+            lastCheckedAt: "2026-07-28T00:00:00.000Z",
+            spent: false,
+            tokensUsed: null,
+            tokenLimit: null,
+            ...extra,
+          },
+        ],
+      } as never,
+      NOW,
+    )[0]
+
+  test("fills from tokens measured against the configured ceiling", () => {
+    const row = measured({ tokensUsed: 1_200_000, tokenLimit: 3_000_000 })
+
+    expect(row?.utilization).toBeCloseTo(0.4, 5)
+    // Counts, not a bare percentage: a share is meaningless without the ceiling it is a share of.
+    expect(row?.utilizationText).toBe("1.2M / 3M")
+    expect(row?.utilizationNote).toContain("not a figure the provider reported")
+  })
+
+  test("a provider reading always wins over our own arithmetic", () => {
+    const row = measured({ utilization: 0.9, tokensUsed: 10, tokenLimit: 3_000_000 })
+
+    expect(row?.utilization).toBe(0.9)
+    expect(row?.utilizationText).not.toContain("/")
+  })
+
+  test("a ceiling with no count, or a count with no ceiling, draws nothing", () => {
+    expect(measured({ tokenLimit: 3_000_000 })?.utilization).toBeNull()
+    expect(measured({ tokensUsed: 1_000 })?.utilization).toBeNull()
+  })
+
+  /** `undefined` slips past a `!== null` check and turns the division into NaN — a filled bar. */
+  test("missing fields do not become a NaN-filled bar", () => {
+    const row = measured({ tokensUsed: undefined, tokenLimit: undefined })
+
+    expect(row?.utilization).toBeNull()
+    expect(row?.utilizationText).not.toContain("NaN")
+  })
+
+  test("overshooting the configured ceiling clamps to full rather than past it", () => {
+    expect(measured({ tokensUsed: 9_000_000, tokenLimit: 3_000_000 })?.utilization).toBe(1)
+  })
+
+  test("a zero or negative ceiling is not a permanently-spent window", () => {
+    expect(measured({ tokensUsed: 10, tokenLimit: 0 })?.utilization).toBeNull()
+  })
+})

@@ -78,6 +78,39 @@ export const QuotaWindowKind = z.enum([
 export type QuotaWindowKind = z.infer<typeof QuotaWindowKind>
 
 /**
+ * How long each window spans, so "tokens used *in this window*" has a start instant.
+ *
+ * A window's start is `resetsAt - span`, which is the only way to bound the usage query correctly:
+ * "the last five hours from now" is a different range from "the five hours this window covers", and
+ * they diverge by exactly however long ago the window opened.
+ *
+ * `overage` has no span — it is a paid allowance beside the included windows, not a rolling clock —
+ * so it is absent rather than guessed, and a bar is simply not drawn for it.
+ */
+export const QUOTA_WINDOW_SPAN_MS: Readonly<Partial<Record<QuotaWindowKind, number>>> = {
+  five_hour: 5 * 60 * 60 * 1_000,
+  seven_day: 7 * 24 * 60 * 60 * 1_000,
+  seven_day_opus: 7 * 24 * 60 * 60 * 1_000,
+  seven_day_sonnet: 7 * 24 * 60 * 60 * 1_000,
+}
+
+/**
+ * Operator-set token ceilings per quota window — **an estimate the operator owns, never a fact the
+ * provider stated.**
+ *
+ * This exists because Anthropic publishes no numeric limit and its SDK reports a `utilization`
+ * only when a window is already near its edge, so for most of every window the console has nothing
+ * to draw. A ceiling written here lets the router show consumption it measured itself against a
+ * number the operator chose.
+ *
+ * Two honesty rules follow from that and are enforced at the render, not here: the bar is labelled
+ * as configured, and it never feeds routing. Nothing in `services/routing/` reads this — a guess
+ * about someone else's accounting must not decide which account serves a request.
+ */
+export const WindowTokenLimits = z.record(QuotaWindowKind, z.number().int().positive())
+export type WindowTokenLimits = z.infer<typeof WindowTokenLimits>
+
+/**
  * Where a utilization reading comes from — a first-class distinction, not a provider detail.
  *
  * - `continuous` — a real percentage at any point in the window. The only kind `quota-aware` can

@@ -79,6 +79,14 @@ export interface QuotaWindowView {
   readonly lastCheckedAt: string
   /** Computed server-side with the same function candidate filtering calls. */
   readonly spent: boolean
+  /**
+   * Tokens THIS ROUTER recorded inside the window's own span, or null where no ceiling is set.
+   * Deliberately not folded into `utilization`: that is the provider's reading and must stay null
+   * when the provider said nothing.
+   */
+  readonly tokensUsed: number | null
+  /** The operator's configured ceiling. Not a provider fact — never reaches routing. */
+  readonly tokenLimit: number | null
 }
 
 /** `services/accounts/availability.ts` — `AccountAvailability`. */

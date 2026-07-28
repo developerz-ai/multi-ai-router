@@ -1,4 +1,10 @@
-import { AccountBilling, AccountStatus, Dialect, ProviderId } from "@multi-ai-router/core"
+import {
+  AccountBilling,
+  AccountStatus,
+  Dialect,
+  ProviderId,
+  QuotaWindowKind,
+} from "@multi-ai-router/core"
 import { z } from "zod"
 
 /**
@@ -32,6 +38,15 @@ const MODEL_ALIASES = z.record(z.string().min(1).max(200), z.string().min(1).max
  * operator should not have to know which of the two spellings clears it.
  */
 const SUPPORTED_MODELS = z.array(MODEL_NAME).max(1000)
+/**
+ * Operator-set token ceilings per quota window — the figure the console's progress bar is a
+ * fraction of.
+ *
+ * Bounded well above any real plan so a typo is a validation error rather than a bar that never
+ * moves. Positive integers only: zero would render as permanently 100% spent, and a negative
+ * ceiling has no meaning.
+ */
+const WINDOW_TOKEN_LIMITS = z.record(QuotaWindowKind, z.number().int().positive().max(1e12))
 /** Bias for `weighted`; zero would silently remove the account from that policy. */
 const WEIGHT = z.number().int().min(1).max(10_000)
 /** Strict order for `priority-failover`; lower is tried first. */
@@ -54,6 +69,11 @@ export const createAccountBody = z
      * wrong one for a subscription-only provider is refused rather than ignored (`rules.ts`).
      */
     billing: AccountBilling.optional(),
+    /**
+     * The operator's own estimate of each window's token allowance. Not a provider fact — nothing
+     * in routing reads it, and the console labels every bar it draws as configured.
+     */
+    windowTokenLimits: WINDOW_TOKEN_LIMITS.optional(),
   })
   .strict()
 
@@ -73,6 +93,8 @@ export const updateAccountBody = z
     modelAliases: MODEL_ALIASES.nullable().optional(),
     /** `null` (or `[]`) drops the declaration, which returns the account to passthrough. */
     supportedModels: SUPPORTED_MODELS.nullable().optional(),
+    /** `null` clears every configured ceiling, which removes the bars rather than zeroing them. */
+    windowTokenLimits: WINDOW_TOKEN_LIMITS.nullable().optional(),
     weight: WEIGHT.optional(),
     priority: PRIORITY.optional(),
     /** Not nullable: every account is billed one of the two ways, so there is nothing to clear. */
