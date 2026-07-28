@@ -44,6 +44,35 @@ describe("classifying an Agent-SDK failure", () => {
     }
   })
 
+  /**
+   * The wording a spent *plan window* actually uses — recorded verbatim from a Max subscription at
+   * 100% of its weekly allowance. It shares no phrase with the two above, so it used to fall all
+   * the way through to `UNCLASSIFIED`: a `500`-shaped unknown for the most ordinary thing a pooled
+   * subscription does, and the reason that account showed no diagnosis at all.
+   */
+  test("a spent plan window is a cooldown, in the wording the plan itself uses", () => {
+    for (const message of [
+      "You've hit your weekly limit · resets Jul 30, 11pm (UTC)",
+      "You've hit your 5-hour limit · resets 4pm",
+    ]) {
+      const { classification } = classifySdkFailure(new Error(message))
+
+      expect(classification.kind).toBe("rate-limited")
+      expect(classification.status).toBe(429)
+      // Never `auth`: parking a working subscription at `needs_reauth` for a window a clock
+      // reopens is the exact confusion non-negotiable 7 forbids.
+      expect(classification.retryable).toBe(true)
+    }
+  })
+
+  test("the word 'limit' alone does not make a failure a cooldown", () => {
+    const { classification } = classifySdkFailure(
+      new Error("the configured context limit is not valid for this model"),
+    )
+
+    expect(classification.kind).not.toBe("rate-limited")
+  })
+
   test("a stale session is its own class, not a server error", () => {
     const { classification } = classifySdkFailure(
       new Error("No conversation found with session ID: 4f2b-…"),
