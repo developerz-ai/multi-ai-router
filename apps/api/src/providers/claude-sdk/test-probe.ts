@@ -3,7 +3,7 @@ import { query } from "@anthropic-ai/claude-agent-sdk"
 import { createCliProbe } from "./cli-probe"
 import type { SdkConcurrency, SdkSlot } from "./concurrency"
 import { subprocessEnv } from "./env"
-import { classifySdkFailure } from "./errors"
+import { classifySdkFailure, readSdkFailure } from "./errors"
 import { type CliResolution, resolveClaudeCli } from "./resolve-cli"
 
 /**
@@ -69,6 +69,21 @@ export interface SdkTestProbeResult {
    * the reason both transports agree.
    */
   readonly rateLimitInfos: readonly unknown[]
+  /**
+   * What the upstream *actually said*, verbatim and truncated — present only on a failure, and
+   * **only ever for a log line**.
+   *
+   * {@link message} is router-authored by contract, which is right for a response body and useless
+   * for the one case that matters: an upstream failing for a reason this build has no rule for
+   * renders as "a reason this router does not recognize", and without this field the only copy of
+   * the real text is the one we discarded. That is a dead end both for the operator and for
+   * whoever has to write the missing rule — logging the sanitized message instead just records the
+   * router's own words for "I could not classify this".
+   *
+   * Safe to log, not safe to return: the log redactor strips credential material
+   * (`logging/redact.ts`), while a response body is a contract with the console.
+   */
+  readonly reasonDetail?: string
 }
 
 export interface SdkTestProbe {
@@ -178,7 +193,12 @@ export function createSdkTestProbe(options: SdkTestProbeOptions): SdkTestProbe {
           if (message.subtype === "success" && !message.is_error) {
             return { ok: true, message: snippet(message.result), rateLimitInfos }
           }
-          return { ok: false, message: resultFailureMessage(message), rateLimitInfos }
+          return {
+            ok: false,
+            message: resultFailureMessage(message),
+            rateLimitInfos,
+            ...detailOf(statedResult(message)),
+          }
         }
         return {
           ok: false,
@@ -186,7 +206,12 @@ export function createSdkTestProbe(options: SdkTestProbeOptions): SdkTestProbe {
           rateLimitInfos,
         }
       } catch (error) {
-        return { ok: false, message: classifySdkFailure(error).clientMessage, rateLimitInfos }
+        return {
+          ok: false,
+          message: classifySdkFailure(error).clientMessage,
+          rateLimitInfos,
+          ...detailOf(readSdkFailure(error).message),
+        }
       } finally {
         input.signal.removeEventListener("abort", onAbort)
         // The subprocess dies with the iterator, so the slot is free the moment this scope is:
@@ -212,6 +237,36 @@ export function createSdkTestProbe(options: SdkTestProbeOptions): SdkTestProbe {
  * button and the data plane never describe one condition two ways. A turn that failed with nothing
  * quotable falls back to the subtype, which is at least honest for `error_max_turns` and friends.
  */
+/**
+ * Absent rather than empty when the upstream said nothing — there is no detail to record.
+ *
+ * Takes the message rather than the field for the same reason {@link resultFailureMessage} does:
+ * only the SDK's *success* result variant declares `result`, and the failure we care most about
+ * (`subtype: "success"` with `is_error: true`) is that variant. A structurally-typed parameter
+ * reads it off either without narrowing the union by hand.
+ */
+function detailOf(stated: string | undefined): { reasonDetail?: string } {
+  const trimmed = stated?.trim()
+  if (trimmed === undefined || trimmed === "") return {}
+  return { reasonDetail: snippet(trimmed) }
+}
+
+/**
+ * The `result` text, read off whichever result variant carries one — only the SDK's *success*
+ * variant declares it, and the failure that matters most (`subtype: "success"` with
+ * `is_error: true`) is that variant.
+ *
+ * `subtype` is in the parameter type purely to make this assignable: a shape whose properties are
+ * all optional is a *weak type*, and the error variant — which has no `result` at all — shares no
+ * property with it and is rejected. One field both variants declare is enough to anchor it.
+ */
+function statedResult(message: {
+  readonly subtype: string
+  readonly result?: string
+}): string | undefined {
+  return message.result
+}
+
 function resultFailureMessage(message: {
   readonly subtype: string
   readonly result?: string

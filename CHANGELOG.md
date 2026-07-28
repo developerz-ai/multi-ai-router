@@ -5,6 +5,18 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.3] — 2026-07-28
+
+### Fixed
+
+- **The failed-test log recorded the router's own words, not the upstream's.**
+  1.1.2 logged a failed "Test now", but logged the router-authored message — so
+  an upstream failing for a reason this build has no rule for was recorded as
+  "the Claude Agent SDK failed for a reason this router does not recognize". A
+  tautology, and a dead end for whoever has to write the missing rule. The probe
+  now carries the upstream's verbatim text through to the log line (never to the
+  response body, which is a contract with the console).
+
 ## [1.1.2] — 2026-07-28
 
 ### Fixed

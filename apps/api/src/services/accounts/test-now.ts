@@ -176,6 +176,9 @@ export function createTestNowService(deps: TestNowServiceDeps): TestNowService {
           provider: account.provider,
           model: input.model,
           reason: outcome.message,
+          // What the upstream itself said, when it said anything. This is the field that makes an
+          // unrecognized failure diagnosable instead of a tautology.
+          ...(outcome.detail === undefined ? {} : { detail: outcome.detail }),
           latencyMs,
         })
       }
@@ -196,6 +199,8 @@ export function createTestNowService(deps: TestNowServiceDeps): TestNowService {
 interface ProbeOutcome {
   readonly ok: boolean
   readonly message: string
+  /** Raw upstream text, for the log only. Never rendered into the response. */
+  readonly detail?: string
 }
 
 async function runSdkProbe(
@@ -245,7 +250,11 @@ async function runSdkProbe(
     if (latest !== null) deps.health?.applyRateLimit(account.id, latest, now)
   }
 
-  return { ok: result.ok, message: result.message }
+  return {
+    ok: result.ok,
+    message: result.message,
+    ...(result.reasonDetail === undefined ? {} : { detail: result.reasonDetail }),
+  }
 }
 
 async function runHttpProbe(
