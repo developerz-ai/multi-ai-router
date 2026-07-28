@@ -312,6 +312,23 @@ describe("what the probe reports back", () => {
     expect(result.message).not.toContain("(success)")
   })
 
+  /**
+   * The field that makes an *unclassified* failure diagnosable. `message` is router-authored, so
+   * without this the only record of a reason no rule matched is the router saying it did not
+   * recognize one — a tautology, and a dead end for whoever has to add the rule.
+   */
+  test("the upstream's own words come back for the log, even when no rule matched", async () => {
+    const result = await run([erroredResult("Something entirely new went wrong upstream")])
+
+    expect(result.ok).toBe(false)
+    expect(result.message).toContain("does not recognize")
+    expect(result.reasonDetail).toBe("Something entirely new went wrong upstream")
+  })
+
+  test("a success carries no reason detail — there is nothing to diagnose", async () => {
+    expect((await run([pong()])).reasonDetail).toBeUndefined()
+  })
+
   test("the quota readings the turn paid for come back for the caller to ingest", async () => {
     const info = { status: "allowed", rateLimitType: "five_hour", resetsAt: 1_785_204_600 }
     const result = await run([rateLimitEvent(info), pong()])
