@@ -54,6 +54,21 @@ export interface SdkTestProbeResult {
    * contract the dispatch path renders to a client.
    */
   readonly message: string
+  /**
+   * Every `rate_limit_info` this turn reported, oldest first, verbatim and unparsed.
+   *
+   * **The probe already paid for these.** It spawns a real subprocess and bills a real turn, and
+   * the SDK volunteers the account's window state on *every* query — not only near a limit. Reading
+   * the answer and dropping it meant the one button an operator presses to ask "how is this account
+   * doing" spent a turn and learned nothing about quota, while the dispatch path
+   * (`services/dataplane/sdk-attempt.ts`) folded the identical event into Account state. Same event,
+   * same destination; the caller ingests it through the same store.
+   *
+   * Unparsed on purpose, exactly like `SdkInvokeOptions.onRateLimit`: this module knows how to spawn
+   * a subprocess, not what a quota window means. `claude-sdk/quota.ts` owns that, and one parser is
+   * the reason both transports agree.
+   */
+  readonly rateLimitInfos: readonly unknown[]
 }
 
 export interface SdkTestProbe {
@@ -107,6 +122,9 @@ export function createSdkTestProbe(options: SdkTestProbeOptions): SdkTestProbe {
         return {
           ok: false,
           message: "this router has no usable claude binary to spawn — see /readyz",
+          // Nothing spawned, so nothing was reported. Empty, never absent: a caller folding
+          // readings in must not have to distinguish "no events" from "this path forgot".
+          rateLimitInfos: [],
         }
       }
 
@@ -116,7 +134,7 @@ export function createSdkTestProbe(options: SdkTestProbeOptions): SdkTestProbe {
       } catch {
         // The only way out of the queue other than a slot is the caller's own signal, and the probe
         // is that caller. Nothing spawned, so there is nothing to report but the ceiling.
-        return { ok: false, message: AT_CEILING }
+        return { ok: false, message: AT_CEILING, rateLimitInfos: [] }
       }
 
       const controller = new AbortController()
@@ -143,20 +161,32 @@ export function createSdkTestProbe(options: SdkTestProbeOptions): SdkTestProbe {
         includePartialMessages: false,
       }
 
+      const rateLimitInfos: unknown[] = []
+
       try {
         for await (const message of runQuery({ prompt: PROBE_PROMPT, options: sdkOptions })) {
+          // Collected before the result is examined, because a turn that ends in a spent window
+          // still reported that window on its way there — and that reading is the whole answer to
+          // "why did this fail". The SDK's own snake_case field, read here rather than through
+          // `render/events.ts`: this loop consumes the SDK's messages directly, not the normalized
+          // stream the dispatch path builds.
+          if (message.type === "rate_limit_event") {
+            rateLimitInfos.push(message.rate_limit_info)
+            continue
+          }
           if (message.type !== "result") continue
           if (message.subtype === "success" && !message.is_error) {
-            return { ok: true, message: snippet(message.result) }
+            return { ok: true, message: snippet(message.result), rateLimitInfos }
           }
-          return {
-            ok: false,
-            message: `the Claude Agent SDK turn did not succeed (${message.subtype})`,
-          }
+          return { ok: false, message: resultFailureMessage(message), rateLimitInfos }
         }
-        return { ok: false, message: "the Claude Agent SDK ended without answering" }
+        return {
+          ok: false,
+          message: "the Claude Agent SDK ended without answering",
+          rateLimitInfos,
+        }
       } catch (error) {
-        return { ok: false, message: classifySdkFailure(error).clientMessage }
+        return { ok: false, message: classifySdkFailure(error).clientMessage, rateLimitInfos }
       } finally {
         input.signal.removeEventListener("abort", onAbort)
         // The subprocess dies with the iterator, so the slot is free the moment this scope is:
@@ -165,6 +195,30 @@ export function createSdkTestProbe(options: SdkTestProbeOptions): SdkTestProbe {
       }
     },
   }
+}
+
+/**
+ * What a failed turn actually says, in one sentence an operator can act on.
+ *
+ * **`subtype` alone is not the reason, and on the most important failure it is actively wrong.** A
+ * spent Claude subscription comes back as `subtype: "success"` with `is_error: true` and the reason
+ * in `result` — so rendering the subtype produced the self-contradiction "the Claude Agent SDK turn
+ * did not succeed (success)" while discarding the one field that explained it. Observed on a live
+ * account whose window was at 100%.
+ *
+ * So `result` leads, through the same `classifySdkFailure` table the dispatch path uses: a usage
+ * limit reads as "the account's Claude subscription window is spent", an expired credential as
+ * "needs re-authenticating", and each keeps the wording the client would have received, so the
+ * button and the data plane never describe one condition two ways. A turn that failed with nothing
+ * quotable falls back to the subtype, which is at least honest for `error_max_turns` and friends.
+ */
+function resultFailureMessage(message: {
+  readonly subtype: string
+  readonly result?: string
+}): string {
+  const stated = message.result?.trim()
+  if (stated !== undefined && stated !== "") return classifySdkFailure(stated).clientMessage
+  return `the Claude Agent SDK turn did not succeed (${message.subtype})`
 }
 
 /** No tool this probe could grant — it asks one question and reads one answer. */

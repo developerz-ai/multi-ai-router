@@ -1,6 +1,11 @@
 import { type Dialect, isRouterError, type OpenAiChatCeiling } from "@multi-ai-router/core"
 import type { AccountRepository, AccountRow } from "@multi-ai-router/db"
-import { type DriverAccount, httpDriver, type SdkTestProbe } from "../../providers"
+import {
+  type DriverAccount,
+  httpDriver,
+  type SdkQuotaStore,
+  type SdkTestProbe,
+} from "../../providers"
 import { AUDIT_KINDS, AUDIT_SUBJECTS, type AuditRecorder } from "../admin/audit"
 import { type AdminResult, invalid, notFound, ok } from "../admin/result"
 import type { CredentialCipher } from "../crypto/cipher"
@@ -76,6 +81,12 @@ export interface TestNowServiceDeps {
    * silently doing nothing — the same rule `DispatcherDeps.invokeSdk` follows for the real path.
    */
   readonly sdkProbe?: SdkTestProbe
+  /**
+   * The **same** quota store the dispatch path writes to, so a tested account's windows are the
+   * windows routing reads — never a second copy that could disagree. Omitted means the readings are
+   * discarded, which is what this service did for every account before: correct, and useless.
+   */
+  readonly quota?: Pick<SdkQuotaStore, "ingest">
 }
 
 const NO_SDK_PROBE = "this router has no Agent-SDK test probe configured"
@@ -174,6 +185,19 @@ async function runSdkProbe(
     model,
     signal: AbortSignal.timeout(deps.timeoutMs),
   })
+
+  // The turn is already billed and the SDK already volunteered this account's window state, so the
+  // readings are folded in exactly as the dispatch path folds them
+  // (`services/dataplane/sdk-attempt.ts`). Without this the console's quota windows stayed empty
+  // until real traffic happened to route through the account — which is backwards for the button
+  // whose entire job is answering "how is this account doing".
+  //
+  // Oldest first, so the last event of the turn is the one that stands.
+  if (deps.quota !== undefined) {
+    const now = deps.now()
+    for (const info of result.rateLimitInfos) deps.quota.ingest(account.id, info, now)
+  }
+
   return { ok: result.ok, message: result.message }
 }
 

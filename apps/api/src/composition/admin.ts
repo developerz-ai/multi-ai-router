@@ -13,7 +13,7 @@ import {
 } from "@multi-ai-router/db"
 import type { Env } from "../config/env"
 import type { Logger } from "../logging/logger"
-import { createSdkTestProbe, type SdkConcurrency } from "../providers"
+import { createSdkTestProbe, type SdkConcurrency, type SdkQuotaStore } from "../providers"
 import type { AccountConfigDirs } from "../providers/claude-sdk/config-dir"
 import { scheduledTaskIntervals } from "../scheduler"
 import {
@@ -92,6 +92,13 @@ export interface AdminPlaneDeps {
    */
   readonly sdkConcurrency: SdkConcurrency
   /**
+   * The dispatch path's own Claude quota store, so a "Test now" turn's `rate_limit_event` readings
+   * land where routing and the console already read them. Passed in for the same reason the gate
+   * above is: a second store would be a second, disagreeing answer to "how much of this
+   * subscription is left".
+   */
+  readonly sdkQuota: Pick<SdkQuotaStore, "ingest">
+  /**
    * One isolated `CLAUDE_CONFIG_DIR` per subscription account, as the composition root built it.
    * Passed in for the same reason the gate above is: the scheduler's reaper sweeps the very volume
    * this plane provisions on, and two instances could be rooted at two different places.
@@ -165,6 +172,8 @@ export function createAdminPlane(deps: AdminPlaneDeps): AdminPlane {
       cliPathOverride: env.claudeCliPath,
       concurrency: deps.sdkConcurrency,
     }),
+    // The turn is billed either way; this is what makes it also answer "how much is left".
+    quota: deps.sdkQuota,
   })
 
   const accountsService = createAccountsService({ accounts, keys, cipher, configDirs, audit, now })

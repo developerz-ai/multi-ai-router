@@ -115,14 +115,85 @@ describe("ingesting a rate-limit event", () => {
     const snapshot = ingest(createSdkQuotaStore(), {
       status: "rejected",
       rateLimitType: "five_hour",
-      // What a seconds-valued timestamp looks like read as milliseconds, and what late delivery
-      // looks like too. Either way the breaker's own backoff is the honest answer.
+      // Seconds, and genuinely behind NOW (2026-07-13 vs 2026-07-25) — late delivery or clock
+      // skew. The breaker's own backoff is the honest answer.
       resetsAt: 1_784_000_000,
     })
 
     expect(snapshot?.signal.limited).toBe(true)
     expect(snapshot?.signal.resetsAt).toBeUndefined()
     expect(snapshot?.signal.resetSource).toBe("unknown")
+  })
+
+  /**
+   * The unit the SDK actually uses, recorded live against SDK 0.3.220. §5 says milliseconds and the
+   * type annotates no unit; reading this value as milliseconds puts it in 1970, where it fails the
+   * "still ahead of us" check and is dropped as stale. That silently cost the entire Claude
+   * subscription reset surface — no per-window countdown, `resetSource: "unknown"` instead of
+   * `provider-reported`, and a breaker estimating a backoff while holding the exact answer.
+   */
+  test("a seconds-valued reset in the future is read as seconds, not thrown away as 1970", () => {
+    const snapshot = ingest(createSdkQuotaStore(), {
+      status: "allowed",
+      rateLimitType: "five_hour",
+      // 2026-07-25T13:00:00Z — one hour after NOW, exactly as the live SDK reports it.
+      resetsAt: IN_AN_HOUR / 1000,
+    })
+
+    // The per-window value, because that is the one the console renders as a countdown and the
+    // one that read `null` for every Claude subscription while this was wrong.
+    const fiveHour = snapshot?.windows.find((window) => window.window === "five_hour")
+    expect(fiveHour?.resetsAt).toEqual(new Date(IN_AN_HOUR))
+    expect(fiveHour?.resetSource).toBe("provider-reported")
+  })
+
+  test("a millisecond-valued reset still works, so an SDK that switches units does not re-break it", () => {
+    const snapshot = ingest(createSdkQuotaStore(), {
+      status: "allowed",
+      rateLimitType: "five_hour",
+      resetsAt: IN_AN_HOUR,
+    })
+
+    const fiveHour = snapshot?.windows.find((window) => window.window === "five_hour")
+    expect(fiveHour?.resetsAt).toEqual(new Date(IN_AN_HOUR))
+    expect(fiveHour?.resetSource).toBe("provider-reported")
+  })
+
+  /** A spent window is the case the breaker consumes, so it has to carry the instant too. */
+  test("a rejected window reports its seconds-valued reset as the cooldown instant", () => {
+    const snapshot = ingest(createSdkQuotaStore(), {
+      status: "rejected",
+      rateLimitType: "five_hour",
+      resetsAt: IN_AN_HOUR / 1000,
+    })
+
+    expect(snapshot?.signal.limited).toBe(true)
+    expect(snapshot?.signal.resetsAt).toEqual(new Date(IN_AN_HOUR))
+    expect(snapshot?.signal.resetSource).toBe("provider-reported")
+  })
+
+  test("the overage window's reset is read in the same unit as the main one", () => {
+    const snapshot = ingest(createSdkQuotaStore(), {
+      status: "allowed",
+      rateLimitType: "five_hour",
+      overageStatus: "allowed",
+      overageResetsAt: IN_AN_HOUR / 1000,
+    })
+
+    const overage = snapshot?.windows.find((window) => window.window === "overage")
+    expect(overage?.resetsAt).toEqual(new Date(IN_AN_HOUR))
+  })
+
+  test("a nonsense epoch is dropped rather than turned into an instant", () => {
+    for (const resetsAt of [0, -1, Number.NaN, Number.POSITIVE_INFINITY]) {
+      const snapshot = ingest(createSdkQuotaStore(), {
+        status: "rejected",
+        rateLimitType: "five_hour",
+        resetsAt,
+      })
+
+      expect(snapshot?.signal.resetsAt).toBeUndefined()
+    }
   })
 
   test("utilization outside 0..1 is clamped to what the domain admits", () => {
