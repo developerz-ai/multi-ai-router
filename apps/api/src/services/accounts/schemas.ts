@@ -46,7 +46,9 @@ const SUPPORTED_MODELS = z.array(MODEL_NAME).max(1000)
  * moves. Positive integers only: zero would render as permanently 100% spent, and a negative
  * ceiling has no meaning.
  */
-const WINDOW_TOKEN_LIMITS = z.record(QuotaWindowKind, z.number().int().positive().max(1e12))
+// `partialRecord`: a record keyed by an enum is exhaustive in Zod, which would demand a ceiling
+// for every window kind. Operators set the one or two their plan actually has.
+const WINDOW_TOKEN_LIMITS = z.partialRecord(QuotaWindowKind, z.number().int().positive().max(1e12))
 /** Bias for `weighted`; zero would silently remove the account from that policy. */
 const WEIGHT = z.number().int().min(1).max(10_000)
 /** Strict order for `priority-failover`; lower is tried first. */

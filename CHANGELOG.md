@@ -5,6 +5,16 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.1] — 2026-07-28
+
+### Fixed
+
+- **`windowTokenLimits` rejected every realistic map.** Zod treats a record keyed
+  by an enum as *exhaustive*, so setting a ceiling for one window answered
+  `seven_day_opus: expected number, received undefined` and demanded all five
+  kinds. A plan has one or two windows an operator cares about, so a partial map
+  is the normal case — `partialRecord` now.
+
 ## [1.3.0] — 2026-07-28
 
 ### Added
