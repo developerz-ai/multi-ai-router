@@ -1,6 +1,12 @@
 import { describe, expect, test } from "bun:test"
 import type { AccountRow } from "@multi-ai-router/db"
-import type { SdkTestProbe, SdkTestProbeInput, SdkTestProbeResult } from "../../../src/providers"
+import {
+  createSdkQuotaStore,
+  type RateLimitSignal,
+  type SdkTestProbe,
+  type SdkTestProbeInput,
+  type SdkTestProbeResult,
+} from "../../../src/providers"
 import { createTestNowService } from "../../../src/services/accounts"
 import type { AuditEventInput } from "../../../src/services/admin"
 
@@ -45,6 +51,12 @@ function harness(options: {
   const audited: AuditEventInput[] = []
   let clock = NOW
 
+  // The real stores, not stubs: the point of these two is that a reading lands where the console
+  // reads it, and a stub would let the two drift apart exactly as they did in production.
+  const quota = createSdkQuotaStore()
+  const folded: { accountId: string; signal: RateLimitSignal | null }[] = []
+  const warnings: { msg: string; fields?: Record<string, unknown> }[] = []
+
   const service = createTestNowService({
     accounts: { findById: async (id) => (id === row.id ? row : undefined) },
     cipher: { decrypt: (envelope) => envelope },
@@ -54,11 +66,19 @@ function harness(options: {
     now: () => clock,
     ...(options.fetch === undefined ? {} : { fetch: options.fetch }),
     ...(options.sdkProbe === undefined ? {} : { sdkProbe: options.sdkProbe }),
+    quota,
+    health: {
+      applyRateLimit: (accountId, signal) => void folded.push({ accountId, signal }),
+    },
+    log: { warn: (msg, fields) => void warnings.push({ msg, fields }) },
   })
 
   return {
     service,
     audited,
+    quota,
+    folded,
+    warnings,
     advance: (ms: number) => {
       clock = new Date(clock.getTime() + ms)
     },
@@ -189,7 +209,7 @@ describe("createTestNowService — Agent-SDK accounts", () => {
     const probe: SdkTestProbe = {
       run: async () => {
         called = true
-        return { ok: true, message: "pong" }
+        return { ok: true, message: "pong", rateLimitInfos: [] }
       },
     }
     const { service } = harness({ row: subscriptionRow(), sdkProbe: probe })
@@ -206,7 +226,7 @@ describe("createTestNowService — Agent-SDK accounts", () => {
     const probe: SdkTestProbe = {
       run: async (input): Promise<SdkTestProbeResult> => {
         seen.push(input)
-        return { ok: true, message: "pong" }
+        return { ok: true, message: "pong", rateLimitInfos: [] }
       },
     }
     const { service, audited } = harness({ row: subscriptionRow(), sdkProbe: probe })
@@ -228,6 +248,7 @@ describe("createTestNowService — Agent-SDK accounts", () => {
       run: async () => ({
         ok: false,
         message: "the account's Claude subscription window is spent",
+        rateLimitInfos: [],
       }),
     }
     const { service } = harness({ row: subscriptionRow(), sdkProbe: probe })
@@ -250,7 +271,9 @@ describe("createTestNowService — Agent-SDK accounts", () => {
   })
 
   test("refuses an account with no config directory yet", async () => {
-    const probe: SdkTestProbe = { run: async () => ({ ok: true, message: "pong" }) }
+    const probe: SdkTestProbe = {
+      run: async () => ({ ok: true, message: "pong", rateLimitInfos: [] }),
+    }
     const bare = accountRow({ provider: "anthropic-oauth", authMaterial: null, configDir: null })
     const { service } = harness({ row: bare, sdkProbe: probe })
 
@@ -259,5 +282,99 @@ describe("createTestNowService — Agent-SDK accounts", () => {
     if (!result.ok) return
     expect(result.value.outcome).toBe("failed")
     expect(result.value.message).toContain("no config directory")
+  })
+})
+
+/**
+ * What the billed turn is worth beyond a yes/no.
+ *
+ * The SDK volunteers `rate_limit_event` on every query, so the probe already holds the account's
+ * live window state by the time it answers. Two hops have to happen for that to be worth anything,
+ * and the first version of this fix only did the first: ingest it into the quota store, **and** fold
+ * the resulting signal into the health store — which is what `availability.ts` builds the console's
+ * view from. A reading that stops at the quota store is a reading nothing renders.
+ */
+describe("createTestNowService — what a Claude subscription's turn reports back", () => {
+  const subscription = () =>
+    accountRow({ provider: "anthropic-oauth", configDir: "/data/claude/a" })
+
+  function probeReturning(result: Partial<SdkTestProbeResult>): SdkTestProbe {
+    return {
+      run: async (_input: SdkTestProbeInput) => ({
+        ok: true,
+        message: "pong",
+        rateLimitInfos: [],
+        ...result,
+      }),
+    }
+  }
+
+  test("the turn's quota reading reaches the health store the console reads", async () => {
+    const reading = {
+      status: "allowed",
+      rateLimitType: "five_hour",
+      // Epoch SECONDS, as the SDK actually sends them.
+      resetsAt: Math.floor(NOW.getTime() / 1000) + 3_600,
+    }
+    const { service, folded } = harness({
+      row: subscription(),
+      sdkProbe: probeReturning({ rateLimitInfos: [reading] }),
+    })
+
+    const result = await service.test(subscription().id, { model: "claude-x", confirmed: true })
+
+    expect(result.ok).toBe(true)
+    expect(folded).toHaveLength(1)
+    expect(folded[0]?.accountId).toBe(subscription().id)
+    // The window is carried through with the provider's own instant, not an estimate of ours.
+    const window = folded[0]?.signal?.quotaWindows?.find((w) => w.window === "five_hour")
+    expect(window?.resetsAt).toEqual(new Date(NOW.getTime() + 3_600_000))
+    expect(window?.resetSource).toBe("provider-reported")
+  })
+
+  test("a turn that reported no windows folds nothing rather than an empty reading", async () => {
+    const { service, folded } = harness({
+      row: subscription(),
+      sdkProbe: probeReturning({ rateLimitInfos: [] }),
+    })
+
+    await service.test(subscription().id, { model: "claude-x", confirmed: true })
+
+    // Not `applyRateLimit(id, null)`: claiming "this account reported no limits" is a different
+    // statement from "this turn carried no reading", and the store would act on the first.
+    expect(folded).toHaveLength(0)
+  })
+
+  test("a failed test is logged, so an unrecognized upstream reason is not lost", async () => {
+    const { service, warnings } = harness({
+      row: subscription(),
+      sdkProbe: {
+        run: async () => ({
+          ok: false,
+          message: "the account's Claude subscription window is spent",
+          rateLimitInfos: [],
+        }),
+      },
+    })
+
+    await service.test(subscription().id, { model: "claude-x", confirmed: true })
+
+    expect(warnings).toHaveLength(1)
+    expect(warnings[0]?.msg).toBe("account test failed")
+    expect(warnings[0]?.fields).toMatchObject({
+      provider: "anthropic-oauth",
+      reason: "the account's Claude subscription window is spent",
+    })
+  })
+
+  test("a successful test logs nothing — the response already said so", async () => {
+    const { service, warnings } = harness({
+      row: subscription(),
+      sdkProbe: probeReturning({}),
+    })
+
+    await service.test(subscription().id, { model: "claude-x", confirmed: true })
+
+    expect(warnings).toHaveLength(0)
   })
 })

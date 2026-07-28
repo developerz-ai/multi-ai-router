@@ -172,8 +172,12 @@ export function createAdminPlane(deps: AdminPlaneDeps): AdminPlane {
       cliPathOverride: env.claudeCliPath,
       concurrency: deps.sdkConcurrency,
     }),
-    // The turn is billed either way; this is what makes it also answer "how much is left".
+    // The turn is billed either way; this is what makes it also answer "how much is left" — and
+    // `health` is what makes that answer visible, since the console reads a health snapshot rather
+    // than the quota store.
     quota: deps.sdkQuota,
+    health,
+    log: logger,
   })
 
   const accountsService = createAccountsService({ accounts, keys, cipher, configDirs, audit, now })
