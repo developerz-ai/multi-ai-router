@@ -68,6 +68,10 @@ async function main(): Promise<void> {
       dispatcher: runtime.dispatcher,
       catalog: runtime.catalog,
       health: runtime.health,
+      // `GET /v1/catalog` only: a size and a price beside each reachable model. Both warm, both
+      // read synchronously — the listing never touches Postgres.
+      models: runtime.models,
+      prices: (provider, model) => runtime.prices.lookup(provider, model),
     },
     trustProxy: env.trustProxy,
     sessionCookieInsecure: env.adminAuth.sessionCookieInsecure,

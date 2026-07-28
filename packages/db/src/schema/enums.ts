@@ -80,6 +80,7 @@ export const scheduledTask = pgEnum("scheduled_task", [
   "config_dir_reap",
   "admin_session_purge",
   "idle_account_probe",
+  "model_catalog_refresh",
 ])
 
 export const scheduledTaskOutcome = pgEnum("scheduled_task_outcome", [

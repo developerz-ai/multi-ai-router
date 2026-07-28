@@ -288,6 +288,19 @@ export interface SchedulerConfig {
    * row. The sweep is resumable, so a backlog drains over consecutive ticks.
    */
   readonly idleAccountProbeBatchSize: number
+  /**
+   * How often the model catalog is re-read from each account's upstream. Hourly by default, which
+   * it can afford to be: a model listing costs no tokens and spends no quota window, unlike the
+   * keepalive above. It writes only `model_catalog` — a description nothing in routing reads — so
+   * an upstream retiring a model changes what the listing *says* and never where a request lands.
+   */
+  readonly modelCatalogRefreshIntervalMinutes: number
+  /**
+   * Accounts refreshed per catalog tick. Bounds outbound requests per tick, not memory. The sweep
+   * orders by staleness, so a deployment with more accounts than one batch rotates through them
+   * across consecutive ticks rather than refreshing the same few forever.
+   */
+  readonly modelCatalogRefreshBatchSize: number
   /** Max rows per bounded-delete sweep. */
   readonly sweepBatchSize: number
   /** Jitter applied to task intervals as a fraction of the interval. E.g., 0.2 means ±20%. */
@@ -500,6 +513,8 @@ export const ENV_FIELDS = {
   IDLE_ACCOUNT_AFTER_DAYS: atLeastOne.optional(),
   IDLE_ACCOUNT_PROBE_BATCH_SIZE: atLeastOne.optional(),
   ADMIN_SESSION_PURGE_INTERVAL_MINUTES: atLeastOne.optional(),
+  MODEL_CATALOG_REFRESH_INTERVAL_MINUTES: atLeastOne.optional(),
+  MODEL_CATALOG_REFRESH_BATCH_SIZE: atLeastOne.optional(),
   SWEEP_BATCH_SIZE: atLeastOne.optional(),
   SCHEDULER_JITTER_FRACTION: fraction.optional(),
   // Exclusive bounds: `0` would refresh in a loop and `1` would refresh at the instant of
@@ -645,6 +660,10 @@ const envSchema = z.object(ENV_FIELDS).transform((raw, ctx): Env => {
       idleAccountProbeIntervalMinutes: raw.IDLE_ACCOUNT_PROBE_INTERVAL_MINUTES ?? 1_440,
       idleAccountAfterDays: raw.IDLE_ACCOUNT_AFTER_DAYS ?? 7,
       idleAccountProbeBatchSize: raw.IDLE_ACCOUNT_PROBE_BATCH_SIZE ?? 5,
+      // Hourly, and a batch that covers a normal fleet in one tick. Bigger than the keepalive's
+      // five because these are plain GETs against a listing endpoint, not billed turns.
+      modelCatalogRefreshIntervalMinutes: raw.MODEL_CATALOG_REFRESH_INTERVAL_MINUTES ?? 60,
+      modelCatalogRefreshBatchSize: raw.MODEL_CATALOG_REFRESH_BATCH_SIZE ?? 25,
       sweepBatchSize: raw.SWEEP_BATCH_SIZE ?? 1_000,
       jitterFraction: raw.SCHEDULER_JITTER_FRACTION ?? 0.2,
     },

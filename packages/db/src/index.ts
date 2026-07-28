@@ -29,6 +29,12 @@ export { createApiKeyRepository } from "./repositories/api-key-repository"
 export type { AppendAuditEventInput, AuditRepository } from "./repositories/audit-repository"
 export { createAuditRepository } from "./repositories/audit-repository"
 export type {
+  AccountCatalogAge,
+  ModelCatalogEntry,
+  ModelCatalogRepository,
+} from "./repositories/model-catalog-repository"
+export { createModelCatalogRepository } from "./repositories/model-catalog-repository"
+export type {
   CreateOauthStateInput,
   OauthStateRepository,
 } from "./repositories/oauth-state-repository"
@@ -69,6 +75,8 @@ export {
   toUtcDay,
 } from "./repositories/usage-daily-repository"
 export type {
+  TokenSpanShape,
+  TokenSpanUsage,
   UsageDimension,
   UsageGroupRow,
   UsageGroupSeriesPoint,
@@ -79,7 +87,7 @@ export type {
   UsageTotals,
   UsageWindow,
 } from "./repositories/usage-read-repository"
-export { createUsageReadRepository } from "./repositories/usage-read-repository"
+export { createUsageReadRepository, foldTokenSpans } from "./repositories/usage-read-repository"
 export type {
   RecentAttemptQuery,
   RecentAttemptRow,
@@ -131,6 +139,8 @@ export {
 // The whole schema as one namespace, for `drizzle(sql, { schema })` and for
 // query builders that need a table this barrel does not name individually.
 export * as schema from "./schema/index"
+export type { ModelCatalogRow, NewModelCatalogRow } from "./schema/model-catalog"
+export { modelCatalog } from "./schema/model-catalog"
 export type { NewOauthStateRow, OauthStateRow } from "./schema/oauth-states"
 export { oauthStates } from "./schema/oauth-states"
 export type { NewPoolMemberRow, NewPoolRow, PoolMemberRow, PoolRow } from "./schema/pools"

@@ -22,7 +22,7 @@ import { ADMIN_USAGE_BASE_PATH, adminUsageRoutes } from "./routes/admin/usage"
 import { healthRoutes } from "./routes/health"
 import { type MetricsRouteDeps, metricsRoutes } from "./routes/metrics"
 import { spaRoutes } from "./routes/spa"
-import { DATA_PLANE_BASE_PATH, dataPlaneRoutes } from "./routes/v1"
+import { DATA_PLANE_BASE_PATH, type DataPlaneRoutesDeps, dataPlaneRoutes } from "./routes/v1"
 import type {
   Dispatcher,
   HealthStore,
@@ -94,6 +94,13 @@ export interface DataPlaneDeps {
   readonly dispatcher: Dispatcher
   readonly catalog: RoutingCatalog
   readonly health: HealthStore
+  /**
+   * `GET /v1/catalog` only, and both optional: the warm model catalog and the warm price lookup.
+   * A test that mounts the data plane to exercise inference wires neither, and the catalog route
+   * answers an empty list rather than 404ing a path that exists.
+   */
+  readonly models?: DataPlaneRoutesDeps["models"]
+  readonly prices?: DataPlaneRoutesDeps["prices"]
 }
 
 export function createApp(deps: AppDeps): Hono<AppEnv> {

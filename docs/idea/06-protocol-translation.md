@@ -40,6 +40,32 @@ leftmost one that applies.
 | `POST /v1/embeddings` | OpenAI, dialect-neutral (`openai-chat` for the error shape) | embed — below |
 | `GET /v1/models` | union of models reachable by the presenting key — [04-api-keys-and-access.md](04-api-keys-and-access.md) | — |
 | `GET /v1/models/:id` | one model; `404` if the presenting key cannot reach it | — |
+| `GET /v1/catalog` | the same models, with context window, price, and pooling depth — this router's own shape | — |
+| `GET /v1/providers` | the upstreams the presenting key can reach, and how many accounts of each can serve now | — |
+
+**`/v1/catalog` is a separate path rather than more fields on `/v1/models`, deliberately.**
+`/v1/models` is a *wire contract*: an OpenAI or Anthropic client parses it with a generated SDK, and
+the router's job there is to answer in the shape those clients expect and nothing more. The catalog
+is the router's own listing, so it can say things neither of those shapes has a place for — how much
+fits, what it costs, and how many accounts stand behind the name.
+
+It is shaped after an aggregator's models endpoint in *what it answers*, not byte-for-byte in how it
+spells it, and the difference is deliberate. Copying that shape exactly would mean publishing
+per-token decimal strings, a single "top provider" this router chooses per request, and architecture
+fields nothing here can verify — a listing that looks authoritative while being unable to stand
+behind half of it. So: per-million-token prices, the unit every price in this system already uses; a
+provider *list* rather than a winner, because pooling is the product; and no field this router cannot
+source. `null` means **unknown** in every numeric field — never zero, never unlimited.
+
+Both take the same router key and the same scope intersection as everything else on `/v1`. The model
+set comes from the same implementation `GET /v1/models` uses, because a second opinion about what a
+key can reach would be wrong in the direction of publishing a catalog the key cannot use.
+
+**A passthrough account contributes to `/v1/catalog` and not to `/v1/models`**, which is the point of
+having both. An account declaring no `supportedModels` serves any name and therefore advertises
+nothing enumerable — while its upstream has told the hourly sweep exactly which models it serves. The
+catalog publishes those; the wire listing cannot, because it has no way to say "and also anything
+else you ask for".
 
 **Both OpenAI paths are first-class, and that is not redundancy.** `POST /v1/responses` is OpenAI's
 current recommended primitive and where new clients are going; `POST /v1/chat/completions` is what the

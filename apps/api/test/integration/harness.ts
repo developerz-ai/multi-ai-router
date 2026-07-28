@@ -7,8 +7,8 @@ import type { RouterKeyEnv } from "../../src/middleware/routerKeyAuth"
 import { createMetrics } from "../../src/observability"
 import type { SdkInvoker, SdkQuotaStore, SessionStore } from "../../src/providers"
 import { metricsRoutes } from "../../src/routes/metrics"
-import { dataPlaneRoutes } from "../../src/routes/v1"
-import type { RateLookup } from "../../src/services/cost"
+import { type DataPlaneRoutesDeps, dataPlaneRoutes } from "../../src/routes/v1"
+import { lookupRates, type RateLookup } from "../../src/services/cost"
 import {
   createDispatcher,
   createHealthStore,
@@ -77,6 +77,12 @@ export interface HarnessOptions {
   readonly prices?: RateLookup
   /** The body ceiling, as the composition root passes `env.dataPlane.maxRequestBodyBytes`. */
   readonly maxBodyBytes?: number
+  /**
+   * The warm model catalog behind `GET /v1/catalog`. Omitted means this router was built without
+   * one — the route still exists and answers an empty list, the same as a deployment whose hourly
+   * sweep has not run yet.
+   */
+  readonly models?: DataPlaneRoutesDeps["models"]
 }
 
 export function harness(options: HarnessOptions) {
@@ -122,6 +128,14 @@ export function harness(options: HarnessOptions) {
       catalog: store,
       health,
       now: testClock.now,
+      ...(options.models === undefined
+        ? {}
+        : {
+            models: options.models,
+            // The same book the attempt is priced against, so a catalog price and a usage row
+            // can never disagree about what a model costs.
+            prices: (provider, model) => (options.prices ?? lookupRates)(provider, model) ?? null,
+          }),
       dispatcher: createDispatcher({
         catalog: store,
         health,

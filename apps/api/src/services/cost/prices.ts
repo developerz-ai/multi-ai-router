@@ -41,7 +41,7 @@ import { ZAI_MODELS } from "./tables/zai"
  *
  * Update it in the same commit as any edit under `tables/`, and never without one.
  */
-export const PRICE_TABLE_AS_OF = "2026-07-27"
+export const PRICE_TABLE_AS_OF = "2026-07-28"
 
 /**
  * Only providers with a published, model-keyed price list appear here.

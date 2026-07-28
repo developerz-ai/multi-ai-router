@@ -83,7 +83,8 @@ export interface UsageReadRepository {
    */
   tokensSince(
     spans: readonly { readonly accountId: string; readonly window: string; readonly since: Date }[],
-  ): Promise<readonly { accountId: string; window: string; tokens: number }[]>
+    shape?: TokenSpanShape,
+  ): Promise<readonly TokenSpanUsage[]>
   /** Totals grouped by one dimension, biggest first. */
   breakdown(window: UsageWindow, dimension: UsageDimension): Promise<UsageGroupRow[]>
   /**
@@ -114,6 +115,96 @@ export interface UsageReadRepository {
    * can hand back a numeric as a string.
    */
   latency(window: UsageWindow): Promise<UsageLatency>
+}
+
+/**
+ * Ask `tokensSince` for the *shape* of a window's consumption as well as its total.
+ *
+ * Optional because the total alone answers "how much of this window is gone", which is what the
+ * progress bar needs. The shape answers the different question beside it — "how fast" — and a
+ * window two-thirds spent in its first hour is a very different situation from one two-thirds spent
+ * evenly, which a single number cannot distinguish.
+ *
+ * One query either way: the total is the sum of the buckets, so asking for both costs nothing over
+ * asking for one. Slots are **equal divisions of `since..until`**, not clock hours, because each
+ * window has its own span and a fixed bucket would give a five-hour window five points and a
+ * seven-day one a hundred and sixty-eight.
+ */
+export interface TokenSpanShape {
+  /** The end of every span. The same instant for all of them — "now", as the caller sees it. */
+  readonly until: Date
+  /** How many equal buckets to divide each span into. */
+  readonly slots: number
+}
+
+export interface TokenSpanUsage {
+  readonly accountId: string
+  readonly window: string
+  readonly tokens: number
+  /**
+   * Tokens per slot, oldest first, zero-filled. Empty when no shape was asked for.
+   *
+   * Zero-filled rather than sparse: a quiet hour inside a window is a real measurement and a
+   * sparkline that closed the gap would draw a smooth line through a pause that actually happened.
+   */
+  readonly series: readonly number[]
+}
+
+/**
+ * Slot rows back into one entry per (account, window): the zero-filled series, and the total as the
+ * sum of it.
+ *
+ * The total is derived from the buckets rather than summed by a second aggregate, so the bar and
+ * the sparkline beside it cannot disagree — they are literally the same numbers. A `null` slot is
+ * the left join's empty side (an account that recorded nothing in its span) and contributes zero
+ * without disturbing the series, which is what makes an idle account render as a flat line at zero
+ * rather than dropping out of the answer.
+ *
+ * Exported for its own test: the SQL needs a database, this does not.
+ */
+export function foldTokenSpans(
+  rows: readonly {
+    readonly account_id: string
+    readonly window_kind: string
+    readonly slot: number | null
+    readonly tokens: string | number
+  }[],
+  slots: number,
+): readonly TokenSpanUsage[] {
+  const width = Math.max(0, slots)
+  const byPair = new Map<
+    string,
+    { accountId: string; window: string; series: number[]; unbucketed: number }
+  >()
+
+  for (const row of rows) {
+    const key = `${row.account_id} ${row.window_kind}`
+    const entry = byPair.get(key) ?? {
+      accountId: row.account_id,
+      window: row.window_kind,
+      series: Array.from({ length: width }, () => 0),
+      unbucketed: 0,
+    }
+    // `sum` is bigint-shaped, which the driver hands back as a string.
+    const tokens = Number(row.tokens)
+    // `width_bucket` numbers from 1; `null` is the empty side of the left join, and anything
+    // outside 1..slots is a boundary the join's own bounds should already have excluded. Either
+    // way those tokens still count toward the total — they are simply not placed on the curve.
+    const index = (row.slot ?? 0) - 1
+    if (index >= 0 && index < width) {
+      entry.series[index] = (entry.series[index] ?? 0) + tokens
+    } else {
+      entry.unbucketed += tokens
+    }
+    byPair.set(key, entry)
+  }
+
+  return [...byPair.values()].map((entry) => ({
+    accountId: entry.accountId,
+    window: entry.window,
+    tokens: entry.series.reduce((sum, value) => sum + value, entry.unbucketed),
+    series: width > 0 ? entry.series : [],
+  }))
 }
 
 export interface UsageSeriesPoint {
@@ -156,16 +247,48 @@ export function createUsageReadRepository(db: Database): UsageReadRepository {
    * One statement over a VALUES list of (account, window, since), so a fleet of subscriptions
    * costs one round trip rather than one per window per account.
    */
-  const tokensSince: UsageReadRepository["tokensSince"] = async (spans) => {
+  const tokensSince: UsageReadRepository["tokensSince"] = async (spans, shape) => {
     if (spans.length === 0) return []
 
+    // `width_bucket` refuses a range whose bounds are equal, and a span that has not opened yet has
+    // nothing to measure anyway. Dropped rather than clamped: a zero-width window is a caller bug,
+    // and silently widening it would report tokens against a range nobody asked about.
+    const usable =
+      shape === undefined
+        ? spans
+        : spans.filter((span) => span.since.getTime() < shape.until.getTime())
+    if (usable.length === 0) return []
+
     const values = sql.join(
-      spans.map(
+      usable.map(
         (span) =>
           sql`(${span.accountId}::uuid, ${span.window}::text, ${span.since.toISOString()}::timestamptz)`,
       ),
       sql`, `,
     )
+
+    const tokenSum = sql`coalesce(sum(
+      ${usageRecords.tokensIn} + ${usageRecords.tokensOut}
+      + ${usageRecords.cacheReadTokens} + ${usageRecords.cacheWriteTokens}
+    ), 0)`
+
+    // Equal divisions of each span's own `since..until`, so every window yields the same number of
+    // points whatever its length. `width_bucket` answers 1..slots inside the range; the join's own
+    // bounds keep anything outside it out, and a `null` here is the left join's empty side.
+    const slot =
+      shape === undefined
+        ? sql`null::int`
+        : sql`width_bucket(
+            extract(epoch from ${usageRecords.createdAt}),
+            extract(epoch from s.since),
+            extract(epoch from ${shape.until.toISOString()}::timestamptz),
+            ${shape.slots}
+          )`
+
+    const upperBound =
+      shape === undefined
+        ? sql``
+        : sql`and ${usageRecords.createdAt} < ${shape.until.toISOString()}::timestamptz`
 
     // `window_kind`, never `window`: WINDOW is a reserved keyword in Postgres (it introduces a
     // window-function clause), so an alias column named `window` makes the whole statement a
@@ -173,27 +296,21 @@ export function createUsageReadRepository(db: Database): UsageReadRepository {
     const rows = await db.execute<{
       account_id: string
       window_kind: string
+      slot: number | null
       tokens: string | number
     }>(
       sql`
-        select s.account_id, s.window_kind, coalesce(sum(
-          ${usageRecords.tokensIn} + ${usageRecords.tokensOut}
-          + ${usageRecords.cacheReadTokens} + ${usageRecords.cacheWriteTokens}
-        ), 0) as tokens
+        select s.account_id, s.window_kind, ${slot} as slot, ${tokenSum} as tokens
         from (values ${values}) as s(account_id, window_kind, since)
         left join ${usageRecords}
           on ${usageRecords.accountId} = s.account_id
          and ${usageRecords.createdAt} >= s.since
-        group by s.account_id, s.window_kind
+         ${upperBound}
+        group by s.account_id, s.window_kind, slot
       `,
     )
 
-    return [...rows].map((row) => ({
-      accountId: row.account_id,
-      window: row.window_kind,
-      // `sum` is bigint-shaped, which the driver hands back as a string.
-      tokens: Number(row.tokens),
-    }))
+    return foldTokenSpans([...rows], shape?.slots ?? 0)
   }
 
   const inWindow = (window: UsageWindow) =>

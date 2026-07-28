@@ -5,6 +5,72 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.4.0] — 2026-07-28
+
+### Added
+
+- **A model catalog, refreshed hourly, with each model's context window.** Every
+  account's upstream is asked what it serves and the answer is stored with how
+  much fits in each model — the data behind the new catalog endpoint and the
+  console's model column. It costs nothing to run: a model listing spends no
+  tokens and no quota window, unlike the keepalive sweep beside it.
+
+  **It writes a description, never a routing decision.** `supported_models` — the
+  column that decides which accounts a request may land on — stays operator-owned
+  and is untouched by any timer, exactly as its own note has always said. The new
+  `model_catalog` table is read by nothing in selection, which is what lets it
+  refresh itself at all: an upstream retiring a model changes what the router
+  *says* and never where a request goes.
+
+  Skipped for Claude subscriptions (the Agent SDK owns that catalog and there is
+  no endpoint to GET), for `openrouter` (an aggregator of several hundred models
+  it does not itself serve), and for accounts the operator disabled. The batch is
+  ordered **oldest catalog first**, so a fleet larger than one tick rotates
+  through rather than refreshing the same few forever.
+
+- **Context windows for the providers whose listings state none.** Verified
+  against the live endpoints rather than assumed: z.ai, MiniMax, OpenAI and
+  Anthropic all answer `/v1/models` with an id, an object type and an owner and
+  nothing else. Those windows now ship in a pinned table with a date, structured
+  exactly like the price tables next door. Google, Mistral, Groq, Together and
+  Cerebras are deliberately absent — their listings carry a real size, so the
+  parser reads a live number and a shipped row would only be a staler copy.
+
+  Every window is labelled `upstream` or `shipped` wherever it is rendered. Both
+  are real published figures; only one can know about a model released after the
+  image was built.
+
+- **`GET /v1/catalog` and `GET /v1/providers`** — this router's own listings, with
+  context window, price, and how many accounts stand behind each model. Same
+  router key, same scope intersection, and the model set comes from the same
+  implementation `/v1/models` uses, so the two can never disagree about what a key
+  can reach.
+
+  A **passthrough account contributes here and not to `/v1/models`**, which is the
+  point of having both: an account declaring no `supported_models` serves any name
+  and therefore advertises nothing enumerable, while its upstream has told the
+  sweep exactly what it serves. `null` means unknown in every numeric field —
+  never zero, never unlimited.
+
+- **A consumption sparkline beside the quota bar.** Two windows both two-thirds
+  spent look identical until one of them shows the whole two-thirds went in the
+  first hour, and only one of those is about to run out. It is the same
+  measurement as the bar — the total is the sum of the slices, from one query —
+  and it appears only where the bar is the router's own count, never beside a
+  provider-reported percentage.
+
+### Fixed
+
+- **Claude Opus 5 priced as unknown, so subscription usage reported `$0`.** The
+  Anthropic price table stopped at the 4.x families. Opus 5, its fast variant, and
+  the 4.x models below 4.6 are all named now, along with **Sonnet 4.5 — which the
+  keepalive sweep itself sends**, so until now every turn this router billed
+  itself priced as free.
+
+  Fast-mode variants are priced **by name, never by multiplying the base model**:
+  Opus 4.7 fast bills at 6× its base and Opus 4.8 and 5 fast at 2×, so a derived
+  rate would have over-reported one family threefold.
+
 ## [1.3.2] — 2026-07-28
 
 ### Fixed

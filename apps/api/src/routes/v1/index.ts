@@ -2,13 +2,21 @@ import type { Dialect } from "@multi-ai-router/core"
 import { Hono } from "hono"
 import { type RouterKeyEnv, routerKeyAuth } from "../../middleware/routerKeyAuth"
 import type {
+  CatalogListingDeps,
   Dispatcher,
   HealthStore,
   RouterKeyVerifier,
   RoutingCatalog,
   UpstreamOperation,
 } from "../../services/dataplane"
-import { reachableModel, reachableModels } from "../../services/dataplane"
+import {
+  catalogListing,
+  providerListing,
+  reachableModel,
+  reachableModels,
+} from "../../services/dataplane"
+import type { ModelCatalogStore } from "../../services/models"
+import { renderCatalog, renderProviders } from "./catalog"
 import { renderModel, renderModels } from "./models"
 
 /**
@@ -56,6 +64,13 @@ export interface DataPlaneRoutesDeps {
   readonly dispatcher: Dispatcher
   readonly catalog: RoutingCatalog
   readonly health: HealthStore
+  /**
+   * The warm model catalog and the warm price book, for `GET /v1/catalog`. Both optional: a runtime
+   * built without them serves every other route, and the catalog route answers an empty list rather
+   * than 404ing a path that exists — the same reason a deployment with no accounts lists no models.
+   */
+  readonly models?: Pick<ModelCatalogStore, "describe" | "modelsOf">
+  readonly prices?: CatalogListingDeps["prices"]
   readonly now?: () => Date
 }
 
@@ -111,6 +126,28 @@ export function dataPlaneRoutes(deps: DataPlaneRoutesDeps): Hono<RouterKeyEnv> {
     )
     return renderModel(c, model, at)
   })
+
+  // This router's own listings. Same key, same scope intersection, richer answer — see `catalog.ts`
+  // for why they are separate paths rather than more fields on `/v1/models`.
+  routes.get("/v1/catalog", guard, (c) => {
+    const { models, prices } = deps
+    if (models === undefined || prices === undefined) return renderCatalog(c, [])
+    return renderCatalog(
+      c,
+      catalogListing(
+        { catalog: deps.catalog, health: deps.health, models, prices },
+        c.get("routerKey"),
+        now(),
+      ),
+    )
+  })
+
+  routes.get("/v1/providers", guard, (c) =>
+    renderProviders(
+      c,
+      providerListing({ catalog: deps.catalog, health: deps.health }, c.get("routerKey"), now()),
+    ),
+  )
 
   return routes
 }

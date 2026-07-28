@@ -22,6 +22,24 @@
   white-space: nowrap;
 }
 
+// Pinned to the gauge's own column so the curve sits directly under the bar it
+// decomposes — the two are one measurement, and reading them as a pair is the
+// only way the shape means anything.
+//
+// `currentColor` from a muted tone: the bar already carries the status colour,
+// and a second coloured element beside it would compete for the same glance.
+.trend {
+  grid-column: 2;
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  color: var(--text-muted);
+}
+
+.trend svg {
+  max-width: 100%;
+}
+
 .reset {
   display: flex;
   flex-wrap: wrap;

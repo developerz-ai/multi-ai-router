@@ -325,3 +325,57 @@ describe("the measured fallback bar", () => {
     expect(measured({ tokensUsed: 10, tokenLimit: 0 })?.utilization).toBeNull()
   })
 })
+
+/**
+ * The consumption curve beside the bar.
+ *
+ * Both halves of the rule are load-bearing. It appears only where the bar is the router's **own**
+ * measurement, because these slices sum to that measurement and putting them beside a
+ * provider-reported percentage would be a curve about one accounting sitting under a number from
+ * another. And it is validated rather than trusted: an older router simply omits the field.
+ */
+describe("the measured consumption curve", () => {
+  const measured = (overrides: Partial<QuotaWindowView> = {}) =>
+    window({
+      utilization: null,
+      utilizationSource: "threshold-triggered",
+      tokensUsed: 300,
+      tokenLimit: 1_000,
+      tokenSeries: [100, 0, 200],
+      ...overrides,
+    })
+
+  test("rides along where the bar is our own count", () => {
+    expect(describeQuotaWindow("active", measured(), NOW).tokenSeries).toEqual([100, 0, 200])
+  })
+
+  test("is dropped where the provider stated a percentage of its own", () => {
+    // The bar is now the provider's reading; the slices describe ours. Two measurements.
+    const view = describeQuotaWindow("active", measured({ utilization: 0.62 }), NOW)
+
+    expect(view.utilization).toBe(0.62)
+    expect(view.tokenSeries).toEqual([])
+  })
+
+  test("is dropped where there is no configured ceiling to measure against", () => {
+    expect(describeQuotaWindow("active", measured({ tokenLimit: null }), NOW).tokenSeries).toEqual(
+      [],
+    )
+  })
+
+  /** An older router omits the field entirely; a chart handed `undefined` renders as broken. */
+  test("an absent or malformed series is empty, never passed through", () => {
+    const { tokenSeries, ...withoutSeries } = measured()
+    expect(describeQuotaWindow("active", withoutSeries, NOW).tokenSeries).toEqual([])
+    expect(
+      describeQuotaWindow("active", measured({ tokenSeries: [1, Number.NaN] }), NOW).tokenSeries,
+    ).toEqual([])
+  })
+
+  /** One slice is a dot. `Sparkline` would draw it as a flat line claiming a shape nobody measured. */
+  test("a single point is not a trend", () => {
+    expect(
+      describeQuotaWindow("active", measured({ tokenSeries: [500] }), NOW).tokenSeries,
+    ).toEqual([])
+  })
+})

@@ -87,6 +87,15 @@ export interface QuotaWindowView {
   readonly tokensUsed: number | null
   /** The operator's configured ceiling. Not a provider fact — never reaches routing. */
   readonly tokenLimit: number | null
+  /**
+   * `tokensUsed` spread across equal slices of the window's span, oldest first. Empty where the
+   * bar is absent.
+   *
+   * The same numbers as `tokensUsed`, which is their sum — so the sparkline and the bar beside it
+   * cannot disagree. It answers what the total cannot: a window two-thirds spent in its first hour
+   * and one two-thirds spent evenly draw the same bar and are not the same situation.
+   */
+  readonly tokenSeries?: readonly number[]
 }
 
 /** `services/accounts/availability.ts` — `AccountAvailability`. */

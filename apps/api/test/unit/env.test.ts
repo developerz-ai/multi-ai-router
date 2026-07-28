@@ -70,6 +70,10 @@ describe("parseEnv", () => {
       idleAccountProbeIntervalMinutes: 1_440,
       idleAccountAfterDays: 7,
       idleAccountProbeBatchSize: 5,
+      // Hourly, and a bigger batch than the keepalive's five: these are plain GETs against a
+      // listing endpoint, not billed turns.
+      modelCatalogRefreshIntervalMinutes: 60,
+      modelCatalogRefreshBatchSize: 25,
       sweepBatchSize: 1_000,
       jitterFraction: 0.2,
     })
@@ -111,6 +115,8 @@ describe("parseEnv", () => {
       IDLE_ACCOUNT_PROBE_INTERVAL_MINUTES: "720",
       IDLE_ACCOUNT_AFTER_DAYS: "3",
       IDLE_ACCOUNT_PROBE_BATCH_SIZE: "2",
+      MODEL_CATALOG_REFRESH_INTERVAL_MINUTES: "30",
+      MODEL_CATALOG_REFRESH_BATCH_SIZE: "8",
       ADMIN_SESSION_PURGE_INTERVAL_MINUTES: "20",
       SWEEP_BATCH_SIZE: "500",
       SCHEDULER_JITTER_FRACTION: "0.5",
@@ -159,6 +165,8 @@ describe("parseEnv", () => {
       idleAccountProbeIntervalMinutes: 720,
       idleAccountAfterDays: 3,
       idleAccountProbeBatchSize: 2,
+      modelCatalogRefreshIntervalMinutes: 30,
+      modelCatalogRefreshBatchSize: 8,
       sweepBatchSize: 500,
       jitterFraction: 0.5,
     })
