@@ -12,9 +12,11 @@ import type {
 import type { Env } from "../../config/env"
 import type { AccountConfigDirs } from "../../providers/claude-sdk/config-dir"
 import type { HealthStore } from "../../services/dataplane"
+import type { AccountAuthProbe } from "../../services/health/claudeAuthProbe"
 import type { ScheduledTask } from "../types"
 import { type AdminSessionStoreForPurge, createAdminSessionPurgeTask } from "./admin-session-purge"
 import { createConfigDirReapTask } from "./config-dir-reap"
+import { createIdleAccountProbeTask, type IdleAccountProbeDeps } from "./idle-account-probe"
 import { createJanitorTask } from "./janitor"
 import { createOauthPurgeTask } from "./oauth-purge"
 import { createQuotaFloorTask } from "./quota-floor"
@@ -50,7 +52,7 @@ export interface ScheduledTaskDeps {
   readonly adminSessions: AdminSessionStoreForPurge
   readonly accounts: Pick<
     AccountRepository,
-    "list" | "listIds" | "listQuotaWindows" | "upsertQuotaWindow"
+    "list" | "listIds" | "listQuotaWindows" | "upsertQuotaWindow" | "findIdle" | "updateStatusWhen"
   >
   /**
    * The rollup's catch-up cursor, and the janitor's sweep of the run log itself. The runner uses
@@ -64,12 +66,31 @@ export interface ScheduledTaskDeps {
    * than here because the admin plane provisions and removes through the same instance.
    */
   readonly configDirs: Pick<AccountConfigDirs, "root" | "list" | "remove">
+  /**
+   * The keepalive sweep's billed half — the admin plane's own "Test now", handed in rather than
+   * rebuilt, so a scheduled probe and an operator's button press share one cooldown, one
+   * subprocess gate, and one audit kind. Absent means the sweep has nothing to spend and probes
+   * nothing.
+   */
+  readonly testAccount?: IdleAccountProbeDeps["test"]
+  /**
+   * The free half: "is this Claude subscription still logged in", asked of the CLI. Absent where
+   * no CLI is available, in which case a dead credential is discovered by the paid test instead.
+   */
+  readonly authProbe?: AccountAuthProbe
+  /**
+   * Which model each provider is probed with. Empty means nothing is probed — the sweep never
+   * invents a model name, because the client picks the model and this is the one place the router
+   * would otherwise have to choose one (non-negotiable 4 in spirit).
+   */
+  readonly probeModels?: Readonly<Record<string, string>>
   /** A full `Env` satisfies this, so the composition root passes `env` straight through. */
   readonly env: Pick<Env, "retention" | "janitorIntervalMinutes" | "scheduler">
 }
 
 const MINUTE_MS = 60_000
 const HOUR_MS = 60 * MINUTE_MS
+const DAY_MS = 24 * HOUR_MS
 
 /**
  * Every task's cadence, in milliseconds, keyed by its `scheduled_task` name.
@@ -90,6 +111,7 @@ export function scheduledTaskIntervals(
     quota_floor_refresh: env.scheduler.quotaFloorIntervalMinutes * MINUTE_MS,
     config_dir_reap: env.scheduler.configDirReapIntervalMinutes * MINUTE_MS,
     admin_session_purge: env.scheduler.adminSessionPurgeIntervalMinutes * MINUTE_MS,
+    idle_account_probe: env.scheduler.idleAccountProbeIntervalMinutes * MINUTE_MS,
   }
 }
 
@@ -143,6 +165,28 @@ export function createScheduledTasks(deps: ScheduledTaskDeps): readonly Schedule
       sessions: deps.adminSessions,
       intervalMs: intervals.admin_session_purge,
     }),
+    // Last, and the only task here that spends money. It exists because a Claude subscription's
+    // tokens are refreshed by the SDK *when it runs*, so an account traffic forgets expires on its
+    // own — see the module header for why the free auth check comes first.
+    //
+    // Built only when there is something to spend: a deployment with no test service wired gets no
+    // task at all rather than one that ticks and does nothing.
+    ...(deps.testAccount === undefined
+      ? []
+      : [
+          createIdleAccountProbeTask({
+            accounts: deps.accounts,
+            test: deps.testAccount,
+            ...(deps.authProbe === undefined ? {} : { auth: deps.authProbe }),
+            models: deps.probeModels ?? {},
+            intervalMs: intervals.idle_account_probe,
+            idleAfterMs: env.scheduler.idleAccountAfterDays * DAY_MS,
+            // Deliberately not `sweepBatchSize`: every item here may spawn a ~245 MB subprocess
+            // and bill a turn, which is nothing like deleting a row, so it gets a much smaller
+            // bound of its own.
+            batchSize: env.scheduler.idleAccountProbeBatchSize,
+          }),
+        ]),
   ]
 }
 
@@ -150,6 +194,8 @@ export type { AdminSessionPurgeDeps, AdminSessionStoreForPurge } from "./admin-s
 export { createAdminSessionPurgeTask } from "./admin-session-purge"
 export type { ConfigDirReapDeps, OrphanConfigDir, ReapPlan, ReapPlanInput } from "./config-dir-reap"
 export { createConfigDirReapTask, planConfigDirReap } from "./config-dir-reap"
+export type { IdleAccountProbeDeps } from "./idle-account-probe"
+export { createIdleAccountProbeTask, IDLE_PROBE_MODELS } from "./idle-account-probe"
 export type { JanitorDeps } from "./janitor"
 export { createJanitorTask } from "./janitor"
 export type { OauthPurgeDeps } from "./oauth-purge"

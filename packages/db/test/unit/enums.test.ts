@@ -116,6 +116,7 @@ describe("documented enum values", () => {
       "quota_floor_refresh",
       "config_dir_reap",
       "admin_session_purge",
+      "idle_account_probe",
     ])
     expect(scheduledTaskOutcome.enumValues).toEqual(["success", "failed", "partial"])
   })

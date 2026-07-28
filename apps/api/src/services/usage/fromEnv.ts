@@ -1,4 +1,4 @@
-import type { UsageRecordRepository } from "@multi-ai-router/db"
+import type { AccountRepository, UsageRecordRepository } from "@multi-ai-router/db"
 import type { Env } from "../../config/env"
 import type { Logger } from "../../logging/logger"
 import type { UsageRecord } from "./record"
@@ -24,6 +24,12 @@ import { createUsageRecorder, type UsageRecorder } from "./recorder"
 
 export interface UsageRecorderFromEnvDeps {
   readonly records: Pick<UsageRecordRepository, "insertMany">
+  /**
+   * Stamped once per flush with every account the batch touched, so "unused for a week" is an
+   * indexed question about the account rather than a scan of a table retention prunes. Off the
+   * request path by construction — this runs on the recorder's background drain.
+   */
+  readonly accounts: Pick<AccountRepository, "markUsed">
   /** Only the queue's own three knobs: this module has no business reading the rest of the env. */
   readonly env: {
     readonly dataPlane: Pick<
@@ -39,6 +45,8 @@ export interface UsageRecorderFromEnvDeps {
   readonly onRecord?: (record: UsageRecord) => void
   /** Monotonic-enough milliseconds for the log throttle. Injected only by tests. */
   readonly now?: () => number
+  /** The wall clock the last-used stamp is written with. Injected only by tests. */
+  readonly clock?: () => Date
 }
 
 /**
@@ -48,6 +56,7 @@ export interface UsageRecorderFromEnvDeps {
 const REPORT_INTERVAL_MS = 60_000
 
 export function createUsageRecorderFromEnv(deps: UsageRecorderFromEnvDeps): UsageRecorder {
+  const clock = deps.clock ?? (() => new Date())
   const log = deps.logger.child({ component: "usage" })
   const now = deps.now ?? (() => Date.now())
   const { usageQueueMax, usageBatchSize, usageFlushIntervalMs } = deps.env.dataPlane
@@ -59,6 +68,15 @@ export function createUsageRecorderFromEnv(deps: UsageRecorderFromEnvDeps): Usag
     log.warn("usage batch write failed — retrying it on the next flush, traffic unaffected", {
       batches,
       records: latest.size,
+      reason: latest.reason,
+    })
+  })
+  // Throttled like its neighbours: a database that refuses this refuses it every flush, and one
+  // line per flush would bury the write failure that actually matters.
+  const reportStampFailure = throttled<WriteFailure>(now, (batches, latest) => {
+    log.warn("usage written but last-used stamp failed — idle probing may run early", {
+      batches,
+      accounts: latest.size,
       reason: latest.reason,
     })
   })
@@ -74,6 +92,19 @@ export function createUsageRecorderFromEnv(deps: UsageRecorderFromEnvDeps): Usag
     {
       write: async (batch) => {
         await deps.records.insertMany(batch.map(toUsageRecordRow))
+        // One extra statement per *flush*, not per request, and strictly after the records land:
+        // this stamp is what lets the idle probe find an account nothing has routed to in a week
+        // without scanning a table retention prunes. A failure here must not cost the batch that
+        // already succeeded — a missed stamp makes an account look idler than it is, which the
+        // probe answers with one free auth check, while a re-thrown error would re-queue records
+        // already written and double-count them.
+        const used = batch.flatMap((entry) => (entry.accountId === null ? [] : [entry.accountId]))
+        if (used.length === 0) return
+        try {
+          await deps.accounts.markUsed(used, clock())
+        } catch (error) {
+          reportStampFailure({ reason: reasonOf(error), size: used.length })
+        }
       },
     },
     {

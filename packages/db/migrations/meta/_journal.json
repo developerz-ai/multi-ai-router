@@ -113,6 +113,13 @@
       "when": 1785189336925,
       "tag": "0015_drop_unread_usage_indexes",
       "breakpoints": true
+    },
+    {
+      "idx": 16,
+      "version": "7",
+      "when": 1785209269268,
+      "tag": "0016_account_last_used_at",
+      "breakpoints": true
     }
   ]
 }
