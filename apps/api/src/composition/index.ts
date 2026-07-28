@@ -328,6 +328,9 @@ export function createRuntime(deps: RuntimeDeps): Runtime {
     health,
     prices,
     sdkConcurrency,
+    // The same instance the dispatch path ingests into, so "Test now" and a real request write one
+    // account's quota state to one place.
+    sdkQuota,
     configDirs,
     sessionStore: adminSessions,
     coherence: {

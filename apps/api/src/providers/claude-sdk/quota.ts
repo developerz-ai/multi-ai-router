@@ -274,16 +274,35 @@ function windowKind(raw: string | null): QuotaWindowKind | null {
 }
 
 /**
- * Epoch **milliseconds** per §5, and only when the instant is still ahead of us.
+ * The instant a window refills, in **whichever epoch unit the SDK used**, and only when it is still
+ * ahead of us.
  *
- * A reset already in the past answers nothing — it is late delivery, clock skew, or a value the SDK
- * reported in seconds — and passing it on would be worse than reporting none: the breaker would set
- * a cooldown that has already elapsed, which is a cooldown of zero against an upstream that just
- * said no. Dropping it lets the backoff schedule take over, labelled `estimated` rather than dressed
- * up as the provider's own word.
+ * **The SDK reports seconds.** Observed against a live subscription (SDK 0.3.220):
+ * `rate_limit_info.resetsAt = 1785204600`, which is 2026-07-28T09:30:00Z as seconds and
+ * 1970-01-21 as milliseconds. §5 says milliseconds and the type annotates no unit, so this read
+ * both ways and took the wrong one — every Claude subscription reset was landing in 1970, failing
+ * the "still ahead of us" test below, and being dropped as stale. The visible cost was the whole
+ * subscription reset surface: no per-window countdown in the console, `resetSource: "unknown"`
+ * rather than `provider-reported`, and a breaker that fell back to its estimated backoff while
+ * holding the provider's own exact answer.
+ *
+ * Both units are accepted rather than the observed one pinned, using the same floor
+ * `rate-limit/parse.ts` applies to OpenRouter's epoch header: anything below it cannot be a
+ * plausible millisecond instant (it would be 1973 or earlier) and is therefore seconds. That way an
+ * SDK that starts sending milliseconds tomorrow — matching what §5 always claimed — keeps working
+ * instead of re-breaking this in the other direction.
+ *
+ * A reset genuinely in the past still answers nothing: passing it on would be worse than reporting
+ * none, because the breaker would set a cooldown that has already elapsed — a cooldown of zero
+ * against an upstream that just said no. Dropping it lets the backoff schedule take over, labelled
+ * `estimated` rather than dressed up as the provider's own word.
  */
-function futureInstant(epochMs: number | null | undefined, now: Date): Date | null {
-  if (epochMs === null || epochMs === undefined) return null
+export const SDK_EPOCH_MILLIS_FLOOR = 100_000_000_000
+
+function futureInstant(epoch: number | null | undefined, now: Date): Date | null {
+  if (epoch === null || epoch === undefined) return null
+  if (!Number.isFinite(epoch) || epoch <= 0) return null
+  const epochMs = epoch < SDK_EPOCH_MILLIS_FLOOR ? epoch * 1000 : epoch
   return epochMs > now.getTime() ? new Date(epochMs) : null
 }
 

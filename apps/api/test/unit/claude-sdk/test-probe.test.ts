@@ -241,3 +241,123 @@ describe("the Agent-SDK test probe", () => {
     expect(launched.cwd).toBe("/data/claude/acc-1")
   })
 })
+
+/**
+ * What a spent subscription and a healthy one actually put on the wire, recorded from SDK 0.3.220
+ * against live accounts.
+ *
+ * Two behaviours are pinned here because both were silently wrong, and both cost the operator the
+ * answer they pressed the button for:
+ *
+ * 1. A spent window arrives as `subtype: "success"` with `is_error: true` and the reason in
+ *    `result`. Rendering the subtype produced the literal self-contradiction "the Claude Agent SDK
+ *    turn did not succeed (success)" while discarding the only field that explained it.
+ * 2. The SDK volunteers `rate_limit_event` on *every* turn, not only near a limit. The probe bills a
+ *    real turn to obtain it and used to throw it away, so the console's quota windows stayed empty
+ *    until unrelated traffic happened to route through the account.
+ */
+describe("what the probe reports back", () => {
+  const rateLimitEvent = (info: Record<string, unknown>): SDKMessage =>
+    ({
+      type: "rate_limit_event",
+      // The SDK's own snake_case field — the probe consumes raw SDK messages, not the normalized
+      // stream `render/events.ts` builds for the dispatch path.
+      rate_limit_info: info,
+      uuid: "22222222-2222-4222-8222-222222222222",
+      session_id: "sess-1",
+    }) as unknown as SDKMessage
+
+  const erroredResult = (result: string): SDKMessage =>
+    ({
+      type: "result",
+      subtype: "success",
+      is_error: true,
+      result,
+      duration_ms: 9,
+      duration_api_ms: 8,
+      num_turns: 1,
+      session_id: "sess-1",
+      total_cost_usd: 0,
+      usage: { input_tokens: 4, output_tokens: 0 },
+      modelUsage: {},
+      permission_denials: [],
+      uuid: "33333333-3333-4333-8333-333333333333",
+    }) as unknown as SDKMessage
+
+  function probeOver(messages: readonly SDKMessage[]) {
+    return createSdkTestProbe({
+      cliPathOverride: null,
+      concurrency: createSdkConcurrency({ global: 4, perAccount: 2 }),
+      resolveCli: () => CLI,
+      runQuery: async function* () {
+        for (const message of messages) yield message
+      },
+    })
+  }
+
+  const run = (messages: readonly SDKMessage[]) =>
+    probeOver(messages).run({
+      accountId: "acct-1",
+      configDir: "/data/claude/acct-1",
+      model: "claude-sonnet-4-5-20250929",
+      signal: AbortSignal.timeout(5_000),
+    })
+
+  test("a spent window reports what the account said, not the subtype that contradicts it", async () => {
+    const result = await run([erroredResult("Claude AI usage limit reached|1785204600")])
+
+    expect(result.ok).toBe(false)
+    // The dispatch path's own wording for the same condition — one condition, one sentence.
+    expect(result.message).toBe("the account's Claude subscription window is spent")
+    expect(result.message).not.toContain("(success)")
+  })
+
+  test("the quota readings the turn paid for come back for the caller to ingest", async () => {
+    const info = { status: "allowed", rateLimitType: "five_hour", resetsAt: 1_785_204_600 }
+    const result = await run([rateLimitEvent(info), pong()])
+
+    expect(result.ok).toBe(true)
+    expect(result.rateLimitInfos).toEqual([info])
+  })
+
+  test("readings are kept oldest-first even when the turn ends spent", async () => {
+    const first = { status: "allowed_warning", rateLimitType: "five_hour" }
+    const second = { status: "rejected", rateLimitType: "five_hour" }
+    const result = await run([
+      rateLimitEvent(first),
+      rateLimitEvent(second),
+      erroredResult("Claude AI usage limit reached"),
+    ])
+
+    expect(result.ok).toBe(false)
+    expect(result.rateLimitInfos).toEqual([first, second])
+  })
+
+  test("a turn with nothing quotable still names its subtype rather than saying nothing", async () => {
+    const result = await run([
+      {
+        type: "result",
+        subtype: "error_max_turns",
+        is_error: true,
+        duration_ms: 5,
+        duration_api_ms: 4,
+        num_turns: 1,
+        session_id: "sess-1",
+        total_cost_usd: 0,
+        usage: { input_tokens: 1, output_tokens: 0 },
+        modelUsage: {},
+        permission_denials: [],
+        uuid: "44444444-4444-4444-8444-444444444444",
+      } as unknown as SDKMessage,
+    ])
+
+    expect(result.ok).toBe(false)
+    expect(result.message).toContain("error_max_turns")
+  })
+
+  test("a healthy turn still answers with the model's own reply, and an empty reading list", async () => {
+    const result = await run([pong()])
+
+    expect(result).toMatchObject({ ok: true, message: "pong", rateLimitInfos: [] })
+  })
+})

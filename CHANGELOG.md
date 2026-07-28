@@ -5,6 +5,31 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.1] — 2026-07-28
+
+### Fixed
+
+- **Every Claude subscription reset instant was being discarded.** The Agent SDK
+  reports `rate_limit_info.resetsAt` in epoch **seconds** (verified live against
+  SDK 0.3.220); the router read it as milliseconds, landing it in 1970, where it
+  failed the "still in the future" check and was dropped as stale. That silently
+  cost the whole subscription reset surface — no per-window countdown in the
+  console, `resetSource: "unknown"` instead of `provider-reported`, and a circuit
+  breaker estimating a backoff while holding the provider's exact answer. Both
+  units are now accepted, so an SDK that switches to milliseconds cannot re-break
+  it in the other direction.
+- **"Test now" billed a turn and threw away the quota reading it paid for.** The
+  SDK volunteers `rate_limit_event` on every query, not only near a limit. The
+  probe ignored it, so an account's quota windows stayed empty until unrelated
+  traffic happened to route through it — backwards for the one button whose job
+  is answering "how is this account doing". The readings now land in the same
+  store the dispatch path writes to.
+- **A spent Claude subscription reported "the Claude Agent SDK turn did not
+  succeed (success)".** That failure arrives as `subtype: "success"` with
+  `is_error: true` and the reason in `result`; the probe rendered the subtype and
+  discarded the reason. It now reads the stated reason through the same
+  classification table the data plane uses, so a spent window says so.
+
 ## [1.1.0] — 2026-07-27
 
 ### Added
