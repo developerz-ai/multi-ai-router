@@ -1,5 +1,7 @@
 import { type Dialect, isRouterError, type OpenAiChatCeiling } from "@multi-ai-router/core"
 import type { AccountRepository, AccountRow } from "@multi-ai-router/db"
+import type { Logger } from "../../logging/logger"
+import type { RateLimitSignal } from "../../providers"
 import {
   type DriverAccount,
   httpDriver,
@@ -9,7 +11,13 @@ import {
 import { AUDIT_KINDS, AUDIT_SUBJECTS, type AuditRecorder } from "../admin/audit"
 import { type AdminResult, invalid, notFound, ok } from "../admin/result"
 import type { CredentialCipher } from "../crypto/cipher"
-import { type FetchLike, type RoutableAccount, runAttempt, upstreamUrl } from "../dataplane"
+import {
+  type FetchLike,
+  type HealthStore,
+  type RoutableAccount,
+  runAttempt,
+  upstreamUrl,
+} from "../dataplane"
 import { describeProvider } from "./providers"
 
 /**
@@ -87,6 +95,19 @@ export interface TestNowServiceDeps {
    * discarded, which is what this service did for every account before: correct, and useless.
    */
   readonly quota?: Pick<SdkQuotaStore, "ingest">
+  /**
+   * Where the ingested reading actually becomes visible. The console and routing both read a health
+   * snapshot, not the quota store, so a reading that stops at `quota` is a reading nothing renders.
+   */
+  readonly health?: Pick<HealthStore, "applyRateLimit">
+  /**
+   * Optional, and only ever used for a **failed** test. A test that fails is the one outcome an
+   * operator cannot debug from the response alone — it carries a router-authored sentence by
+   * design, so an unrecognized upstream reason reads as "a reason this router does not recognize"
+   * with nothing anywhere naming what that reason was. That is a dead end for the operator and for
+   * whoever has to add the missing classification rule.
+   */
+  readonly log?: Pick<Logger, "warn">
 }
 
 const NO_SDK_PROBE = "this router has no Agent-SDK test probe configured"
@@ -144,6 +165,21 @@ export function createTestNowService(deps: TestNowServiceDeps): TestNowService {
         detail: { provider: account.provider, outcome: outcome.ok ? "ok" : "failed" },
       })
 
+      // A failed test used to leave no trace anywhere but the HTTP response the operator was
+      // already looking at. The message is deliberately router-authored, so when the upstream says
+      // something this build has no rule for, the *only* copy of what it actually said was the one
+      // we discarded. This is the line that makes the next classification rule writable.
+      if (!outcome.ok) {
+        deps.log?.warn("account test failed", {
+          component: "test-now",
+          accountId: account.id,
+          provider: account.provider,
+          model: input.model,
+          reason: outcome.message,
+          latencyMs,
+        })
+      }
+
       return ok({
         accountId,
         lastCheckedAt: now.toISOString(),
@@ -192,10 +228,21 @@ async function runSdkProbe(
   // until real traffic happened to route through the account — which is backwards for the button
   // whose entire job is answering "how is this account doing".
   //
-  // Oldest first, so the last event of the turn is the one that stands.
+  // Oldest first, so the last event of the turn is the one that stands. **Both stores, not one:**
+  // `quota.ingest` accumulates the per-account windows, and the resulting signal then goes to the
+  // health store — which is what the console and routing actually read (`availability.ts` builds
+  // its view from a health snapshot). Ingesting without folding leaves the reading in a store
+  // nothing renders, which is the shape this bug took the first time.
   if (deps.quota !== undefined) {
     const now = deps.now()
-    for (const info of result.rateLimitInfos) deps.quota.ingest(account.id, info, now)
+    let latest: RateLimitSignal | null = null
+    // `?? []` because the probe is an injected dependency: a non-conforming one should fold
+    // nothing, never throw on the button's own path.
+    for (const info of result.rateLimitInfos ?? []) {
+      const snapshot = deps.quota.ingest(account.id, info, now)
+      if (snapshot !== null) latest = snapshot.signal
+    }
+    if (latest !== null) deps.health?.applyRateLimit(account.id, latest, now)
   }
 
   return { ok: result.ok, message: result.message }

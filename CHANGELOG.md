@@ -5,6 +5,21 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.2] — 2026-07-28
+
+### Fixed
+
+- **The quota reading "Test now" ingested never reached the console.** 1.1.1 folded
+  the turn's `rate_limit_event` into the SDK quota store, but the console and
+  routing both read a *health snapshot*, so the reading landed somewhere nothing
+  renders and the windows stayed as stale as before. The resulting signal is now
+  folded into the health store too — the same hop the dispatch path makes.
+- **A failed "Test now" left no trace anywhere.** Its message is router-authored
+  by design, so when an upstream fails for a reason this build has no rule for,
+  the only copy of what it actually said was the one being discarded — a dead end
+  for the operator and for whoever has to write the missing rule. A failed test
+  now logs the provider, model and reason at `warn`.
+
 ## [1.1.1] — 2026-07-28
 
 ### Fixed
