@@ -5,6 +5,18 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.4] — 2026-07-28
+
+### Fixed
+
+- **A spent Claude plan window was not classified at all.** The wording a plan
+  actually uses — `"You've hit your weekly limit · resets Jul 30, 11pm (UTC)"` —
+  shares no phrase with the rules that existed, so it fell through to
+  `UNCLASSIFIED`: an unknown failure for the single most ordinary thing a pooled
+  subscription does. It now reads as `rate-limited` (`cooling_down` + `429`),
+  never `auth`, which would have parked a perfectly good subscription at
+  `needs_reauth` for a window a clock reopens.
+
 ## [1.1.3] — 2026-07-28
 
 ### Fixed

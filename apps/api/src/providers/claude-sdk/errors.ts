@@ -123,6 +123,29 @@ const RULES: readonly SdkRule[] = [
     match: phrase("usage limit reached", "rate limit"),
   },
   {
+    /**
+     * The wording a *plan window* actually uses, which is not the one above. Recorded verbatim from
+     * a Max subscription whose weekly window was spent:
+     *
+     *     "You've hit your weekly limit · resets Jul 30, 11pm (UTC)"
+     *
+     * It contains neither "usage limit reached" nor "rate limit", so it fell all the way through to
+     * `UNCLASSIFIED` — a `500`-shaped unknown for the single most ordinary thing a pooled
+     * subscription does. `all("hit your", "limit")` covers the family without reaching further than
+     * the evidence: the five-hour variant words it the same way, and requiring both fragments keeps
+     * an unrelated sentence containing the word "limit" from matching.
+     *
+     * `rate-limited`, emphatically: the message states its own reset, so a clock revives this
+     * account and CLAUDE.md non-negotiable 7 puts it in `cooling_down` rather than `exhausted` or
+     * — worse — `auth`, which would park a working subscription at `needs_reauth`.
+     */
+    kind: "rate-limited",
+    signal: "claude-sdk:plan-window-spent",
+    status: 429,
+    clientMessage: "the account's Claude subscription window is spent",
+    match: all("hit your", "limit"),
+  },
+  {
     kind: "auth",
     signal: "claude-sdk:credential-expired",
     status: 401,
