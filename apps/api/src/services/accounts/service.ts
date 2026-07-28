@@ -102,6 +102,7 @@ export function createAccountsService(deps: AccountsServiceDeps): AccountsServic
           dialect: body.dialect ?? null,
           modelAliases: body.modelAliases ?? null,
           supportedModels: body.supportedModels ?? null,
+          windowTokenLimits: body.windowTokenLimits ?? null,
           ...(body.weight === undefined ? {} : { weight: body.weight }),
           ...(body.priority === undefined ? {} : { priority: body.priority }),
           // Always written, never left to the column default: the default is right for a metered
@@ -159,6 +160,9 @@ export function createAccountsService(deps: AccountsServiceDeps): AccountsServic
           ...(body.dialect === undefined ? {} : { dialect: body.dialect }),
           ...(body.modelAliases === undefined ? {} : { modelAliases: body.modelAliases }),
           ...(body.supportedModels === undefined ? {} : { supportedModels: body.supportedModels }),
+          ...(body.windowTokenLimits === undefined
+            ? {}
+            : { windowTokenLimits: body.windowTokenLimits }),
           ...(body.weight === undefined ? {} : { weight: body.weight }),
           ...(body.priority === undefined ? {} : { priority: body.priority }),
           ...(body.billing === undefined ? {} : { billing: body.billing }),

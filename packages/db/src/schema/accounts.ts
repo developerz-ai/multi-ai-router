@@ -3,6 +3,7 @@ import {
   DEFAULT_ACCOUNT_PRIORITY,
   DEFAULT_ACCOUNT_WEIGHT,
   type Dialect,
+  type WindowTokenLimits,
 } from "@multi-ai-router/core"
 import {
   index,
@@ -127,6 +128,20 @@ export const accounts = pgTable(
      * without an operator ever asking for it.
      */
     supportedModels: jsonb("supported_models").$type<SupportedModelList>(),
+
+    /**
+     * Operator-set token ceilings per quota window, keyed by `QuotaWindowKind`.
+     *
+     * **A number the operator chose, never one the provider stated.** Anthropic publishes no
+     * numeric limit and its SDK reports a utilization only near a window's edge, so without this
+     * the console has nothing to draw for most of every window. A ceiling here lets it show
+     * consumption the router measured itself against a figure the operator owns — labelled as
+     * configured wherever it is rendered, and read by nothing in routing, because a guess about
+     * someone else's accounting must not decide which account serves a request.
+     *
+     * NULL, or a window absent from the map, means no bar for that window.
+     */
+    windowTokenLimits: jsonb("window_token_limits").$type<WindowTokenLimits>(),
 
     /** Bias for the `weighted` policy. */
     weight: integer("weight").notNull().default(DEFAULT_ACCOUNT_WEIGHT),

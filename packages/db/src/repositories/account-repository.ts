@@ -4,6 +4,7 @@ import type {
   Dialect,
   ProviderId,
   QuotaWindowState,
+  WindowTokenLimits,
 } from "@multi-ai-router/core"
 import { and, asc, eq, inArray, isNull, lt, ne, or, sql } from "drizzle-orm"
 import type { Database } from "../client"
@@ -161,6 +162,7 @@ export interface CreateAccountInput {
   readonly modelAliases?: ModelAliasMap | null
   /** Upstream-side model ids. Null or empty means unknown, which routing reads as passthrough. */
   readonly supportedModels?: SupportedModelList | null
+  readonly windowTokenLimits?: WindowTokenLimits | null
   readonly weight?: number
   readonly priority?: number
   /**
@@ -188,6 +190,7 @@ export interface UpdateAccountInput {
   readonly dialect?: Dialect | null
   readonly modelAliases?: ModelAliasMap | null
   readonly supportedModels?: SupportedModelList | null
+  readonly windowTokenLimits?: WindowTokenLimits | null
   readonly weight?: number
   readonly priority?: number
   readonly billing?: AccountBilling
@@ -231,6 +234,7 @@ export function createAccountRepository(db: Database): AccountRepository {
           dialect: input.dialect ?? null,
           modelAliases: input.modelAliases ?? null,
           supportedModels: input.supportedModels ?? null,
+          windowTokenLimits: input.windowTokenLimits ?? null,
           ...(input.weight === undefined ? {} : { weight: input.weight }),
           ...(input.priority === undefined ? {} : { priority: input.priority }),
           ...(input.billing === undefined ? {} : { billing: input.billing }),
@@ -285,6 +289,9 @@ export function createAccountRepository(db: Database): AccountRepository {
           ...(patch.supportedModels === undefined
             ? {}
             : { supportedModels: patch.supportedModels }),
+          ...(patch.windowTokenLimits === undefined
+            ? {}
+            : { windowTokenLimits: patch.windowTokenLimits }),
           ...(patch.weight === undefined ? {} : { weight: patch.weight }),
           ...(patch.priority === undefined ? {} : { priority: patch.priority }),
           ...(patch.billing === undefined ? {} : { billing: patch.billing }),

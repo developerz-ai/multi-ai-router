@@ -11,10 +11,12 @@ export {
   AccountStatus,
   DEFAULT_ACCOUNT_BILLING,
   isStandingBlock,
+  QUOTA_WINDOW_SPAN_MS,
   QuotaWindowKind,
   QuotaWindowState,
   ResetSource,
   UtilizationSource,
+  WindowTokenLimits,
 } from "./domain/account"
 export {
   DEFAULT_OPENAI_CHAT_CEILING,

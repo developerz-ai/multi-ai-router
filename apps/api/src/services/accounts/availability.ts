@@ -1,10 +1,13 @@
-import type {
-  AccountStatus,
-  QuotaWindowKind,
-  QuotaWindowState,
-  ResetSource,
-  UtilizationSource,
+import {
+  type AccountStatus,
+  QUOTA_WINDOW_SPAN_MS,
+  type QuotaWindowKind,
+  type QuotaWindowState,
+  type ResetSource,
+  type UtilizationSource,
+  type WindowTokenLimits,
 } from "@multi-ai-router/core"
+import type { UsageReadRepository } from "@multi-ai-router/db"
 import type { AdminResult } from "../admin/result"
 import { buildSnapshot, type HealthStore, type RoutingCatalog } from "../dataplane"
 import { isWindowSpent } from "../routing"
@@ -55,6 +58,22 @@ export interface QuotaWindowView {
   readonly lastCheckedAt: string
   /** Whether this window is one of the ones currently blocking the account. */
   readonly spent: boolean
+  /**
+   * Tokens the **router itself** recorded for this account inside this window's own span, or null
+   * where the window has no span to measure against (`overage`) or no ceiling is configured.
+   *
+   * Deliberately separate from {@link utilization}: that field is the *provider's* reading and must
+   * stay null when the provider said nothing. This is our own measurement, and conflating the two
+   * would let a number we computed be read as one Anthropic reported.
+   */
+  readonly tokensUsed: number | null
+  /**
+   * The operator's configured ceiling for this window, or null when they set none.
+   *
+   * **Not a provider fact.** Anthropic publishes no numeric limit, so this is a figure the operator
+   * chose and the console labels as such. It never reaches routing.
+   */
+  readonly tokenLimit: number | null
 }
 
 export interface AccountAvailability {
@@ -81,6 +100,12 @@ export interface AccountAvailability {
 }
 
 export interface AvailabilityDeps {
+  /**
+   * Reads how many tokens the router itself recorded inside a window's span. Optional: a
+   * deployment that wires none simply renders no configured bars, which is the same thing an
+   * operator who set no ceilings sees.
+   */
+  readonly usage?: Pick<UsageReadRepository, "tokensSince">
   readonly catalog: RoutingCatalog
   readonly health: HealthStore
   readonly recheck: Pick<RecheckService, "lastCheckedAt">
@@ -91,12 +116,23 @@ export function withAvailability(
   service: AccountsService,
   deps: AvailabilityDeps,
 ): AccountsService {
-  const overlay = (views: readonly AccountView[]): readonly AccountView[] => {
+  const overlay = async (views: readonly AccountView[]): Promise<readonly AccountView[]> => {
     // One snapshot for the whole list: `buildSnapshot` is the same call the request path makes,
     // so the console cannot disagree with the router about what is available.
     const now = deps.now()
     const snapshot = buildSnapshot(deps.catalog, deps.health, now)
     const live = new Map(snapshot.accounts.map((account) => [account.id, account]))
+
+    // One query for every (account, window) an operator configured a ceiling for. Accounts with no
+    // ceiling contribute no span, so a deployment that configured none pays nothing for this.
+    const limits = new Map(
+      views.flatMap((view) =>
+        view.windowTokenLimits === null || view.windowTokenLimits === undefined
+          ? []
+          : [[view.id, view.windowTokenLimits] as const],
+      ),
+    )
+    const measured = await measureTokens(deps, limits, live, now)
 
     return views.map((view) => {
       const observed = live.get(view.id)
@@ -119,15 +155,19 @@ export function withAvailability(
           lastCheckedAt: deps.recheck.lastCheckedAt(view.id)?.toISOString() ?? null,
           consecutiveFailures: observed.health.consecutiveFailures,
           inFlight: observed.health.inFlight,
-          quotaWindows: (observed.quotaWindows ?? []).map((window) => toWindowView(window, now)),
+          quotaWindows: (observed.quotaWindows ?? []).map((window) =>
+            toWindowView(window, now, limits.get(view.id), measured, view.id),
+          ),
         },
       }
     })
   }
 
-  const overlayOne = (result: AdminResult<AccountView>): AdminResult<AccountView> => {
+  const overlayOne = async (
+    result: AdminResult<AccountView>,
+  ): Promise<AdminResult<AccountView>> => {
     if (!result.ok) return result
-    const [view] = overlay([result.value])
+    const [view] = await overlay([result.value])
     return view === undefined ? result : { ok: true, value: view }
   }
 
@@ -135,7 +175,7 @@ export function withAvailability(
     ...service,
     list: async (query) => {
       const result = await service.list(query)
-      return result.ok ? { ok: true, value: overlay(result.value) } : result
+      return result.ok ? { ok: true, value: await overlay(result.value) } : result
     },
     get: async (id) => overlayOne(await service.get(id)),
   }
@@ -146,7 +186,14 @@ export function withAvailability(
  * that reported nothing has said nothing, and a zero would render as a wide-open gauge on an
  * account the provider may already have cut off.
  */
-function toWindowView(window: QuotaWindowState, now: Date): QuotaWindowView {
+function toWindowView(
+  window: QuotaWindowState,
+  now: Date,
+  limits: WindowTokenLimits | undefined,
+  measured: ReadonlyMap<string, number>,
+  accountId?: string,
+): QuotaWindowView {
+  const limit = limits?.[window.window] ?? null
   return {
     window: window.window,
     utilization: window.utilization ?? null,
@@ -155,5 +202,44 @@ function toWindowView(window: QuotaWindowState, now: Date): QuotaWindowView {
     resetSource: window.resetSource,
     lastCheckedAt: window.lastCheckedAt.toISOString(),
     spent: isWindowSpent(window, now),
+    // Null unless BOTH exist: a count with no ceiling has nothing to be a fraction of, and a
+    // ceiling with no measurable span (`overage`) has nothing to count.
+    tokensUsed:
+      limit === null ? null : (measured.get(`${accountId ?? ""}:${window.window}`) ?? null),
+    tokenLimit: limit,
   }
+}
+
+/**
+ * Tokens recorded inside each configured window's own span, keyed `accountId:window`.
+ *
+ * The span is `resetsAt - QUOTA_WINDOW_SPAN_MS[kind]`, not "the last N hours": a five-hour window
+ * resetting in twenty minutes opened 4h40m ago, and measuring from now would count the wrong 4h40m.
+ * A window with no reported reset, or no known span, is skipped rather than measured against a
+ * start we invented.
+ */
+async function measureTokens(
+  deps: AvailabilityDeps,
+  limits: ReadonlyMap<string, WindowTokenLimits>,
+  live: ReadonlyMap<string, { readonly quotaWindows?: readonly QuotaWindowState[] }>,
+  now: Date,
+): Promise<ReadonlyMap<string, number>> {
+  if (limits.size === 0 || deps.usage === undefined) return new Map()
+
+  const spans: { accountId: string; window: string; since: Date }[] = []
+  for (const [accountId, configured] of limits) {
+    for (const window of live.get(accountId)?.quotaWindows ?? []) {
+      if (configured[window.window] === undefined) continue
+      const span = QUOTA_WINDOW_SPAN_MS[window.window]
+      if (span === undefined || window.resetsAt === undefined) continue
+      const since = new Date(window.resetsAt.getTime() - span)
+      // A reset further out than one full span means a clock we do not trust; skip rather than
+      // measure a range that starts in the future.
+      if (since.getTime() > now.getTime()) continue
+      spans.push({ accountId, window: window.window, since })
+    }
+  }
+
+  const rows = await deps.usage.tokensSince(spans)
+  return new Map(rows.map((row) => [`${row.accountId}:${row.window}`, row.tokens]))
 }
