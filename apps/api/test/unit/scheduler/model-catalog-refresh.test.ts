@@ -153,4 +153,31 @@ describe("the hourly model-catalog sweep", () => {
     const summary = logs.find((line) => line.msg === "model catalog refresh")
     expect(summary).toMatchObject({ due: 2, accounts: 3, models: 6 })
   })
+
+  /**
+   * The catalog is the one sweep whose absence is *visible*: `GET /v1/catalog` reads what it
+   * writes, so a full interval of `data: []` after a fresh deploy reads as a broken endpoint.
+   */
+  test("asks for an early first tick, without changing its own cadence", () => {
+    const { task } = built({ intervalMs: 3_600_000 })
+
+    expect(task.startupDelayMs).toBe(30_000)
+    expect(task.intervalMs).toBe(3_600_000)
+  })
+
+  test("never delays the first tick past a cadence shorter than the delay itself", () => {
+    // A deployment configuring a one-second refresh must not wait thirty for its first run.
+    expect(built({ intervalMs: 1_000 }).task.startupDelayMs).toBe(1_000)
+  })
 })
+
+function built(options: { readonly intervalMs: number }) {
+  const task = createModelCatalogRefreshTask({
+    accounts: { list: async () => [] },
+    catalog: { lastRefreshedAt: async () => [] },
+    refresh: async () => ({ kind: "skipped", reason: "test" }),
+    intervalMs: options.intervalMs,
+    batchSize: 1,
+  })
+  return { task }
+}

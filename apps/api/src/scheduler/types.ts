@@ -45,6 +45,18 @@ export interface ScheduledTask {
   readonly name: ScheduledTaskName
   /** Nominal gap between runs. Config, never a constant (non-negotiable 11). Jittered by the runner. */
   readonly intervalMs: number
+  /**
+   * How long after `start()` the **first** tick runs. Absent means one full jittered interval,
+   * which is the right default for every task that deletes or rolls up: nothing is waiting on it,
+   * and sweeping at boot is work a restart loop would repeat.
+   *
+   * A task states this only when its output is something a reader can *see missing*. The model
+   * catalog is the case: it populates a public listing, so an hour of `data: []` after a fresh
+   * deploy looks exactly like a broken endpoint rather than a sweep that has not come round yet.
+   *
+   * Jittered like any other delay, so replicas restarting together do not converge on one instant.
+   */
+  readonly startupDelayMs?: number
   run(ctx: TaskContext): Promise<TaskOutcome>
 }
 

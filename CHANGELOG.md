@@ -5,6 +5,23 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.4.1] — 2026-07-28
+
+### Fixed
+
+- **`GET /v1/catalog` answered `data: []` for the first hour after a deploy.**
+  Every scheduled task waits one full jittered interval for its first tick, which
+  is right for a sweep that deletes rows — nothing is looking at it. The model
+  catalog is the first task here whose output someone can *see missing*, and an
+  hour of an empty listing is indistinguishable from a broken endpoint. Caught by
+  calling the endpoint on production rather than by a test, because no test
+  asserted a thing nobody had thought to want yet.
+
+  Tasks may now state a `startupDelayMs`; the catalog asks for thirty seconds and
+  nothing else asks for anything. It is the **first gap only** — a task that kept
+  using it would run on a cadence nobody configured, which for a sweep making
+  outbound requests is a self-inflicted rate problem. Both halves are asserted.
+
 ## [1.4.0] — 2026-07-28
 
 ### Added

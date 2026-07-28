@@ -219,3 +219,90 @@ describe("the bookkeeping itself failing", () => {
     expect(result.error).toBe("connection reset")
   })
 })
+
+/**
+ * `startupDelayMs` — the first gap only.
+ *
+ * It exists for one kind of task: the one whose output someone can see missing. A sweep that only
+ * deletes rows can wait a full interval for its first tick because nothing is looking; a sweep that
+ * populates `GET /v1/catalog` cannot, because an hour of `data: []` after a fresh deploy is
+ * indistinguishable from a broken endpoint.
+ *
+ * Both halves are asserted, because the dangerous mistake is the second one: a task that kept using
+ * the startup delay as its interval would run on a cadence nobody configured, and for a sweep that
+ * makes outbound requests that is a self-inflicted rate problem rather than a cosmetic bug.
+ */
+describe("the first tick", () => {
+  test("waits a full interval by default", async () => {
+    const repo = memoryTaskRepository()
+    let calls = 0
+    const scheduler = createScheduler({
+      tasks: [
+        task({
+          intervalMs: 5_000,
+          run: async () => {
+            calls += 1
+            return { outcome: "success", itemsProcessed: 0 }
+          },
+        }),
+      ],
+      repo,
+      logger: silentLogger(),
+      lock: alwaysFree(),
+      jitterFraction: 0,
+    })
+
+    scheduler.start()
+    // Well inside a five-second interval: a task with no startup delay must not have run.
+    await new Promise((resolve) => setTimeout(resolve, 60))
+    await scheduler.stop()
+
+    expect(calls).toBe(0)
+  })
+
+  test("comes early when the task asks, and the interval takes over after it", async () => {
+    const repo = memoryTaskRepository()
+    const calls: number[] = []
+    const started = Date.now()
+    let resolveSecond: () => void = () => undefined
+    const second = new Promise<void>((resolve) => {
+      resolveSecond = resolve
+    })
+
+    const scheduler = createScheduler({
+      // Real timers: the point is which delay the runner armed, which no stub can show.
+      tasks: [
+        task({
+          intervalMs: 40,
+          startupDelayMs: 5,
+          run: async () => {
+            calls.push(Date.now() - started)
+            if (calls.length === 2) resolveSecond()
+            return { outcome: "success", itemsProcessed: 0 }
+          },
+        }),
+      ],
+      repo,
+      logger: silentLogger(),
+      lock: alwaysFree(),
+      jitterFraction: 0,
+    })
+
+    scheduler.start()
+    try {
+      await Promise.race([
+        second,
+        new Promise((_resolve, reject) => {
+          setTimeout(() => reject(new Error("the second tick never fired")), 2_000)
+        }),
+      ])
+    } finally {
+      await scheduler.stop()
+    }
+
+    // First tick on the startup delay, not the interval.
+    expect(calls[0]).toBeLessThan(30)
+    // Second on the interval: the startup delay describes the first gap and nothing after it.
+    expect((calls[1] ?? 0) - (calls[0] ?? 0)).toBeGreaterThanOrEqual(30)
+  })
+})
