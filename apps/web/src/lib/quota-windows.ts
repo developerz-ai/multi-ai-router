@@ -146,6 +146,15 @@ export interface QuotaWindowDisplay {
   /** Whether this window is one of the ones currently blocking the account. */
   readonly spent: boolean
   readonly lastCheckedAtMs: number | null
+  /**
+   * How the window was consumed across its own span, oldest first — the sparkline beside the bar.
+   *
+   * **Empty whenever the bar is not the router's own measurement.** These slices sum to the
+   * measured total, so drawing them next to a *provider-reported* percentage would put a curve
+   * about one accounting beside a number from another. Empty is also what a window with no
+   * configured ceiling gets, which is the ordinary case.
+   */
+  readonly tokenSeries: readonly number[]
 }
 
 export interface QuotaWindowsInput {
@@ -209,7 +218,28 @@ export function describeQuotaWindow(
     resetLabel: resetQualifier(window.resetSource),
     spent: window.spent,
     lastCheckedAtMs: parseInstant(window.lastCheckedAt),
+    // Carried only where the bar itself is ours. Beside a provider-reported percentage the curve
+    // would describe a different measurement than the number above it.
+    tokenSeries:
+      window.utilization === null && measuredFraction(window) !== null
+        ? measuredSeries(window)
+        : [],
   }
+}
+
+/**
+ * The window's consumption curve, or empty.
+ *
+ * Validated the same way `measuredFraction` is and for the same reason: an older router, or any
+ * response that omits the field, delivers `undefined`, and a chart handed `undefined` renders an
+ * empty box that looks like a broken component rather than an absent measurement. A single point
+ * is dropped too — one slice is a dot, not a trend, and `Sparkline` would draw it as a flat line
+ * across the whole width, which claims a shape nobody measured.
+ */
+function measuredSeries(window: QuotaWindowView): readonly number[] {
+  const series = window.tokenSeries
+  if (!Array.isArray(series) || series.length < 2) return []
+  return series.every((value) => Number.isFinite(value)) ? series : []
 }
 
 /**

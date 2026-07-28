@@ -2,6 +2,7 @@ import {
   createAccountRepository,
   createApiKeyRepository,
   createAuditRepository,
+  createModelCatalogRepository,
   createOauthStateRepository,
   createPoolRepository,
   createPriceOverrideRepository,
@@ -26,7 +27,7 @@ import { createAccountConfigDirs } from "../providers/claude-sdk/config-dir"
 import { IDLE_PROBE_MODELS, type Scheduler, schedulerFromEnv } from "../scheduler"
 import { createMemorySessionStore } from "../services/admin-auth"
 import { createRoutingCatalog, loadCatalog, type RoutingCatalogStore } from "../services/catalog"
-import { createPriceBook } from "../services/cost"
+import { createPriceBook, type PriceBook } from "../services/cost"
 import { createCredentialCipherFromEnv } from "../services/crypto/fromEnv"
 import {
   type AccountStatusWriter,
@@ -44,6 +45,11 @@ import {
   sessionStoreFromEnv,
   stampLastUsed,
 } from "../services/dataplane"
+import {
+  createModelCatalogStore,
+  type ModelCatalogStore,
+  refreshAccountCatalog,
+} from "../services/models"
 import { createUsageRecorderFromEnv, type UsageRecorder } from "../services/usage"
 import type { AdminServices } from "../types"
 import { createAdminPlane } from "./admin"
@@ -93,6 +99,13 @@ export interface Runtime {
    * `accounts.status` so `exhausted` outlives the process that observed it.
    */
   readonly statusWriter: AccountStatusWriter
+  /**
+   * The warm model catalog and the warm price book, both exposed for `GET /v1/catalog` — the one
+   * listing that answers with a size and a price beside each model. Warm for the reason everything
+   * else here is: the endpoint that enumerates the router is the one an operator polls.
+   */
+  readonly models: ModelCatalogStore
+  readonly prices: PriceBook
   /** Exposed for the admin plane's "run now" and for shutdown ordering; the timers are internal. */
   readonly scheduler: Scheduler
   /** What `GET /metrics` renders. Fed from the usage drain, the scheduler, and per-scrape gauges. */
@@ -122,6 +135,10 @@ export function createRuntime(deps: RuntimeDeps): Runtime {
   const usageDaily = createUsageDailyRepository(database)
   // The scheduler's run log; the usage read path reads it to know which days the rollup closed.
   const scheduledTasks = createScheduledTaskRepository(database)
+  // What each account's upstream says it serves, and how big. A *description* — the hourly sweep
+  // writes it and nothing in selection reads it, which is what lets it refresh on a timer at all
+  // while `accounts.supported_models` deliberately does not.
+  const modelCatalog = createModelCatalogRepository(database)
 
   // --- warm state -----------------------------------------------------------
   // The Claude subscription transport's quota state: keyed by Account and living as long as this
@@ -187,6 +204,15 @@ export function createRuntime(deps: RuntimeDeps): Runtime {
   // another replica may have changed — and one knob for both is one fewer to explain.
   const prices = createPriceBook({
     load: () => priceOverrides.list(),
+    refreshIntervalMs: env.dataPlane.catalogRefreshSeconds * 1_000,
+    now,
+  })
+  // What the hourly sweep discovered, held warm so `GET /v1/catalog` renders without a query per
+  // model. It shares the catalog's staleness bound for the same reason the price book does: it is
+  // the same kind of value — a table another replica may have rewritten — and one knob for all
+  // three is one fewer to explain.
+  const modelCatalogStore = createModelCatalogStore({
+    load: () => modelCatalog.list(),
     refreshIntervalMs: env.dataPlane.catalogRefreshSeconds * 1_000,
     now,
   })
@@ -355,6 +381,21 @@ export function createRuntime(deps: RuntimeDeps): Runtime {
     // test for a reason only a human can fix.
     ...(admin.authProbe === undefined ? {} : { authProbe: admin.authProbe }),
     probeModels: IDLE_PROBE_MODELS,
+    modelCatalog,
+    // Hourly, free, and pointed at `model_catalog` alone: a listing costs no tokens and spends no
+    // quota window, and nothing in routing reads what it writes. `supported_models` — which does
+    // gate routing — stays the operator's, untouched by any timer.
+    refreshCatalog: (account, at) =>
+      refreshAccountCatalog(
+        {
+          catalog: modelCatalog,
+          cipher,
+          timeoutMs: env.failover.upstreamTimeoutMs,
+          fetch: (request) => fetch(request),
+        },
+        account,
+        at,
+      ),
     env,
     sql: deps.sql,
     logger,
@@ -371,6 +412,8 @@ export function createRuntime(deps: RuntimeDeps): Runtime {
     sdkQuota,
     quotaWriter,
     statusWriter,
+    models: modelCatalogStore,
+    prices,
     scheduler,
     metrics,
     start: async () => {
@@ -382,6 +425,16 @@ export function createRuntime(deps: RuntimeDeps): Runtime {
       // than one that was right from the first request.
       await prices.refresh()
       prices.start()
+      // Not awaited, and the one warm store here that genuinely need not be: an unloaded model
+      // catalog makes `GET /v1/catalog` thinner for a moment, which no request path and no report
+      // depends on. Failing a boot over it would trade a working router for a listing.
+      void modelCatalogStore.refresh().catch((error: unknown) => {
+        logger.warn("model catalog did not load at boot", {
+          component: "runtime",
+          error: error instanceof Error ? error.message : String(error),
+        })
+      })
+      modelCatalogStore.start()
       usage.start()
       quotaWriter.start()
       statusWriter.start()
@@ -402,6 +455,7 @@ export function createRuntime(deps: RuntimeDeps): Runtime {
       admin.connect.stop() // every pending login, so no `claude` subprocess outlives the router
       catalog.stop()
       prices.stop()
+      modelCatalogStore.stop()
       await usage.stop()
       // Last, and awaited: a reading observed a second before shutdown is the freshest thing anyone
       // knows about that account's quota, and losing it means the next boot renders a stale gauge.

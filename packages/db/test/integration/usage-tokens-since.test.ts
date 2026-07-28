@@ -147,4 +147,88 @@ describe.skipIf(!runnable)("tokensSince against a live database", () => {
   test("no spans means no query", async () => {
     expect(await usage.tokensSince([])).toEqual([])
   })
+
+  /**
+   * The bucketed form, which the console's sparkline is drawn from.
+   *
+   * `width_bucket` is the other thing only a live planner can prove: it refuses a range whose
+   * bounds are equal, it numbers from 1, and `extract(epoch from ...)` has to agree with the
+   * timestamps the join filters on. All three are invisible to a stub.
+   */
+  describe("with a shape asked for", () => {
+    const shape = { until: NOW, slots: 4 }
+
+    test("spreads the same total across equal slices of the span", async () => {
+      const accountId = await seedAccount()
+      const since = new Date(NOW.getTime() - 4 * HOUR_MS)
+
+      // One hour per slot, at 4 slots over 4 hours: one row per slice, in order.
+      await seedUsage(accountId, new Date(since.getTime() + 30 * 60 * 1_000), 1)
+      await seedUsage(accountId, new Date(since.getTime() + HOUR_MS + 30 * 60 * 1_000), 20)
+      await seedUsage(accountId, new Date(since.getTime() + 3 * HOUR_MS + 30 * 60 * 1_000), 4_000)
+
+      const [row] = await usage.tokensSince([{ accountId, window: "five_hour", since }], shape)
+
+      expect(row?.series).toEqual([1, 20, 0, 4_000])
+      // The bar and the curve are the same measurement — this is what makes that true.
+      expect(row?.tokens).toBe(4_021)
+    })
+
+    test("an account that recorded nothing is a flat line, not a missing row", async () => {
+      const accountId = await seedAccount()
+
+      const [row] = await usage.tokensSince(
+        [{ accountId, window: "five_hour", since: new Date(NOW.getTime() - 5 * HOUR_MS) }],
+        shape,
+      )
+
+      expect(row).toMatchObject({ tokens: 0, series: [0, 0, 0, 0] })
+    })
+
+    test("usage after the span's end is outside the window and is not counted", async () => {
+      const accountId = await seedAccount()
+      const since = new Date(NOW.getTime() - 4 * HOUR_MS)
+
+      await seedUsage(accountId, new Date(since.getTime() + HOUR_MS), 7)
+      // An hour past `until`: a clock skew or a late-arriving drain, and not this window's.
+      await seedUsage(accountId, new Date(NOW.getTime() + HOUR_MS), 9_999)
+
+      const [row] = await usage.tokensSince([{ accountId, window: "five_hour", since }], shape)
+
+      expect(row?.tokens).toBe(7)
+    })
+
+    /**
+     * `width_bucket` raises `lower bound cannot equal upper bound`, which would take down the whole
+     * accounts screen for one account whose reset instant happens to land on now.
+     */
+    test("a span with nothing in it is dropped rather than crashing the statement", async () => {
+      const accountId = await seedAccount()
+
+      const rows = await usage.tokensSince([{ accountId, window: "five_hour", since: NOW }], shape)
+
+      expect(rows).toEqual([])
+    })
+
+    test("each pair keeps its own slicing in one statement", async () => {
+      const accountId = await seedAccount()
+      await seedUsage(accountId, new Date(NOW.getTime() - 30 * 60 * 1_000), 500)
+
+      const rows = await usage.tokensSince(
+        [
+          { accountId, window: "five_hour", since: new Date(NOW.getTime() - 4 * HOUR_MS) },
+          { accountId, window: "seven_day", since: new Date(NOW.getTime() - 4 * 24 * HOUR_MS) },
+        ],
+        shape,
+      )
+
+      const at = (window: string) => rows.find((row) => row.window === window)
+      // The same 500 tokens, half an hour old: the last slice of a four-hour window, and the last
+      // slice of a four-day one. Same total, different position — which is the point of per-pair
+      // bounds.
+      expect(at("five_hour")?.series).toEqual([0, 0, 0, 500])
+      expect(at("seven_day")?.series).toEqual([0, 0, 0, 500])
+      expect(at("five_hour")?.tokens).toBe(500)
+    })
+  })
 })

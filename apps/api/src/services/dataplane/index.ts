@@ -60,6 +60,8 @@ export {
   resolveSessionKey,
   type SessionKeySource,
 } from "./body/session"
+export type { CatalogListingDeps, CatalogModel, CatalogProvider } from "./catalog-listing"
+export { catalogListing, providerListing } from "./catalog-listing"
 export { answeredFailure, type ChainFailure, foldChainFailure, routerFailure } from "./chain-error"
 export { accountCredential } from "./egress/credential"
 export {

@@ -18,6 +18,8 @@ export {
   UtilizationSource,
   WindowTokenLimits,
 } from "./domain/account"
+export type { ContextTable, ContextWindow, ModelDescriptor } from "./domain/catalog"
+export { ModelContextSource } from "./domain/catalog"
 export {
   DEFAULT_OPENAI_CHAT_CEILING,
   Dialect,

@@ -5,6 +5,7 @@ import { formatAbsolute, type ResetQualifier } from "../lib/reset-countdown"
 import { Badge, type BadgeTone } from "./Badge"
 import { QuotaGauge } from "./QuotaGauge"
 import styles from "./QuotaWindowRow.module.scss"
+import { Sparkline } from "./Sparkline"
 
 export interface QuotaWindowRowProps {
   readonly window: QuotaWindowDisplay
@@ -40,6 +41,26 @@ export function QuotaWindowRow(props: QuotaWindowRowProps) {
         tone={quotaWindowTone(window())}
         value={window().utilization}
       />
+
+      {/*
+        Only where the bar is the router's own count — `describeQuotaWindow` empties the series
+        beside a provider-reported percentage, because a curve about one accounting next to a
+        number from another is two measurements pretending to be one.
+
+        It earns its space by answering what the bar cannot: two windows both two-thirds spent
+        look identical until one of them shows the whole two-thirds went in the first hour.
+      */}
+      <Show when={window().tokenSeries.length > 0}>
+        <span
+          class={styles.trend}
+          title="Tokens this router recorded across the window's span, oldest first. Same measurement as the bar — these slices are what it sums."
+        >
+          <Sparkline
+            label={`${props.owner}, ${window().title} consumption over the window`}
+            points={[...window().tokenSeries]}
+          />
+        </span>
+      </Show>
 
       <span class={styles.reset}>
         <span class={window().reset.kind === "needs_topup" ? styles.topUp : styles.text}>

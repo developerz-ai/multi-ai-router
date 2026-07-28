@@ -315,6 +315,8 @@ decision in [10-roadmap.md](10-roadmap.md).
 | Circuit-breaker half-open probes | when a cooling-down account's reset passes | Not a fixed interval — scheduled per account |
 | Quota refresh for subscription accounts | opportunistic, plus a slow floor | Prefer signals already in hand: `rate_limit_event` events arrive on responses we are already making, so an actively used account needs no polling. The floor covers idle accounts; **Re-check now** is the same code path triggered by hand — see [05-routing-and-failover.md](05-routing-and-failover.md) |
 | Expired OAuth state / PKCE verifier purge | every few minutes | One-shot values, 10-minute TTL |
+| Idle-account keepalive | daily, against a `IDLE_ACCOUNT_AFTER_DAYS` threshold | The only task here that spends money, and the only one that has to. A Claude subscription's tokens are refreshed by the Agent SDK *when it runs*, so an account traffic has forgotten expires on its own — one real request is what prevents it. The **free** auth check runs first and a dead credential skips the billed turn entirely |
+| Model catalog refresh | hourly | Asks each account's upstream what it serves and stores it with each model's context window — the data behind `GET /v1/catalog`. **Free**: a listing costs no tokens and spends no quota window. Writes only the catalog table, never `supportedModels`, so it changes what the router *says* and never where a request lands. Ordered oldest-catalog-first so a fleet larger than one batch rotates instead of starving its tail |
 
 ### Credential refresh is not a cron job
 

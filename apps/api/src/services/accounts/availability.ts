@@ -7,7 +7,7 @@ import {
   type UtilizationSource,
   type WindowTokenLimits,
 } from "@multi-ai-router/core"
-import type { UsageReadRepository } from "@multi-ai-router/db"
+import type { TokenSpanUsage, UsageReadRepository } from "@multi-ai-router/db"
 import type { AdminResult } from "../admin/result"
 import { buildSnapshot, type HealthStore, type RoutingCatalog } from "../dataplane"
 import { isWindowSpent } from "../routing"
@@ -46,6 +46,16 @@ import type { AccountView } from "./view"
  * threaded here too or the console starts disagreeing with the router about which window blocks.
  */
 
+/**
+ * How many slices a window's span is divided into for the sparkline.
+ *
+ * Twelve is enough to show a burst against a steady burn and small enough that a fleet of accounts
+ * with five windows each adds a few hundred integers to one admin response. It is a **display**
+ * resolution, not a measurement one: the total is the sum of the slices either way, so changing
+ * this changes the smoothness of a curve and nothing about the number beside it.
+ */
+export const QUOTA_WINDOW_SLOTS = 12
+
 export interface QuotaWindowView {
   readonly window: QuotaWindowKind
   /** `0..1`, or null where the source reported nothing. Absent is normal, not a fault. */
@@ -74,6 +84,18 @@ export interface QuotaWindowView {
    * chose and the console labels as such. It never reaches routing.
    */
   readonly tokenLimit: number | null
+  /**
+   * The same measurement as {@link tokensUsed}, spread across equal slices of the window's span,
+   * oldest first — what the console draws as a sparkline beside the bar.
+   *
+   * Not a second query and not a second number: the total above is the sum of exactly these
+   * buckets, so the bar and the curve cannot disagree. Empty where the bar itself is absent.
+   *
+   * It answers the question a total cannot. A window two-thirds spent in its first hour and one
+   * two-thirds spent evenly are the same bar and completely different situations, and only one of
+   * them is about to run out.
+   */
+  readonly tokenSeries: readonly number[]
 }
 
 export interface AccountAvailability {
@@ -190,10 +212,12 @@ function toWindowView(
   window: QuotaWindowState,
   now: Date,
   limits: WindowTokenLimits | undefined,
-  measured: ReadonlyMap<string, number>,
+  measured: ReadonlyMap<string, TokenSpanUsage>,
   accountId?: string,
 ): QuotaWindowView {
   const limit = limits?.[window.window] ?? null
+  const measurement =
+    limit === null ? undefined : measured.get(`${accountId ?? ""}:${window.window}`)
   return {
     window: window.window,
     utilization: window.utilization ?? null,
@@ -204,9 +228,9 @@ function toWindowView(
     spent: isWindowSpent(window, now),
     // Null unless BOTH exist: a count with no ceiling has nothing to be a fraction of, and a
     // ceiling with no measurable span (`overage`) has nothing to count.
-    tokensUsed:
-      limit === null ? null : (measured.get(`${accountId ?? ""}:${window.window}`) ?? null),
+    tokensUsed: measurement?.tokens ?? null,
     tokenLimit: limit,
+    tokenSeries: measurement?.series ?? [],
   }
 }
 
@@ -223,7 +247,7 @@ async function measureTokens(
   limits: ReadonlyMap<string, WindowTokenLimits>,
   live: ReadonlyMap<string, { readonly quotaWindows?: readonly QuotaWindowState[] }>,
   now: Date,
-): Promise<ReadonlyMap<string, number>> {
+): Promise<ReadonlyMap<string, TokenSpanUsage>> {
   if (limits.size === 0 || deps.usage === undefined) return new Map()
 
   const spans: { accountId: string; window: string; since: Date }[] = []
@@ -240,6 +264,8 @@ async function measureTokens(
     }
   }
 
-  const rows = await deps.usage.tokensSince(spans)
-  return new Map(rows.map((row) => [`${row.accountId}:${row.window}`, row.tokens]))
+  // One query for the total *and* the curve: the total is the sum of the slots, so the bar and the
+  // sparkline beside it are literally the same numbers and cannot drift apart.
+  const rows = await deps.usage.tokensSince(spans, { until: now, slots: QUOTA_WINDOW_SLOTS })
+  return new Map(rows.map((row) => [`${row.accountId}:${row.window}`, row]))
 }

@@ -78,7 +78,7 @@ account per provider. The `label` is what distinguishes them to a human.
 | `billing` | enum | `metered` \| `subscription`. **How this Account is billed, which decides how its usage is priced and nothing else** — see below. Defaults to the provider's own answer; fixed where that answer is `subscription` |
 | *(quota windows)* | separate `quota_windows` table | Per-window quota state — see below. A Claude subscription has several concurrent windows that reset independently, so they are rows keyed `(account_id, window)`, not a JSON blob on the account: each window is upserted and expires on its own clock, and one refresh must not rewrite the others. Two writers, both idempotent on that key: the replica that *observed* a reading upserts it off its request path (`QUOTA_WRITE_INTERVAL_MS`), and the quota floor clears rows whose own reset has passed |
 | `modelAliases` | json, optional | Maps the client's model name to the account's (`sonnet` → `glm-4.7`, `sonnet` → `k3`). Absent means pass the name through unchanged. Keys are **requested-side** — what a client sends |
-| `supportedModels` | json, optional | The model ids this account's upstream accepts, **upstream-side** — the side `modelAliases` points *at*, and the side a provider's own `/v1/models` returns. Absent (and `[]`) mean *unknown*, which routing reads as passthrough: the account serves whatever the client names. A non-empty list filters selection and is what `GET /v1/models` enumerates. Filled by the operator or by `POST /api/admin/accounts/:id/models/discover`; never on a timer, because a catalog that refreshed itself would change routing without anyone asking |
+| `supportedModels` | json, optional | The model ids this account's upstream accepts, **upstream-side** — the side `modelAliases` points *at*, and the side a provider's own `/v1/models` returns. Absent (and `[]`) mean *unknown*, which routing reads as passthrough: the account serves whatever the client names. A non-empty list filters selection and is what `GET /v1/models` enumerates. Filled by the operator or by `POST /api/admin/accounts/:id/models/discover`; never on a timer, because a catalog that refreshed itself would change routing without anyone asking. The hourly sweep writes the separate `ModelCatalog` table instead — a *description*, read by no part of selection |
 | `weight` | number | Bias for the `weighted` policy. The account's own default; a Pool membership carries its own and wins where it is set |
 | `priority` | number | Strict order for the `priority-failover` policy. Same relationship to a membership's own value |
 | `health` | in-memory | Cooldown expiry, recent failures, in-flight count, quota headroom. Snapshotted and injected into selection |
@@ -319,6 +319,40 @@ Append-only record of admin-plane mutations. **Never contains credential materia
 | `subject` | ref | Entity id the event concerns |
 | `detail` | json | Redacted by the tested redactor before write |
 | `createdAt` | timestamp | 365 day retention |
+
+## ModelCatalog
+
+What each Account's upstream says it serves, and how big those models are. One row per
+(Account, model).
+
+**This table describes; it does not gate.** `Account.supportedModels` decides which Accounts a
+request may land on and stays operator-owned for the reason recorded on that field. Nothing in
+selection reads this table, which is exactly what lets it refresh itself hourly: an upstream
+retiring a model changes what `GET /v1/catalog` and the console *say*, and changes nothing about
+where a request goes.
+
+Keyed by **Account**, not by Provider — two Accounts of one Provider genuinely answer the listing
+endpoint differently (a coding plan versus the metered API, or two `openai-compatible` Accounts
+pointed at different base URLs), and collapsing them would make five Claude subscriptions share one
+answer.
+
+| Field | Type | Notes |
+|---|---|---|
+| `accountId` | ref | Cascades on delete: a description of a row that no longer exists is meaningless, not stale |
+| `modelId` | text | **Upstream-side** id, exactly as the provider named it — the side `modelAliases` points *at* |
+| `contextTokens` | int, optional | Total window. NULL is **unknown**, never zero and never unlimited: a client reading a missing window as "no limit" builds a request the upstream rejects |
+| `maxOutputTokens` | int, optional | Largest completion the model will produce. NULL where nothing published one |
+| `contextSource` | text, optional | `upstream` (the provider's own listing) or `shipped` (this image's table). Rendered wherever the number is: both are real published figures, but only one can know about a model released after the image was built. NULL exactly when both numbers are |
+| `refreshedAt` | timestamp | Rendered beside the catalog — a listing with no timestamp cannot be told apart from one that has quietly stopped refreshing |
+
+A row is sourced **whole**, never field by field: if the listing stated a window, the row is the
+listing's, output ceiling included; otherwise it is the shipped table's entirely. Mixing would make
+`contextSource` a question with no answer.
+
+Rows are replaced per Account as a set rather than upserted, so a model the upstream stopped
+listing actually leaves. Most upstreams state no size at all — verified against the live endpoints:
+z.ai, MiniMax, OpenAI and Anthropic answer `/v1/models` with an id, an object type and an owner and
+nothing else — so most rows carry `shipped`.
 
 ## ScheduledTaskRun
 

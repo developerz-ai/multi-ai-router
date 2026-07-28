@@ -2,6 +2,7 @@ import type {
   AccountRepository,
   ApiKeyRepository,
   AuditRepository,
+  ModelCatalogRepository,
   OauthStateRepository,
   ScheduledTaskName,
   ScheduledTaskRepository,
@@ -18,6 +19,10 @@ import { type AdminSessionStoreForPurge, createAdminSessionPurgeTask } from "./a
 import { createConfigDirReapTask } from "./config-dir-reap"
 import { createIdleAccountProbeTask, type IdleAccountProbeDeps } from "./idle-account-probe"
 import { createJanitorTask } from "./janitor"
+import {
+  createModelCatalogRefreshTask,
+  type ModelCatalogRefreshDeps,
+} from "./model-catalog-refresh"
 import { createOauthPurgeTask } from "./oauth-purge"
 import { createQuotaFloorTask } from "./quota-floor"
 import { createUsageRollupTask } from "./usage-rollup"
@@ -84,6 +89,18 @@ export interface ScheduledTaskDeps {
    * would otherwise have to choose one (non-negotiable 4 in spirit).
    */
   readonly probeModels?: Readonly<Record<string, string>>
+  /**
+   * The model catalog's staleness ordering. Read-only here — the writes go through
+   * {@link ScheduledTaskDeps.refreshCatalog}, which owns the transaction per account.
+   */
+  readonly modelCatalog?: Pick<ModelCatalogRepository, "lastRefreshedAt">
+  /**
+   * One account's catalog refresh, handed in rather than rebuilt, so the hourly sweep and the admin
+   * plane's discover button ask an upstream through exactly one parser. Absent means no sweep is
+   * built at all — a deployment with nothing wired gets no task rather than one that ticks and
+   * does nothing.
+   */
+  readonly refreshCatalog?: ModelCatalogRefreshDeps["refresh"]
   /** A full `Env` satisfies this, so the composition root passes `env` straight through. */
   readonly env: Pick<Env, "retention" | "janitorIntervalMinutes" | "scheduler">
 }
@@ -112,6 +129,7 @@ export function scheduledTaskIntervals(
     config_dir_reap: env.scheduler.configDirReapIntervalMinutes * MINUTE_MS,
     admin_session_purge: env.scheduler.adminSessionPurgeIntervalMinutes * MINUTE_MS,
     idle_account_probe: env.scheduler.idleAccountProbeIntervalMinutes * MINUTE_MS,
+    model_catalog_refresh: env.scheduler.modelCatalogRefreshIntervalMinutes * MINUTE_MS,
   }
 }
 
@@ -187,6 +205,20 @@ export function createScheduledTasks(deps: ScheduledTaskDeps): readonly Schedule
             batchSize: env.scheduler.idleAccountProbeBatchSize,
           }),
         ]),
+    // Hourly, and free: a model listing costs no tokens and spends no quota window. It writes only
+    // `model_catalog`, which nothing in routing reads — see that task's header for why that is not
+    // in tension with `supported_models` being deliberately timer-free.
+    ...(deps.refreshCatalog === undefined || deps.modelCatalog === undefined
+      ? []
+      : [
+          createModelCatalogRefreshTask({
+            accounts: deps.accounts,
+            catalog: deps.modelCatalog,
+            refresh: deps.refreshCatalog,
+            intervalMs: intervals.model_catalog_refresh,
+            batchSize: env.scheduler.modelCatalogRefreshBatchSize,
+          }),
+        ]),
   ]
 }
 
@@ -198,6 +230,8 @@ export type { IdleAccountProbeDeps } from "./idle-account-probe"
 export { createIdleAccountProbeTask, IDLE_PROBE_MODELS } from "./idle-account-probe"
 export type { JanitorDeps } from "./janitor"
 export { createJanitorTask } from "./janitor"
+export type { ModelCatalogRefreshDeps } from "./model-catalog-refresh"
+export { createModelCatalogRefreshTask } from "./model-catalog-refresh"
 export type { OauthPurgeDeps } from "./oauth-purge"
 export { createOauthPurgeTask } from "./oauth-purge"
 export type { QuotaFloorDeps } from "./quota-floor"

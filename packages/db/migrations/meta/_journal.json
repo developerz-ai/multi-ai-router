@@ -127,6 +127,13 @@
       "when": 1785211111350,
       "tag": "0017_window_token_limits",
       "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "7",
+      "when": 1785215059101,
+      "tag": "0018_model_catalog",
+      "breakpoints": true
     }
   ]
 }

@@ -188,6 +188,7 @@ describe("the quota windows on an account read", () => {
         // measured bar from — and inventing a zero would read as a wide-open window.
         tokensUsed: null,
         tokenLimit: null,
+        tokenSeries: [],
         resetsAt: LATER.toISOString(),
         resetSource: "provider-reported",
         lastCheckedAt: NOW.toISOString(),
