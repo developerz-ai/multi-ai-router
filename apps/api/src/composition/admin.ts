@@ -254,6 +254,8 @@ export function createAdminPlane(deps: AdminPlaneDeps): AdminPlane {
       }),
       recheck,
       testNow,
+      // Same instance the re-check button uses — one probe, one `needs_reauth` transition.
+      ...(cli.authProbe === undefined ? {} : { authProbe: cli.authProbe }),
       discoverModels,
       connect,
     },

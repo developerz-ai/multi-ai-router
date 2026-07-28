@@ -5,6 +5,33 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.0] — 2026-07-28
+
+### Added
+
+- **An idle-account keepalive sweep.** A Claude subscription's tokens are
+  refreshed by the Agent SDK, but only *when it runs* — the access token lasts
+  hours and the refresh token weeks, so a subscription nobody routes to is not
+  idle, it is expired, and the operator finds out at the moment they needed it.
+  A daily task now spends one real, billed request on any account unused for
+  `IDLE_ACCOUNT_AFTER_DAYS` (default 7). The request *is* the refresh.
+
+  It asks the `claude` CLI whether the account is still logged in **first** —
+  free, contacts no provider — and for one that answers "logged out" it marks
+  `needs_reauth` and **skips the billed turn entirely**: that test would fail for
+  a reason only a human can fix, and paying to re-learn a fact we hold is a slow
+  leak rather than a keepalive.
+
+  Cost is bounded by the *threshold*, not the interval: testing an account counts
+  as using it, so each account is touched about once per idle window. Bounded per
+  tick, resumable, and abort-checked between accounts so a shutdown never lands
+  mid-turn.
+- `accounts.last_used_at`, stamped by the usage recorder's existing background
+  drain (never on the request path), so "has this account gone unused" is one
+  indexed question rather than a scan of a table retention prunes.
+- `IDLE_ACCOUNT_PROBE_INTERVAL_MINUTES`, `IDLE_ACCOUNT_AFTER_DAYS`,
+  `IDLE_ACCOUNT_PROBE_BATCH_SIZE`.
+
 ## [1.1.4] — 2026-07-28
 
 ### Fixed

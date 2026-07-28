@@ -19,6 +19,7 @@ const TABLE_COLUMNS: ReadonlyArray<{ table: Table; columns: readonly string[] }>
       "authMaterial",
       "configDir",
       "tokenExpiresAt",
+      "lastUsedAt",
       "baseUrl",
       "dialect",
       "modelAliases",

@@ -23,7 +23,7 @@ import {
   type SdkQuotaStore,
 } from "../providers"
 import { createAccountConfigDirs } from "../providers/claude-sdk/config-dir"
-import { type Scheduler, schedulerFromEnv } from "../scheduler"
+import { IDLE_PROBE_MODELS, type Scheduler, schedulerFromEnv } from "../scheduler"
 import { createMemorySessionStore } from "../services/admin-auth"
 import { createRoutingCatalog, loadCatalog, type RoutingCatalogStore } from "../services/catalog"
 import { createPriceBook } from "../services/cost"
@@ -222,6 +222,9 @@ export function createRuntime(deps: RuntimeDeps): Runtime {
   // Queued in memory, batch-written off-path. Both loss modes reach a log line — see fromEnv.ts.
   const usage: UsageRecorder = createUsageRecorderFromEnv({
     records: usageRecords,
+    // Stamped on the same background drain the records are written on, so the idle probe can
+    // find an account nothing has routed to without scanning `usage_records`.
+    accounts,
     env,
     logger,
     onRecord: (record) => metrics.observeUsage(record),
@@ -235,24 +238,6 @@ export function createRuntime(deps: RuntimeDeps): Runtime {
   // --- background work ------------------------------------------------------
   // Every periodic task behind one in-process runner (non-negotiable 13). `schedulerFromEnv` binds
   // the advisory lock to `deps.sql`, so nothing below is ever handed a connection.
-  const scheduler = schedulerFromEnv({
-    sessions,
-    usageRecords,
-    auditEvents,
-    apiKeys: keys,
-    oauthStates,
-    usageDaily,
-    accounts,
-    scheduledTasks,
-    health,
-    configDirs,
-    adminSessions,
-    env,
-    sql: deps.sql,
-    logger,
-    now,
-    onTick: (result) => metrics.observeTask(result),
-  })
 
   // --- data plane -----------------------------------------------------------
   const verifier = createRouterKeyVerifier({
@@ -341,6 +326,40 @@ export function createRuntime(deps: RuntimeDeps): Runtime {
         limiter.forget(keyId)
       },
     },
+  })
+
+  // Built AFTER the admin plane, not before: the keepalive sweep spends the admin plane's own
+  // "Test now" rather than a second probe of its own, so a scheduled probe and an operator's button
+  // press share one cooldown, one subprocess gate, and one audit kind. Nothing between the two
+  // needed the scheduler, so this is an ordering, not an indirection.
+  const scheduler = schedulerFromEnv({
+    sessions,
+    usageRecords,
+    auditEvents,
+    apiKeys: keys,
+    oauthStates,
+    usageDaily,
+    accounts,
+    scheduledTasks,
+    health,
+    configDirs,
+    adminSessions,
+    testAccount: async (accountId, model) => {
+      const result = await admin.testNow.test(accountId, { model, confirmed: true })
+      // A refusal (`ok: false`) is a validation outcome — an unknown id, a provider with no
+      // implementation. Reported as "not tested" rather than as a failed account, because nothing
+      // was sent and the account said nothing about itself.
+      return result.ok ? result.value : { tested: false }
+    },
+    // Free, and asked before anything is billed: a credential that is already dead fails the
+    // test for a reason only a human can fix.
+    ...(admin.authProbe === undefined ? {} : { authProbe: admin.authProbe }),
+    probeModels: IDLE_PROBE_MODELS,
+    env,
+    sql: deps.sql,
+    logger,
+    now,
+    onTick: (result) => metrics.observeTask(result),
   })
 
   return {

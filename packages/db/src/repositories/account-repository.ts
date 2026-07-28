@@ -5,7 +5,7 @@ import type {
   ProviderId,
   QuotaWindowState,
 } from "@multi-ai-router/core"
-import { and, asc, eq, inArray } from "drizzle-orm"
+import { and, asc, eq, inArray, isNull, lt, ne, or, sql } from "drizzle-orm"
 import type { Database } from "../client"
 import {
   type AccountRow,
@@ -88,6 +88,31 @@ export interface AccountRepository {
    * filtering.
    */
   disable(id: string, now: Date): Promise<AccountRow | undefined>
+  /**
+   * Stamps `last_used_at` for a set of accounts in one statement.
+   *
+   * Called from the usage recorder's **batched background drain**, never from a request
+   * (non-negotiable 8) — one write per flush covering every account that appeared in it, rather
+   * than one per request. Ids repeated within a batch collapse to a single row update.
+   *
+   * `GREATEST` rather than a plain assignment: two replicas flush concurrently and their batches
+   * are not ordered relative to each other, so an older flush landing second must not move the
+   * stamp backwards and make a busy account look idle.
+   */
+  markUsed(ids: readonly string[], at: Date): Promise<void>
+  /**
+   * Accounts that have served nothing since `before`, oldest (and never-used) first.
+   *
+   * `NULL` counts as idle: an account connected and never used is exactly the one whose
+   * credential expires without anyone noticing. Ordering puts the most neglected first, so a
+   * bounded batch always makes progress on the worst case rather than revisiting the same head.
+   *
+   * `disabled` is excluded — it is the operator's own switch, and probing it would spend money to
+   * learn something about an account they have deliberately turned off. Every other status is
+   * included on purpose: an `exhausted` or `cooling_down` account still holds a credential that
+   * can expire while it waits.
+   */
+  findIdle(input: { readonly before: Date; readonly limit: number }): Promise<AccountRow[]>
   /**
    * Writes one window's state, replacing whatever was there. Windows reset
    * independently, so this is per window and never a whole-account overwrite.
@@ -294,6 +319,39 @@ export function createAccountRepository(db: Database): AccountRepository {
     },
 
     disable: (id, now) => setStatus(id, "disabled", now),
+
+    markUsed: async (ids, at) => {
+      if (ids.length === 0) return
+      await db
+        .update(accounts)
+        // GREATEST, not assignment: concurrent replicas flush unordered batches, and a late
+        // flush carrying an older instant must never walk the stamp backwards.
+        .set({ lastUsedAt: sql`greatest(${accounts.lastUsedAt}, ${at})` })
+        // `inArray` de-duplicates for us at the SQL level — one row updated per distinct id,
+        // however many times it appeared in the batch.
+        .where(inArray(accounts.id, [...new Set(ids)]))
+    },
+
+    findIdle: async ({ before, limit }) => {
+      if (limit <= 0) return []
+      return (
+        db
+          .select()
+          .from(accounts)
+          .where(
+            and(
+              // Never used counts as idle — see the interface note.
+              or(isNull(accounts.lastUsedAt), lt(accounts.lastUsedAt, before)),
+              // The operator's own switch is not ours to spend money probing.
+              ne(accounts.status, "disabled"),
+            ),
+          )
+          // NULLs first: an account that never served anything is the most neglected of all, and
+          // Postgres sorts NULLs last under ASC unless told otherwise.
+          .orderBy(sql`${accounts.lastUsedAt} asc nulls first`)
+          .limit(limit)
+      )
+    },
 
     upsertQuotaWindow: async (accountId, state) => {
       const values = {

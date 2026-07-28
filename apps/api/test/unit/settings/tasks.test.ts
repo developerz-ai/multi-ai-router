@@ -133,6 +133,7 @@ describe("the tasks read", () => {
       "quota_floor_refresh",
       "config_dir_reap",
       "admin_session_purge",
+      "idle_account_probe",
     ])
 
     const janitor = result.value.tasks[0]

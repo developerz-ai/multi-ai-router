@@ -7,6 +7,7 @@ import type {
   TestNowService,
 } from "./services/accounts"
 import type { AdminAuthService } from "./services/admin-auth"
+import type { AccountAuthProbe } from "./services/health/claudeAuthProbe"
 import type { KeysService } from "./services/keys"
 import type { PoolsService } from "./services/pools"
 import type { SettingsService } from "./services/settings"
@@ -53,6 +54,16 @@ export interface AdminServices {
    * from `recheck` because it actually spends a request (`services/accounts/test-now.ts`).
    */
   readonly testNow: TestNowService
+  /**
+   * "Is this Claude subscription still logged in", asked of the CLI's own credential file — free,
+   * contacts no provider, and owns the `needs_reauth` transition
+   * (`services/health/claudeAuthProbe.ts`).
+   *
+   * Exposed because the keepalive sweep must ask it *before* spending a turn: a credential that is
+   * already dead fails the test for a reason only a human can fix, so billing one to re-learn that
+   * is a slow leak. Absent when no `claude` CLI is available to answer.
+   */
+  readonly authProbe?: AccountAuthProbe
   /**
    * "Discover models": reads the upstream's own listing into `supportedModels`. The one button of
    * the three that changes the row, which is why it writes through `accounts` rather than beside it

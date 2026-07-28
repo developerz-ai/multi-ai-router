@@ -265,6 +265,29 @@ export interface SchedulerConfig {
    * table, so every replica runs it against its own heap — see `scheduler/tasks/admin-session-purge.ts`.
    */
   readonly adminSessionPurgeIntervalMinutes: number
+  /**
+   * How often the idle-account keepalive sweep looks for accounts traffic has forgotten. Daily by
+   * default — the *cadence per account* is set by `idleAccountAfterDays`, not by this, because a
+   * probed account stops being idle until that threshold passes again.
+   */
+  readonly idleAccountProbeIntervalMinutes: number
+  /**
+   * How long an account must have gone unused before one real, billed request is spent keeping it
+   * alive. Default 7 days, comfortably inside a Claude subscription's ~4-week refresh-token life:
+   * the SDK refreshes those tokens only when it runs, so an account nobody routes to expires
+   * silently and fails at exactly the moment it is next needed
+   * (`scheduler/tasks/idle-account-probe.ts`).
+   *
+   * Raising it past the shortest refresh-token life among the connected accounts re-opens that
+   * hole; lowering it costs one request per account per window.
+   */
+  readonly idleAccountAfterDays: number
+  /**
+   * Accounts probed per keepalive tick. Small on purpose and separate from `sweepBatchSize`: each
+   * item may spawn a ~245 MB `claude` subprocess and bill a turn, which is nothing like deleting a
+   * row. The sweep is resumable, so a backlog drains over consecutive ticks.
+   */
+  readonly idleAccountProbeBatchSize: number
   /** Max rows per bounded-delete sweep. */
   readonly sweepBatchSize: number
   /** Jitter applied to task intervals as a fraction of the interval. E.g., 0.2 means ±20%. */
@@ -471,6 +494,11 @@ export const ENV_FIELDS = {
   OAUTH_STATE_PURGE_INTERVAL_MINUTES: atLeastOne.optional(),
   QUOTA_FLOOR_INTERVAL_MINUTES: atLeastOne.optional(),
   CONFIG_DIR_REAP_INTERVAL_MINUTES: atLeastOne.optional(),
+  // Both refuse 0: an interval of zero re-arms every millisecond, and a threshold of zero makes
+  // every account idle, so the sweep would bill a request per account per tick, forever.
+  IDLE_ACCOUNT_PROBE_INTERVAL_MINUTES: atLeastOne.optional(),
+  IDLE_ACCOUNT_AFTER_DAYS: atLeastOne.optional(),
+  IDLE_ACCOUNT_PROBE_BATCH_SIZE: atLeastOne.optional(),
   ADMIN_SESSION_PURGE_INTERVAL_MINUTES: atLeastOne.optional(),
   SWEEP_BATCH_SIZE: atLeastOne.optional(),
   SCHEDULER_JITTER_FRACTION: fraction.optional(),
@@ -613,6 +641,10 @@ const envSchema = z.object(ENV_FIELDS).transform((raw, ctx): Env => {
       // Minutes, not hours: an idle console session outlives its own expiry by up to one tick's
       // worth of memory, and a login-heavy operator day should not let that pile up for hours.
       adminSessionPurgeIntervalMinutes: raw.ADMIN_SESSION_PURGE_INTERVAL_MINUTES ?? 30,
+      // Daily. Each account is still only touched once per idle window — see the field note.
+      idleAccountProbeIntervalMinutes: raw.IDLE_ACCOUNT_PROBE_INTERVAL_MINUTES ?? 1_440,
+      idleAccountAfterDays: raw.IDLE_ACCOUNT_AFTER_DAYS ?? 7,
+      idleAccountProbeBatchSize: raw.IDLE_ACCOUNT_PROBE_BATCH_SIZE ?? 5,
       sweepBatchSize: raw.SWEEP_BATCH_SIZE ?? 1_000,
       jitterFraction: raw.SCHEDULER_JITTER_FRACTION ?? 0.2,
     },

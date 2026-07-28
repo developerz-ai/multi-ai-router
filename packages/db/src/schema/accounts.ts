@@ -76,6 +76,21 @@ export const accounts = pgTable(
     tokenExpiresAt: timestamp("token_expires_at", { withTimezone: true, mode: "date" }),
 
     /**
+     * When this account last served a request. Written off the request path by the
+     * usage recorder's batched drain, never on it (non-negotiable 8).
+     *
+     * Exists so "has this account gone unused" is one indexed question about the
+     * account, rather than a `NOT EXISTS` over `usage_records` — a table retention
+     * prunes, which would make "unused for a week" and "no surviving usage row"
+     * silently the same question once the retention window is the shorter of the two.
+     *
+     * NULL means never used, or not since this column existed. The idle probe reads
+     * NULL as idle, which is the safe direction: a connected-but-never-used
+     * subscription is precisely the one whose refresh token expires unnoticed.
+     */
+    lastUsedAt: timestamp("last_used_at", { withTimezone: true, mode: "date" }),
+
+    /**
      * Per-account base URL override. NULL means the provider driver's own
      * default (`03-providers.md` has the verified defaults per provider).
      *
@@ -124,6 +139,9 @@ export const accounts = pgTable(
   (table) => [
     index("accounts_provider_idx").on(table.provider),
     index("accounts_status_idx").on(table.status),
+    // The idle probe's only query orders the whole table by this. Small table, but the
+    // index keeps the sweep from degrading as accounts accumulate.
+    index("accounts_last_used_at_idx").on(table.lastUsedAt),
     // Two accounts sharing a config directory is cross-contamination of two
     // subscriptions, which is exactly what per-account isolation prevents.
     uniqueIndex("accounts_config_dir_key").on(table.configDir),

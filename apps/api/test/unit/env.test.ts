@@ -65,6 +65,11 @@ describe("parseEnv", () => {
       quotaFloorIntervalMinutes: 30,
       configDirReapIntervalMinutes: 360,
       adminSessionPurgeIntervalMinutes: 30,
+      // Daily sweep, 7-day threshold — comfortably inside a Claude subscription's ~4-week
+      // refresh-token life, which is the window this exists to stay ahead of.
+      idleAccountProbeIntervalMinutes: 1_440,
+      idleAccountAfterDays: 7,
+      idleAccountProbeBatchSize: 5,
       sweepBatchSize: 1_000,
       jitterFraction: 0.2,
     })
@@ -103,6 +108,9 @@ describe("parseEnv", () => {
       OAUTH_STATE_PURGE_INTERVAL_MINUTES: "10",
       QUOTA_FLOOR_INTERVAL_MINUTES: "45",
       CONFIG_DIR_REAP_INTERVAL_MINUTES: "90",
+      IDLE_ACCOUNT_PROBE_INTERVAL_MINUTES: "720",
+      IDLE_ACCOUNT_AFTER_DAYS: "3",
+      IDLE_ACCOUNT_PROBE_BATCH_SIZE: "2",
       ADMIN_SESSION_PURGE_INTERVAL_MINUTES: "20",
       SWEEP_BATCH_SIZE: "500",
       SCHEDULER_JITTER_FRACTION: "0.5",
@@ -148,6 +156,9 @@ describe("parseEnv", () => {
       quotaFloorIntervalMinutes: 45,
       configDirReapIntervalMinutes: 90,
       adminSessionPurgeIntervalMinutes: 20,
+      idleAccountProbeIntervalMinutes: 720,
+      idleAccountAfterDays: 3,
+      idleAccountProbeBatchSize: 2,
       sweepBatchSize: 500,
       jitterFraction: 0.5,
     })

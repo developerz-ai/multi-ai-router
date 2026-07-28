@@ -30,11 +30,13 @@ export type {
 export {
   createAdminSessionPurgeTask,
   createConfigDirReapTask,
+  createIdleAccountProbeTask,
   createJanitorTask,
   createOauthPurgeTask,
   createQuotaFloorTask,
   createScheduledTasks,
   createUsageRollupTask,
+  IDLE_PROBE_MODELS,
   planConfigDirReap,
   rollupDays,
   rollupFrom,
