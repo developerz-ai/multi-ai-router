@@ -51,7 +51,7 @@ export default function LoginRoute() {
         )}
 
         <Button onClick={startOIDC} tone="primary" type="button">
-          Sign in with OIDC
+          Sign in with SSO
         </Button>
 
         <p class={styles.note}>

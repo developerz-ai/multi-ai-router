@@ -7,7 +7,7 @@ import type { SessionView } from "./types"
 // require.
 //
 // The login itself runs entirely in the browser:
-//   - the operator clicks "Sign in with OIDC" on `/login`
+//   - the operator clicks "Sign in with SSO" on `/login`
 //   - the SPA navigates the browser to `/api/admin/auth/oidc/start`
 //   - the API redirects to the IdP with PKCE + nonce
 //   - the IdP returns the browser to `/api/admin/auth/oidc/callback`
