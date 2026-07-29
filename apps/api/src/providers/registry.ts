@@ -82,6 +82,18 @@ export const PROVIDER_REGISTRY: Readonly<Record<ProviderId, ProviderSupport>> = 
     reason:
       "Claude Max/Pro subscriptions go through @anthropic-ai/claude-agent-sdk, one isolated CLAUDE_CONFIG_DIR per account. No subscription token is ever extracted or attached to an HTTP request — docs/idea/11-anthropic-agent-sdk.md.",
   },
+
+  // Synthetic id written into `oauth_states.provider` by the admin-plane OIDC
+  // flow (apps/api/src/services/admin-auth/oidc/state.ts). Not an AI
+  // provider — no driver, no pool, no routing. Present here because the
+  // registry is keyed by `ProviderId` as a total record (the Open/Closed
+  // rule with a compiler behind it) and the column is enum-typed, so the
+  // synthetic value needs to be a real enum member to be written at all.
+  "admin-oidc": {
+    transport: "unimplemented",
+    reason:
+      "Synthetic id for the admin-plane OIDC flow's oauth_states rows. Never selected as a routing target; presence in the registry is only to satisfy the total-keyed type.",
+  },
 }
 
 /** The driver for an id, or `null` when this provider is not served over HTTP. */

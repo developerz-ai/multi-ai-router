@@ -8,6 +8,16 @@ import { z } from "zod"
  * `anthropic-oauth` (Claude Max/Pro subscriptions) and `anthropic-api` (console API keys) are
  * deliberately separate ids: the first is served by the Agent-SDK driver and never sees a token
  * injected into an HTTP request, the second is an ordinary HTTP driver.
+ *
+ * `admin-oidc` is the synthetic id written by the admin-plane OIDC flow into
+ * `oauth_states.provider`. It is not an AI provider — it has no driver, no
+ * pool, no routing. The admin flow reuses the same one-shot `oauth_states`
+ * table as the legacy account-connect flow, and the column's enum-typed
+ * vocabulary would otherwise reject the synthetic value (slice 02 left the
+ * enum value out of scope and shipped with a TS-only cast; the runtime
+ * Postgres insert failed with `invalid input value for enum` on every
+ * `/api/admin/auth/oidc/start` request). Postgres enums cannot be widened
+ * silently, so the value is named here and shipped via the next migration.
  */
 export const ProviderId = z.enum([
   "anthropic-oauth",
@@ -28,6 +38,7 @@ export const ProviderId = z.enum([
   "ollama",
   "openai-compatible",
   "anthropic-compatible",
+  "admin-oidc",
 ])
 export type ProviderId = z.infer<typeof ProviderId>
 

@@ -1,0 +1,1 @@
+ALTER TYPE "public"."provider_id" ADD VALUE 'admin-oidc';
