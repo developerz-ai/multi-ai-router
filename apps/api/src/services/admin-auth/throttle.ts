@@ -2,18 +2,18 @@ import { createHash } from "node:crypto"
 import type { AdminAuthConfig } from "./config"
 
 /**
- * Login attempt throttling, per username **and** per client IP
- * (docs/idea/04-api-keys-and-access.md#csrf-and-throttling). A single-admin surface whose
- * password comes from an env file is the highest-value target in the deployment, so an online
- * guessing attack has to be made expensive in wall-clock time, not just in CPU.
+ * Login attempt throttling, per client IP only. The admin plane is a single
+ * identity, gated by an OIDC assertion, so there is no username to count
+ * against. The IP throttle is what stops an online guessing attack from
+ * cycling through states and codes at the rate the network allows.
  *
- * Both keys are checked before the password is ever verified and both are charged on failure:
- * per-username stops a distributed attack from one identity, per-IP stops one host from
- * spraying. Counting happens on the *submitted* username whether or not it exists, so the
- * throttle can never be used as a username oracle.
+ * Counting happens on the *presented* IP, hashed so a hostile 1 KB-`X-Forwarded-For`
+ * cannot grow the map, and bounded so a spray from many addresses cannot
+ * grow it unboundedly either.
  *
- * Pure over an injected clock and its own map — no timers, no I/O, no Hono. In-memory like the
- * session store, with the same caveat: a restart forgives every attacker mid-attack.
+ * Pure over an injected clock and its own map — no timers, no I/O, no Hono.
+ * In-memory like the session store, with the same caveat: a restart forgives
+ * every attacker mid-attack.
  */
 
 export type ThrottleDecision =
@@ -28,13 +28,9 @@ export interface LoginThrottle {
   reset(keys: readonly string[]): void
 }
 
-/** Hashed so a hostile 1 MB username cannot grow the map, and so it stays out of memory dumps. */
-export function usernameThrottleKey(username: string): string {
-  return `user:${createHash("sha256").update(username, "utf8").digest("base64url")}`
-}
-
+/** Hashed so a hostile 1 KB `X-Forwarded-For` cannot grow the map. */
 export function ipThrottleKey(ip: string): string {
-  return `ip:${ip}`
+  return `ip:${createHash("sha256").update(ip, "utf8").digest("base64url")}`
 }
 
 interface Bucket {

@@ -28,8 +28,10 @@ const NOW = new Date("2026-01-01T12:00:00.000Z")
 const base: Record<string, string> = {
   // Unreachable on purpose. If anything below ever opens a connection, this test hangs and says so.
   DATABASE_URL: "postgres://nobody:nobody@127.0.0.1:1/none",
-  ADMIN_USERNAME: "admin",
-  ADMIN_PASSWORD: "hunter2",
+  ADMIN_OIDC_ISSUER_URL: "https://sso.test",
+  ADMIN_OIDC_CLIENT_ID: "multi-ai-router-test",
+  ADMIN_OIDC_REDIRECT_URI: "https://router.test/api/admin/auth/oidc/callback",
+  ADMIN_OIDC_ADMIN_EMAIL: "admin@test",
   ENCRYPTION_KEY,
 }
 

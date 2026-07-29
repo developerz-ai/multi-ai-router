@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/solid-query"
-import { type Credentials, fetchSession, login, logout } from "../api/auth"
+import { fetchSession, logout } from "../api/auth"
 import { queryKeys } from "./query-keys"
 
 /**
@@ -15,16 +15,6 @@ export function useSession() {
     queryFn: () => fetchSession(),
     retry: false,
     staleTime: 60_000,
-  }))
-}
-
-export function useLogin() {
-  const client = useQueryClient()
-  return useMutation(() => ({
-    mutationFn: (credentials: Credentials) => login(credentials),
-    onSuccess: (session) => {
-      client.setQueryData(queryKeys.session(), session)
-    },
   }))
 }
 

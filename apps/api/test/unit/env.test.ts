@@ -16,8 +16,10 @@ const ENCRYPTION_KEY = Buffer.alloc(32, 7).toString("base64")
 /** The minimum an operator must set by hand, plus the DATABASE_URL compose supplies. */
 const base: Record<string, string | undefined> = {
   DATABASE_URL: "postgres://router:router@postgres:5432/router",
-  ADMIN_USERNAME: "admin",
-  ADMIN_PASSWORD: "hunter2",
+  ADMIN_OIDC_ISSUER_URL: "https://sso.test",
+  ADMIN_OIDC_CLIENT_ID: "multi-ai-router-test",
+  ADMIN_OIDC_REDIRECT_URI: "https://router.test/api/admin/auth/oidc/callback",
+  ADMIN_OIDC_ADMIN_EMAIL: "admin@test",
   ENCRYPTION_KEY,
 }
 
@@ -189,26 +191,51 @@ describe("parseEnv", () => {
     expect(env.trustProxy).toBe(false)
   })
 
-  describe("admin credential", () => {
-    test("uses ADMIN_PASSWORD when it is the only one set", () => {
-      expect(parseEnv(base).adminCredential).toEqual({ kind: "password", value: "hunter2" })
-    })
+  describe("admin OIDC", () => {
+    test("carries the four required fields and the optional ones", () => {
+      const env = parseEnv({
+        ...base,
+        ADMIN_OIDC_CLIENT_SECRET: "shh",
+        ADMIN_OIDC_ADMIN_SUBJECT: "subject-123",
+        ADMIN_OIDC_SCOPES: "openid email",
+        ADMIN_OIDC_CLOCK_SKEW_SECONDS: "30",
+      })
 
-    test("ADMIN_PASSWORD_HASH wins when both are set", () => {
-      const env = parseEnv({ ...base, ADMIN_PASSWORD_HASH: "$argon2id$v=19$m=65536,t=3,p=4$abc" })
-
-      expect(env.adminCredential).toEqual({
-        kind: "hash",
-        value: "$argon2id$v=19$m=65536,t=3,p=4$abc",
+      expect(env.adminOidc).toEqual({
+        issuerUrl: "https://sso.test",
+        clientId: "multi-ai-router-test",
+        clientSecret: "shh",
+        redirectUri: "https://router.test/api/admin/auth/oidc/callback",
+        adminEmail: "admin@test",
+        adminSubject: "subject-123",
+        scopes: ["openid", "email"],
+        clockSkewSeconds: 30,
       })
     })
 
-    test("boot fails naming both variables when neither is set", () => {
-      const { ADMIN_PASSWORD: _omitted, ...withoutPassword } = base
-      const error = expectEnvError(withoutPassword)
+    test("defaults the optional fields", () => {
+      const env = parseEnv(base)
 
-      expect(error.variables).toEqual(["ADMIN_PASSWORD", "ADMIN_PASSWORD_HASH"])
-      expect(error.message).toContain("exactly one of ADMIN_PASSWORD or ADMIN_PASSWORD_HASH")
+      expect(env.adminOidc.clientSecret).toBeNull()
+      expect(env.adminOidc.adminSubject).toBeNull()
+      expect(env.adminOidc.scopes).toEqual(["openid", "profile", "email"])
+      expect(env.adminOidc.clockSkewSeconds).toBe(60)
+    })
+
+    test("boot fails naming every required field that is missing", () => {
+      const error = expectEnvError({
+        DATABASE_URL: "postgres://router:router@postgres:5432/router",
+        ENCRYPTION_KEY,
+      })
+
+      const required = [
+        "ADMIN_OIDC_ISSUER_URL",
+        "ADMIN_OIDC_CLIENT_ID",
+        "ADMIN_OIDC_REDIRECT_URI",
+        "ADMIN_OIDC_ADMIN_EMAIL",
+      ]
+      for (const name of required) expect(error.variables).toContain(name)
+      expect(error.message).toContain("docs/idea/13-admin-oidc.md")
     })
   })
 
@@ -283,12 +310,6 @@ describe("parseEnv", () => {
       expect(expectEnvError(withoutDatabase).variables).toEqual(["DATABASE_URL"])
     })
 
-    test("names ADMIN_USERNAME when it is missing", () => {
-      const { ADMIN_USERNAME: _omitted, ...withoutUsername } = base
-
-      expect(expectEnvError(withoutUsername).variables).toEqual(["ADMIN_USERNAME"])
-    })
-
     test("names PORT when it is not a number", () => {
       expect(expectEnvError({ ...base, PORT: "eight-thousand" }).variables).toEqual(["PORT"])
     })
@@ -307,7 +328,6 @@ describe("parseEnv", () => {
       const error = expectEnvError({ ENCRYPTION_KEY: "short", PORT: "nope" })
 
       expect(error.variables).toContain("DATABASE_URL")
-      expect(error.variables).toContain("ADMIN_USERNAME")
       expect(error.variables).toContain("ENCRYPTION_KEY")
       expect(error.variables).toContain("PORT")
     })

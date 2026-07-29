@@ -1,39 +1,38 @@
-import { useNavigate, useSearchParams } from "@solidjs/router"
-import { createSignal, Show } from "solid-js"
+import { useSearchParams } from "@solidjs/router"
 import { Button } from "../components/Button"
-import { TextField } from "../components/Field"
 import { errorMessage } from "../lib/api/errors"
-import { useLogin } from "../lib/queries/session"
 import { safeNextPath } from "../lib/routes"
 import styles from "./LoginRoute.module.scss"
 
 /**
- * Rendered outside `AppLayout` — no nav, no chrome. A single admin, no user
- * table: the form posts credentials and the server sets a `__Host-` session
- * cookie plus a CSRF token the SPA holds in memory only.
+ * Rendered outside `AppLayout` — no nav, no chrome. The admin plane is now a
+ * generic OIDC flow: the operator bounces off to the IdP, the IdP returns the
+ * browser to `/api/admin/auth/oidc/callback`, the route mints a session and
+ * serves the operator the SPA. This page is the only place in the router that
+ * still renders any chrome around the login.
  *
- * `?next=` carries the surface the operator was heading for when their session
- * expired, so a timeout returns them where they were rather than to the
- * dashboard. It is validated as a same-origin path before use: an open redirect
- * on a login form is how a phished operator ends up authenticating somewhere
- * else entirely.
+ * `?error=` carries the message the callback page rendered when the IdP
+ * declined the authorization. We display it inline, the same way the password
+ * flow used to, so an operator who mistypes their IdP password lands back here
+ * with the same flow.
  */
 export default function LoginRoute() {
   const [params] = useSearchParams()
-  const navigate = useNavigate()
-  const login = useLogin()
-
-  const [username, setUsername] = createSignal("")
-  const [password, setPassword] = createSignal("")
 
   const destination = () => safeNextPath(params.next)
+  const error = () => {
+    const value = params.error
+    if (typeof value !== "string" || value.length === 0) return null
+    return value
+  }
 
-  const submit = (event: SubmitEvent) => {
-    event.preventDefault()
-    login.mutate(
-      { username: username(), password: password() },
-      { onSuccess: () => navigate(destination(), { replace: true }) },
-    )
+  const startOIDC = () => {
+    const next = destination()
+    const url =
+      next === "/"
+        ? "/api/admin/auth/oidc/start"
+        : `/api/admin/auth/oidc/start?next=${encodeURIComponent(next)}`
+    window.location.assign(url)
   }
 
   return (
@@ -44,39 +43,19 @@ export default function LoginRoute() {
           <p class={styles.note}>Sign in to the admin console.</p>
         </div>
 
-        <form class={styles.form} onSubmit={submit}>
-          <TextField
-            autocomplete="username"
-            label="Username"
-            name="username"
-            onInput={(event) => setUsername(event.currentTarget.value)}
-            required
-            value={username()}
-          />
-          <TextField
-            autocomplete="current-password"
-            label="Password"
-            name="password"
-            onInput={(event) => setPassword(event.currentTarget.value)}
-            required
-            type="password"
-            value={password()}
-          />
+        {/* The single button. The whole login is a redirect to the IdP. */}
+        {error() !== null && (
+          <p class={styles.error} role="alert">
+            {errorMessage(Object.assign(new Error("error"), { message: error() }))}
+          </p>
+        )}
 
-          {/* `role="alert"`: the operator has just acted and is waiting on this. */}
-          <Show when={login.isError}>
-            <p class={styles.error} role="alert">
-              {errorMessage(login.error)}
-            </p>
-          </Show>
-
-          <Button busy={login.isPending} tone="primary" type="submit">
-            Sign in
-          </Button>
-        </form>
+        <Button onClick={startOIDC} tone="primary" type="button">
+          Sign in with OIDC
+        </Button>
 
         <p class={styles.note}>
-          Failed attempts are throttled per username and per address, and audited server-side.
+          Failed attempts are throttled per address and audited server-side.
         </p>
       </div>
     </div>

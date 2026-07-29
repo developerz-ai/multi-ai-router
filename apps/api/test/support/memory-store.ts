@@ -232,6 +232,7 @@ export function createMemoryStore(): MemoryStore {
           id: crypto.randomUUID(),
           state: input.state,
           codeVerifier: input.codeVerifier,
+          nonce: input.nonce ?? null,
           provider: input.provider,
           accountId: input.accountId ?? null,
           redirectUri: input.redirectUri ?? null,

@@ -20,6 +20,14 @@ export const oauthStates = pgTable(
     /** AES-256-GCM ciphertext of the PKCE `code_verifier`. */
     codeVerifier: text("code_verifier").notNull(),
 
+    /**
+     * AES-256-GCM ciphertext of the OIDC `nonce`. Null when the flow that
+     * minted this row does not use one — the legacy account-connect flow, for
+     * example. The admin-OIDC flow writes it and reads it back during the
+     * callback to bind the id_token to the start request.
+     */
+    nonce: text("nonce"),
+
     provider: providerId("provider").notNull(),
     accountId: uuid("account_id").references(() => accounts.id, { onDelete: "cascade" }),
 

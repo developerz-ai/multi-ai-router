@@ -3,26 +3,19 @@ import { adoptSession, clearSession } from "./session"
 import type { SessionView } from "./types"
 
 // `/api/admin/auth`. The only group mounted outside the admin guard, because
-// login is what issues the session it would otherwise require.
+// the OIDC start is what initiates the session the guard would otherwise
+// require.
 //
-// Each call folds its result into the session state itself: a caller that has
-// to remember to call `adoptSession` after `login` is a caller that will one day
-// forget and leave every mutation without a CSRF token.
-
-export interface Credentials {
-  readonly username: string
-  readonly password: string
-}
-
-export async function login(credentials: Credentials): Promise<SessionView> {
-  const session = await request<SessionView>({
-    method: "POST",
-    path: "/auth/login",
-    body: credentials,
-  })
-  adoptSession(session)
-  return session
-}
+// The login itself runs entirely in the browser:
+//   - the operator clicks "Sign in with OIDC" on `/login`
+//   - the SPA navigates the browser to `/api/admin/auth/oidc/start`
+//   - the API redirects to the IdP with PKCE + nonce
+//   - the IdP returns the browser to `/api/admin/auth/oidc/callback`
+//   - the API sets the session cookie and serves the SPA a small HTML page
+//   - the SPA re-loads and `fetchSession()` reads the new cookie
+//
+// There is no `login()` here on purpose: the SPA does not POST credentials,
+// so there is no body to put on the wire.
 
 /**
  * Who am I, and is this cookie still worth anything. A 401 here is the normal

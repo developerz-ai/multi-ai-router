@@ -61,6 +61,11 @@ export interface CreateOauthStateInput {
   readonly state: string
   /** AES-256-GCM envelope of the PKCE `code_verifier`. Never plaintext. */
   readonly codeVerifier: string
+  /**
+   * AES-256-GCM envelope of the OIDC `nonce`. Null when the flow that mints
+   * this row does not use one — the legacy account-connect flow.
+   */
+  readonly nonce?: string | null
   readonly provider: ProviderId
   /** The pending account row this flow belongs to. */
   readonly accountId?: string | null
@@ -82,6 +87,7 @@ export function createOauthStateRepository(db: Database): OauthStateRepository {
         .values({
           state: input.state,
           codeVerifier: input.codeVerifier,
+          nonce: input.nonce ?? null,
           provider: input.provider,
           accountId: input.accountId ?? null,
           redirectUri: input.redirectUri ?? null,
