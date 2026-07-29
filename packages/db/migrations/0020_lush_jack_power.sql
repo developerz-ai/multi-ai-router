@@ -1,0 +1,1 @@
+ALTER TABLE "oauth_states" ALTER COLUMN "provider" SET DATA TYPE text;

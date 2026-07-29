@@ -1,4 +1,3 @@
-import type { ProviderId } from "@multi-ai-router/core"
 import { and, eq, gt, isNull } from "drizzle-orm"
 import type { Database } from "../client"
 import { type OauthStateRow, oauthStates } from "../schema/oauth-states"
@@ -66,7 +65,15 @@ export interface CreateOauthStateInput {
    * this row does not use one — the legacy account-connect flow.
    */
   readonly nonce?: string | null
-  readonly provider: ProviderId
+  /**
+   * Free-form identifier of the flow that minted this row. Real
+   * AI-provider values for the legacy account-connect flow;
+   * "admin-oidc" for the admin-plane OIDC flow. Widened from the
+   * ProviderId enum to plain text so the synthetic admin value is
+   * not rejected at insert time (mirrors the column widening in
+   * `schema/oauth-states.ts`).
+   */
+  readonly provider: string
   /** The pending account row this flow belongs to. */
   readonly accountId?: string | null
   /**

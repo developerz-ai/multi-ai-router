@@ -1,6 +1,5 @@
 import { index, pgTable, text, timestamp, uniqueIndex, uuid } from "drizzle-orm/pg-core"
 import { accounts } from "./accounts"
-import { providerId } from "./enums"
 
 /**
  * One-shot OAuth `state` + PKCE verifier, bound to a pending account row and
@@ -10,6 +9,15 @@ import { providerId } from "./enums"
  *
  * Claude subscription accounts do not use this table — their login is handed to
  * the `claude` CLI and lands in the account's `CLAUDE_CONFIG_DIR`.
+ *
+ * The `provider` column is `text` rather than the enum used elsewhere on
+ * purpose: the admin-plane OIDC flow writes the synthetic value
+ * `admin-oidc` to mark rows that do not belong to a real AI provider, and
+ * the legacy account-connect flow writes one of the enum members. Postgres
+ * enums cannot be widened silently, and a synthetic id in the provider enum
+ * would violate the architectural invariant that every declared id has a
+ * driver (apps/api/test/unit/providers/registry.test.ts). The legacy flow
+ * still uses real provider values; only the column's vocabulary is widened.
  */
 export const oauthStates = pgTable(
   "oauth_states",
@@ -28,7 +36,13 @@ export const oauthStates = pgTable(
      */
     nonce: text("nonce"),
 
-    provider: providerId("provider").notNull(),
+    /**
+     * Free-form identifier of the flow that minted this row. Real
+     * AI-provider values (e.g. "openai-oauth") for the legacy
+     * account-connect flow; "admin-oidc" for the admin-plane OIDC flow.
+     * `text` so the admin synthetic value is not rejected at insert time.
+     */
+    provider: text("provider").notNull(),
     accountId: uuid("account_id").references(() => accounts.id, { onDelete: "cascade" }),
 
     redirectUri: text("redirect_uri"),
