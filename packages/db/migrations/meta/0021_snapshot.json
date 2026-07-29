@@ -1,5 +1,5 @@
 {
-  "id": "3d739d4b-427d-47a1-b9b7-592a8464cbe7",
+  "id": "4f9fc51c-2936-4242-9d95-27b13025e078",
   "prevId": "50618ca7-7ffd-4576-acb3-1bc73a00907d",
   "version": "7",
   "dialect": "postgresql",
@@ -752,8 +752,7 @@
         },
         "provider": {
           "name": "provider",
-          "type": "provider_id",
-          "typeSchema": "public",
+          "type": "text",
           "primaryKey": false,
           "notNull": true
         },
@@ -2038,8 +2037,7 @@
         "cerebras",
         "ollama",
         "openai-compatible",
-        "anthropic-compatible",
-        "admin-oidc"
+        "anthropic-compatible"
       ]
     },
     "public.reset_source": {

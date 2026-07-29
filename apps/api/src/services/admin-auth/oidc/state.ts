@@ -83,12 +83,12 @@ export function createOIDCStateStore(deps: OIDCStateStoreDeps): OIDCStateStore {
         state,
         codeVerifier: deps.cipher.encrypt(codeVerifier),
         nonce: deps.cipher.encrypt(nonce),
-        // The provider enum does not include this value. The cast is the
-        // single, named seam where the admin flow writes outside the
-        // provider vocabulary — that is what the field's name is *for*.
-        provider: ADMIN_OIDC_PROVIDER as unknown as Parameters<
-          typeof deps.states.create
-        >[0]["provider"],
+        // `provider` is `text`, not the enum used elsewhere — the admin flow
+        // reuses the legacy oauth_states table but writes a synthetic value
+        // that is not (and never should be) a real AI-provider id. The cast
+        // here is the single named seam that knows that, and the column
+        // widening that ships with this commit lets the cast run at runtime.
+        provider: ADMIN_OIDC_PROVIDER,
         expiresAt,
       })
       return { state, nonce, codeVerifier, expiresAt }
@@ -97,7 +97,7 @@ export function createOIDCStateStore(deps: OIDCStateStoreDeps): OIDCStateStore {
     async consume(state: string) {
       const row = await deps.states.consume(state, deps.now())
       if (row === undefined) throw new OIDCStateMismatchError()
-      if (row.provider !== (ADMIN_OIDC_PROVIDER as unknown as typeof row.provider)) {
+      if (row.provider !== ADMIN_OIDC_PROVIDER) {
         throw new OIDCStateMismatchError()
       }
       if (row.nonce === null) throw new OIDCStateMismatchError()

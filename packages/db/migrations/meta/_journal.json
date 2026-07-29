@@ -148,6 +148,13 @@
       "when": 1785333350523,
       "tag": "0020_naive_zuras",
       "breakpoints": true
+    },
+    {
+      "idx": 21,
+      "version": "7",
+      "when": 1785333694658,
+      "tag": "0021_lush_jack_power",
+      "breakpoints": true
     }
   ]
 }
