@@ -223,14 +223,23 @@ export function createOIDCFlow(deps: OIDCFlowDeps): OIDCFlow {
         principal = { email, subject: sub }
       } catch (err) {
         const kind =
-          err instanceof OIDCDiscoveryError ? `discovery:${err.kind}` :
-          err instanceof OIDCJWKSError ? `jwks` :
-          err instanceof OIDCIdTokenInvalidError ? `idtoken:${err.code}` :
-          err instanceof OIDCStateMismatchError ? `state` :
-          err instanceof OIDCPrincipalMismatchError ? `principal` :
-          err instanceof AdminAuthError ? `auth` :
-          `unknown:${err instanceof Error ? err.constructor.name : String(err)}`
-        console.error(`[admin-oidc] complete failed: ${kind}`, err instanceof Error ? err.message : err)
+          err instanceof OIDCDiscoveryError
+            ? `discovery:${err.code}`
+            : err instanceof OIDCJWKSError
+              ? `jwks`
+              : err instanceof OIDCIdTokenInvalidError
+                ? `idtoken:${err.code}`
+                : err instanceof OIDCStateMismatchError
+                  ? `state`
+                  : err instanceof OIDCPrincipalMismatchError
+                    ? `principal`
+                    : err instanceof AdminAuthError
+                      ? `auth`
+                      : `unknown:${err instanceof Error ? err.constructor.name : String(err)}`
+        console.error(
+          `[admin-oidc] complete failed: ${kind}`,
+          err instanceof Error ? err.message : err,
+        )
         if (
           err instanceof OIDCDiscoveryError ||
           err instanceof OIDCJWKSError ||
