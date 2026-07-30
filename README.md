@@ -6,7 +6,9 @@
 
 A server you run yourself, sitting between your AI tools and the companies you buy AI from.
 
-You already pay for the accounts — a couple of Claude subscriptions, an OpenAI key, maybe a ChatGPT plan and something cheaper for bulk work. Right now each one is pasted into a different tool on a different laptop, and only the person holding it can use it. Here you add them once, in a web console, and hand out keys of your own making instead. Your team's tools point at your server, and the real logins never leave it.
+You already pay for the accounts — a few Claude subscriptions, an OpenAI key, maybe a ChatGPT plan and something cheaper for bulk work. Right now each one is pasted into a different tool on a different laptop, and only the person holding it can use it. Here you add them once, in a web console, and hand out keys of your own making instead. Your team's tools point at your server, and the real logins never leave it.
+
+**Several accounts of the same kind is the normal case here, not a corner case.** Five Claude plans side by side should behave like one plan that rarely runs out. That is what this is for, and everything else in it exists to make that true.
 
 ```
 Claude Code / OpenCode / Codex / any OpenAI|Anthropic client
@@ -28,7 +30,7 @@ Claude Max sub · ChatGPT sub · Anthropic API · OpenRouter · z.ai · Kimi · 
 
 ## How you use it
 
-**As a developer**, you change two settings in the tool you already use: the address it talks to, and the key it presents. That is the whole integration — no library to install, nothing in your code to change. Ask for the model you always ask for and you get that model, served by whichever account was healthy at that moment; if one is rate-limited or out of credit, the next one picks the request up. You never hold a real provider credential.
+**As a developer**, you change two settings in the tool you already use: the address it talks to, and the key it presents. It makes no difference whether that tool speaks OpenAI's API or Anthropic's — the router answers both, and translates between them when the account that serves you speaks the other one. That is the whole integration: no library to install, nothing in your code to change. Ask for the model you always ask for and you get that model, served by whichever account was healthy at that moment; if one is rate-limited or out of credit, the next one picks the request up. You never hold a real provider credential.
 
 **As an admin**, you bring up the router and its database from the bundled Docker Compose file, open the console, and add your accounts — pasting in an API key, or signing in to a subscription through that provider's own login page. Group the accounts into pools, choose how each pool shares work, and mint a named key per person or per agent, each one limited to the accounts you pick, with its own request-rate ceiling and expiry date. The dashboard answers the daily questions: who spent what, which accounts are paused and when they come back, and which ones have run out of credit and need a human.
 
