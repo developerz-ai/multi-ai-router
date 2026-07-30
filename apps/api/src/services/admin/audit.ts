@@ -129,9 +129,10 @@ export const AUDIT_SUBJECTS = {
    */
   settings: "settings",
   /**
-   * The single admin identity this deployment has. Its subject id is the configured
-   * `ADMIN_USERNAME`, never the string someone typed into the login form: a failed login must
-   * not be able to write an attacker-chosen subject id into an append-only table.
+   * The single admin identity this deployment has. Its subject id is the stable
+   * `admin` category; the OIDC-asserted email and subject are recorded in the
+   * event detail only after verification, so a failed callback cannot choose an
+   * append-only subject id.
    */
   admin: "admin",
 } as const

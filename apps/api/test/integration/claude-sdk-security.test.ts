@@ -412,7 +412,7 @@ describe("the static SPA mount cannot serve anything outside its web root", () =
    * This isn't the Agent SDK, but the same failure mode is: a filesystem mount reachable from an
    * unauthenticated HTTP request, sitting on the same host as `CLAUDE_CONFIG_ROOT` (per-Account
    * OAuth credentials) and the process's own `.env` (`ENCRYPTION_KEY`, `DATABASE_URL`,
-   * `ADMIN_PASSWORD`). `routes/spa.ts` is mounted last, at `/`, with no router key and no session —
+   * `ADMIN_OIDC_CLIENT_SECRET`). `routes/spa.ts` is mounted last, at `/`, with no router key and no session —
    * a traversal bug there is a wider hole than anything the Agent SDK's own sandbox guards.
    *
    * The fixture below never touches the real filesystem locations — it stands up its own `web/`

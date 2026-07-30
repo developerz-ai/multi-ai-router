@@ -1,15 +1,15 @@
-# multi-ai-router — the whole deployment. Two services, three env vars.
-# Copy .env.example to .env, fill in ENCRYPTION_KEY and the admin credentials,
+# multi-ai-router — the whole deployment. Two services, OIDC config + one encryption key.
+# Copy .env.example to .env, fill in ADMIN_OIDC_* and ENCRYPTION_KEY,
 # then: docker compose up -d
 #
-# DATABASE_URL is supplied by this file (see the `router` service below), so the
-# only values you set by hand are ADMIN_USERNAME, ADMIN_PASSWORD and ENCRYPTION_KEY.
+# DATABASE_URL is supplied by this file (see the `router` service below).
+# Full OIDC setup: docs/idea/13-admin-oidc.md
 # Full env reference: docs/idea/09-deployment.md
 
 services:
   router:
-    image: ghcr.io/developerz-ai/multi-ai-router:1.4.1
-    # Pin at least the minor in production (e.g. :1.2) — `latest` moves under you.
+    image: ghcr.io/developerz-ai/multi-ai-router:2.0.3
+    # Pin a full release in production — `latest` moves under you.
 
     ports:
       # Host:container. The admin plane lives on this same port, so publish it on
@@ -17,7 +17,7 @@ services:
       # you mean to expose. See the "Reverse proxy" section in docs/idea/09-deployment.md.
       - "127.0.0.1:8080:8080"
 
-    # Admin credentials + ENCRYPTION_KEY come from .env. Nothing secret belongs in
+    # OIDC settings, client secret, and ENCRYPTION_KEY come from .env. Nothing secret belongs in
     # this file.
     env_file:
       - path: .env

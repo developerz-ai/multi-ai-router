@@ -12,10 +12,12 @@ guess at.
 ## Getting started
 
 ```
-bin/setup   # fresh clone → prereqs, install, .env, dev Postgres, migrate
+bin/setup   # fresh clone → prereqs, install, OIDC-ready .env, dev Postgres, migrate
 bin/dev     # each session: API + web, watch mode
 bin/check   # before every commit: lint + typecheck + test + build
 ```
+
+`bin/setup` generates the encryption key and development database URL, but it cannot invent an identity provider. Register an OIDC client and fill the required `ADMIN_OIDC_*` values described in [`docs/idea/13-admin-oidc.md`](docs/idea/13-admin-oidc.md) before starting the app.
 
 Those three commands are the house contract. If a task is worth running
 twice, it belongs in `bin/`, not a one-off shell invocation copy-pasted into
