@@ -1,0 +1,6 @@
+{
+  "repo": "developerz-ai/multi-ai-router",
+  "merge": {
+    "reviewGate": "ci-only"
+  }
+}
