@@ -2,7 +2,11 @@
 
 <p align="center"><strong>your tools → multi-ai-router → providers</strong></p>
 
-**It's a proxy: your tools → multi-ai-router → providers.** A self-hosted web app where you add the API keys and subscription accounts you already pay for (Claude Max/Pro, ChatGPT/Codex, Anthropic API, OpenAI API, OpenRouter, z.ai, Kimi, MiniMax, Gemini, or any OpenAI-/Anthropic-compatible endpoint) once, in the admin console — and get back one OpenAI- and Anthropic-compatible URL. Mint a router key, bind it to the accounts it may use, and point every tool you own — Claude Code, Cursor, OpenCode, Codex CLI, Cline, Aider, anything speaking the OpenAI or Anthropic wire protocol — at that one key. Your tools never see the upstream credential, and the upstream never sees more than one caller.
+## What is this?
+
+A server you run yourself, sitting between your AI tools and the companies you buy AI from.
+
+You already pay for the accounts — a couple of Claude subscriptions, an OpenAI key, maybe a ChatGPT plan and something cheaper for bulk work. Right now each one is pasted into a different tool on a different laptop, and only the person holding it can use it. Here you add them once, in a web console, and hand out keys of your own making instead. Your team's tools point at your server, and the real logins never leave it.
 
 ```
 Claude Code / OpenCode / Codex / any OpenAI|Anthropic client
@@ -14,9 +18,23 @@ Claude Code / OpenCode / Codex / any OpenAI|Anthropic client
 Claude Max sub · ChatGPT sub · Anthropic API · OpenRouter · z.ai · Kimi · …
 ```
 
-## What it is
+## Why it exists
 
-multi-ai-router is the thing that sits between your tools and your providers so you don't have to paste a different key into every one of them. Log in as the single admin, attach as many upstream accounts as you have — **many accounts of the same provider is the normal case, not an edge case**: five Claude Max subscriptions, three z.ai keys, two ChatGPT subs, side by side — group them into pools with load balancing and failover, and mint one named, revocable router key per human or agent. Clients keep speaking the OpenAI or Anthropic wire protocol they already speak; the router picks which account answers, refreshes OAuth for them, and records what it cost. **The client picks the model. The router picks the account.**
+**You bought five subscriptions and can still only use one at a time.** Every AI plan has a ceiling — so many messages in five hours, so many in a week. Hit it and you stop, even when the four other plans your team pays for are sitting idle. Someone has to notice, log out, log into another account, reconfigure their editor, and lose their place. The router makes that switch itself, on the failing request, before the tool notices anything went wrong.
+
+**Every tool wants the real password.** Editors, agents, CI jobs, one-off scripts — each one asks for the provider credential, and each copy is another place you have to trust and eventually rotate. Here every person and every bot gets a key you minted, which reaches only the accounts you allowed and can be switched off on its own. The real credential stays in one place, encrypted, on your server.
+
+**Nobody knows who spent what.** Providers bill you in one lump. The router records every request it forwards — who sent it, which account served it, which model, how many tokens, how long it took, and what it cost — so "why was last month expensive" becomes a question with an answer.
+
+## How you use it
+
+**As a developer**, you change two settings in the tool you already use: the address it talks to, and the key it presents. That is the whole integration — no library to install, nothing in your code to change. Ask for the model you always ask for and you get that model, served by whichever account was healthy at that moment; if one is rate-limited or out of credit, the next one picks the request up. You never hold a real provider credential.
+
+**As an admin**, you bring up the router and its database from the bundled Docker Compose file, open the console, and add your accounts — pasting in an API key, or signing in to a subscription through that provider's own login page. Group the accounts into pools, choose how each pool shares work, and mint a named key per person or per agent, each one limited to the accounts you pick, with its own request-rate ceiling and expiry date. The dashboard answers the daily questions: who spent what, which accounts are paused and when they come back, and which ones have run out of credit and need a human.
+
+One thing to know before you start: the console has no password of its own. You sign in through an identity provider you point it at — Google Workspace, Okta, Zitadel, Keycloak, Auth0 — and the router refuses to start until one is configured. That is a deliberate trade. It means the credential guarding every account in your deployment is your identity provider's, with its multi-factor and its audit trail behind it — and it means trying this out on a bare laptop takes an identity provider first.
+
+> **In one sentence:** a server you host that turns all the AI accounts you already pay for into a single address your whole team can use, without ever handing anyone the real logins.
 
 ---
 
