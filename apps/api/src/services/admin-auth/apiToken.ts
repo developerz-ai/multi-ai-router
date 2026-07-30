@@ -23,8 +23,8 @@ import type { AdminSession } from "./sessionStore"
  */
 
 /**
- * The floor on entropy, and not a stylistic minimum. Every other way into the admin plane is
- * rate-limited: `POST /login` is throttled per username and per IP with a lockout
+ * The floor on entropy, and not a stylistic minimum. Browser entry into the admin plane is
+ * rate-limited by client IP before OIDC state creation or code exchange
  * (`services/admin-auth/throttle.ts`). A static bearer has none of that — it is checked and
  * answered on every request, forever, at whatever rate the network allows. Length is therefore the
  * only thing standing between this token and an unbounded guessing budget, so boot refuses a short
@@ -36,9 +36,9 @@ export const ADMIN_API_TOKEN_MIN_LENGTH = 32
 
 /**
  * What the audit trail and `GET /api/admin/auth/session` call this caller. Deliberately not the
- * configured `ADMIN_USERNAME`: an operator reading the log has to be able to tell a console login
- * from a script holding the token, because revoking the two is a different action — one is a
- * password change, the other is an env var and a restart.
+ * OIDC principal: an operator reading the log has to distinguish a browser session from a script
+ * holding the token, because revoking them differs — one happens at the IdP, the other is an env var
+ * change and a restart.
  */
 export const ADMIN_API_TOKEN_ACTOR = "admin-api-token"
 

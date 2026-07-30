@@ -120,5 +120,6 @@ cat <<'NEXT'
      bin/check          the CI gate, locally
      bin/db psql        a shell on the dev database
 
-   The console login is ADMIN_USERNAME / ADMIN_PASSWORD from .env.
+   The console login uses the ADMIN_OIDC_* relying-party settings from .env.
+   Register the callback and claim contract in docs/idea/13-admin-oidc.md first.
 NEXT

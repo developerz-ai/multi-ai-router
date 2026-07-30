@@ -1,7 +1,6 @@
 # Security
 
-Status: **implemented** — AES-256-GCM at rest, the tested log redactor, plane separation, admin
-session + CSRF, argon2id, login throttling, per-key rate limiting, and a `METRICS_TOKEN` on
+Status: **implemented** — AES-256-GCM at rest, the tested log redactor, plane separation, generic admin OIDC + bounded session + CSRF, OIDC callback throttling, per-key rate limiting, and a `METRICS_TOKEN` on
 `/metrics`. **Not built:** per-IP request rate limiting. Deployment-side settings live in
 [09-deployment.md](09-deployment.md); key semantics in
 [04-api-keys-and-access.md](04-api-keys-and-access.md).
@@ -150,14 +149,24 @@ inline with a copy button — retrieval is the recovery path, not the normal one
 
 | Element | Rule |
 |---|---|
-| Identity | A single admin, from the environment. No user table in v1 |
-| Credentials | `ADMIN_USERNAME` + `ADMIN_PASSWORD` (plaintext in env, hashed with argon2id at boot, never persisted in plaintext), or `ADMIN_PASSWORD_HASH` (pre-computed argon2id). **`ADMIN_PASSWORD_HASH` takes precedence when both are set.** Exactly one form must be present or boot fails |
-| Hashing | argon2id, with parameters pinned in one place |
-| Session | Login issues an httpOnly, `SameSite=Strict`, `Secure`, `__Host-` cookie with a bounded lifetime. Logout invalidates server-side. `SESSION_COOKIE_INSECURE` drops `Secure`+`__Host-` for a plain-HTTP install and nothing else |
+| Identity | One configured OIDC principal. No router user table in v1 |
+| Authentication | Generic OIDC discovery + authorization code + PKCE S256. The signed ID token must match issuer, audience, nonce, timestamps, verified email, configured admin email, and optional subject pin. See [13-admin-oidc.md](13-admin-oidc.md) |
+| Break glass | `ADMIN_API_TOKEN` authenticates the same admin API without a browser and is audited separately as `admin-api-token` |
+| Session | OIDC login issues an httpOnly, `SameSite=Strict`, `Secure`, `__Host-` cookie with a bounded lifetime. Logout invalidates server-side. `SESSION_COOKIE_INSECURE` drops `Secure`+`__Host-` for a plain-HTTP install and nothing else |
 | CSRF | A token is required on every mutating admin request. `SameSite=Strict` is the belt; the token is the braces |
-| Throttling | Per-IP and per-account login attempt throttling with backoff. Failed logins are audit events |
+| Throttling | OIDC start and callback are throttled by client IP before state creation or code exchange. Every callback failure returns the same wording |
+| MFA | Enrollment and MFA policy belong to the IdP. The router does not keep a second password or TOTP secret |
 | Console assets | The built SPA is served from `WEB_ROOT` at the root, mounted **last** and never for a path under `/api`, `/v1`, `/healthz`, `/readyz` or `/metrics`. The history-API fallback reads one fixed filename, so the request path never reaches it. A path that escapes the root, or that the filesystem cannot name at all (a NUL byte, past `PATH_MAX`), gets the shell — never a file outside the root, and never a `500` an unauthenticated caller can mint on demand |
-| 2FA | `ADMIN_TOTP_SECRET` is **DEFERRED** |
+
+### Admin OIDC
+
+The browser starts at `GET /api/admin/auth/oidc/start`. The router fetches the issuer's discovery document, requires advertised PKCE S256 support, creates one-shot state with a nonce and encrypted verifier, and redirects to the authorization endpoint. The callback consumes state before validating the principal, exchanges the code with the same redirect URI and verifier, verifies the RS256 ID token against the issuer's JWKS, then applies the email and optional subject pins.
+
+The callback route is public by necessity: a cross-site top-level redirect cannot carry the `SameSite=Strict` admin cookie. Its authority is the high-entropy, short-lived, single-use state plus PKCE and nonce — not an existing session. Every rejection is collapsed to one operator-facing sentence. The server may log a bounded diagnostic kind, but never a token, code, state, verifier, client secret, or claim payload.
+
+The IdP must put `email` and `email_verified` in the signed ID token. A provider that serves those claims only from userinfo must enable its “userinfo in ID token” setting; accepting a second, unsigned-or-differently-bound principal response would widen the security boundary for no benefit.
+
+The admin plane may be internet-facing when HTTPS and this OIDC contract protect it. That posture does not turn the router into multi-tenant SaaS: one configured email, optionally one immutable `sub`, receives the only browser session.
 
 **The two credential spaces are completely separate.** A router key authenticates the data plane and
 nothing else: it is never accepted on an admin route, cannot mint or read keys, cannot list accounts,
@@ -214,7 +223,7 @@ pending login ([11-anthropic-agent-sdk.md](11-anthropic-agent-sdk.md) §3.1).
 | `ENCRYPTION_KEY` alone | Nothing, without the database |
 | **Database + `ENCRYPTION_KEY`** | Total compromise: every upstream credential and every router key. Rotate upstream credentials, re-auth every OAuth account, mint new keys, and rotate `ENCRYPTION_KEY` |
 | The `CLAUDE_CONFIG_DIR` volume | Every Claude subscription it holds, immediately and without `ENCRYPTION_KEY` — the credentials are live in the SDK's own format. Recovery is re-running the SDK login for each affected Account, which invalidates the old directory |
-| The admin password | Full control of the admin plane: keys can be read and minted, accounts read (but not their credentials — no endpoint returns them) |
+| A compromised IdP admin or the configured OIDC principal | Full control of the admin plane: keys can be read and minted, accounts read (but not their credentials — no endpoint returns them). Revoke the IdP session/credential and rotate the OIDC client secret if the client was affected |
 | Logs | Metadata only: request ids, model names, token counts, account labels. No prompts, no credentials |
 | An admin session cookie | Admin-plane access until the session expires or is invalidated |
 
@@ -222,13 +231,16 @@ pending login ([11-anthropic-agent-sdk.md](11-anthropic-agent-sdk.md) §3.1).
 
 For operators, at deploy time:
 
-- Put the router behind a reverse proxy that terminates HTTPS. Do not publish the container port.
-- Do **not** expose the admin plane (`/api/admin/**`, the SPA) to the public internet — bind it to a
-  private network, a VPN, or an authenticating proxy. The data plane can be public; the admin plane
-  has no reason to be.
+- Publish the admin plane only behind a reverse proxy that terminates HTTPS. An internet-facing console
+  is supported when the documented OIDC flow protects it; a private network, VPN, or IP allowlist is
+  optional defense in depth, not an architectural requirement. Do not publish the container port.
+- Register the exact OIDC callback URI, require PKCE S256, and make the IdP include verified email in
+  the signed ID token. Set `ADMIN_OIDC_ADMIN_SUBJECT` as an additional immutable pin when practical.
+  Enforce MFA and account-recovery policy at the IdP. See [13-admin-oidc.md](13-admin-oidc.md).
+- Keep `ADMIN_API_TOKEN` in a secret store and prove the break-glass path before an IdP outage. Rotate
+  it by changing the value and restarting.
 - Generate `ENCRYPTION_KEY` from a CSPRNG (32 bytes, base64). Store it in a secret store if you have
   one. Never commit it. Never reuse it across deployments.
-- Prefer `ADMIN_PASSWORD_HASH` over `ADMIN_PASSWORD` once you are past first boot.
 - Back up the Postgres database (`pg_dump` or a volume snapshot) — and back up `ENCRYPTION_KEY`
   separately, somewhere the database backup is not. A backup of one without the other is useless; a
   backup of both in one place is the whole compromise in one file.

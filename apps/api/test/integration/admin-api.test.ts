@@ -28,6 +28,7 @@ import {
   OAUTH_CALLBACK_PATH,
 } from "../../src/services/accounts"
 import { createAuditRecorder } from "../../src/services/admin"
+import type { OIDCFlow } from "../../src/services/admin-auth/oidc/flow"
 import { createAdminAuthService } from "../../src/services/admin-auth/service"
 import { createCredentialCipher } from "../../src/services/crypto/cipher"
 import { createHealthStore } from "../../src/services/dataplane"
@@ -292,10 +293,22 @@ describe("the guard", () => {
   test("every admin route group is unreachable without a session", async () => {
     const service = createAdminAuthService({
       env: {
-        adminUsername: "admin",
-        adminCredential: { kind: "hash", value: await Bun.password.hash("hunter2") },
+        adminOidc: {
+          issuerUrl: "https://idp.test",
+          clientId: "router-test",
+          clientSecret: null,
+          redirectUri: "https://router.test/api/admin/auth/oidc/callback",
+          adminEmail: "admin@test",
+          adminSubject: null,
+          scopes: ["openid", "profile", "email"],
+          clockSkewSeconds: 60,
+        },
         encryptionKey: ENCRYPTION_KEY,
       },
+      oidc: {
+        start: () => Promise.reject(new Error("not exercised by an unauthenticated request")),
+        complete: () => Promise.reject(new Error("not exercised by an unauthenticated request")),
+      } satisfies OIDCFlow,
     })
     const { app } = harness(adminAuth(service, false))
 
@@ -759,10 +772,22 @@ describe("the OAuth callback route", () => {
     // CSRF) is a different surface this file already covers in `admin-auth.test.ts`.
     const service = createAdminAuthService({
       env: {
-        adminUsername: "admin",
-        adminCredential: { kind: "hash", value: await Bun.password.hash("hunter2") },
+        adminOidc: {
+          issuerUrl: "https://idp.test",
+          clientId: "router-test",
+          clientSecret: null,
+          redirectUri: "https://router.test/api/admin/auth/oidc/callback",
+          adminEmail: "admin@test",
+          adminSubject: null,
+          scopes: ["openid", "profile", "email"],
+          clockSkewSeconds: 60,
+        },
         encryptionKey: ENCRYPTION_KEY,
       },
+      oidc: {
+        start: () => Promise.reject(new Error("not exercised by an unauthenticated request")),
+        complete: () => Promise.reject(new Error("not exercised by an unauthenticated request")),
+      } satisfies OIDCFlow,
     })
     const { app, store, connect } = harness(adminAuth(service, false), {
       oauthFetch: fakeOAuthFetch(),

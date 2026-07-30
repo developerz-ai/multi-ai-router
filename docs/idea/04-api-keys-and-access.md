@@ -1,7 +1,7 @@
 # API Keys and Access
 
 Status: **implemented**, except where a row says otherwise — the two planes, admin auth with CSRF
-and login throttling, key mint/reveal/revoke, both header styles, and scope enforced as an
+and OIDC callback throttling, key mint/reveal/revoke, both header styles, and scope enforced as an
 intersection all work, as does `GET /api/admin/usage`. Per-key rate limits are enforced in memory,
 per replica. `/api/admin/settings` reads the deployment's configuration and edits the price-override
 table; the retention windows and the log level are environment variables and are shown, not
@@ -50,32 +50,30 @@ alike.
 | Rule | Why |
 |---|---|
 | **Unset by default** | No token means the plane is browser-only, exactly as it was. This adds a credential; it does not enable one. |
-| **Refused under 32 characters, at boot** | Every other way in is rate-limited — `POST /login` is throttled per username and per IP, with a lockout. A static bearer is not: it is checked and answered on every request, forever, at whatever rate the network allows. Length is the only thing bounding that budget. |
+| **Refused under 32 characters, at boot** | Every browser sign-in is IP-throttled before OIDC state or code exchange. A static bearer is not: it is checked and answered on every request, forever, at whatever rate the network allows. Length is the only thing bounding that budget. |
 | **Refused if it begins `mar_live_`, at boot** | The guard rejects that prefix as a data-plane credential *before* any comparison, so such a token would authenticate nothing while looking correct. Refusing it at boot turns a silent dead end into a message naming the variable. |
 | **No CSRF token required** | CSRF defends against a browser attaching *ambient* authority to a request the user did not intend. A bearer token is not ambient — no browser sends it cross-site on its own — and demanding one would be unsatisfiable anyway, since minting a CSRF token requires the login this credential exists to avoid. |
 | **Never expires; `POST /logout` refuses it** | It is a variable, not a session. Answering `logged_out` would report a revocation that did not happen and leave the caller holding a credential it believes it surrendered. Rotation is: change the value, restart. |
-| **Audited as `admin-api-token`** | Not as `ADMIN_USERNAME`. An operator reading the audit feed has to be able to tell a console login from a script, because revoking the two is a different action. |
+| **Audited as `admin-api-token`** | Not as the OIDC principal. An operator reading the audit feed has to be able to tell a console login from a script, because revoking the two is a different action. |
 
 ## Admin authentication
 
-A single admin, credentials from env. No user table in v1.
+A single admin principal, asserted by an OpenID Connect provider. No router user table in v1. The full relying-party contract and provider setup live in [13-admin-oidc.md](13-admin-oidc.md).
 
 | Variable | Meaning |
 |---|---|
-| `ADMIN_USERNAME` | The one admin identity. Required. |
-| `ADMIN_PASSWORD` | Plaintext password in env. Hashed with argon2id **at boot**, never persisted in plaintext. The documented default. |
-| `ADMIN_PASSWORD_HASH` | A pre-computed argon2id hash, for operators who don't want a plaintext secret in a compose file or env store. |
-| `ADMIN_TOTP_SECRET` | **DEFERRED** |
+| `ADMIN_OIDC_ISSUER_URL` | Exact issuer used for discovery and the `iss` check. |
+| `ADMIN_OIDC_CLIENT_ID` | OIDC client and expected ID-token audience. |
+| `ADMIN_OIDC_CLIENT_SECRET` | Confidential-client secret; optional for public clients. PKCE remains mandatory. |
+| `ADMIN_OIDC_REDIRECT_URI` | Exact registered callback URI. |
+| `ADMIN_OIDC_ADMIN_EMAIL` | Required, case-insensitive match against a verified `email` claim in the ID token. |
+| `ADMIN_OIDC_ADMIN_SUBJECT` | Optional stricter exact match against `sub`. |
 
-**Precedence:** when both are set, `ADMIN_PASSWORD_HASH` wins and `ADMIN_PASSWORD` is ignored.
-Exactly one of the two must be present or **boot fails** with a message naming the variable.
+There is no password or TOTP credential in the router. TOTP, passkeys, MFA policy, enrollment, and account recovery belong to the configured IdP. Adding a second factor *after* the OIDC-issued router session would be a separate design decision, not a deferred password-login field.
 
-**Why plaintext-in-env is the documented default:** the happy path has to be three env vars and
-`docker compose up -d`. Requiring a hash-generation step before the first login trades a real
-adoption cost for a marginal gain — the env store already holds `ENCRYPTION_KEY`, which is
-strictly more valuable than the admin password. Operators with an opinion about secrets in env
-get `ADMIN_PASSWORD_HASH`, and it takes precedence. Both paths converge on the same argon2id
-verification.
+`GET /api/admin/auth/oidc/start` is IP-throttled before it creates state. The callback consumes one-shot state, verifies PKCE, nonce, signature, standard claims, verified email, and the configured principal pins, then issues the same bounded session described below. Every callback rejection uses one generic response. Detailed diagnostics stay server-side.
+
+`ADMIN_API_TOKEN` remains the independent break-glass path. It is not a browser session and is audited as `admin-api-token`.
 
 ### Session cookie
 
@@ -91,13 +89,12 @@ verification.
 
 **Why the escape hatch exists.** A self-hosted router reached at `http://192.168.1.50:8080` — a
 LAN install with no proxy, which is a normal way this is run — is *unusable* with the hardened
-cookie: a browser silently discards a `Secure` cookie delivered over `http://`, so `POST /login`
-answers `200` and every request after it is `401`. `SESSION_COOKIE_INSECURE=true`
+cookie: a browser silently discards a `Secure` cookie delivered over `http://`, so the OIDC callback succeeds and every request after it is `401`. `SESSION_COOKIE_INSECURE=true`
 ([09-deployment.md](09-deployment.md#environment-reference)) is the one supported answer.
 
 **And the router says so.** This is the only misconfiguration on the admin plane with no HTTP
-answer available: the login is a legitimate `200` and the `401` lands on the *next* request, which
-did nothing wrong. The server is the only party that sees both halves, so `POST /login` emits a
+answer available: the callback is legitimate and the `401` lands on the *next* request, which
+did nothing wrong. The server is the only party that sees both halves, so the OIDC callback emits a
 `warn` naming `SESSION_COOKIE_INSECURE` whenever it sets a `Secure` cookie on a request that
 arrived over plain `http://`. `X-Forwarded-Proto: https` suppresses it, **whether or not
 `TRUST_PROXY` is set** — the asymmetry with the login throttle is deliberate: a forged
@@ -121,13 +118,14 @@ logs in again, which is the honest outcome rather than a session silently downgr
 - A CSRF token is required on every **mutating** admin request (`POST`/`PATCH`/`DELETE`).
   `SameSite=Strict` is the first line; the token is the second, because one is a browser
   behavior and the other is an application invariant.
-- **Login attempt throttling** on the admin plane: per-IP and per-username, with backoff. A
-  single-admin surface with a password from env is the highest-value target in the deployment.
-  Tunable, not constant — `ADMIN_LOGIN_MAX_ATTEMPTS`, `ADMIN_LOGIN_ATTEMPT_WINDOW_MINUTES`,
+- **OIDC start/callback throttling** on the admin plane is keyed by client IP. `GET /oidc/start`
+  is charged before state is created, and the callback is charged before code exchange. Tunable, not
+  constant — `ADMIN_LOGIN_MAX_ATTEMPTS`, `ADMIN_LOGIN_ATTEMPT_WINDOW_MINUTES`,
   `ADMIN_LOGIN_LOCKOUT_MINUTES` ([09-deployment.md](09-deployment.md#environment-reference)).
-  The per-IP key is only as good as the IP, which is why `TRUST_PROXY` defaults to off: an
-  unvetted `X-Forwarded-For` is a throttle bypass.
-- Login failures are indistinguishable to the caller — no "unknown user" vs "bad password".
+  The key is only as good as the IP, which is why `TRUST_PROXY` defaults to off: an unvetted
+  `X-Forwarded-For` is a throttle bypass.
+- OIDC failures are indistinguishable to the caller. The server log carries a bounded diagnostic kind;
+  no claim, token, code, or state value is returned.
 
 ## Router API keys
 

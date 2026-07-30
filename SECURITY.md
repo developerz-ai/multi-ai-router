@@ -39,10 +39,13 @@ In scope:
 
 Out of scope:
 - Deployment mistakes covered by the [hardening checklist](docs/idea/07-security.md#hardening-checklist)
-  — e.g. publishing the admin plane to the public internet, running without a reverse proxy in front,
-  or losing `ENCRYPTION_KEY`. **The admin plane is documented as not-internet-facing**; exposing it
-  yourself is an operator decision, not a router vulnerability.
+  — e.g. running without HTTPS or a reverse proxy, misconfiguring the OIDC client or principal pins,
+  or losing `ENCRYPTION_KEY`. The admin plane may be internet-facing by design when protected by the
+  documented OIDC flow; exposure is not itself a vulnerability. A bypass of OIDC, PKCE, ID-token
+  verification, the configured email/subject match, session protections, or CSRF is in scope.
 - Vulnerabilities in upstream providers (Anthropic, OpenAI, etc.) — report those to the provider.
 - Social engineering, physical access, or anything requiring prior compromise of the host itself.
 
-Full threat model, redaction rules, and secrets handling: [`docs/idea/07-security.md`](docs/idea/07-security.md).
+Full threat model, admin OIDC controls, redaction rules, and secrets handling:
+[`docs/idea/07-security.md`](docs/idea/07-security.md) and
+[`docs/idea/13-admin-oidc.md`](docs/idea/13-admin-oidc.md).

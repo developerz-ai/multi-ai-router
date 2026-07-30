@@ -34,7 +34,7 @@ src/
     v1/                       the four data-plane ingress paths
   providers/                  One driver per upstream, behind one interface + a total registry
   services/
-    admin-auth/               Session cookie, CSRF, argon2id, login throttle
+    admin-auth/               OIDC flow, bounded session, CSRF, callback throttle
     admin/                    AdminResult, body parsing, audit recorder, cache-coherence decorators
     accounts|pools|keys/      Admin CRUD. Plain services; they know nothing about caches
     catalog/                  The warm accounts/pools snapshot the request path reads
@@ -76,8 +76,8 @@ production wiring lives in `composition.ts`, and a `Database` becomes a service 
 |---|---|---|---|
 | `GET /healthz` | none | shipped | **Liveness.** `200` with `{"status":"ok","version":"1.0.0"}` whenever the process is serving. Never touches the database — zero healthy accounts is an operator problem, not a reason to restart a working process. The `version` is here because this is the one endpoint a deploy pipeline reaches without a credential |
 | `GET /readyz` | none | shipped | **Readiness.** 200 only when the database answered **and** at least one Account is healthy; otherwise 503 with `checks` and a short `reason` |
-| `POST /api/admin/auth/login`, `/logout`, `GET /session` | cookie (login issues it) | shipped | Session + CSRF. Login is throttled per IP and per username |
-| `/api/admin/accounts/**` | session cookie | shipped | CRUD, disable, delete, `POST /recheck` and `POST /:id/recheck`. The OAuth connect/reconnect flows are **not** built |
+| `GET /api/admin/auth/oidc/start`, `/oidc/callback`, `/logout`, `GET /session` | OIDC callback issues cookie; `ADMIN_API_TOKEN` also accepted | shipped | PKCE + signed ID token + principal pin, bounded session + CSRF. Start and callback are IP-throttled |
+| `/api/admin/accounts/**` | session cookie or `ADMIN_API_TOKEN` | shipped | CRUD, connect/reconnect, disable, delete, `POST /recheck` and `POST /:id/recheck` |
 | `/api/admin/pools/**` | session cookie | shipped | CRUD, membership, policy, weights, priority, overflow account |
 | `/api/admin/keys/**` | session cookie | shipped | List, create, `POST /:id/reveal`, edit, `POST /:id/revoke`, delete |
 | `GET /api/admin/providers` | session cookie | shipped | The static registry, so the console never keeps a second copy of it |
@@ -109,9 +109,12 @@ explicitly, before an upstream call, rather than degrading into a lossy approxim
 | Variable | Required | Default | Purpose |
 |---|---|---|---|
 | `DATABASE_URL` | yes | — | PostgreSQL 16+ connection string. The bundled compose file supplies it |
-| `ADMIN_USERNAME` | yes | — | The single admin identity. No user table in v1 |
-| `ADMIN_PASSWORD` | one of | — | Plaintext password, hashed with argon2id at boot |
-| `ADMIN_PASSWORD_HASH` | one of | — | Pre-computed argon2id hash |
+| `ADMIN_OIDC_ISSUER_URL` | yes | — | Exact OIDC issuer used for discovery and the `iss` check |
+| `ADMIN_OIDC_CLIENT_ID` | yes | — | Client id and expected ID-token audience |
+| `ADMIN_OIDC_CLIENT_SECRET` | no | — | Confidential-client secret; omit only for a public client |
+| `ADMIN_OIDC_REDIRECT_URI` | yes | — | Exact registered callback URI |
+| `ADMIN_OIDC_ADMIN_EMAIL` | yes | — | Single verified email allowed to receive an admin session |
+| `ADMIN_OIDC_ADMIN_SUBJECT` | no | — | Optional exact `sub` pin |
 | `ENCRYPTION_KEY` | yes | — | AES-256-GCM key for upstream credentials and router keys |
 | `PORT` | no | `8080` | Listen port |
 | `LOG_LEVEL` | no | `info` | `debug` \| `info` \| `warn` \| `error` |
@@ -144,8 +147,9 @@ The last two groups are the request path's own tunables. Their defaults **mirror
 constants they override**, so an unset variable and a variable set to its default behave
 identically — there is no second source of truth to drift.
 
-- **`ADMIN_PASSWORD_HASH` wins over `ADMIN_PASSWORD`** when both are set; **exactly one must be
-  present or boot fails**, naming both variables.
+- **All required `ADMIN_OIDC_*` values are validated as one relying-party configuration.** Missing
+  fields fail boot with a link to `docs/idea/13-admin-oidc.md`; `openid` is mandatory and clock skew
+  must be positive.
 - **`ENCRYPTION_KEY` is decoded, not merely present**: base64/base64url in, must yield exactly 32
   bytes. A 16-byte key fails the boot instead of producing a weak cipher later.
 - An empty string means unset — `PORT=` takes the default rather than failing.

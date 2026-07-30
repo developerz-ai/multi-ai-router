@@ -12,6 +12,7 @@ import {
   createRecheckService,
 } from "../../src/services/accounts"
 import { createAuditRecorder } from "../../src/services/admin"
+import type { OIDCFlow } from "../../src/services/admin-auth/oidc/flow"
 import { createAdminAuthService } from "../../src/services/admin-auth/service"
 import { createCredentialCipher } from "../../src/services/crypto/cipher"
 import {
@@ -319,10 +320,23 @@ describe("the full app, mounted end to end", () => {
       admin: {
         auth: createAdminAuthService({
           env: {
-            adminUsername: "admin",
-            adminCredential: { kind: "hash", value: "$argon2id$unused$" },
+            adminOidc: {
+              issuerUrl: "https://idp.test",
+              clientId: "router-test",
+              clientSecret: null,
+              redirectUri: "https://router.test/api/admin/auth/oidc/callback",
+              adminEmail: "admin@test",
+              adminSubject: null,
+              scopes: ["openid", "profile", "email"],
+              clockSkewSeconds: 60,
+            },
             encryptionKey: Buffer.alloc(32, 7).toString("base64"),
           },
+          oidc: {
+            start: () => Promise.reject(new Error("not exercised by an unauthenticated request")),
+            complete: () =>
+              Promise.reject(new Error("not exercised by an unauthenticated request")),
+          } satisfies OIDCFlow,
           config: {},
           now: () => now().getTime(),
         }),

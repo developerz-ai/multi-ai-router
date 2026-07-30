@@ -8,13 +8,12 @@ they sweep against.
 
 ## The promise
 
-**`docker compose up -d`, three env vars you set by hand.** No hash-generation step before first
-login, no database to provision.
+**`docker compose up -d` after one OIDC client registration and one secret file edit.** No local admin password and no database to provision.
 
 `docker compose up -d` brings up **two services**: the router and a PostgreSQL 16 container, with a
 named volume for the Postgres data directory and a health check gating the router's start. The
-compose file supplies `DATABASE_URL` itself, so the operator still fills in exactly three values —
-`ADMIN_USERNAME`, `ADMIN_PASSWORD`, `ENCRYPTION_KEY` — in `.env`.
+compose file supplies `DATABASE_URL` itself. The operator fills the `ADMIN_OIDC_*` relying-party
+settings and `ENCRYPTION_KEY` in `.env`; see [13-admin-oidc.md](13-admin-oidc.md) for provider setup.
 
 ```yaml
 # docker-compose.yml — abridged; the shipped file carries the full comments
@@ -22,7 +21,7 @@ services:
   router:
     image: ghcr.io/developerz-ai/multi-ai-router:latest
     ports: ["8080:8080"]
-    env_file: [.env]                 # the three you set
+    env_file: [.env]                 # OIDC settings + ENCRYPTION_KEY
     environment:
       DATABASE_URL: postgres://router:router@postgres:5432/router
     depends_on:
@@ -45,7 +44,8 @@ volumes:
 ```
 
 ```bash
-cp .env.example .env      # set ADMIN_USERNAME, ADMIN_PASSWORD, ENCRYPTION_KEY
+cp .env.example .env      # set ADMIN_OIDC_* and ENCRYPTION_KEY
+# Register ADMIN_OIDC_REDIRECT_URI at the IdP, then:
 docker compose up -d
 ```
 
@@ -95,9 +95,14 @@ and fails the build for any numeric knob that is neither refused nor explained
 
 | Variable | Required | Default | Purpose |
 |---|---|---|---|
-| `ADMIN_USERNAME` | yes | — | The single admin identity. No user table in v1. |
-| `ADMIN_PASSWORD` | one of | — | Plaintext password. Hashed with argon2id at boot, never persisted in plaintext. The documented default. |
-| `ADMIN_PASSWORD_HASH` | one of | — | Pre-computed argon2id hash, for operators who refuse a plaintext secret in an env store. |
+| `ADMIN_OIDC_ISSUER_URL` | yes | — | Exact OIDC issuer. Discovery is fetched from `/.well-known/openid-configuration`; its `issuer` must match. |
+| `ADMIN_OIDC_CLIENT_ID` | yes | — | OIDC client identifier and expected ID-token audience. |
+| `ADMIN_OIDC_CLIENT_SECRET` | no | — | Confidential-client secret. Omit only for a public client; PKCE S256 is always required. |
+| `ADMIN_OIDC_REDIRECT_URI` | yes | — | Exact callback URI registered at the IdP: `https://router.example.com/api/admin/auth/oidc/callback`. |
+| `ADMIN_OIDC_ADMIN_EMAIL` | yes | — | The single allowed administrator. The ID token must carry this email with `email_verified: true`. |
+| `ADMIN_OIDC_ADMIN_SUBJECT` | no | — | Optional stricter exact match against the ID token's `sub`. Recommended once known. |
+| `ADMIN_OIDC_SCOPES` | no | `openid profile email` | Space-separated scopes sent to the IdP. Must include `openid`. The IdP must embed `email` and `email_verified` in the ID token. |
+| `ADMIN_OIDC_CLOCK_SKEW_SECONDS` | no | `60` | Clock-skew tolerance for token timestamps. **`0` refused at boot**: no real hosts have perfectly synchronized clocks. |
 | `ENCRYPTION_KEY` | yes | — | 32 bytes, base64. AES-256-GCM key for upstream credentials and router keys. Boot fails loudly if missing or short. |
 | `DATABASE_URL` | yes | — | PostgreSQL 16+ connection string. **Supplied by the bundled compose file**, so it is not one of the three you set by hand. Set it yourself only when pointing at an existing/managed instance. |
 | `DB_POOL_MAX` | no | `10` | Connections this replica holds open. **One pool serves everything that is not the request path** — the admin console, every scheduler sweep, the off-path usage/quota/status writers and `/readyz` — so it is the ceiling on all of them at once, and a long sweep holding a connection is one fewer for the console. Raise it for a busy console or long sweeps; lower it when several replicas share a managed instance with its own connection cap (`max_connections`), remembering each replica opens its own pool. **`0` refused at boot**: it opens nothing and queues every query forever. |
@@ -123,7 +128,7 @@ and fails the build for any numeric knob that is neither refused nor explained
 | `WEB_ROOT` | no | `dist/web` beside the bundled entrypoint | Directory holding the built admin console, which the router serves at `/` on its own origin. The default is correct in the image; set it only when the assets live elsewhere. Set-but-missing an `index.html` **fails boot** rather than quietly serving an API-only router that looks like a broken web app. Absent assets at the default path are not fatal — that is what running from source looks like, and Vite serves the console itself in dev. |
 | `LOG_LEVEL` | no | `info` | `debug` \| `info` \| `warn` \| `error`. Structured JSON either way. |
 | `METRICS_TOKEN` | no | — | Bearer token `GET /metrics` demands (`Authorization: Bearer …`). Unset leaves the endpoint open, which is right only where its port is not routable from outside the host. The exposition carries account, key and pool ids — never a credential. |
-| `ADMIN_API_TOKEN` | no | — | Bearer token that authenticates `/api/admin/**` **without a browser login** — the credential a deploy script, a CI job, or an agent uses to drive the same REST API the console drives ([04-api-keys-and-access.md](04-api-keys-and-access.md#driving-the-admin-api-without-a-browser)). Unset leaves the admin plane browser-only, which is the default. **Boot refuses a token under 32 characters** — nothing rate-limits this credential the way the login form is throttled, so length is what bounds a guessing attack — and refuses one beginning `mar_live_`, since the admin guard rejects that prefix outright and such a token would authenticate nothing while reading as correct. Rotate by changing the value and restarting; there is no revoke call, because there is no session to end. |
+| `ADMIN_API_TOKEN` | no | — | Bearer token that authenticates `/api/admin/**` **without a browser login** — the credential a deploy script, a CI job, or an agent uses to drive the same REST API the console drives ([04-api-keys-and-access.md](04-api-keys-and-access.md#driving-the-admin-api-without-a-browser)). Unset leaves the admin plane browser-only, which is the default. **Boot refuses a token under 32 characters** — unlike OIDC start/callback, this static bearer is not throttled, so length is what bounds a guessing attack — and refuses one beginning `mar_live_`, since the admin guard rejects that prefix outright and such a token would authenticate nothing while reading as correct. Rotate by changing the value and restarting; there is no revoke call, because there is no session to end. |
 | `ROUTER_REVISION` | no | `unknown` | Which commit this build is, reported by `router_build_info{revision}` and the `router listening` boot log line. The published image bakes in the tagged commit's sha (`--build-arg ROUTER_REVISION=…`); a version alone cannot separate a rebuilt `latest` from the tag it was cut for. Set it by hand only when you build your own image. |
 | `TRUST_PROXY` | no | `false` | Honor `X-Forwarded-For` / `-Proto`. Set `true` **only** behind a proxy you control — otherwise clients can forge their own IP past the rate limiter. |
 | `RETENTION_SESSIONS_HOURS` | no | `24` | Idle sticky-session and fingerprint TTL. Retention is *keep for*, never *keep nothing*: at `0` the cutoff is the sweep's own clock, so the janitor empties the table on its next tick and every tick after. **Refused at boot.** |
@@ -177,9 +182,6 @@ The last two groups are the request path's own tunables: nothing there queries P
 values are what decide how quickly it learns about a change and how much memory it spends not
 having to. Defaults mirror the layer constants they override, so an unset variable and a variable
 set to its default behave identically.
-
-**Admin credential precedence:** when both are set, `ADMIN_PASSWORD_HASH` wins and
-`ADMIN_PASSWORD` is ignored. **Exactly one of the two must be present or boot fails.**
 
 Generate an encryption key with `openssl rand -base64 32`. Losing it loses every stored credential —
 there is no recovery path. See [07-security.md](07-security.md).
@@ -305,10 +307,7 @@ and a weaker cookie than you need. It is acceptable only on the bare, proxy-less
 and only until HTTPS is put in front — see the env reference above and
 [04-api-keys-and-access.md](04-api-keys-and-access.md#session-cookie).
 
-**Do not publicly expose the admin plane.** `/api/admin/**` and the SPA are protected by one
-password. Keep them on a private network, a VPN, or behind an IP allowlist in the proxy, and expose
-only `/v1/**` publicly if clients need to reach the router from the internet. The data plane is
-designed for hostile callers; the admin plane is not.
+**The admin plane may be internet-facing when OIDC-protected.** `/api/admin/**` and the SPA share the same origin and are designed to sit behind HTTPS with the generic OIDC flow in [13-admin-oidc.md](13-admin-oidc.md). A private network, VPN, or IP allowlist remains useful defense in depth, but it is not required for correctness. Never expose the container port directly; terminate TLS at a controlled reverse proxy, keep the client secret and break-glass token in a secret store, pin the one allowed email (and preferably `sub`), and enforce MFA at the IdP. The data plane remains separately authenticated by router keys.
 
 ## Persistence & backup
 
@@ -611,7 +610,7 @@ same-dialect passthrough (the common case) does no body parsing at all; see
 
 | Symptom | Likely cause | Fix |
 |---|---|---|
-| Container exits immediately, log names a variable | Zod env validation failed | Read the named variable in the exit message. Most common: `ENCRYPTION_KEY` not 32 bytes of base64, or neither `ADMIN_PASSWORD` nor `ADMIN_PASSWORD_HASH` set. |
+| Container exits immediately, log names a variable | Zod env validation failed | Read the named variable in the exit message. Most common: `ENCRYPTION_KEY` is not 32 bytes of base64, or a required `ADMIN_OIDC_*` value is missing. See [13-admin-oidc.md](13-admin-oidc.md). |
 | Account stuck in `needs_reauth` | Background refresh failed — refresh token revoked upstream, password changed, or the provider changed its flow | Click **Reconnect** on `/accounts`. It re-runs the same OAuth flow against the existing row, preserving id, pool membership, and usage history. |
 | OAuth callback never returns / provider rejects the redirect URI | `PUBLIC_URL` unset, wrong, or not reachable from your browser; or the provider will not accept your host | Use the **paste-back flow** on the same screen: copy the authorization URL, authorize, paste `code#state` back. It needs no reachable callback and is a first-class path, not a fallback. See [03-providers.md](03-providers.md). |
 | Container restarts in a loop, log names a migration | A migration failed. Boot is deliberately fatal here rather than serving a half-migrated schema | `docker compose logs router` names the failing migration. Check the database is reachable and the role may create/alter tables. Restore the last `pg_dump` before retrying a migration that partially applied. |
@@ -620,7 +619,8 @@ same-dialect passthrough (the common case) does no body parsing at all; see
 | Claude subscription account fails every request while API-key accounts work | The `claude` CLI is missing or cannot exec in the image (a native binary built for a different libc), or `CLAUDE_CONFIG_ROOT` is not on the persistent volume | Read `checks.claudeCli` on `/readyz`: it names the resolution rung that won, or `missing`. The image stages the CLI from the SDK's own platform package and proves it execs at build time, so a custom build is the usual cause — keep builder and runtime on the same libc. Confirm the `claude-config` volume is mounted and owned by the container's uid — a fresh, empty config directory presents as an account that never authenticates. |
 | All accounts `cooling_down`, requests fail | Every candidate hit a `429` or a circuit breaker and none has reset yet | Check reset times on `/accounts`. Add another account to the pool, or move the key to a pool with a paid-API fallback via `priority-failover`. See [05-routing-and-failover.md](05-routing-and-failover.md). |
 | Clients get `401` | Key revoked, expired, wrong value, or both auth headers sent and disagreeing | Re-copy the key from `/keys`. Send exactly one of `Authorization: Bearer` or `x-api-key`. See [04-api-keys-and-access.md](04-api-keys-and-access.md). |
-| Console login says it succeeded, then every screen bounces back to the login form ("session expired") | The router is reached over plain `http://` (a LAN install, or a proxy that does not forward `X-Forwarded-Proto`), so the browser silently discarded the `Secure` session cookie. The login itself was genuinely fine, which is why no status code names the problem | `docker compose logs router` carries a `warn` from the login itself: *"login succeeded but the session cookie is Secure and this request arrived over plain HTTP"*, with the remedy in the same line. Either set `SESSION_COOKIE_INSECURE=true` (plain-HTTP install), or terminate HTTPS in front and forward `X-Forwarded-Proto` — the header is honored for this check whether or not `TRUST_PROXY` is on. See [04-api-keys-and-access.md](04-api-keys-and-access.md#session-cookie). |
+| Admin SSO returns “Single sign-on verification failed” | Discovery, JWKS, state, token claims, or the configured principal check failed | Start a fresh login and inspect the bounded `[admin-oidc] complete failed: <kind>` server log. Match the kind against [13-admin-oidc.md](13-admin-oidc.md#troubleshooting). Never paste the callback URL, code, state, ID token, or client secret into an issue. |
+| Console login says it succeeded, then every screen bounces back to the login form ("session expired") | The router is reached over plain `http://` (a LAN install, or a proxy that does not forward `X-Forwarded-Proto`), so the browser silently discarded the `Secure` session cookie. The OIDC verification itself was genuinely fine, which is why no provider error names the problem | `docker compose logs router` carries a `warn` from the callback: *"login succeeded but the session cookie is Secure and this request arrived over plain HTTP"*, with the remedy in the same line. Either set `SESSION_COOKIE_INSECURE=true` (plain-HTTP install), or terminate HTTPS in front and forward `X-Forwarded-Proto` — the header is honored for this check whether or not `TRUST_PROXY` is on. See [04-api-keys-and-access.md](04-api-keys-and-access.md#session-cookie). |
 | A sweep hasn't run — the DB keeps growing, or usage rollups stop appearing | The scheduler runs in-process, so a wedged or crashed task is invisible unless you look at its last-run record | Check the task's last `ScheduledTaskRun` (admin UI, or the row directly): a stale `startedAt` with a null `finishedAt` means a run was killed halfway or is stuck holding the advisory lock; a stale `startedAt` with `outcome: failed` names the error. `outcome: partial` is normal and means the batch limit was hit and the next run continues. If every replica shows nothing, no replica is acquiring the lock — check Postgres connectivity and `JANITOR_INTERVAL_MINUTES`. |
 | `/readyz` red, `/healthz` green | Postgres unreachable or zero healthy accounts | `/healthz` is liveness only, by design — zero healthy accounts is an operator problem, not a reason to restart a working process. Check `docker compose ps postgres` and account health. See [08-observability.md](08-observability.md). |
 | `GET /metrics` returns `401` | `METRICS_TOKEN` is set and Prometheus (or your scrape client) is not sending it, or is sending it as the wrong header | `/metrics` has its own credential, separate from both the admin session and router keys — neither is accepted here. Send `Authorization: Bearer <METRICS_TOKEN>`. Leaving `METRICS_TOKEN` unset removes the check entirely; that is the intended posture for a single-host deployment where `/metrics` is not reachable outside its own network — see [08-observability.md](08-observability.md). |
@@ -631,5 +631,6 @@ same-dialect passthrough (the common case) does no body parsing at all; see
 | Doc | Covers |
 |---|---|
 | [07-security.md](07-security.md) | Encryption at rest, redaction, rate limits, threat framing |
+| [13-admin-oidc.md](13-admin-oidc.md) | OIDC client registration, principal pins, callback security, troubleshooting |
 | [08-observability.md](08-observability.md) | `/metrics`, `/healthz`, `/readyz`, structured logs |
 | [10-roadmap.md](10-roadmap.md) | Milestones, deferrals, maintenance posture |

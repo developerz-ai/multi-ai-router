@@ -5,6 +5,50 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.3] — 2026-07-30
+
+### Changed
+
+- Added bounded server-side diagnostic kinds for failed admin OIDC callbacks. The browser still receives one generic verification failure, while operators can distinguish discovery, JWKS, token-claim, principal, and state failures without logging token or claim material.
+
+## [2.0.2] — 2026-07-29
+
+### Fixed
+
+- Widened the shared OAuth-state provider column to text so the internal `admin-oidc` state namespace can coexist with code-defined upstream provider ids without pretending the admin identity provider is an inference provider.
+- Repaired the Drizzle migration journal so the widening migration is applied by the runtime migrator.
+
+### Changed
+
+- Relabeled the console action from **Sign in with OIDC** to the operator-facing **Sign in with SSO**.
+
+## [2.0.1] — 2026-07-29
+
+### Changed
+
+- Shipped the SSO button relabel. This release retained the OAuth-state enum mismatch fixed in 2.0.2 and should not be deployed.
+
+## [2.0.0] — 2026-07-29
+
+### Breaking
+
+- Removed `ADMIN_USERNAME`, `ADMIN_PASSWORD`, and `ADMIN_PASSWORD_HASH`. The router no longer ships a local password-login path. Existing deployments must register an OIDC client and configure the required `ADMIN_OIDC_*` values before upgrading; boot fails closed when the relying-party configuration is incomplete.
+- Removed `POST /api/admin/auth/login`. Browser authentication now starts at `GET /api/admin/auth/oidc/start` and returns through `/api/admin/auth/oidc/callback`.
+
+### Added
+
+- Generic admin OpenID Connect discovery, authorization code exchange, PKCE S256, JWKS caching, RS256 ID-token verification, nonce validation, verified-email enforcement, and optional immutable subject pinning ([#42](https://github.com/developerz-ai/multi-ai-router/pull/42)).
+- One-shot, ten-minute admin OIDC state built on the existing OAuth-state repository.
+- OIDC-only console login and a callback result page.
+- Provider-agnostic setup and security documentation in [`docs/idea/13-admin-oidc.md`](docs/idea/13-admin-oidc.md).
+
+### Changed
+
+- Admin browser sessions are issued only after the IdP-asserted email matches `ADMIN_OIDC_ADMIN_EMAIL`; `ADMIN_OIDC_ADMIN_SUBJECT` can add an exact `sub` match.
+- Login throttling now protects OIDC start and callback by client IP rather than a local username/password attempt.
+- `bin/setup` points operators to the OIDC setup contract instead of generating local admin credentials.
+- `ADMIN_API_TOKEN` remains the independent, auditable break-glass path for scripts and IdP outages.
+
 ## [1.4.1] — 2026-07-28
 
 ### Fixed
@@ -230,7 +274,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   can be driven by a script, a CI job, or an agent rather than only a browser
   session. Unset by default, which leaves the plane browser-only. Boot refuses a
   token under 32 characters (nothing rate-limits this credential the way the
-  login form is throttled) or one wearing the `mar_live_` router-key prefix (the
+  browser OIDC start/callback is throttled) or one wearing the `mar_live_` router-key prefix (the
   admin guard rejects that prefix outright, so it would authenticate nothing).
   Router keys still cannot reach the admin plane under any configuration.
 

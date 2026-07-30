@@ -212,7 +212,7 @@ export interface ProviderListResponse {
   readonly providers: readonly ProviderDescriptor[]
 }
 
-/** `routes/admin/auth.ts` — the body of `POST /login` and `GET /session`. */
+/** `routes/admin/auth.ts` — the body of `GET /auth/session`. */
 export interface SessionView {
   readonly username: string
   readonly csrfToken: string

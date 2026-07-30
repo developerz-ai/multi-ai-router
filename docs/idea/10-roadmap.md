@@ -43,7 +43,7 @@ Named, with the reason. Not "someday" — a deliberate not-now.
 | **OAuth encryption-key rotation** | Rotating `ENCRYPTION_KEY` means re-encrypting every stored OAuth credential in place, online, with a rollback that survives a crash mid-rotation — a migration with a live data plane on top of it. Worth doing; not worth doing before the credentials it protects exist in the field. (The reverse-engineered client ids are a separate matter and are handled by editing one provider file — see Maintenance posture.) |
 | **Chart library choice** | The usage data shape is specified; the renderer is not. Picking a charting library before the dashboard's real queries exist is a bet placed blind. |
 | **Gemini native GenAI dialect** | The `gemini` driver ships and serves Google's OpenAI-compatibility surface, so Gemini accounts route, fail over, and are accounted for like any other. The *native* GenAI protocol is what is deferred: it is a fourth dialect in the translation matrix, and the existing matrix earns that first. |
-| **Admin TOTP (`ADMIN_TOTP_SECRET`)** | The admin plane is not meant to be publicly exposed. Second-factor on a single env-configured account is worth doing, but after the planes it protects exist. |
+| **Router-side MFA after OIDC** | MFA enrollment and recovery now belong to the configured IdP, which can enforce them before issuing an ID token. A second router-held factor on top of that session would add another recovery and secret lifecycle; build it only if an operator needs defense independent of the IdP. |
 
 ## Maintenance posture
 
