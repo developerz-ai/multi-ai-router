@@ -6,7 +6,7 @@
       "headless": true,
       "url": "http://localhost:5173",
       "executablePath": "/home/ivann/.cache/ms-playwright/chromium-1228/chrome-linux64/chrome",
-      "notes": "Operator console for the multi-ai-router (SolidJS SPA). Dark mode is the default theme. On a fresh dev database, empty tables and 'no accounts yet' states are expected — not bugs. The admin SPA is OIDC-gated: without an attached authenticated session you will only see the login page, which is by design."
+      "notes": "Operator console for the multi-ai-router (SolidJS SPA). The theme follows the OS preference unless the operator toggles — headless Chrome defaults to light, so a light render is CORRECT, not a bug. On a fresh dev database, empty tables and 'no accounts yet' states are expected — not bugs. The admin SPA is OIDC-gated: without an attached authenticated session you will only see the login page ('Sign in with SSO'), which is by design."
     }
   }
 }
