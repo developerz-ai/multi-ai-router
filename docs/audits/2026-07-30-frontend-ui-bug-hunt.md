@@ -327,3 +327,164 @@ QuotaGauge.module.scss:53-61 `.figure { @include tabular-figures; ... min-width:
 - Pattern: 5 parallel `general-purpose` agents via the `Workflow` tool
 - Source: `/tmp/claude-1003/-home-ivann-ws-developerz-ai-Projects-multi-ai-router/5d2b6df8-1cc7-4e33-a200-d4a5124401d4/tasks/wjana3g9k.output`
 - Repo state at time of review: `main @ 2f02eb9` (clean)
+
+---
+
+## Verification — 2026-07-31
+
+Verifier: Claude (`k3[1m]`), inline static pass — every cited file read directly, and the two
+server-side claims (HIGH #2, MEDIUM #5) traced through the API layer. No subagent fan-out: the
+audit itself was one, and re-running that pattern to check itself is circular.
+
+Method limits: the safe-area findings are settled as "is the rule absent, and can the viewport
+even enter the inset" — no notched device was used. Screen-reader behavior was not tested; the
+live-region verdicts assert only what the source does and what WCAG 4.1.3 expects of it.
+
+### Tally
+
+**27 verdicts on 28 filed findings.** The #50 re-lock predicted 26 distinct; verification
+restores 27 — the HIGH #7/#8 pair is **not** one defect (a dead submit-time fallback vs a live
+edit-time guard — see below), so only the Sparkline pair (MEDIUM #7 = LOW #10) merges.
+
+| Bucket | Count | Findings |
+|---|---|---|
+| CONFIRMED-BUG | 10 | HIGH 3, 4, 5, 7 · MEDIUM 1, 3, 4, 6, 7(+LOW 10) · LOW 5 |
+| TRUE-BUT-NOT-A-BUG | 12 | HIGH 1, 6 · MEDIUM 2, 8 · LOW 1, 2, 3, 6, 7, 8, 11, 12 |
+| REJECTED | 5 | HIGH 2, 8 · MEDIUM 5 · LOW 4, 9 |
+
+### HIGH
+
+1. **TRUE-BUT-NOT-A-BUG** — the rule is absent as claimed (`Modal.module.scss:36`, no safe-area
+   padding on the bottom sheet), but `apps/web/index.html:5` has **no `viewport-fit=cover`**, so
+   iOS never extends the page into the inset and `env(safe-area-inset-bottom)` resolves to 0 —
+   there is nothing for the home indicator to clip. Becomes real the day the app opts into
+   edge-to-edge layout; `padding-bottom: max(var(--space-4), env(safe-area-inset-bottom))` should
+   ride that change.
+2. **REJECTED** — premise false: the begin endpoint never touches `accounts.updatedAt`. OAuth
+   begin writes only to the states table (`oauth.ts:183-197` — `abandonForAccount` +
+   `states.create`, no `accounts.update`); Claude begin spawns a subprocess under a turn lock;
+   and `useBeginConnect` (`apps/web/src/lib/queries/connect.ts:26-33`) invalidates no query. The
+   row's `updatedAt` moves only when the callback/paste completion writes the credential — the
+   legitimate signal the poller exists to see. The false-"Connected" scenario cannot occur.
+3. **CONFIRMED-BUG** — the press outcome renders in plain spans (`AccountRecheck.tsx:69-84`) with
+   no `aria-live`/`role=status` anywhere on the control. WCAG 4.1.3 status-message gap; the house
+   pattern elsewhere (`ConnectResult`, the `KeyFormDialog` blocker) expects a pre-mounted region.
+4. **CONFIRMED-BUG** — same class: result spans (`AccountTestNow.tsx:73-95`) unannounced; no live
+   region on the control.
+5. **CONFIRMED-BUG** — same class: the Discover result swaps the "any model" fallback for the
+   badge + preview (`AccountModels.tsx:41-56`) with no live region. (Description fix: it swaps
+   from "any model", not from "0 models".)
+6. **TRUE-BUT-NOT-A-BUG** — the code matches the claim (`ThemeToggle.tsx:30`), but the mechanism
+   is wrong: `aria-live` on any element creates a live region per spec, and mainstream screen
+   readers (NVDA, JAWS) do announce the label change; VoiceOver is inconsistent, not silent.
+   "Cycles themes blind" overstates it. A visually-hidden `role="status"` sibling would be more
+   robust — hardening, not a bug.
+7. **CONFIRMED-BUG** — `numeric()` (`AccountEditDialog.tsx:296-303`) is a **submit-time**
+   fallback whose NaN branch is unreachable: `required` + `type="number"` blocks the
+   empty/invalid submit before `submit()` runs, so the comment at lines 291-295 describes a path
+   that cannot execute. **Corollary rejected:** an account with weight=0 in storage cannot exist
+   via the API — `WEIGHT = z.number().int().min(1)` (`services/accounts/schemas.ts:53`), DB
+   default 100.
+8. **REJECTED** — `tune()` (`PoolFormDialog.tsx:117-128`) is an **edit-time** guard, not a
+   submit-time fallback: it keeps the prior value in state while the box sits empty mid-retype,
+   and its own comment (lines 118-120) documents that the input's `min`/`required` refuse the
+   submit until a real value returns. Comment and enforcement agree. Operators can clear and
+   retype; they cannot submit an empty box — the designed behavior. Not the same defect as
+   HIGH #7: the re-lock's "one defect, two files" framing does not survive inspection, and the
+   pair splits.
+
+### MEDIUM
+
+1. **CONFIRMED-BUG** — `.success` (`ConnectDialog.module.scss:93-100`) applies
+   border/padding/background unconditionally and the `<section>` is always mounted
+   (`ConnectResult.tsx:25`), so an empty ok-bordered box renders before any completion. The
+   wrapper must stay mounted (its docstring explains why — a `role="status"` inserted together
+   with its text announces unreliably); the fix is visual gating (`:empty` or a conditional
+   class), not removal.
+2. **TRUE-BUT-NOT-A-BUG** — same settlement as HIGH #1: no `viewport-fit=cover`, no inset
+   rendering, nothing to clip.
+3. **CONFIRMED-BUG** — AccountsTable `.label` (`AccountsTable.module.scss:7-9`) lacks
+   `overflow-wrap` while all three cited siblings carry it: KeysTable `.name`
+   (`routes/keys/KeysTable.module.scss:9-12` — the audit's `components/` path was wrong, the line
+   numbers right), PoolsRoute `.name` (:1-4), UsageBreakdown `.label` (:7-9). Account labels are
+   operator-supplied free text in the pinned column.
+4. **CONFIRMED-BUG** — `.actions` (`PageHeader.module.scss:22-26`) has no `flex-wrap`; when the
+   root wraps `.actions` onto its own line, a segmented windows control plus a button can
+   overflow a narrow viewport.
+5. **REJECTED** — premise false: weight=0 is not "legal under the tuning schema".
+   `WEIGHT = z.number().int().min(1).max(10_000)` on both account writes
+   (`services/accounts/schemas.ts:53`) and pool member input (`services/pools/schemas.ts`), DB
+   default `DEFAULT_ACCOUNT_WEIGHT = 100`. A 0 cannot be seeded, so the save-lock cascade cannot
+   start.
+6. **CONFIRMED-BUG** — core claim verified: neither control carries `required`
+   (`PriceAddForm.tsx:35-53`), and `Field.tsx:31-35` renders the asterisk only when
+   `required === true`, so both mandatory fields look and behave optional until a post-submit
+   error. **Citation corrected:** the validation lives in the parent at
+   `PriceOverridesSection.tsx:133`, not "PriceAddForm.tsx:132-135" (that file is 67 lines).
+7. + LOW 10. **CONFIRMED-BUG** — one defect, two findings. `.chart { color: var(--accent) }`
+   (`Sparkline.module.scss:4`) overrides both call sites' explicit intent — QuotaWindowRow
+   `.trend` sets `color: var(--text-muted)` under a comment saying the curve takes "currentColor
+   from a muted tone" (:29-36), UsageTopN `.trend` sets it too (:148-156) — and directly
+   contradicts the component docstring (`Sparkline.tsx:20-21`). Deleting the rule makes code,
+   comment, and call sites agree.
+8. **TRUE-BUT-NOT-A-BUG** — the code matches (`Button.module.scss:49-52`), but the cited rule
+   ("never a raw hex in a component") targets hex colours, not a numeric filter constant;
+   `brightness(1.08)` is a conventional hover treatment and there is no `--accent-hover` token it
+   bypasses. Whole-subtree brightening (icon, spinner) is real but cosmetic-consistent. If a
+   per-scheme hover delta is ever wanted, that is a token addition, not this bug.
+
+### LOW
+
+1. **TRUE-BUT-NOT-A-BUG** — mechanism real (`.version`, `AppLayout.module.scss:217-223`, has no
+   overflow protection), but the rendered string is `v{VERSION}` = `v2.0.3`
+   (`packages/core/src/version.ts`) — six characters. The long-git-SHA scenario is not what this
+   footer shows.
+2. **TRUE-BUT-NOT-A-BUG** — verified absent (`AccountsTable.module.scss:11-15`), but provider
+   ids are pinned code constants (`apps/api/src/providers/drivers/*`); the longest is
+   `anthropic-compatible` at 19 characters, which fits the 9rem-min identity column. No
+   operator-supplied provider id exists.
+3. **TRUE-BUT-NOT-A-BUG** — verified absent (`TaskHealthSection.module.scss:16-18`); task names
+   are short server-side constants. The finding self-describes as future-proofing.
+4. **REJECTED** — the mechanism fails twice: `.identity` carries `max-width: 100%` +
+   `overflow-wrap: anywhere` (`AppLayout.module.scss:206-213`), so it cannot push or overflow its
+   track; and nothing inside can "push the column past --drawer-width" because the sidebar's
+   width is fixed. The only unprotected child is `.version` — LOW #1's subject, with a
+   six-character real string.
+5. **CONFIRMED-BUG** — `.member` (`PoolsRoute.module.scss:12-18`) has `white-space: nowrap` with
+   no wrap protection on operator-supplied account labels, while the pool-name `.name` in the
+   same file wraps `anywhere`. Inconsistent; a long label widens the table scroller.
+6. **TRUE-BUT-NOT-A-BUG** — verified (`StatTile.tsx:19`), but explicit `aria-busy="false"` is
+   redundant, not harmful: the tile is not a live region, so there is nothing to re-announce.
+   Omitting the attribute in the false branch is tidier, not buggier.
+7. **TRUE-BUT-NOT-A-BUG** — verified (`ConnectDialog.tsx:216-225` has no `maxlength`), but the
+   finding self-describes as "not an active bug": the textarea scrolls rather than breaking
+   layout, and `classifyPaste` is a cheap shape check. A defensive cap is hardening.
+8. **TRUE-BUT-NOT-A-BUG** — verified absent (`AccountTestNow.tsx:62-68`), but the comparators are
+   `type="password"` credential boxes, which password managers actually target; a plain text
+   field for a model name is not an autofill magnet. Hardening, not a bug.
+9. **REJECTED** — the "silent, no cue" claim is contradicted by the file: `blocker()` renders a
+   persistent inline message — "Choose at least one pool…" — in a `role="status"` paragraph
+   (`KeyFormDialog.tsx:239-245`) from the moment the condition holds, before any submit attempt.
+   The early return (line 131) is the backstop, and the comment at line 122 ("Named, not
+   silent") states the design the finding missed. Button-not-disabled is a deliberate pattern,
+   not a missing cue.
+10. (merged into MEDIUM #7 — one defect, one verdict.)
+11. **TRUE-BUT-NOT-A-BUG** — verified: favicon `stroke='%235b9dff'` (`index.html:8` — one-line
+    drift from the cited :5) matches `--accent: #5b9dff` (`_tokens.scss:30`). Structurally
+    unavoidable in a `data:` URL, as the finding itself says. A comment pointing at the token is
+    the whole ask.
+12. **TRUE-BUT-NOT-A-BUG** — the mixin description is accurate (`_mixins.scss:48-51` does set
+    `font-family: var(--font-mono)` + `font-variant-numeric`), but the "no effect on non-digits"
+    mechanism is self-defeating: the figure is `"62%"`, which *contains* digits, so
+    `tabular-nums` is live. Mono figures are the house pattern for numeric readouts (StatTile,
+    PoolsRoute `.tuning`). Typography preference, not a defect.
+
+### What this leaves
+
+- **Fix queue (10 confirmed):** HIGH 3, 4, 5, 7 · MEDIUM 1, 3, 4, 6, 7(+LOW 10) · LOW 5.
+  HIGH 3/4/5 are one pattern (a pre-mounted `role="status"` region on three controls);
+  MEDIUM 7/LOW 10 is one line. Tracked in a follow-up fix issue.
+- **Live browser pass:** still owed, unchanged — it hunts *new* interaction/hydration/responsive
+  bugs, not these.
+- **Safe-area pair (HIGH 1, MEDIUM 2):** parked with `viewport-fit=cover` — if the app ever opts
+  into edge-to-edge layout, both fixes become mandatory in the same PR.
