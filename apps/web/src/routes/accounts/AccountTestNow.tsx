@@ -70,29 +70,34 @@ export function AccountTestNow(props: AccountTestNowProps) {
         Test now
       </Button>
 
-      <Show when={last.isSuccess ? last.data : null}>
-        {(result) => (
-          <span class={styles.note}>
-            <Show
-              fallback={
-                <span class={styles.line}>
-                  On cooldown — next test {formatRelative(result().nextAllowedAt, props.nowMs)}
+      {/* Pre-mounted live region, the same shape as ConnectResult: a `role="status"` inserted
+          into the DOM together with its own text announces unreliably, so the region wraps the
+          slot and the outcome of a press swaps inside it. Empty until the first test runs. */}
+      <span class={styles.note} role="status">
+        <Show when={last.isSuccess ? last.data : null}>
+          {(result) => (
+            <>
+              <Show
+                fallback={
+                  <span class={styles.line}>
+                    On cooldown — next test {formatRelative(result().nextAllowedAt, props.nowMs)}
+                  </span>
+                }
+                when={result().tested}
+              >
+                <span class={styles.line} data-outcome={result().outcome}>
+                  {result().outcome === "ok" ? "Answered" : "Failed"} ·{" "}
+                  {formatTimestamp(result().lastCheckedAt)} (
+                  {formatRelative(result().lastCheckedAt, props.nowMs)})
                 </span>
-              }
-              when={result().tested}
-            >
-              <span class={styles.line} data-outcome={result().outcome}>
-                {result().outcome === "ok" ? "Answered" : "Failed"} ·{" "}
-                {formatTimestamp(result().lastCheckedAt)} (
-                {formatRelative(result().lastCheckedAt, props.nowMs)})
-              </span>
-              <Show when={result().message}>
-                {(message) => <span class={styles.line}>{message()}</span>}
+                <Show when={result().message}>
+                  {(message) => <span class={styles.line}>{message()}</span>}
+                </Show>
               </Show>
-            </Show>
-          </span>
-        )}
-      </Show>
+            </>
+          )}
+        </Show>
+      </span>
 
       <ConfirmDialog
         busy={props.busy}

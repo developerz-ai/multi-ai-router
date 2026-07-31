@@ -5,6 +5,15 @@
   min-width: 11rem;
 }
 
+// The pre-mounted live region (role="status" in the tsx). Repeats the root's
+// own stacking so wrapping the badge + preview in one element changes nothing
+// an operator sees.
+.status {
+  display: grid;
+  gap: var(--space-1);
+  justify-items: start;
+}
+
 .passthrough {
   color: var(--text-muted);
   font-size: var(--text-xs);

@@ -17,6 +17,15 @@
   white-space: nowrap;
 }
 
+// The row's nowrap exists for the dot and the tuning number, not to clip an
+// operator-supplied account label — those can be arbitrarily long. The label is
+// the one unclassed span in the row (the dot and `.tuning` both carry classes),
+// so it gets wrapping back without PoolsRoute.tsx gaining a class for it.
+.member > span:not([class]) {
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+
 /* The one membership number this pool's policy reads. Trails the label, never competes with it. */
 .tuning {
   margin-inline-start: auto;

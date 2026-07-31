@@ -99,6 +99,17 @@
   background: color-mix(in srgb, var(--ok) 10%, var(--surface-overlay));
 }
 
+// Before any completion the section is empty, and an empty ok-bordered box
+// reads as a broken panel. Un-style it rather than `display: none`: the live
+// region has to stay in the accessibility tree, because a region that re-enters
+// the tree together with its text announces unreliably — the whole reason
+// ConnectResult pre-mounts it (see that component's docstring).
+.success:empty {
+  padding: 0;
+  border-color: transparent;
+  background: none;
+}
+
 .successLine {
   font-size: var(--text-sm);
   line-height: var(--line-snug);

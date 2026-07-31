@@ -51,40 +51,46 @@ export function AccountRecheck(props: AccountRecheckProps) {
         Re-check
       </Button>
 
-      <Show
-        fallback={
-          // Genuinely never checked since the router started — the timestamps live in memory
-          // alongside the breaker marks they guard. Saying so beats inventing a time.
-          <span class={styles.note}>Not checked since restart</span>
-        }
-        when={checkedAt()}
-      >
-        {(checked) => (
-          <span class={styles.note}>
-            <span class={styles.line}>
-              Checked {formatTimestamp(checked())} ({formatRelative(checked(), props.nowMs)})
-            </span>
-            {/* Only a press from this tab knows whether the cooldown declined it; the read
-                carries the timestamp but not that verdict. */}
-            <Show when={result()}>
-              {(pressed) => (
-                <Show
-                  fallback={
+      {/* Pre-mounted live region, the same shape as ConnectResult: a `role="status"` inserted
+          into the DOM together with its own text announces unreliably, so the region wraps the
+          slot and every update — the first timestamp, the press verdict — swaps inside it. */}
+      <span class={styles.note} role="status">
+        <Show
+          fallback={
+            // Genuinely never checked since the router started — the timestamps live in memory
+            // alongside the breaker marks they guard. Saying so beats inventing a time.
+            <span class={styles.line}>Not checked since restart</span>
+          }
+          when={checkedAt()}
+        >
+          {(checked) => (
+            <>
+              <span class={styles.line}>
+                Checked {formatTimestamp(checked())} ({formatRelative(checked(), props.nowMs)})
+              </span>
+              {/* Only a press from this tab knows whether the cooldown declined it; the read
+                  carries the timestamp but not that verdict. */}
+              <Show when={result()}>
+                {(pressed) => (
+                  <Show
+                    fallback={
+                      <span class={styles.line}>
+                        Eligible again — status updates on the next request
+                      </span>
+                    }
+                    when={!pressed().rechecked}
+                  >
                     <span class={styles.line}>
-                      Eligible again — status updates on the next request
+                      On cooldown — next check{" "}
+                      {formatRelative(pressed().nextAllowedAt, props.nowMs)}
                     </span>
-                  }
-                  when={!pressed().rechecked}
-                >
-                  <span class={styles.line}>
-                    On cooldown — next check {formatRelative(pressed().nextAllowedAt, props.nowMs)}
-                  </span>
-                </Show>
-              )}
-            </Show>
-          </span>
-        )}
-      </Show>
+                  </Show>
+                )}
+              </Show>
+            </>
+          )}
+        </Show>
+      </span>
     </div>
   )
 }
