@@ -1,6 +1,6 @@
 # Security
 
-Status: **implemented** — AES-256-GCM at rest, the tested log redactor, plane separation, generic admin OIDC + bounded session + CSRF, OIDC callback throttling, per-key rate limiting, and a `METRICS_TOKEN` on
+Status: **implemented** — AES-256-GCM at rest, the tested log redactor, plane separation, generic admin OIDC *or* an optional local admin password (argon2id in Postgres, off by default) + bounded session + CSRF, login throttling, per-key rate limiting, and a `METRICS_TOKEN` on
 `/metrics`. **Not built:** per-IP request rate limiting. Deployment-side settings live in
 [09-deployment.md](09-deployment.md); key semantics in
 [04-api-keys-and-access.md](04-api-keys-and-access.md).
@@ -149,13 +149,13 @@ inline with a copy button — retrieval is the recovery path, not the normal one
 
 | Element | Rule |
 |---|---|
-| Identity | One configured OIDC principal. No router user table in v1 |
-| Authentication | Generic OIDC discovery + authorization code + PKCE S256. The signed ID token must match issuer, audience, nonce, timestamps, verified email, configured admin email, and optional subject pin. See [13-admin-oidc.md](13-admin-oidc.md) |
+| Identity | One principal. OIDC pins it to a configured email; the local password runs as `local-admin`. No user table |
+| Authentication | Generic OIDC discovery + authorization code + PKCE S256 — the signed ID token must match issuer, audience, nonce, timestamps, verified email, configured admin email, and optional subject pin — **or** the optional local admin password: an argon2id hash in Postgres set by `bin/admin set-password`, off by default. Boot requires at least one. See [13-admin-oidc.md](13-admin-oidc.md) |
 | Break glass | `ADMIN_API_TOKEN` authenticates the same admin API without a browser and is audited separately as `admin-api-token` |
-| Session | OIDC login issues an httpOnly, `SameSite=Strict`, `Secure`, `__Host-` cookie with a bounded lifetime. Logout invalidates server-side. `SESSION_COOKIE_INSECURE` drops `Secure`+`__Host-` for a plain-HTTP install and nothing else |
+| Session | Either login issues an httpOnly, `SameSite=Strict`, `Secure`, `__Host-` cookie with a bounded lifetime — the *same* session record; the password door is a second way to obtain it, not a second model. Logout invalidates server-side. `SESSION_COOKIE_INSECURE` drops `Secure`+`__Host-` for a plain-HTTP install and nothing else |
 | CSRF | A token is required on every mutating admin request. `SameSite=Strict` is the belt; the token is the braces |
-| Throttling | OIDC start and callback are throttled by client IP before state creation or code exchange. Every callback failure returns the same wording |
-| MFA | Enrollment and MFA policy belong to the IdP. The router does not keep a second password or TOTP secret |
+| Throttling | Local-password attempts are throttled per client IP on the login-throttle seam and lock after `ADMIN_LOGIN_MAX_ATTEMPTS`. Every rejection — wrong password, unconfigured door, locked address — returns one sentence, byte-identical to the OIDC callback's, so a prober cannot tell them apart |
+| MFA | For OIDC, enrollment and MFA policy belong to the IdP. The local password has no second factor — which is exactly why it is loopback-only by default |
 | Console assets | The built SPA is served from `WEB_ROOT` at the root, mounted **last** and never for a path under `/api`, `/v1`, `/healthz`, `/readyz` or `/metrics`. The history-API fallback reads one fixed filename, so the request path never reaches it. A path that escapes the root, or that the filesystem cannot name at all (a NUL byte, past `PATH_MAX`), gets the shell — never a file outside the root, and never a `500` an unauthenticated caller can mint on demand |
 
 ### Admin OIDC
@@ -167,6 +167,17 @@ The callback route is public by necessity: a cross-site top-level redirect canno
 The IdP must put `email` and `email_verified` in the signed ID token. A provider that serves those claims only from userinfo must enable its “userinfo in ID token” setting; accepting a second, unsigned-or-differently-bound principal response would widen the security boundary for no benefit.
 
 The admin plane may be internet-facing when HTTPS and this OIDC contract protect it. That posture does not turn the router into multi-tenant SaaS: one configured email, optionally one immutable `sub`, receives the only browser session.
+
+### The local admin password, and what enabling it costs
+
+`bin/admin set-password` opens a second door: a password-only login at `POST /api/admin/auth/login`, whose credential is an argon2id hash in the `admin_credentials` table. Enabling it buys independence from an IdP; what it costs, stated plainly:
+
+- **It is a guessing surface OIDC does not have.** An OIDC login is a signed assertion from a third party an attacker must compromise; a password is a secret an attacker can grind at from the network. The bounds on that grind are the argon2id cost per attempt, the per-IP throttle and lockout, the one generic failure sentence, and the `admin.login_failed` audit trail — mitigations, not removal. An IdP-issued session carries none of this surface.
+- **It has no MFA.** Whatever second-factor policy the IdP enforces stops existing the moment the password door is open: the two doors are peers, and an attacker takes the weaker one. This is the entire reason for the fail-closed rule — boot refuses while a hash row exists and `PUBLIC_URL` is not loopback, with `ADMIN_LOCAL_LOGIN_ALLOW_PUBLIC` as the named, boot-warned opt-out.
+- **A database dump now contains something grindable.** Every other credential column is AES-256-GCM ciphertext, useless without `ENCRYPTION_KEY`; the argon2id hash is deliberately one-way instead, so a dump yields a hash to attack offline at argon2id cost rather than plaintext. A weak password shortens that attack — the verb's 12-character floor exists for this.
+- **It never appears anywhere else.** Not in `.env`, a compose file, an image layer, a log line, or an API response — asserted by a redaction test. That is the specific flaw that killed `ADMIN_PASSWORD` (#42), and the design exists to keep it dead.
+
+Recovery is re-running `bin/admin set-password`; `bin/admin delete-password` closes the door. Neither touches `ADMIN_API_TOKEN`, which remains the script break-glass.
 
 **The two credential spaces are completely separate.** A router key authenticates the data plane and
 nothing else: it is never accepted on an admin route, cannot mint or read keys, cannot list accounts,
@@ -224,6 +235,7 @@ pending login ([11-anthropic-agent-sdk.md](11-anthropic-agent-sdk.md) §3.1).
 | **Database + `ENCRYPTION_KEY`** | Total compromise: every upstream credential and every router key. Rotate upstream credentials, re-auth every OAuth account, mint new keys, and rotate `ENCRYPTION_KEY` |
 | The `CLAUDE_CONFIG_DIR` volume | Every Claude subscription it holds, immediately and without `ENCRYPTION_KEY` — the credentials are live in the SDK's own format. Recovery is re-running the SDK login for each affected Account, which invalidates the old directory |
 | A compromised IdP admin or the configured OIDC principal | Full control of the admin plane: keys can be read and minted, accounts read (but not their credentials — no endpoint returns them). Revoke the IdP session/credential and rotate the OIDC client secret if the client was affected |
+| The local admin password | The same full control of the admin plane as a compromised OIDC principal. Rotate with `bin/admin set-password` (or close the door with `bin/admin delete-password`) and invalidate existing sessions by restarting |
 | Logs | Metadata only: request ids, model names, token counts, account labels. No prompts, no credentials |
 | An admin session cookie | Admin-plane access until the session expires or is invalidated |
 
@@ -237,6 +249,12 @@ For operators, at deploy time:
 - Register the exact OIDC callback URI, require PKCE S256, and make the IdP include verified email in
   the signed ID token. Set `ADMIN_OIDC_ADMIN_SUBJECT` as an additional immutable pin when practical.
   Enforce MFA and account-recovery policy at the IdP. See [13-admin-oidc.md](13-admin-oidc.md).
+- Reach for the local admin password only when an IdP is genuinely not available, and treat it as
+  own-machine scope: leave `PUBLIC_URL` unset or loopback so the boot refusal stands, pick a password
+  well over the 12-character floor (a database dump of its hash is grindable offline), and never set
+  `ADMIN_LOCAL_LOGIN_ALLOW_PUBLIC` for an internet-facing console — that combination is precisely the
+  guessing surface OIDC exists to avoid. See the cost statement in
+  [07-security.md](#the-local-admin-password-and-what-enabling-it-costs).
 - Keep `ADMIN_API_TOKEN` in a secret store and prove the break-glass path before an IdP outage. Rotate
   it by changing the value and restarting.
 - Generate `ENCRYPTION_KEY` from a CSPRNG (32 bytes, base64). Store it in a secret store if you have

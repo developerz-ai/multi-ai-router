@@ -3,6 +3,7 @@
  * client is typed against is re-exported here — one file per domain concern.
  */
 export * from "./accounts"
+export * from "./admin-credentials"
 export * from "./api-key-scope"
 export * from "./api-keys"
 export * from "./audit-events"

@@ -87,6 +87,7 @@ describe("parseEnv", () => {
       loginLockoutMinutes: 15,
       sessionSlideFraction: 0.1,
       sessionCookieInsecure: false,
+      localLoginAllowPublic: false,
     })
   })
 
@@ -180,6 +181,7 @@ describe("parseEnv", () => {
       loginLockoutMinutes: 30,
       sessionSlideFraction: 0.25,
       sessionCookieInsecure: true,
+      localLoginAllowPublic: false,
     })
   })
 
@@ -216,26 +218,40 @@ describe("parseEnv", () => {
     test("defaults the optional fields", () => {
       const env = parseEnv(base)
 
-      expect(env.adminOidc.clientSecret).toBeNull()
-      expect(env.adminOidc.adminSubject).toBeNull()
-      expect(env.adminOidc.scopes).toEqual(["openid", "profile", "email"])
-      expect(env.adminOidc.clockSkewSeconds).toBe(60)
+      expect(env.adminOidc?.clientSecret).toBeNull()
+      expect(env.adminOidc?.adminSubject).toBeNull()
+      expect(env.adminOidc?.scopes).toEqual(["openid", "profile", "email"])
+      expect(env.adminOidc?.clockSkewSeconds).toBe(60)
     })
 
-    test("boot fails naming every required field that is missing", () => {
-      const error = expectEnvError({
+    test("no OIDC variables at all parses to null — local login decides at boot", () => {
+      const env = parseEnv({
         DATABASE_URL: "postgres://router:router@postgres:5432/router",
         ENCRYPTION_KEY,
       })
 
-      const required = [
-        "ADMIN_OIDC_ISSUER_URL",
-        "ADMIN_OIDC_CLIENT_ID",
-        "ADMIN_OIDC_REDIRECT_URI",
-        "ADMIN_OIDC_ADMIN_EMAIL",
-      ]
-      for (const name of required) expect(error.variables).toContain(name)
+      expect(env.adminOidc).toBeNull()
+    })
+
+    test("a partial OIDC block fails naming every missing field", () => {
+      const error = expectEnvError({
+        DATABASE_URL: "postgres://router:router@postgres:5432/router",
+        ADMIN_OIDC_ISSUER_URL: "https://sso.test",
+        ENCRYPTION_KEY,
+      })
+
+      const missing = ["ADMIN_OIDC_CLIENT_ID", "ADMIN_OIDC_REDIRECT_URI", "ADMIN_OIDC_ADMIN_EMAIL"]
+      for (const name of missing) expect(error.variables).toContain(name)
+      expect(error.variables).not.toContain("ADMIN_OIDC_ISSUER_URL")
       expect(error.message).toContain("docs/idea/13-admin-oidc.md")
+    })
+
+    test("ADMIN_LOCAL_LOGIN_ALLOW_PUBLIC is a flag, off by default", () => {
+      expect(parseEnv(base).adminAuth.localLoginAllowPublic).toBe(false)
+      expect(
+        parseEnv({ ...base, ADMIN_LOCAL_LOGIN_ALLOW_PUBLIC: "true" }).adminAuth
+          .localLoginAllowPublic,
+      ).toBe(true)
     })
   })
 

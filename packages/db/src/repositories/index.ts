@@ -1,4 +1,5 @@
 export * from "./account-repository"
+export * from "./admin-credential-repository"
 export * from "./api-key-repository"
 export * from "./audit-repository"
 export * from "./bounded-delete"

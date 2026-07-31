@@ -32,11 +32,11 @@ Claude Max sub · ChatGPT sub · Anthropic API · OpenRouter · z.ai · Kimi · 
 
 **As a developer**, you change two settings in the tool you already use: the address it talks to, and the key it presents. It makes no difference whether that tool speaks OpenAI's API or Anthropic's — the router answers both, and translates between them when the account that serves you speaks the other one — refusing outright, rather than approximating, the handful of requests that will not convert cleanly. Two endpoints do need a matching account rather than a translated one, token counting and embeddings, and they say so plainly when none is in reach instead of guessing a number. That aside, this is the whole integration: no library to install, nothing in your code to change. Ask for the model you always ask for and you get that model — the router never swaps in a cheaper one, and the only thing that can rename it is an alias map you wrote yourself on the account. It is served by whichever account was healthy at that moment; if one is rate-limited or out of credit, the next one picks the request up, as long as no part of the answer has arrived yet. You never hold a real provider credential.
 
-**As an admin** — there is one admin identity, pinned to a single email address, with one exception named below — you bring up the router and its database from the bundled Docker Compose file, open the console, and add your accounts — pasting in an API key, or signing in to a subscription through that provider's own login page. Group the accounts into pools, choose how each pool shares work, and mint a named key per person or per agent, each one limited to the accounts you pick, with its own request-rate ceiling and expiry date. The dashboard answers the daily questions: who spent what, which accounts are paused and when they come back, and which ones have run out of credit and need a human.
+**As an admin** — there is one admin identity, with two exceptions named below — you bring up the router and its database from the bundled Docker Compose file, open the console, and add your accounts — pasting in an API key, or signing in to a subscription through that provider's own login page. Group the accounts into pools, choose how each pool shares work, and mint a named key per person or per agent, each one limited to the accounts you pick, with its own request-rate ceiling and expiry date. The dashboard answers the daily questions: who spent what, which accounts are paused and when they come back, and which ones have run out of credit and need a human.
 
-One thing to know before you start: the console has no password of its own. You sign in through an identity provider you point it at — Zitadel, Keycloak, Authentik, Auth0, or anything else that follows the standard — and the router refuses to start until one is configured. That is a deliberate trade: the sign-in guarding your console is then your identity provider's, with its multi-factor and its audit trail behind it, and trying this out on a bare laptop takes an identity provider first.
+One thing to know before you start: the console signs you in one of two ways. The one we recommend for anything reachable by more than one machine is an identity provider you point it at — Zitadel, Keycloak, Authentik, Auth0, or anything else that follows the OIDC standard — because the sign-in guarding your console is then your IdP's, with its multi-factor and its audit trail behind it. The other is a local admin password you set on the host with `bin/admin set-password`: it is hashed with argon2id and only the hash touches Postgres, it is off by default, and the router refuses to boot with it on a non-loopback `PUBLIC_URL` unless you name the risk (`ADMIN_LOCAL_LOGIN_ALLOW_PUBLIC`). Either one is enough; boot refuses when neither exists.
 
-And the exception to "one admin", stated properly because it is the one that matters: you can enable a static token for scripts and recovery, and it is a **second full-admin credential**, not a lesser one. It reaches the whole admin plane, including reading a key back out. It has no email pin, no expiry and no rate limit, and the only way to revoke it is to change the value and restart the router. Leave it unset — the default — and the single-admin claim holds exactly; set it, and its secrecy is the only thing standing in front of every account in your deployment.
+And the second exception to "one admin", stated properly because it is the one that matters: you can enable a static token for scripts and recovery, and it is a **second full-admin credential**, not a lesser one. It reaches the whole admin plane, including reading a key back out. It has no email pin, no expiry and no rate limit, and the only way to revoke it is to change the value and restart the router. Leave it unset — the default — and the single-admin claim holds exactly; set it, and its secrecy is the only thing standing in front of every account in your deployment.
 
 > **In one sentence:** a server you host that turns all the AI accounts you already pay for into a single address your whole team can use, without ever handing anyone the real logins.
 
@@ -76,7 +76,7 @@ Marked ⏳ where the design is settled but the code is not — see [Status](#-st
 - ⏱️ **Reset visibility** — every unavailable account shows its reset as an absolute time *and* a countdown, per window for Claude subs (5-hour, 7-day, per-model), labeled as reported / estimated / unknown. Plus a manual **Re-check now**, per account or for all: providers sometimes reset early or lift a limit for everyone, and the router shouldn't sit on a stale timestamp.
 - ⚡ **Performance as a stated goal** — under 5 ms added p99 on the passthrough path and zero added time-to-first-token. Streams are never buffered, passthrough bodies are never parsed, and nothing touches Postgres on the critical path: accounts and pools are read from a warm catalog, keys from a bounded cache, usage is written off-path. `bin/bench` checks both claims against a stub upstream and exits non-zero when either breaks; CI runs it and reports the delta against a committed baseline on every PR, but the job is `continue-on-error` — a shared runner's noise isn't a regression signal worth blocking a merge over, so it doesn't fail the build (yet).
 - 🖥️ **SolidJS operator console** — overview, accounts, pools, keys, usage and settings all render live data: key reveal with no shown-once flow, destructive actions that name exactly what they break, reset shown as absolute time *and* countdown labelled by how far it can be trusted, a red banner for any account out of credits, a live request feed that names the failing request by id, account and error class, and a settings screen with live price overrides, retention knobs, scheduled-task health, and the audit feed.
-- 🐳 **`docker compose up -d`** — the router plus PostgreSQL 16, a healthcheck gating startup, generic OIDC settings and one encryption key in `.env`.
+- 🐳 **`docker compose up -d`** — the router plus PostgreSQL 16, a healthcheck gating startup, one OIDC client (or one `bin/admin set-password` run) and one encryption key in `.env`.
 
 ---
 
@@ -92,7 +92,7 @@ Not for you if you want a semantic model picker, an agent framework, multi-tenan
 
 ## 🚀 Quick start
 
-Configure one OIDC client and one encryption key, then start the stack. The bundled [`docker-compose.yml`](docker-compose.yml) brings up two services — the router and PostgreSQL 16 — with a healthcheck gating the router's start and `DATABASE_URL` wired in for you; it reads its secrets from `.env`, which is gitignored:
+Configure one OIDC client (or set one local password) and one encryption key, then start the stack. The bundled [`docker-compose.yml`](docker-compose.yml) brings up two services — the router and PostgreSQL 16 — with a healthcheck gating the router's start and `DATABASE_URL` wired in for you; it reads its secrets from `.env`, which is gitignored:
 
 ```bash
 cp .env.example .env
@@ -102,27 +102,32 @@ cp .env.example .env
 docker compose up -d
 ```
 
-The admin console uses generic OIDC discovery, PKCE, and signed ID-token verification. Zitadel is production-tested; Keycloak, Authentik, and Auth0 use the same config-only contract. See [`docs/idea/13-admin-oidc.md`](docs/idea/13-admin-oidc.md) for client registration, claim requirements, and troubleshooting.
+No identity provider to point it at? Skip the `ADMIN_OIDC_*` block entirely and run `docker compose exec router bun run dist/api/admin.js set-password` once it's up — a local admin password, stored as an argon2id hash in Postgres and never in `.env` (from a checkout, the same verb is `bin/admin set-password`). The login page shows whichever methods exist; `GET /api/admin/auth/methods` says the same. Boot refuses when neither is configured.
+
+The admin console uses generic OIDC discovery, PKCE, and signed ID-token verification. Zitadel is production-tested; Keycloak, Authentik, and Auth0 use the same config-only contract. See [`docs/idea/13-admin-oidc.md`](docs/idea/13-admin-oidc.md) for both sign-in paths, client registration, claim requirements, and troubleshooting.
 
 Migrations run at boot, are idempotent, and fail the boot loudly rather than starting on a half-migrated schema. Pointing `DATABASE_URL` at an existing or managed Postgres and dropping the bundled `postgres` service is a one-line change — see [`docs/idea/09-deployment.md`](docs/idea/09-deployment.md#using-an-existing-or-managed-postgres). The compose file itself is the reference, not a copy of it here: it's commented inline, and a snippet reproduced in docs would just be one more place for the two to drift apart.
 
-Then open **<http://localhost:8080>** and select **Sign in with SSO**. For a plain-HTTP LAN install, set `SESSION_COOKIE_INSECURE=true`; otherwise terminate HTTPS in front so the hardened session cookie is accepted. The router process serves the SolidJS console itself, at the same origin as the API — no second container, no static host, no CORS to configure. An empty deployment lands on a three-step walk — **add an account → pool it → mint a key** — and the mint hands you a **Point your tool at it** block already filled in with this deployment's base URL and that key's real value, one tab per client. `/api/admin/**` is there directly if you'd rather script it. **Give the key a name; you can view and copy its value again at any time** via `POST /api/admin/keys/:id/reveal` — keys are stored encrypted, not hashed, because an operator running a fleet of agents needs to look one up later without rotating it.
+Then open **<http://localhost:8080>** and sign in — **Sign in with SSO**, or the password form if you set a local password (the page shows whichever exists). For a plain-HTTP LAN install, set `SESSION_COOKIE_INSECURE=true`; otherwise terminate HTTPS in front so the hardened session cookie is accepted. The router process serves the SolidJS console itself, at the same origin as the API — no second container, no static host, no CORS to configure. An empty deployment lands on a three-step walk — **add an account → pool it → mint a key** — and the mint hands you a **Point your tool at it** block already filled in with this deployment's base URL and that key's real value, one tab per client. `/api/admin/**` is there directly if you'd rather script it. **Give the key a name; you can view and copy its value again at any time** via `POST /api/admin/keys/:id/reveal` — keys are stored encrypted, not hashed, because an operator running a fleet of agents needs to look one up later without rotating it.
 
 | Env var | Required | Notes |
 |---|---|---|
-| `ADMIN_OIDC_ISSUER_URL` | ✅ | Exact OIDC issuer; discovery document `issuer` must match. |
-| `ADMIN_OIDC_CLIENT_ID` | ✅ | OIDC client id and expected ID-token audience. |
-| `ADMIN_OIDC_CLIENT_SECRET` | ✅* | Confidential-client secret. The shipped setup uses a confidential client; omit only for an explicitly configured public client. PKCE remains mandatory. |
-| `ADMIN_OIDC_REDIRECT_URI` | ✅ | Exact registered callback: `/api/admin/auth/oidc/callback`. |
-| `ADMIN_OIDC_ADMIN_EMAIL` | ✅ | Single allowed admin email; the IdP must assert it as verified in the ID token. |
+| `ADMIN_OIDC_ISSUER_URL` | ✅* | Exact OIDC issuer; discovery document `issuer` must match. |
+| `ADMIN_OIDC_CLIENT_ID` | ✅* | OIDC client id and expected ID-token audience. |
+| `ADMIN_OIDC_CLIENT_SECRET` | — | Confidential-client secret. The shipped setup uses a confidential client; omit only for an explicitly configured public client. PKCE remains mandatory. |
+| `ADMIN_OIDC_REDIRECT_URI` | ✅* | Exact registered callback: `/api/admin/auth/oidc/callback`. |
+| `ADMIN_OIDC_ADMIN_EMAIL` | ✅* | Single allowed admin email; the IdP must assert it as verified in the ID token. |
 | `ADMIN_OIDC_ADMIN_SUBJECT`, `ADMIN_OIDC_SCOPES`, `ADMIN_OIDC_CLOCK_SKEW_SECONDS` | — | Optional stricter `sub` pin, scopes, and clock-skew tolerance. |
-| `ADMIN_API_TOKEN` | — | Break-glass bearer for scripts and recovery; separate from browser OIDC. |
+| `ADMIN_LOCAL_LOGIN_ALLOW_PUBLIC` | — | Opts out of the boot refusal for a local password on a non-loopback `PUBLIC_URL`. Default off; boot warns while on. |
+| `ADMIN_API_TOKEN` | — | Break-glass bearer for scripts and recovery; separate from browser sign-in. |
 | `ENCRYPTION_KEY` | ✅ | 32 bytes, base64. Boot fails loudly if missing or short. Encrypts upstream credentials and router keys. |
 | `DATABASE_URL` | ✅ | PostgreSQL 16+ connection string. Supplied by the bundled compose file, so you don't set it by hand. |
 | `PORT`, `LOG_LEVEL`, `TRUST_PROXY`, `PUBLIC_URL` | — | `PUBLIC_URL` is the router's own public address: the provider-account OAuth callback base, and the base URL the console fills into every client snippet. Set it when the console's own origin is not what an agent machine should call — a port-forward, a tunnel, a private hostname. Falls back to that origin. |
 | `ADMIN_SESSION_*`, `ADMIN_LOGIN_*` | — | Session idle/absolute windows and callback-throttle limits. |
 | `CATALOG_REFRESH_SECONDS`, `KEY_CACHE_*`, `USAGE_*` | — | The request path's staleness and memory bounds. Nothing there queries Postgres, so these decide how fast it learns about a change. |
 | `RETENTION_*`, `JANITOR_INTERVAL_MINUTES`, `CLAUDE_CONFIG_ROOT`, `ACCOUNT_RECHECK_COOLDOWN_SECONDS` | — | Retention windows and background-work knobs. Every one is config, never a constant. |
+
+\* The four `ADMIN_OIDC_*` fields are all-or-nothing, and required only for the OIDC path. The alternative is `bin/admin set-password` — one sign-in method or the other must exist, and both may be enabled at once.
 
 Env is validated by Zod at boot; a bad config exits non-zero naming the offending variable. Run HTTPS in front — cookies are `Secure` by default. Full matrix in [`docs/idea/09-deployment.md`](docs/idea/09-deployment.md).
 
@@ -139,7 +144,7 @@ one) is named explicitly rather than silently approximated.
 | Capability | State |
 |---|---|
 | Boot: Zod-validated env, migrations before the listener opens, `/healthz` + `/readyz` | ✅ |
-| Admin auth: generic OIDC + PKCE, signed ID-token verification, single-principal pin, bounded session + CSRF | ✅ |
+| Admin auth: generic OIDC + PKCE *or* a local admin password (argon2id in Postgres, off by default), single-principal pin, bounded session + CSRF | ✅ |
 | Admin API: accounts, pools (incl. overflow account), keys, provider registry | ✅ |
 | Router keys: minted, named, encrypted, **retrievable** (`POST /api/admin/keys/:id/reveal`), revocable | ✅ |
 | Data plane, **same-dialect passthrough**: `/v1/messages`, `/v1/chat/completions`, `/v1/responses`, `/v1/models` | ✅ |

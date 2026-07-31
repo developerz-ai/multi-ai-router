@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+# The local admin password — the console's OIDC-alternative sign-in.
+#
+#   bin/admin set-password       set or replace it (typed twice, hidden; or two
+#                                lines on stdin when piped)
+#   bin/admin delete-password    remove it — password sign-in is off again
+#
+# The credential lives ONLY as an argon2id hash in Postgres — never in .env, a
+# compose file, or an image layer. A fresh database has no row, so the door is
+# off until you open it here. Boot refuses while a row exists and PUBLIC_URL is
+# not loopback, unless ADMIN_LOCAL_LOGIN_ALLOW_PUBLIC=true.
+# See docs/idea/13-admin-oidc.md.
+set -euo pipefail
+cd "$(dirname "${BASH_SOURCE[0]}")/.."
+
+exec bun apps/api/src/bin/admin.ts "$@"

@@ -20,6 +20,14 @@ mkdir -p dist/api dist/web
 # (node targets would rewrite them) and matches the runtime stage's entrypoint.
 bun build apps/api/src/main.ts --target=bun --outfile dist/api/index.js
 
+# The local-admin verb ships too: `bin/admin set-password` is the first-run
+# setup flow (docs/idea/13-admin-oidc.md), and the image is where a fresh
+# deployment runs it — `docker compose exec router bun run dist/api/admin.js
+# set-password`. Bundled, not copied from src, because the runtime stage has no
+# source tree, and resolving `../migrations` from dist/api lands on the same
+# copied folder as the server's own boot migrations.
+bun build apps/api/src/bin/admin.ts --target=bun --outfile dist/api/admin.js
+
 # Migrations are data, not code — `bun build` cannot bundle a directory of .sql
 # files, so they must be copied. The destination is not arbitrary: migrate.ts
 # resolves its folder as `../migrations` relative to `import.meta.url`, which is
