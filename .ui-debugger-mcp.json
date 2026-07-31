@@ -6,7 +6,14 @@
       "headless": true,
       "url": "http://localhost:5173",
       "executablePath": "/home/ivann/.cache/ms-playwright/chromium-1228/chrome-linux64/chrome",
-      "notes": "Operator console for the multi-ai-router (SolidJS SPA). The theme follows the OS preference unless the operator toggles — headless Chrome defaults to light, so a light render is CORRECT, not a bug. On a fresh dev database, empty tables and 'no accounts yet' states are expected — not bugs. The admin SPA is OIDC-gated: without an attached authenticated session you will only see the login page ('Sign in with SSO'), which is by design."
+      "notes": "Operator console for the multi-ai-router (SolidJS SPA), dev stack via bin/dev with a SEEDED throwaway database: 3 accounts (one anthropic-api with a 118-char label, one openai-api, one ollama pointed at a dead localhost port), 1 weighted pool, 1 router key. All credentials are fake — upstream calls fail on purpose; error statuses, cooldown lines and 'needs reauth' states are EXPECTED, not bugs. The theme follows the OS preference — headless Chrome renders light, which is CORRECT. Sign-in uses the local password form (the OIDC button may also render; ignore it). Safe-area / notch behavior cannot be judged in headless Chrome — do not report it.",
+      "personas": {
+        "admin": {
+          "path": "/login",
+          "fields": { "password": "ui-debugger-dev" },
+          "submit": "Sign in"
+        }
+      }
     }
   }
 }
