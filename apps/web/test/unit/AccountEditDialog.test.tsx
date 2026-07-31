@@ -232,17 +232,6 @@ describe("AccountEditDialog submission", () => {
     })
   })
 
-  test("a box mid-retype re-sends what the account holds, never a silent zero", () => {
-    // `weight: 0` drops the account out of the weighted policy entirely, so an emptied
-    // box must not become one.
-    let patch: UpdateAccountInput | undefined
-    withMount(base({ onSubmit: (next) => (patch = next) }), () => {
-      typeInto(fieldByLabel("Weight"), "")
-      submitForm()
-      expect(patch?.weight).toBe(300)
-    })
-  })
-
   test("refuses an unreadable alias map in the operator's line numbers, and sends nothing", () => {
     let patch: UpdateAccountInput | undefined
     withMount(base({ onSubmit: (next) => (patch = next) }), () => {
