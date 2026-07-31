@@ -11,6 +11,7 @@ export {
   adminApiTokenSession,
   isAdminApiTokenConfigured,
 } from "./apiToken"
+export { ADMIN_AUTH_DOC, adminAuthBootProblem, isLoopbackUrl } from "./boot"
 export {
   type AdminAuthConfig,
   type AdminAuthEnvConfig,
@@ -36,9 +37,22 @@ export {
 } from "./cookies"
 export { CSRF_HEADER, isMutatingMethod } from "./csrf"
 export {
+  createLocalAdminCredentials,
+  hashLocalPassword,
+  LOCAL_PASSWORD_MAX_LENGTH,
+  LOCAL_PASSWORD_MIN_LENGTH,
+  type LocalAdminCredentials,
+  LocalPasswordPolicyError,
+  localPasswordPolicyProblem,
+} from "./localCredential"
+export {
+  ADMIN_LOGIN_FAILED_MESSAGE,
   type AdminAuthDeps,
+  type AdminAuthMethods,
   type AdminAuthService,
+  AdminLoginThrottledError,
   createAdminAuthService,
+  LOCAL_ADMIN_USERNAME,
   type LoginCompleteResult,
   type LoginStartResult,
 } from "./service"

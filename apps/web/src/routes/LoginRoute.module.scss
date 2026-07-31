@@ -45,6 +45,24 @@
   gap: var(--space-4);
 }
 
+// Between two doors: SSO above, the password form below. A plain rule with a
+// word on it, not a second card — the two methods are peers, not sections.
+.divider {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  margin: 0;
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+
+  &::before,
+  &::after {
+    content: "";
+    flex: 1;
+    border-top: 1px solid var(--border);
+  }
+}
+
 .error {
   padding: var(--space-3);
   border: 1px solid var(--danger);

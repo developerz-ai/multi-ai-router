@@ -24,6 +24,14 @@ export type {
 } from "./repositories/account-repository"
 // --- repositories -----------------------------------------------------------
 export { createAccountRepository } from "./repositories/account-repository"
+export type {
+  AdminCredentialRepository,
+  UpsertAdminCredentialInput,
+} from "./repositories/admin-credential-repository"
+export {
+  ADMIN_CREDENTIAL_SINGLETON,
+  createAdminCredentialRepository,
+} from "./repositories/admin-credential-repository"
 export type { ApiKeyRepository } from "./repositories/api-key-repository"
 export { createApiKeyRepository } from "./repositories/api-key-repository"
 export type { AppendAuditEventInput, AuditRepository } from "./repositories/audit-repository"
@@ -108,9 +116,10 @@ export type {
   NewAccountRow,
   SupportedModelList,
 } from "./schema/accounts"
-
-// --- tables -----------------------------------------------------------------
 export { accounts } from "./schema/accounts"
+export type { AdminCredentialRow, NewAdminCredentialRow } from "./schema/admin-credentials"
+// --- tables -----------------------------------------------------------------
+export { adminCredentials } from "./schema/admin-credentials"
 export type {
   ApiKeyAccountRow,
   ApiKeyPoolRow,

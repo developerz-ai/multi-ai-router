@@ -8,12 +8,15 @@ they sweep against.
 
 ## The promise
 
-**`docker compose up -d` after one OIDC client registration and one secret file edit.** No local admin password and no database to provision.
+**`docker compose up -d` after one sign-in method and one secret file edit.** No database to provision — and no IdP required either, if a local admin password suits the machine.
 
 `docker compose up -d` brings up **two services**: the router and a PostgreSQL 16 container, with a
 named volume for the Postgres data directory and a health check gating the router's start. The
-compose file supplies `DATABASE_URL` itself. The operator fills the `ADMIN_OIDC_*` relying-party
-settings and `ENCRYPTION_KEY` in `.env`; see [13-admin-oidc.md](13-admin-oidc.md) for provider setup.
+compose file supplies `DATABASE_URL` itself. The operator fills `ENCRYPTION_KEY` in `.env` and picks
+a sign-in method: the `ADMIN_OIDC_*` relying-party settings, or one
+`docker compose exec router bun run dist/api/admin.js set-password` run after the stack is up (the
+local password lives as an argon2id hash in Postgres, never in `.env`). See
+[13-admin-oidc.md](13-admin-oidc.md) for both.
 
 ```yaml
 # docker-compose.yml — abridged; the shipped file carries the full comments
@@ -95,11 +98,12 @@ and fails the build for any numeric knob that is neither refused nor explained
 
 | Variable | Required | Default | Purpose |
 |---|---|---|---|
-| `ADMIN_OIDC_ISSUER_URL` | yes | — | Exact OIDC issuer. Discovery is fetched from `/.well-known/openid-configuration`; its `issuer` must match. |
-| `ADMIN_OIDC_CLIENT_ID` | yes | — | OIDC client identifier and expected ID-token audience. |
+| `ADMIN_OIDC_ISSUER_URL` | for OIDC | — | Exact OIDC issuer. Discovery is fetched from `/.well-known/openid-configuration`; its `issuer` must match. |
+| `ADMIN_OIDC_CLIENT_ID` | for OIDC | — | OIDC client identifier and expected ID-token audience. |
 | `ADMIN_OIDC_CLIENT_SECRET` | no | — | Confidential-client secret. Omit only for a public client; PKCE S256 is always required. |
-| `ADMIN_OIDC_REDIRECT_URI` | yes | — | Exact callback URI registered at the IdP: `https://router.example.com/api/admin/auth/oidc/callback`. |
-| `ADMIN_OIDC_ADMIN_EMAIL` | yes | — | The single allowed administrator. The ID token must carry this email with `email_verified: true`. |
+| `ADMIN_OIDC_REDIRECT_URI` | for OIDC | — | Exact callback URI registered at the IdP: `https://router.example.com/api/admin/auth/oidc/callback`. |
+| `ADMIN_OIDC_ADMIN_EMAIL` | for OIDC | — | The single allowed administrator. The ID token must carry this email with `email_verified: true`. |
+| `ADMIN_LOCAL_LOGIN_ALLOW_PUBLIC` | no | `false` | Opts out of the fail-closed rule that refuses boot while a local admin password exists and `PUBLIC_URL` is not loopback — see [13-admin-oidc.md](13-admin-oidc.md). Boot warns on every start while it is on. |
 | `ADMIN_OIDC_ADMIN_SUBJECT` | no | — | Optional stricter exact match against the ID token's `sub`. Recommended once known. |
 | `ADMIN_OIDC_SCOPES` | no | `openid profile email` | Space-separated scopes sent to the IdP. Must include `openid`. The IdP must embed `email` and `email_verified` in the ID token. |
 | `ADMIN_OIDC_CLOCK_SKEW_SECONDS` | no | `60` | Clock-skew tolerance for token timestamps. **`0` refused at boot**: no real hosts have perfectly synchronized clocks. |
@@ -610,7 +614,9 @@ same-dialect passthrough (the common case) does no body parsing at all; see
 
 | Symptom | Likely cause | Fix |
 |---|---|---|
-| Container exits immediately, log names a variable | Zod env validation failed | Read the named variable in the exit message. Most common: `ENCRYPTION_KEY` is not 32 bytes of base64, or a required `ADMIN_OIDC_*` value is missing. See [13-admin-oidc.md](13-admin-oidc.md). |
+| Container exits immediately, log names a variable | Zod env validation failed | Read the named variable in the exit message. Most common: `ENCRYPTION_KEY` is not 32 bytes of base64, or a partial `ADMIN_OIDC_*` block (some of the four set, not all). See [13-admin-oidc.md](13-admin-oidc.md). |
+| Container exits immediately, log says "no admin sign-in method is configured" | No `ADMIN_OIDC_*` variables and no local admin password — boot requires one of the two | Set the four OIDC variables, or run `bin/admin set-password` (`docker compose exec router bun run dist/api/admin.js set-password` in the shipped image). See [13-admin-oidc.md](13-admin-oidc.md). |
+| Container exits immediately, log names `ADMIN_LOCAL_LOGIN_ALLOW_PUBLIC` | A local admin password exists and `PUBLIC_URL` is not loopback — the fail-closed rule for a password-only door on a public address | Remove the password (`bin/admin delete-password`), unset `PUBLIC_URL`, or accept the risk by setting `ADMIN_LOCAL_LOGIN_ALLOW_PUBLIC=true`. See [13-admin-oidc.md](13-admin-oidc.md). |
 | Account stuck in `needs_reauth` | Background refresh failed — refresh token revoked upstream, password changed, or the provider changed its flow | Click **Reconnect** on `/accounts`. It re-runs the same OAuth flow against the existing row, preserving id, pool membership, and usage history. |
 | OAuth callback never returns / provider rejects the redirect URI | `PUBLIC_URL` unset, wrong, or not reachable from your browser; or the provider will not accept your host | Use the **paste-back flow** on the same screen: copy the authorization URL, authorize, paste `code#state` back. It needs no reachable callback and is a first-class path, not a fallback. See [03-providers.md](03-providers.md). |
 | Container restarts in a loop, log names a migration | A migration failed. Boot is deliberately fatal here rather than serving a half-migrated schema | `docker compose logs router` names the failing migration. Check the database is reachable and the role may create/alter tables. Restore the last `pg_dump` before retrying a migration that partially applied. |

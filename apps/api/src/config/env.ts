@@ -163,6 +163,14 @@ export interface AdminAuthConfig {
    * `services/admin-auth/cookies.ts`.
    */
   readonly sessionCookieInsecure: boolean
+  /**
+   * `ADMIN_LOCAL_LOGIN_ALLOW_PUBLIC`. Opts out of the fail-closed rule that
+   * refuses to boot when a local admin password exists and `PUBLIC_URL` is not
+   * loopback (`services/admin-auth/boot.ts`). Off by default; setting it is the
+   * operator stating by name that a password-only door on a public address is
+   * acceptable to them, and boot warns about it every time.
+   */
+  readonly localLoginAllowPublic: boolean
 }
 
 /**
@@ -391,7 +399,15 @@ export interface Env {
   readonly shutdownReadyGraceMs: number
   readonly databaseUrl: string
   readonly databasePool: DatabasePoolConfig
-  readonly adminOidc: AdminOidcConfig
+  /**
+   * The OIDC relying-party configuration, or null when no `ADMIN_OIDC_*`
+   * variable is set at all. Null is only viable alongside a local admin
+   * credential (`bin/admin set-password`): "OIDC or local" needs the database,
+   * so that half of the rule is checked after migrations
+   * (`services/admin-auth/boot.ts`); this parser owns the other half — a
+   * *partial* OIDC block fails here, immediately, naming the missing fields.
+   */
+  readonly adminOidc: AdminOidcConfig | null
   readonly encryptionKey: string
   readonly logLevel: LogLevel
   readonly trustProxy: boolean
@@ -497,11 +513,13 @@ export const ENV_FIELDS = {
   DB_POOL_MAX_LIFETIME_SECONDS: wholeNumber.optional(),
   DB_POOL_CLOSE_TIMEOUT_SECONDS: wholeNumber.optional(),
   // === Admin OIDC ===
-  // The router ships with no username/password path: the admin surface is a
-  // generic OIDC flow whose principal is pinned to the email the operator
-  // configures here. The four required fields fail boot if any of them is
-  // absent, with a message pointing at docs/idea/13-admin-oidc.md. The fifth
-  // (`ADMIN_OIDC_ADMIN_SUBJECT`) is optional; the sixth is a tempered default.
+  // One of two ways to obtain an admin session — the other is the local admin
+  // password (`bin/admin set-password`, an argon2id hash in Postgres). The four
+  // fields below are all-or-nothing: all absent means "OIDC off, local login
+  // only" and is legal here, because "OIDC or local" needs the database and is
+  // therefore checked after migrations (`services/admin-auth/boot.ts`). A
+  // *partial* block is an operator mistake and fails fast, with a message
+  // pointing at docs/idea/13-admin-oidc.md.
   //
   // The required fields are parsed as optional so the `.transform` step can
   // raise a single, doc-pointing message for every missing field rather than
@@ -517,6 +535,9 @@ export const ENV_FIELDS = {
   ADMIN_OIDC_ADMIN_SUBJECT: z.string().optional(),
   ADMIN_OIDC_SCOPES: z.string().optional(),
   ADMIN_OIDC_CLOCK_SKEW_SECONDS: atLeastOne.optional(),
+  // The named opt-out of the fail-closed loopback rule for the local admin
+  // password — see `services/admin-auth/boot.ts`. Off by default, on purpose.
+  ADMIN_LOCAL_LOGIN_ALLOW_PUBLIC: flag.optional(),
   ENCRYPTION_KEY: encryptionKey,
   LOG_LEVEL: z.enum(LOG_LEVELS).optional(),
   TRUST_PROXY: flag.optional(),
@@ -601,40 +622,46 @@ export const ENV_FIELDS = {
 } as const
 
 const envSchema = z.object(ENV_FIELDS).transform((raw, ctx): Env => {
-  // Boot fails if any of the four required OIDC fields is missing. The
-  // message is the same one the operator will see if they only set the
-  // secret and forgot the URL — and it points at the doc rather than the
-  // field name, because the *group* is what the operator has to read.
+  // OIDC is all-or-nothing at parse time. All four absent means "local login
+  // only", which is legal — whether *some* sign-in method exists is decided
+  // after migrations, because the local credential's existence is a row in the
+  // database (`services/admin-auth/boot.ts`). A partial block is neither and
+  // fails here, naming every missing field and pointing at the doc.
   const requiredOidc: ReadonlyArray<{ key: keyof typeof raw; env: string }> = [
     { key: "ADMIN_OIDC_ISSUER_URL", env: "ADMIN_OIDC_ISSUER_URL" },
     { key: "ADMIN_OIDC_CLIENT_ID", env: "ADMIN_OIDC_CLIENT_ID" },
     { key: "ADMIN_OIDC_REDIRECT_URI", env: "ADMIN_OIDC_REDIRECT_URI" },
     { key: "ADMIN_OIDC_ADMIN_EMAIL", env: "ADMIN_OIDC_ADMIN_EMAIL" },
   ]
-  let missingOidc: string | null = null
+  const missingOidc: string[] = []
   for (const { key, env } of requiredOidc) {
     const value = raw[key]
-    if (typeof value !== "string" || value.length === 0) {
-      if (missingOidc === null) missingOidc = env
+    if (typeof value !== "string" || value.length === 0) missingOidc.push(env)
+  }
+  const oidcConfigured = missingOidc.length === 0
+  if (!oidcConfigured && missingOidc.length < requiredOidc.length) {
+    for (const env of missingOidc) {
       ctx.addIssue({
         code: "custom",
         path: [env],
-        message: `is required — see docs/idea/13-admin-oidc.md`,
+        message: `is required once any ADMIN_OIDC_* variable is set — see docs/idea/13-admin-oidc.md`,
       })
     }
+    return z.NEVER
   }
-  if (missingOidc !== null) return z.NEVER
 
-  const adminOidc: AdminOidcConfig = {
-    issuerUrl: raw.ADMIN_OIDC_ISSUER_URL as string,
-    clientId: raw.ADMIN_OIDC_CLIENT_ID as string,
-    clientSecret: raw.ADMIN_OIDC_CLIENT_SECRET ?? null,
-    redirectUri: raw.ADMIN_OIDC_REDIRECT_URI as string,
-    adminEmail: raw.ADMIN_OIDC_ADMIN_EMAIL as string,
-    adminSubject: raw.ADMIN_OIDC_ADMIN_SUBJECT ?? null,
-    scopes: (raw.ADMIN_OIDC_SCOPES ?? "openid profile email").split(/\s+/u).filter(Boolean),
-    clockSkewSeconds: raw.ADMIN_OIDC_CLOCK_SKEW_SECONDS ?? 60,
-  }
+  const adminOidc: AdminOidcConfig | null = oidcConfigured
+    ? {
+        issuerUrl: raw.ADMIN_OIDC_ISSUER_URL as string,
+        clientId: raw.ADMIN_OIDC_CLIENT_ID as string,
+        clientSecret: raw.ADMIN_OIDC_CLIENT_SECRET ?? null,
+        redirectUri: raw.ADMIN_OIDC_REDIRECT_URI as string,
+        adminEmail: raw.ADMIN_OIDC_ADMIN_EMAIL as string,
+        adminSubject: raw.ADMIN_OIDC_ADMIN_SUBJECT ?? null,
+        scopes: (raw.ADMIN_OIDC_SCOPES ?? "openid profile email").split(/\s+/u).filter(Boolean),
+        clockSkewSeconds: raw.ADMIN_OIDC_CLOCK_SKEW_SECONDS ?? 60,
+      }
+    : null
 
   const usageDays = raw.RETENTION_USAGE_DAYS ?? 90
   // Two years of daily aggregates: long enough that "what did this cost me last year" is still
@@ -744,6 +771,7 @@ const envSchema = z.object(ENV_FIELDS).transform((raw, ctx): Env => {
       loginLockoutMinutes: raw.ADMIN_LOGIN_LOCKOUT_MINUTES ?? 15,
       sessionSlideFraction: raw.ADMIN_SESSION_SLIDE_FRACTION ?? 0.1,
       sessionCookieInsecure: raw.SESSION_COOKIE_INSECURE ?? false,
+      localLoginAllowPublic: raw.ADMIN_LOCAL_LOGIN_ALLOW_PUBLIC ?? false,
     },
     // Defaults mirror the layer constants they override, so an unset variable
     // and a variable set to the default behave identically.

@@ -1,5 +1,6 @@
 import {
   type AccountRepository,
+  type AdminCredentialRepository,
   type ApiKeyRepository,
   type AuditRepository,
   createUsageReadRepository,
@@ -37,6 +38,7 @@ import {
 import {
   adminAuthConfigFromEnv,
   createAdminAuthService,
+  createLocalAdminCredentials,
   type SessionStore,
 } from "../services/admin-auth"
 import { createOIDCFlow } from "../services/admin-auth/oidc/flow"
@@ -78,6 +80,8 @@ export interface AdminPlaneDeps {
   readonly pools: PoolRepository
   readonly auditEvents: AuditRepository
   readonly oauthStates: OauthStateRepository
+  /** The one-row local admin credential; the auth service reads it live per login. */
+  readonly adminCredentials: AdminCredentialRepository
   readonly usageDaily: UsageDailyRepository
   readonly scheduledTasks: ScheduledTaskRepository
   readonly priceOverrides: PriceOverrideRepository
@@ -221,27 +225,35 @@ export function createAdminPlane(deps: AdminPlaneDeps): AdminPlane {
           adminLoginLockoutMinutes: env.adminAuth.loginLockoutMinutes,
           adminSessionSlideFraction: env.adminAuth.sessionSlideFraction,
         }),
-        oidc: createOIDCFlow({
-          config: {
-            issuerUrl: env.adminOidc.issuerUrl,
-            clientId: env.adminOidc.clientId,
-            clientSecret: env.adminOidc.clientSecret,
-            redirectUri: env.adminOidc.redirectUri,
-            adminEmail: env.adminOidc.adminEmail,
-            adminSubject: env.adminOidc.adminSubject,
-            scopes: env.adminOidc.scopes,
-            clockSkewSeconds: env.adminOidc.clockSkewSeconds,
-          },
-          stateStore: {
-            // The OAuth state repository is reused — see `packages/db` for the
-            // shared schema. The cipher is the same one every other admin
-            // secret rides on.
-            states: deps.oauthStates,
-            cipher: deps.cipher,
-            stateMinutes: env.retention.oauthStateMinutes,
-            now,
-          },
-        }),
+        // No OIDC variables means no OIDC door: the login page learns what is
+        // offered from `methods()`, and the start/callback routes answer 404.
+        oidc:
+          env.adminOidc === null
+            ? null
+            : createOIDCFlow({
+                config: {
+                  issuerUrl: env.adminOidc.issuerUrl,
+                  clientId: env.adminOidc.clientId,
+                  clientSecret: env.adminOidc.clientSecret,
+                  redirectUri: env.adminOidc.redirectUri,
+                  adminEmail: env.adminOidc.adminEmail,
+                  adminSubject: env.adminOidc.adminSubject,
+                  scopes: env.adminOidc.scopes,
+                  clockSkewSeconds: env.adminOidc.clockSkewSeconds,
+                },
+                stateStore: {
+                  // The OAuth state repository is reused — see `packages/db` for the
+                  // shared schema. The cipher is the same one every other admin
+                  // secret rides on.
+                  states: deps.oauthStates,
+                  cipher: deps.cipher,
+                  stateMinutes: env.retention.oauthStateMinutes,
+                  now,
+                },
+              }),
+        // Always built: whether the door is open is the *row*, read live per
+        // login, so `bin/admin set-password` takes effect without a restart.
+        local: createLocalAdminCredentials({ repository: deps.adminCredentials }),
         audit,
       }),
       // Two decorators in the order they must run: `withCatalogRefresh` makes a write land on the

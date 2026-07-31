@@ -58,7 +58,7 @@ alike.
 
 ## Admin authentication
 
-A single admin principal, asserted by an OpenID Connect provider. No router user table in v1. The full relying-party contract and provider setup live in [13-admin-oidc.md](13-admin-oidc.md).
+A single admin principal. It is asserted either by an OpenID Connect provider or by the optional local admin password — an argon2id hash in Postgres set by `bin/admin set-password`, off by default, and fail-closed on a non-loopback `PUBLIC_URL`. No router user table either way. The full relying-party contract, the password door, and provider setup live in [13-admin-oidc.md](13-admin-oidc.md).
 
 | Variable | Meaning |
 |---|---|
@@ -69,7 +69,7 @@ A single admin principal, asserted by an OpenID Connect provider. No router user
 | `ADMIN_OIDC_ADMIN_EMAIL` | Required, case-insensitive match against a verified `email` claim in the ID token. |
 | `ADMIN_OIDC_ADMIN_SUBJECT` | Optional stricter exact match against `sub`. |
 
-There is no password or TOTP credential in the router. TOTP, passkeys, MFA policy, enrollment, and account recovery belong to the configured IdP. Adding a second factor *after* the OIDC-issued router session would be a separate design decision, not a deferred password-login field.
+The only password-shaped credential is the optional local admin password above; the router keeps no TOTP secret. TOTP, passkeys, MFA policy, enrollment, and account recovery belong to the configured IdP — which is exactly why the password door, having no second factor, is loopback-only by default. Adding a second factor *after* the router-issued session would be a separate design decision, not a deferred field.
 
 `GET /api/admin/auth/oidc/start` is IP-throttled before it creates state. The callback consumes one-shot state, verifies PKCE, nonce, signature, standard claims, verified email, and the configured principal pins, then issues the same bounded session described below. Every callback rejection uses one generic response. Detailed diagnostics stay server-side.
 

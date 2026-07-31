@@ -1,11 +1,15 @@
 import { type Context, Hono } from "hono"
 import { getConnInfo } from "hono/bun"
 import { deleteCookie, setCookie } from "hono/cookie"
+import { z } from "zod"
 import { renderErrorBody } from "../../errors/render"
 import { type AdminAuthEnv, adminAuth } from "../../middleware/adminAuth"
+import { readJsonBody } from "../../services/admin"
 import {
   ADMIN_API_TOKEN_ACTOR,
+  ADMIN_LOGIN_FAILED_MESSAGE,
   type AdminAuthService,
+  AdminLoginThrottledError,
   type AdminSession,
   SESSION_COOKIE_NAME,
   sessionCookieOptions,
@@ -16,12 +20,19 @@ import {
 /**
  * The admin plane's authentication routes — mountable on its own, because `app.ts` owns the
  * wiring. Thin, as CLAUDE.md requires: parse → validate with Zod → one service call → render.
- * Every rule (PKCE, JWKS verification, session lifetime, CSRF) lives in `services/admin-auth/`.
+ * Every rule (PKCE, JWKS verification, session lifetime, CSRF, the login throttle) lives in
+ * `services/admin-auth/`.
  *
- * `GET /oidc/start`    — public, throttled per IP. Mints the state and the nonce, returns a
- *                          302 to the IdP's authorize endpoint.
- * `GET /oidc/callback`  — public, throttled per IP. The IdP sends the browser back with the
- *                          `code` and `state`. The route renders the HTML callback page.
+ * `GET /methods`      — public, unguarded. Which sign-in doors this deployment has, so the
+ *                          login page knows what to render. Reveals nothing an unauthenticated
+ *                          caller could not learn by trying both.
+ * `POST /login`       — public, per-IP throttled. The local password door: trades the password
+ *                          for the same session the OIDC callback issues. Every failure,
+ *                          whatever its cause, carries the one OIDC-identical wording.
+ * `GET /oidc/start`    — public. Mints the state and the nonce, returns a 302 to the IdP's
+ *                          authorize endpoint. 404 when OIDC is not configured.
+ * `GET /oidc/callback`  — public. The IdP sends the browser back with the `code` and `state`.
+ *                          The route renders the HTML callback page. 404 when unconfigured.
  * `POST /logout`        — guarded, and mutating, so it carries a CSRF token like any other
  *                          mutation.
  * `GET  /session`       — guarded. Who am I, and is this cookie still worth anything.
@@ -53,12 +64,53 @@ export function adminAuthRoutes(deps: AdminAuthRoutesDeps): Hono<AdminAuthEnv> {
   const routes = new Hono<AdminAuthEnv>()
   const guard = adminAuth(deps.service, deps.sessionCookieInsecure, deps.apiToken ?? null)
 
+  routes.get("/methods", async (c) => c.json(await deps.service.methods()))
+
+  routes.post("/login", async (c) => {
+    const parsed = localLoginBody.safeParse(await readJsonBody(c.req.raw))
+    if (!parsed.success) {
+      // A malformed body is not a credential verdict, so it gets a 400 — but a
+      // 400 that says nothing about what the verdict would have been.
+      return c.json(renderErrorBody(null, 400, "Invalid request body", "invalid_request"), 400)
+    }
+
+    try {
+      const result = await deps.service.completeLocalLogin({
+        password: parsed.data.password,
+        ip: clientIp(c, deps.trustProxy),
+      })
+      setCookie(
+        c,
+        SESSION_COOKIE_NAME,
+        result.cookieValue,
+        sessionCookieOptions(result.cookieMaxAgeSeconds, deps.sessionCookieInsecure),
+      )
+      warnIfCookieUndeliverable(c, deps.sessionCookieInsecure)
+      // The same body `/session` answers with, so the SPA adopts the session it
+      // just minted without a second round trip.
+      return c.json(sessionBody(result.session), 200)
+    } catch (error) {
+      if (error instanceof AdminLoginThrottledError) {
+        c.header("Retry-After", String(error.retryAfterSeconds))
+        return c.json(renderErrorBody(null, 429, ADMIN_LOGIN_FAILED_MESSAGE, null), 429)
+      }
+      // Wrong password, no credential configured, anything else: one wording,
+      // byte-identical to the OIDC callback's — see the service.
+      return c.json(
+        renderErrorBody(null, 401, ADMIN_LOGIN_FAILED_MESSAGE, "admin_auth_failed"),
+        401,
+      )
+    }
+  })
+
   routes.get("/oidc/start", async (c) => {
+    if (!(await deps.service.methods()).oidc) return oidcNotConfigured(c)
     const { authorizeUrl } = await deps.service.startLogin()
     return c.redirect(authorizeUrl, 302)
   })
 
   routes.get("/oidc/callback", async (c) => {
+    if (!(await deps.service.methods()).oidc) return oidcNotConfigured(c)
     const code = c.req.query("code")
     const state = c.req.query("state")
     const error = c.req.query("error")
@@ -66,16 +118,10 @@ export function adminAuthRoutes(deps: AdminAuthRoutesDeps): Hono<AdminAuthEnv> {
       // The IdP denied the authorization. Render the callback page with a
       // generic failure message — the operator sees the same wording as a
       // probe would.
-      return c.html(
-        callbackPage("Sign-in failed", "Single sign-on verification failed. Try again."),
-        400,
-      )
+      return c.html(callbackPage("Sign-in failed", ADMIN_LOGIN_FAILED_MESSAGE), 400)
     }
     if (code === undefined || code === "" || state === undefined || state === "") {
-      return c.html(
-        callbackPage("Sign-in failed", "Single sign-on verification failed. Try again."),
-        400,
-      )
+      return c.html(callbackPage("Sign-in failed", ADMIN_LOGIN_FAILED_MESSAGE), 400)
     }
 
     try {
@@ -95,10 +141,7 @@ export function adminAuthRoutes(deps: AdminAuthRoutesDeps): Hono<AdminAuthEnv> {
     } catch {
       // The exact failure mode is in the audit log; the operator sees the
       // single wording.
-      return c.html(
-        callbackPage("Sign-in failed", "Single sign-on verification failed. Try again."),
-        401,
-      )
+      return c.html(callbackPage("Sign-in failed", ADMIN_LOGIN_FAILED_MESSAGE), 401)
     }
   })
 
@@ -179,6 +222,20 @@ function sessionBody(session: AdminSession): Record<string, string | null> {
 }
 
 const UNKNOWN_IP = "unknown"
+
+/**
+ * The password door's body contract. Password-only, deliberately: there is one
+ * principal and no username to ask for. Bounded well under the request-body
+ * ceiling so a "password" cannot spend argon2's input buffer on a novel.
+ */
+const localLoginBody = z.object({
+  password: z.string().min(1).max(1024),
+})
+
+/** OIDC absent is not an error — the door simply does not exist on this router. */
+function oidcNotConfigured(c: Context<AdminAuthEnv>): Response {
+  return c.json(renderErrorBody(null, 404, "Not found", "not_found"), 404)
+}
 
 /**
  * The address the per-IP throttle counts against. `X-Forwarded-For` is honored only when

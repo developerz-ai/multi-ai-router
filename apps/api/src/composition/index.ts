@@ -1,5 +1,6 @@
 import {
   createAccountRepository,
+  createAdminCredentialRepository,
   createApiKeyRepository,
   createAuditRepository,
   createModelCatalogRepository,
@@ -131,6 +132,9 @@ export function createRuntime(deps: RuntimeDeps): Runtime {
   // Conversation identity: written by the data plane's session store, swept by the janitor.
   const sessions = createSessionRepository(database)
   const oauthStates = createOauthStateRepository(database)
+  // The one-row local admin credential. The auth service reads it live, so a
+  // `bin/admin` verb takes effect without a restart.
+  const adminCredentials = createAdminCredentialRepository(database)
   // One repository, both directions: the admin read path reads closed days, the rollup closes them.
   const usageDaily = createUsageDailyRepository(database)
   // The scheduler's run log; the usage read path reads it to know which days the rollup closed.
@@ -331,6 +335,7 @@ export function createRuntime(deps: RuntimeDeps): Runtime {
     pools,
     auditEvents,
     oauthStates,
+    adminCredentials,
     usageDaily,
     scheduledTasks,
     priceOverrides,

@@ -148,6 +148,13 @@
       "when": 1785333694658,
       "tag": "0020_lush_jack_power",
       "breakpoints": true
+    },
+    {
+      "idx": 21,
+      "version": "7",
+      "when": 1785491312393,
+      "tag": "0021_admin_credentials",
+      "breakpoints": true
     }
   ]
 }

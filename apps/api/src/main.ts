@@ -2,12 +2,18 @@ import { existsSync } from "node:fs"
 import { join } from "node:path"
 import { fileURLToPath } from "node:url"
 import { VERSION } from "@multi-ai-router/core"
-import { createDatabase, runMigrations } from "@multi-ai-router/db"
+import {
+  createAdminCredentialRepository,
+  createDatabase,
+  type DatabaseHandle,
+  runMigrations,
+} from "@multi-ai-router/db"
 import { createApp } from "./app"
 import { createRuntime, type Runtime, type RuntimeDeps } from "./composition"
 import { type Env, EnvValidationError, parseEnv } from "./config/env"
 import { createLogger, type Logger } from "./logging/logger"
 import { ConfigDirError } from "./providers/claude-sdk/config-dir"
+import { adminAuthBootProblem } from "./services/admin-auth"
 import { createAccountProbe } from "./services/health/accountProbe"
 import { createClaudeCliProbe } from "./services/health/claudeCliProbe"
 import { createDatabaseProbe } from "./services/health/databaseProbe"
@@ -30,6 +36,12 @@ async function main(): Promise<void> {
   await migrate(env, logger)
 
   const database = createDatabase({ url: env.databaseUrl, ...env.databasePool })
+
+  // "OIDC or local" needs the database — the local credential's existence is a
+  // row, and the row does not exist until migrations have run. Same fail-fast
+  // UX as a malformed variable: the process exits before the listener opens.
+  await assertAdminSignInConfigured(env, database, logger)
+
   const runtime = buildRuntime({
     env,
     database: database.db,
@@ -196,6 +208,46 @@ function resolveWebRoot(env: Env, logger: Logger): string | undefined {
     webRoot: root,
   })
   return undefined
+}
+
+/**
+ * The one boot rule `parseEnv` cannot own: "an OIDC relying party OR a local
+ * admin credential must exist" — the credential's existence is a database row,
+ * so the check runs after migrations and before the listener. The refusal
+ * mirrors the env-validation UX: stderr, the remedy, the doc, exit non-zero.
+ *
+ * When the local door *is* open it announces itself the way
+ * `SESSION_COOKIE_INSECURE` does: the operator who enabled it for a laptop and
+ * later pointed the router at a public address has no other signal.
+ */
+async function assertAdminSignInConfigured(
+  env: Env,
+  database: DatabaseHandle,
+  logger: Logger,
+): Promise<void> {
+  const localCredential = await createAdminCredentialRepository(database.db).get()
+  const problem = adminAuthBootProblem({
+    oidcConfigured: env.adminOidc !== null,
+    localCredentialConfigured: localCredential !== undefined,
+    publicUrl: env.publicUrl,
+    allowPublicLocalLogin: env.adminAuth.localLoginAllowPublic,
+  })
+  if (problem !== null) {
+    process.stderr.write(`${problem}\n`)
+    process.exit(1)
+  }
+
+  if (localCredential === undefined) return
+  logger.info("admin sign-in: local password is enabled", {
+    component: "admin-auth",
+    oidc: env.adminOidc !== null,
+  })
+  if (env.adminAuth.localLoginAllowPublic) {
+    logger.warn("ADMIN_LOCAL_LOGIN_ALLOW_PUBLIC is on — a password-only admin door is reachable", {
+      component: "admin-auth",
+      risk: "the local admin password has no IdP and no MFA in front of it; prefer OIDC for anything but this machine, and see docs/idea/13-admin-oidc.md",
+    })
+  }
 }
 
 /** A malformed environment exits non-zero naming the offending variable, and never starts. */
