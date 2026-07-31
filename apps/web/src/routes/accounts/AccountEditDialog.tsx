@@ -113,8 +113,8 @@ export function AccountEditDialog(props: AccountEditDialogProps) {
       dialect: dialect().length > 0 ? (dialect() as Dialect) : null,
       supportedModels: models.length > 0 ? models : null,
       modelAliases: Object.keys(aliasMap).length > 0 ? aliasMap : null,
-      ...numeric("weight", weight(), account.weight),
-      ...numeric("priority", priority(), account.priority),
+      ...numeric("weight", weight()),
+      ...numeric("priority", priority()),
       // Stated every time, like every other field this form owns: `PATCH` reads an absent field as
       // "leave it", and a control the operator can see but that sends nothing is a control that
       // silently does not work. Withheld only where the provider is the answer — sending one there
@@ -289,15 +289,11 @@ export function AccountEditDialog(props: AccountEditDialogProps) {
 }
 
 /**
- * A number box that is mid-retype holds no number, and sending `0` for it would
- * silently drop the account out of the `weighted` policy. An unreadable box
- * re-sends what the account already carries instead.
+ * `required` + `type="number"` + `min`/`max` refuse an empty or out-of-range box
+ * in the browser before `submit()` can run — the same floor the API enforces
+ * (`WEIGHT = z.number().int().min(1)`). What arrives here is therefore always a
+ * parseable integer; there is no unreadable-box path left to fall back from.
  */
-function numeric(
-  field: "weight" | "priority",
-  raw: string,
-  current: number,
-): Record<string, number> {
-  const parsed = Number.parseInt(raw, 10)
-  return { [field]: Number.isFinite(parsed) ? parsed : current }
+function numeric(field: "weight" | "priority", raw: string): Record<string, number> {
+  return { [field]: Number.parseInt(raw, 10) }
 }

@@ -38,22 +38,27 @@ export function AccountModels(props: AccountModelsProps) {
 
   return (
     <div class={styles.root}>
-      <Show
-        fallback={
-          <span class={styles.passthrough} title={PASSTHROUGH_HINT}>
-            any model
+      {/* Pre-mounted live region, the same shape as ConnectResult: a `role="status"` inserted
+          into the DOM together with its own text announces unreliably, so the region wraps the
+          slot and a discovery result — the badge/preview swap — lands inside it. */}
+      <div class={styles.status} role="status">
+        <Show
+          fallback={
+            <span class={styles.passthrough} title={PASSTHROUGH_HINT}>
+              any model
+            </span>
+          }
+          when={declared().length > 0}
+        >
+          <Badge title={declared().join("\n")} tone="accent">
+            {declared().length} model{declared().length === 1 ? "" : "s"}
+          </Badge>
+          <span class={styles.preview}>
+            {declared().slice(0, PREVIEW).join(", ")}
+            {declared().length > PREVIEW ? ", …" : ""}
           </span>
-        }
-        when={declared().length > 0}
-      >
-        <Badge title={declared().join("\n")} tone="accent">
-          {declared().length} model{declared().length === 1 ? "" : "s"}
-        </Badge>
-        <span class={styles.preview}>
-          {declared().slice(0, PREVIEW).join(", ")}
-          {declared().length > PREVIEW ? ", …" : ""}
-        </span>
-      </Show>
+        </Show>
+      </div>
 
       <Show
         fallback={

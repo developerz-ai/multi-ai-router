@@ -43,12 +43,14 @@ export function PriceAddForm(props: PriceAddFormProps) {
             label: descriptor.id,
           })),
         ]}
+        required
         value={props.provider}
       />
       <TextField
         hint="Exactly as clients ask for it. Stored lowercase, so one model is one row."
         label="Model"
         onInput={(event) => props.onModel(event.currentTarget.value)}
+        required
         value={props.model}
       />
       <Button class={styles.action} tone="neutral" type="submit">
