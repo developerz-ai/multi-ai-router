@@ -28,10 +28,10 @@ export const apiKeys = pgTable(
     /**
      * Per-key ceiling. NULL means no per-key limit.
      *
-     * **Stored and carried, not yet enforced.** The verifier puts both values on `VerifiedKey`,
-     * but no limiter reads them, so setting a limit today changes nothing about what a key can
-     * do. Said plainly here rather than described as enforced, because a security control that
-     * is documented as working and is not is worse than one that is absent.
+     * Enforced in the data plane (`services/dataplane/limits.ts`): an exact sliding
+     * window, charged before the request body is read. In-memory and therefore per
+     * replica — two replicas admit up to twice the ceiling, the deliberate trade the
+     * overhead budget makes (no shared counter on the request path).
      */
     rateLimitRequests: integer("rate_limit_requests"),
     rateLimitWindowSeconds: integer("rate_limit_window_seconds"),
