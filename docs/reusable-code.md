@@ -67,6 +67,7 @@ business knowing a table.
 | `ROUTER_ERROR_CODES`, `RouterErrorCode` | same | Typing an outcome column or metric label — `UsageOutcome` in db already does |
 | `isRouterError(value)` | same | Narrowing an unknown throw. Used by `errors/render.ts` and `middleware/errorHandler.ts` |
 | `QuotaExhaustedInit`, `RetryableInit` | same | Constructing a 429 with `retryAfterSeconds` / `resetsAt` |
+| `AdminAuthError` (401), `AdminAuthInit` | same | An admin-plane rejection. Its `reason` is the pattern to copy when a response must stay uninformative but the operator still needs the kind: `message` is the one generic sentence every rejection shares, `reason` is operator-only and `middleware/errorHandler.ts` logs it beside the `requestId`. Never rendered — `errors/render.ts` builds a body from `message` and `code` alone. Never put credential material in it; it reaches a log |
 
 **The HTTP status comes from the error instance.** `error.status` and `error.code` are fixed at class
 declaration. Nothing may re-derive a status from a route, a code string, or a second mapping table.
