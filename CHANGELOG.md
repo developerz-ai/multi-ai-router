@@ -5,6 +5,12 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.3.2] — 2026-08-01
+
+### Fixed
+
+- Dialogs are wider, and width is now a named size on the shared `Modal` rather than one hardcoded number. The panel was pinned at `34rem`, a width chosen for a one-sentence confirmation and then inherited by the account, pool and key forms — which are two-column and dense, so labels wrapped, member lists were squeezed, and a pool with five accounts rendered as a column of ellipses. `sm`/`md`/`lg` (40/56/76rem) are set as a custom property in one stylesheet; every dialog is wider than before, and the dense forms are much wider.
+
 ## [2.3.1] — 2026-08-01
 
 ### Fixed

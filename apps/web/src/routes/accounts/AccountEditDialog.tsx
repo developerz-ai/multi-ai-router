@@ -125,6 +125,7 @@ export function AccountEditDialog(props: AccountEditDialogProps) {
 
   return (
     <Modal
+      size="lg"
       description="Everything here is the account, not the pool: a pool membership carries its own weight and priority, and those win where they are set."
       footer={
         <>

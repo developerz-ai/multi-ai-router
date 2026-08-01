@@ -120,6 +120,7 @@ export function AccountFormDialog(props: AccountFormDialogProps) {
 
   return (
     <Modal
+      size="lg"
       description="Many accounts of the same provider is the normal case — five Claude subscriptions side by side is what this is for."
       footer={
         <>
