@@ -159,6 +159,12 @@ describe.skipIf(!runnable)("migrations against a live database", () => {
   test("scheduled task run round-trips through begin and finish", async () => {
     db = (handle as DatabaseHandle).db
     const repository = createScheduledTaskRepository(db)
+    // The whole table, not just this task's rows: any API that has booted against this
+    // database writes real scheduler rows dated today, which beat the 2026-07-24 fixture
+    // in `lastRun`'s recency ordering. They are last-run telemetry the scheduler rewrites
+    // on its next tick, so clearing them is the honest setup — the same posture
+    // `priceOverrides` teardown takes below.
+    await db.delete(scheduledTaskRuns)
     const startedAt = new Date("2026-07-24T12:00:00.000Z")
     const finishedAt = new Date("2026-07-24T12:05:00.000Z")
 
