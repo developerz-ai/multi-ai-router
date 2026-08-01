@@ -8,7 +8,7 @@
 
 services:
   router:
-    image: ghcr.io/developerz-ai/multi-ai-router:2.2.0
+    image: ghcr.io/developerz-ai/multi-ai-router:latest
     # Pin a full release in production — `latest` moves under you.
 
     ports:
