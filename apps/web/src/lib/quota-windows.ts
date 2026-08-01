@@ -75,7 +75,12 @@ const UTILIZATION_NOTE: Readonly<Record<UtilizationSource, string>> = {
   continuous: "A real percentage at any point in the window.",
   "threshold-triggered":
     "The provider only reports near the limit, so an empty gauge here is normal, not a fault.",
-  none: "This provider exposes no utilization signal at all.",
+  // `none` is per-window state, not a provider verdict: no reading has ever arrived for THIS
+  // window (claude-sdk's `utilizationSourceOf` maps "no value yet" to `none`). A provider with
+  // genuinely no signal has no windows at all, so its rows are never invented and this note
+  // never shows for it. Claiming "the provider exposes no signal" for a never-read Claude sub
+  // sent operators hunting a provider problem that did not exist (#69).
+  none: "No reading yet — readings arrive as the account serves traffic, or on a Test now.",
 }
 
 /**
@@ -186,14 +191,26 @@ export function describeQuotaWindow(
   nowMs: number,
 ): QuotaWindowDisplay {
   const resetsAtMs = parseInstant(window.resetsAt)
+  const measured = measuredFraction(window)
 
   // `exhausted` is the one status that overrides the window's own instant, and it is checked
   // first: a row whose stored `resetsAt` survived from before the credits ran out would otherwise
   // count down to a recovery that will not happen. Every other status defers to the window —
   // an `active` subscription's five-hour window still refills on its own clock, and printing "—"
   // beside a gauge that is visibly moving is the other way to be wrong here.
-  const reset =
+  const baseReset =
     status === "exhausted" ? NEEDS_TOPUP : describeInstant(resetsAtMs, window.resetSource, nowMs)
+
+  // A window that has told us nothing — no provider reading, no measurement of our own, no known
+  // reset — on an account that is otherwise healthy is NOT "retrying": nothing is. The backoff
+  // sentence belongs to a blocked account's recovery loop, and printing it here invents one (#69).
+  const reset: ResetDisplay =
+    status === "active" &&
+    window.utilization === null &&
+    measured === null &&
+    baseReset.kind === "unknown"
+      ? { ...baseReset, text: "Unknown — no reading yet" }
+      : baseReset
 
   return {
     window: window.window,
@@ -202,12 +219,12 @@ export function describeQuotaWindow(
     // The provider's reading wins whenever it exists — it is the only figure that reflects the
     // provider's own accounting. The measured fraction is the fallback for the long stretches
     // where a threshold-triggered source reports nothing at all, which is most of every window.
-    utilization: window.utilization ?? measuredFraction(window),
+    utilization: window.utilization ?? measured,
     utilizationText:
       window.utilization === null ? measuredText(window) : formatUtilization(window.utilization),
     utilizationSource: window.utilizationSource,
     utilizationNote:
-      window.utilization === null && measuredFraction(window) !== null
+      window.utilization === null && measured !== null
         ? MEASURED_NOTE
         : utilizationNote(window.utilizationSource),
     reset,
