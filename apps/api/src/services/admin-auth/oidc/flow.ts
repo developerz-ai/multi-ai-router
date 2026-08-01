@@ -32,8 +32,15 @@ export interface OIDCFlowConfig {
   readonly clientSecret: string | null
   /** Where the IdP sends the browser back. Must be one of the registered redirect URIs. */
   readonly redirectUri: string
-  /** The principal that may sign in. The IdP-asserted email must match this. */
-  readonly adminEmail: string
+  /**
+   * The principals that may sign in. The IdP-asserted email must be one of these; entries are
+   * expected already lowercased (the env layer normalizes), and the comparison lowercases the
+   * asserted side so a provider changing case cannot lock the operator out.
+   *
+   * Several entries do not make this multi-user: they all map onto the one admin principal, with
+   * one session model and no per-person state. It is a list because a team shares one router.
+   */
+  readonly adminEmails: readonly string[]
   /** Optional stricter check: the `sub` claim must match this exactly. */
   readonly adminSubject?: string | null
   /** Scopes to request. `openid` is mandatory; the rest are passed through. */
@@ -161,11 +168,17 @@ export function createOIDCFlow(deps: OIDCFlowDeps): OIDCFlow {
         signal: controller.signal,
       })
       if (!res.ok) {
-        throw new AdminAuthError(OIDC_VERIFICATION_FAILED)
+        // The status only. A token-endpoint error body quotes the request back — including the
+        // authorization code and, on some providers, the client secret — so it never reaches a log.
+        throw new AdminAuthError(OIDC_VERIFICATION_FAILED, {
+          reason: `token_exchange: endpoint returned ${res.status}`,
+        })
       }
       const body = (await res.json()) as { id_token?: unknown }
       if (typeof body.id_token !== "string" || body.id_token.length === 0) {
-        throw new AdminAuthError(OIDC_VERIFICATION_FAILED)
+        throw new AdminAuthError(OIDC_VERIFICATION_FAILED, {
+          reason: "token_exchange: response carried no id_token",
+        })
       }
       return { id_token: body.id_token }
     } finally {
@@ -208,9 +221,9 @@ export function createOIDCFlow(deps: OIDCFlowDeps): OIDCFlow {
           { jwks: cachedJwks ?? createJWKSCache(doc.jwks_uri, undefined, () => now().getTime()) },
         )
         const { email, sub } = assertEmailVerified(verified.claims)
-        if (email.toLowerCase() !== config.adminEmail.toLowerCase()) {
+        if (!config.adminEmails.includes(email.toLowerCase())) {
           throw new OIDCPrincipalMismatchError(
-            `sign-in email "${email}" does not match the configured admin`,
+            `sign-in email "${email}" is not in ADMIN_OIDC_ADMIN_EMAIL`,
           )
         }
         if (config.adminSubject !== undefined && config.adminSubject !== null) {
@@ -236,10 +249,12 @@ export function createOIDCFlow(deps: OIDCFlowDeps): OIDCFlow {
                     : err instanceof AdminAuthError
                       ? `auth`
                       : `unknown:${err instanceof Error ? err.constructor.name : String(err)}`
-        console.error(
-          `[admin-oidc] complete failed: ${kind}`,
-          err instanceof Error ? err.message : err,
-        )
+        // The kind travels on the error rather than to a log sink of its own. This service is
+        // constructed without a logger by design, and the transport already writes one structured
+        // line per failed request with the `requestId` bound — so `reason` lands there, findable in
+        // a log aggregator, instead of in the unstructured `console.error` this replaces. The
+        // browser still learns only {@link OIDC_VERIFICATION_FAILED}.
+        const reason = `${kind}: ${err instanceof Error ? err.message : String(err)}`
         if (
           err instanceof OIDCDiscoveryError ||
           err instanceof OIDCJWKSError ||
@@ -247,12 +262,20 @@ export function createOIDCFlow(deps: OIDCFlowDeps): OIDCFlow {
           err instanceof OIDCStateMismatchError ||
           err instanceof OIDCPrincipalMismatchError
         ) {
-          throw new AdminAuthError(OIDC_VERIFICATION_FAILED)
+          throw new AdminAuthError(OIDC_VERIFICATION_FAILED, { reason })
         }
-        if (err instanceof AdminAuthError) throw err
-        throw new AdminAuthError(OIDC_VERIFICATION_FAILED)
+        // An `AdminAuthError` from `exchangeCode` already carries the single wording and nothing
+        // else; re-wrapping would lose nothing, but attaching the reason it never had is the point.
+        if (err instanceof AdminAuthError) {
+          throw err.reason === undefined ? new AdminAuthError(err.message, { reason }) : err
+        }
+        throw new AdminAuthError(OIDC_VERIFICATION_FAILED, { reason })
       }
-      if (principal === null) throw new AdminAuthError(OIDC_VERIFICATION_FAILED)
+      if (principal === null) {
+        throw new AdminAuthError(OIDC_VERIFICATION_FAILED, {
+          reason: "unknown: the flow completed without a principal",
+        })
+      }
       return principal
     },
   }

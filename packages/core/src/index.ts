@@ -42,7 +42,7 @@ export {
   usageOutcomeFault,
   usageOutcomeForErrorCode,
 } from "./domain/usage"
-export type { QuotaExhaustedInit, RetryableInit, RouterErrorCode } from "./errors"
+export type { AdminAuthInit, QuotaExhaustedInit, RetryableInit, RouterErrorCode } from "./errors"
 export {
   AdminAuthError,
   CredentialDecryptError,

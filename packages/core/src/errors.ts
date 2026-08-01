@@ -151,6 +151,31 @@ export class KeyRevokedError extends RouterError {
 export class AdminAuthError extends RouterError {
   readonly code = "admin_auth_failed"
   readonly status = 401
+  /**
+   * Operator-only diagnostic: *which* check rejected the sign-in. Never rendered — the response
+   * body is built from `message` and `code` alone (`errors/render.ts`), and the message is the one
+   * generic sentence every rejection shares. This field is the other half of that trade: the
+   * browser learns nothing, the log line names the kind.
+   *
+   * It exists because the alternative in practice was a `console.error` beside the throw, which
+   * produced an unstructured line with no `requestId` and no level — unfindable in a log
+   * aggregator, which is precisely where an operator debugging a failed login looks. Carrying the
+   * kind on the error instead lets the transport log it on the line it already writes.
+   *
+   * Never put credential material here: it reaches a log, and only the field redactor stands
+   * between the two.
+   */
+  readonly reason: string | undefined
+
+  constructor(message: string, init: AdminAuthInit = {}) {
+    super(message, init)
+    this.reason = init.reason
+  }
+}
+
+export interface AdminAuthInit extends ErrorOptions {
+  /** See {@link AdminAuthError.reason}. Operator-facing, never rendered. */
+  readonly reason?: string
 }
 
 /**

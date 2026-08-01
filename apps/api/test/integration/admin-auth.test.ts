@@ -8,6 +8,7 @@ import { errorHandler, notFoundHandler } from "../../src/middleware/errorHandler
 import { requestLogger } from "../../src/middleware/logger"
 import { requestId } from "../../src/middleware/requestId"
 import { ADMIN_AUTH_BASE_PATH, adminAuthRoutes } from "../../src/routes/admin/auth"
+import type { AuditEventInput } from "../../src/services/admin/audit"
 import type { AdminAuthConfig } from "../../src/services/admin-auth"
 import {
   ADMIN_API_TOKEN_ACTOR,
@@ -103,6 +104,10 @@ interface Harness {
   keyPair: KeyPair
   store: ReturnType<typeof createMemoryStore>
   fetch: typeof fetch
+  /** Every line the app logged, so a test can assert on the operator's diagnostic. */
+  logs: LogLine[]
+  /** Every audit event the service recorded, in order. */
+  audits: AuditEventInput[]
   override: {
     email: string | null
     sub: string | null
@@ -114,12 +119,19 @@ async function harness(
   config: Partial<AdminAuthConfig> = {},
   sessionCookieInsecure = false,
   apiToken: string | null = null,
-  overlaps: Partial<{ email: string | null; sub: string | null; verified: boolean | null }> = {},
+  overlaps: Partial<{
+    email: string | null
+    sub: string | null
+    verified: boolean | null
+    adminEmails: readonly string[]
+  }> = {},
 ): Promise<Harness> {
   const clock = { nowMs: 1_700_000_000_000 }
   const store = createMemoryStore()
   const cipher = createCredentialCipher({ key: new Uint8Array(32).fill(7) })
   const keyPair = await newKeyPair("kid-1")
+  const adminEmails = overlaps.adminEmails ?? [ADMIN_EMAIL]
+  const audits: AuditEventInput[] = []
   const override = {
     email: overlaps.email ?? null,
     sub: overlaps.sub ?? null,
@@ -177,7 +189,7 @@ async function harness(
       clientId: CLIENT_ID,
       clientSecret: "shh",
       redirectUri: "https://router.test/api/admin/auth/oidc/callback",
-      adminEmail: ADMIN_EMAIL,
+      adminEmails,
       scopes: ["openid", "profile", "email"],
     },
     stateStore: {
@@ -196,7 +208,7 @@ async function harness(
         clientId: CLIENT_ID,
         clientSecret: "shh",
         redirectUri: "https://router.test/api/admin/auth/oidc/callback",
-        adminEmail: ADMIN_EMAIL,
+        adminEmails,
         adminSubject: null,
         scopes: ["openid", "profile", "email"],
         clockSkewSeconds: 60,
@@ -207,6 +219,11 @@ async function harness(
     store: createMemorySessionStore(),
     config,
     now: () => clock.nowMs,
+    audit: {
+      record: async (event) => {
+        audits.push(event)
+      },
+    },
   })
   const logs: LogLine[] = []
   const logger = createLogger({
@@ -227,7 +244,7 @@ async function harness(
   keys.get("/", (c) => c.json({ username: c.get("adminSession").username }))
   keys.post("/", (c) => c.json({ minted: true }, 201))
   app.route(KEYS, keys)
-  return { app, clock, keyPair, store, fetch: fetchImpl, override }
+  return { app, clock, keyPair, store, fetch: fetchImpl, logs, audits, override }
 }
 
 type LogLine = { level: string; msg: string } & Record<string, unknown>
@@ -286,6 +303,23 @@ function cookieHeader(setCookieRaw: string): string {
   if (setCookieRaw.length === 0) return ""
   const first = setCookieRaw.split(";")[0] ?? ""
   return first
+}
+
+/**
+ * Walks `/oidc/start` and returns the callback URL its freshly issued state expects — the stub
+ * token endpoint checks the PKCE challenge, so the code has to be minted from the stored verifier.
+ */
+async function callbackUrlFor(h: Harness): Promise<string> {
+  const startRes = await get(h.app, START)
+  const url = new URL(startRes.headers.get("location") ?? "")
+  const state = url.searchParams.get("state") ?? ""
+  const row = h.store.rows.oauthStates.find((r) => r.state === state)
+  if (row === undefined) throw new Error("state row missing")
+  const cipher = createCredentialCipher({ key: new Uint8Array(32).fill(7) })
+  const codeVerifier = cipher.decrypt(row.codeVerifier)
+  const challenge = createHash("sha256").update(codeVerifier).digest("base64url")
+  const code = `${state}:${challenge}`
+  return `${CALLBACK}?code=${encodeURIComponent(code)}&state=${encodeURIComponent(state)}`
 }
 
 describe("GET /api/admin/auth/oidc/start", () => {
@@ -353,22 +387,69 @@ describe("GET /api/admin/auth/oidc/callback", () => {
     expect(replay.status).toBe(401)
   })
 
-  test("an id_token whose email does not match the configured admin is rejected", async () => {
+  test("an id_token whose email is in no allowlist entry is rejected", async () => {
     const h = await harness({}, false, null, { email: "someone-else@test" })
-    const startRes = await get(h.app, START)
-    const url = new URL(startRes.headers.get("location") ?? "")
-    const state = url.searchParams.get("state") ?? ""
-    const row = h.store.rows.oauthStates.find((r) => r.state === state)
-    if (row === undefined) throw new Error("state row missing")
-    const cipher = createCredentialCipher({ key: new Uint8Array(32).fill(7) })
-    const codeVerifier = cipher.decrypt(row.codeVerifier)
-    const challenge = createHash("sha256").update(codeVerifier).digest("base64url")
-    const code = `${state}:${challenge}`
-    const res = await get(
-      h.app,
-      `${CALLBACK}?code=${encodeURIComponent(code)}&state=${encodeURIComponent(state)}`,
-    )
+    const res = await get(h.app, await callbackUrlFor(h))
     expect(res.status).toBe(401)
+  })
+
+  /**
+   * The failure this whole slice exists for: an operator whose email was not in
+   * `ADMIN_OIDC_ADMIN_EMAIL` saw only "Single sign-on verification failed" and had to grep pod
+   * stdout for an unstructured `console.error` line to learn why. The wording stays — the diagnostic
+   * now rides the structured line the transport already writes.
+   */
+  test("a rejected sign-in logs the diagnostic kind on the structured line, not in the body", async () => {
+    const h = await harness({}, false, null, { email: "someone-else@test" })
+    const res = await get(h.app, await callbackUrlFor(h))
+    expect(res.status).toBe(401)
+
+    const failure = h.logs.find((line) => line.errorCode === "admin_auth_failed")
+    expect(failure).toBeDefined()
+    expect(failure?.level).toBe("warn")
+    // Named in `docs/idea/13-admin-oidc.md`'s troubleshooting table, and correlatable with the rest
+    // of the request — the two things the `console.error` it replaces could not offer.
+    expect(String(failure?.reason)).toContain("principal")
+    expect(failure?.requestId).toBeTruthy()
+
+    // The browser half is unchanged: one wording, and nothing about which emails are configured.
+    // A body that named the rejected address would turn the callback into a probe oracle.
+    const body = await res.text()
+    expect(body.toLowerCase()).toContain("single sign-on")
+    expect(body).not.toContain("someone-else@test")
+    expect(body).not.toContain(ADMIN_EMAIL)
+
+    // And a row lands, as it always has for a failed *password* attempt. The subject is `unknown`
+    // rather than a configured email: the router never accepted an identity here, so naming a real
+    // operator on this row would be a false attribution.
+    const row = h.audits.find((event) => event.kind === "admin.login_failed")
+    if (row === undefined) throw new Error("expected an admin.login_failed audit row")
+    expect(row.subjectId).toBe("unknown")
+    const detail = row.detail as { method: string; reason: string }
+    expect(detail.method).toBe("oidc")
+    expect(detail.reason).toContain("principal")
+  })
+
+  test("a second allowlisted email signs in and owns its own session and audit identity", async () => {
+    const second = "second.operator@test"
+    const h = await harness({}, false, null, {
+      email: second,
+      adminEmails: [ADMIN_EMAIL, second],
+    })
+    const res = await get(h.app, await callbackUrlFor(h))
+    expect(res.status).toBe(200)
+
+    // The session is the *asserted* operator, not the allowlist's first entry — with several emails
+    // allowed, taking `adminEmails[0]` would attribute every session to whoever sorted first.
+    const session = await get(h.app, SESSION, {
+      cookie: cookieHeader(res.headers.get("set-cookie") ?? ""),
+    })
+    expect(session.status).toBe(200)
+    expect(((await session.json()) as { username: string }).username).toBe(second)
+
+    // Same for the audit row — it is the record of who signed in, so it cannot be a constant.
+    const row = h.audits.find((event) => event.kind === "admin.login")
+    expect(row?.subjectId).toBe(second)
   })
 })
 

@@ -116,7 +116,7 @@ Then open **<http://localhost:8080>** and sign in — **Sign in with SSO**, or t
 | `ADMIN_OIDC_CLIENT_ID` | ✅* | OIDC client id and expected ID-token audience. |
 | `ADMIN_OIDC_CLIENT_SECRET` | — | Confidential-client secret. The shipped setup uses a confidential client; omit only for an explicitly configured public client. PKCE remains mandatory. |
 | `ADMIN_OIDC_REDIRECT_URI` | ✅* | Exact registered callback: `/api/admin/auth/oidc/callback`. |
-| `ADMIN_OIDC_ADMIN_EMAIL` | ✅* | Single allowed admin email; the IdP must assert it as verified in the ID token. |
+| `ADMIN_OIDC_ADMIN_EMAIL` | ✅* | Comma-separated allowlist of admin emails; the IdP must assert one of them as verified in the ID token. Still one admin principal — no users, no roles. |
 | `ADMIN_OIDC_ADMIN_SUBJECT`, `ADMIN_OIDC_SCOPES`, `ADMIN_OIDC_CLOCK_SKEW_SECONDS` | — | Optional stricter `sub` pin, scopes, and clock-skew tolerance. |
 | `ADMIN_LOCAL_LOGIN_ALLOW_PUBLIC` | — | Opts out of the boot refusal for a local password on a non-loopback `PUBLIC_URL`. Default off; boot warns while on. |
 | `ADMIN_API_TOKEN` | — | Break-glass bearer for scripts and recovery; separate from browser sign-in. |

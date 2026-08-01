@@ -112,7 +112,7 @@ async function harness(options: HarnessOptions = {}): Promise<Harness> {
               clientId: "multi-ai-router",
               clientSecret: null,
               redirectUri: "https://router.test/api/admin/auth/oidc/callback",
-              adminEmail: "admin@test",
+              adminEmails: ["admin@test"],
               adminSubject: null,
               scopes: ["openid"],
               clockSkewSeconds: 60,

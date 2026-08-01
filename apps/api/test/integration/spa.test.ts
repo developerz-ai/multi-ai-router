@@ -325,7 +325,7 @@ describe("the full app, mounted end to end", () => {
               clientId: "router-test",
               clientSecret: null,
               redirectUri: "https://router.test/api/admin/auth/oidc/callback",
-              adminEmail: "admin@test",
+              adminEmails: ["admin@test"],
               adminSubject: null,
               scopes: ["openid", "profile", "email"],
               clockSkewSeconds: 60,

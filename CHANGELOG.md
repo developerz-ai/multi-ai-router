@@ -5,6 +5,45 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.3.0] — 2026-08-01
+
+### Fixed
+
+- A rejected admin sign-in now leaves a record. The `/oidc/callback` route renders its own HTML and therefore never reached the error handler, so the only trace of a failure was an unstructured `console.error` on stdout — no level, no `requestId`, invisible to a log aggregator, and the sole `console.*` call left in the router. It is now a structured `warn` line (`component: "admin-auth"`, the diagnostic `reason`, the request id) plus an `admin.login_failed` audit row with `method: "oidc"`, which the password path has always written and this one never did. The browser still receives only the one generic sentence.
+- A failed token exchange reports the endpoint's HTTP status as its diagnostic instead of being folded into an unlabelled `auth` kind. The response body is deliberately not logged: some providers quote the authorization code and client secret back inside it.
+
+### Changed
+
+- `ADMIN_OIDC_ADMIN_EMAIL` is a comma-separated allowlist. A self-hosted router is normally run by a team, and pinning one address meant every other operator shared a credential or could not sign in at all. Entries are trimmed, lowercased, and deduplicated at boot; a value naming no email (`","`) is refused at boot rather than left to fail every login. This is not multi-user: there are still no user rows, no roles, and no per-person state — every entry maps onto the same single admin principal.
+- The admin session and its audit rows carry the email the identity provider actually asserted, not the configured value. With one allowed address the two were the same string; with several, using the configured list would attribute every session and every logout to whichever entry sorted first.
+
+## [2.2.0] — 2026-07-31
+
+### Fixed
+
+- Split spend into its own **COST** column on the accounts and keys tables (#65).
+- An unread quota window reads "no reading yet" rather than claiming the provider exposes no signal (#69, #70).
+
+### Changed
+
+- Declared `policy.defaultTier` GREEN so a merge to `main` never deploys (#66).
+- Hardened two live-Postgres suites against cross-test interference: the admin credential is evicted and restored rather than the table wiped (#64), and `scheduled_task_runs` is cleared before the last-run assertion (#61).
+
+## [2.1.0] — 2026-07-30
+
+### Added
+
+- Optional local admin password login alongside OIDC — an argon2id hash set by `bin/admin set-password`, off by default, fail-closed on a non-loopback `PUBLIC_URL` (#52, #59).
+
+### Fixed
+
+- The ten confirmed findings from the 2026-07-30 frontend audit (#58).
+- `bin/lint` on `main`: `.claude/**` is excluded from Biome.
+
+### Changed
+
+- Completed the admin OIDC rollout and its documentation (#47), and corrected the README claims the new intro still got wrong (#53, #56).
+
 ## [2.0.3] — 2026-07-30
 
 ### Changed

@@ -102,7 +102,7 @@ and fails the build for any numeric knob that is neither refused nor explained
 | `ADMIN_OIDC_CLIENT_ID` | for OIDC | — | OIDC client identifier and expected ID-token audience. |
 | `ADMIN_OIDC_CLIENT_SECRET` | no | — | Confidential-client secret. Omit only for a public client; PKCE S256 is always required. |
 | `ADMIN_OIDC_REDIRECT_URI` | for OIDC | — | Exact callback URI registered at the IdP: `https://router.example.com/api/admin/auth/oidc/callback`. |
-| `ADMIN_OIDC_ADMIN_EMAIL` | for OIDC | — | The single allowed administrator. The ID token must carry this email with `email_verified: true`. |
+| `ADMIN_OIDC_ADMIN_EMAIL` | for OIDC | — | Comma-separated emails allowed to sign in. The ID token must carry one of them with `email_verified: true`. Several entries admit several humans to the one admin principal; they do not create users or roles. |
 | `ADMIN_LOCAL_LOGIN_ALLOW_PUBLIC` | no | `false` | Opts out of the fail-closed rule that refuses boot while a local admin password exists and `PUBLIC_URL` is not loopback — see [13-admin-oidc.md](13-admin-oidc.md). Boot warns on every start while it is on. |
 | `ADMIN_OIDC_ADMIN_SUBJECT` | no | — | Optional stricter exact match against the ID token's `sub`. Recommended once known. |
 | `ADMIN_OIDC_SCOPES` | no | `openid profile email` | Space-separated scopes sent to the IdP. Must include `openid`. The IdP must embed `email` and `email_verified` in the ID token. |

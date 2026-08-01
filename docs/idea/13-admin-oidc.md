@@ -15,6 +15,8 @@ The router is an OIDC relying party, not an identity provider. Any standards-com
 
 This remains a single-admin, self-hosted product. Both sign-in paths mint the same bounded session for the same single principal; neither adds users, organizations, or RBAC.
 
+`ADMIN_OIDC_ADMIN_EMAIL` is an allowlist, not one address, because a self-hosted router is normally run by a team: every operator has their own identity at the IdP, and pinning one email means the others share a credential or nobody else gets in. Each entry still maps onto the **same** admin principal — there are no user rows, no roles, and no per-person state. What is per-person is attribution: the session and every audit row carry the email the IdP actually asserted, never the allowlist's first entry.
+
 A successful OIDC callback must satisfy every check:
 
 1. The authorization `state` exists, is unexpired, and is consumed exactly once.
@@ -22,10 +24,15 @@ A successful OIDC callback must satisfy every check:
 3. The ID token signature verifies against the issuer's JWKS.
 4. `iss`, `aud`, `exp`, `iat`, and `nonce` match the current flow.
 5. The token contains `email` and `email_verified: true`.
-6. The asserted email matches `ADMIN_OIDC_ADMIN_EMAIL` case-insensitively.
+6. The asserted email matches one entry of `ADMIN_OIDC_ADMIN_EMAIL` case-insensitively.
 7. When `ADMIN_OIDC_ADMIN_SUBJECT` is set, `sub` matches it exactly.
 
 Every rejection — from either path — returns the same operator-facing sentence. Detailed claim failures are server-side diagnostics, never a browser-visible oracle.
+
+Server-side means two records, both structured, neither reaching the browser:
+
+- a `warn` log line, `component: "admin-auth"`, carrying the diagnostic `reason` and the request's `requestId`;
+- an `admin.login_failed` audit row with `method: "oidc"` and the same `reason`. Its `subjectId` is `unknown` — a rejected sign-in is one where the router never accepted an identity, so attributing the row to a configured operator would be a fabrication.
 
 ## Local admin password
 
@@ -68,7 +75,7 @@ The redirect URI is an exact match. Replace `router.example.com` with the router
 
 Some providers expose the last requirement as “include user info in ID token” or “ID token userinfo assertion.” Enable it when claims requested through the `email` scope would otherwise be available only from the userinfo endpoint. The router deliberately validates the signed ID token and does not fetch a second principal from userinfo.
 
-For the configured administrator, verify the provider records the email as verified. Prefer also setting `ADMIN_OIDC_ADMIN_SUBJECT` after the first enrollment: email is the required human-readable pin, while `sub` adds an immutable provider-specific pin.
+For every configured administrator, verify the provider records the email as verified. Prefer also setting `ADMIN_OIDC_ADMIN_SUBJECT` after the first enrollment: email is the required human-readable pin, while `sub` adds an immutable provider-specific pin. It pins **one** subject, so it fits a single-operator deployment; with several allowed emails, leave it unset and let the email allowlist be the pin.
 
 ## Configure the router for OIDC
 
@@ -77,7 +84,8 @@ ADMIN_OIDC_ISSUER_URL=https://sso.example.com
 ADMIN_OIDC_CLIENT_ID=multi-ai-router
 ADMIN_OIDC_CLIENT_SECRET=replace-with-client-secret
 ADMIN_OIDC_REDIRECT_URI=https://router.example.com/api/admin/auth/oidc/callback
-ADMIN_OIDC_ADMIN_EMAIL=admin@example.com
+# Comma-separated: one entry per operator, all mapping onto the single admin principal.
+ADMIN_OIDC_ADMIN_EMAIL=admin@example.com,second.operator@example.com
 # ADMIN_OIDC_ADMIN_SUBJECT=provider-subject-id
 # ADMIN_OIDC_SCOPES=openid profile email
 # ADMIN_OIDC_CLOCK_SKEW_SECONDS=60
@@ -89,7 +97,7 @@ ADMIN_OIDC_ADMIN_EMAIL=admin@example.com
 | `ADMIN_OIDC_CLIENT_ID` | for OIDC | Client identifier and expected ID-token audience. |
 | `ADMIN_OIDC_CLIENT_SECRET` | no | Confidential-client secret. Omit only for a public client; PKCE remains mandatory either way. |
 | `ADMIN_OIDC_REDIRECT_URI` | for OIDC | Exact callback URI registered with the provider. |
-| `ADMIN_OIDC_ADMIN_EMAIL` | for OIDC | The single email allowed to receive an admin session. Compared case-insensitively. |
+| `ADMIN_OIDC_ADMIN_EMAIL` | for OIDC | Comma-separated emails allowed to receive an admin session. Compared case-insensitively; entries are trimmed, lowercased, and deduplicated at boot. A value naming no email at all (`","`) is refused at boot rather than left to fail every login. |
 | `ADMIN_OIDC_ADMIN_SUBJECT` | no | Additional exact match against `sub`. Recommended once known. |
 | `ADMIN_OIDC_SCOPES` | no | Space-separated scopes. Default `openid profile email`; `openid` is mandatory. |
 | `ADMIN_OIDC_CLOCK_SKEW_SECONDS` | no | Accepted clock skew for token timestamps. Default `60`; zero is refused. |
@@ -114,14 +122,21 @@ A router API key (`mar_live_…`) can never authenticate the admin plane.
 ## Verify a deployment
 
 1. Open `/login`. The page shows **Sign in with SSO**, a password form, or both — matching what you configured (`GET /api/admin/auth/methods` says the same).
-2. With OIDC: complete the identity-provider login and confirm the console loads; confirm `GET /api/admin/auth/session` returns the configured admin email, and the audit feed contains an `admin.login` event for the OIDC principal.
+2. With OIDC: complete the identity-provider login and confirm the console loads; confirm `GET /api/admin/auth/session` returns the email *you* signed in with, and the audit feed contains an `admin.login` event for that same address. Sign in as a second allowlisted operator and confirm both records name them and not the first entry.
 3. With a local password: sign in with it and confirm the console loads; `GET /api/admin/auth/session` returns `local-admin`. A wrong password returns `401` with the same generic sentence the OIDC callback uses.
 4. Confirm the fail-closed rule if you enabled the password: boot with `PUBLIC_URL` set to a non-loopback address refuses, naming `ADMIN_LOCAL_LOGIN_ALLOW_PUBLIC`.
 5. Exercise `ADMIN_API_TOKEN` separately so the recovery path is proven before it is needed.
 
 ## Troubleshooting
 
-The browser receives only “Single sign-on verification failed.” — for both paths. Inspect the router log for the diagnostic kind:
+The browser receives only “Single sign-on verification failed.” — for both paths. The kind is in the router log and in the audit feed, never in the response:
+
+```
+{"level":"warn","msg":"admin sign-in rejected at the OIDC callback","component":"admin-auth",
+ "reason":"principal: sign-in email \"someone@example.com\" is not in ADMIN_OIDC_ADMIN_EMAIL", ...}
+```
+
+Match the `reason` prefix against this table:
 
 | Diagnostic | Check |
 |---|---|
@@ -132,7 +147,8 @@ The browser receives only “Single sign-on verification failed.” — for both
 | `idtoken:wrong_nonce` | A fresh browser flow; state and nonce cannot be replayed. |
 | `idtoken:missing_email` | Request `email` scope and configure the provider to embed userinfo claims in the ID token. |
 | `idtoken:email_unverified` | Mark the administrator's email verified at the provider. |
-| `principal` | Configured admin email and optional subject versus the provider claims. |
+| `principal` | The asserted email is in no `ADMIN_OIDC_ADMIN_EMAIL` entry, or `ADMIN_OIDC_ADMIN_SUBJECT` is set and `sub` does not equal it. The line names the rejected address; add it to the allowlist, or correct the typo. |
+| `token_exchange:*` | The token endpoint refused the code exchange, or returned no `id_token`. Check the client secret and that the redirect URI byte-matches the registered one. Only the HTTP status is logged — a token-endpoint error body quotes the authorization code back. |
 | `state` | Restart the flow; state is one-shot and expires after the configured OAuth-state retention window. |
 | `admin.login_failed` audit rows with `method: "local"` | Password attempts are failing — `reason: "throttled"` means the per-IP lockout is doing its job. |
 | Boot refuses, naming `bin/admin set-password` | No sign-in method exists: set the four OIDC variables, or set a local password. |

@@ -208,7 +208,7 @@ describe("parseEnv", () => {
         clientId: "multi-ai-router-test",
         clientSecret: "shh",
         redirectUri: "https://router.test/api/admin/auth/oidc/callback",
-        adminEmail: "admin@test",
+        adminEmails: ["admin@test"],
         adminSubject: "subject-123",
         scopes: ["openid", "email"],
         clockSkewSeconds: 30,
@@ -243,6 +243,29 @@ describe("parseEnv", () => {
       const missing = ["ADMIN_OIDC_CLIENT_ID", "ADMIN_OIDC_REDIRECT_URI", "ADMIN_OIDC_ADMIN_EMAIL"]
       for (const name of missing) expect(error.variables).toContain(name)
       expect(error.variables).not.toContain("ADMIN_OIDC_ISSUER_URL")
+      expect(error.message).toContain("docs/idea/13-admin-oidc.md")
+    })
+
+    test("ADMIN_OIDC_ADMIN_EMAIL is a comma-separated allowlist, normalized and deduplicated", () => {
+      const env = parseEnv({
+        ...base,
+        ADMIN_OIDC_ADMIN_EMAIL:
+          " Ivann@Developerz.ai , sebastian@developerz.ai ,ivann@developerz.ai, ",
+      })
+
+      // Lowercased here so the flow compares two already-normalized values; deduplicated so a
+      // repeated entry cannot make the allowlist look wider than the humans it admits; the trailing
+      // empty entry is dropped rather than becoming an email nothing can equal.
+      expect(env.adminOidc?.adminEmails).toEqual(["ivann@developerz.ai", "sebastian@developerz.ai"])
+    })
+
+    test("an ADMIN_OIDC_ADMIN_EMAIL that names no email at all is refused", () => {
+      // Non-empty, so the all-or-nothing check above is satisfied, yet it configures an allowlist
+      // nobody can satisfy. Left to boot, every sign-in would fail the principal check and read as
+      // a broken identity provider rather than a typo here.
+      const error = expectEnvError({ ...base, ADMIN_OIDC_ADMIN_EMAIL: " , " })
+
+      expect(error.variables).toContain("ADMIN_OIDC_ADMIN_EMAIL")
       expect(error.message).toContain("docs/idea/13-admin-oidc.md")
     })
 

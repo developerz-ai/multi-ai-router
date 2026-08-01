@@ -113,7 +113,7 @@ explicitly, before an upstream call, rather than degrading into a lossy approxim
 | `ADMIN_OIDC_CLIENT_ID` | yes | — | Client id and expected ID-token audience |
 | `ADMIN_OIDC_CLIENT_SECRET` | no | — | Confidential-client secret; omit only for a public client |
 | `ADMIN_OIDC_REDIRECT_URI` | yes | — | Exact registered callback URI |
-| `ADMIN_OIDC_ADMIN_EMAIL` | yes | — | Single verified email allowed to receive an admin session |
+| `ADMIN_OIDC_ADMIN_EMAIL` | yes | — | Comma-separated verified emails allowed to receive an admin session |
 | `ADMIN_OIDC_ADMIN_SUBJECT` | no | — | Optional exact `sub` pin |
 | `ENCRYPTION_KEY` | yes | — | AES-256-GCM key for upstream credentials and router keys |
 | `PORT` | no | `8080` | Listen port |
