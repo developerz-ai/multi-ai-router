@@ -23,13 +23,39 @@
   background: var(--scrim);
 }
 
+/**
+ * Three widths, set as a custom property on the panel so a caller picks a size
+ * rather than a number — the dialogs stay a set, and there is one place to
+ * change what "wide" means.
+ *
+ * Every one of them is wider than the single 34rem the panel used to hardcode.
+ * That width was chosen for a confirmation and then inherited by the account,
+ * pool and key forms, which are two-column and dense: they wrapped labels,
+ * squeezed the member lists, and turned a table of accounts into a column of
+ * ellipses. Sizing is per-dialog because the content differs, not because
+ * anyone preferred a number.
+ */
+.sm {
+  --modal-width: 40rem;
+}
+
+.md {
+  --modal-width: 56rem;
+}
+
+.lg {
+  --modal-width: 76rem;
+}
+
 .panel {
   position: relative;
   display: flex;
   flex-direction: column;
   gap: var(--space-4);
   width: 100%;
-  max-width: 34rem;
+  // `width: 100%` keeps this a ceiling, never a floor — on a narrow viewport the
+  // panel is still the viewport, and the layer's padding is the only gutter.
+  max-width: var(--modal-width, 56rem);
   // Never taller than the viewport: the body scrolls, the header and footer
   // stay put, so the confirm button is always reachable.
   max-height: min(90dvh, 44rem);

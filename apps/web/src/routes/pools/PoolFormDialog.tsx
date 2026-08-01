@@ -140,6 +140,7 @@ export function PoolFormDialog(props: PoolFormDialogProps) {
 
   return (
     <Modal
+      size="lg"
       description="A pool turns a set of accounts into one addressable thing a key can point at. Membership is replaced as a whole set, so the pool is never briefly half-populated."
       footer={
         <>

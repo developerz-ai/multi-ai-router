@@ -140,6 +140,7 @@ export function KeyFormDialog(props: KeyFormDialogProps) {
 
   return (
     <Modal
+      size="lg"
       description="Keys are named, stored encrypted, and readable again whenever you need them. Editing one never changes its value."
       footer={
         <>

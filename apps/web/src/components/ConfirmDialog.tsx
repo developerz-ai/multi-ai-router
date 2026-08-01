@@ -36,6 +36,7 @@ export interface ConfirmDialogProps {
 export function ConfirmDialog(props: ConfirmDialogProps) {
   return (
     <Modal
+      size="sm"
       description={`This affects "${props.subject}".`}
       footer={
         <>

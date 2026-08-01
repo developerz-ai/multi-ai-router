@@ -5,6 +5,16 @@ import { createScrollLock } from "../lib/scroll-lock"
 import { Icon } from "./Icon"
 import styles from "./Modal.module.scss"
 
+/**
+ * How wide the panel is allowed to get. A name rather than a number, so the
+ * dialogs stay a set and the widths live in one stylesheet.
+ *
+ * `sm` a confirmation — one sentence and two buttons.
+ * `md` the default, and enough for a single-column form.
+ * `lg` a dense form: two columns, a member list, or a table.
+ */
+export type ModalSize = "sm" | "md" | "lg"
+
 export interface ModalProps {
   readonly open: boolean
   readonly title: string
@@ -14,6 +24,8 @@ export interface ModalProps {
   readonly children: JSX.Element
   /** Actions, right-aligned. The dialog never places them itself. */
   readonly footer?: JSX.Element
+  /** Defaults to `md`. See {@link ModalSize}. */
+  readonly size?: ModalSize
 }
 
 /**
@@ -47,7 +59,7 @@ export function Modal(props: ModalProps) {
             aria-describedby={props.description === undefined ? undefined : descriptionId}
             aria-labelledby={titleId}
             aria-modal="true"
-            class={styles.panel}
+            class={`${styles.panel} ${styles[props.size ?? "md"]}`}
             ref={panel}
             role="dialog"
           >
