@@ -206,6 +206,49 @@ describe("the utilization reading", () => {
     expect(row.utilizationNote).toContain("normal")
   })
 
+  test("an unread window says 'no reading yet', never that the provider cannot signal (#69)", () => {
+    const row = describeQuotaWindow(
+      "active",
+      window({ utilization: null, utilizationSource: "none" }),
+      NOW,
+    )
+
+    expect(row.utilizationNote).toContain("No reading yet")
+    expect(row.utilizationNote).not.toContain("exposes no utilization signal")
+  })
+
+  test("an active account with nothing known gets 'no reading yet', not an invented retry (#69)", () => {
+    const row = describeQuotaWindow(
+      "active",
+      window({
+        utilization: null,
+        utilizationSource: "none",
+        resetsAt: null,
+        resetSource: "unknown",
+      }),
+      NOW,
+    )
+
+    expect(row.reset.kind).toBe("unknown")
+    expect(row.reset.text).toBe("Unknown — no reading yet")
+  })
+
+  test("a blocked account with nothing known keeps the honest backoff sentence (#69)", () => {
+    const row = describeQuotaWindow(
+      "cooling_down",
+      window({
+        utilization: null,
+        utilizationSource: "none",
+        resetsAt: null,
+        resetSource: "unknown",
+      }),
+      NOW,
+    )
+
+    expect(row.reset.kind).toBe("unknown")
+    expect(row.reset.text).toBe("Unknown — will retry with backoff")
+  })
+
   test("never rounds a small non-zero share down to 0%", () => {
     expect(formatUtilization(0.004)).toBe("0.4%")
     expect(formatUtilization(0)).toBe("0%")
