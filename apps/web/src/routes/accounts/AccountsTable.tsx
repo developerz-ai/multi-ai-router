@@ -2,6 +2,7 @@ import { Show } from "solid-js"
 import { Badge } from "../../components/Badge"
 import { Button } from "../../components/Button"
 import { ResetIndicator } from "../../components/ResetIndicator"
+import { SpendCell } from "../../components/SpendCell"
 import { StatusDot } from "../../components/StatusDot"
 import { type Column, Table } from "../../components/Table"
 import { UsageCell } from "../../components/UsageCell"
@@ -111,6 +112,16 @@ export function AccountsTable(props: AccountsTableProps) {
           loading={props.usageLoading}
           usage={usageFor(props.usage, account.id)}
         />
+      ),
+    },
+    {
+      // Cost is always its own column, beside the usage cell it was once crammed
+      // into — the pair overflowed the column and painted through the credential
+      // pill (#62).
+      id: "cost",
+      header: `Cost · ${props.usageWindowLabel}`,
+      cell: (account) => (
+        <SpendCell loading={props.usageLoading} usage={usageFor(props.usage, account.id)} />
       ),
     },
     {

@@ -1,6 +1,7 @@
 import { Show } from "solid-js"
 import { Badge } from "../../components/Badge"
 import { Button } from "../../components/Button"
+import { SpendCell } from "../../components/SpendCell"
 import { type Column, Table } from "../../components/Table"
 import { UsageCell } from "../../components/UsageCell"
 import type { ApiKeyView } from "../../lib/api/types"
@@ -35,8 +36,8 @@ export interface KeysTableProps {
  *
  * Usage is a column here rather than a trip to the usage screen: "which key is
  * burning the budget" is the question an operator arrives at this table with,
- * and answering it elsewhere means holding two screens side by side. Metered and
- * notional spend are printed apart in that cell and never summed.
+ * and answering it elsewhere means holding two screens side by side. Spend rides
+ * beside it in the COST column, metered and notional printed apart and never summed.
  */
 export function KeysTable(props: KeysTableProps) {
   const columns = (): readonly Column<ApiKeyView>[] => [
@@ -89,6 +90,15 @@ export function KeysTable(props: KeysTableProps) {
           loading={props.usageLoading}
           usage={usageFor(props.usage, key.id)}
         />
+      ),
+    },
+    {
+      // Same rule as the accounts table: cost is its own column, never part of
+      // the usage cell (#62).
+      id: "cost",
+      header: `Cost · ${props.usageWindowLabel}`,
+      cell: (key) => (
+        <SpendCell loading={props.usageLoading} usage={usageFor(props.usage, key.id)} />
       ),
     },
     {
