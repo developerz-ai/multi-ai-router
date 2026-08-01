@@ -174,7 +174,7 @@ function baseConfig(): Parameters<typeof createOIDCFlow>[0]["config"] {
     clientId: CLIENT_ID,
     clientSecret: "shh",
     redirectUri: "https://router.test/api/admin/auth/oidc/callback",
-    adminEmail: ADMIN_EMAIL,
+    adminEmails: [ADMIN_EMAIL],
     scopes: ["openid", "profile", "email"],
   }
 }
@@ -230,13 +230,47 @@ describe("createOIDCFlow", () => {
     expect(flow.complete({ code, state })).rejects.toBeInstanceOf(AdminAuthError)
   })
 
-  test("email mismatch: an id_token whose email is not the configured admin is rejected", async () => {
+  test("email mismatch: an id_token whose email is in no allowlist entry is rejected", async () => {
+    const { h, fetch } = await buildHarness({ email: "someone-else@test" })
+    const flow = buildFlow(h, fetch, { ...baseConfig(), adminEmails: ["a@test", "b@test"] })
+    const { state } = await flow.start()
+    const { code } = await startAndMintCode(h, flow, state)
+
+    expect(flow.complete({ code, state })).rejects.toBeInstanceOf(AdminAuthError)
+  })
+
+  test("the rejection carries the operator-only reason and never the wording's detail", async () => {
     const { h, fetch } = await buildHarness({ email: "someone-else@test" })
     const flow = buildFlow(h, fetch, baseConfig())
     const { state } = await flow.start()
     const { code } = await startAndMintCode(h, flow, state)
 
-    expect(flow.complete({ code, state })).rejects.toBeInstanceOf(AdminAuthError)
+    const err = await flow.complete({ code, state }).then(
+      () => null,
+      (e: unknown) => e,
+    )
+    expect(err).toBeInstanceOf(AdminAuthError)
+    // The kind is what `docs/idea/13-admin-oidc.md`'s troubleshooting table tells the operator to
+    // grep for, and it reaches the log only through this field.
+    expect((err as AdminAuthError).reason).toContain("principal")
+    // The browser-facing half stays the one uninformative sentence — a `reason` that leaked into
+    // `message` would make the callback a probe oracle for which emails are configured.
+    expect((err as AdminAuthError).message).not.toContain("someone-else@test")
+  })
+
+  test("a second allowlist entry signs in, and case does not matter", async () => {
+    const { h, fetch } = await buildHarness({ email: "Second.Operator@Test" })
+    const flow = buildFlow(h, fetch, {
+      ...baseConfig(),
+      // As the env layer produces them: lowercased and deduplicated.
+      adminEmails: [ADMIN_EMAIL, "second.operator@test"],
+    })
+    const { state } = await flow.start()
+    const { code } = await startAndMintCode(h, flow, state)
+
+    const principal = await flow.complete({ code, state })
+    // The asserted spelling is preserved — it is what the session and the audit row show.
+    expect(principal.email).toBe("Second.Operator@Test")
   })
 
   test("subject mismatch: an id_token whose sub does not match the configured admin is rejected", async () => {

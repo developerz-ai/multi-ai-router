@@ -1,3 +1,4 @@
+import { AdminAuthError } from "@multi-ai-router/core"
 import { type Context, Hono } from "hono"
 import { getConnInfo } from "hono/bun"
 import { deleteCookie, setCookie } from "hono/cookie"
@@ -138,9 +139,19 @@ export function adminAuthRoutes(deps: AdminAuthRoutesDeps): Hono<AdminAuthEnv> {
       )
       warnIfCookieUndeliverable(c, deps.sessionCookieInsecure)
       return c.html(callbackPageSignedIn(), 200)
-    } catch {
-      // The exact failure mode is in the audit log; the operator sees the
-      // single wording.
+    } catch (err) {
+      // This route renders HTML, so it answers the failure itself rather than rethrowing into the
+      // error handler — which means it owes the operator the line that handler would have written.
+      // Skipping it is what made a rejected sign-in a dead end: the browser shows one deliberately
+      // uninformative sentence, and without this there is nothing anywhere that says which check
+      // rejected it. `reason` is the diagnostic kind; the response body still carries neither.
+      c.get("log").warn("admin sign-in rejected at the OIDC callback", {
+        component: "admin-auth",
+        errorClass: err instanceof Error ? err.name : "unknown",
+        errorCode: err instanceof AdminAuthError ? err.code : null,
+        reason: err instanceof AdminAuthError ? err.reason : undefined,
+        remedy: "docs/idea/13-admin-oidc.md#troubleshooting maps the kind to what to check",
+      })
       return c.html(callbackPage("Sign-in failed", ADMIN_LOGIN_FAILED_MESSAGE), 401)
     }
   })
@@ -165,7 +176,9 @@ export function adminAuthRoutes(deps: AdminAuthRoutesDeps): Hono<AdminAuthEnv> {
 
     // The source address rides along for the same reason login's does: the audit row for a
     // session ending is only useful next to the one that started it.
-    await deps.service.logout(session.id, clientIp(c, deps.trustProxy))
+    // The username, so the row names the operator who ended *this* session rather than the admin
+    // allowlist's first entry — `ADMIN_OIDC_ADMIN_EMAIL` may name several.
+    await deps.service.logout(session.id, clientIp(c, deps.trustProxy), session.username)
     deleteCookie(c, SESSION_COOKIE_NAME, sessionCookieOptions(0, deps.sessionCookieInsecure))
     return c.json({ status: "logged_out" })
   })

@@ -1,4 +1,4 @@
-import { isRouterError } from "@multi-ai-router/core"
+import { AdminAuthError, isRouterError } from "@multi-ai-router/core"
 import type { Context, ErrorHandler, NotFoundHandler } from "hono"
 import type { ContentfulStatusCode } from "hono/utils/http-status"
 import {
@@ -30,7 +30,18 @@ export function errorHandler(fallbackLog: Logger): ErrorHandler<AppEnv> {
     }
     if (isRouterError(err)) {
       const level = response.status >= 500 ? "error" : "warn"
-      log[level]("request failed", { ...fields, errorClass: err.name, errorCode: err.code })
+      // `reason` is present only on the errors carrying an operator-only diagnostic —
+      // `AdminAuthError` today, whose message is one deliberately uninformative sentence for every
+      // rejection. The kind belongs on this line and nowhere else: this is the only place a
+      // `requestId` is bound, and the response body is built from `message`/`code` alone, so
+      // logging it here cannot widen what the browser learns.
+      const reason = err instanceof AdminAuthError ? err.reason : undefined
+      log[level]("request failed", {
+        ...fields,
+        errorClass: err.name,
+        errorCode: err.code,
+        ...(reason === undefined ? {} : { reason }),
+      })
     } else {
       // The message and stack are for the operator only — they never reach the response body.
       log.error("request failed", { ...fields, errorClass: err.name, stack: err.stack })

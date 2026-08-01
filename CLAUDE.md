@@ -73,7 +73,7 @@ Postgres is the house standard and the current decision — earlier drafts said 
 | Dev database shell / migrate / reset | `bin/db psql` · `bin/db migrate` · `bin/db reset` |
 | Build release image locally | `docker build -t multi-ai-router:dev .` |
 
-Local config: copy `.env.example` → `.env`. `.env` is gitignored. Configure the generic admin OIDC relying party (`ADMIN_OIDC_ISSUER_URL`, `ADMIN_OIDC_CLIENT_ID`, optional client secret, `ADMIN_OIDC_REDIRECT_URI`, `ADMIN_OIDC_ADMIN_EMAIL`) and set `ENCRYPTION_KEY`; the compose file supplies `DATABASE_URL`. See `docs/idea/13-admin-oidc.md`.
+Local config: copy `.env.example` → `.env`. `.env` is gitignored. Configure the generic admin OIDC relying party (`ADMIN_OIDC_ISSUER_URL`, `ADMIN_OIDC_CLIENT_ID`, optional client secret, `ADMIN_OIDC_REDIRECT_URI`, `ADMIN_OIDC_ADMIN_EMAIL` — comma-separated, one entry per operator) and set `ENCRYPTION_KEY`; the compose file supplies `DATABASE_URL`. See `docs/idea/13-admin-oidc.md`.
 
 ## Layers
 

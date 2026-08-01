@@ -113,9 +113,11 @@ export interface AdminAuthService {
   /**
    * Ends the session server-side. `ip` is optional because the audit row wants the source
    * address (08-observability.md) and the caller is the only one who can resolve it — optional
-   * rather than required so no existing caller has to change to keep compiling.
+   * rather than required so no existing caller has to change to keep compiling. `subjectId` is
+   * optional for the same reason, and is the session's own username: with several admin emails
+   * allowed, that is the only value that says *who* logged out.
    */
-  logout(sessionId: string, ip?: string): Promise<void>
+  logout(sessionId: string, ip?: string, subjectId?: string): Promise<void>
   /** Resolves the session a cookie names, sliding its idle window. Throws when it does not. */
   authenticate(cookieValue: string | undefined): Promise<AdminSession>
   /** Throws unless the presented token matches the session's own. */
@@ -131,6 +133,12 @@ export interface AdminAuthMethods {
 const NOT_AUTHENTICATED = "Admin authentication required"
 /** What a caller that cannot resolve a peer address records, so the field is always present. */
 const UNKNOWN_IP = "unknown"
+/**
+ * The audit subject for a sign-in that failed before a principal existed. Deliberately not one of
+ * the configured admin emails: an OIDC rejection means the router never accepted an identity, and
+ * naming a real operator on a row they may have had nothing to do with is a false attribution.
+ */
+const UNKNOWN_ADMIN_SUBJECT = "unknown"
 
 /**
  * The one sentence every local-login failure carries, byte-identical to the OIDC
@@ -183,11 +191,12 @@ export function createAdminAuthService(deps: AdminAuthDeps): AdminAuthService {
     const event = {
       kind,
       subjectType: AUDIT_SUBJECTS.admin,
-      // The configured admin email is the stable identifier, not the typed
-      // username — there is no username anymore. The IdP-asserted email is
-      // recorded in the detail on a successful login, by the route. A local
-      // password login has no email; it records its own constant subject.
-      subjectId: subjectId ?? deps.env.adminOidc?.adminEmail ?? LOCAL_ADMIN_USERNAME,
+      // The IdP-asserted email is the stable identifier, not the typed username — there is no
+      // username anymore. Every OIDC caller passes it explicitly, which is what makes an audit
+      // row attributable now that `ADMIN_OIDC_ADMIN_EMAIL` admits several operators: the *configured*
+      // value is a list and would name whichever entry happened to sort first, not whoever signed
+      // in. A local password login has no email; it records its own constant subject.
+      subjectId: subjectId ?? LOCAL_ADMIN_USERNAME,
       detail,
     }
     try {
@@ -236,16 +245,34 @@ export function createAdminAuthService(deps: AdminAuthDeps): AdminAuthService {
     ip: string
   }): Promise<LoginCompleteResult> {
     if (deps.oidc == null) throw new AdminAuthError(ADMIN_LOGIN_FAILED_MESSAGE)
-    const principal = await deps.oidc.complete({
-      code: input.code,
-      state: input.state,
-    })
+    let principal: { readonly email: string; readonly subject: string }
+    try {
+      principal = await deps.oidc.complete({ code: input.code, state: input.state })
+    } catch (err) {
+      // Symmetry with `completeLocalLogin`, which has always audited its rejections. Without this
+      // the audit feed showed OIDC logins that succeeded and nothing at all for the ones that did
+      // not — so a console reporting "sign-in failed" left no row behind to explain it, and the
+      // subject is unknowable at this point precisely because the principal check is what failed.
+      fireAudit(
+        AUDIT_KINDS.adminLoginFailed,
+        {
+          ip: input.ip,
+          method: "oidc",
+          // The diagnostic kind, not the wording — the same value the transport logs.
+          ...(err instanceof AdminAuthError && err.reason !== undefined
+            ? { reason: err.reason }
+            : {}),
+        },
+        UNKNOWN_ADMIN_SUBJECT,
+      )
+      throw err
+    }
     return issueSession({
       // The session's `username` is the IdP-asserted email so the audit log
       // and the console match the human-readable identity the operator
       // logged in with.
       username: principal.email,
-      subjectId: deps.env.adminOidc?.adminEmail ?? LOCAL_ADMIN_USERNAME,
+      subjectId: principal.email,
       ip: input.ip,
       auditDetail: { subject: principal.subject, email: principal.email, method: "oidc" },
     })
@@ -341,10 +368,10 @@ export function createAdminAuthService(deps: AdminAuthDeps): AdminAuthService {
     startLogin,
     completeLogin,
     completeLocalLogin,
-    logout: async (sessionId, ip) => {
+    logout: async (sessionId, ip, subjectId) => {
       await store.delete(sessionId)
       // After the invalidation, so the row only ever claims a logout that actually happened.
-      fireAudit(AUDIT_KINDS.adminLogout, { ip: ip ?? UNKNOWN_IP })
+      fireAudit(AUDIT_KINDS.adminLogout, { ip: ip ?? UNKNOWN_IP }, subjectId)
     },
     authenticate,
     assertCsrf(session, presented) {

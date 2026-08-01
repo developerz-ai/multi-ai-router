@@ -66,7 +66,7 @@ A single admin principal. It is asserted either by an OpenID Connect provider or
 | `ADMIN_OIDC_CLIENT_ID` | OIDC client and expected ID-token audience. |
 | `ADMIN_OIDC_CLIENT_SECRET` | Confidential-client secret; optional for public clients. PKCE remains mandatory. |
 | `ADMIN_OIDC_REDIRECT_URI` | Exact registered callback URI. |
-| `ADMIN_OIDC_ADMIN_EMAIL` | Required, case-insensitive match against a verified `email` claim in the ID token. |
+| `ADMIN_OIDC_ADMIN_EMAIL` | Required. Comma-separated; a verified `email` claim in the ID token must match one entry, case-insensitively. |
 | `ADMIN_OIDC_ADMIN_SUBJECT` | Optional stricter exact match against `sub`. |
 
 The only password-shaped credential is the optional local admin password above; the router keeps no TOTP secret. TOTP, passkeys, MFA policy, enrollment, and account recovery belong to the configured IdP — which is exactly why the password door, having no second factor, is loopback-only by default. Adding a second factor *after* the router-issued session would be a separate design decision, not a deferred field.

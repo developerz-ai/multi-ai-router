@@ -51,8 +51,18 @@ export interface AdminOidcConfig {
   readonly clientSecret: string | null
   /** The redirect URI the IdP will return the browser to. */
   readonly redirectUri: string
-  /** The exact email the IdP must assert for the admin to be admitted. */
-  readonly adminEmail: string
+  /**
+   * The emails the IdP may assert for the admin to be admitted, lowercased and
+   * deduplicated at parse time. Never empty when this config exists.
+   *
+   * A list rather than one string because a self-hosted router is normally run
+   * by a *team* — every operator has their own IdP identity, and pinning one
+   * email means everyone else shares a credential or nobody else gets in. This
+   * is **not** multi-user: there are no user rows, no roles and no per-person
+   * state. Every entry maps onto the same single admin principal and the same
+   * session model, exactly as the single email did.
+   */
+  readonly adminEmails: readonly string[]
   /** Optional stricter: the `sub` claim must equal this value. */
   readonly adminSubject: string | null
   /**
@@ -650,13 +660,38 @@ const envSchema = z.object(ENV_FIELDS).transform((raw, ctx): Env => {
     return z.NEVER
   }
 
+  // Comma-separated, so one operator per entry. Lowercased here rather than at the comparison so
+  // the flow compares two already-normalized values, and deduplicated so a repeated entry cannot
+  // make the allowlist look longer than the number of humans it admits. A value that parses to
+  // *zero* emails (`","`, `" "`) is an operator mistake that would otherwise configure OIDC with
+  // an allowlist nobody can satisfy — every login would fail the principal check, which reads as a
+  // broken IdP rather than a typo here.
+  const adminEmails = oidcConfigured
+    ? [
+        ...new Set(
+          (raw.ADMIN_OIDC_ADMIN_EMAIL as string)
+            .split(",")
+            .map((entry) => entry.trim().toLowerCase())
+            .filter((entry) => entry.length > 0),
+        ),
+      ]
+    : []
+  if (oidcConfigured && adminEmails.length === 0) {
+    ctx.addIssue({
+      code: "custom",
+      path: ["ADMIN_OIDC_ADMIN_EMAIL"],
+      message: `must name at least one email — see docs/idea/13-admin-oidc.md`,
+    })
+    return z.NEVER
+  }
+
   const adminOidc: AdminOidcConfig | null = oidcConfigured
     ? {
         issuerUrl: raw.ADMIN_OIDC_ISSUER_URL as string,
         clientId: raw.ADMIN_OIDC_CLIENT_ID as string,
         clientSecret: raw.ADMIN_OIDC_CLIENT_SECRET ?? null,
         redirectUri: raw.ADMIN_OIDC_REDIRECT_URI as string,
-        adminEmail: raw.ADMIN_OIDC_ADMIN_EMAIL as string,
+        adminEmails,
         adminSubject: raw.ADMIN_OIDC_ADMIN_SUBJECT ?? null,
         scopes: (raw.ADMIN_OIDC_SCOPES ?? "openid profile email").split(/\s+/u).filter(Boolean),
         clockSkewSeconds: raw.ADMIN_OIDC_CLOCK_SKEW_SECONDS ?? 60,
