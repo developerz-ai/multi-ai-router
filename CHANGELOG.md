@@ -5,6 +5,12 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.3.1] — 2026-08-01
+
+### Fixed
+
+- A completed SSO sign-in returns to the console instead of ending on a "you can close this tab" page. The callback was a dead end, so the operator finished the login by hand. It now navigates to `/` — client-side rather than as a `302`, because this response is the tail of a cross-site chain that began at the identity provider, and a server redirect can arrive without the `SameSite=Strict` session cookie the response just set, bouncing back to `/login` as though the sign-in had failed. A visible link is the no-JS path.
+
 ## [2.3.0] — 2026-08-01
 
 ### Fixed

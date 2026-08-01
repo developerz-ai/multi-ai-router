@@ -11,7 +11,7 @@
  * settings endpoint and the console footer. Five surfaces, one string: a bug report that quotes a
  * version quotes the same build every time.
  */
-export const VERSION = "2.3.0"
+export const VERSION = "2.3.1"
 
 /**
  * What `router_build_info{revision}` and the boot log report when nothing told the build which

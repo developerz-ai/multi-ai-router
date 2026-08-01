@@ -348,6 +348,27 @@ describe("GET /api/admin/auth/oidc/callback", () => {
     expect(cookie).toContain(HARDENED_NAME.split("=")[0])
   })
 
+  /**
+   * The callback used to end at "you can close this tab", so the operator finished the login by
+   * hand. It now leaves for the console — and by a client-side hop, not a `302`: this response is
+   * the tail of a cross-site chain from the IdP, and a server redirect can drop the `SameSite=Strict`
+   * cookie it just set, bouncing straight back to `/login`.
+   */
+  test("a successful callback sets the cookie and sends the browser to the console", async () => {
+    const h = await harness()
+    const res = await get(h.app, await callbackUrlFor(h))
+    expect(res.status).toBe(200)
+    // The cookie is on this very response — the hop must not be what carries it.
+    expect(res.headers.get("set-cookie") ?? "").toContain(HARDENED_NAME.split("=")[0] ?? "")
+
+    const body = await res.text()
+    expect(body).toContain('location.replace("/")')
+    // The no-JS path, and the reason the scripted hop is safe to make unconditional.
+    expect(body).toContain('<a href="/">')
+    // The dead end is gone.
+    expect(body).not.toContain("close this tab")
+  })
+
   test("a missing state or code is rejected", async () => {
     const h = await harness()
     const res = await get(h.app, CALLBACK)
