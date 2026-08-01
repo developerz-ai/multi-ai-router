@@ -1,0 +1,39 @@
+@use "../styles/mixins" as *;
+
+// A definition list, not two spans: "metered" and "notional" are labels for two
+// distinct measures, and the pairing is what stops them being read as one total.
+//
+// Fixed width, not content width: the label sits left and the tabular value right
+// at one shared edge on every row. A ragged right edge is what pushed the widest
+// value furthest into the neighbouring column (#62).
+.spend {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  width: 9rem;
+  margin: 0;
+}
+
+.spendRow {
+  display: flex;
+  gap: var(--space-2);
+  align-items: baseline;
+  justify-content: space-between;
+}
+
+.spendLabel {
+  @include eyebrow;
+
+  color: var(--text-muted);
+}
+
+.spendValue {
+  @include tabular-figures;
+
+  margin: 0;
+  font-size: var(--text-xs);
+}
+
+.pending {
+  color: var(--text-muted);
+}

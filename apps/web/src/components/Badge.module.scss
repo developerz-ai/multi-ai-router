@@ -7,6 +7,12 @@
   gap: var(--space-1);
   align-items: center;
   padding: 0.125rem var(--space-2);
+  // Opaque on purpose (#62): a transparent pill lets a neighbouring cell's
+  // overflow paint through it and read as strikethrough; occlusion is the honest
+  // degradation. No `z-index` — in the tables the pill's cell follows the usage
+  // cell in DOM order and already paints above. Rows hover to `--surface-sunken`
+  // while the pill keeps `--surface-raised`; the subtle rectangle is accepted.
+  background: var(--surface-raised);
   border: 1px solid currentcolor;
   border-radius: var(--radius-full);
   line-height: 1.5;
