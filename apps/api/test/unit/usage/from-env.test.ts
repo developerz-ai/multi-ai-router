@@ -110,6 +110,24 @@ describe("a refused usage batch, as an operator reads it", () => {
     expect(reason.length).toBeLessThan(256)
   })
 
+  test("a wrapped refusal speaks its cause first — the wrapper names the statement, not the reason", async () => {
+    // drizzle's "Failed query: …" carries the driver's complaint one `cause` down; logging only
+    // the wrapper once hid a bind-time failure behind the statement it never reached.
+    const { lines, recorder } = harness(
+      () =>
+        new Error(`Failed query: update "accounts" set "last_used_at" = greatest($1)`, {
+          cause: new Error("Received an instance of Date"),
+        }),
+    )
+
+    recorder.record(record(1))
+    await recorder.flush()
+
+    const reason = lines[0]?.reason ?? ""
+    expect(reason).toStartWith("Received an instance of Date ← ")
+    expect(reason).toContain("Failed query")
+  })
+
   test("says it once per window however many batches are refused", async () => {
     const { lines, recorder } = harness(() => new Error("database is down"))
 
