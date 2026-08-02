@@ -20,6 +20,19 @@
   white-space: nowrap;
 }
 
+.status {
+  display: grid;
+  gap: var(--space-1);
+}
+
+// The routing block a green dot does not show. Warn, not danger: it is
+// clock-recoverable, the same class of state as cooling_down.
+.spentNote {
+  color: var(--warn);
+  font-size: var(--text-xs);
+  white-space: nowrap;
+}
+
 .actions {
   display: flex;
   flex-wrap: wrap;

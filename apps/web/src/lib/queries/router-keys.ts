@@ -29,6 +29,10 @@ import { queryKeys } from "./query-keys"
 //
 // Keys stay retrievable through all of this — pressing reveal again is one more
 // audited call, which is exactly the intended cost.
+//
+// Every one of these — reveal included — is an audited action, so each also
+// invalidates the audit root: the log must show a write (or a view) without a
+// reload of the settings screen.
 
 export function useKeys() {
   return useQuery(() => ({
@@ -43,7 +47,7 @@ export function useCreateKey() {
   return useMutation(() => ({
     mutationFn: (input: CreateKeyInput) => createKey(input),
     gcTime: 0,
-    onSuccess: () => client.invalidateQueries({ queryKey: queryKeys.keys.root() }),
+    onSuccess: () => invalidateKeyReaders(client),
   }))
 }
 
@@ -51,15 +55,21 @@ export function useUpdateKey() {
   const client = useQueryClient()
   return useMutation(() => ({
     mutationFn: (args: { readonly id: string; readonly patch: UpdateKeyInput }) => updateKey(args),
-    onSuccess: () => client.invalidateQueries({ queryKey: queryKeys.keys.root() }),
+    onSuccess: () => invalidateKeyReaders(client),
   }))
 }
 
-/** The other one that carries a value. Same rule. */
+/**
+ * The other one that carries a value. Same `gcTime` rule — and it still touches
+ * the audit root, because a reveal changes no key but does append a `key.viewed`
+ * row the log must show.
+ */
 export function useRevealKey() {
+  const client = useQueryClient()
   return useMutation(() => ({
     mutationFn: (id: string) => revealKey(id),
     gcTime: 0,
+    onSuccess: () => client.invalidateQueries({ queryKey: queryKeys.audit.root() }),
   }))
 }
 
@@ -67,7 +77,7 @@ export function useRevokeKey() {
   const client = useQueryClient()
   return useMutation(() => ({
     mutationFn: (id: string) => revokeKey(id),
-    onSuccess: () => client.invalidateQueries({ queryKey: queryKeys.keys.root() }),
+    onSuccess: () => invalidateKeyReaders(client),
   }))
 }
 
@@ -75,6 +85,13 @@ export function useDeleteKey() {
   const client = useQueryClient()
   return useMutation(() => ({
     mutationFn: (id: string) => deleteKey(id),
-    onSuccess: () => client.invalidateQueries({ queryKey: queryKeys.keys.root() }),
+    onSuccess: () => invalidateKeyReaders(client),
   }))
+}
+
+async function invalidateKeyReaders(client: ReturnType<typeof useQueryClient>): Promise<void> {
+  await Promise.all([
+    client.invalidateQueries({ queryKey: queryKeys.keys.root() }),
+    client.invalidateQueries({ queryKey: queryKeys.audit.root() }),
+  ])
 }

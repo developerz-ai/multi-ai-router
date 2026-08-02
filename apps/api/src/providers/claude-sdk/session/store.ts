@@ -95,8 +95,30 @@ export function createSessionStore(deps: SessionStoreDeps): SessionStore {
     ...(deps.cache?.now === undefined ? {} : { now: deps.cache.now }),
   })
 
-  const write = (input: Parameters<SessionRepository["upsert"]>[0]): void => {
-    void deps.repository.upsert(input).catch((error: unknown) => deps.onError?.("write", error))
+  /**
+   * Row writes, ordered **per session key**. Every write is still fire-and-forget from the
+   * caller's side — nothing on the request path waits on Postgres — but within one key the
+   * upserts land in the order they were issued. Without this, an `invalidate` (clear) and the
+   * `remember` (bind) of the same request were two independent floating promises, and the clear
+   * landing second left the row empty behind a cache that says bound; two requests rebinding the
+   * same session concurrently could interleave the same way. The chain never grows unbounded: a
+   * key's tail entry is removed the moment it settles with nothing queued behind it.
+   */
+  const pending = new Map<string, Promise<void>>()
+  const write = (key: string, input: Parameters<SessionRepository["upsert"]>[0]): void => {
+    const run = (): Promise<void> =>
+      deps.repository.upsert(input).then(
+        () => undefined,
+        (error: unknown) => deps.onError?.("write", error),
+      )
+    const previous = pending.get(key)
+    // Issued synchronously when nothing is in flight for this key, so an unqueued write costs the
+    // same instant it always did; queued only behind its own key's predecessor.
+    const tail = previous === undefined ? run() : previous.then(run)
+    pending.set(key, tail)
+    void tail.finally(() => {
+      if (pending.get(key) === tail) pending.delete(key)
+    })
   }
 
   return {
@@ -123,7 +145,7 @@ export function createSessionStore(deps: SessionStoreDeps): SessionStore {
       const key = scopedKey(apiKeyId, sessionKey)
       cache.drop(key)
       cache.set(key, null)
-      write({
+      write(key, {
         apiKeyId,
         key: sessionKey,
         accountId: null,
@@ -168,7 +190,7 @@ export function createSessionStore(deps: SessionStoreDeps): SessionStore {
           const lineage = nextLineage(hashes, carried, assistantUuid)
           cache.set(key, { accountId: input.accountId, sdkSessionId, lineage })
           if (fingerprint !== null) cache.alias(fingerprint, key)
-          write({
+          write(key, {
             apiKeyId: input.apiKeyId,
             key: input.sessionKey,
             accountId: input.accountId,

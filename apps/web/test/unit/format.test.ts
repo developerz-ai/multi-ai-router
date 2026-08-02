@@ -3,6 +3,7 @@ import {
   formatCost,
   formatCount,
   formatDate,
+  formatMillis,
   formatPercent,
   formatRelative,
   formatTimestamp,
@@ -104,5 +105,20 @@ describe("shortId", () => {
   test("truncates with an ellipsis, and leaves short ids alone", () => {
     expect(shortId("abcd")).toBe("abcd")
     expect(shortId("0123456789abcdef")).toBe("01234567…")
+  })
+})
+
+describe("formatMillis", () => {
+  // "A null reading renders as an explicitly unread track, never as zero" — the console's own
+  // rule. "0 ms" on the overhead tile is a perfect score nobody measured.
+  test("null is a dash, never 0 ms", () => {
+    expect(formatMillis(null)).toBe("—")
+    expect(formatMillis(Number.NaN)).toBe("—")
+  })
+
+  test("a real reading keeps its unit, and zero measured is still a reading", () => {
+    expect(formatMillis(0)).toBe("0 ms")
+    expect(formatMillis(3.4)).toBe("3 ms")
+    expect(formatMillis(2100)).toBe("2100 ms")
   })
 })

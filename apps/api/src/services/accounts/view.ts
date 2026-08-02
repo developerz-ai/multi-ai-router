@@ -59,6 +59,13 @@ export interface AccountView {
    */
   readonly billing: AccountBilling
   readonly tokenExpiresAt: string | null
+  /**
+   * When this account last served a request, stamped off-path by the usage recorder's batched
+   * drain. Null is *never used* (or not since the column existed) — the console renders that word,
+   * not a zero and not a blank. This is the operator's only view of the column the idle probe
+   * reads, so a pooled-but-never-selected account is visible before the probe spends a turn on it.
+   */
+  readonly lastUsedAt: string | null
   readonly createdAt: string
   readonly updatedAt: string
   /**
@@ -86,6 +93,7 @@ export function toAccountView(row: AccountRow): AccountView {
     priority: row.priority,
     billing: row.billing,
     tokenExpiresAt: row.tokenExpiresAt?.toISOString() ?? null,
+    lastUsedAt: row.lastUsedAt?.toISOString() ?? null,
     createdAt: row.createdAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),
   }

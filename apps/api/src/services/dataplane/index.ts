@@ -62,7 +62,21 @@ export {
 } from "./body/session"
 export type { CatalogListingDeps, CatalogModel, CatalogProvider } from "./catalog-listing"
 export { catalogListing, providerListing } from "./catalog-listing"
-export { answeredFailure, type ChainFailure, foldChainFailure, routerFailure } from "./chain-error"
+export {
+  type AnsweredFailureContext,
+  answeredFailure,
+  type ChainFailure,
+  foldChainFailure,
+  routerFailure,
+} from "./chain-error"
+export {
+  DEFAULT_UPSTREAM_TIMEOUT_MS,
+  type Dispatcher,
+  type DispatcherDeps,
+  type DispatchInput,
+  type DispatchOptions,
+  type TranslationOptions,
+} from "./dispatcher-config"
 export { accountCredential } from "./egress/credential"
 export {
   upstreamCountTokensUrl,
@@ -100,15 +114,7 @@ export {
   type RateLimiterOptions,
 } from "./limits"
 export { type ReachableModel, reachableModel, reachableModels } from "./models"
-export {
-  createDispatcher,
-  DEFAULT_UPSTREAM_TIMEOUT_MS,
-  type Dispatcher,
-  type DispatcherDeps,
-  type DispatchInput,
-  type DispatchOptions,
-  type TranslationOptions,
-} from "./orchestrator"
+export { createDispatcher } from "./orchestrator"
 export {
   type CandidatePlan,
   type HttpServableCandidate,
@@ -133,6 +139,11 @@ export {
   sessionBindings,
   sessionStoreFromEnv,
 } from "./session-binding"
+export {
+  SESSION_RESTART_HEADER,
+  type SessionRestartReason,
+  withSessionRestart,
+} from "./session-restart"
 export { buildSnapshot, overlayHealth } from "./snapshot"
 export {
   type AccountStatusWriter,

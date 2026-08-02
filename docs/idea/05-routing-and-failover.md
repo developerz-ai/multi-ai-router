@@ -191,8 +191,26 @@ overrule:
 |---|---|
 | **Binding wins over policy** | If a live Session already has an Account, that Account is the choice — for any policy. The policy only ever selects for a Session with no binding yet, or one whose binding was invalidated. |
 | **Moving is not an option** | There is no operation that carries a Session from one Account to another. A policy that would move an in-flight Session must instead **invalidate the mapping and start a fresh upstream session** on the new Account. |
-| **Say so, don't fake it** | A restarted session has lost every prior turn. The router surfaces that — it does **not** silently truncate context, replay a flattened transcript as if it were the real history, or let the client believe the conversation continued. |
+| **Say so, don't fake it** | A restarted session has lost every prior turn. The router surfaces that — it does **not** silently truncate context, replay a flattened transcript as if it were the real history, or let the client believe the conversation continued. The surface is one response header, **`x-router-session-restart`**, stamped on the turn that answered from a fresh upstream session where a bound one used to be: its value is the invalidation reason (`cooling-down`, `out-of-scope`, `exhausted`, …) or `failover` when a mid-chain hop left the bound account. Clients that resend full history lose no content; the header tells the ones that do not. |
 | **Rendezvous is the tiebreak, not the truth** | Hashing decides where a *new* Session lands, and re-derives the same answer after a restart. Where a binding exists, the binding is the truth, because only the storing Account can resume the id. |
+
+#### `rebind`: trading resumability for availability, and its two guardrails
+
+A bound account that is merely cooling down normally **blocks** the request: the honest `429` +
+`Retry-After`, binding kept, conversation resumable when the clock fixes the account.
+`ROUTING_BOUND_ACCOUNT_COOLING_DOWN=rebind` opts a deployment out of the wait: the binding is
+invalidated and the turn is served fresh on another eligible account. It exists for clients that
+resend their full history every turn. Two guardrails keep `rebind` from ever being *worse* than
+`fail`:
+
+| Guardrail | Statement |
+|---|---|
+| **A probe in flight never rebinds** | `rebind` fires on `cooling-down` and `quota-window-spent` only. `probe-in-flight` is the router's own hold, seconds long and already settling inside another request — dropping a resumable conversation over it would trade seconds for the whole history. It stays `blocked` whatever the operator configured. |
+| **Invalidate only with a replacement in hand** | The stored mapping is dropped only once selection has produced a servable alternative. When every pool account is cooling (one provider, windows depleting together — the common case), the request fails with the same `429`-binding-kept that `fail` produces, and the client's post-reset retry resumes the original session warm. Dropping first and failing anyway was a lost conversation for a rebind that never happened. |
+
+The store-side mechanics follow from "dropped, never moved": on a successful rebind the SDK
+attempt's own `remember` re-points the row at the account that actually served, and per-session
+row writes are ordered so a clear can never land after the bind that superseded it.
 
 On the plain **HTTP path** (`anthropic-api`, `openai-api`, OpenRouter, z.ai, …) none of this
 applies: every request carries its full history, so stickiness there is purely the cache
@@ -321,6 +339,19 @@ Rules:
   the attempt count in the error metadata and in the `UsageRecord`. Every attempt is still recorded;
   only one of them answers the client. See [Which failure the client hears](#which-failure-the-client-hears).
 
+Both transports answer this table. The Agent-SDK path has no upstream HTTP status of its own, so
+three consequences are spelled out:
+
+- A **non-streaming** SDK turn whose upstream erred mid-generation comes back as a fully-built
+  error object — no byte of it has reached the client — so it is a *failed attempt* that fails
+  over like any other, never a success to relay. (Streaming is the opposite by construction: the
+  status is out before the error, so the failure is a terminal SSE frame and nothing is retried.)
+- A spent-window classification carries the reset its own stream reported (`rate_limit_event`),
+  which is where the SDK path's `429` gets its `Retry-After`: the throw itself names no instant.
+- A classified SDK failure with no upstream body (subprocess crash, busy session, unclassifiable
+  throw) keeps its classified status and router-authored message all the way to the client rather
+  than collapsing into a generic "no healthy account" `503`.
+
 ### Failover mid-conversation — the two paths are not the same operation
 
 Retrying "the next candidate" means something different depending on how the Account is served.
@@ -338,8 +369,8 @@ Rules specific to the SDK path:
 
 | Rule | Statement |
 |---|---|
-| **Invalidate, never migrate** | Failing over drops the Session → Account mapping. The router never carries an `sdkSessionId` to another Account, and never retries a `resume` against one. |
-| **Be honest about the restart** | The router surfaces that prior turns are gone rather than silently continuing with truncated context or replaying a flattened transcript as if it were the real conversation. |
+| **Invalidate, never migrate** | Failing over drops the Session → Account mapping. The router never carries an `sdkSessionId` to another Account, and never retries a `resume` against one. Mechanically, the drop is realized by the replacement: a successful attempt on the new Account records its own fresh session over the row, and a chain that fails everywhere leaves the original binding standing for the clock to recover. |
+| **Be honest about the restart** | The router surfaces that prior turns are gone rather than silently continuing with truncated context or replaying a flattened transcript as if it were the real conversation. The chain knows which account the session was bound to, so a hop off it stamps `x-router-session-restart: failover` on the response it answers with (see the binding section above), and logs the hop with the account and attempt. |
 | **A stale session is not a failover** | `No conversation found with session ID` on the *same* Account evicts the mapping and replays once there ([11-anthropic-agent-sdk.md](11-anthropic-agent-sdk.md) §9). That is recovery in place, not a hop to another Account. |
 | **The streaming rule still dominates** | Once bytes are on the wire, nothing is retried on either path. A restart is only ever possible before the first byte. |
 
@@ -461,6 +492,7 @@ Rules:
 |---|---|
 | **Detect, don't guess** | The classification comes from the upstream signal — status code plus the provider's error body. This is a **driver-level** concern ([03-providers.md](03-providers.md)), because every provider words it differently. The router records *which* signal produced the classification, so a misclassification is debuggable. |
 | **A verdict outranks a header** | Limiter headers ride *every* response, including the `402` that says the balance is dead — a drained account very often answers `402` **and** `x-ratelimit-remaining-requests: 0` in the same breath. The classified failure is the verdict and lands first; the parsed headers are a reading and land second, where they may extend a cooldown but **never** overwrite `exhausted`, `needs_reauth`, or `disabled`. Without this, a dead balance becomes a countdown, gets retried on a timer, and the client is told `429 + Retry-After` for something no clock fixes. The reading is still recorded — refused, not discarded — so the console can show what the limiter said. |
+| **A verdict outranks a later verdict, too** | The same precedence holds between two classified failures. Requests run concurrently, so a `429` can classify *after* the `402` that already marked the account `exhausted` — and must not demote it back to `cooling_down`. Once an account is in a state no timer changes (`exhausted`, `needs_reauth`, `disabled`), later failures of any kind leave it standing; the first terminal verdict wins. |
 | **Remove immediately** | An `exhausted` account leaves every candidate set at once, for every key and every pool. |
 | **Surface loudly** | `exhausted` gets a **red banner on the dashboard**, not a status buried on a detail page. This is the failure an operator most needs to see, because it silently shrinks the pool while everything still appears to work. |
 | **Survive the process** | Which is why the verdict is written to the row rather than kept in memory. A block that only one replica remembers is a block the next deploy erases: routing re-learns it with one more failed request, and the banner that was supposed to tell the operator was reset by the same restart. The clear is the mirror image and belongs to the operator's **Re-check now** — nothing on a timer lifts it. |
@@ -480,6 +512,18 @@ code follows the cause:
 | Mixed causes | the code for the **soonest recoverable** one, `429` if any account has a reset | per-account breakdown |
 
 Never a generic upstream `500`. Never a silent fallback outside the key's scope.
+
+Two details of the `429`'s honesty:
+
+- **A reset instant is rendered with its provenance.** A provider-reported instant is stated
+  plainly; one the router computed from its own backoff schedule renders as
+  `earliest reset <iso> (estimated)`. A guessed reset presented as fact is worse than no reset
+  at all.
+- **An unknown reset gets a pause, not a countdown.** A `cooling_down` account with no recorded
+  instant (a hand-set row that never went through the breaker) still answers `429` +
+  `Retry-After` — but the wait is a configured floor, default **30 seconds**
+  (`ROUTING_UNKNOWN_RESET_RETRY_AFTER_SECONDS`), because nothing is scheduled to clear the
+  condition and a 1-second floor was a standing retry-per-second storm against it.
 
 ### When the chain is empty
 

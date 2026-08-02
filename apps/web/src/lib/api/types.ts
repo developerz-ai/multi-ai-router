@@ -43,6 +43,12 @@ export interface AccountView {
    * seen through the alias map, which is what `GET /v1/models` publishes.
    */
   readonly supportedModels: readonly string[] | null
+  /**
+   * Operator-set token ceilings per quota window, or null where none were configured. The figure
+   * the measured quota bar is a fraction of — the operator's own estimate, labelled *configured*
+   * wherever it is drawn, never a provider fact and never read by routing.
+   */
+  readonly windowTokenLimits: Readonly<Partial<Record<QuotaWindowKind, number>>> | null
   readonly weight: number
   readonly priority: number
   /**
@@ -51,6 +57,11 @@ export interface AccountView {
    */
   readonly billing: AccountBilling
   readonly tokenExpiresAt: string | null
+  /**
+   * When this account last served a request, stamped off-path by the usage recorder. Null means
+   * *never used* — rendered as that word, never as a zero or a blank cell.
+   */
+  readonly lastUsedAt: string | null
   readonly createdAt: string
   readonly updatedAt: string
   /**

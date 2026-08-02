@@ -210,6 +210,27 @@ describe.skipIf(!runnable)("tokensSince against a live database", () => {
       expect(rows).toEqual([])
     })
 
+    /**
+     * `width_bucket` refuses a non-positive bucket count exactly as it refuses equal bounds — a
+     * server error on the whole statement. The repository guards it: the bounds still apply (they
+     * name the measured range) but no curve is asked for, so a caller bug costs the sparkline and
+     * nothing else.
+     */
+    test("a shape with no positive width degrades to totals without a curve, not an error", async () => {
+      const accountId = await seedAccount()
+      await seedUsage(accountId, new Date(NOW.getTime() - HOUR_MS), 42)
+      // Past `until`, so it also proves the shape's upper bound survives the degraded path.
+      await seedUsage(accountId, new Date(NOW.getTime() + HOUR_MS), 9_999)
+
+      for (const slots of [0, -3]) {
+        const [row] = await usage.tokensSince(
+          [{ accountId, window: "five_hour", since: new Date(NOW.getTime() - 5 * HOUR_MS) }],
+          { until: NOW, slots },
+        )
+        expect(row).toMatchObject({ tokens: 42, series: [] })
+      }
+    })
+
     test("each pair keeps its own slicing in one statement", async () => {
       const accountId = await seedAccount()
       await seedUsage(accountId, new Date(NOW.getTime() - 30 * 60 * 1_000), 500)

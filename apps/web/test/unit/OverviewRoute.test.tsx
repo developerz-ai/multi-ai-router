@@ -22,8 +22,12 @@ afterEach(() => {
 
 const usageRequests: string[] = []
 
-function stubFetch(): void {
+/** What `GET /accounts` answers with — each test sets its own fleet before mounting. */
+let accountRows: readonly unknown[] = []
+
+function stubFetch(accounts: readonly unknown[] = [account()]): void {
   usageRequests.length = 0
+  accountRows = accounts
   globalThis.fetch = (async (input: RequestInfo | URL) => {
     const url = typeof input === "string" ? input : input.toString()
     return new Response(JSON.stringify(responseFor(url)), {
@@ -38,7 +42,7 @@ function responseFor(url: string): unknown {
     usageRequests.push(url)
     return usageSummary()
   }
-  if (url.includes("/accounts")) return [account()]
+  if (url.includes("/accounts")) return accountRows
   if (url.includes("/pools")) return []
   if (url.includes("/keys")) return []
   if (url.includes("/providers")) return { providers: [] }
@@ -88,6 +92,38 @@ describe("OverviewRoute", () => {
       container.remove()
     }
   })
+
+  test("an active account with a spent window is subtracted from 'routable now'", async () => {
+    // The scenario the audit named: a Claude sub at utilization 1.0 with the reset 40 minutes out
+    // stays status `active` — green dot — while candidate filtering drops it and every request
+    // 429s. Counting it as routable makes the headline promise capacity the router will refuse.
+    stubFetch([account(), spentAccount({ id: "acct-2", label: "claude-max-spent" })])
+    const { dispose, container } = mount()
+    try {
+      await settle()
+
+      expect(container.textContent).toContain("1 routable now")
+      // The status table's active row carries the same fact instead of a bare "yes".
+      expect(container.textContent).toContain("1 window-spent now")
+    } finally {
+      dispose()
+      container.remove()
+    }
+  })
+
+  test("with no spent window every active account counts, and no nuance is invented", async () => {
+    stubFetch([account()])
+    const { dispose, container } = mount()
+    try {
+      await settle()
+
+      expect(container.textContent).toContain("1 routable now")
+      expect(container.textContent).not.toContain("window-spent")
+    } finally {
+      dispose()
+      container.remove()
+    }
+  })
 })
 
 function usageSummary(): unknown {
@@ -131,10 +167,42 @@ function account(): unknown {
     dialect: null,
     modelAliases: null,
     supportedModels: null,
+    windowTokenLimits: null,
     weight: 1,
     priority: 1,
+    billing: "metered",
     tokenExpiresAt: null,
+    lastUsedAt: null,
     createdAt: "2026-01-01T00:00:00.000Z",
     updatedAt: "2026-01-01T00:00:00.000Z",
+  }
+}
+
+/** Active — green dot — but blocked by a spent five-hour window, as the server reports it. */
+function spentAccount(overrides: Record<string, unknown>): unknown {
+  return {
+    ...(account() as Record<string, unknown>),
+    ...overrides,
+    availability: {
+      configuredStatus: "active",
+      resetsAt: null,
+      resetSource: "unknown",
+      lastCheckedAt: null,
+      consecutiveFailures: 0,
+      inFlight: 0,
+      quotaWindows: [
+        {
+          window: "five_hour",
+          utilization: 1,
+          utilizationSource: "threshold-triggered",
+          resetsAt: "2026-07-27T12:40:00.000Z",
+          resetSource: "provider-reported",
+          lastCheckedAt: "2026-07-27T12:00:00.000Z",
+          spent: true,
+          tokensUsed: null,
+          tokenLimit: null,
+        },
+      ],
+    },
   }
 }

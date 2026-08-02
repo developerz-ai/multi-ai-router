@@ -99,7 +99,13 @@ export function selectAccounts(
   if (binding.state === "blocked" || candidates.length === 0) {
     return {
       ok: false,
-      error: noCandidatesError({ ...decision, now: snapshot.now }),
+      error: noCandidatesError({
+        ...decision,
+        now: snapshot.now,
+        ...(options.unknownResetRetryAfterSeconds === undefined
+          ? {}
+          : { unknownResetRetryAfterSeconds: options.unknownResetRetryAfterSeconds }),
+      }),
       decision,
     }
   }

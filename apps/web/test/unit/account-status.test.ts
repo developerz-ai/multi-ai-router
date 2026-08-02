@@ -2,7 +2,9 @@ import { describe, expect, test } from "bun:test"
 import { AccountStatus } from "@multi-ai-router/core"
 import {
   hasReset,
+  hasSpentWindow,
   isRoutable,
+  isRoutableNow,
   needsOperator,
   STATUS_DISPLAY_ORDER,
   statusLabel,
@@ -74,5 +76,40 @@ describe("status predicates", () => {
 
   test("only cooling_down has a reset to count down to", () => {
     expect(AccountStatus.options.filter(hasReset)).toEqual(["cooling_down"])
+  })
+})
+
+describe("isRoutableNow", () => {
+  // The failure this exists to prevent: a Claude sub at utilization 1.0 with a reset 40 minutes
+  // out stays status `active` — green dot — while candidate filtering drops it and every request
+  // 429s. "Routable" must mean what the router means.
+  test("an active account with a spent window is NOT routable, whatever its dot says", () => {
+    expect(isRoutableNow("active", [{ spent: true }])).toBe(false)
+    expect(isRoutableNow("active", [{ spent: false }, { spent: true }])).toBe(false)
+  })
+
+  test("an active account with no spent window is routable", () => {
+    expect(isRoutableNow("active", [])).toBe(true)
+    expect(isRoutableNow("active", undefined)).toBe(true)
+    expect(isRoutableNow("active", [{ spent: false }, { spent: false }])).toBe(true)
+  })
+
+  test("a spent window never promotes a non-active status", () => {
+    for (const status of AccountStatus.options.filter((option) => option !== "active")) {
+      expect(isRoutableNow(status, [{ spent: false }])).toBe(false)
+    }
+  })
+})
+
+describe("hasSpentWindow", () => {
+  test("absent and empty both mean nothing is blocking", () => {
+    expect(hasSpentWindow(undefined)).toBe(false)
+    expect(hasSpentWindow([])).toBe(false)
+  })
+
+  test("one spent window among five is enough — the account is blocked by whichever", () => {
+    expect(
+      hasSpentWindow([{ spent: false }, { spent: false }, { spent: true }, { spent: false }]),
+    ).toBe(true)
   })
 })

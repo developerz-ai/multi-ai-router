@@ -280,7 +280,12 @@ export function quotaWindowTone(display: QuotaWindowDisplay): "danger" | "warn" 
   return "neutral"
 }
 
-function parseInstant(iso: string | null): number | null {
+/**
+ * ISO string → epoch ms, or null. Exported because every surface that hands an instant to a
+ * countdown must make the same choice: a malformed timestamp becomes *no instant*, never a `NaN`
+ * that renders as "Invalid Date" beside "in 0s".
+ */
+export function parseInstant(iso: string | null): number | null {
   if (iso === null) return null
   const parsed = Date.parse(iso)
   return Number.isNaN(parsed) ? null : parsed

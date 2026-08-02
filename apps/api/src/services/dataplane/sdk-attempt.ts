@@ -1,4 +1,5 @@
 import { UpstreamTimeoutError } from "@multi-ai-router/core"
+import type { Logger } from "../../logging/logger"
 import {
   classifySdkFailure,
   type RateLimitSignal,
@@ -65,6 +66,22 @@ export interface SdkAttemptInput {
   readonly timeoutMs: number
   /** The client's own abort signal, so a client that goes away terminates the subprocess. */
   readonly signal?: AbortSignal
+  /**
+   * The chain's request-scoped logger (component + request id already stamped). Captured by the
+   * invocation's callbacks: the render observer fires as the stream drains, after this returned.
+   */
+  readonly log?: Logger
+  /**
+   * A previous attempt of this same request learned the SDK no longer knows the resumed session —
+   * this attempt is the one in-place replay it earns, and the lineage plan must start fresh
+   * rather than resume the disowned id again. Supplied by the chain, which is the only caller
+   * that knows what the previous attempt said.
+   *
+   * The other two lineage inputs (`clientCwd`, `forkOrSubagent` — `session/store.ts`) are
+   * deliberately not supplied: no ingress surface carries either fact, so the router has nothing
+   * truthful to pass. The seam stays open for a client that one day sends them.
+   */
+  readonly sessionGone?: boolean
 }
 
 /** The request's own session identity, plus the store that turns it into a plan. */
@@ -107,16 +124,67 @@ export async function runSdkAttempt(input: SdkAttemptInput): Promise<AttemptOutc
       session: turn.plan,
       onSession: (report) => turn.remember(report.sdkSessionId, report.assistantUuid),
       onRateLimit: rateLimit.capture,
+      // Stream-integrity alarm: the renderer force-closed blocks the SDK never terminated. Logged
+      // here because the render layer is pure — this seam is where account and request id meet it.
+      onForcedBlockClose: (count) =>
+        input.log?.warn("sdk stream closed with unterminated content blocks", {
+          accountId: plan.account.id,
+          blocks: count,
+        }),
     })
   } catch (error) {
     return invocationFailure(error, input, turn, rateLimit.signal())
   }
+
+  // The renderer answers a non-streaming turn that ended in an upstream `error` event with the
+  // error's own body under a real status (`render/stream.ts`). No byte of it has reached the
+  // client — the whole object was built before this returned — so it is a *failed attempt*, free
+  // to fail over, not a success to relay: wrapping it as one recorded a success on the account,
+  // reset its failure streak, and handed the client a 502 while healthy candidates sat unasked.
+  // The streaming path is the opposite case by construction: its Response is always 200, and a
+  // mid-stream failure is spelled as a terminal SSE frame after bytes are out — never retried.
+  if (response.status >= 400) return errorResponseFailure(response, rateLimit.signal())
 
   // Rate-limit and quota state does not ride the HTTP response here: it arrives as
   // `rate_limit_event` messages inside the query stream, which `rateLimitCapture` folds into
   // Account state exactly as `applyRateLimit` folds in an HTTP driver's parsed headers
   // (docs/idea/11-anthropic-agent-sdk.md §5).
   return { kind: "success", response, rateLimit: rateLimit.signal() }
+}
+
+/**
+ * A fully-built error Response off the SDK renderer, reshaped into the same outcome an HTTP
+ * attempt's error response produces: classified by status, the body kept so the client can still
+ * be answered with the upstream's own words when no other candidate serves.
+ */
+async function errorResponseFailure(
+  response: Response,
+  rateLimit: RateLimitSignal | null,
+): Promise<AttemptOutcome> {
+  let bodyText = ""
+  try {
+    bodyText = await response.text()
+  } catch {
+    // An unreadable body leaves the status to speak for itself.
+  }
+  return {
+    kind: "failure",
+    failure: {
+      kind: failoverKind(null, response.status),
+      status: response.status,
+      // Router-authored (docs/idea/07-security.md): the SDK body is relayed as an *upstream*
+      // answer where relaying is safe, but this sentence is what a router-shaped error renders.
+      message: "the Claude Agent SDK turn ended in an upstream error",
+    },
+    classification: null,
+    rateLimit,
+    upstream: {
+      status: response.status,
+      headers: response.headers,
+      bodyText,
+      contentType: response.headers.get("content-type"),
+    },
+  }
 }
 
 /**
@@ -161,6 +229,7 @@ function resolveTurn(input: SdkAttemptInput, accountId: string): SessionTurn {
     keySource: session.keySource,
     accountId,
     body: input.body,
+    ...(input.sessionGone === undefined ? {} : { sessionGone: input.sessionGone }),
   })
 }
 

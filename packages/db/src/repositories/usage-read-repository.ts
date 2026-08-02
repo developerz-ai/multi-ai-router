@@ -242,6 +242,18 @@ const DIMENSION_COLUMNS = {
   model: usageRecords.model,
 } as const
 
+/**
+ * Failed attempts, as one shared fragment: the totals/breakdown aggregates, the series, and the
+ * daily rollup (`usage-daily-repository.ts`) all count "not success", and one spelling keeps the
+ * three from drifting apart. `outcome` is a plain text column — its values are typed in
+ * TypeScript, not as a Postgres enum — so the constant crosses as an ordinary string parameter;
+ * the `::text` cast follows the raw-fragment convention (`usage-daily-repository.ts` documents
+ * it), where no column encoder applies and the parameter's type is otherwise left to inference.
+ */
+export function errorAttempts() {
+  return sql<number>`count(*) filter (where ${usageRecords.outcome} <> ${USAGE_OUTCOME_SUCCESS}::text)::int`
+}
+
 export function createUsageReadRepository(db: Database): UsageReadRepository {
   /**
    * One statement over a VALUES list of (account, window, since), so a fleet of subscriptions
@@ -275,15 +287,21 @@ export function createUsageReadRepository(db: Database): UsageReadRepository {
     // Equal divisions of each span's own `since..until`, so every window yields the same number of
     // points whatever its length. `width_bucket` answers 1..slots inside the range; the join's own
     // bounds keep anything outside it out, and a `null` here is the left join's empty side.
-    const slot =
-      shape === undefined
-        ? sql`null::int`
-        : sql`width_bucket(
-            extract(epoch from ${usageRecords.createdAt}),
-            extract(epoch from s.since),
-            extract(epoch from ${shape.until.toISOString()}::timestamptz),
-            ${shape.slots}
-          )`
+    //
+    // `width_bucket` refuses a non-positive bucket count as hard as it refuses equal bounds, and
+    // `slots` crosses as a bare parameter no column encoder types (hence the `::int`). A shape with
+    // no positive width keeps its bounds — they still name each span's measured range — but draws
+    // no curve, the same answer `foldTokenSpans` gives an empty width: a caller bug degrades to
+    // "no sparkline", never a server error on the whole statement.
+    const bucketed = shape !== undefined && shape.slots > 0
+    const slot = bucketed
+      ? sql`width_bucket(
+          extract(epoch from ${usageRecords.createdAt}),
+          extract(epoch from s.since),
+          extract(epoch from ${shape.until.toISOString()}::timestamptz),
+          ${shape.slots}::int
+        )`
+      : sql`null::int`
 
     const upperBound =
       shape === undefined
@@ -310,7 +328,7 @@ export function createUsageReadRepository(db: Database): UsageReadRepository {
       `,
     )
 
-    return foldTokenSpans([...rows], shape?.slots ?? 0)
+    return foldTokenSpans([...rows], bucketed ? shape.slots : 0)
   }
 
   const inWindow = (window: UsageWindow) =>
@@ -320,7 +338,7 @@ export function createUsageReadRepository(db: Database): UsageReadRepository {
   const aggregates = {
     requests: countDistinct(usageRecords.correlationId),
     attempts: sql<number>`count(*)::int`,
-    errors: sql<number>`count(*) filter (where ${usageRecords.outcome} <> ${USAGE_OUTCOME_SUCCESS})::int`,
+    errors: errorAttempts(),
     tokensIn: sql<number>`coalesce(sum(${usageRecords.tokensIn}), 0)::int`,
     tokensOut: sql<number>`coalesce(sum(${usageRecords.tokensOut}), 0)::int`,
     cacheReadTokens: sql<number>`coalesce(sum(${usageRecords.cacheReadTokens}), 0)::int`,
@@ -329,8 +347,11 @@ export function createUsageReadRepository(db: Database): UsageReadRepository {
     costNotional: sql<string>`coalesce(sum(${usageRecords.costEstimate}) filter (where ${usageRecords.costBasis} = 'notional'), 0)::text`,
   }
 
+  // `bucket` is a value in a raw fragment, so no column encoder types it — `::text` names the
+  // `date_trunc(text, timestamptz)` overload explicitly rather than leaning on inference from the
+  // second argument (the raw-fragment convention `usage-daily-repository.ts` documents).
   const bucketExpr = (bucket: "hour" | "day") =>
-    sql<string>`to_char(date_trunc(${bucket}, ${usageRecords.createdAt}) at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"')`
+    sql<string>`to_char(date_trunc(${bucket}::text, ${usageRecords.createdAt}) at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"')`
 
   const latencyAggregates = {
     latencyP50Ms: sql<
@@ -375,7 +396,7 @@ export function createUsageReadRepository(db: Database): UsageReadRepository {
           at: bucketExpr(bucket),
           requests: countDistinct(usageRecords.correlationId),
           attempts: sql<number>`count(*)::int`,
-          errors: sql<number>`count(*) filter (where ${usageRecords.outcome} <> ${USAGE_OUTCOME_SUCCESS})::int`,
+          errors: errorAttempts(),
         })
         .from(usageRecords)
         .where(inWindow(window))

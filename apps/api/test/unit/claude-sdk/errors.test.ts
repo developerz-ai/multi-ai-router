@@ -104,6 +104,55 @@ describe("classifying an Agent-SDK failure", () => {
     expect(classification.signal).toBe("claude-sdk:overage-required")
   })
 
+  /**
+   * The CLI's own long-context wording, verbatim from the 0.3.220 binary's extended-context error
+   * detector — neither sentence contains "1m", so both fell through the paired-fragment rule to
+   * `unknown` before the phrases were added.
+   */
+  test("the CLI's long-context overage sentences cool down too, in both verbatim forms", () => {
+    for (const message of [
+      "Extra usage is required for long context requests with this model",
+      "Usage credits are required for long context requests",
+      "This account has run out of extra usage for this billing period",
+    ]) {
+      const { classification } = classifySdkFailure(new Error(message))
+
+      expect(classification.kind).toBe("rate-limited")
+      expect(classification.status).toBe(429)
+      expect(classification.signal).toBe("claude-sdk:overage-required")
+    }
+  })
+
+  /**
+   * Non-negotiable 7's other half: out of credits is permanent until a human acts — `402`,
+   * `exhausted`, never timer-retried and never conflated with a window a clock reopens. The phrase
+   * is the CLI's own error constant ("Credit balance is too low", 0.3.220 binary), which is also
+   * how the API's raw sentence words it.
+   */
+  test("a drained credit balance is credits-exhausted, 402, and its own signal", () => {
+    for (const message of [
+      "API Error: Credit balance is too low",
+      "Your credit balance is too low to access the Anthropic API. Please go to Plans & Billing to upgrade or purchase credits.",
+    ]) {
+      const { classification, clientMessage } = classifySdkFailure(new Error(message))
+
+      expect(classification.kind).toBe("credits-exhausted")
+      expect(classification.status).toBe(402)
+      expect(classification.signal).toBe("claude-sdk:credit-balance")
+      // Fail over, yes — the next account may be funded. Retry this one on a timer, never.
+      expect(classification.retryable).toBe(true)
+      expect(clientMessage).not.toContain("Plans & Billing")
+    }
+  })
+
+  test("'credits' in a long-context sentence never reads as a dead balance", () => {
+    const { classification } = classifySdkFailure(
+      new Error("Usage credits are required for long context requests"),
+    )
+    expect(classification.kind).toBe("rate-limited")
+    expect(classification.kind).not.toBe("credits-exhausted")
+  })
+
   test("a subprocess exit is a crash, retryably, and says so", () => {
     const { classification } = classifySdkFailure(
       crash("Claude Code process exited with code 1", "panic: cannot open config"),

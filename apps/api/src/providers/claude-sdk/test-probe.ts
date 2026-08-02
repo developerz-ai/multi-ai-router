@@ -1,8 +1,9 @@
 import type { Options, PermissionResult, SDKMessage } from "@anthropic-ai/claude-agent-sdk"
 import { query } from "@anthropic-ai/claude-agent-sdk"
+import { PERMITTED_TOOLS } from "./allowlist"
 import { createCliProbe } from "./cli-probe"
 import type { SdkConcurrency, SdkSlot } from "./concurrency"
-import { subprocessEnv } from "./env"
+import { QUERY_ENV_OVERRIDES, subprocessEnv } from "./env"
 import { classifySdkFailure, readSdkFailure } from "./errors"
 import { type CliResolution, resolveClaudeCli } from "./resolve-cli"
 
@@ -164,11 +165,16 @@ export function createSdkTestProbe(options: SdkTestProbeOptions): SdkTestProbe {
         strictMcpConfig: true,
         skills: [],
         tools: [],
-        allowedTools: [],
+        // The one reviewed allowlist (`allowlist.ts`), never a second literal that could drift
+        // from it: this is the second of exactly two `query()` call sites, and the security gate
+        // test asserts both launches carry the same constant.
+        allowedTools: [...PERMITTED_TOOLS],
         permissionMode: "dontAsk",
         canUseTool: denyEveryTool,
         cwd: input.configDir,
-        env: subprocessEnv({ configDir: input.configDir }),
+        // The same forced overrides the dispatch path applies, for the same reasons (`env.ts`):
+        // a probe is a real, billed turn on the operator's own credential.
+        env: { ...subprocessEnv({ configDir: input.configDir }), ...QUERY_ENV_OVERRIDES },
         pathToClaudeCodeExecutable: resolution.path,
         model: input.model,
         // One turn: the probe asks one question and reads one answer, never an agent loop.

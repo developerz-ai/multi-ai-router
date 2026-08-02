@@ -2,7 +2,7 @@ import { Sparkline } from "../../components/Sparkline"
 import { type Column, Table } from "../../components/Table"
 import type { UsageBreakdownRow, UsageDimension } from "../../lib/api/usage"
 import { usageDimensionLabel } from "../../lib/api/usage"
-import { formatCost, formatCount, formatPercent } from "../../lib/format"
+import { formatCost, formatCount, formatMillis, formatPercent } from "../../lib/format"
 import styles from "./UsageBreakdown.module.scss"
 
 export interface UsageBreakdownProps {
@@ -95,7 +95,9 @@ export function UsageBreakdown(props: UsageBreakdownProps) {
       id: "latency",
       header: "p50 / p95",
       numeric: true,
-      cell: (row) => `${row.totals.latencyP50Ms} / ${row.totals.latencyP95Ms} ms`,
+      // Null renders as a dash, never as zero — a quiet row has no percentile, not a 0 ms one.
+      cell: (row) =>
+        `${formatMillis(row.totals.latencyP50Ms)} / ${formatMillis(row.totals.latencyP95Ms)}`,
     },
   ]
 

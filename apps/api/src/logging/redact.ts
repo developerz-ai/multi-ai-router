@@ -1,4 +1,4 @@
-import { ROUTER_KEY_PREFIX } from "@multi-ai-router/core"
+import { describeError, ROUTER_KEY_PREFIX } from "@multi-ai-router/core"
 
 /**
  * Redaction is default-on: a log field is scrubbed unless it is demonstrably safe, never the
@@ -115,6 +115,13 @@ const SECRET_VALUE_PATTERNS: readonly ValuePattern[] = [
 
 const MAX_DEPTH = 4
 
+/**
+ * Ceiling on an `Error` field flattened into a log line. Not an operator knob: it bounds one
+ * rendered field the way the scheduler's persisted-error ceiling bounds a column — the policy
+ * knob for quoted reasons is `LOG_REASON_MAX_CHARS`, applied where call sites compose messages.
+ */
+const MAX_ERROR_CHARS = 500
+
 export function isSecretFieldName(name: string): boolean {
   const normalized = normalizeFieldName(name)
   if (SECRET_FIELD_NAMES.has(normalized)) return true
@@ -155,13 +162,23 @@ function redactUnknown(value: unknown, depth: number): unknown {
   if (depth >= MAX_DEPTH) return REDACTED
   if (Array.isArray(value)) return value.map((entry) => redactUnknown(entry, depth + 1))
   if (value instanceof Date) return value.toISOString()
-  // `String(error)` is the `Name: message` shape, scrubbed like any other free-text value. The
-  // stack is dropped on purpose: it is a file-system map of the host, and the one call site that
-  // wants it (`middleware/errorHandler.ts`) passes it as its own field.
-  if (value instanceof Error) return redactValue(String(value))
+  // The whole `cause` chain, innermost first, scrubbed like any other free-text value — an error
+  // flattened to its outermost message alone institutionalizes wrapper-only logging for every
+  // call site that passes the object. Redacted before the cap, so truncation cannot split a
+  // credential and leave its tail. The stack is dropped on purpose: it is a file-system map of
+  // the host, and the one call site that wants it (`middleware/errorHandler.ts`) passes it as
+  // its own field.
+  if (value instanceof Error) return redactError(value)
   if (value instanceof Map) return redactRecord(fromMap(value), depth)
   if (value instanceof Set) return [...value].map((entry) => redactUnknown(entry, depth + 1))
   return redactRecord(value as Record<string, unknown>, depth)
+}
+
+function redactError(error: Error): string {
+  const scrubbed = redactValue(describeError(error, Number.POSITIVE_INFINITY))
+  return scrubbed.length <= MAX_ERROR_CHARS
+    ? scrubbed
+    : `${scrubbed.slice(0, MAX_ERROR_CHARS - 1)}…`
 }
 
 /** Map keys become field names, so a `Map` keyed by header name is scrubbed by name like any record. */

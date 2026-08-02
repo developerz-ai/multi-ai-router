@@ -1,4 +1,4 @@
-import { createSignal, Show } from "solid-js"
+import { createSignal, onCleanup, Show } from "solid-js"
 import { copyText } from "../lib/clipboard"
 import { cx } from "../lib/cx"
 import { Button } from "./Button"
@@ -27,9 +27,16 @@ export interface CopyValueProps {
 export function CopyValue(props: CopyValueProps) {
   const [state, setState] = createSignal<"idle" | "copied" | "failed">("idle")
 
+  // One timer, held by handle. Cleared before each re-arm — two quick copies must not let the
+  // first press's timer wipe the second's confirmation early — and on dispose, so a closed
+  // dialog leaves no callback writing to a disposed signal.
+  let resetTimer: number | undefined
+  onCleanup(() => window.clearTimeout(resetTimer))
+
   const copy = async () => {
     setState((await copyText(props.value)) ? "copied" : "failed")
-    window.setTimeout(() => setState("idle"), 2500)
+    window.clearTimeout(resetTimer)
+    resetTimer = window.setTimeout(() => setState("idle"), 2500)
   }
 
   return (

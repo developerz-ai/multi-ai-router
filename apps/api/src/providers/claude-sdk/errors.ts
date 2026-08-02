@@ -107,13 +107,42 @@ const RULES: readonly SdkRule[] = [
     match: phrase("is currently running as a background agent"),
   },
   {
+    /**
+     * The one condition non-negotiable 7 forbids conflating with a rate limit: the underlying
+     * account is billing-dead, and no clock revives it. `402`, `exhausted`, never timer-retried.
+     *
+     * Provenance: the CLI (0.3.220 vendored binary) defines the error-message constant
+     * `"Credit balance is too low"` in its API-error table (beside `"Not logged in · Please run
+     * /login"`), and its own diagnostics list `"credit balance too low"` among Anthropic API error
+     * strings; the API's raw sentence ("Your credit balance is too low to access the Anthropic
+     * API…") carries the same phrase. Matched as the full phrase rather than a fragment, because a
+     * wrong match here parks a healthy account at `402` until a human intervenes — the one
+     * misclassification worse than the `unknown` fallback.
+     */
+    kind: "credits-exhausted",
+    signal: "claude-sdk:credit-balance",
+    status: 402,
+    clientMessage: "the account's credit balance is spent — it needs a top-up, not a retry",
+    match: phrase("credit balance is too low"),
+  },
+  {
     // Cooling down, not `credits-exhausted`: the request asked for a variant the account's plan
-    // does not cover right now, and the included window it falls back to refills on a clock.
+    // does not cover right now, and the included window it falls back to refills on a clock. The
+    // long-context phrases are the CLI's own wording, verbatim from the 0.3.220 binary (its
+    // extended-context error detector matches exactly these two sentences); "out of extra usage"
+    // is Meridian's live-observed variant of the same condition (their errors.ts). A spent overage
+    // budget still leaves the included window refilling on a clock, so all of them cool down.
     kind: "rate-limited",
     signal: "claude-sdk:overage-required",
     status: 429,
     clientMessage: "the account's plan does not cover the extended-context variant of this model",
-    match: all("extra usage", "1m"),
+    match: (text) =>
+      all("extra usage", "1m")(text) ||
+      phrase(
+        "extra usage is required for long context",
+        "usage credits are required for long context",
+        "out of extra usage",
+      )(text),
   },
   {
     kind: "rate-limited",

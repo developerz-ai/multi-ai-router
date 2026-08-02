@@ -53,34 +53,52 @@ describe("kept, because a clock will fix it", () => {
     subscription("other"),
   ]
 
+  const probed = [
+    subscription("bound", {
+      status: "cooling_down",
+      health: health({ cooldownUntil: at(-1_000), probeHeldUntil: at(20_000) }),
+    }),
+    subscription("other"),
+  ]
+
   test("a cooling-down account blocks the request instead of moving the conversation", () => {
     expect(decide(cooling, "bound")).toEqual({
       state: "blocked",
       accountId: "bound",
+      reason: "cooling-down",
       resetsAt: at(600_000),
     })
   })
 
-  test("a spent quota window is the same kind of temporary", () => {
+  test("a spent quota window is the same kind of temporary — and named as itself, not as cooling", () => {
     const spent = [subscription("bound", { quotaWindows: [continuous(1)] }), subscription("other")]
-    expect(decide(spent, "bound").state).toBe("blocked")
+    const decision = decide(spent, "bound")
+    expect(decision.state).toBe("blocked")
+    if (decision.state === "blocked") expect(decision.reason).toBe("quota-window-spent")
   })
 
   test("another request's probe on the bound account is the shortest clock of all", () => {
     // Milliseconds, not minutes: the probe either brings the account back or cools it down again.
     // Dropping a resumable conversation over that would restart it for nothing.
-    const probed = [
-      subscription("bound", {
-        status: "cooling_down",
-        health: health({ cooldownUntil: at(-1_000), probeHeldUntil: at(20_000) }),
-      }),
-      subscription("other"),
-    ]
-
     expect(decide(probed, "bound")).toEqual({
       state: "blocked",
       accountId: "bound",
+      reason: "probe-in-flight",
       resetsAt: at(20_000),
+      // The router's own hold, not anything the provider said — the 429 must say so.
+      resetSource: "estimated",
+    })
+  })
+
+  test("`rebind` never fires on a probe in flight — the shortest clock is always worth the wait", () => {
+    // The failure this pins: `rebind` inverting the *whole* clock-recoverable set dropped a
+    // resumable conversation over a hold the router itself placed and settles within one request.
+    expect(decide(probed, "bound", { boundAccountCoolingDown: "rebind" })).toEqual({
+      state: "blocked",
+      accountId: "bound",
+      reason: "probe-in-flight",
+      resetsAt: at(20_000),
+      resetSource: "estimated",
     })
   })
 
@@ -89,6 +107,15 @@ describe("kept, because a clock will fix it", () => {
       state: "invalidated",
       accountId: "bound",
       reason: "cooling-down",
+    })
+  })
+
+  test("`rebind` also covers a spent quota window — the commit that shipped it names both", () => {
+    const spent = [subscription("bound", { quotaWindows: [continuous(1)] }), subscription("other")]
+    expect(decide(spent, "bound", { boundAccountCoolingDown: "rebind" })).toEqual({
+      state: "invalidated",
+      accountId: "bound",
+      reason: "quota-window-spent",
     })
   })
 })

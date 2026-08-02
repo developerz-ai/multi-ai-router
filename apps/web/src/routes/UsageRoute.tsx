@@ -18,7 +18,7 @@ import {
 } from "../lib/api/usage"
 import { createNow } from "../lib/clock"
 import { fromDateTimeInput } from "../lib/datetime-input"
-import { formatCost, formatCount, formatPercent } from "../lib/format"
+import { formatCost, formatCount, formatMillis, formatPercent } from "../lib/format"
 import { useAllAccounts } from "../lib/queries/accounts"
 import { useUsageSummary } from "../lib/queries/usage"
 import styles from "./UsageRoute.module.scss"
@@ -187,15 +187,18 @@ export default function UsageRoute() {
                 note="Non-success share of attempts — broken down below"
                 value={formatPercent(data.totals.errors, data.totals.attempts)}
               />
+              {/* `formatMillis` on all four: a null reading renders as an explicitly unread
+                  track (`—`), never as zero — "0 ms" on the overhead tile is a perfect result
+                  nobody measured, the exact opposite of "no data in this window". */}
               <StatTile
                 label="Latency p95"
-                note={`p50 ${data.totals.latencyP50Ms} ms`}
-                value={`${data.totals.latencyP95Ms} ms`}
+                note={`p50 ${formatMillis(data.totals.latencyP50Ms)}`}
+                value={formatMillis(data.totals.latencyP95Ms)}
               />
               <StatTile
                 label="Router overhead p95"
                 note="Budgeted under 5 ms — a regression is a bug"
-                value={`${data.totals.routerOverheadP95Ms} ms`}
+                value={formatMillis(data.totals.routerOverheadP95Ms)}
               />
               {/* Fetched and rendered nowhere before this: the router's own budget is zero *added*
                   TTFT (CLAUDE.md non-negotiable 8), and this is the only figure that can catch a
@@ -203,7 +206,7 @@ export default function UsageRoute() {
               <StatTile
                 label="Time to first byte p95"
                 note="Budgeted at zero added TTFT"
-                value={`${data.totals.ttfbP95Ms} ms`}
+                value={formatMillis(data.totals.ttfbP95Ms)}
               />
             </section>
 

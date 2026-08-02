@@ -145,4 +145,58 @@ describe("answeredFailure", () => {
     expect(answeredFailure(null, null, null)).toBeNull()
     expect(fold(RATE_LIMITED, answeredFailure(null, null, null))).toBe(RATE_LIMITED)
   })
+
+  const NOW = new Date("2026-01-01T12:00:00.000Z")
+
+  test("an SDK 429 carries the reset its own stream reported — never a blind retry", () => {
+    // The SDK's reset instant rides the query stream as a `rate_limit_event`, never the throw, so
+    // `classifySdkFailure` pins `classification.rateLimit` to null. Without the attempt's captured
+    // signal, the rendered 429 had no Retry-After (non-negotiable 7).
+    const held = answeredFailure(classified("rate-limited", 429), null, null, {
+      rateLimit: {
+        limited: true,
+        resetsAt: new Date(NOW.getTime() + 90_000),
+        resetSource: "provider-reported",
+        windows: [],
+      },
+      now: NOW,
+      clientMessage: "the account's Claude subscription window is spent",
+    })
+
+    expect(held?.kind).toBe("router")
+    if (held?.kind !== "router") return
+    expect(held.error).toBeInstanceOf(QuotaExhaustedError)
+    const error = held.error as QuotaExhaustedError
+    expect(error.resetsAt).toEqual(new Date(NOW.getTime() + 90_000))
+    // Derived from the instant when the signal named no seconds of its own.
+    expect(error.retryAfterSeconds).toBe(90)
+  })
+
+  test("a classified failure with no body keeps its status and its router-authored sentence", () => {
+    // A subprocess crash, a busy session, an unclassifiable throw: classification, no upstream
+    // body. Contributing nothing here collapsed every one of them into a generic 503
+    // `NoHealthyAccountError` — a crashed subprocess indistinguishable from an empty pool.
+    const held = answeredFailure(classified("server-error", 502), null, "anthropic", {
+      rateLimit: null,
+      now: NOW,
+      clientMessage: "the Claude Agent SDK subprocess exited before answering",
+    })
+
+    expect(held?.kind).toBe("upstream")
+    if (held?.kind !== "upstream") return
+    expect(held.upstream.status).toBe(502)
+    expect(held.upstream.bodyText).toContain("subprocess exited before answering")
+    expect(held.dialect).toBe("anthropic")
+  })
+
+  test("the synthesized answer still loses to a real 429 elsewhere in the chain", () => {
+    const crashed = answeredFailure(classified("server-error", 502), null, null, {
+      rateLimit: null,
+      now: NOW,
+      clientMessage: "the Claude Agent SDK subprocess exited before answering",
+    })
+
+    expect(status(fold(RATE_LIMITED, crashed))).toBe(429)
+    expect(status(fold(crashed, RATE_LIMITED))).toBe(429)
+  })
 })

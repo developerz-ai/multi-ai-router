@@ -1,4 +1,13 @@
 import { readMessageFacts, readStopFacts, readUsage, type SdkUsage, type WireEvent } from "./events"
+import {
+  type ClientFrame,
+  isRecord,
+  normalizedStart,
+  outputCounts,
+  randomMessageId,
+  stripContextManagement,
+  synthesizedStart,
+} from "./frames"
 import { createBlockIndexMap, type Turn, withClientIndex } from "./index-map"
 
 /**
@@ -35,8 +44,7 @@ import { createBlockIndexMap, type Turn, withClientIndex } from "./index-map"
  * wire a request fails honestly, and a malformed frame is worth dropping, never worth a crash.
  */
 
-/** A client-visible Anthropic SSE frame. The object *is* the `data:` payload. */
-export type ClientFrame = Readonly<Record<string, unknown>> & { readonly type: string }
+export type { ClientFrame } from "./frames"
 
 const NO_FRAMES: readonly ClientFrame[] = []
 
@@ -77,6 +85,13 @@ export interface Envelope {
   finish(completion: Completion): readonly ClientFrame[]
   /** A classified failure. @returns one terminal `error` frame, after which nothing is emitted. */
   fail(type: string, message: string): readonly ClientFrame[]
+  /**
+   * Blocks `finish` had to close because the upstream never did. Zero in every healthy turn — the
+   * force-close below keeps the client's parser sound, but a non-zero count means an upstream (or
+   * a filter of ours) dropped a `content_block_stop`, and without this counter that regression is
+   * only visible in user transcripts, never in our logs (`stream.ts` reports it to the observer).
+   */
+  readonly forcedBlockCloses: number
 }
 
 export function createEnvelope(options: EnvelopeOptions): Envelope {
@@ -90,6 +105,31 @@ export function createEnvelope(options: EnvelopeOptions): Envelope {
   let stopReason: string | null = null
   let stopSequence: string | null = null
   let lastUsage: SdkUsage | null = null
+  let forcedBlockCloses = 0
+
+  /**
+   * Field-wise, newest non-null value wins. The SDK splits one turn's counts across events —
+   * `message_start` carries the input and cache counts, each `message_delta` the output count so
+   * far — so replacing wholesale (the old behaviour) threw away input and cache on **every** turn
+   * whose authoritative `result` never arrived. That is precisely the early-stopped tool-call turn
+   * (`tools/early-stop.ts` synthesizes a result with no usage, by design), the dominant agent
+   * traffic shape, and it under-reported input+cache in every UsageRecord it produced. Nothing is
+   * invented: a count no event stated stays null, and `outputCounts` still omits it.
+   */
+  const mergeUsage = (usage: SdkUsage | null): void => {
+    if (usage === null) return
+    const held = lastUsage
+    lastUsage =
+      held === null
+        ? usage
+        : {
+            input_tokens: usage.input_tokens ?? held.input_tokens,
+            output_tokens: usage.output_tokens ?? held.output_tokens,
+            cache_creation_input_tokens:
+              usage.cache_creation_input_tokens ?? held.cache_creation_input_tokens,
+            cache_read_input_tokens: usage.cache_read_input_tokens ?? held.cache_read_input_tokens,
+          }
+  }
 
   const openStart = (out: ClientFrame[], event: WireEvent | null): void => {
     if (started) return
@@ -112,7 +152,12 @@ export function createEnvelope(options: EnvelopeOptions): Envelope {
 
     switch (event.type) {
       case "message_start":
-        if (keep) openStart(out, event)
+        if (keep) {
+          openStart(out, event)
+          // The turn's input and cache counts live here and nowhere else on the stream — see
+          // `mergeUsage`. A subagent's start is not the answer's bill, so `keep` gates this too.
+          if (isRecord(event.raw.message)) mergeUsage(readUsage(event.raw.message.usage))
+        }
         break
 
       case "content_block_start": {
@@ -142,8 +187,7 @@ export function createEnvelope(options: EnvelopeOptions): Envelope {
         const facts = readStopFacts(event.raw)
         if (facts.stopReason !== null) stopReason = facts.stopReason
         if (facts.stopSequence !== null) stopSequence = facts.stopSequence
-        const usage = readUsage(event.raw.usage)
-        if (usage !== null) lastUsage = usage
+        mergeUsage(readUsage(event.raw.usage))
         break
       }
 
@@ -164,7 +208,7 @@ export function createEnvelope(options: EnvelopeOptions): Envelope {
         break
     }
 
-    return out
+    return out.map(stripContextManagement)
   }
 
   return {
@@ -177,6 +221,9 @@ export function createEnvelope(options: EnvelopeOptions): Envelope {
     get id() {
       return id
     },
+    get forcedBlockCloses() {
+      return forcedBlockCloses
+    },
     push,
 
     finish(completion) {
@@ -184,7 +231,10 @@ export function createEnvelope(options: EnvelopeOptions): Envelope {
       terminated = true
       const out: ClientFrame[] = []
       openStart(out, null)
-      for (const index of blocks.open()) out.push({ type: "content_block_stop", index })
+      for (const index of blocks.open()) {
+        forcedBlockCloses += 1
+        out.push({ type: "content_block_stop", index })
+      }
       out.push({
         type: "message_delta",
         delta: { stop_reason: completion.stopReason ?? stopReason, stop_sequence: stopSequence },
@@ -200,73 +250,4 @@ export function createEnvelope(options: EnvelopeOptions): Envelope {
       return [{ type: "error", error: { type, message } }]
     },
   }
-}
-
-/**
- * `message_delta`'s usage block.
- *
- * `output_tokens` is required by the shape and is therefore the one count stated unconditionally.
- * Everything else appears only when the SDK actually counted it — the same rule
- * `services/translate/shared/usage.ts` applies at every other seam, for the same reason: a zero
- * written for a number nobody measured is invented data.
- */
-function outputCounts(usage: SdkUsage | null): Record<string, number> {
-  const counts: Record<string, number> = { output_tokens: usage?.output_tokens ?? 0 }
-  if (usage === null) return counts
-  if (usage.input_tokens !== null) counts.input_tokens = usage.input_tokens
-  if (usage.cache_creation_input_tokens !== null) {
-    counts.cache_creation_input_tokens = usage.cache_creation_input_tokens
-  }
-  if (usage.cache_read_input_tokens !== null) {
-    counts.cache_read_input_tokens = usage.cache_read_input_tokens
-  }
-  return counts
-}
-
-/**
- * The SDK's `message_start`, with the id and model the client will be told about.
- *
- * A shallow rewrite of two fields rather than a rebuild: everything else the upstream stated —
- * `role`, `content`, `usage`, fields this build has never heard of — is the Anthropic dialect
- * already and is forwarded exactly as it arrived.
- */
-function normalizedStart(
-  raw: Readonly<Record<string, unknown>>,
-  id: string,
-  model: string,
-): ClientFrame {
-  const message = isRecord(raw.message) ? raw.message : {}
-  return { ...raw, type: "message_start", message: { ...message, id, model } }
-}
-
-/**
- * The `message_start` for a turn that never sent one — a tool-only turn, a structured-output turn,
- * or an error close before the first content block.
- *
- * `content: []` is the point: an empty completion is the honest answer when the model produced
- * nothing, and the counts are stated in the terminal `message_delta` where the real ones live.
- */
-function synthesizedStart(id: string, model: string): ClientFrame {
-  return {
-    type: "message_start",
-    message: {
-      id,
-      type: "message",
-      role: "assistant",
-      model,
-      content: [],
-      stop_reason: null,
-      stop_sequence: null,
-      usage: { input_tokens: 0, output_tokens: 0 },
-    },
-  }
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value)
-}
-
-/** 122 bits from the platform CSPRNG. Unique across replicas, unlike anything clock-derived. */
-function randomMessageId(): string {
-  return `msg_${crypto.randomUUID().replaceAll("-", "")}`
 }

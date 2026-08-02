@@ -83,6 +83,34 @@ describe("a single user turn", () => {
     expect(described.every((block) => block.type === "text")).toBe(true)
     expect(textOf(described)).toContain("image")
   })
+
+  test("an omitted image says why, so the model can tell the user what is missing", () => {
+    const badMedia = buildSdkPrompt({
+      messages: [
+        user([{ type: "image", source: { type: "base64", media_type: "image/tiff", data: "A" } }]),
+      ],
+      plan: FRESH,
+    })
+    expect(textOf(badMedia)).toBe("[image omitted: unsupported source type image/tiff]")
+
+    const badShape = buildSdkPrompt({
+      messages: [user([{ type: "image", source: { type: "file", file_id: "f_1" } }])],
+      plan: FRESH,
+    })
+    expect(textOf(badShape)).toBe("[image omitted: unsupported source type file]")
+  })
+
+  test("the image/jpg misspelling is normalized to image/jpeg rather than demoted to text", () => {
+    const blocks = buildSdkPrompt({
+      messages: [
+        user([{ type: "image", source: { type: "base64", media_type: "image/jpg", data: "AAA" } }]),
+      ],
+      plan: FRESH,
+    })
+    expect(blocks).toEqual([
+      { type: "image", source: { type: "base64", media_type: "image/jpeg", data: "AAA" } },
+    ])
+  })
 })
 
 describe("a conversation the SDK has never held", () => {
@@ -152,6 +180,65 @@ describe("blocks with no user-message equivalent", () => {
     expect(blocks).toEqual([
       { type: "text", text: "[the client ran the requested tool and it returned: 72°F and clear]" },
     ])
+  })
+
+  test("a tool_result's nested images survive as sibling image blocks, never inside the line", () => {
+    const image = { type: "image", source: { type: "base64", media_type: "image/png", data: "S" } }
+    const blocks = buildSdkPrompt({
+      messages: [
+        user([
+          {
+            type: "tool_result",
+            tool_use_id: "toolu_1",
+            content: [{ type: "text", text: "screenshot taken" }, image],
+          },
+        ]),
+      ],
+      plan: FRESH,
+    })
+
+    // Both halves survive: the transcript line names the image, and the image itself follows as a
+    // real block — a screenshot/chart/PDF-page tool used to lose it every turn.
+    expect(blocks).toEqual([
+      {
+        type: "text",
+        text: "[the client ran the requested tool and it returned: screenshot taken\n(and 1 image, forwarded below this line)]",
+      },
+      { type: "image", source: { type: "base64", media_type: "image/png", data: "S" } },
+    ])
+  })
+
+  test("an image-only tool_result forwards the image and the line says that is all there was", () => {
+    const blocks = buildSdkPrompt({
+      messages: [
+        user([
+          {
+            type: "tool_result",
+            tool_use_id: "toolu_1",
+            content: [
+              { type: "image", source: { type: "base64", media_type: "image/png", data: "S" } },
+            ],
+          },
+        ]),
+      ],
+      plan: FRESH,
+    })
+
+    expect(blocks).toEqual([
+      {
+        type: "text",
+        text: "[the client ran the requested tool and it returned: 1 image, forwarded below this line]",
+      },
+      { type: "image", source: { type: "base64", media_type: "image/png", data: "S" } },
+    ])
+  })
+
+  test("a tool_result with neither text nor images still reads as no textual output", () => {
+    const blocks = buildSdkPrompt({
+      messages: [user([{ type: "tool_result", tool_use_id: "toolu_1", content: [] }])],
+      plan: FRESH,
+    })
+    expect(textOf(blocks)).toContain("no textual output")
   })
 
   test("a failed tool result says so", () => {

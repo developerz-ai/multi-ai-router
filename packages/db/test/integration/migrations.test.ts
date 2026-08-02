@@ -329,6 +329,12 @@ describe.skipIf(!runnable)("migrations against a live database", () => {
     })
     apiKeyIds.push(apiKey.id)
 
+    const other = await accountRepository.create({
+      label: "test-migrations-usage-acct-2",
+      provider: "zai",
+    })
+    accountIds.push(other.id)
+
     await usageRepository.insertMany([
       {
         correlationId: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
@@ -347,5 +353,80 @@ describe.skipIf(!runnable)("migrations against a live database", () => {
 
     const totals = await dailyRepository.totals({ fromDay: "2026-07-24", toDay: "2026-07-25" })
     expect(totals.requests).toBeGreaterThan(0)
+
+    const dailyRow = async (accountId: string) => {
+      const rows = await db.select().from(usageDaily).where(eq(usageDaily.accountId, accountId))
+      expect(rows).toHaveLength(1)
+      // biome-ignore lint/style/noNonNullAssertion: length asserted on the line above
+      return rows[0]!
+    }
+    const firstStamp = (await dailyRow(account.id)).updatedAt
+
+    // A second batch in the same day that moves **every** replaced measure — two more attempts on
+    // one new request (a failover chain), one failure, tokens in all four columns, one metered and
+    // one notional cost — plus one attempt on a second account for the breakdown's ordering.
+    await usageRepository.insertMany([
+      {
+        correlationId: "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+        apiKeyId: apiKey.id,
+        accountId: account.id,
+        model: "test-migrations-model",
+        outcome: "upstream_error",
+        createdAt,
+        tokensIn: 11,
+        tokensOut: 22,
+        cacheReadTokens: 33,
+        cacheWriteTokens: 44,
+        costEstimate: "1.5",
+        costBasis: "metered",
+      },
+      {
+        correlationId: "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+        apiKeyId: apiKey.id,
+        accountId: account.id,
+        model: "test-migrations-model",
+        outcome: "success",
+        createdAt,
+        tokensIn: 100,
+        costEstimate: "2.5",
+        costBasis: "notional",
+      },
+      {
+        correlationId: "cccccccc-cccc-cccc-cccc-cccccccccccc",
+        apiKeyId: apiKey.id,
+        accountId: other.id,
+        model: "test-migrations-model",
+        outcome: "success",
+        createdAt,
+      },
+    ])
+
+    // The conflict SET is a hand-joined `sql.raw` over `REPLACED_COLUMNS`; the only gate on that
+    // list staying complete is a re-rollup whose row must come back *replaced*, not accumulated —
+    // a measure missing from the SET keeps its first-rollup value here and fails its assertion.
+    expect(await dailyRepository.rollupDay(createdAt)).toBeGreaterThan(0)
+
+    const breakdown = await dailyRepository.breakdown(
+      { fromDay: "2026-07-24", toDay: "2026-07-25" },
+      "accountId",
+    )
+    const mineFirst = breakdown.filter((row) => row.id === account.id || row.id === other.id)
+    // Biggest first: three attempts outrank one, whatever else shares the day.
+    expect(mineFirst.map((row) => row.id)).toEqual([account.id, other.id])
+    expect(mineFirst[0]).toMatchObject({
+      requests: 2,
+      attempts: 3,
+      errors: 1,
+      tokensIn: 111,
+      tokensOut: 22,
+      cacheReadTokens: 33,
+      cacheWriteTokens: 44,
+    })
+    expect(Number(mineFirst[0]?.costMetered)).toBeCloseTo(1.5)
+    expect(Number(mineFirst[0]?.costNotional)).toBeCloseTo(2.5)
+    expect(mineFirst[1]).toMatchObject({ requests: 1, attempts: 1, errors: 0 })
+
+    // `updated_at` is the tenth replaced column — the re-run must stamp it forward too.
+    expect((await dailyRow(account.id)).updatedAt.getTime()).toBeGreaterThan(firstStamp.getTime())
   })
 })

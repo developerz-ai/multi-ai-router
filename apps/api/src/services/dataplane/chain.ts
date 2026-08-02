@@ -21,6 +21,7 @@ import { admitHalfOpenProbe } from "./probe"
 import { relayUpstreamError } from "./relay-error"
 import type { DispatchRuntime } from "./runtime"
 import { runSdkAttempt } from "./sdk-attempt"
+import { withSessionRestart } from "./session-restart"
 import type { TranslatedRequestBody } from "./translate-body"
 
 /**
@@ -126,7 +127,7 @@ export async function runChain(ctx: ChainContext): Promise<Response> {
 
     let outcome: AttemptOutcome
     try {
-      outcome = await dispatch(ctx, servable, upstreamBody)
+      outcome = await dispatch(ctx, servable, upstreamBody, decision.action === "retry-in-place")
     } catch (error) {
       // A credential that will not decrypt, or a driver that refused to build the request. This
       // account cannot serve; the next one still can, and the reason is kept in case none can —
@@ -157,10 +158,19 @@ export async function runChain(ctx: ChainContext): Promise<Response> {
       progress = markStreamed(progress)
       // The span stays open: a stream settles long after this returns, and every byte of the drain
       // is still time the router spent waiting. `chain-relay.ts` closes it at the last byte.
-      return relaySuccess(ctx, servable, decision.attempt, outcome.response, {
+      const relayed = relaySuccess(ctx, servable, decision.attempt, outcome.response, {
         ...at,
         upstreamStarted,
       })
+      // Failover left the bound account behind, so this answer came from a fresh upstream
+      // session: said out loud, never silently (`session-restart.ts`). The binding itself is
+      // re-pointed by the SDK attempt's own `remember` — dropped-then-rebound, never migrated.
+      if (decision.action !== "attempt" || !decision.sessionRestart) return relayed
+      ctx.log?.warn("bound session restarted on another account", {
+        accountId,
+        attempt: decision.attempt,
+      })
+      return withSessionRestart(relayed, "failover")
     }
 
     // Order is load-bearing. The classified failure is this response's *verdict* and lands first;
@@ -196,10 +206,17 @@ export async function runChain(ctx: ChainContext): Promise<Response> {
     held = foldChainFailure(
       held,
       // A translated attempt's error body is the *account's* dialect. The client is owed its own.
+      // The captured rate-limit reading rides along: on the SDK path the reset instant arrived on
+      // the query stream rather than the throw, and a 429 rendered without it has no Retry-After.
       answeredFailure(
         outcome.classification,
         outcome.upstream,
         servable.translation === null ? null : runtime.ingressDialect,
+        {
+          rateLimit: outcome.rateLimit,
+          now: attemptStartedAt,
+          clientMessage: outcome.failure.message,
+        },
       ),
     )
   }
@@ -232,6 +249,7 @@ function dispatch(
   ctx: ChainContext,
   servable: ServableCandidate,
   body: Uint8Array | null,
+  inPlaceReplay: boolean,
 ): Promise<AttemptOutcome> {
   const { runtime } = ctx
   if (servable.kind === "sdk") {
@@ -244,6 +262,10 @@ function dispatch(
       now: runtime.clock.now,
       timeoutMs: runtime.timeoutMs,
       signal: ctx.request.signal,
+      // The planner only ever replays in place after `stale-session`, so this attempt already
+      // knows the SDK disowned the resumed id — the lineage plan must not offer it again.
+      sessionGone: inPlaceReplay,
+      ...(ctx.log === undefined ? {} : { log: ctx.log }),
     })
   }
 

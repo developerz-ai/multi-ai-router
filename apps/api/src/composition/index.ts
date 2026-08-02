@@ -1,3 +1,4 @@
+import { describeError } from "@multi-ai-router/core"
 import {
   createAccountRepository,
   createAdminCredentialRepository,
@@ -54,6 +55,7 @@ import {
 import { createUsageRecorderFromEnv, type UsageRecorder } from "../services/usage"
 import type { AdminServices } from "../types"
 import { createAdminPlane } from "./admin"
+import { dispatchOptionsFromEnv } from "./dispatch-options"
 /**
  * The composition root: every long-lived object in the process is constructed here, exactly once,
  * and injected downward.
@@ -311,15 +313,8 @@ export function createRuntime(deps: RuntimeDeps): Runtime {
     prices: prices.lookup,
     logger,
     onRequest: (sample) => metrics.observeRequest(sample),
-    options: {
-      failover: { maxAttempts: env.failover.maxAttempts },
-      selection: { boundAccountCoolingDown: env.failover.boundAccountCoolingDown },
-      upstreamTimeoutMs: env.failover.upstreamTimeoutMs,
-      translation: { defaultMaxTokens: env.translation.defaultMaxTokens },
-      // The one limit an unauthenticated-shaped mistake can spend memory on before anything else
-      // runs, so it is the operator's to set rather than the reader's to assume.
-      body: { maxBytes: env.dataPlane.maxRequestBodyBytes },
-    },
+    // One tested mapping from parsed env to dispatcher behavior — see `dispatch-options.ts`.
+    options: dispatchOptionsFromEnv(env),
   })
 
   // --- admin plane ----------------------------------------------------------
@@ -437,7 +432,7 @@ export function createRuntime(deps: RuntimeDeps): Runtime {
       void modelCatalogStore.refresh().catch((error: unknown) => {
         logger.warn("model catalog did not load at boot", {
           component: "runtime",
-          error: error instanceof Error ? error.message : String(error),
+          error: describeError(error, Number.POSITIVE_INFINITY),
         })
       })
       modelCatalogStore.start()
