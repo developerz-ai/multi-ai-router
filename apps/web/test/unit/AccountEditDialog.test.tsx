@@ -70,10 +70,12 @@ function account(overrides: Partial<AccountView> = {}): AccountView {
     dialect: null,
     modelAliases: { "claude-sonnet-4-5": "glm-4.6" },
     supportedModels: ["glm-4.6", "glm-4.7"],
+    windowTokenLimits: null,
     weight: 300,
     priority: 2,
     billing: "metered",
     tokenExpiresAt: null,
+    lastUsedAt: null,
     createdAt: "2026-07-24T12:00:00.000Z",
     updatedAt: "2026-07-24T12:00:00.000Z",
     ...overrides,
@@ -250,6 +252,72 @@ describe("AccountEditDialog submission", () => {
       submitForm()
       expect(patch?.modelAliases).toEqual({ "gpt-5": "glm-4.7", "claude-opus-4-1": "glm-4.6" })
     })
+  })
+})
+
+describe("AccountEditDialog window token ceilings", () => {
+  const subAccount = (overrides: Partial<AccountView> = {}) =>
+    account({ provider: "anthropic-oauth", billing: "subscription", ...overrides })
+
+  test("offers no ceiling boxes for an http provider, and never sends the field", () => {
+    // An http account reports no named windows, so a ceiling would draw nothing — and sending
+    // `null` from a form that never displayed the boxes would silently clear limits set elsewhere.
+    let patch: UpdateAccountInput | undefined
+    withMount(base({ onSubmit: (next) => (patch = next) }), () => {
+      expect(hasFieldLabelled("5h tokens")).toBe(false)
+      submitForm()
+      expect(patch).toBeDefined()
+      expect("windowTokenLimits" in (patch ?? {})).toBe(false)
+    })
+  })
+
+  test("seeds each box from the stored ceiling, and offers no box for overage", () => {
+    withMount(
+      base({
+        provider: SUBSCRIPTION,
+        account: subAccount({ windowTokenLimits: { five_hour: 3_000_000 } }),
+      }),
+      () => {
+        expect(fieldByLabel("5h tokens").value).toBe("3000000")
+        expect(fieldByLabel("7d tokens").value).toBe("")
+        expect(hasFieldLabelled("7d Opus tokens")).toBe(true)
+        expect(hasFieldLabelled("7d Sonnet tokens")).toBe(true)
+        // No span, so no bar can ever be drawn for it — a box would be a silent no-op.
+        expect(hasFieldLabelled("Overage")).toBe(false)
+      },
+    )
+  })
+
+  test("typed ceilings go up as numbers, keeping the ones already stored", () => {
+    let patch: UpdateAccountInput | undefined
+    withMount(
+      base({
+        provider: SUBSCRIPTION,
+        account: subAccount({ windowTokenLimits: { five_hour: 3_000_000 } }),
+        onSubmit: (next) => (patch = next),
+      }),
+      () => {
+        typeInto(fieldByLabel("7d tokens"), "5000000")
+        submitForm()
+        expect(patch?.windowTokenLimits).toEqual({ five_hour: 3_000_000, seven_day: 5_000_000 })
+      },
+    )
+  })
+
+  test("all boxes empty sends null — the clear-everything spelling, not a zero", () => {
+    let patch: UpdateAccountInput | undefined
+    withMount(
+      base({
+        provider: SUBSCRIPTION,
+        account: subAccount({ windowTokenLimits: { five_hour: 3_000_000 } }),
+        onSubmit: (next) => (patch = next),
+      }),
+      () => {
+        typeInto(fieldByLabel("5h tokens"), "")
+        submitForm()
+        expect(patch?.windowTokenLimits).toBeNull()
+      },
+    )
   })
 })
 

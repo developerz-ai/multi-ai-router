@@ -59,5 +59,7 @@ async function invalidateAccountReaders(client: ReturnType<typeof useQueryClient
   await Promise.all([
     client.invalidateQueries({ queryKey: queryKeys.accounts.root() }),
     client.invalidateQueries({ queryKey: queryKeys.pools.root() }),
+    // Completing or abandoning a login is audited; the log must not wait for a reload.
+    client.invalidateQueries({ queryKey: queryKeys.audit.root() }),
   ])
 }

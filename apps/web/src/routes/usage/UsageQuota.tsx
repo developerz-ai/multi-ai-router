@@ -33,16 +33,15 @@ export interface UsageQuotaProps {
 export function UsageQuota(props: UsageQuotaProps) {
   const headingId = createUniqueId()
 
+  // The `<For>` below is reference-keyed, so what it iterates must NOT change identity on a
+  // clock tick — this memo therefore depends on `props.accounts` alone and hands `<For>` the
+  // account objects themselves, which are stable between refetches. The time-dependent window
+  // descriptions are derived *inside* each row (same pattern as `ResetIndicator`): before this
+  // split, reading `props.nowMs` here rebuilt every entry object each 30s tick, and `<For>`
+  // disposed and recreated every account block — tooltips vanished mid-read and screen-reader
+  // position was lost.
   const metered = createMemo(() =>
-    props.accounts
-      .map((account) => ({
-        account,
-        windows: describeQuotaWindows(
-          { status: account.status, windows: account.availability?.quotaWindows ?? [] },
-          props.nowMs,
-        ),
-      }))
-      .filter((entry) => entry.windows.length > 0),
+    props.accounts.filter((account) => (account.availability?.quotaWindows ?? []).length > 0),
   )
 
   return (
@@ -67,27 +66,37 @@ export function UsageQuota(props: UsageQuotaProps) {
 
         <ul class={styles.accounts}>
           <For each={metered()}>
-            {(entry) => (
-              <li class={styles.account}>
-                <div class={styles.identity}>
-                  <StatusDot status={entry.account.status} />
-                  <span class={styles.label}>{entry.account.label}</span>
-                  <span class={styles.provider}>{entry.account.provider}</span>
-                </div>
+            {(account) => {
+              // Derived per row, where a tick updates text in place instead of recreating the
+              // block — the row's own memo re-runs, the `<li>` above it survives.
+              const windows = createMemo(() =>
+                describeQuotaWindows(
+                  { status: account.status, windows: account.availability?.quotaWindows ?? [] },
+                  props.nowMs,
+                ),
+              )
+              return (
+                <li class={styles.account}>
+                  <div class={styles.identity}>
+                    <StatusDot status={account.status} />
+                    <span class={styles.label}>{account.label}</span>
+                    <span class={styles.provider}>{account.provider}</span>
+                  </div>
 
-                {/* `Index`, not `For`: these descriptions are rebuilt on every clock tick, so
-                    keying by reference would dispose and recreate every gauge underneath. */}
-                <ul class={styles.windows}>
-                  <Index each={entry.windows}>
-                    {(window) => <QuotaWindowRow owner={entry.account.label} window={window()} />}
-                  </Index>
-                </ul>
+                  {/* `Index`, not `For`: these descriptions are rebuilt on every clock tick, so
+                      keying by reference would dispose and recreate every gauge underneath. */}
+                  <ul class={styles.windows}>
+                    <Index each={windows()}>
+                      {(window) => <QuotaWindowRow owner={account.label} window={window()} />}
+                    </Index>
+                  </ul>
 
-                <p class={styles.checked}>
-                  Last reading {formatRelative(lastChecked(entry.windows), props.nowMs)}
-                </p>
-              </li>
-            )}
+                  <p class={styles.checked}>
+                    Last reading {formatRelative(lastChecked(windows()), props.nowMs)}
+                  </p>
+                </li>
+              )
+            }}
           </For>
         </ul>
       </section>

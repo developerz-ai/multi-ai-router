@@ -47,11 +47,20 @@ export function useAuditLog(query: Accessor<AuditQuery>) {
  * than the response being written into the cache: the server owns `updatedAt`
  * and the clamped values, and a hand-placed copy is how a table starts showing
  * numbers nobody stored.
+ *
+ * The audit root is invalidated too: this write is an audited action, and the
+ * audit table sits on the *same screen* — a save whose row does not appear
+ * beside it reads as a save that was not recorded.
  */
 export function useSavePriceOverrides() {
   const client = useQueryClient()
   return useMutation(() => ({
     mutationFn: (overrides: readonly PriceRate[]) => savePriceOverrides(overrides),
-    onSuccess: () => client.invalidateQueries({ queryKey: queryKeys.settings.root() }),
+    onSuccess: async () => {
+      await Promise.all([
+        client.invalidateQueries({ queryKey: queryKeys.settings.root() }),
+        client.invalidateQueries({ queryKey: queryKeys.audit.root() }),
+      ])
+    },
   }))
 }

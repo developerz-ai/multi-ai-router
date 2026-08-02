@@ -1,7 +1,7 @@
 import { existsSync } from "node:fs"
 import { join } from "node:path"
 import { fileURLToPath } from "node:url"
-import { VERSION } from "@multi-ai-router/core"
+import { describeError, VERSION } from "@multi-ai-router/core"
 import {
   createAdminCredentialRepository,
   createDatabase,
@@ -288,10 +288,14 @@ async function migrate(env: Env, logger: Logger): Promise<void> {
     })
     logger.info("migrations applied", { component: "db" })
   } catch (error) {
+    // The full cause chain, innermost first: at this one moment the operator must know *why*,
+    // and the wrapper's message alone is the statement, not the reason. A Postgres outage here is
+    // an AggregateError whose own message is empty. Unbounded on purpose — the logger redacts,
+    // and a pre-cut could split a credential right where the scrub would have matched.
     logger.error("migration failed — refusing to serve a half-migrated schema", {
       component: "db",
       errorClass: error instanceof Error ? error.name : "unknown",
-      reason: error instanceof Error ? error.message : String(error),
+      reason: describeError(error, Number.POSITIVE_INFINITY),
     })
     process.exit(1)
   }

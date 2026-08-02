@@ -2,7 +2,7 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test"
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import type { Options, PermissionResult } from "@anthropic-ai/claude-agent-sdk"
+import type { Options, PermissionResult, SDKMessage } from "@anthropic-ai/claude-agent-sdk"
 import { createApp } from "../../src/app"
 import { createLogger } from "../../src/logging/logger"
 import {
@@ -11,6 +11,7 @@ import {
   createQueryLaunch,
   createSdkConcurrency,
   createSdkInvoker,
+  createSdkTestProbe,
   PASSTHROUGH_SERVER_NAME,
   PERMITTED_TOOLS,
   qualifyToolName,
@@ -193,6 +194,8 @@ describe("ANTHROPIC_* and router secrets never reach the child environment", () 
     CLAUDE_CONFIG_DIR: "/wrong/account",
     ENCRYPTION_KEY: "leaked-encryption-key",
     DATABASE_URL: "postgres://leaked",
+    ADMIN_OIDC_CLIENT_SECRET: "leaked-oidc-client-secret",
+    ADMIN_API_TOKEN: "leaked-admin-api-token",
     METRICS_TOKEN: "leaked-metrics-token",
     PATH: "/usr/bin",
     HOME: "/home/router",
@@ -226,6 +229,113 @@ describe("ANTHROPIC_* and router secrets never reach the child environment", () 
     expect(env.ENCRYPTION_KEY).toBeUndefined()
     expect(env.DATABASE_URL).toBeUndefined()
     expect(env.CLAUDE_CONFIG_DIR).toBe("/data/accounts/sub")
+  })
+})
+
+describe("the probe's query() launch — the second of exactly two call sites", () => {
+  /**
+   * `test-probe.ts` builds its own `Options` rather than going through `createQueryLaunch`, so a
+   * gate that only asserted the invoker's launch left the probe free to drift. Same stub-at-query()
+   * seam, same assertions: a probe is a real, billed request running as the operator's credential,
+   * and it gets the same sandbox (CLAUDE.md non-negotiable 2, no exception for a diagnostic).
+   */
+  async function probedOptions(inherited: Record<string, string> = {}): Promise<Options> {
+    const captured: Options[] = []
+    const restore = new Map<string, string | undefined>()
+    for (const [name, value] of Object.entries(inherited)) {
+      restore.set(name, process.env[name])
+      process.env[name] = value
+    }
+
+    try {
+      const probe = createSdkTestProbe({
+        cliPathOverride: null,
+        concurrency: createSdkConcurrency({ global: 2, perAccount: 1 }),
+        resolveCli: () => ({
+          ok: true,
+          source: "platform_package",
+          path: "/opt/claude/claude",
+          bytes: 245_000_000,
+        }),
+        runQuery: ({ options }) => {
+          captured.push(options)
+          const stream = {
+            async *[Symbol.asyncIterator]() {
+              yield { type: "result", subtype: "success", is_error: false, result: "pong" }
+            },
+          }
+          // The fixture only shapes the two fields the probe reads; the SDK union is far wider.
+          return stream as AsyncIterable<SDKMessage>
+        },
+      })
+
+      const result = await probe.run({
+        accountId: "sub-1",
+        configDir: "/data/accounts/sub-1",
+        model: "claude-opus-5",
+        signal: new AbortController().signal,
+      })
+      expect(result.ok).toBe(true)
+
+      const options = captured[0]
+      if (options === undefined) throw new Error("the probe must have launched a query()")
+      return options
+    } finally {
+      for (const [name, value] of restore) {
+        if (value === undefined) delete process.env[name]
+        else process.env[name] = value
+      }
+    }
+  }
+
+  test("names the shared allowlist constant and every isolation flag", async () => {
+    const options = await probedOptions()
+
+    // The one reviewed constant, never a second literal that could drift from it.
+    expect(options.allowedTools).toEqual([...PERMITTED_TOOLS])
+    expect(options.tools).toEqual([])
+    expect(options.permissionMode).toBe("dontAsk")
+    expect(options.settingSources).toEqual([])
+    expect(options.strictMcpConfig).toBe(true)
+    expect(options.skills).toEqual([])
+    expect(options.maxTurns).toBe(1)
+  })
+
+  test("denies every host-executing built-in through its own canUseTool gate", async () => {
+    const options = await probedOptions()
+    const canUseTool = options.canUseTool
+    if (canUseTool === undefined) throw new Error("canUseTool must be set on every launch")
+
+    for (const toolName of [...HOST_TOOLS, "SomeFutureBuiltin"]) {
+      const result = await canUseTool(toolName, {}, { signal: new AbortController().signal })
+      expect(result.behavior).toBe("deny")
+    }
+  })
+
+  test("runs in the account's own directory with ANTHROPIC_* and router secrets stripped", async () => {
+    const options = await probedOptions({
+      ANTHROPIC_API_KEY: "sk-ant-leaked",
+      ANTHROPIC_BASE_URL: "https://router.internal",
+      CLAUDE_CODE_OAUTH_TOKEN: "leaked-oauth",
+      ADMIN_OIDC_CLIENT_SECRET: "leaked-oidc-client-secret",
+      ADMIN_API_TOKEN: "leaked-admin-api-token",
+    })
+    const env = options.env as Record<string, string>
+
+    expect(options.cwd).toBe("/data/accounts/sub-1")
+    expect(env.CLAUDE_CONFIG_DIR).toBe("/data/accounts/sub-1")
+    expect(Object.keys(env).some((key) => key.toUpperCase().startsWith("ANTHROPIC_"))).toBe(false)
+    expect(env.CLAUDE_CODE_OAUTH_TOKEN).toBeUndefined()
+    expect(env.ADMIN_OIDC_CLIENT_SECRET).toBeUndefined()
+    expect(env.ADMIN_API_TOKEN).toBeUndefined()
+  })
+
+  test("carries the forced query overrides, same as the dispatch path", async () => {
+    const env = (await probedOptions()).env as Record<string, string>
+
+    // claude.ai org connectors are a separate door from strictMcpConfig — see `env.ts`.
+    expect(env.ENABLE_CLAUDEAI_MCP_SERVERS).toBe("false")
+    expect(env.CLAUDE_CODE_SESSION_KIND).toBe("bg")
   })
 })
 
@@ -397,6 +507,8 @@ describe("the launch the production invoker actually builds", () => {
       ANTHROPIC_API_KEY: "sk-ant-leaked",
       ANTHROPIC_BASE_URL: "https://router.internal",
       CLAUDE_CODE_OAUTH_TOKEN: "leaked-oauth",
+      ADMIN_OIDC_CLIENT_SECRET: "leaked-oidc-client-secret",
+      ADMIN_API_TOKEN: "leaked-admin-api-token",
     })
     const env = options.env as Record<string, string>
 
@@ -404,6 +516,23 @@ describe("the launch the production invoker actually builds", () => {
     expect(env.CLAUDE_CONFIG_DIR).toBe("/data/accounts/sub-1")
     expect(Object.keys(env).some((key) => key.toUpperCase().startsWith("ANTHROPIC_"))).toBe(false)
     expect(env.CLAUDE_CODE_OAUTH_TOKEN).toBeUndefined()
+    expect(env.ADMIN_OIDC_CLIENT_SECRET).toBeUndefined()
+    expect(env.ADMIN_API_TOKEN).toBeUndefined()
+  })
+
+  test("forces the query env overrides, so no inherited value can re-open either door", async () => {
+    const options = await launchedOptions({
+      ENABLE_CLAUDEAI_MCP_SERVERS: "true",
+      CLAUDE_CODE_SESSION_KIND: "interactive",
+    })
+    const env = options.env as Record<string, string>
+
+    // claude.ai org connectors ride the OAuth token's scope, not the filesystem config that
+    // strictMcpConfig governs — a separate door, closed here (`env.ts`).
+    expect(env.ENABLE_CLAUDEAI_MCP_SERVERS).toBe("false")
+    expect(env.CLAUDE_CODE_SESSION_KIND).toBe("bg")
+    // And the runtime the CLI is launched under is a decision, never a detection.
+    expect(options.executable).toBe("bun")
   })
 })
 

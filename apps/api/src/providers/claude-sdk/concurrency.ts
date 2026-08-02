@@ -19,6 +19,20 @@
  * therefore **per replica** — two replicas run up to twice the configured processes, which is the
  * honest reading of a per-container memory bound, and the same trade `services/dataplane/limits.ts`
  * documents for per-key rate limiting.
+ *
+ * **What this gate deliberately does not serialize: the `CLAUDE_CONFIG_DIR` itself.** Up to
+ * `perAccount` subprocesses share one credential directory, each capable of an OAuth refresh
+ * inside it, and the login CLI (`login/spawn.ts`) touches the same directory from outside this
+ * gate entirely. That is a considered deferral, not an oversight
+ * (docs/idea/11-anthropic-agent-sdk.md §3, "Concurrent subprocesses on one directory"): the CLI
+ * writes `.credentials.json` atomically and carries its own cross-process locking; a refresh lost
+ * to a concurrent rotation fails one request into the ordinary auth classification rather than
+ * corrupting the file; and a login almost always runs against an Account that `needs_reauth` — a
+ * status routing already excludes — so login-vs-traffic overlap is the reconnect edge case, not
+ * the normal case. Serializing here would mean an exclusive drain of the account gate plus wiring
+ * the login path through it, priced against a corruption nobody has observed in comparable
+ * multi-process deployments. If that evidence changes, the seam is an `acquireAll(accountId)` on
+ * this interface — never a silent cut to `perAccount`, which is throughput the pool is sized on.
  */
 
 export interface SdkConcurrencyLimits {

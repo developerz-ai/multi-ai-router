@@ -167,8 +167,17 @@ export interface SelectionOptions {
   /**
    * `fail` (default) prefers the honest 429 and keeps the binding — the conversation stays
    * resumable when the clock fixes the account. `rebind` invalidates it and starts fresh.
+   * Never fires on `probe-in-flight`: that hold is the router's own and settles within one
+   * request (`binding.ts`).
    */
   readonly boundAccountCoolingDown?: BoundCooldownBehavior
+  /**
+   * The `Retry-After` a 429 carries when every candidate is out for a clock-recoverable reason
+   * but no reset instant is known. A pause rather than a countdown — nothing is scheduled to
+   * clear the condition, so a short value is a standing retry storm.
+   * Default: `no-candidates.ts`, `DEFAULT_UNKNOWN_RESET_RETRY_AFTER_SECONDS`.
+   */
+  readonly unknownResetRetryAfterSeconds?: number
 }
 
 /** One in-scope account, carrying the membership values the policies rank on. */

@@ -83,14 +83,19 @@ export interface UsageTotals {
   readonly costMetered: number
   /** Attributed spend on a subscription account. Never added to the above. */
   readonly costNotional: number
-  readonly latencyP50Ms: number
-  readonly latencyP95Ms: number
+  /**
+   * The four percentile readings are `number | null`, and null survives all the way to the render
+   * as `—`: the server sends null where nothing was measured, and coercing that to `0` would print
+   * "0 ms" on the overhead tile — a perfect score nobody earned, for a window with no data.
+   */
+  readonly latencyP50Ms: number | null
+  readonly latencyP95Ms: number | null
   /** The router's own added time. Budgeted at <5 ms p99; a regression is a bug. */
-  readonly routerOverheadP95Ms: number
+  readonly routerOverheadP95Ms: number | null
   /** Time to first byte. Budgeted at zero added TTFT — the number that catches a stream bug the
    *  overhead figure above cannot, because overhead is measured off the critical path and this is
    *  measured on it. */
-  readonly ttfbP95Ms: number
+  readonly ttfbP95Ms: number | null
 }
 
 /** One row of a leaderboard: a dimension member and its totals. */
@@ -209,10 +214,12 @@ export const EMPTY_TOTALS: UsageTotals = {
   cacheWriteTokens: 0,
   costMetered: 0,
   costNotional: 0,
-  latencyP50Ms: 0,
-  latencyP95Ms: 0,
-  routerOverheadP95Ms: 0,
-  ttfbP95Ms: 0,
+  // Null, not zero: an empty set has no percentile, and a zero here would sum into "0 ms" tiles
+  // that read as a measurement.
+  latencyP50Ms: null,
+  latencyP95Ms: null,
+  routerOverheadP95Ms: null,
+  ttfbP95Ms: null,
 }
 
 /**
@@ -231,11 +238,18 @@ function addTotals(a: UsageTotals, b: UsageTotals): UsageTotals {
     cacheWriteTokens: a.cacheWriteTokens + b.cacheWriteTokens,
     costMetered: a.costMetered + b.costMetered,
     costNotional: a.costNotional + b.costNotional,
-    latencyP50Ms: Math.max(a.latencyP50Ms, b.latencyP50Ms),
-    latencyP95Ms: Math.max(a.latencyP95Ms, b.latencyP95Ms),
-    routerOverheadP95Ms: Math.max(a.routerOverheadP95Ms, b.routerOverheadP95Ms),
-    ttfbP95Ms: Math.max(a.ttfbP95Ms, b.ttfbP95Ms),
+    latencyP50Ms: maxReading(a.latencyP50Ms, b.latencyP50Ms),
+    latencyP95Ms: maxReading(a.latencyP95Ms, b.latencyP95Ms),
+    routerOverheadP95Ms: maxReading(a.routerOverheadP95Ms, b.routerOverheadP95Ms),
+    ttfbP95Ms: maxReading(a.ttfbP95Ms, b.ttfbP95Ms),
   }
+}
+
+/** Max of two readings where null is "unmeasured", not zero — one reading wins over none. */
+function maxReading(a: number | null, b: number | null): number | null {
+  if (a === null) return b
+  if (b === null) return a
+  return Math.max(a, b)
 }
 
 // ------------------------------------------------------------------ the wire
@@ -308,10 +322,12 @@ export async function fetchUsageSummary(range: UsageRange): Promise<UsageSummary
     to: wire.to,
     totals: {
       ...parseTotals(wire.totals),
-      latencyP50Ms: wire.latency.p50Ms ?? 0,
-      latencyP95Ms: wire.latency.p95Ms ?? 0,
-      routerOverheadP95Ms: wire.latency.routerOverheadP95Ms ?? 0,
-      ttfbP95Ms: wire.latency.ttfbP95Ms ?? 0,
+      // Null carried through, never `?? 0`: the server's null means "nothing measured", and the
+      // render's contract is a dash for that — "0 ms" on the overhead tile is a perfect result.
+      latencyP50Ms: wire.latency.p50Ms,
+      latencyP95Ms: wire.latency.p95Ms,
+      routerOverheadP95Ms: wire.latency.routerOverheadP95Ms,
+      ttfbP95Ms: wire.latency.ttfbP95Ms,
     },
     failures: parseFailures(wire.failures),
     series: wire.series.map((point) => ({
@@ -375,12 +391,15 @@ function toRow(row: WireRow): UsageBreakdownRow {
     series: row.series,
     totals: {
       ...parseTotals(row.totals),
-      latencyP50Ms: row.latencyP50Ms ?? 0,
-      latencyP95Ms: row.latencyP95Ms ?? 0,
-      routerOverheadP95Ms: row.routerOverheadP95Ms ?? 0,
+      // Null carried through — see `fetchUsageSummary`. A quiet row renders a dash, not "0 ms".
+      latencyP50Ms: row.latencyP50Ms,
+      latencyP95Ms: row.latencyP95Ms,
+      routerOverheadP95Ms: row.routerOverheadP95Ms,
       // Not tracked per breakdown row on the wire, only for the summary as a whole — a per-row
-      // TTFT would need a percentile scan per key/account/pool/model, which nobody has asked for.
-      ttfbP95Ms: 0,
+      // TTFT would need a percentile scan per key/account/pool/model, which nobody has asked
+      // for. Null, because "not tracked" is precisely what null means here; a zero would claim
+      // this row's first byte arrived instantly.
+      ttfbP95Ms: null,
     },
   }
 }

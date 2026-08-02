@@ -244,10 +244,47 @@ describe("a Claude subscription conversation across turns", () => {
 
     // Served by the healthy account the cooling one's binding would otherwise have hidden.
     expect(res.status).toBe(200)
+    // The restart is surfaced, never silent: prior upstream turns are gone and the client is told.
+    expect(res.headers.get("x-router-session-restart")).toBe("cooling-down")
     // Dropped, never moved — same row shape an unrecoverable account leaves.
     const cleared = repository.writes.at(-1)
     expect(cleared?.accountId).toBeNull()
     expect(cleared?.sdkSessionId).toBeNull()
+  })
+
+  test("`rebind` with nowhere to rebind keeps the mapping and answers the 429 `fail` would", async () => {
+    // The pool-wide cooldown case: one provider, windows depleting together. Dropping the binding
+    // *before* knowing whether a replacement exists lost the conversation for a rebind that never
+    // happened — the client's post-429 retry found the account healthy again but the session cold.
+    const seen: SdkInvocation[] = []
+    const { repository, store } = sessionStore()
+    const headers = { ...bearer(), "x-session-id": "conv-1" }
+
+    const first = harness({
+      accounts: [subscriptionAccount("sub")],
+      responses: [],
+      invokeSdk: sdkWithSessions(seen),
+      sessions: store,
+    })
+    await (await first.app.request("/v1/messages", post(OPENING, headers))).text()
+    await settle()
+    const writesBefore = repository.writes.length
+
+    const second = harness({
+      accounts: [subscriptionAccount("sub", { snapshot: { status: "cooling_down" } })],
+      responses: [],
+      sessions: store,
+      selection: { unpooledPolicy: "priority-failover", boundAccountCoolingDown: "rebind" },
+    })
+    const res = await second.app.request("/v1/messages", post(SECOND_TURN, headers))
+    await res.text()
+    await settle()
+
+    expect(res.status).toBe(429)
+    // The binding survives: no clearing write, the row still names its account and session.
+    expect(repository.writes).toHaveLength(writesBefore)
+    const rows = [...repository.rows.values()]
+    expect(rows[0]).toMatchObject({ accountId: "sub", sdkSessionId: "sess_sub" })
   })
 
   test("a router with no session store still serves subscriptions, just always cold", async () => {

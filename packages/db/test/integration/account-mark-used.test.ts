@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test"
-import { inArray } from "drizzle-orm"
+import { eq, inArray, sql } from "drizzle-orm"
 import { createDatabase, type Database, type DatabaseHandle } from "../../src/client"
 import { defaultMigrationsFolder, runMigrations } from "../../src/migrate"
 import {
@@ -82,5 +82,33 @@ describe.skipIf(!runnable)("markUsed against a live database", () => {
     await repository.markUsed([row.id], EARLY)
 
     expect((await repository.findById(row.id))?.lastUsedAt).toEqual(LATE)
+  })
+
+  /**
+   * The pre-#77 statement shape, kept as a mechanism probe. A value in a raw `sql` fragment has
+   * no column, so drizzle applies no encoder and the `Date` reaches the driver untouched — and
+   * postgres@3.4.x under Bun refuses it client-side before anything goes on the wire
+   * (`ERR_INVALID_ARG_TYPE`, observed live against this exact stack). Bind behavior is
+   * driver-version-dependent: if an upgrade ever makes this pass, the comments citing bind
+   * failure need re-verifying — the explicit-cast convention stands either way.
+   */
+  test("mechanism: a raw Date in a raw sql fragment is refused by the driver, client-side", async () => {
+    const row = await seed()
+
+    let refused: unknown
+    try {
+      await db
+        .update(accounts)
+        .set({ lastUsedAt: sql`greatest(${accounts.lastUsedAt}, ${EARLY})` })
+        .where(eq(accounts.id, row.id))
+    } catch (error) {
+      refused = error
+    }
+
+    expect(refused).toBeDefined()
+    // The cause chain names the un-serialized Date — the signature the flush logs surfaced.
+    expect(String((refused as Error).cause ?? refused)).toContain("Date")
+    // And nothing was stamped: exactly the year of silent NULLs the fix ended.
+    expect((await repository.findById(row.id))?.lastUsedAt).toBeNull()
   })
 })

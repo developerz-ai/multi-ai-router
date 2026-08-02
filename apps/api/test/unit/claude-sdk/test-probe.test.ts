@@ -4,6 +4,7 @@ import {
   type CliResolution,
   createSdkConcurrency,
   createSdkTestProbe,
+  PERMITTED_TOOLS,
   type SdkConcurrency,
 } from "../../../src/providers"
 
@@ -234,11 +235,16 @@ describe("the Agent-SDK test probe", () => {
     expect(launched.strictMcpConfig).toBe(true)
     expect(launched.skills).toEqual([])
     expect(launched.tools).toEqual([])
-    expect(launched.allowedTools).toEqual([])
+    // The shared reviewed constant, not a second literal that could drift from the dispatch path.
+    expect(launched.allowedTools).toEqual([...PERMITTED_TOOLS])
     expect(launched.permissionMode).toBe("dontAsk")
     // The model the operator asked about, never a substitute.
     expect(launched.model).toBe("claude-sonnet-4-5")
     expect(launched.cwd).toBe("/data/claude/acc-1")
+    // The forced query overrides ride the probe too — same doors, same request class (`env.ts`).
+    const env = launched.env as Record<string, string>
+    expect(env.ENABLE_CLAUDEAI_MCP_SERVERS).toBe("false")
+    expect(env.CLAUDE_CODE_SESSION_KIND).toBe("bg")
   })
 })
 

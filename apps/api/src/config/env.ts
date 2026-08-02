@@ -231,6 +231,12 @@ export interface DataPlaneConfig {
   readonly usageBatchSize: number
   readonly usageFlushIntervalMs: number
   /**
+   * How often a sustained usage-write failure or queue overflow is allowed one log line. A
+   * log-throttle window, not an operational one: no retention, TTL, or sweep cadence depends on
+   * it — but it is still an interval, and intervals are config (non-negotiable 11).
+   */
+  readonly usageLogReportIntervalMs: number
+  /**
    * How long an observed quota reading may sit in this replica's memory before it is persisted.
    *
    * Not a poll: a reading only exists after a response reported one, and the writer flushes what
@@ -287,6 +293,13 @@ export interface FailoverConfig {
    * than being dispatched onto an account that has answered nobody yet.
    */
   readonly halfOpenHoldMs: number
+  /**
+   * The `Retry-After` (seconds) answered when every candidate is out for a clock-recoverable
+   * reason but no reset instant is known. A pause, not a countdown: nothing is scheduled to
+   * clear the condition, so the number is a polite re-ask interval rather than a promise —
+   * see `routing/no-candidates.ts`.
+   */
+  readonly unknownResetRetryAfterSeconds: number
   /** How long the router waits on one upstream. Long, because a long completion is normal. */
   readonly upstreamTimeoutMs: number
   /**
@@ -432,6 +445,13 @@ export interface Env {
   readonly adminOidc: AdminOidcConfig | null
   readonly encryptionKey: string
   readonly logLevel: LogLevel
+  /**
+   * Ceiling on how much of a described error — the full cause chain, innermost first — one log
+   * line quotes as its `reason`. A driver names the statement it refused, and a batched statement
+   * is thousands of bind parameters long; unbounded, the one line an operator needs becomes the
+   * reason they cannot read any of them.
+   */
+  readonly logReasonMaxChars: number
   readonly trustProxy: boolean
   readonly publicUrl: string | null
   /**
@@ -562,6 +582,8 @@ export const ENV_FIELDS = {
   ADMIN_LOCAL_LOGIN_ALLOW_PUBLIC: flag.optional(),
   ENCRYPTION_KEY: encryptionKey,
   LOG_LEVEL: z.enum(LOG_LEVELS).optional(),
+  // Refuses zero: a zero-length reason logs failures with no reason at all — a silent absence.
+  LOG_REASON_MAX_CHARS: atLeastOne.optional(),
   TRUST_PROXY: flag.optional(),
   PUBLIC_URL: absoluteUrl.optional(),
   ROUTER_REVISION: nonEmpty.optional(),
@@ -631,6 +653,8 @@ export const ENV_FIELDS = {
   USAGE_QUEUE_MAX: atLeastOne.optional(),
   USAGE_BATCH_SIZE: usageBatchSize.optional(),
   USAGE_FLUSH_INTERVAL_MS: atLeastOne.optional(),
+  // Refuses zero: an unthrottled failure flood is the incident the throttle exists to prevent.
+  USAGE_LOG_REPORT_INTERVAL_MS: atLeastOne.optional(),
   QUOTA_WRITE_INTERVAL_MS: atLeastOne.optional(),
   ACCOUNT_STATUS_WRITE_INTERVAL_MS: atLeastOne.optional(),
   MAX_REQUEST_BODY_BYTES: atLeastOne.optional(),
@@ -639,6 +663,9 @@ export const ENV_FIELDS = {
   ROUTING_BASE_BACKOFF_MS: atLeastOne.optional(),
   ROUTING_MAX_BACKOFF_MS: atLeastOne.optional(),
   ROUTING_HALF_OPEN_HOLD_MS: atLeastOne.optional(),
+  // Refuses zero: `Retry-After: 0` invites an immediate retry storm against accounts that are,
+  // by definition, not ready.
+  ROUTING_UNKNOWN_RESET_RETRY_AFTER_SECONDS: atLeastOne.optional(),
   // `fail` keeps a bound session on its cooling-down account and answers 429; `rebind` drops the
   // binding and starts the conversation fresh on another eligible account. Enum, not a number —
   // the drift guard's zero rule does not apply.
@@ -758,6 +785,7 @@ const envSchema = z.object(ENV_FIELDS).transform((raw, ctx): Env => {
     adminOidc,
     encryptionKey: raw.ENCRYPTION_KEY,
     logLevel: raw.LOG_LEVEL ?? "info",
+    logReasonMaxChars: raw.LOG_REASON_MAX_CHARS ?? 200,
     trustProxy: raw.TRUST_PROXY ?? false,
     publicUrl: raw.PUBLIC_URL ?? null,
     revision: raw.ROUTER_REVISION ?? UNKNOWN_REVISION,
@@ -837,6 +865,7 @@ const envSchema = z.object(ENV_FIELDS).transform((raw, ctx): Env => {
       usageQueueMax: raw.USAGE_QUEUE_MAX ?? 10_000,
       usageBatchSize: raw.USAGE_BATCH_SIZE ?? 200,
       usageFlushIntervalMs: raw.USAGE_FLUSH_INTERVAL_MS ?? 1_000,
+      usageLogReportIntervalMs: raw.USAGE_LOG_REPORT_INTERVAL_MS ?? 60_000,
       quotaWriteIntervalMs: raw.QUOTA_WRITE_INTERVAL_MS ?? 5_000,
       accountStatusWriteIntervalMs: raw.ACCOUNT_STATUS_WRITE_INTERVAL_MS ?? 1_000,
       maxRequestBodyBytes: raw.MAX_REQUEST_BODY_BYTES ?? 32 * 1024 * 1024,
@@ -847,6 +876,7 @@ const envSchema = z.object(ENV_FIELDS).transform((raw, ctx): Env => {
       baseBackoffMs: raw.ROUTING_BASE_BACKOFF_MS ?? 1_000,
       maxBackoffMs: raw.ROUTING_MAX_BACKOFF_MS ?? 300_000,
       halfOpenHoldMs: raw.ROUTING_HALF_OPEN_HOLD_MS ?? 30_000,
+      unknownResetRetryAfterSeconds: raw.ROUTING_UNKNOWN_RESET_RETRY_AFTER_SECONDS ?? 30,
       upstreamTimeoutMs: raw.UPSTREAM_TIMEOUT_MS ?? 600_000,
       boundAccountCoolingDown: raw.ROUTING_BOUND_ACCOUNT_COOLING_DOWN ?? "fail",
     },

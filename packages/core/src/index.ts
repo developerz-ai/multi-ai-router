@@ -6,6 +6,7 @@
  * never from a path inside `src/`.
  */
 
+export { describeError } from "./describe-error"
 export {
   AccountBilling,
   AccountStatus,
@@ -74,4 +75,5 @@ export {
   ROUTER_KEY_RANDOM_LENGTH,
   routerKeyDisplayPrefix,
 } from "./ids"
+export { scrubCredentials } from "./scrub-credentials"
 export { UNKNOWN_REVISION, VERSION } from "./version"

@@ -261,6 +261,62 @@ describe("a write the database refuses", () => {
   })
 })
 
+describe("stop() — invisible loss is the one thing this module promises not to do", () => {
+  test("records the writer keeps refusing are counted as abandoned, never silently stranded", async () => {
+    // The failure case first. Before the count, stop() coalesced onto a pass that ended at the
+    // first refusal and returned: the retry batch and everything queued behind it evaporated
+    // with the process — neither dropped nor writeFailures moved.
+    let abandoned = 0
+    const recorder = createUsageRecorder(
+      { write: () => Promise.reject(new Error("database is down")) },
+      {
+        batchSize: 2,
+        onAbandoned: (records) => {
+          abandoned += records
+        },
+      },
+    )
+
+    for (let attempt = 1; attempt <= 6; attempt += 1) recorder.record(record({ attempt }))
+    await recorder.stop()
+
+    // First pass: [1,2] refused, held for retry. Second pass: the retry refused again —
+    // discarded and counted — and the pass ends. [3,4,5,6] die with the process, counted.
+    expect(abandoned).toBe(4)
+    expect(recorder.stats()).toMatchObject({ writeFailures: 4, writeDiscarded: 2 })
+  })
+
+  test("gives late records a fresh pass instead of abandoning them behind an ended drain", async () => {
+    const writer = collectingWriter()
+    const recorder = createUsageRecorder(writer, { batchSize: 2 })
+
+    recorder.record(record({ attempt: 1 }))
+    const first = recorder.flush()
+    // Enqueued while the first pass is already running: the shutdown race in miniature. stop()
+    // coalesces onto `first`, and whichever pass sees this record, none may abandon it.
+    recorder.record(record({ attempt: 2 }))
+    await recorder.stop()
+    await first
+
+    expect(writer.batches.flat().map((held) => held.attempt)).toEqual([1, 2])
+    expect(recorder.stats().depth).toBe(0)
+  })
+
+  test("a clean shutdown reports nothing abandoned", async () => {
+    let calls = 0
+    const recorder = createUsageRecorder(collectingWriter(), {
+      onAbandoned: () => {
+        calls += 1
+      },
+    })
+
+    recorder.record(record({ attempt: 1 }))
+    await recorder.stop()
+
+    expect(calls).toBe(0)
+  })
+})
+
 describe("persistence shape", () => {
   test("maps onto the row the schema defines", () => {
     const row = toUsageRecordRow(record())

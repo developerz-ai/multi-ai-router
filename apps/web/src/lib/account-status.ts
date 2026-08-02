@@ -32,7 +32,10 @@ const PRESENTATION: Readonly<Record<AccountStatus, StatusPresentation>> = {
     token: "--ok",
     fill: "solid",
     label: "Active",
-    hint: "Eligible for routing.",
+    // Not "eligible for routing", full stop: candidate filtering also drops an active account
+    // whose quota window is spent, and a hint that omits that turns a green dot into a lie
+    // whenever a Claude sub sits at 100% of its five-hour window.
+    hint: "Eligible for routing while no quota window is spent.",
   },
   cooling_down: {
     token: "--warn",
@@ -90,9 +93,40 @@ export function statusLabel(status: AccountStatus): string {
   return PRESENTATION[status].label
 }
 
-/** Only `active` accounts enter a candidate set. */
+/**
+ * Whether the *status* permits routing. Necessary, not sufficient: candidate filtering also drops
+ * an active account with a spent quota window — use {@link isRoutableNow} wherever the claim is
+ * "routable right now" rather than "not switched off".
+ */
 export function isRoutable(status: AccountStatus): boolean {
   return status === "active"
+}
+
+/** The one per-window fact routability needs. Structural, so any window view shape qualifies. */
+export interface SpentWindowReading {
+  readonly spent: boolean
+}
+
+/**
+ * True when any window is currently blocking the account. `spent` is computed **server-side** with
+ * the same pure function candidate filtering calls (`isWindowSpent`, threshold and refill clock
+ * included) — re-deriving that math here from utilization and resetsAt is how the console starts
+ * disagreeing with the router about which window blocks.
+ */
+export function hasSpentWindow(windows: readonly SpentWindowReading[] | undefined): boolean {
+  return (windows ?? []).some((window) => window.spent)
+}
+
+/**
+ * Routable *right now*: the status allows it AND no quota window is spent. This is the console's
+ * mirror of `filterCandidates` — an active Claude sub at 100% of its five-hour window is not
+ * routable, and a headline that counts it is a headline that promises 429s.
+ */
+export function isRoutableNow(
+  status: AccountStatus,
+  windows: readonly SpentWindowReading[] | undefined,
+): boolean {
+  return isRoutable(status) && !hasSpentWindow(windows)
 }
 
 /** True when no clock will fix it — drives the dashboard's red banner. */

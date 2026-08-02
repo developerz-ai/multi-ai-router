@@ -4,7 +4,10 @@ import {
   type RouterError,
   type RouterErrorCode,
 } from "@multi-ai-router/core"
-import { type FailureClassification, toRouterError } from "../../providers"
+import type { FailureClassification, RateLimitSignal } from "../../providers"
+// Deep import: the providers barrel does not re-export `RateLimitContext`, and that file is
+// owned by another change set right now. Fold into `../../providers` when it does.
+import { type RateLimitContext, toRouterError } from "../../providers/failure/router-error"
 import type { UpstreamError } from "./attempt"
 
 /**
@@ -117,21 +120,71 @@ export function routerFailure(error: RouterError): ChainFailure {
   return { kind: "router", error }
 }
 
+/** What the attempt knew beside its classification — see each field's note. */
+export interface AnsweredFailureContext {
+  /**
+   * The rate-limit reading the attempt captured off its own transport. On the SDK path the reset
+   * instant rides the query stream's `rate_limit_event`, never the throw, so the classification
+   * carries none — without this, an SDK 429 rendered with no `Retry-After` and the client
+   * retried blind (non-negotiable 7).
+   */
+  readonly rateLimit: RateLimitSignal | null
+  /** The attempt's clock reading, for deriving a `Retry-After` from a reported instant. */
+  readonly now: Date
+  /**
+   * The router-authored sentence for this failure (`AttemptFailure.message`). Rendered only when
+   * the transport produced a classification but no upstream body — never the SDK's own words.
+   */
+  readonly clientMessage: string
+}
+
 /**
  * The failure an attempt that reached its upstream contributes: the driver's classification when it
  * produced a router-shaped verdict, and the provider's own answer when it did not. The verdict wins
  * over the body it arrived with — a spent window is a `429` with a `Retry-After`, not a relayed
  * rate-limit page — and an attempt whose upstream never spoke at all contributes nothing, leaving
  * whatever an earlier candidate established in place.
+ *
+ * One transport classifies without a body: the Agent SDK throws prose, so a subprocess crash or a
+ * busy session arrives here with a classification and `upstream === null`. Contributing nothing
+ * there collapsed every such failure into a generic `NoHealthyAccountError` — a crashed subprocess
+ * indistinguishable from an empty pool — so the classification's own status and the router-authored
+ * message are preserved as a synthesized upstream answer instead. Synthesized in the account's
+ * dialect (Anthropic — the only classify-without-body transport is the SDK), so the ordinary
+ * relay path re-renders it for the client exactly as it would a provider's own body.
  */
 export function answeredFailure(
   classification: FailureClassification | null,
   upstream: UpstreamError | null,
   dialect: Dialect | null,
+  context?: AnsweredFailureContext,
 ): ChainFailure | null {
-  const error = classification === null ? null : toRouterError(classification)
+  const rateLimit: RateLimitContext | undefined =
+    context === undefined ? undefined : { signal: context.rateLimit, now: context.now }
+  const error = classification === null ? null : toRouterError(classification, rateLimit)
   if (error !== null) return { kind: "router", error }
-  return upstream === null ? null : { kind: "upstream", upstream, dialect }
+  if (upstream !== null) return { kind: "upstream", upstream, dialect }
+  if (classification === null || context === undefined) return null
+  return {
+    kind: "upstream",
+    upstream: synthesizedUpstream(classification.status, context.clientMessage),
+    dialect,
+  }
+}
+
+/**
+ * An Anthropic-shaped error body for a classified failure that produced no body of its own. The
+ * message is router-authored by contract ({@link AnsweredFailureContext.clientMessage});
+ * `api_error` because naming a finer type is the classifier's job, and it already spoke through
+ * the status.
+ */
+function synthesizedUpstream(status: number, message: string): UpstreamError {
+  return {
+    status,
+    headers: new Headers(),
+    bodyText: JSON.stringify({ type: "error", error: { type: "api_error", message } }),
+    contentType: "application/json",
+  }
 }
 
 function rankOf(failure: ChainFailure): number {

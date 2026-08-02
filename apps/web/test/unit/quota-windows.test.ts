@@ -6,6 +6,7 @@ import {
   describeQuotaWindow,
   describeQuotaWindows,
   formatUtilization,
+  parseInstant,
   QUOTA_WINDOW_DISPLAY_ORDER,
   quotaWindowLabel,
   quotaWindowTitle,
@@ -420,5 +421,19 @@ describe("the measured consumption curve", () => {
     expect(
       describeQuotaWindow("active", measured({ tokenSeries: [500] }), NOW).tokenSeries,
     ).toEqual([])
+  })
+})
+
+describe("parseInstant", () => {
+  // The guard every countdown consumer must share: a malformed instant is *no* instant. A bare
+  // Date.parse hands NaN to formatDuration and the row renders "Invalid Date" beside "in 0s".
+  test("a malformed instant is null, never NaN", () => {
+    expect(parseInstant("not-an-instant")).toBeNull()
+    expect(parseInstant("")).toBeNull()
+  })
+
+  test("null stays null and a real instant becomes epoch ms", () => {
+    expect(parseInstant(null)).toBeNull()
+    expect(parseInstant("2026-07-26T00:00:00.000Z")).toBe(Date.parse("2026-07-26T00:00:00.000Z"))
   })
 })

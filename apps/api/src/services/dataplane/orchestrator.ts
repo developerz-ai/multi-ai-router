@@ -1,33 +1,23 @@
-import { type Dialect, type RouterError, TranslationError } from "@multi-ai-router/core"
-import type { Logger } from "../../logging/logger"
-import type { SdkInvoker, SdkQuotaStore, SessionStore } from "../../providers"
-import type { RateLookup } from "../cost"
-import type { CredentialCipher } from "../crypto/cipher"
-import { type FailoverOptions, type SelectionOptions, selectAccounts } from "../routing"
-import { clientRequestIdFrom, correlationIdFrom, type UsageRecorder } from "../usage"
-import type { VerifiedKey } from "./auth/verifier"
-import { type BodyReadOptions, readRequestBody } from "./body/read"
+import { type RouterError, TranslationError } from "@multi-ai-router/core"
+import { type FailoverOptions, selectAccounts } from "../routing"
+import { clientRequestIdFrom, correlationIdFrom } from "../usage"
+import { readRequestBody } from "./body/read"
 import { MODEL_NAME_MAX_BYTES } from "./body/scanner"
 import { DEFAULT_SESSION_HEADERS, resolveSessionKey } from "./body/session"
 import { runChain } from "./chain"
+import type { Dispatcher, DispatcherDeps, DispatchInput } from "./dispatcher-config"
+import { DEFAULT_UPSTREAM_TIMEOUT_MS } from "./dispatcher-config"
 import { resolveEgress } from "./egress/mode"
-import type { HealthStore } from "./health"
-import { keyRateLimitedError, type RateLimiter } from "./limits"
+import { keyRateLimitedError } from "./limits"
 import { outcomeForResponse, type RequestProgress, sampleOf, streamed } from "./observe"
 import { planCandidates } from "./plan"
 import { attemptRecord, errorClassOf, outcomeOf } from "./records"
 import { createRuntime } from "./runtime"
 import { sessionBindings } from "./session-binding"
+import { withSessionRestart } from "./session-restart"
 import { buildSnapshot } from "./snapshot"
 import { createTranslatedRequestBody } from "./translate-body"
-import {
-  type DataPlaneClock,
-  type FetchLike,
-  type RequestObserver,
-  type RoutingCatalog,
-  SYSTEM_CLOCK,
-  type UpstreamOperation,
-} from "./types"
+import { SYSTEM_CLOCK } from "./types"
 import { unservableError } from "./unservable"
 
 /**
@@ -40,91 +30,14 @@ import { unservableError } from "./unservable"
  * scanned incrementally for two fields, the snapshot is assembled from warm memory, and selection
  * is a pure function. Nothing here opens a socket or touches Postgres.
  *
- * A failure in preflight still writes a `UsageRecord` — an attempt that failed before selection
- * has no account, and the spec wants that row anyway, because "nothing in this key's scope" is
- * exactly the kind of failure an operator needs to see counted.
+ * A failure in preflight still writes a `UsageRecord` **once the body has named a model** — an
+ * attempt that failed before selection has no account, and the spec wants that row anyway, because
+ * "nothing in this key's scope" is exactly the kind of failure an operator needs to see counted.
+ * The refusals *before* a model exists write none, deliberately: `UsageRecord.model` is
+ * non-nullable by design, so a row for a key over its ceiling, an unreadable body, or a body that
+ * names no model (or one too long to be one) would have to claim a model nobody named. Those
+ * refusals are counted on `router_requests_total` by the request observer below instead.
  */
-
-export interface DispatchOptions {
-  readonly selection?: SelectionOptions
-  readonly failover?: FailoverOptions
-  readonly body?: BodyReadOptions
-  /** Headers a client may name its conversation with. See `body/session.ts`. */
-  readonly sessionHeaders?: readonly string[]
-  readonly upstreamTimeoutMs?: number
-  readonly translation?: TranslationOptions
-}
-
-export interface TranslationOptions {
-  /**
-   * The `max_tokens` an Anthropic egress is given when the client's dialect made it optional and
-   * the client omitted it. Operator-configured, deliberately generous: a low ceiling would truncate
-   * an answer the caller never asked to truncate (`06-protocol-translation.md#known-lossy-edges`).
-   */
-  readonly defaultMaxTokens?: number
-}
-
-/** Long, because a long completion is a normal response, not a hung one. Configurable. */
-export const DEFAULT_UPSTREAM_TIMEOUT_MS = 600_000
-
-export interface DispatcherDeps {
-  readonly catalog: RoutingCatalog
-  readonly health: HealthStore
-  readonly cipher: Pick<CredentialCipher, "decrypt">
-  readonly usage: Pick<UsageRecorder, "record">
-  /**
-   * Enforces the ceiling stored on the key. Omitted means unlimited — a dispatcher built without
-   * one behaves exactly as this router did before limits were enforced.
-   */
-  readonly limiter?: Pick<RateLimiter, "check">
-  /** Injected so tests need no network and no live provider. Defaults to global `fetch`. */
-  readonly fetch?: FetchLike
-  /**
-   * The Claude subscription transport. Injected for the same reason `fetch` is — no test may spawn
-   * a real `claude` CLI. Omitted means this router serves no subscription account, and one selected
-   * fails its attempt by name rather than being routed onto some other path.
-   */
-  readonly invokeSdk?: SdkInvoker
-  /**
-   * Session -> Account bindings. Omitted, every subscription turn starts a fresh SDK session and
-   * routing places it freely — correct, and cold. Present, a bound session is where selection
-   * starts and where an SDK resume becomes possible at all (`session-binding.ts`).
-   */
-  readonly sessions?: SessionStore
-  /**
-   * Where a `rate_limit_event` folds into Account quota state. Omitted, a subscription attempt
-   * still classifies a spent window from a later `429` — it just cannot cool the account down a
-   * turn early, the way an HTTP driver's parsed headers do.
-   */
-  readonly quota?: SdkQuotaStore
-  /** The operator's warm price overrides. Omitted, attempts price off the shipped table. */
-  readonly prices?: RateLookup
-  readonly clock?: DataPlaneClock
-  readonly logger?: Logger
-  /** Notified once per client request, after it ended. Feeds `router_requests_total`. */
-  readonly onRequest?: RequestObserver
-  readonly options?: DispatchOptions
-}
-
-export interface DispatchInput {
-  readonly ingress: Dialect
-  /**
-   * What the called route asks of an Account. Omitted is `messages` — inference, which is what
-   * every ingress path but `POST /v1/messages/count_tokens` and `POST /v1/embeddings` performs. It
-   * travels with the request rather than being derived from the URL because the URL is the *route's*
-   * to know: everything below this line addresses an upstream, and an upstream's path is not the
-   * client's.
-   */
-  readonly operation?: UpstreamOperation
-  readonly request: Request
-  readonly key: VerifiedKey
-  /** The correlation id assigned at ingress and propagated end to end. */
-  readonly requestId: string
-}
-
-export interface Dispatcher {
-  dispatch(input: DispatchInput): Promise<Response>
-}
 
 const NO_MODEL = "The request body must name a model"
 const MODEL_TOO_LONG = `The request body's model name is longer than ${MODEL_NAME_MAX_BYTES} bytes`
@@ -214,11 +127,10 @@ export function createDispatcher(deps: DispatcherDeps): Dispatcher {
       { sessionKey: session.key, model, keyScope: input.key.scope, binding },
       options.selection,
     )
-    // Dropped, never moved. A `blocked` binding is deliberately kept: the account is coming back
-    // on a clock and the conversation stays resumable, so the request fails honestly instead.
-    if (selection.decision.binding.state === "invalidated") {
-      bindings.invalidate(input.key.id, session.key)
-    }
+    // A `blocked` binding is deliberately kept: the account is coming back on a clock and the
+    // conversation stays resumable, so the request fails honestly instead. An `invalidated` one
+    // is *not* dropped here — see below: the store mutation waits for a replacement to exist,
+    // because dropping it and then failing anyway loses the conversation for nothing.
     if (!selection.ok) return fail(selection.error)
 
     const plan = planCandidates(selection.candidates, deps.catalog, input.ingress, operation)
@@ -240,6 +152,24 @@ export function createDispatcher(deps: DispatcherDeps): Dispatcher {
       )
     }
 
+    // Dropped, never moved — and only now, with a servable replacement in hand. Selection said
+    // the binding cannot be honored (`rebind` on a cooling account, out of scope, exhausted, the
+    // account gone); acting on that verdict *before* knowing whether anything else could serve
+    // was the bug that turned a pool-wide cooldown under `rebind` into a lost conversation: the
+    // binding went, selection failed anyway, and the client's post-429 retry found a healthy
+    // account holding a cold session. A chain that fails from here still loses the binding — a
+    // narrow window, accepted — while an SDK success re-points it through its own `remember`.
+    const decidedBinding = selection.decision.binding
+    if (decidedBinding.state === "invalidated") {
+      bindings.invalidate(input.key.id, session.key)
+      deps.logger?.info("session binding invalidated", {
+        component: "dataplane",
+        requestId: input.requestId,
+        accountId: decidedBinding.accountId,
+        reason: decidedBinding.reason,
+      })
+    }
+
     // Injected, never read off a clock inside a translator: the same recorded body must convert to
     // the same bytes in a test as it does on the wire.
     const translation = {
@@ -249,7 +179,14 @@ export function createDispatcher(deps: DispatcherDeps): Dispatcher {
       defaultMaxTokens: options.translation?.defaultMaxTokens,
     }
 
-    return runChain({
+    // The bound account travels into the chain so a mid-chain hop off it is *known* to be one —
+    // without it, `leavingBound` could never be true and a restarted session went unsurfaced.
+    const failover: FailoverOptions = {
+      ...options.failover,
+      ...(decidedBinding.state === "honored" ? { boundAccountId: decidedBinding.accountId } : {}),
+    }
+
+    const response = await runChain({
       runtime,
       plan: plan.servable,
       request: input.request,
@@ -257,9 +194,15 @@ export function createDispatcher(deps: DispatcherDeps): Dispatcher {
       modelSpan: body.fields.modelSpan,
       translation,
       translated: createTranslatedRequestBody(body.bytes, translation),
-      failover: options.failover,
+      failover,
       log: deps.logger?.child({ component: "transport", requestId: input.requestId }),
     })
+
+    // The other half of "surfaced, never silently truncated": this turn started a fresh upstream
+    // session where a bound one used to be, and the client is told so (`session-restart.ts`).
+    return decidedBinding.state === "invalidated"
+      ? withSessionRestart(response, decidedBinding.reason)
+      : response
   }
 
   const observe = deps.onRequest

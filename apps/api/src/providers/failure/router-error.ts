@@ -4,7 +4,7 @@ import {
   type RouterError,
   UpstreamAuthError,
 } from "@multi-ai-router/core"
-import type { FailureClassification } from "../types"
+import type { FailureClassification, RateLimitSignal } from "../types"
 
 /**
  * The classifications the router answers for itself, mapped onto the error hierarchy. Every
@@ -21,12 +21,37 @@ import type { FailureClassification } from "../types"
  * Messages are router-authored. An upstream message can echo request content back, and no
  * client-facing error body carries anything we did not write ourselves.
  */
-export function toRouterError(classification: FailureClassification): RouterError | null {
+
+/**
+ * The rate-limit reading that rode *beside* the classification, when the classification itself
+ * carries none. The Agent-SDK transport is the case: its reset instant arrives as a
+ * `rate_limit_event` inside the query stream, never on the throw, so `classifySdkFailure` pins
+ * `classification.rateLimit` to null and the attempt's captured signal is the only source. `now`
+ * is the attempt's clock reading, injected because the seconds a `Retry-After` counts are derived
+ * from the reported instant — this module still reads no clock of its own.
+ */
+export interface RateLimitContext {
+  readonly signal: RateLimitSignal | null
+  readonly now: Date
+}
+
+export function toRouterError(
+  classification: FailureClassification,
+  rateLimit?: RateLimitContext,
+): RouterError | null {
   if (classification.kind === "rate-limited") {
-    const rateLimit = classification.rateLimit
+    const signal = classification.rateLimit ?? rateLimit?.signal ?? null
+    const resetsAt = signal?.resetsAt
+    // A `429` without a `Retry-After` makes a client guess, and guessing clients retry in
+    // lockstep (non-negotiable 7). When only the instant was reported, the wait is derived.
+    const retryAfterSeconds =
+      signal?.retryAfterSeconds ??
+      (resetsAt !== undefined && rateLimit !== undefined
+        ? secondsUntil(resetsAt, rateLimit.now)
+        : undefined)
     return new QuotaExhaustedError(`upstream rate limited (${classification.signal})`, {
-      retryAfterSeconds: rateLimit?.retryAfterSeconds,
-      resetsAt: rateLimit?.resetsAt,
+      retryAfterSeconds,
+      resetsAt,
     })
   }
 
@@ -43,4 +68,9 @@ export function toRouterError(classification: FailureClassification): RouterErro
   }
 
   return null
+}
+
+/** At least one second: a `Retry-After: 0` invites an immediate retry into the same wall. */
+function secondsUntil(resetsAt: Date, now: Date): number {
+  return Math.max(1, Math.ceil((resetsAt.getTime() - now.getTime()) / 1000))
 }

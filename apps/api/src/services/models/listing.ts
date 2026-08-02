@@ -1,4 +1,4 @@
-import { type Dialect, isRouterError } from "@multi-ai-router/core"
+import { type Dialect, describeError, isRouterError } from "@multi-ai-router/core"
 import type { AccountRow } from "@multi-ai-router/db"
 import { z } from "zod"
 import { type DriverAccount, httpDriver } from "../../providers"
@@ -250,5 +250,7 @@ async function readJson(response: Response): Promise<unknown> {
 
 function messageOf(error: unknown): string {
   if (isRouterError(error)) return error.message
-  return error instanceof Error ? error.message : "the account's endpoint could not be resolved"
+  // The cause chain, not just the wrapper: "fetch failed" alone names nothing an operator can fix.
+  const described = describeError(error, Number.POSITIVE_INFINITY)
+  return described.length > 0 ? described : "the account's endpoint could not be resolved"
 }

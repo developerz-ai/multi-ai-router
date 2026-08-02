@@ -1,3 +1,4 @@
+import { describeError } from "@multi-ai-router/core"
 import type { AccountRepository, AccountRow } from "@multi-ai-router/db"
 import type { Logger } from "../../../logging/logger"
 import { redactValue } from "../../../logging/redact"
@@ -282,10 +283,14 @@ function defaultSchedule(run: () => void, delayMs: number): () => void {
   return () => clearTimeout(timer)
 }
 
-/** Message only — never a stack, never a body. Scrubbed and bounded before it reaches a log line. */
+/**
+ * The full cause chain, innermost first (`describeError`) — a wrapper-only `error.message` is how
+ * a fetch failure logs "unable to refresh" while the socket's actual complaint sits one `cause`
+ * down, discarded. Never a stack, never a body; scrubbed first and bounded after, so redaction
+ * always sees the whole chain (the same order `services/usage/fromEnv.ts` uses).
+ */
 function describe(error: unknown): string {
-  const message = error instanceof Error ? error.message : String(error)
-  const scrubbed = redactValue(message)
+  const scrubbed = redactValue(describeError(error, Number.POSITIVE_INFINITY))
   return scrubbed.length <= MAX_ERROR_CHARS
     ? scrubbed
     : `${scrubbed.slice(0, MAX_ERROR_CHARS - 1)}…`

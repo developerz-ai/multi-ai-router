@@ -101,6 +101,16 @@ function pickUnit(abs: number): { readonly ms: number; readonly suffix: string }
   return UNITS[3]
 }
 
+/**
+ * A latency reading in milliseconds, or `—` where nothing was measured. Null is never rendered as
+ * `0 ms`: on the overhead and TTFT tiles a zero reads as a perfect result, which is the opposite
+ * of "no data" — a null reading renders as an explicitly unread track, never as zero.
+ */
+export function formatMillis(value: number | null): string {
+  if (value === null || !Number.isFinite(value)) return "—"
+  return `${Math.round(value)} ms`
+}
+
 /** Seconds as a rate-limit window: `60s`, `5m`, `1h`, `24h`. */
 export function formatWindow(seconds: number): string {
   if (seconds % 3600 === 0 && seconds >= 3600) return `${seconds / 3600}h`

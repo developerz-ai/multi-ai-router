@@ -287,3 +287,101 @@ describe("invalidating a binding", () => {
     expect(next.plan).toEqual({ kind: "fresh", reason: "no-session" })
   })
 })
+
+/**
+ * The row writes are fire-and-forget — nothing on the request path waits on Postgres — but within
+ * one session they must land in the order they were issued. An invalidate's clear and a rebind's
+ * bind used to be two independent floating upserts: the clear landing second left an empty row
+ * behind a cache that says bound, and the next replica to warm from that row started cold.
+ */
+describe("row writes are ordered per session", () => {
+  interface GatedSessions {
+    readonly repository: Parameters<typeof createSessionStore>[0]["repository"]
+    /** `sdkSessionId` of each landed write, in landing order. `null` is a clear. */
+    readonly landed: (string | null)[]
+    /** Makes the next upsert wait until `release()` is called. */
+    hold(): void
+    release(): void
+  }
+
+  function gatedSessions(): GatedSessions {
+    const landed: (string | null)[] = []
+    let gate: Promise<void> | null = null
+    let open: () => void = () => {}
+    return {
+      landed,
+      hold() {
+        gate = new Promise((resolve) => {
+          open = resolve
+        })
+      },
+      release: () => open(),
+      repository: {
+        findByKey: async () => undefined,
+        upsert: async (input) => {
+          const wait = gate
+          gate = null
+          if (wait !== null) await wait
+          landed.push(input.sdkSessionId ?? null)
+          return {
+            id: `${input.apiKeyId}::${input.key}`,
+            key: input.key,
+            apiKeyId: input.apiKeyId,
+            accountId: input.accountId ?? null,
+            sdkSessionId: input.sdkSessionId ?? null,
+            lineageState: input.lineageState ?? null,
+            fingerprintSource: input.fingerprintSource ?? null,
+            lastUsedAt: input.lastUsedAt,
+            createdAt: input.lastUsedAt,
+          }
+        },
+      },
+    }
+  }
+
+  async function until(check: () => boolean): Promise<void> {
+    for (let tries = 0; tries < 200 && !check(); tries += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 1))
+    }
+  }
+
+  test("a slow clear still lands before the rebind's bind that followed it", async () => {
+    const gate = gatedSessions()
+    const store = createSessionStore({ repository: gate.repository, now: () => NOW })
+
+    gate.hold()
+    store.invalidate("key-1", "conv-1")
+
+    // The rebind, immediately behind it: the same session, freshly placed on another account.
+    store
+      .resolve({
+        apiKeyId: "key-1",
+        sessionKey: "conv-1",
+        keySource: "header",
+        accountId: "acct-2",
+        body: opening,
+      })
+      .remember("sess_2")
+
+    gate.release()
+    await until(() => gate.landed.length === 2)
+
+    expect(gate.landed).toEqual([null, "sess_2"])
+  })
+
+  test("two sessions never wait on each other's writes", async () => {
+    const gate = gatedSessions()
+    const store = createSessionStore({ repository: gate.repository, now: () => NOW })
+
+    gate.hold()
+    store.invalidate("key-1", "conv-1")
+    store.invalidate("key-1", "conv-2")
+    await until(() => gate.landed.length === 1)
+
+    // conv-2's clear landed while conv-1's is still held.
+    expect(gate.landed).toEqual([null])
+    gate.release()
+    await until(() => gate.landed.length === 2)
+    expect(gate.landed).toHaveLength(2)
+  })
+})

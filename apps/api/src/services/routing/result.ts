@@ -26,6 +26,9 @@ export type FilterReason =
   | "quota-window-spent"
   | "model-unsupported"
 
+/** The clock-recoverable subset of {@link FilterReason} — the only reasons a binding may block on. */
+export type RecoverableFilterReason = "cooling-down" | "probe-in-flight" | "quota-window-spent"
+
 /** Filter reasons a clock alone recovers from. Everything else needs a human or a client change. */
 export const RECOVERABLE_FILTER_REASONS: readonly FilterReason[] = [
   "cooling-down",
@@ -34,6 +37,10 @@ export const RECOVERABLE_FILTER_REASONS: readonly FilterReason[] = [
   "probe-in-flight",
   "quota-window-spent",
 ]
+
+export function isRecoverableFilterReason(reason: FilterReason): reason is RecoverableFilterReason {
+  return RECOVERABLE_FILTER_REASONS.includes(reason)
+}
 
 export interface RejectedCandidate {
   readonly accountId: string
@@ -89,11 +96,19 @@ export type BindingDecision =
   /** The bound account is eligible. It is the choice, for any policy. */
   | { readonly state: "honored"; readonly accountId: string }
   /**
-   * The bound account is cooling down. The binding is *kept* — a clock will fix it and the
-   * conversation is still resumable — and the request fails honestly rather than resuming
-   * somewhere it cannot be resumed.
+   * The bound account is out for a reason a clock recovers. The binding is *kept* — a clock will
+   * fix it and the conversation is still resumable — and the request fails honestly rather than
+   * resuming somewhere it cannot be resumed. `reason` and `resetSource` travel with the instant
+   * because the 429 rendered from this must name the actual condition and must not present a
+   * guessed reset as a fact (`types.ts`, `AccountHealth.cooldownSource`).
    */
-  | { readonly state: "blocked"; readonly accountId: string; readonly resetsAt?: Date }
+  | {
+      readonly state: "blocked"
+      readonly accountId: string
+      readonly reason: RecoverableFilterReason
+      readonly resetsAt?: Date
+      readonly resetSource?: ResetSource
+    }
   /**
    * The binding is dropped, never moved. The next request starts a fresh upstream session on a
    * new account and the loss of prior turns is surfaced, never silently truncated.

@@ -1043,7 +1043,9 @@ describe("the Agent-SDK transport", () => {
     await res.text()
 
     expect(calls).toBe(2)
-    expect(res.status).toBe(503)
+    // The exhausted replay is a subprocess-class failure with its own sentence, not a
+    // "no healthy account" collapse — 502, per the SDK error table in docs/idea/11.
+    expect(res.status).toBe(502)
   })
 
   test("a spent subscription window is a 429, never a generic 503", async () => {

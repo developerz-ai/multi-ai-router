@@ -153,6 +153,15 @@ function blocksOf(message: SdkRequestMessage | undefined): readonly PromptBlock[
     }
     const rendered = renderBlock(block)
     if (rendered !== null) pending.push(rendered)
+    // A `tool_result`'s nested images are hoisted to sibling top-level blocks, after the
+    // transcript line that names them: the SDK's user message has no `tool_result` block to carry
+    // them in place, and folding them into the bracketed text erased them entirely — a client
+    // whose screenshot/PDF/chart tool returns an image lost it every turn (Meridian hoists the
+    // same way). The transcript line above states how many follow, so the model can tie them back.
+    for (const nested of toolResultImages(block)) {
+      flush()
+      out.push(nested)
+    }
   }
 
   flush()
@@ -164,8 +173,31 @@ function blocksOf(message: SdkRequestMessage | undefined): readonly PromptBlock[
 /** @returns the image block, or null when this is not one this transport can forward. */
 function readImage(block: Readonly<Record<string, unknown>>): PromptBlock | null {
   if (block.type !== "image") return null
-  const source = imageSourceSchema.safeParse(block.source)
+  const source = imageSourceSchema.safeParse(normalizeImageSource(block.source))
   return source.success ? { type: "image", source: source.data } : null
+}
+
+/**
+ * `image/jpg` → `image/jpeg` before validation: a real-world misspelling (Meridian normalizes the
+ * same one) that is unambiguous, and without this it demoted a perfectly forwardable image to an
+ * omission line. Only that one exact value — anything else is genuinely not a type Anthropic
+ * accepts, and inventing further mappings would forward images the API will reject.
+ */
+function normalizeImageSource(source: unknown): unknown {
+  if (!isRecord(source) || source.media_type !== "image/jpg") return source
+  return { ...source, media_type: "image/jpeg" }
+}
+
+/** Every nested image a `tool_result` carries, in order. Empty for every other block type. */
+function toolResultImages(block: Readonly<Record<string, unknown>>): readonly PromptBlock[] {
+  if (block.type !== "tool_result" || !Array.isArray(block.content)) return []
+  const out: PromptBlock[] = []
+  for (const nested of block.content) {
+    if (!isRecord(nested)) continue
+    const image = readImage(nested)
+    if (image !== null) out.push(image)
+  }
+  return out
 }
 
 /**
@@ -186,6 +218,10 @@ function renderBlock(block: Readonly<Record<string, unknown>>): string | null {
       return renderToolUse(block)
     case "tool_result":
       return renderToolResult(block)
+    // Only reached when `readImage` refused the source. Named rather than the generic label below,
+    // so the model can tell the user *why* the image it was told about is not there.
+    case "image":
+      return `[image omitted: unsupported source type ${sourceTypeOf(block.source)}]`
     default:
       // Deliberately named rather than dropped: a client using a block type this build has never
       // seen is told the turn carried one, instead of silently losing it.
@@ -200,11 +236,16 @@ function renderToolUse(block: Readonly<Record<string, unknown>>): string {
 
 function renderToolResult(block: Readonly<Record<string, unknown>>): string {
   const failed = block.is_error === true ? " (it failed)" : ""
-  return `[the client ran the requested tool${failed} and it returned: ${resultText(block.content)}]`
+  const images = toolResultImages(block).length
+  return `[the client ran the requested tool${failed} and it returned: ${resultText(block.content, images)}]`
 }
 
-/** A `tool_result`'s content is a string or blocks; only its text is legible as a transcript line. */
-function resultText(content: unknown): string {
+/**
+ * A `tool_result`'s content is a string or blocks; its text goes into the transcript line, and its
+ * images — hoisted to sibling blocks by `blocksOf` — are *named* here so an image-only result does
+ * not read as a tool that returned nothing.
+ */
+function resultText(content: unknown, images: number): string {
   if (typeof content === "string") return content
   if (!Array.isArray(content)) return json(content)
 
@@ -214,7 +255,26 @@ function resultText(content: unknown): string {
     const value: unknown = Reflect.get(block, "text")
     if (typeof value === "string") parts.push(value)
   }
-  return parts.length === 0 ? "no textual output" : parts.join("\n")
+
+  const note =
+    images === 0 ? null : `${images} image${images === 1 ? "" : "s"}, forwarded below this line`
+  if (parts.length === 0) return note ?? "no textual output"
+  return note === null ? parts.join("\n") : `${parts.join("\n")}\n(and ${note})`
+}
+
+/**
+ * What the omission line names as the reason. The media type when the source stated one — a
+ * `base64` source only ever fails on it — otherwise the source type itself, which is the failing
+ * field for every other shape. Never the data.
+ */
+function sourceTypeOf(source: unknown): string {
+  if (!isRecord(source)) return "unknown"
+  if (typeof source.media_type === "string") return source.media_type
+  return typeof source.type === "string" ? source.type : "unknown"
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
 }
 
 function json(value: unknown): string {

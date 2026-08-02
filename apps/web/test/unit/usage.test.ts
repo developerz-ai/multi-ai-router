@@ -78,3 +78,30 @@ describe("labels", () => {
     }
   })
 })
+
+describe("null latency readings", () => {
+  // The regression pinned here: `?? 0` on the wire coercion turned "nothing measured" into
+  // "0 ms", and the overhead tile printed a perfect result for a window with no data.
+  test("an empty set has no percentile — null, never zero", () => {
+    expect(EMPTY_TOTALS.latencyP50Ms).toBeNull()
+    expect(EMPTY_TOTALS.latencyP95Ms).toBeNull()
+    expect(EMPTY_TOTALS.routerOverheadP95Ms).toBeNull()
+    expect(EMPTY_TOTALS.ttfbP95Ms).toBeNull()
+  })
+
+  test("summing rows keeps null as unmeasured: one reading wins over none, none stays none", () => {
+    const measured = {
+      id: "a",
+      label: "a",
+      note: "",
+      series: [],
+      totals: { ...EMPTY_TOTALS, routerOverheadP95Ms: 3 },
+    }
+    const quiet = { id: "b", label: "b", note: "", series: [], totals: EMPTY_TOTALS }
+
+    // A quiet row must not drag a real reading down to zero…
+    expect(sumTotals([measured, quiet]).routerOverheadP95Ms).toBe(3)
+    // …and two quiet rows must not fabricate one.
+    expect(sumTotals([quiet, quiet]).routerOverheadP95Ms).toBeNull()
+  })
+})

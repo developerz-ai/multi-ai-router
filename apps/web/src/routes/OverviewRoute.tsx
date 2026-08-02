@@ -9,7 +9,13 @@ import { StatTile } from "../components/StatTile"
 import { StatusDot } from "../components/StatusDot"
 import { type Column, Table } from "../components/Table"
 import { TableSkeleton } from "../components/TableSkeleton"
-import { isRoutable, STATUS_DISPLAY_ORDER, statusPresentation } from "../lib/account-status"
+import {
+  hasSpentWindow,
+  isRoutable,
+  isRoutableNow,
+  STATUS_DISPLAY_ORDER,
+  statusPresentation,
+} from "../lib/account-status"
 import type { AccountView } from "../lib/api/types"
 import { USAGE_WINDOWS, type UsageWindow, usageWindowLabel } from "../lib/api/usage"
 import { formatCost, formatCount, formatPercent } from "../lib/format"
@@ -84,13 +90,33 @@ export default function OverviewRoute() {
     })),
   )
 
-  const columns: readonly Column<StatusCount>[] = [
+  // Active accounts a spent quota window is currently blocking. Server-computed `spent`, the same
+  // verdict candidate filtering reaches — these are green dots that will 429, and both the
+  // routable headline and the status table must say so rather than counting them as capacity.
+  const windowBlocked = createMemo(
+    () =>
+      list().filter(
+        (account) =>
+          account.status === "active" && hasSpentWindow(account.availability?.quotaWindows),
+      ).length,
+  )
+  const routableNow = createMemo(
+    () =>
+      list().filter((account) => isRoutableNow(account.status, account.availability?.quotaWindows))
+        .length,
+  )
+
+  const columns = (): readonly Column<StatusCount>[] => [
     { id: "status", header: "Status", cell: (row) => <StatusDot status={row.status} /> },
     { id: "count", header: "Accounts", numeric: true, cell: (row) => String(row.count) },
     {
       id: "routable",
       header: "Routable",
-      cell: (row) => (isRoutable(row.status) ? "yes" : "no"),
+      cell: (row) => {
+        if (!isRoutable(row.status)) return "no"
+        const blocked = windowBlocked()
+        return blocked > 0 ? `yes — ${blocked} window-spent now` : "yes"
+      },
     },
     { id: "meaning", header: "Meaning", cell: (row) => statusPresentation(row.status).hint },
   ]
@@ -157,7 +183,10 @@ export default function OverviewRoute() {
         <section aria-label="Headline figures" class={styles.tiles}>
           <StatTile
             label="Accounts"
-            note={`${list().filter((account) => isRoutable(account.status)).length} routable now`}
+            // `isRoutableNow`, not the status alone: an active sub with a spent window is a green
+            // dot every request bounces off, and "5 routable now" above a fleet answering 429s is
+            // the exact headline this screen exists not to print.
+            note={`${routableNow()} routable now`}
             value={accounts.isSuccess ? String(list().length) : undefined}
           />
           <StatTile
@@ -199,7 +228,7 @@ export default function OverviewRoute() {
           {() => (
             <Table
               caption="Accounts by status. cooling_down and exhausted are counted separately — one is a clock, the other is a purchase."
-              columns={columns}
+              columns={columns()}
               rowId={(row) => row.status}
               rows={counts()}
             />

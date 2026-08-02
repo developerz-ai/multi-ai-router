@@ -151,9 +151,10 @@ export function useDiscoverAccountModels() {
 }
 
 /**
- * The last "Test now" this console knows about for one account. Cache-only, same reasoning as
- * `useLastRecheck`: `AccountView` carries no such field, so a cold load says nothing was tested in
- * this session rather than inventing a result.
+ * The last "Test now" this console knows about for one account. Cache-only: `AccountView` carries
+ * no last-test field (a test's verdict is a moment's observation, not account state), so a cold
+ * load says nothing was tested in this session rather than inventing a result. `enabled: false`
+ * keeps it a pure cache read — there is no `GET` behind this key to call.
  */
 export function useLastTest(id: Accessor<string>) {
   return useQuery(() => ({
@@ -165,13 +166,15 @@ export function useLastTest(id: Accessor<string>) {
 }
 
 /**
- * The last re-check this console knows about for one account.
+ * The last re-check *press* this console made for one account.
  *
- * **Cache-only, and that is a gap, not a design.** `AccountView` carries no
- * `lastCheckedAt`, so on a cold load — a fresh tab, another operator's press —
- * there is nothing to show and the row says "not checked in this session"
- * rather than inventing a time. `enabled: false` keeps it a pure cache read:
- * there is no `GET` behind this key to call.
+ * Cache-only, and no longer the row's only source of a timestamp: the accounts read carries
+ * `availability.lastCheckedAt` — what the **server** remembers — and `AccountRecheck` prefers a
+ * press result only because that one also carries `nextAllowedAt` (the cooldown verdict, which
+ * the read cannot know). What the server remembers is still per-process memory beside the breaker
+ * marks it guards (`services/accounts/recheck.ts`), so after a router restart both sources are
+ * empty and the row honestly says "Not checked since restart" rather than inventing a time.
+ * `enabled: false` keeps this a pure cache read: there is no `GET` behind this key to call.
  */
 export function useLastRecheck(id: Accessor<string>) {
   return useQuery(() => ({
@@ -213,5 +216,8 @@ async function invalidateAccountReaders(client: ReturnType<typeof useQueryClient
   await Promise.all([
     client.invalidateQueries({ queryKey: queryKeys.accounts.root() }),
     client.invalidateQueries({ queryKey: queryKeys.pools.root() }),
+    // Every mutation routed through here is an audited action; without this the
+    // audit table only updates on a reload, which reads as a write not recorded.
+    client.invalidateQueries({ queryKey: queryKeys.audit.root() }),
   ])
 }

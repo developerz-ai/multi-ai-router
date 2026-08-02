@@ -61,7 +61,11 @@ export {
 } from "./filter"
 export { rendezvousRank, rendezvousScore, scoreWithSeed, sessionSeed } from "./hash"
 export { advertisedModels, type ModelResolution, resolveModel } from "./model"
-export { type NoCandidatesInput, noCandidatesError } from "./no-candidates"
+export {
+  DEFAULT_UNKNOWN_RESET_RETRY_AFTER_SECONDS,
+  type NoCandidatesInput,
+  noCandidatesError,
+} from "./no-candidates"
 export {
   leastUsed,
   POLICIES,
@@ -90,6 +94,7 @@ export type {
   FilterReason,
   GroupDecision,
   PolicyNote,
+  RecoverableFilterReason,
   RejectedCandidate,
   ScopeDiagnostics,
   SelectionDecision,
@@ -97,7 +102,7 @@ export type {
   SelectionResult,
   SelectionSuccess,
 } from "./result"
-export { RECOVERABLE_FILTER_REASONS } from "./result"
+export { isRecoverableFilterReason, RECOVERABLE_FILTER_REASONS } from "./result"
 export { isInScope, resolveScope, type ScopeResolution } from "./scope"
 export { selectAccounts } from "./select"
 export type {

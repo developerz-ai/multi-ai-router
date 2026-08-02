@@ -52,6 +52,13 @@ export interface UsageRecorderOptions {
   /** Called once per refused batch — twice for one that fails, retries, and fails again. */
   readonly onWriteError?: (failure: UsageWriteFailure) => void
   /**
+   * Called at most once, from `stop()`, with how many records were still unwritten when shutdown
+   * gave up on them — a retry batch the writer refused again, and the queue behind it. Invisible
+   * loss is the one thing this module promises not to do, and records that die with the process
+   * must be counted like records shed or discarded, not merely absent.
+   */
+  readonly onAbandoned?: (records: number) => void
+  /**
    * Called once per record as the batch drains — which is to say on the flush timer, never on
    * the request path. This is where metrics are fed from: an observation costs a map lookup and
    * an add, and even that belongs off the critical path (CLAUDE.md non-negotiable 8).
@@ -179,6 +186,12 @@ export function createUsageRecorder(
         timer = null
       }
       await flush()
+      // The await above may have coalesced onto a pass whose final drain predates records
+      // enqueued since — or ended early on a refused batch. One fresh pass writes what it can
+      // (and gives a held retry batch its one try) instead of abandoning it all silently.
+      if (queue.depth > 0 || retry !== null) await flush()
+      const stranded = queue.depth + (retry?.length ?? 0)
+      if (stranded > 0) options.onAbandoned?.(stranded)
     },
 
     stats: () => ({

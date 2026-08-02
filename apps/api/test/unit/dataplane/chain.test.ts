@@ -1,12 +1,24 @@
 import { describe, expect, test } from "bun:test"
 import { TranslationError } from "@multi-ai-router/core"
-import { createHealthStore, planCandidates } from "../../../src/services/dataplane"
+import {
+  createHealthStore,
+  planCandidates,
+  SESSION_RESTART_HEADER,
+} from "../../../src/services/dataplane"
 import { type ChainContext, runChain } from "../../../src/services/dataplane/chain"
 import { createRuntime } from "../../../src/services/dataplane/runtime"
 import type { TranslatedRequestBody } from "../../../src/services/dataplane/translate-body"
 import type { UsageRecord } from "../../../src/services/usage"
 import { candidate } from "../routing/fixtures"
-import { account, catalog, cipher, clock, jsonResponse, type TestClock } from "./fixtures"
+import {
+  account,
+  catalog,
+  cipher,
+  clock,
+  jsonResponse,
+  subscriptionAccount,
+  type TestClock,
+} from "./fixtures"
 
 /**
  * Where the upstream span opens, and what that costs the one number it decides.
@@ -202,5 +214,86 @@ describe("the upstream span opens when the transport is called, not when the att
     const row = it.rows[0]
     expect(row?.outcome).toBe("client_error")
     expect(row?.routerOverheadMs).toBe(TRANSLATE_MS)
+  })
+})
+
+/**
+ * The mid-chain half of "surfaced, never silently truncated" (`session-restart.ts`): failover off
+ * the account a session is bound to answers from a fresh upstream session, and the response says so.
+ */
+describe("leaving a bound account mid-chain is surfaced", () => {
+  function mixedChain(options: { readonly boundAccountId?: string }): {
+    readonly context: ChainContext
+    readonly rows: readonly UsageRecord[]
+  } {
+    const testClock = clock()
+    const sub = subscriptionAccount("sub")
+    const api = account("api-1", { provider: "anthropic-api", cipher: CRYPTOR })
+    const plan = planCandidates(
+      [candidate(sub.snapshot, 0), candidate(api.snapshot, 1)],
+      catalog([sub, api]),
+      "anthropic",
+      "messages",
+    )
+    const rows: UsageRecord[] = []
+
+    const runtime = createRuntime({
+      health: createHealthStore({ jitter: () => 0 }),
+      cipher: CRYPTOR,
+      // Only the HTTP candidate reaches here; the SDK one fails first for want of a transport.
+      call: () => Promise.resolve(jsonResponse(200, { type: "message", content: [] })),
+      // No `invokeSdk`: the subscription attempt fails by name, retryably — the shape of any
+      // mid-chain failure on the bound account, without stubbing the SDK itself.
+      sessionKeySource: "header",
+      clock: testClock,
+      timeoutMs: 30_000,
+      record: (row) => void rows.push(row),
+      correlationId: "11111111-1111-4111-8111-111111111111",
+      clientRequestId: null,
+      apiKeyId: "22222222-2222-4222-8222-222222222222",
+      sessionKey: "session-1",
+      model: "claude-opus-5",
+      ingressDialect: "anthropic",
+      operation: "messages",
+      requestStarted: testClock.elapsed(),
+    })
+
+    return {
+      rows,
+      context: {
+        runtime,
+        plan: plan.servable,
+        request: new Request("http://router.test/v1/messages", { method: "POST", body: BODY }),
+        bodyBytes: new TextEncoder().encode(BODY),
+        modelSpan: null,
+        translation: { created: 0, model: "claude-opus-5", fallbackId: "msg_test" },
+        translated: { bodyFor: () => new TextEncoder().encode(BODY) },
+        failover:
+          options.boundAccountId === undefined
+            ? undefined
+            : { boundAccountId: options.boundAccountId },
+        log: undefined,
+      },
+    }
+  }
+
+  test("the hop off a bound subscription account stamps the session-restart header", async () => {
+    const it = mixedChain({ boundAccountId: "sub" })
+    const response = await runChain(it.context)
+
+    expect(response.status).toBe(200)
+    expect(response.headers.get(SESSION_RESTART_HEADER)).toBe("failover")
+    // Both attempts still wrote their rows — the failed subscription one included. The success
+    // row settles at the last relayed byte, so the body is drained first.
+    await response.text()
+    expect(it.rows).toHaveLength(2)
+  })
+
+  test("the same hop with no binding in play stamps nothing", async () => {
+    const it = mixedChain({})
+    const response = await runChain(it.context)
+
+    expect(response.status).toBe(200)
+    expect(response.headers.get(SESSION_RESTART_HEADER)).toBeNull()
   })
 })

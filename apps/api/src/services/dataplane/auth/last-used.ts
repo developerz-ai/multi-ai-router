@@ -1,3 +1,4 @@
+import { describeError } from "@multi-ai-router/core"
 import type { ApiKeyRepository } from "@multi-ai-router/db"
 import type { Logger } from "../../../logging/logger"
 
@@ -22,7 +23,7 @@ export function stampLastUsed(
       logger.warn("failed to stamp key last-used", {
         component: "dataplane",
         keyId: key.id,
-        reason: error instanceof Error ? error.message : String(error),
+        reason: describeError(error, Number.POSITIVE_INFINITY),
       })
     })
   }

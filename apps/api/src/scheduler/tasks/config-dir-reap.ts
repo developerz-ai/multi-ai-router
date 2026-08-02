@@ -1,3 +1,4 @@
+import { describeError } from "@multi-ai-router/core"
 import type { AccountRepository } from "@multi-ai-router/db"
 import type { AccountConfigDirs, ConfigDirEntry } from "../../providers/claude-sdk/config-dir"
 import type { ScheduledTask, TaskOutcome } from "../types"
@@ -157,8 +158,13 @@ export function createConfigDirReapTask(deps: ConfigDirReapDeps): ScheduledTask 
         }
       } catch (error) {
         // Caught rather than thrown so the count survives: what was removed is gone whatever
-        // happens next, and the runner redacts the message before it reaches the run row.
-        return { outcome: "failed", itemsProcessed: removed, error: messageOf(error) }
+        // happens next, and the runner redacts and truncates the full cause chain — unbounded
+        // here — before it reaches the run row.
+        return {
+          outcome: "failed",
+          itemsProcessed: removed,
+          error: describeError(error, Number.POSITIVE_INFINITY),
+        }
       }
 
       logger.info("config dir reap", {
@@ -179,7 +185,3 @@ export function createConfigDirReapTask(deps: ConfigDirReapDeps): ScheduledTask 
 }
 
 const HOUR_MS = 60 * 60 * 1_000
-
-function messageOf(error: unknown): string {
-  return error instanceof Error ? error.message : String(error)
-}

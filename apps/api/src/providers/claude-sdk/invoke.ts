@@ -52,6 +52,13 @@ export interface SdkInvocation {
    * answers, just without cooling the account down ahead of the next `429`.
    */
   readonly onRateLimit?: (info: unknown) => void
+  /**
+   * Called at most once per turn, when the renderer's `finish()` had to force-close content blocks
+   * the stream never terminated — a stream-integrity alarm, not a client-visible event. `count` is
+   * how many blocks were closed by force. Optional like the callbacks above: the render layer is
+   * pure and holds no logger, so a launch that wires nothing simply goes unalarmed.
+   */
+  readonly onForcedBlockClose?: (count: number) => void
 }
 
 export interface SdkSessionReport {

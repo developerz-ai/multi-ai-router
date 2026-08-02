@@ -1,4 +1,3 @@
-@use "../../styles/breakpoints" as bp;
 @use "../../styles/mixins" as *;
 
 .form {
@@ -6,21 +5,8 @@
   gap: var(--space-4);
 }
 
-.pair {
-  display: grid;
-  gap: var(--space-4);
-
-  @include bp.respond-to("sidebar") {
-    grid-template-columns: 1fr 1fr;
-  }
-}
-
-// A field is a grid of label/control/hint, and a grid row stretches to its
-// tallest sibling — so a two-line hint on one side pushes the *other* side's
-// input down the cell to fill the slack, and the pair renders visibly stepped.
-.pair > * {
-  align-content: start;
-}
+// The weight/priority pair moved to `RoutingNumberFields.module.scss` with its
+// component; the window ceilings grid lives in `QuotaCeilingFields.module.scss`.
 
 // A fact about this account the form cannot change, stated where the operator
 // would otherwise go looking for a control.
