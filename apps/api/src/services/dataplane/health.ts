@@ -249,6 +249,13 @@ export function createHealthStore(options: HealthStoreOptions = {}): HealthStore
 
     recordFailure(accountId, failure, now, caller) {
       const before = read(accountId).breaker
+      // The same precedence rule `foldRateLimit` documents (`health-reading.ts`): a terminal
+      // verdict outranks any later failure. Two attempts run concurrently, one answers `402` and
+      // the other `429` — folding the `429` in second would demote `exhausted` back to
+      // `cooling_down`, hand a dead balance a `Retry-After`, and put it back on the half-open
+      // probe's timer (non-negotiable 7). `blocked` is the breaker's own name for "no timer will
+      // change this", so who is protected here cannot drift from who routing treats as out.
+      if (phase(before, now) === "blocked") return
       const after = recordFailure(before, failure, now, breakerOptions(caller))
       write(accountId, { breaker: after })
       // `blocked` is the breaker's own name for "no timer will change this", so who gets announced

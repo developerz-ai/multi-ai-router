@@ -2,14 +2,15 @@ import type { Options, SDKUserMessage } from "@anthropic-ai/claude-agent-sdk"
 import { query } from "@anthropic-ai/claude-agent-sdk"
 import { createCliProbe } from "./cli-probe"
 import type { SdkConcurrency } from "./concurrency"
-import { STDERR_TAIL_LIMIT } from "./errors"
-import type { SdkInvocation, SdkInvoker, SdkSessionReport } from "./invoke"
+import { classifySdkFailure } from "./errors"
+import type { SdkInvocation, SdkInvoker } from "./invoke"
 import { createQueryLaunch, type QueryLaunch } from "./options"
 import { buildSdkPrompt, type PromptBlock } from "./prompt"
 import { renderSdkResponse, type StreamPacing } from "./render"
 import { readSdkRequest } from "./request"
 import { type CliResolution, resolveClaudeCli } from "./resolve-cli"
 import { createPassthrough, type Passthrough } from "./tools"
+import { createSessionReport, createStderrTail, withStderr } from "./turn-support"
 
 /**
  * The `SdkInvoker` itself: one Anthropic Messages request in, one `query()` turn, one Anthropic
@@ -33,12 +34,26 @@ import { createPassthrough, type Passthrough } from "./tools"
  * Three lifetimes are managed here and nowhere else, because this is the only module that holds all
  * three at once:
  *
- * - **The slot** is released when the message stream ends — normally, by failure, or by a client
- *   that went away — never when `query()` returns, which is immediately and long before the answer.
+ * - **The slot** is held from the instant it is granted until the message stream ends — normally,
+ *   by failure, or by a client that went away — never released early by a throw between acquire and
+ *   launch, and never when `query()` returns, which is immediately and long before the answer.
+ *   Everything after the acquire runs under a handler that hands the permits back on failure,
+ *   because a leaked permit is invisible until the fourth one wedges the account for good
+ *   (`concurrency.ts`: "every holder releases").
  * - **The abort bridge** is detached at the same moment, or a finished query keeps a listener on a
  *   signal that outlives it (§9).
  * - **The session report** is fired once, at the end, with whatever the SDK named. Before the end
  *   there is no assistant uuid to report, and reporting twice would write the row twice.
+ *
+ * **One recovery lives here: busy-session → retry as a fork.** The CLI refuses to resume a session
+ * still registered as a running background agent (§9's table, `errors.ts` `busy-session`) — the
+ * fate of two turns of one conversation dispatched concurrently, and routine under
+ * `CLAUDE_CODE_SESSION_KIND: "bg"` (`env.ts`). That refusal is thrown before the subprocess streams
+ * anything, and the renderer only ever throws before a byte is on the wire — so one in-place retry
+ * with `forkSession: true` (same account, same slot, full history inherited) is legal under "never
+ * retry after bytes are on the wire", and strictly better than failing over to a cold account and a
+ * full transcript replay. Once, and only for a `resume` plan: a `fork` already forks, `fresh` can
+ * never be busy, and a fork that comes back busy too is a real failure the chain should see.
  *
  * `query` and the CLI resolution are injected for the same reason `fetch` is injected on the HTTP
  * path: **no test may spawn a real `claude` CLI** (CLAUDE.md testing rules), and a transport that
@@ -96,57 +111,93 @@ export function createSdkInvoker(deps: SdkInvokerDeps): SdkInvoker {
 
     // Held before the subprocess exists and released when its output stream ends. Aborting while
     // queued throws the signal's own reason, which `runSdkAttempt` reads as the deadline it was.
-    const slot = await deps.concurrency.acquire(invocation.accountId, invocation.signal)
+    // `let`, because a busy-session retry ends the first attempt's slot and takes its own.
+    let slot = await deps.concurrency.acquire(invocation.accountId, invocation.signal)
 
-    const stderr = createStderrTail()
-    // The passthrough's early stop terminates the subprocess, and the launch is what owns that
-    // ability — so the two are tied together after both exist rather than at construction.
-    let launch: QueryLaunch | null = null
-    const passthrough: Passthrough | null = createPassthrough({
-      tools: request.tools,
-      abort: () => launch?.abort(),
-    })
+    /** One `query()` turn. Releases nothing on failure — the caller below owns the slot's end. */
+    const attempt = async (busySessionFork: boolean): Promise<Response> => {
+      const stderr = createStderrTail()
+      // The passthrough's early stop terminates the subprocess, and the launch is what owns that
+      // ability — so the two are tied together after both exist rather than at construction.
+      let launch: QueryLaunch | null = null
+      const passthrough: Passthrough | null = createPassthrough({
+        tools: request.tools,
+        abort: () => launch?.abort(),
+      })
 
-    launch = createQueryLaunch({
-      configDir: invocation.configDir,
-      model: invocation.model,
-      cliPath: cli.path,
-      signal: invocation.signal,
-      onStderr: stderr.push,
-      session: invocation.session,
-      ...(request.system === null ? {} : { systemPrompt: request.system }),
-      ...(passthrough === null ? {} : { passthrough }),
-    })
-    const started = launch
+      launch = createQueryLaunch({
+        configDir: invocation.configDir,
+        model: invocation.model,
+        cliPath: cli.path,
+        signal: invocation.signal,
+        onStderr: stderr.push,
+        session: invocation.session,
+        ...(busySessionFork ? { busySessionFork: true } : {}),
+        ...(request.system === null ? {} : { systemPrompt: request.system }),
+        ...(passthrough === null ? {} : { passthrough }),
+      })
+      const started = launch
 
-    const report = createSessionReport(invocation.onSession)
-    const done = (): void => {
-      report.fire()
-      started.detach()
-      slot.release()
+      const report = createSessionReport(invocation.onSession)
+      const done = (): void => {
+        report.fire()
+        started.detach()
+        slot.release()
+      }
+
+      try {
+        const messages = runQuery({ prompt: singleTurn(prompt), options: started.options })
+        const filtered = passthrough === null ? messages : passthrough.filter(messages)
+
+        return await renderSdkResponse({
+          messages: untilExhausted(filtered, done),
+          model: invocation.model,
+          stream: request.stream,
+          ...(deps.pacing === undefined ? {} : { pacing: deps.pacing }),
+          observer: {
+            onSession: report.session,
+            onAssistantUuid: report.assistant,
+            ...(invocation.onRateLimit === undefined
+              ? {}
+              : { onRateLimit: invocation.onRateLimit }),
+            ...(invocation.onForcedBlockClose === undefined
+              ? {}
+              : { onForcedBlockClose: invocation.onForcedBlockClose }),
+          },
+        })
+      } catch (error) {
+        // The renderer only throws before a byte is on the wire, so this is still allowed to be a
+        // real status — and a retry is still legal. The subprocess is terminated because nothing is
+        // going to read it now.
+        report.fire()
+        started.abort(error)
+        throw withStderr(error, stderr.tail())
+      }
     }
 
+    // From here every exit hands the permits back: the stream's own end via `done`, and every
+    // failure — including one thrown before the launch existed — via the handlers below. The
+    // releases are once-guarded per slot (`concurrency.ts`), so the overlap with `done` is safe.
     try {
-      const messages = runQuery({ prompt: singleTurn(prompt), options: started.options })
-      const filtered = passthrough === null ? messages : passthrough.filter(messages)
-
-      return await renderSdkResponse({
-        messages: untilExhausted(filtered, done),
-        model: invocation.model,
-        stream: request.stream,
-        ...(deps.pacing === undefined ? {} : { pacing: deps.pacing }),
-        observer: {
-          onSession: report.session,
-          onAssistantUuid: report.assistant,
-          ...(invocation.onRateLimit === undefined ? {} : { onRateLimit: invocation.onRateLimit }),
-        },
-      })
+      return await attempt(false)
     } catch (error) {
-      // The renderer only throws before a byte is on the wire, so this is still allowed to be a
-      // real status. The subprocess is terminated because nothing is going to read it now.
-      started.abort(error)
-      done()
-      throw withStderr(error, stderr.tail())
+      if (
+        invocation.session.kind === "resume" &&
+        classifySdkFailure(error).classification.kind === "busy-session"
+      ) {
+        // The first attempt's stream is over, so its slot is already handed back (or is, here).
+        // The retry takes its own, queueing honestly behind whatever arrived in between.
+        slot.release()
+        slot = await deps.concurrency.acquire(invocation.accountId, invocation.signal)
+        try {
+          return await attempt(true)
+        } catch (retried) {
+          slot.release()
+          throw retried
+        }
+      }
+      slot.release()
+      throw error
     }
   }
 }
@@ -187,94 +238,5 @@ async function* untilExhausted(
     for await (const message of messages) yield message
   } finally {
     onEnd()
-  }
-}
-
-interface SessionReport {
-  session(sdkSessionId: string): void
-  assistant(uuid: string): void
-  /** Reports what the SDK named, once. A turn that never named a session reports nothing. */
-  fire(): void
-}
-
-/**
- * The Session mapping's half of the turn.
- *
- * Fired at the end rather than on arrival: the session id lands in `system`/`init` before any
- * content, the assistant uuid only once the turn has produced one, and a binding written without
- * the uuid costs the next undo its fork point. Firing once also means one row write per turn rather
- * than one per message (`session/store.ts`).
- */
-function createSessionReport(onSession: SdkInvocation["onSession"]): SessionReport {
-  let sdkSessionId: string | null = null
-  let assistantUuid: string | null = null
-  let fired = false
-
-  return {
-    session: (value) => {
-      sdkSessionId = value
-    },
-    assistant: (value) => {
-      assistantUuid = value
-    },
-    fire: () => {
-      if (fired || onSession === undefined || sdkSessionId === null) return
-      fired = true
-      const report: SdkSessionReport = {
-        sdkSessionId,
-        ...(assistantUuid === null ? {} : { assistantUuid }),
-      }
-      // The caller's own bookkeeping. A throw here is theirs, and it must not become this turn's.
-      try {
-        onSession(report)
-      } catch {
-        // The binding is not recorded. The answer is already served, and the next turn is cold.
-      }
-    },
-  }
-}
-
-interface StderrTail {
-  push(chunk: string): void
-  /** The last {@link STDERR_TAIL_LIMIT} characters the subprocess wrote. */
-  tail(): string
-}
-
-/** Bounded at the source: a crashing subprocess can print megabytes, and the cause is at the end. */
-function createStderrTail(): StderrTail {
-  let buffered = ""
-  return {
-    push: (chunk) => {
-      buffered = (buffered + chunk).slice(-STDERR_TAIL_LIMIT)
-    },
-    tail: () => buffered,
-  }
-}
-
-/**
- * Attaches the subprocess's own last words to the failure, which is where `classifySdkFailure`
- * looks for them (`errors.ts`).
- *
- * Only ever *adds*: an error that already carries stderr keeps its own, and an abort or a deadline
- * is rethrown untouched so its `name` still reads as the deadline it was (`sdk-attempt.ts`).
- */
-function withStderr(error: unknown, tail: string): unknown {
-  if (tail === "" || typeof error !== "object" || error === null) return error
-  if (typeof Reflect.get(error, "stderr") === "string") return error
-  if (!(error instanceof Error)) return error
-
-  const carried = new SdkSubprocessError(error.message, tail)
-  carried.name = error.name
-  return carried
-}
-
-/** An SDK failure with the subprocess's stderr tail beside it. Never rendered to a client. */
-class SdkSubprocessError extends Error {
-  readonly stderr: string
-
-  constructor(message: string, stderr: string) {
-    super(message)
-    this.name = "SdkSubprocessError"
-    this.stderr = stderr
   }
 }

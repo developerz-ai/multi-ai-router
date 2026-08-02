@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto"
-import { AdminAuthError } from "@multi-ai-router/core"
+import { AdminAuthError, describeError } from "@multi-ai-router/core"
 import { type DiscoveryDocument, discoverySchema, OIDCDiscoveryError } from "./discovery"
 import { assertEmailVerified, OIDCIdTokenInvalidError, verifyIdToken } from "./idToken"
 import { createJWKSCache, OIDCJWKSError } from "./jwks"
@@ -254,7 +254,12 @@ export function createOIDCFlow(deps: OIDCFlowDeps): OIDCFlow {
         // line per failed request with the `requestId` bound — so `reason` lands there, findable in
         // a log aggregator, instead of in the unstructured `console.error` this replaces. The
         // browser still learns only {@link OIDC_VERIFICATION_FAILED}.
-        const reason = `${kind}: ${err instanceof Error ? err.message : String(err)}`
+        // The whole cause chain, innermost first — it earns its keep on the `unknown:` branch,
+        // where a failed fetch buries the socket-level complaint one `cause` down. It cannot
+        // resurrect a token-endpoint body: `exchangeCode` throws status-only errors with no cause
+        // attached, by design (see the comment there), and every OIDC error here is built the
+        // same way. Bounded like any logged reason; the transport's redactor scrubs the line.
+        const reason = `${kind}: ${describeError(err, 500)}`
         if (
           err instanceof OIDCDiscoveryError ||
           err instanceof OIDCJWKSError ||

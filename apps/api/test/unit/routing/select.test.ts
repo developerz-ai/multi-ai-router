@@ -6,7 +6,10 @@
 import { describe, expect, test } from "bun:test"
 import { QuotaExhaustedError, RoutingPolicy } from "@multi-ai-router/core"
 import type { SelectionRequest, SelectionResult } from "../../../src/services/routing"
-import { selectAccounts } from "../../../src/services/routing"
+import {
+  DEFAULT_UNKNOWN_RESET_RETRY_AFTER_SECONDS,
+  selectAccounts,
+} from "../../../src/services/routing"
 import { account, at, continuous, health, ids, pool, snapshot, subscription } from "./fixtures"
 
 const ask = (overrides: Partial<SelectionRequest> = {}): SelectionRequest => ({
@@ -147,7 +150,9 @@ describe("the empty candidate set fails by cause", () => {
   test("a cooling_down account with no recorded reset still gets a 429 with Retry-After", () => {
     // `filter.ts` admits this state (status cooling_down, no cooldownUntil) as still cooling —
     // never having gone through the breaker's own trip(). The reset instant is genuinely unknown,
-    // but cooling_down must never render as a 429 with no Retry-After (non-negotiable 7).
+    // but cooling_down must never render as a 429 with no Retry-After (non-negotiable 7). The
+    // wait is a *pause*, not a countdown: no clock is scheduled to clear this state, and the old
+    // 1-second floor had every waiting client retrying once a second forever.
     const state = snapshot(
       [account("a", { status: "cooling_down", health: health() })],
       [pool("team", ["a"])],
@@ -157,7 +162,38 @@ describe("the empty candidate set fails by cause", () => {
     expect(result.error.status).toBe(429)
     expect(result.error.code).toBe("quota_exhausted")
     expect(result.error).toBeInstanceOf(QuotaExhaustedError)
-    expect((result.error as QuotaExhaustedError).retryAfterSeconds).toBe(1)
+    expect((result.error as QuotaExhaustedError).retryAfterSeconds).toBe(
+      DEFAULT_UNKNOWN_RESET_RETRY_AFTER_SECONDS,
+    )
+  })
+
+  test("the unknown-reset wait is config, not a constant", () => {
+    const state = snapshot(
+      [account("a", { status: "cooling_down", health: health() })],
+      [pool("team", ["a"])],
+    )
+    const result = expectFailure(
+      selectAccounts(state, ask(), { unknownResetRetryAfterSeconds: 120 }),
+    )
+
+    expect((result.error as QuotaExhaustedError).retryAfterSeconds).toBe(120)
+  })
+
+  test("an estimated reset is labeled as one, never presented as the provider's word", () => {
+    // The breaker computed this instant from its own backoff schedule (`cooldownSource:
+    // "estimated"`). Rendering it bare would present arithmetic as fact.
+    const state = snapshot(
+      [
+        account("a", {
+          status: "cooling_down",
+          health: health({ cooldownUntil: at(60_000), cooldownSource: "estimated" }),
+        }),
+      ],
+      [pool("team", ["a"])],
+    )
+    const result = expectFailure(selectAccounts(state, ask()))
+
+    expect(result.error.message).toContain(`${at(60_000).toISOString()} (estimated)`)
   })
 
   test("five accounts, one recoverable and four exhausted, never reads as everyone rate limited", () => {
@@ -262,6 +298,18 @@ describe("the binding outranks the policy, in the whole chain", () => {
 
     expect(result.error.status).toBe(429)
     expect(result.decision.binding.state).toBe("blocked")
+  })
+
+  test("a bound account blocked by a spent window is told so — not that it is cooling down", () => {
+    const spent = snapshot(
+      [subscription("a", { quotaWindows: [continuous(1)] }), subscription("b")],
+      [pool("team", ["a", "b"])],
+    )
+    const result = expectFailure(selectAccounts(spent, ask({ binding: { accountId: "a" } })))
+
+    expect(result.error.status).toBe(429)
+    expect(result.error.message).toContain("out of quota")
+    expect(result.error.message).not.toContain("cooling down")
   })
 
   test("an exhausted bound account invalidates and the session lands elsewhere", () => {

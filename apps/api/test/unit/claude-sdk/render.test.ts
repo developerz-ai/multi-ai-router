@@ -127,6 +127,61 @@ describe("rendering two internal turns", () => {
   })
 })
 
+describe("a stream that loses a content_block_stop", () => {
+  test("the client's transcript is repaired and the observer is alarmed, once", async () => {
+    const counts: number[] = []
+    const response = await renderSdkResponse({
+      messages: sdkQueryStream({
+        turns: [
+          [
+            wireEvent({
+              type: "message_start",
+              message: { id: "msg_1", type: "message", role: "assistant", content: [] },
+            }),
+            wireEvent({
+              type: "content_block_start",
+              index: 0,
+              content_block: { type: "text", text: "" },
+            }),
+            wireEvent({
+              type: "content_block_delta",
+              index: 0,
+              delta: { type: "text_delta", text: "hi" },
+            }),
+            // No content_block_stop: the regression this alarm exists for.
+            wireEvent({ type: "message_delta", delta: { stop_reason: "end_turn" } }),
+            wireEvent({ type: "message_stop" }),
+          ],
+        ],
+        result: { stop_reason: "end_turn" },
+      }),
+      model: "claude-sonnet-4-5",
+      stream: true,
+      observer: { onForcedBlockClose: (count) => counts.push(count) },
+    })
+
+    const names = events(await response.text()).map((frame) => frame.name)
+    // The client still gets a sound sequence — the force-close is the repair…
+    expect(names).toContain("content_block_stop")
+    expect(names.at(-1)).toBe("message_stop")
+    // …and the counter is the alarm, which used to exist only in user transcripts.
+    expect(counts).toEqual([1])
+  })
+
+  test("a clean stream never calls the alarm", async () => {
+    const counts: number[] = []
+    const response = await renderSdkResponse({
+      messages: sdkQueryStream({ turns: [sdkTurn({ blocks: [TEXT_BLOCK] })] }),
+      model: "claude-sonnet-4-5",
+      stream: true,
+      observer: { onForcedBlockClose: (count) => counts.push(count) },
+    })
+
+    await response.text()
+    expect(counts).toEqual([])
+  })
+})
+
 describe("a fixture body that never opens a block", () => {
   test("a tool-only turn still funnels through message_start/message_stop cleanly", async () => {
     const response = await renderSdkResponse({

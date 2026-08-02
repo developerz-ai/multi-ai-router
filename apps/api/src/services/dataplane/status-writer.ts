@@ -1,4 +1,4 @@
-import type { AccountStatus } from "@multi-ai-router/core"
+import { type AccountStatus, describeError } from "@multi-ai-router/core"
 import type { AccountRepository } from "@multi-ai-router/db"
 import type { Logger } from "../../logging/logger"
 
@@ -170,7 +170,7 @@ export function createAccountStatusWriter(deps: AccountStatusWriterDeps): Accoun
     if (failed > 0) {
       log.warn("account status writes failed — routing holds the verdict, stored rows lag", {
         accounts: failed,
-        reason: lastError instanceof Error ? lastError.message : String(lastError),
+        reason: describeError(lastError, Number.POSITIVE_INFINITY),
       })
     }
   }

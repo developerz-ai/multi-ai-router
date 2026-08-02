@@ -265,7 +265,12 @@ async function measureTokens(
   }
 
   // One query for the total *and* the curve: the total is the sum of the slots, so the bar and the
-  // sparkline beside it are literally the same numbers and cannot drift apart.
-  const rows = await deps.usage.tokensSince(spans, { until: now, slots: QUOTA_WINDOW_SLOTS })
+  // sparkline beside it are literally the same numbers and cannot drift apart. The floor keeps a
+  // future edit of the display constant from handing the repository a slot count it can only
+  // degrade on — one slice is the least a span can be divided into.
+  const rows = await deps.usage.tokensSince(spans, {
+    until: now,
+    slots: Math.max(1, QUOTA_WINDOW_SLOTS),
+  })
   return new Map(rows.map((row) => [`${row.accountId}:${row.window}`, row]))
 }

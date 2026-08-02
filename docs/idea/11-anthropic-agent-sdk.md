@@ -179,6 +179,8 @@ neither write body has a field for one; `CLAUDE_CONFIG_ROOT` is the only knob, a
 | **Token-based Accounts still need a pinned dir** | With `CLAUDE_CODE_OAUTH_TOKEN` (from `claude setup-token`) an isolated dir is still required, or the SDK's 401-recovery silently falls back to host credentials and masks the failure (`profiles.ts:217-227`). That dir holds SDK state only, never the credential |
 | **`settingSources` must be explicitly `[]`** | Omitting it makes the CLI load user + project + local settings and slurp the **router host's** `CLAUDE.md` into the system prompt (`query.ts:296-302`) — a **cross-tenant context leak** for us |
 | **Env leakage** | Strip `ANTHROPIC_API_KEY` / `ANTHROPIC_BASE_URL` / `ANTHROPIC_AUTH_TOKEN` before spawning, or the subprocess can loop back through our own router |
+| **claude.ai org connectors are a separate door from `strictMcpConfig`** | The CLI fetches the subscription's claude.ai-hosted MCP connectors over HTTP whenever the OAuth token carries `user:mcp_servers` — its eligibility check (CLI 0.3.220) reads env, safe mode, auth precedence, and scopes, **not** `strictMcpConfig`, which only governs filesystem config. Every `query()` launch forces `ENABLE_CLAUDEAI_MCP_SERVERS=false` (`env.ts` `QUERY_ENV_OVERRIDES`), or one Account's connector catalog is injected into another key holder's request |
+| **The CLI's scratchpad block advertises a router-host path** | The injected "# Scratchpad Directory" context block names the subprocess cwd — the Account's `CLAUDE_CONFIG_DIR`, a **router** path — to a model whose tools execute on the *client*. `CLAUDE_CODE_SESSION_KIND=bg` (forced with the override above) suppresses it; the CLI's other `bg` effects are TUI rendering or `CLAUDE_JOB_DIR`-gated (Meridian #627/#628, audited against the bundled CLI). Known cost: a `bg` session registers as a running background agent, so a concurrent resume is refused — recovered by the busy-session fork retry (§9) |
 | **Root** | The SDK refuses permission-skipping as root unless `IS_SANDBOX=1` (`query.ts:335`). Prefer a real UID |
 
 ### Credential lifecycle per Account
@@ -193,6 +195,18 @@ neither write body has a field for one; `CLAUDE_CONFIG_ROOT` is the only knob, a
 | Reconnect | Re-run login against the **same** directory: Account id, Pool membership, and usage history survive |
 | Delete | Remove the directory with the Account row |
 | Reap | A scheduled task (`scheduler/tasks/config-dir-reap.ts`) removes what a crash left on the volume: a directory named after an account id that no row claims, once it is older than `RETENTION_ORPHAN_CONFIG_DIR_HOURS`. It surveys the directories *before* it reads the accounts — a directory minted after the survey cannot be in it, while a row inserted after it is still read — and it never touches a name that is not an account id. Both rules exist because the failure it prevents (a stale credential nobody will rotate) is milder than the failure a careless sweep would cause (a working subscription logged out for good) |
+
+**Concurrent subprocesses on one directory — a considered deferral.** Up to
+`CLAUDE_SDK_MAX_CONCURRENCY_PER_ACCOUNT` subprocesses share one `CLAUDE_CONFIG_DIR`, each capable of
+an OAuth refresh inside it, and a login or probe can touch the same directory beside them. The
+router deliberately does **not** serialize them (`concurrency.ts` records the same decision beside
+the gate): the CLI writes `.credentials.json` atomically and carries its own cross-process locking;
+a refresh that loses a race with a concurrent rotation fails one request into the ordinary auth
+classification rather than corrupting the file; and a login almost always runs against an Account
+that is `needs_reauth` — a status routing already excludes — so login-vs-traffic overlap is the
+reconnect edge case. The mitigation, if field evidence ever demands one, is an exclusive drain of
+the per-Account gate (`acquireAll`) wired through the login path — never a quiet reduction of the
+per-Account ceiling, which is throughput the pool is sized on.
 
 > **Credential refresh for subscription Accounts is not ours to do.** Meridian implements its own
 > refresh loop — proactive expiry timers, a background scheduler, direct `.credentials.json` writes
@@ -468,7 +482,7 @@ re-synthesis, not a passthrough.**
 |---|---|---|
 | `message_start` | first forwarded `stream_event`, **once** | structured output, tool-only turns |
 | `content_block_start` / `_delta` / `_stop` | forwarded `stream_event`s | passthrough tool_use blocks, error recovery |
-| `message_delta` (`stop_reason`, `usage.output_tokens`) | forwarded or synthesized | early stop, tool_use termination, error close |
+| `message_delta` (`stop_reason`, `usage` — `output_tokens` always, input/cache counts when the stream stated them) | forwarded or synthesized | early stop, tool_use termination, error close |
 | `message_stop` | exactly one, after the loop | always terminal |
 | `error` | classified failure | — |
 | `: ping` | every 15 s | keep-alive |
@@ -490,6 +504,33 @@ re-synthesis, not a passthrough.**
 - **A stop reason nobody stated is `null`.** Absence is reported as absence, exactly as a token
   count nobody measured is; claiming `end_turn` for a turn that never said so is the same class of
   invention as the canned fallback sentence.
+- **The terminal usage fallback merges every count the stream stated, field-wise.** The SDK splits
+  one turn's counts across events — `message_start` carries input and cache, each `message_delta`
+  the output so far — and the authoritative `result` usage is deliberately absent on an
+  early-stopped tool-call turn (§7). Falling back to the last `message_delta` alone therefore lost
+  input+cache on the dominant agent-traffic shape and systematically under-reported every such
+  `UsageRecord`. The envelope now keeps the newest non-null value per field; a count no event
+  stated stays absent, never a zero (`render/envelope.ts` `mergeUsage`).
+- **`context_management` is stripped from every forwarded frame**, at the event level and inside
+  `delta`. The SDK/CLI attaches it; the real Anthropic API never emits it on a plain request, and
+  stock clients crash treating it as a typed field (observed against langchain-anthropic —
+  Meridian #525). A narrow named deletion in the envelope, same spirit as tool-name un-prefixing;
+  everything else in the frame stays byte-identical.
+- **A force-closed block is an alarm, not only a repair.** `finish` closes any block the upstream
+  left open so the client's parser stays sound — and counts it, reporting through the render
+  observer (`onForcedBlockClose`) so a regression that eats a `content_block_stop` lands in our
+  logs instead of only in user transcripts.
+- **Unknown `content_block_delta` kinds fold like they stream.** The streaming path forwards a
+  delta kind this build has never seen; the non-streaming fold used to drop it, so the two response
+  shapes diverged for every future block type. The fold now carries the delta's own fields onto the
+  block verbatim, newest value winning (`render/message.ts`).
+- **A `tool_result`'s nested images are hoisted to sibling image blocks** when a conversation is
+  rendered into the prompt (`prompt.ts`): the SDK's user message has no `tool_result` block to
+  carry them in place, and folding them into the bracketed transcript line erased them — a
+  screenshot/PDF/chart tool's output, every turn. The transcript line names how many images follow;
+  the `image/jpg` misspelling is normalized to `image/jpeg`, and an image that still fails the
+  source schema is omitted **by name** (`[image omitted: unsupported source type …]`), never as a
+  bare `[image block]`.
 - **Message ids are CSPRNG-backed** (`crypto.randomUUID`), never clock-derived — see the fidelity
   table below.
 - **One renderer, both response shapes.** `includePartialMessages: true` is unconditional, so
@@ -718,6 +759,11 @@ walks, resolved from the SDK's own directory because bun installs a package's de
 `claude` got picked" is otherwise indistinguishable from any other SDK error. The path is logged,
 not returned: `/readyz` is unauthenticated. Implementation:
 `apps/api/src/providers/claude-sdk/resolve-cli.ts` (pure ladder) + `cli-probe.ts` (host facts).
+The **runtime** that would launch a JS-file rung is pinned the same way: `Options.executable` is
+set to `bun` explicitly (`options.ts`) rather than left to the SDK's autodetection, which spawns
+`bun cli.js` whenever `process.versions.bun` exists — wherever `bun` may or may not be on the
+child's PATH (Meridian pins `node` after embedded-Bun hosts broke on exactly that). Our image
+ships Bun as the runtime, so `bun` is the decision; the point is that it is written, not detected.
 
 | Concern | Design |
 |---|---|
@@ -735,9 +781,10 @@ the message plus the subprocess stderr tail. Classes worth naming as our own err
 |---|---|---|
 | Expired credential | `oauth token has expired`, `not logged in`, `401` | Account → `needs_reauth`, drop from routing, fail over to the next Account in the Pool. The status is **written through to the row** off the request path, because the router never refreshes this token: noticing the failure and parking the Account *is* the whole mechanism, so a verdict that died with the process would be nobody ever being told to log back in ([05-routing-and-failover.md](05-routing-and-failover.md#circuit-breaker)). **We do not refresh-and-retry** the way Meridian does — the SDK owns the token (§3) |
 | Rate limited | `429`, `rate limit`, `usage limit reached` | 429 + circuit breaker; fail over to the next Account |
+| Credits exhausted | `credit balance is too low` (the CLI's own error constant, 0.3.220) | `402`, Account → `exhausted` — permanent until a human tops up, **never** timer-retried (CLAUDE.md non-negotiable 7). Fail over: the next Account may be funded |
 | Stale SDK session | `No conversation found with session ID` | Evict the Session mapping, replay once |
-| Busy session | `is currently running as a background agent` | Bounded linear retries, then `forkSession` |
-| Overage required | `extra usage` + `1m` | Drop the extended-context variant, cool down |
+| Busy session | `is currently running as a background agent` | **One in-place retry as a fork** (`invoker.ts`): same Account, `forkSession: true` at the tip — the fork inherits the full transcript warm, where a failover would replay it cold. Legal because the refusal is thrown before any stream output and the renderer never throws after the first byte. A fork that comes back busy is a real `503` for the chain |
+| Overage required | `extra usage` + `1m`, or the CLI's verbatim long-context sentences (`Extra usage is required for long context`, `Usage credits are required for long context`, `out of extra usage`) | Drop the extended-context variant, cool down — the included window still refills on a clock, so this is never `exhausted` |
 | Subprocess crash | `exited with code N` + stderr | 502. Meridian maps a generic exit-1 to 401 on a heuristic — **do not copy that**; classify honestly and log the stderr tail |
 | Upstream idle | Guard expiry | 504 |
 

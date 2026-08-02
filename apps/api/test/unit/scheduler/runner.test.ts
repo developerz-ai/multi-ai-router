@@ -106,6 +106,36 @@ describe("a throwing task", () => {
     expect(repo.rows[0]?.outcome).toBe("failed")
   })
 
+  test("persists the cause chain innermost first — the statement never crowds out the reason", async () => {
+    // The audited failure: a drizzle wrapper whose message is 500 chars of statement text filled
+    // the front-anchored budget on its own, and the driver's complaint one `cause` down — with a
+    // credential in it, here — was discarded entirely.
+    const repo = memoryTaskRepository()
+    const t = task({
+      run: async () => {
+        throw new Error(`Failed query: insert into "usage_records" ${"$1, ".repeat(500)}`, {
+          cause: new Error("connect failed: postgres://router:s3cret-pw@db.internal:5432/router"),
+        })
+      },
+    })
+    const scheduler = createScheduler({
+      tasks: [t],
+      repo,
+      logger: silentLogger(),
+      lock: alwaysFree(),
+      jitterFraction: 0,
+    })
+
+    const result = await scheduler.runNow(t.name)
+
+    const persisted = repo.rows[0]?.error ?? ""
+    expect(persisted).toStartWith("connect failed:")
+    expect(persisted).toContain("Failed query")
+    expect(persisted).not.toContain("s3cret-pw")
+    expect(persisted.length).toBeLessThanOrEqual(500)
+    expect(result.error).toStartWith("connect failed:")
+  })
+
   test("still reschedules the next tick after failing", async () => {
     const repo = memoryTaskRepository()
     let calls = 0

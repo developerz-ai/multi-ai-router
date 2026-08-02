@@ -1,0 +1,17 @@
+@use "../../styles/breakpoints" as bp;
+
+.pair {
+  display: grid;
+  gap: var(--space-4);
+
+  @include bp.respond-to("sidebar") {
+    grid-template-columns: 1fr 1fr;
+  }
+}
+
+// A field is a grid of label/control/hint, and a grid row stretches to its
+// tallest sibling — so a two-line hint on one side pushes the *other* side's
+// input down the cell to fill the slack, and the pair renders visibly stepped.
+.pair > * {
+  align-content: start;
+}

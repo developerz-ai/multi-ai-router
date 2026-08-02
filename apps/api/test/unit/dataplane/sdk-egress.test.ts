@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import { NoHealthyAccountError } from "@multi-ai-router/core"
+import type { Logger } from "../../../src/logging/logger"
 import {
   claudeSdkDriver,
   type SdkInvocation,
@@ -332,6 +333,163 @@ describe("what a subscription failure is read as", () => {
     await rejectingAttempt(new Error("Claude AI usage limit reached"), session.context)
 
     expect(session.invalidated).toEqual([])
+  })
+})
+
+describe("a rendered error Response is a failed attempt, not a success to relay", () => {
+  // The renderer answers a non-streaming turn that ended in an upstream `error` event with the
+  // error's body under a real status (`render/stream.ts`) — and *no byte of it has reached the
+  // client*. Wrapping it as a success recorded a win on the account, reset its failure streak,
+  // and relayed the 502 while healthy candidates in the same pool sat unasked.
+  const errorBody = JSON.stringify({ type: "error", error: { type: "api_error", message: "boom" } })
+
+  test("a 502 body comes back as a retryable failure carrying the upstream's own answer", async () => {
+    const outcome = await runSdkAttempt({
+      plan: SDK_PLAN,
+      body: null,
+      invoke: async () =>
+        new Response(errorBody, { status: 502, headers: { "content-type": "application/json" } }),
+      session: undefined,
+      timeoutMs: 1_000,
+    })
+
+    expect(outcome.kind).toBe("failure")
+    if (outcome.kind !== "failure") return
+    // `server-error` is retryable: the four healthy accounts beside this one get their turn.
+    expect(outcome.failure.kind).toBe("server-error")
+    expect(outcome.failure.status).toBe(502)
+    // The body is kept, so the client can still hear the upstream's words if nobody else serves.
+    expect(outcome.upstream?.status).toBe(502)
+    expect(outcome.upstream?.bodyText).toBe(errorBody)
+    // The router-authored sentence, never the upstream's own.
+    expect(outcome.failure.message).not.toContain("boom")
+  })
+
+  test("a 200 stays a success — the streaming path is always one, by construction", async () => {
+    const outcome = await runSdkAttempt({
+      plan: SDK_PLAN,
+      body: null,
+      invoke: async () => new Response('{"type":"message"}', { status: 200 }),
+      session: undefined,
+      timeoutMs: 1_000,
+    })
+
+    expect(outcome.kind).toBe("success")
+  })
+})
+
+describe("the stream-integrity alarm reaches the log", () => {
+  // The render layer is pure and holds no logger, so `onForcedBlockClose` is worth nothing until
+  // this seam turns it into a line an operator can see — with the account, on the request-scoped
+  // logger that already stamps the request id.
+  function capturingLog(): { readonly log: Logger; readonly warned: Record<string, unknown>[] } {
+    const warned: Record<string, unknown>[] = []
+    const log: Logger = {
+      debug: () => {},
+      info: () => {},
+      warn: (msg, fields) => void warned.push({ msg, ...fields }),
+      error: () => {},
+      child: () => log,
+    }
+    return { log, warned }
+  }
+
+  test("a forced block close is warned about with the account and the count", async () => {
+    const { log, warned } = capturingLog()
+    await runSdkAttempt({
+      plan: SDK_PLAN,
+      body: null,
+      invoke: async (invocation) => {
+        invocation.onForcedBlockClose?.(2)
+        return new Response('{"type":"message"}', { status: 200 })
+      },
+      session: undefined,
+      timeoutMs: 1_000,
+      log,
+    })
+
+    expect(warned).toEqual([
+      {
+        msg: "sdk stream closed with unterminated content blocks",
+        accountId: "sub",
+        blocks: 2,
+      },
+    ])
+  })
+
+  test("a clean stream logs nothing, and no logger wired breaks nothing", async () => {
+    const { log, warned } = capturingLog()
+    await runSdkAttempt({
+      plan: SDK_PLAN,
+      body: null,
+      invoke: async () => new Response('{"type":"message"}', { status: 200 }),
+      session: undefined,
+      timeoutMs: 1_000,
+      log,
+    })
+    expect(warned).toEqual([])
+
+    const bare = await runSdkAttempt({
+      plan: SDK_PLAN,
+      body: null,
+      invoke: async (invocation) => {
+        invocation.onForcedBlockClose?.(1)
+        return new Response('{"type":"message"}', { status: 200 })
+      },
+      session: undefined,
+      timeoutMs: 1_000,
+    })
+    expect(bare.kind).toBe("success")
+  })
+})
+
+describe("what the lineage plan is told", () => {
+  function recordingSession(): {
+    readonly context: SdkSessionContext
+    readonly resolved: { sessionGone?: boolean }[]
+  } {
+    const resolved: { sessionGone?: boolean }[] = []
+    const store: SessionStore = {
+      binding: () => Promise.resolve(undefined),
+      invalidate: () => {},
+      resolve: (input) => {
+        resolved.push({
+          ...(input.sessionGone === undefined ? {} : { sessionGone: input.sessionGone }),
+        })
+        return { plan: { kind: "fresh", reason: "no-session" }, remember: () => {} }
+      },
+    }
+    return {
+      context: { store, apiKeyId: "key-1", sessionKey: "sess-1", keySource: "header" },
+      resolved,
+    }
+  }
+
+  test("the in-place replay after a stale session says the session is gone", async () => {
+    const session = recordingSession()
+    await runSdkAttempt({
+      plan: SDK_PLAN,
+      body: null,
+      invoke: async () => new Response('{"type":"message"}', { status: 200 }),
+      session: session.context,
+      timeoutMs: 1_000,
+      sessionGone: true,
+    })
+
+    expect(session.resolved).toEqual([{ sessionGone: true }])
+  })
+
+  test("an ordinary first attempt claims nothing about the session", async () => {
+    const session = recordingSession()
+    await runSdkAttempt({
+      plan: SDK_PLAN,
+      body: null,
+      invoke: async () => new Response('{"type":"message"}', { status: 200 }),
+      session: session.context,
+      timeoutMs: 1_000,
+    })
+
+    expect(session.resolved).toEqual([{}])
   })
 })
 

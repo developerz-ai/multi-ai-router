@@ -1,3 +1,4 @@
+import { describeError } from "@multi-ai-router/core"
 import type { TaskOutcome } from "../types"
 
 /**
@@ -91,12 +92,15 @@ export async function runSweeps(
     // committed are deleted whatever happens next, and a run that reports zero
     // reads as "did nothing" to the operator. The runner redacts and truncates
     // the message before it reaches `scheduled_task_runs.error`.
-    return { outcome: "failed", itemsProcessed: deleted, error: messageOf(error), counts }
+    // The full cause chain, unbounded here on purpose: the runner redacts and truncates once,
+    // and a pre-cut could split a credential right where its scrub would have matched.
+    return {
+      outcome: "failed",
+      itemsProcessed: deleted,
+      error: describeError(error, Number.POSITIVE_INFINITY),
+      counts,
+    }
   }
 
   return { outcome: remaining ? "partial" : "success", itemsProcessed: deleted, counts }
-}
-
-function messageOf(error: unknown): string {
-  return error instanceof Error ? error.message : String(error)
 }

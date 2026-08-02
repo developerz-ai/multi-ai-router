@@ -7,7 +7,7 @@ import {
   type SdkQueryFn,
   type SdkSessionReport,
 } from "../../../src/providers"
-import { sdkQueryStream, sdkTurn } from "./fixtures"
+import { sdkQueryStream, sdkTurn, wireEvent } from "./fixtures"
 
 /**
  * The transport itself: `createSdkInvoker` composing the launch, the tools, the concurrency gate,
@@ -446,6 +446,161 @@ describe("the subprocess slot", () => {
     expect(concurrency.inFlight).toBe(0)
     expect(concurrency.inFlightFor("acct-a")).toBe(0)
     expect(concurrency.inFlightFor("acct-b")).toBe(0)
+  })
+})
+
+describe("permits never leak, even when the launch itself is what throws", () => {
+  test("a throw between the acquire and the stream hands both permits back", async () => {
+    const concurrency = createSdkConcurrency({ global: 4, perAccount: 2 })
+    const spy = spyQuery()
+    const { invoke } = invoker(spy, concurrency)
+
+    // A signal-shaped object with no `addEventListener`: the concurrency gate admits it (a free
+    // permit only reads `.aborted`), and `createQueryLaunch` then throws wiring the abort bridge —
+    // after the permits were granted, before any stream existed whose end could release them.
+    // Before the fix, four of these wedged the account forever and ten wedged the replica.
+    const broken = { aborted: false } as unknown as AbortSignal
+    await expect(invoke(invocation({ signal: broken }))).rejects.toThrow()
+
+    expect(spy.options).toHaveLength(0)
+    expect(concurrency.inFlight).toBe(0)
+    expect(concurrency.inFlightFor("sub-1")).toBe(0)
+  })
+})
+
+describe("a busy session is retried once, in place, as a fork", () => {
+  const RESUME = {
+    kind: "resume",
+    sdkSessionId: "sess_9",
+    lineage: "continuation",
+    deltaFrom: 0,
+  } as const
+  const BUSY = "Session sess_9 is currently running as a background agent"
+
+  const busyStream = (): AsyncIterable<unknown> => ({
+    // biome-ignore lint/correctness/useYield: the CLI's refusal is thrown before any output.
+    async *[Symbol.asyncIterator](): AsyncIterator<unknown> {
+      throw new Error(BUSY)
+    },
+  })
+
+  /** Like {@link spyQuery}, but each call gets its own stream — the busy-then-served shape. */
+  function spySequence(streams: readonly (() => AsyncIterable<unknown>)[]): Spy {
+    const options: Options[] = []
+    const prompts: unknown[] = []
+    let call = 0
+
+    return {
+      options,
+      prompts,
+      query: ({ prompt, options: launched }) => {
+        options.push(launched)
+        const stream = streams[Math.min(call, streams.length - 1)] ?? busyStream
+        call += 1
+        return {
+          async *[Symbol.asyncIterator]() {
+            for await (const message of prompt) prompts.push(message)
+            yield* stream()
+          },
+        }
+      },
+    }
+  }
+
+  test("the retry launches the same session with forkSession, and it serves the answer", async () => {
+    const concurrency = createSdkConcurrency({ global: 4, perAccount: 2 })
+    const spy = spySequence([busyStream, () => sdkQueryStream({ turns: [ONE_TURN] })])
+    const { invoke } = invoker(spy, concurrency)
+
+    const response = await invoke(invocation({ session: RESUME }))
+    expect(response.status).toBe(200)
+    const answered = (await response.json()) as Record<string, unknown>
+    expect(answered.content).toEqual([{ type: "text", text: "pong" }])
+
+    expect(spy.options).toHaveLength(2)
+    // First attempt: the plan verbatim. Second: the same session, forked at the tip — no rewind
+    // point, because nothing was undone; the fork inherits the full history warm.
+    expect(spy.options[0]?.resume).toBe("sess_9")
+    expect(spy.options[0]?.forkSession).toBeUndefined()
+    expect(spy.options[1]?.resume).toBe("sess_9")
+    expect(spy.options[1]?.forkSession).toBe(true)
+    expect(spy.options[1]).not.toHaveProperty("resumeSessionAt")
+
+    expect(concurrency.inFlight).toBe(0)
+    expect(concurrency.inFlightFor("sub-1")).toBe(0)
+  })
+
+  test("one retry, not a loop: a fork that comes back busy is a real failure", async () => {
+    const concurrency = createSdkConcurrency({ global: 4, perAccount: 2 })
+    const spy = spySequence([busyStream, busyStream])
+    const { invoke } = invoker(spy, concurrency)
+
+    await expect(invoke(invocation({ session: RESUME }))).rejects.toThrow("background agent")
+    expect(spy.options).toHaveLength(2)
+    expect(concurrency.inFlight).toBe(0)
+  })
+
+  test("only a resume plan retries — fresh cannot be busy, a fork already forked", async () => {
+    for (const session of [
+      FRESH,
+      { kind: "fork", sdkSessionId: "sess_9", resumeSessionAt: "uuid-7", deltaFrom: 0 } as const,
+    ]) {
+      const spy = spySequence([busyStream])
+      const { invoke } = invoker(spy)
+
+      await expect(invoke(invocation({ session }))).rejects.toThrow("background agent")
+      expect(spy.options).toHaveLength(1)
+    }
+  })
+
+  test("a non-busy failure of a resume is not retried in place", async () => {
+    const spy = spySequence([
+      (): AsyncIterable<unknown> => ({
+        // biome-ignore lint/correctness/useYield: the failure is the point.
+        async *[Symbol.asyncIterator](): AsyncIterator<unknown> {
+          throw new Error("Claude AI usage limit reached")
+        },
+      }),
+    ])
+    const { invoke } = invoker(spy)
+
+    await expect(invoke(invocation({ session: RESUME }))).rejects.toThrow("usage limit reached")
+    expect(spy.options).toHaveLength(1)
+  })
+
+  test("once bytes are on the wire there is no retry — the failure is a terminal frame", async () => {
+    const midStream = (): AsyncIterable<unknown> => ({
+      async *[Symbol.asyncIterator]() {
+        yield { type: "system", subtype: "init", session_id: "sess_9" }
+        yield wireEvent({
+          type: "message_start",
+          message: { id: "msg_1", type: "message", role: "assistant", content: [] },
+        })
+        yield wireEvent({
+          type: "content_block_start",
+          index: 0,
+          content_block: { type: "text", text: "" },
+        })
+        throw new Error(BUSY)
+      },
+    })
+
+    const spy = spySequence([midStream])
+    const { invoke } = invoker(spy)
+    const response = await invoke(
+      invocation({
+        session: RESUME,
+        body: body({ messages: [{ role: "user", content: "ping" }], stream: true }),
+      }),
+    )
+
+    // The stream had already started, so the busy failure arrives as a terminal error frame in
+    // the one response — never as a second query() behind the client's back.
+    expect(response.status).toBe(200)
+    const sse = await response.text()
+    expect(sse).toContain("event: message_start")
+    expect(sse).toContain("event: error")
+    expect(spy.options).toHaveLength(1)
   })
 })
 

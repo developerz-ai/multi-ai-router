@@ -1,6 +1,6 @@
 import type { Options, PermissionResult } from "@anthropic-ai/claude-agent-sdk"
 import { isPermittedTool, PERMITTED_TOOLS, toolDenial } from "./allowlist"
-import { subprocessEnv } from "./env"
+import { QUERY_ENV_OVERRIDES, subprocessEnv } from "./env"
 import type { SessionPlan } from "./session"
 import type { Passthrough } from "./tools"
 
@@ -80,6 +80,17 @@ export interface QueryLaunchInput {
    * held is the absence of these options rather than a value of them.
    */
   readonly session?: SessionPlan
+  /**
+   * Recovery for a `busy-session` refusal, applied to a `resume` plan only: the CLI refuses to
+   * resume a session that is still registered as a running background agent ("is currently running
+   * as a background agent" — the fate of two turns of one conversation dispatched concurrently, and
+   * routine under `CLAUDE_CODE_SESSION_KIND: "bg"`, see `env.ts`). `forkSession: true` without a
+   * rewind point resumes the same transcript at its tip under a **new** session id, so the retry
+   * inherits full history instead of failing over to a cold account and a full replay (Meridian's
+   * `busySessionFork` does the same). A `fork` plan already forks and gains nothing from this;
+   * `fresh` resumes nothing and can never be busy.
+   */
+  readonly busySessionFork?: boolean
 }
 
 export interface QueryLaunch {
@@ -114,7 +125,19 @@ export function createQueryLaunch(input: QueryLaunchInput): QueryLaunch {
     canUseTool: permitOnlyAllowlisted,
     // Transport.
     cwd: input.configDir,
-    env: subprocessEnv({ configDir: input.configDir, inherited: input.inheritedEnv }),
+    // `QUERY_ENV_OVERRIDES` after the inherited environment, so no inherited value can win — the
+    // claude.ai-connector door and the scratchpad block are isolation decisions (`env.ts`).
+    env: {
+      ...subprocessEnv({ configDir: input.configDir, inherited: input.inheritedEnv }),
+      ...QUERY_ENV_OVERRIDES,
+    },
+    // Explicit, because the SDK's default is a *detection*: it spawns `bun cli.js` whenever
+    // `process.versions.bun` exists, wherever `bun` may or may not be on the child's PATH
+    // (Meridian query.ts pins `node` because embedded-Bun hosts broke on exactly that). Our image
+    // ships Bun as the runtime — the router itself runs under it — so `bun` is the decision; the
+    // point is that it is written here, not autodetected. Moot while the resolved `claude` is the
+    // platform-native binary, load-bearing the day a resolution rung lands on a `cli.js`.
+    executable: "bun",
     pathToClaudeCodeExecutable: input.cliPath,
     model: input.model,
     maxTurns: MAX_TURNS,
@@ -126,7 +149,7 @@ export function createQueryLaunch(input: QueryLaunchInput): QueryLaunch {
     ...(input.systemPrompt === undefined
       ? {}
       : { systemPrompt: systemPromptOf(input.systemPrompt) }),
-    ...sessionOptions(input.session),
+    ...sessionOptions(input.session, input.busySessionFork === true),
     ...(input.passthrough === undefined
       ? {}
       : { mcpServers: input.passthrough.mcpServers, hooks: input.passthrough.hooks }),
@@ -150,9 +173,16 @@ export function createQueryLaunch(input: QueryLaunchInput): QueryLaunch {
  * the old branch stays where it was, so a client that undoes and redoes does not destroy the
  * history it may go back to (docs/idea/11-anthropic-agent-sdk.md §4).
  */
-function sessionOptions(plan: SessionPlan | undefined): Partial<Options> {
+function sessionOptions(plan: SessionPlan | undefined, busyFork: boolean): Partial<Options> {
   if (plan === undefined || plan.kind === "fresh") return {}
-  if (plan.kind === "resume") return { resume: plan.sdkSessionId }
+  if (plan.kind === "resume") {
+    // A busy-session retry forks at the tip: `forkSession` without `resumeSessionAt` re-reads the
+    // whole stored transcript under a new session id, which is a warm resume of a session the CLI
+    // refuses to re-enter directly. See `QueryLaunchInput.busySessionFork`.
+    return busyFork
+      ? { resume: plan.sdkSessionId, forkSession: true }
+      : { resume: plan.sdkSessionId }
+  }
   return { resume: plan.sdkSessionId, forkSession: true, resumeSessionAt: plan.resumeSessionAt }
 }
 

@@ -1,10 +1,9 @@
 import { type AnyColumn, and, gte, lt, sql } from "drizzle-orm"
 import type { Database } from "../client"
-import { USAGE_OUTCOME_SUCCESS } from "../schema/enums"
 import { usageDaily } from "../schema/usage-daily"
 import { usageRecords } from "../schema/usage-records"
 import { deleteOldestBatch } from "./bounded-delete"
-import type { UsageDimension, UsageTotals } from "./usage-read-repository"
+import { errorAttempts, type UsageDimension, type UsageTotals } from "./usage-read-repository"
 
 /**
  * The daily rollup — writer and reader. Repositories own SQL; this file is the
@@ -219,7 +218,7 @@ function rollupStatement(scanFrom: Date, scanTo: Date) {
       ${usageRecords.model},
       count(distinct ${usageRecords.correlationId})::int,
       count(*)::int,
-      count(*) filter (where ${usageRecords.outcome} <> ${USAGE_OUTCOME_SUCCESS})::int,
+      ${errorAttempts()},
       coalesce(sum(${usageRecords.tokensIn}), 0),
       coalesce(sum(${usageRecords.tokensOut}), 0),
       coalesce(sum(${usageRecords.cacheReadTokens}), 0),

@@ -405,6 +405,7 @@ describe("parseEnv", () => {
         baseBackoffMs: 1_000,
         maxBackoffMs: 300_000,
         halfOpenHoldMs: 30_000,
+        unknownResetRetryAfterSeconds: 30,
         upstreamTimeoutMs: 600_000,
         boundAccountCoolingDown: "fail",
       })

@@ -107,6 +107,29 @@ describe("health store", () => {
     expect(store.stateOf("key").breaker.cooldownUntil).toBeUndefined()
   })
 
+  test("a concurrent 429 never demotes exhausted back to cooling_down", () => {
+    // Two attempts in flight on the same account: one answers 402, the other 429 a moment later.
+    // `foldRateLimit` already refused the header's version of this; the classified-failure path
+    // had no such guard, so the late 429 rewrote "top this account up" as "retry at 14:32" and
+    // put a dead balance back on the half-open probe's timer (non-negotiable 7).
+    const store = createHealthStore()
+    store.recordFailure("a", { kind: "credits-exhausted", message: "402" }, NOW)
+    store.recordFailure("a", { kind: "rate-limited", retryAfterSeconds: 60, message: "429" }, NOW)
+
+    const state = store.stateOf("a")
+    expect(state.breaker.status).toBe("exhausted")
+    expect(state.breaker.cooldownUntil).toBeUndefined()
+  })
+
+  test("a late failure of any kind leaves a terminal verdict standing — first verdict wins", () => {
+    const store = createHealthStore({ failureThreshold: 1, jitter: () => 0 })
+    store.recordFailure("a", { kind: "auth", message: "401" }, NOW, { authKind: "oauth" })
+    store.recordFailure("a", { kind: "server-error", message: "500" }, NOW)
+    store.recordFailure("a", { kind: "credits-exhausted", message: "402" }, NOW)
+
+    expect(store.stateOf("a").breaker.status).toBe("needs_reauth")
+  })
+
   test("still records the reading of an exhausted account — refused, not discarded", () => {
     const store = createHealthStore()
     store.recordFailure("a", { kind: "credits-exhausted", message: "402" }, NOW)

@@ -1,4 +1,5 @@
 import { fileURLToPath } from "node:url"
+import { describeError, scrubCredentials } from "@multi-ai-router/core"
 import { migrate } from "drizzle-orm/postgres-js/migrator"
 import { createDatabase } from "./client"
 
@@ -56,13 +57,25 @@ export async function runMigrations(options: MigrateOptions): Promise<void> {
   }
 }
 
+/**
+ * The full cause chain, innermost first: "refusing to start on a half-migrated schema" is the one
+ * moment the operator must know *why*, and the wrapper's message alone is the statement, not the
+ * reason. Bun's multi-address connect refusal — a Postgres outage, the most likely boot failure —
+ * is an `AggregateError` whose own message is empty; the helper reads its `.errors`.
+ */
 function describe(error: unknown): string {
-  return error instanceof Error ? error.message : String(error)
+  return describeError(error, Number.POSITIVE_INFINITY)
 }
 
+/**
+ * The boot-time stderr JSON logger — the labeled exception to "everything logs through the server
+ * logger", because it runs before that logger exists. It scrubs the whole line before writing:
+ * a connect failure echoes `DATABASE_URL`, userinfo and all, and credentials never leave the
+ * router in any log (CLAUDE.md non-negotiable 3).
+ */
 function log(level: "info" | "error", message: string, extra: Record<string, unknown> = {}): void {
   const line = JSON.stringify({ level, msg: message, component: "db.migrate", ...extra })
-  process.stderr.write(`${line}\n`)
+  process.stderr.write(`${scrubCredentials(line)}\n`)
 }
 
 async function main(): Promise<void> {

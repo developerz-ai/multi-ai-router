@@ -141,14 +141,17 @@ export function createUsageRecentRepository(db: Database): UsageRecentRepository
  * string handed to a `uuid` comparison is a Postgres *error*, not a non-match,
  * and "req-42" is exactly the value this lookup exists to accept. The
  * `client_request_id` half is guarded by `is not null` so it rides the partial
- * index rather than falling back to a sequential scan.
+ * index rather than falling back to a sequential scan. The operator's value
+ * crosses with its own `::text` — the raw-fragment convention: a parameter here
+ * has no column encoder, so its type is named rather than inferred. Cast on the
+ * parameter side only, which leaves both index shapes untouched.
  */
 function matchesRequestId(requestId: string) {
   return or(
-    sql`${usageRecords.correlationId}::text = ${requestId}`,
+    sql`${usageRecords.correlationId}::text = ${requestId}::text`,
     and(
       isNotNull(usageRecords.clientRequestId),
-      sql`${usageRecords.clientRequestId} = ${requestId}`,
+      sql`${usageRecords.clientRequestId} = ${requestId}::text`,
     ),
   )
 }

@@ -1,3 +1,4 @@
+import { describeError } from "@multi-ai-router/core"
 import {
   advisoryLockKey,
   type ScheduledTaskName,
@@ -234,10 +235,17 @@ function indexTasks(tasks: readonly ScheduledTask[]): Map<ScheduledTaskName, Sch
   return indexed
 }
 
-/** Message only — never a stack, never a query. This string is persisted and rendered. */
+/**
+ * Messages only — never a stack, never a query. This string is persisted and rendered.
+ *
+ * The whole `cause` chain, innermost first: a task failing on an ORM statement carries the
+ * driver's complaint one `cause` down from a wrapper whose message *is* the statement text, and
+ * front-anchored truncation of the wrapper alone persisted 500 chars of SQL with the actual
+ * reason discarded. Redacted before the cap, so truncation cannot split a credential and leave
+ * its tail in the persisted half.
+ */
 function describe(error: unknown): string {
-  const message = error instanceof Error ? error.message : String(error)
-  const scrubbed = redactValue(message)
+  const scrubbed = redactValue(describeError(error, Number.POSITIVE_INFINITY))
   return scrubbed.length <= MAX_ERROR_CHARS
     ? scrubbed
     : `${scrubbed.slice(0, MAX_ERROR_CHARS - 1)}…`

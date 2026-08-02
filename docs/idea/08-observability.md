@@ -43,6 +43,9 @@ transaction, and never fails because the database is slow. **A slow or unavailab
 reporting, never traffic** — the queue is bounded, and on overflow it drops the oldest records and
 increments a counter rather than applying backpressure to live requests (`router_usage_queue_depth`
 and `router_usage_records_dropped_total`, plus a throttled log line — a drop is never silent).
+The throttle (`USAGE_LOG_REPORT_INTERVAL_MS`) emits one line per window carrying the count since
+the last one, and a burst that stops mid-window gets a **trailing report** for its tail — 500
+sheds are never remembered as `dropped: 1`.
 Shedding is also *cheap*: an enqueue costs the same whether the queue is empty or full and shedding,
 because the queue advances a head rather than moving its contents. A queue that copied itself to
 make room would charge every request during an outage for the whole ceiling — backpressure by
@@ -62,6 +65,11 @@ differently. The retry is logged at `warn` and the discard at `error`, throttled
 the first refusal rather than burning the rest of the queue against the same database, and a retried
 batch is **not** re-counted into the attempt series: a blip must not show up on a dashboard as
 upstream calls the router never made.
+
+**Shutdown loss is counted too.** `stop()` drains what it can — including one fresh pass for
+records that arrived after an in-flight flush's final drain, the coalescing race — and whatever a
+refusing writer strands is reported once, at `error`, with the count. Invisible loss is the one
+thing the recorder promises not to do, and dying with the process is not an exemption.
 
 One request writes no record at all: a key refused for exceeding **its own** rate limit
 ([04-api-keys-and-access.md](04-api-keys-and-access.md#per-key-controls)). The check runs before the
@@ -585,6 +593,20 @@ Three properties of the redactor are load-bearing enough to state:
 - **It fails closed.** The walk stops at four levels of nesting and redacts whatever is below.
   `Error`, `Map`, and `Set` values keep their payload somewhere `Object.entries` cannot see, so
   each is unwrapped and scrubbed rather than serialized as an empty object.
+- **An `Error` field is its whole `cause` chain, innermost first.** Flattening an error to its
+  outermost message institutionalizes wrapper-only logging: an ORM wrapper's message names the
+  *statement* it refused while the driver's complaint sits one `cause` down. The shared
+  `describeError` helper in `packages/core` joins the chain innermost-first — so truncation eats
+  the wrapper's statement text, never the root complaint — and reads an `AggregateError`'s
+  `.errors` (its own `message` defaults to `""`; a multi-address connect refusal, i.e. a Postgres
+  outage, is exactly that shape). Redaction runs before the length cap, so a cut can never split a
+  credential and leave its tail. `LOG_REASON_MAX_CHARS` bounds how much of a described chain a
+  `reason` field quotes.
+
+One logger runs before this one exists: the boot-time migration logger in `packages/db` writes
+JSON to stderr directly, and it scrubs its own lines (connection-string userinfo, obvious key
+material — `scrubCredentials` in `packages/core`) because a connect failure at that moment echoes
+`DATABASE_URL` back, credentials included.
 
 ## Audit events
 
@@ -621,7 +643,9 @@ locks** — no BullMQ, no Redis/Dragonfly, no worker container, no system cron. 
 idempotent, resumable, and works in bounded batches; the rationale is in
 [09-deployment.md](09-deployment.md). What belongs here is that **a task which silently stops running
 is the failure this surface exists to catch.** Each run appends to `scheduled_task_runs` — task name,
-started/finished, outcome, items processed — and `/settings` renders the latest row per task in plain
+started/finished, outcome, items processed, and on failure the error's whole `cause` chain,
+innermost message first, redacted and bounded (the wrapper's statement text is what a tight budget
+truncates, never the driver's complaint) — and `/settings` renders the latest row per task in plain
 language (*"janitor last ran 4 min ago, deleted 812 rows"*), served by `GET /api/admin/tasks`. A task
 with no recent successful run is called out, not left to inference: the health it reports is
 `never_run`, `running`, `ok`, `stale` or `failing`, judged against the cadence *this process is

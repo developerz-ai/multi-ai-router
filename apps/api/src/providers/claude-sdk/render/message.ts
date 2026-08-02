@@ -129,11 +129,21 @@ function applyDelta(pending: PendingBlock, delta: Record<string, unknown>): void
     case "input_json_delta":
       if (typeof delta.partial_json === "string") pending.json += delta.partial_json
       break
-    default:
-      // A delta kind this build does not define carries content it cannot place. Dropped rather
-      // than guessed at — the streaming half forwards it, so the two shapes differ only here, and
-      // §6 already records that unknown upstream features do not survive re-synthesis.
+    default: {
+      // A delta kind this build does not define. The streaming half forwards it verbatim
+      // (`envelope.ts`), and this module's whole contract is that `stream: false` assembles the
+      // same message a streaming client saw — so dropping it here made the two response shapes
+      // diverge for every future block type, the exact property the module note guarantees.
+      // Folded by carrying the delta's own fields onto the block verbatim, newest value winning:
+      // for a scalar-shaped kind (the `signature_delta` shape, historically how new kinds have
+      // arrived) that is exactly what streaming assembly yields, and for anything else it
+      // preserves the payload rather than erasing it. Nothing is invented — every field written
+      // is one the upstream stated.
+      for (const [key, value] of Object.entries(delta)) {
+        if (key !== "type") pending.block[key] = value
+      }
       break
+    }
   }
 }
 

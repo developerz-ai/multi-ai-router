@@ -5,6 +5,41 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.5.0] — 2026-08-02
+
+A deep-dive sweep across routing, the Agent SDK layer, usage accounting, the database layer, and the operator console, driven by five parallel audits of the areas v2.4.0 touched.
+
+### Added
+
+- `x-router-session-restart` response header: when a bound session is rebound off a cooling account (preflight) or failed over mid-chain, the response says so — the loss of upstream-side resumability is surfaced, never silent.
+- `ROUTING_UNKNOWN_RESET_RETRY_AFTER_SECONDS` (default 30): the `Retry-After` answered when every candidate is out for a clock-recoverable reason but no reset instant is known. Replaces a hard-coded 1-second floor that invited a retry storm.
+- Busy-session retry-as-fork on the Agent SDK path: two concurrent turns resuming one SDK session no longer fail over to a cold account — the loser retries once in place with a session fork, full history intact.
+- Images nested in `tool_result` blocks are forwarded to the model (hoisted to sibling content blocks) instead of being silently dropped; `image/jpg` is normalized to `image/jpeg`; an image the router cannot forward is named in place (`[image omitted: …]`) instead of a generic label.
+- Accounts table shows per-account last-used time (the column v2.4.0 unbroke); account edit dialog gains per-window token-limit ceilings, making the measured quota bars reachable for the first time.
+- `describeError` in `@multi-ai-router/core`: every error log walks the cause chain innermost-first (AggregateError included), so a driver's complaint is never hidden behind a wrapper's statement text again — the failure mode that kept the `last_used_at` bug invisible. Six wrapper-only log sites converged on it.
+- Live-database integration tests for every raw-SQL repository method that had none (`findIdle`'s NULLs-first ordering, usage series/breakdown/latency/totals), plus a mechanism probe pinning the raw-`Date` bind failure the v2.4.0 fix corrected.
+
+### Fixed
+
+- **Rebind is never worse than `fail`.** A rebind that finds no replacement account no longer destroys the session binding — the whole-pool-cooling case now answers the same honest `429` + `Retry-After` as `fail` mode with the binding kept, and the post-reset retry resumes warm. Rebind also no longer fires on a probe-in-flight hold, and the blocked 429 names the real reason with estimated resets labeled as such.
+- **A concurrent rate-limit can no longer demote a dead account.** `recordFailure` now refuses to overwrite a terminal verdict, so an `exhausted` account keeps its `402`/"needs top-up" instead of gaining a countdown and timer retries.
+- **SDK-path 429s carry `Retry-After`.** The reset instant delivered by the stream's `rate_limit_event` now reaches the error response instead of being dropped at classification.
+- **A mid-turn upstream error on a non-streaming SDK request fails over.** It was relayed as a 502 while recording *success* on the account — no failover, failure streak reset. Zero bytes had reached the client, so trying the next pool account is honest and now happens. Subprocess crashes are also no longer collapsed into "no healthy account".
+- **Credit-balance exhaustion on the SDK path classifies as `402`/`exhausted`** (string sourced from the vendored CLI), no longer retried on a timer as if rate-limited.
+- Token accounting on tool-call turns: input and cache-read counts are no longer lost on early-stopped turns — the dominant agent-traffic shape under-reported systematically.
+- Concurrency permits can no longer leak when a launch fails before the subprocess exists (a leak that silently wedged an account); session-binding writes are serialized per key so a rebind's clear can never land after its new bind.
+- The console no longer claims a window-spent account is "Eligible for routing": the routable count and status cell subtract accounts blocked by a spent quota window. Unmeasured latency renders as "—", never "0 ms". Audit log updates after the mutations it records. Quota gauges no longer rebuild every element on each 30-second tick.
+- `context_management` (an SDK-only field stock Anthropic clients crash on) is stripped from forwarded stream events; `ENABLE_CLAUDEAI_MCP_SERVERS=false` and `CLAUDE_CODE_SESSION_KIND=bg` are forced on SDK subprocesses (the connectors door is not covered by `strictMcpConfig`; the scratchpad block advertised a router-internal path).
+- Boot-migration failures log the actual Postgres complaint (cause chain) through a credential scrubber — the migrate-time logger previously wrote unredacted and wrapper-only.
+- Raw-SQL convention: un-cast bind parameters in usage read/rollup queries gained explicit casts; `width_bucket` can no longer be reached with a non-positive slot count.
+
+### Changed
+
+- Dependencies: hono 4.12.33, drizzle-orm 0.45.2, @hono/zod-validator 0.9.0, biome 2.5.6, vite-plugin-solid 2.11.14. (`@anthropic-ai/claude-agent-sdk` 0.3.220 was already latest. Major bumps — TypeScript 7, solid-router 1.0, Vite 8 — deliberately deferred.)
+- Log limits and intervals became config: `LOG_REASON_MAX_CHARS` (200), `USAGE_LOG_REPORT_INTERVAL_MS` (60000).
+- `ADMIN_OIDC_CLIENT_SECRET` and `ADMIN_API_TOKEN` added to the SDK subprocess env strip list (defense in depth).
+- Usage recorder: shutdown flushes late-enqueued records and counts anything a refusing writer stranded; log throttling reports trailing counts instead of under-reporting bursts forever.
+
 ## [2.4.0] — 2026-08-02
 
 ### Added

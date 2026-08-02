@@ -350,6 +350,37 @@ describe("redact — values that hide their payload from Object.entries", () => 
     expect(safe.cause).toBe(`TypeError: upstream rejected ${REDACTED}`)
   })
 
+  test("a credential-bearing cause survives the chain-join scrubbed — never verbatim", () => {
+    // The failure case this flattening exists for: the wrapper's message is all statement, and
+    // the complaint one `cause` down quotes DATABASE_URL back. Both halves must hold at once —
+    // the cause reaches the line, the credential does not.
+    const safe = redact({
+      error: new Error("Failed query: select 1", {
+        cause: new Error("connect failed: postgres://router:s3cret-pw@db.internal:5432/router"),
+      }),
+    })
+
+    const line = String(safe.error)
+    expect(line).toStartWith("connect failed:")
+    expect(line).toContain("Failed query")
+    expect(line).toContain("db.internal")
+    expect(line).not.toContain("s3cret-pw")
+  })
+
+  test("an Error field is no longer wrapper-only: the cause chain reaches the line, bounded", () => {
+    const safe = redact({
+      error: new Error(`Failed query: insert ${"$1, ".repeat(500)}`, {
+        cause: new Error("bind refused"),
+      }),
+    })
+
+    const line = String(safe.error)
+    // Innermost first: truncation eats the wrapper's statement text, never the root complaint.
+    expect(line).toStartWith("bind refused ← Failed query:")
+    expect(line.length).toBeLessThanOrEqual(500)
+    expect(line).toEndWith("…")
+  })
+
   test("a Map is scrubbed by key name and by value, not flattened to an empty object", () => {
     const safe = redact({
       headers: new Map([

@@ -63,7 +63,14 @@ export function ResetIndicator(props: ResetIndicatorProps) {
           {display().text}
         </span>
 
-        <Show when={display().kind !== "needs_topup" && props.resetsAt !== null}>
+        {/* Only where the sentence is *about* that instant — the same discipline
+            `describeQuotaWindow` applies to its rows. A timestamp beside "Unknown — …" or "—"
+            contradicts the words next to it, and neither kind should ever carry one. */}
+        <Show
+          when={
+            (display().kind === "countdown" || display().kind === "due") && props.resetsAt !== null
+          }
+        >
           <span class={styles.absolute}>{formatAbsolute(props.resetsAt ?? 0)}</span>
         </Show>
 

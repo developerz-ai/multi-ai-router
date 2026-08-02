@@ -30,9 +30,12 @@ function account(overrides: Partial<AccountView>): AccountView {
     dialect: "anthropic",
     modelAliases: null,
     supportedModels: null,
+    windowTokenLimits: null,
     weight: 1,
     priority: 0,
+    billing: "metered",
     tokenExpiresAt: null,
+    lastUsedAt: null,
     createdAt: "2026-01-01T00:00:00.000Z",
     updatedAt: "2026-01-01T00:00:00.000Z",
     ...overrides,
@@ -178,6 +181,113 @@ describe("AccountsTable", () => {
         if (!(second instanceof HTMLButtonElement)) throw new Error("no edit button")
         second.click()
         expect(edited?.id).toBe("b")
+      },
+    )
+  })
+
+  test("a never-used account reads the word never, not a blank and not a time", () => {
+    // NULL was the fleet-wide state of last_used_at from 1.2.0 until the 2.4.0 stamping fix —
+    // this cell is how an operator confirms the fix landed and spots a pooled-but-never-selected
+    // account without a database shell.
+    withMount([account({ lastUsedAt: null })], {}, (container) => {
+      expect(container.textContent).toContain("used never")
+      expect(container.textContent).not.toContain("Invalid Date")
+    })
+  })
+
+  test("a stamped account shows relative last use", () => {
+    // nowMs is 2026-07-26T00:00Z; one hour earlier renders as an hour ago.
+    withMount([account({ lastUsedAt: "2026-07-25T23:00:00.000Z" })], {}, (container) => {
+      expect(container.textContent).toContain("used 1h ago")
+    })
+  })
+
+  test("an active account with a spent window says so at headline level", () => {
+    // Status stays `active` — filtering drops the account anyway (quota-window-spent). Without
+    // this line the only truth is a badge buried in the window sub-row.
+    withMount(
+      [
+        account({
+          availability: {
+            configuredStatus: "active",
+            resetsAt: null,
+            resetSource: "unknown",
+            lastCheckedAt: null,
+            consecutiveFailures: 0,
+            inFlight: 0,
+            quotaWindows: [
+              {
+                window: "five_hour",
+                utilization: 1,
+                utilizationSource: "threshold-triggered",
+                resetsAt: "2026-07-26T00:40:00.000Z",
+                resetSource: "provider-reported",
+                lastCheckedAt: "2026-07-25T23:59:00.000Z",
+                spent: true,
+                tokensUsed: null,
+                tokenLimit: null,
+              },
+            ],
+          },
+        }),
+      ],
+      {},
+      (container) => {
+        expect(container.textContent).toContain("window spent — not routable")
+      },
+    )
+  })
+
+  test("no spent-window line without a spent window", () => {
+    withMount([account({})], {}, (container) => {
+      expect(container.textContent).not.toContain("window spent")
+    })
+  })
+
+  test("a malformed reset instant never renders as Invalid Date or a zero countdown", () => {
+    withMount(
+      [
+        account({
+          status: "cooling_down",
+          availability: {
+            configuredStatus: "cooling_down",
+            resetsAt: "not-an-instant",
+            resetSource: "provider-reported",
+            lastCheckedAt: null,
+            consecutiveFailures: 1,
+            inFlight: 0,
+          },
+        }),
+      ],
+      {},
+      (container) => {
+        expect(container.textContent).not.toContain("Invalid Date")
+        expect(container.textContent).not.toContain("in 0s")
+      },
+    )
+  })
+
+  test("an unknown-source reset prints no absolute timestamp beside its own admission", () => {
+    // "Unknown — …" beside a printed clock time contradicts itself; the instant travels only
+    // with the countdown and due kinds, matching describeQuotaWindow's discipline.
+    withMount(
+      [
+        account({
+          status: "cooling_down",
+          availability: {
+            configuredStatus: "cooling_down",
+            resetsAt: "2026-07-26T01:00:00.000Z",
+            resetSource: "unknown",
+            lastCheckedAt: null,
+            consecutiveFailures: 1,
+            inFlight: 0,
+          },
+        }),
+      ],
+      {},
+      (container) => {
+        expect(container.textContent).toContain("Unknown")
+        expect(container.querySelectorAll("[class*='absolute']").length).toBe(0)
       },
     )
   })

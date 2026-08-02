@@ -1,4 +1,10 @@
-import type { AccountBilling, AccountStatus, Dialect, ProviderId } from "@multi-ai-router/core"
+import type {
+  AccountBilling,
+  AccountStatus,
+  Dialect,
+  ProviderId,
+  QuotaWindowKind,
+} from "@multi-ai-router/core"
 import { request } from "./client"
 import type { AccountView, DeletedView } from "./types"
 
@@ -36,6 +42,11 @@ export interface CreateAccountInput {
    * cannot read off the wire. Absent takes the provider's own default.
    */
   readonly billing?: AccountBilling
+  /**
+   * The operator's own estimate of each window's token allowance — what the measured quota bar
+   * is a fraction of. Not a provider fact; nothing in routing reads it.
+   */
+  readonly windowTokenLimits?: Readonly<Partial<Record<QuotaWindowKind, number>>>
 }
 
 /** Only `active` and `disabled` are operator-settable — the rest are observations. */
@@ -49,6 +60,8 @@ export interface UpdateAccountInput {
   readonly modelAliases?: Readonly<Record<string, string>> | null
   /** `null` (or `[]`) drops the declaration, returning the account to "accepts any model". */
   readonly supportedModels?: readonly string[] | null
+  /** `null` clears every configured ceiling, which removes the bars rather than zeroing them. */
+  readonly windowTokenLimits?: Readonly<Partial<Record<QuotaWindowKind, number>>> | null
   readonly weight?: number
   readonly priority?: number
   /** Not nullable: every account is billed one of the two ways, so there is nothing to clear. */

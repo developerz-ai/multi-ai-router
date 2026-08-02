@@ -39,13 +39,49 @@ export const STRIPPED_ENV_NAMES: readonly string[] = Object.freeze([
   // Subscription credentials the SDK owns. Ours is the config directory, never a token.
   "CLAUDE_CODE_OAUTH_TOKEN",
   CLAUDE_CONFIG_DIR_VAR,
-  // The router's own secrets. Nothing in the subprocess has a reason to read them.
+  // The router's own secrets. Nothing in the subprocess has a reason to read them. The list is
+  // every secret-bearing name the env schema (`apps/api/src/config/env.ts`) reads; adding a secret
+  // there means adding it here, which is why the strip is asserted in the security gate test.
   "ENCRYPTION_KEY",
   "DATABASE_URL",
   "ADMIN_PASSWORD",
   "ADMIN_PASSWORD_HASH",
+  "ADMIN_OIDC_CLIENT_SECRET",
+  "ADMIN_API_TOKEN",
   "METRICS_TOKEN",
 ])
+
+/**
+ * Variables forced onto every **`query()`** subprocess — the dispatch path and the "Test now"
+ * probe — and deliberately *not* onto the login CLI (`login/spawn.ts`), whose interactive output
+ * the router scrapes and must not perturb.
+ *
+ * - `ENABLE_CLAUDEAI_MCP_SERVERS: "false"` — the CLI fetches the subscription's **claude.ai org
+ *   connectors** (remote MCP servers) over HTTP whenever the OAuth token carries the
+ *   `user:mcp_servers` scope. Its eligibility check (CLI 0.3.220, `[claudeai-mcp]` fetch path)
+ *   consults this env var, safe mode, auth precedence, and scopes — **not** `strictMcpConfig`,
+ *   which only governs filesystem-configured servers (`.mcp.json` and friends). So this is a
+ *   separate door from the one `options.ts` closes: without it, one Account's claude.ai connector
+ *   catalog is injected into whichever key holder's request lands on it — a cross-tenant leak, and
+ *   surprise egress to servers this router never configured. Provenance: Meridian `query.ts` sets
+ *   the same guard for the same reason.
+ * - `CLAUDE_CODE_SESSION_KIND: "bg"` — suppresses the CLI's injected "# Scratchpad Directory"
+ *   context block, which otherwise advertises a **router-host** path (the subprocess cwd is the
+ *   Account's `CLAUDE_CONFIG_DIR`) to the client's model, whose tools execute on the *client*.
+ *   `bg` is the CLI's own headless-background mode, which is semantically what this subprocess is;
+ *   its other effects are TUI rendering (none here) or `CLAUDE_JOB_DIR`-gated bookkeeping (unset
+ *   here) — Meridian #627/#628 audited the same CLI. The known cost: a `bg` session registers as a
+ *   running background agent, so a concurrent resume is refused with "is currently running as a
+ *   background agent" (Meridian #630) — which `invoker.ts` recovers from with one in-place
+ *   `forkSession` retry (`errors.ts` `busy-session`).
+ *
+ * Applied after {@link subprocessEnv}, so no inherited value can win — these are isolation
+ * decisions, not operator knobs.
+ */
+export const QUERY_ENV_OVERRIDES: Readonly<Record<string, string>> = Object.freeze({
+  ENABLE_CLAUDEAI_MCP_SERVERS: "false",
+  CLAUDE_CODE_SESSION_KIND: "bg",
+})
 
 export interface SubprocessEnvOptions {
   /** This Account's `CLAUDE_CONFIG_DIR`, already resolved. The value the whole mechanism turns on. */

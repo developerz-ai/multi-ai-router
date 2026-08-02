@@ -1,4 +1,4 @@
-import type { QuotaWindowState } from "@multi-ai-router/core"
+import { describeError, type QuotaWindowState } from "@multi-ai-router/core"
 import type { AccountRepository } from "@multi-ai-router/db"
 import type { Logger } from "../../logging/logger"
 
@@ -98,7 +98,7 @@ export function createQuotaWindowWriter(deps: QuotaWindowWriterDeps): QuotaWindo
       log.warn("quota window writes failed — readings stay live, stored rows lag", {
         accounts: failedAccounts,
         rows: writeFailures,
-        reason: lastError instanceof Error ? lastError.message : String(lastError),
+        reason: describeError(lastError, Number.POSITIVE_INFINITY),
       })
     }
   }

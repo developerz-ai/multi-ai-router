@@ -1,3 +1,4 @@
+import { describeError } from "@multi-ai-router/core"
 import type { SessionRepository } from "@multi-ai-router/db"
 import type { Env } from "../../config/env"
 import type { Logger } from "../../logging/logger"
@@ -79,10 +80,12 @@ export function sessionStoreFromEnv(deps: SessionStoreEnvDeps): SessionStore {
       negativeTtlMs: dataPlane.sessionCacheNegativeTtlSeconds * 1_000,
     },
     onError: (operation, error) => {
+      // The full cause chain, innermost first: a repository failure here wraps the driver's
+      // complaint, and the wrapper alone names the statement, not the reason. The logger redacts.
       deps.logger.warn("session binding unavailable", {
         component: "dataplane",
         operation,
-        reason: error instanceof Error ? error.message : String(error),
+        reason: describeError(error, deps.env.logReasonMaxChars),
       })
     },
   })

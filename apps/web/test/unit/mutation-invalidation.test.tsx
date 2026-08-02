@@ -8,9 +8,11 @@ import {
   useCreateKey,
   useDeleteKey,
   useKeys,
+  useRevealKey,
   useRevokeKey,
   useUpdateKey,
 } from "../../src/lib/queries/router-keys"
+import { useAuditLog, useSavePriceOverrides } from "../../src/lib/queries/settings"
 
 /**
  * Mutations here never touch the DOM — what they own is the query cache. A
@@ -340,4 +342,129 @@ describe("router key mutations invalidate the keys cache", () => {
       }
     })
   }
+})
+
+describe("audited mutations invalidate the audit log", () => {
+  // The audit table sits on the same settings screen as the price editor. An operator who saves
+  // an override and watches the log not move reads it as "my write was not recorded" — the exact
+  // doubt an append-only audit log exists to remove.
+  test("saving price overrides refetches the audit list on the same screen", async () => {
+    const calls: string[] = []
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input.toString()
+      const method = init?.method ?? "GET"
+      calls.push(`${method} ${url.split("?")[0]}`)
+      if (url.includes("/audit"))
+        return new Response(JSON.stringify({ events: [], limit: 50 }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        })
+      // The PATCH answer is the new settings body; nothing in this test reads it.
+      return new Response("{}", { status: 200, headers: { "content-type": "application/json" } })
+    }) as typeof fetch
+
+    const client = newClient()
+    let save: ReturnType<typeof useSavePriceOverrides> | undefined
+    function Harness() {
+      useAuditLog(() => ({ limit: 50, kind: null, subjectId: null }))
+      save = useSavePriceOverrides()
+      return null
+    }
+    const { dispose } = mountHarness(client, () => <Harness />)
+    try {
+      await settle()
+      const before = calls.filter((c) => c === "GET /api/admin/audit").length
+      expect(before).toBeGreaterThan(0)
+
+      save?.mutate([])
+      await settle()
+
+      expect(calls).toContain("PATCH /api/admin/settings")
+      expect(calls.filter((c) => c === "GET /api/admin/audit").length).toBeGreaterThan(before)
+    } finally {
+      dispose()
+    }
+  })
+
+  test("revoking a key refetches the audit list, not only the keys table", async () => {
+    const calls: string[] = []
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input.toString()
+      const method = init?.method ?? "GET"
+      calls.push(`${method} ${url.split("?")[0]}`)
+      if (url.includes("/audit"))
+        return new Response(JSON.stringify({ events: [], limit: 50 }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        })
+      if (method === "GET")
+        return new Response(JSON.stringify([keyRow()]), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        })
+      return new Response(JSON.stringify(keyRow({ revoked: true })), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      })
+    }) as typeof fetch
+
+    const client = newClient()
+    let revoke: ReturnType<typeof useRevokeKey> | undefined
+    function Harness() {
+      useKeys()
+      useAuditLog(() => ({ limit: 50, kind: null, subjectId: null }))
+      revoke = useRevokeKey()
+      return null
+    }
+    const { dispose } = mountHarness(client, () => <Harness />)
+    try {
+      await settle()
+      const before = calls.filter((c) => c === "GET /api/admin/audit").length
+
+      revoke?.mutate("key-1")
+      await settle()
+
+      expect(calls.filter((c) => c === "GET /api/admin/audit").length).toBeGreaterThan(before)
+    } finally {
+      dispose()
+    }
+  })
+
+  test("a reveal is a key.viewed row — the audit list refetches even though no key changed", async () => {
+    const calls: string[] = []
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input.toString()
+      const method = init?.method ?? "GET"
+      calls.push(`${method} ${url.split("?")[0]}`)
+      if (url.includes("/audit"))
+        return new Response(JSON.stringify({ events: [], limit: 50 }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        })
+      return new Response(
+        JSON.stringify({ id: "key-1", name: "ci-runner", value: "mar_live_value" }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      )
+    }) as typeof fetch
+
+    const client = newClient()
+    let reveal: ReturnType<typeof useRevealKey> | undefined
+    function Harness() {
+      useAuditLog(() => ({ limit: 50, kind: null, subjectId: null }))
+      reveal = useRevealKey()
+      return null
+    }
+    const { dispose } = mountHarness(client, () => <Harness />)
+    try {
+      await settle()
+      const before = calls.filter((c) => c === "GET /api/admin/audit").length
+
+      reveal?.mutate("key-1")
+      await settle()
+
+      expect(calls.filter((c) => c === "GET /api/admin/audit").length).toBeGreaterThan(before)
+    } finally {
+      dispose()
+    }
+  })
 })

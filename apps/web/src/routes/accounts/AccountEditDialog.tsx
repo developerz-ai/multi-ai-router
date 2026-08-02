@@ -1,4 +1,4 @@
-import type { AccountBilling, Dialect } from "@multi-ai-router/core"
+import type { AccountBilling, Dialect, QuotaWindowKind } from "@multi-ai-router/core"
 import { createEffect, createMemo, createSignal, on, Show } from "solid-js"
 import { Button } from "../../components/Button"
 import { Field, SelectField, type SelectOption, TextField } from "../../components/Field"
@@ -14,6 +14,13 @@ import { errorMessage } from "../../lib/api/errors"
 import type { AccountView, ProviderDescriptor } from "../../lib/api/types"
 import { BILLING_OPTIONS, billingConsequence } from "../../lib/billing"
 import styles from "./AccountEditDialog.module.scss"
+import {
+  type CeilingInputs,
+  parseCeilings,
+  QuotaCeilingFields,
+  seedCeilings,
+} from "./QuotaCeilingFields"
+import { numeric, RoutingNumberFields } from "./RoutingNumberFields"
 
 export interface AccountEditDialogProps {
   readonly open: boolean
@@ -58,6 +65,7 @@ export function AccountEditDialog(props: AccountEditDialogProps) {
   const [weight, setWeight] = createSignal("")
   const [priority, setPriority] = createSignal("")
   const [billing, setBilling] = createSignal<AccountBilling>("metered")
+  const [ceilings, setCeilings] = createSignal<CeilingInputs>({})
 
   // Sync-from-props, re-seeded whenever the dialog opens on a different account.
   // The credential is deliberately not among them: there is nothing to seed it
@@ -76,6 +84,7 @@ export function AccountEditDialog(props: AccountEditDialogProps) {
         setWeight(account === null ? "" : String(account.weight))
         setPriority(account === null ? "" : String(account.priority))
         setBilling(account?.billing ?? "metered")
+        setCeilings(seedCeilings(account?.windowTokenLimits))
       },
     ),
   )
@@ -120,6 +129,12 @@ export function AccountEditDialog(props: AccountEditDialogProps) {
       // silently does not work. Withheld only where the provider is the answer — sending one there
       // is a write the API refuses whichever value it carries.
       ...(props.provider?.billingFixed === true ? {} : { billing: billing() }),
+      // Same gate as the control itself: where the boxes are shown they are stated every save
+      // (`null` clears), and where they are not, nothing is sent — an edit of an account whose
+      // ceilings this form never displayed must not silently clear them.
+      ...(props.provider?.transport === "agent-sdk"
+        ? { windowTokenLimits: parseCeilings(ceilings()) }
+        : {}),
     })
   }
 
@@ -252,32 +267,20 @@ export function AccountEditDialog(props: AccountEditDialogProps) {
           )}
         </Show>
 
-        <div class={styles.pair}>
-          <TextField
-            hint="Bias under the weighted policy. A pool membership's own weight wins where it is set."
-            inputmode="numeric"
-            label="Weight"
-            max={10_000}
-            min={1}
-            onInput={(event) => setWeight(event.currentTarget.value)}
-            required
-            step={1}
-            type="number"
-            value={weight()}
-          />
-          <TextField
-            hint="Order under priority-failover; lower is tried first. A pool membership's own priority wins where it is set."
-            inputmode="numeric"
-            label="Priority"
-            max={10_000}
-            min={0}
-            onInput={(event) => setPriority(event.currentTarget.value)}
-            required
-            step={1}
-            type="number"
-            value={priority()}
-          />
-        </div>
+        <RoutingNumberFields
+          onPriority={setPriority}
+          onWeight={setWeight}
+          priority={priority()}
+          weight={weight()}
+        />
+
+        <QuotaCeilingFields
+          onChange={(window: QuotaWindowKind, value: string) =>
+            setCeilings((current) => ({ ...current, [window]: value }))
+          }
+          transport={props.provider?.transport}
+          values={ceilings()}
+        />
 
         <Show when={props.error !== undefined && props.error !== null}>
           <p class={styles.error} role="alert">
@@ -287,14 +290,4 @@ export function AccountEditDialog(props: AccountEditDialogProps) {
       </form>
     </Modal>
   )
-}
-
-/**
- * `required` + `type="number"` + `min`/`max` refuse an empty or out-of-range box
- * in the browser before `submit()` can run — the same floor the API enforces
- * (`WEIGHT = z.number().int().min(1)`). What arrives here is therefore always a
- * parseable integer; there is no unreadable-box path left to fall back from.
- */
-function numeric(field: "weight" | "priority", raw: string): Record<string, number> {
-  return { [field]: Number.parseInt(raw, 10) }
 }

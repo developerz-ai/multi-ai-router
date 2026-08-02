@@ -6,16 +6,19 @@ import { SpendCell } from "../../components/SpendCell"
 import { StatusDot } from "../../components/StatusDot"
 import { type Column, Table } from "../../components/Table"
 import { UsageCell } from "../../components/UsageCell"
+import { hasSpentWindow } from "../../lib/account-status"
 import type { TestAccountInput } from "../../lib/api/accounts"
 import type { AccountView, ProviderDescriptor } from "../../lib/api/types"
 import { billingConsequence } from "../../lib/billing"
-import { formatDate } from "../../lib/format"
+import { formatDate, formatRelative, formatTimestamp } from "../../lib/format"
+import { parseInstant } from "../../lib/quota-windows"
 import type { UsageRowSummary } from "../../lib/usage-index"
 import { usageFor } from "../../lib/usage-index"
 import { AccountModels } from "./AccountModels"
 import { AccountRecheck } from "./AccountRecheck"
 import styles from "./AccountsTable.module.scss"
 import { AccountTestNow } from "./AccountTestNow"
+import { connectLabel, credentialHint, credentialLabel, credentialTone } from "./account-cells"
 
 export interface AccountsTableProps {
   readonly accounts: readonly AccountView[]
@@ -82,7 +85,20 @@ export function AccountsTable(props: AccountsTableProps) {
     {
       id: "status",
       header: "Status",
-      cell: (account) => <StatusDot status={account.status} />,
+      cell: (account) => (
+        <div class={styles.status}>
+          <StatusDot status={account.status} />
+          {/* A spent window blocks routing exactly like a breaker does, but leaves the status
+              green — so the block is stated here, at headline level, not only in the window
+              sub-row an operator has to know to open. `spent` is the server's verdict, the same
+              one candidate filtering reaches. */}
+          <Show
+            when={account.status === "active" && hasSpentWindow(account.availability?.quotaWindows)}
+          >
+            <span class={styles.spentNote}>window spent — not routable</span>
+          </Show>
+        </div>
+      ),
     },
     {
       id: "reset",
@@ -93,11 +109,9 @@ export function AccountsTable(props: AccountsTableProps) {
           nowMs={props.nowMs}
           quotaWindows={account.availability?.quotaWindows ?? []}
           resetSource={account.availability?.resetSource ?? "unknown"}
-          resetsAt={
-            account.availability?.resetsAt === undefined || account.availability.resetsAt === null
-              ? null
-              : Date.parse(account.availability.resetsAt)
-          }
+          // `parseInstant`, never a bare `Date.parse`: a malformed instant must become "no
+          // instant", not a NaN that renders as "Invalid Date" beside "in 0s".
+          resetsAt={parseInstant(account.availability?.resetsAt ?? null)}
           status={account.status}
         />
       ),
@@ -193,9 +207,27 @@ export function AccountsTable(props: AccountsTableProps) {
       ),
     },
     {
+      // One column, two lifecycle facts. "Last used" is the operator's only view of the
+      // `last_used_at` column the idle probe reads: it is how "pooled but never selected" and
+      // "the usage stamping actually works" become visible without a database shell. Relative
+      // time in the cell, absolute on hover — and null is the word "never", not a blank.
       id: "created",
-      header: "Added",
-      cell: (account) => <span class={styles.muted}>{formatDate(account.createdAt)}</span>,
+      header: "Added / last used",
+      cell: (account) => (
+        <div class={styles.identity}>
+          <span class={styles.muted}>{formatDate(account.createdAt)}</span>
+          <span
+            class={styles.muted}
+            title={
+              account.lastUsedAt === null || account.lastUsedAt === undefined
+                ? "Never served a request — or not since the router began recording last use."
+                : formatTimestamp(account.lastUsedAt)
+            }
+          >
+            used {formatRelative(account.lastUsedAt ?? null, props.nowMs)}
+          </span>
+        </div>
+      ),
     },
     {
       id: "actions",
@@ -246,47 +278,4 @@ export function AccountsTable(props: AccountsTableProps) {
       rows={props.accounts}
     />
   )
-}
-
-/**
- * "Missing", "not connected", and "not needed" are three problems with three different fixes — a
- * paste, a login, and nothing at all. The word decides which button the operator reaches for, and
- * the third one exists so a fully configured local endpoint is never dressed up as a broken account.
- */
-function credentialLabel(account: AccountView, provider: ProviderDescriptor | undefined): string {
-  if (account.hasCredential) return "stored"
-  if (provider?.authKind === "none") return "not needed"
-  return (provider?.connectFlow ?? null) === null ? "missing" : "not connected"
-}
-
-function credentialHint(account: AccountView, provider: ProviderDescriptor | undefined): string {
-  if (account.hasCredential) return "A credential is stored, encrypted. No endpoint returns it."
-  if (provider?.authKind === "none") {
-    return "This upstream authenticates nobody, so none is stored. Add one only if something in front of it checks."
-  }
-  if ((provider?.connectFlow ?? null) === null) {
-    return "No credential stored — this account cannot serve a request."
-  }
-  return "No authorization yet — run Connect. Nothing is pasted by hand for this provider."
-}
-
-/** A local endpoint with nothing stored is configured, not half-finished. Never a warning. */
-function credentialTone(account: AccountView, provider: ProviderDescriptor | undefined) {
-  if (account.hasCredential) return "ok" as const
-  return provider?.authKind === "none" ? ("neutral" as const) : ("warn" as const)
-}
-
-/**
- * "Connect" while the router holds no authorization for this account, "Reconnect" after.
- *
- * A Claude subscription always reads "Connect", and that is a stated limitation rather than a
- * default: the router holds no credential for one — the Agent SDK owns it inside the account's
- * `CLAUDE_CONFIG_DIR` and we deliberately never read it — so nothing here can tell a logged-in
- * subscription from a fresh row, and picking the confident word would be a guess.
- *
- * Both words drive the same call against the same row. The id, the config directory, the pool
- * membership and the usage history survive either; only the audit kind differs.
- */
-function connectLabel(account: AccountView): "Connect" | "Reconnect" {
-  return account.hasCredential ? "Reconnect" : "Connect"
 }

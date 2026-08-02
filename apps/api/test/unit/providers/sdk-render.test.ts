@@ -416,3 +416,179 @@ describe("reading what the subprocess said", () => {
     expect(event?.index).toBe(3)
   })
 })
+
+describe("usage split across the SDK's events", () => {
+  /** The real shape: `message_start` carries input+cache, each `message_delta` the output so far. */
+  const START_WITH_USAGE = {
+    type: "message_start",
+    message: {
+      id: "msg_upstream",
+      type: "message",
+      role: "assistant",
+      model: MODEL,
+      content: [],
+      usage: {
+        input_tokens: 1200,
+        output_tokens: 1,
+        cache_creation_input_tokens: 300,
+        cache_read_input_tokens: 4500,
+      },
+    },
+  }
+
+  test("a turn with no authoritative result still bills input and cache, not output alone", () => {
+    const env = envelope()
+    push(env, [
+      START_WITH_USAGE,
+      textBlock(0),
+      textDelta(0, "calling a tool"),
+      { type: "content_block_stop", index: 0 },
+      { type: "message_delta", delta: { stop_reason: "tool_use" }, usage: { output_tokens: 42 } },
+    ])
+
+    // The early-stopped tool-call loop synthesizes a result with **no** usage on purpose
+    // (`tools/early-stop.ts`), so the completion arrives null — the dominant agent-traffic shape,
+    // and the one that used to lose every input and cache count it had already been told.
+    const [delta] = env.finish({ stopReason: "tool_use", usage: null })
+
+    expect(delta?.usage).toEqual({
+      output_tokens: 42,
+      input_tokens: 1200,
+      cache_creation_input_tokens: 300,
+      cache_read_input_tokens: 4500,
+    })
+  })
+
+  test("a count nobody measured stays absent — merging never zero-fills", () => {
+    const env = envelope()
+    push(env, [
+      {
+        type: "message_start",
+        message: {
+          id: "m",
+          type: "message",
+          role: "assistant",
+          content: [],
+          usage: { input_tokens: 7 },
+        },
+      },
+      { type: "message_delta", delta: { stop_reason: "end_turn" }, usage: { output_tokens: 3 } },
+    ])
+    const [delta] = env.finish({ stopReason: null, usage: null })
+
+    expect(delta?.usage).toEqual({ output_tokens: 3, input_tokens: 7 })
+  })
+
+  test("a subagent's message_start never bills the main turn", () => {
+    const env = envelope()
+    env.push(wire(START), null)
+    env.push(wire(START_WITH_USAGE), "toolu_task")
+    const [delta] = env.finish({ stopReason: null, usage: null })
+
+    expect(delta?.usage).toEqual({ output_tokens: 0 })
+  })
+
+  test("the authoritative result usage still wins wholesale when it exists", () => {
+    const env = envelope()
+    push(env, [
+      START_WITH_USAGE,
+      { type: "message_delta", delta: { stop_reason: "end_turn" }, usage: { output_tokens: 42 } },
+    ])
+    const [delta] = env.finish({
+      stopReason: "end_turn",
+      usage: {
+        input_tokens: 9,
+        output_tokens: 10,
+        cache_creation_input_tokens: null,
+        cache_read_input_tokens: null,
+      },
+    })
+
+    expect(delta?.usage).toEqual({ output_tokens: 10, input_tokens: 9 })
+  })
+})
+
+describe("context_management never reaches a client", () => {
+  /**
+   * The SDK/CLI attaches `context_management` to streamed events; the real Anthropic API never
+   * emits it on a plain request, and stock clients crash calling into it as if it were typed
+   * (observed against langchain-anthropic — Meridian #525). Stripped at the envelope, both levels.
+   */
+  test("stripped from the event and from event.delta, everything else intact", () => {
+    const env = envelope()
+    const [start] = push(env, [{ ...START, context_management: { applied_edits: [] } }])
+    expect(start).not.toHaveProperty("context_management")
+    expect(start?.message).toMatchObject({ id: "msg_upstream", model: MODEL })
+
+    const frames = push(env, [
+      textBlock(0),
+      {
+        type: "content_block_delta",
+        index: 0,
+        context_management: { applied_edits: [] },
+        delta: { type: "text_delta", text: "hi", context_management: { applied_edits: [] } },
+      },
+    ])
+    const delta = frames.at(-1)
+
+    expect(delta).not.toHaveProperty("context_management")
+    expect(delta?.delta).toEqual({ type: "text_delta", text: "hi" })
+    expect(delta?.index).toBe(0)
+    expect(delta?.type).toBe("content_block_delta")
+  })
+
+  test("a frame without the field is passed through untouched, not rebuilt", () => {
+    const env = envelope()
+    push(env, [START])
+    const frames = push(env, [textBlock(0), textDelta(0, "verbatim")])
+    expect(frames.at(-1)?.delta).toEqual({ type: "text_delta", text: "verbatim" })
+  })
+})
+
+describe("dangling blocks are an alarm, not only a repair", () => {
+  test("finish counts the blocks it had to force-close", () => {
+    const env = envelope()
+    push(env, [START, textBlock(0), textDelta(0, "unterminated"), textBlock(1)])
+    expect(env.forcedBlockCloses).toBe(0)
+
+    const frames = env.finish({ stopReason: null, usage: null })
+    expect(env.forcedBlockCloses).toBe(2)
+    expect(frames.filter((frame) => frame.type === "content_block_stop")).toHaveLength(2)
+  })
+
+  test("a clean turn counts zero", () => {
+    const env = envelope()
+    push(env, [START, textBlock(0), textDelta(0, "hi"), { type: "content_block_stop", index: 0 }])
+    env.finish({ stopReason: "end_turn", usage: null })
+    expect(env.forcedBlockCloses).toBe(0)
+  })
+})
+
+describe("unknown delta kinds fold the same as they stream", () => {
+  test("the payload lands on the block verbatim, newest value winning", () => {
+    // The streaming half forwards a future delta kind untouched (`envelope.ts`); the fold used to
+    // drop it, so `stream: true` and `stream: false` diverged for every block type Anthropic adds.
+    const fold = createMessageFold()
+    fold.push([
+      { type: "message_start", message: { id: "m", type: "message", content: [] } },
+      { type: "content_block_start", index: 0, content_block: { type: "future_block" } },
+      { type: "content_block_delta", index: 0, delta: { type: "future_delta", payload: "one" } },
+      { type: "content_block_delta", index: 0, delta: { type: "future_delta", payload: "two" } },
+      { type: "content_block_stop", index: 0 },
+    ])
+
+    expect(fold.body().content).toEqual([{ type: "future_block", payload: "two" }])
+  })
+
+  test("the known kinds keep their accumulate semantics", () => {
+    const fold = createMessageFold()
+    fold.push([
+      { type: "message_start", message: { id: "m", type: "message", content: [] } },
+      { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } },
+      { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "a" } },
+      { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "b" } },
+      { type: "content_block_stop", index: 0 },
+    ])
+    expect(fold.body().content).toEqual([{ type: "text", text: "ab" }])
+  })
+})
