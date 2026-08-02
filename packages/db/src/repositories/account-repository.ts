@@ -333,7 +333,13 @@ export function createAccountRepository(db: Database): AccountRepository {
         .update(accounts)
         // GREATEST, not assignment: concurrent replicas flush unordered batches, and a late
         // flush carrying an older instant must never walk the stamp backwards.
-        .set({ lastUsedAt: sql`greatest(${accounts.lastUsedAt}, ${at})` })
+        // ISO string + explicit cast, never a raw `Date`: a value in a raw `sql` template has no
+        // column, so drizzle applies no encoder and the driver fails to serialize the object at
+        // bind time — the rule `usage-daily-repository.ts` states, violated here and caught only
+        // in production.
+        .set({
+          lastUsedAt: sql`greatest(${accounts.lastUsedAt}, ${at.toISOString()}::timestamptz)`,
+        })
         // `inArray` de-duplicates for us at the SQL level — one row updated per distinct id,
         // however many times it appeared in the batch.
         .where(inArray(accounts.id, [...new Set(ids)]))
