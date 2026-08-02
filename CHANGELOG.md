@@ -5,6 +5,17 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.4.0] — 2026-08-02
+
+### Added
+
+- `ROUTING_BOUND_ACCOUNT_COOLING_DOWN` chooses what happens when a session is bound to an account that is merely cooling down: `fail` (the default, unchanged behavior — `429` + `Retry-After`, binding kept) or `rebind` (invalidate the binding and start fresh on another eligible account). `rebind` suits pools with more than one account and clients that resend full history every turn, where the abandoned upstream resumability costs nothing and a spent window stops hard-blocking the session. The routing layer already knew both options; until now no config selected one.
+
+### Fixed
+
+- `last_used_at` stamping worked again — `markUsed` interpolated a raw `Date` into a raw sql template where no column encoder applies, so postgres.js refused it at bind time and every stamp since 1.2.0 silently failed, leaving every account's `last_used_at` NULL and making the idle probe treat busy accounts as never-used. The instant is now bound as an ISO string with an explicit `::timestamptz` cast, and a live-database integration test covers the stamp.
+- A refused usage write logs its cause chain innermost-first, not just drizzle's "Failed query" wrapper — the wrapper's statement text had hidden the actual client-side bind failure inside the 200-char budget for days.
+
 ## [2.3.2] — 2026-08-01
 
 ### Fixed
