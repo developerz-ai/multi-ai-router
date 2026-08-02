@@ -313,6 +313,7 @@ export function createRuntime(deps: RuntimeDeps): Runtime {
     onRequest: (sample) => metrics.observeRequest(sample),
     options: {
       failover: { maxAttempts: env.failover.maxAttempts },
+      selection: { boundAccountCoolingDown: env.failover.boundAccountCoolingDown },
       upstreamTimeoutMs: env.failover.upstreamTimeoutMs,
       translation: { defaultMaxTokens: env.translation.defaultMaxTokens },
       // The one limit an unauthenticated-shaped mistake can spend memory on before anything else

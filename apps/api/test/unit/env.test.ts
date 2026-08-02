@@ -406,6 +406,7 @@ describe("parseEnv", () => {
         maxBackoffMs: 300_000,
         halfOpenHoldMs: 30_000,
         upstreamTimeoutMs: 600_000,
+        boundAccountCoolingDown: "fail",
       })
     })
 
@@ -433,6 +434,19 @@ describe("parseEnv", () => {
       expect(expectEnvError({ ...base, ROUTING_HALF_OPEN_HOLD_MS: "0" }).variables).toEqual([
         "ROUTING_HALF_OPEN_HOLD_MS",
       ])
+    })
+
+    test("ROUTING_BOUND_ACCOUNT_COOLING_DOWN takes the operator's word, literally", () => {
+      expect(
+        parseEnv({ ...base, ROUTING_BOUND_ACCOUNT_COOLING_DOWN: "rebind" }).failover
+          .boundAccountCoolingDown,
+      ).toBe("rebind")
+    })
+
+    test("anything but `fail` or `rebind` is refused by name", () => {
+      expect(
+        expectEnvError({ ...base, ROUTING_BOUND_ACCOUNT_COOLING_DOWN: "ignore" }).variables,
+      ).toEqual(["ROUTING_BOUND_ACCOUNT_COOLING_DOWN"])
     })
   })
 

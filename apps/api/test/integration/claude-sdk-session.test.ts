@@ -215,6 +215,41 @@ describe("a Claude subscription conversation across turns", () => {
     expect(rows[0]).toMatchObject({ accountId: "sub", sdkSessionId: "sess_sub" })
   })
 
+  test("`rebind` trades the prior turns for an answer now: the mapping drops and another account serves", async () => {
+    const seen: SdkInvocation[] = []
+    const { repository, store } = sessionStore()
+    const headers = { ...bearer(), "x-session-id": "conv-1" }
+
+    const first = harness({
+      accounts: [subscriptionAccount("sub")],
+      responses: [],
+      invokeSdk: sdkWithSessions(seen),
+      sessions: store,
+    })
+    await (await first.app.request("/v1/messages", post(OPENING, headers))).text()
+    await settle()
+
+    const second = harness({
+      accounts: [
+        subscriptionAccount("sub", { snapshot: { status: "cooling_down" } }),
+        account("api-1", { apiKey: "sk-one", cipher: CRYPTOR }),
+      ],
+      responses: [() => new Response('{"ok":true}', { status: 200 })],
+      sessions: store,
+      selection: { unpooledPolicy: "priority-failover", boundAccountCoolingDown: "rebind" },
+    })
+    const res = await second.app.request("/v1/messages", post(SECOND_TURN, headers))
+    await res.text()
+    await settle()
+
+    // Served by the healthy account the cooling one's binding would otherwise have hidden.
+    expect(res.status).toBe(200)
+    // Dropped, never moved — same row shape an unrecoverable account leaves.
+    const cleared = repository.writes.at(-1)
+    expect(cleared?.accountId).toBeNull()
+    expect(cleared?.sdkSessionId).toBeNull()
+  })
+
   test("a router with no session store still serves subscriptions, just always cold", async () => {
     const seen: SdkInvocation[] = []
     const { app } = harness({

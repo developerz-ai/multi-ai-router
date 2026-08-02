@@ -3,6 +3,7 @@ import { UNKNOWN_REVISION } from "@multi-ai-router/core"
 import { DATABASE_POOL_DEFAULTS } from "@multi-ai-router/db"
 import { z } from "zod"
 import { adminApiTokenProblem } from "../services/admin-auth"
+import type { BoundCooldownBehavior } from "../services/routing"
 import {
   absoluteUrl,
   atLeastOne,
@@ -288,6 +289,17 @@ export interface FailoverConfig {
   readonly halfOpenHoldMs: number
   /** How long the router waits on one upstream. Long, because a long completion is normal. */
   readonly upstreamTimeoutMs: number
+  /**
+   * What a request does when its session is bound to an account that is merely cooling down.
+   *
+   * `fail` (default) answers the honest `429` with a `Retry-After` and keeps the binding — the
+   * conversation stays resumable on the account that owns it. `rebind` invalidates the binding
+   * instead and starts a fresh upstream session on another eligible account: the request is
+   * served now rather than after the reset, at the cost of the prior turns the bound account
+   * still holds. Opt-in, because the loss of those turns is real even though it is surfaced —
+   * see `services/routing/binding.ts`.
+   */
+  readonly boundAccountCoolingDown: BoundCooldownBehavior
 }
 
 /**
@@ -627,6 +639,10 @@ export const ENV_FIELDS = {
   ROUTING_BASE_BACKOFF_MS: atLeastOne.optional(),
   ROUTING_MAX_BACKOFF_MS: atLeastOne.optional(),
   ROUTING_HALF_OPEN_HOLD_MS: atLeastOne.optional(),
+  // `fail` keeps a bound session on its cooling-down account and answers 429; `rebind` drops the
+  // binding and starts the conversation fresh on another eligible account. Enum, not a number —
+  // the drift guard's zero rule does not apply.
+  ROUTING_BOUND_ACCOUNT_COOLING_DOWN: z.enum(["fail", "rebind"]).optional(),
   UPSTREAM_TIMEOUT_MS: atLeastOne.optional(),
   TRANSLATE_DEFAULT_MAX_TOKENS: atLeastOne.optional(),
 } as const
@@ -832,6 +848,7 @@ const envSchema = z.object(ENV_FIELDS).transform((raw, ctx): Env => {
       maxBackoffMs: raw.ROUTING_MAX_BACKOFF_MS ?? 300_000,
       halfOpenHoldMs: raw.ROUTING_HALF_OPEN_HOLD_MS ?? 30_000,
       upstreamTimeoutMs: raw.UPSTREAM_TIMEOUT_MS ?? 600_000,
+      boundAccountCoolingDown: raw.ROUTING_BOUND_ACCOUNT_COOLING_DOWN ?? "fail",
     },
     translation: {
       defaultMaxTokens: raw.TRANSLATE_DEFAULT_MAX_TOKENS ?? 4_096,
