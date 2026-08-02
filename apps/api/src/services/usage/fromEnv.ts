@@ -134,8 +134,21 @@ interface WriteFailure {
  */
 const MAX_REASON_CHARS = 200
 
+/**
+ * The full cause chain, innermost first. An ORM's wrapper message names the *statement* it refused
+ * ("Failed query: …\nparams: …") and carries the real complaint one `cause` down — logging only the
+ * wrapper once hid a client-side bind failure behind its own statement text for days. Deepest
+ * first, so the budget cut eats the statement's tail, never the cause.
+ */
 function reasonOf(error: unknown): string {
-  const message = error instanceof Error ? error.message : String(error)
+  if (!(error instanceof Error)) return String(error)
+  const messages: string[] = []
+  let current: Error | undefined = error
+  while (current !== undefined && messages.length < 4) {
+    if (!messages.includes(current.message)) messages.unshift(current.message)
+    current = current.cause instanceof Error ? current.cause : undefined
+  }
+  const message = messages.join(" ← ")
   return message.length <= MAX_REASON_CHARS ? message : `${message.slice(0, MAX_REASON_CHARS)}…`
 }
 
