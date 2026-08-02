@@ -12,6 +12,7 @@ import { createApp } from "./app"
 import { createRuntime, type Runtime, type RuntimeDeps } from "./composition"
 import { type Env, EnvValidationError, parseEnv } from "./config/env"
 import { createLogger, type Logger } from "./logging/logger"
+import { initSentry } from "./observability"
 import { ConfigDirError } from "./providers/claude-sdk/config-dir"
 import { adminAuthBootProblem } from "./services/admin-auth"
 import { createAccountProbe } from "./services/health/accountProbe"
@@ -28,6 +29,11 @@ import { createLifecycle, type Lifecycle } from "./services/shutdown/lifecycle"
 async function main(): Promise<void> {
   const env = readEnv()
   const logger = createLogger({ level: env.logLevel })
+
+  // Earliest, after the logger exists: a boot error (a failed migration, a bad config dir) is
+  // exactly the kind of failure GlitchTip should see, so the SDK is live before anything that can
+  // exit the process runs. No-op when no SENTRY_DSN is set.
+  initSentry(env, logger)
 
   warnOnInsecureSessionCookie(env, logger)
 

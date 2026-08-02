@@ -29,4 +29,5 @@ export {
   type RegistryOptions,
 } from "./registry"
 export { createRuntimeMetrics, type RuntimeMetricsDeps } from "./runtime"
+export { captureException, initSentry, redactSentryEvent } from "./sentry"
 export { createSeries, type RouterSeries } from "./series"

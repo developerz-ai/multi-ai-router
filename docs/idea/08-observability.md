@@ -586,6 +586,33 @@ Three properties of the redactor are load-bearing enough to state:
   `Error`, `Map`, and `Set` values keep their payload somewhere `Object.entries` cannot see, so
   each is unwrapped and scrubbed rather than serialized as an empty object.
 
+## Error tracking (GlitchTip)
+
+Opt-in error tracking against the self-hosted GlitchTip instance — a Sentry-protocol backend, so
+the router speaks Sentry to it. `SENTRY_DSN` unset (the default) and the SDK is never initialized:
+a dev, test, or CI boot ships nothing and `captureException` is a no-op without a transport. Set
+the DSN and 5xx errors leave the process tagged with `release`, `environment`, and the request's
+`errorClass` / `status` / `path` / `errorCode`. **4xx never leaves** — an exhausted account, a scope
+violation, a rate limit is an operational state, not a defect, and stays in the logs.
+
+The credential-leak rule above applies just as hard here, because a Sentry SDK scrapes request
+headers, request bodies, breadcrumbs and exception messages onto every event — exactly the surfaces
+that carry upstream keys and OAuth tokens on this router. So `beforeSend` is the **same redactor**
+the structured log uses (`logging/redact.ts`), not a second one; one scrubbing set covers both
+surfaces, and the gate is a unit test (`test/unit/observability/sentry.test.ts`). The redactor's
+known boundary carries over unchanged: a credential is caught by field name or by a recognisable
+value shape (`sk-`, `Bearer`, JWT, connection string, vendor prefixes), not by guessing at bare
+free-text values with no prefix.
+
+Two properties hold the overhead budget ([06](06-protocol-translation.md), non-negotiable #8):
+
+- **Tracing is off** (`tracesSampleRate: 0`) — no spans.
+- **The request/fetch instrumentations are stripped from the defaults** (`Console`, `Http`,
+  `NodeFetch`, `BunServer`, `ProcessSession`). The router makes an upstream call on every request;
+  patching global `fetch` and `Bun.serve` to scope and breadcrumb each one is overhead on the happy
+  path. Errors are captured explicitly in the Hono error handler instead — on the 5xx path, never
+  the 200 one. What remains of the defaults only does work while an event is being assembled.
+
 ## Audit events
 
 Append-only. Admin-plane mutations only; the data plane produces usage records, not audit events.
