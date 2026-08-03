@@ -137,14 +137,28 @@ export function redactValue(value: string): string {
   return scrubbed
 }
 
-export function redact(fields: Record<string, unknown>): Record<string, unknown> {
-  return redactRecord(fields, 0)
+export function redact(
+  fields: Record<string, unknown>,
+  maxDepth: number = MAX_DEPTH,
+): Record<string, unknown> {
+  return redactRecord(fields, 0, maxDepth)
 }
 
-function redactRecord(fields: Record<string, unknown>, depth: number): Record<string, unknown> {
+/**
+ * `maxDepth` is a parameter, not always `MAX_DEPTH`, because the same walk scrubs two shapes whose
+ * credential-relevant nesting differs: a flat log record is done by 4, but a Sentry event carries
+ * its stack at `exception.values[].stacktrace.frames[].vars` — depth 4 lands exactly on
+ * `stacktrace` and would redact the whole trace. The Sentry caller passes a deeper floor so the
+ * frames survive while their `vars` are still scrubbed; the log caller keeps the default.
+ */
+function redactRecord(
+  fields: Record<string, unknown>,
+  depth: number,
+  maxDepth: number,
+): Record<string, unknown> {
   const safe: Record<string, unknown> = {}
   for (const [name, value] of Object.entries(fields)) {
-    safe[name] = isSecretFieldName(name) ? REDACTED : redactUnknown(value, depth + 1)
+    safe[name] = isSecretFieldName(name) ? REDACTED : redactUnknown(value, depth + 1, maxDepth)
   }
   return safe
 }
@@ -156,11 +170,11 @@ function redactRecord(fields: Record<string, unknown>, depth: number): Record<st
  * — a log line that is technically safe and completely useless, which is how a redaction bug
  * survives review. Each is unwrapped into a shape the walk understands and scrubbed there.
  */
-function redactUnknown(value: unknown, depth: number): unknown {
+function redactUnknown(value: unknown, depth: number, maxDepth: number): unknown {
   if (typeof value === "string") return redactValue(value)
   if (value === null || typeof value !== "object") return value
-  if (depth >= MAX_DEPTH) return REDACTED
-  if (Array.isArray(value)) return value.map((entry) => redactUnknown(entry, depth + 1))
+  if (depth >= maxDepth) return REDACTED
+  if (Array.isArray(value)) return value.map((entry) => redactUnknown(entry, depth + 1, maxDepth))
   if (value instanceof Date) return value.toISOString()
   // The whole `cause` chain, innermost first, scrubbed like any other free-text value — an error
   // flattened to its outermost message alone institutionalizes wrapper-only logging for every
@@ -169,9 +183,10 @@ function redactUnknown(value: unknown, depth: number): unknown {
   // the host, and the one call site that wants it (`middleware/errorHandler.ts`) passes it as
   // its own field.
   if (value instanceof Error) return redactError(value)
-  if (value instanceof Map) return redactRecord(fromMap(value), depth)
-  if (value instanceof Set) return [...value].map((entry) => redactUnknown(entry, depth + 1))
-  return redactRecord(value as Record<string, unknown>, depth)
+  if (value instanceof Map) return redactRecord(fromMap(value), depth, maxDepth)
+  if (value instanceof Set)
+    return [...value].map((entry) => redactUnknown(entry, depth + 1, maxDepth))
+  return redactRecord(value as Record<string, unknown>, depth, maxDepth)
 }
 
 function redactError(error: Error): string {
