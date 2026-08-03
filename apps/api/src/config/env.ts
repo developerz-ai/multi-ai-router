@@ -495,6 +495,18 @@ export interface Env {
    * credential rather than enabling one (`services/admin-auth/apiToken.ts`).
    */
   readonly adminApiToken: string | null
+  /**
+   * GlitchTip (Sentry-protocol) DSN the router ships errors to, or null to leave error tracking
+   * off. Null is the default — a dev, test or CI boot ships nothing. In production a sealed
+   * `SENTRY_DSN` turns it on; see `observability/sentry.ts` for the redaction that makes that safe.
+   */
+  readonly sentryDsn: string | null
+  /**
+   * Logical environment tagged on every event ("production", "staging"); GlitchTip groups and
+   * filters on it. Defaults to "production"; override with `SENTRY_ENVIRONMENT` for a staging or
+   * dev install that also carries a DSN.
+   */
+  readonly sentryEnvironment: string
   readonly accountRecheckCooldownSeconds: number
   /**
    * "Test now"'s own cooldown — deliberately not shared with `accountRecheckCooldownSeconds`. A
@@ -585,6 +597,8 @@ export const ENV_FIELDS = {
   // Refuses zero: a zero-length reason logs failures with no reason at all — a silent absence.
   LOG_REASON_MAX_CHARS: atLeastOne.optional(),
   TRUST_PROXY: flag.optional(),
+  SENTRY_DSN: z.string().optional(),
+  SENTRY_ENVIRONMENT: z.string().optional(),
   PUBLIC_URL: absoluteUrl.optional(),
   ROUTER_REVISION: nonEmpty.optional(),
   WEB_ROOT: nonEmpty.optional(),
@@ -795,6 +809,8 @@ const envSchema = z.object(ENV_FIELDS).transform((raw, ctx): Env => {
     claudeSdkMaxConcurrency: raw.CLAUDE_SDK_MAX_CONCURRENCY ?? 10,
     claudeSdkMaxConcurrencyPerAccount: raw.CLAUDE_SDK_MAX_CONCURRENCY_PER_ACCOUNT ?? 4,
     metricsToken: raw.METRICS_TOKEN ?? null,
+    sentryDsn: raw.SENTRY_DSN ?? null,
+    sentryEnvironment: raw.SENTRY_ENVIRONMENT ?? "production",
     adminApiToken: raw.ADMIN_API_TOKEN ?? null,
     accountRecheckCooldownSeconds: raw.ACCOUNT_RECHECK_COOLDOWN_SECONDS ?? 60,
     // Longer than the re-check default on purpose: this one costs money (and, on the Agent-SDK

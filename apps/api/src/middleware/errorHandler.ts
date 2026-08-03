@@ -8,6 +8,7 @@ import {
   toErrorResponse,
 } from "../errors/render"
 import type { Logger } from "../logging/logger"
+import { captureException } from "../observability"
 import type { AppEnv } from "../types"
 
 /**
@@ -45,6 +46,21 @@ export function errorHandler(fallbackLog: Logger): ErrorHandler<AppEnv> {
     } else {
       // The message and stack are for the operator only — they never reach the response body.
       log.error("request failed", { ...fields, errorClass: err.name, stack: err.stack })
+    }
+
+    // A 5xx reaches GlitchTip; a 4xx (quota exhausted, scope violation, rate-limited) is an
+    // operational state, not a defect, and stays in logs only. No-op when no SENTRY_DSN is set.
+    if (response.status >= 500) {
+      captureException(err, {
+        tags: {
+          errorClass: err.name,
+          status: response.status,
+          method: c.req.method,
+          path: c.req.path,
+          ...(isRouterError(err) ? { errorCode: err.code } : {}),
+        },
+        extra: { requestId: c.get("requestId") },
+      })
     }
 
     return send(c, response)
