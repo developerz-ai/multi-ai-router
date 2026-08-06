@@ -19,6 +19,13 @@
       "headers": {
         "Authorization": "Bearer ${DEVELOPERZ_API_KEY}"
       }
+    },
+    "db-mcp-gateway": {
+      "type": "http",
+      "url": "https://db.developerz.ai/mcp",
+      "headers": {
+        "Authorization": "Bearer ${DBMCP_SVC_TOKEN}"
+      }
     }
   }
 }
