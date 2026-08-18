@@ -217,6 +217,58 @@ describe("registration is deterministic, because order is the system prompt", ()
   })
 })
 
+describe("tool_choice decides what gets registered, and whether a call is required", () => {
+  test('absent and "auto" both register everything and never require a call', () => {
+    const tools = [declared("a"), declared("b")]
+    expect(createPassthrough({ tools })?.required).toBe(false)
+    expect(createPassthrough({ tools, toolChoice: { type: "auto" } })?.required).toBe(false)
+    expect(createPassthrough({ tools, toolChoice: { type: "auto" } })?.registered).toEqual([
+      "a",
+      "b",
+    ])
+  })
+
+  test('"none" returns no passthrough at all, the same as a client with no tools', () => {
+    const tools = [declared("a"), declared("b")]
+    expect(createPassthrough({ tools, toolChoice: { type: "none" } })).toBeNull()
+  })
+
+  test('"any" registers everything and requires a call', () => {
+    const tools = [declared("a"), declared("b")]
+    const passthrough = createPassthrough({ tools, toolChoice: { type: "any" } })
+    expect(passthrough?.registered).toEqual(["a", "b"])
+    expect(passthrough?.required).toBe(true)
+  })
+
+  test('"tool" narrows registration to the named tool only, and requires a call', () => {
+    const tools = [declared("a"), declared("b")]
+    const passthrough = createPassthrough({
+      tools,
+      toolChoice: { type: "tool", name: "b" },
+    })
+    expect(passthrough?.registered).toEqual(["b"])
+    expect(passthrough?.required).toBe(true)
+  })
+
+  test("forcing a tool the client never declared throws rather than silently falling back", () => {
+    const tools = [declared("a")]
+    expect(() => createPassthrough({ tools, toolChoice: { type: "tool", name: "ghost" } })).toThrow(
+      /ghost/,
+    )
+  })
+
+  test('"any" with zero declared tools throws rather than silently downgrading to a plain chat', () => {
+    // Anthropic's own API rejects a forced choice with no tools declared; returning null here would
+    // answer it as an ordinary chat turn — the exact silent downgrade this issue exists to prevent.
+    expect(() => createPassthrough({ tools: [], toolChoice: { type: "any" } })).toThrow(
+      /declared no tools/,
+    )
+    // The same reading with no forced choice stays a plain chat turn, as it must.
+    expect(createPassthrough({ tools: [] })).toBeNull()
+    expect(createPassthrough({ tools: [], toolChoice: { type: "auto" } })).toBeNull()
+  })
+})
+
 describe("deferred loading is described but not granted, because ToolSearch is not permitted", () => {
   const many = Array.from({ length: DEFER_LOADING_THRESHOLD + 5 }, (_, i) =>
     declared(`tool_${String(i).padStart(2, "0")}`),

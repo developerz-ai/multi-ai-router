@@ -87,9 +87,85 @@ describe("what a launch reads out of an Anthropic Messages body", () => {
   })
 })
 
+describe("tool_choice, the one Anthropic field this layer used to drop on the floor", () => {
+  test('absent is null, read the same as "auto" downstream', () => {
+    expect(readSdkRequest(body({ messages: [] })).toolChoice).toBeNull()
+  })
+
+  test("each shape the translator can emit round-trips verbatim", () => {
+    expect(readSdkRequest(body({ tool_choice: { type: "auto" } })).toolChoice).toEqual({
+      type: "auto",
+    })
+    expect(readSdkRequest(body({ tool_choice: { type: "any" } })).toolChoice).toEqual({
+      type: "any",
+    })
+    expect(readSdkRequest(body({ tool_choice: { type: "none" } })).toolChoice).toEqual({
+      type: "none",
+    })
+    expect(
+      readSdkRequest(body({ tool_choice: { type: "tool", name: "get_weather" } })).toolChoice,
+    ).toEqual({ type: "tool", name: "get_weather" })
+  })
+
+  // The two tests below assert the whole request SURVIVES, not just that `toolChoice` is null: an
+  // earlier draft failed the object parse on a bad `tool_choice`, which read as null here too —
+  // because the entire request had been wiped to `EMPTY`. The conversation must outlive one field.
+  test("an unrecognized shape is absence of the field, not a failed turn", () => {
+    const request = readSdkRequest(
+      body({
+        messages: [{ role: "user", content: "ping" }],
+        system: "be terse",
+        tools: [{ name: "get_weather", description: "d", input_schema: { type: "object" } }],
+        tool_choice: { type: "bogus" },
+      }),
+    )
+
+    expect(request.toolChoice).toBeNull()
+    expect(request.messages).toEqual([{ role: "user", content: "ping" }])
+    expect(request.system).toBe("be terse")
+    expect(request.tools.map((tool) => tool.name)).toEqual(["get_weather"])
+  })
+
+  test("an explicit null is absence of the field, not a failed turn", () => {
+    const request = readSdkRequest(
+      body({
+        messages: [{ role: "user", content: "ping" }],
+        system: "be terse",
+        tools: [{ name: "get_weather", description: "d", input_schema: { type: "object" } }],
+        tool_choice: null,
+      }),
+    )
+
+    expect(request.toolChoice).toBeNull()
+    expect(request.messages).toEqual([{ role: "user", content: "ping" }])
+    expect(request.system).toBe("be terse")
+    expect(request.tools.map((tool) => tool.name)).toEqual(["get_weather"])
+  })
+
+  // A near miss is not a foreign shape: the `type` is one this vocabulary recognizes, so the client
+  // *tried* to force a call and misspelt the payload — and degrading that to "auto" was the silent
+  // downgrade this issue exists to kill, invisible because nothing visibly changes. Anthropic's own
+  // API answers these shapes 400.
+  test('a recognized "type" with an unreadable payload throws, rather than silently running optional', () => {
+    for (const toolChoice of [
+      { type: "tool" },
+      { type: "tool", name: 7 },
+      { type: "tool", name: null },
+    ]) {
+      expect(() =>
+        readSdkRequest(
+          body({ messages: [{ role: "user", content: "ping" }], tool_choice: toolChoice }),
+        ),
+      ).toThrow(
+        'tool_choice\'s type "tool" is recognized but its payload is one this router cannot read',
+      )
+    }
+  })
+})
+
 describe("a body that cannot be read", () => {
   test("null, empty, unparseable, and non-object bodies all read as an empty request", () => {
-    const empty = { messages: [], system: null, tools: [], stream: false }
+    const empty = { messages: [], system: null, tools: [], stream: false, toolChoice: null }
 
     expect(readSdkRequest(null)).toEqual(empty)
     expect(readSdkRequest(new Uint8Array())).toEqual(empty)

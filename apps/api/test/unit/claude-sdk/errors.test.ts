@@ -1,5 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import { classifySdkFailure, readSdkFailure, STDERR_TAIL_LIMIT } from "../../../src/providers"
+import { failoverKind } from "../../../src/services/dataplane/attempt"
+import { HEALTHY, recordFailure } from "../../../src/services/routing"
 
 /**
  * SDK failures arrive as prose, so these tests pin the substring table itself
@@ -183,6 +185,57 @@ describe("classifying an Agent-SDK failure", () => {
     expect(classifySdkFailure(new Error("request req_11401 failed")).classification.kind).toBe(
       "unknown",
     )
+  })
+
+  // The router-authored rules. An unclassed version of any of these throws was a `502` that blamed
+  // the SDK and — through the breaker's default arm — punished a healthy account for the client's
+  // own request shape, which is the exact confusion these rows exist to prevent.
+  test("a tool_choice the request's own tools cannot satisfy is the client's 400, never the account's", () => {
+    for (const message of [
+      'tool_choice forced the tool "ghost", which is not among the declared tools',
+      'tool_choice is "any", which requires a tool call, but the request declared no tools',
+    ]) {
+      const { classification } = classifySdkFailure(new Error(message))
+      const kind = failoverKind(classification.kind, classification.status)
+
+      expect(classification.kind).toBe("invalid-request")
+      expect(classification.status).toBe(400)
+      // A bad request is bad at every account: nothing to retry, and the `client-error` kind the
+      // breaker exempts — "it says nothing about this one's health".
+      expect(classification.retryable).toBe(false)
+      expect(classification.signal).toBe("claude-sdk:tool-choice-unsatisfiable")
+      expect(kind).toBe("client-error")
+      expect(recordFailure(HEALTHY, { kind, message }, new Date(0)).consecutiveFailures).toBe(0)
+    }
+  })
+
+  // The same `400`, for the near miss `request.ts` throws: a recognized variant with an unreadable
+  // payload is a client that misspelt a force, not an account that failed.
+  test("a tool_choice shape this router cannot read is the same client 400, not an unknown 502", () => {
+    const message =
+      'tool_choice\'s type "tool" is recognized but its payload is one this router cannot read'
+    const { classification } = classifySdkFailure(new Error(message))
+
+    expect(classification.kind).toBe("invalid-request")
+    expect(classification.status).toBe(400)
+    expect(classification.retryable).toBe(false)
+    expect(classification.signal).toBe("claude-sdk:tool-choice-unsatisfiable")
+    expect(failoverKind(classification.kind, classification.status)).toBe("client-error")
+  })
+
+  test("a forced call the drained turn never made is a server failure that fails over", () => {
+    const message = "tool_choice forced a tool call, but the turn completed without one"
+    const { classification, clientMessage } = classifySdkFailure(new Error(message))
+
+    expect(classification.kind).toBe("server-error")
+    expect(classification.status).toBe(502)
+    // The turn ran and did not comply — an upstream failure, so the next account gets its chance.
+    expect(classification.retryable).toBe(true)
+    expect(classification.signal).toBe("claude-sdk:forced-tool-unmet")
+    expect(failoverKind(classification.kind, classification.status)).toBe("server-error")
+    // Router-authored, per the module rule: the throw's own sentence stays in the log field.
+    expect(clientMessage).not.toContain("the turn completed without one")
+    expect(classification.message).toBe(message)
   })
 
   test("an unrecognized failure is named unknown rather than guessed at", () => {
