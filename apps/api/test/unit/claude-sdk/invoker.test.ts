@@ -1,12 +1,15 @@
 import { describe, expect, test } from "bun:test"
-import type { Options } from "@anthropic-ai/claude-agent-sdk"
+import type { Options, PreToolUseHookInput } from "@anthropic-ai/claude-agent-sdk"
 import {
   type CliResolution,
+  classifySdkFailure,
   createSdkConcurrency,
   createSdkInvoker,
   type SdkQueryFn,
   type SdkSessionReport,
 } from "../../../src/providers"
+import { qualifyToolName } from "../../../src/providers/claude-sdk/tools/names"
+import { failoverKind } from "../../../src/services/dataplane/attempt"
 import { sdkQueryStream, sdkTurn, wireEvent } from "./fixtures"
 
 /**
@@ -683,5 +686,128 @@ describe("what a failure carries to the classifier", () => {
     const { invoke } = invoker(spy)
     const failure = await invoke(invocation()).catch((error: unknown) => error)
     expect(Reflect.get(failure as object, "stderr")).toBe("sdk-collected")
+  })
+})
+
+describe("a forced tool_choice the turn did not honour", () => {
+  /** One `any`-forced body: tools declared, a call required, nothing else decided yet. */
+  function forced(extra: Record<string, unknown> = {}): Uint8Array {
+    return body({
+      messages: [{ role: "user", content: "weather?" }],
+      tools: [{ name: "get_weather", description: "d", input_schema: { type: "object" } }],
+      tool_choice: { type: "any" },
+      ...extra,
+    })
+  }
+
+  test("non-streaming with no captured call refuses, as a classified failure the chain can fail over on", async () => {
+    const reports: SdkSessionReport[] = []
+    const spy = spyQuery()
+    const concurrency = createSdkConcurrency({ global: 4, perAccount: 2 })
+    const { invoke } = invoker(spy, concurrency)
+
+    const failure = await invoke(
+      invocation({ body: forced(), onSession: (report: SdkSessionReport) => reports.push(report) }),
+    ).catch((error: unknown) => error)
+
+    expect(failure).toBeInstanceOf(Error)
+    const { classification } = classifySdkFailure(failure)
+    expect(classification.kind).toBe("server-error")
+    expect(classification.status).toBe(502)
+    expect(classification.retryable).toBe(true)
+    expect(classification.signal).toBe("claude-sdk:forced-tool-unmet")
+
+    // The refusal lands after the drain, so the once-guarded ends fire once each — not twice, and
+    // not never: the session is reported and both permits are back.
+    expect(reports).toEqual([{ sdkSessionId: "sess_1" }])
+    expect(concurrency.inFlight).toBe(0)
+    expect(concurrency.inFlightFor("sub-1")).toBe(0)
+  })
+
+  test("non-streaming with a captured call returns the turn normally", async () => {
+    // The hook is the only surface that observes a call, so the fake SDK must fire it — the capture
+    // lands before the deny-hold, which an already-aborted signal releases at once.
+    const options: Options[] = []
+    const prompts: unknown[] = []
+    const spy: Spy = {
+      options,
+      prompts,
+      query: ({ prompt, options: launched }) => {
+        options.push(launched)
+        const hook = launched.hooks?.PreToolUse?.[0]?.hooks[0]
+        const call: PreToolUseHookInput = {
+          hook_event_name: "PreToolUse",
+          session_id: "sess_1",
+          transcript_path: "/dev/null",
+          cwd: "/data",
+          tool_name: qualifyToolName("get_weather"),
+          tool_input: { cityName: "Berlin" },
+          tool_use_id: "toolu_1",
+        }
+        return {
+          async *[Symbol.asyncIterator]() {
+            for await (const message of prompt) prompts.push(message)
+            hook?.(call, "toolu_1", { signal: AbortSignal.abort() })
+            yield* sdkQueryStream({ turns: [ONE_TURN] })
+          },
+        }
+      },
+    }
+
+    const { invoke } = invoker(spy)
+    const response = await invoke(invocation({ body: forced() }))
+
+    expect(response.status).toBe(200)
+    const answered = (await response.json()) as Record<string, unknown>
+    expect(answered.content).toEqual([{ type: "text", text: "pong" }])
+  })
+
+  test("a streaming turn is returned, not refused — the refusal is not attempted there (v1 scope)", async () => {
+    const spy = spyQuery()
+    const { invoke } = invoker(spy)
+
+    const response = await invoke(invocation({ body: forced({ stream: true }) }))
+
+    // Pins the documented gap so it cannot silently deepen: bytes already flowed, so the turn that
+    // forced a call and made none still answers 200, end to end.
+    expect(response.status).toBe(200)
+    expect(response.headers.get("content-type")).toContain("text/event-stream")
+    const sse = await response.text()
+    expect(sse.indexOf("event: message_start")).toBe(0)
+    expect(sse.trimEnd().endsWith(JSON.stringify({ type: "message_stop" }))).toBe(true)
+  })
+
+  test('"none" never refuses — there is no passthrough to read captures from', async () => {
+    const spy = spyQuery()
+    const { invoke } = invoker(spy)
+
+    const response = await invoke(invocation({ body: forced({ tool_choice: { type: "none" } }) }))
+
+    expect(response.status).toBe(200)
+    const answered = (await response.json()) as Record<string, unknown>
+    expect(answered.content).toEqual([{ type: "text", text: "pong" }])
+    expect(spy.options[0]?.mcpServers).toBeUndefined()
+  })
+
+  test("an undeclared forced tool name is the client's 400, and nothing is spawned", async () => {
+    const spy = spyQuery()
+    const concurrency = createSdkConcurrency({ global: 4, perAccount: 2 })
+    const { invoke } = invoker(spy, concurrency)
+
+    const failure = await invoke(
+      invocation({ body: forced({ tool_choice: { type: "tool", name: "ghost" } }) }),
+    ).catch((error: unknown) => error)
+
+    expect(failure).toBeInstanceOf(Error)
+    const { classification } = classifySdkFailure(failure)
+    expect(classification.kind).toBe("invalid-request")
+    expect(classification.status).toBe(400)
+    expect(classification.retryable).toBe(false)
+    expect(classification.signal).toBe("claude-sdk:tool-choice-unsatisfiable")
+    // The AttemptFailure kind the breaker sees: exempt, not a strike against the account.
+    expect(failoverKind(classification.kind, classification.status)).toBe("client-error")
+
+    expect(spy.options).toHaveLength(0)
+    expect(concurrency.inFlight).toBe(0)
   })
 })

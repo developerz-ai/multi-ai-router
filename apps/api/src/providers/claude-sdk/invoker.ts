@@ -122,6 +122,7 @@ export function createSdkInvoker(deps: SdkInvokerDeps): SdkInvoker {
       let launch: QueryLaunch | null = null
       const passthrough: Passthrough | null = createPassthrough({
         tools: request.tools,
+        toolChoice: request.toolChoice,
         abort: () => launch?.abort(),
       })
 
@@ -149,7 +150,7 @@ export function createSdkInvoker(deps: SdkInvokerDeps): SdkInvoker {
         const messages = runQuery({ prompt: singleTurn(prompt), options: started.options })
         const filtered = passthrough === null ? messages : passthrough.filter(messages)
 
-        return await renderSdkResponse({
+        const response = await renderSdkResponse({
           messages: untilExhausted(filtered, done),
           model: invocation.model,
           stream: request.stream,
@@ -165,6 +166,27 @@ export function createSdkInvoker(deps: SdkInvokerDeps): SdkInvoker {
               : { onForcedBlockClose: invocation.onForcedBlockClose }),
           },
         })
+
+        // A non-streaming turn is fully drained before `renderSdkResponse` returns (§6: "no byte is
+        // on the wire until the whole object is"), so `passthrough.captures` is settled here and a
+        // throw is still a real status, not a body already on the wire. A forced `tool_choice` that
+        // produced no captured call is the silent downgrade the acceptance criteria refuses: refuse
+        // loudly instead of answering with the plain-text turn. The refusal is not attempted on a
+        // streaming turn — a chosen v1 scope decision, not a technical impossibility
+        // (docs/idea/11-anthropic-agent-sdk.md §7 item 9): a terminal SSE error frame after
+        // `message_stop` would be implementable, but this issue does not build it.
+        if (
+          !request.stream &&
+          passthrough !== null &&
+          passthrough.required &&
+          passthrough.captures.length === 0
+        ) {
+          // The sentence's tail is load-bearing: `errors.ts` matches it to classify this refusal as
+          // `server-error` — retryable on another account, never the client's fault.
+          throw new Error("tool_choice forced a tool call, but the turn completed without one")
+        }
+
+        return response
       } catch (error) {
         // The renderer only throws before a byte is on the wire, so this is still allowed to be a
         // real status — and a retry is still legal. The subprocess is terminated because nothing is

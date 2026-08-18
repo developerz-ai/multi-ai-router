@@ -93,6 +93,44 @@ function statusToken(status: number): (text: Haystack) => boolean {
  */
 const RULES: readonly SdkRule[] = [
   {
+    /**
+     * The two rules that are **not** CLI prose: both sentences are this router's own throws
+     * (`tools/register.ts` refuses a `tool_choice` the request's own tools cannot satisfy;
+     * `invoker.ts` refuses a forced call the drained turn never produced). Provenance is therefore
+     * our source rather than the binary's, and the blast radius is a reworded throw site: its class
+     * degrades to `unknown` — a `502` and a failover — which is the same honest fallback every CLI
+     * phrase already risks. They sit first because a sentence we wrote ourselves is the most
+     * specific signal the table can carry.
+     *
+     * `invalid-request`, because a forced choice with nothing to force is a client request-shape
+     * bug — Anthropic's own API answers it `400` — so it must not fail over (a bad request is bad
+     * at every account) and must not count against the breaker: `failoverKind` maps it to
+     * `client-error`, the kind `breaker.ts` exempts for exactly this reason.
+     */
+    kind: "invalid-request",
+    signal: "claude-sdk:tool-choice-unsatisfiable",
+    status: 400,
+    clientMessage:
+      "the request's tool_choice demands a tool call its own declared tools do not provide",
+    match: phrase(
+      "which is not among the declared tools",
+      "which requires a tool call, but the request declared no tools",
+    ),
+  },
+  {
+    /**
+     * The turn *ran* and answered free-form text where a tool call was forced: an upstream that did
+     * not comply, not a client that misspoke — `server-error`, the documented home of "this account
+     * could not serve this request" (`providers/types.ts`). Retryable on purpose: the next account's
+     * model may honour the force, and the failover chain is where that bet belongs.
+     */
+    kind: "server-error",
+    signal: "claude-sdk:forced-tool-unmet",
+    status: 502,
+    clientMessage: "the turn ended without the tool call the request's tool_choice forced",
+    match: phrase("but the turn completed without one"),
+  },
+  {
     kind: "stale-session",
     signal: "claude-sdk:session-not-found",
     status: 502,

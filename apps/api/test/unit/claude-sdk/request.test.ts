@@ -87,9 +87,65 @@ describe("what a launch reads out of an Anthropic Messages body", () => {
   })
 })
 
+describe("tool_choice, the one Anthropic field this layer used to drop on the floor", () => {
+  test('absent is null, read the same as "auto" downstream', () => {
+    expect(readSdkRequest(body({ messages: [] })).toolChoice).toBeNull()
+  })
+
+  test("each shape the translator can emit round-trips verbatim", () => {
+    expect(readSdkRequest(body({ tool_choice: { type: "auto" } })).toolChoice).toEqual({
+      type: "auto",
+    })
+    expect(readSdkRequest(body({ tool_choice: { type: "any" } })).toolChoice).toEqual({
+      type: "any",
+    })
+    expect(readSdkRequest(body({ tool_choice: { type: "none" } })).toolChoice).toEqual({
+      type: "none",
+    })
+    expect(
+      readSdkRequest(body({ tool_choice: { type: "tool", name: "get_weather" } })).toolChoice,
+    ).toEqual({ type: "tool", name: "get_weather" })
+  })
+
+  // The two tests below assert the whole request SURVIVES, not just that `toolChoice` is null: an
+  // earlier draft failed the object parse on a bad `tool_choice`, which read as null here too —
+  // because the entire request had been wiped to `EMPTY`. The conversation must outlive one field.
+  test("an unrecognized shape is absence of the field, not a failed turn", () => {
+    const request = readSdkRequest(
+      body({
+        messages: [{ role: "user", content: "ping" }],
+        system: "be terse",
+        tools: [{ name: "get_weather", description: "d", input_schema: { type: "object" } }],
+        tool_choice: { type: "bogus" },
+      }),
+    )
+
+    expect(request.toolChoice).toBeNull()
+    expect(request.messages).toEqual([{ role: "user", content: "ping" }])
+    expect(request.system).toBe("be terse")
+    expect(request.tools.map((tool) => tool.name)).toEqual(["get_weather"])
+  })
+
+  test("an explicit null is absence of the field, not a failed turn", () => {
+    const request = readSdkRequest(
+      body({
+        messages: [{ role: "user", content: "ping" }],
+        system: "be terse",
+        tools: [{ name: "get_weather", description: "d", input_schema: { type: "object" } }],
+        tool_choice: null,
+      }),
+    )
+
+    expect(request.toolChoice).toBeNull()
+    expect(request.messages).toEqual([{ role: "user", content: "ping" }])
+    expect(request.system).toBe("be terse")
+    expect(request.tools.map((tool) => tool.name)).toEqual(["get_weather"])
+  })
+})
+
 describe("a body that cannot be read", () => {
   test("null, empty, unparseable, and non-object bodies all read as an empty request", () => {
-    const empty = { messages: [], system: null, tools: [], stream: false }
+    const empty = { messages: [], system: null, tools: [], stream: false, toolChoice: null }
 
     expect(readSdkRequest(null)).toEqual(empty)
     expect(readSdkRequest(new Uint8Array())).toEqual(empty)

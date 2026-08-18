@@ -4,6 +4,7 @@ import type {
   McpSdkServerConfigWithInstance,
 } from "@anthropic-ai/claude-agent-sdk"
 import { z } from "zod"
+import type { ParsedAnthropicToolChoice } from "../../../services/translate/shared/anthropic"
 import { isPermittedTool } from "../allowlist"
 import { type CapturedToolCall, createEarlyStop, type ToolIntegrity } from "./early-stop"
 import { PASSTHROUGH_SERVER_NAME } from "./names"
@@ -72,21 +73,70 @@ export interface Passthrough {
   readonly registered: readonly string[]
   readonly captures: readonly CapturedToolCall[]
   integrity(): ToolIntegrity
+  /**
+   * Whether this turn's `tool_choice` (`"tool"` or `"any"`) requires at least one captured call.
+   * `false` for `"auto"`/absence, where the model calling nothing is an ordinary chat answer. The
+   * invoker reads this against `captures` after a non-streaming turn drains, to refuse a turn that
+   * silently downgraded a forced call to an optional one rather than return it as plain text
+   * (docs/idea/11-anthropic-agent-sdk.md §7 item 9).
+   */
+  readonly required: boolean
 }
 
 export interface PassthroughInput {
   readonly tools: readonly DeclaredTool[]
   /** Terminates the subprocess, for an early stop. */
   readonly abort?: () => void
+  /**
+   * The client's `tool_choice`. Absent or `"auto"` registers every declared tool, unchanged. `"none"`
+   * returns `null` — the same "no passthrough at all" a client with no tools gets, which is the one
+   * hard guarantee the SDK's own options offer against calling a tool. `"tool"` narrows registration
+   * to the named tool only, so the model has nothing else to call; naming a tool the client never
+   * declared is a client bug and throws rather than silently falling back to `"auto"`. `"any"`
+   * registers everything, same as `"auto"` — the difference is `required` below, which the caller
+   * enforces after the turn. Both throws classify as a client `400` (`errors.ts`
+   * `claude-sdk:tool-choice-unsatisfiable`), and `"any"` with no declared tools throws the same
+   * way: there is nothing to require a call from.
+   */
+  readonly toolChoice?: ParsedAnthropicToolChoice | null
 }
 
 /**
- * @returns null when the client declared no tools — the signal to launch without passthrough at all.
+ * @returns null when the client declared no tools, or `tool_choice` was `"none"` — both mean launch
+ * without passthrough at all.
+ * @throws when `tool_choice` demands a call the request's own tools cannot satisfy — a name that was
+ * never declared, or `"any"` with no tools declared at all. A request that cannot be satisfied, not
+ * one to silently downgrade to `"auto"`.
  */
 export function createPassthrough(input: PassthroughInput): Passthrough | null {
-  const ordered = orderForRegistration(input.tools)
-  if (ordered.length === 0) return null
+  const choice = input.toolChoice ?? { type: "auto" as const }
+  if (choice.type === "none") return null
 
+  let ordered = orderForRegistration(input.tools)
+  if (choice.type === "tool") {
+    const forced = ordered.filter((tool) => tool.name === choice.name)
+    if (forced.length === 0) {
+      // The sentence's tail is load-bearing: `errors.ts` matches it to classify this refusal as
+      // `invalid-request` (a client `400`), never as an account failure.
+      throw new Error(
+        `tool_choice forced the tool "${choice.name}", which is not among the declared tools`,
+      )
+    }
+    ordered = forced
+  }
+  if (ordered.length === 0) {
+    // `"any"` with nothing declared has nothing to require a call from — Anthropic's own API rejects
+    // this shape, and returning null would silently downgrade the turn to a plain chat, the exact
+    // downgrade this module exists to prevent. (`"tool"` cannot reach here: it threw above.)
+    if (choice.type === "any") {
+      throw new Error(
+        'tool_choice is "any", which requires a tool call, but the request declared no tools',
+      )
+    }
+    return null
+  }
+
+  const required = choice.type === "tool" || choice.type === "any"
   const deferrable = ordered.length > DEFER_LOADING_THRESHOLD && isPermittedTool(TOOL_SEARCH)
   const schemas = new Map<string, ToolSchema>()
   const definitions = ordered.map((declared, position) => {
@@ -112,6 +162,7 @@ export function createPassthrough(input: PassthroughInput): Passthrough | null {
     registered: ordered.map((declared) => declared.name),
     captures: earlyStop.captures,
     integrity: () => earlyStop.integrity(),
+    required,
   }
 }
 

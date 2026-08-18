@@ -1,4 +1,8 @@
 import { z } from "zod"
+import {
+  anthropicToolChoiceSchema,
+  type ParsedAnthropicToolChoice,
+} from "../../services/translate/shared/anthropic"
 import { type DeclaredTool, readToolList } from "./tools"
 
 /**
@@ -37,6 +41,10 @@ const requestSchema = z.looseObject({
   system: systemSchema.nullish(),
   tools: z.unknown().optional(),
   stream: z.boolean().nullish(),
+  // Unknown on purpose, like `tools` above: the shape decision is `readToolChoice`'s alone, so a
+  // `tool_choice` this build does not recognize costs the *field* — never, via a failed object
+  // parse, the whole request (messages, system, and tools with it).
+  tool_choice: z.unknown().optional(),
 })
 
 export type SdkRequestRole = "user" | "assistant"
@@ -62,9 +70,24 @@ export interface SdkRequest {
   readonly tools: readonly DeclaredTool[]
   /** Whether the client asked for SSE. Decides the response shape, never how the SDK is read. */
   readonly stream: boolean
+  /**
+   * The client's `tool_choice`, or null for a client that sent none — or sent one this build cannot
+   * read, which is the same thing here — and absence is `"auto"` in every way that matters (the SDK
+   * has no forcing knob of its own; `auto` and absence both mean "register everything, let the model
+   * choose"). `"none"`, `"any"`, and `"tool"` each change what `createPassthrough` registers and,
+   * for a non-streaming turn, whether the invoker refuses a turn that never produced the forced call
+   * (`tools/register.ts`, docs/idea/11-anthropic-agent-sdk.md §7 item 9).
+   */
+  readonly toolChoice: ParsedAnthropicToolChoice | null
 }
 
-const EMPTY: SdkRequest = { messages: [], system: null, tools: [], stream: false }
+const EMPTY: SdkRequest = {
+  messages: [],
+  system: null,
+  tools: [],
+  stream: false,
+  toolChoice: null,
+}
 
 export function readSdkRequest(body: Uint8Array | null): SdkRequest {
   if (body === null || body.length === 0) return EMPTY
@@ -84,7 +107,20 @@ export function readSdkRequest(body: Uint8Array | null): SdkRequest {
     system: readSystem(result.data.system),
     tools: readToolList(result.data.tools),
     stream: result.data.stream === true,
+    toolChoice: readToolChoice(result.data.tool_choice),
   }
+}
+
+/**
+ * The client's `tool_choice`, read as loosely as the rest of the body: anything this build cannot
+ * parse — an unrecognized variant, or an explicit `null`, which is a common wire spelling of "no
+ * preference" — is the *field's* absence, never the request's. The same rule `readToolList` applies
+ * to `tools`, for the reason the module header gives: a choice shape this build has never seen must
+ * still run as an `"auto"`-shaped turn rather than fail the whole conversation.
+ */
+function readToolChoice(value: unknown): ParsedAnthropicToolChoice | null {
+  const result = anthropicToolChoiceSchema.safeParse(value)
+  return result.success ? result.data : null
 }
 
 function readMessage(message: z.infer<typeof messageSchema>): SdkRequestMessage {
