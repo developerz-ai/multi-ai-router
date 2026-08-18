@@ -854,17 +854,27 @@ mechanism, not the model.
    Claude Code, OpenCode, Codex, Cline, and Cursor, or does the first integration force a per-client record?
 9. **Tool-loop fidelity.** *Partly answered (developerz-ai/multi-ai-router#85):* `tool_choice` is
    now honoured on the subscription path. `"none"` launches with no passthrough at all — the same
-   hard guarantee a client with no tools gets. `"tool"` narrows registration to the named tool only
-   (`tools/register.ts`), throwing if the client never declared it, so the model has nothing else
-   to call. `"any"` and `"tool"` both mark the turn `required`; for a **non-streaming** turn, the
-   invoker refuses (rather than silently returning free-form text) if the drained turn produced no
-   captured call — a non-streaming turn is fully drained before a byte is on the wire, so a throw
-   there is still a real status (`request.ts`, `tools/register.ts`, `invoker.ts`).
+   hard guarantee a client with no tools gets — which **diverges from Anthropic's own semantics**:
+   the API keeps the tool catalog visible-but-uncallable, while this path withholds it entirely,
+   because registering the tools and denying the calls would forward captures to a client that
+   forbade them; withholding is the only hard enforcement this SDK's paradigm offers. `"tool"`
+   narrows registration to the named tool only (`tools/register.ts`), throwing if the client never
+   declared it, so the model has nothing else to call. A recognized variant carrying a payload the
+   schema refuses (`{"type":"tool"}` with no `name`) is the client's `400`, never a silent
+   `"auto"` — Anthropic's own API rejects the shape; a genuinely foreign shape still costs only the
+   field (`request.ts`). `"any"` and `"tool"` both mark the turn `required`; for a
+   **non-streaming** turn, the invoker refuses (rather than silently returning free-form text) if
+   the drained turn produced no captured call — and only if the turn actually completed: one that
+   ended in an upstream `error` frame is that error, never a mislabelled refusal. A non-streaming
+   turn is fully drained before a byte is on the wire, so a throw there is still a real status
+   (`request.ts`, `tools/register.ts`, `invoker.ts`).
    Still open, and named rather than silently dropped: the refusal is **not attempted on a streaming
    turn** — a chosen v1 scope decision, not a technical impossibility (a terminal SSE error frame
    after `message_stop` would be implementable; this issue does not build it) — so a forced call a
-   streaming turn never produces goes undetected. Parallel tool calls and interleaved thinking
-   remain undocumented gaps, unchanged by this issue.
+   streaming turn never produces goes undetected. `disable_parallel_tool_use` on an
+   otherwise-valid choice is silently stripped by the strict parse (`request.ts`): the force
+   survives, only the parallel hint is dropped, and the SDK could not enforce the hint anyway.
+   Parallel tool calls and interleaved thinking remain undocumented gaps, unchanged by this issue.
 10. **Cost attribution.** The SDK `result` message is authoritative, but a stream closed early never
     delivers it to the client. Do we bill from `result` regardless, and how do we reconcile that in the UI?
 11. **Multi-arch.** Does the `claude` CLI ship a working `linux/arm64` (and musl-arm64) binary for

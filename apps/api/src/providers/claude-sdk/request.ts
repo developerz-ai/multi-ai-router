@@ -72,11 +72,13 @@ export interface SdkRequest {
   readonly stream: boolean
   /**
    * The client's `tool_choice`, or null for a client that sent none — or sent one this build cannot
-   * read, which is the same thing here — and absence is `"auto"` in every way that matters (the SDK
-   * has no forcing knob of its own; `auto` and absence both mean "register everything, let the model
-   * choose"). `"none"`, `"any"`, and `"tool"` each change what `createPassthrough` registers and,
-   * for a non-streaming turn, whether the invoker refuses a turn that never produced the forced call
-   * (`tools/register.ts`, docs/idea/11-anthropic-agent-sdk.md §7 item 9).
+   * recognize, which is the same thing here — and absence is `"auto"` in every way that matters
+   * (the SDK has no forcing knob of its own; `auto` and absence both mean "register everything, let
+   * the model choose"). `"none"`, `"any"`, and `"tool"` each change what `createPassthrough`
+   * registers and, for a non-streaming turn, whether the invoker refuses a turn that never produced
+   * the forced call (`tools/register.ts`, docs/idea/11-anthropic-agent-sdk.md §7 item 9). The one
+   * unrecognized shape that is *not* null is the near miss — a recognized `type` whose payload the
+   * schema refuses — which `readToolChoice` throws on rather than degrade.
    */
   readonly toolChoice: ParsedAnthropicToolChoice | null
 }
@@ -111,16 +113,48 @@ export function readSdkRequest(body: Uint8Array | null): SdkRequest {
   }
 }
 
+/** The variants `anthropicToolChoiceSchema` discriminates on — the near-miss test's vocabulary. */
+const KNOWN_TOOL_CHOICE_TYPES: ReadonlySet<string> = new Set(["auto", "any", "none", "tool"])
+
 /**
- * The client's `tool_choice`, read as loosely as the rest of the body: anything this build cannot
- * parse — an unrecognized variant, or an explicit `null`, which is a common wire spelling of "no
+ * The client's `tool_choice`, read as loosely as the rest of the body: a shape this build has
+ * never seen — a foreign variant, or an explicit `null`, which is a common wire spelling of "no
  * preference" — is the *field's* absence, never the request's. The same rule `readToolList` applies
  * to `tools`, for the reason the module header gives: a choice shape this build has never seen must
  * still run as an `"auto"`-shaped turn rather than fail the whole conversation.
+ *
+ * The near miss is the one exception. A `type` this vocabulary recognizes carrying a payload the
+ * schema refuses — `{"type":"tool"}` without its `name`, a `name` that is not a string — is a
+ * client that *tried* to force a call and got the shape wrong, and Anthropic's own API answers it
+ * `400`. Degrading that to `"auto"` would be the silent downgrade this issue exists to kill in its
+ * most invisible form: nothing visibly changes, the turn just runs optional. So it throws the same
+ * client-`400` family `tools/register.ts` already throws (`errors.ts`
+ * `claude-sdk:tool-choice-unsatisfiable`).
  */
 function readToolChoice(value: unknown): ParsedAnthropicToolChoice | null {
   const result = anthropicToolChoiceSchema.safeParse(value)
-  return result.success ? result.data : null
+  if (result.success) return result.data
+
+  const type = recognizedToolChoiceType(value)
+  if (type === null) return null
+
+  // The sentence's tail is load-bearing: `errors.ts` matches it to classify this refusal as
+  // `invalid-request` (a client `400`), never as an account failure. The type literal is echoed
+  // rather than the payload — it is one of four known words, and a failed payload is
+  // client-supplied bytes of unbounded shape.
+  throw new Error(
+    `tool_choice's type "${type}" is recognized but its payload is one this router cannot read`,
+  )
+}
+
+/**
+ * The failed parse's `type`, when it is a variant this vocabulary knows — the one signal that
+ * separates a misspelt known shape (a near miss) from a shape this build never knew (foreign).
+ */
+function recognizedToolChoiceType(value: unknown): string | null {
+  if (typeof value !== "object" || value === null) return null
+  const type: unknown = Reflect.get(value, "type")
+  return typeof type === "string" && KNOWN_TOOL_CHOICE_TYPES.has(type) ? type : null
 }
 
 function readMessage(message: z.infer<typeof messageSchema>): SdkRequestMessage {

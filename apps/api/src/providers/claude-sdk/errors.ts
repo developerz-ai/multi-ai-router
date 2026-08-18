@@ -94,18 +94,14 @@ function statusToken(status: number): (text: Haystack) => boolean {
 const RULES: readonly SdkRule[] = [
   {
     /**
-     * The two rules that are **not** CLI prose: both sentences are this router's own throws
-     * (`tools/register.ts` refuses a `tool_choice` the request's own tools cannot satisfy;
-     * `invoker.ts` refuses a forced call the drained turn never produced). Provenance is therefore
-     * our source rather than the binary's, and the blast radius is a reworded throw site: its class
-     * degrades to `unknown` — a `502` and a failover — which is the same honest fallback every CLI
-     * phrase already risks. They sit first because a sentence we wrote ourselves is the most
-     * specific signal the table can carry.
-     *
-     * `invalid-request`, because a forced choice with nothing to force is a client request-shape
-     * bug — Anthropic's own API answers it `400` — so it must not fail over (a bad request is bad
-     * at every account) and must not count against the breaker: `failoverKind` maps it to
-     * `client-error`, the kind `breaker.ts` exempts for exactly this reason.
+     * The rules that are **not** CLI prose: every sentence here is one of this router's own throws
+     * (`request.ts` refuses a recognized `tool_choice` variant with an unreadable payload;
+     * `tools/register.ts` refuses a choice the request's own tools cannot satisfy; `invoker.ts`
+     * refuses a forced call the drained turn never produced). Provenance is our source rather than
+     * the binary's; a reworded throw site degrades to `unknown` — a `502` and a failover, the same
+     * honest fallback every CLI phrase risks. `invalid-request`, because all three are client
+     * request-shape bugs Anthropic's own API answers `400`: no failover, no breaker strike —
+     * `failoverKind` maps the kind to `client-error`, which `breaker.ts` exempts for exactly this.
      */
     kind: "invalid-request",
     signal: "claude-sdk:tool-choice-unsatisfiable",
@@ -115,13 +111,13 @@ const RULES: readonly SdkRule[] = [
     match: phrase(
       "which is not among the declared tools",
       "which requires a tool call, but the request declared no tools",
+      "is recognized but its payload is one this router cannot read",
     ),
   },
   {
     /**
      * The turn *ran* and answered free-form text where a tool call was forced: an upstream that did
-     * not comply, not a client that misspoke — `server-error`, the documented home of "this account
-     * could not serve this request" (`providers/types.ts`). Retryable on purpose: the next account's
+     * not comply, not a client that misspoke — `server-error`, retryable because the next account's
      * model may honour the force, and the failover chain is where that bet belongs.
      */
     kind: "server-error",

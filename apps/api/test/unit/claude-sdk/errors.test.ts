@@ -187,7 +187,7 @@ describe("classifying an Agent-SDK failure", () => {
     )
   })
 
-  // The two router-authored rules. An unclassed version of either throw was a `502` that blamed
+  // The router-authored rules. An unclassed version of any of these throws was a `502` that blamed
   // the SDK and — through the breaker's default arm — punished a healthy account for the client's
   // own request shape, which is the exact confusion these rows exist to prevent.
   test("a tool_choice the request's own tools cannot satisfy is the client's 400, never the account's", () => {
@@ -207,6 +207,20 @@ describe("classifying an Agent-SDK failure", () => {
       expect(kind).toBe("client-error")
       expect(recordFailure(HEALTHY, { kind, message }, new Date(0)).consecutiveFailures).toBe(0)
     }
+  })
+
+  // The same `400`, for the near miss `request.ts` throws: a recognized variant with an unreadable
+  // payload is a client that misspelt a force, not an account that failed.
+  test("a tool_choice shape this router cannot read is the same client 400, not an unknown 502", () => {
+    const message =
+      'tool_choice\'s type "tool" is recognized but its payload is one this router cannot read'
+    const { classification } = classifySdkFailure(new Error(message))
+
+    expect(classification.kind).toBe("invalid-request")
+    expect(classification.status).toBe(400)
+    expect(classification.retryable).toBe(false)
+    expect(classification.signal).toBe("claude-sdk:tool-choice-unsatisfiable")
+    expect(failoverKind(classification.kind, classification.status)).toBe("client-error")
   })
 
   test("a forced call the drained turn never made is a server failure that fails over", () => {

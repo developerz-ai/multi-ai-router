@@ -777,6 +777,25 @@ describe("a forced tool_choice the turn did not honour", () => {
     expect(sse.trimEnd().endsWith(JSON.stringify({ type: "message_stop" }))).toBe(true)
   })
 
+  test("a turn that ended in an upstream error frame is that error, never a forced-tool refusal", async () => {
+    const spy = spyQuery(() =>
+      sdkQueryStream({
+        turns: [[wireEvent({ type: "error", error: { type: "api_error", message: "boom" } })]],
+      }),
+    )
+    const { invoke } = invoker(spy)
+
+    const response = await invoke(invocation({ body: forced() }))
+
+    // The renderer answers an errored non-streaming turn with the error's own body under a 502
+    // rather than throwing, so the drained turn has zero captures here too — and the refusal must
+    // not fire on it. Before the status guard this threw the forced-tool-unmet sentence, misnaming
+    // an upstream failure (a rate limit, a crash) as a compliance one.
+    expect(response.status).toBe(502)
+    const answered = (await response.json()) as Record<string, unknown>
+    expect(answered).toEqual({ type: "error", error: { type: "api_error", message: "boom" } })
+  })
+
   test('"none" never refuses — there is no passthrough to read captures from', async () => {
     const spy = spyQuery()
     const { invoke } = invoker(spy)
@@ -807,6 +826,32 @@ describe("a forced tool_choice the turn did not honour", () => {
     // The AttemptFailure kind the breaker sees: exempt, not a strike against the account.
     expect(failoverKind(classification.kind, classification.status)).toBe("client-error")
 
+    expect(spy.options).toHaveLength(0)
+    expect(concurrency.inFlight).toBe(0)
+  })
+
+  test("a recognized type with an unreadable payload is the client's 400, and nothing is spawned", async () => {
+    const spy = spyQuery()
+    const concurrency = createSdkConcurrency({ global: 4, perAccount: 2 })
+    const { invoke } = invoker(spy, concurrency)
+
+    // The near miss: `{type:"tool"}` names a variant this vocabulary knows but omits the `name`
+    // that variant requires — a client that tried to force a call and got the shape wrong. Before
+    // the fix this parsed to null and ran as an ordinary optional turn, the silent downgrade in its
+    // most invisible form.
+    const failure = await invoke(
+      invocation({ body: forced({ tool_choice: { type: "tool" } }) }),
+    ).catch((error: unknown) => error)
+
+    expect(failure).toBeInstanceOf(Error)
+    const { classification } = classifySdkFailure(failure)
+    expect(classification.kind).toBe("invalid-request")
+    expect(classification.status).toBe(400)
+    expect(classification.retryable).toBe(false)
+    expect(classification.signal).toBe("claude-sdk:tool-choice-unsatisfiable")
+    expect(failoverKind(classification.kind, classification.status)).toBe("client-error")
+
+    // The throw is out of `readSdkRequest`, before a slot is taken or a subprocess exists.
     expect(spy.options).toHaveLength(0)
     expect(concurrency.inFlight).toBe(0)
   })

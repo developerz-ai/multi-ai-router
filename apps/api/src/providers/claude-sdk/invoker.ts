@@ -171,14 +171,17 @@ export function createSdkInvoker(deps: SdkInvokerDeps): SdkInvoker {
         // on the wire until the whole object is"), so `passthrough.captures` is settled here and a
         // throw is still a real status, not a body already on the wire. A forced `tool_choice` that
         // produced no captured call is the silent downgrade the acceptance criteria refuses: refuse
-        // loudly instead of answering with the plain-text turn. The refusal is not attempted on a
-        // streaming turn — a chosen v1 scope decision, not a technical impossibility
-        // (docs/idea/11-anthropic-agent-sdk.md §7 item 9): a terminal SSE error frame after
-        // `message_stop` would be implementable, but this issue does not build it.
+        // loudly instead of answering with the plain-text turn — but only on a turn that actually
+        // *completed*: the renderer answers a turn that ended in an upstream `error` frame with that
+        // error under a `502` (`render/stream.ts`) rather than throwing, and relabelling it
+        // "forced-tool-unmet" would misname a rate limit or a crash as a compliance failure. The
+        // refusal is not attempted on a streaming turn — a chosen v1 scope decision, not a technical
+        // impossibility (docs/idea/11-anthropic-agent-sdk.md §7 item 9): a terminal SSE error frame
+        // after `message_stop` would be implementable, but this issue does not build it.
         if (
           !request.stream &&
-          passthrough !== null &&
-          passthrough.required &&
+          response.status === 200 &&
+          passthrough?.required &&
           passthrough.captures.length === 0
         ) {
           // The sentence's tail is load-bearing: `errors.ts` matches it to classify this refusal as

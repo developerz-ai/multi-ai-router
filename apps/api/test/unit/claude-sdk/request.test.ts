@@ -141,6 +141,26 @@ describe("tool_choice, the one Anthropic field this layer used to drop on the fl
     expect(request.system).toBe("be terse")
     expect(request.tools.map((tool) => tool.name)).toEqual(["get_weather"])
   })
+
+  // A near miss is not a foreign shape: the `type` is one this vocabulary recognizes, so the client
+  // *tried* to force a call and misspelt the payload — and degrading that to "auto" was the silent
+  // downgrade this issue exists to kill, invisible because nothing visibly changes. Anthropic's own
+  // API answers these shapes 400.
+  test('a recognized "type" with an unreadable payload throws, rather than silently running optional', () => {
+    for (const toolChoice of [
+      { type: "tool" },
+      { type: "tool", name: 7 },
+      { type: "tool", name: null },
+    ]) {
+      expect(() =>
+        readSdkRequest(
+          body({ messages: [{ role: "user", content: "ping" }], tool_choice: toolChoice }),
+        ),
+      ).toThrow(
+        'tool_choice\'s type "tool" is recognized but its payload is one this router cannot read',
+      )
+    }
+  })
 })
 
 describe("a body that cannot be read", () => {
