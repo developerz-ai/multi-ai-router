@@ -5,6 +5,12 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.9.1] — 2026-09-05
+
+### Fixed
+
+- `/v1/models` on a Claude subscription lists the live handshake rows **and** the shipped family aliases and canonical ids (`opus`, `fable`, `haiku`, `claude-opus-5`, `claude-sonnet-5`, …); live rows win on an alias. A swept subscription had listed only the five rows the CLI reports.
+
 ## [2.9.0] — 2026-09-05
 
 ### routing
