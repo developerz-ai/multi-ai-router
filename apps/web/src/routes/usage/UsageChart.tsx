@@ -33,9 +33,18 @@ export function UsageChart(props: UsageChartProps) {
   const series = createMemo(() => buildChartSeries(props.points))
   const ticks = createMemo(() => pickChartTicks(props.points))
   const formatTick = (at: string) => (props.bucket === "hour" ? formatTime(at) : formatDate(at))
+  // Three flat lines on the baseline read as a broken chart, not as zero traffic. Say which it is.
+  const silent = createMemo(() =>
+    props.points.every(
+      (point) => point.requests === 0 && point.attempts === 0 && point.errors === 0,
+    ),
+  )
 
   return (
     <div class={styles.root}>
+      <Show when={silent()}>
+        <p class={styles.empty}>No traffic in this window — the lines would all sit on zero.</p>
+      </Show>
       <svg
         aria-label={`Requests, attempts and errors per ${props.bucket} across the window`}
         class={styles.chart}

@@ -18,16 +18,23 @@ import { queryKeys } from "./query-keys"
 // what disposes of it early — abandoning the pending row and any subprocess with it rather than
 // leaving both to their TTL.
 //
-// Completing a login changes `hasCredential`, `status` and `tokenExpiresAt` on the account, and
-// pool member rows carry the status — so the same readers a normal account write invalidates are
-// invalidated here.
+// Completing a login changes `hasCredential`, `status`, `credential` and `tokenExpiresAt` on the
+// account, and pool member rows carry the status — so the same readers a normal account write
+// invalidates are invalidated here.
+//
+// **On settle, not on success.** A completion that fails *after* the CLI wrote its credential
+// file, or a start that flips the row into a pending state, has changed the account whether or
+// not the response said so. Invalidating only the happy path is how an operator reconnects a
+// subscription and still sees `needs_reauth` until a reload.
 
 export function useBeginConnect() {
+  const client = useQueryClient()
   return useMutation(() => ({
     mutationFn: (args: {
       readonly id: string
       readonly mode: ConnectMode
     }): Promise<ConnectStarted> => beginConnect(args),
+    onSettled: () => invalidateAccountReaders(client),
   }))
 }
 
@@ -38,7 +45,7 @@ export function useCompleteConnect() {
       readonly id: string
       readonly pasted: string
     }): Promise<ConnectCompleted> => completeConnect(args),
-    onSuccess: () => invalidateAccountReaders(client),
+    onSettled: () => invalidateAccountReaders(client),
   }))
 }
 
@@ -51,7 +58,7 @@ export function useCancelConnect() {
   const client = useQueryClient()
   return useMutation(() => ({
     mutationFn: (id: string): Promise<ConnectCancelled> => cancelConnect(id),
-    onSuccess: () => invalidateAccountReaders(client),
+    onSettled: () => invalidateAccountReaders(client),
   }))
 }
 

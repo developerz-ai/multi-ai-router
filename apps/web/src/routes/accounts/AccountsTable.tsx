@@ -1,11 +1,8 @@
 import { Show } from "solid-js"
-import { Badge } from "../../components/Badge"
 import { Button } from "../../components/Button"
 import { ResetIndicator } from "../../components/ResetIndicator"
-import { SpendCell } from "../../components/SpendCell"
 import { StatusDot } from "../../components/StatusDot"
 import { type Column, Table } from "../../components/Table"
-import { UsageCell } from "../../components/UsageCell"
 import { hasSpentWindow } from "../../lib/account-status"
 import type { TestAccountInput } from "../../lib/api/accounts"
 import type { AccountView, ProviderDescriptor } from "../../lib/api/types"
@@ -18,11 +15,15 @@ import { AccountModels } from "./AccountModels"
 import { AccountRecheck } from "./AccountRecheck"
 import styles from "./AccountsTable.module.scss"
 import { AccountTestNow } from "./AccountTestNow"
-import { connectLabel, credentialHint, credentialLabel, credentialTone } from "./account-cells"
+import { connectLabel } from "./account-cells"
+import { CredentialCell } from "./CredentialCell"
+import { TrafficCell } from "./TrafficCell"
 
 export interface AccountsTableProps {
   readonly accounts: readonly AccountView[]
   readonly nowMs: number
+  /** Names the table for its region landmark. Per provider group, so seven tables have seven names. */
+  readonly caption?: string
   /** The id currently being re-checked, if any. */
   readonly recheckingId: string | null
   /** The id currently being tested, if any. */
@@ -117,10 +118,13 @@ export function AccountsTable(props: AccountsTableProps) {
       ),
     },
     {
+      // Traffic and spend in one compact column: "no traffic" for a silent row, otherwise the
+      // trend, the count and both spend figures with their meaning on hover. The keys table keeps
+      // the two-column form; here twelve columns compete for the width.
       id: "usage",
       header: `Usage · ${props.usageWindowLabel}`,
       cell: (account) => (
-        <UsageCell
+        <TrafficCell
           bucket={props.usageBucket}
           label={`Requests per ${props.usageBucket} for account ${account.label}`}
           loading={props.usageLoading}
@@ -129,41 +133,22 @@ export function AccountsTable(props: AccountsTableProps) {
       ),
     },
     {
-      // Cost is always its own column, beside the usage cell it was once crammed
-      // into — the pair overflowed the column and painted through the credential
-      // pill (#62).
-      id: "cost",
-      header: `Cost · ${props.usageWindowLabel}`,
-      cell: (account) => (
-        <SpendCell loading={props.usageLoading} usage={usageFor(props.usage, account.id)} />
-      ),
-    },
-    {
+      // For a Claude subscription this is the login's lifetime — plan badge, "valid until"
+      // with countdown, or "expired — reconnect" with the button inline. See `CredentialCell`.
       id: "credential",
-      header: "Credential",
+      header: "Credential / login",
       cell: (account) => (
-        <Show
-          fallback={
-            <Badge
-              tone={credentialTone(account, props.providerFor(account))}
-              title={credentialHint(account, props.providerFor(account))}
-            >
-              {credentialLabel(account, props.providerFor(account))}
-            </Badge>
-          }
-          when={account.configDir}
-        >
-          {(dir) => (
-            <Badge title={`Agent SDK config directory: ${dir()}`} tone="accent">
-              config dir
-            </Badge>
-          )}
-        </Show>
+        <CredentialCell
+          account={account}
+          nowMs={props.nowMs}
+          onReconnect={props.onConnect}
+          provider={props.providerFor(account)}
+        />
       ),
     },
     {
       id: "routing",
-      header: "Weight / priority",
+      header: "Weight / prio",
       numeric: true,
       cell: (account) => `${account.weight} / ${account.priority}`,
     },
@@ -272,7 +257,10 @@ export function AccountsTable(props: AccountsTableProps) {
 
   return (
     <Table
-      caption="Upstream accounts. Reset is shown as absolute time and countdown, labelled by how much the instant can be trusted."
+      caption={
+        props.caption ??
+        "Upstream accounts. Reset is shown as absolute time and countdown, labelled by how much the instant can be trusted."
+      }
       columns={columns()}
       rowId={(account) => account.id}
       rows={props.accounts}

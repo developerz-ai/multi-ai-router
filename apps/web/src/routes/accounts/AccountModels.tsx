@@ -1,4 +1,4 @@
-import { Show } from "solid-js"
+import { createSignal, createUniqueId, For, Show } from "solid-js"
 import { Badge } from "../../components/Badge"
 import { Button } from "../../components/Button"
 import type { ProviderTransport } from "../../lib/api/types"
@@ -13,9 +13,6 @@ export interface AccountModelsProps {
   readonly transport: ProviderTransport | undefined
   readonly onDiscover: (id: string) => void
 }
-
-/** Enough to read at a glance; the rest is one click away in the account's own row. */
-const PREVIEW = 6
 
 /**
  * What this account serves, and the button that fills it in.
@@ -35,6 +32,10 @@ const PREVIEW = 6
 export function AccountModels(props: AccountModelsProps) {
   const declared = (): readonly string[] => props.models ?? []
   const listable = (): boolean => props.transport === "http"
+  // The count is the cell; the names are a fold. Seven OpenRouter ids inline is what pushed this
+  // column off the right edge of the accounts table.
+  const [expanded, setExpanded] = createSignal(false)
+  const listId = createUniqueId()
 
   return (
     <div class={styles.root}>
@@ -50,13 +51,23 @@ export function AccountModels(props: AccountModelsProps) {
           }
           when={declared().length > 0}
         >
-          <Badge title={declared().join("\n")} tone="accent">
-            {declared().length} model{declared().length === 1 ? "" : "s"}
-          </Badge>
-          <span class={styles.preview}>
-            {declared().slice(0, PREVIEW).join(", ")}
-            {declared().length > PREVIEW ? ", …" : ""}
+          <span class={styles.summary}>
+            <Badge title={declared().join("\n")} tone="accent">
+              {declared().length} model{declared().length === 1 ? "" : "s"}
+            </Badge>{" "}
+            <button
+              aria-controls={listId}
+              aria-expanded={expanded() ? "true" : "false"}
+              class={styles.toggle}
+              onClick={() => setExpanded(!expanded())}
+              type="button"
+            >
+              {expanded() ? "hide" : "show"}
+            </button>
           </span>
+          <ul class={styles.list} hidden={!expanded()} id={listId}>
+            <For each={declared()}>{(model) => <li>{model}</li>}</For>
+          </ul>
         </Show>
       </div>
 

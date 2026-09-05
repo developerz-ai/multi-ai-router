@@ -16,11 +16,13 @@ import {
   type SettingsView,
   withRates,
 } from "../../lib/api/settings"
+import { visiblePriceRows } from "../../lib/price-filter"
 import { useProviders } from "../../lib/queries/providers"
 import { useSavePriceOverrides, useSettings } from "../../lib/queries/settings"
 import { PriceAddForm } from "./PriceAddForm"
 import styles from "./PriceOverridesSection.module.scss"
 import { PriceTable } from "./PriceTable"
+import { PriceTableControls } from "./PriceTableControls"
 import {
   draftOf,
   EMPTY_DRAFT,
@@ -39,9 +41,7 @@ import {
  *
  * **Nothing is saved until Save is pressed.** Every edit is a signal here; the
  * edits survive a failed save, because losing a table of typed numbers to a 400
- * is worse than the 400.
- *
- * **The PATCH is the complete set.** Removing an override means sending a list
+ * is worse than the 400. **The PATCH is the complete set.** Removing an override means sending a list
  * without it, so the confirmation names every row that disappears and what each
  * one falls back to — a shipped price, or no price at all.
  *
@@ -61,6 +61,8 @@ export function PriceOverridesSection() {
   const [model, setModel] = createSignal("")
   const [addError, setAddError] = createSignal<string | null>(null)
   const [confirming, setConfirming] = createSignal(false)
+  const [query, setQuery] = createSignal("")
+  const [showAll, setShowAll] = createSignal(false)
 
   // A row added in this session sits at the end until the save lands and the
   // server's ordering takes over — a just-added row must not be hard to find.
@@ -87,6 +89,10 @@ export function PriceOverridesSection() {
       const draft = drafts()[row.id]
       return draft !== undefined && parseDraft(draft) === null
     })
+
+  // Folded to the first page unless searched or unfolded; an edited row is never folded away.
+  const visible = (view: SettingsView) =>
+    visiblePriceRows(rows(view), query(), showAll(), (row) => drafts()[row.id] !== undefined)
 
   const cellValue = (row: PriceRow, field: RateField): string =>
     drafts()[row.id]?.[field] ?? String(row.rates[field])
@@ -202,11 +208,22 @@ export function PriceOverridesSection() {
               here.
             </p>
 
+            <PriceTableControls
+              hidden={visible(view).hidden}
+              matched={visible(view).matched}
+              onQuery={setQuery}
+              onShowAll={setShowAll}
+              query={query()}
+              showAll={showAll()}
+              shown={visible(view).rows.length}
+              total={rows(view).length}
+            />
+
             <PriceTable
               invalid={badCell}
               onEdit={edit}
               onRevert={revert}
-              rows={rows(view)}
+              rows={visible(view).rows}
               value={cellValue}
             />
 

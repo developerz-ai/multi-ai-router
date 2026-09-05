@@ -142,6 +142,15 @@ function patchTemplateInnerHtmlForTableFragments(): void {
       const wrap = tag === undefined ? undefined : TABLE_SCOPED_WRAP[tag]
       if (wrap === undefined) {
         nativeSet.call(this, html)
+        // Same class of parser gap for a non-table element happy-dom drops inside a template —
+        // `<textarea>` (RCDATA) parses to nothing there, so the connect dialog's paste box came
+        // out as a null node and Solid's `setAttribute` threw. A detached `<div>` parses it fine;
+        // its children are moved into the fragment. Only taken when the native parse lost content.
+        if (this.content.firstChild === null && html.trim() !== "") {
+          const host = this.ownerDocument.createElement("div")
+          host.innerHTML = html
+          while (host.firstChild !== null) this.content.appendChild(host.firstChild)
+        }
         return
       }
       const table = this.ownerDocument.createElement("table")

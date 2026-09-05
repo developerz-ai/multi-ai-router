@@ -145,11 +145,11 @@ describe("AccountModels live region", () => {
     })
   })
 
-  test("a discovery result — badge and preview — renders inside the region", () => {
+  test("a discovery result — badge and the folded names — renders inside the region", () => {
     mount(["glm-4.6", "glm-4.7"], (container) => {
       const region = statusRegion(container)
       expect(region.textContent).toContain("2 models")
-      expect(region.textContent).toContain("glm-4.6, glm-4.7")
+      expect(region.querySelector("ul")?.textContent).toContain("glm-4.6")
     })
   })
 })

@@ -13,6 +13,7 @@ export type IconName =
   | "settings"
   | "menu"
   | "close"
+  | "chevron"
 
 const PATHS: Readonly<Record<IconName, string>> = {
   // Four panes — a dashboard.
@@ -27,6 +28,8 @@ const PATHS: Readonly<Record<IconName, string>> = {
     "M2 5h5M10 5h4M2 11h3M8 11h6M8.5 3.5a1.5 1.5 0 1 0 0 3 1.5 1.5 0 0 0 0-3ZM6.5 9.5a1.5 1.5 0 1 0 0 3 1.5 1.5 0 0 0 0-3Z",
   menu: "M2.5 4.5h11M2.5 8h11M2.5 11.5h11",
   close: "M4 4l8 8M12 4l-8 8",
+  // Points down; a group header rotates it to point at a folded panel.
+  chevron: "M4 6l4 4 4-4",
 }
 
 export interface IconProps {

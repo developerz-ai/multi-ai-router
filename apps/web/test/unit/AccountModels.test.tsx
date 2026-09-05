@@ -59,10 +59,18 @@ describe("AccountModels", () => {
     })
   })
 
-  test("a declared set shows its count and the names it holds", () => {
+  test("a declared set shows its count, and the names behind a fold", () => {
     withMount({ models: ["glm-4.6", "glm-4.7"] }, (container) => {
       expect(container.textContent).toContain("2 models")
-      expect(container.textContent).toContain("glm-4.6, glm-4.7")
+      const toggle = container.querySelector<HTMLButtonElement>("button[aria-expanded]")
+      const list = container.querySelector<HTMLUListElement>("ul")
+      expect(toggle?.getAttribute("aria-expanded")).toBe("false")
+      expect(list?.hidden).toBe(true)
+      expect(list?.textContent).toContain("glm-4.6")
+      expect(list?.textContent).toContain("glm-4.7")
+      toggle?.click()
+      expect(toggle?.getAttribute("aria-expanded")).toBe("true")
+      expect(list?.hidden).toBe(false)
     })
   })
 

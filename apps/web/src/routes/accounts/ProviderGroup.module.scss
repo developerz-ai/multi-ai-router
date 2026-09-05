@@ -1,0 +1,114 @@
+@use "../../styles/mixins" as *;
+@use "../../styles/breakpoints" as bp;
+
+// `min-width: 0` on the section and on the panel: both are grid items, and a
+// grid item's default `min-width: auto` lets a wide table push the page past the
+// viewport instead of scrolling inside its own container.
+.root {
+  display: grid;
+  gap: var(--space-3);
+  min-width: 0;
+}
+
+// Stacks on a phone; from the sidebar breakpoint up it is three columns —
+// toggle, summary, actions — so "Reconnect all" stays on the header line however
+// long the summary runs. The summary wraps inside its own cell instead.
+.header {
+  display: grid;
+  gap: var(--space-2) var(--space-4);
+  align-items: center;
+
+  @include bp.respond-to("sidebar") {
+    grid-template-columns: auto minmax(0, 1fr) auto;
+  }
+}
+
+// The group in trouble gets an edge, the same device the spent quota window
+// uses — a mark a skimming reader catches before reading a single label.
+.root[data-attention="true"] .header {
+  padding-inline-start: var(--space-3);
+  border-inline-start: 3px solid var(--danger);
+}
+
+.toggle {
+  @include tappable(2rem);
+
+  display: inline-flex;
+  gap: var(--space-2);
+  align-items: baseline;
+  padding: 0 var(--space-1);
+  background: none;
+  border: 0;
+  border-radius: var(--radius-1);
+  color: var(--text);
+  font: inherit;
+  text-align: start;
+  cursor: pointer;
+}
+
+.toggle:hover .heading {
+  color: var(--accent);
+}
+
+.toggle:focus-visible {
+  @include focus-ring;
+}
+
+.chevron {
+  display: inline-flex;
+  align-self: center;
+  color: var(--text-muted);
+}
+
+.chevron[data-open="false"] {
+  transform: rotate(-90deg);
+}
+
+.heading {
+  font-size: var(--text-lg);
+  font-weight: var(--weight-semibold);
+  line-height: var(--line-tight);
+}
+
+.providerId {
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+}
+
+.summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1) var(--space-3);
+  align-items: center;
+  min-width: 0;
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+}
+
+.count {
+  white-space: nowrap;
+}
+
+.expiry {
+  font-size: var(--text-xs);
+}
+
+.pools {
+  font-size: var(--text-xs);
+  overflow-wrap: anywhere;
+}
+
+.actions {
+  display: flex;
+  gap: var(--space-2);
+  justify-self: start;
+
+  @include bp.respond-to("sidebar") {
+    justify-self: end;
+  }
+}
+
+.panel {
+  min-width: 0;
+}

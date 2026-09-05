@@ -77,3 +77,11 @@
     background: var(--danger);
   }
 }
+
+// Stated over the plot rather than instead of it, so the axis and legend keep
+// their place and the section does not jump when traffic arrives.
+.empty {
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+  text-align: center;
+}

@@ -37,6 +37,7 @@ export function QuotaWindowRow(props: QuotaWindowRowProps) {
       <QuotaGauge
         label={`${props.owner}, ${window().title} utilization`}
         note={window().utilizationNote}
+        qualifier={window().utilizationQualifier}
         text={window().utilizationText}
         tone={quotaWindowTone(window())}
         value={window().utilization}
