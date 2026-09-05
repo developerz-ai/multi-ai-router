@@ -23,6 +23,13 @@ import type { RelayObserver } from "./relay"
  * experienced. Both fire **after** the enqueue, so observation can never sit between a byte and the
  * client, and an observer that throws degrades reporting rather than breaking the stream.
  *
+ * **An upstream keepalive is forwarded, not swallowed.** A comment line (`: OPENROUTER PROCESSING`,
+ * `: keep-alive`) is how a provider holds the connection open through a long time-to-first-token,
+ * and it is exactly during that window that a proxy or a client idle timer would otherwise close a
+ * socket that was fine. It goes out as a comment of its own — no dialect's client reads one as an
+ * event — and it does not count as the first byte: time-to-first-byte is a claim about *content*,
+ * and a keepalive is the upstream saying there is none yet.
+ *
  * A non-streaming body is read whole before it is converted. That is not a violation of the
  * streaming rule: there is no stream — the upstream sent one JSON object and the client is owed one
  * JSON object, and no byte is delayed that could have gone out earlier.
@@ -75,12 +82,23 @@ function translatedStream(
   upstream: ReadableStream<Uint8Array>,
 ): ReadableStream<Uint8Array> {
   const { observer = {} } = input
-  const parser = createSseParser()
+  // Collected per chunk and written ahead of that chunk's frames: a comment carries no data, so its
+  // order relative to the frames beside it is immaterial, and nothing is held past the chunk.
+  let comments: string[] = []
+  const parser = createSseParser({ onComment: (text) => void comments.push(text) })
   const translator = input.pair.stream(input.context)
   const encoder = new TextEncoder()
 
   let bytes = 0
   let settled = false
+
+  const keepalive = (controller: TransformStreamDefaultController<Uint8Array>): void => {
+    if (comments.length === 0) return
+    let out = ""
+    for (const text of comments) out += `:${text}\n\n`
+    comments = []
+    controller.enqueue(encoder.encode(out))
+  }
 
   const write = (controller: TransformStreamDefaultController<Uint8Array>, text: string): void => {
     if (text.length === 0) return
@@ -103,7 +121,9 @@ function translatedStream(
 
   const transform = new TransformStream<Uint8Array, Uint8Array>({
     transform(chunk, controller) {
-      write(controller, render(parser.push(chunk).flatMap((frame) => translator.push(frame))))
+      const events = parser.push(chunk).flatMap((frame) => translator.push(frame))
+      keepalive(controller)
+      write(controller, render(events))
       // The upstream's own bytes, so token counting reads the numbers the provider stated.
       guard(() => observer.onChunk?.(chunk))
     },

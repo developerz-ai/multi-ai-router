@@ -3,11 +3,13 @@ import {
   RetryableRouterError,
   type RouterError,
   type RouterErrorCode,
+  UpstreamTimeoutError,
 } from "@multi-ai-router/core"
 import type { FailureClassification, RateLimitSignal } from "../../providers"
 // Deep import: the providers barrel does not re-export `RateLimitContext`, and that file is
 // owned by another change set right now. Fold into `../../providers` when it does.
 import { type RateLimitContext, toRouterError } from "../../providers/failure/router-error"
+import type { FailureKind } from "../routing"
 import type { UpstreamError } from "./attempt"
 
 /**
@@ -136,6 +138,11 @@ export interface AnsweredFailureContext {
    * the transport produced a classification but no upstream body — never the SDK's own words.
    */
   readonly clientMessage: string
+  /**
+   * Failover's own reading of the failure (`AttemptFailure.kind`). Read for one value: `timeout`,
+   * the transport failure that carries a verdict of its own — see below.
+   */
+  readonly failureKind?: FailureKind
 }
 
 /**
@@ -164,6 +171,15 @@ export function answeredFailure(
   const error = classification === null ? null : toRouterError(classification, rateLimit)
   if (error !== null) return { kind: "router", error }
   if (upstream !== null) return { kind: "upstream", upstream, dialect }
+  // A deadline the HTTP transport hit is a verdict, not silence: `UpstreamTimeoutError` (504) has
+  // sat in the rank table for exactly this, and nothing on the HTTP path ever produced one — so a
+  // chain whose every attempt timed out fell through to the "nothing was attempted" 503. That
+  // status says the pool is empty when the truth is that it was reached and did not answer in
+  // time, and a coding agent's retry policy reads the two differently. A connect failure still
+  // contributes nothing: it says the account was never reached, which is what "nothing" means.
+  if (classification === null && context?.failureKind === "timeout") {
+    return { kind: "router", error: new UpstreamTimeoutError(context.clientMessage) }
+  }
   if (classification === null || context === undefined) return null
   return {
     kind: "upstream",

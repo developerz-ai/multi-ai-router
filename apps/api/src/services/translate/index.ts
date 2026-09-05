@@ -21,11 +21,13 @@
  * so there is no ordering two writers of it could disagree about.
  */
 
+export type { AnthropicToOpenAiChatOptions } from "./anthropic-to-openai-chat/request"
 export { anthropicToOpenAiChatRequest } from "./anthropic-to-openai-chat/request"
 export type { AnthropicToOpenAiChatResponseOptions } from "./anthropic-to-openai-chat/response"
 export { anthropicToOpenAiChatResponse } from "./anthropic-to-openai-chat/response"
 export type { AnthropicToOpenAiChatStreamOptions } from "./anthropic-to-openai-chat/stream"
 export { anthropicToOpenAiChatStream } from "./anthropic-to-openai-chat/stream"
+export type { AnthropicToOpenAiResponsesOptions } from "./anthropic-to-openai-responses/request"
 export { anthropicToOpenAiResponsesRequest } from "./anthropic-to-openai-responses/request"
 export type { AnthropicToOpenAiResponsesResponseOptions } from "./anthropic-to-openai-responses/response"
 export { anthropicToOpenAiResponsesResponse } from "./anthropic-to-openai-responses/response"
@@ -67,6 +69,8 @@ export type {
   AnthropicToolUseBlock,
 } from "./shared/anthropic"
 export { DEFAULT_MAX_TOKENS } from "./shared/anthropic"
+export type { DropSink, TranslationDrop } from "./shared/drops"
+export { IGNORE_DROPS } from "./shared/drops"
 export type { UpstreamErrorDetail } from "./shared/errors"
 export { parseUpstreamError, translateUpstreamError } from "./shared/errors"
 export type {
@@ -119,6 +123,7 @@ export {
   toOpenAiFinishReason,
   toResponsesCompletion,
 } from "./shared/stop-reason"
+export { toolChoiceForOpenAiChat } from "./shared/tool-choice"
 export {
   argumentsFromInput,
   inputFromArguments,
@@ -144,5 +149,5 @@ export {
 } from "./shared/usage"
 export type { SseEvent, StreamTranslator } from "./sse/emit"
 export { DONE, encodeSseEvent, NO_EVENTS } from "./sse/emit"
-export type { SseFrame, SseParser } from "./sse/parse"
+export type { SseFrame, SseParser, SseParserOptions } from "./sse/parse"
 export { createSseParser, frameJson } from "./sse/parse"

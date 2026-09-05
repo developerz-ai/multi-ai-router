@@ -37,10 +37,16 @@ export function errorHandler(fallbackLog: Logger): ErrorHandler<AppEnv> {
       // `requestId` is bound, and the response body is built from `message`/`code` alone, so
       // logging it here cannot widen what the browser learns.
       const reason = err instanceof AdminAuthError ? err.reason : undefined
+      // `error` is the whole `cause` chain, innermost first, scrubbed and bounded by the logger's
+      // `Error` rendering (`logging/redact.ts`). Without it a `translation_failed` line said which
+      // class refused and nothing about which field — 213 such lines in one production week carried
+      // zero diagnostic content. Every `RouterError` message is router-authored and already the
+      // client-facing body (`errors/render.ts`), so the line learns nothing the caller was not told.
       log[level]("request failed", {
         ...fields,
         errorClass: err.name,
         errorCode: err.code,
+        error: err,
         ...(reason === undefined ? {} : { reason }),
       })
     } else {

@@ -154,14 +154,27 @@ describe("anthropic -> openai-responses request", () => {
     ).toThrow(TranslationError)
   })
 
-  test("an unrecognized block type is refused, naming the field", () => {
-    expect(() =>
-      anthropicToOpenAiResponsesRequest(
-        anthropicRequest({
-          messages: [{ role: "user", content: [{ type: "server_tool_use", id: "x" }] }],
-        }),
-      ),
-    ).toThrow(/messages\[0\]\.content\[0\]\.type/)
+  test("an unrecognized block type is dropped and reported, naming the field", () => {
+    const drops: { field: string; reason: string }[] = []
+    const out = anthropicToOpenAiResponsesRequest(
+      anthropicRequest({
+        messages: [
+          {
+            role: "user",
+            content: [
+              { type: "server_tool_use", id: "x" },
+              { type: "text", text: "kept" },
+            ],
+          },
+        ],
+      }),
+      { onDrop: (drop) => void drops.push(drop) },
+    )
+    expect(out.input).toEqual([
+      { type: "message", role: "user", content: [{ type: "input_text", text: "kept" }] },
+    ])
+    expect(drops[0]?.field).toBe("messages[0].content[0]")
+    expect(drops[0]?.reason).toContain("server_tool_use")
   })
 })
 

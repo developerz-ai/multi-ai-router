@@ -18,6 +18,13 @@
  * ignored — they exist for browser reconnection, which has no meaning for a one-shot completion
  * being proxied, and neither dialect sets them.
  *
+ * A comment is never a frame, but it is not nothing either: it is the upstream keeping the
+ * connection alive through a long time-to-first-token, and a relay that swallows it hands its
+ * client a silent socket for exactly the window the upstream was trying to cover. So the parser
+ * hands each one to `onComment` as it arrives, and the translated relay forwards it as a comment
+ * of its own (`dataplane/relay-translate.ts`). The passthrough relay never parses and forwards
+ * them with everything else.
+ *
  * Nothing here throws. A malformed frame is a stream already on the wire, and by then the request
  * fails honestly rather than being retranslated (`06-protocol-translation.md`, "Rejected: nothing
  * at stream time").
@@ -42,7 +49,12 @@ const LF = 10
 const BOM = "﻿"
 const NONE: readonly SseFrame[] = []
 
-export function createSseParser(): SseParser {
+export interface SseParserOptions {
+  /** Called with each comment line's text (the part after the leading `:`), in arrival order. */
+  readonly onComment?: (text: string) => void
+}
+
+export function createSseParser(options: SseParserOptions = {}): SseParser {
   const decoder = new TextDecoder("utf-8")
   let buffer = ""
   let atStreamStart = true
@@ -68,7 +80,10 @@ export function createSseParser(): SseParser {
       dispatch(out)
       return
     }
-    if (raw.startsWith(":")) return
+    if (raw.startsWith(":")) {
+      options.onComment?.(raw.slice(1))
+      return
+    }
 
     const colon = raw.indexOf(":")
     const field = colon === -1 ? raw : raw.slice(0, colon)

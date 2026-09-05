@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test"
+import { createLogger } from "../../src/logging/logger"
 import type { PoolSnapshot } from "../../src/services/routing"
 import { account, jsonResponse, slowStream } from "../unit/dataplane/fixtures"
 import { bearer, CRYPTOR, harness, MESSAGE, post, settle } from "./harness"
@@ -287,6 +288,160 @@ describe("cross-dialect streaming (translate egress)", () => {
  * (docs/idea/06-protocol-translation.md#known-lossy-edges). These are the assertions that say the
  * caller's ceiling survives the conversion, whichever account answers.
  */
+/**
+ * The request a current Claude Code sends, end to end against an openai-chat account. Production
+ * counted 213 `translation_failed` 400s in one week from exactly this shape; the unit half is
+ * `test/unit/translate/claude-code-shape.test.ts`, this is the wire: the request is served, the
+ * upstream gets a body it can read, and the operator gets one line naming what was left out.
+ */
+describe("a Claude Code turn on translate egress", () => {
+  const CLAUDE_CODE = JSON.stringify({
+    model: "claude-opus-5",
+    max_tokens: 32_000,
+    system: [{ type: "text", text: "You are Claude Code.", cache_control: { type: "ephemeral" } }],
+    metadata: { user_id: '{"device_id":"d"}' },
+    thinking: { type: "adaptive", display: "summarized" },
+    output_config: { effort: "xhigh" },
+    tools: [
+      { type: "web_search_20260209", name: "web_search", max_uses: 8 },
+      { type: "tool_search_tool_regex_20251119", name: "tool_search_tool_regex" },
+      {
+        name: "Read",
+        description: "Reads a file",
+        input_schema: { type: "object", properties: { file_path: { type: "string" } } },
+        cache_control: { type: "ephemeral" },
+      },
+    ],
+    tool_choice: { type: "auto", disable_parallel_tool_use: false },
+    messages: [
+      {
+        role: "user",
+        content: [
+          { type: "text", text: "look at the screenshot" },
+          {
+            type: "document",
+            source: { type: "base64", media_type: "application/pdf", data: "JVBERi0=" },
+          },
+        ],
+      },
+      {
+        role: "assistant",
+        content: [
+          { type: "thinking", thinking: "ok", signature: "sig" },
+          { type: "tool_use", id: "toolu_1", name: "Read", input: { file_path: "a.png" } },
+        ],
+      },
+      {
+        role: "user",
+        content: [
+          {
+            type: "tool_result",
+            tool_use_id: "toolu_1",
+            content: [
+              { type: "image", source: { type: "base64", media_type: "image/png", data: "AAAA" } },
+            ],
+          },
+        ],
+      },
+    ],
+  })
+
+  function capturing() {
+    const lines: Record<string, unknown>[] = []
+    const logger = createLogger({
+      level: "debug",
+      write: (line) => void lines.push(JSON.parse(line) as Record<string, unknown>),
+    })
+    return { logger, lines }
+  }
+
+  test("is served, the upstream gets only what it can read, and one warn line names the rest", async () => {
+    const { logger, lines } = capturing()
+    const { app, upstream, usage } = harness({
+      accounts: [openRouterAccount("or-1", { apiKey: "sk-or-secret-value-1234567890" })],
+      responses: [
+        () =>
+          jsonResponse(200, {
+            id: "chatcmpl-1",
+            model: "gpt-4o",
+            choices: [{ index: 0, message: { role: "assistant", content: "a cat" } }],
+            usage: { prompt_tokens: 10, completion_tokens: 2 },
+          }),
+      ],
+      logger,
+    })
+
+    const res = await app.request("/v1/messages", post(CLAUDE_CODE, bearer()))
+    const body = (await res.json()) as Record<string, unknown>
+    await settle()
+
+    expect(res.status).toBe(200)
+    expect(body).toMatchObject({ type: "message", role: "assistant" })
+
+    const sent = JSON.parse(upstream.calls[0]?.body ?? "{}") as Record<string, unknown>
+    const tools = sent.tools as { function: { name: string } }[]
+    expect(tools.map((tool) => tool.function.name)).toEqual(["Read"])
+    expect(JSON.stringify(sent)).not.toMatch(/web_search|tool_search|JVBERi0=|"sig"|thinking/)
+    // The screenshot reached the model, hoisted out of the text-only tool message.
+    expect(JSON.stringify(sent)).toContain("data:image/png;base64,AAAA")
+
+    const line = lines.find((entry) => entry.msg === "translation dropped fields")
+    expect(line).toBeDefined()
+    expect(line?.level).toBe("warn")
+    expect(line?.egress).toBe("openai-chat")
+    expect(line?.dropped).toBe(3)
+    expect(JSON.stringify(line?.fields)).toMatch(/tools\[0\].*web_search_20260209/)
+    expect(JSON.stringify(line?.fields)).toContain("messages[0].content[1]")
+    // Nothing about the account — and nothing from the body's values — reaches the line.
+    expect(JSON.stringify(lines)).not.toContain("sk-or-secret-value-1234567890")
+    expect(JSON.stringify(lines)).not.toContain("You are Claude Code")
+
+    expect(usage.rows[0]).toMatchObject({ egressMode: "translate", outcome: "success" })
+  })
+
+  test("a refused request logs the field it refused on the request-failed line", async () => {
+    const { logger, lines } = capturing()
+    const { app } = harness({
+      accounts: [openRouterAccount()],
+      responses: [() => jsonResponse(200, {})],
+      logger,
+    })
+    const noMessages = JSON.stringify({ model: "claude-opus-5", max_tokens: 8 })
+
+    const res = await app.request("/v1/messages", post(noMessages, bearer()))
+
+    expect(res.status).toBe(400)
+    const line = lines.find((entry) => entry.msg === "request failed")
+    expect(line?.errorCode).toBe("translation_failed")
+    expect(String(line?.error)).toContain("messages")
+  })
+
+  test("an upstream keepalive comment reaches the client before the first event, as a comment", async () => {
+    const first = ": OPENROUTER PROCESSING\n\n"
+    const second =
+      openAiChunk({ choices: [{ index: 0, delta: { role: "assistant", content: "hi" } }] }) +
+      openAiChunk({ choices: [{ index: 0, delta: {}, finish_reason: "stop" }] }) +
+      DONE
+    const slow = slowStream([first, second])
+    const { app } = harness({ accounts: [openRouterAccount()], responses: [() => slow.response] })
+
+    const res = await app.request("/v1/messages", post(MESSAGE, bearer()))
+    if (res.body === null) throw new Error("expected a body")
+    const reader = res.body.getReader()
+
+    slow.release(0)
+    const early = new TextDecoder().decode((await reader.read()).value)
+    // The keepalive went out on its own, while the upstream had said nothing else yet.
+    expect(early).toBe(": OPENROUTER PROCESSING\n\n")
+
+    slow.release(1)
+    slow.finish()
+    const rest = await drain(reader)
+    expect(rest).toContain("event: message_start")
+    expect(rest).toContain("event: message_stop")
+  })
+})
+
 describe("the openai-chat output ceiling (translate egress)", () => {
   const CEILING_POOL_ID = "ceiling-pool"
 

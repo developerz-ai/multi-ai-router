@@ -276,14 +276,18 @@ Quota signals arrive as SDK `rate_limit_event` messages rather than response hea
 | | |
 |---|---|
 | Clean | `user` / `assistant` roles; text blocks; `image` blocks with a base64 `source` ⇄ OpenAI `image_url` with a `data:` URI; a remote-URL `image_url` ⇄ Anthropic's `source: {type:"url"}`; `tool_result` ⇄ `role: "tool"` message keyed by `tool_call_id`. |
-| Lossy | `detail: "low"/"high"` is dropped. Anthropic `thinking` / `redacted_thinking` blocks have no OpenAI Chat counterpart and are dropped. |
-| Rejected | Interleaved multi-part `tool_result` content the target cannot express; audio and file parts; an image source that is neither a base64 `data:` URI nor http(s); Anthropic `document` blocks. |
+| Lossy | `detail: "low"/"high"` is dropped. Anthropic `thinking` / `redacted_thinking` blocks have no OpenAI Chat counterpart and are dropped (silently — a documented hint). Toward OpenAI, an **image inside a `tool_result`** is *hoisted*: the tool message carries the text, and the image lands as user content directly after it — the position a person pasting the screenshot would give it. A `document` with a `text` source travels as text. |
+| Dropped and **reported** | Toward OpenAI: a `document` with any other source (a base64 PDF, a URL, a Files-API id — reported with its media type); `server_tool_use`, `web_search_tool_result`, and every block type this build does not know; a nested `tool_result` block that is neither text nor image (`tool_reference`, `search_result`). Each is left out and named — field path and block type — on one `translation dropped fields` warn line per conversion ([08](08-observability.md)). Never a `400`: Claude Code puts all of these in an ordinary transcript, and refusing the turn served nothing. |
+| Rejected | Toward Anthropic: audio and file parts; an image source that is neither a base64 `data:` URI nor http(s). Toward OpenAI: a *malformed* known block (a `tool_use` with no `id`) — that body is not a valid Anthropic request. |
 
 A remote URL is **never fetched and inlined**. A translator is a pure function, and reaching an
 arbitrary URL from inside one puts a network call — and an SSRF surface — on the request path;
 Anthropic's own `url` image source carries the reference instead, so the fetch never has to happen.
-Anthropic `document` blocks are **rejected, not dropped**: a document is content the caller sent,
-and losing it quietly returns an answer to a question that was never asked.
+A dropped block is never dropped *quietly*: the `translation dropped fields` line names it, so an
+operator can tell "the PDF never reached the model" from "the model ignored the PDF". The earlier
+rule — refuse a `document` with `400` — was retired when production showed what it cost: a coding
+agent cannot rewrite the turn it is replaying, so the refusal ended the session rather than the
+attachment.
 
 Anthropic requires strict `user`/`assistant` alternation; OpenAI does not. Translating toward
 Anthropic merges consecutive same-role messages rather than reordering them. Merging concatenates
@@ -303,8 +307,9 @@ carrying `tool_calls` or a `tool_call_id` never merges — it is keyed to one sp
 | Calls | Anthropic `tool_use` block `{id, name, input}` ⇄ OpenAI `tool_calls[].{id, function.{name, arguments}}` — `input` is an object, `arguments` is a **JSON string**; both directions parse/serialize |
 | Results | Anthropic `tool_result` `{tool_use_id, content, is_error}` ⇄ one `role:"tool"` message per call; `is_error` has no OpenAI field and is folded into the result text |
 | Clean | Name, description, JSON Schema parameters, call ids, parallel calls (Anthropic emits several `tool_use` blocks; OpenAI emits several `tool_calls` entries). Ids are preserved verbatim; ordering across blocks/entries is reconstructed and may differ |
-| Lossy | `is_error`, `strict`, Anthropic server-side/built-in tool types. `parallel_tool_calls` is **carried** between the two OpenAI dialects, which spell it identically, and dropped toward `anthropic`, which states the same idea as `tool_choice.disable_parallel_tool_use` — a field on a `tool_choice` the caller may not have sent at all |
-| Rejected | A tool whose schema is not a valid JSON Schema object type; a `tool_result` with no matching call id in the transcript |
+| Lossy | `is_error`, `strict`, `defer_loading`, `eager_input_streaming`, `cache_control` on a tool. `parallel_tool_calls` is **carried** between the two OpenAI dialects, which spell it identically, and dropped toward `anthropic`, which states the same idea as `tool_choice.disable_parallel_tool_use` — a field on a `tool_choice` the caller may not have sent at all |
+| Dropped and **reported** | Anthropic **server-side and built-in** tool types toward OpenAI — a declaration with a `type` and no `input_schema`: `web_search_*`, `tool_search_tool_*`, `code_execution_*`, `bash_*`, `text_editor_*`, `computer_*`, `memory_*`. A capability of Anthropic's own inference, or a tool whose schema Anthropic supplies, that no other upstream can act on. Left out by name; the client's own tools go through. A `tool_choice` naming a dropped tool goes with it, and a toolkit that translated to nothing is omitted rather than sent as `tools: []` (several compatible upstreams refuse the empty list). A `defer_loading: true` tool is sent up front — a target with no tool search gets every tool, which is the faithful reading of "deferred" |
+| Rejected | A tool with no name, or whose schema is not a valid JSON Schema object type — not a valid Anthropic declaration |
 
 ### Streaming SSE event mapping
 
@@ -514,7 +519,13 @@ Be suspicious of any cell not listed here — if it is not documented, it is not
 | Anthropic `top_k` | → OpenAI | dropped |
 | Remote-URL images | → `anthropic` | carried as Anthropic's `source: {type:"url"}`, never fetched — see [above](#message-roles-and-content-blocks). `detail: "low"/"high"` is dropped |
 | Absent `max_tokens` | → `anthropic` | Anthropic requires one and OpenAI's is optional, so a configured default is supplied. Not a constant in a branch: the value is a parameter of the translator, defaulted generously, because a low ceiling would truncate an answer the caller never asked to truncate |
-| Anthropic server-side tools (web search, code execution) | → OpenAI | unsupported; `400` |
+| Anthropic server-side and built-in tools (web search, tool search, code execution, `bash_*`, `text_editor_*`) | → OpenAI | **dropped and reported by name**; the client's own tools go through. See [Tool and function calling](#tool-and-function-calling) |
+| `tool_choice` naming a dropped tool | → OpenAI | dropped and reported with it; an empty surviving toolkit is omitted, never sent as `tools: []` |
+| Anthropic `document` blocks | → OpenAI | a `text` source travels as text; any other source is **dropped and reported** with its media type |
+| `server_tool_use`, `web_search_tool_result`, unknown block types; non-text/image blocks nested in a `tool_result` | → OpenAI | **dropped and reported** by field path and type — the provider's own artifacts, whose visible outcome is already in the text beside them |
+| An image inside a `tool_result` | → OpenAI | **hoisted** into user content directly after the tool message / `function_call_output`; never dropped, never refused |
+| `thinking`, `output_config`, `context_management`, `metadata`, `container`, `mcp_servers` (request-level) | → OpenAI | dropped silently — knobs of Anthropic's own inference with no target field; `thinking` has its own row below |
+| Upstream SSE comment lines (`: keep-alive`, `: OPENROUTER PROCESSING`) | translate egress, any pair | **forwarded** as comment lines, ahead of the frames they arrived with. They are how a provider holds a socket open through a long time-to-first-token, and a relay that swallowed them left the client silent for exactly that window. They do not count as the first byte. Passthrough forwards them with everything else |
 | OpenAI built-in tools (`web_search_preview`, `file_search`, `code_interpreter`, …) | `openai-responses` → any | unsupported; `400`. Served inside OpenAI's own inference, so nothing on the other side of the seam runs one |
 | `stop` / `stop_sequences` | → `openai-responses` | no counterpart — the dialect has no stop parameter at all; **rejected** `400`, because a stop sequence decides where the answer ends and dropping it returns text past the delimiter the caller drew |
 | `text.format` (structured output / JSON Schema) | `openai-responses` → any | `{"type":"text"}` passes; anything else is **rejected** `400`. A schema-constrained answer is a contract the caller will parse, and prose in its place is a different answer, not a degraded one |
@@ -536,10 +547,13 @@ Be suspicious of any cell not listed here — if it is not documented, it is not
 | `temperature`, `top_p`, `top_k`, `max_tokens`, `stop`, `seed`, `n`, `logprobs`, penalties | → `agent-sdk` | **accepted and silently inert** — `query()` has no equivalent for any of them, so a value the caller set has no effect on the request. `reasoning_effort` is the exception, mapped onto the SDK's effort scale (`low`…`max`; OpenAI's `minimal` has no target) |
 
 **Silently dropping a parameter the caller set is a correctness trap, so the router does not stay
-quiet about it.** Every inert sampling field a request carried is surfaced by name, so a caller can
-tell "ignored" from "honored" instead of being answered as though it had been applied. Which surface
-carries it — a response-level warning field, a header, a logged and counted event, or several — is
-**DEFERRED**; that it is surfaced is not. It also compounds: current Anthropic models reject
+quiet about it.** Every field a conversion drops that the caller would want to know about — a tool,
+a document, a block — is reported by the translator through an injected drop sink
+(`services/translate/shared/drops.ts`; the translator stays pure and never logs) and written by the
+transport as one `translation dropped fields` warn line per conversion, naming ingress, egress, the
+count, and each field with its structural reason. Documented *hints* (`top_k`, `cache_control`, a
+thinking block) are not reported: every request carries some, and a line per request says nothing.
+A response-level surface — a warning field or header the *caller* can read — is still **DEFERRED**. It also compounds: current Anthropic models reject
 `temperature` / `top_p` / `top_k` outright, so the same field is a `400` on the HTTP path and a
 silent no-op here.
 
@@ -637,7 +651,7 @@ requirements, not preferences — a violation is a bug, not a tuning opportunity
 | One module per dialect pair | `services/translate/<from>-to-<to>/`, request and stream translators split. A pair is added without touching the others (Open/Closed). Each pair owns its own *reading* of the wire — its schemas are local, so a field added for one pair cannot change what another accepts |
 | One emitter per target dialect | The event sequence a dialect's clients rely on is a fact about that dialect, not about the pair producing it, so it is written once (`shared/anthropic-stream.ts`, `shared/responses-stream.ts`). Two copies could disagree, and a client would then be able to tell from the stream which ingress path served it — the one thing a translator exists to hide. `openai-chat` needs no such module: its stream carries no block or item structure, so there is no ordering to disagree about |
 | Passthrough is not a translator | It is a relay in the transport layer. It has no per-dialect module and no schema knowledge. |
-| Fail loud, never degrade | A request that cannot be translated faithfully returns a clear `4xx` naming the offending field, before any upstream call. Silently dropping a *contract* field is a bug; dropping a documented *hint* is listed above. |
+| Fail loud, never degrade | A request whose *contract* cannot be carried — a stop sequence with no target, a structured-output constraint, a stateful Responses field — returns a clear `4xx` naming the offending field, before any upstream call; so does a body that is not a valid request in its own dialect. A field the target merely cannot *represent* — a server-side tool, a PDF, a block type — is dropped **and reported by name** rather than refused: the request is served with what the target can read, and the operator's log says what it could not. Silently dropping either is a bug; dropping a documented *hint* is listed above. |
 | One direction at a time | Each translator is written and tested per direction. "Round-trips" are not assumed to be lossless and are not asserted. |
 
 ## Read next

@@ -41,6 +41,14 @@ const EMPTY_WINDOW: UsageWindow = {
   from: new Date("2031-06-01T00:00:00.000Z"),
   to: new Date("2031-06-02T00:00:00.000Z"),
 }
+/** A window whose token sum crosses 2^31 — the overflow that answered the usage page a `500`. */
+const BIG_DAY = "2031-09-01"
+const BIG_WINDOW: UsageWindow = {
+  from: new Date(`${BIG_DAY}T00:00:00.000Z`),
+  to: new Date("2031-09-02T00:00:00.000Z"),
+}
+/** Fits an `integer` column on its own; two of them do not fit an `int` sum. */
+const HALF_OVERFLOW = 1_500_000_000
 
 let handle: DatabaseHandle | undefined
 let db: Database
@@ -124,6 +132,27 @@ beforeAll(async () => {
       ttfbMs: 90,
     }),
   ])
+
+  // Production measured 4.7 billion cache-read tokens over one week; two rows are enough to cross
+  // the `int` ceiling the aggregates used to cast through.
+  await db.insert(usageRecords).values([
+    {
+      correlationId: crypto.randomUUID(),
+      accountId: accountA,
+      model: "glm-4.6",
+      outcome: "success",
+      createdAt: new Date(`${BIG_DAY}T10:00:00.000Z`),
+      cacheReadTokens: HALF_OVERFLOW,
+    },
+    {
+      correlationId: crypto.randomUUID(),
+      accountId: accountB,
+      model: "glm-4.6",
+      outcome: "success",
+      createdAt: new Date(`${BIG_DAY}T11:00:00.000Z`),
+      cacheReadTokens: HALF_OVERFLOW,
+    },
+  ])
 })
 
 afterAll(async () => {
@@ -150,6 +179,23 @@ describe.skipIf(!runnable)("usage aggregates against a live database", () => {
     // Metered and notional stay apart — asserting both proves neither absorbed the other.
     expect(Number(totals.costMetered)).toBeCloseTo(0.5)
     expect(Number(totals.costNotional)).toBeCloseTo(1.25)
+  })
+
+  test("totals: a token sum past 2^31 is answered, not raised as integer out of range", async () => {
+    const totals = await usage.totals(BIG_WINDOW)
+
+    expect(totals.cacheReadTokens).toBe(2 * HALF_OVERFLOW)
+    expect(totals.attempts).toBe(2)
+    expect(totals.requests).toBe(2)
+
+    // The same aggregates behind every grouped reader: none may keep an `int` cast of its own.
+    const byAccount = await usage.breakdown(BIG_WINDOW, "accountId")
+    expect(byAccount.map((row) => row.cacheReadTokens).sort()).toEqual([
+      HALF_OVERFLOW,
+      HALF_OVERFLOW,
+    ])
+    const outcomes = await usage.outcomes(BIG_WINDOW)
+    expect(outcomes).toEqual([{ outcome: "success", attempts: 2 }])
   })
 
   test("totals: an empty window answers zeros, not an absent row", async () => {

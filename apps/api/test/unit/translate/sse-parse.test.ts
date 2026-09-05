@@ -86,6 +86,14 @@ describe("the line grammar", () => {
     expect(parser.push("data\ndata: real\n\n")).toEqual([{ event: null, data: "\nreal" }])
   })
 
+  test("a comment line is handed to onComment as it arrives, and still produces no frame", () => {
+    const comments: string[] = []
+    const parser = createSseParser({ onComment: (text) => void comments.push(text) })
+    expect(parser.push(": OPENROUTER PROCESSING\n\n:keep-alive\n")).toEqual([])
+    expect(comments).toEqual([" OPENROUTER PROCESSING", "keep-alive"])
+    expect(parser.push('data: {"a":1}\n\n')).toEqual([{ event: null, data: '{"a":1}' }])
+  })
+
   test("a comment line is a keepalive and produces nothing", () => {
     const parser = createSseParser()
     expect(parser.push(": ping\n\n")).toEqual([])

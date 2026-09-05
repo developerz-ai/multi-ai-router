@@ -192,6 +192,7 @@ neither write body has a field for one; `CLAUDE_CONFIG_ROOT` is the only knob, a
 | Health probe | `claude auth status --json` with the dir set returns `{loggedIn, email, subscriptionType}` — cheap, first-party, no token handling. Implemented in `providers/claude-sdk/login/status.ts`; it rides on **Re-check now** rather than getting a button of its own — see [§3.2](#32-the-credential-probe) |
 | Completion probe | **Test now** (`services/accounts/test-now.ts`) is the other end of the spectrum from the health probe above: a real, opt-in `query()` turn that actually spends a turn and a subprocess. Never fires without `confirmed: true` on the request, and its own cooldown, longer than Re-check now's — see [05-routing-and-failover.md](05-routing-and-failover.md#test-now) |
 | Refresh | **Not ours.** The SDK / `claude` CLI refreshes inside the config directory. The router does **not** schedule, mint, or write subscription tokens — see the box below |
+| Refresh-token expiry | **A Claude subscription hard-expires ~30 days after login, however much it is used.** Verified in production (2026-09-05): every account's `refreshTokenExpiresAt` sat at exactly login + ~30 d — on accounts that had served traffic daily for weeks. Use refreshes the *access* token; nothing slides the refresh token, and when it expires the CLI blanks the tokens in `.credentials.json` (the file stays, `claude auth status` says `loggedIn: false`, a turn answers `Failed to authenticate: OAuth session expired and could not be refreshed`). No keepalive, probe, or traffic can prevent it — **only a re-login can**, so plan on reconnecting every subscription monthly. What the router does: the daily `idle_account_probe` tick runs the free `claude auth status` check over **every** subscription account, idle or not, so an expired one flips to `needs_reauth` within a day (`scheduler/tasks/idle-account-probe.ts`); and the request path classifies that sentence `auth` → `needs_reauth`, never a `502` |
 | Reconnect | Re-run login against the **same** directory: Account id, Pool membership, and usage history survive |
 | Delete | Remove the directory with the Account row |
 | Reap | A scheduled task (`scheduler/tasks/config-dir-reap.ts`) removes what a crash left on the volume: a directory named after an account id that no row claims, once it is older than `RETENTION_ORPHAN_CONFIG_DIR_HOURS`. It surveys the directories *before* it reads the accounts — a directory minted after the survey cannot be in it, while a row inserted after it is still read — and it never touches a name that is not an account id. Both rules exist because the failure it prevents (a stale credential nobody will rotate) is milder than the failure a careless sweep would cause (a working subscription logged out for good) |
@@ -286,8 +287,16 @@ Account id (stable; a label is not):
   `authMaterial` in [07-security.md](07-security.md), though the CLI owns their format. They are
   the one piece of Account state that does *not* live in Postgres, which makes the volume a backup
   and restore concern in its own right.
-- They grow (transcripts). Retention is **DEFERRED** — note it beside the other sweeps in
-  [09-deployment.md](09-deployment.md).
+- They grow (transcripts). The `claude` CLI writes `projects/<cwd-slug>/<session>.jsonl` (and a
+  `<session>/` directory of tool results and subagent transcripts) per SDK session and never removes
+  them — production measured a quarter of a gigabyte per Account. The `sdk_transcript_sweep` task
+  (`scheduler/tasks/sdk-transcript-sweep.ts`, `providers/claude-sdk/transcripts.ts`) removes those
+  two artifact shapes, and only those, once older than `RETENTION_SDK_TRANSCRIPT_HOURS` (default
+  24 h, the same window as the `sessions` row that could resume them). It never looks at anything
+  else in the directory — credentials, settings, `memory/`, the CLI's own state — never follows a
+  symlink, and rebuilds every path it removes from validated parts. A resume that lands on a swept
+  transcript is the `stale-session` class below: binding evicted, one replay in place, never a
+  failed request. Listed beside the other sweeps in [09-deployment.md](09-deployment.md).
 - Adding an Account must not need a restart; Accounts resolve from Postgres per request anyway.
 
 ---
@@ -407,7 +416,15 @@ store is created per runtime and keyed by Account — never a module-level singl
 
 **The critical caveat: `utilization` is only populated near the limit** (`oauthUsage.ts:5-8`). It is
 an *alarm*, not a gauge — a `quota-aware` policy built only on SDK events sees `null` headroom for
-most of every window and degrades to round-robin.
+most of every window and degrades to round-robin. **This is why the console and `status.ts` show
+`—` for an actively used subscription's `five_hour` / `seven_day` / `overage` windows**: the windows
+themselves are reported, persisted, and reloaded (their names and resets are what prove the events
+arrive), but a percentage is only ever a threshold-triggered reading. Verified against the 0.3.261
+CLI: it reads `anthropic-ratelimit-unified-<claim>-utilization` off the API response, which the API
+sends only past a threshold. `—` means "no reading", by design, not a dropped event. The SDK 0.3.261
+exposes a continuous gauge through `usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET()`
+(the claude.ai usage endpoint, per-window 0–100 %); it is marked unstable by its own name and is
+deliberately not wired.
 
 **The dispatch-level wire.** `SdkInvocation.onRateLimit` (`invoke.ts`) is the seam a launcher calls
 for every `rate_limit_event`, the `onSession` of quota. `runSdkAttempt` (`sdk-attempt.ts`) folds each
@@ -737,7 +754,7 @@ musl platform package exists (`@anthropic-ai/claude-code-linux-<arch>-musl`). Ei
 belongs on `PATH` as `claude` — a *symlink* or the real executable, never a shell wrapper, which the
 SDK's launcher rejects on some paths — so `claude auth status` and the SDK resolve the same file.
 
-**How our image actually does it, and why it differs.** `@anthropic-ai/claude-agent-sdk` (0.3.220+)
+**How our image actually does it, and why it differs.** `@anthropic-ai/claude-agent-sdk` (0.3.220+; pinned `^0.3.261`, whose bundled CLI is 2.1.261 — the resolution ladder, the security gates, and the `auth login` / `auth status` shapes were re-verified against it)
 ships the same binary as its *own* prebuilt optional dependency
 (`@anthropic-ai/claude-agent-sdk-<platform>-<arch>`, glibc and musl variants), and its internal
 resolution says so: it fails with "Reinstall `@anthropic-ai/claude-agent-sdk` without
@@ -774,18 +791,26 @@ ships Bun as the runtime, so `bun` is the decision; the point is that it is writ
 | Timeouts | Client keep-alive ≈ 15 s; **upstream** idle guard ≈ 90 s → 504. Independent, both needed |
 | Retries | Bounded, and **forbidden once bytes are on the wire** — the same rule as [05-routing-and-failover.md](05-routing-and-failover.md) |
 
-**Error classification.** SDK failures arrive as strings, so classification is substring matching on
-the message plus the subprocess stderr tail. Classes worth naming as our own error types:
+**Error classification.** SDK failures arrive as strings — a throw out of `query()`, or a `result`
+message with `is_error: true`, which the renderer raises as `SdkResultError` (`result-error.ts`)
+carrying the SDK's structured `api_error_status` and `terminal_reason` beside the sentence — so
+classification is substring matching on the message plus the subprocess stderr tail, with the
+structured status read **after** every phrase (`failure-rules.ts`). Classes worth naming as our own
+error types:
 
 | Class | Signal | Response |
 |---|---|---|
-| Expired credential | `oauth token has expired`, `not logged in`, `401` | Account → `needs_reauth`, drop from routing, fail over to the next Account in the Pool. The status is **written through to the row** off the request path, because the router never refreshes this token: noticing the failure and parking the Account *is* the whole mechanism, so a verdict that died with the process would be nobody ever being told to log back in ([05-routing-and-failover.md](05-routing-and-failover.md#circuit-breaker)). **We do not refresh-and-retry** the way Meridian does — the SDK owns the token (§3) |
-| Rate limited | `429`, `rate limit`, `usage limit reached` | 429 + circuit breaker; fail over to the next Account |
-| Credits exhausted | `credit balance is too low` (the CLI's own error constant, 0.3.220) | `402`, Account → `exhausted` — permanent until a human tops up, **never** timer-retried (CLAUDE.md non-negotiable 7). Fail over: the next Account may be funded |
-| Stale SDK session | `No conversation found with session ID` | Evict the Session mapping, replay once |
+| Expired credential | `oauth token has expired`, `oauth session expired`, `could not be refreshed`, `failed to authenticate`, `not logged in`, `please run /login`, `invalid api key`, `authentication_error`, `authentication failed` (message only), or `api_error_status` 401/403, or a bare `401` in the message | Account → `needs_reauth`, drop from routing, fail over to the next Account in the Pool. The status is **written through to the row** off the request path, because the router never refreshes this token: noticing the failure and parking the Account *is* the whole mechanism, so a verdict that died with the process would be nobody ever being told to log back in ([05-routing-and-failover.md](05-routing-and-failover.md#circuit-breaker)). **We do not refresh-and-retry** the way Meridian does — the SDK owns the token (§3) |
+| Rate limited | `429`, `rate limit`, `usage limit reached`, `hit your … limit` (session, weekly, monthly spend, fast), `you've reached your <tier> limit` (one to three qualifier words — the credits-era per-tier banner), `you're out of usage credits` (a member's spent top-up; the included window still refills) | 429 + circuit breaker; fail over to the next Account |
+| Credits exhausted | `credit balance is too low` (the CLI's own error constant, 0.3.220 and 2.1.261), `organization is out of usage credits`, `usage limit is set to $N` (an admin-provisioned cap) or `api_error_status` 402 | `402`, Account → `exhausted` — permanent until a human tops up, **never** timer-retried (CLAUDE.md non-negotiable 7). Fail over: the next Account may be funded |
+| Stale SDK session | `No conversation found with session ID`, `No message found with message.uuid` (a fork whose rewind point is gone — same recovery, and before it was named here it fell to `unknown`, which does not retry, so the binding survived to fail the next turn too) | Evict the Session mapping, replay once |
 | Busy session | `is currently running as a background agent` | **One in-place retry as a fork** (`invoker.ts`): same Account, `forkSession: true` at the tip — the fork inherits the full transcript warm, where a failover would replay it cold. Legal because the refusal is thrown before any stream output and the renderer never throws after the first byte. A fork that comes back busy is a real `503` for the chain |
 | Overage required | `extra usage` + `1m`, or the CLI's verbatim long-context sentences (`Extra usage is required for long context`, `Usage credits are required for long context`, `out of extra usage`) | Drop the extended-context variant, cool down — the included window still refills on a clock, so this is never `exhausted` |
 | Subprocess crash | `exited with code N` + stderr | 502. Meridian maps a generic exit-1 to 401 on a heuristic — **do not copy that**; classify honestly and log the stderr tail |
+| Oversized prompt | `prompt is too long`, `context_length_exceeded`, `exceed context limit`, or `terminal_reason: prompt_too_long` | **400**, `invalid-request`: waiting does not fix it, and an identical retry would burn a full turn on every account in the pool and strike every breaker to fail identically (Meridian #919). No failover, no breaker strike |
+| CLI too old for the model | `Claude Code <v> does not support this model` | **400**, `invalid-request`, naming the *router image* as the thing to upgrade. Every account shares the binary, so a failover would spend the whole pool on a fact about the image (Meridian 3ce6a57) |
+| Overloaded | `overloaded`, `529`, or `api_error_status` 503/529 | **529** (Anthropic's own code), `server-error`, retryable: an overload is about the upstream, not this credential. Before this row it fell to `unknown`, which does not retry — one overloaded answer failed the request with healthy accounts unasked |
+| Structured status | `api_error_status` 400/413/422 → 400; any 5xx → 502 | The fallback for a sentence nobody has recorded yet; strictly better than `unknown`, never better than a phrase |
 | Upstream idle | Guard expiry | 504 |
 
 The table is matched in order, most specific phrase first, and two rules keep it from lying

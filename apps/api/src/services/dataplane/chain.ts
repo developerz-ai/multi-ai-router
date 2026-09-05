@@ -10,17 +10,19 @@ import {
   recordAttempt,
 } from "../routing"
 import type { TranslationContext } from "../translate"
-import { type AttemptOutcome, runAttempt } from "./attempt"
+import type { AttemptOutcome } from "./attempt"
+import { logAttemptFailure } from "./attempt-log"
 import { rewriteModel } from "./body/read"
 import type { ByteSpan } from "./body/scanner"
 import { answeredFailure, type ChainFailure, foldChainFailure, routerFailure } from "./chain-error"
 import { recordAttemptFailure, relaySuccess } from "./chain-relay"
+import { dispatch } from "./dispatch"
+import { DEFAULT_LOG_REASON_MAX_CHARS } from "./dispatcher-config"
 import { breakerOptionsFor } from "./health"
 import type { ServableCandidate } from "./plan"
 import { admitHalfOpenProbe } from "./probe"
 import { relayUpstreamError } from "./relay-error"
 import type { DispatchRuntime } from "./runtime"
-import { runSdkAttempt } from "./sdk-attempt"
 import { withSessionRestart } from "./session-restart"
 import type { TranslatedRequestBody } from "./translate-body"
 
@@ -57,6 +59,11 @@ export interface ChainContext {
   readonly translated: TranslatedRequestBody
   readonly failover: FailoverOptions | undefined
   readonly log: Logger | undefined
+  /**
+   * Ceiling on the upstream's own words quoted on a failed-attempt log line — `LOG_REASON_MAX_CHARS`,
+   * threaded through `DispatchOptions.log`. Absent means {@link DEFAULT_LOG_REASON_MAX_CHARS}.
+   */
+  readonly reasonMaxChars?: number
 }
 
 export async function runChain(ctx: ChainContext): Promise<Response> {
@@ -195,12 +202,13 @@ export async function runChain(ctx: ChainContext): Promise<Response> {
       ...at,
       upstreamMs,
     })
-    ctx.log?.warn("upstream attempt failed", {
+    logAttemptFailure(
+      ctx.log,
       accountId,
-      attempt: decision.attempt,
-      status: outcome.failure.status,
-      failureKind: outcome.failure.kind,
-    })
+      decision.attempt,
+      outcome,
+      ctx.reasonMaxChars ?? DEFAULT_LOG_REASON_MAX_CHARS,
+    )
 
     lastFailure = outcome.failure
     held = foldChainFailure(
@@ -216,6 +224,7 @@ export async function runChain(ctx: ChainContext): Promise<Response> {
           rateLimit: outcome.rateLimit,
           now: attemptStartedAt,
           clientMessage: outcome.failure.message,
+          failureKind: outcome.failure.kind,
         },
       ),
     )
@@ -238,47 +247,6 @@ export async function runChain(ctx: ChainContext): Promise<Response> {
     throw new NoHealthyAccountError(`every attempt failed: ${lastFailure.message}`)
   }
   throw new NoHealthyAccountError("no candidate account could be attempted")
-}
-
-/**
- * The one place the two transports diverge. Both answer with the same `AttemptOutcome`, so the loop
- * above, the health store, the records, and the relay below are written once — from here down,
- * nothing can tell a re-synthesized SDK `Response` from one relayed off a socket.
- */
-function dispatch(
-  ctx: ChainContext,
-  servable: ServableCandidate,
-  body: Uint8Array | null,
-  inPlaceReplay: boolean,
-): Promise<AttemptOutcome> {
-  const { runtime } = ctx
-  if (servable.kind === "sdk") {
-    return runSdkAttempt({
-      plan: servable,
-      body,
-      invoke: runtime.invokeSdk,
-      session: runtime.session,
-      quota: runtime.quota,
-      now: runtime.clock.now,
-      timeoutMs: runtime.timeoutMs,
-      signal: ctx.request.signal,
-      // The planner only ever replays in place after `stale-session`, so this attempt already
-      // knows the SDK disowned the resumed id — the lineage plan must not offer it again.
-      sessionGone: inPlaceReplay,
-      ...(ctx.log === undefined ? {} : { log: ctx.log }),
-    })
-  }
-
-  return runAttempt({
-    plan: servable,
-    method: ctx.request.method,
-    clientHeaders: ctx.request.headers,
-    body,
-    fetch: runtime.call,
-    cipher: runtime.cipher,
-    timeoutMs: runtime.timeoutMs,
-    signal: ctx.request.signal,
-  })
 }
 
 /**

@@ -1,6 +1,6 @@
 import type { OpenAiChatCeiling } from "@multi-ai-router/core"
 import { TranslationError } from "@multi-ai-router/core"
-import type { TranslationContext, TranslationPair } from "../translate"
+import type { TranslationContext, TranslationDrop, TranslationPair } from "../translate"
 
 /**
  * The upstream body a translate candidate sends — built lazily, and at most once per target shape.
@@ -31,12 +31,20 @@ export interface TranslatedRequestBody {
   bodyFor(pair: TranslationPair, upstreamModel: string, chatCeiling: OpenAiChatCeiling): Uint8Array
 }
 
+/**
+ * Told once per conversion, with everything the translator dropped by name — one report per target
+ * shape, not one per field, so a long transcript full of `web_search_tool_result` blocks costs a
+ * single log line. Never called for a conversion that dropped nothing.
+ */
+export type DropReport = (pair: TranslationPair, drops: readonly TranslationDrop[]) => void
+
 const NOT_JSON = "The request body must be JSON for a cross-dialect request"
 const EMPTY = "The request body is empty: there is nothing to translate"
 
 export function createTranslatedRequestBody(
   bytes: Uint8Array,
   context: TranslationContext,
+  report?: DropReport,
 ): TranslatedRequestBody {
   const encoder = new TextEncoder()
   // Keyed by target *shape*, not target dialect: see the ceiling note above.
@@ -64,7 +72,12 @@ export function createTranslatedRequestBody(
         // A translator emits an object; anything else would mean a pair returning a body no
         // upstream could read, and asserting it here beats discovering it as a 400 from the
         // provider on a body we wrote.
-        const result = pair.request(body(), { ...context, chatCeiling })
+        const drops: TranslationDrop[] = []
+        const result = pair.request(body(), {
+          ...context,
+          chatCeiling,
+          onDrop: (drop) => void drops.push(drop),
+        })
         if (typeof result !== "object" || result === null || Array.isArray(result)) {
           throw new TranslationError(
             `the ${pair.ingress} to ${pair.egress} conversion produced no body`,
@@ -72,6 +85,7 @@ export function createTranslatedRequestBody(
         }
         translated = result as Record<string, unknown>
         converted.set(shape, translated)
+        if (drops.length > 0) report?.(pair, drops)
       }
       // Last, and unconditionally: the account's alias map is the operator saying which name this
       // upstream bills, and it must survive whatever the conversion put there.

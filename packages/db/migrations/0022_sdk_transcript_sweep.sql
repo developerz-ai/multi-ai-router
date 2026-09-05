@@ -1,0 +1,12 @@
+-- The Agent SDK transcript sweep, as a scheduled task.
+--
+-- Every Claude subscription turn leaves a transcript on the persistent volume:
+-- the `claude` CLI writes `<CLAUDE_CONFIG_DIR>/projects/<cwd>/<session>.jsonl`
+-- (plus a `<session>/` directory of tool results and subagent transcripts) for
+-- each SDK session, and nothing ever removed them — production measured a
+-- quarter of a gigabyte per account, essentially all of it older than the
+-- `sessions` rows that could still resume it. The task named here removes
+-- those files once they are older than `RETENTION_SDK_TRANSCRIPT_HOURS`
+-- (apps/api/src/scheduler/tasks/sdk-transcript-sweep.ts). `IF NOT EXISTS`, so
+-- a re-run of this migration is a no-op like every other one.
+ALTER TYPE "public"."scheduled_task" ADD VALUE IF NOT EXISTS 'sdk_transcript_sweep';

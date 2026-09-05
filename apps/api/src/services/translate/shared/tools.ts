@@ -5,6 +5,7 @@ import type {
   ParsedAnthropicTool,
   ParsedAnthropicToolChoice,
 } from "./anthropic"
+import { type DropSink, IGNORE_DROPS } from "./drops"
 import type { OpenAiChatTool, OpenAiChatToolChoice } from "./openai-chat"
 import type {
   OpenAiResponsesTool,
@@ -75,28 +76,47 @@ function assertObjectSchema(schema: Record<string, unknown>, field: string): voi
   }
 }
 
-export function toolsToOpenAiChat(tools: readonly ParsedAnthropicTool[]): OpenAiChatTool[] {
-  return tools.map((tool, index) => {
+/**
+ * Anthropic tool declarations → openai-chat function tools.
+ *
+ * A declaration with no `input_schema` is an Anthropic **server-side or built-in** tool — web search,
+ * code execution, the tool-search tool, `bash_20250124`, `text_editor_20250728`: a capability of
+ * Anthropic's own inference or a tool whose schema Anthropic supplies, not a declaration another
+ * upstream can act on. It is dropped and reported by name, never refused: Claude Code sends its
+ * whole toolkit on every turn, and a `400` over one tool the client never asked *this* upstream to
+ * run served nothing at all. The deferred-loading marker (`defer_loading`), `strict`,
+ * `eager_input_streaming` and `cache_control` are stripped by the schema — a target with no tool
+ * search gets every tool up front, which is the faithful reading of "deferred".
+ *
+ * @throws TranslationError (400) for a declaration that is not a valid Anthropic tool at all — no
+ * name, or a schema that is not an object schema.
+ */
+export function toolsToOpenAiChat(
+  tools: readonly ParsedAnthropicTool[],
+  onDrop: DropSink = IGNORE_DROPS,
+): OpenAiChatTool[] {
+  const out: OpenAiChatTool[] = []
+  for (const [index, tool] of tools.entries()) {
     const at = `tools[${index}]`
     const name = tool.name
     if (name === undefined || name.length === 0) rejectField(`${at}.name`, "is required")
 
     const schema = tool.input_schema
     if (schema === undefined) {
-      // A server-side tool (web search, code execution) is a capability of Anthropic's own
-      // inference, not a declaration the client can execute. Nothing on the OpenAI side runs it.
-      rejectField(
-        `${at}.input_schema`,
-        `is missing: \`${name}\` is an Anthropic server-side tool (type \`${tool.type ?? "unknown"}\`), which has no openai-chat counterpart`,
-      )
+      onDrop({
+        field: at,
+        reason: `\`${name}\` is an Anthropic server-side or built-in tool (type \`${tool.type ?? "unknown"}\`) with no openai-chat counterpart; dropped`,
+      })
+      continue
     }
     assertObjectSchema(schema, `${at}.input_schema`)
 
-    return {
+    out.push({
       type: "function",
       function: { name, description: tool.description, parameters: schema },
-    }
-  })
+    })
+  }
+  return out
 }
 
 export function toolsToAnthropic(tools: readonly ChatToolLike[]): AnthropicTool[] {

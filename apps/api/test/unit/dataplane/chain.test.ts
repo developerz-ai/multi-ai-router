@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import { TranslationError } from "@multi-ai-router/core"
+import { createLogger, type Logger } from "../../../src/logging/logger"
 import {
   createHealthStore,
   planCandidates,
@@ -72,7 +73,7 @@ function costlyTranslation(testClock: TestClock, ms: number): TranslatedRequestB
 }
 
 interface Chain {
-  readonly context: ChainContext
+  context: ChainContext
   readonly rows: readonly UsageRecord[]
 }
 
@@ -86,6 +87,7 @@ function chain(options: {
   readonly translated: TranslatedRequestBody
   readonly call: (request: Request) => Promise<Response>
   readonly decrypt?: (value: string) => string
+  readonly log?: Logger
 }): Chain {
   const upstream = account("or-1", { provider: "openrouter", apiKey: "sk-or", cipher: CRYPTOR })
   const plan = planCandidates(
@@ -125,9 +127,19 @@ function chain(options: {
       translation: { created: 0, model: "claude-opus-5", fallbackId: "msg_test" },
       translated: options.translated,
       failover: undefined,
-      log: undefined,
+      log: options.log,
     },
   }
+}
+
+/** A logger whose lines a test can read back, exactly as they would be written. */
+function capturedLogger(): { readonly log: Logger; readonly lines: Record<string, unknown>[] } {
+  const lines: Record<string, unknown>[] = []
+  const log = createLogger({
+    level: "debug",
+    write: (line) => void lines.push(JSON.parse(line) as Record<string, unknown>),
+  })
+  return { log, lines }
 }
 
 /** An upstream that charges the clock for its own time before answering, exactly as one does. */
@@ -214,6 +226,77 @@ describe("the upstream span opens when the transport is called, not when the att
     const row = it.rows[0]
     expect(row?.outcome).toBe("client_error")
     expect(row?.routerOverheadMs).toBe(TRANSLATE_MS)
+  })
+})
+
+describe("a chain whose only attempt hit its deadline answers 504, not the empty-pool 503", () => {
+  test("the timeout is the verdict the client hears", async () => {
+    const testClock = clock()
+    const it = chain({
+      clock: testClock,
+      translated: costlyTranslation(testClock, TRANSLATE_MS),
+      call: () => {
+        const error = new Error("deadline")
+        error.name = "TimeoutError"
+        return Promise.reject(error)
+      },
+    })
+
+    await expect(runChain(it.context)).rejects.toMatchObject({
+      code: "upstream_timeout",
+      status: 504,
+    })
+    expect(it.rows[0]?.outcome).toBe("upstream_timeout")
+  })
+})
+
+/**
+ * What the failed-attempt line says. Production read `status 502 failureKind server-error` and
+ * nothing else while a Claude-subscription pool failed every request; the classifier's signal and
+ * the upstream's own complaint are what an operator needs, scrubbed and bounded.
+ */
+describe("the failed-attempt log line names the why", () => {
+  test("carries the classifier's signal, the router's sentence, and the upstream's words", async () => {
+    const testClock = clock()
+    const { log, lines } = capturedLogger()
+    const it = chain({
+      clock: testClock,
+      log,
+      translated: costlyTranslation(testClock, 0),
+      call: answersAfter(testClock, 1, () =>
+        jsonResponse(401, { error: { message: "key sk-live-abcdefghijklmnop was rejected" } }),
+      ),
+    })
+
+    await expect(runChain(it.context)).rejects.toMatchObject({ code: "upstream_auth_failed" })
+
+    const line = lines.find((entry) => entry.msg === "upstream attempt failed")
+    expect(line).toBeDefined()
+    expect(line?.failureKind).toBe("auth")
+    expect(typeof line?.signal).toBe("string")
+    expect(typeof line?.reason).toBe("string")
+    expect(line?.upstreamMessage).toContain("was rejected")
+    // The redactor is the only thing between an upstream's echo and the log.
+    expect(JSON.stringify(line)).not.toContain("sk-live-abcdefghijklmnop")
+  })
+
+  test("the upstream's words are bounded by the configured ceiling", async () => {
+    const testClock = clock()
+    const { log, lines } = capturedLogger()
+    const it = chain({
+      clock: testClock,
+      log,
+      translated: costlyTranslation(testClock, 0),
+      call: answersAfter(testClock, 1, () =>
+        jsonResponse(401, { error: { message: "x".repeat(2_000) } }),
+      ),
+    })
+    it.context = { ...it.context, reasonMaxChars: 40 }
+
+    await expect(runChain(it.context)).rejects.toThrow()
+
+    const line = lines.find((entry) => entry.msg === "upstream attempt failed")
+    expect(String(line?.upstreamMessage).length).toBeLessThanOrEqual(40)
   })
 })
 

@@ -52,6 +52,18 @@ const sdkMessageSchema = z.looseObject({
   stop_reason: z.string().nullish(),
   /** `assistant` only: the SDK's own id for this message, which is what an undo rewinds to (§4). */
   uuid: z.string().nullish(),
+  /**
+   * `result` only: the turn failed, and these say how. `result` carries the API's own sentence on
+   * a `success`-subtype error (the shape an auth failure arrives in); `errors` carries the list an
+   * `error_during_execution` result names; the two numbers are the structured facts the SDK adds
+   * beside the prose — the upstream HTTP status when the failure was an API answer, and the
+   * SDK's own word for why the turn stopped (`prompt_too_long`, `api_error`, …).
+   */
+  is_error: z.boolean().nullish().catch(null),
+  result: z.string().nullish().catch(null),
+  errors: z.array(z.string()).nullish().catch(null),
+  api_error_status: z.number().int().nullish().catch(null),
+  terminal_reason: z.string().nullish().catch(null),
 })
 
 export interface SdkMessageView {
@@ -66,6 +78,14 @@ export interface SdkMessageView {
   readonly stopReason: string | null
   /** The SDK message id an `assistant` message carries. Null on every other type. */
   readonly uuid: string | null
+  /** `result` only: the turn ended in failure. False on every other type. */
+  readonly isError: boolean
+  /** What the SDK said went wrong: the `result` sentence, else the `errors` list joined. */
+  readonly errorText: string
+  /** The upstream HTTP status behind a failed `result`, when the SDK reported one. */
+  readonly apiErrorStatus: number | null
+  /** The SDK's own reason a `result` stopped, when it named one. */
+  readonly terminalReason: string | null
 }
 
 export interface SdkUsage {
@@ -90,7 +110,33 @@ export function readSdkMessage(value: unknown): SdkMessageView | null {
     usage: readUsage(data.usage),
     stopReason: data.stop_reason ?? null,
     uuid: data.uuid ?? null,
+    isError: data.type === "result" && data.is_error === true,
+    errorText: errorTextOf(data.result, data.errors),
+    apiErrorStatus: data.api_error_status ?? null,
+    terminalReason: nonEmpty(data.terminal_reason),
   }
+}
+
+/**
+ * The SDK's own precedence, mirrored (`Query.readMessages` in the SDK: a `success`-subtype error
+ * carries its sentence in `result`, every other subtype lists its causes in `errors`), so the text
+ * this router classifies is the text the SDK would have thrown had the subprocess exited non-zero.
+ */
+function errorTextOf(
+  result: string | null | undefined,
+  errors: readonly string[] | null | undefined,
+): string {
+  const sentence = nonEmpty(result)
+  if (sentence !== null) return sentence
+  return (errors ?? [])
+    .map((entry) => entry.trim())
+    .filter((entry) => entry.length > 0)
+    .join("; ")
+}
+
+function nonEmpty(value: string | null | undefined): string | null {
+  const trimmed = value?.trim()
+  return trimmed === undefined || trimmed === "" ? null : trimmed
 }
 
 /** @returns null when the value is not a usage block — absent or malformed. Never a zeroed one. */

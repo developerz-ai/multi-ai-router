@@ -172,6 +172,39 @@ describe("answeredFailure", () => {
     expect(error.retryAfterSeconds).toBe(90)
   })
 
+  test("a deadline the HTTP transport hit is a 504, never the empty-pool 503", () => {
+    // Production: every attempt in a chain timed out, `held` stayed null, and the client got
+    // `503 no_healthy_account "every attempt failed"` with no verdict at all. The timeout is the
+    // verdict — the account was reached and did not answer in time — and the rank table has held
+    // `upstream_timeout` for it since the table was written.
+    const timedOut = answeredFailure(null, null, null, {
+      rateLimit: null,
+      now: NOW,
+      clientMessage: "upstream did not answer within its deadline",
+      failureKind: "timeout",
+    })
+
+    expect(timedOut?.kind).toBe("router")
+    if (timedOut?.kind !== "router") return
+    expect(timedOut.error).toBeInstanceOf(UpstreamTimeoutError)
+    expect(timedOut.error.status).toBe(504)
+    // Still below a 429: the pool is free at the reset, and that is the cheaper next step.
+    expect(status(fold(timedOut, RATE_LIMITED))).toBe(429)
+    // But above a refusal specific to one account.
+    expect(status(fold(UNREADABLE, timedOut))).toBe(504)
+  })
+
+  test("a connect failure still contributes nothing: the account was never reached", () => {
+    expect(
+      answeredFailure(null, null, null, {
+        rateLimit: null,
+        now: NOW,
+        clientMessage: "upstream connection failed",
+        failureKind: "connection",
+      }),
+    ).toBeNull()
+  })
+
   test("a classified failure with no body keeps its status and its router-authored sentence", () => {
     // A subprocess crash, a busy session, an unclassifiable throw: classification, no upstream
     // body. Contributing nothing here collapsed every one of them into a generic 503

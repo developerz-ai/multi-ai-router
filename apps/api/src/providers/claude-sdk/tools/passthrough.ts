@@ -53,22 +53,43 @@ export interface PassthroughTool {
 }
 
 /**
+ * The definition shape every passthrough tool shares.
+ *
+ * The handler is typed on `unknown` rather than on the SDK's `InferShape` of the client's raw
+ * shape, and that is not laziness: since SDK 0.3.261 `tool()` infers the handler's argument type
+ * from the shape it was given, and a definition built over a runtime `ZodRawShape` infers a
+ * parameter no concrete call site can satisfy. The refusal below ignores its arguments by design
+ * (it never runs), so a handler that accepts anything states the truth *and* is what the SDK's
+ * `createSdkMcpServer` accepts.
+ */
+export type PassthroughToolDefinition = Omit<
+  SdkMcpToolDefinition<ToolSchema["shape"]>,
+  "handler"
+> & {
+  readonly handler: (args: unknown, extra: unknown) => Promise<CallToolResult>
+}
+
+/** What a tool handler answers with — the MCP result type, reached through the SDK's own surface. */
+type CallToolResult = Awaited<ReturnType<SdkMcpToolDefinition["handler"]>>
+
+/**
  * One client tool as an SDK tool definition.
  *
  * The handler closes over the client's name rather than the qualified one: if it ever does run, the
  * message the model reads should name the tool the way the conversation does.
  */
-export function passthroughToolDefinition(declared: PassthroughTool): SdkMcpToolDefinition {
-  return tool(
-    declared.name,
-    declared.description,
-    declared.schema.shape,
-    async () => ({
-      content: [{ type: "text" as const, text: toolDenial(declared.name) }],
-      isError: true,
-    }),
-    { alwaysLoad: declared.alwaysLoad },
-  )
+export function passthroughToolDefinition(declared: PassthroughTool): PassthroughToolDefinition {
+  const refuse = async (): Promise<CallToolResult> => ({
+    content: [{ type: "text" as const, text: toolDenial(declared.name) }],
+    isError: true,
+  })
+  // `tool()` still builds the definition — it is what stamps `alwaysLoad` into `_meta` under the
+  // SDK's own key — and only the handler's declared type is widened afterwards, to the same
+  // function.
+  const definition = tool(declared.name, declared.description, declared.schema.shape, refuse, {
+    alwaysLoad: declared.alwaysLoad,
+  })
+  return { ...definition, handler: refuse }
 }
 
 /**
@@ -79,7 +100,7 @@ export function passthroughToolDefinition(declared: PassthroughTool): SdkMcpTool
  * prompt — different for every request shape.
  */
 export function createPassthroughServer(
-  tools: readonly SdkMcpToolDefinition[],
+  tools: readonly PassthroughToolDefinition[],
 ): McpSdkServerConfigWithInstance {
   return createSdkMcpServer({
     name: PASSTHROUGH_SERVER_NAME,
