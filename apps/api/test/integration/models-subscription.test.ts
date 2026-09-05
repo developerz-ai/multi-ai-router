@@ -190,7 +190,14 @@ describe("GET /v1/models on a pool of Claude subscriptions", () => {
     await store.refresh()
 
     const body = await listed(subscriptionPool(store).app)
-    expect(body.data.map((row) => row.id)).toEqual(["claude-opus-5", "claude-sonnet-6", "sonnet"])
+    // The live rows are listed with the SDK's own resolution, and the shipped family aliases and
+    // ids sit beside them, so `opus` / `fable` / `haiku` are listed even when the handshake did not
+    // spell them. The wire listing is sorted by id, so containment is the assertion, not order.
+    const ids = body.data.map((row) => row.id)
+    for (const liveId of ["claude-opus-5", "claude-sonnet-6", "sonnet"]) expect(ids).toContain(liveId)
+    expect(body.data.find((row) => row.id === "sonnet")?.resolved_model).toBe("claude-sonnet-6")
+    for (const alias of ["opus", "fable", "haiku", "claude-fable-5-1"]) expect(ids).toContain(alias)
+    expect(new Set(ids).size).toBe(ids.length)
     // The SDK's resolution, not the shipped map's `claude-sonnet-5`.
     expect(body.data.find((row) => row.id === "sonnet")?.resolved_model).toBe("claude-sonnet-6")
   })

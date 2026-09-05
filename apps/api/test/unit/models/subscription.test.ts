@@ -120,13 +120,22 @@ describe("what an account contributes to GET /v1/models", () => {
       },
       // What the CLI actually reports for a 1M-context plan: a suffixed alias the shipped table
       // never spells, listed as it came.
-      { ...rows[0], id: "opus[1m]", listingSource: "live" as const, resolvedModel: "claude-opus-5[1m]" },
+      {
+        ...rows[0],
+        id: "opus[1m]",
+        listingSource: "live" as const,
+        resolvedModel: "claude-opus-5[1m]",
+      },
     ]
     const listed = listableModels(snapshot(), live)
     const byId = new Map(listed.map((model) => [model.id, model.resolvedModel]))
 
     // Live rows come first and their resolution is the one shown.
-    expect(listed.slice(0, 3).map((model) => model.id)).toEqual(["claude-opus-5", "sonnet", "opus[1m]"])
+    expect(listed.slice(0, 3).map((model) => model.id)).toEqual([
+      "claude-opus-5",
+      "sonnet",
+      "opus[1m]",
+    ])
     expect(byId.get("sonnet")).toBe("claude-sonnet-6")
     expect(byId.get("opus[1m]")).toBe("claude-opus-5[1m]")
     // The shipped family aliases and canonical ids the handshake did not spell are still there —
