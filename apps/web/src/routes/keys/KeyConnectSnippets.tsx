@@ -1,6 +1,7 @@
 import { createMemo, createSignal, createUniqueId, For, Show } from "solid-js"
+import { Banner } from "../../components/Banner"
 import { CopyValue } from "../../components/CopyValue"
-import { type ClientRecipe, clientRecipes } from "../../lib/client-snippets"
+import { type ClaudeReach, type ClientRecipe, clientRecipes } from "../../lib/client-snippets"
 import styles from "./KeyConnectSnippets.module.scss"
 
 export interface KeyConnectSnippetsProps {
@@ -9,6 +10,8 @@ export interface KeyConnectSnippetsProps {
   readonly keyValue: string
   /** Names the key in each copy control's label, so a screen reader hears which key it is. */
   readonly keyName: string
+  /** Whether this key's scope reaches a Claude subscription — decides the Claude Code panel's warning. */
+  readonly claudeSubscriptions?: ClaudeReach
 }
 
 /**
@@ -27,7 +30,11 @@ export interface KeyConnectSnippetsProps {
  */
 export function KeyConnectSnippets(props: KeyConnectSnippetsProps) {
   const uid = createUniqueId()
-  const recipes = createMemo(() => clientRecipes(props.baseUrl, props.keyValue))
+  const recipes = createMemo(() =>
+    clientRecipes(props.baseUrl, props.keyValue, {
+      claudeSubscriptions: props.claudeSubscriptions ?? "unknown",
+    }),
+  )
   const [selected, setSelected] = createSignal(0)
 
   // Clamped rather than trusted: `selected` outlives a change to the recipe list.
@@ -98,6 +105,14 @@ export function KeyConnectSnippets(props: KeyConnectSnippetsProps) {
             role="tabpanel"
           >
             <p class={styles.panelLead}>{recipe().lead}</p>
+
+            <Show when={recipe().warning}>
+              {(warning) => (
+                <Banner title="This key will not reach a Claude subscription" tone="warn">
+                  {warning()}
+                </Banner>
+              )}
+            </Show>
 
             <Show when={recipe().steps.length > 0}>
               <ol class={styles.steps}>

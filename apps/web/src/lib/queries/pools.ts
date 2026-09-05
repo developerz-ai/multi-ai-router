@@ -7,6 +7,7 @@ import {
   type UpdatePoolInput,
   updatePool,
 } from "../api/pools"
+import { LIVE_POLL_MS } from "../query"
 import { queryKeys } from "./query-keys"
 
 // Server state for pools.
@@ -23,6 +24,8 @@ export function usePools() {
   return useQuery(() => ({
     queryKey: queryKeys.pools.list(),
     queryFn: () => listPools(),
+    // Member rows carry account status, which moves on its own — see `LIVE_POLL_MS`.
+    refetchInterval: LIVE_POLL_MS,
   }))
 }
 

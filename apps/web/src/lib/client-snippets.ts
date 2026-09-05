@@ -28,6 +28,19 @@ export interface ClientRecipe {
   readonly snippets: readonly ClientSnippet[]
   /** The thing that bites. Stated, never dropped — `null` only when there genuinely isn't one. */
   readonly caveat: string | null
+  /** A problem with *this* key for *this* client, known from the key's own scope. Rare, loud. */
+  readonly warning: string | null
+}
+
+/**
+ * Whether the key's scope reaches a Claude subscription (`anthropic-oauth` account) — the one fact
+ * that decides if a Claude Code turn lands on a subscription or on nothing. `unknown` while the
+ * pools and accounts have not loaded; never guessed.
+ */
+export type ClaudeReach = "reachable" | "unreachable" | "unknown"
+
+export interface RecipeOptions {
+  readonly claudeSubscriptions?: ClaudeReach
 }
 
 /**
@@ -56,7 +69,11 @@ export function openAiBaseUrl(baseUrl: string): string {
  * Every recipe, in the order the panel shows them: the two clients most operators arrive with
  * first, then the file-configured ones, then the SDK and the raw request that proves the rest.
  */
-export function clientRecipes(baseUrl: string, keyValue: string): readonly ClientRecipe[] {
+export function clientRecipes(
+  baseUrl: string,
+  keyValue: string,
+  options: RecipeOptions = {},
+): readonly ClientRecipe[] {
   const origin = routerOrigin(baseUrl)
   const v1 = openAiBaseUrl(baseUrl)
 
@@ -64,8 +81,11 @@ export function clientRecipes(baseUrl: string, keyValue: string): readonly Clien
     {
       id: "claude-code",
       label: "Claude Code",
-      lead: "Anthropic dialect. The base URL carries no /v1 suffix — Claude Code appends /v1/messages itself.",
-      steps: [],
+      lead: "Anthropic dialect, two variables. The base URL carries no /v1 suffix — Claude Code appends /v1/messages itself.",
+      steps: [
+        "Export exactly these two variables in the shell that runs claude. Unset ANTHROPIC_API_KEY there — a second, different key is a rejected request, not a fallback.",
+        "Scope this key to a pool that contains the Claude subscriptions (anthropic-oauth accounts). That is what puts a Claude Code turn onto a subscription; a scope with none reaches API-key accounts only.",
+      ],
       snippets: [
         {
           label: "Shell environment",
@@ -74,6 +94,10 @@ export function clientRecipes(baseUrl: string, keyValue: string): readonly Clien
       ],
       caveat:
         "ANTHROPIC_AUTH_TOKEN sends the key as Authorization: Bearer, ANTHROPIC_API_KEY sends it as x-api-key. The router accepts either — set both only if they carry the same value, because two different keys is a rejected request, not a fallback.",
+      warning:
+        options.claudeSubscriptions === "unreachable"
+          ? "This key's scope reaches no Claude subscription. Claude Code will be served by API-key accounts only — or refused with 403 if none serves the model. Edit the key's scope to include the pool holding the anthropic-oauth accounts."
+          : null,
     },
     {
       id: "cursor",
@@ -90,6 +114,7 @@ export function clientRecipes(baseUrl: string, keyValue: string): readonly Clien
       ],
       caveat:
         "Agent and plan mode go through the override. Tab-autocomplete and inline edit stay on Cursor's own backend and never reach the router, so they will not appear in usage.",
+      warning: null,
     },
     {
       id: "codex",
@@ -113,6 +138,7 @@ export function clientRecipes(baseUrl: string, keyValue: string): readonly Clien
       ],
       caveat:
         'wire_api = "responses" targets POST /v1/responses. Set it to "chat" to go through /v1/chat/completions instead — the router serves both.',
+      warning: null,
     },
     {
       id: "aider",
@@ -131,6 +157,7 @@ export function clientRecipes(baseUrl: string, keyValue: string): readonly Clien
       ],
       caveat:
         "The openai/ and anthropic/ prefixes pick the dialect LiteLLM speaks and are stripped before the request leaves, so the router sees the bare model name and passes it through unchanged.",
+      warning: null,
     },
     {
       id: "openai-sdk",
@@ -168,6 +195,7 @@ export function clientRecipes(baseUrl: string, keyValue: string): readonly Clien
       ],
       caveat:
         "Anthropic's SDKs take the same two arguments — the bare origin as the base URL, without /v1, and the router key as the API key.",
+      warning: null,
     },
     {
       id: "curl",
@@ -200,6 +228,7 @@ export function clientRecipes(baseUrl: string, keyValue: string): readonly Clien
       ],
       caveat:
         "No anthropic-version header: the router sets each provider's required headers itself and overrides a client-supplied one. Model names pass through unchanged unless the selected account defines an alias.",
+      warning: null,
     },
   ]
 }

@@ -18,6 +18,7 @@ import {
 } from "../lib/account-status"
 import type { AccountView } from "../lib/api/types"
 import { USAGE_WINDOWS, type UsageWindow, usageWindowLabel } from "../lib/api/usage"
+import { createNow } from "../lib/clock"
 import { formatCost, formatCount, formatPercent } from "../lib/format"
 import { useAllAccounts, useRecheckAllAccounts } from "../lib/queries/accounts"
 import { usePools } from "../lib/queries/pools"
@@ -25,6 +26,8 @@ import { useProviders } from "../lib/queries/providers"
 import { useKeys } from "../lib/queries/router-keys"
 import { useSettings } from "../lib/queries/settings"
 import { useUsageSummary } from "../lib/queries/usage"
+import { isSubscriptionLogin, listNames } from "../lib/subscription-login"
+import { SubscriptionBanner } from "./accounts/SubscriptionBanner"
 import styles from "./OverviewRoute.module.scss"
 import { OnboardingPanel } from "./overview/OnboardingPanel"
 
@@ -43,7 +46,9 @@ interface StatusCount {
  *
  * `needs_reauth` shares the banner for the same reason — it is the other status
  * no amount of waiting fixes. They are still named separately inside it, because
- * one needs money and the other needs a re-login.
+ * one needs money and the other needs a re-login. Claude subscriptions are the
+ * exception: their re-login has a *deadline the router can see*, so they get
+ * `SubscriptionBanner` — which warns a week before the login dies, not after.
  *
  * Before any of that, this is also the screen a brand new deployment lands on with nothing in it
  * — `OnboardingPanel` owns that walk end to end and decides its own visibility from the same
@@ -63,6 +68,8 @@ export default function OverviewRoute() {
   const [window, setWindow] = createSignal<UsageWindow>("today")
   const usage = useUsageSummary(window)
   const recheckAll = useRecheckAllAccounts()
+  // Coarse: the subscription banner counts down in days, not seconds.
+  const now = createNow(30_000)
 
   const list = () => (accounts.isSuccess ? (accounts.data ?? []) : [])
   const poolList = () => (pools.isSuccess ? (pools.data ?? []) : [])
@@ -79,8 +86,9 @@ export default function OverviewRoute() {
   const zeroAccounts = createMemo(() => loaded() && list().length === 0)
 
   const exhausted = createMemo(() => list().filter((account) => account.status === "exhausted"))
+  // Subscriptions are named by their own banner, with the deadline; this one keeps the rest.
   const needsReauth = createMemo(() =>
-    list().filter((account) => account.status === "needs_reauth"),
+    list().filter((account) => account.status === "needs_reauth" && !isSubscriptionLogin(account)),
   )
 
   const counts = createMemo<readonly StatusCount[]>(() =>
@@ -161,6 +169,16 @@ export default function OverviewRoute() {
       </Show>
 
       <Show when={!zeroAccounts()}>
+        <SubscriptionBanner
+          accounts={list()}
+          action={() => (
+            <A class={styles.bannerLink} href="/accounts">
+              Open accounts
+            </A>
+          )}
+          nowMs={now()}
+        />
+
         <Show when={exhausted().length > 0 || needsReauth().length > 0}>
           <Banner
             action={
@@ -247,5 +265,5 @@ function bannerTitle(exhausted: number, needsReauth: number): string {
 }
 
 function names(accounts: readonly AccountView[]): string {
-  return accounts.map((account) => account.label).join(", ")
+  return listNames(accounts.map((account) => account.label))
 }

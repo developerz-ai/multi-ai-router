@@ -1,6 +1,5 @@
 import { createEffect, createMemo, createSignal, createUniqueId, Show } from "solid-js"
 import { Banner } from "../../components/Banner"
-import { Button } from "../../components/Button"
 import { CopyValue } from "../../components/CopyValue"
 import { Field } from "../../components/Field"
 import { Modal } from "../../components/Modal"
@@ -15,6 +14,7 @@ import {
 } from "../../lib/connect-capture"
 import { formatAbsolute } from "../../lib/reset-countdown"
 import styles from "./ConnectDialog.module.scss"
+import { ConnectFooter } from "./ConnectFooter"
 import { ConnectResult } from "./ConnectResult"
 
 export interface ConnectDialogProps {
@@ -33,6 +33,18 @@ export interface ConnectDialogProps {
   readonly onBegin: () => void
   readonly onComplete: (pasted: string) => void
   readonly onClose: () => void
+  /** Set when this login is one step of a guided "Reconnect all" run — "2 of 6" in the title. */
+  readonly progress?: ConnectProgress
+  /** Abandons this step and moves on; the sequence owns what "on" means. Only with `progress`. */
+  readonly onSkip?: () => void
+  /** After a completed step: advance. Only with `progress`. */
+  readonly onNext?: () => void
+}
+
+export interface ConnectProgress {
+  /** 1-based, as a human counts. */
+  readonly index: number
+  readonly total: number
 }
 
 /**
@@ -105,6 +117,14 @@ export function ConnectDialog(props: ConnectDialogProps) {
     if (submittable()) props.onComplete(pasted())
   }
 
+  const title = () => {
+    const step = props.progress
+    if (step !== undefined) return `Reconnect ${step.index} of ${step.total}`
+    return reconnect() ? "Re-authorize account" : "Connect account"
+  }
+  const lastStep = () =>
+    props.progress !== undefined && props.progress.index >= props.progress.total
+
   return (
     <Show when={props.account}>
       {(account) => (
@@ -115,36 +135,35 @@ export function ConnectDialog(props: ConnectDialogProps) {
               : `${account().label} · ${account().provider}`
           }
           footer={
-            <>
-              <Button onClick={() => props.onClose()} tone="ghost">
-                {props.completed === null && props.connectFlow !== null ? "Cancel" : "Close"}
-              </Button>
-              <Show when={props.connectFlow !== null && props.completed === null}>
-                <Show
-                  fallback={
-                    <Button busy={props.beginning} onClick={() => props.onBegin()} tone="primary">
-                      {startLabel()}
-                    </Button>
-                  }
-                  when={live()}
-                >
-                  <Button
-                    busy={props.completing}
-                    disabled={!submittable()}
-                    form={formId}
-                    tone="primary"
-                    type="submit"
-                  >
-                    Complete login
-                  </Button>
-                </Show>
-              </Show>
-            </>
+            <ConnectFooter
+              completed={props.completed !== null}
+              completing={props.completing}
+              connectable={props.connectFlow !== null}
+              beginning={props.beginning}
+              formId={formId}
+              lastStep={lastStep()}
+              live={live()}
+              onBegin={() => props.onBegin()}
+              onClose={() => props.onClose()}
+              onNext={props.onNext}
+              onSkip={props.onSkip}
+              progress={props.progress}
+              startLabel={startLabel()}
+              submittable={submittable()}
+            />
           }
           onClose={() => props.onClose()}
           open={props.open}
-          title={reconnect() ? "Re-authorize account" : "Connect account"}
+          title={title()}
         >
+          {/* First in the body, not last: a refused paste has to be read without scrolling past the
+              authorization block it is about, or the operator pastes again into a spent login. */}
+          <Show when={props.error !== undefined && props.error !== null}>
+            <p class={styles.error} role="alert">
+              {errorMessage(props.error)}
+            </p>
+          </Show>
+
           <Show when={props.connectFlow === null}>
             <Banner title="This provider takes a key, not a login" tone="info">
               <p>
@@ -225,12 +244,12 @@ export function ConnectDialog(props: ConnectDialogProps) {
                           />
                         )}
                       </Field>
+                      {/* Described-by and nothing more. A live region here would re-announce the
+                          whole sentence on every keystroke of a value that is pasted, not typed. */}
+                      <p class={styles.feedback} id={feedbackId}>
+                        {describePasteShape(classifyPaste(pasted()))}
+                      </p>
                     </form>
-                    {/* Described-by and nothing more. A live region here would re-announce the
-                        whole sentence on every keystroke of a value that is pasted, not typed. */}
-                    <p class={styles.feedback} id={feedbackId}>
-                      {describePasteShape(classifyPaste(pasted()))}
-                    </p>
                   </section>
 
                   <Show when={started().capture === "paste"}>
@@ -263,12 +282,6 @@ export function ConnectDialog(props: ConnectDialogProps) {
           </Show>
 
           <ConnectResult completed={props.completed} mode={props.mode} />
-
-          <Show when={props.error !== undefined && props.error !== null}>
-            <p class={styles.error} role="alert">
-              {errorMessage(props.error)}
-            </p>
-          </Show>
         </Modal>
       )}
     </Show>

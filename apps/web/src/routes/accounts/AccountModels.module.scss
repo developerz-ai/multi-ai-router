@@ -1,3 +1,5 @@
+@use "../../styles/mixins" as *;
+
 .root {
   display: grid;
   gap: var(--space-1);
@@ -19,14 +21,50 @@
   font-size: var(--text-xs);
 }
 
-.preview {
-  max-width: 14rem;
-  overflow: hidden;
+.summary {
+  display: inline-flex;
+  gap: var(--space-2);
+  align-items: center;
+}
+
+// A text-shaped disclosure, not a second bordered button beside "Discover":
+// the badge is the fact and this only opens it.
+.toggle {
+  padding: 0 var(--space-1);
+  background: none;
+  border: 0;
+  border-radius: var(--radius-1);
+  color: var(--accent);
+  font: inherit;
+  font-size: var(--text-xs);
+  cursor: pointer;
+}
+
+.toggle:hover {
+  text-decoration: underline;
+}
+
+.toggle:focus-visible {
+  @include focus-ring;
+}
+
+// `display: grid` would beat the UA's `[hidden] { display: none }`; say so here.
+.list[hidden] {
+  display: none;
+}
+
+.list {
+  display: grid;
+  gap: 1px;
+  max-width: 16rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
   color: var(--text-muted);
+  font-family: var(--font-mono);
   font-size: var(--text-xs);
   line-height: var(--line-snug);
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  overflow-wrap: anywhere;
 }
 
 .note {

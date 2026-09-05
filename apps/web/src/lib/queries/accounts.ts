@@ -20,6 +20,7 @@ import {
   updateAccount,
 } from "../api/accounts"
 import type { AccountView } from "../api/types"
+import { LIVE_POLL_MS } from "../query"
 import { queryKeys } from "./query-keys"
 
 // Server state for accounts.
@@ -38,6 +39,7 @@ export function useAccounts(filter: Accessor<AccountListFilter>) {
   return useQuery(() => ({
     queryKey: queryKeys.accounts.list(filter()),
     queryFn: () => listAccounts(filter()),
+    refetchInterval: LIVE_POLL_MS,
   }))
 }
 
@@ -46,6 +48,7 @@ export function useAllAccounts() {
   return useQuery(() => ({
     queryKey: queryKeys.accounts.list({}),
     queryFn: () => listAccounts({}),
+    refetchInterval: LIVE_POLL_MS,
   }))
 }
 
@@ -98,10 +101,11 @@ export function useRecheckAccount() {
   const client = useQueryClient()
   return useMutation(() => ({
     mutationFn: (id: string) => recheckAccount(id),
-    onSuccess: async (result: RecheckResult) => {
+    onSuccess: (result: RecheckResult) => {
       client.setQueryData(queryKeys.accounts.recheck(result.accountId), result)
-      await invalidateAccountReaders(client)
     },
+    // Settled, not success: the press may have cleared marks before the response failed.
+    onSettled: () => invalidateAccountReaders(client),
   }))
 }
 
@@ -109,12 +113,12 @@ export function useRecheckAllAccounts() {
   const client = useQueryClient()
   return useMutation(() => ({
     mutationFn: () => recheckAllAccounts(),
-    onSuccess: async (results: readonly RecheckResult[]) => {
+    onSuccess: (results: readonly RecheckResult[]) => {
       for (const result of results) {
         client.setQueryData(queryKeys.accounts.recheck(result.accountId), result)
       }
-      await invalidateAccountReaders(client)
     },
+    onSettled: () => invalidateAccountReaders(client),
   }))
 }
 
@@ -127,9 +131,14 @@ export function useTestAccount() {
   const client = useQueryClient()
   return useMutation(() => ({
     mutationFn: (input: TestAccountInput) => testAccount(input),
-    onSuccess: async (result: TestNowResult) => {
+    onSuccess: (result: TestNowResult) => {
       client.setQueryData(queryKeys.accounts.test(result.accountId), result)
+    },
+    // A test is one real completion: it writes a usage row and can flip the status (an auth
+    // failure lands as `needs_reauth`) whether or not the call itself came back ok.
+    onSettled: async () => {
       await invalidateAccountReaders(client)
+      await client.invalidateQueries({ queryKey: queryKeys.usage.root() })
     },
   }))
 }
@@ -143,10 +152,10 @@ export function useDiscoverAccountModels() {
   const client = useQueryClient()
   return useMutation(() => ({
     mutationFn: (id: string) => discoverAccountModels(id),
-    onSuccess: async (result: DiscoverModelsResult) => {
+    onSuccess: (result: DiscoverModelsResult) => {
       client.setQueryData(queryKeys.accounts.models(result.accountId), result)
-      await invalidateAccountReaders(client)
     },
+    onSettled: () => invalidateAccountReaders(client),
   }))
 }
 

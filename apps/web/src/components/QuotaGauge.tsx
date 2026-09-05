@@ -18,6 +18,12 @@ export interface QuotaGaugeProps {
    */
   readonly note?: string
   readonly tone?: QuotaGaugeTone
+  /**
+   * Whose figure this is — `reported` by the provider, `measured` by the router, `unlabelled` when
+   * a newer router names a source this build does not know. Printed beside the figure so a
+   * provider's percentage and the router's own estimate never look like the same kind of number.
+   */
+  readonly qualifier?: string | null
 }
 
 const TONE: Readonly<Record<QuotaGaugeTone, string | undefined>> = {
@@ -53,7 +59,7 @@ export function QuotaGauge(props: QuotaGaugeProps) {
   const spoken = () =>
     merged.value === null
       ? `no reading. ${merged.note ?? "The provider reported nothing for this window."}`
-      : merged.text
+      : `${merged.text}${merged.qualifier ? `, ${merged.qualifier}` : ""}`
 
   return (
     <div class={styles.root} title={merged.note}>
@@ -72,6 +78,9 @@ export function QuotaGauge(props: QuotaGaugeProps) {
         </span>
         <span aria-hidden="true">{merged.text}</span>
       </span>
+      <Show when={merged.qualifier}>
+        {(qualifier) => <span class={styles.qualifier}>{qualifier()}</span>}
+      </Show>
     </div>
   )
 }

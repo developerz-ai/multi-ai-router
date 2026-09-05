@@ -188,6 +188,47 @@ describe("the source label", () => {
   })
 })
 
+describe("a usage-endpoint reading", () => {
+  test("continuous — what the SDK gauge arrives as — is a filled bar with its percentage, qualified as reported", () => {
+    const row = describeQuotaWindow("active", window({ utilizationSource: "continuous" }), NOW)
+
+    expect(row.utilization).toBe(0.62)
+    expect(row.utilizationText).toBe("62%")
+    expect(row.utilizationQualifier).toBe("reported")
+    expect(row.utilizationNote).toContain("subscription's usage endpoint")
+  })
+
+  test("gauge, should core ever name it that, renders identically", () => {
+    const row = describeQuotaWindow("active", window({ utilizationSource: "gauge" }), NOW)
+
+    expect(row.utilizationQualifier).toBe("reported")
+    expect(row.utilizationNote).toBe(utilizationNote("continuous"))
+  })
+
+  test("a source this build does not know is a reading with an unlabelled origin, never a crash", () => {
+    const row = describeQuotaWindow("active", window({ utilizationSource: "from-the-future" }), NOW)
+
+    expect(row.utilization).toBe(0.62)
+    expect(row.utilizationQualifier).toBe("unlabelled")
+    expect(row.utilizationNote).toContain("does not label")
+    expect(utilizationNote("toString")).toContain("does not label")
+  })
+
+  test("no reading carries no qualifier; the router's own count reads measured", () => {
+    expect(
+      describeQuotaWindow("active", window({ utilization: null, utilizationSource: "none" }), NOW)
+        .utilizationQualifier,
+    ).toBeNull()
+    expect(
+      describeQuotaWindow(
+        "active",
+        window({ utilization: null, utilizationSource: "none", tokensUsed: 500, tokenLimit: 1000 }),
+        NOW,
+      ).utilizationQualifier,
+    ).toBe("measured")
+  })
+})
+
 describe("the utilization reading", () => {
   test("keeps a null reading null rather than collapsing it to zero", () => {
     const row = describeQuotaWindow("active", window({ utilization: null }), NOW)

@@ -6,8 +6,10 @@ import { PageHeader } from "../components/PageHeader"
 import { QueryBoundary } from "../components/QueryBoundary"
 import { TableSkeleton } from "../components/TableSkeleton"
 import { errorMessage } from "../lib/api/errors"
-import type { ApiKeyView } from "../lib/api/types"
+import type { ApiKeyView, KeyScopeView } from "../lib/api/types"
+import type { ClaudeReach } from "../lib/client-snippets"
 import { createNow } from "../lib/clock"
+import { scopeReaches } from "../lib/key-scope"
 import { routerBaseUrl } from "../lib/onboarding"
 import { useAllAccounts } from "../lib/queries/accounts"
 import { usePools } from "../lib/queries/pools"
@@ -21,6 +23,7 @@ import {
 } from "../lib/queries/router-keys"
 import { useSettings } from "../lib/queries/settings"
 import { useTableUsage } from "../lib/queries/table-usage"
+import { isSubscriptionLogin } from "../lib/subscription-login"
 import styles from "./KeysRoute.module.scss"
 import { KeyFormDialog, type KeyFormValues, toCreateKeyInput } from "./keys/KeyFormDialog"
 import { KeysTable } from "./keys/KeysTable"
@@ -30,6 +33,8 @@ interface ShownKey {
   readonly name: string
   readonly value: string
   readonly minted: boolean
+  /** So the Claude Code panel can say whether this key reaches a subscription at all. */
+  readonly scope: KeyScopeView
 }
 
 /**
@@ -64,6 +69,15 @@ export default function KeysRoute() {
   const baseUrl = () => routerBaseUrl(settings.data?.publicUrl ?? null, window.location.origin)
 
   const usage = useTableUsage("key")
+
+  // Scope ∩ fleet, the router's own rule, answered before the operator pastes a key into Claude
+  // Code and gets a 403 for a scope that never held a subscription. Unknown until both lists are in.
+  const claudeReach = (scope: KeyScopeView): ClaudeReach => {
+    if (!pools.isSuccess || !accounts.isSuccess) return "unknown"
+    return scopeReaches(scope, pools.data ?? [], accounts.data ?? [], isSubscriptionLogin)
+      ? "reachable"
+      : "unreachable"
+  }
 
   const create = useCreateKey()
   const update = useUpdateKey()
@@ -113,7 +127,7 @@ export default function KeysRoute() {
       create.mutate(toCreateKeyInput(values), {
         onSuccess: (key) => {
           closeForm()
-          setShown({ name: key.name, value: key.value, minted: true })
+          setShown({ name: key.name, value: key.value, minted: true, scope: key.scope })
         },
       })
       return
@@ -168,7 +182,12 @@ export default function KeysRoute() {
               onReveal={(key) =>
                 reveal.mutate(key.id, {
                   onSuccess: (revealed) =>
-                    setShown({ name: revealed.name, value: revealed.value, minted: false }),
+                    setShown({
+                      name: revealed.name,
+                      value: revealed.value,
+                      minted: false,
+                      scope: key.scope,
+                    }),
                 })
               }
               onRevoke={setPendingRevoke}
@@ -194,6 +213,7 @@ export default function KeysRoute() {
         {(key) => (
           <KeyValueDialog
             baseUrl={baseUrl()}
+            claudeSubscriptions={claudeReach(key().scope)}
             minted={key().minted}
             name={key().name}
             onClose={() => dismissValue(key().minted)}

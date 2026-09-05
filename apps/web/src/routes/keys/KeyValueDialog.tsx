@@ -1,6 +1,7 @@
 import { Button } from "../../components/Button"
 import { CopyValue } from "../../components/CopyValue"
 import { Modal } from "../../components/Modal"
+import type { ClaudeReach } from "../../lib/client-snippets"
 import { KeyConnectSnippets } from "./KeyConnectSnippets"
 import styles from "./KeyValueDialog.module.scss"
 
@@ -12,6 +13,8 @@ export interface KeyValueDialogProps {
   readonly minted: boolean
   /** The router's own address, for the per-client snippets below the value. */
   readonly baseUrl: string
+  /** From the key's scope ∩ the fleet — see `key-scope.ts`. Absent reads as unknown. */
+  readonly claudeSubscriptions?: ClaudeReach
   readonly onClose: () => void
 }
 
@@ -51,7 +54,12 @@ export function KeyValueDialog(props: KeyValueDialogProps) {
         You can come back and read this value whenever you need it — keys are encrypted at rest and
         retrievable by design. Nothing here is shown once.
       </p>
-      <KeyConnectSnippets baseUrl={props.baseUrl} keyName={props.name} keyValue={props.value} />
+      <KeyConnectSnippets
+        baseUrl={props.baseUrl}
+        claudeSubscriptions={props.claudeSubscriptions}
+        keyName={props.name}
+        keyValue={props.value}
+      />
     </Modal>
   )
 }

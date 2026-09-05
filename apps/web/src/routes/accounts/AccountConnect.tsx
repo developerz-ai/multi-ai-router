@@ -1,9 +1,10 @@
-import { createEffect, createSignal, on } from "solid-js"
+import { createEffect, createMemo, createSignal, on } from "solid-js"
 import type { ConnectCompleted, ConnectMode, ConnectStarted } from "../../lib/api/connect"
 import type { AccountView, ProviderConnectFlow } from "../../lib/api/types"
 import { useWatchedAccount } from "../../lib/queries/accounts"
 import { useBeginConnect, useCancelConnect, useCompleteConnect } from "../../lib/queries/connect"
-import { ConnectDialog } from "./ConnectDialog"
+import { connectLabel } from "./account-cells"
+import { ConnectDialog, type ConnectProgress } from "./ConnectDialog"
 
 export interface AccountConnectProps {
   /** Null while no account is selected. The dialog stays shut. */
@@ -11,6 +12,16 @@ export interface AccountConnectProps {
   readonly connectFlow: ProviderConnectFlow | null
   readonly nowMs: number
   readonly onClose: () => void
+  /**
+   * The guided "Reconnect all" run drives this with a step counter and starts each login the moment
+   * its account arrives — the operator already asked for all of them, so a second "Start" per row
+   * would be six extra clicks. Skip abandons the current login (cancelling its subprocess) and
+   * moves on; Next advances after a completed one.
+   */
+  readonly progress?: ConnectProgress
+  readonly autoBegin?: boolean
+  readonly onSkip?: () => void
+  readonly onNext?: () => void
 }
 
 /** How often a pending redirect capture re-reads the account. Only ever armed while one is live. */
@@ -54,11 +65,36 @@ export function AccountConnect(props: AccountConnectProps) {
     complete.reset()
   }
 
+  /**
+   * Which word the audit trail gets — the same decision the row's button label makes, so the
+   * dialog never says "Connect" over a button that said "Reconnect". See `connectLabel`.
+   */
+  const mode = (): ConnectMode => {
+    const account = props.account
+    return account !== null && connectLabel(account) === "Reconnect" ? "reconnect" : "connect"
+  }
+
+  const beginLogin = () => {
+    const account = props.account
+    if (account === null) return
+    setCompleted(null)
+    setStartedAt(watched.data?.updatedAt ?? account.updatedAt)
+    begin.mutate({ id: account.id, mode: mode() }, { onSuccess: (result) => setStarted(result) })
+  }
+
   // Selecting a different account starts a different login. Carrying the previous one across would
-  // offer an authorization URL bound to a row the operator is no longer looking at. `on` so the
-  // dependency is the id and not the prop object — a refetch handing back an equal-but-new
-  // `AccountView` must not wipe a live login.
-  createEffect(on(() => props.account?.id, clear))
+  // offer an authorization URL bound to a row the operator is no longer looking at. The dependency
+  // is a **memo of the id**, not the prop object: `on` re-runs whenever its source notifies, and a
+  // refetch (the poll, or this very login's own invalidation) hands back an equal-but-new
+  // `AccountView` — keyed on the object, that wiped a live login and, with `autoBegin`, restarted
+  // it in a loop. A memo only notifies when the id itself changes.
+  const accountId = createMemo(() => props.account?.id ?? null)
+  createEffect(
+    on(accountId, (id) => {
+      clear()
+      if (id !== null && props.autoBegin === true) beginLogin()
+    }),
+  )
 
   const awaitingRedirect = () =>
     started()?.capture === "redirect" && completed() === null && props.account !== null
@@ -83,13 +119,8 @@ export function AccountConnect(props: AccountConnectProps) {
     })
   })
 
-  /**
-   * Which word the audit trail gets. Derived from whether the router holds an authorization for
-   * this account, which is the only signal it has — see `connectLabel` in `AccountsTable`.
-   */
-  const mode = (): ConnectMode => (props.account?.hasCredential === true ? "reconnect" : "connect")
-
-  const close = () => {
+  /** Abandons an unfinished login (terminating its subprocess), then hands control to `then`. */
+  const leave = (then: () => void) => {
     const pending = started()
     const account = props.account
     // Completed logins have nothing left to abandon; an unfinished one does.
@@ -97,7 +128,7 @@ export function AccountConnect(props: AccountConnectProps) {
       cancel.mutate(account.id)
     }
     clear()
-    props.onClose()
+    then()
   }
 
   return (
@@ -110,23 +141,17 @@ export function AccountConnect(props: AccountConnectProps) {
       error={begin.error ?? complete.error}
       mode={mode()}
       nowMs={props.nowMs}
-      onBegin={() => {
-        const account = props.account
-        if (account === null) return
-        setCompleted(null)
-        setStartedAt(watched.data?.updatedAt ?? account.updatedAt)
-        begin.mutate(
-          { id: account.id, mode: mode() },
-          { onSuccess: (result) => setStarted(result) },
-        )
-      }}
-      onClose={close}
+      onBegin={beginLogin}
+      onClose={() => leave(props.onClose)}
       onComplete={(pasted) => {
         const account = props.account
         if (account === null) return
         complete.mutate({ id: account.id, pasted }, { onSuccess: (result) => setCompleted(result) })
       }}
+      onNext={props.onNext === undefined ? undefined : () => leave(props.onNext ?? (() => {}))}
+      onSkip={props.onSkip === undefined ? undefined : () => leave(props.onSkip ?? (() => {}))}
       open={props.account !== null}
+      progress={props.progress}
       started={started()}
     />
   )

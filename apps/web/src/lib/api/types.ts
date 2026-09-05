@@ -58,6 +58,12 @@ export interface AccountView {
   readonly billing: AccountBilling
   readonly tokenExpiresAt: string | null
   /**
+   * The subscription login's own lifetime — Claude subscriptions (`anthropic-oauth`) only, `null`
+   * for every other provider. Absent on an older API and read as `null`; see
+   * `subscription-login.ts` for what each field becomes on screen.
+   */
+  readonly credential?: SubscriptionCredentialView | null
+  /**
    * When this account last served a request, stamped off-path by the usage recorder. Null means
    * *never used* — rendered as that word, never as a zero or a blank cell.
    */
@@ -74,6 +80,27 @@ export interface AccountView {
 }
 
 /**
+ * What the API relays about a Claude subscription's login, read off the account's own
+ * `CLAUDE_CONFIG_DIR` metadata — never the token. `expiresAt` is when the ~30-day refresh token
+ * dies and a browser login is due again; `present: false` means the tokens are already gone.
+ */
+export interface SubscriptionCredentialView {
+  readonly expiresAt: string | null
+  /** `"max"`, `"pro"`, `"team"`, … — Anthropic's own spelling. */
+  readonly subscriptionType: string | null
+  /** `"default_claude_max_20x"` and friends. */
+  readonly rateLimitTier: string | null
+  readonly present: boolean
+}
+
+/**
+ * Core's enum plus the values a newer router may send ahead of this build (`gauge` is the SDK's
+ * plan-usage reading). Widened to any string on purpose: an unrecognised source must render as a
+ * reading with an unlabelled origin, never crash a row — see `utilizationNote`.
+ */
+export type QuotaUtilizationSource = UtilizationSource | "gauge" | (string & {})
+
+/**
  * `services/accounts/availability.ts` — `QuotaWindowView`.
  *
  * One row per window, never collapsed: a Claude subscription runs several on independent clocks
@@ -83,7 +110,7 @@ export interface QuotaWindowView {
   readonly window: QuotaWindowKind
   /** `0..1`, or null where the source reported nothing — normal, not a fault. */
   readonly utilization: number | null
-  readonly utilizationSource: UtilizationSource
+  readonly utilizationSource: QuotaUtilizationSource
   readonly resetsAt: string | null
   /** Always present, so a countdown is never rendered without its qualifier. */
   readonly resetSource: ResetSource

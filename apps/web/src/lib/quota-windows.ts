@@ -1,5 +1,5 @@
 import type { AccountStatus, QuotaWindowKind, UtilizationSource } from "@multi-ai-router/core"
-import type { QuotaWindowView } from "./api/types"
+import type { QuotaUtilizationSource, QuotaWindowView } from "./api/types"
 import {
   describeInstant,
   NEEDS_TOPUP,
@@ -70,9 +70,18 @@ export function quotaWindowTitle(window: QuotaWindowKind): string {
   return NAMING[window].title
 }
 
-/** Why a gauge reads what it reads. Keyed exhaustively for the same drift reason as `NAMING`. */
-const UTILIZATION_NOTE: Readonly<Record<UtilizationSource, string>> = {
-  continuous: "A real percentage at any point in the window.",
+/**
+ * Why a gauge reads what it reads. Keyed exhaustively over core's enum plus `gauge` for the same
+ * drift reason as `NAMING`; a value outside both is answered by `utilizationNote`'s fallback.
+ */
+const UTILIZATION_NOTE: Readonly<Record<UtilizationSource | "gauge", string>> = {
+  // `continuous` is what the SDK's plan-usage readings arrive as — the subscription's own usage
+  // endpoint, a real percentage at any point in the window. `gauge` is kept as its synonym in
+  // case core names it that later; both render the same way.
+  continuous:
+    "From the subscription's usage endpoint — the provider's own accounting, reported as a percentage of the window at any point in it.",
+  gauge:
+    "From the subscription's usage endpoint — the provider's own accounting, reported as a percentage of the window at any point in it.",
   "threshold-triggered":
     "The provider only reports near the limit, so an empty gauge here is normal, not a fault.",
   // `none` is per-window state, not a provider verdict: no reading has ever arrived for THIS
@@ -128,8 +137,36 @@ function compactTokens(value: number): string {
   return String(value)
 }
 
-export function utilizationNote(source: UtilizationSource): string {
-  return UTILIZATION_NOTE[source]
+/** The fallback names the fact it lacks: a reading arrived, and this build cannot say from where. */
+const UNLABELLED_NOTE =
+  "Reported for this window by a source this console version does not label. The figure is the provider's; only its origin is unnamed."
+
+export function utilizationNote(source: QuotaUtilizationSource): string {
+  return Object.hasOwn(UTILIZATION_NOTE, source)
+    ? UTILIZATION_NOTE[source as UtilizationSource | "gauge"]
+    : UNLABELLED_NOTE
+}
+
+/**
+ * The one word beside the figure saying whose number it is. `reported` for the provider's own
+ * reading (gauge or continuous), `measured` for the router's count against a configured ceiling,
+ * `unlabelled` for a source this build does not know — and null where there is no figure at all,
+ * so an empty gauge never carries a qualifier claiming otherwise.
+ */
+export type UtilizationQualifier = "reported" | "measured" | "unlabelled"
+
+export function utilizationQualifier(
+  window: Pick<QuotaWindowView, "utilization" | "utilizationSource">,
+  measured: number | null,
+): UtilizationQualifier | null {
+  if (window.utilization !== null && Number.isFinite(window.utilization)) {
+    const source = window.utilizationSource
+    if (source === "gauge" || source === "continuous" || source === "threshold-triggered") {
+      return "reported"
+    }
+    return "unlabelled"
+  }
+  return measured === null ? null : "measured"
 }
 
 export interface QuotaWindowDisplay {
@@ -140,8 +177,10 @@ export interface QuotaWindowDisplay {
   readonly utilization: number | null
   /** `"62%"`, or `"—"` when there is no reading. Always rendered, so no gauge is colour-only. */
   readonly utilizationText: string
-  readonly utilizationSource: UtilizationSource
+  readonly utilizationSource: QuotaUtilizationSource
   readonly utilizationNote: string
+  /** Whose figure the bar shows — see `utilizationQualifier`. Null with no reading. */
+  readonly utilizationQualifier: UtilizationQualifier | null
   /** Status-aware: `exhausted` yields `needs_topup` and never a countdown. */
   readonly reset: ResetDisplay
   /** Epoch ms, or null. Null whenever rendering the absolute instant would be a lie. */
@@ -227,6 +266,7 @@ export function describeQuotaWindow(
       window.utilization === null && measured !== null
         ? MEASURED_NOTE
         : utilizationNote(window.utilizationSource),
+    utilizationQualifier: utilizationQualifier(window, measured),
     reset,
     // Carried only where the *description* is about that instant. "Unknown" beside a printed
     // timestamp, or "needs top-up" beside one, are two ways of contradicting the sentence next
