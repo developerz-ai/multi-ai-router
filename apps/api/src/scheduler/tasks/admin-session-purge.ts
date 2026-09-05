@@ -1,41 +1,36 @@
 import type { ScheduledTask } from "../types"
+import { runSweeps } from "./sweep"
 
 /**
- * Sweeps expired admin console sessions out of the in-memory `SessionStore`
- * (`services/admin-auth/sessionStore.ts`).
+ * Sweeps expired admin console sessions out of the `SessionStore`
+ * (`services/admin-auth/postgresSessionStore.ts` in the deployed shape).
  *
- * **Its own task, not a fifth janitor category.** The janitor's four categories
- * are all Postgres tables, drained through `runSweeps` under the run's advisory
- * lock so exactly one replica does the work. This store is neither: it is a
- * `Map` living in *this* process's heap, so there is nothing to coordinate and
- * nothing another replica could double-delete. Folding it into the janitor
- * would buy a shared cadence at the cost of implying a shared resource that
- * does not exist.
+ * A table sweep like every other: `admin_sessions` is shared by every replica,
+ * so this runs through `runSweeps` under the run's advisory lock and exactly
+ * one replica drains it per tick, in bounded batches, resumable across
+ * shutdown. It stays its own task rather than a janitor category because it is
+ * on its own cadence (`ADMIN_SESSION_PURGE_INTERVAL_MINUTES`) and because it
+ * goes through the store, not a repository: the store also evicts the dead
+ * entries from its per-replica read cache, and only it knows that cache exists.
  *
- * **Every replica sweeps its own store.** The lock still wraps this task like
- * every other — `docs/idea/01-architecture.md`'s "no broker" is about the
- * *mechanism* (in-process timers, not a queue), not about serializing work
- * that is already replica-local — but losing the race here costs nothing: the
- * losing replica's sessions are exactly as expired as the winner's, and its
- * own next tick clears them. A single shared lock key for a per-replica job is
- * harmless, not a bug, and keeping it means this task needs no bespoke
- * unlock-free path through the runner.
- *
- * A session past `sessionExpiryMs` is already refused by `authenticate()` —
- * this task frees the memory an expired-but-unread session would otherwise
- * hold until a login attempt happened to probe it, or forever if none ever
- * did.
+ * **The cutoff is the tick's clock.** Both expiry bounds are already durable
+ * instants on the row — `authenticate()` refuses a session the moment either
+ * passes — so no retention window is applied here; the sweep only removes what
+ * the auth path would already reject, freeing the row a never-revisited
+ * session would otherwise hold forever.
  */
 
 export interface AdminSessionStoreForPurge {
-  /** Drops every session already past its own expiry. Returns how many. */
-  deleteExpired(nowMs: number): Promise<number>
+  /** Drops at most `limit` sessions past their own expiry. Returns how many; `limit` means more. */
+  deleteExpired(nowMs: number, limit: number): Promise<number>
 }
 
 export interface AdminSessionPurgeDeps {
   readonly sessions: AdminSessionStoreForPurge
   /** `ADMIN_SESSION_PURGE_INTERVAL_MINUTES`, in milliseconds. The runner jitters it. */
   readonly intervalMs: number
+  /** `SWEEP_BATCH_SIZE`. */
+  readonly batchSize: number
 }
 
 export function createAdminSessionPurgeTask(deps: AdminSessionPurgeDeps): ScheduledTask {
@@ -43,11 +38,22 @@ export function createAdminSessionPurgeTask(deps: AdminSessionPurgeDeps): Schedu
     name: "admin_session_purge",
     intervalMs: deps.intervalMs,
 
-    run: async ({ now, logger }) => {
-      const removed = await deps.sessions.deleteExpired(now.getTime())
+    run: async ({ now, logger, signal }) => {
+      const report = await runSweeps(
+        [
+          {
+            category: "adminSessions",
+            deleteBatch: (limit) => deps.sessions.deleteExpired(now.getTime(), limit),
+          },
+        ],
+        { batchSize: deps.batchSize, signal },
+      )
 
-      logger.info("admin session purge", { outcome: "success", removed })
-      return { outcome: "success", itemsProcessed: removed }
+      logger.info("admin session purge", {
+        outcome: report.outcome,
+        deleted: report.itemsProcessed,
+      })
+      return report
     },
   }
 }

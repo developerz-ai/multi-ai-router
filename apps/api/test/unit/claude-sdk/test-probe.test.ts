@@ -384,3 +384,36 @@ describe("what the probe reports back", () => {
     expect(result).toMatchObject({ ok: true, message: "pong", rateLimitInfos: [] })
   })
 })
+
+describe("the usage gauge on a probe turn", () => {
+  test("is asked of the query object after the answer, and the probe waits for it", async () => {
+    const observed: { accountId: string; source: unknown }[] = []
+    const stream = {
+      async *[Symbol.asyncIterator]() {
+        yield { type: "assistant", message: { content: [] } } as unknown as SDKMessage
+        yield pong()
+      },
+    }
+    const probe = createSdkTestProbe({
+      cliPathOverride: null,
+      concurrency: createSdkConcurrency({ global: 4, perAccount: 2 }),
+      resolveCli: () => CLI,
+      runQuery: () => stream,
+      usageGauge: {
+        observe: async (accountId, source) => {
+          observed.push({ accountId, source })
+        },
+      },
+    })
+
+    const result = await probe.run({
+      accountId: "acc-1",
+      configDir: "/data/claude/acc-1",
+      model: "claude-sonnet-4-5",
+      signal: AbortSignal.timeout(5_000),
+    })
+
+    expect(result.ok).toBe(true)
+    expect(observed).toEqual([{ accountId: "acc-1", source: stream }])
+  })
+})

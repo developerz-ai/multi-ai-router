@@ -52,9 +52,9 @@ export interface ScheduledTaskDeps {
   readonly oauthStates: Pick<OauthStateRepository, "deleteExpiredBefore">
   readonly usageDaily: Pick<UsageDailyRepository, "rollupDay" | "deleteOlderThan">
   /**
-   * The admin console's in-memory session store. Not a repository: it lives in this process's
-   * heap, so this task never needs the advisory lock's "exactly one replica" guarantee — see the
-   * task's own module comment.
+   * The admin console's session store, over the shared `admin_sessions` table. Handed in as the
+   * store rather than its repository because the store also evicts what the sweep deletes from
+   * its per-replica read cache — see the task's own module comment.
    */
   readonly adminSessions: AdminSessionStoreForPurge
   readonly accounts: Pick<
@@ -90,6 +90,11 @@ export interface ScheduledTaskDeps {
    * no CLI is available, in which case a dead credential is discovered by the paid test instead.
    */
   readonly authProbe?: AccountAuthProbe
+  /**
+   * The turn-free usage read for one subscription account, for the free half of the sweep. Absent
+   * where no CLI is available — the request path's gauge still covers accounts that serve traffic.
+   */
+  readonly usageProbe?: IdleAccountProbeDeps["usage"]
   /**
    * Which model each provider is probed with. Empty means nothing is probed — the sweep never
    * invents a model name, because the client picks the model and this is the one place the router
@@ -196,6 +201,7 @@ export function createScheduledTasks(deps: ScheduledTaskDeps): readonly Schedule
     createAdminSessionPurgeTask({
       sessions: deps.adminSessions,
       intervalMs: intervals.admin_session_purge,
+      batchSize,
     }),
     // The only task here that spends money, and the one that asks every subscription whether
     // it is still logged in: the free `claude auth status` check runs over every CLI-managed
@@ -211,6 +217,7 @@ export function createScheduledTasks(deps: ScheduledTaskDeps): readonly Schedule
             accounts: deps.accounts,
             test: deps.testAccount,
             ...(deps.authProbe === undefined ? {} : { auth: deps.authProbe }),
+            ...(deps.usageProbe === undefined ? {} : { usage: deps.usageProbe }),
             models: deps.probeModels ?? {},
             intervalMs: intervals.idle_account_probe,
             idleAfterMs: env.scheduler.idleAccountAfterDays * DAY_MS,
@@ -218,6 +225,9 @@ export function createScheduledTasks(deps: ScheduledTaskDeps): readonly Schedule
             // and bill a turn, which is nothing like deleting a row, so it gets a much smaller
             // bound of its own.
             batchSize: env.scheduler.idleAccountProbeBatchSize,
+            // Off by default: a billed keepalive cannot move a subscription's refresh-token cliff,
+            // and checking on a subscription must never spend usage.
+            paidTurn: env.scheduler.idleAccountProbePaidTurn,
           }),
         ]),
     // Hourly, and free: a model listing costs no tokens and spends no quota window. It writes only

@@ -84,12 +84,16 @@ describe("refreshing one account's catalog", () => {
         contextTokens: 204_800,
         maxOutputTokens: 131_072,
         contextSource: "shipped",
+        listingSource: "upstream",
+        resolvedModel: null,
       },
       {
         modelId: "glm-5.2",
         contextTokens: 1_048_576,
         maxOutputTokens: 131_072,
         contextSource: "shipped",
+        listingSource: "upstream",
+        resolvedModel: null,
       },
     ])
     expect(writes[0]?.at).toEqual(NOW)
@@ -120,17 +124,35 @@ describe("refreshing one account's catalog", () => {
     expect(writes).toEqual([])
   })
 
-  test("a Claude subscription is skipped without a socket being opened", async () => {
+  /**
+   * The subscription path is its own module (`subscription-refresh.test.ts`); what this asserts is
+   * the seam: a runtime with no SDK lister never opens a socket for a subscription and never fails
+   * the account over it.
+   */
+  test("a Claude subscription under a runtime with no lister is skipped, not fetched", async () => {
     const { deps, writes, calls } = harness({ data: [] })
 
     const outcome = await refreshAccountCatalog(
       deps,
-      accountRow({ provider: "anthropic-oauth" }),
+      accountRow({ provider: "anthropic-oauth", configDir: "/data/claude/acc-1" }),
       NOW,
     )
 
-    expect(outcome).toEqual({ kind: "skipped", reason: "agent-sdk:no-listing" })
+    expect(outcome).toEqual({ kind: "skipped", reason: "agent-sdk:no-lister" })
     expect(calls()).toBe(0)
+    expect(writes).toEqual([])
+  })
+
+  test("a subscription that needs re-auth is not asked — spawning the CLI to be told so is not free", async () => {
+    const { deps, writes } = harness({ data: [] })
+
+    const outcome = await refreshAccountCatalog(
+      deps,
+      accountRow({ provider: "anthropic-oauth", status: "needs_reauth" }),
+      NOW,
+    )
+
+    expect(outcome).toEqual({ kind: "skipped", reason: "agent-sdk:needs-reauth" })
     expect(writes).toEqual([])
   })
 
@@ -170,9 +192,21 @@ describe("which accounts are refreshable at all", () => {
     expect(isRefreshable({ provider: "zai", status: "disabled" })).toBe(false)
   })
 
-  test("the three exclusions", () => {
+  test("the exclusions", () => {
     expect(isRefreshable({ provider: "openrouter", status: "active" })).toBe(false)
-    expect(isRefreshable({ provider: "anthropic-oauth", status: "active" })).toBe(false)
     expect(isRefreshable({ provider: "zai", status: "disabled" })).toBe(false)
+  })
+
+  /**
+   * A subscription is asked through the Agent SDK's handshake, which spawns the CLI. Free of tokens,
+   * not free of a process — so a credential already known to be dead is left alone until a human
+   * reconnects it, where an HTTP account's listing is a GET cheap enough to keep trying.
+   */
+  test("a Claude subscription is refreshable unless it needs re-auth or is disabled", () => {
+    expect(isRefreshable({ provider: "anthropic-oauth", status: "active" })).toBe(true)
+    expect(isRefreshable({ provider: "anthropic-oauth", status: "cooling_down" })).toBe(true)
+    expect(isRefreshable({ provider: "anthropic-oauth", status: "exhausted" })).toBe(true)
+    expect(isRefreshable({ provider: "anthropic-oauth", status: "needs_reauth" })).toBe(false)
+    expect(isRefreshable({ provider: "anthropic-oauth", status: "disabled" })).toBe(false)
   })
 })

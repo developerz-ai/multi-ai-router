@@ -7,11 +7,14 @@
  * pools and keys selection reads on every request. The two words mean different things and the
  * directories keep them apart. Everything here is on the describing side of that line —
  * `accounts.supported_models` decides where a request may land and stays operator-owned, while this
- * reads an upstream's listing, fills what it did not say from a shipped table, and stores the
- * result for a console and a public listing to render. Nothing in selection imports this.
+ * reads an upstream's listing (or a subscription's Agent SDK handshake), fills what it did not say
+ * from a shipped table, and stores the result for a console and a public listing to render. Nothing
+ * in selection imports this.
  */
 
 export { catalogEntry } from "./entries"
+export type { ListedModel } from "./listable"
+export { listableModels, mergeResolution } from "./listable"
 export type {
   ListingFailureCode,
   UpstreamListing,
@@ -21,7 +24,16 @@ export type {
 export { listUpstreamModels, NOT_HTTP } from "./listing"
 export type { CatalogRefreshDeps, CatalogRefreshOutcome } from "./refresh"
 export { isRefreshable, refreshAccountCatalog } from "./refresh"
+export type { RefreshSubscriptionModels, SubscriptionModelRefreshDeps } from "./refresher"
+export { createSubscriptionModelRefresh } from "./refresher"
 export { selectForRefresh } from "./select"
 export type { ModelCatalogStore, ModelCatalogStoreDeps } from "./store"
 export { createModelCatalogStore } from "./store"
+export {
+  shippedSubscriptionCatalog,
+  shippedSubscriptionModels,
+  subscriptionCatalog,
+} from "./subscription"
+export type { SubscriptionListingDeps, SubscriptionRefreshDeps } from "./subscription-refresh"
+export { refreshSubscriptionCatalog } from "./subscription-refresh"
 export { CONTEXT_TABLE_AS_OF, lookupContextWindow } from "./windows"

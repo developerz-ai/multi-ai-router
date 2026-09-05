@@ -14,7 +14,13 @@ import {
 } from "@multi-ai-router/db"
 import type { Env } from "../config/env"
 import type { Logger } from "../logging/logger"
-import { createSdkTestProbe, type SdkConcurrency, type SdkQuotaStore } from "../providers"
+import {
+  createCredentialMetadataReader,
+  createSdkTestProbe,
+  type SdkConcurrency,
+  type SdkQuotaStore,
+  type SdkUsageGauge,
+} from "../providers"
 import type { AccountConfigDirs } from "../providers/claude-sdk/config-dir"
 import { scheduledTaskIntervals } from "../scheduler"
 import {
@@ -22,11 +28,13 @@ import {
   claudeCliFromEnv,
   connectFromEnv,
   createAccountsService,
+  createCredentialPark,
   createDiscoverModelsService,
   createRecheckService,
   createTestNowService,
   refresherFromEnv,
   withAvailability,
+  withCredentialMetadata,
 } from "../services/accounts"
 import {
   type CoherenceHooks,
@@ -47,6 +55,7 @@ import type { PriceBook } from "../services/cost"
 import type { CredentialCipher } from "../services/crypto/cipher"
 import type { HealthStore } from "../services/dataplane"
 import { createKeysService } from "../services/keys"
+import type { RefreshSubscriptionModels } from "../services/models"
 import { createPoolsService } from "../services/pools"
 import { createSettingsService } from "../services/settings"
 import { catalogLabels, createUsageService } from "../services/usage-read"
@@ -116,6 +125,15 @@ export interface AdminPlaneDeps {
    * would mean the task cleans a map nothing ever populates.
    */
   readonly sessionStore: SessionStore
+  /**
+   * One Account's model-catalog refresh, for the connect flow to call the moment a Claude login
+   * completes (`services/models/refresher.ts`). The same refresh the hourly sweep runs, plus an
+   * immediate warm of the store — so a subscription lists its models before the next tick rather
+   * than answering `data: []` for up to an hour.
+   */
+  readonly refreshSubscriptionModels: RefreshSubscriptionModels
+  /** The dispatch path's usage gauge, so a "Test now" turn also reads the plan's percentages. */
+  readonly usageGauge?: SdkUsageGauge
 }
 
 export interface AdminPlane {
@@ -133,7 +151,22 @@ export function createAdminPlane(deps: AdminPlaneDeps): AdminPlane {
 
   // Both halves of running the `claude` binary against an account's directory, and every login flow
   // behind the one service the admin plane mounts.
-  const cli = claudeCliFromEnv({ accounts, configDirs, audit, env, logger, now })
+  const cli = claudeCliFromEnv({
+    accounts,
+    configDirs,
+    audit,
+    env,
+    logger,
+    now,
+    // A completed login lifts the same live verdict Re-check does — see `connect/claude.ts`.
+    health,
+    refreshCatalog: deps.coherence.refreshCatalog,
+    // A freshly connected subscription lists its models at once, turn-free (`services/models`).
+    // Fire-and-forget: the refresh never throws, and a login does not wait on a catalog.
+    onConnected: (accountId) => {
+      void deps.refreshSubscriptionModels(accountId)
+    },
+  })
   // Expiry-driven per account, never a poll (non-negotiable 13); built before `connect` needs it.
   const refresher = refresherFromEnv({ accounts, cipher, audit, env, logger, now, catalog })
   const connect = connectFromEnv({
@@ -176,6 +209,7 @@ export function createAdminPlane(deps: AdminPlaneDeps): AdminPlane {
     sdkProbe: createSdkTestProbe({
       cliPathOverride: env.claudeCliPath,
       concurrency: deps.sdkConcurrency,
+      ...(deps.usageGauge === undefined ? {} : { usageGauge: deps.usageGauge }),
     }),
     // The turn is billed either way; this is what makes it also answer "how much is left" — and
     // `health` is what makes that answer visible, since the console reads a health snapshot rather
@@ -188,7 +222,7 @@ export function createAdminPlane(deps: AdminPlaneDeps): AdminPlane {
   const accountsService = createAccountsService({ accounts, keys, cipher, configDirs, audit, now })
   // Decorated once, and shared: "Discover models" writes through the same service the route does,
   // so its write refreshes the warm catalog exactly like an operator's edit would.
-  const decoratedAccounts = withAvailability(withCatalogRefresh(accountsService, deps.coherence), {
+  const availableAccounts = withAvailability(withCatalogRefresh(accountsService, deps.coherence), {
     catalog,
     health,
     recheck,
@@ -197,6 +231,16 @@ export function createAdminPlane(deps: AdminPlaneDeps): AdminPlane {
     // the console can draw a bar where the provider reports no utilization. One query, and only
     // for accounts whose operator set a ceiling.
     usage: createUsageReadRepository(deps.database),
+  })
+  // Outermost, so a dead login it parks is the status the read returns, not the warm catalog's
+  // stale `active`.
+  const decoratedAccounts = withCredentialMetadata(availableAccounts, {
+    reader: createCredentialMetadataReader(),
+    configDirs,
+    ttlMs: env.adminCredentialMetadataTtlSeconds * 1_000,
+    now,
+    park: createCredentialPark({ accounts, audit, refreshCatalog: deps.coherence.refreshCatalog }),
+    logger,
   })
 
   // "Discover models": one GET at the provider's own listing, written into `supportedModels`. No
@@ -223,7 +267,7 @@ export function createAdminPlane(deps: AdminPlaneDeps): AdminPlane {
           adminLoginMaxAttempts: env.adminAuth.loginMaxAttempts,
           adminLoginAttemptWindowMinutes: env.adminAuth.loginAttemptWindowMinutes,
           adminLoginLockoutMinutes: env.adminAuth.loginLockoutMinutes,
-          adminSessionSlideFraction: env.adminAuth.sessionSlideFraction,
+          adminSessionTouchIntervalSeconds: env.adminAuth.sessionTouchIntervalSeconds,
         }),
         // No OIDC variables means no OIDC door: the login page learns what is
         // offered from `methods()`, and the start/callback routes answer 404.

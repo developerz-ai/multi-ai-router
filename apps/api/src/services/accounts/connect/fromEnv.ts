@@ -13,6 +13,7 @@ import {
 } from "../../../providers/claude-sdk/login"
 import type { AuditRecorder } from "../../admin/audit"
 import type { CredentialCipher } from "../../crypto/cipher"
+import type { HealthStore } from "../../dataplane"
 import { type AccountAuthProbe, createClaudeAuthProbe } from "../../health/claudeAuthProbe"
 import type { CredentialRefresher } from "../refresh"
 import { type ClaudeConnectService, createClaudeConnectService } from "./claude"
@@ -53,6 +54,15 @@ export interface ClaudeCliFromEnvDeps {
   readonly env: Pick<Env, "claudeCliPath" | "retention">
   readonly logger: Logger
   readonly now: () => Date
+  /**
+   * Required here, optional on the service: the composition root always has a health store, and a
+   * completed login that left the breaker's `needs_reauth` verdict in place is the bug this wiring
+   * exists to close (`./claude.ts`, module comment).
+   */
+  readonly health: Pick<HealthStore, "reset">
+  readonly refreshCatalog: () => Promise<void>
+  /** See `ClaudeConnectDeps.onConnected`. */
+  readonly onConnected?: (accountId: string) => void
 }
 
 export function claudeCliFromEnv(deps: ClaudeCliFromEnvDeps): ClaudeCliStack {
@@ -97,6 +107,9 @@ export function claudeCliFromEnv(deps: ClaudeCliFromEnvDeps): ClaudeCliStack {
       pendingLoginMinutes: deps.env.retention.oauthStateMinutes,
       logger: deps.logger,
       now: deps.now,
+      health: deps.health,
+      refreshCatalog: deps.refreshCatalog,
+      ...(deps.onConnected === undefined ? {} : { onConnected: deps.onConnected }),
     }),
     authProbe: createClaudeAuthProbe({
       accounts: deps.accounts,

@@ -42,6 +42,8 @@ export {
   OAUTH_CALLBACK_PATH,
   parseAuthorizationPaste,
 } from "./connect"
+export type { CredentialMetadataDeps, CredentialParkDeps } from "./credential"
+export { createCredentialPark, withCredentialMetadata } from "./credential"
 export type {
   DiscoverModelsResult,
   DiscoverModelsService,
@@ -97,5 +99,5 @@ export type { AccountsService, AccountsServiceDeps } from "./service"
 export { createAccountsService } from "./service"
 export type { TestNowResult, TestNowService, TestNowServiceDeps } from "./test-now"
 export { createTestNowService } from "./test-now"
-export type { AccountView } from "./view"
+export type { AccountCredentialView, AccountView } from "./view"
 export { toAccountView } from "./view"

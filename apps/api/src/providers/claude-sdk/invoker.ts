@@ -5,12 +5,14 @@ import type { SdkConcurrency } from "./concurrency"
 import { classifySdkFailure } from "./errors"
 import type { SdkInvocation, SdkInvoker } from "./invoke"
 import { createQueryLaunch, type QueryLaunch } from "./options"
-import { buildSdkPrompt, type PromptBlock } from "./prompt"
+import { buildSdkPrompt } from "./prompt"
 import { renderSdkResponse, type StreamPacing } from "./render"
 import { readSdkRequest } from "./request"
 import { type CliResolution, resolveClaudeCli } from "./resolve-cli"
 import { createPassthrough, type Passthrough } from "./tools"
+import { holdPrompt, observeTurn } from "./turn-lifecycle"
 import { createSessionReport, createStderrTail, withStderr } from "./turn-support"
+import type { SdkUsageGauge, SdkUsageGaugeSource } from "./usage-gauge"
 
 /**
  * The `SdkInvoker` itself: one Anthropic Messages request in, one `query()` turn, one Anthropic
@@ -30,15 +32,18 @@ import { createSessionReport, createStderrTail, withStderr } from "./turn-suppor
  *    nothing: `allowlist.ts` still decides what may execute, which is nothing (§7).
  * 5. **Launch** (`options.ts`) — isolation flags, the abort bridge, and the lineage plan verbatim.
  * 6. **Render** (`render/`) — SDK messages back into Anthropic Messages, streaming or not.
+ * 7. **Gauge** (`usage-gauge.ts`) — once the first content frame is out, ask the query object for
+ *    the plan's usage percentages, off the response path; `turn-lifecycle.ts` keeps the subprocess
+ *    alive for exactly that long after `result`.
  *
  * Three lifetimes are managed here and nowhere else, because this is the only module that holds all
  * three at once:
  *
- * - **The slot** is held from the instant it is granted until the message stream ends — normally,
- *   by failure, or by a client that went away — never released early by a throw between acquire and
- *   launch, and never when `query()` returns, which is immediately and long before the answer.
- *   Everything after the acquire runs under a handler that hands the permits back on failure,
- *   because a leaked permit is invisible until the fourth one wedges the account for good
+ * - **The slot** is held from the instant it is granted until the subprocess is finished with —
+ *   normally, by failure, or by a client that went away — never released early by a throw between
+ *   acquire and launch, and never when `query()` returns, which is immediately and long before the
+ *   answer. Everything after the acquire runs under a handler that hands the permits back on
+ *   failure, because a leaked permit is invisible until the fourth one wedges the account for good
  *   (`concurrency.ts`: "every holder releases").
  * - **The abort bridge** is detached at the same moment, or a finished query keeps a listener on a
  *   signal that outlives it (§9).
@@ -60,11 +65,17 @@ import { createSessionReport, createStderrTail, withStderr } from "./turn-suppor
  * can only be exercised by spawning one is a transport nobody can test.
  */
 
+/**
+ * What `query()` hands back, narrowed to what this module uses: the message stream, plus the one
+ * control method the usage gauge asks — optional, so a test's plain async iterable still qualifies.
+ */
+export type SdkQueryStream = AsyncIterable<unknown> & SdkUsageGaugeSource
+
 /** The SDK's own entry point, narrowed to what this module uses. */
 export type SdkQueryFn = (params: {
   prompt: AsyncIterable<SDKUserMessage>
   options: Options
-}) => AsyncIterable<unknown>
+}) => SdkQueryStream
 
 export interface SdkInvokerDeps {
   /** Bounds `claude` subprocesses, globally and per Account. Shared across every request. */
@@ -77,6 +88,11 @@ export interface SdkInvokerDeps {
   readonly runQuery?: SdkQueryFn
   /** Idle guard and keep-alive cadence. Defaults to the renderer's own (90 s / 15 s). */
   readonly pacing?: StreamPacing
+  /**
+   * The per-turn plan-usage reading. Absent means no gauge is asked and the turn ends exactly as it
+   * always did — a deployment that wires none simply keeps showing alarms instead of percentages.
+   */
+  readonly usageGauge?: SdkUsageGauge
 }
 
 /**
@@ -140,18 +156,26 @@ export function createSdkInvoker(deps: SdkInvokerDeps): SdkInvoker {
       const started = launch
 
       const report = createSessionReport(invocation.onSession)
-      const done = (): void => {
-        report.fire()
-        started.detach()
-        slot.release()
-      }
+      const held = holdPrompt(prompt)
 
       try {
-        const messages = runQuery({ prompt: singleTurn(prompt), options: started.options })
-        const filtered = passthrough === null ? messages : passthrough.filter(messages)
+        const messages = runQuery({ prompt: held.prompt, options: started.options })
+        // The gauge is asked of the query object itself — the SDK doing the request, inside this
+        // Account's own config directory, with a credential this router never sees.
+        const turn = observeTurn(messages, {
+          onFirstContent: () =>
+            deps.usageGauge?.observe(invocation.accountId, messages) ?? Promise.resolve(),
+          onSettled: held.release,
+          onEnd: () => {
+            report.fire()
+            started.detach()
+            slot.release()
+          },
+        })
+        const filtered = passthrough === null ? turn : passthrough.filter(turn)
 
         const response = await renderSdkResponse({
-          messages: untilExhausted(filtered, done),
+          messages: filtered,
           model: invocation.model,
           stream: request.stream,
           ...(deps.pacing === undefined ? {} : { pacing: deps.pacing }),
@@ -193,8 +217,9 @@ export function createSdkInvoker(deps: SdkInvokerDeps): SdkInvoker {
       } catch (error) {
         // The renderer only throws before a byte is on the wire, so this is still allowed to be a
         // real status — and a retry is still legal. The subprocess is terminated because nothing is
-        // going to read it now.
+        // going to read it now, and the prompt released so the SDK's input loop ends with it.
         report.fire()
+        held.release()
         started.abort(error)
         throw withStderr(error, stderr.tail())
       }
@@ -229,39 +254,3 @@ export function createSdkInvoker(deps: SdkInvokerDeps): SdkInvoker {
 
 /** The one rung that won, as `resolve-cli.ts` reports it. */
 type UsableCli = Extract<CliResolution, { ok: true }>
-
-/**
- * The prompt, as the SDK's streaming input.
- *
- * One user message, and the stream ends there: the SDK closes the subprocess's stdin once the
- * iterable is exhausted, which is what makes a single-turn endpoint out of a bidirectional
- * protocol. The structured form is used rather than a plain string because a string cannot carry an
- * image, and dropping the client's images would be a fidelity loss nothing forces on us (§6).
- */
-async function* singleTurn(content: readonly PromptBlock[]): AsyncIterable<SDKUserMessage> {
-  const message: SDKUserMessage = {
-    type: "user",
-    message: { role: "user", content: [...content] },
-    parent_tool_use_id: null,
-  }
-  yield message
-}
-
-/**
- * Runs `onEnd` exactly once, when the SDK's message stream is finished with — whether it ended, or
- * failed, or the renderer let go of it because the client did.
- *
- * A wrapper rather than a callback on the renderer, because the renderer's job is one turn's frames
- * and this is the request's resources. `finally` on a generator is the one construct that fires for
- * all three endings, including the one nobody writes a test for.
- */
-async function* untilExhausted(
-  messages: AsyncIterable<unknown>,
-  onEnd: () => void,
-): AsyncIterable<unknown> {
-  try {
-    for await (const message of messages) yield message
-  } finally {
-    onEnd()
-  }
-}

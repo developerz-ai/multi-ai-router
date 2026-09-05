@@ -32,6 +32,8 @@ export {
   ADMIN_CREDENTIAL_SINGLETON,
   createAdminCredentialRepository,
 } from "./repositories/admin-credential-repository"
+export type { AdminSessionRepository } from "./repositories/admin-session-repository"
+export { createAdminSessionRepository } from "./repositories/admin-session-repository"
 export type { ApiKeyRepository } from "./repositories/api-key-repository"
 export { createApiKeyRepository } from "./repositories/api-key-repository"
 export type { AppendAuditEventInput, AuditRepository } from "./repositories/audit-repository"
@@ -120,6 +122,8 @@ export { accounts } from "./schema/accounts"
 export type { AdminCredentialRow, NewAdminCredentialRow } from "./schema/admin-credentials"
 // --- tables -----------------------------------------------------------------
 export { adminCredentials } from "./schema/admin-credentials"
+export type { AdminSessionRow, NewAdminSessionRow } from "./schema/admin-sessions"
+export { adminSessions } from "./schema/admin-sessions"
 export type {
   ApiKeyAccountRow,
   ApiKeyPoolRow,

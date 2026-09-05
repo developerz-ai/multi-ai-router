@@ -59,13 +59,20 @@ describe("choosing the accounts one catalog tick refreshes", () => {
    */
   test("accounts that can never be refreshed do not consume the batch", () => {
     const accounts = [
-      account("sub", { provider: "anthropic-oauth" }),
+      account("locked-sub", { provider: "anthropic-oauth", status: "needs_reauth" }),
       account("aggregator", { provider: "openrouter" }),
       account("off", { status: "disabled" }),
       account("real"),
     ]
 
     expect(selectForRefresh(accounts, [], 2).map((a) => a.id)).toEqual(["real"])
+  })
+
+  /** A subscription's catalog comes from the Agent SDK's handshake, and the sweep asks for it too. */
+  test("a healthy Claude subscription takes its turn like any HTTP account", () => {
+    const accounts = [account("sub", { provider: "anthropic-oauth" }), account("real")]
+
+    expect(selectForRefresh(accounts, [], 5).map((a) => a.id)).toEqual(["real", "sub"])
   })
 
   test("the cap is a rate limit, and the remainder is simply next tick's work", () => {

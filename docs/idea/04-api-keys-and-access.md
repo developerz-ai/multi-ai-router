@@ -84,7 +84,7 @@ The only password-shaped credential is the optional local admin password above; 
 | `Path` | `/` | SPA and API share an origin |
 | `Secure` | default | HTTPS is assumed in front (reverse proxy) |
 | `__Host-` prefix | default | host-only, `Path=/`, `Secure` — enforced by the *browser*. What stops a sibling subdomain planting a session cookie on this origin |
-| Lifetime | sliding idle window (`ADMIN_SESSION_IDLE_MINUTES`, default 480) under a hard absolute cap (`ADMIN_SESSION_ABSOLUTE_HOURS`, default 24) | Sliding alone means a stolen cookie is renewable forever by the thief; the cap turns "forever" into a bounded window. A session dies at whichever bound comes first |
+| Lifetime | sliding idle window (`ADMIN_SESSION_IDLE_MINUTES`, default 43200 — 30 d) under a hard absolute cap (`ADMIN_SESSION_ABSOLUTE_HOURS`, default 720 — 30 d); the session row lives in Postgres and survives a redeploy ([13-admin-oidc.md](13-admin-oidc.md#session-lifetime-and-durability)) | Sliding alone means a stolen cookie is renewable forever by the thief; the cap turns "forever" into a bounded window. A session dies at whichever bound comes first |
 | `SESSION_COOKIE_INSECURE` | `false` | The escape hatch. Set `true` to drop `Secure` **and** `__Host-`, and nothing else |
 
 **Why the escape hatch exists.** A self-hosted router reached at `http://192.168.1.50:8080` — a
@@ -346,6 +346,31 @@ value the authorization page left behind, `DELETE /:id/connect` abandons what is
 leaving a subprocess — or a redeemable `state` — to its TTL, and `POST /:id/reconnect` is the same
 start against the same row: id, config directory, pool membership, and usage history all survive,
 and only the audit kind differs (`account.reauthorized` rather than `account.connected`).
+
+Every account read (`GET /api/admin/accounts`, `GET /api/admin/accounts/:id`) carries a
+`credential` field beside `availability`:
+
+```json
+"credential": {
+  "expiresAt": "2026-10-03T09:30:00.000Z",
+  "subscriptionType": "max",
+  "rateLimitTier": "default_claude_max_20x",
+  "present": true
+}
+```
+
+It is **metadata about a Claude subscription's login, never the login itself**
+([11-anthropic-agent-sdk.md §3](11-anthropic-agent-sdk.md)): `expiresAt` is when the refresh token
+— and so the login — dies, read from the Account's own `CLAUDE_CONFIG_DIR` so the console can warn
+before it does; `subscriptionType` and `rateLimitTier` are the plan as the CLI recorded them;
+`present` is whether the file still holds tokens at all. `present: false` is a login that is already
+dead or never happened, and a read that finds it against an `active` row parks the row
+`needs_reauth` through the same conditional status write the auth probe uses, audited as
+`account.updated`. The field is `null` for every provider that holds no config directory, and also
+`null` when the file could not be read — *unknown* is not *dead*, so nothing is parked then. It is
+absent on a write. The reader picks exactly those fields and drops the tokens before anything else
+sees the parsed file; there is no field on the response that could hold one. Reads are cached per
+account for `ADMIN_CREDENTIAL_METADATA_TTL_SECONDS`.
 
 **The same four calls serve both logins.** Which one an Account takes is read from the provider
 registry, not passed by the caller, so the console has no table of provider-to-endpoint: a Claude

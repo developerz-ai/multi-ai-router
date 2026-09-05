@@ -167,12 +167,18 @@ export interface AdminAuthConfig {
   /** How long a tripped throttle key stays locked. */
   readonly loginLockoutMinutes: number
   /**
-   * Share of the idle window a session must have advanced before the slide persists to the
-   * store. `0.1` of an 8-hour idle window is ~48 minutes: an operator clicking around gets one
-   * store write roughly every that often instead of one per request — see
-   * `services/admin-auth/service.ts`.
+   * How long a session's idle-window slide may go unpersisted. An operator clicking around gets
+   * one `admin_sessions` write per interval instead of one per request; the in-memory value is
+   * authoritative for every response regardless — see `services/admin-auth/service.ts`. `0` is
+   * legal and means "persist every slide".
    */
-  readonly sessionSlideFraction: number
+  readonly sessionTouchIntervalSeconds: number
+  /**
+   * Sessions the durable store keeps warm in memory per replica, so `authenticate()` never reads
+   * Postgres for a session it has already seen. Sized for one operator with a few browsers; the
+   * table is the truth, the cache is only what stops a read per admin request.
+   */
+  readonly sessionCacheMax: number
   /**
    * Drops `Secure` and the `__Host-` prefix from the session cookie. Off by
    * default and warned about at boot: it is the escape hatch for a plain-HTTP
@@ -372,6 +378,14 @@ export interface SchedulerConfig {
    */
   readonly idleAccountProbeBatchSize: number
   /**
+   * Whether the keepalive spends a real, billed turn on each idle account. **Off by default**: a
+   * turn refreshes only a Claude subscription's *access* token — the 30-day refresh-token cliff is
+   * unaffected — so the operator was paying usage for a check that could not achieve its aim.
+   * The free `claude auth status` check still runs daily over every subscription; this flag is
+   * the only thing that lets the sweep bill anything (`scheduler/tasks/idle-account-probe.ts`).
+   */
+  readonly idleAccountProbePaidTurn: boolean
+  /**
    * How often the model catalog is re-read from each account's upstream. Hourly by default, which
    * it can afford to be: a model listing costs no tokens and spends no quota window, unlike the
    * keepalive above. It writes only `model_catalog` — a description nothing in routing reads — so
@@ -527,6 +541,25 @@ export interface Env {
    * window (`services/accounts/test-now.ts`).
    */
   readonly accountTestNowCooldownSeconds: number
+  /**
+   * How long the admin accounts read trusts one reading of a Claude subscription's credential
+   * *metadata* (login expiry, plan, tier — never the token; `providers/claude-sdk/credential-
+   * metadata.ts`) before re-reading the file. A console poll must not stat six files a second.
+   */
+  readonly adminCredentialMetadataTtlSeconds: number
+  /**
+   * The Agent-SDK usage gauge: the plan's per-window percentages, asked of the SDK's own query
+   * object once a turn has started answering (`providers/claude-sdk/usage-gauge.ts`). Never on
+   * the response path, never a turn of its own.
+   */
+  readonly claudeSdkUsageGauge: {
+    /** `CLAUDE_SDK_USAGE_GAUGE`. Off leaves the console showing alarms only. */
+    readonly enabled: boolean
+    /** `CLAUDE_SDK_USAGE_GAUGE_TIMEOUT_MS`. A reading slower than this is dropped. */
+    readonly timeoutMs: number
+    /** `CLAUDE_SDK_USAGE_GAUGE_MIN_INTERVAL_SECONDS`. At most one reading per account per interval. */
+    readonly minIntervalSeconds: number
+  }
   readonly retention: RetentionConfig
   readonly janitorIntervalMinutes: number
   readonly adminAuth: AdminAuthConfig
@@ -618,6 +651,9 @@ export const ENV_FIELDS = {
   CLAUDE_CLI_PATH: nonEmpty.optional(),
   CLAUDE_SDK_MAX_CONCURRENCY: atLeastOne.optional(),
   CLAUDE_SDK_MAX_CONCURRENCY_PER_ACCOUNT: atLeastOne.optional(),
+  CLAUDE_SDK_USAGE_GAUGE: flag.optional(),
+  CLAUDE_SDK_USAGE_GAUGE_TIMEOUT_MS: atLeastOne.optional(),
+  CLAUDE_SDK_USAGE_GAUGE_MIN_INTERVAL_SECONDS: wholeNumber.optional(),
   METRICS_TOKEN: nonEmpty.optional(),
   // Refused by name at boot when too short to resist guessing, or when it wears the router-key
   // prefix — the admin guard rejects that prefix outright, so such a token would authenticate
@@ -630,6 +666,7 @@ export const ENV_FIELDS = {
     .optional(),
   ACCOUNT_RECHECK_COOLDOWN_SECONDS: wholeNumber.optional(),
   ACCOUNT_TEST_NOW_COOLDOWN_SECONDS: wholeNumber.optional(),
+  ADMIN_CREDENTIAL_METADATA_TTL_SECONDS: wholeNumber.optional(),
   RETENTION_SESSIONS_HOURS: atLeastOne.optional(),
   RETENTION_USAGE_DAYS: atLeastOne.optional(),
   RETENTION_USAGE_DAILY_DAYS: atLeastOne.optional(),
@@ -650,6 +687,7 @@ export const ENV_FIELDS = {
   IDLE_ACCOUNT_PROBE_INTERVAL_MINUTES: atLeastOne.optional(),
   IDLE_ACCOUNT_AFTER_DAYS: atLeastOne.optional(),
   IDLE_ACCOUNT_PROBE_BATCH_SIZE: atLeastOne.optional(),
+  IDLE_ACCOUNT_PROBE_PAID_TURN: flag.optional(),
   ADMIN_SESSION_PURGE_INTERVAL_MINUTES: atLeastOne.optional(),
   MODEL_CATALOG_REFRESH_INTERVAL_MINUTES: atLeastOne.optional(),
   MODEL_CATALOG_REFRESH_BATCH_SIZE: atLeastOne.optional(),
@@ -669,7 +707,8 @@ export const ENV_FIELDS = {
   ADMIN_LOGIN_MAX_ATTEMPTS: atLeastOne.optional(),
   ADMIN_LOGIN_ATTEMPT_WINDOW_MINUTES: atLeastOne.optional(),
   ADMIN_LOGIN_LOCKOUT_MINUTES: atLeastOne.optional(),
-  ADMIN_SESSION_SLIDE_FRACTION: fraction.optional(),
+  ADMIN_SESSION_TOUCH_INTERVAL_SECONDS: wholeNumber.optional(),
+  ADMIN_SESSION_CACHE_MAX: atLeastOne.optional(),
   SESSION_COOKIE_INSECURE: flag.optional(),
   CATALOG_REFRESH_SECONDS: atLeastOne.optional(),
   KEY_CACHE_MAX: atLeastOne.optional(),
@@ -830,6 +869,12 @@ const envSchema = z.object(ENV_FIELDS).transform((raw, ctx): Env => {
     // Longer than the re-check default on purpose: this one costs money (and, on the Agent-SDK
     // path, a subprocess), so the button that spends it should not be as cheap to lean on.
     accountTestNowCooldownSeconds: raw.ACCOUNT_TEST_NOW_COOLDOWN_SECONDS ?? 120,
+    adminCredentialMetadataTtlSeconds: raw.ADMIN_CREDENTIAL_METADATA_TTL_SECONDS ?? 60,
+    claudeSdkUsageGauge: {
+      enabled: raw.CLAUDE_SDK_USAGE_GAUGE ?? true,
+      timeoutMs: raw.CLAUDE_SDK_USAGE_GAUGE_TIMEOUT_MS ?? 5_000,
+      minIntervalSeconds: raw.CLAUDE_SDK_USAGE_GAUGE_MIN_INTERVAL_SECONDS ?? 60,
+    },
     retention: {
       sessionsHours: raw.RETENTION_SESSIONS_HOURS ?? 24,
       usageDays,
@@ -867,6 +912,7 @@ const envSchema = z.object(ENV_FIELDS).transform((raw, ctx): Env => {
       idleAccountProbeIntervalMinutes: raw.IDLE_ACCOUNT_PROBE_INTERVAL_MINUTES ?? 1_440,
       idleAccountAfterDays: raw.IDLE_ACCOUNT_AFTER_DAYS ?? 7,
       idleAccountProbeBatchSize: raw.IDLE_ACCOUNT_PROBE_BATCH_SIZE ?? 5,
+      idleAccountProbePaidTurn: raw.IDLE_ACCOUNT_PROBE_PAID_TURN ?? false,
       // Hourly, and a batch that covers a normal fleet in one tick. Bigger than the keepalive's
       // five because these are plain GETs against a listing endpoint, not billed turns.
       modelCatalogRefreshIntervalMinutes: raw.MODEL_CATALOG_REFRESH_INTERVAL_MINUTES ?? 60,
@@ -880,12 +926,17 @@ const envSchema = z.object(ENV_FIELDS).transform((raw, ctx): Env => {
       maxAttempts: raw.OAUTH_REFRESH_MAX_ATTEMPTS ?? 5,
     },
     adminAuth: {
-      sessionIdleMinutes: raw.ADMIN_SESSION_IDLE_MINUTES ?? 480,
-      sessionAbsoluteHours: raw.ADMIN_SESSION_ABSOLUTE_HOURS ?? 24,
+      // Thirty days on both bounds: a single-operator console behind SSO, redeployed weekly, whose
+      // sessions now live in Postgres — the eight-hour idle window only ever logged the operator
+      // out. The trade (a stolen cookie lives up to 30 d; logout is a real invalidation) is
+      // written down in docs/idea/13-admin-oidc.md.
+      sessionIdleMinutes: raw.ADMIN_SESSION_IDLE_MINUTES ?? 43_200,
+      sessionAbsoluteHours: raw.ADMIN_SESSION_ABSOLUTE_HOURS ?? 720,
       loginMaxAttempts: raw.ADMIN_LOGIN_MAX_ATTEMPTS ?? 5,
       loginAttemptWindowMinutes: raw.ADMIN_LOGIN_ATTEMPT_WINDOW_MINUTES ?? 15,
       loginLockoutMinutes: raw.ADMIN_LOGIN_LOCKOUT_MINUTES ?? 15,
-      sessionSlideFraction: raw.ADMIN_SESSION_SLIDE_FRACTION ?? 0.1,
+      sessionTouchIntervalSeconds: raw.ADMIN_SESSION_TOUCH_INTERVAL_SECONDS ?? 60,
+      sessionCacheMax: raw.ADMIN_SESSION_CACHE_MAX ?? 1_000,
       sessionCookieInsecure: raw.SESSION_COOKIE_INSECURE ?? false,
       localLoginAllowPublic: raw.ADMIN_LOCAL_LOGIN_ALLOW_PUBLIC ?? false,
     },

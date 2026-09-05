@@ -162,6 +162,20 @@
       "when": 1788632161497,
       "tag": "0022_sdk_transcript_sweep",
       "breakpoints": true
+    },
+    {
+      "idx": 23,
+      "version": "7",
+      "when": 1788636202142,
+      "tag": "0023_admin_sessions",
+      "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "7",
+      "when": 1788636577457,
+      "tag": "0024_model_catalog_source",
+      "breakpoints": true
     }
   ]
 }

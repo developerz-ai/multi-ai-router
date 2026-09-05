@@ -1,14 +1,20 @@
-import {
+import type {
   QuotaWindowKind,
-  type QuotaWindowState,
-  type ResetSource,
-  type UtilizationSource,
+  QuotaWindowState,
+  ResetSource,
+  UtilizationSource,
 } from "@multi-ai-router/core"
-import { z } from "zod"
+import { QuotaWindowKind as QuotaWindowKindSchema } from "@multi-ai-router/core"
 import type { RateLimitSignal, RateLimitWindow } from "../types"
+import {
+  clampFraction,
+  readSdkRateLimitInfo,
+  type SdkRateLimitReading,
+  type SdkUsageGaugeReading,
+} from "./quota-reading"
 
 /**
- * `rate_limit_event` in, Account quota state out (docs/idea/11-anthropic-agent-sdk.md §5).
+ * SDK readings in, Account quota state out (docs/idea/11-anthropic-agent-sdk.md §5).
  *
  * The SDK reports its limits inside the query stream rather than in a response header, which is why
  * this exists at all: an HTTP account's headroom is parsed off the response it just answered
@@ -16,12 +22,23 @@ import type { RateLimitSignal, RateLimitWindow } from "../types"
  * destination, two sources — a `RateLimitSignal` the health store folds in exactly as it folds in an
  * HTTP one, so `cooling_down`, `Retry-After`, and the breaker are written once for both transports.
  *
- * Three properties are load-bearing:
+ * Two readings feed one set of per-window buckets, and the bucket remembers which fed it:
  *
- * - **`utilization` is an alarm, not a gauge.** The SDK populates it only near the limit, so it
- *   reads absent for most of every window. That is a normal reading and it is labelled as one:
- *   `utilizationSource` is `threshold-triggered` whenever a value is present, which is precisely
- *   what stops `quota-aware` from ranking accounts on an absence (`services/routing/quota.ts`).
+ * - **`rate_limit_event` — an alarm, not a gauge.** The SDK populates `utilization` only near the
+ *   limit, so it reads absent for most of every window. That is a normal reading and it is labelled
+ *   as one: `utilizationSource: "threshold-triggered"` whenever the event carried a value, which is
+ *   precisely what stops `quota-aware` from ranking accounts on an absence
+ *   (`services/routing/quota.ts`). The event is also the only reading that can say **rejected** —
+ *   it is the account refusing a request — so it alone may mark a bucket `limited`.
+ * - **The usage gauge — continuous.** The plan-usage percentages behind the CLI's `/usage`, asked
+ *   for through the SDK's own query object once a turn (`usage-gauge.ts`). Every window it names
+ *   carries a number, labelled `continuous`, which is the second source §5 always described. It is
+ *   a reading of how full a window is, never a verdict: a gauge at 100% leaves the breaker alone and
+ *   lets `quota-window-spent` — the filter that already reads utilization — do the excluding.
+ * - **The two merge per window, and neither erases the other's fact.** An alarm that carried no
+ *   utilization leaves a gauge's percentage standing (it said nothing about fullness); an alarm that
+ *   did carry one wins, because it is the fresher and the nearer-the-limit reading; a gauge never
+ *   clears an alarm's `limited` — only the next event or the window's reset does.
  * - **An event that named no window still counts.** A `rejected` with no `rateLimitType` is the
  *   account saying "not now", so it lands in an internal `default` bucket and cools the account
  *   down — but it is never rendered as a real window, because naming which window was spent would
@@ -30,30 +47,10 @@ import type { RateLimitSignal, RateLimitWindow } from "../types"
  * - **Never a process singleton.** State is per-runtime and keyed by Account, exactly like the
  *   health store: a module-level map would bleed one runtime's readings into another's inside a
  *   single process, and every test would start dirty.
- *
- * Absent until a caller exists, mirroring the driver's own omissions: enumeration for `/metrics` and
- * the admin console, and the OAuth usage endpoint that would supply the *continuous* second source
- * §5 describes. Both are additive; neither is faked here.
  */
 
 /** The bucket an event that named no window lands in. Never rendered as a `QuotaWindowState`. */
 export const SDK_DEFAULT_BUCKET = "default"
-
-export type SdkRateLimitStatus = "allowed" | "allowed_warning" | "rejected" | "unknown"
-
-/** One `rate_limit_info` payload, validated. Absent fields stay absent — never defaulted to zero. */
-export interface SdkRateLimitReading {
-  readonly status: SdkRateLimitStatus
-  /** The SDK's own word for the window, or null when it named none. */
-  readonly rateLimitType: string | null
-  /** Epoch instant the window refills, or null when none was reported or it had already passed. */
-  readonly resetsAt: Date | null
-  /** 0..1 spent, and only near the limit. */
-  readonly utilization: number | null
-  readonly overageStatus: string | null
-  readonly overageResetsAt: Date | null
-  readonly usingOverage: boolean
-}
 
 export interface SdkQuotaSnapshot {
   /** The windows a console renders. Unknown and unnamed buckets are absent by construction. */
@@ -73,84 +70,79 @@ export interface SdkQuotaStore {
    * one frame rather than the turn (`render/events.ts`).
    */
   ingest(accountId: string, info: unknown, now: Date): SdkQuotaSnapshot | null
+  /**
+   * Folds one usage-gauge reading into this Account's state. The returned signal is never
+   * `limited` — see the module comment — so applying it to the health store records the windows and
+   * touches nothing else.
+   */
+  ingestGauge(accountId: string, reading: SdkUsageGaugeReading, now: Date): SdkQuotaSnapshot
   /** The Account's current reading, or null when it has never reported one. */
   snapshot(accountId: string): SdkQuotaSnapshot | null
   /** Drops every reading for an Account — deletion, and the operator's "Re-check now". */
   forget(accountId: string): void
 }
 
-const nullableString = z.string().nullish().catch(null)
-const nullableNumber = z.number().finite().nullish().catch(null)
-const nullableBoolean = z.boolean().nullish().catch(null)
-
-/**
- * Both spellings of every field, because the envelope around this payload is `snake_case`
- * (`rate_limit_info`, `parent_tool_use_id`) while §5 names its contents in `camelCase`. Accepting
- * one and silently dropping the other would read as "this account reported no limits" — the single
- * misreading that keeps traffic pointed at an upstream that already said no. `looseObject`, so a
- * field the SDK adds tomorrow survives the parse.
- */
-const rateLimitInfoSchema = z.looseObject({
-  status: nullableString,
-  rateLimitType: nullableString,
-  rate_limit_type: nullableString,
-  resetsAt: nullableNumber,
-  resets_at: nullableNumber,
-  utilization: nullableNumber,
-  overageStatus: nullableString,
-  overage_status: nullableString,
-  overageResetsAt: nullableNumber,
-  overage_resets_at: nullableNumber,
-  isUsingOverage: nullableBoolean,
-  is_using_overage: nullableBoolean,
-})
-
-/** @returns null when the value is not a rate-limit payload at all. The caller skips it. */
-export function readSdkRateLimitInfo(value: unknown, now: Date): SdkRateLimitReading | null {
-  const parsed = rateLimitInfoSchema.safeParse(value)
-  if (!parsed.success) return null
-  const data = parsed.data
-
-  return {
-    status: readStatus(data.status),
-    rateLimitType: nonEmpty(data.rateLimitType ?? data.rate_limit_type ?? null),
-    resetsAt: futureInstant(data.resetsAt ?? data.resets_at ?? null, now),
-    utilization: data.utilization ?? null,
-    overageStatus: nonEmpty(data.overageStatus ?? data.overage_status ?? null),
-    overageResetsAt: futureInstant(data.overageResetsAt ?? data.overage_resets_at ?? null, now),
-    usingOverage: (data.isUsingOverage ?? data.is_using_overage) === true,
-  }
-}
-
 export function createSdkQuotaStore(): SdkQuotaStore {
   const accounts = new Map<string, AccountQuota>()
+
+  const stateOf = (accountId: string): AccountQuota => {
+    const existing = accounts.get(accountId)
+    if (existing !== undefined) return existing
+    const fresh: AccountQuota = { buckets: new Map(), usingOverage: false }
+    accounts.set(accountId, fresh)
+    return fresh
+  }
 
   return {
     ingest(accountId, info, now) {
       const reading = readSdkRateLimitInfo(info, now)
       if (reading === null) return null
 
-      const state = accounts.get(accountId) ?? { buckets: new Map(), usingOverage: false }
-      accounts.set(accountId, state)
-
+      const state = stateOf(accountId)
       const key = reading.rateLimitType ?? SDK_DEFAULT_BUCKET
+      const previous = state.buckets.get(key)
+      const alarmed = reading.utilization !== null
       state.buckets.set(key, {
         limiter: key,
         kind: windowKind(reading.rateLimitType),
         limited: reading.status === "rejected",
-        utilization: clampUtilization(reading.utilization),
-        resetsAt: reading.resetsAt ?? undefined,
+        // An alarm that said nothing about fullness leaves the gauge's number standing.
+        utilization: alarmed
+          ? clampFraction(reading.utilization ?? 0)
+          : previous?.source === "continuous"
+            ? previous.utilization
+            : undefined,
+        source: alarmed ? "threshold-triggered" : (previous?.source ?? "none"),
+        resetsAt: reading.resetsAt ?? previous?.resetsAt,
         lastCheckedAt: now,
       })
       state.usingOverage = reading.usingOverage
       applyOverage(state, reading, key, now)
 
-      return snapshotOf(state)
+      return snapshotOf(state, "verdict")
+    },
+
+    ingestGauge(accountId, reading, now) {
+      const state = stateOf(accountId)
+      for (const window of reading.windows) {
+        const previous = state.buckets.get(window.kind)
+        state.buckets.set(window.kind, {
+          limiter: window.kind,
+          kind: window.kind,
+          // Only an event may say rejected; a gauge never lifts or sets that verdict.
+          limited: previous?.limited ?? false,
+          utilization: window.utilization ?? undefined,
+          source: window.utilization === null ? (previous?.source ?? "none") : "continuous",
+          resetsAt: window.resetsAt ?? previous?.resetsAt,
+          lastCheckedAt: now,
+        })
+      }
+      return snapshotOf(state, "reading")
     },
 
     snapshot(accountId) {
       const state = accounts.get(accountId)
-      return state === undefined ? null : snapshotOf(state)
+      return state === undefined ? null : snapshotOf(state, "verdict")
     },
 
     forget(accountId) {
@@ -166,6 +158,8 @@ interface QuotaBucket {
   readonly kind: QuotaWindowKind | null
   readonly limited: boolean
   readonly utilization: number | undefined
+  /** Which reading `utilization` came from. `none` whenever it is undefined. */
+  readonly source: UtilizationSource
   readonly resetsAt: Date | undefined
   readonly lastCheckedAt: Date
 }
@@ -201,12 +195,18 @@ function applyOverage(
     kind: "overage",
     limited: false,
     utilization: undefined,
+    source: "none",
     resetsAt: reading.overageResetsAt ?? undefined,
     lastCheckedAt: now,
   })
 }
 
-function snapshotOf(state: AccountQuota): SdkQuotaSnapshot {
+/**
+ * `verdict` is the event path: a `limited` bucket cools the account down through the breaker.
+ * `reading` is the gauge path: the same windows, but the signal never claims a refusal the gauge
+ * did not make — the health store's fold would otherwise re-record a rate-limit failure per gauge.
+ */
+function snapshotOf(state: AccountQuota, mode: "verdict" | "reading"): SdkQuotaSnapshot {
   const windows: QuotaWindowState[] = []
   const limiterWindows: RateLimitWindow[] = []
   let limited = false
@@ -214,7 +214,7 @@ function snapshotOf(state: AccountQuota): SdkQuotaSnapshot {
 
   for (const bucket of state.buckets.values()) {
     const reading = {
-      utilizationSource: utilizationSourceOf(bucket),
+      utilizationSource: bucket.utilization === undefined ? ("none" as const) : bucket.source,
       resetSource: resetSourceOf(bucket),
       ...(bucket.utilization === undefined ? {} : { utilization: bucket.utilization }),
       ...(bucket.resetsAt === undefined ? {} : { resetsAt: bucket.resetsAt }),
@@ -225,7 +225,7 @@ function snapshotOf(state: AccountQuota): SdkQuotaSnapshot {
     }
     limiterWindows.push({ limiter: bucket.limiter, ...reading })
 
-    if (!bucket.limited) continue
+    if (!bucket.limited || mode === "reading") continue
     limited = true
     if (bucket.resetsAt !== undefined && (resetsAt === undefined || bucket.resetsAt < resetsAt)) {
       resetsAt = bucket.resetsAt
@@ -252,67 +252,24 @@ function snapshotOf(state: AccountQuota): SdkQuotaSnapshot {
   }
 }
 
-/** Always threshold-triggered when present: §5's caveat, carried on the row rather than assumed. */
-function utilizationSourceOf(bucket: QuotaBucket): UtilizationSource {
-  return bucket.utilization === undefined ? "none" : "threshold-triggered"
-}
-
 function resetSourceOf(bucket: QuotaBucket): ResetSource {
   return bucket.resetsAt === undefined ? "unknown" : "provider-reported"
-}
-
-function readStatus(value: string | null | undefined): SdkRateLimitStatus {
-  if (value === "allowed" || value === "allowed_warning" || value === "rejected") return value
-  return "unknown"
 }
 
 /** Zod validated the shape, not the vocabulary; an unknown kind is a bucket, never a window. */
 function windowKind(raw: string | null): QuotaWindowKind | null {
   if (raw === null) return null
-  const parsed = QuotaWindowKind.safeParse(raw)
+  const parsed = QuotaWindowKindSchema.safeParse(raw)
   return parsed.success ? parsed.data : null
 }
 
-/**
- * The instant a window refills, in **whichever epoch unit the SDK used**, and only when it is still
- * ahead of us.
- *
- * **The SDK reports seconds.** Observed against a live subscription (SDK 0.3.220):
- * `rate_limit_info.resetsAt = 1785204600`, which is 2026-07-28T09:30:00Z as seconds and
- * 1970-01-21 as milliseconds. §5 says milliseconds and the type annotates no unit, so this read
- * both ways and took the wrong one — every Claude subscription reset was landing in 1970, failing
- * the "still ahead of us" test below, and being dropped as stale. The visible cost was the whole
- * subscription reset surface: no per-window countdown in the console, `resetSource: "unknown"`
- * rather than `provider-reported`, and a breaker that fell back to its estimated backoff while
- * holding the provider's own exact answer.
- *
- * Both units are accepted rather than the observed one pinned, using the same floor
- * `rate-limit/parse.ts` applies to OpenRouter's epoch header: anything below it cannot be a
- * plausible millisecond instant (it would be 1973 or earlier) and is therefore seconds. That way an
- * SDK that starts sending milliseconds tomorrow — matching what §5 always claimed — keeps working
- * instead of re-breaking this in the other direction.
- *
- * A reset genuinely in the past still answers nothing: passing it on would be worse than reporting
- * none, because the breaker would set a cooldown that has already elapsed — a cooldown of zero
- * against an upstream that just said no. Dropping it lets the backoff schedule take over, labelled
- * `estimated` rather than dressed up as the provider's own word.
- */
-export const SDK_EPOCH_MILLIS_FLOOR = 100_000_000_000
-
-function futureInstant(epoch: number | null | undefined, now: Date): Date | null {
-  if (epoch === null || epoch === undefined) return null
-  if (!Number.isFinite(epoch) || epoch <= 0) return null
-  const epochMs = epoch < SDK_EPOCH_MILLIS_FLOOR ? epoch * 1000 : epoch
-  return epochMs > now.getTime() ? new Date(epochMs) : null
-}
-
-/** `QuotaWindowState` admits 0..1 only. A provider overshoot reads as spent, which is the truth. */
-function clampUtilization(value: number | null): number | undefined {
-  if (value === null) return undefined
-  return Math.min(Math.max(value, 0), 1)
-}
-
-function nonEmpty(value: string | null): string | null {
-  const trimmed = value?.trim()
-  return trimmed === undefined || trimmed === "" ? null : trimmed
-}
+// The readers live in `quota-reading.ts`; re-exported so every existing import keeps working.
+export {
+  readSdkRateLimitInfo,
+  readSdkUsageGauge,
+  SDK_EPOCH_MILLIS_FLOOR,
+  type SdkGaugeWindow,
+  type SdkRateLimitReading,
+  type SdkRateLimitStatus,
+  type SdkUsageGaugeReading,
+} from "./quota-reading"

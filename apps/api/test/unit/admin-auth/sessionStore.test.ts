@@ -54,9 +54,20 @@ describe("createMemorySessionStore", () => {
     await store.save(session({ id: "capped-out", idleExpiryMs: 99_999, absoluteExpiryMs: 100 }))
     await store.save(session({ id: "live", idleExpiryMs: 99_999, absoluteExpiryMs: 99_999 }))
 
-    expect(await store.deleteExpired(1_000)).toBe(2)
+    expect(await store.deleteExpired(1_000, 100)).toBe(2)
     expect(await store.get("live")).toBeDefined()
     expect(await store.get("idle-out")).toBeUndefined()
     expect(await store.get("capped-out")).toBeUndefined()
+  })
+
+  test("deleteExpired stops at the limit, so a full batch means there is more", async () => {
+    const store = createMemorySessionStore()
+    await store.save(session({ id: "a", idleExpiryMs: 100 }))
+    await store.save(session({ id: "b", idleExpiryMs: 100 }))
+    await store.save(session({ id: "c", idleExpiryMs: 100 }))
+
+    expect(await store.deleteExpired(1_000, 2)).toBe(2)
+    expect(await store.deleteExpired(1_000, 2)).toBe(1)
+    expect(await store.deleteExpired(1_000, 2)).toBe(0)
   })
 })

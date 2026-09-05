@@ -192,7 +192,8 @@ neither write body has a field for one; `CLAUDE_CONFIG_ROOT` is the only knob, a
 | Health probe | `claude auth status --json` with the dir set returns `{loggedIn, email, subscriptionType}` — cheap, first-party, no token handling. Implemented in `providers/claude-sdk/login/status.ts`; it rides on **Re-check now** rather than getting a button of its own — see [§3.2](#32-the-credential-probe) |
 | Completion probe | **Test now** (`services/accounts/test-now.ts`) is the other end of the spectrum from the health probe above: a real, opt-in `query()` turn that actually spends a turn and a subprocess. Never fires without `confirmed: true` on the request, and its own cooldown, longer than Re-check now's — see [05-routing-and-failover.md](05-routing-and-failover.md#test-now) |
 | Refresh | **Not ours.** The SDK / `claude` CLI refreshes inside the config directory. The router does **not** schedule, mint, or write subscription tokens — see the box below |
-| Refresh-token expiry | **A Claude subscription hard-expires ~30 days after login, however much it is used.** Verified in production (2026-09-05): every account's `refreshTokenExpiresAt` sat at exactly login + ~30 d — on accounts that had served traffic daily for weeks. Use refreshes the *access* token; nothing slides the refresh token, and when it expires the CLI blanks the tokens in `.credentials.json` (the file stays, `claude auth status` says `loggedIn: false`, a turn answers `Failed to authenticate: OAuth session expired and could not be refreshed`). No keepalive, probe, or traffic can prevent it — **only a re-login can**, so plan on reconnecting every subscription monthly. What the router does: the daily `idle_account_probe` tick runs the free `claude auth status` check over **every** subscription account, idle or not, so an expired one flips to `needs_reauth` within a day (`scheduler/tasks/idle-account-probe.ts`); and the request path classifies that sentence `auth` → `needs_reauth`, never a `502` |
+| Refresh-token expiry | **A Claude subscription hard-expires ~30 days after login, however much it is used.** Verified in production (2026-09-05): every account's `refreshTokenExpiresAt` sat at exactly login + ~30 d — on accounts that had served traffic daily for weeks. Use refreshes the *access* token; nothing slides the refresh token, and when it expires the CLI blanks the tokens in `.credentials.json` (the file stays, `claude auth status` says `loggedIn: false`, a turn answers `Failed to authenticate: OAuth session expired and could not be refreshed`). No keepalive, probe, or traffic can prevent it — **only a re-login can**, so plan on reconnecting every subscription monthly. What the router does: the daily `idle_account_probe` tick runs the free `claude auth status` check over **every** subscription account, idle or not, so an expired one flips to `needs_reauth` within a day (`scheduler/tasks/idle-account-probe.ts`); the request path classifies that sentence `auth` → `needs_reauth`, never a `502`; and every admin account read carries the expiry itself — see the row below |
+| Expiry visibility | The router reads **metadata, never the token**, out of `.credentials.json`: `refreshTokenExpiresAt`, `subscriptionType`, `rateLimitTier`, and whether the two token fields are non-empty (`providers/claude-sdk/credential-metadata.ts`). The Zod schema names exactly those fields, the tokens are consulted for presence only and dropped before the parsed value leaves the function, and nothing returned, thrown, or logged can carry one — non-negotiables 1 and 13 still hold: we do not touch, refresh, or use the tokens; we read when the login expires so the console can warn before it does. `withCredentialMetadata` (`services/accounts/credential.ts`) overlays it on every admin account read as `credential: { expiresAt, subscriptionType, rateLimitTier, present }` ([04-api-keys-and-access.md](04-api-keys-and-access.md#admin-api-route-groups)), cached per account for `ADMIN_CREDENTIAL_METADATA_TTL_SECONDS`, admin plane only. A read that finds blank tokens against an `active` row parks it `needs_reauth` through the same conditional write the auth probe uses; a read that *fails* reports `null` and parks nothing |
 | Reconnect | Re-run login against the **same** directory: Account id, Pool membership, and usage history survive |
 | Delete | Remove the directory with the Account row |
 | Reap | A scheduled task (`scheduler/tasks/config-dir-reap.ts`) removes what a crash left on the volume: a directory named after an account id that no row claims, once it is older than `RETENTION_ORPHAN_CONFIG_DIR_HOURS`. It surveys the directories *before* it reads the accounts — a directory minted after the survey cannot be in it, while a row inserted after it is still read — and it never touches a name that is not an account id. Both rules exist because the failure it prevents (a stale credential nobody will rotate) is milder than the failure a careless sweep would cause (a working subscription logged out for good) |
@@ -266,8 +267,23 @@ one status transition it may drive).
 
 This is the answer to [§12.7](#12-open-questions) for the operator-driven case: because the router
 never refreshes subscription tokens, a revoked credential is otherwise invisible until every request
-to the Account has already failed. Running it *periodically* is still open — the cost per Account is
-a process, and nothing yet says how often that is worth paying.
+to the Account has already failed. It also runs *periodically*, daily, over every subscription
+(`scheduler/tasks/idle-account-probe.ts`) — one process per Account per day, which is cheap enough
+to pay without asking.
+
+**Checking whether a subscription is alive never spends usage.** Three things follow, all built:
+the sweep's billed keepalive turn is opt-in (`IDLE_ACCOUNT_PROBE_PAID_TURN`, default `false`) — a
+turn refreshes only the *access* token and cannot move the refresh-token cliff, so it was cost with
+no benefit for a subscription; the sweep's usage-gauge read and the model listing use a turn-free
+query (`idle-query.ts`: the initialize handshake, no prompt, closed right after); and a completed
+login triggers no probe and no test — only the turn-free model listing (`onConnected`). The one thing
+that does spend is the operator's own **Test now**, by name and with a confirmation.
+
+A completed login also lifts the **whole** `needs_reauth` verdict: the request path parks a dead
+subscription in the row *and* in the health store's breaker, and the accounts read overlays the
+latter — so clearing only the row left reconnected accounts reading `needs_reauth` until Re-check.
+`connect/claude.ts` now calls the same `HealthStore.reset` Re-check does and refreshes the warm
+catalog, and logs `claude login started` / `completed` / `rejected` / `cancelled` per account.
 
 ### Container layout
 
@@ -421,10 +437,43 @@ most of every window and degrades to round-robin. **This is why the console and 
 themselves are reported, persisted, and reloaded (their names and resets are what prove the events
 arrive), but a percentage is only ever a threshold-triggered reading. Verified against the 0.3.261
 CLI: it reads `anthropic-ratelimit-unified-<claim>-utilization` off the API response, which the API
-sends only past a threshold. `—` means "no reading", by design, not a dropped event. The SDK 0.3.261
-exposes a continuous gauge through `usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET()`
-(the claude.ai usage endpoint, per-window 0–100 %); it is marked unstable by its own name and is
-deliberately not wired.
+sends only past a threshold. `—` means "no reading", by design, not a dropped event.
+
+**The continuous source, as built: the SDK's own usage gauge** (`providers/claude-sdk/usage-gauge.ts`).
+SDK 0.3.261's query object exposes `usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET()` —
+the structured answer behind the CLI's `/usage`: `rate_limits_available`, `subscription_type`, and
+per-window `{ utilization: 0–100, resets_at: ISO }` for `five_hour`, `seven_day`, `seven_day_opus`,
+`seven_day_sonnet` (plus `seven_day_oauth_apps` and `model_scoped`, which have no window kind here and
+are ignored). Calling it is sanctioned under non-negotiable 1: it is the SDK asking, inside the
+Account's own `CLAUDE_CONFIG_DIR`, with a credential this router never sees. How it is wired:
+
+- **Off the response path, on the turn already being served.** `turn-lifecycle.ts` fires the gauge
+  only after the turn's first content message has been handed to the renderer (TTFT is untouched by
+  construction), keeps the one-message prompt open past `result` so the CLI stays alive for exactly
+  one bounded control request (the SDK closes stdin — and the CLI exits — when the prompt ends), and
+  ends the *consumer's* stream at `result` so the client's last frame never waits on the reading. The
+  subprocess slot is held until the reading settles: a live process is a process the memory bound
+  counts. Bounded by `CLAUDE_SDK_USAGE_GAUGE_TIMEOUT_MS`; every failure costs the reading and nothing
+  else.
+- **Turn-free for idle accounts.** The daily `idle_account_probe` reads the gauge for every
+  logged-in subscription through `idle-query.ts` — the SDK's initialize handshake and *no prompt* —
+  so an account nothing routed to today still shows real percentages. Nothing is billed; the test
+  asserts zero user messages reach the SDK. The same shape serves `supportedModels()` (§3).
+- **Coalesced** to one reading per account per `CLAUDE_SDK_USAGE_GAUGE_MIN_INTERVAL_SECONDS`,
+  counted from the start of a reading, so parallel coding agents on one subscription ask once.
+- **Validated tolerantly** (`quota-reading.ts`, Zod `looseObject`, every field degrading to null):
+  the API's own name says it may change, so a shape surprise is a `debug` line and a dropped
+  reading, never a failed turn. `rate_limits_available: false` (API key, or a login without the
+  `user:profile` scope) is logged once per account at `info`.
+- **Folded as a reading, never a verdict.** `SdkQuotaStore.ingestGauge` writes the same per-window
+  buckets a `rate_limit_event` fills, labelled `utilizationSource: "continuous"` (the domain's
+  existing value for exactly this source); the snapshot it returns is never `limited`, so applying
+  it to the health store records windows and touches no breaker. Merge rule per window: an alarm
+  that carried no utilization leaves the gauge's number standing; an alarm that carried one wins
+  (fresher, nearer the limit); a gauge never lifts or sets `rejected`. The reading reaches the
+  console and `quota_windows` through the one existing channel — `HealthStore.applyRateLimit` →
+  `onQuotaWindows` → the quota writer — so `quota-window-spent` and `quota-aware` ranking see it
+  with no new path. `CLAUDE_SDK_USAGE_GAUGE=false` turns all of it off.
 
 **The dispatch-level wire.** `SdkInvocation.onRateLimit` (`invoke.ts`) is the seam a launcher calls
 for every `rate_limit_event`, the `onSession` of quota. `runSdkAttempt` (`sdk-attempt.ts`) folds each

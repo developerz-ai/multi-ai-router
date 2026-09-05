@@ -46,6 +46,11 @@ export {
   localPasswordPolicyProblem,
 } from "./localCredential"
 export {
+  createPostgresSessionStore,
+  hashSessionId,
+  type PostgresSessionStoreDeps,
+} from "./postgresSessionStore"
+export {
   ADMIN_LOGIN_FAILED_MESSAGE,
   type AdminAuthDeps,
   type AdminAuthMethods,

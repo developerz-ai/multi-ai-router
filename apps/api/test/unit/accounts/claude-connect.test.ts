@@ -11,8 +11,15 @@ import {
   createAccountsService,
   createClaudeConnectService,
 } from "../../../src/services/accounts"
+import { withAvailability } from "../../../src/services/accounts/availability"
+import type { AccountsService } from "../../../src/services/accounts/service"
 import { createAuditRecorder } from "../../../src/services/admin"
 import { createCredentialCipher } from "../../../src/services/crypto/cipher"
+import {
+  createHealthStore,
+  type HealthStore,
+  type RoutableAccount,
+} from "../../../src/services/dataplane"
 import { createMemoryConfigDirs, type MemoryConfigDirs } from "../../support/config-dirs"
 import { createMemoryStore, type MemoryStore } from "../../support/memory-store"
 
@@ -120,12 +127,19 @@ interface Harness {
   readonly store: MemoryStore
   readonly configDirs: MemoryConfigDirs
   readonly clock: { now: Date }
+  readonly health: HealthStore
+  /** How many times a completed login asked for the warm catalog to be re-read. */
+  readonly catalogRefreshes: { count: number }
+  /** The admin read exactly as the console sees it: the live health verdict overlaid on the row. */
+  readonly read: AccountsService
   account(provider?: "anthropic-oauth" | "openrouter"): Promise<string>
 }
 
 function harness(
   options: { login?: FakeLogin; credentials?: CredentialGuard; ttlMinutes?: number } = {},
 ): Harness {
+  const health = createHealthStore()
+  const catalogRefreshes = { count: 0 }
   const store = createMemoryStore()
   const configDirs = createMemoryConfigDirs()
   const clock = { now: NOW }
@@ -149,6 +163,53 @@ function harness(
     audit,
     pendingLoginMinutes: options.ttlMinutes ?? 10,
     now: () => clock.now,
+    health,
+    refreshCatalog: async () => {
+      catalogRefreshes.count += 1
+    },
+  })
+
+  // The routing catalog the overlay consults, read live from the same rows the connect flow writes.
+  const routable = async (): Promise<readonly RoutableAccount[]> =>
+    (await store.accounts.list({})).map((row) => ({
+      id: row.id,
+      snapshot: {
+        id: row.id,
+        label: row.label,
+        provider: row.provider,
+        status: row.status,
+        weight: row.weight,
+        priority: row.priority,
+        health: { consecutiveFailures: 0, inFlight: 0, recentTokens: 0 },
+      },
+      driver: {
+        id: row.id,
+        provider: row.provider,
+        baseUrl: row.baseUrl,
+        dialect: row.dialect ?? null,
+        modelAliases: row.modelAliases,
+      },
+      authMaterial: null,
+      configDir: row.configDir,
+    }))
+  let catalogAccounts: readonly RoutableAccount[] = []
+  const read: AccountsService = {
+    ...accounts,
+    // `withAvailability` reads the catalog synchronously, so refresh it before each read.
+    list: async (query) => {
+      catalogAccounts = await routable()
+      return decorated.list(query)
+    },
+    get: async (id) => {
+      catalogAccounts = await routable()
+      return decorated.get(id)
+    },
+  }
+  const decorated = withAvailability(accounts, {
+    catalog: { accounts: () => catalogAccounts, pools: () => [] },
+    health,
+    recheck: { lastCheckedAt: () => null },
+    now: () => clock.now,
   })
 
   return {
@@ -157,6 +218,9 @@ function harness(
     store,
     configDirs,
     clock,
+    health,
+    catalogRefreshes,
+    read,
     account: async (provider = "anthropic-oauth") => {
       const created = await accounts.create({
         label: `${provider}-1`,
@@ -307,6 +371,60 @@ describe("pasting the code back", () => {
 
     await h.connect.complete(id, PASTE)
     expect((await h.store.accounts.findById(id))?.status).toBe("active")
+  })
+
+  test("a login lifts the request path's verdict too — the admin read says active without a re-check", async () => {
+    // The production shape (#reconnect): the data plane classified an `auth` failure and parked the
+    // account twice — the row, and the breaker's `blocked` phase in this process. Clearing only the
+    // row left the console overlay reading `needs_reauth` until an operator pressed Re-check.
+    const h = harness()
+    const id = await h.account()
+    h.health.recordFailure(id, { kind: "auth", message: "401" }, NOW, { authKind: "oauth" })
+    await h.store.accounts.update(id, { status: "needs_reauth" }, NOW)
+
+    const parked = await h.read.get(id)
+    if (!parked.ok) throw new Error(parked.failure.message)
+    expect(parked.value.status).toBe("needs_reauth")
+
+    await h.connect.begin(id, "reconnect")
+    const completed = await h.connect.complete(id, PASTE)
+    expect(completed.ok).toBe(true)
+
+    const restored = await h.read.get(id)
+    if (!restored.ok) throw new Error(restored.failure.message)
+    expect(restored.value.status).toBe("active")
+    expect(restored.value.availability?.configuredStatus).toBe("active")
+    expect(h.health.stateOf(id).breaker.status).toBe("active")
+    // Once, and awaited: the console re-reads the list the instant `complete` answers.
+    expect(h.catalogRefreshes.count).toBe(1)
+  })
+
+  test("a login on an account whose row already said active still clears a stale live verdict", async () => {
+    const h = harness()
+    const id = await h.account()
+    h.health.recordFailure(id, { kind: "auth", message: "401" }, NOW, { authKind: "oauth" })
+
+    await h.connect.begin(id, "reconnect")
+    await h.connect.complete(id, PASTE)
+
+    expect(h.health.stateOf(id).breaker.status).toBe("active")
+    // The row did not change, so there was nothing for the catalog to re-read.
+    expect(h.catalogRefreshes.count).toBe(0)
+  })
+
+  test("a completed login spends no turn: the CLI's own login is the only subprocess", async () => {
+    // The operator's rule — checking on a subscription must never cost usage — read at the seam
+    // that could break it: the connect service holds no probe, no test, and no `query()`; the one
+    // CLI it starts is the login itself, and one paste goes to it.
+    const h = harness()
+    const id = await h.account()
+
+    await h.connect.begin(id, "connect")
+    await h.connect.complete(id, PASTE)
+
+    expect(h.login.calls.starts).toBe(1)
+    expect(h.login.handles[0]?.submitted).toEqual([PASTE])
+    expect(h.health.stateOf(id).inFlight).toBe(0)
   })
 
   test("a disabled account stays disabled — connecting is not a way to re-enable it", async () => {

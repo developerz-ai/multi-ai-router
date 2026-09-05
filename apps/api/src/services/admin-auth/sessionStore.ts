@@ -3,12 +3,12 @@
  * about a session — who it belongs to, when it dies, its CSRF token — lives here, so logout and
  * expiry are real invalidations rather than a client-side suggestion.
  *
- * **This store is in memory, and that means what it says.** Sessions do not survive a restart,
- * a redeploy, or a crash, and a second replica cannot see the first one's sessions: `docker
- * compose up -d` logs the operator out. That is the current, honest state — not durability with
- * a caveat. The `SessionStore` interface exists so a Postgres-backed implementation can replace
- * this one without a single caller changing, and it is `Promise`-returning **for that reason
- * alone** (an in-memory map needs no async).
+ * Two implementations share the `SessionStore` interface: the in-memory map below, and the
+ * durable one in `postgresSessionStore.ts`. **The memory store means what it says** — sessions
+ * do not survive a restart, a redeploy, or a crash, and a second replica cannot see the first
+ * one's — which is why the composition root wires the Postgres store and this one is kept for
+ * tests and for a router deliberately run without durability. The interface is
+ * `Promise`-returning for the durable implementation's sake (a map needs no async).
  */
 
 export interface AdminSession {
@@ -34,8 +34,12 @@ export interface SessionStore {
   get(id: string): Promise<AdminSession | undefined>
   save(session: AdminSession): Promise<void>
   delete(id: string): Promise<void>
-  /** Drops every session already past its expiry. Returns how many. */
-  deleteExpired(nowMs: number): Promise<number>
+  /**
+   * Drops sessions already past their expiry, at most `limit` of them, and returns how many went.
+   * Exactly `limit` is the caller's "there is more" signal — the same contract every bounded
+   * retention delete in the scheduler drains on.
+   */
+  deleteExpired(nowMs: number, limit: number): Promise<number>
 }
 
 export function createMemorySessionStore(): SessionStore {
@@ -53,9 +57,10 @@ export function createMemorySessionStore(): SessionStore {
       sessions.delete(id)
       return Promise.resolve()
     },
-    deleteExpired(nowMs) {
+    deleteExpired(nowMs, limit) {
       let removed = 0
       for (const [id, session] of sessions) {
+        if (removed >= limit) break
         if (sessionExpiryMs(session) <= nowMs) {
           sessions.delete(id)
           removed += 1

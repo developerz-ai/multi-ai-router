@@ -85,7 +85,7 @@ describe("the hourly model-catalog sweep", () => {
   test("accounts with nothing to ask never enter the batch", async () => {
     const { run, refreshed } = harness({
       accounts: [
-        account("sub", { provider: "anthropic-oauth" }),
+        account("sub", { provider: "anthropic-oauth", status: "needs_reauth" }),
         account("aggregator", { provider: "openrouter" }),
         account("real"),
       ],
@@ -116,13 +116,21 @@ describe("the hourly model-catalog sweep", () => {
     expect(logs.some((line) => line.reason === "discovery_failed")).toBe(true)
   })
 
-  test("a skip is not a failure", async () => {
-    const { run } = harness({
-      accounts: [account("a")],
-      outcome: () => ({ kind: "skipped", reason: "account:disabled" }),
+  test("a skip is not a failure, and says why at info", async () => {
+    const { run, logs } = harness({
+      accounts: [account("sub", { provider: "anthropic-oauth" })],
+      outcome: () => ({ kind: "skipped", reason: "agent-sdk:no-config-dir" }),
     })
 
     expect(await run()).toMatchObject({ outcome: "success", itemsProcessed: 0 })
+    // One dead subscription must not turn the tick partial, but it must not vanish either.
+    const skipped = logs.find((line) => line.msg === "model catalog refresh skipped an account")
+    expect(skipped).toMatchObject({
+      level: "info",
+      accountId: "sub",
+      provider: "anthropic-oauth",
+      reason: "agent-sdk:no-config-dir",
+    })
   })
 
   test("an aborted run stops before the first account and reports partial", async () => {

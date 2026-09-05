@@ -20,7 +20,12 @@ export {
   WindowTokenLimits,
 } from "./domain/account"
 export type { ContextTable, ContextWindow, ModelDescriptor } from "./domain/catalog"
-export { ModelContextSource } from "./domain/catalog"
+export {
+  CLAUDE_SUBSCRIPTION_ALIASES,
+  CLAUDE_SUBSCRIPTION_MODELS,
+  ModelContextSource,
+  ModelListingSource,
+} from "./domain/catalog"
 export {
   DEFAULT_OPENAI_CHAT_CEILING,
   Dialect,

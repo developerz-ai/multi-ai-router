@@ -25,6 +25,8 @@ describe("turning an upstream listing entry into a catalog row", () => {
       contextTokens: 999_999,
       maxOutputTokens: 4_096,
       contextSource: "upstream",
+      listingSource: "upstream",
+      resolvedModel: null,
     })
   })
 
@@ -54,6 +56,8 @@ describe("turning an upstream listing entry into a catalog row", () => {
       contextTokens: 1_048_576,
       maxOutputTokens: 131_072,
       contextSource: "shipped",
+      listingSource: "upstream",
+      resolvedModel: null,
     })
   })
 
@@ -71,6 +75,8 @@ describe("turning an upstream listing entry into a catalog row", () => {
       contextTokens: null,
       maxOutputTokens: null,
       contextSource: null,
+      listingSource: "upstream",
+      resolvedModel: null,
     })
   })
 

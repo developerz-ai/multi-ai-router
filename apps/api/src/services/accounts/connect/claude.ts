@@ -1,18 +1,18 @@
-import type { AccountStatus, ProviderId } from "@multi-ai-router/core"
 import type { AccountRepository } from "@multi-ai-router/db"
 import type { Logger } from "../../../logging/logger"
 import type { AccountConfigDirs } from "../../../providers/claude-sdk/config-dir"
 import {
   type ClaudeCliLogin,
-  ClaudeLoginError,
   type ClaudeLoginHandle,
   type CredentialGuard,
   parsePastedCode,
 } from "../../../providers/claude-sdk/login"
 import { AUDIT_KINDS, AUDIT_SUBJECTS, type AuditRecorder } from "../../admin/audit"
-import { type AdminResult, conflict, invalid, notFound, ok } from "../../admin/result"
+import { type AdminResult, conflict, invalid, ok } from "../../admin/result"
 import { timingSafeEqualStrings } from "../../admin-auth"
-import { describeProvider } from "../providers"
+import type { HealthStore } from "../../dataplane"
+import { createPendingLogins } from "./claude-pending"
+import { findSubscriptionAccount, loginFailure, type SubscriptionAccount } from "./claude-subject"
 import { createAccountTurns } from "./turns"
 
 /**
@@ -36,9 +36,16 @@ import { createAccountTurns } from "./turns"
  * (docs/idea/07-security.md#oauth-flow-safety). No token, no code, and no credential material is
  * returned, logged, or audited by anything in this file.
  *
- * **Pending logins live in memory, and that is the honest store.** A pending login *is* a running
- * subprocess; a restart kills it, so persisting the `state` would only preserve a value no CLI is
- * waiting for. Same reasoning as the re-check cooldown in `../recheck.ts`.
+ * **Pending logins live in memory** (`./claude-pending.ts`), and that is the honest store: a pending
+ * login *is* a running subprocess. Same reasoning as the re-check cooldown in `../recheck.ts`.
+ *
+ * **A completed login lifts the whole `needs_reauth` verdict, not half of it.** The request path
+ * parks a dead subscription twice — the row (`status-writer.ts`) and the breaker's `blocked` phase in
+ * this process's health store — and the accounts read overlays the second onto the first. Clearing
+ * only the row left three freshly reconnected subscriptions reading `needs_reauth` in the console
+ * until an operator pressed Re-check, whose `health.reset` is exactly what was missing. So
+ * completion calls that same `reset` and the same catalog refresh: one code path for "this account
+ * is eligible again", whichever button reached it.
  *
  * **Every call that touches that store takes the account's turn** (`./turns.ts`). All three of them
  * read the one pending login and then replace it, with a subprocess spawn or a stdin write in
@@ -109,47 +116,43 @@ export interface ClaudeConnectDeps {
    */
   readonly logger?: Logger
   readonly now: () => Date
-}
-
-interface Pending {
-  readonly handle: ClaudeLoginHandle
-  readonly configDir: string
-  readonly mode: ClaudeConnectMode
-  readonly expiresAt: Date
-  readonly timer: ReturnType<typeof setTimeout>
+  /**
+   * The live half of the verdict a login lifts — the same `reset` the Re-check button calls (see the
+   * module comment). Optional so a test of the paste flow alone need not build a health store; the
+   * composition root always wires it.
+   */
+  readonly health?: Pick<HealthStore, "reset">
+  /**
+   * Re-reads the warm routing catalog once the row changed, so the console's next read — which
+   * happens the instant `complete` answers — sees `active` rather than the status it just lifted.
+   */
+  readonly refreshCatalog?: () => Promise<void>
+  /**
+   * Fired after a login has landed and the account is eligible again. For anything that wants to
+   * learn about the fresh credential without this service knowing what — the subscription's model
+   * list, today. Fire-and-forget: a completion never waits on it and never fails because of it.
+   */
+  readonly onConnected?: (accountId: string) => void
 }
 
 export function createClaudeConnectService(deps: ClaudeConnectDeps): ClaudeConnectService {
-  const pending = new Map<string, Pending>()
+  const pending = createPendingLogins()
   const turns = createAccountTurns()
   const ttlMs = deps.pendingLoginMinutes * 60_000
   const log = deps.logger?.child({ component: "claude-connect" })
-  let stopping = false
 
-  /** Removes and terminates a pending login. The only way one is ever released. */
-  const release = (accountId: string): Pending | undefined => {
-    const found = pending.get(accountId)
-    if (found === undefined) return undefined
-    pending.delete(accountId)
-    clearTimeout(found.timer)
-    return found
+  /**
+   * Every refusal of a paste, logged before it is answered. The operator sees the message; the
+   * pod log — which showed nothing at all for a six-account reconnect — gets the code and the
+   * account, and never the paste itself.
+   */
+  const rejected = (accountId: string, message: string, code: string): AdminResult<never> => {
+    log?.info("claude login rejected", { accountId, code })
+    return invalid(message, code)
   }
 
-  const discard = (accountId: string): void => {
-    release(accountId)?.handle.cancel()
-  }
-
-  const subscription = async (accountId: string): Promise<AdminResult<SubscriptionAccount>> => {
-    const row = await deps.accounts.findById(accountId)
-    if (row === undefined) return notFound(`no account with id "${accountId}"`)
-    if (!describeProvider(row.provider).requiresConfigDir) {
-      return invalid(
-        `account "${row.label}" is a ${row.provider} account: only Claude subscription accounts are connected through the claude CLI`,
-        "not_a_subscription_account",
-      )
-    }
-    return ok({ id: row.id, label: row.label, provider: row.provider, status: row.status })
-  }
+  const subscription = (accountId: string): Promise<AdminResult<SubscriptionAccount>> =>
+    findSubscriptionAccount(deps.accounts, accountId)
 
   return {
     // In the account's turn: reads the pending login, then replaces it, two awaits later
@@ -162,7 +165,7 @@ export function createClaudeConnectService(deps: ClaudeConnectDeps): ClaudeConne
         // A second `begin` supersedes the first: one Account has one pending login, and leaving the
         // old subprocess running would mean two live states for one row. Queued, so what this
         // displaces is always a registered login and never one still starting.
-        discard(accountId)
+        pending.discard(accountId)
 
         // Idempotent, and it re-asserts `0700` on a directory that already exists — a login must
         // never be the thing that discovers the directory was never made.
@@ -178,7 +181,7 @@ export function createClaudeConnectService(deps: ClaudeConnectDeps): ClaudeConne
         // `stop()` is synchronous and cannot reach a CLI that has not printed its URL yet, so the
         // check belongs where the handle first exists: the login shutdown could not see is the one
         // that would outlive the router.
-        if (stopping) {
+        if (pending.stopping) {
           handle.cancel()
           return conflict(
             "this router is shutting down — connect this account once it is back",
@@ -187,9 +190,8 @@ export function createClaudeConnectService(deps: ClaudeConnectDeps): ClaudeConne
         }
 
         const expiresAt = new Date(deps.now().getTime() + ttlMs)
-        const timer = setTimeout(() => discard(accountId), ttlMs)
-        timer.unref?.()
-        pending.set(accountId, { handle, configDir, mode, expiresAt, timer })
+        pending.hold(accountId, { handle, configDir, mode, expiresAt }, ttlMs)
+        log?.info("claude login started", { accountId, mode, expiresAt: expiresAt.toISOString() })
 
         return ok({
           accountId,
@@ -210,9 +212,10 @@ export function createClaudeConnectService(deps: ClaudeConnectDeps): ClaudeConne
         // Consumed before it is checked. One-shot means a mismatched or expired paste burns the
         // login too — otherwise a wrong value is just a retry, which is the whole attack this guard
         // exists to stop (docs/idea/07-security.md).
-        const found = release(accountId)
+        const found = pending.release(accountId)
         if (found === undefined) {
-          return invalid(
+          return rejected(
+            accountId,
             "no login is pending for this account — start one and paste the code within the window",
             "no_pending_login",
           )
@@ -220,21 +223,23 @@ export function createClaudeConnectService(deps: ClaudeConnectDeps): ClaudeConne
 
         if (deps.now() >= found.expiresAt) {
           found.handle.cancel()
-          return invalid("that login expired — start a new one", "login_expired")
+          return rejected(accountId, "that login expired — start a new one", "login_expired")
         }
 
         const parsed = parsePastedCode(pasted)
         if (parsed === null) {
           found.handle.cancel()
           // Says what the value looks like, never what was pasted: the paste is credential material.
-          return invalid(
+          return rejected(
+            accountId,
             "paste the whole value from the authorization page, in the form code#state",
             "malformed_paste",
           )
         }
         if (!timingSafeEqualStrings(parsed.state, found.handle.state)) {
           found.handle.cancel()
-          return invalid(
+          return rejected(
+            accountId,
             "that code belongs to a different login — start a new one and paste the value it gives you",
             "state_mismatch",
           )
@@ -248,7 +253,8 @@ export function createClaudeConnectService(deps: ClaudeConnectDeps): ClaudeConne
 
         const state = await deps.credentials.settle(found.configDir)
         if (state === "absent" || state === "unreadable") {
-          return invalid(
+          return rejected(
+            accountId,
             "the claude CLI finished without leaving a usable credential — start the login again",
             "no_credential",
           )
@@ -259,6 +265,24 @@ export function createClaudeConnectService(deps: ClaudeConnectDeps): ClaudeConne
         const previousStatus = account.value.status
         if (previousStatus === "needs_reauth") {
           await deps.accounts.update(accountId, { status: "active" }, deps.now())
+        }
+        // Whatever the row said: the health store may hold a `blocked` verdict the row never did (a
+        // failed write-through, a manual flip), and a fresh login is the one event that makes it
+        // stale. Same call as Re-check, so the two cannot disagree — see the module comment.
+        deps.health?.reset(accountId)
+        // Awaited, like `recheck` does: the console re-reads the list the moment this answers.
+        if (previousStatus === "needs_reauth") await deps.refreshCatalog?.()
+
+        log?.info("claude login completed", {
+          accountId,
+          mode: found.mode,
+          previousStatus,
+          repaired: state === "repaired",
+        })
+        try {
+          deps.onConnected?.(accountId)
+        } catch {
+          // A listener's failure is its own; the login landed regardless.
         }
 
         await deps.audit.record({
@@ -282,41 +306,14 @@ export function createClaudeConnectService(deps: ClaudeConnectDeps): ClaudeConne
       turns.take(accountId, async () => {
         const account = await subscription(accountId)
         if (!account.ok) return account
-        const found = release(accountId)
+        const found = pending.release(accountId)
         found?.handle.cancel()
+        if (found !== undefined) log?.info("claude login cancelled", { accountId })
         return ok({ accountId, cancelled: found !== undefined })
       }),
 
-    stop: () => {
-      // Set first: a login still inside `login.start` cannot be terminated from here, so it reads
-      // this flag when its handle appears and terminates itself.
-      stopping = true
-      for (const accountId of [...pending.keys()]) discard(accountId)
-    },
+    // The registry sets its flag first: a login still inside `login.start` cannot be terminated from
+    // here, so it reads that flag when its handle appears and terminates itself.
+    stop: pending.stop,
   }
-}
-
-interface SubscriptionAccount {
-  readonly id: string
-  readonly label: string
-  readonly provider: ProviderId
-  readonly status: AccountStatus
-}
-
-/**
- * The CLI's failures: a router-authored sentence for the operator, the diagnostic tail for the log.
- *
- * The two halves never swap. `message` is the only thing rendered, and `logDetail` — the CLI's own
- * words, already redacted where they were read — is the only thing logged. Anything that is not a
- * `ClaudeLoginError` is a bug on this side and is rethrown rather than flattened into a 400 the
- * operator cannot act on.
- */
-function loginFailure(error: unknown, accountId: string, log?: Logger): AdminResult<never> {
-  if (!(error instanceof ClaudeLoginError)) throw error
-  log?.warn("claude cli login failed", {
-    accountId,
-    kind: error.kind,
-    ...(error.logDetail === null ? {} : { cliOutput: error.logDetail }),
-  })
-  return invalid(error.message, `claude_login_${error.kind}`)
 }

@@ -28,6 +28,21 @@ export const ModelContextSource = z.enum(["upstream", "shipped"])
 export type ModelContextSource = z.infer<typeof ModelContextSource>
 
 /**
+ * Where the **row itself** came from — which voice said "this model exists here". Distinct from
+ * {@link ModelContextSource}, which labels only the two numbers beside it: a live SDK listing that
+ * states no size still takes its window from the shipped table, so one row legitimately reads
+ * `listingSource: "live"` with `contextSource: "shipped"`.
+ *
+ * - `upstream` — the provider's own HTTP model listing, read by the hourly sweep.
+ * - `live` — the Claude Agent SDK's `system/init` handshake for one subscription's own
+ *   `CLAUDE_CONFIG_DIR`: what that subscription can actually be asked for today, aliases included.
+ * - `shipped` — {@link CLAUDE_SUBSCRIPTION_MODELS}, the fallback for a subscription whose live read
+ *   was unavailable. A real published list, but one that ages with the image.
+ */
+export const ModelListingSource = z.enum(["upstream", "live", "shipped"])
+export type ModelListingSource = z.infer<typeof ModelListingSource>
+
+/**
  * One model as this router can describe it. Every field beyond the id is nullable, and null means
  * **unknown** rather than zero or unlimited — a client that reads a missing context window as "no
  * limit" would build a request the upstream rejects, so the absence has to be visible.
@@ -41,6 +56,13 @@ export interface ModelDescriptor {
   readonly maxOutputTokens: number | null
   /** Absent whenever both numbers are null: a source with nothing to source is noise. */
   readonly contextSource: ModelContextSource | null
+  /** Which voice listed this row — see {@link ModelListingSource}. */
+  readonly listingSource: ModelListingSource
+  /**
+   * For an alias row (`sonnet`, `opus`, `fable`, `haiku`), the canonical id it resolves to today.
+   * Information only: the client's model string is still what goes upstream, unchanged.
+   */
+  readonly resolvedModel: string | null
 }
 
 /**
@@ -57,3 +79,39 @@ export interface ContextWindow {
 
 /** A vendor table: normalized model name -> its window. Mirrors `cost/rates.ts`'s `ModelTable`. */
 export type ContextTable = Readonly<Record<string, ContextWindow>>
+
+/**
+ * The models a Claude subscription serves when the Agent SDK cannot be asked — the fallback behind
+ * a `listingSource: "shipped"` row. A subscription has no HTTP listing to GET and no discover
+ * button; the SDK's `system/init` handshake is its only live voice, and when that voice is
+ * unavailable (no `claude` binary, `needs_reauth`, a timeout) this is what `GET /v1/models` says
+ * rather than `data: []`.
+ *
+ * Provenance: the published model reference on the date `CONTEXT_TABLE_AS_OF` names. Context
+ * windows live in the shipped table under `services/models/windows/`, keyed by these same ids.
+ * Blast radius of a stale row: a model listed that the subscription no longer serves, or one
+ * missing that it does — until the next live read replaces the set. Nothing routes on it.
+ */
+export const CLAUDE_SUBSCRIPTION_MODELS: readonly string[] = Object.freeze([
+  "claude-fable-5-1",
+  "claude-fable-5",
+  "claude-opus-5",
+  "claude-opus-4-8",
+  "claude-opus-4-7",
+  "claude-opus-4-6",
+  "claude-sonnet-5",
+  "claude-sonnet-4-6",
+  "claude-haiku-4-5",
+])
+
+/**
+ * The family aliases the `claude` CLI accepts, each resolving to the **latest** of its family as
+ * of the same date. A live listing's own `resolvedModel` wins over this map whenever it states
+ * one; this is only what the shipped fallback claims.
+ */
+export const CLAUDE_SUBSCRIPTION_ALIASES: Readonly<Record<string, string>> = Object.freeze({
+  fable: "claude-fable-5-1",
+  opus: "claude-opus-5",
+  sonnet: "claude-sonnet-5",
+  haiku: "claude-haiku-4-5",
+})
