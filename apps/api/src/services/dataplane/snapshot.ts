@@ -5,6 +5,7 @@ import {
   type RoutingSnapshot,
 } from "../routing"
 import type { AccountHealthState, HealthStore } from "./health"
+import type { RotationCounters } from "./rotation"
 import type { RoutingCatalog } from "./types"
 
 /**
@@ -76,17 +77,29 @@ function toLimiterReading(window: {
   }
 }
 
-/** The one snapshot a request's selection reads. Built from warm memory; no I/O, no query. */
+/**
+ * The one snapshot a request's selection reads. Built from warm memory; no I/O, no query.
+ *
+ * `rotation` stamps each pool with the counter its rotation policy reads this request
+ * (`rotation.ts`). Absent, the pools carry whatever the catalog holds — nothing today — and every
+ * rotation policy sees `0`, which a caller that is not the dispatcher (a probe, a test of the pure
+ * chain) is entitled to.
+ */
 export function buildSnapshot(
   catalog: RoutingCatalog,
   health: Pick<HealthStore, "stateOf">,
   now: Date,
+  rotation?: Pick<RotationCounters, "current">,
 ): RoutingSnapshot {
+  const pools = catalog.pools()
   return {
     accounts: catalog
       .accounts()
       .map((account) => overlayHealth(account.snapshot, health.stateOf(account.id))),
-    pools: catalog.pools(),
+    pools:
+      rotation === undefined
+        ? pools
+        : pools.map((pool) => ({ ...pool, rotationCounter: rotation.current(pool.id) })),
     now,
   }
 }

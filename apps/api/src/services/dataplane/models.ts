@@ -1,5 +1,6 @@
 import { isStandingBlock, ModelNotFoundError, type ProviderId } from "@multi-ai-router/core"
-import { advertisedModels, resolveScope, selectAccounts } from "../routing"
+import { listableModels, type ModelCatalogStore, mergeResolution } from "../models"
+import { resolveScope, selectAccounts } from "../routing"
 import type { VerifiedKey } from "./auth/verifier"
 import type { HealthStore } from "./health"
 import { buildSnapshot } from "./snapshot"
@@ -22,7 +23,11 @@ import type { RoutingCatalog } from "./types"
  *
  * An Account that declares no model set supports everything — unknown is passthrough, not
  * exclusion — and therefore contributes no enumerable name beyond its alias keys. A deployment of
- * only such Accounts lists nothing rather than inventing a catalog it cannot stand behind.
+ * only such Accounts lists nothing rather than inventing a catalog it cannot stand behind — with
+ * one exception. A **Claude subscription** has no HTTP listing and no discover button; the Agent
+ * SDK's handshake is its only voice, and the warm model catalog holds what it said. So a
+ * subscription also lists its catalog rows, aliases and their resolutions included, or the shipped
+ * table until the sweep has reached it (`services/models/listable.ts` has the whole rule).
  *
  * An Account under a **standing** block (`disabled`, `exhausted`, `needs_reauth`) contributes
  * nothing either: listing a model no request can be served by sends the client to a 503 it could
@@ -35,13 +40,22 @@ export interface ReachableModel {
   readonly id: string
   /** The first in-scope provider offering it. Listings want an owner, not the whole set. */
   readonly owner: ProviderId
+  /**
+   * For an alias (`sonnet`), what it resolves to today under the first account that says so.
+   * Information only — the request path still sends the client's own string (non-negotiable 4).
+   */
+  readonly resolvedModel: string | null
 }
+
+/** The warm model catalog, or nothing: a runtime built without one lists routing's view alone. */
+export type ReachableModelsCatalog = Pick<ModelCatalogStore, "modelsOf" | "describe"> | undefined
 
 export function reachableModels(
   catalog: RoutingCatalog,
   health: HealthStore,
   key: VerifiedKey,
   now: Date,
+  models: ReachableModelsCatalog = undefined,
 ): readonly ReachableModel[] {
   const snapshot = buildSnapshot(catalog, health, now)
   const { diagnostics } = resolveScope(snapshot, {
@@ -54,18 +68,22 @@ export function reachableModels(
   // Live status, not the catalog's stored one: the health store is what knows an account went
   // `exhausted` thirty seconds ago, and the catalog only knows what the operator last saved.
   const liveStatus = new Map(snapshot.accounts.map((account) => [account.id, account.status]))
-  const owners = new Map<string, ProviderId>()
+  const merged = new Map<string, { owner: ProviderId; resolvedModel: string | null }>()
 
   for (const account of catalog.accounts()) {
     if (!inScope.has(account.id)) continue
     if (isStandingBlock(liveStatus.get(account.id) ?? account.snapshot.status)) continue
-    for (const name of advertisedModels(account.snapshot)) {
-      if (!owners.has(name)) owners.set(name, account.driver.provider)
+    for (const model of listableModels(account.snapshot, models?.modelsOf(account.id) ?? [])) {
+      const current = merged.get(model.id)
+      merged.set(model.id, {
+        owner: current?.owner ?? account.driver.provider,
+        resolvedModel: mergeResolution(current?.resolvedModel ?? null, model.resolvedModel),
+      })
     }
   }
 
-  return [...owners]
-    .map(([id, owner]) => ({ id, owner }))
+  return [...merged]
+    .map(([id, row]) => ({ id, ...row }))
     .sort((left, right) => left.id.localeCompare(right.id))
 }
 
@@ -87,6 +105,7 @@ export function reachableModel(
   key: VerifiedKey,
   id: string,
   now: Date,
+  models: ReachableModelsCatalog = undefined,
 ): ReachableModel {
   const snapshot = buildSnapshot(catalog, health, now)
   const selection = selectAccounts(snapshot, { sessionKey: "", model: id, keyScope: key.scope })
@@ -103,5 +122,11 @@ export function reachableModel(
   if (head === undefined) {
     throw new ModelNotFoundError(`model "${id}" is not reachable: no eligible account`)
   }
-  return { id, owner: head.account.provider }
+  // What the id resolves to under the account that would serve it, if that account's catalog knows
+  // — a subscription's `sonnet` — or under its own alias map. Null for a concrete id.
+  const account = head.account
+  const listed = listableModels(account, models?.modelsOf(account.id) ?? []).find(
+    (model) => model.id === id,
+  )
+  return { id, owner: account.provider, resolvedModel: listed?.resolvedModel ?? null }
 }

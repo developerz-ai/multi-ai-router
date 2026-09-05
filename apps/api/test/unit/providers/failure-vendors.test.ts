@@ -195,7 +195,8 @@ describe("gemini", () => {
 
     expect(result?.kind).toBe("auth")
     expect(result?.signal).toBe("gemini:auth-status")
-    expect(result?.retryable).toBe(false)
+    // The credential's problem stays the account's: parked, and the next candidate takes the turn.
+    expect(result?.retryable).toBe(true)
   })
 
   test("a rejected key dressed as a client mistake is still an auth failure", () => {
@@ -328,7 +329,7 @@ describe("groq", () => {
     )
 
     expect(result?.kind).toBe("auth")
-    expect(result?.retryable).toBe(false)
+    expect(result?.retryable).toBe(true)
   })
 })
 
@@ -366,7 +367,7 @@ describe("deepseek", () => {
     )
 
     expect(result?.kind).toBe("auth")
-    expect(result?.retryable).toBe(false)
+    expect(result?.retryable).toBe(true)
   })
 
   test("429 is a cooldown and 503 is transient — DeepSeek's statuses mean what they say", () => {
@@ -543,7 +544,7 @@ describe("cerebras", () => {
 
     expect(result?.kind).toBe("auth")
     expect(result?.signal).toBe("cerebras:wrong_api_key")
-    expect(result?.retryable).toBe(false)
+    expect(result?.retryable).toBe(true)
   })
 
   test("a spent daily token allowance is a 429, so it cools down rather than exhausting", () => {

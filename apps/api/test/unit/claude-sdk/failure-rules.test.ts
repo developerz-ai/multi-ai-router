@@ -32,11 +32,13 @@ describe("an expired subscription, in every spelling the CLI has for it", () => 
 
     expect(classification.kind).toBe("auth")
     expect(classification.status).toBe(401)
-    expect(classification.retryable).toBe(false)
+    // Retryable: the account is parked and the chain walks on to the next candidate with zero
+    // bytes on the wire — the client's request is not the dead credential's problem.
+    expect(classification.retryable).toBe(true)
     expect(classification.signal).toBe("claude-sdk:credential-expired")
     expect(clientMessage).toBe("the account's Claude subscription needs re-authenticating")
-    // Through the breaker, the account leaves routing until a human reconnects it — never a 502
-    // that fails over through every other subscription and reads as "server error".
+    // Through the breaker, the account leaves routing until a human reconnects it — parked as
+    // `needs_reauth`, never a 502 that reads as "server error" and hides the real remedy.
     const kind = failoverKind(classification.kind, classification.status)
     const state = recordFailure(HEALTHY, { kind, message: clientMessage, status: 401 }, NOW, {
       authKind: "oauth",

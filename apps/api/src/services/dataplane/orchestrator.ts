@@ -12,6 +12,7 @@ import { keyRateLimitedError } from "./limits"
 import { outcomeForResponse, type RequestProgress, sampleOf, streamed } from "./observe"
 import { planCandidates } from "./plan"
 import { attemptRecord, errorClassOf, outcomeOf } from "./records"
+import { createRotationCounters } from "./rotation"
 import { createRuntime } from "./runtime"
 import { sessionBindings } from "./session-binding"
 import { withSessionRestart } from "./session-restart"
@@ -53,6 +54,8 @@ export function createDispatcher(deps: DispatcherDeps): Dispatcher {
   const call = deps.fetch ?? ((request: Request) => fetch(request))
   const options = deps.options ?? {}
   const bindings = sessionBindings(deps.catalog, deps.sessions)
+  // Per pool, per replica, in memory — the caller-owned half of `round-robin` (`rotation.ts`).
+  const rotation = createRotationCounters()
 
   /**
    * The request itself. `progress` carries the two readings the observer needs but only this
@@ -129,10 +132,22 @@ export function createDispatcher(deps: DispatcherDeps): Dispatcher {
 
     // Scope intersection, filtering, and policy — one pure call over an injected snapshot.
     const selection = selectAccounts(
-      buildSnapshot(deps.catalog, deps.health, clock.now()),
-      { sessionKey: session.key, model, keyScope: input.key.scope, binding },
+      buildSnapshot(deps.catalog, deps.health, clock.now(), rotation),
+      {
+        sessionKey: session.key,
+        model,
+        keyScope: input.key.scope,
+        binding,
+        rotationCounter: rotation.current(null),
+      },
       options.selection,
     )
+    // The rotation moved only if the policy placed this session. A honored binding chose nothing —
+    // the bound account is the head whatever the counter says — and counting it would leave new
+    // sessions landing at whatever offset the bound traffic stopped on (`rotation.ts`).
+    if (selection.decision.binding.state !== "honored") {
+      for (const group of selection.decision.groups) rotation.advance(group.poolId)
+    }
     // A `blocked` binding is deliberately kept: the account is coming back on a clock and the
     // conversation stays resumable, so the request fails honestly instead. An `invalidated` one
     // is *not* dropped here — see below: the store mutation waits for a replacement to exist,

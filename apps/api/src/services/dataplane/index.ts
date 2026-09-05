@@ -115,7 +115,12 @@ export {
   type RateLimiter,
   type RateLimiterOptions,
 } from "./limits"
-export { type ReachableModel, reachableModel, reachableModels } from "./models"
+export {
+  type ReachableModel,
+  type ReachableModelsCatalog,
+  reachableModel,
+  reachableModels,
+} from "./models"
 export { createDispatcher } from "./orchestrator"
 export {
   type CandidatePlan,
@@ -134,6 +139,7 @@ export {
 export { type RelayObserver, relayResponse } from "./relay"
 export { relayUpstreamError } from "./relay-error"
 export { relayTranslatedResponse, type TranslatedRelayInput } from "./relay-translate"
+export { createRotationCounters, type RotationCounters } from "./rotation"
 export { runSdkAttempt, type SdkAttemptInput, type SdkSessionContext } from "./sdk-attempt"
 export {
   type SessionBindings,

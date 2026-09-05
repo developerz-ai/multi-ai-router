@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test"
+import { createLogger, type Logger } from "../../src/logging/logger"
 import { MODEL_NAME_MAX_BYTES } from "../../src/services/dataplane"
 import type { PoolSnapshot } from "../../src/services/routing"
 import type { UsageRecord } from "../../src/services/usage"
@@ -17,6 +18,16 @@ import { bearer, CRYPTOR, harness, KEY, MESSAGE, post, settle } from "./harness"
  * is exactly why they are dependencies. The harness itself lives in `./harness` and is shared with
  * `translate.test.ts`.
  */
+
+/** A logger whose lines a test reads back, exactly as they would be written. */
+function capturedLogger(): { readonly log: Logger; readonly lines: Record<string, unknown>[] } {
+  const lines: Record<string, unknown>[] = []
+  const log = createLogger({
+    level: "warn",
+    write: (line) => void lines.push(JSON.parse(line) as Record<string, unknown>),
+  })
+  return { log, lines }
+}
 
 describe("authentication", () => {
   test("accepts the OpenAI bearer form", async () => {
@@ -511,6 +522,48 @@ describe("failover", () => {
     expect(second.status).toBe(503)
     expect(second.headers.get("Retry-After")).toBeNull()
     expect(upstream.calls).toHaveLength(1)
+  })
+
+  test("a rejected credential is walked past to the next account, and the account is parked", async () => {
+    const { log, lines } = capturedLogger()
+    const { app, health, upstream, usage } = harness({
+      accounts: twoAccounts,
+      logger: log,
+      responses: [
+        () =>
+          jsonResponse(401, {
+            type: "error",
+            error: { type: "authentication_error", message: "invalid x-api-key" },
+          }),
+        () => jsonResponse(200, { usage: { input_tokens: 1, output_tokens: 2 } }),
+      ],
+    })
+
+    const res = await app.request("/v1/messages", post(MESSAGE, bearer()))
+    await res.text()
+    await settle()
+
+    // The credential is the account's problem, not the request's: the next candidate authenticates
+    // with its own and serves. Before, this request failed 502 with a healthy account beside it.
+    expect(res.status).toBe(200)
+    expect(upstream.calls).toHaveLength(2)
+    const [first, second] = usage.rows
+    expect(first?.outcome).toBe("upstream_auth_failed")
+    expect(second?.outcome).toBe("success")
+    // An `api-key` account whose key was rejected is `disabled` until the operator changes it.
+    const parked = first?.accountId ?? ""
+    expect(health.stateOf(parked).breaker.status).toBe("disabled")
+    expect(health.stateOf(second?.accountId ?? "").breaker.status).toBe("active")
+    // One failed-attempt line, naming the account and the kind.
+    const failed = lines.filter((line) => line.msg === "upstream attempt failed")
+    expect(failed).toHaveLength(1)
+    expect(failed[0]).toMatchObject({ accountId: parked, attempt: 1, failureKind: "auth" })
+
+    // The next request never dials the parked account.
+    const again = await app.request("/v1/messages", post(MESSAGE, bearer()))
+    await again.text()
+    expect(again.status).toBe(200)
+    expect(upstream.calls).toHaveLength(3)
   })
 
   test("Gemini's throttle names billing and is still a cooldown, timed off the body", async () => {

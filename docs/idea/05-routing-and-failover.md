@@ -133,12 +133,14 @@ each a different answer to "spread the load how?" — and the default answer is 
 because on Claude subscription pools even spreading is not merely wasteful, it is **incorrect**:
 an Agent-SDK session is resumable only on the Account that created it.
 
-> **Read this before choosing a policy.** On pools containing `anthropic-oauth` (Claude
-> subscription) Accounts, `round-robin`, `weighted`, and `least-used` are **unsafe as-is** — they
-> ignore session identity, and moving a Session to another Account does not cost a cache, it breaks
-> the conversation. They are safe only where they respect an existing Session → Account binding.
-> See [`sticky`](#sticky-default--session-affinity) below and
-> [11-anthropic-agent-sdk.md](11-anthropic-agent-sdk.md) §4.
+> **Every policy respects a live Session → Account binding.** The binding is decided *before* any
+> policy runs (`routing/binding.ts`), and `runPolicy` pins a honored binding at the head of whatever
+> the policy ordered (`routing/policies/index.ts`). `round-robin`, `weighted`, `least-used`, and
+> `quota-aware` therefore never move a bound conversation on a Claude subscription pool: they only
+> ever place a Session that has no binding yet, or whose binding was invalidated. Choose among them
+> by how you want *new* sessions spread. Pinned by `test/unit/routing/subscription-pool.test.ts` and
+> `test/integration/claude-sdk-fleet.test.ts`. See [`sticky`](#sticky-default--session-affinity)
+> below and [11-anthropic-agent-sdk.md](11-anthropic-agent-sdk.md) §4.
 
 ### `sticky` (default) — session affinity
 
@@ -217,16 +219,24 @@ applies: every request carries its full history, so stickiness there is purely t
 optimization it has always been, and hopping accounts is safe.
 
 Trade-off: distribution is even in expectation, not exactly. One heavy session can make its
-account the busiest. `least-used` trades that away — but see the warning above before using it on
-a Claude subscription pool.
+account the busiest. `least-used` trades that away.
 
 ### `round-robin`
 
-Even rotation across the eligible candidates, one request at a time, ignoring session identity.
+Even rotation across the eligible candidates, one placement at a time.
+
+**The counter.** Rotation reads a per-pool counter the dispatcher owns
+(`services/dataplane/rotation.ts`): in memory, per replica, keyed by pool so another pool's traffic
+never strides this one's rotation, and **advanced only when the policy placed something** — a turn
+whose binding was honored chose nothing and does not move it. So on the HTTP path, where no binding
+is ever honored, this is per-request rotation; on a Claude subscription pool it is per-*new-session*
+rotation: twenty agents starting on six subscriptions land 4·4·3·3·3·3, and each one then stays
+where it landed. Before this counter existed nothing set the field, and every rotation policy ran at
+`0` — a fixed head, indistinguishable from the pool's declared order.
 
 | When to use | Trade-off |
 |---|---|
-| Homogeneous accounts, short stateless requests, or when you want the flattest possible spread. | **Destroys cache affinity.** A multi-turn conversation hits a different account every turn and pays a cold cache each time. **Unsafe as-is on Claude subscription pools** — there a hop is not a cold cache, it is an unresumable conversation. Safe only if it respects an existing Session → Account binding. |
+| Homogeneous accounts, short stateless requests, or the flattest possible spread of **new sessions** across a fleet of Claude subscriptions serving many coding agents at once. | **Destroys cache affinity on the HTTP path.** A multi-turn conversation there hits a different account every turn and pays a cold cache each time. On a Claude subscription pool the binding holds the conversation in place and rotation only decides where the *next* session starts — there it is the policy for a fleet of parallel agents, where `priority-failover` would pile every agent onto the top account and its per-account concurrency gate. |
 
 ### `weighted`
 
@@ -237,16 +247,19 @@ the Pool form.
 
 | When to use | Trade-off |
 |---|---|
-| Accounts of unequal capacity — a Max 20x sub alongside two Pro subs; a fast local endpoint alongside a slow remote one. | Weights are a static guess. They do not react to live load or quota; that is `least-used` and `quota-aware`. Same cache-affinity loss as round-robin — and the same **unsafe-as-is on Claude subscription pools** caveat, for the same reason. |
+| Accounts of unequal capacity — a Max 20x sub alongside two Pro subs; a fast local endpoint alongside a slow remote one. | Weights are a static guess. They do not react to live load or quota; that is `least-used` and `quota-aware`. Same cache-affinity loss as round-robin on the HTTP path; on a Claude subscription pool the weight decides where new sessions start and the binding holds them there. Rotates on the same per-pool counter. |
 
 ### `least-used`
 
-Picks the candidate with the lowest current load: fewest in-flight requests, or lowest recent
-token spend. **DEFERRED**: which of the two is the default measure, and the exact window.
+Picks the candidate with the lowest current load. **Implemented** (`routing/policies/least-used.ts`):
+the default measure is **in-flight requests** — the one signal every provider has and that reacts
+immediately — with recent token spend as the tiebreak, then the declared order. `SelectionOptions.
+leastUsedMeasure: "recent-tokens"` swaps the two; it is not yet an env knob. The recent-tokens
+window is the health store's running counter; a bounded window for it is still **DEFERRED**.
 
 | When to use | Trade-off |
 |---|---|
-| Bursty traffic with wildly uneven request sizes, where a flat rotation still leaves one account buried. | Reactive, so it can oscillate under rapid churn. No affinity — same cold-cache cost, and the same **unsafe-as-is on Claude subscription pools** caveat. Oscillation makes it the worst of the three there: it can move a Session mid-conversation on a load blip. |
+| Bursty traffic with wildly uneven request sizes, where a flat rotation still leaves one account buried. Also a fleet of parallel agents on subscriptions, where "fewest in flight" is the spread that matters. | Reactive, so it can oscillate under rapid churn — a cold-cache cost on the HTTP path. On a Claude subscription pool the binding is pinned ahead of this ordering, so a load blip cannot move a Session mid-conversation; it only changes where the next one starts. |
 
 ### `priority-failover`
 
@@ -293,24 +306,24 @@ TTLs, and last-good-snapshot behavior are in
 
 | When to use | Trade-off |
 |---|---|
-| A pool of several subscriptions of the same kind, where the goal is to keep all of them usable rather than drain one — **and** a continuous quota signal is available for them. | Only as good as the provider's signal, and *only* a continuous one counts. Accounts whose provider exposes nothing continuous rank as unknown-headroom and fall back to round-robin among themselves. Signals are cached on a short TTL, so the view can be seconds stale. No affinity — the same Claude-subscription binding caveat as round-robin applies whenever headroom ranking would move a bound Session. |
+| A pool of several subscriptions of the same kind, where the goal is to keep all of them usable rather than drain one — **and** a continuous quota signal is available for them. | Only as good as the provider's signal, and *only* a continuous one counts. Accounts whose provider exposes nothing continuous rank as unknown-headroom and fall back to round-robin among themselves (on the same per-pool counter). Signals are cached on a short TTL, so the view can be seconds stale. Headroom ranking never moves a bound Session — the binding is pinned ahead of it — it decides where the next one starts. |
 
 ### Comparison
 
 | Policy | Session affinity | Spreads load | Safe on a Claude subscription pool? | Best for |
 |---|---|---|---|---|
 | `sticky` | **yes** | evenly, per session | **Yes** — it is the reason the binding holds | the default — many subs, multi-turn conversations, warm caches |
-| `round-robin` | no | evenly, per request | **No, unsafe as-is** — moves Sessions, breaking resume | homogeneous accounts, stateless calls |
-| `weighted` | no | proportionally | **No, unsafe as-is** — same reason | accounts of unequal capacity |
-| `least-used` | no | reactively | **No, unsafe as-is** — worst of the three, it can move a Session on a load blip | bursty, uneven request sizes |
-| `priority-failover` | incidental | **no — concentrates** | Yes in practice — it holds a Session on the top account until that account is filtered out | burn the subscription first, pay per token last |
-| `quota-aware` | no | by remaining headroom | Only while it respects an existing binding — **and** only useful with a continuous quota signal | keeping several subscriptions alive together |
+| `round-robin` | via the binding | evenly, per new session (per request on HTTP) | **Yes** — the binding is pinned ahead of the rotation | a fleet of parallel agents on homogeneous subscriptions; stateless HTTP calls |
+| `weighted` | via the binding | proportionally | **Yes** — same mechanism | accounts of unequal capacity |
+| `least-used` | via the binding | reactively, fewest in flight | **Yes** — same mechanism; a load blip only moves where the *next* session starts | bursty, uneven request sizes |
+| `priority-failover` | incidental | **no — concentrates** | Yes — it holds a Session on the top account until that account is filtered out. **Not for a fleet**: every new agent lands on the top account and queues at its per-account concurrency gate | burn the subscription first, pay per token last |
+| `quota-aware` | via the binding | by remaining headroom | **Yes** — and only useful with a continuous quota signal | keeping several subscriptions alive together |
 
-"Unsafe as-is" means exactly one thing: the policy selects an Account **ignoring** any existing
-Session → Account binding. On the HTTP path that costs a cold cache. On the Claude subscription
-path it makes the conversation unresumable. A pool mixing both kinds of Account is judged by its
-SDK-path members. Where such a policy is offered on a subscription pool at all, it must be
-binding-respecting: the policy chooses only for unbound Sessions.
+"Safe" means exactly one thing here: an existing Session → Account binding is decided before the
+policy runs and pinned ahead of whatever it ordered, so no policy ever moves a bound Session. The
+policies differ only in where an **unbound** Session — a new conversation, or one whose binding was
+invalidated — lands. On the HTTP path no binding is ever honored, so there every request is
+"unbound" and the affinity column reads as the cache-warmth story it always was.
 
 Policy is set **per Pool**. A key scoped to two pools gets each pool's own policy applied within
 that pool — the policy never runs across the union.
@@ -324,7 +337,7 @@ that pool — the policy never runs across the union.
 | `5xx` | Retry the next candidate. Count toward the breaker's failure streak. |
 | Connection failure / timeout | Retry the next candidate. Count toward the failure streak. |
 | `4xx` other than `429` | **Do not retry.** A bad request is bad at every account; returning the upstream's error is the honest answer. |
-| `401` / `403` | Do not retry. Move the account to `needs_reauth` (OAuth) or `disabled` (an API key, or a no-auth endpoint that has grown something in front of it — neither has a login to re-run) and surface it. |
+| `401` / `403` | **Retry the next candidate** — before any byte has reached the client, like every row above. Move the account to `needs_reauth` (OAuth) or `disabled` (an API key, or a no-auth endpoint that has grown something in front of it — neither has a login to re-run). A rejected credential is *account*-scoped, not request-scoped: the next candidate authenticates with its own. Until v2.9 this row read "do not retry", which meant the first request to land on a subscription whose 30-day login had expired failed `502` while five healthy subscriptions sat beside it; only the *next* request routed around the parked account. The `502` is still what the client hears when **every** candidate failed that way (or the attempt cap ran out first — `ROUTING_MAX_ATTEMPTS`, default 3, so size it against how many logins you expect to lapse together). |
 
 Rules:
 
@@ -568,7 +581,7 @@ resolved by the same rule — **the most actionable failure wins, never simply t
 | Rank | Failure | The caller's next step |
 |---|---|---|
 | 1 | A clock fixes it — `429` | Wait the `Retry-After`, then the pool serves. |
-| 2 | A human fixes it — `402` top up, `502` re-authenticate the Account | One named action, by the operator. |
+| 2 | A human fixes it — `402` top up, `502` re-authenticate the Account | One named action, by the operator. Reachable only once the chain is over: a `401`/`403` mid-chain is walked past (the account parked, the next candidate tried), so a `502` here means every candidate was tried or the attempt cap ran out. It still outranks a later candidate's relayed `400`, the same way `402` does — a pre-existing property of this table, not a new one. |
 | 2½ | The upstream was reached and hit its deadline — `504` | Retry; transient, but names no instant. A chain whose every attempt timed out answers this, never the empty-pool `503` — that status says nothing was attempted, and a coding agent's retry policy reads the two differently. A *connect* failure contributes nothing: the account was never reached, which is what "nothing" means. |
 | 3 | The upstream answered — relayed verbatim | Whatever the provider said, in the provider's own words. |
 | 4 | *This one Account* could not take *this request* — `400` no faithful conversion into its dialect, `500` a credential this router cannot read | Nothing the caller can use. |

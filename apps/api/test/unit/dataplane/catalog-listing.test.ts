@@ -43,6 +43,8 @@ function models(
       contextTokens: entry.contextTokens ?? null,
       maxOutputTokens: entry.maxOutputTokens ?? null,
       contextSource: entry.contextSource ?? null,
+      listingSource: entry.listingSource ?? "upstream",
+      resolvedModel: entry.resolvedModel ?? null,
     }
   }
   return {
