@@ -6,9 +6,9 @@ import {
   UpstreamTimeoutError,
 } from "@multi-ai-router/core"
 import type { FailureClassification, RateLimitSignal } from "../../providers"
-// Deep import: the providers barrel does not re-export `RateLimitContext`, and that file is
+// Deep import: the providers barrel does not re-export `FailureContext`, and that file is
 // owned by another change set right now. Fold into `../../providers` when it does.
-import { type RateLimitContext, toRouterError } from "../../providers/failure/router-error"
+import { type FailureContext, toRouterError } from "../../providers/failure/router-error"
 import type { FailureKind } from "../routing"
 import type { UpstreamError } from "./attempt"
 
@@ -166,9 +166,19 @@ export function answeredFailure(
   dialect: Dialect | null,
   context?: AnsweredFailureContext,
 ): ChainFailure | null {
-  const rateLimit: RateLimitContext | undefined =
-    context === undefined ? undefined : { signal: context.rateLimit, now: context.now }
-  const error = classification === null ? null : toRouterError(classification, rateLimit)
+  const failure: FailureContext | undefined =
+    context === undefined
+      ? undefined
+      : {
+          signal: context.rateLimit,
+          now: context.now,
+          // Only for a transport that classified **without** a body — the Agent SDK. There
+          // `AttemptFailure.message` is the router-authored sentence; on the HTTP path the same
+          // field carries the classification's signal token, which is a log breadcrumb and not a
+          // sentence anyone should read in a `429`.
+          ...(upstream === null ? { clientMessage: context.clientMessage } : {}),
+        }
+  const error = classification === null ? null : toRouterError(classification, failure)
   if (error !== null) return { kind: "router", error }
   if (upstream !== null) return { kind: "upstream", upstream, dialect }
   // A deadline the HTTP transport hit is a verdict, not silence: `UpstreamTimeoutError` (504) has

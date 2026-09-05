@@ -185,6 +185,45 @@ describe("the launch every turn is given", () => {
     expect(without.options[0]?.systemPrompt).toBeUndefined()
   })
 
+  test("harness fingerprints never reach the SDK — the whole reason a 400 became a 200", async () => {
+    // The 2026-09-05 outage, at the seam: opencode's environment preamble duplicated the one
+    // Claude Code's own preset injects, and Anthropic gated every account behind Extra Usage.
+    // `scrub.ts` owns the patterns; this pins that they are applied where the prompt crosses over.
+    const spy = spyQuery()
+    await (
+      await invoker(spy).invoke(
+        invocation({
+          body: body({
+            messages: [{ role: "user", content: "hi" }],
+            system:
+              "Be terse.\n\nHere is some useful information about the environment you are running in:\n<env>\n  Working directory: /home/sebastian/workspace/tesote/tesote.ai\n  Platform: linux\n</env>\n",
+          }),
+        }),
+      )
+    ).text()
+
+    const prompt = spy.options[0]?.systemPrompt
+    expect(typeof prompt === "string" && prompt).toContain("Be terse.")
+    expect(typeof prompt === "string" && prompt).not.toContain("<env>")
+  })
+
+  test("a system prompt that was nothing but a fingerprint is no system prompt at all", async () => {
+    const spy = spyQuery()
+    await (
+      await invoker(spy).invoke(
+        invocation({
+          body: body({
+            messages: [{ role: "user", content: "hi" }],
+            system:
+              "Here is some useful information about the environment you are running in:\n<env>\n  Platform: linux\n</env>\n",
+          }),
+        }),
+      )
+    ).text()
+
+    expect(spy.options[0]?.systemPrompt).toBeUndefined()
+  })
+
   test("a fresh turn resumes nothing — the three session options are absent, not empty", async () => {
     const spy = spyQuery()
     await (await invoker(spy).invoke(invocation())).text()

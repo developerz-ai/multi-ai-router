@@ -15,7 +15,9 @@
  * - **Once bytes have been streamed to the client, nothing is retried.** Replaying a partially
  *   delivered stream produces a response the client cannot reconcile — duplicated tokens, a
  *   second `message_start`, a tool call emitted twice. Hard rule, not a tunable.
- * - **Attempts are bounded**, well under the candidate count, so a broken pool fails fast.
+ * - **Attempts are bounded by the pool**: the chain walks to the next account, and the next, until
+ *   one serves or every eligible account has been tried. An operator who wants to fail sooner than
+ *   that sets `ROUTING_MAX_ATTEMPTS`; nothing raises the bound past the candidates that exist.
  * - **Each attempt is a distinct account.** Never retry the same account inside one request —
  *   except the one in-place replay a stale SDK session earns, which is recovery on the *same*
  *   account and explicitly not a failover.
@@ -86,12 +88,14 @@ export function classifyStatus(
   return "client-error"
 }
 
-/** A small fixed cap, deliberately well under a typical candidate count. */
-export const DEFAULT_MAX_ATTEMPTS = 3
 /** A stale SDK session earns exactly one replay in place. */
 export const DEFAULT_MAX_IN_PLACE_RETRIES = 1
 
 export interface FailoverOptions {
+  /**
+   * Operator ceiling on distinct accounts tried for one request. Absent means the pool itself is
+   * the ceiling — see {@link maxAttempts}.
+   */
   readonly maxAttempts?: number
   readonly maxInPlaceRetries?: number
   /** The account this session is bound to, when it has a binding. */
@@ -159,9 +163,24 @@ export function planNextAttempt(
   return attemptOn(next, ordered, progress, options)
 }
 
-/** The bound cap: the configured attempt count, never more than there are candidates. */
+/**
+ * How many distinct accounts one request may be tried on: **every eligible one**, unless an
+ * operator set a lower ceiling.
+ *
+ * There is deliberately no default number here any more. A fixed cap of three meant a pool of six
+ * subscriptions stopped after two failures with four healthy accounts unasked — the client got an
+ * honest-sounding error about capacity that was simply untrue, and the request the operator paid
+ * for a deep pool to survive failed anyway. The pool *is* the bound: each attempt is a distinct
+ * account (`planNextAttempt` never re-offers one), the candidate list is already filtered to
+ * accounts that could serve, and the attempt deadline still governs the whole chain — so the walk
+ * terminates in at most `ordered.length` attempts however large the pool grows.
+ *
+ * `ROUTING_MAX_ATTEMPTS` remains for the operator who wants to fail faster than their pool allows;
+ * it can only ever lower this, never raise it past the candidates that exist.
+ */
 export function maxAttempts(ordered: readonly Candidate[], options: FailoverOptions = {}): number {
-  const configured = Math.max(1, Math.trunc(options.maxAttempts ?? DEFAULT_MAX_ATTEMPTS))
+  if (options.maxAttempts === undefined) return ordered.length
+  const configured = Math.max(1, Math.trunc(options.maxAttempts))
   return Math.min(configured, ordered.length)
 }
 

@@ -80,6 +80,15 @@ export function apiStatus(...statuses: readonly number[]): Matcher {
 }
 
 export const WINDOW_SPENT = "the account's Claude subscription window is spent"
+/**
+ * Extra Usage, and the one client-facing sentence about it. Router-authored like every other
+ * `clientMessage`, and deliberately says nothing about *which* account, how many were tried, or how
+ * long any of them is cooling down — the rotation is the router's business, and a caller only ever
+ * hears this when nothing in the pool could serve. What it does name is the remedy, because that is
+ * the one thing a caller (or the operator reading their report) can act on.
+ */
+export const EXTRA_USAGE_GATED =
+  "no Claude subscription capacity is available right now — this request was metered against Extra Usage, which is spent; add more at claude.ai/settings/usage"
 export const NEEDS_REAUTH = "the account's Claude subscription needs re-authenticating"
 export const CREDITS_SPENT =
   "the account's credit balance is spent — it needs a top-up, not a retry"
@@ -175,6 +184,33 @@ export const SDK_FAILURE_RULES: readonly SdkRule[] = [
     match: any(
       phrase("credit balance is too low", "organization is out of usage credits"),
       pattern(/usage limit is set to \$\d/),
+    ),
+  },
+  {
+    // The sentence Anthropic answers a *harness-fingerprinted* request with — `400 Third-party apps
+    // now draw from your extra usage, not your plan limits. Add more at claude.ai/settings/usage and
+    // keep going.` (production, 2026-09-05, through opencode). It is a `400`, and before this row it
+    // fell through every phrase to the bare `apiStatus(400)` rule and read as `invalid-request`: not
+    // retryable, so the planner never tried another account, and the client was told its request was
+    // malformed when the request was fine and the *account* had no Extra Usage left.
+    //
+    // `rate-limited` is the honest class. Nothing about the request is wrong; this account cannot
+    // serve it and a clock will change that, which is exactly `cooling_down` (non-negotiable 7) —
+    // never `credits-exhausted`, which would park a healthy subscription at `402` until a human
+    // intervened. Retryable, so the chain rotates to the next account, and the breaker cools this
+    // one down so the pool is not burned on it again on the very next request.
+    //
+    // Ordered ahead of `claude-sdk:overage-required` because it is the more specific sentence, and
+    // ahead of every bare status token by construction (see the module note in `errors.ts`). The
+    // real fix is upstream of classification — `scrub.ts` removes the fingerprint that provokes it —
+    // and this row is what keeps the pool alive for the prompts it does not catch.
+    kind: "rate-limited",
+    signal: "claude-sdk:extra-usage-gated",
+    status: 429,
+    clientMessage: EXTRA_USAGE_GATED,
+    match: any(
+      phrase("third-party apps now draw from your extra usage"),
+      all("extra usage", "claude.ai/settings/usage"),
     ),
   },
   {

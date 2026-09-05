@@ -337,12 +337,17 @@ that pool — the policy never runs across the union.
 | `5xx` | Retry the next candidate. Count toward the breaker's failure streak. |
 | Connection failure / timeout | Retry the next candidate. Count toward the failure streak. |
 | `4xx` other than `429` | **Do not retry.** A bad request is bad at every account; returning the upstream's error is the honest answer. |
-| `401` / `403` | **Retry the next candidate** — before any byte has reached the client, like every row above. Move the account to `needs_reauth` (OAuth) or `disabled` (an API key, or a no-auth endpoint that has grown something in front of it — neither has a login to re-run). A rejected credential is *account*-scoped, not request-scoped: the next candidate authenticates with its own. Until v2.9 this row read "do not retry", which meant the first request to land on a subscription whose 30-day login had expired failed `502` while five healthy subscriptions sat beside it; only the *next* request routed around the parked account. The `502` is still what the client hears when **every** candidate failed that way (or the attempt cap ran out first — `ROUTING_MAX_ATTEMPTS`, default 3, so size it against how many logins you expect to lapse together). |
+| `401` / `403` | **Retry the next candidate** — before any byte has reached the client, like every row above. Move the account to `needs_reauth` (OAuth) or `disabled` (an API key, or a no-auth endpoint that has grown something in front of it — neither has a login to re-run). A rejected credential is *account*-scoped, not request-scoped: the next candidate authenticates with its own. Until v2.9 this row read "do not retry", which meant the first request to land on a subscription whose 30-day login had expired failed `502` while five healthy subscriptions sat beside it; only the *next* request routed around the parked account. The `502` is still what the client hears when **every** candidate failed that way — every one, because the default attempt bound is the pool itself, not a number (`ROUTING_MAX_ATTEMPTS` unset). |
 
 Rules:
 
-- **Attempts are bounded** — a small fixed cap, well under the candidate count, so a broken pool
-  fails fast instead of walking every account. Exact cap is configuration.
+- **Attempts are bounded by the pool** — the chain walks to the next candidate, and the next, until
+  one serves or every eligible account has been tried. That is the default and there is no number
+  behind it: a fixed cap of three meant a pool of six subscriptions stopped after two failures with
+  four healthy accounts unasked, which is the opposite of what a deep pool is for (2026-09-05, the
+  Extra-Usage outage). The walk still terminates in at most one attempt per candidate, and the
+  request deadline governs the whole chain. `ROUTING_MAX_ATTEMPTS` remains for an operator who wants
+  to fail faster than their pool allows; it can only lower the bound, never raise it.
 - **Each attempt is a distinct account.** Never retry the same account inside one request.
 - **Once bytes have been streamed to the client, the request fails honestly.** No silent restart.
   Replaying a partially delivered stream would produce a response the client cannot reconcile —

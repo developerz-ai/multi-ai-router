@@ -78,18 +78,56 @@ describe("ordering and bounds", () => {
   })
 
   test("each attempt is a distinct account", () => {
-    const decision = planNextAttempt(chain, after("a", "b"), failure("server-error"), {
-      maxAttempts: 4,
-    })
+    const decision = planNextAttempt(chain, after("a", "b"), failure("server-error"))
     expect(decision.action === "attempt" && decision.candidate.account.id).toBe("c")
   })
 
-  test("attempts are bounded well under the candidate count", () => {
-    expect(maxAttempts(chain)).toBe(3)
-    expect(planNextAttempt(chain, after("a", "b", "c"), failure("server-error"))).toEqual({
+  test("a pool that keeps failing is walked end to end, one distinct account at a time", () => {
+    // The owner's ask, in his words: "try next, try next, try next … until we have it running."
+    // Every account whose Extra Usage is spent answers the same `429`; the request only fails when
+    // there is no untried account left.
+    let progress = NO_ATTEMPTS
+    const tried: string[] = []
+    for (;;) {
+      const decision = planNextAttempt(
+        chain,
+        progress,
+        tried.length === 0 ? null : failure("rate-limited"),
+      )
+      if (decision.action === "stop") {
+        expect(decision.reason).toBe("attempts-exhausted")
+        break
+      }
+      if (decision.action !== "attempt") throw new Error("unexpected in-place retry")
+      tried.push(decision.candidate.account.id)
+      progress = recordAttempt(progress, decision.candidate.account.id)
+    }
+    expect(tried).toEqual(["a", "b", "c", "d"])
+  })
+
+  test("with no operator ceiling, the walk keeps going while an untried account exists", () => {
+    // The bound is the pool, not a number. A fixed cap of three stopped a six-account pool after
+    // two failures with four healthy subscriptions unasked — the failure this default exists to
+    // prevent (2026-09-05).
+    expect(maxAttempts(chain)).toBe(4)
+    expect(planNextAttempt(chain, after("a", "b", "c"), failure("server-error"))).toMatchObject({
+      action: "attempt",
+      attempt: 4,
+    })
+  })
+
+  test("and it stops the moment the pool is spent, never before", () => {
+    expect(planNextAttempt(chain, after("a", "b", "c", "d"), failure("rate-limited"))).toEqual({
       action: "stop",
       reason: "attempts-exhausted",
     })
+  })
+
+  test("an operator ceiling lowers the bound, and only lowers it", () => {
+    expect(maxAttempts(chain, { maxAttempts: 2 })).toBe(2)
+    expect(
+      planNextAttempt(chain, after("a", "b"), failure("server-error"), { maxAttempts: 2 }),
+    ).toEqual({ action: "stop", reason: "attempts-exhausted" })
   })
 
   test("the cap never exceeds the number of candidates", () => {

@@ -38,7 +38,6 @@ export {
 export {
   type AttemptFailure,
   classifyStatus,
-  DEFAULT_MAX_ATTEMPTS,
   DEFAULT_MAX_IN_PLACE_RETRIES,
   type FailoverDecision,
   type FailoverOptions,

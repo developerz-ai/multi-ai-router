@@ -24,7 +24,10 @@ type PendingFailoverEnv = Env["failover"] & {
 export function dispatchOptionsFromEnv(env: Env): DispatchOptions {
   const failover: PendingFailoverEnv = env.failover
   return {
-    failover: { maxAttempts: failover.maxAttempts },
+    // Absent stays absent: the routing layer reads "no ceiling" as "every eligible account", which
+    // is a bound only it can compute (`routing/failover.ts`, `maxAttempts`). Writing a number here
+    // would be this file inventing a pool size.
+    failover: failover.maxAttempts === undefined ? {} : { maxAttempts: failover.maxAttempts },
     selection: {
       boundAccountCoolingDown: failover.boundAccountCoolingDown,
       ...(failover.unknownResetRetryAfterSeconds === undefined

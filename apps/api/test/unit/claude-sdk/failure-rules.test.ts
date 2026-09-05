@@ -203,3 +203,76 @@ describe("the SDK's structured status, read after every phrase", () => {
     ).toBe("unknown")
   })
 })
+
+/**
+ * The 2026-09-05 outage: every agent-sized request through opencode came back `400` and the client
+ * was told its request was malformed. The request was fine — Anthropic had metered it against Extra
+ * Usage because the system prompt carried a second harness's fingerprints (`scrub.ts`), and the
+ * account had none left. Read as `invalid-request` the chain stopped dead with five healthy
+ * subscriptions unasked; read as what it is, it rotates and the account cools down.
+ */
+describe("a request Anthropic metered against Extra Usage", () => {
+  /** Verbatim from the pod log, 2026-09-05. The sentence is the whole provenance. */
+  const EXTRA_USAGE =
+    "Claude Code returned an error result: API Error: 400 Third-party apps now draw from your extra usage, not your plan limits. Add more at claude.ai/settings/usage and keep going."
+
+  test("it is never `invalid-request`, however the SDK reports the 400 beside it", () => {
+    for (const error of [
+      new Error(EXTRA_USAGE),
+      resultError(EXTRA_USAGE, 400),
+      resultError("Third-party apps now draw from your extra usage, not your plan limits.", null),
+    ]) {
+      const { classification } = classifySdkFailure(error)
+      expect(classification.kind).not.toBe("invalid-request")
+      expect(classification.signal).toBe("claude-sdk:extra-usage-gated")
+    }
+  })
+
+  test("the named phrase beats the bare 400: the account is cooling down, not the request bad", () => {
+    const { classification, clientMessage } = classifySdkFailure(resultError(EXTRA_USAGE, 400))
+
+    expect(classification.kind).toBe("rate-limited")
+    expect(classification.status).toBe(429)
+    // Retryable is the whole point: the planner walks to the next account in the pool.
+    expect(classification.retryable).toBe(true)
+    expect(failoverKind(classification.kind, classification.status)).toBe("rate-limited")
+
+    // And the account it just failed on is parked on a clock, so the pool is not burned on it
+    // again on the very next request — `cooling_down`, never `exhausted` (non-negotiable 7).
+    const state = recordFailure(
+      HEALTHY,
+      { kind: "rate-limited", message: clientMessage, status: 429 },
+      NOW,
+    )
+    expect(state.status).toBe("cooling_down")
+    expect(state.cooldownUntil).toBeInstanceOf(Date)
+  })
+
+  test("the client hears one honest sentence: no capacity, and where to add more", () => {
+    const { clientMessage } = classifySdkFailure(resultError(EXTRA_USAGE, 400))
+
+    expect(clientMessage).toContain("no Claude subscription capacity is available right now")
+    expect(clientMessage).toContain("claude.ai/settings/usage")
+    expect(clientMessage).not.toContain("malformed")
+    // Router-authored: the rotation is the router's business, so nothing about which account was
+    // tried, how many there were, or how long any of them is cooling down reaches a caller.
+    expect(clientMessage).not.toContain("account ")
+    expect(clientMessage).not.toContain("cooling")
+  })
+
+  test("the SDK's own words stay on the log side of the split", () => {
+    const { classification, clientMessage } = classifySdkFailure(resultError(EXTRA_USAGE, 400))
+
+    expect(classification.message).toContain("Third-party apps now draw from your extra usage")
+    expect(clientMessage).not.toContain("Claude Code returned an error result")
+  })
+
+  test("a spent plan window is still the plain window message, not this one", () => {
+    const { classification, clientMessage } = classifySdkFailure(
+      new Error("You've hit your weekly limit · resets Sep 8, 11pm (UTC)"),
+    )
+
+    expect(classification.signal).toBe("claude-sdk:plan-window-spent")
+    expect(clientMessage).not.toContain("claude.ai/settings/usage")
+  })
+})

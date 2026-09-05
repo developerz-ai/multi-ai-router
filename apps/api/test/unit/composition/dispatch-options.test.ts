@@ -27,7 +27,9 @@ describe("dispatchOptionsFromEnv", () => {
     const options = dispatchOptionsFromEnv(parseEnv(base))
 
     expect(options.selection?.boundAccountCoolingDown).toBe("fail")
-    expect(options.failover?.maxAttempts).toBe(3)
+    // Absent by default: the routing layer reads no ceiling as "every eligible account", and this
+    // file must not invent a pool size for it.
+    expect(options.failover?.maxAttempts).toBeUndefined()
     expect(options.upstreamTimeoutMs).toBe(600_000)
     expect(options.translation?.defaultMaxTokens).toBe(4_096)
     // Unset env still dispatches the documented default: the env layer owns it
