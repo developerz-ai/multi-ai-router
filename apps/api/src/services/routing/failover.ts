@@ -8,7 +8,7 @@
  * | `402` / out-of-credits body | Retry the next candidate; the account becomes `exhausted`. |
  * | `5xx`, connection failure, timeout | Retry the next candidate; counts toward the failure streak. |
  * | other `4xx` | **Do not retry.** A bad request is bad at every account. |
- * | `401` / `403` | **Do not retry.** The account needs re-auth or is disabled. |
+ * | `401` / `403` | Retry the next candidate. The account is parked `needs_reauth` / `disabled`; a rejected credential is *this account's* problem, not the request's. |
  *
  * Three rules dominate the table:
  *
@@ -45,13 +45,23 @@ export interface AttemptFailure {
   readonly message: string
 }
 
-/** Failures that justify walking to the next candidate. */
+/**
+ * Failures that justify walking to the next candidate.
+ *
+ * `auth` is here because a rejected credential is account-scoped: the breaker has already parked
+ * the account (`needs_reauth` for a token, `disabled` for a key) by the time this is consulted, and
+ * the next candidate authenticates with its own credential. Stopping on it made the first request
+ * to land on an expired subscription fail while healthy accounts sat beside it — only the *next*
+ * request routed around the parked account. `client-error` stays out: a bad request is bad at every
+ * account. Both hold only before a byte reaches the client; `planNextAttempt` checks that first.
+ */
 export const RETRYABLE_FAILURE_KINDS: readonly FailureKind[] = [
   "rate-limited",
   "credits-exhausted",
   "server-error",
   "connection",
   "timeout",
+  "auth",
 ]
 
 export function isRetryable(kind: FailureKind): boolean {

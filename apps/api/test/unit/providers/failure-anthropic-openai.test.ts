@@ -61,11 +61,12 @@ describe("anthropic-api", () => {
     expect(result?.signal).toBe("anthropic:credit-balance-too-low")
   })
 
-  test("401 is an auth failure and is never retried onto another account", () => {
+  test("401 is an auth failure, and the chain walks on to the next account's own credential", () => {
     const result = anthropic?.classifyFailure(response(401, { body: anthropicAuthBody }))
 
     expect(result?.kind).toBe("auth")
-    expect(result?.retryable).toBe(false)
+    // Account-scoped: this account is parked `disabled` / `needs_reauth`; the request is fine.
+    expect(result?.retryable).toBe(true)
   })
 
   test("500 is transient and retryable on the next candidate", () => {

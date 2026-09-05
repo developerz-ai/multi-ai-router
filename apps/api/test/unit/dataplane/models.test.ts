@@ -76,7 +76,8 @@ describe("reachableModels", () => {
       keyWithFullScope(),
       NOW,
     )
-    expect(models).toEqual([{ id: "sonnet", owner: "zai" }])
+    // An alias row says what it resolves to under the operator's own map — information only.
+    expect(models).toEqual([{ id: "sonnet", owner: "zai", resolvedModel: "glm-4.7" }])
   })
 
   test("an account declaring no models contributes no name rather than inventing a catalog", () => {
@@ -95,8 +96,8 @@ describe("reachableModels", () => {
       NOW,
     )
     expect(models).toEqual([
-      { id: "claude-haiku-5", owner: "anthropic-api" },
-      { id: "claude-opus-5", owner: "anthropic-api" },
+      { id: "claude-haiku-5", owner: "anthropic-api", resolvedModel: null },
+      { id: "claude-opus-5", owner: "anthropic-api", resolvedModel: null },
     ])
   })
 
@@ -134,7 +135,7 @@ describe("reachableModel", () => {
       "sonnet",
       NOW,
     )
-    expect(model).toEqual({ id: "sonnet", owner: "zai" })
+    expect(model).toEqual({ id: "sonnet", owner: "zai", resolvedModel: "glm-4.7" })
   })
 
   test("a passthrough account (no declared models) still answers a probe for any id", () => {
@@ -147,7 +148,11 @@ describe("reachableModel", () => {
       "whatever-the-client-asked-for",
       NOW,
     )
-    expect(model).toEqual({ id: "whatever-the-client-asked-for", owner: "anthropic-api" })
+    expect(model).toEqual({
+      id: "whatever-the-client-asked-for",
+      owner: "anthropic-api",
+      resolvedModel: null,
+    })
   })
 
   test("throws ModelNotFoundError, naming the scope-aware reason, when no account can serve it", () => {

@@ -180,7 +180,7 @@ An `exhausted` Account has **no** reset by definition — that is what separates
 |---|---|---|
 | `id` | id | |
 | `name` | string | Human-chosen |
-| `policy` | enum | `sticky` (default) \| `round-robin` \| `weighted` \| `least-used` \| `priority-failover` \| `quota-aware` — see [05-routing-and-failover.md](05-routing-and-failover.md). On a Pool containing Claude subscription Accounts, `round-robin` / `weighted` / `least-used` are **unsafe as-is**: they ignore the Session → Account binding, which on that path breaks the conversation rather than just the cache |
+| `policy` | enum | `sticky` (default) \| `round-robin` \| `weighted` \| `least-used` \| `priority-failover` \| `quota-aware` — see [05-routing-and-failover.md](05-routing-and-failover.md). Every policy honors an existing Session → Account binding; the policy only decides where an *unbound* Session lands. On a Pool of Claude subscriptions serving many parallel agents, `round-robin` spreads new sessions evenly while `priority-failover` piles them onto the top Account |
 | `members` | Account[] | Ordered/weighted set. An Account may sit in several Pools |
 | `members[].weight` | number | Bias for `weighted`, **within this Pool only**. Defaults to the Account's own when the membership is created |
 | `members[].priority` | number | Order for `priority-failover`, within this Pool only; lower is tried first. Same default |
@@ -275,7 +275,7 @@ conversation continued.
 |---|---|---|
 | `cooling_down` | **Kept.** The clock will fix it, and the conversation is still resumable when it does | Served by another Account only if the caller cannot wait — and that means invalidating the binding and starting fresh, not resuming elsewhere. Preferring the honest `429` keeps the conversation intact |
 | `exhausted` | **Invalidated.** No clock returns this Account | Rebinds to a new Account, new `sdkSessionId`, prior turns gone — surfaced, never silently truncated |
-| `needs_reauth` | **Invalidated** | Same as above |
+| `needs_reauth` | **Invalidated** | Same as above. Mid-request too: when the bound Account's credential is rejected on an attempt, the chain parks it and continues to the next candidate before any byte has reached the client — the turn is answered from a fresh session elsewhere and stamped `x-router-session-restart: failover` |
 | `disabled` / removed from the pool | **Invalidated** | Same as above |
 | Out of the key's scope | **Invalidated for that key** | Scope always wins; a binding can never reach an Account the key may not use |
 
@@ -343,6 +343,8 @@ answer.
 | `contextTokens` | int, optional | Total window. NULL is **unknown**, never zero and never unlimited: a client reading a missing window as "no limit" builds a request the upstream rejects |
 | `maxOutputTokens` | int, optional | Largest completion the model will produce. NULL where nothing published one |
 | `contextSource` | text, optional | `upstream` (the provider's own listing) or `shipped` (this image's table). Rendered wherever the number is: both are real published figures, but only one can know about a model released after the image was built. NULL exactly when both numbers are |
+| `listingSource` | text | Which voice listed the **row**: `upstream` (an HTTP model listing), `live` (a Claude subscription's Agent SDK handshake), or `shipped` (the fallback table for a subscription that could not be asked). Distinct from `contextSource`, which labels only the numbers — a live SDK row states no size, so it reads `live` here and `shipped` there. Defaults to `upstream`: every row written before the column existed came from an HTTP listing |
+| `resolvedModel` | text, optional | For an alias row (`sonnet`, `opus`, `fable`, `haiku`), the canonical id it resolves to today — the SDK's own word, or the shipped alias map's. NULL for a concrete id. Rendered as `resolved_model` on `GET /v1/models`; never a rename on the request path |
 | `refreshedAt` | timestamp | Rendered beside the catalog — a listing with no timestamp cannot be told apart from one that has quietly stopped refreshing |
 
 A row is sourced **whole**, never field by field: if the listing stated a window, the row is the
