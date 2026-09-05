@@ -413,7 +413,9 @@ describe("parseEnv", () => {
   describe("failover and breaker knobs", () => {
     test("every one of them has a documented default", () => {
       expect(parseEnv(base).failover).toEqual({
-        maxAttempts: 3,
+        // Undefined is the documented default and not a gap: the ceiling is "every eligible
+        // account", which only the failover chain can count (`routing/failover.ts`).
+        maxAttempts: undefined,
         failureThreshold: 3,
         baseBackoffMs: 1_000,
         maxBackoffMs: 300_000,

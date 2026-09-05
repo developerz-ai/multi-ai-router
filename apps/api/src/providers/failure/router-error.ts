@@ -23,36 +23,50 @@ import type { FailureClassification, RateLimitSignal } from "../types"
  */
 
 /**
- * The rate-limit reading that rode *beside* the classification, when the classification itself
- * carries none. The Agent-SDK transport is the case: its reset instant arrives as a
+ * What the attempt knew beside its classification.
+ *
+ * `signal` is the rate-limit reading that rode *beside* the classification, when the classification
+ * itself carries none. The Agent-SDK transport is the case: its reset instant arrives as a
  * `rate_limit_event` inside the query stream, never on the throw, so `classifySdkFailure` pins
  * `classification.rateLimit` to null and the attempt's captured signal is the only source. `now`
  * is the attempt's clock reading, injected because the seconds a `Retry-After` counts are derived
  * from the reported instant — this module still reads no clock of its own.
  */
-export interface RateLimitContext {
+export interface FailureContext {
   readonly signal: RateLimitSignal | null
   readonly now: Date
+  /**
+   * The router-authored sentence for this failure, when the transport had one that says more than
+   * the class does (`SdkFailure.clientMessage`). Read for the `429` alone, because that is the one
+   * verdict where the classes differ in remedy and not just in wording: a spent plan window and a
+   * request Anthropic metered against Extra Usage are both `rate-limited`, and only the second has
+   * somewhere for the operator to go. Router-authored by contract — an upstream's own words never
+   * reach a client-facing body.
+   */
+  readonly clientMessage?: string
 }
 
 export function toRouterError(
   classification: FailureClassification,
-  rateLimit?: RateLimitContext,
+  context?: FailureContext,
 ): RouterError | null {
   if (classification.kind === "rate-limited") {
-    const signal = classification.rateLimit ?? rateLimit?.signal ?? null
+    const signal = classification.rateLimit ?? context?.signal ?? null
     const resetsAt = signal?.resetsAt
     // A `429` without a `Retry-After` makes a client guess, and guessing clients retry in
     // lockstep (non-negotiable 7). When only the instant was reported, the wait is derived.
     const retryAfterSeconds =
       signal?.retryAfterSeconds ??
-      (resetsAt !== undefined && rateLimit !== undefined
-        ? secondsUntil(resetsAt, rateLimit.now)
+      (resetsAt !== undefined && context !== undefined
+        ? secondsUntil(resetsAt, context.now)
         : undefined)
-    return new QuotaExhaustedError(`upstream rate limited (${classification.signal})`, {
-      retryAfterSeconds,
-      resetsAt,
-    })
+    const stated = context?.clientMessage
+    return new QuotaExhaustedError(
+      stated === undefined
+        ? `upstream rate limited (${classification.signal})`
+        : `${stated} (${classification.signal})`,
+      { retryAfterSeconds, resetsAt },
+    )
   }
 
   if (classification.kind === "credits-exhausted") {

@@ -1,6 +1,7 @@
 import type { Options, PermissionResult } from "@anthropic-ai/claude-agent-sdk"
 import { isPermittedTool, PERMITTED_TOOLS, toolDenial } from "./allowlist"
 import { QUERY_ENV_OVERRIDES, subprocessEnv } from "./env"
+import { scrubSystemPrompt } from "./scrub"
 import type { SessionPlan } from "./session"
 import type { Passthrough } from "./tools"
 
@@ -21,7 +22,7 @@ import type { Passthrough } from "./tools"
  * | `maxTurns` | The SDK is an autonomous agent with a 200-turn internal budget; we are a single-turn endpoint. After a denied tool call it still runs a fully billed "digest" turn, so the budget is what bounds the loop (§7) |
  * | `cwd` | Server-controlled. The client's own working directory does not exist on this host, and passing it fails the spawn with an error that reads like anything but the cause (§8) |
  * | `mcpServers` + `hooks` | Present only when the client sent tools. The server declares them so the model emits well-formed calls; the hook denies every one and hands it to the client (`tools/`). Neither grants execution — the allowlist above is still the only thing that can (§7) |
- * | `systemPrompt` | The **client's**, or nothing. Omitted, the SDK runs with no system prompt at all, which is what a client that sent none asked for; the Claude Code preset is a per-Account setting, never a substituted default (§8) |
+ * | `systemPrompt` | The **client's**, or nothing. Omitted, the SDK runs with no system prompt at all, which is what a client that sent none asked for; the Claude Code preset is a per-Account setting, never a substituted default (§8). The one edit it receives is `scrub.ts`, and it is not editorial: a competing harness's identity lines make Anthropic meter the turn as a third-party app and refuse it on every account in the pool |
  * | `resume` / `forkSession` / `resumeSessionAt` | The lineage plan, applied verbatim. `fresh` is the absence of all three, not a value of one (§4) |
  *
  * **The abort path is the reason this returns more than an object.** The SDK takes an
@@ -71,6 +72,9 @@ export interface QueryLaunchInput {
    * prompt, and substituting the Claude Code preset would put ~28 KB of instructions the caller
    * never wrote into their turn — a per-Account setting at most, never a default
    * (docs/idea/11-anthropic-agent-sdk.md §8).
+   *
+   * Passed through verbatim but for the harness fingerprints `scrub.ts` removes, and a prompt that
+   * is nothing but fingerprints is the same as none at all — see {@link systemPromptOption}.
    */
   readonly systemPrompt?: string | readonly string[]
   /**
@@ -146,9 +150,7 @@ export function createQueryLaunch(input: QueryLaunchInput): QueryLaunch {
     // assembled from the same events — one renderer, not one per response shape.
     includePartialMessages: true,
     ...(input.onStderr === undefined ? {} : { stderr: input.onStderr }),
-    ...(input.systemPrompt === undefined
-      ? {}
-      : { systemPrompt: systemPromptOf(input.systemPrompt) }),
+    ...systemPromptOption(input.systemPrompt),
     ...sessionOptions(input.session, input.busySessionFork === true),
     ...(input.passthrough === undefined
       ? {}
@@ -186,9 +188,23 @@ function sessionOptions(plan: SessionPlan | undefined, busyFork: boolean): Parti
   return { resume: plan.sdkSessionId, forkSession: true, resumeSessionAt: plan.resumeSessionAt }
 }
 
-/** The SDK takes a mutable array; ours is readonly, and a copy is cheaper than widening the type. */
-function systemPromptOf(prompt: string | readonly string[]): string | string[] {
-  return typeof prompt === "string" ? prompt : [...prompt]
+/**
+ * The `systemPrompt` field, or its absence — and the **one** place a system prompt crosses into the
+ * Agent SDK, which is why the fingerprint scrub lives here rather than at the invoker's read of the
+ * body. A harness's own identity lines make Anthropic meter this subscription request as a
+ * third-party app and refuse it on every account in the pool; `scrub.ts` carries the measurement and
+ * the reason each pattern is load-bearing.
+ *
+ * A prompt that scrubs down to nothing omits the option entirely, exactly as a client that sent no
+ * system prompt does: the SDK's default is *no* system prompt, and an empty one is a different
+ * thing to send.
+ */
+function systemPromptOption(prompt: string | readonly string[] | undefined): Partial<Options> {
+  if (prompt === undefined) return {}
+  const scrubbed = scrubSystemPrompt(prompt)
+  if (scrubbed === null) return {}
+  // The SDK takes a mutable array; ours is readonly, and a copy is cheaper than widening the type.
+  return { systemPrompt: typeof scrubbed === "string" ? scrubbed : [...scrubbed] }
 }
 
 /**

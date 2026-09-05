@@ -172,6 +172,38 @@ describe("answeredFailure", () => {
     expect(error.retryAfterSeconds).toBe(90)
   })
 
+  test("the SDK's router-authored sentence is what a 429 says, so Extra Usage is named", () => {
+    // The chain's last word when every subscription answered `claude-sdk:extra-usage-gated`.
+    // "upstream rate limited (signal)" would tell a caller to wait for a window that is not the
+    // thing that ran out; the remedy is a top-up at claude.ai/settings/usage, and only the
+    // transport's own sentence knows that.
+    const held = answeredFailure(classified("rate-limited", 429), null, null, {
+      rateLimit: null,
+      now: NOW,
+      clientMessage:
+        "no Claude subscription capacity is available right now — this request was metered against Extra Usage, which is spent; add more at claude.ai/settings/usage",
+    })
+
+    expect(held?.kind).toBe("router")
+    if (held?.kind !== "router") return
+    expect(held.error.message).toContain("claude.ai/settings/usage")
+    expect(held.error.message).not.toStartWith("upstream rate limited")
+  })
+
+  test("an HTTP 429 keeps its own wording: that field carries a signal token, not a sentence", () => {
+    // On the HTTP path `AttemptFailure.message` is the classification's signal — a log breadcrumb.
+    // Rendering it into a client body would answer a rate limit with "anthropic:rate_limit".
+    const held = answeredFailure(classified("rate-limited", 429), upstream(429), null, {
+      rateLimit: null,
+      now: NOW,
+      clientMessage: "http-status:429",
+    })
+
+    expect(held?.kind).toBe("router")
+    if (held?.kind !== "router") return
+    expect(held.error.message).toBe("upstream rate limited (http-status:429)")
+  })
+
   test("a deadline the HTTP transport hit is a 504, never the empty-pool 503", () => {
     // Production: every attempt in a chain timed out, `held` stayed null, and the client got
     // `503 no_healthy_account "every attempt failed"` with no verdict at all. The timeout is the

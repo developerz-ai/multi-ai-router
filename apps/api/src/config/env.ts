@@ -291,8 +291,15 @@ export interface DataPlaneConfig {
  * another account after bytes are on the wire — fail honestly").
  */
 export interface FailoverConfig {
-  /** Distinct accounts tried for one client request, before the honest failure. */
-  readonly maxAttempts: number
+  /**
+   * Operator ceiling on distinct accounts tried for one client request, before the honest failure.
+   *
+   * Undefined — the default — is not a missing value: it is "every eligible account", the only
+   * ceiling this layer cannot name, because it depends on the pool the request was filtered down
+   * to and only the failover chain has seen that (`routing/failover.ts`, `maxAttempts`). Set
+   * `ROUTING_MAX_ATTEMPTS` to fail faster than the pool allows.
+   */
+  readonly maxAttempts: number | undefined
   /** Consecutive 5xx or connection failures before an account's breaker trips. */
   readonly failureThreshold: number
   /** First cooldown step. Doubles per consecutive failure. */
@@ -959,7 +966,7 @@ const envSchema = z.object(ENV_FIELDS).transform((raw, ctx): Env => {
       maxRequestBodyBytes: raw.MAX_REQUEST_BODY_BYTES ?? 32 * 1024 * 1024,
     },
     failover: {
-      maxAttempts: raw.ROUTING_MAX_ATTEMPTS ?? 3,
+      maxAttempts: raw.ROUTING_MAX_ATTEMPTS,
       failureThreshold: raw.ROUTING_FAILURE_THRESHOLD ?? 3,
       baseBackoffMs: raw.ROUTING_BASE_BACKOFF_MS ?? 1_000,
       maxBackoffMs: raw.ROUTING_MAX_BACKOFF_MS ?? 300_000,

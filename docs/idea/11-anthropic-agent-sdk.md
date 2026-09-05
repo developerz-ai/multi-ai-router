@@ -790,6 +790,38 @@ request hook for genuine one-offs. The three per-client parsers worth porting en
 clients we cannot change: Claude Code's session id buried as JSON in `metadata.user_id`, Droid's
 working directory hidden in `<system-reminder>` blocks, and LiteLLM's `x-litellm-*` headers.
 
+### The one edit a client's system prompt receives — harness fingerprints
+
+**As built** (`apps/api/src/providers/claude-sdk/scrub.ts`, applied in `options.ts` where the prompt
+crosses into `query()`). The client's system prompt is otherwise passed through verbatim, and the
+Claude Code preset is still never substituted for one. What is removed is a small, named set of
+*fingerprints*: the lines by which a competing harness announces itself inside a request the Agent
+SDK is making as Claude Code.
+
+The reason is billing, not tidiness. Anthropic meters a subscription request partly by who appears
+to be asking, and a prompt that names another harness is read as a third-party app wearing Claude
+Code's credential: the account is gated behind Extra Usage rather than its plan, and the request is
+refused with `400 Third-party apps now draw from your extra usage, not your plan limits. Add more at
+claude.ai/settings/usage and keep going.` The strongest tell is a **duplicate** — Claude Code's own
+preset already injects `Here is some useful information about the environment you are running in:`
+followed by an `<env>` block, so a harness that appends its own copy makes the preamble appear twice.
+
+Measured 2026-09-05 against this router: the same 56 KB opencode system prompt fails with that
+section present and succeeds with it removed, on `default`, `opus`, `sonnet`, `haiku` and
+`claude-opus-5` alike, and on every account in the pool — so it is neither model- nor
+account-specific, and no amount of failover routes around it. Meridian's
+`@rynfar/meridian-plugin-opencode-scrub` bisected the same block independently (its issue #516).
+
+Three properties, each pinned by a test: the rules are **independent** (a missing pattern is a
+no-op), **idempotent** (scrubbing twice equals scrubbing once), and **conservative** — tool policy,
+tone rules, task guidance and any user `CLAUDE.md` content the harness appended all survive verbatim.
+A prompt that was *only* a fingerprint scrubs to nothing, and nothing means the option is omitted,
+exactly as for a client that sent no system prompt at all.
+
+**Agent-SDK egress only.** An API-key account is plain HTTP under the caller's own credential with no
+impersonation to detect, and every other provider is a passthrough where rewriting the caller's
+prompt would be the router substituting words the client never wrote.
+
 ---
 
 ## 9. Operational notes
@@ -854,6 +886,7 @@ error types:
 | Credits exhausted | `credit balance is too low` (the CLI's own error constant, 0.3.220 and 2.1.261), `organization is out of usage credits`, `usage limit is set to $N` (an admin-provisioned cap) or `api_error_status` 402 | `402`, Account → `exhausted` — permanent until a human tops up, **never** timer-retried (CLAUDE.md non-negotiable 7). Fail over: the next Account may be funded |
 | Stale SDK session | `No conversation found with session ID`, `No message found with message.uuid` (a fork whose rewind point is gone — same recovery, and before it was named here it fell to `unknown`, which does not retry, so the binding survived to fail the next turn too) | Evict the Session mapping, replay once |
 | Busy session | `is currently running as a background agent` | **One in-place retry as a fork** (`invoker.ts`): same Account, `forkSession: true` at the tip — the fork inherits the full transcript warm, where a failover would replay it cold. Legal because the refusal is thrown before any stream output and the renderer never throws after the first byte. A fork that comes back busy is a real `503` for the chain |
+| Extra Usage gated | `third-party apps now draw from your extra usage`, or `extra usage` together with `claude.ai/settings/usage` — Anthropic's answer to a request it metered as a third-party app (production, 2026-09-05) | **429**, `rate-limited`: cool this Account down and fail over to the next. Ordered **before** the bare `api_error_status` 400, which had it reading as `invalid-request` — not retryable, so the chain stopped with five healthy subscriptions unasked and the client was told its request was malformed. The client-facing sentence names Extra Usage and `claude.ai/settings/usage`, because that is the remedy; the fix that stops it arising is the fingerprint scrub (§8) |
 | Overage required | `extra usage` + `1m`, or the CLI's verbatim long-context sentences (`Extra usage is required for long context`, `Usage credits are required for long context`, `out of extra usage`) | Drop the extended-context variant, cool down — the included window still refills on a clock, so this is never `exhausted` |
 | Subprocess crash | `exited with code N` + stderr | 502. Meridian maps a generic exit-1 to 401 on a heuristic — **do not copy that**; classify honestly and log the stderr tail |
 | Oversized prompt | `prompt is too long`, `context_length_exceeded`, `exceed context limit`, or `terminal_reason: prompt_too_long` | **400**, `invalid-request`: waiting does not fix it, and an identical retry would burn a full turn on every account in the pool and strike every breaker to fail identically (Meridian #919). No failover, no breaker strike |
