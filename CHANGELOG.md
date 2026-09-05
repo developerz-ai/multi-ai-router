@@ -5,6 +5,21 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.10.0] — 2026-09-05
+
+### Fixed
+
+- **Every agent-sized request from opencode answered `400 "the upstream rejected the request as malformed"`.** The request was not malformed. Anthropic meters a subscription request partly by *who appears to be asking*, and the prompt carried a second harness's fingerprints inside a turn the Agent SDK makes as Claude Code: `API Error: 400 Third-party apps now draw from your extra usage, not your plan limits. Add more at claude.ai/settings/usage and keep going.` Bisected to opencode's environment preamble and its `<env>` block — Claude Code's own preset already injects that preamble, so opencode appending its own copy makes it appear **twice**, and the duplicate is the impersonation signal. Measured on `default`, `opus`, `sonnet`, `haiku` and `claude-opus-5`, and on every account in the pool: not model-specific, not account-specific, and unreachable by failover. `providers/claude-sdk/scrub.ts` removes the fingerprints where the system prompt crosses into `query()` — Agent-SDK egress only, never on the API-key or any other provider path, where the caller's prompt is a passthrough. Each rule is independent (a missing pattern is a no-op), idempotent, and conservative: tool policy, tone rules, task guidance and any user `CLAUDE.md` content survive verbatim. A prompt that was *only* a fingerprint scrubs to nothing, and nothing means the option is omitted, exactly as for a client that sent no system prompt.
+- **That `400` read as `invalid-request`, so the router died on it instead of rotating.** `invalid-request` is not retryable — a bad request is bad at every account — so the failover planner never tried another subscription and the client got a dead-end error naming the wrong cause. The sentence is now a named phrase rule (`claude-sdk:extra-usage-gated`) ordered ahead of the bare `apiStatus(400)`, classified `rate-limited`: retryable, so the chain rotates to the next account; the breaker cools the failing one down so the pool is not burned on it again on the very next request; never `credits-exhausted`, which would park a healthy subscription at `402` until a human intervened (non-negotiable 7). When nothing in the pool can serve, the client gets one router-authored sentence naming Extra Usage and `claude.ai/settings/usage` — no account labels, no cooldown timers, no attempt counts.
+
+### Changed
+
+- **Failover walks the whole pool.** `ROUTING_MAX_ATTEMPTS` defaulted to `3`, so a six-subscription pool stopped after two failures with four healthy accounts unasked — the opposite of what a deep pool is for. The default is now the pool itself: the chain tries the next account, and the next, until one serves or every eligible candidate has been tried. It still terminates in at most one attempt per candidate, each a distinct account, and the request deadline still governs the chain. The knob remains for an operator who wants to fail faster than their pool allows; it can only lower the bound, never raise it past the candidates that exist.
+
+### Documentation
+
+- `docs/idea/11-anthropic-agent-sdk.md` §8 gains "the one edit a client's system prompt receives — harness fingerprints" (the measurement, the three properties, and why it is Agent-SDK egress only) and §9 the `Extra Usage gated` classification row. `docs/idea/05-routing-and-failover.md`, `docs/idea/09-deployment.md` and `.env.example` record the new attempt bound.
+
 ## [2.9.1] — 2026-09-05
 
 ### Fixed
