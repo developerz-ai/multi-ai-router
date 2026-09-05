@@ -26,10 +26,20 @@ import type { ScheduledTask, TaskOutcome } from "../types"
  * client's failed request. The probe (`services/health/claudeAuthProbe.ts`) owns that transition,
  * in both directions.
  *
- * **The billed half stays bounded to idle accounts**, and a dead credential ends the run for that
- * account: the test would fail, for a reason a human already has to fix, and billing a turn to
- * re-learn that is spending money to confirm a fact we hold. Testing an account counts as using it,
- * so each account is billed about once per idle window, not once per tick.
+ * **The billed half is opt-in (`IDLE_ACCOUNT_PROBE_PAID_TURN`, default off), and stays bounded to
+ * idle accounts when it is on.** Checking whether a subscription is alive must never spend usage:
+ * a turn refreshes only the *access* token, which the cliff above does not care about, so the
+ * operator was paying for a check that could not achieve its aim — and saw usage move on freshly
+ * reconnected accounts. With the flag off the sweep bills nothing on any provider. With it on, a
+ * dead credential still ends the run for that account: the test would fail, for a reason a human
+ * already has to fix, and billing a turn to re-learn that is spending money to confirm a fact we
+ * hold. Testing an account counts as using it, so each account is billed about once per idle
+ * window, not once per tick.
+ *
+ * **The free half also reads the usage gauge** for every logged-in subscription, through a
+ * turn-free query (`providers/claude-sdk/usage-gauge-probe.ts`): the console's per-window
+ * percentages for an account nothing routed to today would otherwise stay stale until traffic
+ * arrived. One subprocess per account per sweep, no prompt, nothing billed.
  *
  * **Outcomes are the sweep's, not the accounts'.** An account correctly parked `needs_reauth` is
  * the sweep doing its job — `success`, with a `warn` line naming the account. `partial` means the
@@ -76,6 +86,11 @@ export interface IdleAccountProbeDeps {
    * the auth question cannot be asked, and idle accounts go straight to the paid test.
    */
   readonly auth?: AccountAuthProbe
+  /**
+   * The turn-free usage read for one subscription account, run after its credential checks out.
+   * Absent means the sweep leaves the gauge to the request path.
+   */
+  readonly usage?: (account: AccountRow) => Promise<boolean>
   /** Which model each provider is probed with. Absent for a provider means it is not probed. */
   readonly models: Readonly<Record<string, string>>
   /** `IDLE_ACCOUNT_PROBE_INTERVAL_MINUTES`, in milliseconds. The runner jitters it. */
@@ -84,6 +99,8 @@ export interface IdleAccountProbeDeps {
   readonly idleAfterMs: number
   /** Idle accounts billed per tick. Each one spawns a subprocess, so this bounds memory, not just time. */
   readonly batchSize: number
+  /** `IDLE_ACCOUNT_PROBE_PAID_TURN`. False means `test` is never called — see the module comment. */
+  readonly paidTurn: boolean
 }
 
 interface Tally {
@@ -93,6 +110,8 @@ interface Tally {
   loggedOut: number
   /** Accounts the free check found logged in again after `needs_reauth`. */
   reauthorized: number
+  /** Subscription accounts whose usage gauge was read on this sweep, turn-free. */
+  gauged: number
   /** Idle accounts billed a keepalive turn. */
   probed: number
   refreshed: number
@@ -112,6 +131,7 @@ export function createIdleAccountProbeTask(deps: IdleAccountProbeDeps): Schedule
         checked: 0,
         loggedOut: 0,
         reauthorized: 0,
+        gauged: 0,
         probed: 0,
         refreshed: 0,
         failed: 0,
@@ -129,7 +149,13 @@ export function createIdleAccountProbeTask(deps: IdleAccountProbeDeps): Schedule
             if (account.status === "disabled") continue
             const answer = await checkCredential(deps.auth, account, logger, tally)
             if (answer === "logged-out") loggedOut.add(account.id)
+            if (answer === "logged-in") await readUsage(deps, account, logger, tally)
           }
+        }
+
+        if (!deps.paidTurn) {
+          logger.info("idle account probe", { outcome: "success", ...tally, paidTurn: false })
+          return { outcome: "success", itemsProcessed: processed() }
         }
 
         const before = new Date(now.getTime() - deps.idleAfterMs)
@@ -214,6 +240,25 @@ async function checkCredential(
 }
 
 /** The billed turn. Never writes a status: the test already fed the breaker, whose verdict is better. */
+/** The gauge read, free: a failure here is a reading not taken, logged and never a run outcome. */
+async function readUsage(
+  deps: Pick<IdleAccountProbeDeps, "usage">,
+  account: AccountRow,
+  logger: Logger,
+  tally: Tally,
+): Promise<void> {
+  if (deps.usage === undefined) return
+  try {
+    if (await deps.usage(account)) tally.gauged += 1
+  } catch (error) {
+    logger.warn("idle account usage gauge not read", {
+      accountId: account.id,
+      provider: account.provider,
+      error: describeError(error, Number.POSITIVE_INFINITY),
+    })
+  }
+}
+
 async function keepAlive(
   deps: Pick<IdleAccountProbeDeps, "test">,
   account: AccountRow,

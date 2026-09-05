@@ -20,7 +20,7 @@ describe("adminAuthConfigFromEnv", () => {
         adminLoginMaxAttempts: 7,
         adminLoginAttemptWindowMinutes: 10,
         adminLoginLockoutMinutes: 20,
-        adminSessionSlideFraction: 0.25,
+        adminSessionTouchIntervalSeconds: 90,
       }),
     ).toEqual({
       idleTtlSeconds: 1_800,
@@ -28,19 +28,20 @@ describe("adminAuthConfigFromEnv", () => {
       maxFailedAttempts: 7,
       attemptWindowSeconds: 600,
       lockoutSeconds: 1_200,
-      sessionSlideFraction: 0.25,
+      touchIntervalSeconds: 90,
     })
   })
 
   test("the documented defaults are the ones the service falls back to", () => {
     expect(adminAuthConfigFromEnv(DEFAULT_ADMIN_AUTH_ENV)).toEqual(DEFAULT_ADMIN_AUTH_CONFIG)
     expect(DEFAULT_ADMIN_AUTH_CONFIG).toEqual({
-      idleTtlSeconds: 8 * 3600,
-      absoluteTtlSeconds: 24 * 3600,
+      // Thirty days on both bounds — docs/idea/13-admin-oidc.md, "Session and callback behavior".
+      idleTtlSeconds: 30 * 24 * 3600,
+      absoluteTtlSeconds: 30 * 24 * 3600,
       maxFailedAttempts: 5,
       attemptWindowSeconds: 15 * 60,
       lockoutSeconds: 15 * 60,
-      sessionSlideFraction: 0.1,
+      touchIntervalSeconds: 60,
     })
   })
 })

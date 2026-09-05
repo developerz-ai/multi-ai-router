@@ -178,6 +178,7 @@ their mechanisms instead of routing around them.
 | Credential probe | `claude auth status --json` against the Account's directory, carried by **Re-check now**. Local, unbilled, and the only thing that makes a silently revoked login visible before every request has failed |
 | Runtime requirement | the `claude` CLI present in the image |
 | Quota signal | the SDK's `rate_limit_event` stream events (below) |
+| Model catalog | the SDK's `initialize` handshake — `Query.supportedModels()` on a query that never sends a turn (below). Falls back to the shipped table |
 | Usage endpoint | `GET https://api.anthropic.com/api/oauth/usage` — **optional and secondary**, never the primary source |
 
 **Why, plainly:** the point of the router is to make a team's subscriptions usable, and that only
@@ -213,6 +214,32 @@ policy (prefer the account with the most headroom) and the circuit breaker (an e
 sets `cooling_down` until `resetsAt`). Snapshots are cached on a short TTL with concurrent reads
 deduped per account; a transient gap serves the last-good snapshot rather than blanking the
 routing view.
+
+### Model catalog — the handshake, not a listing
+
+A subscription has no HTTP model listing to `GET` (non-negotiable 1 forbids the token that would be
+needed) and no discover button, so until the Agent SDK became a catalog source a pool of six working
+subscriptions answered `GET /v1/models` with `data: []`. The sanctioned live voice is the SDK itself:
+`Query.supportedModels()` is answered from the CLI's `initialize` handshake, which the subprocess
+completes **before it reads any prompt**. The hourly `model_catalog_refresh` sweep therefore opens an
+*idle* query per subscription (`providers/claude-sdk/idle-query.ts`) — the same sandbox as a real
+request, the same subprocess ceiling, a prompt stream that never yields — reads the list, and ends
+the process. No message reaches a model; nothing is billed. The unit test that proves zero user
+messages were yielded and no `result` turn occurred is a build gate: if the SDK ever required a turn
+to answer, the live source is dropped in favour of the shipped table, never the other way round.
+
+What comes back is written to `ModelCatalog` with `listingSource: "live"`: concrete ids and the
+CLI's family aliases (`opus`, `sonnet`, `haiku`, `fable`), each alias carrying the canonical id it
+resolves to today. When the handshake is unavailable — no binary, the ceiling, a timeout, an
+unreadable answer — the shipped Claude table (`CLAUDE_SUBSCRIPTION_MODELS` and its alias map in
+`packages/core`) is written instead, labelled `shipped`, so the listing is honest about its age
+rather than empty. An auth failure writes nothing: the rows the account had stand until a human
+reconnects it, and the reconnect refreshes them on the spot through `refreshSubscriptionModels`. A
+`needs_reauth` or `disabled` subscription is skipped, at info, never failed — spawning the CLI to be
+told a credential is dead is not free, and one dead subscription must not turn the sweep partial.
+
+Resolution is information for a picker, nothing more. The client's model string still goes upstream
+unchanged (the core rule in [06-protocol-translation.md](06-protocol-translation.md#model-names)).
 
 Full mechanics — SDK invocation shape, config-directory layout, subprocess lifecycle, and the
 re-synthesis contract — live in [11-anthropic-agent-sdk.md](11-anthropic-agent-sdk.md). This page

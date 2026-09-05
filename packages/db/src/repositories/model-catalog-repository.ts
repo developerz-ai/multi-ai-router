@@ -1,4 +1,4 @@
-import type { ModelContextSource } from "@multi-ai-router/core"
+import type { ModelContextSource, ModelListingSource } from "@multi-ai-router/core"
 import { asc, eq, inArray, max } from "drizzle-orm"
 import type { Database } from "../client"
 import { type ModelCatalogRow, modelCatalog } from "../schema/model-catalog"
@@ -54,6 +54,10 @@ export interface ModelCatalogEntry {
   readonly maxOutputTokens: number | null
   /** Null exactly when both numbers are null. */
   readonly contextSource: ModelContextSource | null
+  /** Which voice listed the row. */
+  readonly listingSource: ModelListingSource
+  /** What an alias row resolves to; null for a concrete id. */
+  readonly resolvedModel: string | null
 }
 
 export type { ModelCatalogRow }
@@ -73,6 +77,8 @@ export function createModelCatalogRepository(db: Database): ModelCatalogReposito
             contextTokens: row.contextTokens,
             maxOutputTokens: row.maxOutputTokens,
             contextSource: row.contextSource,
+            listingSource: row.listingSource,
+            resolvedModel: row.resolvedModel,
             refreshedAt,
           })),
         )

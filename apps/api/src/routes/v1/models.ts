@@ -13,10 +13,17 @@ import { credentialStyle, type ReachableModel } from "../../services/dataplane"
  * scope, named the way a client would ask for them.
  */
 
+/**
+ * Both shapes carry one field neither ecosystem defines, on alias rows only: `resolved_model`, what
+ * `sonnet` means today under this key. An extra field is what generated SDKs tolerate and what a
+ * picker can use to collapse an alias onto the model it names; on a concrete id it is absent rather
+ * than null, so a strict client sees exactly the documented shape.
+ */
 interface AnthropicModel {
   readonly type: "model"
   readonly id: string
   readonly display_name: string
+  readonly resolved_model?: string
 }
 
 interface OpenAiModel {
@@ -24,6 +31,7 @@ interface OpenAiModel {
   readonly object: "model"
   readonly created: number
   readonly owned_by: string
+  readonly resolved_model?: string
 }
 
 export function renderModels(
@@ -46,11 +54,15 @@ export function renderModel(c: Context<RouterKeyEnv>, model: ReachableModel, now
 }
 
 function anthropicModel(model: ReachableModel): AnthropicModel {
-  return { type: "model", id: model.id, display_name: model.id }
+  return { type: "model", id: model.id, display_name: model.id, ...resolution(model) }
 }
 
 function openAiModel(model: ReachableModel, created: number): OpenAiModel {
-  return { id: model.id, object: "model", created, owned_by: model.owner }
+  return { id: model.id, object: "model", created, owned_by: model.owner, ...resolution(model) }
+}
+
+function resolution(model: ReachableModel): { resolved_model?: string } {
+  return model.resolvedModel === null ? {} : { resolved_model: model.resolvedModel }
 }
 
 function anthropicList(models: readonly ReachableModel[]): {

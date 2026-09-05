@@ -65,9 +65,11 @@ export interface DataPlaneRoutesDeps {
   readonly catalog: RoutingCatalog
   readonly health: HealthStore
   /**
-   * The warm model catalog and the warm price book, for `GET /v1/catalog`. Both optional: a runtime
-   * built without them serves every other route, and the catalog route answers an empty list rather
-   * than 404ing a path that exists — the same reason a deployment with no accounts lists no models.
+   * The warm model catalog and the warm price book, for `GET /v1/catalog` — and the catalog alone
+   * for `GET /v1/models`, where a Claude subscription's rows are the only enumerable thing it has.
+   * Both optional: a runtime built without them serves every other route, and the catalog route
+   * answers an empty list rather than 404ing a path that exists — the same reason a deployment with
+   * no accounts lists no models.
    */
   readonly models?: Pick<ModelCatalogStore, "describe" | "modelsOf">
   readonly prices?: CatalogListingDeps["prices"]
@@ -109,8 +111,14 @@ export function dataPlaneRoutes(deps: DataPlaneRoutesDeps): Hono<RouterKeyEnv> {
     )
   }
 
+  // The warm model catalog rides along so a Claude subscription — which has no `supported_models`
+  // to advertise and no HTTP listing to discover them from — lists what its Agent SDK reported.
   routes.get("/v1/models", guard, (c) =>
-    renderModels(c, reachableModels(deps.catalog, deps.health, c.get("routerKey"), now()), now()),
+    renderModels(
+      c,
+      reachableModels(deps.catalog, deps.health, c.get("routerKey"), now(), deps.models),
+      now(),
+    ),
   )
 
   // Throws `ModelNotFoundError` (404) when the presenting key's scope can't reach the id; the
@@ -123,6 +131,7 @@ export function dataPlaneRoutes(deps: DataPlaneRoutesDeps): Hono<RouterKeyEnv> {
       c.get("routerKey"),
       c.req.param("id"),
       at,
+      deps.models,
     )
     return renderModel(c, model, at)
   })

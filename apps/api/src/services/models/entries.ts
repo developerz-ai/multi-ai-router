@@ -24,6 +24,7 @@ export function catalogEntry(provider: ProviderId, entry: UpstreamModelEntry): M
       contextTokens: entry.contextTokens,
       maxOutputTokens: entry.maxOutputTokens,
       contextSource: "upstream",
+      ...HTTP_ROW,
     }
   }
 
@@ -36,6 +37,7 @@ export function catalogEntry(provider: ProviderId, entry: UpstreamModelEntry): M
       // only `max_completion_tokens` has told us something true.
       maxOutputTokens: entry.maxOutputTokens,
       contextSource: entry.maxOutputTokens === null ? null : "upstream",
+      ...HTTP_ROW,
     }
   }
 
@@ -44,5 +46,12 @@ export function catalogEntry(provider: ProviderId, entry: UpstreamModelEntry): M
     contextTokens: shipped.contextTokens,
     maxOutputTokens: shipped.maxOutputTokens ?? null,
     contextSource: "shipped",
+    ...HTTP_ROW,
   }
 }
+
+/**
+ * Every row here was listed by the provider's own HTTP endpoint, and an HTTP listing names concrete
+ * ids only — alias resolution is a subscription's (`subscription.ts`).
+ */
+const HTTP_ROW = { listingSource: "upstream", resolvedModel: null } as const

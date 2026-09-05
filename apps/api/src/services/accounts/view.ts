@@ -74,6 +74,23 @@ export interface AccountView {
    * a write — which returns the row just written, not a fresh observation of it.
    */
   readonly availability?: AccountAvailability
+  /**
+   * When a Claude subscription's login dies, and what plan it is on — metadata read from the
+   * Account's own `CLAUDE_CONFIG_DIR`, never the token (`providers/claude-sdk/credential-metadata.ts`).
+   * Added by the `withCredentialMetadata` decorator on reads: `null` for every provider that holds
+   * no such directory, absent on a write. Frozen contract — the console renders it as-is.
+   */
+  readonly credential?: AccountCredentialView | null
+}
+
+export interface AccountCredentialView {
+  /** ISO instant the refresh token — and so the login — expires. Null when unknown or no file. */
+  readonly expiresAt: string | null
+  /** `"max"` | `"pro"` | `"team"` | … as the CLI recorded it. */
+  readonly subscriptionType: string | null
+  readonly rateLimitTier: string | null
+  /** False when the tokens are blank or the file is missing — a login that is already dead or never happened. */
+  readonly present: boolean
 }
 
 export function toAccountView(row: AccountRow): AccountView {

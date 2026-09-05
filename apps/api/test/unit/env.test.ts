@@ -74,6 +74,8 @@ describe("parseEnv", () => {
       idleAccountProbeIntervalMinutes: 1_440,
       idleAccountAfterDays: 7,
       idleAccountProbeBatchSize: 5,
+      // Off: a billed keepalive cannot move a subscription's refresh-token cliff.
+      idleAccountProbePaidTurn: false,
       // Hourly, and a bigger batch than the keepalive's five: these are plain GETs against a
       // listing endpoint, not billed turns.
       modelCatalogRefreshIntervalMinutes: 60,
@@ -82,12 +84,13 @@ describe("parseEnv", () => {
       jitterFraction: 0.2,
     })
     expect(env.adminAuth).toEqual({
-      sessionIdleMinutes: 480,
-      sessionAbsoluteHours: 24,
+      sessionIdleMinutes: 43_200,
+      sessionAbsoluteHours: 720,
       loginMaxAttempts: 5,
       loginAttemptWindowMinutes: 15,
       loginLockoutMinutes: 15,
-      sessionSlideFraction: 0.1,
+      sessionTouchIntervalSeconds: 60,
+      sessionCacheMax: 1_000,
       sessionCookieInsecure: false,
       localLoginAllowPublic: false,
     })
@@ -122,6 +125,7 @@ describe("parseEnv", () => {
       IDLE_ACCOUNT_PROBE_INTERVAL_MINUTES: "720",
       IDLE_ACCOUNT_AFTER_DAYS: "3",
       IDLE_ACCOUNT_PROBE_BATCH_SIZE: "2",
+      IDLE_ACCOUNT_PROBE_PAID_TURN: "true",
       MODEL_CATALOG_REFRESH_INTERVAL_MINUTES: "30",
       MODEL_CATALOG_REFRESH_BATCH_SIZE: "8",
       ADMIN_SESSION_PURGE_INTERVAL_MINUTES: "20",
@@ -132,7 +136,8 @@ describe("parseEnv", () => {
       ADMIN_LOGIN_MAX_ATTEMPTS: "3",
       ADMIN_LOGIN_ATTEMPT_WINDOW_MINUTES: "5",
       ADMIN_LOGIN_LOCKOUT_MINUTES: "30",
-      ADMIN_SESSION_SLIDE_FRACTION: "0.25",
+      ADMIN_SESSION_TOUCH_INTERVAL_SECONDS: "5",
+      ADMIN_SESSION_CACHE_MAX: "50",
       SESSION_COOKIE_INSECURE: "true",
       DB_POOL_MAX: "25",
       DB_POOL_IDLE_TIMEOUT_SECONDS: "120",
@@ -174,6 +179,7 @@ describe("parseEnv", () => {
       idleAccountProbeIntervalMinutes: 720,
       idleAccountAfterDays: 3,
       idleAccountProbeBatchSize: 2,
+      idleAccountProbePaidTurn: true,
       modelCatalogRefreshIntervalMinutes: 30,
       modelCatalogRefreshBatchSize: 8,
       sweepBatchSize: 500,
@@ -185,7 +191,8 @@ describe("parseEnv", () => {
       loginMaxAttempts: 3,
       loginAttemptWindowMinutes: 5,
       loginLockoutMinutes: 30,
-      sessionSlideFraction: 0.25,
+      sessionTouchIntervalSeconds: 5,
+      sessionCacheMax: 50,
       sessionCookieInsecure: true,
       localLoginAllowPublic: false,
     })
@@ -658,7 +665,7 @@ describe("parseEnv", () => {
       // point; that it is the bulk of the schema is.
       expect(numericVariables.length).toBeGreaterThan(30)
       expect(numericVariables).toContain("SWEEP_BATCH_SIZE")
-      expect(numericVariables).toContain("ADMIN_SESSION_SLIDE_FRACTION")
+      expect(numericVariables).toContain("ADMIN_SESSION_TOUCH_INTERVAL_SECONDS")
       // The one a single probe misses: it is a fraction, so `0.5` reaches it, and its upper
       // bound is exclusive, so `1` does not.
       expect(numericVariables).toContain("OAUTH_REFRESH_LEAD_FRACTION")

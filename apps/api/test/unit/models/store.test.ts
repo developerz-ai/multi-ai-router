@@ -20,6 +20,8 @@ function row(overrides: Partial<ModelCatalogRow> = {}): ModelCatalogRow {
     contextTokens: 204_800,
     maxOutputTokens: 131_072,
     contextSource: "shipped",
+    listingSource: "upstream",
+    resolvedModel: null,
     refreshedAt: NOW,
     ...overrides,
   }
@@ -45,6 +47,8 @@ describe("the warm model catalog", () => {
       contextTokens: 204_800,
       maxOutputTokens: 131_072,
       contextSource: "shipped",
+      listingSource: "upstream",
+      resolvedModel: null,
     })
     expect(warm.loadedAt()).toEqual(NOW)
   })

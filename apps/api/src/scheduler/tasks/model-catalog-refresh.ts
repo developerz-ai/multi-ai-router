@@ -88,6 +88,13 @@ export function createModelCatalogRefreshTask(deps: ModelCatalogRefreshDeps): Sc
         }
         if (outcome.kind === "skipped") {
           tally.skipped += 1
+          // Info, not warn: a skip is the refresh declining to ask — a subscription with no config
+          // directory, a runtime with no SDK — and the reason is the whole message.
+          logger.info("model catalog refresh skipped an account", {
+            accountId: account.id,
+            provider: account.provider,
+            reason: outcome.reason,
+          })
           continue
         }
 

@@ -1,4 +1,8 @@
-import type { ModelContextSource, ModelDescriptor } from "@multi-ai-router/core"
+import {
+  type ModelContextSource,
+  type ModelDescriptor,
+  ModelListingSource,
+} from "@multi-ai-router/core"
 import type { ModelCatalogRow } from "@multi-ai-router/db"
 
 /**
@@ -122,6 +126,8 @@ function index(rows: readonly ModelCatalogRow[]): Snapshot {
       contextTokens: row.contextTokens,
       maxOutputTokens: row.maxOutputTokens,
       contextSource: normalizeSource(row.contextSource),
+      listingSource: normalizeListingSource(row.listingSource),
+      resolvedModel: row.resolvedModel,
     })
     byAccount.set(row.accountId, table)
   }
@@ -136,6 +142,15 @@ function index(rows: readonly ModelCatalogRow[]): Snapshot {
  */
 function normalizeSource(value: string | null): ModelContextSource | null {
   return value === "upstream" || value === "shipped" ? value : null
+}
+
+/**
+ * Same rule as above, with one difference: a row has to have come from *somewhere*, so an
+ * unrecognised label reads as the column's own default rather than as nothing.
+ */
+function normalizeListingSource(value: string): ModelListingSource {
+  const parsed = ModelListingSource.safeParse(value)
+  return parsed.success ? parsed.data : "upstream"
 }
 
 /**

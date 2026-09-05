@@ -109,5 +109,13 @@ export const ZERO_IS_LEGAL: ReadonlyMap<string, string> = new Map([
   ["KEY_CACHE_NEGATIVE_TTL_SECONDS", "do not cache a failed key lookup at all"],
   ["SESSION_CACHE_NEGATIVE_TTL_SECONDS", "do not cache an absent session binding at all"],
   ["SCHEDULER_JITTER_FRACTION", "run every task exactly on its interval, unspread"],
-  ["ADMIN_SESSION_SLIDE_FRACTION", "persist a session slide on every authenticated request"],
+  [
+    "ADMIN_SESSION_TOUCH_INTERVAL_SECONDS",
+    "persist a session slide on every authenticated request",
+  ],
+  [
+    "ADMIN_CREDENTIAL_METADATA_TTL_SECONDS",
+    "re-read a subscription's credential file on every admin accounts read",
+  ],
+  ["CLAUDE_SDK_USAGE_GAUGE_MIN_INTERVAL_SECONDS", "ask the usage gauge on every subscription turn"],
 ])

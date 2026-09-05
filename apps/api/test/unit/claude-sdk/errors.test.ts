@@ -15,7 +15,7 @@ function crash(message: string, stderr: string): Error {
 }
 
 describe("classifying an Agent-SDK failure", () => {
-  test("an expired credential is an auth failure, and never a retry onto the next account", () => {
+  test("an expired credential is an auth failure: the account is parked needs_reauth and the chain walks on", () => {
     for (const message of [
       "OAuth token has expired. Please run /login",
       "Not logged in. Run `claude login` first",
@@ -24,9 +24,10 @@ describe("classifying an Agent-SDK failure", () => {
 
       expect(classification.kind).toBe("auth")
       expect(classification.status).toBe(401)
-      // The account needs a human, so no other account absorbs this one's problem — and nothing
+      // The account needs a human and is parked `needs_reauth` for one; the *request* is not its
+      // problem — zero bytes are on the wire, so the chain continues to the next candidate. Nothing
       // here refreshes a token: the SDK owns it (§3).
-      expect(classification.retryable).toBe(false)
+      expect(classification.retryable).toBe(true)
       expect(classification.signal).toBe("claude-sdk:credential-expired")
     }
   })

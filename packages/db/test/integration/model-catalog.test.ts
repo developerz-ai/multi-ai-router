@@ -32,6 +32,8 @@ const url = process.env.DATABASE_URL ?? ""
 const runnable = url !== ""
 
 const EARLIER = new Date("2026-07-28T09:00:00.000Z")
+/** What every HTTP-listed row carries; the subscription path is the one that varies these. */
+const HTTP_ROW = { listingSource: "upstream", resolvedModel: null } as const
 const LATER = new Date("2026-07-28T12:00:00.000Z")
 
 let handle: DatabaseHandle | undefined
@@ -80,9 +82,17 @@ describe.skipIf(!runnable)("the model catalog against a live database", () => {
           contextTokens: 204_800,
           maxOutputTokens: 131_072,
           contextSource: "shipped",
+          listingSource: "upstream",
+          resolvedModel: null,
         },
         // Unknown, which is a real state: an id in neither the listing nor the shipped table.
-        { modelId: "glm-99", contextTokens: null, maxOutputTokens: null, contextSource: null },
+        {
+          modelId: "glm-99",
+          contextTokens: null,
+          maxOutputTokens: null,
+          contextSource: null,
+          ...HTTP_ROW,
+        },
       ],
       LATER,
     )
@@ -98,7 +108,12 @@ describe.skipIf(!runnable)("the model catalog against a live database", () => {
     })
     // Null survives the round trip as null, never as 0 — a client reading a zero window as
     // "unlimited" would build a request the upstream rejects.
-    expect(rows[1]).toMatchObject({ modelId: "glm-99", contextTokens: null, contextSource: null })
+    expect(rows[1]).toMatchObject({
+      modelId: "glm-99",
+      contextTokens: null,
+      contextSource: null,
+      ...HTTP_ROW,
+    })
   })
 
   test("a second refresh replaces the set — a retired model actually leaves", async () => {
@@ -107,16 +122,40 @@ describe.skipIf(!runnable)("the model catalog against a live database", () => {
     await catalog.replaceForAccount(
       accountId,
       [
-        { modelId: "old", contextTokens: 1_000, maxOutputTokens: null, contextSource: "upstream" },
-        { modelId: "kept", contextTokens: 2_000, maxOutputTokens: null, contextSource: "upstream" },
+        {
+          modelId: "old",
+          contextTokens: 1_000,
+          maxOutputTokens: null,
+          contextSource: "upstream",
+          ...HTTP_ROW,
+        },
+        {
+          modelId: "kept",
+          contextTokens: 2_000,
+          maxOutputTokens: null,
+          contextSource: "upstream",
+          ...HTTP_ROW,
+        },
       ],
       EARLIER,
     )
     await catalog.replaceForAccount(
       accountId,
       [
-        { modelId: "kept", contextTokens: 3_000, maxOutputTokens: null, contextSource: "upstream" },
-        { modelId: "new", contextTokens: 4_000, maxOutputTokens: null, contextSource: "upstream" },
+        {
+          modelId: "kept",
+          contextTokens: 3_000,
+          maxOutputTokens: null,
+          contextSource: "upstream",
+          ...HTTP_ROW,
+        },
+        {
+          modelId: "new",
+          contextTokens: 4_000,
+          maxOutputTokens: null,
+          contextSource: "upstream",
+          ...HTTP_ROW,
+        },
       ],
       LATER,
     )
@@ -133,7 +172,15 @@ describe.skipIf(!runnable)("the model catalog against a live database", () => {
 
     await catalog.replaceForAccount(
       accountId,
-      [{ modelId: "gone", contextTokens: null, maxOutputTokens: null, contextSource: null }],
+      [
+        {
+          modelId: "gone",
+          contextTokens: null,
+          maxOutputTokens: null,
+          contextSource: null,
+          ...HTTP_ROW,
+        },
+      ],
       EARLIER,
     )
     await catalog.replaceForAccount(accountId, [], LATER)
@@ -147,12 +194,28 @@ describe.skipIf(!runnable)("the model catalog against a live database", () => {
 
     await catalog.replaceForAccount(
       swept,
-      [{ modelId: "a", contextTokens: null, maxOutputTokens: null, contextSource: null }],
+      [
+        {
+          modelId: "a",
+          contextTokens: null,
+          maxOutputTokens: null,
+          contextSource: null,
+          ...HTTP_ROW,
+        },
+      ],
       EARLIER,
     )
     await catalog.replaceForAccount(
       swept,
-      [{ modelId: "b", contextTokens: null, maxOutputTokens: null, contextSource: null }],
+      [
+        {
+          modelId: "b",
+          contextTokens: null,
+          maxOutputTokens: null,
+          contextSource: null,
+          ...HTTP_ROW,
+        },
+      ],
       LATER,
     )
 
@@ -173,7 +236,15 @@ describe.skipIf(!runnable)("the model catalog against a live database", () => {
     const accountId = await seedAccount()
     await catalog.replaceForAccount(
       accountId,
-      [{ modelId: "doomed", contextTokens: null, maxOutputTokens: null, contextSource: null }],
+      [
+        {
+          modelId: "doomed",
+          contextTokens: null,
+          maxOutputTokens: null,
+          contextSource: null,
+          ...HTTP_ROW,
+        },
+      ],
       LATER,
     )
 

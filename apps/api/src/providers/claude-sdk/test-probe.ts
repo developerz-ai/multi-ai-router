@@ -1,4 +1,9 @@
-import type { Options, PermissionResult, SDKMessage } from "@anthropic-ai/claude-agent-sdk"
+import type {
+  Options,
+  PermissionResult,
+  SDKMessage,
+  SDKUserMessage,
+} from "@anthropic-ai/claude-agent-sdk"
 import { query } from "@anthropic-ai/claude-agent-sdk"
 import { PERMITTED_TOOLS } from "./allowlist"
 import { createCliProbe } from "./cli-probe"
@@ -6,6 +11,9 @@ import type { SdkConcurrency, SdkSlot } from "./concurrency"
 import { QUERY_ENV_OVERRIDES, subprocessEnv } from "./env"
 import { classifySdkFailure, readSdkFailure } from "./errors"
 import { type CliResolution, resolveClaudeCli } from "./resolve-cli"
+import { detailOf, resultFailureMessage, snippet, statedResult } from "./test-probe-result"
+import { holdPrompt } from "./turn-lifecycle"
+import type { SdkUsageGauge, SdkUsageGaugeSource } from "./usage-gauge"
 
 /**
  * The "Test now" button's Agent-SDK half: one real, billed `query()` turn against an Account's own
@@ -93,7 +101,6 @@ export interface SdkTestProbe {
 
 /** What the probe asks for. Fixed, because the point is "did this credential answer", not a prompt. */
 const PROBE_PROMPT = "Reply with exactly one word: pong"
-const MESSAGE_SNIPPET_LIMIT = 200
 
 /**
  * Router-authored, and it names the knob rather than the symptom: "timed out" would send an operator
@@ -103,11 +110,15 @@ const MESSAGE_SNIPPET_LIMIT = 200
 const AT_CEILING =
   "this router is already running its maximum number of claude subprocesses (CLAUDE_SDK_MAX_CONCURRENCY) — the test gave up waiting for a slot"
 
-/** The SDK's own entry point as this module calls it: one fixed string in, messages out. */
+/**
+ * The SDK's own entry point as this module calls it: one fixed message in, messages out. The prompt
+ * is a held stream rather than a string for the same reason the invoker's is (`turn-lifecycle.ts`):
+ * the usage gauge needs the subprocess alive past `result`, and a string prompt closes stdin there.
+ */
 export type SdkProbeQueryFn = (params: {
-  prompt: string
+  prompt: AsyncIterable<SDKUserMessage>
   options: Options
-}) => AsyncIterable<SDKMessage>
+}) => AsyncIterable<SDKMessage> & SdkUsageGaugeSource
 
 export interface SdkTestProbeOptions {
   /** `CLAUDE_CLI_PATH`, validated at the env boundary. Re-resolved per call — see `resolve-cli.ts`. */
@@ -121,6 +132,11 @@ export interface SdkTestProbeOptions {
   readonly resolveCli?: () => CliResolution
   /** Injected in tests, for the reason `SdkInvokerDeps.runQuery` is: no test may spawn a `claude`. */
   readonly runQuery?: SdkProbeQueryFn
+  /**
+   * The plan-usage reading, asked once the turn has answered — a billed probe is the one moment a
+   * never-routed-to account is guaranteed to have a live query object. Absent means none is asked.
+   */
+  readonly usageGauge?: SdkUsageGauge
 }
 
 export function createSdkTestProbe(options: SdkTestProbeOptions): SdkTestProbe {
@@ -183,9 +199,15 @@ export function createSdkTestProbe(options: SdkTestProbeOptions): SdkTestProbe {
       }
 
       const rateLimitInfos: unknown[] = []
+      const held = holdPrompt([{ type: "text", text: PROBE_PROMPT }])
+      // Resolved when the gauge has landed or been dropped; awaited before the answer is returned,
+      // because the probe is the admin plane's own button and a bounded wait there costs nothing
+      // the client is timing.
+      let gauged: Promise<void> = Promise.resolve()
 
       try {
-        for await (const message of runQuery({ prompt: PROBE_PROMPT, options: sdkOptions })) {
+        const messages = runQuery({ prompt: held.prompt, options: sdkOptions })
+        for await (const message of messages) {
           // Collected before the result is examined, because a turn that ends in a spent window
           // still reported that window on its way there — and that reading is the whole answer to
           // "why did this fail". The SDK's own snake_case field, read here rather than through
@@ -195,7 +217,13 @@ export function createSdkTestProbe(options: SdkTestProbeOptions): SdkTestProbe {
             rateLimitInfos.push(message.rate_limit_info)
             continue
           }
+          if (message.type === "assistant" && options.usageGauge !== undefined) {
+            gauged = options.usageGauge.observe(input.accountId, messages)
+            continue
+          }
           if (message.type !== "result") continue
+          await gauged
+          held.release()
           if (message.subtype === "success" && !message.is_error) {
             return { ok: true, message: snippet(message.result), rateLimitInfos }
           }
@@ -219,6 +247,7 @@ export function createSdkTestProbe(options: SdkTestProbeOptions): SdkTestProbe {
           ...detailOf(readSdkFailure(error).message),
         }
       } finally {
+        held.release()
         input.signal.removeEventListener("abort", onAbort)
         // The subprocess dies with the iterator, so the slot is free the moment this scope is:
         // holding it past the answer would shrink the ceiling by one for every probe ever run.
@@ -228,68 +257,7 @@ export function createSdkTestProbe(options: SdkTestProbeOptions): SdkTestProbe {
   }
 }
 
-/**
- * What a failed turn actually says, in one sentence an operator can act on.
- *
- * **`subtype` alone is not the reason, and on the most important failure it is actively wrong.** A
- * spent Claude subscription comes back as `subtype: "success"` with `is_error: true` and the reason
- * in `result` — so rendering the subtype produced the self-contradiction "the Claude Agent SDK turn
- * did not succeed (success)" while discarding the one field that explained it. Observed on a live
- * account whose window was at 100%.
- *
- * So `result` leads, through the same `classifySdkFailure` table the dispatch path uses: a usage
- * limit reads as "the account's Claude subscription window is spent", an expired credential as
- * "needs re-authenticating", and each keeps the wording the client would have received, so the
- * button and the data plane never describe one condition two ways. A turn that failed with nothing
- * quotable falls back to the subtype, which is at least honest for `error_max_turns` and friends.
- */
-/**
- * Absent rather than empty when the upstream said nothing — there is no detail to record.
- *
- * Takes the message rather than the field for the same reason {@link resultFailureMessage} does:
- * only the SDK's *success* result variant declares `result`, and the failure we care most about
- * (`subtype: "success"` with `is_error: true`) is that variant. A structurally-typed parameter
- * reads it off either without narrowing the union by hand.
- */
-function detailOf(stated: string | undefined): { reasonDetail?: string } {
-  const trimmed = stated?.trim()
-  if (trimmed === undefined || trimmed === "") return {}
-  return { reasonDetail: snippet(trimmed) }
-}
-
-/**
- * The `result` text, read off whichever result variant carries one — only the SDK's *success*
- * variant declares it, and the failure that matters most (`subtype: "success"` with
- * `is_error: true`) is that variant.
- *
- * `subtype` is in the parameter type purely to make this assignable: a shape whose properties are
- * all optional is a *weak type*, and the error variant — which has no `result` at all — shares no
- * property with it and is rejected. One field both variants declare is enough to anchor it.
- */
-function statedResult(message: {
-  readonly subtype: string
-  readonly result?: string
-}): string | undefined {
-  return message.result
-}
-
-function resultFailureMessage(message: {
-  readonly subtype: string
-  readonly result?: string
-}): string {
-  const stated = message.result?.trim()
-  if (stated !== undefined && stated !== "") return classifySdkFailure(stated).clientMessage
-  return `the Claude Agent SDK turn did not succeed (${message.subtype})`
-}
-
 /** No tool this probe could grant — it asks one question and reads one answer. */
 async function denyEveryTool(): Promise<PermissionResult> {
   return { behavior: "deny", message: "this probe grants no tools" }
-}
-
-function snippet(text: string): string {
-  const trimmed = text.trim()
-  return trimmed.length <= MESSAGE_SNIPPET_LIMIT
-    ? trimmed
-    : `${trimmed.slice(0, MESSAGE_SNIPPET_LIMIT)}…`
 }

@@ -2,6 +2,7 @@ import { describeError } from "@multi-ai-router/core"
 import {
   createAccountRepository,
   createAdminCredentialRepository,
+  createAdminSessionRepository,
   createApiKeyRepository,
   createAuditRepository,
   createModelCatalogRepository,
@@ -22,13 +23,16 @@ import { createRuntimeMetrics, type RouterMetrics } from "../observability"
 import {
   createSdkConcurrency,
   createSdkInvoker,
+  createSdkModelLister,
   createSdkQuotaStore,
+  createSdkUsageGauge,
+  createSdkUsageGaugeProbe,
   type SdkQuotaStore,
 } from "../providers"
 import { createAccountConfigDirs } from "../providers/claude-sdk/config-dir"
 import { createSdkTranscripts } from "../providers/claude-sdk/transcripts"
 import { IDLE_PROBE_MODELS, type Scheduler, schedulerFromEnv } from "../scheduler"
-import { createMemorySessionStore } from "../services/admin-auth"
+import { createPostgresSessionStore } from "../services/admin-auth"
 import { createRoutingCatalog, loadCatalog, type RoutingCatalogStore } from "../services/catalog"
 import { createPriceBook, type PriceBook } from "../services/cost"
 import { createCredentialCipherFromEnv } from "../services/crypto/fromEnv"
@@ -49,7 +53,9 @@ import {
   stampLastUsed,
 } from "../services/dataplane"
 import {
+  type CatalogRefreshDeps,
   createModelCatalogStore,
+  createSubscriptionModelRefresh,
   type ModelCatalogStore,
   refreshAccountCatalog,
 } from "../services/models"
@@ -266,10 +272,32 @@ export function createRuntime(deps: RuntimeDeps): Runtime {
     onRecord: (record) => metrics.observeUsage(record),
   })
 
-  // The admin console's session state. Built here, once, rather than left to the auth service's
-  // own default — the scheduler's session-purge task and the admin plane's auth service must share
-  // this exact instance, or the task sweeps a map nothing ever populates.
-  const adminSessions = createMemorySessionStore()
+  // The admin console's session state, in Postgres: a redeploy or a crash no longer logs the
+  // operator out (`services/admin-auth/postgresSessionStore.ts`). Built here, once, so the
+  // scheduler's session-purge task and the admin plane's auth service share the one cache in front
+  // of the one table.
+  const adminSessions = createPostgresSessionStore({
+    repository: createAdminSessionRepository(database),
+    logger,
+    cacheMaxEntries: env.adminAuth.sessionCacheMax,
+  })
+
+  // The continuous half of a subscription's quota picture (`providers/claude-sdk/usage-gauge.ts`):
+  // a reading is folded into the same per-Account buckets a `rate_limit_event` fills and then
+  // applied to the health store through the same fold — which is what makes it durable
+  // (`onQuotaWindows` above) and visible to the console. Never a verdict: `ingestGauge`'s signal
+  // is never `limited`, so this can only ever record windows.
+  const usageGauge = createSdkUsageGauge({
+    enabled: env.claudeSdkUsageGauge.enabled,
+    timeoutMs: env.claudeSdkUsageGauge.timeoutMs,
+    minIntervalMs: env.claudeSdkUsageGauge.minIntervalSeconds * 1_000,
+    logger,
+    now,
+    onReading: (accountId, reading, at) => {
+      const snapshot = sdkQuota.ingestGauge(accountId, reading, at)
+      health.applyRateLimit(accountId, snapshot.signal, at)
+    },
+  })
 
   // --- background work ------------------------------------------------------
   // Every periodic task behind one in-process runner (non-negotiable 13). `schedulerFromEnv` binds
@@ -301,6 +329,51 @@ export function createRuntime(deps: RuntimeDeps): Runtime {
   const invokeSdk = createSdkInvoker({
     concurrency: sdkConcurrency,
     cliPathOverride: env.claudeCliPath,
+    usageGauge,
+  })
+  const usageGaugeProbe = createSdkUsageGaugeProbe({
+    gauge: usageGauge,
+    concurrency: sdkConcurrency,
+    cliPathOverride: env.claudeCliPath,
+    // The handshake bound the model lister uses too: a subprocess start, not a model's answer.
+    timeoutMs: env.failover.upstreamTimeoutMs,
+  })
+
+  // What a Claude subscription can be asked for, read from the Agent SDK's handshake over the same
+  // subprocess gate — a subscription has no HTTP listing, and without this a pool of them answers
+  // `GET /v1/models` with `data: []` (`providers/claude-sdk/model-list.ts`).
+  const sdkModelLister = createSdkModelLister({
+    concurrency: sdkConcurrency,
+    cliPathOverride: env.claudeCliPath,
+    onUnavailable: (reason, detail) =>
+      logger.info("subscription model listing unavailable", {
+        component: "model-catalog",
+        reason,
+        ...(detail === "" ? {} : { detail }),
+      }),
+  })
+  // One refresh for both transports, built once so the sweep and the login-completion hook can
+  // never disagree about what a refresh is. Free, off the request path, and pointed at
+  // `model_catalog` alone — `supported_models`, which gates routing, stays the operator's.
+  const catalogRefreshDeps: CatalogRefreshDeps = {
+    catalog: modelCatalog,
+    cipher,
+    timeoutMs: env.failover.upstreamTimeoutMs,
+    fetch: (request) => fetch(request),
+    subscription: {
+      lister: sdkModelLister,
+      timeoutMs: env.failover.upstreamTimeoutMs,
+      logger: logger.child({ component: "model-catalog" }),
+    },
+  }
+  // For the moment a login completes: refresh that account now and warm the store, so the console
+  // and the pool's clients see its models before the sweep's next tick.
+  const refreshSubscriptionModels = createSubscriptionModelRefresh({
+    accounts,
+    refresh: (account, at) => refreshAccountCatalog(catalogRefreshDeps, account, at),
+    onRefreshed: () => modelCatalogStore.refresh(),
+    logger: logger.child({ component: "model-catalog" }),
+    now,
   })
 
   const dispatcher = createDispatcher({
@@ -347,7 +420,12 @@ export function createRuntime(deps: RuntimeDeps): Runtime {
     // The same instance the dispatch path ingests into, so "Test now" and a real request write one
     // account's quota state to one place.
     sdkQuota,
+    // The same gauge the dispatch path reads, so a "Test now" turn also answers "how full".
+    usageGauge,
     configDirs,
+    // The connect flow's login-completion hook: a subscription lists its models the moment it is
+    // connected, through the same refresh the hourly sweep runs.
+    refreshSubscriptionModels,
     sessionStore: adminSessions,
     coherence: {
       refreshCatalog: () => catalog.refresh(),
@@ -386,22 +464,16 @@ export function createRuntime(deps: RuntimeDeps): Runtime {
     // Free, and asked before anything is billed: a credential that is already dead fails the
     // test for a reason only a human can fix.
     ...(admin.authProbe === undefined ? {} : { authProbe: admin.authProbe }),
+    // The free half's usage read: a turn-free query per logged-in subscription, so an account
+    // nothing routed to today still shows real percentages. Bounded by the same semaphore.
+    usageProbe: (account) =>
+      usageGaugeProbe.read({ accountId: account.id, configDir: configDirs.pathFor(account.id) }),
     probeModels: IDLE_PROBE_MODELS,
     modelCatalog,
     // Hourly, free, and pointed at `model_catalog` alone: a listing costs no tokens and spends no
     // quota window, and nothing in routing reads what it writes. `supported_models` — which does
     // gate routing — stays the operator's, untouched by any timer.
-    refreshCatalog: (account, at) =>
-      refreshAccountCatalog(
-        {
-          catalog: modelCatalog,
-          cipher,
-          timeoutMs: env.failover.upstreamTimeoutMs,
-          fetch: (request) => fetch(request),
-        },
-        account,
-        at,
-      ),
+    refreshCatalog: (account, at) => refreshAccountCatalog(catalogRefreshDeps, account, at),
     env,
     sql: deps.sql,
     logger,

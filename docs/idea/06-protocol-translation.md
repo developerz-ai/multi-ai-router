@@ -65,7 +65,28 @@ key can reach would be wrong in the direction of publishing a catalog the key ca
 having both. An account declaring no `supportedModels` serves any name and therefore advertises
 nothing enumerable — while its upstream has told the hourly sweep exactly which models it serves. The
 catalog publishes those; the wire listing cannot, because it has no way to say "and also anything
-else you ask for".
+else you ask for". The operator has the discover button to promote them into `supportedModels` if
+that is what they mean.
+
+**The one exception is a Claude subscription (`anthropic-oauth`).** It has no HTTP listing and no
+discover button; the Agent SDK's handshake is its only voice
+([03-providers.md](03-providers.md#model-catalog--the-handshake-not-a-listing)), and a wire listing
+that ignored it answered `data: []` for a pool of working subscriptions. So a subscription also lists
+its `ModelCatalog` rows on `/v1/models` — the live list where the sweep has one, the shipped Claude
+table until it does — deduplicated across every in-scope account, and still admitted through the same
+`supportedModels` check selection runs, so an operator who narrows a subscription narrows its listing.
+
+**Alias rows say what they resolve to.** A row whose id is an alias — the CLI's `sonnet`, or an
+operator's `sonnet → glm-4.7` — carries one field neither ecosystem defines, `resolved_model`, with
+the canonical id it names today: the SDK's own word for a subscription, the account's alias map
+otherwise, the first in-scope account's answer where several agree. A concrete id carries no such
+field (absent, not null), so a strict client sees exactly the documented shape. OpenAI shape:
+`{ "id": "sonnet", "object": "model", "created": …, "owned_by": "anthropic-oauth", "resolved_model": "claude-sonnet-5" }`;
+Anthropic shape: `{ "type": "model", "id": "sonnet", "display_name": "sonnet", "resolved_model": "claude-sonnet-5" }`.
+Both shapes are served on the one path, chosen by the credential style the client presented
+(`x-api-key` → Anthropic, bearer → OpenAI); `GET /v1/models/:id` resolves the same way. **Resolution
+is information, never a rename**: the request path sends the client's own string upstream unchanged
+([Model names](#model-names)).
 
 **Both OpenAI paths are first-class, and that is not redundancy.** `POST /v1/responses` is OpenAI's
 current recommended primitive and where new clients are going; `POST /v1/chat/completions` is what the
@@ -624,7 +645,9 @@ An Account declaring **nothing** serves everything: unknown is passthrough, not 
 contributes no enumerable name beyond its alias keys, so a deployment of only such Accounts lists
 nothing rather than inventing a catalog it cannot stand behind — which is why the operator is given
 `POST /api/admin/accounts/:id/models/discover`, one free `GET` at the provider's own listing, to fill
-the declaration in.
+the declaration in. A Claude subscription is the exception, for the reason given under
+[Ingress surface](#ingress-surface): it has no listing to discover from, so what its Agent SDK
+handshake reports is what it lists.
 
 ## Performance rules (hard requirements, not preferences)
 

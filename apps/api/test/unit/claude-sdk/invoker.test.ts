@@ -67,9 +67,14 @@ function spyQuery(
     prompts,
     query: ({ prompt, options: launched }) => {
       options.push(launched)
+      // Drained concurrently with the message stream, as the real SDK does: the invoker holds the
+      // prompt open past `result` (`turn-lifecycle.ts`), so a fake that waited for the prompt to end
+      // before answering would wait forever.
+      void (async () => {
+        for await (const message of prompt) prompts.push(message)
+      })()
       return {
         async *[Symbol.asyncIterator]() {
-          for await (const message of prompt) prompts.push(message)
           yield* stream()
         },
       }
@@ -500,9 +505,11 @@ describe("a busy session is retried once, in place, as a fork", () => {
         options.push(launched)
         const stream = streams[Math.min(call, streams.length - 1)] ?? busyStream
         call += 1
+        void (async () => {
+          for await (const message of prompt) prompts.push(message)
+        })()
         return {
           async *[Symbol.asyncIterator]() {
-            for await (const message of prompt) prompts.push(message)
             yield* stream()
           },
         }
@@ -744,9 +751,11 @@ describe("a forced tool_choice the turn did not honour", () => {
           tool_input: { cityName: "Berlin" },
           tool_use_id: "toolu_1",
         }
+        void (async () => {
+          for await (const message of prompt) prompts.push(message)
+        })()
         return {
           async *[Symbol.asyncIterator]() {
-            for await (const message of prompt) prompts.push(message)
             hook?.(call, "toolu_1", { signal: AbortSignal.abort() })
             yield* sdkQueryStream({ turns: [ONE_TURN] })
           },
@@ -854,5 +863,80 @@ describe("a forced tool_choice the turn did not honour", () => {
     // The throw is out of `readSdkRequest`, before a slot is taken or a subprocess exists.
     expect(spy.options).toHaveLength(0)
     expect(concurrency.inFlight).toBe(0)
+  })
+})
+
+describe("the usage gauge rides the turn, off the response path", () => {
+  interface GaugeSpy {
+    readonly observed: { accountId: string; source: unknown }[]
+    settle(): void
+    readonly gauge: { observe(accountId: string, source: unknown): Promise<void> }
+  }
+
+  /** A gauge whose reading takes as long as the test says — the turn must never wait for it. */
+  function gaugeSpy(): GaugeSpy {
+    const observed: { accountId: string; source: unknown }[] = []
+    let settle: () => void = () => {}
+    const pending = new Promise<void>((resolve) => {
+      settle = resolve
+    })
+    return {
+      observed,
+      settle: () => settle(),
+      gauge: {
+        observe: (accountId, source) => {
+          observed.push({ accountId, source })
+          return pending
+        },
+      },
+    }
+  }
+
+  test("is asked once, of the query object itself, and the answer does not wait for it", async () => {
+    const spy = spyQuery()
+    const concurrency = createSdkConcurrency({ global: 4, perAccount: 2 })
+    const gauged = gaugeSpy()
+    const invoke = createSdkInvoker({
+      concurrency,
+      runQuery: spy.query,
+      resolveCli: () => CLI,
+      usageGauge: gauged.gauge,
+    })
+
+    const response = await invoke(invocation())
+    const answered = (await response.json()) as Record<string, unknown>
+    expect(answered.content).toEqual([{ type: "text", text: "pong" }])
+
+    // One reading, of the same object `query()` returned — no second launch, no second prompt.
+    expect(gauged.observed).toHaveLength(1)
+    expect(gauged.observed[0]?.accountId).toBe("sub-1")
+    expect(spy.options).toHaveLength(1)
+    expect(spy.prompts).toHaveLength(1)
+
+    // The slot is held while the gauge is still in flight — a live subprocess is counted — and
+    // handed back once it settles.
+    expect(concurrency.inFlight).toBe(1)
+    gauged.settle()
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(concurrency.inFlight).toBe(0)
+  })
+
+  test("a turn that failed before answering never asks for a gauge", async () => {
+    const spy = spyQuery(() => ({
+      // biome-ignore lint/correctness/useYield: the throw is the fixture.
+      async *[Symbol.asyncIterator](): AsyncIterator<unknown> {
+        throw new Error("exited with code 1")
+      },
+    }))
+    const gauged = gaugeSpy()
+    const invoke = createSdkInvoker({
+      concurrency: createSdkConcurrency({ global: 4, perAccount: 2 }),
+      runQuery: spy.query,
+      resolveCli: () => CLI,
+      usageGauge: gauged.gauge,
+    })
+
+    await expect(invoke(invocation())).rejects.toThrow()
+    expect(gauged.observed).toEqual([])
   })
 })

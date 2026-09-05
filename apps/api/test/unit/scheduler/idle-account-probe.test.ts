@@ -50,6 +50,10 @@ interface HarnessOptions {
   readonly tested?: boolean
   readonly aborted?: boolean
   readonly batchSize?: number
+  /** Defaults to on, so the keepalive cases below still exercise the billed half. */
+  readonly paidTurn?: boolean
+  /** The turn-free usage read. Absent means none is wired. */
+  readonly usage?: (account: AccountRow) => Promise<boolean>
 }
 
 function harness(options: HarnessOptions) {
@@ -88,10 +92,12 @@ function harness(options: HarnessOptions) {
             },
           },
         }),
+    ...(options.usage === undefined ? {} : { usage: options.usage }),
     models: { "anthropic-oauth": "claude-sonnet-4-5", minimax: "MiniMax-M2" },
     intervalMs: 86_400_000,
     idleAfterMs: SEVEN_DAYS_MS,
     batchSize: options.batchSize ?? 10,
+    paidTurn: options.paidTurn ?? true,
   })
 
   const logs: { msg: string; level: string; fields: Record<string, unknown> }[] = []
@@ -175,6 +181,60 @@ describe("the free check over every credential", () => {
   })
 })
 
+describe("the paid turn is opt-in — checking on a subscription must never spend usage", () => {
+  test("with the flag off, nothing is ever tested, however idle", async () => {
+    const { run, tested, checked, logs } = harness({
+      idle: [account()],
+      loggedIn: true,
+      paidTurn: false,
+    })
+
+    const result = await run()
+
+    expect(checked).toEqual(["acc-1"])
+    expect(tested).toEqual([])
+    expect(result).toMatchObject({ outcome: "success", itemsProcessed: 1 })
+    expect(logs.some((line) => line.fields.paidTurn === false)).toBe(true)
+  })
+
+  test("the free half still reads the usage gauge for every logged-in subscription, turn-free", async () => {
+    const gauged: string[] = []
+    const { run, tested, logs } = harness({
+      idle: [],
+      all: [account(), account({ id: "acc-2", status: "needs_reauth" })],
+      loggedIn: { "acc-1": true, "acc-2": false },
+      paidTurn: false,
+      usage: async (row) => {
+        gauged.push(row.id)
+        return true
+      },
+    })
+
+    await run()
+
+    expect(gauged).toEqual(["acc-1"])
+    expect(tested).toEqual([])
+    expect(logs.some((line) => line.fields.gauged === 1)).toBe(true)
+  })
+
+  test("a gauge read that throws is a reading not taken, never a failed sweep", async () => {
+    const { run, logs } = harness({
+      idle: [],
+      all: [account()],
+      loggedIn: true,
+      paidTurn: false,
+      usage: async () => {
+        throw new Error("subprocess refused")
+      },
+    })
+
+    const result = await run()
+
+    expect(result.outcome).toBe("success")
+    expect(logs.some((line) => line.msg === "idle account usage gauge not read")).toBe(true)
+  })
+})
+
 describe("the billed keepalive over idle accounts", () => {
   test("spends one real request on an account traffic has forgotten", async () => {
     const { run, tested } = harness({ idle: [account()], loggedIn: true, outcome: "ok" })
@@ -220,6 +280,7 @@ describe("the billed keepalive over idle accounts", () => {
       intervalMs: 1,
       idleAfterMs: SEVEN_DAYS_MS,
       batchSize: 1,
+      paidTurn: true,
     })
 
     await task.run({
@@ -321,6 +382,7 @@ describe("what the run row says about the sweep itself", () => {
       intervalMs: 1,
       idleAfterMs: SEVEN_DAYS_MS,
       batchSize: 1,
+      paidTurn: true,
     })
 
     const result = await task.run({
@@ -355,6 +417,7 @@ describe("what the run row says about the sweep itself", () => {
       intervalMs: 1,
       idleAfterMs: SEVEN_DAYS_MS,
       batchSize: 1,
+      paidTurn: true,
     })
 
     await task.run({

@@ -1,4 +1,4 @@
-import type { ModelContextSource } from "@multi-ai-router/core"
+import type { ModelContextSource, ModelListingSource } from "@multi-ai-router/core"
 import { index, integer, pgTable, primaryKey, text, timestamp, uuid } from "drizzle-orm/pg-core"
 import { accounts } from "./accounts"
 
@@ -54,6 +54,20 @@ export const modelCatalog = pgTable(
      * NULL exactly when both numbers are NULL. A provenance for nothing is noise.
      */
     contextSource: text("context_source").$type<ModelContextSource>(),
+
+    /**
+     * `upstream` | `live` | `shipped` — which voice listed the row (`ModelListingSource`). Distinct
+     * from `context_source`, which labels only the numbers: a live SDK listing states no size, so
+     * its rows read `live` here and `shipped` there. `text`, by the same rule as above. Defaults to
+     * `upstream` because every row written before this column existed came from an HTTP listing.
+     */
+    listingSource: text("listing_source").$type<ModelListingSource>().notNull().default("upstream"),
+
+    /**
+     * For an alias row (`sonnet` -> `claude-sonnet-5`), what it resolves to today. NULL for a
+     * concrete model id. Information for a listing, never a rename on the request path.
+     */
+    resolvedModel: text("resolved_model"),
 
     /**
      * When the refresh that wrote this row ran. Rendered beside the catalog, because a listing with

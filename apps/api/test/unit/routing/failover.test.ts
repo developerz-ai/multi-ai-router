@@ -38,8 +38,9 @@ describe("classification", () => {
     [402, "credits-exhausted", true],
     [500, "server-error", true],
     [503, "server-error", true],
-    [401, "auth", false],
-    [403, "auth", false],
+    // Account-scoped: the credential is parked with the account, the next candidate has its own.
+    [401, "auth", true],
+    [403, "auth", true],
     [400, "client-error", false],
     [422, "client-error", false],
   ]
@@ -111,11 +112,20 @@ describe("ordering and bounds", () => {
 })
 
 describe("what is not retried", () => {
-  test.each(["auth", "client-error"] as const)("%s stops the chain", (kind) => {
-    expect(planNextAttempt(chain, after("a"), failure(kind))).toEqual({
+  test("a client error stops the chain — a bad request is bad at every account", () => {
+    expect(planNextAttempt(chain, after("a"), failure("client-error"))).toEqual({
       action: "stop",
       reason: "not-retryable",
     })
+  })
+
+  test("a rejected credential does not stop the chain — it is one account's problem", () => {
+    // Production: a subscription's 30-day login expired, and the first request to land on it failed
+    // `502` with five healthy subscriptions beside it. The breaker parks the account before this
+    // planner is consulted; the next candidate authenticates with its own credential.
+    const decision = planNextAttempt(chain, after("a"), failure("auth", { status: 401 }))
+    expect(decision).toMatchObject({ action: "attempt", attempt: 2 })
+    expect(decision.action === "attempt" && decision.candidate.account.id).toBe("b")
   })
 
   test("once bytes have been streamed the request fails honestly", () => {
@@ -128,7 +138,13 @@ describe("what is not retried", () => {
 
   test("the streaming rule outranks every retryable cause", () => {
     const streamed = markStreamed(after("a"))
-    for (const kind of ["rate-limited", "credits-exhausted", "connection", "timeout"] as const) {
+    for (const kind of [
+      "rate-limited",
+      "credits-exhausted",
+      "connection",
+      "timeout",
+      "auth",
+    ] as const) {
       expect(planNextAttempt(chain, streamed, failure(kind))).toEqual({
         action: "stop",
         reason: "bytes-streamed",
@@ -149,6 +165,18 @@ describe("the SDK path is not the HTTP path", () => {
       invalidateBinding: true,
       sessionRestart: true,
     })
+  })
+
+  test("a bound subscription whose login expired is left for the next one, and the restart is said", () => {
+    const decision = planNextAttempt(sdkChain, after("a"), failure("auth", { status: 401 }), {
+      boundAccountId: "a",
+    })
+    expect(decision).toMatchObject({
+      action: "attempt",
+      invalidateBinding: true,
+      sessionRestart: true,
+    })
+    expect(decision.action === "attempt" && decision.candidate.account.id).toBe("b")
   })
 
   test("on the HTTP path the hop is transparent — no restart to surface", () => {

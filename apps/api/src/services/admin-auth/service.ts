@@ -340,9 +340,8 @@ export function createAdminAuthService(deps: AdminAuthDeps): AdminAuthService {
     }
 
     // The slide. In-memory `lastSeenAtMs` is authoritative for this response on every request;
-    // the store write is throttled to once the idle window has advanced past
-    // `sessionSlideFraction` of itself since the last *persisted* `lastSeenAtMs` — a
-    // Postgres-backed store sees on the order of one write per fraction-of-idle-window, not one
+    // the store write is coalesced to once per `touchIntervalSeconds` since the last *persisted*
+    // `lastSeenAtMs` — the Postgres-backed store sees one write per interval per session, not one
     // per request. The persisted row lags by design: a session never expires early because of
     // this (expiry is checked above, before the slide, against the last-persisted value), it only
     // ever reports a slightly stale `lastSeenAtMs` to anything reading the store directly.
@@ -351,8 +350,7 @@ export function createAdminAuthService(deps: AdminAuthDeps): AdminAuthService {
       lastSeenAtMs: nowMs,
       idleExpiryMs: nowMs + config.idleTtlSeconds * 1000,
     }
-    const slideThresholdMs = config.idleTtlSeconds * 1000 * config.sessionSlideFraction
-    if (nowMs - session.lastSeenAtMs >= slideThresholdMs) {
+    if (nowMs - session.lastSeenAtMs >= config.touchIntervalSeconds * 1000) {
       await store.save(slid)
     }
     return slid

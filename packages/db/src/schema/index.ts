@@ -4,6 +4,7 @@
  */
 export * from "./accounts"
 export * from "./admin-credentials"
+export * from "./admin-sessions"
 export * from "./api-key-scope"
 export * from "./api-keys"
 export * from "./audit-events"

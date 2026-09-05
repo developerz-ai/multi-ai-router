@@ -10,6 +10,14 @@ export type { CliProbeOptions } from "./claude-sdk/cli-probe"
 export { createCliProbe } from "./claude-sdk/cli-probe"
 export type { SdkConcurrency, SdkConcurrencyLimits, SdkSlot } from "./claude-sdk/concurrency"
 export { createSdkConcurrency } from "./claude-sdk/concurrency"
+export type {
+  CredentialMetadata,
+  CredentialMetadataReader,
+} from "./claude-sdk/credential-metadata"
+export {
+  createCredentialMetadataReader,
+  UNKNOWN_CREDENTIAL_METADATA,
+} from "./claude-sdk/credential-metadata"
 export type { ClaudeSdkDriver, SdkAccount } from "./claude-sdk/driver"
 export { claudeSdkDriver } from "./claude-sdk/driver"
 export type { SubprocessEnvOptions } from "./claude-sdk/env"
@@ -21,22 +29,41 @@ export {
 } from "./claude-sdk/env"
 export type { SdkFailure, SdkFailureText } from "./claude-sdk/errors"
 export { classifySdkFailure, readSdkFailure, STDERR_TAIL_LIMIT } from "./claude-sdk/errors"
+export type {
+  IdleQuery,
+  IdleQueryFn,
+  IdleQueryHandle,
+  OpenIdleQueryInput,
+} from "./claude-sdk/idle-query"
+export { IdleQueryTimeoutError, openIdleQuery, rejectOnAbort } from "./claude-sdk/idle-query"
 export type { SdkInvocation, SdkInvoker, SdkSessionReport } from "./claude-sdk/invoke"
-export type { SdkInvokerDeps, SdkQueryFn } from "./claude-sdk/invoker"
+export type { SdkInvokerDeps, SdkQueryFn, SdkQueryStream } from "./claude-sdk/invoker"
 export { createSdkInvoker } from "./claude-sdk/invoker"
+export type {
+  SdkModelInfo,
+  SdkModelLister,
+  SdkModelListerOptions,
+  SdkModelListInput,
+  SdkModelListing,
+  SdkModelListUnavailable,
+} from "./claude-sdk/model-list"
+export { createSdkModelLister } from "./claude-sdk/model-list"
 export type { QueryLaunch, QueryLaunchInput } from "./claude-sdk/options"
 export { createQueryLaunch, MAX_TURNS } from "./claude-sdk/options"
 export type { PromptBlock, PromptImageSource, PromptInput } from "./claude-sdk/prompt"
 export { buildSdkPrompt } from "./claude-sdk/prompt"
 export type {
+  SdkGaugeWindow,
   SdkQuotaSnapshot,
   SdkQuotaStore,
   SdkRateLimitReading,
   SdkRateLimitStatus,
+  SdkUsageGaugeReading,
 } from "./claude-sdk/quota"
 export {
   createSdkQuotaStore,
   readSdkRateLimitInfo,
+  readSdkUsageGauge,
   SDK_DEFAULT_BUCKET,
 } from "./claude-sdk/quota"
 export type {
@@ -139,6 +166,16 @@ export {
   TOOL_SEARCH,
   unprefixToolName,
 } from "./claude-sdk/tools"
+export type { HeldPrompt, TurnObserver } from "./claude-sdk/turn-lifecycle"
+export { holdPrompt, observeTurn } from "./claude-sdk/turn-lifecycle"
+export type {
+  SdkUsageGauge,
+  SdkUsageGaugeDeps,
+  SdkUsageGaugeSource,
+} from "./claude-sdk/usage-gauge"
+export { createSdkUsageGauge } from "./claude-sdk/usage-gauge"
+export type { SdkUsageGaugeProbe, SdkUsageGaugeProbeOptions } from "./claude-sdk/usage-gauge-probe"
+export { createSdkUsageGaugeProbe } from "./claude-sdk/usage-gauge-probe"
 export type { HttpDriverConfig, ProviderSurface } from "./driver"
 export { createHttpDriver } from "./driver"
 export type { OpenAiOAuthTokens } from "./drivers/openai-oauth"
