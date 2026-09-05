@@ -17,8 +17,11 @@ import { shippedSubscriptionModels } from "./subscription"
  * `supportedModels` if that is what they mean. A Claude subscription has no such button and no HTTP
  * listing; the Agent SDK's handshake is its only voice, and a wire listing that ignored it would
  * answer `data: []` for a pool of six working subscriptions — which is the production bug this
- * exists to fix. A subscription the sweep has not reached yet contributes the shipped table, so a
- * freshly connected account lists models before its first tick.
+ * exists to fix. The handshake's rows are unioned with the shipped table — the handshake names
+ * what it resolves today (`sonnet -> claude-sonnet-5`, `opus[1m]`), the shipped table names the
+ * family aliases and canonical ids a client may type — and a subscription the sweep has not reached
+ * yet contributes the shipped table alone, so a freshly connected account lists models before its
+ * first tick.
  *
  * Every catalog id is still admitted through `resolveModel(...).supported`, the same check
  * selection runs: an operator who did declare `supportedModels` on a subscription narrows what it
@@ -47,7 +50,11 @@ export function listableModels(
 
   if (PROVIDER_REGISTRY[account.provider].transport !== "agent-sdk") return [...listed.values()]
 
-  const rows = catalogRows.length > 0 ? catalogRows : shippedSubscriptionModels()
+  // Live rows first, so the subscription's own word on an alias wins; the shipped table then adds
+  // the family aliases and canonical ids the handshake does not spell out (`opus`, `fable`,
+  // `claude-opus-5`, …) — a client that types `--model opus` must find it listed, and a freshly
+  // connected account lists models before its first sweep.
+  const rows = [...catalogRows, ...shippedSubscriptionModels()]
   for (const row of rows) {
     if (listed.has(row.id) || !resolveModel(account, row.id).supported) continue
     listed.set(row.id, {

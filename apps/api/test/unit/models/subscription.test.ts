@@ -108,7 +108,7 @@ describe("what an account contributes to GET /v1/models", () => {
     expect(listed.find((model) => model.id === "claude-opus-5")?.resolvedModel).toBeNull()
   })
 
-  test("a swept subscription lists its rows instead — the live word replaces the shipped one", () => {
+  test("a swept subscription lists its rows first, the live word wins, and the shipped aliases stay listed", () => {
     const rows = shippedSubscriptionModels()
     const live = [
       { ...rows[0], id: "claude-opus-5", listingSource: "live" as const },
@@ -118,13 +118,34 @@ describe("what an account contributes to GET /v1/models", () => {
         listingSource: "live" as const,
         resolvedModel: "claude-sonnet-6",
       },
+      // What the CLI actually reports for a 1M-context plan: a suffixed alias the shipped table
+      // never spells, listed as it came.
+      {
+        ...rows[0],
+        id: "opus[1m]",
+        listingSource: "live" as const,
+        resolvedModel: "claude-opus-5[1m]",
+      },
     ]
     const listed = listableModels(snapshot(), live)
+    const byId = new Map(listed.map((model) => [model.id, model.resolvedModel]))
 
-    expect(listed).toEqual([
-      { id: "claude-opus-5", resolvedModel: null },
-      { id: "sonnet", resolvedModel: "claude-sonnet-6" },
+    // Live rows come first and their resolution is the one shown.
+    expect(listed.slice(0, 3).map((model) => model.id)).toEqual([
+      "claude-opus-5",
+      "sonnet",
+      "opus[1m]",
     ])
+    expect(byId.get("sonnet")).toBe("claude-sonnet-6")
+    expect(byId.get("opus[1m]")).toBe("claude-opus-5[1m]")
+    // The shipped family aliases and canonical ids the handshake did not spell are still there —
+    // a client typing `--model opus` or `fable` must find it — each resolving to the latest family member.
+    expect(byId.get("opus")).toBe("claude-opus-5")
+    expect(byId.get("fable")).toBe("claude-fable-5-1")
+    expect(byId.get("haiku")).toBe("claude-haiku-4-5")
+    expect(byId.has("claude-sonnet-5")).toBe(true)
+    // Nothing is listed twice.
+    expect(new Set(listed.map((model) => model.id)).size).toBe(listed.length)
   })
 
   test("an operator's declared model set narrows a subscription exactly as it narrows any account", () => {
