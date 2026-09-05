@@ -513,6 +513,15 @@ code follows the cause:
 
 Never a generic upstream `500`. Never a silent fallback outside the key's scope.
 
+**The message accounts for every rejected member.** The leading clause counts and labels only the
+accounts it describes — `2 of 3 accounts in pool cn-models-team are rate limited or out of quota
+(zai, minimax)` — and every other rejection follows in a clause named by what fixes it: `; 1 more
+needs a human (kimi needs re-auth)` for `disabled` / `needs_reauth`, `; 1 more does not serve this
+model — a client change (ollama)` for `model-unsupported`, `; 1 more account out of credits and
+needs a top-up (…)` when the leading clause was the recoverable one. The numbers in one message
+always add up to the pool the request saw: "2 of 3" with the third unmentioned read as though one
+account were healthy (#88).
+
 Two details of the `429`'s honesty:
 
 - **A reset instant is rendered with its provenance.** A provider-reported instant is stated
@@ -560,6 +569,7 @@ resolved by the same rule — **the most actionable failure wins, never simply t
 |---|---|---|
 | 1 | A clock fixes it — `429` | Wait the `Retry-After`, then the pool serves. |
 | 2 | A human fixes it — `402` top up, `502` re-authenticate the Account | One named action, by the operator. |
+| 2½ | The upstream was reached and hit its deadline — `504` | Retry; transient, but names no instant. A chain whose every attempt timed out answers this, never the empty-pool `503` — that status says nothing was attempted, and a coding agent's retry policy reads the two differently. A *connect* failure contributes nothing: the account was never reached, which is what "nothing" means. |
 | 3 | The upstream answered — relayed verbatim | Whatever the provider said, in the provider's own words. |
 | 4 | *This one Account* could not take *this request* — `400` no faithful conversion into its dialect, `500` a credential this router cannot read | Nothing the caller can use. |
 

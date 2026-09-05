@@ -26,6 +26,7 @@ import {
   type SdkQuotaStore,
 } from "../providers"
 import { createAccountConfigDirs } from "../providers/claude-sdk/config-dir"
+import { createSdkTranscripts } from "../providers/claude-sdk/transcripts"
 import { IDLE_PROBE_MODELS, type Scheduler, schedulerFromEnv } from "../scheduler"
 import { createMemorySessionStore } from "../services/admin-auth"
 import { createRoutingCatalog, loadCatalog, type RoutingCatalogStore } from "../services/catalog"
@@ -237,6 +238,9 @@ export function createRuntime(deps: RuntimeDeps): Runtime {
   // reaper rooted somewhere other than the provisioner would sweep the wrong directory or nothing
   // at all (`scheduler/tasks/config-dir-reap.ts`).
   const configDirs = createAccountConfigDirs({ root: env.claudeConfigRoot })
+  // The transcripts the CLI leaves under those directories, over the validated root: the sweep
+  // that removes them is the retention half of the same volume (`scheduler/tasks/sdk-transcript-sweep.ts`).
+  const transcripts = createSdkTranscripts({ root: configDirs.root })
 
   // `usage` is a getter because the recorder below reports *into* this: see `observability/`.
   const metrics = createRuntimeMetrics({
@@ -370,6 +374,7 @@ export function createRuntime(deps: RuntimeDeps): Runtime {
     scheduledTasks,
     health,
     configDirs,
+    transcripts,
     adminSessions,
     testAccount: async (accountId, model) => {
       const result = await admin.testNow.test(accountId, { model, confirmed: true })

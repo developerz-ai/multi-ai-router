@@ -1,15 +1,22 @@
 import type { ParsedAnthropicBlock, ParsedAnthropicMessage } from "../shared/anthropic"
 import { anthropicRequestSchema } from "../shared/anthropic"
-import { imageUrlFromSource, systemText, toolResultText } from "../shared/anthropic-blocks"
+import {
+  documentText,
+  dropBlock,
+  imageUrlFromSource,
+  systemText,
+  toolResultParts,
+} from "../shared/anthropic-blocks"
+import { type DropSink, IGNORE_DROPS } from "../shared/drops"
 import type {
   OpenAiResponsesItem,
   OpenAiResponsesPart,
   OpenAiResponsesRequest,
 } from "../shared/openai-responses"
 import { assertNoStopSequence, parseRequest, rejectField } from "../shared/reject"
+import { toolChoiceForOpenAiChat } from "../shared/tool-choice"
 import {
   argumentsFromInput,
-  toolChoiceToOpenAiChat,
   toolChoiceToOpenAiResponses,
   toolsToOpenAiChat,
   toolsToOpenAiResponses,
@@ -33,14 +40,22 @@ import {
  *    no alternation requirement at all and each Anthropic turn is already one item, so folding here
  *    would be a transformation with nothing asking for it.
  *
- * Dropped, as documented: `top_k`, `cache_control`, `thinking` / `redacted_thinking` blocks,
- * `metadata`, and any `anthropic-beta` opt-in (a header, handled by the transport). Refused:
- * `stop_sequences`, server-side tools, an image the target cannot carry, and any block with no item
- * or content part to land in — a contract field is never dropped quietly.
+ * Dropped silently, as documented: `top_k`, `cache_control`, `thinking` / `redacted_thinking`
+ * blocks, `metadata`, and any `anthropic-beta` opt-in (a header, handled by the transport). Dropped
+ * and **reported** through `options.onDrop`: server-side and built-in tools, a `tool_choice` naming
+ * one, non-text documents, and any block type the target cannot carry; an image inside a
+ * `tool_result` is hoisted into a user message item after the `function_call_output`. Refused: a
+ * stated `stop_sequences` (the dialect has no stop parameter), an image on an assistant turn, and
+ * anything that is not a valid Anthropic request.
  */
 
-/** What a refusal calls the thing an Anthropic `tool_result` lands in on this side. */
-const TOOL_CARRIER = "an openai-responses `function_call_output` item"
+/** What a drop report calls the thing an Anthropic block would have landed in on this side. */
+const TARGET = "an openai-responses item"
+
+export interface AnthropicToOpenAiResponsesOptions {
+  /** Where a dropped field is reported. Absent, drops are silent (`shared/drops.ts`). */
+  readonly onDrop?: DropSink | undefined
+}
 
 const USER_TOOL_USE =
   "carries a `tool_use` block on a user turn, which openai-responses cannot express"
@@ -49,8 +64,12 @@ const ASSISTANT_IMAGE =
   "is an `image` block on an assistant turn, which openai-responses cannot express: assistant content holds `output_text` and `refusal` only"
 
 /** @throws TranslationError (400) naming the field that has no openai-responses representation. */
-export function anthropicToOpenAiResponsesRequest(body: unknown): OpenAiResponsesRequest {
+export function anthropicToOpenAiResponsesRequest(
+  body: unknown,
+  options: AnthropicToOpenAiResponsesOptions = {},
+): OpenAiResponsesRequest {
   const request = parseRequest(anthropicRequestSchema, body, "anthropic")
+  const onDrop = options.onDrop ?? IGNORE_DROPS
 
   // openai-responses states no stop parameter at all, and `shared/reject.ts` owns that rule for both
   // dialects that spell it — the same field under two names cannot be servable from one and not the
@@ -59,10 +78,15 @@ export function anthropicToOpenAiResponsesRequest(body: unknown): OpenAiResponse
 
   const input: OpenAiResponsesItem[] = []
   for (const [index, message] of request.messages.entries()) {
-    appendMessage(input, message, `messages[${index}]`)
+    appendMessage(input, message, `messages[${index}]`, onDrop)
   }
 
   const instructions = systemText(request.system)
+  // Through the openai-chat shape deliberately: the two differ by one level of nesting, and a
+  // second path would be a second copy of the JSON-Schema validation that could disagree with it.
+  const chatTools =
+    request.tools === undefined ? undefined : toolsToOpenAiChat(request.tools, onDrop)
+  const toolChoice = toolChoiceForOpenAiChat(request.tool_choice, chatTools, onDrop)
 
   // `undefined` members are dropped by `JSON.stringify` on the way out, so an absent field stays
   // absent rather than becoming an explicit null the upstream has to interpret.
@@ -74,16 +98,11 @@ export function anthropicToOpenAiResponsesRequest(body: unknown): OpenAiResponse
     temperature: request.temperature,
     top_p: request.top_p,
     stream: request.stream,
-    // Through the openai-chat shape deliberately: the two differ by one level of nesting, and a
-    // second path would be a second copy of the JSON-Schema validation that could disagree with it.
     tools:
-      request.tools === undefined
+      chatTools === undefined || chatTools.length === 0
         ? undefined
-        : toolsToOpenAiResponses(toolsToOpenAiChat(request.tools)),
-    tool_choice:
-      request.tool_choice === undefined
-        ? undefined
-        : toolChoiceToOpenAiResponses(toolChoiceToOpenAiChat(request.tool_choice)),
+        : toolsToOpenAiResponses(chatTools),
+    tool_choice: toolChoice === undefined ? undefined : toolChoiceToOpenAiResponses(toolChoice),
     // The router holds no conversation state and an Anthropic client has no way to name a stored
     // response on its next turn, so one left behind is litter nobody can reference or delete.
     store: false,
@@ -94,6 +113,7 @@ function appendMessage(
   items: OpenAiResponsesItem[],
   message: ParsedAnthropicMessage,
   at: string,
+  onDrop: DropSink,
 ): void {
   const blocks: readonly ParsedAnthropicBlock[] =
     typeof message.content === "string"
@@ -133,21 +153,42 @@ function appendMessage(
           arguments: argumentsFromInput(block.input),
         })
         break
-      case "tool_result":
+      case "tool_result": {
         flush()
+        const result = toolResultParts(block, field, onDrop)
         items.push({
           type: "function_call_output",
           call_id: block.tool_use_id,
-          output: toolResultText(block, field, TOOL_CARRIER),
+          output: result.text,
         })
+        // Hoisted: a `function_call_output` holds text only, so the image becomes a user message
+        // item right after it — see the openai-chat sibling for why that position.
+        if (result.images.length > 0) {
+          items.push({
+            type: "message",
+            role: "user",
+            content: result.images.map((source) => ({
+              type: "input_image",
+              image_url: imageUrlFromSource(source),
+            })),
+          })
+        }
         break
+      }
+      case "document": {
+        const text = documentText(block, field, onDrop)
+        if (text !== null && text.length > 0) parts.push({ type: textType, text })
+        break
+      }
       case "thinking":
       case "redacted_thinking":
         // Documented drop. Re-sending a reasoning block as plain text would put the model's own
         // scratchpad into the transcript as if a participant had said it.
         break
       default:
-        rejectField(`${field}.type`, `\`${block.actual}\` has no openai-responses counterpart`)
+        // The provider's own artifacts (`server_tool_use`, `web_search_tool_result`, …), whose
+        // visible outcome is already in the text blocks beside them.
+        dropBlock(onDrop, field, block.actual, TARGET)
     }
   }
 

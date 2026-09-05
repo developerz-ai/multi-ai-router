@@ -17,7 +17,8 @@ import type { ClaudeAuthStatus } from "./contract"
 /**
  * The subcommand that runs the CLI's own OAuth login against `CLAUDE_CONFIG_DIR`.
  *
- * *Provenance:* `claude auth login --help` on Claude Code 2.1.220 — the sibling of the
+ * *Provenance:* `claude auth login --help` on Claude Code 2.1.220, re-verified unchanged on 2.1.261
+ * (the CLI bundled with SDK 0.3.261: `--claudeai` still "Use Claude subscription (default)") — the sibling of the
  * `claude auth status` probe docs/idea/11-anthropic-agent-sdk.md §3 pins. `--claudeai` selects the
  * Max/Pro subscription flow. It is the CLI's current default and is passed anyway: this router
  * connects subscriptions, and `--console` (API-key billing) is a different product reached through
@@ -32,7 +33,7 @@ export const CLAUDE_LOGIN_ARGV: readonly string[] = Object.freeze(["auth", "logi
 /**
  * The subcommand that reports what credential a `CLAUDE_CONFIG_DIR` holds.
  *
- * *Provenance:* `claude auth status --help` on Claude Code 2.1.220 — `--json` is documented as the
+ * *Provenance:* `claude auth status --help` on Claude Code 2.1.220, re-verified unchanged on 2.1.261 — `--json` is documented as the
  * default and is passed anyway, because a default is a decision the CLI may revisit and `--text`
  * output is prose this router would have to parse.
  *
@@ -154,7 +155,13 @@ export function parsePastedCode(pasted: string): { code: string; state: string }
 /**
  * *Provenance:* observed output of `claude auth status --json` on Claude Code 2.1.220 — pretty
  * printed, exit code `0` either way. Logged out it prints `loggedIn`, `authMethod`, `apiProvider`;
- * logged in it adds `email`, `orgId`, `orgName`, `subscriptionType`.
+ * logged in it adds `email`, `orgId`, `orgName`, `subscriptionType`. Re-verified on 2.1.261 against
+ * an empty directory: the same three keys plus `analyticsDisabled` and `projectsDirectory`
+ * (`<CLAUDE_CONFIG_DIR>/projects` — the directory the transcript sweep walks), both dropped here.
+ *
+ * A subscription whose refresh token has expired answers `loggedIn: false` with the credential
+ * file still present: the CLI blanks the tokens in place rather than deleting the file, so the
+ * file's existence says nothing about being logged in — only this answer does.
  *
  * Unknown keys are **dropped**, not carried: `orgId` and `orgName` name a tenant this router has no
  * business storing, and a field the CLI adds later must not become one this router persists by

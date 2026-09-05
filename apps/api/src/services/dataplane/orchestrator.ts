@@ -39,6 +39,12 @@ import { unservableError } from "./unservable"
  * refusals are counted on `router_requests_total` by the request observer below instead.
  */
 
+/**
+ * How many dropped fields one log line spells out. Not an operator knob: it bounds one rendered
+ * field the way the redactor bounds an `Error`; the count beside it is always complete.
+ */
+const MAX_REPORTED_DROPS = 20
+
 const NO_MODEL = "The request body must name a model"
 const MODEL_TOO_LONG = `The request body's model name is longer than ${MODEL_NAME_MAX_BYTES} bytes`
 
@@ -186,6 +192,8 @@ export function createDispatcher(deps: DispatcherDeps): Dispatcher {
       ...(decidedBinding.state === "honored" ? { boundAccountId: decidedBinding.accountId } : {}),
     }
 
+    const log = deps.logger?.child({ component: "transport", requestId: input.requestId })
+
     const response = await runChain({
       runtime,
       plan: plan.servable,
@@ -193,9 +201,23 @@ export function createDispatcher(deps: DispatcherDeps): Dispatcher {
       bodyBytes: body.bytes,
       modelSpan: body.fields.modelSpan,
       translation,
-      translated: createTranslatedRequestBody(body.bytes, translation),
+      translated: createTranslatedRequestBody(body.bytes, translation, (pair, drops) =>
+        // One line per conversion, naming every field the target could not carry. `warn`, because
+        // the caller was answered without something it sent — the surfacing rule in
+        // `06-protocol-translation.md#known-lossy-edges`.
+        log?.warn("translation dropped fields", {
+          component: "translate",
+          ingress: pair.ingress,
+          egress: pair.egress,
+          dropped: drops.length,
+          fields: drops.slice(0, MAX_REPORTED_DROPS).map((drop) => `${drop.field} ${drop.reason}`),
+        }),
+      ),
       failover,
-      log: deps.logger?.child({ component: "transport", requestId: input.requestId }),
+      log,
+      ...(options.log?.reasonMaxChars === undefined
+        ? {}
+        : { reasonMaxChars: options.log.reasonMaxChars }),
     })
 
     // The other half of "surfaced, never silently truncated": this turn started a fresh upstream

@@ -1,5 +1,5 @@
 import { Hono } from "hono"
-import { createLogger } from "../../src/logging/logger"
+import { createLogger, type Logger } from "../../src/logging/logger"
 import { errorHandler, notFoundHandler } from "../../src/middleware/errorHandler"
 import { requestLogger } from "../../src/middleware/logger"
 import { requestId } from "../../src/middleware/requestId"
@@ -83,6 +83,11 @@ export interface HarnessOptions {
    * sweep has not run yet.
    */
   readonly models?: DataPlaneRoutesDeps["models"]
+  /**
+   * Where the router's own lines go. Omitted, nothing is written — a suite asserting a log line
+   * passes a logger that captures instead.
+   */
+  readonly logger?: Logger
 }
 
 export function harness(options: HarnessOptions) {
@@ -116,10 +121,11 @@ export function harness(options: HarnessOptions) {
     now: testClock.now,
   })
 
+  const logger = options.logger ?? createLogger({ level: "error", write: () => undefined })
   const app = new Hono<RouterKeyEnv>()
   app.use("*", requestId())
-  app.use("*", requestLogger(createLogger({ level: "error", write: () => undefined })))
-  app.onError(errorHandler(createLogger({ level: "error", write: () => undefined })))
+  app.use("*", requestLogger(logger))
+  app.onError(errorHandler(logger))
   app.notFound(notFoundHandler())
   app.route(
     "/",
@@ -146,6 +152,7 @@ export function harness(options: HarnessOptions) {
         ...(options.sessions === undefined ? {} : { sessions: options.sessions }),
         ...(options.sdkQuota === undefined ? {} : { quota: options.sdkQuota }),
         ...(options.prices === undefined ? {} : { prices: options.prices }),
+        ...(options.logger === undefined ? {} : { logger: options.logger }),
         clock: testClock,
         onRequest: (sample) => metrics.observeRequest(sample),
         options: {

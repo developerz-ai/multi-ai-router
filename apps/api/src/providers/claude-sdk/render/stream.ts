@@ -1,4 +1,5 @@
 import { isRouterError } from "@multi-ai-router/core"
+import { SdkResultError } from "../result-error"
 import { type ClientFrame, type Completion, createEnvelope, type Envelope } from "./envelope"
 import { readSdkMessage, readWireEvent } from "./events"
 import {
@@ -190,6 +191,19 @@ function createPump(input: SdkRenderInput): Pump {
         return NO_FRAMES
       }
       case "result":
+        // A failed turn that produced nothing for the client is a failure with a real status, not
+        // an empty `200`: thrown here, it reaches the invoker before any byte is out, where
+        // `errors.ts` reads its sentence and its structured facts. Once content has started the
+        // contract has inverted — the frames already sent are the answer, and a `result` that
+        // then reports an error (a turn cap after a captured tool call, say) closes the message
+        // rather than retracting it.
+        if (message.isError && !envelope.started) {
+          throw new SdkResultError({
+            text: message.errorText,
+            apiErrorStatus: message.apiErrorStatus,
+            terminalReason: message.terminalReason,
+          })
+        }
         completion = { stopReason: message.stopReason, usage: message.usage }
         return NO_FRAMES
       default:

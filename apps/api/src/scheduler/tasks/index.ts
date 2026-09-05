@@ -12,6 +12,7 @@ import type {
 } from "@multi-ai-router/db"
 import type { Env } from "../../config/env"
 import type { AccountConfigDirs } from "../../providers/claude-sdk/config-dir"
+import type { SdkTranscripts } from "../../providers/claude-sdk/transcripts"
 import type { HealthStore } from "../../services/dataplane"
 import type { AccountAuthProbe } from "../../services/health/claudeAuthProbe"
 import type { ScheduledTask } from "../types"
@@ -25,6 +26,7 @@ import {
 } from "./model-catalog-refresh"
 import { createOauthPurgeTask } from "./oauth-purge"
 import { createQuotaFloorTask } from "./quota-floor"
+import { createTranscriptSweepTask } from "./sdk-transcript-sweep"
 import { createUsageRollupTask } from "./usage-rollup"
 
 /**
@@ -71,6 +73,11 @@ export interface ScheduledTaskDeps {
    * than here because the admin plane provisions and removes through the same instance.
    */
   readonly configDirs: Pick<AccountConfigDirs, "root" | "list" | "remove">
+  /**
+   * The session transcripts the `claude` CLI leaves under those same directories, for the
+   * transcript sweep. Built beside `configDirs` over the same root.
+   */
+  readonly transcripts: Pick<SdkTranscripts, "root" | "survey" | "remove">
   /**
    * The keepalive sweep's billed half — the admin plane's own "Test now", handed in rather than
    * rebuilt, so a scheduled probe and an operator's button press share one cooldown, one
@@ -127,6 +134,7 @@ export function scheduledTaskIntervals(
     oauth_state_purge: env.scheduler.oauthStatePurgeIntervalMinutes * MINUTE_MS,
     quota_floor_refresh: env.scheduler.quotaFloorIntervalMinutes * MINUTE_MS,
     config_dir_reap: env.scheduler.configDirReapIntervalMinutes * MINUTE_MS,
+    sdk_transcript_sweep: env.scheduler.sdkTranscriptSweepIntervalMinutes * MINUTE_MS,
     admin_session_purge: env.scheduler.adminSessionPurgeIntervalMinutes * MINUTE_MS,
     idle_account_probe: env.scheduler.idleAccountProbeIntervalMinutes * MINUTE_MS,
     model_catalog_refresh: env.scheduler.modelCatalogRefreshIntervalMinutes * MINUTE_MS,
@@ -179,13 +187,20 @@ export function createScheduledTasks(deps: ScheduledTaskDeps): readonly Schedule
       intervalMs: intervals.config_dir_reap,
       batchSize,
     }),
+    createTranscriptSweepTask({
+      transcripts: deps.transcripts,
+      retentionMs: env.retention.sdkTranscriptHours * HOUR_MS,
+      intervalMs: intervals.sdk_transcript_sweep,
+      batchSize,
+    }),
     createAdminSessionPurgeTask({
       sessions: deps.adminSessions,
       intervalMs: intervals.admin_session_purge,
     }),
-    // Last, and the only task here that spends money. It exists because a Claude subscription's
-    // tokens are refreshed by the SDK *when it runs*, so an account traffic forgets expires on its
-    // own — see the module header for why the free auth check comes first.
+    // The only task here that spends money, and the one that asks every subscription whether
+    // it is still logged in: the free `claude auth status` check runs over every CLI-managed
+    // account each tick, the billed keepalive only over the idle ones — see the module header,
+    // including what a keepalive cannot do about a refresh token's 30-day expiry.
     //
     // Built only when there is something to spend: a deployment with no test service wired gets no
     // task at all rather than one that ticks and does nothing.
@@ -236,6 +251,12 @@ export type { OauthPurgeDeps } from "./oauth-purge"
 export { createOauthPurgeTask } from "./oauth-purge"
 export type { QuotaFloorDeps } from "./quota-floor"
 export { createQuotaFloorTask } from "./quota-floor"
+export type {
+  TranscriptSweepDeps,
+  TranscriptSweepPlan,
+  TranscriptSweepPlanInput,
+} from "./sdk-transcript-sweep"
+export { createTranscriptSweepTask, planTranscriptSweep } from "./sdk-transcript-sweep"
 export type { Sweep, SweepOptions, SweepReport } from "./sweep"
 export { runSweeps } from "./sweep"
 export type { UsageRollupDeps } from "./usage-rollup"

@@ -70,11 +70,13 @@ export {
   routerFailure,
 } from "./chain-error"
 export {
+  DEFAULT_LOG_REASON_MAX_CHARS,
   DEFAULT_UPSTREAM_TIMEOUT_MS,
   type Dispatcher,
   type DispatcherDeps,
   type DispatchInput,
   type DispatchOptions,
+  type LogOptions,
   type TranslationOptions,
 } from "./dispatcher-config"
 export { accountCredential } from "./egress/credential"

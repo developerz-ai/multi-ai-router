@@ -568,10 +568,19 @@ JSON lines to stdout, one object per event. The container logs; shipping them is
 | Level | Used for |
 |---|---|
 | `error` | A request the router could not serve; a failed OAuth refresh; a decrypt failure; a scheduled task that threw |
-| `warn` | A failover, a circuit breaker opening, an account entering `needs_reauth` or `exhausted`, a rejected translation, a shed usage record |
+| `warn` | A failover, a circuit breaker opening, an account entering `needs_reauth` or `exhausted`, a rejected translation, a translation that dropped fields, a shed usage record |
 | `info` | One line per completed client request; one per scheduled task run; startup and config summary |
 | `debug` | Selection decisions, candidate sets, translation event counts |
 | `trace` | **DEFERRED** |
+
+Three lines say *why*, not only *that* — each was once a class name and a status, which in a week
+of production told an operator nothing:
+
+| Line | Carries |
+|---|---|
+| `request failed` (`transport`) | `errorClass`, `errorCode`, `status`, and **`error`**: the thrown `RouterError`'s whole `cause` chain, innermost first, scrubbed and bounded by the logger's `Error` rendering. Every `RouterError` message is router-authored and is already the client-facing body, so the line learns nothing the caller was not told — it just becomes findable. A `translation_failed` line names the field that was refused. |
+| `upstream attempt failed` (`transport`) | `accountId`, `attempt`, `status`, `failureKind`, plus **`signal`** (which classifier rule decided — `http-status:429`, `claude-sdk:unclassified`), **`reason`** (the router-authored sentence), and **`upstreamMessage`** (the provider's or the SDK's own words, bounded to `LOG_REASON_MAX_CHARS` and scrubbed). |
+| `translation dropped fields` (`translate`) | `ingress`, `egress`, `dropped` (the full count), and `fields` — up to twenty `<path> <reason>` entries, structural only (field paths, tool names, block types, media types; never a value from the body). One line per conversion, not per field. Rationale: [06 § Known lossy edges](06-protocol-translation.md#known-lossy-edges). |
 
 **Never logged, at any level:** prompts, completions, request or response bodies, router key values,
 upstream credentials or tokens, OAuth `code` / `state` / `code_verifier`, cookies, `Authorization`,
@@ -688,6 +697,8 @@ interval reads `stale`, which is what a wedged task looks like from the outside.
 | Quota refresh for idle subscription accounts | slow floor only; active accounts refresh from `rate_limit_event` traffic |
 | Expired OAuth `state` / PKCE verifier purge | every few minutes |
 | Orphaned `CLAUDE_CONFIG_DIR` reap | every few hours; removes only unclaimed directories past `RETENTION_ORPHAN_CONFIG_DIR_HOURS` |
+| SDK transcript sweep (`projects/**/*.jsonl` per subscription account) | `SDK_TRANSCRIPT_SWEEP_INTERVAL_MINUTES`; removes only session transcripts idle past `RETENTION_SDK_TRANSCRIPT_HOURS`, never credentials or settings |
+| Idle account probe | daily; free logged-in check on every subscription account, one billed turn on accounts idle past `IDLE_ACCOUNT_AFTER_DAYS` |
 
 ### The catalog refresh is not a scheduled task
 

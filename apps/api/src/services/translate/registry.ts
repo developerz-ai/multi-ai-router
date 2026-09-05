@@ -17,6 +17,7 @@ import { openAiResponsesToAnthropicStream } from "./openai-responses-to-anthropi
 import { openAiResponsesToOpenAiChatRequest } from "./openai-responses-to-openai-chat/request"
 import { openAiResponsesToOpenAiChatResponse } from "./openai-responses-to-openai-chat/response"
 import { openAiResponsesToOpenAiChatStream } from "./openai-responses-to-openai-chat/stream"
+import type { DropSink } from "./shared/drops"
 import type { TranslatedResponse } from "./shared/response"
 import type { StreamTranslator } from "./sse/emit"
 
@@ -68,6 +69,12 @@ export interface TranslationContext {
    * Absent means the default — see `OpenAiChatCeiling`.
    */
   readonly chatCeiling?: OpenAiChatCeiling | undefined
+  /**
+   * Where a request translator reports a field it dropped by name (`shared/drops.ts`). Injected like
+   * the clock: the translator stays pure and never logs, and the caller — which holds the request
+   * id — writes the line. Absent, drops are silent.
+   */
+  readonly onDrop?: DropSink | undefined
 }
 
 export interface TranslationPair {
@@ -99,7 +106,8 @@ const ANTHROPIC_TO_OPENAI_CHAT: TranslationPair = {
   // No `defaultMaxTokens` in this direction: Anthropic requires `max_tokens` on the way in, so a
   // request that reached here already carries the ceiling the client chose. Which of openai-chat's
   // two names it is emitted under is the target account's answer.
-  request: (body, context) => anthropicToOpenAiChatRequest(body, { ceiling: context.chatCeiling }),
+  request: (body, context) =>
+    anthropicToOpenAiChatRequest(body, { ceiling: context.chatCeiling, onDrop: context.onDrop }),
   response: (body, context) =>
     openAiChatToAnthropicResponse(body, {
       id: `${ANTHROPIC_ID_PREFIX}${context.fallbackId}`,
@@ -135,7 +143,7 @@ const ANTHROPIC_TO_OPENAI_RESPONSES: TranslationPair = {
   ingress: "anthropic",
   egress: "openai-responses",
   // No `defaultMaxTokens` in this direction either: an anthropic request carries its own ceiling.
-  request: (body) => anthropicToOpenAiResponsesRequest(body),
+  request: (body, context) => anthropicToOpenAiResponsesRequest(body, { onDrop: context.onDrop }),
   response: (body, context) =>
     openAiResponsesToAnthropicResponse(body, {
       id: `${ANTHROPIC_ID_PREFIX}${context.fallbackId}`,

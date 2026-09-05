@@ -31,7 +31,23 @@ export interface DispatchOptions {
   readonly sessionHeaders?: readonly string[]
   readonly upstreamTimeoutMs?: number
   readonly translation?: TranslationOptions
+  readonly log?: LogOptions
 }
+
+export interface LogOptions {
+  /**
+   * How much of an upstream's own error text a failed-attempt log line quotes —
+   * `LOG_REASON_MAX_CHARS`, the same knob every other quoted reason in the process obeys. The
+   * composition root passes the parsed value; absent means {@link DEFAULT_LOG_REASON_MAX_CHARS}.
+   */
+  readonly reasonMaxChars?: number
+}
+
+/**
+ * Mirrors the env schema's default for `LOG_REASON_MAX_CHARS`, so a dispatcher built without the
+ * option (a test, an older composition root) bounds the same way the configured one does.
+ */
+export const DEFAULT_LOG_REASON_MAX_CHARS = 200
 
 export interface TranslationOptions {
   /**

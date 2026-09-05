@@ -135,6 +135,7 @@ describe("the tasks read", () => {
       "admin_session_purge",
       "idle_account_probe",
       "model_catalog_refresh",
+      "sdk_transcript_sweep",
     ])
 
     const janitor = result.value.tasks[0]

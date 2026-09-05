@@ -76,18 +76,16 @@ export function noCandidatesError(input: NoCandidatesInput): RouterError {
     RECOVERABLE_FILTER_REASONS.includes(entry.reason),
   )
   const exhausted = input.rejected.filter((entry) => entry.reason === "exhausted")
+  const total = input.rejected.length
 
   // Recoverable outranks exhausted (the doc table's "mixed causes" row: the soonest recoverable
   // one, 429 if any account has a reset) — but the message must count and label only the accounts
-  // it is actually describing. Total-rejected counts and exhausted-only labels here would both
-  // misrepresent the pool and bury the ones that need a human.
+  // it is actually describing, and it must account for **every** rejected member. "2 of 3 are rate
+  // limited (a, b)" with the third silently `needs_reauth` read as though one account were healthy
+  // (#88); the ones a human or a client change would fix are named in their own clause instead.
   if (recoverable.length > 0) {
-    const mixed =
-      exhausted.length > 0
-        ? `; ${exhausted.length} more ${accountWord(exhausted.length)} out of credits and ${exhausted.length === 1 ? "needs" : "need"} a top-up (${labels(exhausted)})`
-        : ""
     return quotaError(
-      `${recoverable.length} of ${input.rejected.length} ${accountWord(input.rejected.length)}${where(input.groups)} ${recoverable.length === 1 ? "is" : "are"} rate limited or out of quota (${labels(recoverable)})${mixed}`,
+      `${recoverable.length} of ${total} ${accountWord(total)}${where(input.groups)} ${recoverable.length === 1 ? "is" : "are"} rate limited or out of quota (${labels(recoverable)})${remainder(input.rejected, recoverable.length)}`,
       earliestRecoverable(recoverable),
       input.now,
       unknownFloor,
@@ -95,14 +93,49 @@ export function noCandidatesError(input: NoCandidatesInput): RouterError {
   }
 
   if (exhausted.length > 0) {
+    const scope = exhausted.length === total ? "all" : `${exhausted.length} of`
     return new CreditsExhaustedError(
-      `all ${input.rejected.length} ${accountWord(input.rejected.length)}${where(input.groups)} are out of credits and need a top-up (${labels(exhausted)})`,
+      `${scope} ${total} ${accountWord(total)}${where(input.groups)} ${exhausted.length === 1 ? "is" : "are"} out of credits and ${exhausted.length === 1 ? "needs" : "need"} a top-up (${labels(exhausted)})${remainder(input.rejected, exhausted.length)}`,
     )
   }
 
   return new NoHealthyAccountError(
     `no eligible account${where(input.groups)}: ${input.rejected.map(describe).join(", ")}`,
   )
+}
+
+/**
+ * The rejected members the leading clause did not describe, each group named by what fixes it.
+ * `described` is how many the leading clause covered; the clauses here cover the rest, so the
+ * numbers in one message always add up to the pool the request saw.
+ */
+function remainder(rejected: readonly RejectedCandidate[], described: number): string {
+  if (described === rejected.length) return ""
+  const clauses: string[] = []
+  const recoverable = rejected.filter((entry) => RECOVERABLE_FILTER_REASONS.includes(entry.reason))
+  const exhausted = rejected.filter((entry) => entry.reason === "exhausted")
+  const human = rejected.filter(
+    (entry) => entry.reason === "disabled" || entry.reason === "needs-reauth",
+  )
+  const unsupported = rejected.filter((entry) => entry.reason === "model-unsupported")
+
+  // The leading clause is the recoverable group when it is non-empty, else the exhausted one.
+  if (recoverable.length > 0 && exhausted.length > 0) {
+    clauses.push(
+      `${exhausted.length} more ${accountWord(exhausted.length)} out of credits and ${exhausted.length === 1 ? "needs" : "need"} a top-up (${labels(exhausted)})`,
+    )
+  }
+  if (human.length > 0) {
+    clauses.push(
+      `${human.length} more ${human.length === 1 ? "needs" : "need"} a human (${human.map(describe).join(", ")})`,
+    )
+  }
+  if (unsupported.length > 0) {
+    clauses.push(
+      `${unsupported.length} more ${unsupported.length === 1 ? "does" : "do"} not serve this model — a client change (${labels(unsupported)})`,
+    )
+  }
+  return clauses.length === 0 ? "" : `; ${clauses.join("; ")}`
 }
 
 /** What the reset instant is, and how it was obtained. Carried together so neither renders alone. */
@@ -184,8 +217,9 @@ function labels(entries: readonly RejectedCandidate[]): string {
   return entries.map((entry) => entry.label).join(", ")
 }
 
+/** `kimi needs re-auth`, `ollama disabled` — the label and the condition, in the operator's words. */
 function describe(entry: RejectedCandidate): string {
-  return `${entry.label} ${entry.reason}`
+  return `${entry.label} ${entry.reason === "needs-reauth" ? "needs re-auth" : entry.reason}`
 }
 
 function accountWord(count: number): string {

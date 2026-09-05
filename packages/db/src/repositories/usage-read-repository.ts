@@ -1,4 +1,4 @@
-import { and, countDistinct, gte, lt, sql } from "drizzle-orm"
+import { type AnyColumn, and, countDistinct, gte, lt, sql } from "drizzle-orm"
 import type { Database } from "../client"
 import { USAGE_OUTCOME_SUCCESS, type UsageOutcome } from "../schema/enums"
 import { usageRecords } from "../schema/usage-records"
@@ -251,7 +251,12 @@ const DIMENSION_COLUMNS = {
  * it), where no column encoder applies and the parameter's type is otherwise left to inference.
  */
 export function errorAttempts() {
-  return sql<number>`count(*) filter (where ${usageRecords.outcome} <> ${USAGE_OUTCOME_SUCCESS}::text)::int`
+  return sql<number>`count(*) filter (where ${usageRecords.outcome} <> ${USAGE_OUTCOME_SUCCESS}::text)::float8`
+}
+
+/** A window's token total. `float8` for the reason given beside `aggregates` below. */
+function tokenSum(column: AnyColumn) {
+  return sql<number>`coalesce(sum(${column}), 0)::float8`
 }
 
 export function createUsageReadRepository(db: Database): UsageReadRepository {
@@ -335,14 +340,20 @@ export function createUsageReadRepository(db: Database): UsageReadRepository {
     and(gte(usageRecords.createdAt, window.from), lt(usageRecords.createdAt, window.to))
 
   // `count(distinct correlation_id)` for requests, `count(*)` for attempts — see the note above.
+  //
+  // Token sums are `float8`, never `::int`: a busy week of cache reads crosses 2^31 (production
+  // measured 4.7 billion `cache_read_tokens` over seven days), and an int cast fails the whole
+  // query with `integer out of range` — the usage page answered `500` for exactly that. A double
+  // is exact for every integer a router will ever sum (2^53), and postgres.js hands it back as a
+  // number, which is why the daily table (`usage-daily-repository.ts`) already chose it.
   const aggregates = {
     requests: countDistinct(usageRecords.correlationId),
-    attempts: sql<number>`count(*)::int`,
+    attempts: sql<number>`count(*)::float8`,
     errors: errorAttempts(),
-    tokensIn: sql<number>`coalesce(sum(${usageRecords.tokensIn}), 0)::int`,
-    tokensOut: sql<number>`coalesce(sum(${usageRecords.tokensOut}), 0)::int`,
-    cacheReadTokens: sql<number>`coalesce(sum(${usageRecords.cacheReadTokens}), 0)::int`,
-    cacheWriteTokens: sql<number>`coalesce(sum(${usageRecords.cacheWriteTokens}), 0)::int`,
+    tokensIn: tokenSum(usageRecords.tokensIn),
+    tokensOut: tokenSum(usageRecords.tokensOut),
+    cacheReadTokens: tokenSum(usageRecords.cacheReadTokens),
+    cacheWriteTokens: tokenSum(usageRecords.cacheWriteTokens),
     costMetered: sql<string>`coalesce(sum(${usageRecords.costEstimate}) filter (where ${usageRecords.costBasis} = 'metered'), 0)::text`,
     costNotional: sql<string>`coalesce(sum(${usageRecords.costEstimate}) filter (where ${usageRecords.costBasis} = 'notional'), 0)::text`,
   }
@@ -385,7 +396,7 @@ export function createUsageReadRepository(db: Database): UsageReadRepository {
 
     outcomes: async (window) =>
       db
-        .select({ outcome: usageRecords.outcome, attempts: sql<number>`count(*)::int` })
+        .select({ outcome: usageRecords.outcome, attempts: sql<number>`count(*)::float8` })
         .from(usageRecords)
         .where(inWindow(window))
         .groupBy(usageRecords.outcome),
@@ -395,7 +406,7 @@ export function createUsageReadRepository(db: Database): UsageReadRepository {
         .select({
           at: bucketExpr(bucket),
           requests: countDistinct(usageRecords.correlationId),
-          attempts: sql<number>`count(*)::int`,
+          attempts: sql<number>`count(*)::float8`,
           errors: errorAttempts(),
         })
         .from(usageRecords)

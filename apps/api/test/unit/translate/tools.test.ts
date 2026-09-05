@@ -8,6 +8,7 @@ import { TranslationError } from "@multi-ai-router/core"
 import {
   argumentsFromInput,
   inputFromArguments,
+  type TranslationDrop,
   toolChoiceToAnthropic,
   toolChoiceToOpenAiChat,
   toolsToAnthropic,
@@ -28,10 +29,16 @@ describe("tool declarations: anthropic -> openai-chat", () => {
     })
   })
 
-  test("a tool with no input_schema (a server-side tool) is rejected by name", () => {
-    expect(() => toolsToOpenAiChat([{ type: "web_search", name: "web_search" } as never])).toThrow(
-      /web_search/,
+  test("a tool with no input_schema (a server-side or built-in tool) is dropped and reported by name", () => {
+    const drops: TranslationDrop[] = []
+    const out = toolsToOpenAiChat(
+      [{ type: "web_search_20250305", name: "web_search" } as never, anthropicTool() as never],
+      (drop) => void drops.push(drop),
     )
+    expect(out.map((tool) => tool.function.name)).toEqual(["get_weather"])
+    expect(drops).toEqual([
+      { field: "tools[0]", reason: expect.stringMatching(/web_search.*web_search_20250305/) },
+    ])
   })
 
   test("a non-object input_schema type is rejected", () => {

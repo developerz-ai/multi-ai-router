@@ -4,8 +4,8 @@ import { z } from "zod"
  * The Anthropic Messages request, in the two shapes translation needs.
  *
  * `Parsed*` is what **arrives**: deliberately permissive, because a client may legitimately send a
- * block type or a tool form this build has never seen, and the translator has to name it in a
- * `400` rather than trip over it. The unsuffixed family is what a translator **emits** when
+ * block type or a tool form this build has never seen, and the translator has to drop it by name
+ * rather than trip over it. The unsuffixed family is what a translator **emits** when
  * Anthropic is the target, and it is narrow — we only construct shapes we can stand behind.
  *
  * Nothing here runs on the passthrough path. Same-dialect egress keeps the body as opaque bytes,
@@ -13,6 +13,12 @@ import { z } from "zod"
  * (docs/idea/06-protocol-translation.md#performance-rules). Unknown top-level keys are stripped
  * rather than carried: a field this schema does not name has no counterpart in the target dialect,
  * and forwarding it would ship a body the upstream never agreed to.
+ *
+ * The schema is deliberately wider than what any translator carries. A block type it does not know
+ * parses to {@link UNSUPPORTED_BLOCK} and is *dropped* by the translator with its type name reported
+ * (`shared/drops.ts`), never refused: Claude Code sends `server_tool_use`, `web_search_tool_result`
+ * and `document` blocks in an ordinary transcript, and a `400` over any of them served nothing. A
+ * malformed *known* block is still a `400` — that body is not a valid Anthropic request.
  */
 
 /** A block type this build cannot represent, kept as data so it can be refused by name. */
@@ -56,7 +62,19 @@ const toolUseBlock = z.object({
   input: z.record(z.string(), z.unknown()),
 })
 
-const toolResultContent = z.union([textBlock, imageBlock])
+/**
+ * Inside a `tool_result`, the same rule as the top level: text and images are carried, and anything
+ * else — a `document`, a `search_result`, a `tool_reference` from tool search — is reduced to its
+ * type name so the translator can drop it by name rather than trip over it.
+ */
+const unsupportedToolResultContent = z
+  .looseObject({ type: z.string() })
+  .refine((block) => block.type !== "text" && block.type !== "image", {
+    message: "malformed tool_result content block",
+  })
+  .transform((block) => ({ type: UNSUPPORTED_BLOCK, actual: block.type }) as const)
+
+const toolResultContent = z.union([textBlock, imageBlock, unsupportedToolResultContent])
 
 const toolResultBlock = z.object({
   type: z.literal("tool_result"),
@@ -67,6 +85,22 @@ const toolResultBlock = z.object({
 
 const thinkingBlock = z.object({ type: z.literal("thinking"), thinking: z.string() })
 const redactedThinkingBlock = z.object({ type: z.literal("redacted_thinking"), data: z.string() })
+
+/**
+ * A document: read for its `source`, whose `type` decides whether the target can carry it. A
+ * `text` source is plain text and travels as such; every other source (a base64 PDF, a URL, a
+ * Files-API id, nested content) is dropped by name with its media type — none of the OpenAI dialects
+ * has a document part every compatible upstream accepts. Loose, because only `source.type`,
+ * `media_type` and `data` are read.
+ */
+const documentBlock = z.object({
+  type: z.literal("document"),
+  source: z.looseObject({
+    type: z.string(),
+    media_type: z.string().optional(),
+    data: z.string().optional(),
+  }),
+})
 
 /**
  * Everything else, reduced to its type name.
@@ -87,6 +121,7 @@ export const anthropicBlockSchema = z.union([
   toolResultBlock,
   thinkingBlock,
   redactedThinkingBlock,
+  documentBlock,
   unsupportedBlock,
 ])
 
@@ -130,6 +165,7 @@ export type ParsedAnthropicBlock = z.infer<typeof anthropicBlockSchema>
 export type ParsedAnthropicImageSource = z.infer<typeof imageSource>
 export type ParsedAnthropicToolResult = z.infer<typeof toolResultBlock>
 export type ParsedAnthropicToolResultContent = z.infer<typeof toolResultContent>
+export type ParsedAnthropicDocument = z.infer<typeof documentBlock>
 export type ParsedAnthropicTool = z.infer<typeof anthropicToolSchema>
 export type ParsedAnthropicToolChoice = z.infer<typeof anthropicToolChoiceSchema>
 

@@ -43,6 +43,9 @@ const TASK_LABELS: Readonly<Record<string, string>> = {
   quota_floor_refresh: "Quota floor refresh",
   config_dir_reap: "Orphaned config directory reap",
   admin_session_purge: "Admin session purge",
+  idle_account_probe: "Idle account probe",
+  model_catalog_refresh: "Model catalog refresh",
+  sdk_transcript_sweep: "SDK transcript sweep",
 }
 
 /** An unknown name is humanised, never dropped — a task added upstream must still render. */
@@ -60,6 +63,9 @@ const TASK_ITEMS: Readonly<Record<string, string>> = {
   quota_floor_refresh: "accounts refreshed",
   config_dir_reap: "directories removed",
   admin_session_purge: "sessions removed",
+  idle_account_probe: "accounts checked or probed",
+  model_catalog_refresh: "accounts refreshed",
+  sdk_transcript_sweep: "transcript files removed",
 }
 
 /** What this task's `itemsProcessed` counts, so the sentence reads like English. */

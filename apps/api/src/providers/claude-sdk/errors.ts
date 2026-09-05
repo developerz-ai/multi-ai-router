@@ -1,28 +1,44 @@
 import { isRetryableFailureKind } from "../failure/classify"
-import type { FailureClassification, UpstreamFailureKind } from "../types"
+import type { FailureClassification } from "../types"
+import {
+  any,
+  apiStatus,
+  CREDITS_SPENT,
+  type Haystack,
+  NEEDS_REAUTH,
+  SDK_FAILURE_RULES,
+  type SdkRule,
+  statusToken,
+  UNCLASSIFIED_SDK_RULE,
+  WINDOW_SPENT,
+} from "./failure-rules"
 
 /**
  * What an Agent-SDK failure *is* (docs/idea/11-anthropic-agent-sdk.md §9).
  *
  * `ProviderDriver.classifyFailure` reads a status line and a provider-shaped body. Neither exists
  * here: `query()` throws, and what it throws is prose — the CLI's own sentence, sometimes with the
- * subprocess's stderr behind it. So this is substring matching, which is exactly as brittle as it
- * sounds, and the three mitigations are structural rather than hopeful:
+ * subprocess's stderr behind it — or the renderer raises a failed `result` as `SdkResultError`
+ * (`result-error.ts`), which carries the same prose plus the two structured facts the SDK adds
+ * beside it. So this is substring matching, which is exactly as brittle as it sounds, and the
+ * mitigations are structural rather than hopeful:
  *
  * - **Ordered, most specific first.** A named phrase beats a bare status token every time, so an
- *   incidental number inside a longer message cannot outrank the sentence that explains it.
- * - **A bare status token is read from the message only, never from the stderr tail.** Meridian maps
- *   a generic `exit 1` to `401` on a heuristic and so reports every crash as an auth failure — which
- *   marks a perfectly good Account `needs_reauth` and drops it from routing until a human logs in
- *   again. A `401` somewhere in a megabyte of stderr is not evidence about *this* failure.
+ *   incidental number inside a longer message cannot outrank the sentence that explains it — and
+ *   the SDK's `api_error_status` is read *after* every phrase, because Anthropic answers a dead
+ *   credit balance with a `400` and the sentence is the fact that matters.
+ * - **A bare status token is read from the message only, never from the stderr tail.** Meridian
+ *   maps a generic `exit 1` to `401` on a heuristic and so reports every crash as an auth failure —
+ *   which marks a perfectly good Account `needs_reauth` and drops it from routing until a human
+ *   logs in again. A `401` somewhere in a megabyte of stderr is not evidence about *this* failure.
  * - **The SDK's own words never reach a client.** Every class carries a router-authored sentence;
  *   the raw text rides `FailureClassification.message`, whose contract already says it is for logs.
  *
- * Classification is where this module stops. It never refreshes a credential — the SDK owns the
- * token and an expired one is `needs_reauth`, not a retry (§3) — and it never performs the recovery
- * it names: replaying a stale session and forking a busy one are the transport's and the failover
- * planner's, which is also why the classes are values in the shared `UpstreamFailureKind` vocabulary
- * rather than a second private enum.
+ * The table itself lives in `failure-rules.ts`. Classification is where this module stops: it never
+ * refreshes a credential — the SDK owns the token and an expired one is `needs_reauth`, not a retry
+ * (§3) — and it never performs the recovery it names: replaying a stale session and forking a busy
+ * one are the transport's and the failover planner's, which is also why the classes are values in
+ * the shared `UpstreamFailureKind` vocabulary rather than a second private enum.
  */
 
 /**
@@ -36,6 +52,10 @@ export interface SdkFailureText {
   readonly message: string
   /** The last {@link STDERR_TAIL_LIMIT} characters of the subprocess's stderr, when it had any. */
   readonly stderrTail: string
+  /** The upstream HTTP status a failed `result` reported, when the SDK stated one. */
+  readonly apiErrorStatus: number | null
+  /** The SDK's own reason a `result` stopped, when it named one. */
+  readonly terminalReason: string | null
 }
 
 export interface SdkFailure {
@@ -50,215 +70,60 @@ export interface SdkFailure {
   readonly text: SdkFailureText
 }
 
-/** Lowercased once, matched many times. */
-interface Haystack {
-  readonly message: string
-  /** Message plus the stderr tail. Phrases may match either half. */
-  readonly all: string
-}
-
-interface SdkRule {
-  readonly kind: UpstreamFailureKind
-  /** Recorded on the classification so a misclassification is traceable to its trigger. */
-  readonly signal: string
-  /** What this failure would be answered with if no account could serve the request. */
-  readonly status: number
-  readonly clientMessage: string
-  readonly match: (text: Haystack) => boolean
-}
-
-/** Any of these phrases, in the message or the stderr tail. */
-function phrase(...needles: readonly string[]): (text: Haystack) => boolean {
-  return (text) => needles.some((needle) => text.all.includes(needle))
-}
-
-/** All of these phrases, in either half — for a class no single phrase identifies. */
-function all(...needles: readonly string[]): (text: Haystack) => boolean {
-  return (text) => needles.every((needle) => text.all.includes(needle))
-}
-
-/** A bare status number, as a whole word, in the **message** only. See the module note. */
-function statusToken(status: number): (text: Haystack) => boolean {
-  const pattern = new RegExp(`\\b${status}\\b`)
-  return (text) => pattern.test(text.message)
-}
-
 /**
- * The table from §9, in order.
- *
- * Provenance: every phrase is the `claude` CLI's own wording, recorded there from Meridian's
- * production matching. Blast radius: a phrase the CLI rewords stops matching and its class degrades
- * to `unknown` — a `502` and a failover, never a silent mislabel. That is why the fallback is honest
- * rather than convenient, and why a reworded rate limit must never quietly become an auth failure.
+ * The structured fallbacks, after every phrase: a status the SDK stated, for a sentence nobody has
+ * recorded yet. Strictly better than `unknown` — a `401` nobody has words for is still a
+ * credential that needs a human — and never better than a named phrase.
  */
-const RULES: readonly SdkRule[] = [
+const STATUS_RULES: readonly SdkRule[] = [
   {
-    /**
-     * The rules that are **not** CLI prose: every sentence here is one of this router's own throws
-     * (`request.ts` refuses a recognized `tool_choice` variant with an unreadable payload;
-     * `tools/register.ts` refuses a choice the request's own tools cannot satisfy; `invoker.ts`
-     * refuses a forced call the drained turn never produced). Provenance is our source rather than
-     * the binary's; a reworded throw site degrades to `unknown` — a `502` and a failover, the same
-     * honest fallback every CLI phrase risks. `invalid-request`, because all three are client
-     * request-shape bugs Anthropic's own API answers `400`: no failover, no breaker strike —
-     * `failoverKind` maps the kind to `client-error`, which `breaker.ts` exempts for exactly this.
-     */
-    kind: "invalid-request",
-    signal: "claude-sdk:tool-choice-unsatisfiable",
-    status: 400,
-    clientMessage:
-      "the request's tool_choice demands a tool call its own declared tools do not provide",
-    match: phrase(
-      "which is not among the declared tools",
-      "which requires a tool call, but the request declared no tools",
-      "is recognized but its payload is one this router cannot read",
-    ),
+    kind: "auth",
+    signal: "claude-sdk:api-status-401",
+    status: 401,
+    clientMessage: NEEDS_REAUTH,
+    match: any(apiStatus(401, 403), statusToken(401)),
   },
   {
-    /**
-     * The turn *ran* and answered free-form text where a tool call was forced: an upstream that did
-     * not comply, not a client that misspoke — `server-error`, retryable because the next account's
-     * model may honour the force, and the failover chain is where that bet belongs.
-     */
-    kind: "server-error",
-    signal: "claude-sdk:forced-tool-unmet",
-    status: 502,
-    clientMessage: "the turn ended without the tool call the request's tool_choice forced",
-    match: phrase("but the turn completed without one"),
-  },
-  {
-    kind: "stale-session",
-    signal: "claude-sdk:session-not-found",
-    status: 502,
-    clientMessage: "the Claude Agent SDK session this conversation resumed no longer exists",
-    match: phrase("no conversation found with session id"),
-  },
-  {
-    kind: "busy-session",
-    signal: "claude-sdk:session-busy",
-    status: 503,
-    clientMessage: "the Claude Agent SDK session this conversation resumed is still running",
-    match: phrase("is currently running as a background agent"),
-  },
-  {
-    /**
-     * The one condition non-negotiable 7 forbids conflating with a rate limit: the underlying
-     * account is billing-dead, and no clock revives it. `402`, `exhausted`, never timer-retried.
-     *
-     * Provenance: the CLI (0.3.220 vendored binary) defines the error-message constant
-     * `"Credit balance is too low"` in its API-error table (beside `"Not logged in · Please run
-     * /login"`), and its own diagnostics list `"credit balance too low"` among Anthropic API error
-     * strings; the API's raw sentence ("Your credit balance is too low to access the Anthropic
-     * API…") carries the same phrase. Matched as the full phrase rather than a fragment, because a
-     * wrong match here parks a healthy account at `402` until a human intervenes — the one
-     * misclassification worse than the `unknown` fallback.
-     */
     kind: "credits-exhausted",
-    signal: "claude-sdk:credit-balance",
+    signal: "claude-sdk:api-status-402",
     status: 402,
-    clientMessage: "the account's credit balance is spent — it needs a top-up, not a retry",
-    match: phrase("credit balance is too low"),
-  },
-  {
-    // Cooling down, not `credits-exhausted`: the request asked for a variant the account's plan
-    // does not cover right now, and the included window it falls back to refills on a clock. The
-    // long-context phrases are the CLI's own wording, verbatim from the 0.3.220 binary (its
-    // extended-context error detector matches exactly these two sentences); "out of extra usage"
-    // is Meridian's live-observed variant of the same condition (their errors.ts). A spent overage
-    // budget still leaves the included window refilling on a clock, so all of them cool down.
-    kind: "rate-limited",
-    signal: "claude-sdk:overage-required",
-    status: 429,
-    clientMessage: "the account's plan does not cover the extended-context variant of this model",
-    match: (text) =>
-      all("extra usage", "1m")(text) ||
-      phrase(
-        "extra usage is required for long context",
-        "usage credits are required for long context",
-        "out of extra usage",
-      )(text),
+    clientMessage: CREDITS_SPENT,
+    match: apiStatus(402),
   },
   {
     kind: "rate-limited",
-    signal: "claude-sdk:rate-limited",
+    signal: "claude-sdk:api-status-429",
     status: 429,
-    clientMessage: "the account's Claude subscription window is spent",
-    match: phrase("usage limit reached", "rate limit"),
+    clientMessage: WINDOW_SPENT,
+    match: any(apiStatus(429), statusToken(429)),
   },
   {
-    /**
-     * The wording a *plan window* actually uses, which is not the one above. Recorded verbatim from
-     * a Max subscription whose weekly window was spent:
-     *
-     *     "You've hit your weekly limit · resets Jul 30, 11pm (UTC)"
-     *
-     * It contains neither "usage limit reached" nor "rate limit", so it fell all the way through to
-     * `UNCLASSIFIED` — a `500`-shaped unknown for the single most ordinary thing a pooled
-     * subscription does. `all("hit your", "limit")` covers the family without reaching further than
-     * the evidence: the five-hour variant words it the same way, and requiring both fragments keeps
-     * an unrelated sentence containing the word "limit" from matching.
-     *
-     * `rate-limited`, emphatically: the message states its own reset, so a clock revives this
-     * account and CLAUDE.md non-negotiable 7 puts it in `cooling_down` rather than `exhausted` or
-     * — worse — `auth`, which would park a working subscription at `needs_reauth`.
-     */
-    kind: "rate-limited",
-    signal: "claude-sdk:plan-window-spent",
-    status: 429,
-    clientMessage: "the account's Claude subscription window is spent",
-    match: all("hit your", "limit"),
+    kind: "invalid-request",
+    signal: "claude-sdk:api-status-400",
+    status: 400,
+    clientMessage: "the upstream rejected the request as malformed",
+    match: apiStatus(400, 413, 422),
   },
   {
-    kind: "auth",
-    signal: "claude-sdk:credential-expired",
-    status: 401,
-    clientMessage: "the account's Claude subscription needs re-authenticating",
-    match: phrase("oauth token has expired", "not logged in"),
-  },
-  {
-    // Ahead of the bare tokens on purpose: a crash prints whatever the subprocess last said, and
-    // an exit is a fact about the process rather than an opinion about the credential.
-    kind: "subprocess-crash",
-    signal: "claude-sdk:subprocess-exit",
+    kind: "server-error",
+    signal: "claude-sdk:api-status-5xx",
     status: 502,
-    clientMessage: "the Claude Agent SDK subprocess exited before answering",
-    match: phrase("exited with code", "process exited"),
-  },
-  {
-    kind: "rate-limited",
-    signal: "claude-sdk:status-429",
-    status: 429,
-    clientMessage: "the account's Claude subscription window is spent",
-    match: statusToken(429),
-  },
-  {
-    kind: "auth",
-    signal: "claude-sdk:status-401",
-    status: 401,
-    clientMessage: "the account's Claude subscription needs re-authenticating",
-    match: statusToken(401),
+    clientMessage: "the upstream failed to answer",
+    match: (text) => text.apiErrorStatus !== null && text.apiErrorStatus >= 500,
   },
 ]
 
-/**
- * Nothing matched. `502` and a failover, because an unreadable failure is still one account failing
- * and the next one may well serve — the one thing it must not do is name a class it cannot support.
- */
-const UNCLASSIFIED: SdkRule = {
-  kind: "unknown",
-  signal: "claude-sdk:unclassified",
-  status: 502,
-  clientMessage: "the Claude Agent SDK failed for a reason this router does not recognize",
-  match: () => true,
-}
+const RULES: readonly SdkRule[] = [...SDK_FAILURE_RULES, ...STATUS_RULES]
 
 export function classifySdkFailure(error: unknown): SdkFailure {
   const text = readSdkFailure(error)
   const haystack: Haystack = {
     message: text.message.toLowerCase(),
     all: `${text.message}\n${text.stderrTail}`.toLowerCase(),
+    apiErrorStatus: text.apiErrorStatus,
+    terminalReason: text.terminalReason,
   }
-  const rule = RULES.find((candidate) => candidate.match(haystack)) ?? UNCLASSIFIED
+  const rule = RULES.find((candidate) => candidate.match(haystack)) ?? UNCLASSIFIED_SDK_RULE
 
   return {
     classification: {
@@ -279,18 +144,38 @@ export function classifySdkFailure(error: unknown): SdkFailure {
 
 /** Everything a throw out of `query()` can be matched against, in one bounded shape. */
 export function readSdkFailure(error: unknown): SdkFailureText {
-  if (typeof error === "string") return { message: error, stderrTail: "" }
-  if (typeof error !== "object" || error === null) return { message: "", stderrTail: "" }
+  if (typeof error === "string") {
+    return { message: error, stderrTail: "", apiErrorStatus: null, terminalReason: null }
+  }
+  if (typeof error !== "object" || error === null) {
+    return { message: "", stderrTail: "", apiErrorStatus: null, terminalReason: null }
+  }
 
   return {
     message: stringProperty(error, "message"),
     stderrTail: tail(stringProperty(error, "stderr")),
+    // Only ever set by `SdkResultError` — the names are this router's, so a foreign error object
+    // carrying a `status` of its own (a fetch failure, say) is never mistaken for the SDK's word.
+    apiErrorStatus: statusProperty(error, "apiErrorStatus"),
+    terminalReason: nonEmpty(stringProperty(error, "terminalReason")),
   }
 }
 
 function stringProperty(source: object, key: string): string {
   const value: unknown = Reflect.get(source, key)
   return typeof value === "string" ? value : ""
+}
+
+function statusProperty(source: object, key: string): number | null {
+  const value: unknown = Reflect.get(source, key)
+  return typeof value === "number" && Number.isInteger(value) && value >= 100 && value <= 599
+    ? value
+    : null
+}
+
+function nonEmpty(value: string): string | null {
+  const trimmed = value.trim()
+  return trimmed === "" ? null : trimmed
 }
 
 function tail(value: string): string {
