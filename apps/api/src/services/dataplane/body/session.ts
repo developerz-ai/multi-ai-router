@@ -17,6 +17,15 @@ import { fingerprintSessionKey } from "./read"
  * `x-conversation-id` covers the editors that word it that way. Blast radius of a wrong entry:
  * unrelated requests share a session key and pin to one account, or one conversation splits across
  * accounts and loses its cache. Operator-overridable, never inferred from anything else.
+ *
+ * **`x-parent-session-id` is deliberately not here, and that absence is the rule.** A subagent runs
+ * in its own session, concurrently with its parent by design, and it sends its own `x-session-id`
+ * for it. Keying the child on its parent would bind two live conversations to one SDK session —
+ * which the CLI refuses outright — so the child's own id is both the correct key and the only one
+ * this list will ever read. The parent id is logged (`middleware/logger.ts`) and routes nothing.
+ *
+ * Header lookup is case-insensitive by the `Headers` contract, so a client sending `X-Session-Id`
+ * is matched by the lower-case entry above; the spellings here are canonical, not exhaustive.
  */
 export const DEFAULT_SESSION_HEADERS: readonly string[] = [
   "x-session-id",
