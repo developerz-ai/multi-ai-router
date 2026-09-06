@@ -15,6 +15,7 @@ import {
 import type { Env } from "../config/env"
 import type { Logger } from "../logging/logger"
 import {
+  type CredentialFreshness,
   createCredentialMetadataReader,
   createSdkTestProbe,
   type SdkConcurrency,
@@ -105,6 +106,12 @@ export interface AdminPlaneDeps {
    * memory budget takes one gate — see `providers/claude-sdk/test-probe.ts`.
    */
   readonly sdkConcurrency: SdkConcurrency
+  /**
+   * The refresh-window gate (`providers/claude-sdk/credential-freshness.ts`), from the same root and
+   * for the same reason as the ceiling above: an operator's "Test now" is a subprocess against the
+   * Account's config dir, and one landing mid-refresh is exactly how a credential gets spent twice.
+   */
+  readonly credentialFreshness: CredentialFreshness
   /**
    * The dispatch path's own Claude quota store, so a "Test now" turn's `rate_limit_event` readings
    * land where routing and the console already read them. Passed in for the same reason the gate
@@ -209,6 +216,7 @@ export function createAdminPlane(deps: AdminPlaneDeps): AdminPlane {
     sdkProbe: createSdkTestProbe({
       cliPathOverride: env.claudeCliPath,
       concurrency: deps.sdkConcurrency,
+      freshness: deps.credentialFreshness,
       ...(deps.usageGauge === undefined ? {} : { usageGauge: deps.usageGauge }),
     }),
     // The turn is billed either way; this is what makes it also answer "how much is left" — and

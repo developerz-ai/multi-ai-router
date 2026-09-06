@@ -232,7 +232,7 @@ describe("ANTHROPIC_* and router secrets never reach the child environment", () 
   })
 })
 
-describe("the probe's query() launch — the second of exactly two call sites", () => {
+describe("the probe's query() launch — one of three call sites", () => {
   /**
    * `test-probe.ts` builds its own `Options` rather than going through `createQueryLaunch`, so a
    * gate that only asserted the invoker's launch left the probe free to drift. Same stub-at-query()

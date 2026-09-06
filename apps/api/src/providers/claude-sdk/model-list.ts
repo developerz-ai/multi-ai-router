@@ -1,6 +1,7 @@
 import { z } from "zod"
 import { createCliProbe } from "./cli-probe"
 import type { SdkConcurrency } from "./concurrency"
+import type { CredentialFreshness } from "./credential-freshness"
 import { classifySdkFailure, readSdkFailure } from "./errors"
 import {
   type IdleQueryFn,
@@ -66,6 +67,8 @@ export interface SdkModelListerOptions {
   readonly cliPathOverride: string | null
   /** The **same instance** the dispatch path holds — one memory budget, one gate. */
   readonly concurrency: SdkConcurrency
+  /** Passed straight to `openIdleQuery`: this probe spawns, so it crosses the refresh window too. */
+  readonly freshness?: CredentialFreshness
   /** Injected in tests. Defaults to the real ladder over this host's filesystem. */
   readonly resolveCli?: () => CliResolution
   /** Injected in tests, for the reason `SdkInvokerDeps.runQuery` is: no test may spawn a `claude`. */
@@ -112,6 +115,8 @@ export function createSdkModelLister(options: SdkModelListerOptions): SdkModelLi
           configDir: input.configDir,
           cliPath: resolution.path,
           concurrency: options.concurrency,
+          ...(options.freshness === undefined ? {} : { freshness: options.freshness }),
+          ...(options.freshness === undefined ? {} : { freshness: options.freshness }),
           timeoutMs: input.timeoutMs,
           ...(input.signal === undefined ? {} : { signal: input.signal }),
           ...(options.runQuery === undefined ? {} : { runQuery: options.runQuery }),

@@ -198,17 +198,68 @@ neither write body has a field for one; `CLAUDE_CONFIG_ROOT` is the only knob, a
 | Delete | Remove the directory with the Account row |
 | Reap | A scheduled task (`scheduler/tasks/config-dir-reap.ts`) removes what a crash left on the volume: a directory named after an account id that no row claims, once it is older than `RETENTION_ORPHAN_CONFIG_DIR_HOURS`. It surveys the directories *before* it reads the accounts — a directory minted after the survey cannot be in it, while a row inserted after it is still read — and it never touches a name that is not an account id. Both rules exist because the failure it prevents (a stale credential nobody will rotate) is milder than the failure a careless sweep would cause (a working subscription logged out for good) |
 
-**Concurrent subprocesses on one directory — a considered deferral.** Up to
+**Concurrent subprocesses on one directory — the deferral that came due (2026-09-06).** Up to
 `CLAUDE_SDK_MAX_CONCURRENCY_PER_ACCOUNT` subprocesses share one `CLAUDE_CONFIG_DIR`, each capable of
-an OAuth refresh inside it, and a login or probe can touch the same directory beside them. The
-router deliberately does **not** serialize them (`concurrency.ts` records the same decision beside
-the gate): the CLI writes `.credentials.json` atomically and carries its own cross-process locking;
-a refresh that loses a race with a concurrent rotation fails one request into the ordinary auth
-classification rather than corrupting the file; and a login almost always runs against an Account
-that is `needs_reauth` — a status routing already excludes — so login-vs-traffic overlap is the
-reconnect edge case. The mitigation, if field evidence ever demands one, is an exclusive drain of
-the per-Account gate (`acquireAll`) wired through the login path — never a quiet reduction of the
-per-Account ceiling, which is throughput the pool is sized on.
+an OAuth refresh inside it, and a login or probe can touch the same directory beside them. This
+section used to argue the router need not serialize them, on the grounds that the CLI "carries its
+own cross-process locking" and that a lost race "fails one request into the ordinary auth
+classification rather than corrupting the file". **Both halves of that were wrong.**
+
+What production showed, on a router running 2.10.8 with `perAccount: 8`:
+
+| Account | `.credentials.json` | `refreshTokenExpiresAt` | blanked at |
+|---|---|---|---|
+| `a8c0fd1f` | 509 B → **281 B**, both tokens `""` | 2026-10-05 | 12:05:06.706Z |
+| `afbee92b` | 509 B → **281 B**, both tokens `""` | 2026-10-05 | 03:25 |
+| `f97f6dd2` | 509 B → **276 B**, both tokens `""` | 2026-10-05 | 12:50:11.784Z |
+
+Three of six subscription Accounts, dead inside nine hours, each with a **month** left on its
+refresh token. `f97f6dd2` was blanked 176 ms before `model_catalog_refresh` logged completion — its
+idle-query subprocess was live at that instant. `a8c0fd1f` was blanked 121 ms before the request
+path reported `401 claude-sdk:credential-expired`, with the usage gauge firing 8 ms later.
+
+The mechanism is **refresh-token rotation**. A successful refresh consumes the stored token and
+returns a new one, so `refreshTokenExpiresAt` being far in the future says nothing about whether
+that particular *string* is still live. Two subprocesses crossing the ~8-hourly refresh instant
+together both spend the stored value; the server honours one and rejects the other; and the losing
+CLI treats the rejection as a dead login and blanks the file — taking the winner's freshly rotated
+credential with it. (Rotation is not documented by Anthropic but is directly observable: the
+Meridian proxy's `tokenRefresh.ts` writes back `refresh_token` from every refresh response and pins
+it in a test, with the comment *"The refresh token is rotated on every refresh, so its expiry may
+roll forward too."* Meridian guards it with a process-local single-flight map — which is exactly the
+protection a second process does not get.)
+
+Recovery is an interactive re-login per Account. Nothing the router can do reverses it, which is why
+this is prevented rather than detected.
+
+**The mitigation, now implemented: `providers/claude-sdk/credential-freshness.ts`.** Inside a
+configurable skew of an access token's expiry (`CLAUDE_SDK_CREDENTIAL_REFRESH_SKEW_SECONDS`, default
+300 s — the same buffer Meridian settled on), exactly one subprocess per Account may cross. The
+first caller is not delayed at all and does the refresh as part of whatever it came to do; the rest
+wait until the credential file shows the new token, capped by
+`CLAUDE_SDK_CREDENTIAL_REFRESH_WAIT_MS` and then let through regardless — a narrower race is the
+goal, and an Account wedged behind the gate would be a worse outage than the one it prevents. No
+extra subprocess is ever spawned to force a refresh. Outside the window the gate is one cached
+metadata read and no wait.
+
+It lives **beside** `concurrency.ts` rather than inside it, because that gate is a memory bound that
+only the `query()` paths hold: `claude auth status` (`login/status.ts`) and the login CLI
+(`login/spawn.ts`) spawn against the same directory through a raw `Bun.spawn` and take no slot. Every
+spawn site takes freshness first and a slot second — one fixed order, so the two cannot deadlock.
+`CLAUDE_SDK_MAX_CONCURRENCY_PER_ACCOUNT` is untouched: it is throughput the pool is sized on, and it
+was never what kept a credential safe.
+
+The router still reads **metadata, never a token** (non-negotiables 1 and 13): two instants and a
+boolean out of `credential-metadata.ts`, whose return type has no field that could hold a token. The
+Agent SDK continues to own the credentials and to perform every refresh itself. The gate decides
+only who waits.
+
+**Still unguarded, deliberately:** `claude auth status`, which `idle_account_probe` runs daily over
+every Account and the console's "Re-check now" runs on demand. Its contract says it contacts nobody
+and only reads the file the CLI wrote, and it had not run at all in the window containing the three
+deaths — so there is no evidence it refreshes. Threading an Account id and a signal through
+`ClaudeAuthCheck` to cover it would be a change made on a guess. If a blanking is ever seen with
+only `auth status` in flight, that is the evidence, and this is the seam.
 
 > **Credential refresh for subscription Accounts is not ours to do.** Meridian implements its own
 > refresh loop — proactive expiry timers, a background scheduler, direct `.credentials.json` writes

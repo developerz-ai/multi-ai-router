@@ -2,6 +2,7 @@ import type { Options, SDKUserMessage } from "@anthropic-ai/claude-agent-sdk"
 import { query } from "@anthropic-ai/claude-agent-sdk"
 import { createCliProbe } from "./cli-probe"
 import type { SdkConcurrency } from "./concurrency"
+import { ALWAYS_FRESH, type CredentialFreshness } from "./credential-freshness"
 import { classifySdkFailure } from "./errors"
 import type { SdkInvocation, SdkInvoker } from "./invoke"
 import { createQueryLaunch, type QueryLaunch } from "./options"
@@ -80,6 +81,12 @@ export type SdkQueryFn = (params: {
 export interface SdkInvokerDeps {
   /** Bounds `claude` subprocesses, globally and per Account. Shared across every request. */
   readonly concurrency: SdkConcurrency
+  /**
+   * Lets one subprocess cross this Account's token-refresh moment alone (`credential-freshness.ts`).
+   * Taken **before** the slot, the one order every spawn site uses. Optional so a deployment that
+   * wires none behaves exactly as it did before the gate existed.
+   */
+  readonly freshness?: CredentialFreshness
   /** `CLAUDE_CLI_PATH`, validated at the env boundary. Null leaves the resolution ladder to decide. */
   readonly cliPathOverride?: string | null
   /** Injected in tests. Defaults to the real ladder over this host's filesystem. */
@@ -120,6 +127,8 @@ export function createSdkInvoker(deps: SdkInvokerDeps): SdkInvoker {
     return resolution
   }
 
+  const freshness = deps.freshness ?? ALWAYS_FRESH
+
   return async (invocation: SdkInvocation): Promise<Response> => {
     const cli = usableCli()
     const request = readSdkRequest(invocation.body)
@@ -128,6 +137,9 @@ export function createSdkInvoker(deps: SdkInvokerDeps): SdkInvoker {
     // Held before the subprocess exists and released when its output stream ends. Aborting while
     // queued throws the signal's own reason, which `runSdkAttempt` reads as the deadline it was.
     // `let`, because a busy-session retry ends the first attempt's slot and takes its own.
+    // Before the slot, never after: a caller holding a subprocess budget while it waits for someone
+    // else's refresh would be holding capacity it cannot use.
+    await freshness.ensureFresh(invocation.accountId, invocation.signal)
     let slot = await deps.concurrency.acquire(invocation.accountId, invocation.signal)
 
     /** One `query()` turn. Releases nothing on failure — the caller below owns the slot's end. */
@@ -248,6 +260,7 @@ export function createSdkInvoker(deps: SdkInvokerDeps): SdkInvoker {
         // The first attempt's stream is over, so its slot is already handed back (or is, here).
         // The retry takes its own, queueing honestly behind whatever arrived in between.
         slot.release()
+        await freshness.ensureFresh(invocation.accountId, invocation.signal)
         slot = await deps.concurrency.acquire(invocation.accountId, invocation.signal)
         try {
           return await attempt(true)

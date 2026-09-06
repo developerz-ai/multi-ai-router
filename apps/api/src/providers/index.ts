@@ -10,6 +10,11 @@ export type { CliProbeOptions } from "./claude-sdk/cli-probe"
 export { createCliProbe } from "./claude-sdk/cli-probe"
 export type { SdkConcurrency, SdkConcurrencyLimits, SdkSlot } from "./claude-sdk/concurrency"
 export { createSdkConcurrency } from "./claude-sdk/concurrency"
+export {
+  ALWAYS_FRESH,
+  type CredentialFreshness,
+  createCredentialFreshness,
+} from "./claude-sdk/credential-freshness"
 export type {
   CredentialMetadata,
   CredentialMetadataReader,

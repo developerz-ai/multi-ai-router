@@ -519,9 +519,12 @@ describe("the subprocess slot", () => {
 
     const a = invoke(invocation({ accountId: "acct-a", configDir: "/data/accounts/acct-a" }))
     const b = invoke(invocation({ accountId: "acct-b", configDir: "/data/accounts/acct-b" }))
-    await Promise.resolve()
-    await Promise.resolve()
-    await Promise.resolve()
+    // Drained rather than counted: how many microtasks sit between the call and the launch is an
+    // implementation detail (the refresh-window gate added one), and a test that hardcodes it
+    // breaks on changes that do not change what it is asserting.
+    for (let tick = 0; tick < 50 && Object.keys(launchedCwd).length < 2; tick += 1) {
+      await Promise.resolve()
+    }
 
     // Overlap is real: both accounts hold their own slot and were launched in their own directory
     // at the same time, not one after the other.
