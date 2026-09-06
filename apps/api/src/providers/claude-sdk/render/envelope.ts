@@ -178,7 +178,15 @@ export function createEnvelope(options: EnvelopeOptions): Envelope {
 
       case "content_block_start": {
         if (event.index === null) break
-        const decision = blocks.start(turn, event.index, keep)
+        // The block's own type travels with it, so a turn that ends mid-block can say *what* was
+        // left open — a truncated `tool_use` is a different failure from a truncated `text`.
+        const opened = isRecord(event.raw.content_block) ? event.raw.content_block.type : null
+        const decision = blocks.start(
+          turn,
+          event.index,
+          keep,
+          typeof opened === "string" ? opened : undefined,
+        )
         if (decision.kind === "drop") break
         // A block cannot precede the message that carries it, even when the SDK skipped the start.
         openStart(out, null)

@@ -137,7 +137,8 @@ export async function runSdkAttempt(input: SdkAttemptInput): Promise<AttemptOutc
           lastMessage: detail.lastMessage,
           lastEvent: detail.lastEvent,
           sawResult: detail.sawResult,
-          messages: detail.messages,
+          lastSystemSubtype: detail.lastSystemSubtype,
+          sdkMessages: detail.sdkMessages,
           frames: detail.frames,
         }),
     })

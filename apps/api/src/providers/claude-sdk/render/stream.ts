@@ -83,8 +83,22 @@ export interface TruncatedTurn {
   readonly lastEvent: string | null
   /** Whether the SDK's authoritative `result` arrived at all. False means the loop simply ended. */
   readonly sawResult: boolean
-  /** SDK messages read on this turn. A stream that ended after two chunks says so here. */
-  readonly messages: number
+  /**
+   * The `subtype` of the last `system` message, when the turn's last word was one.
+   *
+   * The SDK says several different things through `system`, and the difference between them is the
+   * difference between a session opening and a run being cut short — so the subtype is the fact,
+   * not the type.
+   */
+  readonly lastSystemSubtype: string | null
+  /**
+   * SDK messages read on this turn. A stream that ended after two chunks says so here.
+   *
+   * Not `messages`: that key is on the log redactor's list — it is what a request body calls its
+   * conversation — so a field named that arrives in the log as `[REDACTED]`, which is exactly what
+   * happened to the first cut of this line (2026-09-06).
+   */
+  readonly sdkMessages: number
   /** Client frames emitted before the truncation — how much of the answer the client did get. */
   readonly frames: number
 }
@@ -174,8 +188,9 @@ function createPump(input: SdkRenderInput): Pump {
   // when the incident happens.
   let lastMessage: string | null = null
   let lastEvent: string | null = null
+  let lastSystemSubtype: string | null = null
   let sawResult = false
-  let messages = 0
+  let sdkMessages = 0
   let frames = 0
 
   /** An observer belongs to whoever passed it in, and a broken one must not break a response. */
@@ -188,7 +203,7 @@ function createPump(input: SdkRenderInput): Pump {
   }
 
   const handle = (value: unknown): readonly ClientFrame[] => {
-    messages += 1
+    sdkMessages += 1
     const message = readSdkMessage(value)
     if (message === null) return NO_FRAMES
     lastMessage = message.type
@@ -204,6 +219,7 @@ function createPump(input: SdkRenderInput): Pump {
         return envelope.push(event, message.parentToolUseId)
       }
       case "system": {
+        lastSystemSubtype = message.subtype
         const sessionId = message.sessionId
         if (message.subtype === "init" && sessionId !== null) {
           observe(() => input.observer?.onSession?.(sessionId))
@@ -265,7 +281,8 @@ function createPump(input: SdkRenderInput): Pump {
           lastMessage,
           lastEvent,
           sawResult,
-          messages,
+          lastSystemSubtype,
+          sdkMessages,
           frames,
         }),
       )

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { renderSdkResponse } from "../../../src/providers"
+import { renderSdkResponse, type TruncatedTurn } from "../../../src/providers"
 import { relayTranslatedResponse } from "../../../src/services/dataplane/relay-translate"
 import type { TranslationContext } from "../../../src/services/translate"
 import { translationPair } from "../../../src/services/translate/registry"
@@ -229,5 +229,107 @@ describe("a healthy turn is unchanged", () => {
     // `tool_use`, not the conservative fallback: a stated reason is never overwritten.
     expect(finishReasons(sse).at(-1)).toBe("tool_calls")
     expect(isWellFormed(sse)).toBe(true)
+  })
+})
+
+/**
+ * The alarm's own fields, because the first cut of this line shipped two of them broken: the block
+ * kind was never recorded at `content_block_start`, so every truncation reported `kinds: [""]`, and
+ * the message counter was called `messages` — a key on the log redactor's list — so it reached the
+ * log as `[REDACTED]` (2026-09-06). A diagnostic nobody can read is not a diagnostic.
+ */
+describe("what the truncation alarm reports", () => {
+  async function alarmFor(messages: AsyncIterable<unknown>) {
+    let detail: TruncatedTurn | null = null
+    const response = await renderSdkResponse({
+      messages,
+      model: "claude-opus-5",
+      stream: true,
+      observer: {
+        onTruncatedTurn: (seen) => {
+          detail = seen
+        },
+      },
+    })
+    await response.text()
+    return detail
+  }
+
+  test("it names what was left open, so a truncated tool call is not read as truncated prose", async () => {
+    const detail = await alarmFor(
+      stream(
+        INIT,
+        MESSAGE_START,
+        wire({
+          type: "content_block_start",
+          index: 0,
+          content_block: { type: "tool_use", id: "toolu_1", name: "read", input: {} },
+        }),
+        wire({
+          type: "content_block_delta",
+          index: 0,
+          delta: { type: "input_json_delta", partial_json: '{"pa' },
+        }),
+      ),
+    )
+
+    expect(detail?.kinds).toEqual(["tool_use"])
+    expect(detail?.blocks).toBe(1)
+  })
+
+  test("it says which early ending it was: no result, and the SDK's last word", async () => {
+    const detail = await alarmFor(stream(INIT, MESSAGE_START, BLOCK_START, BLOCK_DELTA))
+
+    expect(detail?.sawResult).toBe(false)
+    expect(detail?.lastEvent).toBe("content_block_delta")
+    expect(detail?.lastSystemSubtype).toBe("init")
+    // The counter survives the log redactor, which `messages` did not.
+    expect(detail?.sdkMessages).toBeGreaterThan(0)
+  })
+
+  test("a text block reports as text", async () => {
+    expect((await alarmFor(stream(INIT, MESSAGE_START, BLOCK_START, BLOCK_DELTA)))?.kinds).toEqual([
+      "text",
+    ])
+  })
+
+  test("a turn that closed its own blocks raises nothing at all", async () => {
+    const clean = await alarmFor(
+      stream(
+        INIT,
+        MESSAGE_START,
+        BLOCK_START,
+        BLOCK_DELTA,
+        wire({
+          type: "content_block_stop",
+          index: 0,
+        }),
+        {
+          type: "result",
+          subtype: "success",
+          stop_reason: "end_turn",
+          usage: {},
+        },
+      ),
+    )
+
+    expect(clean).toBeNull()
+  })
+
+  test("a repaired block still alarms, even though the turn finishes cleanly", async () => {
+    // A dropped `content_block_stop` behind a stated ending is repaired rather than failed
+    // (`envelope.ts`), and the repair is still worth a line: it is an upstream, or a filter of
+    // ours, eating an event nobody would otherwise see.
+    const repaired = await alarmFor(
+      stream(INIT, MESSAGE_START, BLOCK_START, BLOCK_DELTA, {
+        type: "result",
+        subtype: "success",
+        stop_reason: "end_turn",
+        usage: {},
+      }),
+    )
+
+    expect(repaired?.blocks).toBe(1)
+    expect(repaired?.sawResult).toBe(true)
   })
 })
