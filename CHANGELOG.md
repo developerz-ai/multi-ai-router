@@ -5,6 +5,30 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.11.0] — 2026-09-06
+
+### Fixed
+
+- **One `claude` subprocess at a time across an Account's token refresh — the race that deauthenticated half the pool.** Anthropic's OAuth refresh token *rotates* when it is spent, so two subprocesses sharing one `CLAUDE_CONFIG_DIR` across the ~8-hourly refresh instant both present the stored value; the server honours the first and rejects the second, and the losing CLI reads that rejection as a dead login and blanks `.credentials.json` — destroying the winner's freshly rotated credential along with it. On 2026-09-06 that took out three of six production Accounts in nine hours, every one of them with a **month** left on `refreshTokenExpiresAt`: the login was alive, the token string was merely spent. Recovery is an interactive re-login, so this is now prevented rather than detected.
+
+  `providers/claude-sdk/credential-freshness.ts` is the guard. Inside `CLAUDE_SDK_CREDENTIAL_REFRESH_SKEW_SECONDS` of the access token's expiry exactly one subprocess per Account may cross: the first caller is not delayed at all and refreshes as part of whatever it came to do, and the rest wait until the credential file shows the new token, capped by `CLAUDE_SDK_CREDENTIAL_REFRESH_WAIT_MS` and then let through regardless. No extra subprocess is ever spawned to force a refresh, and the gate always fails open — an Account wedged behind it would be a worse outage than the race. Outside the window it is one ~500-byte read and nothing else.
+
+  It sits *beside* the concurrency semaphore rather than inside it, because that gate bounds memory and only the `query()` paths hold it, while `claude auth status` and the login CLI spawn against the same directory through a raw `Bun.spawn`. Every spawn site takes freshness first and a slot second — one fixed order, so the two cannot deadlock. `CLAUDE_SDK_MAX_CONCURRENCY_PER_ACCOUNT` is deliberately untouched: it is throughput the pool is sized on, and it was never what kept a credential safe.
+
+  The router still reads **metadata, never a token** — two instants and a boolean out of a type with no field that could hold one. The Agent SDK continues to own the credentials and to perform every refresh itself; the gate decides only who waits.
+
+- **The audit reason on a parked credential no longer claims the refresh token expired.** From the router's side a rejected refresh and an expired one look identical, and this incident was the former — three Accounts blanked with a month of refresh-token life left. It now says what is actually known: the CLI has blanked the tokens and the Account needs an interactive re-login.
+
+### Added
+
+- `CLAUDE_SDK_CREDENTIAL_REFRESH_SKEW_SECONDS` (default `300`), `CLAUDE_SDK_CREDENTIAL_REFRESH_WAIT_MS` (default `20000`) and `CLAUDE_SDK_CREDENTIAL_REFRESH_POLL_MS` (default `250`). `0` on the skew is legal and means *no lead time* — the window still guards, but only once the token has actually expired.
+- `CredentialMetadata.accessTokenExpiresAt`, the access token's own (~8 h) clock, distinct from the `refreshTokenExpiresAt` login clock that was already read. Presence-only on the tokens is unchanged, and the exhaustive key-list assertion that keeps a token from ever riding along now names it.
+
+### Documentation
+
+- **`docs/idea/11-anthropic-agent-sdk.md` §3 recorded the opposite of what happens, and is corrected with the evidence.** It — and the docstring in `concurrency.ts` — had this down as a considered deferral, reasoning that the CLI "carries its own cross-process locking" and that a lost race "fails one request into the ordinary auth classification rather than corrupting the file". Both halves were wrong. The section now carries the file sizes, the timestamps, the mechanism, and the corroborating observation from Meridian's `tokenRefresh.ts` that the refresh token is rotated on every refresh.
+- `claude auth status` is documented as deliberately still unguarded, with the reason (its contract says it contacts nobody, and it had not run at all in the window containing the three deaths) and the seam to use if evidence ever contradicts that.
+
 ## [2.10.8] — 2026-09-06
 
 ### Added
