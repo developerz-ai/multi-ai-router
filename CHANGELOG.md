@@ -5,6 +5,16 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.10.8] — 2026-09-06
+
+### Added
+
+- **The truncation alarm says what the flush closed.** A `tool_use` truncation on 2.10.7 arrived with `lastMessage: "user"` rather than the `"assistant"` that drove the 2.10.7 fix, and could not be reproduced: a stream that ends after a `user` message, one that throws after the block opened, and one that throws immediately all close their blocks correctly, and each is now a test. `flushedBlocks` is the fact that separates them from production — non-zero means the rewriter held that block and closed it, so whatever the renderer still had open was never the rewriter's to close and the discrepancy is between the envelope and the stream; zero means the rewriter was holding nothing at all.
+
+### Documentation
+
+- **Whether a truncated turn can be failed over is answered, and it is a fact about the shape rather than a policy.** A block can only be *open* if its `content_block_start` was forwarded, and on the streaming path a forwarded frame is a written byte — so by the time a turn can be called truncated, the client already holds part of it and "never retry after bytes are on the wire" applies with nothing left to decide. The non-streaming path answers the same question the other way for the same reason: nothing is written until the whole object is, so a truncated fold is still free to be a real status, and it is — which is what already lets the chain try another account there. Two paths, one rule, opposite outcomes, now pinned by tests. The streaming half of that failover was built and then deleted: `primed.done` together with a truncation is unreachable, because opening the block is itself the frame that makes it reachable, and a rule that never fires is one this repo says does not exist.
+
 ## [2.10.7] — 2026-09-06
 
 ### Fixed
