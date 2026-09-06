@@ -430,7 +430,8 @@ describe("the truncated-turn alarm reaches the log", () => {
           lastMessage: "stream_event",
           lastEvent: "content_block_delta",
           sawResult: false,
-          messages: 7,
+          lastSystemSubtype: "init",
+          sdkMessages: 7,
           frames: 5,
         })
         return new Response('{"type":"message"}', { status: 200 })
@@ -451,7 +452,8 @@ describe("the truncated-turn alarm reaches the log", () => {
         lastMessage: "stream_event",
         lastEvent: "content_block_delta",
         sawResult: false,
-        messages: 7,
+        lastSystemSubtype: "init",
+        sdkMessages: 7,
         frames: 5,
       },
     ])
