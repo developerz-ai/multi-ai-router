@@ -54,6 +54,10 @@ interface HarnessOptions {
   readonly paidTurn?: boolean
   /** The turn-free usage read. Absent means none is wired. */
   readonly usage?: (account: AccountRow) => Promise<boolean>
+  /** Access-token expiry per account id. Absent means the seam is not wired at all. */
+  readonly expiry?: Readonly<Record<string, Date | null>>
+  /** Defaults to on. */
+  readonly warmCredentials?: boolean
 }
 
 function harness(options: HarnessOptions) {
@@ -98,6 +102,11 @@ function harness(options: HarnessOptions) {
     idleAfterMs: SEVEN_DAYS_MS,
     batchSize: options.batchSize ?? 10,
     paidTurn: options.paidTurn ?? true,
+    warmCredentials: options.warmCredentials ?? true,
+    warmBeforeMs: 60 * 60_000,
+    ...(options.expiry === undefined
+      ? {}
+      : { accessTokenExpiry: async (account: AccountRow) => options.expiry?.[account.id] ?? null }),
   })
 
   const logs: { msg: string; level: string; fields: Record<string, unknown> }[] = []
@@ -427,5 +436,103 @@ describe("what the run row says about the sweep itself", () => {
     })
 
     expect(seen).toEqual(new Date(NOW.getTime() - SEVEN_DAYS_MS))
+  })
+})
+
+/**
+ * The credential keepalive — the half added after the 2026-09-06 losses.
+ *
+ * A subscription's access token lives ~8 h and **only a real turn refreshes it**: the turn-free
+ * handshake the model-catalog sweep runs demonstrably leaves `.credentials.json` untouched. So an
+ * account nothing routes to goes cold, and the next thing to touch it finds a refresh the upstream
+ * will not honour — after which the CLI blanks the file and only a re-login recovers it.
+ *
+ * The first test is that failure: a logged-in account whose access token has gone cold must be
+ * given a turn, even though it is nowhere near the `idleAfterMs` window the billed half uses.
+ */
+describe("the credential keepalive", () => {
+  test("warms a logged-in account whose access token has gone cold — the 2026-09-06 regression", async () => {
+    const cold = account({ id: "cold", lastUsedAt: new Date(NOW.getTime() - 60_000) })
+    const h = harness({
+      idle: [],
+      all: [cold],
+      loggedIn: true,
+      // Expired an hour ago. Recently *used*, so the idle half would never look at it.
+      expiry: { cold: new Date(NOW.getTime() - 60 * 60_000) },
+    })
+
+    const outcome = await h.run()
+
+    expect(h.tested).toEqual([{ accountId: "cold", model: "claude-sonnet-4-5" }])
+    expect(outcome.outcome).toBe("success")
+  })
+
+  test("leaves a warm access token alone", async () => {
+    const warm = account({ id: "warm" })
+    const h = harness({
+      idle: [],
+      all: [warm],
+      loggedIn: true,
+      // Seven hours of life left: far outside the one-hour margin.
+      expiry: { warm: new Date(NOW.getTime() + 7 * 60 * 60_000) },
+    })
+
+    await h.run()
+
+    // Nothing billed: the common case must stay free.
+    expect(h.tested).toEqual([])
+  })
+
+  test("an unknown expiry is not cold — it must never bill a turn on a guess", async () => {
+    const unknown = account({ id: "unknown" })
+    const h = harness({ idle: [], all: [unknown], loggedIn: true, expiry: { unknown: null } })
+
+    await h.run()
+
+    expect(h.tested).toEqual([])
+  })
+
+  test("with the keepalive off, a cold credential is reported and not billed", async () => {
+    const cold = account({ id: "cold" })
+    const h = harness({
+      idle: [],
+      all: [cold],
+      loggedIn: true,
+      warmCredentials: false,
+      expiry: { cold: new Date(NOW.getTime() - 60 * 60_000) },
+    })
+
+    await h.run()
+
+    expect(h.tested).toEqual([])
+    expect(
+      h.logs.some(
+        (line) =>
+          line.msg === "subscription access token is cold and was not warmed" &&
+          line.fields.accountId === "cold",
+      ),
+    ).toBe(true)
+  })
+
+  test("a logged-out account is never warmed — its credential is already gone", async () => {
+    const dead = account({ id: "dead" })
+    const h = harness({
+      idle: [],
+      all: [dead],
+      loggedIn: false,
+      expiry: { dead: new Date(NOW.getTime() - 60 * 60_000) },
+    })
+
+    await h.run()
+
+    expect(h.tested).toEqual([])
+  })
+
+  test("without the expiry seam the keepalive does nothing at all", async () => {
+    const h = harness({ idle: [], all: [account({ id: "a" })], loggedIn: true })
+
+    await h.run()
+
+    expect(h.tested).toEqual([])
   })
 })

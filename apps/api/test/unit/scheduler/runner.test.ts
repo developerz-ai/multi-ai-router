@@ -336,3 +336,93 @@ describe("the first tick", () => {
     expect((calls[1] ?? 0) - (calls[0] ?? 0)).toBeGreaterThanOrEqual(30)
   })
 })
+
+/**
+ * A restart must not reset a long interval.
+ *
+ * The bug this pins cost three production subscriptions on 2026-09-06. `idle_account_probe` runs on
+ * a 24-hour timer; the pod restarts more often than that; and because the first gap was measured
+ * from process start rather than from the last recorded run, the sweep meant to notice a dying
+ * credential had run **zero** times in a ten-hour-old pod. It was armed, reported as scheduled, and
+ * never fired — the worst shape a safety net can take.
+ *
+ * `ScheduledTaskRun` already recorded every run. The scheduler simply never read what it wrote.
+ */
+describe("the first tick after a restart", () => {
+  test("runs immediately when the interval already elapsed while the process was down", async () => {
+    const repo = memoryTaskRepository()
+    // A run that started well over an interval ago and finished.
+    repo.rows.push({
+      id: crypto.randomUUID(),
+      task: "janitor_sweep",
+      startedAt: new Date(Date.now() - 10_000),
+      finishedAt: new Date(Date.now() - 9_000),
+      outcome: "success",
+      itemsProcessed: 0,
+      error: null,
+    })
+
+    let calls = 0
+    const scheduler = createScheduler({
+      tasks: [
+        task({
+          name: "janitor_sweep",
+          intervalMs: 5_000,
+          run: async () => {
+            calls += 1
+            return { outcome: "success", itemsProcessed: 0 }
+          },
+        }),
+      ],
+      repo,
+      logger: silentLogger(),
+      lock: alwaysFree(),
+      jitterFraction: 0,
+    })
+
+    scheduler.start()
+    await new Promise((resolve) => setTimeout(resolve, 80))
+    await scheduler.stop()
+
+    // Due the moment the process came back, not five seconds later — and emphatically not never.
+    expect(calls).toBe(1)
+  })
+
+  test("still waits out the remainder when the last run was recent", async () => {
+    const repo = memoryTaskRepository()
+    repo.rows.push({
+      id: crypto.randomUUID(),
+      task: "janitor_sweep",
+      startedAt: new Date(Date.now() - 50),
+      finishedAt: new Date(Date.now() - 40),
+      outcome: "success",
+      itemsProcessed: 0,
+      error: null,
+    })
+
+    let calls = 0
+    const scheduler = createScheduler({
+      tasks: [
+        task({
+          name: "janitor_sweep",
+          intervalMs: 5_000,
+          run: async () => {
+            calls += 1
+            return { outcome: "success", itemsProcessed: 0 }
+          },
+        }),
+      ],
+      repo,
+      logger: silentLogger(),
+      lock: alwaysFree(),
+      jitterFraction: 0,
+    })
+
+    scheduler.start()
+    await new Promise((resolve) => setTimeout(resolve, 80))
+    await scheduler.stop()
+
+    // A restart loop must not turn into a sweep loop.
+    expect(calls).toBe(0)
+  })
+})

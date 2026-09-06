@@ -188,12 +188,50 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
     timers.set(task.name, timer)
   }
 
+  /**
+   * The first gap after a boot, measured from when the task **last actually ran** rather than from
+   * when this process started.
+   *
+   * Without this a long-interval task on a short-lived pod never runs at all: the timer restarts
+   * from zero on every boot, so a 24-hour sweep on a container that restarts more often than daily
+   * is armed, reported as scheduled, and silently never fires. That is not hypothetical — on
+   * 2026-09-06 `idle_account_probe` had run **zero** times in a ten-hour-old pod, which is why the
+   * sweep that exists to notice a dying credential noticed nothing.
+   *
+   * `ScheduledTaskRun` already records every run precisely so a wedged task is visible
+   * (CLAUDE.md non-negotiable 13); this makes the scheduler *read* what it writes. `startedAt` is
+   * the cursor rather than `finishedAt`, and `lastRun` rather than the successful-only variant: the
+   * question here is "when did we last attempt this", so a task that fails every time still waits
+   * its interval instead of re-running on every restart.
+   *
+   * A task that has never run keeps the configured first gap, which is what `startupDelayMs`
+   * describes. A lookup failure falls back to the same value — a scheduler that will not start
+   * because Postgres hiccuped would be a worse failure than one tick at the wrong time.
+   */
+  const scheduleFirst = async (task: ScheduledTask): Promise<void> => {
+    let delayMs = task.startupDelayMs ?? task.intervalMs
+    try {
+      const last = await deps.repo.lastRun(task.name)
+      if (last !== undefined) {
+        delayMs = Math.max(0, task.intervalMs - (now().getTime() - last.startedAt.getTime()))
+      }
+    } catch (error) {
+      deps.logger.warn("scheduled task last-run lookup failed; using the configured first gap", {
+        component: "scheduler",
+        task: task.name,
+        reason: describe(error),
+      })
+    }
+    // `stop()` may have won the race with this lookup; arming a timer now would outlive it.
+    if (started) schedule(task, delayMs)
+  }
+
   return {
     start() {
       if (started) return
       started = true
       if (abort.signal.aborted) abort = new AbortController()
-      for (const task of tasks.values()) schedule(task, task.startupDelayMs ?? task.intervalMs)
+      for (const task of tasks.values()) void scheduleFirst(task)
       deps.logger.info("scheduler started", {
         component: "scheduler",
         tasks: [...tasks.keys()],

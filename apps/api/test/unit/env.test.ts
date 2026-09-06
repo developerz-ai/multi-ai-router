@@ -71,7 +71,7 @@ describe("parseEnv", () => {
       adminSessionPurgeIntervalMinutes: 30,
       // Daily sweep, 7-day threshold — comfortably inside a Claude subscription's ~4-week
       // refresh-token life, which is the window this exists to stay ahead of.
-      idleAccountProbeIntervalMinutes: 1_440,
+      idleAccountProbeIntervalMinutes: 360,
       idleAccountAfterDays: 7,
       idleAccountProbeBatchSize: 5,
       // Off: a billed keepalive cannot move a subscription's refresh-token cliff.
