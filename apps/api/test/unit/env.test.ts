@@ -700,3 +700,30 @@ describe("parseEnv", () => {
     })
   })
 })
+
+/**
+ * The keepalive margin has to span a whole gap between sweeps.
+ *
+ * A token expiring after this tick's margin but before the next tick is one no sweep ever sees in
+ * time. Shipped first as a flat 60 minutes against a 6-hour sweep, which meant an account expiring
+ * 2 h 49 m out was skipped now and already dead by the next tick — the keepalive would never have
+ * fired for it at all.
+ */
+describe("the credential keepalive margin", () => {
+  test("defaults to one sweep interval plus slack, not a fixed hour", () => {
+    const env = parseEnv({ ...base })
+    expect(env.claudeSdkCredentialKeepaliveBeforeMinutes).toBe(
+      env.scheduler.idleAccountProbeIntervalMinutes + 30,
+    )
+  })
+
+  test("follows a retuned sweep interval, so the two cannot drift apart", () => {
+    const env = parseEnv({ ...base, IDLE_ACCOUNT_PROBE_INTERVAL_MINUTES: "120" })
+    expect(env.claudeSdkCredentialKeepaliveBeforeMinutes).toBe(150)
+  })
+
+  test("an explicit margin still wins", () => {
+    const env = parseEnv({ ...base, CLAUDE_SDK_CREDENTIAL_KEEPALIVE_BEFORE_MINUTES: "45" })
+    expect(env.claudeSdkCredentialKeepaliveBeforeMinutes).toBe(45)
+  })
+})
