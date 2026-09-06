@@ -200,13 +200,10 @@ export function createEarlyStop(input: EarlyStopInput): EarlyStop {
 
   async function* filter(messages: AsyncIterable<unknown>): AsyncIterable<unknown> {
     const iterator = messages[Symbol.asyncIterator]()
-    /** The shape to rewrap a flushed event in, so it reaches the renderer as the SDK's own would. */
-    let lastMessage: unknown = null
     try {
       for (;;) {
         const next = await Promise.race([pull(iterator), stopped$])
         if (next === STOPPED || next.done === true) break
-        lastMessage = next.value
         for (const out of step(next.value)) yield out
         if (stopped) break
       }
@@ -227,8 +224,21 @@ export function createEarlyStop(input: EarlyStopInput): EarlyStop {
     // The hook's copy of the input is preferred over the buffer because it is the assembled one —
     // the buffer holds only the fragments that arrived before the loop ended, and a truncated prefix
     // of valid JSON is still not valid JSON.
+    // **Wrapped explicitly, never against the loop's last message.** The renderer discriminates on
+    // the SDK message's `type` (`render/events.ts`), and the first cut of this flush reused
+    // `rewrap` with whatever message the loop happened to end on. When that was an `assistant`
+    // message — routinely the last thing the SDK sends — the flushed events came out typed
+    // `assistant` with a wire event stapled to them, the renderer never looked inside, and the
+    // block stayed open exactly as if the flush had never run. Production, 2026-09-06:
+    // `blocks: 1, kinds: ["tool_use"], lastMessage: "assistant", declaredTools: 12,
+    // passthrough: true` — every part of the machinery working and the last inch undoing it.
+    //
+    // `parent_tool_use_id: null` is a fact rather than a default: the rewriter only ever holds
+    // blocks from the turn the client asked for, because `push` forwards a subagent's untouched.
     const complete = new Map(captures.map((call) => [call.id, call.input]))
-    for (const event of rewriter.flush(complete)) yield rewrap(lastMessage, event)
+    for (const event of rewriter.flush(complete)) {
+      yield { type: "stream_event", event, parent_tool_use_id: null }
+    }
 
     if (stopped) yield TOOL_USE_RESULT
   }

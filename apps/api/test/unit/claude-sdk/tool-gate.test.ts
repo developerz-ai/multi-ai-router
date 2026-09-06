@@ -479,3 +479,108 @@ describe("a tool block whose content_block_stop never arrives", () => {
     expect(JSON.parse(argumentsOf(seen))).toEqual({ cityName: "Berlin" })
   })
 })
+
+/**
+ * **What the flushed events are wrapped in**, which is not the same question as what they contain.
+ *
+ * The renderer discriminates on the SDK message's `type` (`render/events.ts`), so a
+ * `content_block_stop` that arrives inside anything other than a `stream_event` is read as some
+ * other kind of message and its event is never looked at. The block then stays open, the envelope
+ * force-closes it, and the turn is answered as truncated — with the flush having run and produced
+ * exactly the right events.
+ *
+ * Production, 2026-09-06: `blocks: 1, kinds: ["tool_use"], lastMessage: "assistant",
+ * declaredTools: 12, passthrough: true`. The passthrough existed and the flush ran; the last SDK
+ * message before the loop ended happened to be an `assistant` one, and the flush was wrapped
+ * against it.
+ */
+describe("the wrapper a flushed event arrives in", () => {
+  function types(seen: readonly unknown[]): string[] {
+    return seen.map((m) =>
+      typeof m === "object" && m !== null && "type" in m
+        ? String((m as { type: unknown }).type)
+        : "",
+    )
+  }
+
+  test("every flushed event is a stream_event, whatever the loop's last message was", async () => {
+    const passthrough = passthroughFor()
+    const seen = await through(passthrough, [
+      MESSAGE_START,
+      ...toolBlock(0, "toolu_1", ['{"cityName":"Berlin"}']).slice(0, -1),
+      // The SDK's assembled message for the turn, which is routinely the last thing before the
+      // stream ends — and is not a `stream_event`.
+      { type: "assistant", uuid: "asst_1", message: { role: "assistant", content: [] } },
+    ])
+
+    // Nothing the renderer would read as an assistant message may carry a wire event.
+    for (const message of seen) {
+      if (typeof message !== "object" || message === null) continue
+      if (!("event" in message)) continue
+      expect((message as { type: unknown }).type).toBe("stream_event")
+    }
+    expect(types(seen).filter((type) => type === "stream_event").length).toBeGreaterThan(0)
+  })
+
+  test("and it still carries the arguments and the close", async () => {
+    const passthrough = passthroughFor()
+    const seen = await through(passthrough, [
+      MESSAGE_START,
+      ...toolBlock(0, "toolu_1", ['{"cityName":"Berlin"}']).slice(0, -1),
+      { type: "assistant", uuid: "asst_1", message: { role: "assistant", content: [] } },
+    ])
+
+    const wire = events(seen)
+    expect(wire.filter((event) => event.type === "content_block_stop")).toHaveLength(1)
+    const args = wire
+      .filter((event) => event.type === "content_block_delta")
+      .map((event) => (event.delta as { partial_json?: string } | undefined)?.partial_json ?? "")
+      .join("")
+    expect(JSON.parse(args)).toEqual({ cityName: "Berlin" })
+  })
+})
+
+/**
+ * The whole path, asserting the outcome the production line reported rather than the wrapper that
+ * caused it: a tool turn whose `content_block_stop` never arrives and whose last SDK message is an
+ * `assistant` one must reach the client complete, and must raise no truncation alarm.
+ */
+describe("a tool turn that ends on an assistant message", () => {
+  const source = () =>
+    (async function* () {
+      yield MESSAGE_START
+      // No `content_block_stop`: the early stop wins its race with it, which is the whole shape.
+      for (const message of toolBlock(0, "toolu_1", ['{"cityName"', ':"Berlin"}']).slice(0, -1)) {
+        yield message
+      }
+      yield { type: "assistant", uuid: "asst_1", message: { role: "assistant", content: [] } }
+    })()
+
+  test("nothing is reported truncated: the flush closed the block, as it was always meant to", async () => {
+    const alarms: unknown[] = []
+    const response = await renderSdkResponse({
+      messages: passthroughFor().filter(source()),
+      model: "claude-opus-5",
+      stream: false,
+      observer: { onTruncatedTurn: (detail) => void alarms.push(detail) },
+    })
+
+    expect(alarms).toEqual([])
+    // And it is a real answer, not the 502 a truncated turn is answered with.
+    expect(response.status).toBe(200)
+  })
+
+  test("the client's tool call arrives whole, arguments included", async () => {
+    const response = await renderSdkResponse({
+      messages: passthroughFor().filter(source()),
+      model: "claude-opus-5",
+      stream: false,
+    })
+    const body = (await response.json()) as {
+      content: { type: string; name?: string; input?: unknown }[]
+    }
+
+    const call = body.content.find((block) => block.type === "tool_use")
+    expect(call).toMatchObject({ name: "get_weather", input: { cityName: "Berlin" } })
+  })
+})
