@@ -1,5 +1,6 @@
 import type {
   AccountRepository,
+  AccountRow,
   ApiKeyRepository,
   AuditRepository,
   ModelCatalogRepository,
@@ -102,6 +103,11 @@ export interface ScheduledTaskDeps {
    */
   readonly probeModels?: Readonly<Record<string, string>>
   /**
+   * When a subscription account's access token expires — metadata, never a token. Absent disables
+   * the credential keepalive, which is what a deployment with no config directories wants.
+   */
+  readonly accessTokenExpiry?: (account: AccountRow) => Promise<Date | null>
+  /**
    * The model catalog's staleness ordering. Read-only here — the writes go through
    * {@link ScheduledTaskDeps.refreshCatalog}, which owns the transaction per account.
    */
@@ -114,7 +120,14 @@ export interface ScheduledTaskDeps {
    */
   readonly refreshCatalog?: ModelCatalogRefreshDeps["refresh"]
   /** A full `Env` satisfies this, so the composition root passes `env` straight through. */
-  readonly env: Pick<Env, "retention" | "janitorIntervalMinutes" | "scheduler">
+  readonly env: Pick<
+    Env,
+    | "retention"
+    | "janitorIntervalMinutes"
+    | "scheduler"
+    | "claudeSdkCredentialKeepalive"
+    | "claudeSdkCredentialKeepaliveBeforeMinutes"
+  >
 }
 
 const MINUTE_MS = 60_000
@@ -228,6 +241,14 @@ export function createScheduledTasks(deps: ScheduledTaskDeps): readonly Schedule
             // Off by default: a billed keepalive cannot move a subscription's refresh-token cliff,
             // and checking on a subscription must never spend usage.
             paidTurn: env.scheduler.idleAccountProbePaidTurn,
+            // Separate from `paidTurn` on purpose. That flag asks "spend a turn to find out whether
+            // a forgotten account still works"; this one asks "spend a turn so a working account
+            // does not go cold". The second has a concrete effect the first never had.
+            warmCredentials: env.claudeSdkCredentialKeepalive,
+            warmBeforeMs: env.claudeSdkCredentialKeepaliveBeforeMinutes * MINUTE_MS,
+            ...(deps.accessTokenExpiry === undefined
+              ? {}
+              : { accessTokenExpiry: deps.accessTokenExpiry }),
           }),
         ]),
     // Hourly, and free: a model listing costs no tokens and spends no quota window. It writes only

@@ -522,6 +522,12 @@ export interface Env {
    * access token's expiry only one subprocess may cross; the rest wait up to `WaitMs`, re-reading
    * the credential file every `PollMs`, then proceed regardless.
    */
+  /**
+   * Whether an idle subscription account whose **access** token has gone cold is given one small
+   * keepalive turn to refresh it. Only a real turn refreshes: the turn-free handshake does not.
+   */
+  readonly claudeSdkCredentialKeepalive: boolean
+  readonly claudeSdkCredentialKeepaliveBeforeMinutes: number
   readonly claudeSdkCredentialRefreshSkewSeconds: number
   readonly claudeSdkCredentialRefreshWaitMs: number
   readonly claudeSdkCredentialRefreshPollMs: number
@@ -666,6 +672,8 @@ export const ENV_FIELDS = {
   CLAUDE_CLI_PATH: nonEmpty.optional(),
   CLAUDE_SDK_MAX_CONCURRENCY: atLeastOne.optional(),
   CLAUDE_SDK_MAX_CONCURRENCY_PER_ACCOUNT: atLeastOne.optional(),
+  CLAUDE_SDK_CREDENTIAL_KEEPALIVE: flag.optional(),
+  CLAUDE_SDK_CREDENTIAL_KEEPALIVE_BEFORE_MINUTES: wholeNumber.optional(),
   CLAUDE_SDK_CREDENTIAL_REFRESH_SKEW_SECONDS: wholeNumber.optional(),
   CLAUDE_SDK_CREDENTIAL_REFRESH_WAIT_MS: atLeastOne.optional(),
   CLAUDE_SDK_CREDENTIAL_REFRESH_POLL_MS: atLeastOne.optional(),
@@ -883,6 +891,15 @@ const envSchema = z.object(ENV_FIELDS).transform((raw, ctx): Env => {
     // subprocess may cross at a time (`providers/claude-sdk/credential-freshness.ts`). 300 s is the
     // buffer Meridian settled on for the same token endpoint, and it comfortably covers a spawn
     // that begins just before expiry and refreshes just after.
+    // On by default. An access token lives ~8 h and only a real turn refreshes it, so an account
+    // nothing routes to goes cold — and the next thing to touch it finds a refresh the upstream
+    // will not honour, after which the CLI blanks the credential and only a re-login recovers it.
+    // The cost is one small turn per cold account per sweep; `false` restores the old silence.
+    claudeSdkCredentialKeepalive: raw.CLAUDE_SDK_CREDENTIAL_KEEPALIVE ?? true,
+    // An hour of margin before expiry, comfortably inside the sweep's own interval so a credential
+    // is warmed on the tick *before* it goes cold rather than the one after.
+    claudeSdkCredentialKeepaliveBeforeMinutes:
+      raw.CLAUDE_SDK_CREDENTIAL_KEEPALIVE_BEFORE_MINUTES ?? 60,
     claudeSdkCredentialRefreshSkewSeconds: raw.CLAUDE_SDK_CREDENTIAL_REFRESH_SKEW_SECONDS ?? 300,
     // How long a waiter gives the winner before proceeding regardless. A refresh is one HTTPS
     // round-trip inside a subprocess that was starting anyway; past this the gate has clearly not
@@ -937,7 +954,10 @@ const envSchema = z.object(ENV_FIELDS).transform((raw, ctx): Env => {
       // worth of memory, and a login-heavy operator day should not let that pile up for hours.
       adminSessionPurgeIntervalMinutes: raw.ADMIN_SESSION_PURGE_INTERVAL_MINUTES ?? 30,
       // Daily. Each account is still only touched once per idle window — see the field note.
-      idleAccountProbeIntervalMinutes: raw.IDLE_ACCOUNT_PROBE_INTERVAL_MINUTES ?? 1_440,
+      // 6 h, not 24. A subscription's access token lives ~8 h, so a daily sweep cannot keep one
+      // warm however well it works — it wakes up long after the credential has gone cold. This is
+      // the cadence the keepalive needs; the sweep's other halves are free and unbothered by it.
+      idleAccountProbeIntervalMinutes: raw.IDLE_ACCOUNT_PROBE_INTERVAL_MINUTES ?? 360,
       idleAccountAfterDays: raw.IDLE_ACCOUNT_AFTER_DAYS ?? 7,
       idleAccountProbeBatchSize: raw.IDLE_ACCOUNT_PROBE_BATCH_SIZE ?? 5,
       idleAccountProbePaidTurn: raw.IDLE_ACCOUNT_PROBE_PAID_TURN ?? false,

@@ -34,6 +34,7 @@ import {
 import { createAccountConfigDirs } from "../providers/claude-sdk/config-dir"
 import { createSdkTranscripts } from "../providers/claude-sdk/transcripts"
 import { IDLE_PROBE_MODELS, type Scheduler, schedulerFromEnv } from "../scheduler"
+import { describeProvider } from "../services/accounts/providers"
 import { createPostgresSessionStore } from "../services/admin-auth"
 import { createRoutingCatalog, loadCatalog, type RoutingCatalogStore } from "../services/catalog"
 import { createPriceBook, type PriceBook } from "../services/cost"
@@ -255,8 +256,9 @@ export function createRuntime(deps: RuntimeDeps): Runtime {
   // (`providers/claude-sdk/credential-freshness.ts`, docs/idea/11-anthropic-agent-sdk.md §3).
   // Shared by every spawn site for the same reason `sdkConcurrency` is: a gate only some callers
   // honour is not a gate.
+  const credentialReader = createCredentialMetadataReader()
   const credentialFreshness = createCredentialFreshness({
-    reader: createCredentialMetadataReader(),
+    reader: credentialReader,
     configDirs,
     skewMs: env.claudeSdkCredentialRefreshSkewSeconds * 1_000,
     maxWaitMs: env.claudeSdkCredentialRefreshWaitMs,
@@ -492,6 +494,12 @@ export function createRuntime(deps: RuntimeDeps): Runtime {
     usageProbe: (account) =>
       usageGaugeProbe.read({ accountId: account.id, configDir: configDirs.pathFor(account.id) }),
     probeModels: IDLE_PROBE_MODELS,
+    // Metadata, never a token: one instant per account, out of the same reader the admin plane
+    // uses. It is what lets the sweep tell a warm credential from one about to go cold.
+    accessTokenExpiry: async (account) =>
+      describeProvider(account.provider).requiresConfigDir
+        ? (await credentialReader.read(configDirs.pathFor(account.id))).accessTokenExpiresAt
+        : null,
     modelCatalog,
     // Hourly, free, and pointed at `model_catalog` alone: a listing costs no tokens and spends no
     // quota window, and nothing in routing reads what it writes. `supported_models` — which does

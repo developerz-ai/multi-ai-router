@@ -218,16 +218,50 @@ refresh token. `f97f6dd2` was blanked 176 ms before `model_catalog_refresh` logg
 idle-query subprocess was live at that instant. `a8c0fd1f` was blanked 121 ms before the request
 path reported `401 claude-sdk:credential-expired`, with the usage gauge firing 8 ms later.
 
-The mechanism is **refresh-token rotation**. A successful refresh consumes the stored token and
-returns a new one, so `refreshTokenExpiresAt` being far in the future says nothing about whether
-that particular *string* is still live. Two subprocesses crossing the ~8-hourly refresh instant
-together both spend the stored value; the server honours one and rejects the other; and the losing
-CLI treats the rejection as a dead login and blanks the file — taking the winner's freshly rotated
-credential with it. (Rotation is not documented by Anthropic but is directly observable: the
-Meridian proxy's `tokenRefresh.ts` writes back `refresh_token` from every refresh response and pins
-it in a test, with the comment *"The refresh token is rotated on every refresh, so its expiry may
-roll forward too."* Meridian guards it with a process-local single-flight map — which is exactly the
-protection a second process does not get.)
+**Refresh-token rotation is the reason the expiry date proves nothing.** A successful refresh
+consumes the stored token and returns a new one, so `refreshTokenExpiresAt` being far in the future
+says nothing about whether that particular *string* is still honoured. Rotation is undocumented by
+Anthropic but directly observable: the Meridian proxy's `tokenRefresh.ts` writes back
+`refresh_token` from every refresh response and pins it in a test, commenting *"The refresh token is
+rotated on every refresh, so its expiry may roll forward too."*
+
+**What actually spent these three tokens — corrected 2026-09-06, after this section first claimed
+otherwise.** The initial reading was that two subprocesses crossed the refresh instant together and
+double-spent the token. **The concurrency data does not support that**, and the correction matters
+more than the original claim:
+
+- Reconstructing every request interval from the log (start = timestamp − `durationMs`, 730
+  inference requests over ten hours), the **peak concurrent inference requests all day was 2** —
+  never the eight per account the ceiling allows.
+- At `f97f6dd2`'s blanking, **zero** data-plane requests overlapped; only the sequential
+  model-catalog probe was live. At `a8c0fd1f`'s, **exactly one** — the request that got the 401.
+- So at each death there was **one** process on the directory. A double-spend needs two.
+
+The surviving pattern is the opposite of a race, and it points somewhere else:
+
+| account | real turns in the window | outcome |
+|---|---|---|
+| `426a1d04` | 12 | survived — refreshed cleanly at 11:20 |
+| `df3a4fd0` | 2 | survived — refreshed cleanly at 11:44 |
+| `a8c0fd1f`, `f97f6dd2`, `afbee92b` | 0 | all three blanked |
+
+**The accounts doing the work lived; the ones nothing routed to died.** A concurrency race predicts
+exactly the reverse. What fits is the one hard field observation in Meridian's tree
+(`tokenRefresh.ts:546-553`): *"Anthropic's OAuth refresh tokens appear to be invalidated server-side
+after sitting unused for an extended period (observed 2026-05-03 … only fix was OAuth-flow
+re-login). Running a refresh every ~8h keeps the refresh chain warm."*
+
+**And the sharp edge: only a real turn refreshes.** The turn-free handshake `idle-query.ts` runs —
+the one behind the model-catalog sweep and the usage gauge — does **not** rewrite
+`.credentials.json`. Account `27ae4129` sat with an access token three hours expired through three
+consecutive hourly catalog probes with the file untouched at `03:20`. So the hourly probe that looks
+like it exercises every account exercises no credential at all, and an unused account goes cold and
+stays cold until something finally tries to use it.
+
+This is stated at the confidence the evidence carries: idle-invalidation is the best-supported
+explanation and the busy/idle split is strong, but the upstream rejection reason is not observable
+from here. What *is* certain is that a credential no traffic refreshes will eventually be rejected,
+and that the router had no way to see it coming.
 
 Recovery is an interactive re-login per Account. Nothing the router can do reverses it, which is why
 this is prevented rather than detected.
@@ -253,6 +287,27 @@ The router still reads **metadata, never a token** (non-negotiables 1 and 13): t
 boolean out of `credential-metadata.ts`, whose return type has no field that could hold a token. The
 Agent SDK continues to own the credentials and to perform every refresh itself. The gate decides
 only who waits.
+
+**The keepalive that keeps a credential from going cold.** Because only a real turn refreshes,
+`idle_account_probe` now reads each logged-in subscription's **access**-token expiry (metadata, one
+instant, never a token) and gives any account within
+`CLAUDE_SDK_CREDENTIAL_KEEPALIVE_BEFORE_MINUTES` of expiry one small turn to refresh it. Two
+supporting changes make that work at all:
+
+- The sweep's interval default drops from **1440 minutes to 360** — a daily sweep cannot keep an
+  ~8-hourly token warm however well it works, because it wakes long after the credential went cold.
+- The scheduler now measures a task's first gap from its **last recorded run** rather than from
+  process start (`scheduler/runner.ts`). Without that, a 24-hour task on a pod that restarts more
+  often than daily never runs at all: on 2026-09-06 `idle_account_probe` had run **zero** times in a
+  ten-hour-old pod, which is precisely why the sweep meant to catch a dying credential caught
+  nothing. `ScheduledTaskRun` already recorded every run; the scheduler simply never read it.
+
+`CLAUDE_SDK_CREDENTIAL_KEEPALIVE=false` restores the old behaviour, and a cold credential is then
+logged rather than warmed — the visibility survives either way. This spends a small amount of usage
+by design, which the previous reasoning here refused on the grounds that a keepalive "cannot move a
+subscription's refresh-token cliff". That is true of the 30-day login cliff and irrelevant to this
+failure: the token was rejected a month *before* that cliff, and keeping the chain exercised is the
+only lever the router has that does not require a human.
 
 **Still unguarded, deliberately:** `claude auth status`, which `idle_account_probe` runs daily over
 every Account and the console's "Re-check now" runs on demand. Its contract says it contacts nobody
