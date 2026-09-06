@@ -204,7 +204,7 @@ LABEL org.opencontainers.image.title="multi-ai-router" \
       org.opencontainers.image.url="https://github.com/developerz-ai/multi-ai-router" \
       org.opencontainers.image.documentation="https://github.com/developerz-ai/multi-ai-router/blob/main/README.md" \
       org.opencontainers.image.licenses="MIT" \
-      org.opencontainers.image.version="2.10.1" \
+      org.opencontainers.image.version="2.10.2" \
       org.opencontainers.image.revision="${ROUTER_REVISION}"
 
 # ---- PID 1 ----
