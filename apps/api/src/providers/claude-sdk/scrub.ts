@@ -53,7 +53,14 @@ const ENV_PREAMBLE_BLOCK =
  */
 const POWERED_BY_LINE = /You are powered by the model named [^\n]*(?:\n|$)/g
 
-/** opencode's opening identity line, from its built-in `anthropic.txt`. */
+/**
+ * opencode's opening identity line, from its built-in `anthropic.txt`.
+ *
+ * Legacy coverage: 1.18.29's V2 prompt is ~1.1 KB and opens `You are an AI coding agent.`, which
+ * carries no brand and is *not* scrubbed — a generic line is not a fingerprint. This rule is kept
+ * for the older builds a fleet still runs, and it costs nothing when absent, which is the whole
+ * point of the rules being independent.
+ */
 const OPENCODE_IDENTITY_LINE = /You are OpenCode, the best coding agent on the planet\.[^\n]*\n+/g
 
 /**
@@ -90,8 +97,14 @@ const OMO_ENV_BLOCK = /<omo-env>[\s\S]*?<\/omo-env>\n*/g
  * named honestly: a user's own `CLAUDE.md` that discusses the harness by name is rewritten too —
  * the token *is* the fingerprint, so there is no reading of it that keeps both the words and the
  * request.
+ *
+ * **Case-insensitive, which it was not until 2.10.5.** opencode spells itself lower-case in its own
+ * prose — 1.18.29's built-in `customize-opencode` skill description says `opencode` a dozen times
+ * and never once capitalised — so a case-sensitive `\bOpenCode\b` matched none of it and the
+ * fingerprint travelled anyway. The longer alternative is listed first: alternation is ordered, and
+ * `OpenCode` would otherwise match inside `OhMyOpenCode` under `i`.
  */
-const BRAND_TOKENS = /\bOpenCode\b|\bOhMyOpenCode\b/g
+const BRAND_TOKENS = /\bOhMyOpenCode\b|\bOpenCode\b/gi
 const GENERIC_BRAND = "the assistant"
 
 /** Collapse and trim, so a removed block does not leave a hole where a paragraph break belongs. */

@@ -156,3 +156,36 @@ describe("the flattened shapes request.ts produces", () => {
     expect(scrubSystemPrompt([ENV_PREAMBLE, ENV_PREAMBLE])).toBeNull()
   })
 })
+
+/**
+ * opencode spells itself lower-case in its own prose — 1.18.29's built-in `customize-opencode`
+ * skill description says `opencode` a dozen times and never once capitalised — so the
+ * case-sensitive rule this shipped with matched none of it and the fingerprint travelled anyway
+ * (measured on a box, 2026-09-06).
+ */
+describe("the brand token, however it is spelled", () => {
+  test("lower-case is caught, which it was not until 2.10.5", () => {
+    const scrubbed = scrubHarnessFingerprints("Use the opencode skill to customize opencode.")
+
+    expect(scrubbed).not.toContain("opencode")
+    expect(scrubbed).toContain("the assistant")
+  })
+
+  test("the OhMyOpenCode token stays whole rather than being eaten from the middle", () => {
+    // Alternation is ordered: the longer token is listed first, or `OpenCode` would match inside it
+    // under a case-insensitive flag and leave `OhMy` behind.
+    expect(scrubHarnessFingerprints("Built on OhMyOpenCode.")).toBe("Built on the assistant.")
+  })
+
+  test("and it is still idempotent, which the case-insensitive form could quietly break", () => {
+    const once = scrubHarnessFingerprints("opencode and OpenCode and OhMyOpenCode")
+    expect(scrubHarnessFingerprints(once)).toBe(once)
+  })
+
+  test("a generic identity line is not a fingerprint and is left alone", () => {
+    // 1.18.29's V2 prompt opens with this. It carries no brand, so scrubbing it would be the router
+    // rewriting instructions rather than removing a tell.
+    const prompt = "You are an AI coding agent.\n\nBe concise."
+    expect(scrubHarnessFingerprints(prompt)).toBe(prompt)
+  })
+})
