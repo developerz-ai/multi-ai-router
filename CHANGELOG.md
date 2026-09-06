@@ -5,6 +5,32 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.12.0] — 2026-09-06
+
+### Fixed
+
+- **A subscription's credential is kept warm, and the sweep that watches it now survives a restart — the actual cause of the 2026-09-06 deauthentications.** 2.11.0 attributed those three losses to two subprocesses double-spending a rotating refresh token. Reconstructing every request interval from the production log (start = timestamp − `durationMs`, 730 inference requests over ten hours) does not support that: **peak concurrency all day was 2**, at `f97f6dd2`'s blanking **zero** data-plane requests overlapped, and at `a8c0fd1f`'s there was **exactly one** — the request that got the 401. One process on the directory; a double-spend needs two.
+
+  The surviving pattern is the opposite of a race. The accounts doing the work lived (`426a1d04` 12 turns, `df3a4fd0` 2) and the ones nothing routed to died (`a8c0fd1f`, `f97f6dd2`, `afbee92b`, zero each) — which matches Meridian's field note that Anthropic invalidates refresh tokens left unused, and whose remedy is to keep the chain exercised.
+
+  **And only a real turn exercises it.** The turn-free handshake behind the model-catalog sweep and the usage gauge does not rewrite `.credentials.json`: account `27ae4129` sat with an access token three hours expired through three consecutive hourly catalog probes with the file untouched. So the probe that looks like it exercises every account exercises no credential at all, and an unused account goes cold and stays cold until something finally tries to use it.
+
+  `idle_account_probe` now reads each logged-in subscription's **access**-token expiry — metadata, one instant, from a type with no field that could hold a token — and gives any account inside `CLAUDE_SDK_CREDENTIAL_KEEPALIVE_BEFORE_MINUTES` of expiry one small turn to refresh it. This spends a little usage by design; the previous reasoning refused a keepalive because it "cannot move a subscription's refresh-token cliff", which is true of the 30-day *login* cliff and irrelevant here — these tokens were rejected a month before it.
+
+- **A long-interval scheduled task no longer skips itself forever on a restarting pod.** The first gap after boot was measured from process start rather than from the task's last recorded run, so a 24-hour sweep on a container that restarts more often than daily is armed, reported as scheduled, and never fires. `idle_account_probe` had run **zero** times in a ten-hour-old pod, which is exactly why the sweep that exists to notice a dying credential noticed nothing. `ScheduledTaskRun` recorded every run all along; the scheduler simply never read what it wrote. This fixes every long-interval task, not just this one.
+
+### Changed
+
+- `IDLE_ACCOUNT_PROBE_INTERVAL_MINUTES` defaults to **360**, down from `1440`. A subscription's access token lives ~8 h, so a daily sweep wakes long after a credential has gone cold and cannot keep one warm however well it works.
+
+### Added
+
+- `CLAUDE_SDK_CREDENTIAL_KEEPALIVE` (default `true`) and `CLAUDE_SDK_CREDENTIAL_KEEPALIVE_BEFORE_MINUTES` (default `60`). With the keepalive off, a cold credential is logged rather than warmed, so the visibility survives either way.
+
+### Documentation
+
+- **`docs/idea/11-anthropic-agent-sdk.md` §3 carried the wrong root cause and is corrected in place**, with the concurrency numbers that falsified it, rather than quietly amended. 2.11.0's refresh-window guard stays — it closes a real hazard the spec had wrongly denied — it just was not what killed these three, and the section now says so at the confidence the evidence carries.
+
 ## [2.11.0] — 2026-09-06
 
 ### Fixed
