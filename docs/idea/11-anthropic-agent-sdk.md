@@ -364,6 +364,14 @@ account instead of the caller ever seeing it.
 upstream that stated `end_turn` and merely dropped a `content_block_stop` sent a whole answer with
 one framing event missing: that is repaired and finishes cleanly, exactly as it always did.
 
+**Whether a truncated turn can be failed over is a fact about the shape, not a policy.** A block can
+only be *open* if its `content_block_start` was forwarded, and on the streaming path a forwarded
+frame is a written byte — so by the time a turn can be called truncated, the client already holds
+part of it and "never retry after bytes are on the wire" applies with nothing left to decide. The
+non-streaming path answers the same question the other way for the same reason: nothing is written
+until the whole object is, so a truncated fold is still free to be a real status, and it is — which
+is what lets the chain try another account there. Two paths, one rule, opposite outcomes.
+
 `sdk turn ended mid-answer` carries what the renderer knew — the block kinds, the last SDK message
 and wire event, whether a `result` arrived at all, and how many messages and client frames the turn
 produced — plus the two facts only the launch holds: how many tools the client declared, and whether
@@ -375,6 +383,12 @@ dying under it.
 *anywhere* in the turn, not the message that ended it — a turn whose stream stops long after a
 `system` still reports that subtype, and reading it as an ending has already sent one investigation
 after a thinking budget that was never involved.
+
+`flushedBlocks` is the third: it says what the flush actually closed on its way out. Three plausible
+reproductions of the production shape — a stream that ends after a `user` message, one that throws
+after the block opened, one that throws immediately — all close their blocks correctly, so the line
+has to be able to say which of them production is *not*. Non-zero means the rewriter held that block
+and closed it, so anything the renderer still had open was never the rewriter's to close.
 
 The tool fields separate the two live explanations for a turn that ends on a `tool_use` block that
 never closed, and they have opposite fixes. A client that **declared tools** has a passthrough, so

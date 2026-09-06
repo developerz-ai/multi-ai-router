@@ -195,6 +195,7 @@ export function createSdkInvoker(deps: SdkInvokerDeps): SdkInvoker {
                       ...detail,
                       declaredTools: request.tools.length,
                       passthrough: passthrough !== null,
+                      flushedBlocks: passthrough?.integrity().flushedBlocks ?? 0,
                     }),
                 }),
           },
