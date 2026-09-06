@@ -228,7 +228,7 @@ function sessionDouble(plan: SessionPlan): {
   const store: SessionStore = {
     binding: () => Promise.resolve(undefined),
     invalidate: (apiKeyId, sessionKey) => invalidated.push(`${apiKeyId}::${sessionKey}`),
-    resolve: () => ({ plan, remember: () => {} }),
+    resolve: () => ({ plan, remember: () => {}, release: () => {} }),
   }
   return {
     context: { store, apiKeyId: "key-1", sessionKey: "sess-1", keySource: "header" },
@@ -456,7 +456,11 @@ describe("what the lineage plan is told", () => {
         resolved.push({
           ...(input.sessionGone === undefined ? {} : { sessionGone: input.sessionGone }),
         })
-        return { plan: { kind: "fresh", reason: "no-session" }, remember: () => {} }
+        return {
+          plan: { kind: "fresh", reason: "no-session" },
+          remember: () => {},
+          release: () => {},
+        }
       },
     }
     return {

@@ -7,6 +7,7 @@ import {
 } from "./cache"
 import { readConversation } from "./conversation"
 import { scopedKey, sessionFingerprint } from "./fingerprint"
+import { createSessionClaims, type SessionClaims } from "./inflight"
 import { hashMessages, resolveLineage, type SessionPlan } from "./lineage"
 
 /**
@@ -69,10 +70,23 @@ export interface SessionTurn {
    * What the SDK told us, once it says it. Fire-and-forget: the cache is updated synchronously so
    * the next turn on this replica resumes even if the row is still in flight.
    *
+   * **A detached turn remembers nothing** — see {@link SessionStore.resolve}. It is a no-op there
+   * rather than a flag the caller has to check, because the one thing that must not happen is a
+   * hidden one-shot's throwaway session becoming the conversation's binding.
+   *
    * @param assistantUuid the SDK message uuid this turn produced, when known. It is what an undo
    * later rewinds to, and its absence costs exactly that: an undo starts fresh instead of forking.
    */
   remember(sdkSessionId: string, assistantUuid?: string): void
+  /**
+   * This turn is finished with the SDK session, so the next turn of the conversation may have it.
+   *
+   * Idempotent, and called **unconditionally** — from the turn's own end inside the invoker, and
+   * again from the attempt's failure path, because those two cannot coordinate and a claim that
+   * leaks parks a conversation on fresh sessions until the process restarts. A turn that holds no
+   * claim releases nothing (`session/inflight.ts`).
+   */
+  release(): void
 }
 
 export interface SessionStore {
@@ -83,7 +97,16 @@ export interface SessionStore {
   binding(apiKeyId: string, sessionKey: string): Promise<StoredBinding | undefined>
   /** Selection refused the binding. Drop it here and in Postgres; never move it to the new pick. */
   invalidate(apiKeyId: string, sessionKey: string): void
-  /** Before an SDK attempt: resume, fork, or start fresh, and how to record whichever happens. */
+  /**
+   * Before an SDK attempt: resume, fork, or start fresh, and how to record whichever happens.
+   *
+   * **It also claims the conversation for the duration of the turn.** A second request that arrives
+   * on the same session key while the first is still running is *detached* — a fresh SDK session,
+   * and nothing written back — because two turns cannot share one SDK session and the later arrival
+   * is, in practice, a client's hidden title or summary one-shot rather than the conversation
+   * (`session/inflight.ts`). The caller must call {@link SessionTurn.release} when the turn ends,
+   * however it ends.
+   */
   resolve(input: ResolveTurnInput): SessionTurn
 }
 
@@ -104,6 +127,9 @@ export function createSessionStore(deps: SessionStoreDeps): SessionStore {
    * same session concurrently could interleave the same way. The chain never grows unbounded: a
    * key's tail entry is removed the moment it settles with nothing queued behind it.
    */
+  /** Which conversations are mid-turn right now. Per store, never a process singleton. */
+  const claims: SessionClaims = createSessionClaims()
+
   const pending = new Map<string, Promise<void>>()
   const write = (key: string, input: Parameters<SessionRepository["upsert"]>[0]): void => {
     const run = (): Promise<void> =>
@@ -168,24 +194,35 @@ export function createSessionStore(deps: SessionStoreDeps): SessionStore {
               firstUserText: conversation.firstUserText,
             })
 
+      // Taken before the plan is decided, because whether it was granted is one of the plan's
+      // inputs. Keyed by the conversation rather than by the Account: the collision this prevents
+      // is two turns of one conversation, wherever each of them would have run.
+      const claim = claims.acquire(key)
       const session = boundSession(cache, key, input.accountId, fingerprint)
       const plan = resolveLineage({
         session,
         conversation,
         keySource: input.keySource,
+        sessionBusy: !claim.held,
         ...(input.forkOrSubagent === undefined ? {} : { forkOrSubagent: input.forkOrSubagent }),
         ...(input.sessionGone === undefined ? {} : { sessionGone: input.sessionGone }),
       })
 
       // Nothing readable arrived, so there is nothing to hash and nothing worth remembering. The
       // plan already says so by name.
-      if (conversation === null) return { plan, remember: () => {} }
+      if (conversation === null) return { plan, remember: () => {}, release: claim.release }
+
+      // A detached turn is not the conversation: it runs, it answers, and it leaves no trace. Were
+      // it to remember, a throwaway one-shot's fresh session would become the binding the user's
+      // next real turn resumes from — the durable lineage advanced by a request nobody saw.
+      if (!claim.held) return { plan, remember: () => {}, release: claim.release }
 
       const hashes = hashMessages(conversation.messages)
       const carried = plan.kind === "fresh" ? [] : (session?.lineage.assistantUuids ?? [])
 
       return {
         plan,
+        release: claim.release,
         remember: (sdkSessionId, assistantUuid) => {
           const lineage = nextLineage(hashes, carried, assistantUuid)
           cache.set(key, { accountId: input.accountId, sdkSessionId, lineage })

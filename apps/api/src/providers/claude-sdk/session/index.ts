@@ -17,6 +17,8 @@ export type { ConversationView, LineageMessage, LineageRole } from "./conversati
 export { FIRST_USER_TEXT_LIMIT, readConversation } from "./conversation"
 export type { FingerprintSeed } from "./fingerprint"
 export { scopedKey, sessionFingerprint } from "./fingerprint"
+export type { SessionClaim, SessionClaims } from "./inflight"
+export { createSessionClaims } from "./inflight"
 export type {
   FreshReason,
   LineageClass,

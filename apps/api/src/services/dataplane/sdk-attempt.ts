@@ -97,6 +97,7 @@ export interface SdkSessionContext {
 const NO_SESSION: SessionTurn = {
   plan: { kind: "fresh", reason: "no-session" },
   remember: () => {},
+  release: () => {},
 }
 
 const NO_TRANSPORT =
@@ -133,6 +134,10 @@ export async function runSdkAttempt(input: SdkAttemptInput): Promise<AttemptOutc
         }),
     })
   } catch (error) {
+    // Released here as well as from `onTurnEnd`, and idempotently: a throw before the launch ever
+    // existed reaches no `onEnd`, and the *next* attempt of this same request must be able to claim
+    // the conversation immediately rather than fail over onto a detached, session-less turn.
+    turn.release()
     return invocationFailure(error, input, turn, rateLimit.signal())
   }
 
@@ -143,13 +148,83 @@ export async function runSdkAttempt(input: SdkAttemptInput): Promise<AttemptOutc
   // reset its failure streak, and handed the client a 502 while healthy candidates sat unasked.
   // The streaming path is the opposite case by construction: its Response is always 200, and a
   // mid-stream failure is spelled as a terminal SSE frame after bytes are out — never retried.
-  if (response.status >= 400) return errorResponseFailure(response, rateLimit.signal())
+  // The same reason as the catch above: this attempt is over and the chain may try another
+  // account, which resolves its own turn against this conversation.
+  if (response.status >= 400) {
+    turn.release()
+    return errorResponseFailure(response, rateLimit.signal())
+  }
 
   // Rate-limit and quota state does not ride the HTTP response here: it arrives as
   // `rate_limit_event` messages inside the query stream, which `rateLimitCapture` folds into
   // Account state exactly as `applyRateLimit` folds in an HTTP driver's parsed headers
   // (docs/idea/11-anthropic-agent-sdk.md §5).
-  return { kind: "success", response, rateLimit: rateLimit.signal() }
+  // The conversation stays this turn's until the answer has finished being produced — which, on a
+  // streaming turn, is long after this function returned. Releasing any earlier lets a client's
+  // hidden one-shot resume a session still in use, which is the collision the claim exists to
+  // prevent (`claude-sdk/session/inflight.ts`).
+  return {
+    kind: "success",
+    response: releasingWith(response, turn.release),
+    rateLimit: rateLimit.signal(),
+  }
+}
+
+/**
+ * The same `Response`, with `release` called once the body is finished with — drained, cancelled by
+ * a client that went away, or errored.
+ *
+ * **The body is the signal on purpose, rather than a callback the transport fires.** The claim is
+ * held for exactly as long as the SDK session is producing this answer, and the rendered stream *is*
+ * that production: reading it off the body cannot be forgotten by an invoker, where a callback on
+ * the `SdkInvocation` seam silently degrades every later turn of every conversation the moment one
+ * implementation neglects it. A body-less response releases immediately, which is the same claim
+ * with nothing left to produce.
+ *
+ * The gauge that outlives `result` by one bounded control request is knowingly outside this window
+ * (docs/idea/11-anthropic-agent-sdk.md §9). A concurrent turn landing inside it meets the CLI's own
+ * refusal, which is classified and recovered in place — the backstop this was never meant to
+ * replace.
+ */
+function releasingWith(response: Response, release: () => void): Response {
+  const body = response.body
+  if (body === null) {
+    release()
+    return response
+  }
+
+  const reader = body.getReader()
+  const observed = new ReadableStream<Uint8Array>({
+    async pull(controller) {
+      let step: Awaited<ReturnType<typeof reader.read>>
+      try {
+        step = await reader.read()
+      } catch (error) {
+        // A source that failed mid-stream has still stopped producing this answer.
+        release()
+        controller.error(error)
+        return
+      }
+      if (step.done) {
+        release()
+        controller.close()
+        return
+      }
+      controller.enqueue(step.value)
+    },
+    // A client that went away ends the turn as surely as one that read it to the end. Without
+    // this the conversation would stay claimed until the process restarted, and every later turn
+    // of it would run detached.
+    cancel(reason) {
+      release()
+      return reader.cancel(reason)
+    },
+  })
+  return new Response(observed, {
+    status: response.status,
+    statusText: response.statusText,
+    headers: response.headers,
+  })
 }
 
 /**

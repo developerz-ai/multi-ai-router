@@ -40,6 +40,9 @@ function turn(store: SessionStore, body: Uint8Array, sdkSessionId: string | null
     body,
   })
   if (sdkSessionId !== null) resolved.remember(sdkSessionId, uuid)
+  // One whole turn: resolved, answered, and finished with. Without the release the *next* turn of
+  // this conversation would read as a concurrent one and run detached (`session/inflight.ts`).
+  resolved.release()
   return resolved.plan
 }
 
@@ -383,5 +386,112 @@ describe("row writes are ordered per session", () => {
     gate.release()
     await until(() => gate.landed.length === 2)
     expect(gate.landed).toHaveLength(2)
+  })
+})
+
+/**
+ * Two turns of one conversation in flight at once — a coding agent's visible turn and the hidden
+ * title/summary one-shot it fires beside it, carrying the same session header.
+ *
+ * Production, 2026-09-06: both resolved to one SDK session, the second asked the CLI to resume a
+ * session the first was still running, and the CLI refused — `Session <id> is running as a
+ * background session`, on stderr behind an `exit 1`. Read as a subprocess crash, answered `502`,
+ * failed over, and the user's conversation restarted on a cold account mid-turn.
+ */
+describe("a second turn arriving while the first is still running", () => {
+  function resolveTurn(store: SessionStore, body: Uint8Array) {
+    return store.resolve({
+      apiKeyId: "key-1",
+      sessionKey: "conv-1",
+      keySource: "header",
+      accountId: "acct-1",
+      body,
+    })
+  }
+
+  test("it runs detached: a fresh session, named as such, never a resume", () => {
+    const store = storeWith(memorySessions())
+    turn(store, opening, "sess_1")
+
+    const visible = resolveTurn(store, grown)
+    expect(visible.plan).toMatchObject({ kind: "resume", sdkSessionId: "sess_1" })
+
+    // The one-shot, arriving before the visible turn has ended.
+    const oneShot = resolveTurn(store, grown)
+    expect(oneShot.plan).toEqual({ kind: "fresh", reason: "session-busy" })
+  })
+
+  test("and it advances nothing: the conversation's binding is exactly where it was", () => {
+    const store = storeWith(memorySessions())
+    turn(store, opening, "sess_1")
+
+    const visible = resolveTurn(store, grown)
+    const oneShot = resolveTurn(store, grown)
+
+    // A detached turn that remembered would make its throwaway session the conversation's own, and
+    // the user's next real turn would resume from a request nobody ever saw.
+    oneShot.remember("sess_throwaway")
+    oneShot.release()
+    visible.release()
+
+    expect(resolveTurn(store, grown).plan).toMatchObject({
+      kind: "resume",
+      sdkSessionId: "sess_1",
+    })
+  })
+
+  test("the conversation resumes normally again once the turn holding it ends", () => {
+    const store = storeWith(memorySessions())
+    turn(store, opening, "sess_1")
+
+    const visible = resolveTurn(store, grown)
+    expect(resolveTurn(store, grown).plan).toMatchObject({ reason: "session-busy" })
+
+    visible.remember("sess_2")
+    visible.release()
+
+    const later = messagesBody([
+      { role: "user", text: "hello" },
+      { role: "assistant", text: "hi" },
+      { role: "user", text: "and now?" },
+      { role: "assistant", text: "this" },
+      { role: "user", text: "thanks" },
+    ])
+    expect(resolveTurn(store, later).plan).toMatchObject({
+      kind: "resume",
+      sdkSessionId: "sess_2",
+    })
+  })
+
+  test("releasing twice does not hand the conversation to two turns at once", () => {
+    const store = storeWith(memorySessions())
+    turn(store, opening, "sess_1")
+
+    const first = resolveTurn(store, grown)
+    first.release()
+
+    const second = resolveTurn(store, grown)
+    // The stale release must not free the key the second turn now holds.
+    first.release()
+
+    expect(second.plan).toMatchObject({ kind: "resume" })
+    expect(resolveTurn(store, grown).plan).toMatchObject({ reason: "session-busy" })
+  })
+
+  test("a different conversation is untouched — the claim is per session key", () => {
+    const store = storeWith(memorySessions())
+    turn(store, opening, "sess_1")
+    // conv-1 is now held by an unfinished turn.
+    expect(resolveTurn(store, grown).plan).toMatchObject({ kind: "resume" })
+
+    // A different opening, so the fingerprint alias cannot reach conv-1's binding either.
+    const other = store.resolve({
+      apiKeyId: "key-1",
+      sessionKey: "conv-2",
+      keySource: "header",
+      accountId: "acct-1",
+      body: messagesBody([{ role: "user", text: "a different question entirely" }]),
+    })
+    expect(other.plan).toEqual({ kind: "fresh", reason: "no-session" })
   })
 })

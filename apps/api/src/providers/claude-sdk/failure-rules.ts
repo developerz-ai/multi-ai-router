@@ -133,11 +133,27 @@ export const SDK_FAILURE_RULES: readonly SdkRule[] = [
     match: phrase("no conversation found with session id", "no message found with message.uuid"),
   },
   {
+    // Two wordings for one refusal, and the second is why this row is worth a comment. 0.3.x said
+    // "is currently running as a background agent"; 2.1.x says "Session <id> is running as a
+    // background session. Run `claude agents` to find its id, then `claude attach <id>`" — and it
+    // says it on **stderr**, behind an `exit 1`. When only the older phrase was listed the newer
+    // one fell past this row to `claude-sdk:subprocess-exit`: a `502`, no in-place fork, and a
+    // failover that restarted the conversation on a cold account (production, 2026-09-06). A
+    // reworded refusal must never silently become a crash, which is what ordering this rule ahead
+    // of `subprocess-exit` is for.
+    //
+    // It should now be rare rather than routine: `session/inflight.ts` detaches a *concurrent*
+    // turn on one conversation before it can ask the CLI to resume a session it is already
+    // running. This row is what catches the collisions that detachment cannot see — another
+    // replica's turn, or a session the CLI still holds after ours ended.
     kind: "busy-session",
     signal: "claude-sdk:session-busy",
     status: 503,
     clientMessage: "the Claude Agent SDK session this conversation resumed is still running",
-    match: phrase("is currently running as a background agent"),
+    match: phrase(
+      "is currently running as a background agent",
+      "is running as a background session",
+    ),
   },
   {
     // Waiting does not fix an oversized prompt: an identical retry burns a whole upstream turn on

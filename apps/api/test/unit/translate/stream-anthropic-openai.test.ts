@@ -153,6 +153,31 @@ describe("the terminal events", () => {
     expect(stream.push(anthropicFrame("message_stop"))).toEqual([{ data: "[DONE]" }])
   })
 
+  /**
+   * The Agent-SDK renderer emits `stop_reason: null` for a turn whose stream ended mid-block —
+   * honest in Anthropic's dialect, where absence is a legal value. openai-chat has no null finish:
+   * a chunk carrying one says "more is coming", so passing the absence through on the terminal
+   * chunk ended a stream in which nothing ever finished. Twice on 2026-09-06, on two accounts,
+   * which is what the client read as a broken stream.
+   */
+  test("a terminal chunk always states a finish reason, even when the upstream named none", () => {
+    const stream = translator()
+    stream.push(messageStart)
+    const finish = payloads(stream.push(messageDelta(null))) as Chunk[]
+
+    expect(finish[0]?.choices[0]?.finish_reason).toBe("stop")
+    expect(stream.push(anthropicFrame("message_stop"))).toEqual([{ data: "[DONE]" }])
+  })
+
+  test("an absent stop reason is still not an unrecognized one — nothing to report", () => {
+    const stream = translator()
+    stream.push(messageStart)
+    stream.push(messageDelta(null))
+    // The conservative value is this direction's reading of absence, not a provider change: a log
+    // line per truncated turn would be noise, and `unrecognized` exists for the other thing.
+    expect(stream.unrecognizedStopReason()).toBeNull()
+  })
+
   test("usage arrives on message_delta too, summed across the three input fields", () => {
     const stream = translator()
     stream.push(messageStart)
@@ -350,12 +375,19 @@ describe("tool calls", () => {
 })
 
 describe("failure mid-stream", () => {
-  test("an error event becomes an openai error chunk and closes the stream", () => {
+  /**
+   * The error is the first thing out and the stream is closed properly behind it. Until 2.10.1 the
+   * error was the *only* thing out: no terminal chunk, no `[DONE]`. A client's reader then hit EOF
+   * still expecting the stream to continue, and reported a parse failure with the real cause
+   * nowhere in it — opencode's `Failed to read … stream` on a long agent turn (2026-09-06).
+   */
+  test("an error event goes out first, then the stream is terminated properly", () => {
     const stream = translator()
     stream.push(messageStart)
     const events = stream.push(
       anthropicFrame("error", { error: { type: "overloaded_error", message: "Overloaded" } }),
     )
+
     expect(payloads(events)).toEqual([
       {
         error: {
@@ -365,10 +397,32 @@ describe("failure mid-stream", () => {
           code: "overloaded_error",
         },
       },
+      {
+        id: "msg_01",
+        object: "chat.completion.chunk",
+        created: CREATED,
+        model: "claude-sonnet-4-5",
+        choices: [{ index: 0, delta: {}, finish_reason: "stop" }],
+      },
     ])
-    // Then the stream is over: no sentinel, and nothing after it.
+    // And the terminator, so the reader can finish reading rather than wait at EOF.
+    expect(events.at(-1)?.data).toBe("[DONE]")
+    // Then the stream is over: nothing after it, and no second sentinel.
     expect(stream.push(anthropicFrame("message_stop"))).toEqual([])
     expect(stream.flush()).toEqual([])
+  })
+
+  test("an error after the completion already finished does not restate the finish", () => {
+    const stream = translator()
+    stream.push(messageStart)
+    stream.push(messageDelta("end_turn"))
+    const events = stream.push(
+      anthropicFrame("error", { error: { type: "api_error", message: "late" } }),
+    )
+
+    // One terminal chunk per stream: the upstream stated its own ending before the error arrived.
+    expect(payloads(events)).toHaveLength(1)
+    expect(events.at(-1)?.data).toBe("[DONE]")
   })
 
   test("a malformed frame is skipped rather than thrown over", () => {
