@@ -339,6 +339,36 @@ carries per-request file trees that change every turn). Meridian scopes by profi
 by Account id** — resuming against the wrong Account is both a cache miss and a leak of one
 subscription's conversation into another's.
 
+### One conversation, one turn at a time
+
+**As built** (`session/inflight.ts`, applied in `session/store.ts`). Resolving a turn also *claims*
+its session key; the claim is released when the subprocess is finished with, which the invoker
+states through `SdkInvocation.onTurnEnd` because a streaming answer is handed back long before its
+SDK session is free.
+
+A second request arriving on the same key while the first still holds it is served **detached**: a
+fresh SDK session (`FreshReason: "session-busy"`), and it records nothing.
+
+Both halves are load-bearing. Coding-agent clients fire hidden one-shot requests — a conversation
+title, a summary — carrying the **same** session header as the visible turn and often in parallel
+with it; opencode does exactly this, and Meridian's own opencode plugin detaches them by rewriting
+the session-affinity headers before they reach the proxy. Without the detach, both requests resolve
+to one SDK session and the second asks the CLI to resume a session the first is running. The CLI
+refuses — `Session <id> is running as a background session` — and on 2026-09-06 that refusal
+arrived as an `exit 1` on stderr, classified as a subprocess crash, answered `502`, and failed the
+user's conversation over onto a cold account mid-turn.
+
+Forking is *not* the fix, which is why the busy-session recovery is the backstop rather than the
+answer: a fork would serve the one-shot, but the fork's new session id is what the turn then records
+against the conversation's key, so a throwaway "write me a title" request would take ownership of
+the durable lineage and the next real turn would resume from it. A hidden one-shot is not the
+conversation and must not advance it. The cost of detaching is one cold prompt cache on a request
+the user never sees.
+
+Per replica, and honestly so: two replicas cannot see each other's claims. This deployment runs one
+by design, and the CLI's own refusal — now matched in both its spellings — remains the backstop for
+a collision the map cannot see.
+
 ### Lineage classification
 
 Every request re-verifies the incoming messages are a legal descendant of what we stored: fast path
@@ -885,7 +915,7 @@ error types:
 | Rate limited | `429`, `rate limit`, `usage limit reached`, `hit your … limit` (session, weekly, monthly spend, fast), `you've reached your <tier> limit` (one to three qualifier words — the credits-era per-tier banner), `you're out of usage credits` (a member's spent top-up; the included window still refills) | 429 + circuit breaker; fail over to the next Account |
 | Credits exhausted | `credit balance is too low` (the CLI's own error constant, 0.3.220 and 2.1.261), `organization is out of usage credits`, `usage limit is set to $N` (an admin-provisioned cap) or `api_error_status` 402 | `402`, Account → `exhausted` — permanent until a human tops up, **never** timer-retried (CLAUDE.md non-negotiable 7). Fail over: the next Account may be funded |
 | Stale SDK session | `No conversation found with session ID`, `No message found with message.uuid` (a fork whose rewind point is gone — same recovery, and before it was named here it fell to `unknown`, which does not retry, so the binding survived to fail the next turn too) | Evict the Session mapping, replay once |
-| Busy session | `is currently running as a background agent` | **One in-place retry as a fork** (`invoker.ts`): same Account, `forkSession: true` at the tip — the fork inherits the full transcript warm, where a failover would replay it cold. Legal because the refusal is thrown before any stream output and the renderer never throws after the first byte. A fork that comes back busy is a real `503` for the chain |
+| Busy session | `is currently running as a background agent` (0.3.x), `is running as a background session` (2.1.x, on **stderr** behind an `exit 1` — listing only the older phrase sent this to `subprocess-exit` and cost a conversation its account mid-turn, 2026-09-06). Should now be rare rather than routine: the concurrent-turn case is detached before it reaches the CLI (§4) | **One in-place retry as a fork** (`invoker.ts`): same Account, `forkSession: true` at the tip — the fork inherits the full transcript warm, where a failover would replay it cold. Legal because the refusal is thrown before any stream output and the renderer never throws after the first byte. A fork that comes back busy is a real `503` for the chain |
 | Extra Usage gated | `third-party apps now draw from your extra usage`, or `extra usage` together with `claude.ai/settings/usage` — Anthropic's answer to a request it metered as a third-party app (production, 2026-09-05) | **429**, `rate-limited`: cool this Account down and fail over to the next. Ordered **before** the bare `api_error_status` 400, which had it reading as `invalid-request` — not retryable, so the chain stopped with five healthy subscriptions unasked and the client was told its request was malformed. The client-facing sentence names Extra Usage and `claude.ai/settings/usage`, because that is the remedy; the fix that stops it arising is the fingerprint scrub (§8) |
 | Overage required | `extra usage` + `1m`, or the CLI's verbatim long-context sentences (`Extra usage is required for long context`, `Usage credits are required for long context`, `out of extra usage`) | Drop the extended-context variant, cool down — the included window still refills on a clock, so this is never `exhausted` |
 | Subprocess crash | `exited with code N` + stderr | 502. Meridian maps a generic exit-1 to 401 on a heuristic — **do not copy that**; classify honestly and log the stderr tail |

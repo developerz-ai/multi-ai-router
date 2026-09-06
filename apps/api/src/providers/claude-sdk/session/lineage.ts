@@ -164,6 +164,8 @@ function commonPrefix(stored: readonly string[], incoming: readonly string[]): n
  * only as a cold prompt cache, never as an error — a fresh session still answers the question. */
 export type FreshReason =
   | "no-session"
+  /** Another turn of this same conversation is running right now — `session/inflight.ts`. */
+  | "session-busy"
   | "unreadable-body"
   | "diverged"
   | "replay"
@@ -199,6 +201,13 @@ export interface ResolveLineageInput {
   readonly forkOrSubagent?: boolean
   /** The SDK already told us this session is gone. Never resumed again. */
   readonly sessionGone?: boolean
+  /**
+   * Another turn of this conversation is running right now, so this one is a concurrent arrival —
+   * a client's hidden title or summary one-shot, in the overwhelming majority of cases
+   * (`session/inflight.ts`). It may not resume a session that is in use, and the caller separately
+   * sees to it that it records nothing.
+   */
+  readonly sessionBusy?: boolean
 }
 
 /**
@@ -208,10 +217,20 @@ export interface ResolveLineageInput {
  * concurrent loop with the same first message, so they share a fingerprint — and resuming would
  * splice two independent loops into one transcript. With a client-supplied header there is no
  * guess to get wrong, so the rule does not apply.
+ *
+ * `sessionBusy` is the same hazard arriving through the *other* door, and the header does not save
+ * you from it: a client that sends a header sends the **same** header on the hidden one-shots it
+ * fires beside the visible turn. Two turns of one conversation in flight at once cannot share an
+ * SDK session — the CLI refuses outright — so the later arrival runs detached
+ * (`session/inflight.ts`).
  */
 export function resolveLineage(input: ResolveLineageInput): SessionPlan {
   const { conversation, session } = input
 
+  // First, because it is the only rule about what is happening *now* rather than about what the
+  // conversation looks like: a session another turn is running cannot be resumed whatever the
+  // hashes say, and asking the CLI anyway is the refusal this rule exists to prevent.
+  if (input.sessionBusy === true) return { kind: "fresh", reason: "session-busy" }
   if (input.sessionGone === true) return { kind: "fresh", reason: "session-gone" }
   if (input.forkOrSubagent === true) return { kind: "fresh", reason: "subagent-child" }
   if (conversation === null) return { kind: "fresh", reason: "unreadable-body" }

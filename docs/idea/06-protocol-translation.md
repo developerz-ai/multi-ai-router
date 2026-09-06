@@ -458,6 +458,28 @@ Because a translator is a pure function with no logger behind it, the mapping **
 unrecognized value alongside the conservative one; the caller — which holds the request id — is what
 logs it. One line per provider change, none in steady state.
 
+**Absence is a fourth case, and it is not symmetric.** Anthropic's `stop_reason` is legitimately
+null — the Agent-SDK renderer emits exactly that for a turn whose stream ended mid-block, because
+nothing stated one and a router must never fabricate model output. openai-chat has no null finish:
+a chunk carrying `finish_reason: null` says *more is coming*, so forwarding the absence on the
+**terminal** chunk ends a stream in which nothing ever finished, and a reader waiting for a finish
+reason is right to complain. So the mapping itself stays honest — absence maps to absence, which is
+what a mid-stream delta needs — and the streaming translator applies the conservative value when it
+is emitting the terminal chunk and the upstream named none. It is not reported as an unrecognized
+value: nothing unknown arrived, and a log line per truncated turn would be noise.
+
+**An upstream error mid-stream still has to terminate the stream.** Once bytes are out the status
+cannot change, so the failure is spelled in the body — but the client's reader is still reading. The
+error goes out first, so nothing masks it, and is followed by a terminal chunk (if the completion
+had not already stated its own ending) and `[DONE]`. Emitting the error and stopping dead left the
+reader waiting at EOF and surfaced as a parse failure with the real cause nowhere in it — opencode's
+`Failed to read … stream` on a long agent turn, 2026-09-06.
+
+**A stream truncated at the transport still gets nothing.** That case is different in kind: the
+upstream never said the message was over, so a synthesized terminator would report a completion that
+did not happen. The two cases above are stories with an ending — one that failed to name why, one
+that named a failure — and only those two earn a terminator.
+
 ### Usage and token fields
 
 Anthropic reports exactly four fields: `input_tokens`, `output_tokens`, `cache_creation_input_tokens`,

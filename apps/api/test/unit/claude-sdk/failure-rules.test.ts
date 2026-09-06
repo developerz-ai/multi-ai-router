@@ -276,3 +276,38 @@ describe("a request Anthropic metered against Extra Usage", () => {
     expect(clientMessage).not.toContain("claude.ai/settings/usage")
   })
 })
+
+/**
+ * The refusal a concurrent turn on one conversation gets from the CLI. `session/inflight.ts` now
+ * detaches the common case before it can happen; this row is the backstop, and it is here because
+ * the wording drifted underneath it once already.
+ */
+describe("a session the CLI is already running", () => {
+  test("both spellings are busy-session, including the 2.1.x one behind an exit 1", () => {
+    for (const error of [
+      new Error("Session abc is currently running as a background agent"),
+      Object.assign(new Error("Claude Code process exited with code 1"), {
+        stderr:
+          "Error: Session faab23a5-14fd-4a49-b2a8-15237f34d667 is running as a background session. Run `claude agents` to find its id, then `claude attach <id>` to attach to it.",
+      }),
+    ]) {
+      const { classification } = classifySdkFailure(error)
+      expect(classification.kind).toBe("busy-session")
+      expect(classification.signal).toBe("claude-sdk:session-busy")
+    }
+  })
+
+  test("the newer wording is not read as a subprocess crash", () => {
+    // What it was before: `exit 1` on stderr matched `claude-sdk:subprocess-exit` first, so the
+    // in-place fork never ran, the attempt answered 502, and the chain failed the conversation
+    // over onto a cold account mid-turn (production, 2026-09-06).
+    const { classification } = classifySdkFailure(
+      Object.assign(new Error("Claude Code process exited with code 1"), {
+        stderr: "Error: Session abc is running as a background session.",
+      }),
+    )
+
+    expect(classification.kind).not.toBe("subprocess-crash")
+    expect(classification.status).toBe(503)
+  })
+})

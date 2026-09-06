@@ -2,7 +2,7 @@ import { z } from "zod"
 import { renderErrorBody } from "../../../errors/render"
 import { parseUpstreamError } from "../shared/errors"
 import type { OpenAiFinishReason } from "../shared/stop-reason"
-import { toOpenAiFinishReason } from "../shared/stop-reason"
+import { CONSERVATIVE_FINISH_REASON, toOpenAiFinishReason } from "../shared/stop-reason"
 import type { AnthropicUsage } from "../shared/usage"
 import { parseAnthropicUsage, usageToOpenAiChat } from "../shared/usage"
 import type { SseEvent, StreamTranslator } from "../sse/emit"
@@ -31,6 +31,29 @@ import { frameJson } from "../sse/parse"
  * block index counts text blocks too and openai's `index` counts only calls.
  *
  * Dropped, as documented: `thinking` / `redacted_thinking` deltas (no counterpart) and `ping`.
+ *
+ * **A terminal chunk always states a finish reason, and an error always terminates the stream.**
+ * Those two are one rule read from both ends, and both were wrong in a way that hung a client
+ * rather than failing it (2026-09-06, opencode's `Failed to read … stream` on a long agent turn):
+ *
+ * - `finish_reason: null` means *different things* in the two dialects. Anthropic's `stop_reason`
+ *   is legitimately null when nothing stated one — the Agent-SDK renderer emits exactly that for a
+ *   turn whose stream ended mid-block (`claude-sdk/render/envelope.ts`, `finish`) — but openai-chat
+ *   has no null finish: a chunk carrying one says "more is coming". Passing the absence through on
+ *   the **terminal** chunk therefore ends a stream in which nothing ever finished, and a reader
+ *   waiting for a finish reason is right to complain. So the mapping stays honest and unchanged
+ *   ({@link toOpenAiFinishReason}); the terminal chunk falls back to
+ *   {@link CONSERVATIVE_FINISH_REASON}, whose own doc calls it "the one claim that is safe to make
+ *   blind".
+ * - An upstream `error` mid-stream used to emit the error object and stop dead — no terminal chunk,
+ *   no `[DONE]`, nothing. The client's reader hit EOF still expecting the stream to continue and
+ *   threw a parse failure instead of surfacing the error it had just been handed. The error goes
+ *   out first, so nothing can mask it, and the stream is then closed properly behind it.
+ *
+ * **A stream truncated at the transport still gets nothing** — see {@link StreamTranslator.flush}.
+ * That case is different in kind: the upstream never said the message was over, so a synthesized
+ * terminator would report a completion that did not happen. Here the upstream *did* end the
+ * message; it only failed to name why, or named a failure. Both are stories with an ending.
  */
 
 /** `created` is a caller-supplied value, never `Date.now()`: a translator holds no clock. */
@@ -185,7 +208,10 @@ export function anthropicToOpenAiChatStream(
 
     const mapped = toOpenAiFinishReason(parsed.data.delta?.stop_reason)
     unrecognized = mapped.unrecognized ?? unrecognized
-    const events: SseEvent[] = [chunk({}, mapped.value)]
+    // This chunk *is* the last one, so an absent reason cannot travel as absence: see the module
+    // note. The upstream ended the message without naming why — a turn whose stream stopped
+    // mid-block is the common shape — and "the model stopped talking" is the safe blind claim.
+    const events: SseEvent[] = [chunk({}, mapped.value ?? CONSERVATIVE_FINISH_REASON)]
 
     const usage = mergeUsage(startUsage, parseAnthropicUsage(parsed.data.usage))
     if (usage !== null) {
@@ -203,12 +229,28 @@ export function anthropicToOpenAiChatStream(
     return events
   }
 
-  /** An upstream error mid-stream: an error chunk, then the stream closes without a `[DONE]`. */
+  /**
+   * An upstream error mid-stream: the error, then a proper close.
+   *
+   * The order is the point. The error goes first so a client that surfaces errors sees why the
+   * answer stopped, and nothing that follows can mask it. Then the stream is terminated the way
+   * every other ending is — a terminal chunk if none has gone out, and `[DONE]` — because a reader
+   * that has been handed an error still has to be able to *finish reading*. Emitting the error and
+   * stopping dead left it waiting at EOF, which surfaced as a parse failure with the real cause
+   * nowhere in sight.
+   */
   function onError(payload: unknown): readonly SseEvent[] {
-    closed = true
     const detail = parseUpstreamError(payload, 500)
     const body = renderErrorBody("openai-chat", 500, detail.message, detail.code ?? detail.type)
-    return [{ data: JSON.stringify(body) }]
+    const events: SseEvent[] = [{ data: JSON.stringify(body) }]
+    // Only when the completion had not already stated its own ending: a `message_delta` that
+    // arrived before the error is the upstream's own finish, and restating it would be a second
+    // terminal chunk in one stream.
+    if (!finished) events.push(chunk({}, CONSERVATIVE_FINISH_REASON))
+    events.push(DONE)
+    closed = true
+    finished = true
+    return events
   }
 
   return {
