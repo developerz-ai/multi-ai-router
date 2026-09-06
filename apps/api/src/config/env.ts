@@ -527,6 +527,11 @@ export interface Env {
    * keepalive turn to refresh it. Only a real turn refreshes: the turn-free handshake does not.
    */
   readonly claudeSdkCredentialKeepalive: boolean
+  /**
+   * How close to expiry counts as cold. Defaults to one `IDLE_ACCOUNT_PROBE_INTERVAL_MINUTES` plus
+   * 30 minutes, because a margin narrower than the gap between sweeps leaves tokens that expire
+   * between two ticks unwarmed by either.
+   */
   readonly claudeSdkCredentialKeepaliveBeforeMinutes: number
   readonly claudeSdkCredentialRefreshSkewSeconds: number
   readonly claudeSdkCredentialRefreshWaitMs: number
@@ -896,10 +901,15 @@ const envSchema = z.object(ENV_FIELDS).transform((raw, ctx): Env => {
     // will not honour, after which the CLI blanks the credential and only a re-login recovers it.
     // The cost is one small turn per cold account per sweep; `false` restores the old silence.
     claudeSdkCredentialKeepalive: raw.CLAUDE_SDK_CREDENTIAL_KEEPALIVE ?? true,
-    // An hour of margin before expiry, comfortably inside the sweep's own interval so a credential
-    // is warmed on the tick *before* it goes cold rather than the one after.
+    // **Derived from the sweep interval, not a fixed hour.** The margin has to span a whole gap
+    // between sweeps: a token expiring *after* this tick's margin but *before* the next tick is one
+    // no sweep ever sees in time. With a 6 h sweep and the hour this first shipped with, an account
+    // expiring 2 h 49 m out was skipped now and already dead by the next tick — the keepalive would
+    // simply never have fired for it. One interval plus 30 minutes of slack closes that, and stays
+    // correct if the interval is retuned.
     claudeSdkCredentialKeepaliveBeforeMinutes:
-      raw.CLAUDE_SDK_CREDENTIAL_KEEPALIVE_BEFORE_MINUTES ?? 60,
+      raw.CLAUDE_SDK_CREDENTIAL_KEEPALIVE_BEFORE_MINUTES ??
+      (raw.IDLE_ACCOUNT_PROBE_INTERVAL_MINUTES ?? 360) + 30,
     claudeSdkCredentialRefreshSkewSeconds: raw.CLAUDE_SDK_CREDENTIAL_REFRESH_SKEW_SECONDS ?? 300,
     // How long a waiter gives the winner before proceeding regardless. A refresh is one HTTPS
     // round-trip inside a subprocess that was starting anyway; past this the gate has clearly not
