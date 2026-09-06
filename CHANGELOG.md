@@ -5,6 +5,18 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.10.1] — 2026-09-06
+
+### Fixed
+
+- **A hidden one-shot could take a running conversation's SDK session away from it.** Coding-agent clients fire hidden requests — a conversation title, a summary — carrying the **same** session header as the visible turn and often in parallel with it. Both resolved to one SDK session, the second asked the `claude` CLI to resume a session the first was still running, and the CLI refused — on stderr, behind an `exit 1`, so it read as a subprocess crash, answered `502`, and failed the user's conversation over onto a cold account mid-turn. `providers/claude-sdk/session/inflight.ts` now claims the session key for the duration of a turn: a second request arriving while it is held runs **detached** — a fresh SDK session (`FreshReason: "session-busy"`), and it records nothing. Both halves matter, which is why forking is the backstop and not the answer: a fork would serve the one-shot, but its new session id is what the turn then binds to the conversation, so a throwaway "write me a title" would take ownership of the user's durable lineage. The claim is released by the **answer's own body finishing** — drained, cancelled by a client that went away, or errored — rather than by a callback an invoker could forget, because forgetting it would detach every later turn of every conversation silently. Per replica, and honestly so.
+- **The CLI's busy-session wording had drifted, and only the old spelling was matched.** 0.3.x says `is currently running as a background agent`; 2.1.x says `is running as a background session`. The newer one fell past that row to `claude-sdk:subprocess-exit`, which is why the in-place fork recovery that already existed for this condition never ran. Both are matched now, ordered ahead of the crash rule.
+- **An openai-chat stream could end with nothing that says it ended.** Two shapes, both measured through the real renderer and the real translator: a turn whose SDK stream stopped mid-block emitted a terminal chunk carrying `finish_reason: null` — nothing in the whole stream ever finished — and a turn whose subprocess died mid-answer emitted an error object and then stopped dead, with no terminal chunk and no `[DONE]`. A client's reader waited at EOF and reported a parse failure with the real cause nowhere in it (opencode's `Failed to read … stream` on a long agent turn). `finish_reason: null` means different things in the two dialects: Anthropic's `stop_reason` is legitimately null, while on the openai wire a null finish says *more is coming*. The mapping stays honest; the **terminal** chunk falls back to the conservative reason the shared table already names, and an upstream error now goes out first — so nothing masks it — followed by a terminal chunk and `[DONE]`. A stream truncated at the transport still gets nothing, deliberately: the upstream never said the message was over.
+
+### Documentation
+
+- `docs/idea/11-anthropic-agent-sdk.md` §4 gains "One conversation, one turn at a time" — why a concurrent turn is detached rather than forked, why the release is the response body, and what one replica does and does not cover — and its §9 classification row records both busy-session spellings. `docs/idea/06-protocol-translation.md` gains the absence and error-termination rules beside the stop-and-finish table.
+
 ## [2.10.0] — 2026-09-05
 
 ### Fixed
