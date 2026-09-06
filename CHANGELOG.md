@@ -5,6 +5,14 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.10.4] — 2026-09-06
+
+### Fixed
+
+- **A translated stream went silent while the upstream was thinking, and the connection died under it.** Same pod, same account, same prompt, back to back, inside the cluster: `/v1/chat/completions` received 210 bytes and the socket closed at 11.9 s, while `/v1/messages` — the byte relay, no translation — carried 20,469 bytes of the same answer and was still streaming when the probe's 22 s cap stopped it. The only difference between the two is the translation. `thinking` and `redacted_thinking` deltas have no openai-chat counterpart and are dropped, correctly — but an extended-thinking model spends its opening stretch emitting nothing else, so the upstream stream is busy while the translated one writes zero bytes and the client's connection sits idle through the whole thinking phase. A chunk that produces no client event now keeps the connection alive when it has been quiet long enough (`DEFAULT_TRANSLATED_KEEPALIVE_MS`, 5 s): an SSE **comment**, which carries no event and no data in any dialect, so a dropped frame never acquires a counterpart just because the connection needed a byte; it does not count as the first byte, for the same reason a forwarded upstream keepalive does not; and it is bounded by a cadence rather than sent per chunk.
+
+  This is the cause behind the truncated agent turns that 2.10.1–2.10.3 chased through tool handling, hidden one-shots and proxy timeouts. Every symptom pointed upstream: the teardown aborts the request, the subprocess dies mid-thinking, and the renderer reports a turn that ended with a `thinking` block open (`sdk turn ended mid-answer`, `lastSystemSubtype: "thinking_tokens"`, no `result`). That diagnostic — added in 2.10.2 and made legible in 2.10.3 — is what found it. It also explains why short requests always succeeded (they finish before the quiet window opens) and why one run of a prompt gave 2 chunks in 11 s while the next gave 3,892 lines in 122 s (the second started emitting text early, so bytes were flowing).
+
 ## [2.10.3] — 2026-09-06
 
 ### Fixed
