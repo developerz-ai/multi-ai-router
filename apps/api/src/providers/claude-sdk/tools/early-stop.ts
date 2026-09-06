@@ -72,6 +72,20 @@ export interface ToolIntegrity {
   readonly uncaptured: readonly string[]
   /** Block ids whose arguments arrived empty though the tool declares required ones. */
   readonly emptyInput: readonly string[]
+  /**
+   * Tool blocks the flush had to close because the loop ended before their `content_block_stop`.
+   *
+   * Zero in an ordinary turn. It is the fact that separates the two remaining readings of a turn
+   * that ends with a `tool_use` block still open at the renderer: **non-zero** says the rewriter
+   * held that block and closed it, so anything still open is a block the rewriter never saw;
+   * **zero** says the rewriter was holding nothing, so the block the renderer had open was never
+   * the rewriter's to close and the discrepancy is between the envelope and the stream, not here.
+   *
+   * Read only when a turn truncates, and it exists because three plausible reproductions of that
+   * shape all close correctly (`tool-gate.test.ts`) — so the log line has to say which of them
+   * production is not.
+   */
+  readonly flushedBlocks: number
 }
 
 export interface EarlyStopInput {
@@ -111,6 +125,7 @@ export function createEarlyStop(input: EarlyStopInput): EarlyStop {
   let released = false
   let stopped = false
   let mainStarts = 0
+  let flushedBlocks = 0
 
   let fireStop: () => void = () => {}
   const stopped$ = new Promise<typeof STOPPED>((resolve) => {
@@ -237,6 +252,7 @@ export function createEarlyStop(input: EarlyStopInput): EarlyStop {
     // blocks from the turn the client asked for, because `push` forwards a subagent's untouched.
     const complete = new Map(captures.map((call) => [call.id, call.input]))
     for (const event of rewriter.flush(complete)) {
+      if (event.type === "content_block_stop") flushedBlocks += 1
       yield { type: "stream_event", event, parent_tool_use_id: null }
     }
 
@@ -256,6 +272,7 @@ export function createEarlyStop(input: EarlyStopInput): EarlyStop {
       captured: captures.length,
       uncaptured: rewriter.calls.filter((c) => !capturedIds.has(c.id)).map((c) => c.id),
       emptyInput: [...rewriter.emptyInput],
+      flushedBlocks,
     }),
   }
 }

@@ -333,3 +333,69 @@ describe("what the truncation alarm reports", () => {
     expect(repaired?.sawResult).toBe(true)
   })
 })
+
+/**
+ * **When a truncated turn is retryable, and when it is not** — asked because a dead turn can park a
+ * worker, and worth an answer rather than an assumption.
+ *
+ * The answer is a fact about the shape, not a policy: a block can only be *open* if its
+ * `content_block_start` was forwarded, and on the streaming path a forwarded frame is a written
+ * byte. So by the time a turn can be called truncated, the client already holds part of it and
+ * "never retry after bytes are on the wire" applies with nothing left to decide.
+ *
+ * The non-streaming path answers the same question the other way, for the same reason: nothing is
+ * written until the whole object is, so a truncated fold is still free to be a real status — and it
+ * is, which is what lets the chain try another account there. Two paths, one rule, opposite
+ * outcomes. These tests exist so that stays true, and so nobody has to re-derive it.
+ */
+describe("whether a truncated turn can be failed over", () => {
+  const truncatedToolTurn = (): AsyncIterable<unknown> =>
+    stream(
+      INIT,
+      MESSAGE_START,
+      BLOCK_START,
+      BLOCK_DELTA,
+      wire({ type: "content_block_stop", index: 0 }),
+      wire({
+        type: "content_block_start",
+        index: 1,
+        content_block: { type: "tool_use", id: "toolu_1", name: "read", input: {} },
+      }),
+    )
+
+  test("streaming: not retryable, because the client already holds part of the answer", async () => {
+    const sse = await asOpenAiChat(truncatedToolTurn())
+
+    // The content that did arrive is kept — this is the production shape, where 51 frames had
+    // already gone out before the block opened.
+    expect(sse).toContain("partial")
+    expect(chunks(sse).some((chunk) => chunk.error !== undefined)).toBe(true)
+    expect(isWellFormed(sse)).toBe(true)
+  })
+
+  test("non-streaming: a real status, so the chain does try another account", async () => {
+    const response = await renderSdkResponse({
+      messages: truncatedToolTurn(),
+      model: "claude-opus-5",
+      stream: false,
+    })
+
+    // No byte is on the wire until the whole object is, so this attempt is still free to fail.
+    expect(response.status).toBe(502)
+  })
+
+  test("and an empty turn that did not truncate is an empty answer, never a retry", async () => {
+    const response = await renderSdkResponse({
+      messages: stream(INIT, MESSAGE_START, {
+        type: "result",
+        subtype: "success",
+        stop_reason: "end_turn",
+        usage: {},
+      }),
+      model: "claude-opus-5",
+      stream: false,
+    })
+
+    expect(response.status).toBe(200)
+  })
+})

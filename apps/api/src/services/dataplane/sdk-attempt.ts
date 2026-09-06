@@ -142,6 +142,7 @@ export async function runSdkAttempt(input: SdkAttemptInput): Promise<AttemptOutc
           // see `SdkTruncatedTurn`.
           declaredTools: detail.declaredTools,
           passthrough: detail.passthrough,
+          flushedBlocks: detail.flushedBlocks,
           sdkMessages: detail.sdkMessages,
           frames: detail.frames,
         }),

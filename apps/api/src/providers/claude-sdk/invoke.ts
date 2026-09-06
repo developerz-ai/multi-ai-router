@@ -82,6 +82,14 @@ export interface SdkTruncatedTurn extends TruncatedTurn {
   readonly declaredTools: number
   /** Whether a passthrough exists — the machinery that closes a held tool block when a loop ends. */
   readonly passthrough: boolean
+  /**
+   * Tool blocks that machinery actually closed on its way out (`ToolIntegrity.flushedBlocks`).
+   *
+   * With `passthrough: true` and a `tool_use` block still open, this is the field that says which
+   * way to look: non-zero means the rewriter held a block and closed it, so whatever the renderer
+   * still had open was never the rewriter's; zero means the rewriter was holding nothing at all.
+   */
+  readonly flushedBlocks: number
 }
 
 export interface SdkSessionReport {

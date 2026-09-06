@@ -148,6 +148,15 @@ export async function renderSdkResponse(input: SdkRenderInput): Promise<Response
     throw error
   }
 
+  // **A streaming truncation is never retryable, and that is a fact about the shape rather than a
+  // policy.** A block can only be *open* if its `content_block_start` was forwarded, and on this
+  // path a forwarded frame is a written byte — so by the time a turn can be called truncated, the
+  // client already holds part of it and "never retry after bytes are on the wire" applies with
+  // nothing left to decide. The non-streaming path answers the same question the other way for the
+  // same reason: nothing is written until the whole object is, so a truncated fold is still free to
+  // be a real status, and it is (`UPSTREAM_ERROR_STATUS` below), which is what lets the chain try
+  // another account there. Two paths, one rule, opposite outcomes — see
+  // `test/unit/dataplane/sdk-stream-ending.test.ts`.
   if (input.stream) return sseResponse(pump, primed)
 
   // No byte is on the wire until the whole object is, so a failure here is still allowed to be a

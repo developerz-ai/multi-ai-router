@@ -374,6 +374,8 @@ describe("envelope integrity, because these bugs are otherwise silent", () => {
       captured: 1,
       uncaptured: ["toolu_2"],
       emptyInput: [],
+      // Both blocks closed on the wire, so the flush had nothing left to close.
+      flushedBlocks: 0,
     })
   })
 
@@ -582,5 +584,35 @@ describe("a tool turn that ends on an assistant message", () => {
 
     const call = body.content.find((block) => block.type === "tool_use")
     expect(call).toMatchObject({ name: "get_weather", input: { cityName: "Berlin" } })
+  })
+})
+
+/**
+ * `flushedBlocks` exists because three plausible reproductions of the production shape — a stream
+ * that ends after a `user` message, one that throws after the block opened, one that throws
+ * immediately — all close their blocks correctly. The log line has to be able to say which of them
+ * production is *not*, and this is the field that does it: non-zero means the rewriter held that
+ * block and closed it, so anything the renderer still had open was never the rewriter's.
+ */
+describe("what the flush reports it closed", () => {
+  test("it counts the blocks it had to close, and only those", async () => {
+    const passthrough = passthroughFor()
+    await through(passthrough, [
+      MESSAGE_START,
+      ...toolBlock(0, "toolu_1", ['{"cityName":"Berlin"}']).slice(0, -1),
+    ])
+
+    expect(passthrough.integrity().flushedBlocks).toBe(1)
+  })
+
+  test("an ordinary turn flushes nothing", async () => {
+    const passthrough = passthroughFor()
+    await through(passthrough, [
+      MESSAGE_START,
+      ...toolBlock(0, "toolu_1", ['{"cityName":"Berlin"}']),
+      MESSAGE_DELTA,
+    ])
+
+    expect(passthrough.integrity().flushedBlocks).toBe(0)
   })
 })
