@@ -91,9 +91,19 @@ export function recordFailure(
   options: BreakerOptions = {},
 ): BreakerState {
   switch (failure.kind) {
-    // A bad request is bad at every account: it says nothing about this one's health.
+    // Faults whose cause is the **request**, not the account. They say nothing about this
+    // account's health, so they leave its streak and its status exactly where they were.
+    //
+    // `busy-session` is the one that had to be learned. It reached here as `server-error` and so
+    // counted toward the failure threshold — three of them in a row on one account and a
+    // subscription that was answering fine went `cooling_down`. Under an agent workload those
+    // collisions arrive fast and land on account after account, so a per-request fault could walk
+    // a healthy pool into a cooldown cascade and answer the next caller as though there were no
+    // capacity (2026-09-06). A conversation whose session is busy is a fact about that
+    // conversation; the account it happened on just served, and will serve again.
     case "client-error":
     case "stale-session":
+    case "busy-session":
       return state
 
     // No clock refills a drained balance. No reset instant is recorded, deliberately.

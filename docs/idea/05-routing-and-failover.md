@@ -349,6 +349,16 @@ Rules:
   request deadline governs the whole chain. `ROUTING_MAX_ATTEMPTS` remains for an operator who wants
   to fail faster than their pool allows; it can only lower the bound, never raise it.
 - **Each attempt is a distinct account.** Never retry the same account inside one request.
+- **Retryable and blameless are different questions.** Walking to the next candidate says the
+  request may still be served; striking the breaker says *this account* is unwell. Most kinds answer
+  both the same way, and one does not: an SDK `busy-session` is a fact about the conversation's
+  session, not about the subscription it happened on, so the chain moves on and the account it left
+  keeps its streak and its status. It reached the breaker as `server-error` until 2.10.2, so three
+  in a row parked a subscription that was answering fine — and under an agent workload those
+  collisions arrive fast and land on account after account, which is how a healthy pool walks itself
+  into a cooldown and answers the next caller as though it had no capacity. A `subprocess-crash`
+  stays counted, deliberately: a dead subprocess may be this account's config directory or may be
+  this one request, and an ambiguous fault is what the threshold is for.
 - **Once bytes have been streamed to the client, the request fails honestly.** No silent restart.
   Replaying a partially delivered stream would produce a response the client cannot reconcile —
   duplicated tokens, a second `message_start`, a tool call emitted twice. The router surfaces the

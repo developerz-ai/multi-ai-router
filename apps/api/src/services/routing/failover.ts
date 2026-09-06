@@ -36,6 +36,11 @@ export type FailureKind =
   | "client-error"
   /** SDK path: `No conversation found with session ID` on the account that owns it. */
   | "stale-session"
+  /**
+   * SDK path: the CLI refuses to resume a session it is already running. About the *conversation*,
+   * not the account — see {@link RETRYABLE_FAILURE_KINDS} and `breaker.ts`.
+   */
+  | "busy-session"
 
 export interface AttemptFailure {
   readonly kind: FailureKind
@@ -56,6 +61,12 @@ export interface AttemptFailure {
  * to land on an expired subscription fail while healthy accounts sat beside it — only the *next*
  * request routed around the parked account. `client-error` stays out: a bad request is bad at every
  * account. Both hold only before a byte reaches the client; `planNextAttempt` checks that first.
+ *
+ * `busy-session` is here for a third reason, and it is the one that separates *retryable* from
+ * *account-scoped*: the SDK transport has already spent its own recovery (the in-place fork) by the
+ * time the chain sees one, so the next candidate deserves its turn — but the fault was about the
+ * conversation's session, not about the account it happened on, so `breaker.ts` never strikes for
+ * it. Retryable and blameless are different questions, and only this kind answers them differently.
  */
 export const RETRYABLE_FAILURE_KINDS: readonly FailureKind[] = [
   "rate-limited",
@@ -64,6 +75,7 @@ export const RETRYABLE_FAILURE_KINDS: readonly FailureKind[] = [
   "connection",
   "timeout",
   "auth",
+  "busy-session",
 ]
 
 export function isRetryable(kind: FailureKind): boolean {

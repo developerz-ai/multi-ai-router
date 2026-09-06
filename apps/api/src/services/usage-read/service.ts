@@ -174,7 +174,7 @@ export function createUsageService(deps: UsageServiceDeps): UsageService {
         byPool: label(poolRows ?? [], labels.pools, axis, poolSeries ?? []),
         // A model name is its own label; there is nothing to resolve and nothing to lose.
         byModel: (modelRows ?? []).map((row) => ({
-          ...row2(row, axis, modelSeries ?? []),
+          ...breakdownRow(row, axis, modelSeries ?? []),
           label: row.id,
           note: null,
         })),
@@ -234,7 +234,7 @@ function label(
   points: readonly UsageGroupSeriesPoint[],
 ): UsageBreakdownRow[] {
   return rows.map((row) => {
-    const base = row2(row, axis, points)
+    const base = breakdownRow(row, axis, points)
     if (base.id === null) return { ...base, label: null, note: "none" }
     const found = names.get(base.id)
     return found === undefined
@@ -243,8 +243,18 @@ function label(
   })
 }
 
-/** Separates the grouping id and percentiles from the totals, which are flat on the row. */
-function row2(
+/**
+ * Separates the grouping id and percentiles from the totals, which are flat on the row.
+ *
+ * **The name matters, and a digit-suffixed one is what it must never be.** A bundler renames a
+ * local that collides with a hoisted binding by appending a digit, so `row` becomes `row2` — and
+ * when a module-scope function is *already* called that, the minted local shadows it and the call
+ * site invokes a plain object. Bundler-only: source and `bun test` are fine, every unit and
+ * integration test over this file passes, and the operator console's usage dashboard still answers
+ * `500` in production with `TypeError: row2 is not a function` (2026-09-06).
+ * `bundle-shadowing.test.ts` is the guard; a name no bundler mints is the fix.
+ */
+function breakdownRow(
   row: UsageGroupRow,
   axis: readonly string[],
   points: readonly UsageGroupSeriesPoint[],

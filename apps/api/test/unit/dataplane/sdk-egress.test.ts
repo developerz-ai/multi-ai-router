@@ -14,7 +14,7 @@ import {
   type SdkServableCandidate,
   type SdkSessionContext,
 } from "../../../src/services/dataplane"
-import type { Candidate } from "../../../src/services/routing"
+import { type Candidate, HEALTHY, isRetryable, recordFailure } from "../../../src/services/routing"
 import { account, catalog, subscriptionAccount } from "./fixtures"
 
 /**
@@ -236,6 +236,8 @@ function sessionDouble(plan: SessionPlan): {
   }
 }
 
+const NOW = new Date("2026-09-06T00:00:00.000Z")
+
 function rejectingAttempt(error: unknown, session?: SdkSessionContext) {
   return runSdkAttempt({
     plan: SDK_PLAN,
@@ -268,17 +270,39 @@ describe("what a subscription failure is read as", () => {
     expect(outcome.classification?.kind).toBe("rate-limited")
   })
 
-  test("a busy session and a crash both leave the next account free to serve", async () => {
-    for (const message of [
-      "Session 4f2b is currently running as a background agent",
-      "Claude Code process exited with code 1",
-    ]) {
-      const outcome = await rejectingAttempt(new Error(message))
+  test("a crash leaves the next account free to serve, and counts toward this one's streak", async () => {
+    const outcome = await rejectingAttempt(new Error("Claude Code process exited with code 1"))
 
-      expect(outcome.kind).toBe("failure")
-      if (outcome.kind !== "failure") return
-      expect(outcome.failure.kind).toBe("server-error")
-    }
+    expect(outcome.kind).toBe("failure")
+    if (outcome.kind !== "failure") return
+    // Ambiguous by nature — a dead subprocess may be the account's config directory or may be this
+    // one request — so it is counted rather than exempted, and the threshold decides.
+    expect(outcome.failure.kind).toBe("server-error")
+    expect(recordFailure(HEALTHY, outcome.failure, NOW).consecutiveFailures).toBe(1)
+  })
+
+  /**
+   * The cooldown cascade of 2026-09-06. A busy session reached the breaker as `server-error`, so
+   * three in a row on one account parked a subscription that was answering fine — and under an
+   * agent workload they arrive fast and land on account after account, walking a healthy pool into
+   * a cooldown that answers the next caller as though there were no capacity.
+   */
+  test("a busy session moves on without blaming the account it left", async () => {
+    const outcome = await rejectingAttempt(
+      new Error("Session 4f2b is currently running as a background agent"),
+    )
+
+    expect(outcome.kind).toBe("failure")
+    if (outcome.kind !== "failure") return
+    expect(outcome.failure.kind).toBe("busy-session")
+    // Retryable: the next candidate gets its turn, the SDK transport having already spent its own
+    // in-place fork before the chain saw this.
+    expect(isRetryable(outcome.failure.kind)).toBe(true)
+
+    // And blameless: three of them in a row leave the account exactly where they found it.
+    let state = HEALTHY
+    for (let at = 0; at < 3; at += 1) state = recordFailure(state, outcome.failure, NOW)
+    expect(state).toEqual(HEALTHY)
   })
 
   test("the message a client may read is the router's, never the SDK's", async () => {

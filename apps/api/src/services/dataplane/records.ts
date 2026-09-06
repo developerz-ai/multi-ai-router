@@ -167,6 +167,7 @@ const FAILURE_OUTCOMES: Readonly<Record<FailureKind, UsageOutcome>> = {
   "server-error": "upstream_error",
   "client-error": "client_error",
   "stale-session": "upstream_error",
+  "busy-session": "upstream_error",
 }
 
 export function failureOutcome(kind: FailureKind): UsageOutcome {
