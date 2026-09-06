@@ -5,6 +5,20 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.10.5] — 2026-09-06
+
+### Added
+
+- **`request completed` names the conversation and the client.** The line carried method, path, status and the router's own requestId — nothing that says *whose* conversation it was, so a session collision was invisible in production: two requests contending for one SDK session look exactly like one request that died, until you can see they carried the same id. It now carries `x-session-id` and `x-parent-session-id` (a subagent runs in its own session, concurrently with its parent by design, and seeing both is what distinguishes that from two turns of one conversation racing), plus `x-opencode-client` / `-host` / `-model` where a client sets them — a fleet-wide symptom that turns out to be one box, one client build or one model is a different investigation from one that is not. An allowlist rather than "log the headers": a request's headers carry credentials, and the way to be sure none is logged is to name the ones that are not. Values are bounded, like the session key itself.
+
+### Fixed
+
+- **The harness scrub had drifted against opencode 1.18.29.** `BRAND_TOKENS` was case-sensitive, so it matched `OpenCode` and none of the lower-case `opencode` that the built-in `customize-opencode` skill description says a dozen times — the fingerprint travelled anyway. Now case-insensitive, with the longer `OhMyOpenCode` alternative listed first so it is not eaten from the middle. The `You are OpenCode, the best coding agent on the planet.` identity line no longer exists in the V2 prompt, which opens with a generic `You are an AI coding agent.` that carries no brand and is deliberately not scrubbed; that rule is kept and labelled legacy coverage for the older builds a fleet still runs, since it costs nothing when absent.
+
+### Documentation
+
+- `services/dataplane/body/session.ts` states as a rule what was previously an accident: `x-parent-session-id` is **not** a session-key header. A subagent sends its own `x-session-id` and is keyed on that; keying a child on its parent would bind two live conversations to one SDK session, which is the collision rather than the fix. The parent id is logged and routes nothing.
+
 ## [2.10.4] — 2026-09-06
 
 ### Fixed
