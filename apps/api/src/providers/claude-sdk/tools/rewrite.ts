@@ -25,6 +25,16 @@ import type { ToolSchema } from "./schema"
  * Nothing is ever dropped. Arguments that do not parse as JSON, or that outgrow the buffer bound,
  * are forwarded exactly as the model spelled them: a client that can make sense of them still can,
  * and a router that swallowed them would have turned a fidelity gap into a lost tool call.
+ *
+ * **"Nothing is ever dropped" needs {@link ToolRewriter.flush} to be true, and for a while it was
+ * not.** The hold is released by `content_block_stop`, and the early stop ends the SDK loop the
+ * instant every emitted call has been denied (`early-stop.ts`) — a race the stop sometimes wins. The
+ * held fragments then died with the loop, and the client received a `tool_use` block carrying its
+ * name, its id, and **no arguments at all**: `arguments: ""` on the openai wire, which is not JSON,
+ * so the client's reader threw before it could run anything. Measured at ~1.4% of requests under
+ * agent load, always exactly one block, and fatal to the whole turn every time (2026-09-06). So the
+ * stream ending is now an ending the rewriter is *told* about, and it says what it was still
+ * holding.
  */
 
 /** A JSON object as it goes back onto the wire. */
@@ -61,6 +71,22 @@ export interface ToolRewriter {
   readonly calls: readonly EmittedToolCall[]
   /** Calls whose arguments arrived empty though the tool declares required ones. */
   readonly emptyInput: readonly string[]
+  /**
+   * The stream ended. @returns the events every still-open tool block is still owed — its held
+   * arguments, then its `content_block_stop` — in the order the blocks were opened.
+   *
+   * Empty in an ordinary turn: a block that closed on the wire released its own hold and is no
+   * longer open. Non-empty exactly when the loop ended mid-block, which is the early stop winning
+   * its race, and then this is the difference between a client running the model's tool call and a
+   * client throwing on `JSON.parse("")`.
+   *
+   * @param complete the arguments the `PreToolUse` hook saw, by tool-call id. Preferred over the
+   * held buffer, and not because it is more convenient: the hook is handed the input **assembled**,
+   * while the buffer holds only the fragments that reached us before the loop ended — so the buffer
+   * can be a truncated prefix of valid JSON, and the hook's copy is the call the SDK actually
+   * dispatched. Using it is reporting what the model asked for, not inventing it.
+   */
+  flush(complete?: ReadonlyMap<string, unknown>): readonly WireRecord[]
 }
 
 interface OpenTool {
@@ -149,7 +175,31 @@ export function createToolRewriter(schemas: ReadonlyMap<string, ToolSchema>): To
     }
   }
 
+  /** The arguments a still-open block should be closed with, best source first. */
+  const closingInput = (tool: OpenTool, complete?: ReadonlyMap<string, unknown>): string | null => {
+    const captured = asRecord(complete?.get(tool.id))
+    if (captured !== null) return JSON.stringify(repair(tool.name, captured) ?? captured)
+    if (tool.buffer.length === 0) return null
+    const parsed = parseObject(tool.buffer)
+    // Unparseable is still the model's answer, forwarded verbatim — the same rule `stop` follows.
+    return parsed === null ? tool.buffer : JSON.stringify(repair(tool.name, parsed) ?? parsed)
+  }
+
   return {
+    flush(complete) {
+      const events: WireRecord[] = []
+      // Index order rather than insertion order: the envelope closes what it holds open, and the
+      // two must agree about which block each event addresses.
+      for (const [index, tool] of [...open.entries()].sort(([a], [b]) => a - b)) {
+        open.delete(index)
+        // An overflowed block already streamed its fragments; only its ending was lost.
+        const input = tool.overflowed ? null : closingInput(tool, complete)
+        if (input !== null) events.push(inputDelta(index, input))
+        events.push({ type: "content_block_stop", index })
+      }
+      return events
+    },
+
     push(event, turn) {
       // A subagent's blocks are a conversation the client never asked for; the envelope drops them
       // whole. Rewriting them would spend the buffer on output nobody will ever read.

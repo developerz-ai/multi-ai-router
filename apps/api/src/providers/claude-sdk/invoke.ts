@@ -1,3 +1,4 @@
+import type { TruncatedTurn } from "./render"
 import type { SessionPlan } from "./session"
 
 /**
@@ -53,12 +54,12 @@ export interface SdkInvocation {
    */
   readonly onRateLimit?: (info: unknown) => void
   /**
-   * Called at most once per turn, when the renderer's `finish()` had to force-close content blocks
-   * the stream never terminated — a stream-integrity alarm, not a client-visible event. `count` is
-   * how many blocks were closed by force. Optional like the callbacks above: the render layer is
-   * pure and holds no logger, so a launch that wires nothing simply goes unalarmed.
+   * Called at most once per turn, when it ended with content blocks still open — the turn stopped
+   * mid-answer, and the renderer answered with an error rather than a completion. The detail is
+   * what the renderer knew at that moment; the render layer is pure and holds no logger, so a
+   * launch that wires nothing simply goes unalarmed.
    */
-  readonly onForcedBlockClose?: (count: number) => void
+  readonly onTruncatedTurn?: (detail: TruncatedTurn) => void
 }
 
 export interface SdkSessionReport {

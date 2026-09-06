@@ -60,13 +60,33 @@ export interface SdkRenderObserver {
    */
   onAssistantUuid?(uuid: string): void
   /**
-   * The envelope had to force-close `count` content blocks at the end of the turn because the
-   * upstream never did (`envelope.ts`). Called at most once, only when `count > 0`: the close keeps
-   * the client's parser sound, so without this report the regression that caused it — an upstream
-   * or a filter of ours eating a `content_block_stop` — shows up in user transcripts and nowhere
-   * else. An alarm for a log line, never a frame.
+   * The turn ended with content blocks still open, so the envelope closed them and answered with an
+   * error rather than a completion (`envelope.ts`). Called at most once, and only then.
+   *
+   * Everything on {@link TruncatedTurn} is here because it was asked for by someone staring at this
+   * happening in production with no way to tell *which* early ending it was: the query iterator
+   * completing, a `result` arriving mid-block, or the subprocess dying. An alarm for a log line,
+   * never a frame.
    */
-  onForcedBlockClose?(count: number): void
+  onTruncatedTurn?(detail: TruncatedTurn): void
+}
+
+/** What the renderer knew at the moment a turn stopped mid-answer. Diagnostics only. */
+export interface TruncatedTurn {
+  /** How many blocks had to be force-closed. Always at least one. */
+  readonly blocks: number
+  /** What each of them was: `text`, `tool_use`, `thinking`. A truncated tool call is its own bug. */
+  readonly kinds: readonly string[]
+  /** The last SDK message type read before the stream ended — `stream_event`, `result`, … */
+  readonly lastMessage: string | null
+  /** The last wire event type inside it, when the last message carried one. */
+  readonly lastEvent: string | null
+  /** Whether the SDK's authoritative `result` arrived at all. False means the loop simply ended. */
+  readonly sawResult: boolean
+  /** SDK messages read on this turn. A stream that ended after two chunks says so here. */
+  readonly messages: number
+  /** Client frames emitted before the truncation — how much of the answer the client did get. */
+  readonly frames: number
 }
 
 export interface SdkRenderInput {
@@ -149,6 +169,15 @@ function createPump(input: SdkRenderInput): Pump {
   // The `result` message is authoritative for both; an `assistant`'s covers one iteration only.
   let completion: Completion = { stopReason: null, usage: null }
 
+  // Read only when a turn truncates, and cheap enough to keep unconditionally: four counters cost
+  // nothing beside a subprocess, and a diagnostic that has to be switched on is one nobody has on
+  // when the incident happens.
+  let lastMessage: string | null = null
+  let lastEvent: string | null = null
+  let sawResult = false
+  let messages = 0
+  let frames = 0
+
   /** An observer belongs to whoever passed it in, and a broken one must not break a response. */
   const observe = (report: () => void): void => {
     try {
@@ -159,13 +188,16 @@ function createPump(input: SdkRenderInput): Pump {
   }
 
   const handle = (value: unknown): readonly ClientFrame[] => {
+    messages += 1
     const message = readSdkMessage(value)
     if (message === null) return NO_FRAMES
+    lastMessage = message.type
 
     switch (message.type) {
       case "stream_event": {
         const event = readWireEvent(message.event)
         if (event === null) return NO_FRAMES
+        lastEvent = event.type
         // A non-null `parent_tool_use_id` means a subagent produced this — a turn the client never
         // asked for. The envelope still sees it, so a filtered block loses its whole triple and its
         // numbering stays out of the answer's.
@@ -191,6 +223,7 @@ function createPump(input: SdkRenderInput): Pump {
         return NO_FRAMES
       }
       case "result":
+        sawResult = true
         // A failed turn that produced nothing for the client is a failure with a real status, not
         // an empty `200`: thrown here, it reaches the invoker before any byte is out, where
         // `errors.ts` reads its sentence and its structured facts. Once content has started the
@@ -213,17 +246,31 @@ function createPump(input: SdkRenderInput): Pump {
 
   const next = async (): Promise<readonly ClientFrame[] | null> => {
     const step = await guard.race(iterator.next())
-    return step.done === true ? null : handle(step.value)
+    if (step.done === true) return null
+    const produced = handle(step.value)
+    frames += produced.length
+    return produced
   }
 
   let integrityReported = false
   const finish = (): readonly ClientFrame[] => {
-    const frames = envelope.finish(completion)
+    const terminal = envelope.finish(completion)
+    frames += terminal.length
     if (!integrityReported && envelope.forcedBlockCloses > 0) {
       integrityReported = true
-      observe(() => input.observer?.onForcedBlockClose?.(envelope.forcedBlockCloses))
+      observe(() =>
+        input.observer?.onTruncatedTurn?.({
+          blocks: envelope.forcedBlockCloses,
+          kinds: envelope.forcedBlockKinds,
+          lastMessage,
+          lastEvent,
+          sawResult,
+          messages,
+          frames,
+        }),
+      )
     }
-    return frames
+    return terminal
   }
 
   return {

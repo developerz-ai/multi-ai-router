@@ -402,10 +402,10 @@ describe("a rendered error Response is a failed attempt, not a success to relay"
   })
 })
 
-describe("the stream-integrity alarm reaches the log", () => {
-  // The render layer is pure and holds no logger, so `onForcedBlockClose` is worth nothing until
-  // this seam turns it into a line an operator can see — with the account, on the request-scoped
-  // logger that already stamps the request id.
+describe("the truncated-turn alarm reaches the log", () => {
+  // The render layer is pure and holds no logger, so `onTruncatedTurn` is worth nothing until this
+  // seam turns it into a line an operator can see — with the account, on the request-scoped logger
+  // that already stamps the request id, and carrying enough to say *which* early ending it was.
   function capturingLog(): { readonly log: Logger; readonly warned: Record<string, unknown>[] } {
     const warned: Record<string, unknown>[] = []
     const log: Logger = {
@@ -418,13 +418,21 @@ describe("the stream-integrity alarm reaches the log", () => {
     return { log, warned }
   }
 
-  test("a forced block close is warned about with the account and the count", async () => {
+  test("a truncated turn is warned about with the account and everything the renderer knew", async () => {
     const { log, warned } = capturingLog()
     await runSdkAttempt({
       plan: SDK_PLAN,
       body: null,
       invoke: async (invocation) => {
-        invocation.onForcedBlockClose?.(2)
+        invocation.onTruncatedTurn?.({
+          blocks: 2,
+          kinds: ["text", "tool_use"],
+          lastMessage: "stream_event",
+          lastEvent: "content_block_delta",
+          sawResult: false,
+          messages: 7,
+          frames: 5,
+        })
         return new Response('{"type":"message"}', { status: 200 })
       },
       session: undefined,
@@ -432,11 +440,19 @@ describe("the stream-integrity alarm reaches the log", () => {
       log,
     })
 
+    // Every field, because the question this line exists to answer is which early ending it was:
+    // the query iterator completing, a `result` landing mid-block, or the subprocess dying.
     expect(warned).toEqual([
       {
-        msg: "sdk stream closed with unterminated content blocks",
+        msg: "sdk turn ended mid-answer; the client is told it is incomplete",
         accountId: "sub",
         blocks: 2,
+        kinds: ["text", "tool_use"],
+        lastMessage: "stream_event",
+        lastEvent: "content_block_delta",
+        sawResult: false,
+        messages: 7,
+        frames: 5,
       },
     ])
   })

@@ -48,6 +48,15 @@ export type { ClientFrame } from "./frames"
 
 const NO_FRAMES: readonly ClientFrame[] = []
 
+/**
+ * What a turn that stopped mid-block is answered with. Router-authored and safe to render: it names
+ * the shape of the failure and nothing about the account, the session, or the SDK's own words
+ * (docs/idea/07-security.md).
+ */
+const TRUNCATED_ERROR_TYPE = "api_error"
+const TRUNCATED =
+  "the upstream ended this turn while it was still writing, so the answer is incomplete"
+
 export interface EnvelopeOptions {
   /** The model the client asked for — used only until the SDK names one, and if it never does. */
   readonly model: string
@@ -92,6 +101,12 @@ export interface Envelope {
    * only visible in user transcripts, never in our logs (`stream.ts` reports it to the observer).
    */
   readonly forcedBlockCloses: number
+  /**
+   * What those blocks were — `text`, `tool_use`, `thinking`. Diagnostics only, and the one fact
+   * that separates "the answer was cut short" from "the client was handed a tool call with no
+   * arguments": nothing routes on it, and `sdk-attempt.ts` puts it on the alarm's log line.
+   */
+  readonly forcedBlockKinds: readonly string[]
 }
 
 export function createEnvelope(options: EnvelopeOptions): Envelope {
@@ -106,6 +121,7 @@ export function createEnvelope(options: EnvelopeOptions): Envelope {
   let stopSequence: string | null = null
   let lastUsage: SdkUsage | null = null
   let forcedBlockCloses = 0
+  const forcedBlockKinds: string[] = []
 
   /**
    * Field-wise, newest non-null value wins. The SDK splits one turn's counts across events —
@@ -224,6 +240,9 @@ export function createEnvelope(options: EnvelopeOptions): Envelope {
     get forcedBlockCloses() {
       return forcedBlockCloses
     },
+    get forcedBlockKinds() {
+      return [...forcedBlockKinds]
+    },
     push,
 
     finish(completion) {
@@ -231,13 +250,49 @@ export function createEnvelope(options: EnvelopeOptions): Envelope {
       terminated = true
       const out: ClientFrame[] = []
       openStart(out, null)
-      for (const index of blocks.open()) {
+
+      const stranded = blocks.openBlocks()
+      for (const block of stranded) {
         forcedBlockCloses += 1
-        out.push({ type: "content_block_stop", index })
+        forcedBlockKinds.push(block.type)
+        out.push({ type: "content_block_stop", index: block.index })
       }
+
+      const stated = completion.stopReason ?? stopReason
+
+      // **A turn that ended mid-block *without ever saying why* did not finish, and must not be
+      // spelled as though it had.**
+      //
+      // The blocks are still closed — a client's parser is owed sound framing whatever happened —
+      // but what follows them is an `error`, not a `message_delta` and a `message_stop`. Those two
+      // are the sentence "this is the whole answer", and it is not: the model was still speaking.
+      //
+      // Until 2.10.2 this path emitted the clean ending anyway, and the cost was paid by whoever
+      // read the answer. A client got a truncated essay that looked complete, or — worse — a
+      // `tool_use` block whose arguments never arrived, which is `arguments: ""` on the openai wire
+      // and not parseable at all. The one component that knew the answer was broken was the only
+      // one that said nothing about it: the router logged `sdk stream closed with unterminated
+      // content blocks` and handed the client a normal completion (2026-09-06).
+      //
+      // Honest instead: the client sees a failure it can act on — retry the turn, rather than build
+      // on half an answer — and, on a *non-streaming* turn, the error becomes a real status before
+      // any byte is out, so the failover chain tries the next account instead of the caller ever
+      // seeing it. `render/stream.ts` owns that half.
+      //
+      // The stop reason is what separates the two shapes, and only one of them is this failure. An
+      // upstream that stated `end_turn` and merely dropped a `content_block_stop` sent a *whole*
+      // answer with one framing event missing: that is repaired above and finishes cleanly, exactly
+      // as it always did. An upstream that stopped without ever stating an ending was still writing,
+      // and that is the shape production kept producing — two chunks, no `message_delta`, no
+      // `result`, the stream simply over (2026-09-06).
+      if (stranded.length > 0 && stated === null) {
+        out.push({ type: "error", error: { type: TRUNCATED_ERROR_TYPE, message: TRUNCATED } })
+        return out
+      }
+
       out.push({
         type: "message_delta",
-        delta: { stop_reason: completion.stopReason ?? stopReason, stop_sequence: stopSequence },
+        delta: { stop_reason: stated, stop_sequence: stopSequence },
         usage: outputCounts(completion.usage ?? lastUsage),
       })
       out.push({ type: "message_stop" })

@@ -125,12 +125,20 @@ export async function runSdkAttempt(input: SdkAttemptInput): Promise<AttemptOutc
       session: turn.plan,
       onSession: (report) => turn.remember(report.sdkSessionId, report.assistantUuid),
       onRateLimit: rateLimit.capture,
-      // Stream-integrity alarm: the renderer force-closed blocks the SDK never terminated. Logged
-      // here because the render layer is pure — this seam is where account and request id meet it.
-      onForcedBlockClose: (count) =>
-        input.log?.warn("sdk stream closed with unterminated content blocks", {
+      // The turn stopped mid-answer. Logged here because the render layer is pure — this seam is
+      // where the account and the request id meet it — and logged with everything the renderer
+      // knew, because the question this line has to answer is *which* early ending it was: the
+      // query iterator completing, a `result` landing mid-block, or the subprocess dying under it.
+      onTruncatedTurn: (detail) =>
+        input.log?.warn("sdk turn ended mid-answer; the client is told it is incomplete", {
           accountId: plan.account.id,
-          blocks: count,
+          blocks: detail.blocks,
+          kinds: detail.kinds,
+          lastMessage: detail.lastMessage,
+          lastEvent: detail.lastEvent,
+          sawResult: detail.sawResult,
+          messages: detail.messages,
+          frames: detail.frames,
         }),
     })
   } catch (error) {
