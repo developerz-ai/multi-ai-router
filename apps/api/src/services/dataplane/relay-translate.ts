@@ -30,10 +30,40 @@ import type { RelayObserver } from "./relay"
  * event — and it does not count as the first byte: time-to-first-byte is a claim about *content*,
  * and a keepalive is the upstream saying there is none yet.
  *
+ * **And this relay emits one of its own, because translation can be silent while the upstream is
+ * loud.** A dropped frame is a frame that produced no client event — `thinking` and
+ * `redacted_thinking` deltas have no openai-chat counterpart and are documented as dropped
+ * (`06-protocol-translation.md`). An extended-thinking model spends its opening minute emitting
+ * nothing else, so the *upstream* stream is busy, the *translated* stream writes zero bytes, and
+ * the client's connection sits idle through the whole thinking phase. Measured in-cluster,
+ * 2026-09-06, one request against one account back to back: `/v1/chat/completions` got 210 bytes and
+ * the socket closed under it at 11.9 s, while `/v1/messages` — the byte relay, no translation —
+ * carried 20,469 bytes of the same answer and was still streaming at 22 s.
+ *
+ * That cost whole agent turns, and it read as everything except what it was: the teardown aborts the
+ * request, the subprocess dies mid-thinking, and the renderer then reports a turn that ended with a
+ * `thinking` block open (`sdk turn ended mid-answer`). The *symptom* was upstream-shaped; the cause
+ * was here.
+ *
+ * So a chunk that produces nothing for the client still keeps the connection alive, if it has been
+ * quiet long enough. It is a comment, so it cannot be mistaken for content in any dialect; it does
+ * not count as the first byte, for the same reason a forwarded one does not; and it is bounded by a
+ * cadence rather than sent per chunk, so a stream that is merely dropping a few frames pays
+ * nothing.
+ *
  * A non-streaming body is read whole before it is converted. That is not a violation of the
  * streaming rule: there is no stream — the upstream sent one JSON object and the client is owed one
  * JSON object, and no byte is delayed that could have gone out earlier.
  */
+
+/**
+ * How long a translated stream may write nothing to the client while the upstream is still sending.
+ *
+ * The renderer's own SSE keep-alive is 15 s (`claude-sdk/render/idle-guard.ts`) and this is well
+ * inside it deliberately: that one measures the *upstream* going quiet, which is a different
+ * question from this one, and the two must not be tuned as though they were the same.
+ */
+export const DEFAULT_TRANSLATED_KEEPALIVE_MS = 5_000
 
 export interface TranslatedRelayInput {
   readonly upstream: Response
@@ -47,6 +77,10 @@ export interface TranslatedRelayInput {
    * the request id — to log. One line per provider change, none in steady state.
    */
   readonly onUnrecognizedStopReason?: (reason: string) => void
+  /** {@link DEFAULT_TRANSLATED_KEEPALIVE_MS}. Injected so a test drives it without waiting. */
+  readonly keepaliveMs?: number
+  /** Injected for the same reason. Defaults to the wall clock; nothing here reads one otherwise. */
+  readonly now?: () => number
 }
 
 const EVENT_STREAM = "text/event-stream"
@@ -92,6 +126,11 @@ function translatedStream(
   let bytes = 0
   let settled = false
 
+  const now = input.now ?? (() => Date.now())
+  const keepaliveMs = input.keepaliveMs ?? DEFAULT_TRANSLATED_KEEPALIVE_MS
+  /** When the client last had bytes. Seeded at the start, so the first quiet window is measured. */
+  let lastWrite = now()
+
   const keepalive = (controller: TransformStreamDefaultController<Uint8Array>): void => {
     if (comments.length === 0) return
     let out = ""
@@ -105,9 +144,20 @@ function translatedStream(
     const chunk = encoder.encode(text)
     // Enqueue first. Everything after this line happens on time the client already has.
     controller.enqueue(chunk)
+    lastWrite = now()
     const first = bytes === 0
     bytes += chunk.length
     if (first) guard(() => observer.onFirstByte?.())
+  }
+
+  /**
+   * The upstream is sending and the client is getting nothing. Says so, in the one way that cannot
+   * be read as content: an SSE comment carries no event and no data, only a byte.
+   */
+  const heartbeat = (controller: TransformStreamDefaultController<Uint8Array>): void => {
+    if (now() - lastWrite < keepaliveMs) return
+    controller.enqueue(encoder.encode(":\n\n"))
+    lastWrite = now()
   }
 
   const settle = (error: unknown): void => {
@@ -123,7 +173,11 @@ function translatedStream(
     transform(chunk, controller) {
       const events = parser.push(chunk).flatMap((frame) => translator.push(frame))
       keepalive(controller)
-      write(controller, render(events))
+      const out = render(events)
+      // Before the write, so a chunk that *does* produce output resets the clock through `write`
+      // rather than sending a comment it did not need.
+      if (out.length === 0) heartbeat(controller)
+      write(controller, out)
       // The upstream's own bytes, so token counting reads the numbers the provider stated.
       guard(() => observer.onChunk?.(chunk))
     },

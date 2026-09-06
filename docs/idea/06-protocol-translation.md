@@ -475,6 +475,21 @@ had not already stated its own ending) and `[DONE]`. Emitting the error and stop
 reader waiting at EOF and surfaced as a parse failure with the real cause nowhere in it — opencode's
 `Failed to read … stream` on a long agent turn, 2026-09-06.
 
+**A translated stream must not go silent while the upstream is loud.** Dropping a frame is a
+decision about *content*, and it is the right one — `thinking` and `redacted_thinking` deltas have
+no openai-chat counterpart. But an extended-thinking model spends its opening stretch emitting
+nothing else, so the upstream stream is busy while the translated one writes zero bytes, and the
+client's connection sits idle through the whole thinking phase until something under it gives up.
+Measured in-cluster on 2026-09-06, one prompt against one account back to back:
+`/v1/chat/completions` received 210 bytes and the socket closed at 11.9 s, while `/v1/messages` —
+the byte relay, no translation — carried 20,469 bytes of the same answer and was still streaming at
+22 s. So a chunk that produces no client event still keeps the connection alive when it has been
+quiet long enough (`DEFAULT_TRANSLATED_KEEPALIVE_MS`, 5 s). It goes out as an SSE **comment**, which
+carries no event and no data in any dialect, so a dropped frame never acquires a counterpart just
+because the connection needed a byte; it does not count as the first byte, for the same reason a
+forwarded upstream keepalive does not; and it is bounded by a cadence rather than sent per chunk, so
+a stream that merely drops a few frames pays nothing.
+
 **A stream truncated at the transport still gets nothing.** That case is different in kind: the
 upstream never said the message was over, so a synthesized terminator would report a completion that
 did not happen. The two cases above are stories with an ending — one that failed to name why, one
