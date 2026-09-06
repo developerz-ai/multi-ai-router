@@ -389,6 +389,17 @@ emitted call has been denied — a race the stop sometimes wins, taking the held
 `ToolRewriter.flush` now empties that hold when the loop ends, preferring the input the `PreToolUse`
 hook was handed **assembled** over a buffer that may hold only a truncated prefix of it.
 
+**A flushed event is wrapped explicitly as a `stream_event`, never against the loop's last message.**
+The renderer discriminates on the SDK message's `type`, and the first cut of that flush reused the
+filter's `rewrap` helper with whatever message the loop happened to end on. When that was an
+`assistant` message — routinely the last thing the SDK sends — the flushed `content_block_stop` came
+out typed `assistant` with a wire event stapled to it, the renderer never looked inside, and the
+block stayed open exactly as if the flush had never run. It cost two releases to find, because every
+part of the machinery was working and only the last inch undid it: the alarm read
+`blocks: 1, kinds: ["tool_use"], lastMessage: "assistant", declaredTools: 12, passthrough: true`,
+and it was `declaredTools`/`passthrough` — added for precisely this question — that named the half
+of the tree it was in.
+
 ### One conversation, one turn at a time
 
 **As built** (`session/inflight.ts`, applied in `session/store.ts`). Resolving a turn also *claims*
