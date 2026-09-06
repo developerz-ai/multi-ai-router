@@ -5,6 +5,16 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.10.6] — 2026-09-06
+
+### Added
+
+- **The truncation alarm names the tool surface the turn ran with.** Turns still end occasionally on a `tool_use` block that never closes, and the two explanations have opposite fixes: a client that declared tools has a passthrough, so `ToolRewriter.flush` should already have closed that block and something upstream of it is wrong; a client that declared none has no passthrough and no flush at all, and a `tool_use` block appearing at all in that case would mean the built-in catalog `options.ts` elides with `tools: []` was not fully elided — a different bug in a different file. `declaredTools` and `passthrough` on `sdk turn ended mid-answer` say which, instead of costing another measurement round against boxes under live load. Added in the invoker rather than the renderer, which is pure and knows nothing about tools.
+
+### Documentation
+
+- `docs/idea/11-anthropic-agent-sdk.md` §9 records what `lastSystemSubtype` is and is not: the subtype of the last `system` message seen *anywhere* in the turn, **not** the one that ended it. A turn whose stream stops long after a `system` still reports that subtype, and reading it as an ending sent one investigation after a thinking budget that was never involved — the router sets none at all.
+
 ## [2.10.5] — 2026-09-06
 
 ### Added
