@@ -139,7 +139,10 @@ const FAILURE_KINDS: Readonly<Record<UpstreamFailureKind, FailureKind | null>> =
   "invalid-request": "client-error",
   "server-error": "server-error",
   "stale-session": "stale-session",
-  "busy-session": "server-error",
+  // Not `server-error`: it is retryable — the SDK transport already spent its in-place fork — but
+  // it is a fact about the conversation's session rather than about this account, so it must not
+  // strike the breaker (`routing/breaker.ts`).
+  "busy-session": "busy-session",
   "subprocess-crash": "server-error",
   unknown: null,
 }
