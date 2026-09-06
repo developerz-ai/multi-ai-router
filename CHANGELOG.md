@@ -5,6 +5,14 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.10.7] — 2026-09-06
+
+### Fixed
+
+- **A flushed tool-block close was not a `stream_event`, so the renderer never read it.** The enriched alarm answered its question on the first occurrence — `blocks: 1, kinds: ["tool_use"], lastMessage: "assistant", declaredTools: 12, passthrough: true` — putting this squarely in the branch where `ToolRewriter.flush` exists and ran, and still did not close the block. It ran correctly and produced exactly the right events; the last inch undid them. The renderer discriminates on the SDK message's `type`, and the flush added in 2.10.2 reused the filter's `rewrap` helper with whatever message the loop happened to end on. `rewrap` spreads that message and replaces its `event` field — right for every call inside `step()`, where the message *is* the `stream_event` under edit, and wrong at the flush, where the loop's last message is routinely an `assistant` one. The flushed `content_block_stop` then arrived typed `assistant` with a wire event stapled to it, the renderer never looked inside, the block stayed open, and the turn was answered as truncated: exactly as if the flush had never run. Flushed events are now built explicitly as `{ type: "stream_event", event, parent_tool_use_id: null }` — the null parent a fact rather than a default, since the rewriter only ever holds blocks from the turn the client asked for.
+
+  `lastMessage: "assistant"` was in every one of these lines all along; it took the `declaredTools` and `passthrough` fields added in 2.10.6 to know which half of the tree to read it in.
+
 ## [2.10.6] — 2026-09-06
 
 ### Added
