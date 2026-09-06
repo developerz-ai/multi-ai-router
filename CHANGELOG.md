@@ -5,6 +5,18 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.12.1] — 2026-09-06
+
+### Fixed
+
+- **The credential keepalive's margin has to span a gap between sweeps, or it never fires.** 2.12.0 shipped a flat 60-minute margin against a 6-hour sweep, which leaves a hole the keepalive can never cover: a token expiring *after* this tick's margin but *before* the next tick is one no sweep sees in time. Against the live pool that was not hypothetical — account `426a1d04` expires at 19:20 with a sweep at 16:31, so it sat 2 h 49 m out (skipped now) and would have been dead by the next tick at ~22:31. The feature was inert for exactly the accounts it exists to protect.
+
+  `CLAUDE_SDK_CREDENTIAL_KEEPALIVE_BEFORE_MINUTES` now defaults to one `IDLE_ACCOUNT_PROBE_INTERVAL_MINUTES` plus 30 minutes of slack, **derived rather than fixed**, so retuning either keeps them consistent. An explicit setting still wins.
+
+### Field note
+
+The 2.12.0 rollout confirmed the corrected diagnosis prospectively. `idle_account_probe` ran **8 seconds after boot** — it had previously never run at all — and immediately parked `27ae4129`, the account flagged in advance as next to die: idle, access token expired at 11:20, credential blanked at **15:43:13** (509 B → 281 B, both tokens zeroed), with a single process and no concurrency anywhere near it.
+
 ## [2.12.0] — 2026-09-06
 
 ### Fixed
