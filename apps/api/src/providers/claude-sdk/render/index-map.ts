@@ -27,6 +27,12 @@ import type { WireEvent } from "./events"
  * Pure: no clock, no I/O, no allocation policy beyond a counter (non-negotiable 9).
  */
 
+/** An open client block and what it was opened as. `type` is empty when the start named none. */
+export interface OpenBlock {
+  readonly index: number
+  readonly type: string
+}
+
 /** Forward this event under `index`, or drop it entirely. */
 export type BlockDecision =
   | { readonly kind: "forward"; readonly index: number }
@@ -46,7 +52,7 @@ export interface BlockIndexMap {
    * two different internal iterations, and giving the second one the first one's number is the
    * corruption this map exists to prevent.
    */
-  start(turn: Turn, sdkIndex: number, keep: boolean): BlockDecision
+  start(turn: Turn, sdkIndex: number, keep: boolean, blockType?: string): BlockDecision
   /**
    * A `content_block_delta` arrived.
    *
@@ -58,6 +64,15 @@ export interface BlockIndexMap {
   stop(turn: Turn, sdkIndex: number): BlockDecision
   /** Client indices still open, in the order they were opened. Terminating closes each one. */
   open(): readonly number[]
+  /**
+   * The same blocks, with the `content_block.type` each was opened as.
+   *
+   * Read only when a turn ends with blocks still open, and read for one reason: a truncated
+   * `tool_use` is not the same failure as a truncated `text`. Half a sentence is still an answer;
+   * half a tool call is a call whose arguments were never finished, and a client that completes it
+   * acts on input the model never produced (`envelope.ts`, `finish`).
+   */
+  openBlocks(): readonly OpenBlock[]
   /** How many client indices have been handed out. Diagnostics and tests; nothing routes on it. */
   readonly allocated: number
 }
@@ -79,18 +94,21 @@ export function createBlockIndexMap(): BlockIndexMap {
   const mapping = new Map<string, number>()
   /** Client indices in open order, so a terminating stream closes them the way it opened them. */
   const openOrder: number[] = []
+  /** Client index → the `content_block.type` it was opened as. Dropped with the mapping. */
+  const kinds = new Map<number, string>()
   let next = 0
 
   const forget = (key: string): void => {
     const client = mapping.get(key)
     if (client === undefined) return
     mapping.delete(key)
+    kinds.delete(client)
     const at = openOrder.indexOf(client)
     if (at !== -1) openOrder.splice(at, 1)
   }
 
   return {
-    start(turn, sdkIndex, keep) {
+    start(turn, sdkIndex, keep, blockType) {
       const key = keyOf(turn, sdkIndex)
       // A start for an index already open in this turn is an iteration boundary the SDK did not
       // close cleanly. The stale mapping goes: the new block is a different block.
@@ -100,6 +118,7 @@ export function createBlockIndexMap(): BlockIndexMap {
       next += 1
       mapping.set(key, client)
       openOrder.push(client)
+      if (blockType !== undefined) kinds.set(client, blockType)
       return { kind: "forward", index: client }
     },
 
@@ -118,6 +137,10 @@ export function createBlockIndexMap(): BlockIndexMap {
 
     open() {
       return [...openOrder]
+    },
+
+    openBlocks() {
+      return openOrder.map((index) => ({ index, type: kinds.get(index) ?? "" }))
     },
 
     get allocated() {

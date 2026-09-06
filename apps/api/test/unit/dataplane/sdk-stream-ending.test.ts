@@ -100,32 +100,73 @@ function isWellFormed(sse: string): boolean {
   return finishReasons(sse).some((reason) => typeof reason === "string") && sse.includes("[DONE]")
 }
 
-describe("a turn whose SDK stream ended mid-block", () => {
+describe("a turn whose SDK stream ended mid-block, having never stated an ending", () => {
   /**
-   * `sdk stream closed with unterminated content blocks` — the renderer force-closes the open block
-   * and emits its own `message_delta` + `message_stop`, with `stop_reason: null` because nothing
-   * ever stated one. Legal Anthropic. Not a legal openai-chat ending.
+   * The shape production kept producing: two chunks, no `message_delta`, no `result`, the stream
+   * simply over. Reproduced with a plain tool-free request — one run gave 2 chunks in 11 s where the
+   * next gave 3,892 lines in 122 s — so it is nothing to do with tools, harnesses, or session
+   * binding. The upstream stopped while it was still writing.
    */
   const truncated = (): AsyncIterable<unknown> =>
     stream(INIT, MESSAGE_START, BLOCK_START, BLOCK_DELTA)
 
-  test("the client's stream is well-formed: a stated finish, and a terminator", async () => {
+  test("it is answered as the failure it is, not as a completion", async () => {
+    const sse = await asOpenAiChat(truncated())
+
+    // The one component that knew the answer was broken used to be the only one that said nothing:
+    // it logged the truncation and handed the client a normal, complete-looking answer.
+    expect(chunks(sse).some((chunk) => chunk.error !== undefined)).toBe(true)
+    expect(sse).toContain("the upstream ended this turn while it was still writing")
+  })
+
+  test("and it is still a stream a client can finish reading", async () => {
     const sse = await asOpenAiChat(truncated())
 
     expect(isWellFormed(sse)).toBe(true)
-    expect(finishReasons(sse).at(-1)).toBe("stop")
     expect(sse.trimEnd().endsWith("data: [DONE]")).toBe(true)
   })
 
-  test("the partial answer still reaches the client — truncated, not discarded", async () => {
-    expect(await asOpenAiChat(truncated())).toContain("partial")
+  test("the partial answer still reaches the client ahead of the error", async () => {
+    const sse = await asOpenAiChat(truncated())
+    const payloads = chunks(sse)
+    const contentAt = payloads.findIndex((chunk) => JSON.stringify(chunk).includes("partial"))
+    const errorAt = payloads.findIndex((chunk) => chunk.error !== undefined)
+
+    expect(contentAt).toBeGreaterThanOrEqual(0)
+    expect(errorAt).toBeGreaterThan(contentAt)
   })
 
-  test("exactly one chunk states the finish; the deltas before it state none", async () => {
-    const stated = finishReasons(await asOpenAiChat(truncated())).filter(
-      (reason) => typeof reason === "string",
+  test("a non-streaming turn of the same shape is a real status, so the chain can fail over", async () => {
+    const response = await renderSdkResponse({
+      messages: truncated(),
+      model: "claude-opus-5",
+      stream: false,
+    })
+
+    // Not a 200 carrying half an answer: no byte is on the wire yet, so this attempt can still fail
+    // honestly and the next account gets its turn.
+    expect(response.status).toBe(502)
+  })
+})
+
+describe("a turn that stated its ending and merely dropped a content_block_stop", () => {
+  /**
+   * A whole answer with one framing event missing — repaired, and *not* a truncation. Keeping the
+   * two apart is what stops this change turning every dropped stop event into a failed turn.
+   */
+  test("it finishes cleanly on the reason the upstream stated", async () => {
+    const sse = await asOpenAiChat(
+      stream(INIT, MESSAGE_START, BLOCK_START, BLOCK_DELTA, {
+        type: "result",
+        subtype: "success",
+        stop_reason: "end_turn",
+        usage: {},
+      }),
     )
-    expect(stated).toEqual(["stop"])
+
+    expect(chunks(sse).some((chunk) => chunk.error !== undefined)).toBe(false)
+    expect(finishReasons(sse).at(-1)).toBe("stop")
+    expect(isWellFormed(sse)).toBe(true)
   })
 })
 

@@ -200,10 +200,13 @@ export function createEarlyStop(input: EarlyStopInput): EarlyStop {
 
   async function* filter(messages: AsyncIterable<unknown>): AsyncIterable<unknown> {
     const iterator = messages[Symbol.asyncIterator]()
+    /** The shape to rewrap a flushed event in, so it reaches the renderer as the SDK's own would. */
+    let lastMessage: unknown = null
     try {
       for (;;) {
         const next = await Promise.race([pull(iterator), stopped$])
         if (next === STOPPED || next.done === true) break
+        lastMessage = next.value
         for (const out of step(next.value)) yield out
         if (stopped) break
       }
@@ -212,6 +215,21 @@ export function createEarlyStop(input: EarlyStopInput): EarlyStop {
       release()
       iterator.return?.().catch(() => {})
     }
+
+    // **Whatever the rewriter was still holding, before the loop's ending is announced.**
+    //
+    // A tool block's arguments are buffered until its `content_block_stop` (`rewrite.ts`), and every
+    // exit above can happen first — the early stop is a race against that stop and sometimes wins.
+    // The held fragments used to die here, and the client received a `tool_use` block with its name,
+    // its id, and no arguments at all: `arguments: ""` on the openai wire, which is not JSON, so the
+    // client's reader threw before it could run anything (2026-09-06).
+    //
+    // The hook's copy of the input is preferred over the buffer because it is the assembled one —
+    // the buffer holds only the fragments that arrived before the loop ended, and a truncated prefix
+    // of valid JSON is still not valid JSON.
+    const complete = new Map(captures.map((call) => [call.id, call.input]))
+    for (const event of rewriter.flush(complete)) yield rewrap(lastMessage, event)
+
     if (stopped) yield TOOL_USE_RESULT
   }
 

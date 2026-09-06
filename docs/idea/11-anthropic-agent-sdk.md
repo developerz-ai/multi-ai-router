@@ -339,6 +339,42 @@ carries per-request file trees that change every turn). Meridian scopes by profi
 by Account id** — resuming against the wrong Account is both a cache miss and a leak of one
 subscription's conversation into another's.
 
+### A turn that stopped mid-answer is a failure, not a completion
+
+**As built** (`render/envelope.ts`, `finish`). When the SDK's message stream ends with content
+blocks still open **and nothing ever stated a stop reason**, the blocks are closed — a client's
+parser is owed sound framing whatever happened — and what follows them is an `error`, not a
+`message_delta` and a `message_stop`. Those two are the sentence "this is the whole answer", and it
+is not: the model was still writing.
+
+Measured 2026-09-06 under fleet load: ~1.4% of requests, and each one killed an entire agent turn.
+Reproduced with a plain tool-free request — one run answered in 2 chunks and 11 s where the next
+gave 3,892 lines and 122 s for the same prompt — so it is not tools, not a harness fingerprint, not
+session binding, and not an idle timeout anywhere in the path. The upstream simply stops sometimes.
+
+What made it fatal rather than merely disappointing is that **the router was the only component that
+knew, and the only one that said nothing.** It logged the truncation and handed the client a normal
+completion: a truncated answer that looked whole, or a `tool_use` block whose arguments never
+arrived — `arguments: ""` on the openai wire, which is not JSON, so the client's reader threw before
+it could run anything. Now the client gets a failure it can act on, and a *non-streaming* turn of
+the same shape becomes a real status before any byte is out, so the failover chain tries the next
+account instead of the caller ever seeing it.
+
+**The stop reason is what separates the two shapes**, and only one of them is this failure. An
+upstream that stated `end_turn` and merely dropped a `content_block_stop` sent a whole answer with
+one framing event missing: that is repaired and finishes cleanly, exactly as it always did.
+
+`sdk turn ended mid-answer` carries what the renderer knew — the block kinds, the last SDK message
+and wire event, whether a `result` arrived at all, and how many messages and client frames the turn
+produced. That set exists because the question the line has to answer is *which* early ending it
+was: the query iterator completing, a `result` landing mid-block, or the subprocess dying under it.
+
+One cause is ours and is fixed at the source rather than reported: a `tool_use` block's arguments
+are buffered until its `content_block_stop` (§7), and the early stop ends the loop the instant every
+emitted call has been denied — a race the stop sometimes wins, taking the held arguments with it.
+`ToolRewriter.flush` now empties that hold when the loop ends, preferring the input the `PreToolUse`
+hook was handed **assembled** over a buffer that may hold only a truncated prefix of it.
+
 ### One conversation, one turn at a time
 
 **As built** (`session/inflight.ts`, applied in `session/store.ts`). Resolving a turn also *claims*

@@ -185,9 +185,9 @@ export function createSdkInvoker(deps: SdkInvokerDeps): SdkInvoker {
             ...(invocation.onRateLimit === undefined
               ? {}
               : { onRateLimit: invocation.onRateLimit }),
-            ...(invocation.onForcedBlockClose === undefined
+            ...(invocation.onTruncatedTurn === undefined
               ? {}
-              : { onForcedBlockClose: invocation.onForcedBlockClose }),
+              : { onTruncatedTurn: invocation.onTruncatedTurn }),
           },
         })
 

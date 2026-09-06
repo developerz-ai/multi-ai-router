@@ -157,7 +157,7 @@ describe("a stream that loses a content_block_stop", () => {
       }),
       model: "claude-sonnet-4-5",
       stream: true,
-      observer: { onForcedBlockClose: (count) => counts.push(count) },
+      observer: { onTruncatedTurn: (detail) => counts.push(detail.blocks) },
     })
 
     const names = events(await response.text()).map((frame) => frame.name)
@@ -174,7 +174,7 @@ describe("a stream that loses a content_block_stop", () => {
       messages: sdkQueryStream({ turns: [sdkTurn({ blocks: [TEXT_BLOCK] })] }),
       model: "claude-sonnet-4-5",
       stream: true,
-      observer: { onForcedBlockClose: (count) => counts.push(count) },
+      observer: { onTruncatedTurn: (detail) => counts.push(detail.blocks) },
     })
 
     await response.text()

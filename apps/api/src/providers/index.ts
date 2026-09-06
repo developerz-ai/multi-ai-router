@@ -75,6 +75,7 @@ export type {
   SdkRenderObserver,
   StreamPacing,
   Ticker,
+  TruncatedTurn,
 } from "./claude-sdk/render"
 export {
   createEnvelope,

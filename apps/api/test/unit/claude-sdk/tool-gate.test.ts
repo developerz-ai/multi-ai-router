@@ -412,3 +412,70 @@ describe("the whole path, gate into renderer", () => {
     expect(body.usage).toMatchObject({ output_tokens: 12 })
   })
 })
+
+/**
+ * **What the client gets when the loop ends before a tool block closes.**
+ *
+ * A tool block's arguments are held until its `content_block_stop` (`rewrite.ts`), and the early
+ * stop ends the loop the instant every emitted call has been denied — a race the stop sometimes
+ * wins. The held fragments then died with the loop, and the client received a `tool_use` block with
+ * its name, its id, and nothing else: `arguments: ""` on the openai wire, which is not JSON, so the
+ * client's reader threw before it could run anything. Measured at ~1.4% of requests under agent
+ * load, always exactly one block, and fatal to the whole turn every time (2026-09-06).
+ */
+describe("a tool block whose content_block_stop never arrives", () => {
+  /** The block, without its stop — the shape the stop-versus-stop race leaves behind. */
+  function unterminatedToolBlock(fragments: readonly string[]) {
+    return toolBlock(0, "toolu_1", fragments).slice(0, -1)
+  }
+
+  function argumentsOf(seen: readonly unknown[]): string {
+    return events(seen)
+      .filter((event) => event.type === "content_block_delta")
+      .map((event) => {
+        const delta = event.delta as { partial_json?: unknown } | undefined
+        return typeof delta?.partial_json === "string" ? delta.partial_json : ""
+      })
+      .join("")
+  }
+
+  test("the held arguments still reach the client, and the block still closes", async () => {
+    const passthrough = passthroughFor()
+    const seen = await through(passthrough, [
+      MESSAGE_START,
+      ...unterminatedToolBlock(['{"cityName"', ':"Berlin"}']),
+    ])
+
+    expect(JSON.parse(argumentsOf(seen))).toEqual({ cityName: "Berlin" })
+    // Sound framing too: a block the client opened is a block the client sees closed.
+    expect(events(seen).filter((event) => event.type === "content_block_stop")).toHaveLength(1)
+  })
+
+  test("the hook's assembled input wins over a buffer that only got half of it", async () => {
+    const passthrough = passthroughFor()
+    // The hook sees the arguments whole; the stream carried only the opening fragment before the
+    // loop ended. A truncated prefix of valid JSON is still not valid JSON.
+    // An already-aborted signal, so the deny-hold resolves at once: this test is about the capture,
+    // not about the hold that `the deny is held until the turn is generated` already pins.
+    await hookOf(passthrough)(
+      preToolUse("toolu_1", { cityName: "Berlin", units: "metric" }),
+      undefined,
+      { signal: AbortSignal.abort() },
+    )
+    const seen = await through(passthrough, [MESSAGE_START, ...unterminatedToolBlock(['{"cityNa'])])
+
+    expect(JSON.parse(argumentsOf(seen))).toEqual({ cityName: "Berlin", units: "metric" })
+  })
+
+  test("a block that closed on the wire is not flushed a second time", async () => {
+    const passthrough = passthroughFor()
+    const seen = await through(passthrough, [
+      MESSAGE_START,
+      ...toolBlock(0, "toolu_1", ['{"cityName":"Berlin"}']),
+      MESSAGE_DELTA,
+    ])
+
+    expect(events(seen).filter((event) => event.type === "content_block_stop")).toHaveLength(1)
+    expect(JSON.parse(argumentsOf(seen))).toEqual({ cityName: "Berlin" })
+  })
+})
