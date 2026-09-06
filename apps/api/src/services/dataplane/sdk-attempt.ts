@@ -138,6 +138,10 @@ export async function runSdkAttempt(input: SdkAttemptInput): Promise<AttemptOutc
           lastEvent: detail.lastEvent,
           sawResult: detail.sawResult,
           lastSystemSubtype: detail.lastSystemSubtype,
+          // Which of the two explanations for a `tool_use` block that never closed applies —
+          // see `SdkTruncatedTurn`.
+          declaredTools: detail.declaredTools,
+          passthrough: detail.passthrough,
           sdkMessages: detail.sdkMessages,
           frames: detail.frames,
         }),

@@ -56,10 +56,32 @@ export interface SdkInvocation {
   /**
    * Called at most once per turn, when it ended with content blocks still open — the turn stopped
    * mid-answer, and the renderer answered with an error rather than a completion. The detail is
-   * what the renderer knew at that moment; the render layer is pure and holds no logger, so a
-   * launch that wires nothing simply goes unalarmed.
+   * what the renderer knew at that moment, plus the two facts only the invoker holds; the render
+   * layer is pure and holds no logger, so a launch that wires nothing simply goes unalarmed.
    */
-  readonly onTruncatedTurn?: (detail: TruncatedTurn) => void
+  readonly onTruncatedTurn?: (detail: SdkTruncatedTurn) => void
+}
+
+/**
+ * The renderer's account of a truncated turn, plus what the *launch* knew about its tool surface.
+ *
+ * Those last two are here because the open block's kind alone cannot settle the question the live
+ * data raises. Turns are ending on a `tool_use` block that never closes, and the two explanations
+ * have opposite fixes: a client that **declared tools** has a passthrough, so `ToolRewriter.flush`
+ * should already have closed that block and something upstream of it is wrong; a client that
+ * declared **none** has no passthrough and no flush at all — and a `tool_use` block appearing at all
+ * in that case would mean the built-in catalog `options.ts` elides with `tools: []` was not fully
+ * elided, which is a different bug in a different file.
+ *
+ * One field each, and the next occurrence says which. Measuring that from outside would mean
+ * correlating the alarm against the request body, which is the thing this router parses exactly once
+ * and never logs.
+ */
+export interface SdkTruncatedTurn extends TruncatedTurn {
+  /** How many tools the client declared. Zero means no passthrough was built, and no flush ran. */
+  readonly declaredTools: number
+  /** Whether a passthrough exists — the machinery that closes a held tool block when a loop ends. */
+  readonly passthrough: boolean
 }
 
 export interface SdkSessionReport {

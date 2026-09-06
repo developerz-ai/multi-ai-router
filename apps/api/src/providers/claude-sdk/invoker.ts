@@ -185,9 +185,18 @@ export function createSdkInvoker(deps: SdkInvokerDeps): SdkInvoker {
             ...(invocation.onRateLimit === undefined
               ? {}
               : { onRateLimit: invocation.onRateLimit }),
+            // Enriched here rather than in the renderer, which is pure and knows nothing about
+            // tools: the launch is the only place that holds both halves at once.
             ...(invocation.onTruncatedTurn === undefined
               ? {}
-              : { onTruncatedTurn: invocation.onTruncatedTurn }),
+              : {
+                  onTruncatedTurn: (detail) =>
+                    invocation.onTruncatedTurn?.({
+                      ...detail,
+                      declaredTools: request.tools.length,
+                      passthrough: passthrough !== null,
+                    }),
+                }),
           },
         })
 
