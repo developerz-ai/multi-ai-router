@@ -36,7 +36,12 @@ export type {
   OpenIdleQueryInput,
 } from "./claude-sdk/idle-query"
 export { IdleQueryTimeoutError, openIdleQuery, rejectOnAbort } from "./claude-sdk/idle-query"
-export type { SdkInvocation, SdkInvoker, SdkSessionReport } from "./claude-sdk/invoke"
+export type {
+  SdkInvocation,
+  SdkInvoker,
+  SdkSessionReport,
+  SdkTruncatedTurn,
+} from "./claude-sdk/invoke"
 export type { SdkInvokerDeps, SdkQueryFn, SdkQueryStream } from "./claude-sdk/invoker"
 export { createSdkInvoker } from "./claude-sdk/invoker"
 export type {

@@ -224,6 +224,53 @@ describe("the launch every turn is given", () => {
     expect(spy.options[0]?.systemPrompt).toBeUndefined()
   })
 
+  /**
+   * The two facts only the launch holds. Turns are ending on a `tool_use` block that never closes,
+   * and the explanations have opposite fixes: with a passthrough, `ToolRewriter.flush` should
+   * already have closed it; without one there is no flush at all, and a `tool_use` block appearing
+   * would mean the built-in catalog `tools: []` elides was not fully elided.
+   */
+  test("a truncated turn names the tool surface it ran with", async () => {
+    const seen: { declaredTools: number; passthrough: boolean }[] = []
+    const truncating = () => ({
+      async *[Symbol.asyncIterator]() {
+        yield { type: "system", subtype: "init", session_id: "s1" }
+        yield {
+          type: "stream_event",
+          parent_tool_use_id: null,
+          event: {
+            type: "message_start",
+            message: { id: "m1", type: "message", role: "assistant", content: [] },
+          },
+        }
+        yield {
+          type: "stream_event",
+          parent_tool_use_id: null,
+          event: {
+            type: "content_block_start",
+            index: 0,
+            content_block: { type: "text", text: "" },
+          },
+        }
+      },
+    })
+
+    const plain = invoker(spyQuery(truncating))
+    await (
+      await plain.invoke(
+        invocation({
+          body: body({ messages: [{ role: "user", content: "hi" }], stream: true }),
+          onTruncatedTurn: (detail: { declaredTools: number; passthrough: boolean }) =>
+            void seen.push(detail),
+        }),
+      )
+    ).text()
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    // A client that declared none: no passthrough was built, so no flush can have run.
+    expect(seen.at(0)).toMatchObject({ declaredTools: 0, passthrough: false })
+  })
+
   test("a fresh turn resumes nothing — the three session options are absent, not empty", async () => {
     const spy = spyQuery()
     await (await invoker(spy).invoke(invocation())).text()

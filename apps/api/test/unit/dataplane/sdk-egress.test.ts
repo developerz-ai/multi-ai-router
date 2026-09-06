@@ -433,6 +433,8 @@ describe("the truncated-turn alarm reaches the log", () => {
           lastSystemSubtype: "init",
           sdkMessages: 7,
           frames: 5,
+          declaredTools: 0,
+          passthrough: false,
         })
         return new Response('{"type":"message"}', { status: 200 })
       },
@@ -455,6 +457,10 @@ describe("the truncated-turn alarm reaches the log", () => {
         lastSystemSubtype: "init",
         sdkMessages: 7,
         frames: 5,
+        // Zero and false together: no passthrough was built, so no flush ran — which is one of the
+        // two explanations for a `tool_use` block that never closed.
+        declaredTools: 0,
+        passthrough: false,
       },
     ])
   })

@@ -366,8 +366,22 @@ one framing event missing: that is repaired and finishes cleanly, exactly as it 
 
 `sdk turn ended mid-answer` carries what the renderer knew — the block kinds, the last SDK message
 and wire event, whether a `result` arrived at all, and how many messages and client frames the turn
-produced. That set exists because the question the line has to answer is *which* early ending it
-was: the query iterator completing, a `result` landing mid-block, or the subprocess dying under it.
+produced — plus the two facts only the launch holds: how many tools the client declared, and whether
+a passthrough was built. That set exists because the question the line has to answer is *which*
+early ending it was: the query iterator completing, a `result` landing mid-block, or the subprocess
+dying under it.
+
+**Read `lastSystemSubtype` for what it is.** It is the subtype of the last `system` message seen
+*anywhere* in the turn, not the message that ended it — a turn whose stream stops long after a
+`system` still reports that subtype, and reading it as an ending has already sent one investigation
+after a thinking budget that was never involved.
+
+The tool fields separate the two live explanations for a turn that ends on a `tool_use` block that
+never closed, and they have opposite fixes. A client that **declared tools** has a passthrough, so
+`ToolRewriter.flush` should already have closed that block and something upstream of it is wrong. A
+client that declared **none** has no passthrough and no flush at all — and a `tool_use` block
+appearing at all in that case would mean the built-in catalog `tools: []` elides was not fully
+elided, which is a different bug in a different file.
 
 One cause is ours and is fixed at the source rather than reported: a `tool_use` block's arguments
 are buffered until its `content_block_stop` (§7), and the early stop ends the loop the instant every
