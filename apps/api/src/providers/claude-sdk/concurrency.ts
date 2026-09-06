@@ -20,19 +20,23 @@
  * honest reading of a per-container memory bound, and the same trade `services/dataplane/limits.ts`
  * documents for per-key rate limiting.
  *
- * **What this gate deliberately does not serialize: the `CLAUDE_CONFIG_DIR` itself.** Up to
- * `perAccount` subprocesses share one credential directory, each capable of an OAuth refresh
- * inside it, and the login CLI (`login/spawn.ts`) touches the same directory from outside this
- * gate entirely. That is a considered deferral, not an oversight
- * (docs/idea/11-anthropic-agent-sdk.md §3, "Concurrent subprocesses on one directory"): the CLI
- * writes `.credentials.json` atomically and carries its own cross-process locking; a refresh lost
- * to a concurrent rotation fails one request into the ordinary auth classification rather than
- * corrupting the file; and a login almost always runs against an Account that `needs_reauth` — a
- * status routing already excludes — so login-vs-traffic overlap is the reconnect edge case, not
- * the normal case. Serializing here would mean an exclusive drain of the account gate plus wiring
- * the login path through it, priced against a corruption nobody has observed in comparable
- * multi-process deployments. If that evidence changes, the seam is an `acquireAll(accountId)` on
- * this interface — never a silent cut to `perAccount`, which is throughput the pool is sized on.
+ * **What this gate does not serialize: the `CLAUDE_CONFIG_DIR` itself — and something else now
+ * does.** Up to `perAccount` subprocesses share one credential directory, each capable of an OAuth
+ * refresh inside it. This module used to record that as an accepted risk, reasoning that "a refresh
+ * lost to a concurrent rotation fails one request into the ordinary auth classification rather than
+ * corrupting the file". **That reasoning was wrong, and production proved it on 2026-09-06**: the
+ * refresh token rotates on use, so the loser of the race presents a spent token, and the CLI reads
+ * the rejection as a dead login and blanks `.credentials.json`. Three of six Accounts were
+ * deauthenticated in nine hours, every one of them with a month left on `refreshTokenExpiresAt`.
+ *
+ * The mitigation named here for that evidence — an exclusive drain of the per-Account gate, never a
+ * quiet cut to `perAccount` — is now `credential-freshness.ts`, deliberately built *beside* this
+ * gate rather than inside it: `claude auth status` and the login CLI spawn against the same
+ * directory with a raw `Bun.spawn` and hold no slot, so a guard living in here would not cover them.
+ * Callers take the freshness gate **first** and this one second, one fixed order, no deadlock.
+ *
+ * So `perAccount` remains what it always was — a memory bound, and throughput the pool is sized on.
+ * It is not, and never was, the thing keeping a credential safe.
  */
 
 export interface SdkConcurrencyLimits {

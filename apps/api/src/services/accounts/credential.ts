@@ -29,9 +29,13 @@ import type { AccountCredentialView, AccountView } from "./view"
  *   *dead*: it is logged at warn, nothing is parked, and the console shows nothing rather than a
  *   wrong thing.
  * - `present: false` — the file was read and holds no usable login: blank tokens (the CLI's own
- *   mark for an expired refresh token), a missing `claudeAiOauth`, or no file at all (never
- *   connected). Every one of those is an Account the SDK cannot use.
- * - `present: true` — both tokens are there. `expiresAt` says for how long.
+ *   mark for a refresh it could not complete — an expired refresh token, or one already spent by a
+ *   concurrent subprocess, which is the failure `credential-freshness.ts` exists to prevent), a
+ *   missing `claudeAiOauth`, or no file at all (never connected). Every one of those is an Account
+ *   the SDK cannot use.
+ * - `present: true` — both tokens are there. `refreshTokenExpiresAt` says how long the *login*
+ *   has; the access token's own `expiresAt` is a separate, much shorter clock, and the one
+ *   `providers/claude-sdk/credential-freshness.ts` serializes around.
  *
  * **Parking.** A `present: false` read against a row that is still `active` is a login that died
  * between probes, and it is parked through the same conditional status write the auth probe uses
@@ -181,7 +185,11 @@ export function createCredentialPark(
         source: "credential_metadata",
         status: "needs_reauth",
         previousStatus: "active",
-        reason: "refresh token expired: the claude CLI has blanked this account's tokens",
+        // Deliberately does not claim the refresh token expired. The 2026-09-06 incident blanked
+        // three Accounts whose refresh tokens had a month left: a rejected refresh looks exactly
+        // like an expired one from here, and only the file's own expiry can tell them apart.
+        reason:
+          "the claude CLI has blanked this account's tokens; it needs an interactive re-login",
       },
     })
     await deps.refreshCatalog?.()

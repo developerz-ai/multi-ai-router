@@ -1,5 +1,6 @@
 import { createCliProbe } from "./cli-probe"
 import type { SdkConcurrency } from "./concurrency"
+import type { CredentialFreshness } from "./credential-freshness"
 import { type IdleQueryFn, openIdleQuery } from "./idle-query"
 import { type CliResolution, resolveClaudeCli } from "./resolve-cli"
 import type { SdkUsageGauge } from "./usage-gauge"
@@ -21,6 +22,8 @@ import type { SdkUsageGauge } from "./usage-gauge"
 export interface SdkUsageGaugeProbeOptions {
   readonly gauge: SdkUsageGauge
   readonly concurrency: SdkConcurrency
+  /** Passed straight to `openIdleQuery`: this probe spawns, so it crosses the refresh window too. */
+  readonly freshness?: CredentialFreshness
   /** `CLAUDE_CLI_PATH`, validated at the env boundary. Re-resolved per call — see `resolve-cli.ts`. */
   readonly cliPathOverride: string | null
   /** Bounds the slot wait, the handshake, and the read together. Config, never a constant. */
@@ -53,6 +56,7 @@ export function createSdkUsageGaugeProbe(options: SdkUsageGaugeProbeOptions): Sd
         configDir,
         cliPath: resolution.path,
         concurrency: options.concurrency,
+        ...(options.freshness === undefined ? {} : { freshness: options.freshness }),
         timeoutMs: options.timeoutMs,
         ...(options.runQuery === undefined ? {} : { runQuery: options.runQuery }),
       })

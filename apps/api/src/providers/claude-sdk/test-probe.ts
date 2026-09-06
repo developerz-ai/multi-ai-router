@@ -8,6 +8,7 @@ import { query } from "@anthropic-ai/claude-agent-sdk"
 import { PERMITTED_TOOLS } from "./allowlist"
 import { createCliProbe } from "./cli-probe"
 import type { SdkConcurrency, SdkSlot } from "./concurrency"
+import { ALWAYS_FRESH, type CredentialFreshness } from "./credential-freshness"
 import { QUERY_ENV_OVERRIDES, subprocessEnv } from "./env"
 import { classifySdkFailure, readSdkFailure } from "./errors"
 import { type CliResolution, resolveClaudeCli } from "./resolve-cli"
@@ -128,6 +129,12 @@ export interface SdkTestProbeOptions {
    * one sized the same. Two gates over one memory budget bound twice what the operator configured.
    */
   readonly concurrency: SdkConcurrency
+  /**
+   * The Account's refresh-moment gate (`credential-freshness.ts`), taken before the slot like every
+   * other spawn site. "Test now" is the one probe an operator fires by hand, which makes it exactly
+   * the thing most likely to land on top of live traffic.
+   */
+  readonly freshness?: CredentialFreshness
   /** Injected in tests. Defaults to the real ladder over this host's filesystem. */
   readonly resolveCli?: () => CliResolution
   /** Injected in tests, for the reason `SdkInvokerDeps.runQuery` is: no test may spawn a `claude`. */
@@ -160,6 +167,8 @@ export function createSdkTestProbe(options: SdkTestProbeOptions): SdkTestProbe {
         }
       }
 
+      await (options.freshness ?? ALWAYS_FRESH).ensureFresh(input.accountId, input.signal)
+
       let slot: SdkSlot
       try {
         slot = await options.concurrency.acquire(input.accountId, input.signal)
@@ -182,7 +191,8 @@ export function createSdkTestProbe(options: SdkTestProbeOptions): SdkTestProbe {
         skills: [],
         tools: [],
         // The one reviewed allowlist (`allowlist.ts`), never a second literal that could drift
-        // from it: this is the second of exactly two `query()` call sites, and the security gate
+        // from it: this is one of three `query()` call sites (with `invoker.ts` and `idle-query.ts`),
+        // and the security gate
         // test asserts both launches carry the same constant.
         allowedTools: [...PERMITTED_TOOLS],
         permissionMode: "dontAsk",

@@ -518,6 +518,14 @@ export interface Env {
   readonly claudeSdkMaxConcurrency: number
   readonly claudeSdkMaxConcurrencyPerAccount: number
   /**
+   * The refresh-window guard (`providers/claude-sdk/credential-freshness.ts`). Inside `skew` of an
+   * access token's expiry only one subprocess may cross; the rest wait up to `WaitMs`, re-reading
+   * the credential file every `PollMs`, then proceed regardless.
+   */
+  readonly claudeSdkCredentialRefreshSkewSeconds: number
+  readonly claudeSdkCredentialRefreshWaitMs: number
+  readonly claudeSdkCredentialRefreshPollMs: number
+  /**
    * Bearer token `GET /metrics` demands, or null to leave it open. Null is the right default for
    * a deployment whose metrics port is not routable; see `routes/metrics.ts`.
    */
@@ -658,6 +666,9 @@ export const ENV_FIELDS = {
   CLAUDE_CLI_PATH: nonEmpty.optional(),
   CLAUDE_SDK_MAX_CONCURRENCY: atLeastOne.optional(),
   CLAUDE_SDK_MAX_CONCURRENCY_PER_ACCOUNT: atLeastOne.optional(),
+  CLAUDE_SDK_CREDENTIAL_REFRESH_SKEW_SECONDS: wholeNumber.optional(),
+  CLAUDE_SDK_CREDENTIAL_REFRESH_WAIT_MS: atLeastOne.optional(),
+  CLAUDE_SDK_CREDENTIAL_REFRESH_POLL_MS: atLeastOne.optional(),
   CLAUDE_SDK_USAGE_GAUGE: flag.optional(),
   CLAUDE_SDK_USAGE_GAUGE_TIMEOUT_MS: atLeastOne.optional(),
   CLAUDE_SDK_USAGE_GAUGE_MIN_INTERVAL_SECONDS: wholeNumber.optional(),
@@ -868,6 +879,16 @@ const envSchema = z.object(ENV_FIELDS).transform((raw, ctx): Env => {
     claudeCliPath: raw.CLAUDE_CLI_PATH ?? null,
     claudeSdkMaxConcurrency: raw.CLAUDE_SDK_MAX_CONCURRENCY ?? 10,
     claudeSdkMaxConcurrencyPerAccount: raw.CLAUDE_SDK_MAX_CONCURRENCY_PER_ACCOUNT ?? 4,
+    // How near an access token's expiry counts as "inside the refresh window", where only one
+    // subprocess may cross at a time (`providers/claude-sdk/credential-freshness.ts`). 300 s is the
+    // buffer Meridian settled on for the same token endpoint, and it comfortably covers a spawn
+    // that begins just before expiry and refreshes just after.
+    claudeSdkCredentialRefreshSkewSeconds: raw.CLAUDE_SDK_CREDENTIAL_REFRESH_SKEW_SECONDS ?? 300,
+    // How long a waiter gives the winner before proceeding regardless. A refresh is one HTTPS
+    // round-trip inside a subprocess that was starting anyway; past this the gate has clearly not
+    // helped, and a wedged Account would be a worse outage than the race.
+    claudeSdkCredentialRefreshWaitMs: raw.CLAUDE_SDK_CREDENTIAL_REFRESH_WAIT_MS ?? 20_000,
+    claudeSdkCredentialRefreshPollMs: raw.CLAUDE_SDK_CREDENTIAL_REFRESH_POLL_MS ?? 250,
     metricsToken: raw.METRICS_TOKEN ?? null,
     sentryDsn: raw.SENTRY_DSN ?? null,
     sentryEnvironment: raw.SENTRY_ENVIRONMENT ?? "production",

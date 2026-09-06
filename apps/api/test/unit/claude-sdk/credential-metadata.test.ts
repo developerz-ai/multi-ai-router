@@ -60,6 +60,7 @@ describe("reading credential metadata", () => {
 
     expect(metadata).toEqual({
       refreshTokenExpiresAt: new Date(REFRESH_EXPIRES_MS),
+      accessTokenExpiresAt: new Date(1_788_000_000_000),
       subscriptionType: "max",
       rateLimitTier: "default_claude_max_20x",
       hasTokens: true,
@@ -81,7 +82,10 @@ describe("reading credential metadata", () => {
       expect(serialized).not.toContain(token.slice(0, 20))
       expect(serialized).not.toContain(token.slice(-20))
     }
+    // The exhaustive key list is the guard: a field added to the reader has to be added here too,
+    // which is where someone would notice they had just widened it to something token-shaped.
     expect(Object.keys(metadata).sort()).toEqual([
+      "accessTokenExpiresAt",
       "hasTokens",
       "rateLimitTier",
       "refreshTokenExpiresAt",
@@ -139,6 +143,7 @@ describe("reading credential metadata", () => {
 
     expect(metadata).toEqual({
       refreshTokenExpiresAt: null,
+      accessTokenExpiresAt: null,
       subscriptionType: null,
       rateLimitTier: null,
       hasTokens: true,

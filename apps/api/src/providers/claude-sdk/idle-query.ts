@@ -2,6 +2,7 @@ import type { Options, PermissionResult, SDKUserMessage } from "@anthropic-ai/cl
 import { query } from "@anthropic-ai/claude-agent-sdk"
 import { PERMITTED_TOOLS } from "./allowlist"
 import type { SdkConcurrency, SdkSlot } from "./concurrency"
+import { ALWAYS_FRESH, type CredentialFreshness } from "./credential-freshness"
 import { QUERY_ENV_OVERRIDES, subprocessEnv } from "./env"
 
 /**
@@ -55,6 +56,12 @@ export interface OpenIdleQueryInput {
   readonly signal?: AbortSignal
   /** Injected in tests, for the reason `SdkInvokerDeps.runQuery` is: no test may spawn a `claude`. */
   readonly runQuery?: IdleQueryFn
+  /**
+   * The Account's refresh-moment gate (`credential-freshness.ts`). A probe is a subprocess like any
+   * other and races the credential file exactly as a turn does — the model catalog refresh was live
+   * against one of the three Accounts lost on 2026-09-06.
+   */
+  readonly freshness?: CredentialFreshness
 }
 
 export interface IdleQueryHandle {
@@ -86,6 +93,10 @@ export async function openIdleQuery(input: OpenIdleQueryInput): Promise<IdleQuer
   const runQuery: IdleQueryFn = input.runQuery ?? ((params) => query(params))
   const deadline = AbortSignal.timeout(input.timeoutMs)
   const signal = input.signal === undefined ? deadline : AbortSignal.any([deadline, input.signal])
+
+  // Before the slot, matching `invoker.ts`: one fixed order between the two gates, so they cannot
+  // deadlock against each other.
+  await (input.freshness ?? ALWAYS_FRESH).ensureFresh(input.accountId, signal)
 
   let slot: SdkSlot
   try {

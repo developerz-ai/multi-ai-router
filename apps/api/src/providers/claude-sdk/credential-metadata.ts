@@ -29,6 +29,16 @@ import { SDK_EPOCH_MILLIS_FLOOR } from "./quota"
 export interface CredentialMetadata {
   /** When the refresh token — and so the login — dies. Null when the file does not say. */
   readonly refreshTokenExpiresAt: Date | null
+  /**
+   * When the *access* token goes stale and the CLI will refresh on its next spawn — roughly every
+   * eight hours, and a different fact from {@link refreshTokenExpiresAt}. Null when the file does
+   * not say, which callers must read as "unknown", never as "fresh".
+   *
+   * This is the instant `credential-freshness.ts` serializes around: the refresh token rotates on
+   * use, so two subprocesses crossing this moment together double-spend it and the loser's CLI
+   * blanks the file. Knowing *when* is what makes that window narrow enough to guard cheaply.
+   */
+  readonly accessTokenExpiresAt: Date | null
   /** `"max"`, `"pro"`, `"team"`, … as the CLI recorded it. */
   readonly subscriptionType: string | null
   readonly rateLimitTier: string | null
@@ -53,6 +63,7 @@ export interface CredentialMetadataReader {
 /** No credential to speak of: nulls and `hasTokens: false`. */
 export const UNKNOWN_CREDENTIAL_METADATA: CredentialMetadata = Object.freeze({
   refreshTokenExpiresAt: null,
+  accessTokenExpiresAt: null,
   subscriptionType: null,
   rateLimitTier: null,
   hasTokens: false,
@@ -69,6 +80,7 @@ const credentialFileSchema = z.looseObject({
     .looseObject({
       accessToken: z.unknown().optional(),
       refreshToken: z.unknown().optional(),
+      expiresAt: z.number().nullable().optional(),
       refreshTokenExpiresAt: z.number().nullable().optional(),
       subscriptionType: z.string().nullable().optional(),
       rateLimitTier: z.string().nullable().optional(),
@@ -104,6 +116,7 @@ function toMetadata(oauth: ParsedOauth): CredentialMetadata {
   const hasTokens = isNonEmptyString(oauth.accessToken) && isNonEmptyString(oauth.refreshToken)
   return {
     refreshTokenExpiresAt: toInstant(oauth.refreshTokenExpiresAt),
+    accessTokenExpiresAt: toInstant(oauth.expiresAt),
     subscriptionType: oauth.subscriptionType ?? null,
     rateLimitTier: oauth.rateLimitTier ?? null,
     hasTokens,

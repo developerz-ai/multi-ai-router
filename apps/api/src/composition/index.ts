@@ -21,6 +21,8 @@ import type { Env } from "../config/env"
 import type { Logger } from "../logging/logger"
 import { createRuntimeMetrics, type RouterMetrics } from "../observability"
 import {
+  createCredentialFreshness,
+  createCredentialMetadataReader,
   createSdkConcurrency,
   createSdkInvoker,
   createSdkModelLister,
@@ -247,6 +249,21 @@ export function createRuntime(deps: RuntimeDeps): Runtime {
   // The transcripts the CLI leaves under those directories, over the validated root: the sweep
   // that removes them is the retention half of the same volume (`scheduler/tasks/sdk-transcript-sweep.ts`).
   const transcripts = createSdkTranscripts({ root: configDirs.root })
+  // Only one `claude` subprocess may cross an Account's token-refresh moment, because the refresh
+  // token rotates and a second spender gets rejected — after which the losing CLI blanks the
+  // credential file and the Account needs an interactive re-login
+  // (`providers/claude-sdk/credential-freshness.ts`, docs/idea/11-anthropic-agent-sdk.md §3).
+  // Shared by every spawn site for the same reason `sdkConcurrency` is: a gate only some callers
+  // honour is not a gate.
+  const credentialFreshness = createCredentialFreshness({
+    reader: createCredentialMetadataReader(),
+    configDirs,
+    skewMs: env.claudeSdkCredentialRefreshSkewSeconds * 1_000,
+    maxWaitMs: env.claudeSdkCredentialRefreshWaitMs,
+    pollMs: env.claudeSdkCredentialRefreshPollMs,
+    now,
+    logger,
+  })
 
   // `usage` is a getter because the recorder below reports *into* this: see `observability/`.
   const metrics = createRuntimeMetrics({
@@ -328,12 +345,14 @@ export function createRuntime(deps: RuntimeDeps): Runtime {
   // with the rest of the warm state, since `HealthStore.reset` has to be able to clear it.
   const invokeSdk = createSdkInvoker({
     concurrency: sdkConcurrency,
+    freshness: credentialFreshness,
     cliPathOverride: env.claudeCliPath,
     usageGauge,
   })
   const usageGaugeProbe = createSdkUsageGaugeProbe({
     gauge: usageGauge,
     concurrency: sdkConcurrency,
+    freshness: credentialFreshness,
     cliPathOverride: env.claudeCliPath,
     // The handshake bound the model lister uses too: a subprocess start, not a model's answer.
     timeoutMs: env.failover.upstreamTimeoutMs,
@@ -344,6 +363,7 @@ export function createRuntime(deps: RuntimeDeps): Runtime {
   // `GET /v1/models` with `data: []` (`providers/claude-sdk/model-list.ts`).
   const sdkModelLister = createSdkModelLister({
     concurrency: sdkConcurrency,
+    freshness: credentialFreshness,
     cliPathOverride: env.claudeCliPath,
     onUnavailable: (reason, detail) =>
       logger.info("subscription model listing unavailable", {
@@ -417,6 +437,9 @@ export function createRuntime(deps: RuntimeDeps): Runtime {
     health,
     prices,
     sdkConcurrency,
+    // The same refresh-window gate the dispatch path takes: "Test now" spawns against the same
+    // config dir, so it has to queue behind a refresh exactly as a real turn does.
+    credentialFreshness,
     // The same instance the dispatch path ingests into, so "Test now" and a real request write one
     // account's quota state to one place.
     sdkQuota,
