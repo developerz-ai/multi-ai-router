@@ -22,6 +22,16 @@ import { QUERY_ENV_OVERRIDES, subprocessEnv } from "./env"
  * (`concurrency.ts`): this is a ~245 MB process like any other, and a bound only some callers honour
  * is not a bound. The slot is taken before the spawn and freed by `close()`.
  *
+ * **Never against a cold credential.** The CLI refreshes its access token at startup when the token
+ * is expired or inside its own five-minute lead, and persists the rotated refresh token only after
+ * the token endpoint answers. An idle query is ended the moment its handshake is read — before that
+ * write — and the refresh token left on disk is then spent, so the next process to present it is
+ * told `invalid_grant` and the CLI blanks the credential. That is how six of six production
+ * subscriptions were deauthenticated on 2026-09-06/07 (docs/idea/11-anthropic-agent-sdk.md §3). So
+ * `openIdleQuery` asks {@link CredentialFreshness.wouldRefresh} **before taking a slot and again
+ * after**, and refuses with {@link IdleQueryColdCredentialError} rather than spawn. Only a real
+ * turn — a process that runs to completion — may cross a refresh.
+ *
  * **Never run a real `claude` binary from a test.** `runQuery` is injected for exactly that reason.
  */
 
@@ -57,9 +67,8 @@ export interface OpenIdleQueryInput {
   /** Injected in tests, for the reason `SdkInvokerDeps.runQuery` is: no test may spawn a `claude`. */
   readonly runQuery?: IdleQueryFn
   /**
-   * The Account's refresh-moment gate (`credential-freshness.ts`). A probe is a subprocess like any
-   * other and races the credential file exactly as a turn does — the model catalog refresh was live
-   * against one of the three Accounts lost on 2026-09-06.
+   * The Account's refresh-moment gate (`credential-freshness.ts`). Asked whether a spawn would
+   * refresh; absent means every credential is treated as warm, which only a test wants.
    */
   readonly freshness?: CredentialFreshness
 }
@@ -89,14 +98,30 @@ export class IdleQueryTimeoutError extends Error {
   }
 }
 
+/**
+ * Thrown when the Account's access token is cold: a spawn now would refresh it, and an idle query is
+ * ended before the rotated refresh token could be written. Nothing was spawned and no slot is held.
+ * The credential is not broken — it is waiting for a real turn.
+ */
+export class IdleQueryColdCredentialError extends Error {
+  constructor() {
+    super(
+      "the account's access token is inside the CLI's refresh window; a turn-free subprocess would be ended before the rotated refresh token is written, so none is spawned",
+    )
+    this.name = "IdleQueryColdCredentialError"
+  }
+}
+
 export async function openIdleQuery(input: OpenIdleQueryInput): Promise<IdleQueryHandle> {
   const runQuery: IdleQueryFn = input.runQuery ?? ((params) => query(params))
   const deadline = AbortSignal.timeout(input.timeoutMs)
   const signal = input.signal === undefined ? deadline : AbortSignal.any([deadline, input.signal])
+  const freshness = input.freshness ?? ALWAYS_FRESH
 
   // Before the slot, matching `invoker.ts`: one fixed order between the two gates, so they cannot
-  // deadlock against each other.
-  await (input.freshness ?? ALWAYS_FRESH).ensureFresh(input.accountId, signal)
+  // deadlock against each other. An idle query never *enters* the refresh window — it is refused
+  // at its edge — so `ensureFresh` is not taken here; the window belongs to real turns.
+  if (await freshness.wouldRefresh(input.accountId)) throw new IdleQueryColdCredentialError()
 
   let slot: SdkSlot
   try {
@@ -105,6 +130,13 @@ export async function openIdleQuery(input: OpenIdleQueryInput): Promise<IdleQuer
     // The queue lets go only when the signal does: past the deadline it is the ceiling that was
     // the problem, before it the caller's own abort.
     throw deadline.aborted ? new IdleQueryTimeoutError("queued") : error
+  }
+
+  // Asked again with the slot in hand: a queue wait is unbounded below the deadline, and a token
+  // that was warm when this caller queued can be cold by the time it may spawn.
+  if (await freshness.wouldRefresh(input.accountId)) {
+    slot.release()
+    throw new IdleQueryColdCredentialError()
   }
 
   const controller = new AbortController()

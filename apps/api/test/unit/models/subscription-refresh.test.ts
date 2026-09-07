@@ -115,6 +115,20 @@ describe("refreshing a Claude subscription's catalog", () => {
     expect(logs.some((line) => line.level === "info" && line.reason === undefined)).toBe(true)
   })
 
+  test("a cold credential writes nothing — the next real turn refreshes it, the next tick lists it", async () => {
+    const { deps, writes, logs } = harness({ kind: "cold" })
+
+    const outcome = await refreshAccountCatalog(deps, sub(), NOW)
+
+    expect(outcome).toEqual({ kind: "skipped", reason: "agent-sdk:credential-cold" })
+    expect(writes).toEqual([])
+    expect(
+      logs.find((line) =>
+        String(line.msg).startsWith("subscription model listing skipped: access token"),
+      ),
+    ).toMatchObject({ level: "info", accountId: "sub-1" })
+  })
+
   test("a subscription whose login never finished has nothing to spawn against", async () => {
     const { deps, writes, asked } = harness(null)
 

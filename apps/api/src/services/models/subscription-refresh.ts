@@ -18,6 +18,10 @@ import { shippedSubscriptionCatalog, subscriptionCatalog } from "./subscription"
  * - **An auth failure writes nothing.** The credential needs a human, the account is about to be
  *   `needs_reauth` by the health path, and overwriting a good live listing with the shipped one
  *   would make a dead credential look like a downgrade. The previous rows stand.
+ * - **A cold credential writes nothing either.** The lister refused to spawn because the access
+ *   token is inside the CLI's refresh window and a turn-free subprocess would be ended before the
+ *   rotated refresh token was written — the mechanism behind the 2026-09-06/07 deauthentications.
+ *   Nothing is wrong with the account; the next real turn refreshes it and the next tick lists it.
  *
  * None of these fails the tick. One dead subscription is that subscription's problem, logged at
  * info with the reason, never a `failed` outcome that turns the sweep partial.
@@ -58,6 +62,14 @@ export async function refreshSubscriptionCatalog(
   if (listing?.kind === "auth") {
     logger.info("subscription model listing skipped: credential needs re-auth", fields)
     return { kind: "skipped", reason: "agent-sdk:needs-reauth" }
+  }
+
+  if (listing?.kind === "cold") {
+    logger.info(
+      "subscription model listing skipped: access token inside the CLI's refresh window, left for a real turn",
+      fields,
+    )
+    return { kind: "skipped", reason: "agent-sdk:credential-cold" }
   }
 
   if (listing === null) {

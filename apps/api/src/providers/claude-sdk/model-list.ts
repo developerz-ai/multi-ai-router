@@ -4,6 +4,7 @@ import type { SdkConcurrency } from "./concurrency"
 import type { CredentialFreshness } from "./credential-freshness"
 import { classifySdkFailure, readSdkFailure } from "./errors"
 import {
+  IdleQueryColdCredentialError,
   type IdleQueryFn,
   type IdleQueryHandle,
   IdleQueryTimeoutError,
@@ -28,7 +29,9 @@ import { type CliResolution, resolveClaudeCli } from "./resolve-cli"
  *
  * Never throws across the seam. `null` is "unavailable" — no binary, the ceiling, a timeout, an
  * unreadable answer — and the caller falls back to the shipped table. An auth failure is reported
- * distinctly so the caller can tell a dead credential from a slow one.
+ * distinctly so the caller can tell a dead credential from a slow one, and so is a **cold** one: a
+ * credential inside the CLI's refresh window is not listed at all, because the subprocess that
+ * would list it would be ended before the rotated refresh token was written (`idle-query.ts`).
  */
 
 export interface SdkModelInfo {
@@ -43,6 +46,8 @@ export type SdkModelListing =
   | { readonly kind: "listed"; readonly models: readonly SdkModelInfo[] }
   /** The credential needs a human. Distinct from `null`, which a retry may recover. */
   | { readonly kind: "auth" }
+  /** The credential is about to be refreshed and only a real turn may do that. Nothing was spawned. */
+  | { readonly kind: "cold" }
 
 /** Why the answer was `null`. For the caller's log line only. */
 export type SdkModelListUnavailable =
@@ -116,12 +121,12 @@ export function createSdkModelLister(options: SdkModelListerOptions): SdkModelLi
           cliPath: resolution.path,
           concurrency: options.concurrency,
           ...(options.freshness === undefined ? {} : { freshness: options.freshness }),
-          ...(options.freshness === undefined ? {} : { freshness: options.freshness }),
           timeoutMs: input.timeoutMs,
           ...(input.signal === undefined ? {} : { signal: input.signal }),
           ...(options.runQuery === undefined ? {} : { runQuery: options.runQuery }),
         })
       } catch (error) {
+        if (error instanceof IdleQueryColdCredentialError) return { kind: "cold" }
         if (error instanceof IdleQueryTimeoutError) {
           return unavailable(error.phase === "queued" ? "at_ceiling" : "timeout")
         }

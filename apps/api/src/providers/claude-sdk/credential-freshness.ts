@@ -1,56 +1,68 @@
 import type { Logger } from "../../logging/logger"
 import type { AccountConfigDirs } from "./config-dir"
-import type { CredentialMetadataReader } from "./credential-metadata"
+import type { CredentialMetadata, CredentialMetadataReader } from "./credential-metadata"
 
 /**
- * Lets exactly one `claude` subprocess cross an Account's token-refresh moment.
+ * Who may spawn a `claude` subprocess against an Account whose access token is about to be
+ * refreshed — and, more importantly, who may **not**.
  *
- * **The incident this exists for.** Anthropic's OAuth refresh token *rotates*: a successful refresh
- * consumes the old value and returns a new one. The access token lives ~8 h, so every Account has a
- * refresh instant roughly three times a day. When two subprocesses share one `CLAUDE_CONFIG_DIR`
- * across that instant they both read the same stored refresh token and both spend it; the server
- * honours the first and rejects the second, and the losing CLI reads that rejection as a dead login
- * and **blanks `.credentials.json`** — destroying the winner's freshly rotated credential along with
- * it. On 2026-09-06 that took out three of six production Accounts within nine hours. Every one of
- * them still had `refreshTokenExpiresAt` a month in the future: the login was alive, the token
- * string was merely spent. Recovery is an interactive re-login; nothing the router does can undo it.
+ * **The incident this exists for, third reading (2026-09-07, the one the evidence supports).**
+ * Anthropic's OAuth refresh token *rotates*: a successful refresh consumes the stored value and
+ * returns a new one. The CLI refreshes at startup whenever the access token is expired or inside
+ * its own lead of {@link CLI_REFRESH_LEAD_MS}, and it persists the rotated token only *after* the
+ * token endpoint has answered. A turn-free idle query (`idle-query.ts` — the model-catalog sweep,
+ * the usage gauge) wants nothing but the `initialize` handshake, so it closed the query the moment
+ * the handshake answered, and the SDK ended the subprocess before that write landed. The refresh
+ * token on disk was now spent. The next process to refresh — a client's turn, the keepalive, or
+ * the next probe — presented it, was told `invalid_grant`, and the CLI's dead-token handler blanked
+ * both tokens. Every one of the 2026-09-06/07 deauthentications sits within a minute of exactly
+ * that sequence, and the accounts that survived were the ones a *real turn* happened to reach
+ * first, because a turn lives long enough for the write. Two earlier readings of the same losses —
+ * a double-spend race between two subprocesses, then an upstream invalidating idle tokens — were
+ * each contradicted by the next day's data; docs/idea/11-anthropic-agent-sdk.md §3 keeps the ledger.
  *
- * `concurrency.ts` had recorded the opposite as an accepted risk — that a lost race "fails one
- * request into the ordinary auth classification rather than corrupting the file" — and named the
- * mitigation to apply if evidence ever arrived. This is that mitigation, and the evidence is in
- * docs/idea/11-anthropic-agent-sdk.md §3.
+ * **So the rule is: a subprocess that will be ended early must never be the one that refreshes.**
+ * {@link CredentialFreshness.wouldRefresh} is that rule, and every turn-free spawn asks it before
+ * taking a slot. Inside {@link CredentialFreshnessDeps.coldMarginMs} of the access token's expiry
+ * the answer is `true` and the idle query is refused without spawning; the credential is left for
+ * a real turn, which refreshes as part of a process that runs to completion. The margin is floored
+ * at the CLI's own lead at the env boundary, because a margin narrower than that is precisely the
+ * bug.
  *
- * **Why it is not part of the concurrency gate.** `SdkConcurrency` bounds *memory* and only the
- * paths that spawn through `query()` hold it; `claude auth status` (`login/status.ts`) and the login
- * CLI (`login/spawn.ts`) spawn against the same directory with a raw `Bun.spawn` and take no slot at
- * all. A guard living inside the gate would miss the daily probe that walks every Account. So this
- * is its own primitive, taken *before* the gate by everything that spawns — one fixed order, so the
- * two never deadlock against each other.
+ * {@link CredentialFreshness.ensureFresh} is the older half: one real turn at a time across the
+ * window, so two live subprocesses do not both ask the token endpoint. The first caller is not
+ * delayed and refreshes as part of whatever it came to do; the rest wait until the credential file
+ * shows the new token, capped by {@link CredentialFreshnessDeps.maxWaitMs} and then let through
+ * regardless. It sits *beside* the concurrency semaphore rather than inside it, because that gate
+ * bounds memory and only the `query()` paths hold it; every spawn site takes freshness first and a
+ * slot second — one fixed order, so the two cannot deadlock.
  *
- * **What it costs.** Outside the refresh window — which is almost always — `ensureFresh` is one
- * ~500-byte read of a file the page cache already holds, and then it returns: no wait, no
- * subprocess. That read is deliberately not cached. A cache here would have to be invalidated by
- * the very event it cannot see (the CLI rewriting the file from another process), and acting on a
- * stale expiry is precisely the mistake this module exists to prevent — so the read is repeated
- * rather than remembered. It sits on the Agent-SDK path, which CLAUDE.md non-negotiable 8 names as
- * the labelled exception to the overhead budget, and it is followed immediately by spawning a
- * ~245 MB binary that takes three orders of magnitude longer.
+ * **What it costs.** Outside the window — which is almost always — both calls are one ~500-byte
+ * read of a file the page cache already holds. That read is deliberately not cached: a cache here
+ * would have to be invalidated by the very event it cannot see (the CLI rewriting the file from
+ * another process), and acting on a stale expiry is precisely the mistake this module exists to
+ * prevent. It sits on the Agent-SDK path, which CLAUDE.md non-negotiable 8 names as the labelled
+ * exception to the overhead budget, and it is followed by spawning a ~245 MB binary.
  *
- * Inside the window, the first caller is let straight through and does the refresh
- * as part of whatever it came to do; everyone else for that Account waits until the credential file
- * says the refresh landed. No extra process is ever spawned to force one, and the caller that pays
- * the latency is the one that was going to pay it anyway.
- *
- * **Fail open, always.** Every failure — an unreadable file, a stalled winner, a refresh that never
- * lands — ends in the caller proceeding after {@link CredentialFreshnessDeps.maxWaitMs}. A narrower
- * race is the goal; an Account wedged behind this gate would be a worse outage than the one it
- * prevents.
+ * **Fail open, always.** Every failure of `ensureFresh` — an unreadable file, a stalled winner, a
+ * refresh that never lands — ends in the caller proceeding. An unreadable file makes `wouldRefresh`
+ * answer `false`: a probe cannot rotate a token the CLI cannot read either.
  *
  * **Metadata, never the token** (CLAUDE.md non-negotiables 1 and 13). This module reads two instants
  * and a boolean through {@link CredentialMetadataReader}, whose return type has no field that could
  * hold a token. It does not refresh, forward, or write a credential — the Agent SDK still owns them
- * inside the Account's `CLAUDE_CONFIG_DIR`. All this does is decide who waits.
+ * inside the Account's `CLAUDE_CONFIG_DIR`. All this does is decide who spawns, and who waits.
  */
+
+/**
+ * How far ahead of an access token's expiry the `claude` CLI refreshes it on its own.
+ *
+ * Provenance: CLI 2.1.261 (the binary bundled with Agent SDK 0.3.261), `qO(expiresAt)`:
+ * `Date.now() + 300000 >= expiresAt`. Blast radius: if the CLI widens this, an idle query spawned
+ * between the two leads would once again be ended mid-refresh — so the configured cold margin is
+ * floored at this value at boot, and the floor is what to raise if the CLI moves.
+ */
+export const CLI_REFRESH_LEAD_MS = 300_000
 
 export interface CredentialFreshness {
   /**
@@ -62,6 +74,15 @@ export interface CredentialFreshness {
    * the abort exactly as it classifies every other one.
    */
   ensureFresh(accountId: string, signal: AbortSignal): Promise<void>
+  /**
+   * Whether a `claude` subprocess spawned against `accountId` right now would refresh its access
+   * token — and so must not be a turn-free one, which is ended before the rotated refresh token
+   * is written. `true` inside {@link CredentialFreshnessDeps.coldMarginMs} of expiry, or past it.
+   *
+   * `false` for an Account with no tokens (nothing to rotate), an expiry the file never carried
+   * (the CLI would not refresh on unknown either), or a file that cannot be read. Never throws.
+   */
+  wouldRefresh(accountId: string): Promise<boolean>
 }
 
 export interface CredentialFreshnessDeps {
@@ -73,6 +94,13 @@ export interface CredentialFreshnessDeps {
    * before expiry and refreshes just after.
    */
   readonly skewMs: number
+  /**
+   * How close to the access token's expiry a credential counts as **cold**: a turn-free spawn is
+   * refused against it, and the sweep's keepalive spends a real turn on it instead
+   * (`CLAUDE_SDK_CREDENTIAL_COLD_MARGIN_SECONDS`). At least {@link CLI_REFRESH_LEAD_MS}, which the
+   * env boundary enforces — the CLI refreshes inside its own lead whether we like it or not.
+   */
+  readonly coldMarginMs: number
   /** The cap on a waiter's patience (`CLAUDE_SDK_CREDENTIAL_REFRESH_WAIT_MS`). Then it proceeds. */
   readonly maxWaitMs: number
   /** How often a waiter re-reads the credential file (`CLAUDE_SDK_CREDENTIAL_REFRESH_POLL_MS`). */
@@ -104,6 +132,23 @@ export function createCredentialFreshness(deps: CredentialFreshnessDeps): Creden
   }
 
   return {
+    wouldRefresh: async (accountId) => {
+      let metadata: CredentialMetadata
+      try {
+        metadata = await deps.reader.read(deps.configDirs.pathFor(accountId))
+      } catch (error) {
+        deps.logger?.warn("claude credential freshness unreadable", {
+          accountId,
+          reason: error instanceof Error ? error.message : String(error),
+        })
+        return false
+      }
+      if (!metadata.hasTokens) return false
+      const expiresAt = metadata.accessTokenExpiresAt
+      if (expiresAt === null) return false
+      return expiresAt.getTime() - deps.now().getTime() <= deps.coldMarginMs
+    },
+
     ensureFresh: async (accountId, signal) => {
       throwIfAborted(signal)
 
@@ -201,4 +246,5 @@ function abortReason(signal: AbortSignal): unknown {
 /** A freshness gate for a deployment that wires none: everything is fresh, nothing ever waits. */
 export const ALWAYS_FRESH: CredentialFreshness = {
   ensureFresh: async () => {},
+  wouldRefresh: async () => false,
 }

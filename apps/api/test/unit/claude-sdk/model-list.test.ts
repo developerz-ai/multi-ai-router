@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test"
 import type { Options } from "@anthropic-ai/claude-agent-sdk"
 import {
   type CliResolution,
+  type CredentialFreshness,
   createSdkConcurrency,
   createSdkModelLister,
   type IdleQuery,
@@ -48,6 +49,7 @@ function listerWith(options: {
   readonly resolveCli?: () => CliResolution
   readonly concurrency?: ReturnType<typeof createSdkConcurrency>
   readonly returnFails?: boolean
+  readonly freshness?: CredentialFreshness
 }) {
   const spy: Spy = { launches: [], returned: 0, aborted: false, promptPulled: false }
   const reasons: SdkModelListUnavailable[] = []
@@ -57,6 +59,7 @@ function listerWith(options: {
     cliPathOverride: null,
     concurrency,
     resolveCli: options.resolveCli ?? (() => CLI),
+    ...(options.freshness === undefined ? {} : { freshness: options.freshness }),
     onUnavailable: (reason) => reasons.push(reason),
     runQuery: ({ prompt, options: sdkOptions }) => {
       spy.launches.push(sdkOptions)
@@ -143,6 +146,28 @@ describe("listing a subscription's models through the Agent SDK", () => {
 
     expect(await lister.list(input())).toEqual({ kind: "auth" })
     expect(reasons).toEqual([])
+  })
+
+  /**
+   * The 2026-09-06/07 regression: a listing spawned inside the CLI's refresh window was ended before
+   * the rotated refresh token was written, and the account was deauthenticated by the next turn.
+   * A cold credential is its own answer — not `null`, which would write the shipped table over a
+   * live listing — and it costs no spawn and no slot.
+   */
+  test("a cold credential is reported as cold, and nothing is spawned for it", async () => {
+    const { lister, spy, reasons, concurrency } = listerWith({
+      freshness: {
+        ensureFresh: async () => {},
+        wouldRefresh: async () => true,
+      },
+    })
+
+    const listing = await lister.list(input())
+
+    expect(listing).toEqual({ kind: "cold" })
+    expect(spy.launches).toEqual([])
+    expect(reasons).toEqual([])
+    expect(concurrency.inFlight).toBe(0)
   })
 
   test("any other throw is null, with the upstream's words kept for the log only", async () => {

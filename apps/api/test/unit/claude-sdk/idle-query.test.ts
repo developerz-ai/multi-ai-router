@@ -1,8 +1,10 @@
 import { describe, expect, test } from "bun:test"
 import type { Options, SDKUserMessage } from "@anthropic-ai/claude-agent-sdk"
 import {
+  type CredentialFreshness,
   createSdkConcurrency,
   type IdleQuery,
+  IdleQueryColdCredentialError,
   IdleQueryTimeoutError,
   openIdleQuery,
   PERMITTED_TOOLS,
@@ -85,7 +87,11 @@ function fakeQuery(
 
 const open = (
   runQuery: ReturnType<typeof fakeQuery>["runQuery"],
-  overrides: { timeoutMs?: number; concurrency?: ReturnType<typeof createSdkConcurrency> } = {},
+  overrides: {
+    timeoutMs?: number
+    concurrency?: ReturnType<typeof createSdkConcurrency>
+    freshness?: CredentialFreshness
+  } = {},
 ) =>
   openIdleQuery({
     accountId: "acc-1",
@@ -94,7 +100,26 @@ const open = (
     concurrency: overrides.concurrency ?? createSdkConcurrency({ global: 4, perAccount: 2 }),
     timeoutMs: overrides.timeoutMs ?? 5_000,
     runQuery,
+    ...(overrides.freshness === undefined ? {} : { freshness: overrides.freshness }),
   })
+
+/** A freshness gate whose answers are scripted, in order, and which counts what it was asked. */
+function scriptedFreshness(answers: readonly boolean[]) {
+  const asked: string[] = []
+  let calls = 0
+  const gate: CredentialFreshness = {
+    ensureFresh: async () => {
+      throw new Error("an idle query must never enter the refresh window")
+    },
+    wouldRefresh: async (accountId) => {
+      asked.push(accountId)
+      const answer = answers[calls] ?? answers[answers.length - 1] ?? false
+      calls += 1
+      return answer
+    },
+  }
+  return { gate, asked }
+}
 
 describe("an idle Agent SDK query", () => {
   test("is ready once the handshake is, and sends no turn for its whole life", async () => {
@@ -188,6 +213,51 @@ describe("an idle Agent SDK query", () => {
     const handle = await open(fakeQuery({ withoutInit: true }).runQuery)
     expect(handle.query.supportedModels).toBeDefined()
     await handle.close()
+  })
+
+  /**
+   * The 2026-09-06/07 regression. The CLI refreshes at startup inside its own lead and persists the
+   * rotated refresh token only after the token endpoint answers; an idle query is ended before that
+   * write, the token on disk is spent, and the next process to present it blanks the credential.
+   * So a cold credential must produce **no spawn at all** — not a spawn that is closed carefully.
+   */
+  test("refuses to spawn against a cold credential — nothing launched, no slot held", async () => {
+    const { fake, runQuery } = fakeQuery()
+    const concurrency = createSdkConcurrency({ global: 1, perAccount: 1 })
+    const { gate, asked } = scriptedFreshness([true])
+
+    const error = await open(runQuery, { concurrency, freshness: gate }).catch((e: unknown) => e)
+
+    expect(error).toBeInstanceOf(IdleQueryColdCredentialError)
+    expect(fake.launches).toEqual([])
+    expect(asked).toEqual(["acc-1"])
+    expect(concurrency.inFlight).toBe(0)
+    expect(concurrency.queued).toBe(0)
+  })
+
+  test("asks again once it holds a slot — a token warm when it queued can be cold when it may spawn", async () => {
+    const { fake, runQuery } = fakeQuery()
+    const concurrency = createSdkConcurrency({ global: 1, perAccount: 1 })
+    const { gate, asked } = scriptedFreshness([false, true])
+
+    const error = await open(runQuery, { concurrency, freshness: gate }).catch((e: unknown) => e)
+
+    expect(error).toBeInstanceOf(IdleQueryColdCredentialError)
+    expect(asked).toEqual(["acc-1", "acc-1"])
+    expect(fake.launches).toEqual([])
+    // The slot it took for the second look was handed back.
+    expect(concurrency.inFlight).toBe(0)
+  })
+
+  test("a warm credential spawns exactly as before, and never enters the refresh window", async () => {
+    const { fake, runQuery } = fakeQuery()
+    const { gate, asked } = scriptedFreshness([false])
+
+    const handle = await open(runQuery, { freshness: gate })
+    await handle.close()
+
+    expect(fake.launches).toHaveLength(1)
+    expect(asked).toEqual(["acc-1", "acc-1"])
   })
 
   /**

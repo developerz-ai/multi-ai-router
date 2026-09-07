@@ -192,124 +192,92 @@ neither write body has a field for one; `CLAUDE_CONFIG_ROOT` is the only knob, a
 | Health probe | `claude auth status --json` with the dir set returns `{loggedIn, email, subscriptionType}` — cheap, first-party, no token handling. Implemented in `providers/claude-sdk/login/status.ts`; it rides on **Re-check now** rather than getting a button of its own — see [§3.2](#32-the-credential-probe) |
 | Completion probe | **Test now** (`services/accounts/test-now.ts`) is the other end of the spectrum from the health probe above: a real, opt-in `query()` turn that actually spends a turn and a subprocess. Never fires without `confirmed: true` on the request, and its own cooldown, longer than Re-check now's — see [05-routing-and-failover.md](05-routing-and-failover.md#test-now) |
 | Refresh | **Not ours.** The SDK / `claude` CLI refreshes inside the config directory. The router does **not** schedule, mint, or write subscription tokens — see the box below |
-| Refresh-token expiry | **A Claude subscription hard-expires ~30 days after login, however much it is used.** Verified in production (2026-09-05): every account's `refreshTokenExpiresAt` sat at exactly login + ~30 d — on accounts that had served traffic daily for weeks. Use refreshes the *access* token; nothing slides the refresh token, and when it expires the CLI blanks the tokens in `.credentials.json` (the file stays, `claude auth status` says `loggedIn: false`, a turn answers `Failed to authenticate: OAuth session expired and could not be refreshed`). No keepalive, probe, or traffic can prevent it — **only a re-login can**, so plan on reconnecting every subscription monthly. What the router does: the daily `idle_account_probe` tick runs the free `claude auth status` check over **every** subscription account, idle or not, so an expired one flips to `needs_reauth` within a day (`scheduler/tasks/idle-account-probe.ts`); the request path classifies that sentence `auth` → `needs_reauth`, never a `502`; and every admin account read carries the expiry itself — see the row below |
+| Refresh-token expiry | **A Claude subscription hard-expires ~30 days after login, however much it is used.** Verified in production (2026-09-05): every account's `refreshTokenExpiresAt` sat at exactly login + ~30 d — on accounts that had served traffic daily for weeks. Use refreshes the *access* token; nothing slides the refresh token, and when it expires the CLI blanks the tokens in `.credentials.json` (the file stays, `claude auth status` says `loggedIn: false`, a turn answers `Failed to authenticate: OAuth session expired and could not be refreshed`). No keepalive, probe, or traffic can prevent it — **only a re-login can**, so plan on reconnecting every subscription monthly. What the router does: the six-hourly `idle_account_probe` tick runs the free `claude auth status` check over **every** subscription account, idle or not, so an expired one flips to `needs_reauth` within a sweep (`scheduler/tasks/idle-account-probe.ts`); the request path classifies that sentence `auth` → `needs_reauth`, never a `502`; and every admin account read carries the expiry itself — see the row below |
 | Expiry visibility | The router reads **metadata, never the token**, out of `.credentials.json`: `refreshTokenExpiresAt`, `subscriptionType`, `rateLimitTier`, and whether the two token fields are non-empty (`providers/claude-sdk/credential-metadata.ts`). The Zod schema names exactly those fields, the tokens are consulted for presence only and dropped before the parsed value leaves the function, and nothing returned, thrown, or logged can carry one — non-negotiables 1 and 13 still hold: we do not touch, refresh, or use the tokens; we read when the login expires so the console can warn before it does. `withCredentialMetadata` (`services/accounts/credential.ts`) overlays it on every admin account read as `credential: { expiresAt, subscriptionType, rateLimitTier, present }` ([04-api-keys-and-access.md](04-api-keys-and-access.md#admin-api-route-groups)), cached per account for `ADMIN_CREDENTIAL_METADATA_TTL_SECONDS`, admin plane only. A read that finds blank tokens against an `active` row parks it `needs_reauth` through the same conditional write the auth probe uses; a read that *fails* reports `null` and parks nothing |
 | Reconnect | Re-run login against the **same** directory: Account id, Pool membership, and usage history survive |
 | Delete | Remove the directory with the Account row |
 | Reap | A scheduled task (`scheduler/tasks/config-dir-reap.ts`) removes what a crash left on the volume: a directory named after an account id that no row claims, once it is older than `RETENTION_ORPHAN_CONFIG_DIR_HOURS`. It surveys the directories *before* it reads the accounts — a directory minted after the survey cannot be in it, while a row inserted after it is still read — and it never touches a name that is not an account id. Both rules exist because the failure it prevents (a stale credential nobody will rotate) is milder than the failure a careless sweep would cause (a working subscription logged out for good) |
 
-**Concurrent subprocesses on one directory — the deferral that came due (2026-09-06).** Up to
-`CLAUDE_SDK_MAX_CONCURRENCY_PER_ACCOUNT` subprocesses share one `CLAUDE_CONFIG_DIR`, each capable of
-an OAuth refresh inside it, and a login or probe can touch the same directory beside them. This
-section used to argue the router need not serialize them, on the grounds that the CLI "carries its
-own cross-process locking" and that a lost race "fails one request into the ordinary auth
-classification rather than corrupting the file". **Both halves of that were wrong.**
+**The 2026-09-06/07 deauthentications — three readings, and the one the evidence supports.**
+Between 2026-09-06 21:44 and 2026-09-07 12:10 UTC every one of the six production subscription
+Accounts had its `.credentials.json` blanked (509 B → 281 B, both tokens `""`), each with a month
+left on `refreshTokenExpiresAt`. This section was rewritten twice on the way to the cause, and the
+ledger stays because the two wrong readings were plausible and each shipped a fix:
 
-What production showed, on a router running 2.10.8 with `perAccount: 8`:
-
-| Account | `.credentials.json` | `refreshTokenExpiresAt` | blanked at |
-|---|---|---|---|
-| `a8c0fd1f` | 509 B → **281 B**, both tokens `""` | 2026-10-05 | 12:05:06.706Z |
-| `afbee92b` | 509 B → **281 B**, both tokens `""` | 2026-10-05 | 03:25 |
-| `f97f6dd2` | 509 B → **276 B**, both tokens `""` | 2026-10-05 | 12:50:11.784Z |
-
-Three of six subscription Accounts, dead inside nine hours, each with a **month** left on its
-refresh token. `f97f6dd2` was blanked 176 ms before `model_catalog_refresh` logged completion — its
-idle-query subprocess was live at that instant. `a8c0fd1f` was blanked 121 ms before the request
-path reported `401 claude-sdk:credential-expired`, with the usage gauge firing 8 ms later.
-
-**Refresh-token rotation is the reason the expiry date proves nothing.** A successful refresh
-consumes the stored token and returns a new one, so `refreshTokenExpiresAt` being far in the future
-says nothing about whether that particular *string* is still honoured. Rotation is undocumented by
-Anthropic but directly observable: the Meridian proxy's `tokenRefresh.ts` writes back
-`refresh_token` from every refresh response and pins it in a test, commenting *"The refresh token is
-rotated on every refresh, so its expiry may roll forward too."*
-
-**What actually spent these three tokens — corrected 2026-09-06, after this section first claimed
-otherwise.** The initial reading was that two subprocesses crossed the refresh instant together and
-double-spent the token. **The concurrency data does not support that**, and the correction matters
-more than the original claim:
-
-- Reconstructing every request interval from the log (start = timestamp − `durationMs`, 730
-  inference requests over ten hours), the **peak concurrent inference requests all day was 2** —
-  never the eight per account the ceiling allows.
-- At `f97f6dd2`'s blanking, **zero** data-plane requests overlapped; only the sequential
-  model-catalog probe was live. At `a8c0fd1f`'s, **exactly one** — the request that got the 401.
-- So at each death there was **one** process on the directory. A double-spend needs two.
-
-The surviving pattern is the opposite of a race, and it points somewhere else:
-
-| account | real turns in the window | outcome |
+| Reading | Shipped as | What falsified it |
 |---|---|---|
-| `426a1d04` | 12 | survived — refreshed cleanly at 11:20 |
-| `df3a4fd0` | 2 | survived — refreshed cleanly at 11:44 |
-| `a8c0fd1f`, `f97f6dd2`, `afbee92b` | 0 | all three blanked |
+| Two subprocesses crossed the refresh instant and double-spent the rotating token; the loser blanked the file | 2.11.0, `credential-freshness.ts` | Reconstructed request intervals: peak concurrency 2 all day, **one** process on the directory at each death |
+| Anthropic invalidates a refresh token left unused; only a real turn refreshes, so idle Accounts go cold | 2.12.0, the keepalive | The busiest Account in the pool (615 req/day, used eight minutes earlier) died on 2026-09-07 12:10 by the same sequence as the idle ones |
+| **A turn-free idle query is ended before the CLI persists the rotated refresh token** | 2.13.0, this section | — |
 
-**The accounts doing the work lived; the ones nothing routed to died.** A concurrency race predicts
-exactly the reverse. What fits is the one hard field observation in Meridian's tree
-(`tokenRefresh.ts:546-553`): *"Anthropic's OAuth refresh tokens appear to be invalidated server-side
-after sitting unused for an extended period (observed 2026-05-03 … only fix was OAuth-flow
-re-login). Running a refresh every ~8h keeps the refresh chain warm."*
+**The mechanism, read out of the bundled CLI (2.1.261) and the pod's own timeline.** The CLI
+refreshes an access token at startup whenever the token is expired or inside its own lead
+(`qO(expiresAt)`: `Date.now() + 300000 >= expiresAt`, pinned as `CLI_REFRESH_LEAD_MS`). Its
+refresh takes a directory lock (`<CLAUDE_CONFIG_DIR>.lock`, which is why the *root's* mtime
+moves at each death), POSTs the refresh token to the token endpoint — at which point the server
+has rotated it — and only then compare-and-swaps the new tokens into `.credentials.json`. A
+turn-free idle query (`idle-query.ts`: the hourly model-catalog sweep, the usage gauge) wants
+nothing but the `initialize` handshake, so it closed the query the moment the handshake answered,
+and the SDK ended the subprocess (SIGTERM, then SIGKILL) before that write. The refresh token on
+disk was now spent. The next process to refresh — a client's turn, the keepalive, or the next
+probe — presented it, the endpoint answered `invalid_grant`, and the CLI's dead-token handler
+(`R1e`: `refreshToken:"", accessToken:"", expiresAt:0`) blanked the file.
 
-**And the sharp edge: only a real turn refreshes.** The turn-free handshake `idle-query.ts` runs —
-the one behind the model-catalog sweep and the usage gauge — does **not** rewrite
-`.credentials.json`. Account `27ae4129` sat with an access token three hours expired through three
-consecutive hourly catalog probes with the file untouched at `03:20`. So the hourly probe that looks
-like it exercises every account exercises no credential at all, and an unused account goes cold and
-stays cold until something finally tries to use it.
+Every death on the 2.12.2 pod sits on that sequence, and nothing else was on the directory:
 
-This is stated at the confidence the evidence carries: idle-invalidation is the best-supported
-explanation and the busy/idle split is strong, but the upstream rejection reason is not observable
-from here. What *is* certain is that a credential no traffic refreshes will eventually be rejected,
-and that the router had no way to see it coming.
+| Account | Idle query crossed the CLI's lead | Blanked by | Gap |
+|---|---|---|---|
+| `afbee92b` | 08:11:30 (catalog probe, token ~4 min from expiry; nothing else touched it) | 09:21:10 — the *next* catalog probe, `invalid_grant` on the token the 08:11 probe had spent | 70 min, zero data-plane requests |
+| `27ae4129` | 11:20:27 (catalog probe, token ~10 min expired) | 11:44:08 — the next client turn, 401 `OAuth session expired and could not be refreshed`, `.credentials.json` mtime 11:44:08.017 | 24 min |
+| `426a1d04` | 12:10:11 (catalog probe, token ~5 min expired) | 12:10:43 — the next client turn, same 401, file mtime 12:10:43.299, `/data/claude` mtime 12:10:43.303 (the lock directory) | **31 seconds** |
 
-Recovery is an interactive re-login per Account. Nothing the router can do reverses it, which is why
-this is prevented rather than detected.
+And the control: the two refreshes on the same pod that *succeeded* (03:05 for `27ae4129`, 04:01
+for `426a1d04`) were both inside a real turn — a `usage_records` row starts at the same instant
+the freshness gate logged the window — and each produced an access token that lived its full
+eight hours. The Accounts that survived a day were the ones a client's turn happened to reach
+before a probe did. 2.12.0's busy/idle split was real; it was the *probes* that made idle Accounts
+die, not the idleness. `../claude-task-master` wraps the same SDK against the same subscriptions
+and has never lost one: it runs real turns only and never ends a subprocess at the handshake.
 
-**The mitigation, now implemented: `providers/claude-sdk/credential-freshness.ts`.** Inside a
-configurable skew of an access token's expiry (`CLAUDE_SDK_CREDENTIAL_REFRESH_SKEW_SECONDS`, default
-300 s — the same buffer Meridian settled on), exactly one subprocess per Account may cross. The
-first caller is not delayed at all and does the refresh as part of whatever it came to do; the rest
-wait until the credential file shows the new token, capped by
-`CLAUDE_SDK_CREDENTIAL_REFRESH_WAIT_MS` and then let through regardless — a narrower race is the
-goal, and an Account wedged behind the gate would be a worse outage than the one it prevents. No
-extra subprocess is ever spawned to force a refresh. Outside the window the gate is one cached
-metadata read and no wait.
+**The rule, and where it lives: a subprocess that will be ended early must never be the one that
+refreshes.** `CredentialFreshness.wouldRefresh` (`credential-freshness.ts`) answers "would a spawn
+now refresh this Account's token" — metadata, one boolean, no field that could hold a token — and
+is `true` inside `CLAUDE_SDK_CREDENTIAL_COLD_MARGIN_SECONDS` (default 600) of the access token's
+expiry, or past it. Every turn-free spawn asks it **before taking a slot and again after**, and
+`openIdleQuery` refuses with `IdleQueryColdCredentialError` rather than spawn. The margin is
+floored at the CLI's lead at the env boundary, because a narrower margin is this bug reinstated
+by configuration. Downstream, a cold Account is its own answer rather than an absence: the model
+lister reports `{ kind: "cold" }` and the catalog refresh writes nothing (the previous rows stand,
+`agent-sdk:credential-cold`); the usage-gauge probe answers `"cold"` and the reading is not taken.
 
-It lives **beside** `concurrency.ts` rather than inside it, because that gate is a memory bound that
-only the `query()` paths hold: `claude auth status` (`login/status.ts`) and the login CLI
-(`login/spawn.ts`) spawn against the same directory through a raw `Bun.spawn` and take no slot. Every
-spawn site takes freshness first and a slot second — one fixed order, so the two cannot deadlock.
-`CLAUDE_SDK_MAX_CONCURRENCY_PER_ACCOUNT` is untouched: it is throughput the pool is sized on, and it
-was never what kept a credential safe.
+**The keepalive, re-cut to what it can actually do.** A real turn refreshes only when the CLI
+would — inside that same lead — so 2.12.x's "warm anything expiring before the next sweep" spent
+turns that refreshed nothing (the 10:51 keepalive turns on `426a1d04` and `27ae4129` ran with
+34 and 14 minutes of token life left, changed no file, and both Accounts died on the next probe).
+`idle_account_probe` now uses the one definition of *cold* every spawn site shares, and the order
+per Account is fixed: the free `claude auth status` check, then — if the token is cold — one small
+real turn, which runs to completion and persists the refresh, and **only then** the turn-free
+gauge read. A cold Account that could not be warmed (keepalive off, no probe model, batch full,
+turn declined or failed) is not read at all and is named in the log; its gauge and catalog stand
+still until a client's turn refreshes it, which is strictly better than the alternative. With
+`CLAUDE_SDK_CREDENTIAL_KEEPALIVE=false` no probe ever spends a refresh token; the cost is
+staleness, never a login.
 
-The router still reads **metadata, never a token** (non-negotiables 1 and 13): two instants and a
-boolean out of `credential-metadata.ts`, whose return type has no field that could hold a token. The
-Agent SDK continues to own the credentials and to perform every refresh itself. The gate decides
-only who waits.
+**What 2.11.0's gate still does.** `ensureFresh` serializes *real turns* across the refresh window
+(`CLAUDE_SDK_CREDENTIAL_REFRESH_SKEW_SECONDS`): the first caller is not delayed and refreshes as
+part of whatever it came to do; the rest wait until the credential file shows the new token,
+capped by `CLAUDE_SDK_CREDENTIAL_REFRESH_WAIT_MS` and then let through. It closes a real hazard
+the CLI's own directory lock would otherwise turn into a five-retry `lock_busy` — but it was never
+what killed these six, and turn-free spawns no longer enter the window at all: they are refused at
+its edge. It sits **beside** `concurrency.ts` rather than inside it, because that gate is a memory
+bound that only the `query()` paths hold; every spawn site takes freshness first and a slot second
+— one fixed order, so the two cannot deadlock. `CLAUDE_SDK_MAX_CONCURRENCY_PER_ACCOUNT` is
+untouched: it is throughput the pool is sized on.
 
-**The keepalive that keeps a credential from going cold.** Because only a real turn refreshes,
-`idle_account_probe` now reads each logged-in subscription's **access**-token expiry (metadata, one
-instant, never a token) and gives any account within
-`CLAUDE_SDK_CREDENTIAL_KEEPALIVE_BEFORE_MINUTES` of expiry one small turn to refresh it. Two
-supporting changes make that work at all:
+Recovery from a blanked file is an interactive re-login per Account. Nothing the router can do
+reverses it, which is why this is prevented rather than detected.
 
-- The sweep's interval default drops from **1440 minutes to 360** — a daily sweep cannot keep an
-  ~8-hourly token warm however well it works, because it wakes long after the credential went cold.
-- The scheduler now measures a task's first gap from its **last recorded run** rather than from
-  process start (`scheduler/runner.ts`). Without that, a 24-hour task on a pod that restarts more
-  often than daily never runs at all: on 2026-09-06 `idle_account_probe` had run **zero** times in a
-  ten-hour-old pod, which is precisely why the sweep meant to catch a dying credential caught
-  nothing. `ScheduledTaskRun` already recorded every run; the scheduler simply never read it.
-
-`CLAUDE_SDK_CREDENTIAL_KEEPALIVE=false` restores the old behaviour, and a cold credential is then
-logged rather than warmed — the visibility survives either way. This spends a small amount of usage
-by design, which the previous reasoning here refused on the grounds that a keepalive "cannot move a
-subscription's refresh-token cliff". That is true of the 30-day login cliff and irrelevant to this
-failure: the token was rejected a month *before* that cliff, and keeping the chain exercised is the
-only lever the router has that does not require a human.
-
-**Still unguarded, deliberately:** `claude auth status`, which `idle_account_probe` runs daily over
+**Still unguarded, deliberately:** `claude auth status`, which `idle_account_probe` runs every sweep over
 every Account and the console's "Re-check now" runs on demand. Its contract says it contacts nobody
 and only reads the file the CLI wrote, and it had not run at all in the window containing the three
 deaths — so there is no evidence it refreshes. Threading an Account id and a signal through
