@@ -5,6 +5,12 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.12.2] — 2026-09-07
+
+### Fixed
+
+- **The router's own listener was cutting quiet streams.** `Bun.serve` ran with its default `idleTimeout` — 10 s of no bytes in either direction, swept every 4 s — which is shorter than the 15 s heartbeat a quiet SDK stream sends to stay open, so a turn whose tool-call arguments took longer than that to generate (held whole by the rewriter until the block closes, so the client saw nothing) died as `Failed to read … stream` on the client before its first keep-alive went out. Measured on the fleet on 2026-09-07: every such failure on both boxes sat on that 4 s grid with a phase constant per router pod, and a `write_file` call carrying a 1200-word argument reproduced it on demand — start frame at +2.2 s, zero bytes for 11.8 s, socket closed at +14.0 s — while a 93 s text-only answer streamed untouched. `SERVER_IDLE_TIMEOUT_SECONDS` (default `60`, `0` disables, `255` is the ceiling) now sets the listener's clock, `config/listen.ts` is the one seam between `Env` and `Bun.serve`, and a test holds the default to at least two of each keep-alive cadence. (#125)
+
 ## [2.12.1] — 2026-09-06
 
 ### Fixed
@@ -710,4 +716,5 @@ your tooling config.
 - README rewritten around the actual product story: your tools → Multi AI
   Router → providers.
 
+[2.12.2]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.12.2
 [1.0.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v1.0.0
