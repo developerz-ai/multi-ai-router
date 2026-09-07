@@ -49,6 +49,20 @@ export const usageBatchSize = atLeastOne.refine(
 
 export const flag = z.enum(["true", "false", "1", "0"]).transform((v) => v === "true" || v === "1")
 
+/** `Bun.serve` keeps `idleTimeout` in a single byte of seconds; this is that byte's ceiling. */
+export const SERVER_IDLE_TIMEOUT_MAX_SECONDS = 255
+
+/**
+ * `Bun.serve`'s `idleTimeout`, in whole seconds. Refused above the byte rather than clamped or
+ * wrapped: a wrapped value is a silent "reap every quiet stream after a few seconds", which is the
+ * exact failure this knob exists to end, and a clamp would hide that the operator's number was
+ * never the one in force.
+ */
+export const serverIdleTimeoutSeconds = wholeNumber.refine(
+  (v) => v <= SERVER_IDLE_TIMEOUT_MAX_SECONDS,
+  `must be at most ${SERVER_IDLE_TIMEOUT_MAX_SECONDS}: Bun stores the idle timeout in one byte of seconds`,
+)
+
 /** A share of something, written as a decimal in 0..1. */
 export const fraction = z
   .string()
@@ -94,6 +108,11 @@ export const ZERO_IS_LEGAL: ReadonlyMap<string, string> = new Map([
   [
     "SHUTDOWN_READY_GRACE_MS",
     "close the listener as soon as /readyz starts refusing, without waiting for a load balancer to notice",
+  ],
+  [
+    "SERVER_IDLE_TIMEOUT_SECONDS",
+    "never close a connection for inactivity — the client heartbeat and the upstream idle guard " +
+      "are then the only clocks on a stream",
   ],
   // postgres.js treats a falsy timer interval as one that never fires (`src/connection.js#timer`),
   // so zero on either of these reads as *never*, not *at once*. Both leave the router routing,

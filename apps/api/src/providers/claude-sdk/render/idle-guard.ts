@@ -37,6 +37,12 @@ export interface StreamPacing {
  * be comfortably shorter than any proxy's read timeout, and the guard comfortably longer than the
  * slowest legitimate gap between SDK messages — a long tool-free thinking stretch, or a cold model
  * start. Injected at every call site so the composition root can widen either from config.
+ *
+ * "Any proxy" includes the router's own listener. `Bun.serve` closes a connection that carries no
+ * bytes for `idleTimeout` seconds — 10 by default, on a 4 s sweep — and 15 s of heartbeat cadence
+ * is outside that: the socket died before the first ping went out, and the turn with it
+ * (2026-09-07, every stream failure on the fleet on that 4 s grid). `SERVER_IDLE_TIMEOUT_SECONDS`
+ * now sets the listener's clock, and `test/unit/listen.test.ts` keeps this cadence inside it.
  */
 export const DEFAULT_STREAM_PACING: StreamPacing = { idleMs: 90_000, heartbeatMs: 15_000 }
 

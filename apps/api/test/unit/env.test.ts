@@ -7,7 +7,14 @@ import {
   USAGE_RECORD_MAX_BATCH_ROWS,
 } from "@multi-ai-router/db"
 import type { z } from "zod"
-import { ENV_FIELDS, EnvValidationError, parseEnv, ZERO_IS_LEGAL } from "../../src/config/env"
+import {
+  DEFAULT_SERVER_IDLE_TIMEOUT_SECONDS,
+  ENV_FIELDS,
+  EnvValidationError,
+  parseEnv,
+  ZERO_IS_LEGAL,
+} from "../../src/config/env"
+import { SERVER_IDLE_TIMEOUT_MAX_SECONDS } from "../../src/config/fields"
 import { ADMIN_API_TOKEN_MIN_LENGTH } from "../../src/services/admin-auth"
 import { DEFAULT_MAX_BODY_BYTES } from "../../src/services/dataplane"
 
@@ -38,6 +45,7 @@ describe("parseEnv", () => {
     const env = parseEnv(base)
 
     expect(env.port).toBe(8080)
+    expect(env.serverIdleTimeoutSeconds).toBe(DEFAULT_SERVER_IDLE_TIMEOUT_SECONDS)
     expect(env.shutdownDrainMs).toBe(15_000)
     expect(env.shutdownReadyGraceMs).toBe(0)
     // Restated from the package that opens the pool, so an unset variable and the documented
@@ -463,6 +471,41 @@ describe("parseEnv", () => {
       expect(
         expectEnvError({ ...base, ROUTING_BOUND_ACCOUNT_COOLING_DOWN: "ignore" }).variables,
       ).toEqual(["ROUTING_BOUND_ACCOUNT_COOLING_DOWN"])
+    })
+  })
+
+  describe("SERVER_IDLE_TIMEOUT_SECONDS", () => {
+    test("the operator's number is the one parsed", () => {
+      expect(
+        parseEnv({ ...base, SERVER_IDLE_TIMEOUT_SECONDS: "120" }).serverIdleTimeoutSeconds,
+      ).toBe(120)
+    })
+
+    test("zero is legal: it means the server never closes a connection for inactivity", () => {
+      expect(parseEnv({ ...base, SERVER_IDLE_TIMEOUT_SECONDS: "0" }).serverIdleTimeoutSeconds).toBe(
+        0,
+      )
+    })
+
+    test("the byte's ceiling is accepted and one past it is refused by name", () => {
+      const ceiling = String(SERVER_IDLE_TIMEOUT_MAX_SECONDS)
+      expect(
+        parseEnv({ ...base, SERVER_IDLE_TIMEOUT_SECONDS: ceiling }).serverIdleTimeoutSeconds,
+      ).toBe(SERVER_IDLE_TIMEOUT_MAX_SECONDS)
+      // Refused rather than wrapped: a wrapped 256 is a 0-second timeout, which reaps every
+      // stream at the next sweep while the operator believes they widened it.
+      const error = expectEnvError({
+        ...base,
+        SERVER_IDLE_TIMEOUT_SECONDS: String(SERVER_IDLE_TIMEOUT_MAX_SECONDS + 1),
+      })
+      expect(error.variables).toEqual(["SERVER_IDLE_TIMEOUT_SECONDS"])
+      expect(error.message).toContain(`at most ${SERVER_IDLE_TIMEOUT_MAX_SECONDS}`)
+    })
+
+    test("a value that is not a whole number of seconds is refused", () => {
+      expect(expectEnvError({ ...base, SERVER_IDLE_TIMEOUT_SECONDS: "60s" }).variables).toEqual([
+        "SERVER_IDLE_TIMEOUT_SECONDS",
+      ])
     })
   })
 
