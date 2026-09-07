@@ -261,6 +261,7 @@ export function createRuntime(deps: RuntimeDeps): Runtime {
     reader: credentialReader,
     configDirs,
     skewMs: env.claudeSdkCredentialRefreshSkewSeconds * 1_000,
+    coldMarginMs: env.claudeSdkCredentialColdMarginSeconds * 1_000,
     maxWaitMs: env.claudeSdkCredentialRefreshWaitMs,
     pollMs: env.claudeSdkCredentialRefreshPollMs,
     now,
@@ -494,12 +495,13 @@ export function createRuntime(deps: RuntimeDeps): Runtime {
     usageProbe: (account) =>
       usageGaugeProbe.read({ accountId: account.id, configDir: configDirs.pathFor(account.id) }),
     probeModels: IDLE_PROBE_MODELS,
-    // Metadata, never a token: one instant per account, out of the same reader the admin plane
-    // uses. It is what lets the sweep tell a warm credential from one about to go cold.
-    accessTokenExpiry: async (account) =>
+    // Metadata, never a token: one boolean per account, from the same gate every spawn site asks.
+    // It is what lets the sweep warm a cold credential with a real turn *before* its turn-free
+    // gauge read, instead of ending a subprocess mid-refresh.
+    credentialCold: async (account) =>
       describeProvider(account.provider).requiresConfigDir
-        ? (await credentialReader.read(configDirs.pathFor(account.id))).accessTokenExpiresAt
-        : null,
+        ? credentialFreshness.wouldRefresh(account.id)
+        : false,
     modelCatalog,
     // Hourly, free, and pointed at `model_catalog` alone: a listing costs no tokens and spends no
     // quota window, and nothing in routing reads what it writes. `supported_models` — which does

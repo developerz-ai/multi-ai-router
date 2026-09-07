@@ -1,8 +1,10 @@
 import { describeError } from "@multi-ai-router/core"
 import type { AccountRepository, AccountRow } from "@multi-ai-router/db"
 import type { Logger } from "../../logging/logger"
+import type { SdkUsageGaugeProbeOutcome } from "../../providers"
 import type { AccountAuthProbe } from "../../services/health/claudeAuthProbe"
 import type { ScheduledTask, TaskOutcome } from "../types"
+import { isCold, keepAlive, readUsage, type Tally, warm } from "./idle-account-warmth"
 
 /**
  * The daily credential sweep: a free logged-in check over **every** account that holds a CLI-managed
@@ -40,6 +42,19 @@ import type { ScheduledTask, TaskOutcome } from "../types"
  * turn-free query (`providers/claude-sdk/usage-gauge-probe.ts`): the console's per-window
  * percentages for an account nothing routed to today would otherwise stay stale until traffic
  * arrived. One subprocess per account per sweep, no prompt, nothing billed.
+ *
+ * **A cold credential is warmed with a real turn *before* anything turn-free touches it.** The
+ * CLI refreshes the access token at startup once it is expired or inside its own five-minute lead,
+ * and persists the rotated refresh token only after the token endpoint answers; a turn-free query
+ * is ended the moment its handshake is read, before that write, and the refresh token on disk is
+ * then spent — the next process to present it is told `invalid_grant` and the CLI blanks the
+ * credential. That, and not a race or an upstream policy, is what deauthenticated six of six
+ * production subscriptions on 2026-09-06/07 (docs/idea/11-anthropic-agent-sdk.md §3). So the order
+ * per account is fixed: the free check, then — if the token is cold — one small real turn, which
+ * runs to completion and persists the refresh, and only then the gauge. `openIdleQuery` refuses a
+ * cold credential on its own as well; the sweep simply does not ask. With the keepalive off, or
+ * its per-tick batch full, a cold account keeps its old gauge and its old catalog until a client's
+ * turn refreshes it, and the sweep says so.
  *
  * **Outcomes are the sweep's, not the accounts'.** An account correctly parked `needs_reauth` is
  * the sweep doing its job — `success`, with a `warn` line naming the account. `partial` means the
@@ -87,10 +102,10 @@ export interface IdleAccountProbeDeps {
    */
   readonly auth?: AccountAuthProbe
   /**
-   * The turn-free usage read for one subscription account, run after its credential checks out.
-   * Absent means the sweep leaves the gauge to the request path.
+   * The turn-free usage read for one subscription account, run after its credential checks out
+   * **and is warm**. Absent means the sweep leaves the gauge to the request path.
    */
-  readonly usage?: (account: AccountRow) => Promise<boolean>
+  readonly usage?: (account: AccountRow) => Promise<SdkUsageGaugeProbeOutcome>
   /** Which model each provider is probed with. Absent for a provider means it is not probed. */
   readonly models: Readonly<Record<string, string>>
   /** `IDLE_ACCOUNT_PROBE_INTERVAL_MINUTES`, in milliseconds. The runner jitters it. */
@@ -102,43 +117,17 @@ export interface IdleAccountProbeDeps {
   /** `IDLE_ACCOUNT_PROBE_PAID_TURN`. False means `test` is never called — see the module comment. */
   readonly paidTurn: boolean
   /**
-   * When a subscription account's **access** token expires, or `null` when that cannot be known
-   * (no config directory, an unreadable file, a credential that never carried the field).
-   *
-   * Metadata only — the seam hands back one instant and there is no field on it that could hold a
-   * token (CLAUDE.md non-negotiables 1 and 13). Absent means the sweep cannot tell a warm
-   * credential from a cold one and skips the keepalive below entirely.
+   * Whether a `claude` subprocess spawned against this account right now would refresh its access
+   * token — `CredentialFreshness.wouldRefresh`, the one definition of *cold* every spawn site
+   * shares. Metadata only: one boolean, and nothing on the seam could hold a token (CLAUDE.md
+   * non-negotiables 1 and 13). Absent means the sweep cannot tell warm from cold and never warms.
    */
-  readonly accessTokenExpiry?: (account: AccountRow) => Promise<Date | null>
+  readonly cold?: (account: AccountRow) => Promise<boolean>
   /**
-   * `CLAUDE_SDK_CREDENTIAL_KEEPALIVE`. False leaves a cold credential to warn and nothing else.
+   * `CLAUDE_SDK_CREDENTIAL_KEEPALIVE`. False leaves a cold credential to warn and nothing else —
+   * and, because a turn-free read is refused against it, un-gauged until a client's turn.
    */
   readonly warmCredentials: boolean
-  /**
-   * How close to its access-token expiry a credential counts as cold
-   * (`CLAUDE_SDK_CREDENTIAL_KEEPALIVE_BEFORE_MINUTES`, in ms).
-   */
-  readonly warmBeforeMs: number
-}
-
-interface Tally {
-  /** Accounts the free check answered for, either way. */
-  checked: number
-  /** Accounts the free check found logged out — parked `needs_reauth` by the probe. */
-  loggedOut: number
-  /** Accounts the free check found logged in again after `needs_reauth`. */
-  reauthorized: number
-  /** Subscription accounts whose usage gauge was read on this sweep, turn-free. */
-  gauged: number
-  /** Idle accounts billed a keepalive turn. */
-  probed: number
-  /** Subscription accounts whose access token was cold and was warmed by a keepalive turn. */
-  warmed: number
-  /** Subscription accounts found cold while warming is switched off. */
-  cold: number
-  refreshed: number
-  failed: number
-  skipped: number
 }
 
 const ABORTED = "stopped between accounts by shutdown"
@@ -162,8 +151,6 @@ export function createIdleAccountProbeTask(deps: IdleAccountProbeDeps): Schedule
         skipped: 0,
       }
       const loggedOut = new Set<string>()
-      // Subscription accounts whose access token has gone stale with nothing to refresh it.
-      const cold: AccountRow[] = []
       const processed = (): number => tally.checked + tally.probed
 
       try {
@@ -175,31 +162,15 @@ export function createIdleAccountProbeTask(deps: IdleAccountProbeDeps): Schedule
             if (account.status === "disabled") continue
             const answer = await checkCredential(deps.auth, account, logger, tally)
             if (answer === "logged-out") loggedOut.add(account.id)
-            if (answer === "logged-in") {
-              await readUsage(deps, account, logger, tally)
-              if (await isCold(deps, account, now, logger)) cold.push(account)
+            if (answer !== "logged-in") continue
+            // The order is the fix: a real turn crosses the refresh and persists it; only then may
+            // a turn-free read touch the directory. A cold account that could not be warmed is
+            // left alone entirely — `openIdleQuery` would refuse it anyway.
+            if (await isCold(deps, account, logger)) {
+              if (!(await warm(deps, account, logger, tally))) continue
             }
+            await readUsage(deps, account, logger, tally)
           }
-        }
-
-        // Warm the cold ones before the idle half: this is the sweep's whole reason for running
-        // more often than daily, and an idle batch that fills up must not push it to the next tick.
-        for (const account of cold.slice(0, deps.batchSize)) {
-          if (signal.aborted) return partial(logger, tally, processed())
-          const model = deps.models[account.provider]
-          if (!deps.warmCredentials || model === undefined) {
-            tally.cold += 1
-            logger.warn("subscription access token is cold and was not warmed", {
-              accountId: account.id,
-              provider: account.provider,
-              reason: deps.warmCredentials
-                ? "no probe model for this provider"
-                : "keepalive is off",
-            })
-            continue
-          }
-          await keepAlive(deps, account, model, logger, tally)
-          tally.warmed += 1
         }
 
         if (!deps.paidTurn) {
@@ -286,87 +257,6 @@ async function checkCredential(
     statusChangedTo: report.statusChangedTo,
   })
   return "logged-in"
-}
-
-/** The billed turn. Never writes a status: the test already fed the breaker, whose verdict is better. */
-/** The gauge read, free: a failure here is a reading not taken, logged and never a run outcome. */
-/**
- * Whether this account's access token is at or past its expiry, with the configured margin.
- *
- * The signal the 2026-09-06 losses needed and nobody had. A subscription's access token lives ~8 h
- * and only a **real turn** refreshes it: the turn-free handshake the model-catalog sweep and the
- * usage gauge run demonstrably does not rewrite `.credentials.json` (account `27ae4129` sat with an
- * access token three hours expired through three hourly catalog probes, file untouched). So an
- * account nothing routes to goes cold and stays cold, and the next thing to touch it discovers a
- * refresh the upstream will not honour — after which the CLI blanks the file and only a re-login
- * brings it back.
- *
- * Unknown is **not** cold: a null expiry means the file never said, and warming on that would bill
- * a turn against every account forever.
- */
-async function isCold(
-  deps: Pick<IdleAccountProbeDeps, "accessTokenExpiry" | "warmBeforeMs">,
-  account: AccountRow,
-  now: Date,
-  logger: Logger,
-): Promise<boolean> {
-  if (deps.accessTokenExpiry === undefined) return false
-  try {
-    const expiresAt = await deps.accessTokenExpiry(account)
-    if (expiresAt === null) return false
-    return expiresAt.getTime() - now.getTime() <= deps.warmBeforeMs
-  } catch (error) {
-    // Unreadable is unknown, never cold — the same rule `services/accounts/credential.ts` applies.
-    logger.warn("access token expiry unreadable", {
-      accountId: account.id,
-      reason: describeError(error, 200),
-    })
-    return false
-  }
-}
-
-async function readUsage(
-  deps: Pick<IdleAccountProbeDeps, "usage">,
-  account: AccountRow,
-  logger: Logger,
-  tally: Tally,
-): Promise<void> {
-  if (deps.usage === undefined) return
-  try {
-    if (await deps.usage(account)) tally.gauged += 1
-  } catch (error) {
-    logger.warn("idle account usage gauge not read", {
-      accountId: account.id,
-      provider: account.provider,
-      error: describeError(error, Number.POSITIVE_INFINITY),
-    })
-  }
-}
-
-async function keepAlive(
-  deps: Pick<IdleAccountProbeDeps, "test">,
-  account: AccountRow,
-  model: string,
-  logger: Logger,
-  tally: Tally,
-): Promise<void> {
-  const result = await deps.test(account.id, model)
-  if (!result.tested) {
-    // Its own cooldown declined — an operator tested it moments ago. Nothing was billed.
-    tally.skipped += 1
-    return
-  }
-  tally.probed += 1
-  if (result.outcome === "ok") {
-    tally.refreshed += 1
-    logger.info("idle account kept alive", { accountId: account.id, provider: account.provider })
-    return
-  }
-  tally.failed += 1
-  logger.warn("idle account failed its keepalive test", {
-    accountId: account.id,
-    provider: account.provider,
-  })
 }
 
 function partial(logger: Logger, tally: Tally, itemsProcessed: number): TaskOutcome {

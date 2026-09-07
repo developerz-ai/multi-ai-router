@@ -78,7 +78,7 @@ describe("the idle usage probe", () => {
 
     const read = await probe.read({ accountId: "sub-1", configDir: "/data/claude/sub-1" })
 
-    expect(read).toBe(true)
+    expect(read).toBe("read")
     expect(gauge.observed).toHaveLength(1)
     expect(gauge.observed[0]?.accountId).toBe("sub-1")
     // Zero user messages reached the SDK: this is the turn-free property, and the whole point.
@@ -90,7 +90,7 @@ describe("the idle usage probe", () => {
     expect(state.launched[0]?.cwd).toBe("/data/claude/sub-1")
   })
 
-  test("no usable binary means no query and a false answer, never a throw", async () => {
+  test("no usable binary means no query and a no_cli answer, never a throw", async () => {
     const { runQuery, state } = fakeQuery()
     const gauge = spyGauge()
     const probe = createSdkUsageGaugeProbe({
@@ -103,8 +103,33 @@ describe("the idle usage probe", () => {
       runQuery,
     })
 
-    expect(await probe.read({ accountId: "sub-1", configDir: "/data/claude/sub-1" })).toBe(false)
+    expect(await probe.read({ accountId: "sub-1", configDir: "/data/claude/sub-1" })).toBe("no_cli")
     expect(gauge.observed).toEqual([])
     expect(state.launched).toEqual([])
+  })
+
+  /**
+   * The 2026-09-06/07 regression: the gauge's turn-free query, spawned inside the CLI's refresh
+   * window, was ended before the rotated refresh token was written. A cold credential gets no
+   * query at all — the reading waits for the real turn the sweep spends first.
+   */
+  test("a cold credential is not read: no query, no slot, and the answer says why", async () => {
+    const { runQuery, state } = fakeQuery()
+    const gauge = spyGauge()
+    const concurrency = createSdkConcurrency({ global: 2, perAccount: 1 })
+    const probe = createSdkUsageGaugeProbe({
+      gauge,
+      concurrency,
+      freshness: { ensureFresh: async () => {}, wouldRefresh: async () => true },
+      cliPathOverride: null,
+      timeoutMs: 1_000,
+      resolveCli: () => CLI,
+      runQuery,
+    })
+
+    expect(await probe.read({ accountId: "sub-1", configDir: "/data/claude/sub-1" })).toBe("cold")
+    expect(gauge.observed).toEqual([])
+    expect(state.launched).toEqual([])
+    expect(concurrency.inFlight).toBe(0)
   })
 })

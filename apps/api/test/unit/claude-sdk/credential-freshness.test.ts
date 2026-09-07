@@ -1,5 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import {
+  ALWAYS_FRESH,
+  CLI_REFRESH_LEAD_MS,
   type CredentialFreshnessDeps,
   createCredentialFreshness,
 } from "../../../src/providers/claude-sdk/credential-freshness"
@@ -58,6 +60,7 @@ function harness(
     },
     configDirs: { pathFor: (id: string) => `/data/claude/${id}` },
     skewMs: 300_000,
+    coldMarginMs: 600_000,
     maxWaitMs: 20_000,
     pollMs: 250,
     now: () => new Date(clock),
@@ -216,5 +219,58 @@ describe("credential freshness", () => {
     await gate.ensureFresh("11111111-0000-4000-8000-00000000beef", never)
 
     expect(h.warnings()).toEqual([])
+  })
+})
+
+/**
+ * The rule the 2026-09-07 evidence settled on: a subprocess that will be ended early must never be
+ * the one that refreshes. `wouldRefresh` is what every turn-free spawn asks first, and it must say
+ * `true` for the whole stretch in which the CLI would refresh on its own — the CLI's five-minute
+ * lead, plus the router's margin on top — and `false` wherever nothing could be rotated.
+ */
+describe("wouldRefresh — whether a spawn now would rotate the refresh token", () => {
+  test("pins the CLI's own lead: five minutes, as CLI 2.1.261's qO() has it", () => {
+    expect(CLI_REFRESH_LEAD_MS).toBe(300_000)
+  })
+
+  test("is true inside the cold margin, at expiry, and past it", async () => {
+    for (const inMs of [599_000, 300_000, 1, 0, -3_600_000]) {
+      const gate = createCredentialFreshness(harness(credential(inMs)).deps)
+      expect(await gate.wouldRefresh(ACCOUNT)).toBe(true)
+    }
+  })
+
+  test("is false with the margin to spare — the common case, and it must stay free", async () => {
+    const h = harness(credential(601_000))
+    const gate = createCredentialFreshness(h.deps)
+    expect(await gate.wouldRefresh(ACCOUNT)).toBe(false)
+    expect(h.reads()).toBe(1)
+  })
+
+  test("is false when there is no token to rotate", async () => {
+    const gate = createCredentialFreshness(harness(credential(-1, false)).deps)
+    expect(await gate.wouldRefresh(ACCOUNT)).toBe(false)
+  })
+
+  test("is false on an unknown expiry — the CLI would not refresh on unknown either", async () => {
+    const gate = createCredentialFreshness(harness(credential(null)).deps)
+    expect(await gate.wouldRefresh(ACCOUNT)).toBe(false)
+  })
+
+  test("is false, and says so, when the file cannot be read", async () => {
+    const h = harness(credential(-1), {
+      reader: {
+        read: async () => {
+          throw new Error("EIO: /data/claude/x/.credentials.json")
+        },
+      },
+    })
+    const gate = createCredentialFreshness(h.deps)
+    expect(await gate.wouldRefresh(ACCOUNT)).toBe(false)
+    expect(h.warnings()).toEqual(["claude credential freshness unreadable"])
+  })
+
+  test("the no-op gate never calls a credential cold", async () => {
+    expect(await ALWAYS_FRESH.wouldRefresh(ACCOUNT)).toBe(false)
   })
 })

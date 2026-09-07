@@ -745,28 +745,26 @@ describe("parseEnv", () => {
 })
 
 /**
- * The keepalive margin has to span a whole gap between sweeps.
+ * The cold margin is floored at the CLI's own refresh lead.
  *
- * A token expiring after this tick's margin but before the next tick is one no sweep ever sees in
- * time. Shipped first as a flat 60 minutes against a 6-hour sweep, which meant an account expiring
- * 2 h 49 m out was skipped now and already dead by the next tick — the keepalive would never have
- * fired for it at all.
+ * The CLI refreshes an access token within five minutes of its expiry whether the router likes it
+ * or not, and a turn-free probe spawned inside that lead is ended before the rotated refresh token
+ * is written — the mechanism behind the 2026-09-06/07 deauthentications. A margin narrower than
+ * the lead reinstates it by configuration, so boot refuses rather than clamps.
  */
-describe("the credential keepalive margin", () => {
-  test("defaults to one sweep interval plus slack, not a fixed hour", () => {
-    const env = parseEnv({ ...base })
-    expect(env.claudeSdkCredentialKeepaliveBeforeMinutes).toBe(
-      env.scheduler.idleAccountProbeIntervalMinutes + 30,
+describe("the credential cold margin", () => {
+  test("defaults to twice the CLI's five-minute lead", () => {
+    expect(parseEnv({ ...base }).claudeSdkCredentialColdMarginSeconds).toBe(600)
+  })
+
+  test("an explicit margin at or above the lead is honoured", () => {
+    const env = parseEnv({ ...base, CLAUDE_SDK_CREDENTIAL_COLD_MARGIN_SECONDS: "300" })
+    expect(env.claudeSdkCredentialColdMarginSeconds).toBe(300)
+  })
+
+  test("a margin narrower than the CLI's lead is refused at boot, naming why", () => {
+    expect(() => parseEnv({ ...base, CLAUDE_SDK_CREDENTIAL_COLD_MARGIN_SECONDS: "299" })).toThrow(
+      /CLAUDE_SDK_CREDENTIAL_COLD_MARGIN_SECONDS[\s\S]*at least 300/,
     )
-  })
-
-  test("follows a retuned sweep interval, so the two cannot drift apart", () => {
-    const env = parseEnv({ ...base, IDLE_ACCOUNT_PROBE_INTERVAL_MINUTES: "120" })
-    expect(env.claudeSdkCredentialKeepaliveBeforeMinutes).toBe(150)
-  })
-
-  test("an explicit margin still wins", () => {
-    const env = parseEnv({ ...base, CLAUDE_SDK_CREDENTIAL_KEEPALIVE_BEFORE_MINUTES: "45" })
-    expect(env.claudeSdkCredentialKeepaliveBeforeMinutes).toBe(45)
   })
 })

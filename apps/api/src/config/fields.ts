@@ -124,10 +124,6 @@ export const ZERO_IS_LEGAL: ReadonlyMap<string, string> = new Map([
     "destroy the pool at shutdown instead of waiting for in-flight queries",
   ],
   [
-    "CLAUDE_SDK_CREDENTIAL_KEEPALIVE_BEFORE_MINUTES",
-    "warm a credential only once its access token has actually expired, with no margin before it",
-  ],
-  [
     "CLAUDE_SDK_CREDENTIAL_REFRESH_SKEW_SECONDS",
     "guard the refresh window with no lead time — one subprocess at a time only once the access " +
       "token has actually expired, rather than from a margin before it",

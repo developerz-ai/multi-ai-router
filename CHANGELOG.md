@@ -5,6 +5,26 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.13.0] — 2026-09-07
+
+### Fixed
+
+- **A turn-free idle query no longer spends a subscription's refresh token — the actual cause of every deauthentication since 2026-09-06, on the third attempt.** The `claude` CLI refreshes an access token at startup whenever it is expired or inside its own five-minute lead, and persists the rotated refresh token only *after* the token endpoint has answered. The router's turn-free queries — the hourly model-catalog sweep and the usage gauge — wanted nothing but the `initialize` handshake, so they closed the query the moment it answered, and the SDK ended the subprocess before that write. The refresh token left on disk was now spent; the next process to present it — a client's turn, the keepalive, or the next probe — was told `invalid_grant`, and the CLI's dead-token handler blanked both tokens. Reconstructed on the 2.12.2 pod for every one of the six accounts lost between 2026-09-06 21:44 and 2026-09-07 12:10 UTC: `afbee92b` (the catalog probe crossed the CLI's lead at 08:11, the next probe at 09:21 blanked it, nothing else touched the directory in between), `27ae4129` (probe at 11:20, blanked by the next client turn at 11:44), and `426a1d04`, the busiest account in the pool at 615 requests a day (probe at 12:10:11, blanked by the next client turn **31 seconds later**). The two refreshes on the same pod that succeeded were both inside real turns, and both produced tokens that lived their full eight hours. `../claude-task-master` wraps the same SDK against the same subscriptions and has never lost one: it runs real turns only.
+
+  2.11.0 read these losses as a double-spend race between two subprocesses; the concurrency data falsified that. 2.12.0 read them as an upstream invalidating idle tokens; the busiest account dying by the same sequence falsified that. `docs/idea/11-anthropic-agent-sdk.md` §3 keeps all three readings, with the timeline and the CLI code paths (`qO`, the `<CLAUDE_CONFIG_DIR>.lock` directory whose creation is visible as the *root's* mtime at each death, the CAS save, `R1e`).
+
+  **The rule: a subprocess that will be ended early must never be the one that refreshes.** `CredentialFreshness.wouldRefresh` answers whether a spawn now would refresh an account's token — metadata, one boolean, nothing on the seam that could hold a token — and `openIdleQuery` asks it **before taking a slot and again after**, refusing with `IdleQueryColdCredentialError` rather than spawning. Inside `CLAUDE_SDK_CREDENTIAL_COLD_MARGIN_SECONDS` of the access token's expiry the model lister answers `{ kind: "cold" }` and the catalog refresh writes nothing (the previous rows stand, `agent-sdk:credential-cold`); the usage-gauge probe answers `"cold"` and the reading is not taken. Only a real turn — a process that runs to completion — may cross a refresh.
+
+- **The keepalive is re-cut to what a turn can actually do, and runs *before* the gauge read.** A real turn refreshes only when the CLI would — inside that same five-minute lead — so 2.12.x's "warm anything expiring before the next sweep" spent turns that refreshed nothing: the 10:51 keepalive turns on `426a1d04` and `27ae4129` ran with 34 and 14 minutes of token life left, changed no file, and both accounts died on the next probe. `idle_account_probe` now uses the one definition of *cold* every spawn site shares, and the order per account is fixed: the free `claude auth status` check, then — if the token is cold — one small real turn, and **only then** the turn-free gauge read. A cold account that could not be warmed (keepalive off, no probe model, batch full, turn declined or failed) is not read at all and is named in the log. `CLAUDE_SDK_CREDENTIAL_KEEPALIVE=false` now means no probe ever spends a refresh token; the cost is staleness, never a login.
+
+### Added
+
+- `CLAUDE_SDK_CREDENTIAL_COLD_MARGIN_SECONDS` (default `600`): how close to its access-token expiry a credential counts as cold. **Floored at 300 — the CLI's own lead — and boot refuses anything narrower**, because a margin inside the CLI's window is this bug reinstated by configuration. `CLI_REFRESH_LEAD_MS` pins the CLI constant with its provenance.
+
+### Removed
+
+- `CLAUDE_SDK_CREDENTIAL_KEEPALIVE_BEFORE_MINUTES`. Its premise — that a turn six hours before expiry refreshes anything — was false; the margin that matters is the CLI's, above. A value still set in an operator's environment is ignored.
+
 ## [2.12.2] — 2026-09-07
 
 ### Fixed
@@ -716,5 +736,6 @@ your tooling config.
 - README rewritten around the actual product story: your tools → Multi AI
   Router → providers.
 
+[2.13.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.13.0
 [2.12.2]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.12.2
 [1.0.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v1.0.0

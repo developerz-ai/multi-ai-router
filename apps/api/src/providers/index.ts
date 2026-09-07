@@ -12,6 +12,7 @@ export type { SdkConcurrency, SdkConcurrencyLimits, SdkSlot } from "./claude-sdk
 export { createSdkConcurrency } from "./claude-sdk/concurrency"
 export {
   ALWAYS_FRESH,
+  CLI_REFRESH_LEAD_MS,
   type CredentialFreshness,
   createCredentialFreshness,
 } from "./claude-sdk/credential-freshness"
@@ -40,7 +41,12 @@ export type {
   IdleQueryHandle,
   OpenIdleQueryInput,
 } from "./claude-sdk/idle-query"
-export { IdleQueryTimeoutError, openIdleQuery, rejectOnAbort } from "./claude-sdk/idle-query"
+export {
+  IdleQueryColdCredentialError,
+  IdleQueryTimeoutError,
+  openIdleQuery,
+  rejectOnAbort,
+} from "./claude-sdk/idle-query"
 export type {
   SdkInvocation,
   SdkInvoker,
@@ -185,7 +191,11 @@ export type {
   SdkUsageGaugeSource,
 } from "./claude-sdk/usage-gauge"
 export { createSdkUsageGauge } from "./claude-sdk/usage-gauge"
-export type { SdkUsageGaugeProbe, SdkUsageGaugeProbeOptions } from "./claude-sdk/usage-gauge-probe"
+export type {
+  SdkUsageGaugeProbe,
+  SdkUsageGaugeProbeOptions,
+  SdkUsageGaugeProbeOutcome,
+} from "./claude-sdk/usage-gauge-probe"
 export { createSdkUsageGaugeProbe } from "./claude-sdk/usage-gauge-probe"
 export type { HttpDriverConfig, ProviderSurface } from "./driver"
 export { createHttpDriver } from "./driver"

@@ -103,10 +103,11 @@ export interface ScheduledTaskDeps {
    */
   readonly probeModels?: Readonly<Record<string, string>>
   /**
-   * When a subscription account's access token expires — metadata, never a token. Absent disables
-   * the credential keepalive, which is what a deployment with no config directories wants.
+   * Whether a `claude` subprocess spawned against this account now would refresh its access token
+   * (`CredentialFreshness.wouldRefresh`) — metadata, never a token. Absent disables the credential
+   * keepalive, which is what a deployment with no config directories wants.
    */
-  readonly accessTokenExpiry?: (account: AccountRow) => Promise<Date | null>
+  readonly credentialCold?: (account: AccountRow) => Promise<boolean>
   /**
    * The model catalog's staleness ordering. Read-only here — the writes go through
    * {@link ScheduledTaskDeps.refreshCatalog}, which owns the transaction per account.
@@ -122,11 +123,7 @@ export interface ScheduledTaskDeps {
   /** A full `Env` satisfies this, so the composition root passes `env` straight through. */
   readonly env: Pick<
     Env,
-    | "retention"
-    | "janitorIntervalMinutes"
-    | "scheduler"
-    | "claudeSdkCredentialKeepalive"
-    | "claudeSdkCredentialKeepaliveBeforeMinutes"
+    "retention" | "janitorIntervalMinutes" | "scheduler" | "claudeSdkCredentialKeepalive"
   >
 }
 
@@ -242,13 +239,12 @@ export function createScheduledTasks(deps: ScheduledTaskDeps): readonly Schedule
             // and checking on a subscription must never spend usage.
             paidTurn: env.scheduler.idleAccountProbePaidTurn,
             // Separate from `paidTurn` on purpose. That flag asks "spend a turn to find out whether
-            // a forgotten account still works"; this one asks "spend a turn so a working account
-            // does not go cold". The second has a concrete effect the first never had.
+            // a forgotten account still works"; this one asks "spend a turn so a cold credential is
+            // refreshed by a process that lives long enough to persist it" — which is also what
+            // lets the turn-free gauge read follow. The second has a concrete effect the first
+            // never had.
             warmCredentials: env.claudeSdkCredentialKeepalive,
-            warmBeforeMs: env.claudeSdkCredentialKeepaliveBeforeMinutes * MINUTE_MS,
-            ...(deps.accessTokenExpiry === undefined
-              ? {}
-              : { accessTokenExpiry: deps.accessTokenExpiry }),
+            ...(deps.credentialCold === undefined ? {} : { cold: deps.credentialCold }),
           }),
         ]),
     // Hourly, and free: a model listing costs no tokens and spends no quota window. It writes only

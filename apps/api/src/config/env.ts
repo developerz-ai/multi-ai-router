@@ -2,6 +2,7 @@ import { isAbsolute } from "node:path"
 import { UNKNOWN_REVISION } from "@multi-ai-router/core"
 import { DATABASE_POOL_DEFAULTS } from "@multi-ai-router/db"
 import { z } from "zod"
+import { CLI_REFRESH_LEAD_MS } from "../providers/claude-sdk/credential-freshness"
 import { adminApiTokenProblem } from "../services/admin-auth"
 import type { BoundCooldownBehavior } from "../services/routing"
 import {
@@ -544,16 +545,19 @@ export interface Env {
    * the credential file every `PollMs`, then proceed regardless.
    */
   /**
-   * Whether an idle subscription account whose **access** token has gone cold is given one small
-   * keepalive turn to refresh it. Only a real turn refreshes: the turn-free handshake does not.
+   * Whether a logged-in subscription account whose **access** token is cold is given one small real
+   * turn before anything turn-free touches its directory. A real turn runs to completion and so
+   * persists the rotated refresh token; a turn-free probe is ended before that write and spends the
+   * token for nothing (`scheduler/tasks/idle-account-probe.ts`).
    */
   readonly claudeSdkCredentialKeepalive: boolean
   /**
-   * How close to expiry counts as cold. Defaults to one `IDLE_ACCOUNT_PROBE_INTERVAL_MINUTES` plus
-   * 30 minutes, because a margin narrower than the gap between sweeps leaves tokens that expire
-   * between two ticks unwarmed by either.
+   * How close to its access-token expiry a credential counts as **cold**: a turn-free `claude`
+   * spawn is refused against it and the sweep's keepalive spends a real turn on it instead. Floored
+   * at the CLI's own five-minute refresh lead (`CLI_REFRESH_LEAD_MS`), because a margin narrower
+   * than that lets an idle query start exactly the refresh it cannot finish.
    */
-  readonly claudeSdkCredentialKeepaliveBeforeMinutes: number
+  readonly claudeSdkCredentialColdMarginSeconds: number
   readonly claudeSdkCredentialRefreshSkewSeconds: number
   readonly claudeSdkCredentialRefreshWaitMs: number
   readonly claudeSdkCredentialRefreshPollMs: number
@@ -700,7 +704,7 @@ export const ENV_FIELDS = {
   CLAUDE_SDK_MAX_CONCURRENCY: atLeastOne.optional(),
   CLAUDE_SDK_MAX_CONCURRENCY_PER_ACCOUNT: atLeastOne.optional(),
   CLAUDE_SDK_CREDENTIAL_KEEPALIVE: flag.optional(),
-  CLAUDE_SDK_CREDENTIAL_KEEPALIVE_BEFORE_MINUTES: wholeNumber.optional(),
+  CLAUDE_SDK_CREDENTIAL_COLD_MARGIN_SECONDS: wholeNumber.optional(),
   CLAUDE_SDK_CREDENTIAL_REFRESH_SKEW_SECONDS: wholeNumber.optional(),
   CLAUDE_SDK_CREDENTIAL_REFRESH_WAIT_MS: atLeastOne.optional(),
   CLAUDE_SDK_CREDENTIAL_REFRESH_POLL_MS: atLeastOne.optional(),
@@ -861,6 +865,24 @@ const envSchema = z.object(ENV_FIELDS).transform((raw, ctx): Env => {
       }
     : null
 
+  // The CLI refreshes inside its own lead whether the router likes it or not, so a cold margin
+  // narrower than that lets a turn-free probe start exactly the refresh it cannot finish — the
+  // 2026-09-06/07 deauthentications, reinstated by a setting. Refused, not clamped: an operator who
+  // typed a number meant it, and the boot log is where to learn it cannot be honoured.
+  const coldMarginSeconds = raw.CLAUDE_SDK_CREDENTIAL_COLD_MARGIN_SECONDS ?? 600
+  const cliLeadSeconds = CLI_REFRESH_LEAD_MS / 1_000
+  if (coldMarginSeconds < cliLeadSeconds) {
+    ctx.addIssue({
+      code: "custom",
+      path: ["CLAUDE_SDK_CREDENTIAL_COLD_MARGIN_SECONDS"],
+      message:
+        `must be at least ${cliLeadSeconds}: the claude CLI refreshes an access token within ` +
+        `${cliLeadSeconds} s of its expiry on its own, and a turn-free probe spawned inside that ` +
+        `lead is ended before the rotated refresh token is written — which deauthenticates the account`,
+    })
+    return z.NEVER
+  }
+
   const usageDays = raw.RETENTION_USAGE_DAYS ?? 90
   // Two years of daily aggregates: long enough that "what did this cost me last year" is still
   // answerable, and the first bound this table has ever had.
@@ -920,20 +942,16 @@ const envSchema = z.object(ENV_FIELDS).transform((raw, ctx): Env => {
     // subprocess may cross at a time (`providers/claude-sdk/credential-freshness.ts`). 300 s is the
     // buffer Meridian settled on for the same token endpoint, and it comfortably covers a spawn
     // that begins just before expiry and refreshes just after.
-    // On by default. An access token lives ~8 h and only a real turn refreshes it, so an account
-    // nothing routes to goes cold — and the next thing to touch it finds a refresh the upstream
-    // will not honour, after which the CLI blanks the credential and only a re-login recovers it.
-    // The cost is one small turn per cold account per sweep; `false` restores the old silence.
+    // On by default. The CLI persists a rotated refresh token only after the token endpoint
+    // answers, and a turn-free probe is ended before that — so a cold credential is given one
+    // small real turn first, and the turn-free gauge read follows it. The cost is one turn per
+    // cold account per sweep; `false` leaves a cold account un-gauged and un-listed until a
+    // client's turn refreshes it, and never spends its refresh token on a probe.
     claudeSdkCredentialKeepalive: raw.CLAUDE_SDK_CREDENTIAL_KEEPALIVE ?? true,
-    // **Derived from the sweep interval, not a fixed hour.** The margin has to span a whole gap
-    // between sweeps: a token expiring *after* this tick's margin but *before* the next tick is one
-    // no sweep ever sees in time. With a 6 h sweep and the hour this first shipped with, an account
-    // expiring 2 h 49 m out was skipped now and already dead by the next tick — the keepalive would
-    // simply never have fired for it. One interval plus 30 minutes of slack closes that, and stays
-    // correct if the interval is retuned.
-    claudeSdkCredentialKeepaliveBeforeMinutes:
-      raw.CLAUDE_SDK_CREDENTIAL_KEEPALIVE_BEFORE_MINUTES ??
-      (raw.IDLE_ACCOUNT_PROBE_INTERVAL_MINUTES ?? 360) + 30,
+    // Ten minutes: the CLI's own five-minute lead (`CLI_REFRESH_LEAD_MS`), doubled, so a probe that
+    // queued for a slot behind live traffic still cannot arrive inside the CLI's window. The floor
+    // below refuses anything narrower than the CLI's lead — that setting is the bug, not a tuning.
+    claudeSdkCredentialColdMarginSeconds: coldMarginSeconds,
     claudeSdkCredentialRefreshSkewSeconds: raw.CLAUDE_SDK_CREDENTIAL_REFRESH_SKEW_SECONDS ?? 300,
     // How long a waiter gives the winner before proceeding regardless. A refresh is one HTTPS
     // round-trip inside a subprocess that was starting anyway; past this the gate has clearly not
