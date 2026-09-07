@@ -11,6 +11,7 @@ import {
 import { createApp } from "./app"
 import { createRuntime, type Runtime, type RuntimeDeps } from "./composition"
 import { type Env, EnvValidationError, parseEnv } from "./config/env"
+import { listenOptions } from "./config/listen"
 import { createLogger, type Logger } from "./logging/logger"
 import { initSentry } from "./observability"
 import { ConfigDirError } from "./providers/claude-sdk/config-dir"
@@ -97,7 +98,9 @@ async function main(): Promise<void> {
     webRoot: resolveWebRoot(env, logger),
   })
 
-  const server = Bun.serve({ port: env.port, fetch: app.fetch })
+  // The idle timeout is spelled out because Bun's default (10 s, swept every 4 s) is shorter than
+  // the 15 s heartbeat a quiet SDK stream sends to stay alive — see `Env.serverIdleTimeoutSeconds`.
+  const server = Bun.serve({ ...listenOptions(env), fetch: app.fetch })
   logger.info("router listening", {
     component: "transport",
     version: VERSION,

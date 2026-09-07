@@ -11,6 +11,7 @@ import {
   flag,
   fraction,
   nonEmpty,
+  serverIdleTimeoutSeconds,
   usageBatchSize,
   wholeNumber,
 } from "./fields"
@@ -437,8 +438,28 @@ export interface TranslationConfig {
   readonly defaultMaxTokens: number
 }
 
+/**
+ * Sixty seconds: four client heartbeats (`DEFAULT_STREAM_PACING.heartbeatMs`, 15 s) fit inside it
+ * with room for the 4 s granularity Bun's sweep runs at. `test/unit/listen.test.ts` holds the
+ * pairing, so retuning either number alone fails a test rather than a fleet.
+ */
+export const DEFAULT_SERVER_IDLE_TIMEOUT_SECONDS = 60
+
 export interface Env {
   readonly port: number
+  /**
+   * How long a connection may carry no bytes in either direction before the *server* closes it —
+   * `Bun.serve`'s `idleTimeout`, in whole seconds.
+   *
+   * Unset, Bun applies its own default of 10 s and reaps on a 4 s sweep, and that default was
+   * shorter than the 15 s heartbeat every SDK stream relies on to stay open. So a stream that went
+   * quiet for 10–14 s died before its own keep-alive could fire: measured on the fleet on
+   * 2026-09-07, every `Failed to read … stream` on the boxes sat on that 4 s grid, and a tool call
+   * whose arguments took 11.8 s to generate — held whole by the rewriter, so the client saw nothing
+   * until the block closed — reproduced it on demand. The heartbeat has to be comfortably *inside*
+   * this; `0` disables the server's clock entirely and `255` is the ceiling (Bun keeps it in a byte).
+   */
+  readonly serverIdleTimeoutSeconds: number
   /**
    * How long a shutdown lets in-flight requests finish before closing what is left.
    *
@@ -629,6 +650,7 @@ export { decodeEncryptionKey, ZERO_IS_LEGAL } from "./fields"
  */
 export const ENV_FIELDS = {
   PORT: wholeNumber.optional(),
+  SERVER_IDLE_TIMEOUT_SECONDS: serverIdleTimeoutSeconds.optional(),
   SHUTDOWN_DRAIN_MS: wholeNumber.optional(),
   SHUTDOWN_READY_GRACE_MS: wholeNumber.optional(),
   DATABASE_URL: nonEmpty,
@@ -860,6 +882,8 @@ const envSchema = z.object(ENV_FIELDS).transform((raw, ctx): Env => {
 
   return {
     port: raw.PORT ?? 8080,
+    serverIdleTimeoutSeconds:
+      raw.SERVER_IDLE_TIMEOUT_SECONDS ?? DEFAULT_SERVER_IDLE_TIMEOUT_SECONDS,
     // Fifteen seconds: long enough for the ordinary streamed answer in flight at deploy time to
     // land, short enough to leave the flush room inside the 30s stop grace the bundled compose
     // file declares. Neither number is a guess the other has to match by luck — an image-pins
