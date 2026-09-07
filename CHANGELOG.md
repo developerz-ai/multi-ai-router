@@ -736,5 +736,6 @@ your tooling config.
 - README rewritten around the actual product story: your tools → Multi AI
   Router → providers.
 
+[2.13.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.13.0
 [2.12.2]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.12.2
 [1.0.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v1.0.0
