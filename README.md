@@ -14,7 +14,6 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/developerz-ai/multi-ai-router/releases"><img alt="Release" src="https://img.shields.io/github/v/release/developerz-ai/multi-ai-router?sort=semver"></a>
   <a href="https://github.com/developerz-ai/multi-ai-router/pkgs/container/multi-ai-router"><img alt="Container image" src="https://img.shields.io/badge/ghcr.io-multi--ai--router-2496ED?logo=docker&logoColor=white"></a>
   <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-14B8A6"></a>
 </p>
