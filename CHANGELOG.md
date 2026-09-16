@@ -5,6 +5,13 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.13.1] — 2026-09-16
+
+### Changed
+
+- **Agent SDK 0.3.273 (bundled `claude` CLI 2.1.273).** Re-verified against the new binary before shipping: the CLI still refreshes an access token inside a five-minute lead (`Date.now() + 300000 >= expiresAt`), so the idle-query cold-margin floor from 2.13.0 still holds; `claude auth status` JSON and `claude auth login --claudeai` are unchanged. (#129)
+- **README:** logo, social preview, and console screenshots from a demo database with fake data. (#130)
+
 ## [2.13.0] — 2026-09-07
 
 ### Fixed
@@ -737,5 +744,6 @@ your tooling config.
   Router → providers.
 
 [2.13.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.13.0
+[2.13.1]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.13.1
 [2.12.2]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.12.2
 [1.0.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v1.0.0
