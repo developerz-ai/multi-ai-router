@@ -519,7 +519,7 @@ test, and a flaky gate is one people learn to skip.
 
 ### CI: a report, not a gate
 
-`.github/workflows/ci.yml` runs a `bench` job after `test`, on the same shared `blacksmith-*`
+`.github/workflows/ci.yml` runs a `bench` job after `test`, on the same shared GitHub-hosted
 runner as everything else. It never fails the build — the step is `continue-on-error: true` — for
 the same reason `bin/bench` stays out of `bin/check`: a shared runner's jitter is not a signal
 worth blocking a merge over, and a gate nobody trusts gets ignored.

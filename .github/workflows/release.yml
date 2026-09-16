@@ -24,22 +24,19 @@ env:
 jobs:
   # Native per-arch build (amd64 + arm64), each pushed by digest, then merged
   # into one manifest list under the semver + :latest tags. Same shape as ci.yml;
-  # only the tag set and the runner sizes differ.
+  # only the tag set and the arm64 leg differ.
   #
-  # BOTH arches run on 2-vCPU runners, deliberately: 2 vCPU is the size
-  # provisioned for this org. Requesting a larger size does NOT error — the job
-  # sits queued until the workflow times out, which looks like a hang rather
-  # than a misconfiguration. Do not "optimise" either leg up to 8 vCPU without
-  # first confirming that size is actually provisioned.
+  # Both arches build natively on GitHub-hosted runners (`ubuntu-24.04` and
+  # `ubuntu-24.04-arm`), free for a public repository. No QEMU: an emulated
+  # arm64 leg is several times slower and hides arch-specific failures.
   #
-  # A release build is cold (no warm gha cache on a fresh tag), so 2 vCPU makes
-  # it slow rather than broken — the generous timeout below absorbs that, and
-  # the gha layer cache (cache-from/to) keeps subsequent releases cheap.
+  # A release build is cold (no warm gha cache on a fresh tag) — the generous
+  # timeout below absorbs that, and the gha layer cache (cache-from/to) keeps
+  # subsequent releases cheap.
   build:
     runs-on: ${{ matrix.runner }}
     # Generous ceiling for both legs: a tag that changes bun.lock busts the
-    # cached install layer and forces a cold dependency + SPA build, and neither
-    # arch has more than 2 vCPU to throw at it.
+    # cached install layer and forces a cold dependency + SPA build.
     timeout-minutes: 45
     permissions:
       contents: read
@@ -50,9 +47,9 @@ jobs:
       matrix:
         include:
           - platform: linux/amd64
-            runner: blacksmith-2vcpu-ubuntu-2404
+            runner: ubuntu-24.04
           - platform: linux/arm64
-            runner: blacksmith-2vcpu-ubuntu-2404-arm
+            runner: ubuntu-24.04-arm
     steps:
       # `linux/amd64` → `linux-amd64`: slashes are illegal in artifact names and
       # ambiguous in cache scopes.
@@ -130,7 +127,7 @@ jobs:
 
   merge:
     needs: [build]
-    runs-on: blacksmith-2vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:
       contents: read
@@ -177,7 +174,7 @@ jobs:
   # the tag must already resolve when the release becomes visible.
   github_release:
     needs: [merge]
-    runs-on: blacksmith-2vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
       # The only job in this workflow that writes to the repo.

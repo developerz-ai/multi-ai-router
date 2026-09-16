@@ -48,7 +48,7 @@ Full data plane shipped: accounts, pools, keys, `/v1/messages` + `/v1/chat/compl
 | Server state | TanStack Solid Query |
 | Lint/format | Biome |
 | Tests | `bun test` — unit (pure, no I/O) + integration (HTTP + mocked upstreams) |
-| CI | GitHub Actions on Blacksmith runners |
+| CI | GitHub Actions on GitHub-hosted runners (amd64 + native arm64) |
 | Distribution | `ghcr.io/developerz-ai/multi-ai-router`, multi-arch. **Images publish only on a `v*` tag** (`release.yml`); pushes to `main` run the quality gate and publish nothing. `docker compose up -d` starts router + Postgres 16, healthcheck gating the router |
 
 Postgres is the house standard and the current decision — earlier drafts said SQLite; **any doc still saying SQLite, single-file DB, or `DATABASE_PATH` is stale, fix it.** Migrations run at boot, idempotent, and fail the boot rather than start half-migrated. `DATABASE_URL` ships in the bundled compose file so the operator still sets three env vars by hand.

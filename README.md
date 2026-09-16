@@ -393,7 +393,7 @@ Cost comes from a price table shipped with the image and overridable per provide
 | Frontend | SolidJS + Vite SPA, `@solidjs/router`, SCSS modules, TanStack Solid Query |
 | Lint/format | Biome |
 | Tests | `bun test` — unit (pure) + integration (HTTP, mocked upstreams) |
-| CI | GitHub Actions on Blacksmith runners |
+| CI | GitHub Actions on GitHub-hosted runners (amd64 + native arm64) |
 | Distribution | Multi-arch image — `ghcr.io/developerz-ai/multi-ai-router`, published only on a `v*` release tag, plus a Postgres service in the bundled compose file |
 
 ---
