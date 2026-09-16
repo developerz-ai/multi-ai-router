@@ -57,7 +57,8 @@ import type { CredentialMetadata, CredentialMetadataReader } from "./credential-
 /**
  * How far ahead of an access token's expiry the `claude` CLI refreshes it on its own.
  *
- * Provenance: CLI 2.1.261 (the binary bundled with Agent SDK 0.3.261), `qO(expiresAt)`:
+ * Provenance: CLI 2.1.261 (the binary bundled with Agent SDK 0.3.261), `qO(expiresAt)`; re-verified
+ * unchanged in CLI 2.1.273 (Agent SDK 0.3.273, where it is `cF`):
  * `Date.now() + 300000 >= expiresAt`. Blast radius: if the CLI widens this, an idle query spawned
  * between the two leads would once again be ended mid-refresh — so the configured cold margin is
  * floored at this value at boot, and the floor is what to raise if the CLI moves.

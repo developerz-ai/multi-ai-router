@@ -17,7 +17,7 @@ import type { ClaudeAuthStatus } from "./contract"
 /**
  * The subcommand that runs the CLI's own OAuth login against `CLAUDE_CONFIG_DIR`.
  *
- * *Provenance:* `claude auth login --help` on Claude Code 2.1.220, re-verified unchanged on 2.1.261
+ * *Provenance:* `claude auth login --help` on Claude Code 2.1.220, re-verified unchanged on 2.1.261 and 2.1.273
  * (the CLI bundled with SDK 0.3.261: `--claudeai` still "Use Claude subscription (default)") — the sibling of the
  * `claude auth status` probe docs/idea/11-anthropic-agent-sdk.md §3 pins. `--claudeai` selects the
  * Max/Pro subscription flow. It is the CLI's current default and is passed anyway: this router
@@ -33,7 +33,7 @@ export const CLAUDE_LOGIN_ARGV: readonly string[] = Object.freeze(["auth", "logi
 /**
  * The subcommand that reports what credential a `CLAUDE_CONFIG_DIR` holds.
  *
- * *Provenance:* `claude auth status --help` on Claude Code 2.1.220, re-verified unchanged on 2.1.261 — `--json` is documented as the
+ * *Provenance:* `claude auth status --help` on Claude Code 2.1.220, re-verified unchanged on 2.1.261 and 2.1.273 — `--json` is documented as the
  * default and is passed anyway, because a default is a decision the CLI may revisit and `--text`
  * output is prose this router would have to parse.
  *
