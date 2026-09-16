@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512" role="img" aria-label="multi-ai-router">
+<title>multi-ai-router</title>
+<rect width="512" height="512" rx="112" fill="#0F1222"/>
+<rect x="4" y="4" width="504" height="504" rx="108" fill="none" stroke="#FFFFFF" stroke-opacity="0.08" stroke-width="8"/>
+<g transform="translate(51.2 51.2) scale(6.4)" fill="none" stroke-linecap="round" stroke-linejoin="round">
+  <g stroke="#8B5CF6" stroke-width="4.5"><path d="M7 11 C21 11 21 32 35 32"/><path d="M7 24 C21 24 21 32 35 32"/><path d="M7 40 C21 40 21 32 35 32"/><path d="M7 53 C21 53 21 32 35 32"/></g>
+  <path d="M38 32 H57" stroke="#14B8A6" stroke-width="5.0"/>
+  <circle cx="37" cy="32" r="7.5" fill="#14B8A6" stroke="none"/>
+</g>
+</svg>

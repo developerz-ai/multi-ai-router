@@ -1,6 +1,29 @@
-<h1 align="center">multi-ai-router</h1>
+<h1 align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/logo-dark.svg">
+    <source media="(prefers-color-scheme: light)" srcset="docs/assets/logo-light.svg">
+    <img alt="multi-ai-router" src="docs/assets/logo-light.svg" width="440">
+  </picture>
+</h1>
+
+<p align="center"><strong>One self-hosted endpoint for every AI subscription and API key your team pays for.</strong></p>
+
+<p align="center">
+  Pool five Claude Max plans, a ChatGPT/Codex plan and a few API keys behind one OpenAI- and Anthropic-compatible address.<br>
+  Hand out named keys, keep the real logins on your server, and see who spent what.
+</p>
+
+<p align="center">
+  <a href="https://github.com/developerz-ai/multi-ai-router/releases"><img alt="Release" src="https://img.shields.io/github/v/release/developerz-ai/multi-ai-router?sort=semver"></a>
+  <a href="https://github.com/developerz-ai/multi-ai-router/pkgs/container/multi-ai-router"><img alt="Container image" src="https://img.shields.io/badge/ghcr.io-multi--ai--router-2496ED?logo=docker&logoColor=white"></a>
+  <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-14B8A6"></a>
+</p>
 
 <p align="center"><strong>your tools → multi-ai-router → providers</strong></p>
+
+<p align="center">
+  <img alt="Operator console overview: accounts by status, a reconnect banner and an exhausted-account banner" src="docs/assets/screenshots/overview.png" width="900">
+</p>
 
 ## What is this?
 
@@ -77,6 +100,19 @@ Marked ⏳ where the design is settled but the code is not — see [Status](#-st
 - ⚡ **Performance as a stated goal** — under 5 ms added p99 on the passthrough path and zero added time-to-first-token. Streams are never buffered, passthrough bodies are never parsed, and nothing touches Postgres on the critical path: accounts and pools are read from a warm catalog, keys from a bounded cache, usage is written off-path. `bin/bench` checks both claims against a stub upstream and exits non-zero when either breaks; CI runs it and reports the delta against a committed baseline on every PR, but the job is `continue-on-error` — a shared runner's noise isn't a regression signal worth blocking a merge over, so it doesn't fail the build (yet).
 - 🖥️ **SolidJS operator console** — overview, accounts, pools, keys, usage and settings all render live data: key reveal with no shown-once flow, destructive actions that name exactly what they break, reset shown as absolute time *and* countdown labelled by how far it can be trusted, a red banner for any account out of credits, a live request feed that names the failing request by id, account and error class, and a settings screen with live price overrides, retention knobs, scheduled-task health, and the audit feed.
 - 🐳 **`docker compose up -d`** — the router plus PostgreSQL 16, a healthcheck gating startup, one OIDC client (or one `bin/admin set-password` run) and one encryption key in `.env`.
+
+---
+
+## 🖼️ Screenshots
+
+The console with demo data: ten accounts across five providers, three pools, seven keys, 30 days of traffic. Every name, key and credential in these images is fake.
+
+| | |
+|---|---|
+| **Usage** — requests, attempts and spend (metered and notional kept apart), failures grouped by what fixes them, and a 30-day trend.<br><br><img alt="Usage screen: headline totals, why requests failed, requests per day over 30 days" src="docs/assets/screenshots/usage.png"> | **Accounts** — grouped by provider. Each Claude subscription shows its quota windows with reset time and countdown, when its login expires, and a banner for any that need a reconnect.<br><br><img alt="Accounts screen: Claude subscriptions with per-window quota bars and login expiry" src="docs/assets/screenshots/accounts.png"> |
+| **Quota per window** — every subscription window with its reset time, labelled *reported* or *estimated*. A spent window is flagged.<br><br><img alt="Quota gauges per account and per window" src="docs/assets/screenshots/usage-quota.png"> | **Account rows up close** — one account active, one cooling down on a spent 5-hour window, with a 7-day traffic sparkline and notional cost.<br><br><img alt="Two Claude subscription rows: one active, one cooling down" src="docs/assets/screenshots/account-detail.png"> |
+| **Pools** — policy, routable members, overflow account, and a status dot for each member.<br><br><img alt="Pools screen: quota-aware, priority-failover and round-robin pools" src="docs/assets/screenshots/pools.png"> | **Keys** — named, scoped, rate-limited and revealable at any time, each with its own usage and cost.<br><br><img alt="Keys screen: named router keys with state, scope, usage sparkline and cost" src="docs/assets/screenshots/keys.png"> |
+| **Light theme**<br><br><img alt="Overview in the light theme" src="docs/assets/screenshots/overview-light.png"> | <br><br><img alt="Accounts in the light theme" src="docs/assets/screenshots/accounts-light.png"> |
 
 ---
 
