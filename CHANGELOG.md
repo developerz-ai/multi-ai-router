@@ -5,6 +5,29 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.14.0] — 2026-10-01
+
+Driven by a read of the 2.13.1 production log and database. (#135)
+
+### Fixed
+
+- **The CLI's refresh-lock contention is no longer read as a dead credential.** `claude` 2.1.286 has three spellings of "another Claude Code process is refreshing the token"; one contains "could not be refreshed" and classified as auth → `needs_reauth`, parking a healthy subscription until a human reconnected it, and another fell through as "a reason this router does not recognize". All three are now `claude-sdk:credential-refresh-contended`, a retryable `503`. "OAuth refresh token is no longer valid" stays auth.
+- **A body naming no model is an `invalid_request`, not a `translation_failed`.** Nothing was translated. An empty body now says so, and a `Content-Encoding` request body is refused before it is read with `415 unsupported_content_encoding` — the router routes on a byte sniff and will not decompress to do it. The `request failed` log line carries `content-type`, `content-encoding`, `content-length` and `user-agent`. **`router_requests_total` counts these refusals under `outcome="client_error"`, no longer `translation_failed`** — re-key any alert on the old label.
+- **The idle keepalive says why it failed.** A spent subscription window is `info`, not a reasonless `warn`, and the usage gauge is still read when the turn left the credential warm.
+- **A model listing that always fails no longer holds the head of the refresh batch**, and the log carries the reason. An endpoint with no `/models` (404/405) is a skip.
+- `claude-sonnet-5` priced at the published $2/$10 (was $3/$15).
+- The shutdown test pins Bun 1.4's `stop(true)` contract. (#118)
+
+### Added
+
+- **Claude 5.5 family:** price and context-window rows for `claude-opus-5-5`, `claude-sonnet-5-5` and `claude-fable-5-1`; the `opus` and `sonnet` listing aliases follow the bundled CLI's catalog. The model a client sends is still never rewritten.
+- `LOG_QUIET_PATHS` (default `/healthz,/readyz`): successful requests to these paths log at `debug`.
+
+### Changed
+
+- **Agent SDK 0.3.286 (bundled `claude` CLI 2.1.286).** Type surface additive only; the five-minute refresh lead and the `auth` command shapes re-verified against the new binary; the host-tool rejection gate untouched.
+- **Bun 1.4.2** (image, CI, `engines`). hono 4.13, zod 4.6, vite 8, happy-dom 20, biome 2.5.15, drizzle-orm 0.45.3. The idle probe model is `claude-haiku-4-5-20251001`. `@hono/zod-validator` removed (unused).
+
 ## [2.13.1] — 2026-09-16
 
 ### Changed
