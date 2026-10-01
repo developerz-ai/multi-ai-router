@@ -95,3 +95,57 @@ describe("the request-completed line", () => {
     expect(typeof line.durationMs).toBe("number")
   })
 })
+
+/**
+ * Probe traffic. Fourteen hours of production held ~10k `/healthz` + `/readyz` lines at `info`,
+ * burying the requests an operator opened the log to read.
+ */
+describe("quiet paths", () => {
+  function probe(status: 200 | 302 | 503, quietPaths?: readonly string[]) {
+    const lines: Record<string, unknown>[] = []
+    const log = createLogger({
+      level: "debug",
+      write: (line) => void lines.push(JSON.parse(line) as Record<string, unknown>),
+    })
+    const hono = new Hono<AppEnv>()
+    hono.use("*", requestLogger(log, quietPaths === undefined ? {} : { quietPaths }))
+    hono.get("/readyz", (c) => c.json({ ok: status < 400 }, status))
+    hono.get("/readyz/deep", (c) => c.json({ ok: true }))
+
+    return (path = "/readyz") =>
+      hono.request(path).then(() => lines.find((line) => line.msg === "request completed") ?? {})
+  }
+
+  test("a failing probe keeps its normal level — that line is the point", async () => {
+    const line = await probe(503, ["/readyz"])()
+
+    expect(line).toMatchObject({ level: "info", path: "/readyz", status: 503 })
+  })
+
+  test("a successful probe logs at debug", async () => {
+    expect(await probe(200, ["/healthz", "/readyz"])()).toMatchObject({ level: "debug" })
+    expect(await probe(302, ["/readyz"])()).toMatchObject({ level: "debug" })
+  })
+
+  test("the match is exact: a path that merely starts like a probe is ordinary traffic", async () => {
+    const line = await probe(200, ["/readyz"])("/readyz/deep")
+
+    expect(line).toMatchObject({ level: "info", path: "/readyz/deep" })
+  })
+
+  test("nothing is quiet unless configured", async () => {
+    expect(await probe(200)()).toMatchObject({ level: "info" })
+  })
+
+  test("at the default level a quiet probe emits no line at all", async () => {
+    const lines: string[] = []
+    const log = createLogger({ level: "info", write: (line) => void lines.push(line) })
+    const hono = new Hono<AppEnv>()
+    hono.use("*", requestLogger(log, { quietPaths: ["/healthz"] }))
+    hono.get("/healthz", (c) => c.json({ ok: true }))
+
+    await hono.request("/healthz")
+
+    expect(lines).toHaveLength(0)
+  })
+})

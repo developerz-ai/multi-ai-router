@@ -248,6 +248,7 @@ describe("createTestNowService — Agent-SDK accounts", () => {
       run: async () => ({
         ok: false,
         message: "the account's Claude subscription window is spent",
+        failureKind: "rate-limited",
         rateLimitInfos: [],
       }),
     }
@@ -258,6 +259,20 @@ describe("createTestNowService — Agent-SDK accounts", () => {
     if (!result.ok) return
     expect(result.value.outcome).toBe("failed")
     expect(result.value.message).toBe("the account's Claude subscription window is spent")
+    // The class comes through with the sentence — what the idle sweep reads instead of prose.
+    expect(result.value.failureKind).toBe("rate-limited")
+  })
+
+  test("a probe that named no failure class adds none of its own", async () => {
+    const probe: SdkTestProbe = {
+      run: async () => ({ ok: false, message: "ended without answering", rateLimitInfos: [] }),
+    }
+    const { service } = harness({ row: subscriptionRow(), sdkProbe: probe })
+
+    const result = await service.test("acc-1", { model: "claude-sonnet-4-5", confirmed: true })
+    if (!result.ok) throw new Error("expected a tested result")
+    expect(result.value.outcome).toBe("failed")
+    expect("failureKind" in result.value).toBe(false)
   })
 
   test("refuses by name when no probe is configured, even when confirmed", async () => {

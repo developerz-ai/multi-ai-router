@@ -3,9 +3,9 @@ import type { Logger } from "../logging/logger"
 import type { AppEnv } from "../types"
 
 /**
- * Binds a request-scoped logger onto the context and writes one `info` line per completed
- * request. A request that throws is logged by the error handler instead, which is the only
- * place that knows the status it ended on.
+ * Binds a request-scoped logger onto the context and writes one line per completed request —
+ * `info`, or `debug` for a probe path that answered normally. A request that throws is also logged
+ * by the error handler, which is the place that knows why it failed.
  */
 
 /**
@@ -37,17 +37,52 @@ const LOGGED_HEADERS: readonly string[] = [
 /** Long enough for a uuid and a build string, short enough that nothing can flood a line. */
 const MAX_HEADER_LENGTH = 200
 
-/** The logged headers this request actually carried. Absent ones are absent, never null. */
-function clientContext(headers: Headers): Record<string, string> {
+/**
+ * What a *failed* request additionally says about the body it carried — the four facts that tell an
+ * empty body from a compressed one from a client that sent a form. A week of identical
+ * "must name a model" refusals from one key was undiagnosable without them. On the failure line
+ * only: `user-agent` on every completed line is volume for nothing.
+ *
+ * Same allowlist rule as above — none of these carries a credential, and nothing unnamed is read.
+ */
+const FAILURE_HEADERS: readonly string[] = [
+  ...LOGGED_HEADERS,
+  "content-type",
+  "content-encoding",
+  "content-length",
+  "user-agent",
+]
+
+/** The named headers this request actually carried. Absent ones are absent, never null. */
+function headerContext(headers: Headers, names: readonly string[]): Record<string, string> {
   const context: Record<string, string> = {}
-  for (const name of LOGGED_HEADERS) {
+  for (const name of names) {
     const value = headers.get(name)?.trim()
     if (value !== undefined && value.length > 0) context[name] = value.slice(0, MAX_HEADER_LENGTH)
   }
   return context
 }
 
-export function requestLogger(base: Logger): MiddlewareHandler<AppEnv> {
+/** The context of the `request failed` line (`errorHandler.ts`). */
+export function failureContext(headers: Headers): Record<string, string> {
+  return headerContext(headers, FAILURE_HEADERS)
+}
+
+export interface RequestLoggerOptions {
+  /**
+   * `LOG_QUIET_PATHS`: exact paths whose *successful* completions log at `debug`. A liveness probe
+   * every few seconds is thousands of identical lines a day, and they bury the traffic an operator
+   * opened the log to read. A probe that fails keeps its normal level — that line is the point.
+   */
+  readonly quietPaths?: readonly string[]
+}
+
+export function requestLogger(
+  base: Logger,
+  options: RequestLoggerOptions = {},
+): MiddlewareHandler<AppEnv> {
+  const quiet = new Set(options.quietPaths ?? [])
+
   return async (c, next) => {
     const log = base.child({ component: "transport", requestId: c.get("requestId") })
     c.set("log", log)
@@ -55,12 +90,14 @@ export function requestLogger(base: Logger): MiddlewareHandler<AppEnv> {
     const startedAt = performance.now()
     await next()
 
-    log.info("request completed", {
+    const status = c.res.status
+    const level = status < 400 && quiet.has(c.req.path) ? "debug" : "info"
+    log[level]("request completed", {
       method: c.req.method,
       path: c.req.path,
-      status: c.res.status,
+      status,
       durationMs: Math.round(performance.now() - startedAt),
-      ...clientContext(c.req.raw.headers),
+      ...headerContext(c.req.raw.headers, LOGGED_HEADERS),
     })
   }
 }

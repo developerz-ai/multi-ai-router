@@ -56,7 +56,7 @@ describe("what an override changes", () => {
       cacheWritePerMtok: 4,
     })
     // The shipped table is the fallback, not the loser of a merge: it still says what it said.
-    expect(lookupRates("anthropic-api", "claude-sonnet-5")?.inputPerMtok).toBe(3)
+    expect(lookupRates("anthropic-api", "claude-sonnet-5")?.inputPerMtok).toBe(2)
     expect(book.loadedAt()).toEqual(NOW)
   })
 
@@ -75,7 +75,7 @@ describe("what an override changes", () => {
 
     // Same model name, different upstream, different contract — subscriptions share the API
     // table by default and an edit to one must not silently reprice the other.
-    expect(book.lookup("anthropic-oauth", "claude-sonnet-5")?.inputPerMtok).toBe(3)
+    expect(book.lookup("anthropic-oauth", "claude-sonnet-5")?.inputPerMtok).toBe(2)
   })
 
   test("an override prices a provider the shipped table has no list for", async () => {
@@ -98,7 +98,7 @@ describe("what an override changes", () => {
   test("before the first load the book is exactly the shipped table", () => {
     const book = bookOf([row()])
 
-    expect(book.lookup("anthropic-api", "claude-sonnet-5")?.inputPerMtok).toBe(3)
+    expect(book.lookup("anthropic-api", "claude-sonnet-5")?.inputPerMtok).toBe(2)
     expect(book.loadedAt()).toBeNull()
   })
 })

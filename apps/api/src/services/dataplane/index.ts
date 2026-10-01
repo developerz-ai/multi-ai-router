@@ -37,6 +37,12 @@ export {
   type VerifiedKey,
 } from "./auth/verifier"
 export {
+  missingModelError,
+  modelTooLongError,
+  refuseEncodedBody,
+  requestContentEncoding,
+} from "./body/preflight"
+export {
   type BodyReadOptions,
   DEFAULT_MAX_BODY_BYTES,
   declaredBodyBytes,

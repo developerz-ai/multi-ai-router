@@ -89,7 +89,7 @@ describe("GET /v1/models on a pool of Claude subscriptions", () => {
       object: "model",
       created: expect.any(Number),
       owned_by: "anthropic-oauth",
-      resolved_model: "claude-sonnet-5",
+      resolved_model: "claude-sonnet-5-5",
     })
     expect(body.data.find((row) => row.id === "fable")?.resolved_model).toBe("claude-fable-5-1")
     expect(body.data.find((row) => row.id === "claude-opus-5")).not.toHaveProperty("resolved_model")
@@ -105,7 +105,7 @@ describe("GET /v1/models on a pool of Claude subscriptions", () => {
 
     expect(body.has_more).toBe(false)
     expect(body.data.every((row) => row.type === "model")).toBe(true)
-    expect(body.data.find((row) => row.id === "opus")?.resolved_model).toBe("claude-opus-5")
+    expect(body.data.find((row) => row.id === "opus")?.resolved_model).toBe("claude-opus-5-5")
   })
 
   test("GET /v1/models/:id resolves an alias the same way", async () => {
@@ -199,7 +199,7 @@ describe("GET /v1/models on a pool of Claude subscriptions", () => {
     expect(body.data.find((row) => row.id === "sonnet")?.resolved_model).toBe("claude-sonnet-6")
     for (const alias of ["opus", "fable", "haiku", "claude-fable-5-1"]) expect(ids).toContain(alias)
     expect(new Set(ids).size).toBe(ids.length)
-    // The SDK's resolution, not the shipped map's `claude-sonnet-5`.
+    // The SDK's resolution, not the shipped map's `claude-sonnet-5-5`.
     expect(body.data.find((row) => row.id === "sonnet")?.resolved_model).toBe("claude-sonnet-6")
   })
 

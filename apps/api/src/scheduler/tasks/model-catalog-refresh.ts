@@ -57,6 +57,12 @@ export interface ModelCatalogRefreshDeps {
 const STARTUP_DELAY_MS = 30_000
 
 export function createModelCatalogRefreshTask(deps: ModelCatalogRefreshDeps): ScheduledTask {
+  // When each account was last asked *in vain*. `refreshed_at` only moves on a write, so without
+  // this an endpoint that never lists sorts first on every tick and, a batch's worth of them
+  // later, is all the sweep ever asks (`select.ts`). In memory and per replica on purpose: losing
+  // it on restart costs one extra ask per such account, which no column is worth.
+  const attempts = new Map<string, Date>()
+
   return {
     name: "model_catalog_refresh",
     intervalMs: deps.intervalMs,
@@ -71,7 +77,12 @@ export function createModelCatalogRefreshTask(deps: ModelCatalogRefreshDeps): Sc
       ])
       // Most stale first, capped at the batch, non-refreshable accounts already dropped. The
       // ordering is what makes the cap a rate limit rather than a horizon — see `select.ts`.
-      const due = selectForRefresh(accounts, ages, deps.batchSize)
+      // Bounded by the fleet: an account that was deleted takes its entry with it.
+      const present = new Set(accounts.map((account) => account.id))
+      for (const id of attempts.keys()) {
+        if (!present.has(id)) attempts.delete(id)
+      }
+      const due = selectForRefresh(accounts, ages, deps.batchSize, attempts)
       const tally = { refreshed: 0, models: 0, skipped: 0, failed: 0 }
 
       for (const account of due) {
@@ -82,10 +93,13 @@ export function createModelCatalogRefreshTask(deps: ModelCatalogRefreshDeps): Sc
 
         const outcome = await deps.refresh(account, now)
         if (outcome.kind === "refreshed") {
+          // The write moved `refreshed_at`, which now orders this account by itself.
+          attempts.delete(account.id)
           tally.refreshed += 1
           tally.models += outcome.models
           continue
         }
+        attempts.set(account.id, now)
         if (outcome.kind === "skipped") {
           tally.skipped += 1
           // Info, not warn: a skip is the refresh declining to ask — a subscription with no config
@@ -94,6 +108,7 @@ export function createModelCatalogRefreshTask(deps: ModelCatalogRefreshDeps): Sc
             accountId: account.id,
             provider: account.provider,
             reason: outcome.reason,
+            detail: outcome.detail,
           })
           continue
         }
@@ -106,6 +121,8 @@ export function createModelCatalogRefreshTask(deps: ModelCatalogRefreshDeps): Sc
           accountId: account.id,
           provider: account.provider,
           reason: outcome.reason,
+          // The stable code groups; this is what tells a dead credential from a wrong base URL.
+          detail: outcome.detail,
         })
       }
 

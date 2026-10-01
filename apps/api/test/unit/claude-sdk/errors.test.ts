@@ -248,6 +248,10 @@ describe("classifying an Agent-SDK failure", () => {
     expect(classification.status).toBe(502)
     expect(classification.signal).toBe("claude-sdk:unclassified")
     expect(clientMessage).not.toContain("sideways")
+    // The flag and the chain agree: an unreadable failure is one account failing, and the `502`
+    // reads as `server-error`, so the next account gets its turn.
+    expect(classification.retryable).toBe(true)
+    expect(failoverKind(classification.kind, classification.status)).toBe("server-error")
   })
 
   test("the client sentence is router-authored and the SDK's own words stay in the log field", () => {

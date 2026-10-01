@@ -316,6 +316,28 @@ describe("what the probe reports back", () => {
     // The dispatch path's own wording for the same condition — one condition, one sentence.
     expect(result.message).toBe("the account's Claude subscription window is spent")
     expect(result.message).not.toContain("(success)")
+    // The class rides beside the sentence, so the idle sweep never has to match on prose.
+    expect(result.failureKind).toBe("rate-limited")
+  })
+
+  /** Verbatim from production (v2.13.1), where it rendered as "a reason this router does not recognize". */
+  test("a refresh that lost the CLI's lock reads as transient, not as unrecognized or as re-auth", async () => {
+    const said =
+      "Failed to refresh OAuth token: another Claude Code process is refreshing it or exited mid-refresh. This is usually transient; retry in a minute, and if it persists close other Claude Code processes or sign in again"
+    const result = await run([erroredResult(said)])
+
+    expect(result.ok).toBe(false)
+    expect(result.message).toBe(
+      "the account's Claude credential was being refreshed by another process; retry shortly",
+    )
+    expect(result.message).not.toContain("does not recognize")
+    expect(result.message).not.toContain("re-authenticating")
+    expect(result.failureKind).toBe("server-error")
+    expect(result.reasonDetail).toContain("another Claude Code process is refreshing it")
+  })
+
+  test("a success names no failure class", async () => {
+    expect((await run([pong()])).failureKind).toBeUndefined()
   })
 
   /**

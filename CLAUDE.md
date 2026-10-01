@@ -37,7 +37,7 @@ Full data plane shipped: accounts, pools, keys, `/v1/messages` + `/v1/chat/compl
 
 | Concern | Choice |
 |---|---|
-| Runtime | Bun 1.3+ |
+| Runtime | Bun 1.4+ |
 | Language | TypeScript strict, no `any` |
 | HTTP | Hono |
 | Validation | Zod at every external boundary (requests, env, provider responses) |

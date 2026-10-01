@@ -166,6 +166,22 @@ describe("reading a provider's model listing", () => {
     expect(result.ok).toBe(false)
     if (result.ok) return
     expect(result.code).toBe("discovery_failed")
+    expect(result.status).toBe(401)
+    expect(result.message).toContain("401")
+  })
+
+  test("a failure before any answer carries no status, rather than a made-up one", async () => {
+    const result = await listUpstreamModels(
+      deps(async () => {
+        throw new TypeError("fetch failed")
+      }),
+      accountRow(),
+    )
+
+    expect(result.ok).toBe(false)
+    if (result.ok) return
+    expect(result.code).toBe("discovery_failed")
+    expect(result.status).toBeUndefined()
   })
 
   test("a provider with no HTTP driver is refused before any socket opens", async () => {

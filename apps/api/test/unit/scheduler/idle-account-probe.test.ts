@@ -1,8 +1,8 @@
 import { describe, expect, test } from "bun:test"
 import type { AccountRow } from "@multi-ai-router/db"
 import { createLogger } from "../../../src/logging/logger"
-import type { SdkUsageGaugeProbeOutcome } from "../../../src/providers"
-import { createIdleAccountProbeTask } from "../../../src/scheduler"
+import type { SdkUsageGaugeProbeOutcome, UpstreamFailureKind } from "../../../src/providers"
+import { createIdleAccountProbeTask, IDLE_PROBE_MODELS } from "../../../src/scheduler"
 import type { ClaudeAuthReport } from "../../../src/services/health/claudeAuthProbe"
 
 /**
@@ -48,6 +48,11 @@ interface HarnessOptions {
   /** One answer for every account, or a per-id map. Absent means no CLI: no free check at all. */
   readonly loggedIn?: boolean | Readonly<Record<string, boolean | null>>
   readonly outcome?: "ok" | "failed"
+  /** What a failed test said, and the class it named. */
+  readonly message?: string
+  readonly failureKind?: UpstreamFailureKind
+  /** Ids the turn itself warms: cold when first asked, warm once tested — whatever the turn answered. */
+  readonly warmedByTurn?: readonly string[]
   readonly tested?: boolean
   readonly aborted?: boolean
   readonly batchSize?: number
@@ -84,6 +89,8 @@ function harness(options: HarnessOptions) {
       return {
         tested: options.tested ?? true,
         ...(options.outcome === undefined ? {} : { outcome: options.outcome }),
+        ...(options.message === undefined ? {} : { message: options.message }),
+        ...(options.failureKind === undefined ? {} : { failureKind: options.failureKind }),
       }
     },
     ...(options.loggedIn === undefined
@@ -106,7 +113,14 @@ function harness(options: HarnessOptions) {
     warmCredentials: options.warmCredentials ?? true,
     ...(options.cold === undefined
       ? {}
-      : { cold: async (account: AccountRow) => options.cold?.includes(account.id) ?? false }),
+      : {
+          cold: async (account: AccountRow) => {
+            const refreshed =
+              options.warmedByTurn?.includes(account.id) === true &&
+              tested.some((entry) => entry.accountId === account.id)
+            return !refreshed && (options.cold?.includes(account.id) ?? false)
+          },
+        }),
   })
 
   const logs: { msg: string; level: string; fields: Record<string, unknown> }[] = []
@@ -341,11 +355,68 @@ describe("the billed keepalive over idle accounts", () => {
 
     const result = await run()
 
-    // The test already fed the breaker; the sweep ran to completion and says so.
+    // Nothing here writes a status; the sweep ran to completion and says so.
     expect(result.outcome).toBe("success")
     const line = logs.find((entry) => entry.msg.includes("failed its keepalive"))
     expect(line?.level).toBe("warn")
     expect(line?.fields.accountId).toBe("acc-1")
+  })
+
+  test("a failed keepalive's warn line says why — the reason and the class, not just the fact", async () => {
+    const { run, logs } = harness({
+      idle: [account()],
+      loggedIn: true,
+      outcome: "failed",
+      message: "the Claude Agent SDK subprocess exited before answering",
+      failureKind: "subprocess-crash",
+    })
+
+    await run()
+
+    const line = logs.find((entry) => entry.msg.includes("failed its keepalive"))
+    expect(line?.level).toBe("warn")
+    expect(line?.fields.reason).toBe("the Claude Agent SDK subprocess exited before answering")
+    expect(line?.fields.failureKind).toBe("subprocess-crash")
+  })
+
+  test("a failure that gave no reason still says so, rather than logging nothing", async () => {
+    const { run, logs } = harness({ idle: [account()], loggedIn: true, outcome: "failed" })
+
+    await run()
+
+    const line = logs.find((entry) => entry.msg.includes("failed its keepalive"))
+    expect(line?.fields.reason).toBe("the test gave no reason")
+    expect("failureKind" in (line?.fields ?? {})).toBe(false)
+  })
+
+  /** Production, v2.13.1: "You've hit your weekly limit · resets …" logged as a bare warn, daily. */
+  test("a spent subscription window is an expected outcome: info, with the reason, never a warn", async () => {
+    const { run, logs } = harness({
+      idle: [account()],
+      loggedIn: true,
+      outcome: "failed",
+      message: "the account's Claude subscription window is spent",
+      failureKind: "rate-limited",
+    })
+
+    const result = await run()
+
+    expect(result.outcome).toBe("success")
+    expect(logs.some((entry) => entry.msg.includes("failed its keepalive"))).toBe(false)
+    expect(logs.some((entry) => entry.level === "warn")).toBe(false)
+    const line = logs.find((entry) => entry.msg.includes("subscription window spent"))
+    expect(line?.level).toBe("info")
+    expect(line?.fields.reason).toBe("the account's Claude subscription window is spent")
+    const summary = logs.find((entry) => entry.msg === "idle account probe")
+    expect(summary?.fields.spent).toBe(1)
+    expect(summary?.fields.failed).toBe(0)
+  })
+})
+
+describe("the probe models the sweep names for itself", () => {
+  test("Anthropic accounts are probed with the cheapest current model, pinned by dated id", () => {
+    expect(IDLE_PROBE_MODELS["anthropic-oauth"]).toBe("claude-haiku-4-5-20251001")
+    expect(IDLE_PROBE_MODELS["anthropic-api"]).toBe("claude-haiku-4-5-20251001")
   })
 })
 
@@ -614,5 +685,77 @@ describe("the credential keepalive", () => {
     await h.run()
 
     expect(h.tested).toEqual([])
+  })
+})
+
+describe("a keepalive turn answered by a spent window", () => {
+  const spent = {
+    outcome: "failed",
+    message: "the account's Claude subscription window is spent",
+    failureKind: "rate-limited",
+  } as const
+
+  test("still cold afterwards: the gauge stays unread, exactly as for any failed turn", async () => {
+    const gauged: string[] = []
+    const h = harness({
+      idle: [],
+      all: [account({ id: "cold" })],
+      loggedIn: true,
+      cold: ["cold"],
+      ...spent,
+      usage: async (row) => {
+        gauged.push(row.id)
+        return "read"
+      },
+    })
+
+    await h.run()
+
+    expect(h.tested).toHaveLength(1)
+    expect(gauged).toEqual([])
+  })
+
+  test("warm afterwards — the process refreshed before it was refused — so the gauge is read", async () => {
+    const gauged: string[] = []
+    const h = harness({
+      idle: [],
+      all: [account({ id: "cold" })],
+      loggedIn: true,
+      cold: ["cold"],
+      warmedByTurn: ["cold"],
+      ...spent,
+      usage: async (row) => {
+        gauged.push(row.id)
+        return "read"
+      },
+    })
+
+    const outcome = await h.run()
+
+    expect(outcome.outcome).toBe("success")
+    // One turn, never a second: a spent window is not retried by the sweep.
+    expect(h.tested).toHaveLength(1)
+    expect(gauged).toEqual(["cold"])
+  })
+
+  test("a turn that failed for any other reason is not re-asked, warm or not", async () => {
+    const gauged: string[] = []
+    const h = harness({
+      idle: [],
+      all: [account({ id: "cold" })],
+      loggedIn: true,
+      cold: ["cold"],
+      warmedByTurn: ["cold"],
+      outcome: "failed",
+      failureKind: "server-error",
+      usage: async (row) => {
+        gauged.push(row.id)
+        return "read"
+      },
+    })
+
+    await h.run()
+
+    expect(gauged).toEqual([])
   })
 })

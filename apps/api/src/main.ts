@@ -72,6 +72,7 @@ async function main(): Promise<void> {
 
   const app = createApp({
     logger,
+    logQuietPaths: env.logQuietPaths,
     probes: {
       database: createDatabaseProbe({ handle: database, log: logger }),
       // Reads the same warm state the request path reads, so the endpoint cannot
@@ -131,7 +132,7 @@ async function main(): Promise<void> {
  * The latch is set the instant the signal arrives, so the endpoint is honest from that moment — but
  * an honest answer only helps somebody who can still ask. Once `Bun.serve().stop()` runs the
  * listener refuses new connections *and* stops dispatching on the keep-alive connections it already
- * had (measured against bun 1.3), so without this window the flip has nobody left to tell.
+ * had (measured against bun 1.3, re-measured on 1.4.0), so without this window the flip has nobody left to tell.
  *
  * Zero by default and therefore skipped entirely: the bundled compose deployment has no readiness
  * gate, and a wait that helps nobody there is just a slower shutdown.

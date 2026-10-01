@@ -5,8 +5,8 @@ import type { UpstreamFailureKind } from "../types"
  * the `claude` CLI says, in order, most specific first. `errors.ts` walks it; this file is only
  * the vocabulary, kept apart so the table can grow without the walker growing with it.
  *
- * Provenance: every phrase is the CLI's own wording — recorded from the 0.3.220 and 0.3.261
- * binaries' string tables, from Meridian's production matching, and from this router's own
+ * Provenance: every phrase is the CLI's own wording — recorded from the 0.3.220, 0.3.261 and
+ * 0.3.286 binaries' string tables, from Meridian's production matching, and from this router's own
  * production logs. Blast radius: a phrase the CLI rewords stops matching and its class degrades to
  * `unknown` — a `502` and a failover, never a silent mislabel. That is why the fallback is honest
  * rather than convenient, and why a reworded rate limit must never quietly become an auth failure.
@@ -276,12 +276,42 @@ export const SDK_FAILURE_RULES: readonly SdkRule[] = [
     ),
   },
   {
+    // The CLI could not take its own credential-refresh lock: "Failed to refresh OAuth token:
+    // another Claude Code process is refreshing it or exited mid-refresh. This is usually
+    // transient; retry in a minute, and if it persists close other Claude Code processes or sign
+    // in again" (production, v2.13.1 — the SDK reports it as `server_error`, not
+    // `authentication_failed`). The 2.1.286 string table has two more spellings of the same
+    // condition: "Could not refresh your login because another Claude Code process is refreshing
+    // it (or exited mid-refresh)" and "OAuth access token could not be refreshed: another Claude
+    // Code process is holding the refresh lock".
+    //
+    // Ordered ahead of `credential-expired` because that last spelling contains "could not be
+    // refreshed" and would otherwise park a live subscription `needs_reauth` over a lock. The
+    // credential is not dead and nobody has to log in: the token is the CLI's to refresh
+    // (non-negotiables 1 and 13), and the next process to take the lock does. `server-error`, so
+    // the chain rotates and a clock — never a human — brings the account back. Matched on the
+    // contention half only: a bare "failed to refresh" says nothing about *why*, and the dead
+    // variants ("OAuth refresh token is no longer valid") must stay auth.
+    kind: "server-error",
+    signal: "claude-sdk:credential-refresh-contended",
+    status: 503,
+    clientMessage:
+      "the account's Claude credential was being refreshed by another process; retry shortly",
+    match: phrase(
+      "another claude code process is refreshing",
+      "exited mid-refresh",
+      "holding the refresh lock",
+    ),
+  },
+  {
     // Every spelling the CLI has for a credential that no longer works, from the 0.3.220 and
     // 2.1.261 string tables: "OAuth token has expired", "Failed to authenticate: OAuth session
     // expired and could not be refreshed" (production, 2026-09-05 — the refresh token's 30-day
     // hard expiry), "Not logged in · Please run /login", "API Error: 401 Invalid API key · Please
-    // run /login", "Session expired. Please run /login". `authentication failed` is read from the
-    // message only: the same words describe an MCP server's own trouble on stderr.
+    // run /login", "Session expired. Please run /login"; and from 2.1.286, "OAuth refresh token is
+    // no longer valid; run /login to re-authenticate" — the dead half of a failed refresh, where
+    // the contended half is the rule above. `authentication failed` is read from the message
+    // only: the same words describe an MCP server's own trouble on stderr.
     kind: "auth",
     signal: "claude-sdk:credential-expired",
     status: 401,
@@ -291,6 +321,7 @@ export const SDK_FAILURE_RULES: readonly SdkRule[] = [
         "oauth token has expired",
         "oauth session expired",
         "could not be refreshed",
+        "refresh token is no longer valid",
         "not logged in",
         "failed to authenticate",
         "please run /login",

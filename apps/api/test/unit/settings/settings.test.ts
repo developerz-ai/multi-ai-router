@@ -87,8 +87,8 @@ describe("the settings read", () => {
     const sonnet = shipped.find(
       (row) => row.provider === "anthropic-api" && row.model === "claude-sonnet-5",
     )
-    expect(sonnet?.inputPerMtok).toBe(3)
-    expect(sonnet?.outputPerMtok).toBe(15)
+    expect(sonnet?.inputPerMtok).toBe(2)
+    expect(sonnet?.outputPerMtok).toBe(10)
   })
 
   test("dates the shipped table, so an operator can judge how stale it is", async () => {

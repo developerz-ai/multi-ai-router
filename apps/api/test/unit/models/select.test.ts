@@ -68,6 +68,57 @@ describe("choosing the accounts one catalog tick refreshes", () => {
     expect(selectForRefresh(accounts, [], 2).map((a) => a.id)).toEqual(["real"])
   })
 
+  /**
+   * The starvation one level down. An account whose listing always fails is refreshable, so the
+   * filter keeps it — and it never acquires a `refreshed_at`, so on the write time alone it sorts
+   * first every tick. A batch's worth of them and no other account is ever asked again.
+   */
+  test("accounts asked in vain do not hold the front of the queue", () => {
+    const accounts = [account("dead-1"), account("dead-2"), account("real-1"), account("real-2")]
+    const ages = [
+      age("real-1", "2026-07-28T10:00:00.000Z"),
+      age("real-2", "2026-07-28T10:30:00.000Z"),
+    ]
+    const attempts = new Map([
+      ["dead-1", AT("2026-07-28T11:00:00.000Z")],
+      ["dead-2", AT("2026-07-28T11:00:00.000Z")],
+    ])
+
+    // Without the attempts, the two that never answer take the whole batch — the bug.
+    expect(selectForRefresh(accounts, ages, 2).map((a) => a.id)).toEqual(["dead-1", "dead-2"])
+    // With them, the accounts that have waited longest go first.
+    expect(selectForRefresh(accounts, ages, 2, attempts).map((a) => a.id)).toEqual([
+      "real-1",
+      "real-2",
+    ])
+  })
+
+  test("a catalog that used to refresh and now fails rotates too, on its last attempt", () => {
+    const accounts = [account("broke"), account("fine")]
+    const ages = [age("broke", "2026-07-01T00:00:00.000Z"), age("fine", "2026-07-28T10:00:00.000Z")]
+    const attempts = new Map([["broke", AT("2026-07-28T11:00:00.000Z")]])
+
+    expect(selectForRefresh(accounts, ages, 1, attempts).map((a) => a.id)).toEqual(["fine"])
+  })
+
+  test("an attempt older than the last write does not make a fresh catalog look stale", () => {
+    const accounts = [account("recovered"), account("other")]
+    const ages = [
+      age("recovered", "2026-07-28T11:00:00.000Z"),
+      age("other", "2026-07-28T10:00:00.000Z"),
+    ]
+    const attempts = new Map([["recovered", AT("2026-07-20T00:00:00.000Z")]])
+
+    expect(selectForRefresh(accounts, ages, 1, attempts).map((a) => a.id)).toEqual(["other"])
+  })
+
+  test("an account never asked still outranks one asked in vain", () => {
+    const accounts = [account("failing"), account("brand-new")]
+    const attempts = new Map([["failing", AT("2026-07-28T11:00:00.000Z")]])
+
+    expect(selectForRefresh(accounts, [], 1, attempts).map((a) => a.id)).toEqual(["brand-new"])
+  })
+
   /** A subscription's catalog comes from the Agent SDK's handshake, and the sweep asks for it too. */
   test("a healthy Claude subscription takes its turn like any HTTP account", () => {
     const accounts = [account("sub", { provider: "anthropic-oauth" }), account("real")]

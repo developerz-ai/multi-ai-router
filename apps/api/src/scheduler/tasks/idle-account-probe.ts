@@ -1,7 +1,7 @@
 import { describeError } from "@multi-ai-router/core"
 import type { AccountRepository, AccountRow } from "@multi-ai-router/db"
 import type { Logger } from "../../logging/logger"
-import type { SdkUsageGaugeProbeOutcome } from "../../providers"
+import type { SdkUsageGaugeProbeOutcome, UpstreamFailureKind } from "../../providers"
 import type { AccountAuthProbe } from "../../services/health/claudeAuthProbe"
 import type { ScheduledTask, TaskOutcome } from "../types"
 import { isCold, keepAlive, readUsage, type Tally, warm } from "./idle-account-warmth"
@@ -35,8 +35,10 @@ import { isCold, keepAlive, readUsage, type Tally, warm } from "./idle-account-w
  * reconnected accounts. With the flag off the sweep bills nothing on any provider. With it on, a
  * dead credential still ends the run for that account: the test would fail, for a reason a human
  * already has to fix, and billing a turn to re-learn that is spending money to confirm a fact we
- * hold. Testing an account counts as using it, so each account is billed about once per idle
- * window, not once per tick.
+ * hold. A test does **not** count as use: nothing on that path stamps `lastUsedAt` (only a usage
+ * record does, and a probe writes none), so an account traffic has forgotten stays idle and is
+ * billed again on every tick it is still idle — bounded by `batchSize` and the test's own cooldown,
+ * not by the idle window.
  *
  * **The free half also reads the usage gauge** for every logged-in subscription, through a
  * turn-free query (`providers/claude-sdk/usage-gauge-probe.ts`): the console's per-window
@@ -73,15 +75,34 @@ import { isCold, keepAlive, readUsage, type Tally, warm } from "./idle-account-w
  * substitutes one. The rule holds — nothing here touches a client request. A keepalive has no
  * client to ask, so it either names a model or cannot exist. A provider absent from this map is
  * **not probed at all**, which is the honest failure.
+ *
+ * Provenance (Anthropic rows): `claude-haiku-4-5-20251001`, the cheapest model in Anthropic's
+ * current lineup as of 2026-10-01 — a keepalive asks for one word, so the cheapest model that
+ * answers is the right one. Pinned to the dated id rather than an alias so a probe never silently
+ * moves to a pricier model. Blast radius: when Anthropic retires the id the keepalive turn fails
+ * (logged per account), cold credentials stop being warmed and their gauges go stale — no client
+ * request is affected. Replace it here, with the then-cheapest id.
  */
 export const IDLE_PROBE_MODELS: Readonly<Record<string, string>> = {
-  "anthropic-oauth": "claude-sonnet-4-5-20250929",
-  "anthropic-api": "claude-sonnet-4-5-20250929",
+  "anthropic-oauth": "claude-haiku-4-5-20251001",
+  "anthropic-api": "claude-haiku-4-5-20251001",
   "openai-oauth": "gpt-5",
   "openai-api": "gpt-5",
   minimax: "MiniMax-M2",
   zai: "glm-4.6",
   kimi: "k2",
+}
+
+/**
+ * What the sweep reads off one test. `message` is the test's own router-authored sentence and
+ * `failureKind` its class — carried so a failed keepalive's log line says why, and so a spent
+ * window (expected; a clock fixes it) is told apart from a turn that broke.
+ */
+export interface IdleProbeTestResult {
+  readonly tested: boolean
+  readonly outcome?: "ok" | "failed"
+  readonly message?: string
+  readonly failureKind?: UpstreamFailureKind
 }
 
 export interface IdleAccountProbeDeps {
@@ -91,10 +112,7 @@ export interface IdleAccountProbeDeps {
    * hand does not get a second charge from this task — the refusal comes back as `tested: false`
    * and is counted as a skip, not a failure.
    */
-  readonly test: (
-    accountId: string,
-    model: string,
-  ) => Promise<{ readonly tested: boolean; readonly outcome?: "ok" | "failed" }>
+  readonly test: (accountId: string, model: string) => Promise<IdleProbeTestResult>
   /**
    * The free half. Answers `null` for an account with no CLI-managed credential, so it is asked of
    * every account and only the subscriptions cost a subprocess. Absent means no CLI is available:
@@ -144,6 +162,7 @@ export function createIdleAccountProbeTask(deps: IdleAccountProbeDeps): Schedule
         reauthorized: 0,
         gauged: 0,
         probed: 0,
+        spent: 0,
         warmed: 0,
         cold: 0,
         refreshed: 0,
@@ -167,7 +186,13 @@ export function createIdleAccountProbeTask(deps: IdleAccountProbeDeps): Schedule
             // a turn-free read touch the directory. A cold account that could not be warmed is
             // left alone entirely — `openIdleQuery` would refuse it anyway.
             if (await isCold(deps, account, logger)) {
-              if (!(await warm(deps, account, logger, tally))) continue
+              const warmed = await warm(deps, account, logger, tally)
+              // A spent window fails the *turn*, not the refresh: the process ran to completion,
+              // so the credential may well be warm now — and a spent account's gauge is the one
+              // an operator most wants read. Asked again rather than assumed.
+              const usable =
+                warmed === "ok" || (warmed === "spent" && !(await isCold(deps, account, logger)))
+              if (!usable) continue
             }
             await readUsage(deps, account, logger, tally)
           }

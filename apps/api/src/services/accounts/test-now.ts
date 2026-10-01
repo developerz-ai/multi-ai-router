@@ -1,7 +1,7 @@
 import { type Dialect, isRouterError, type OpenAiChatCeiling } from "@multi-ai-router/core"
 import type { AccountRepository, AccountRow } from "@multi-ai-router/db"
 import type { Logger } from "../../logging/logger"
-import type { RateLimitSignal } from "../../providers"
+import type { RateLimitSignal, UpstreamFailureKind } from "../../providers"
 import {
   type DriverAccount,
   httpDriver,
@@ -62,6 +62,11 @@ export interface TestNowResult {
    * `FailureClassification.signal` — never a raw upstream body, a path, or a session id.
    */
   readonly message?: string
+  /**
+   * The failure's class, when the attempt named one — the shared routing vocabulary, so a caller
+   * (the idle sweep) can tell a spent window from a broken turn without reading `message`'s prose.
+   */
+  readonly failureKind?: UpstreamFailureKind
   readonly latencyMs?: number
 }
 
@@ -190,6 +195,7 @@ export function createTestNowService(deps: TestNowServiceDeps): TestNowService {
         tested: true,
         outcome: outcome.ok ? "ok" : "failed",
         message: outcome.message,
+        ...(outcome.failureKind === undefined ? {} : { failureKind: outcome.failureKind }),
         latencyMs,
       })
     },
@@ -201,6 +207,7 @@ interface ProbeOutcome {
   readonly message: string
   /** Raw upstream text, for the log only. Never rendered into the response. */
   readonly detail?: string
+  readonly failureKind?: UpstreamFailureKind
 }
 
 async function runSdkProbe(
@@ -254,6 +261,7 @@ async function runSdkProbe(
     ok: result.ok,
     message: result.message,
     ...(result.reasonDetail === undefined ? {} : { detail: result.reasonDetail }),
+    ...(result.failureKind === undefined ? {} : { failureKind: result.failureKind }),
   }
 }
 
@@ -324,6 +332,9 @@ async function runHttpProbe(
   return {
     ok: false,
     message: outcome.classification?.signal ?? `upstream attempt failed (${outcome.failure.kind})`,
+    ...(outcome.classification?.kind === undefined
+      ? {}
+      : { failureKind: outcome.classification.kind }),
   }
 }
 

@@ -1,8 +1,8 @@
-import { type RouterError, TranslationError } from "@multi-ai-router/core"
+import type { RouterError } from "@multi-ai-router/core"
 import { type FailoverOptions, selectAccounts } from "../routing"
 import { clientRequestIdFrom, correlationIdFrom } from "../usage"
+import { missingModelError, modelTooLongError, refuseEncodedBody } from "./body/preflight"
 import { readRequestBody } from "./body/read"
-import { MODEL_NAME_MAX_BYTES } from "./body/scanner"
 import { DEFAULT_SESSION_HEADERS, resolveSessionKey } from "./body/session"
 import { runChain } from "./chain"
 import type { Dispatcher, DispatcherDeps, DispatchInput } from "./dispatcher-config"
@@ -35,8 +35,8 @@ import { unservableError } from "./unservable"
  * attempt that failed before selection has no account, and the spec wants that row anyway, because
  * "nothing in this key's scope" is exactly the kind of failure an operator needs to see counted.
  * The refusals *before* a model exists write none, deliberately: `UsageRecord.model` is
- * non-nullable by design, so a row for a key over its ceiling, an unreadable body, or a body that
- * names no model (or one too long to be one) would have to claim a model nobody named. Those
+ * non-nullable by design, so a row for a key over its ceiling, an unreadable or compressed body, or
+ * a body that names no model (or one too long to be one) would have to claim a model nobody named. Those
  * refusals are counted on `router_requests_total` by the request observer below instead.
  */
 
@@ -45,9 +45,6 @@ import { unservableError } from "./unservable"
  * field the way the redactor bounds an `Error`; the count beside it is always complete.
  */
 const MAX_REPORTED_DROPS = 20
-
-const NO_MODEL = "The request body must name a model"
-const MODEL_TOO_LONG = `The request body's model name is longer than ${MODEL_NAME_MAX_BYTES} bytes`
 
 export function createDispatcher(deps: DispatcherDeps): Dispatcher {
   const clock = deps.clock ?? SYSTEM_CLOCK
@@ -71,13 +68,17 @@ export function createDispatcher(deps: DispatcherDeps): Dispatcher {
     const limit = deps.limiter?.check(input.key, startedAt.getTime())
     if (limit !== undefined && !limit.allowed) throw keyRateLimitedError(input.key, limit)
 
+    // A header read, before the body: the scanner cannot find a model in compressed bytes, and
+    // "must name a model" is the wrong answer to a body that named one (`body/preflight.ts`).
+    refuseEncodedBody(input.request.headers)
+
     const body = await readRequestBody(input.request, options.body)
     const model = body.fields.model
     // Before the "name a model" refusal, because the body *did* name one and saying otherwise
     // sends a caller looking for a missing field. Refused rather than truncated: a shortened
     // model name is a substituted model (non-negotiable 4).
-    if (body.fields.modelTooLong) throw new TranslationError(MODEL_TOO_LONG)
-    if (model === null) throw new TranslationError(NO_MODEL)
+    if (body.fields.modelTooLong) throw modelTooLongError()
+    if (model === null) throw missingModelError(body.bytes.length)
     progress.model = model
 
     const session = resolveSessionKey(

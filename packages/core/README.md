@@ -51,6 +51,8 @@ never from a path inside `src/`.
 | `UpstreamTimeoutError` | `upstream_timeout` | 504 | Upstream or SDK subprocess missed its deadline |
 | `CredentialDecryptError` | `credential_decrypt_failed` | 500 | Wrong/rotated `ENCRYPTION_KEY`, or a corrupt record |
 | `TranslationError` | `translation_failed` | 400 | A cross-dialect conversion would be unfaithful — raised *before* the upstream call |
+| `InvalidRequestError` | `invalid_request` | 400 | Refused at the edge before routing: empty body, no `model`, or a model name past the ceiling. Nothing was translated |
+| `UnsupportedContentEncodingError` | `unsupported_content_encoding` | 415 | The body arrived under a `Content-Encoding`; the router does not decode request bodies |
 
 Plus `RouterError` (abstract base), `ROUTER_ERROR_CODES`, `RouterErrorCode`, `isRouterError`,
 `QuotaExhaustedInit`.

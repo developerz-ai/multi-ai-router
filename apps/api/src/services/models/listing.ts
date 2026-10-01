@@ -43,7 +43,18 @@ export type ListingFailureCode =
 
 export type UpstreamListing =
   | { readonly ok: true; readonly entries: readonly UpstreamModelEntry[] }
-  | { readonly ok: false; readonly code: ListingFailureCode; readonly message: string }
+  | {
+      readonly ok: false
+      readonly code: ListingFailureCode
+      readonly message: string
+      /**
+       * The HTTP status the upstream answered with, when it answered at all. Absent on a transport
+       * failure and on every failure that happened before a socket opened. Carried apart from the
+       * message so a caller can tell "this endpoint has no listing" (`404`/`405`) from "this
+       * credential is dead" (`401`) without parsing prose.
+       */
+      readonly status?: number
+    }
 
 export interface UpstreamListingDeps {
   readonly cipher: Pick<CredentialCipher, "decrypt">
@@ -156,6 +167,7 @@ export async function listUpstreamModels(
       `could not read the model listing: ${
         outcome.classification?.signal ?? `upstream attempt failed (${outcome.failure.kind})`
       }`,
+      outcome.upstream?.status,
     )
   }
 
@@ -208,8 +220,8 @@ function dedupe(entries: readonly UpstreamModelEntry[]): readonly UpstreamModelE
   return [...byId.values()].sort((left, right) => left.id.localeCompare(right.id))
 }
 
-function fail(code: ListingFailureCode, message: string): UpstreamListing {
-  return { ok: false, code, message }
+function fail(code: ListingFailureCode, message: string, status?: number): UpstreamListing {
+  return { ok: false, code, message, ...(status === undefined ? {} : { status }) }
 }
 
 /**

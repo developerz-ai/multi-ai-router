@@ -2,9 +2,11 @@ import { describe, expect, test } from "bun:test"
 import {
   CredentialDecryptError,
   CreditsExhaustedError,
+  InvalidRequestError,
   NoHealthyAccountError,
   QuotaExhaustedError,
   TranslationError,
+  UnsupportedContentEncodingError,
   UpstreamAuthError,
   UpstreamTimeoutError,
 } from "@multi-ai-router/core"
@@ -94,6 +96,16 @@ describe("foldChainFailure", () => {
     expect(status(fold(UNREADABLE, routerFailure(new TranslationError("no field"))))).toBe(400)
     expect(status(fold(UNREADABLE, routerFailure(new NoHealthyAccountError("none"))))).toBe(503)
     expect(status(fold(UNREADABLE, routerFailure(new UpstreamTimeoutError("deadline"))))).toBe(504)
+  })
+
+  test("an edge refusal that somehow reached the fold surfaces instead of being folded away", () => {
+    // Neither is raised inside a chain today — both are settled before selection. Ranked with the
+    // other pre-chain verdicts so a future path that routes one here cannot lose it under a 429.
+    const invalid = routerFailure(new InvalidRequestError("names no model"))
+    const encoded = routerFailure(new UnsupportedContentEncodingError("gzip"))
+
+    expect(status(fold(RATE_LIMITED, invalid))).toBe(400)
+    expect(status(fold(encoded, RATE_LIMITED))).toBe(415)
   })
 
   test("a candidate the router could not classify at all changes nothing", () => {

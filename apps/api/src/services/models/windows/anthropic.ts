@@ -3,7 +3,8 @@ import type { ContextTable } from "@multi-ai-router/core"
 /**
  * Anthropic context windows.
  *
- * Provenance: the published model reference, cross-checked against a live aggregator listing on the
+ * Provenance: the published model reference
+ * (platform.claude.com/docs/en/about-claude/models/overview), cross-checked against a live aggregator listing on the
  * date `CONTEXT_TABLE_AS_OF` names. Needed as a shipped table because Anthropic's own
  * `GET /v1/models` carries **no** size field at all — it answers `type`, `id`, `display_name` and
  * `created_at`, and nothing about how much fits.
@@ -15,6 +16,8 @@ import type { ContextTable } from "@multi-ai-router/core"
 export const ANTHROPIC_WINDOWS: ContextTable = {
   /** The 5 family: a million in, 128k out. */
   "claude-fable-5-1": { contextTokens: 1_000_000, maxOutputTokens: 128_000 },
+  "claude-opus-5-5": { contextTokens: 1_000_000, maxOutputTokens: 128_000 },
+  "claude-sonnet-5-5": { contextTokens: 1_000_000, maxOutputTokens: 128_000 },
   "claude-opus-5": { contextTokens: 1_000_000, maxOutputTokens: 128_000 },
   "claude-opus-5-fast": { contextTokens: 1_000_000, maxOutputTokens: 128_000 },
   "claude-sonnet-5": { contextTokens: 1_000_000, maxOutputTokens: 128_000 },

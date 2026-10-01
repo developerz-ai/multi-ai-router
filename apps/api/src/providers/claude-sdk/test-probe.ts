@@ -5,6 +5,7 @@ import type {
   SDKUserMessage,
 } from "@anthropic-ai/claude-agent-sdk"
 import { query } from "@anthropic-ai/claude-agent-sdk"
+import type { UpstreamFailureKind } from "../types"
 import { PERMITTED_TOOLS } from "./allowlist"
 import { createCliProbe } from "./cli-probe"
 import type { SdkConcurrency, SdkSlot } from "./concurrency"
@@ -12,7 +13,7 @@ import { ALWAYS_FRESH, type CredentialFreshness } from "./credential-freshness"
 import { QUERY_ENV_OVERRIDES, subprocessEnv } from "./env"
 import { classifySdkFailure, readSdkFailure } from "./errors"
 import { type CliResolution, resolveClaudeCli } from "./resolve-cli"
-import { detailOf, resultFailureMessage, snippet, statedResult } from "./test-probe-result"
+import { detailOf, resultFailure, snippet, statedResult } from "./test-probe-result"
 import { holdPrompt } from "./turn-lifecycle"
 import type { SdkUsageGauge, SdkUsageGaugeSource } from "./usage-gauge"
 
@@ -94,6 +95,13 @@ export interface SdkTestProbeResult {
    * (`logging/redact.ts`), while a response body is a contract with the console.
    */
   readonly reasonDetail?: string
+  /**
+   * The class `classifySdkFailure` named for a failed turn — the same vocabulary the dispatch path
+   * routes on. Absent on success and when nothing was classified (no binary, no slot, a turn that
+   * ended without a word). For a caller that must tell an expected failure from a broken one
+   * without matching on {@link message}'s prose.
+   */
+  readonly failureKind?: UpstreamFailureKind
 }
 
 export interface SdkTestProbe {
@@ -239,7 +247,7 @@ export function createSdkTestProbe(options: SdkTestProbeOptions): SdkTestProbe {
           }
           return {
             ok: false,
-            message: resultFailureMessage(message),
+            ...resultFailure(message),
             rateLimitInfos,
             ...detailOf(statedResult(message)),
           }
@@ -250,9 +258,11 @@ export function createSdkTestProbe(options: SdkTestProbeOptions): SdkTestProbe {
           rateLimitInfos,
         }
       } catch (error) {
+        const failure = classifySdkFailure(error)
         return {
           ok: false,
-          message: classifySdkFailure(error).clientMessage,
+          message: failure.clientMessage,
+          failureKind: failure.classification.kind,
           rateLimitInfos,
           ...detailOf(readSdkFailure(error).message),
         }

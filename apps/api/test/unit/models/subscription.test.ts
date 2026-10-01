@@ -79,7 +79,8 @@ describe("building a subscription's catalog rows", () => {
     ])
     expect(rows.every((row) => row.listingSource === "shipped")).toBe(true)
     expect(rows.find((row) => row.modelId === "fable")?.resolvedModel).toBe("claude-fable-5-1")
-    expect(rows.find((row) => row.modelId === "sonnet")?.resolvedModel).toBe("claude-sonnet-5")
+    expect(rows.find((row) => row.modelId === "sonnet")?.resolvedModel).toBe("claude-sonnet-5-5")
+    expect(rows.find((row) => row.modelId === "opus")?.resolvedModel).toBe("claude-opus-5-5")
     // Every shipped model has a shipped window — a fallback with unknown sizes would be half a row.
     expect(rows.every((row) => row.contextTokens !== null)).toBe(true)
   })
@@ -87,10 +88,29 @@ describe("building a subscription's catalog rows", () => {
   test("aliases resolve to the latest of each family", () => {
     expect(CLAUDE_SUBSCRIPTION_ALIASES).toEqual({
       fable: "claude-fable-5-1",
-      opus: "claude-opus-5",
-      sonnet: "claude-sonnet-5",
+      opus: "claude-opus-5-5",
+      sonnet: "claude-sonnet-5-5",
       haiku: "claude-haiku-4-5",
     })
+  })
+
+  /** An alias pointing at an id the shipped list omits would label a row with a model it never lists. */
+  test("every alias target is itself a shipped model with a shipped window", () => {
+    const rows = shippedSubscriptionCatalog()
+    for (const target of Object.values(CLAUDE_SUBSCRIPTION_ALIASES)) {
+      expect(CLAUDE_SUBSCRIPTION_MODELS).toContain(target)
+      expect(rows.find((row) => row.modelId === target)?.contextTokens).not.toBeNull()
+    }
+  })
+
+  test("the current lineup is listed beside the generations it replaced, which stay listed", () => {
+    for (const id of ["claude-fable-5-1", "claude-opus-5-5", "claude-sonnet-5-5"]) {
+      expect(CLAUDE_SUBSCRIPTION_MODELS).toContain(id)
+    }
+    // Still served, so still listed: a client pinned to the previous generation must find it.
+    for (const id of ["claude-opus-5", "claude-sonnet-5"]) {
+      expect(CLAUDE_SUBSCRIPTION_MODELS).toContain(id)
+    }
   })
 })
 
@@ -103,7 +123,7 @@ describe("what an account contributes to GET /v1/models", () => {
     )
     expect(listed.find((model) => model.id === "sonnet")).toEqual({
       id: "sonnet",
-      resolvedModel: "claude-sonnet-5",
+      resolvedModel: "claude-sonnet-5-5",
     })
     expect(listed.find((model) => model.id === "claude-opus-5")?.resolvedModel).toBeNull()
   })
@@ -140,7 +160,7 @@ describe("what an account contributes to GET /v1/models", () => {
     expect(byId.get("opus[1m]")).toBe("claude-opus-5[1m]")
     // The shipped family aliases and canonical ids the handshake did not spell are still there —
     // a client typing `--model opus` or `fable` must find it — each resolving to the latest family member.
-    expect(byId.get("opus")).toBe("claude-opus-5")
+    expect(byId.get("opus")).toBe("claude-opus-5-5")
     expect(byId.get("fable")).toBe("claude-fable-5-1")
     expect(byId.get("haiku")).toBe("claude-haiku-4-5")
     expect(byId.has("claude-sonnet-5")).toBe(true)
