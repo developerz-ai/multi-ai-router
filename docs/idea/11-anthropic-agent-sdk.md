@@ -257,7 +257,11 @@ turns that refreshed nothing (the 10:51 keepalive turns on `426a1d04` and `27ae4
 `idle_account_probe` now uses the one definition of *cold* every spawn site shares, and the order
 per Account is fixed: the free `claude auth status` check, then — if the token is cold — one small
 real turn, which runs to completion and persists the refresh, and **only then** the turn-free
-gauge read. A cold Account that could not be warmed (keepalive off, no probe model, batch full,
+gauge read. A turn answered "the subscription window is spent" is an expected outcome, logged at
+`info` with its reason rather than as a failed keepalive: the process still ran to completion, so
+the sweep asks again whether the credential is cold and reads the gauge if it is now warm. It
+writes no status and retries nothing — the Account's `cooling_down` is its own clock's business.
+A cold Account that could not be warmed (keepalive off, no probe model, batch full,
 turn declined or failed) is not read at all and is named in the log; its gauge and catalog stand
 still until a client's turn refreshes it, which is strictly better than the alternative. With
 `CLAUDE_SDK_CREDENTIAL_KEEPALIVE=false` no probe ever spends a refresh token; the cost is
@@ -1014,7 +1018,7 @@ musl platform package exists (`@anthropic-ai/claude-code-linux-<arch>-musl`). Ei
 belongs on `PATH` as `claude` — a *symlink* or the real executable, never a shell wrapper, which the
 SDK's launcher rejects on some paths — so `claude auth status` and the SDK resolve the same file.
 
-**How our image actually does it, and why it differs.** `@anthropic-ai/claude-agent-sdk` (0.3.220+; pinned `^0.3.273`, whose bundled CLI is 2.1.273; the resolution ladder, the security gates, and the `auth login` / `auth status` shapes were re-verified against it)
+**How our image actually does it, and why it differs.** `@anthropic-ai/claude-agent-sdk` (0.3.220+; pinned `^0.3.286`, whose bundled CLI is 2.1.286; the resolution ladder, the security gates, and the `auth login` / `auth status` shapes were re-verified against it)
 ships the same binary as its *own* prebuilt optional dependency
 (`@anthropic-ai/claude-agent-sdk-<platform>-<arch>`, glibc and musl variants), and its internal
 resolution says so: it fails with "Reinstall `@anthropic-ai/claude-agent-sdk` without
@@ -1060,7 +1064,8 @@ error types:
 
 | Class | Signal | Response |
 |---|---|---|
-| Expired credential | `oauth token has expired`, `oauth session expired`, `could not be refreshed`, `failed to authenticate`, `not logged in`, `please run /login`, `invalid api key`, `authentication_error`, `authentication failed` (message only), or `api_error_status` 401/403, or a bare `401` in the message | Account → `needs_reauth`, drop from routing, fail over to the next Account in the Pool. The status is **written through to the row** off the request path, because the router never refreshes this token: noticing the failure and parking the Account *is* the whole mechanism, so a verdict that died with the process would be nobody ever being told to log back in ([05-routing-and-failover.md](05-routing-and-failover.md#circuit-breaker)). **We do not refresh-and-retry** the way Meridian does — the SDK owns the token (§3) |
+| Expired credential | `oauth token has expired`, `oauth session expired`, `could not be refreshed`, `refresh token is no longer valid`, `failed to authenticate`, `not logged in`, `please run /login`, `invalid api key`, `authentication_error`, `authentication failed` (message only), or `api_error_status` 401/403, or a bare `401` in the message | Account → `needs_reauth`, drop from routing, fail over to the next Account in the Pool. The status is **written through to the row** off the request path, because the router never refreshes this token: noticing the failure and parking the Account *is* the whole mechanism, so a verdict that died with the process would be nobody ever being told to log back in ([05-routing-and-failover.md](05-routing-and-failover.md#circuit-breaker)). **We do not refresh-and-retry** the way Meridian does — the SDK owns the token (§3) |
+| Credential refresh contended | `another claude code process is refreshing`, `exited mid-refresh`, `holding the refresh lock` — the CLI lost its own credential-refresh lock ("Failed to refresh OAuth token: another Claude Code process is refreshing it or exited mid-refresh…", production v2.13.1; the SDK reports it as `server_error`). Matched on the contention half only, and ordered **before** Expired credential, because one spelling contains `could not be refreshed` | **503**, `server-error`, retryable: fail over to the next Account. **Never** `needs_reauth` and never `exhausted` — the credential is alive, the token is the CLI's to refresh, and the next process to take the lock does. Before this row it fell to `unknown` and the operator read "a reason this router does not recognize" |
 | Rate limited | `429`, `rate limit`, `usage limit reached`, `hit your … limit` (session, weekly, monthly spend, fast), `you've reached your <tier> limit` (one to three qualifier words — the credits-era per-tier banner), `you're out of usage credits` (a member's spent top-up; the included window still refills) | 429 + circuit breaker; fail over to the next Account |
 | Credits exhausted | `credit balance is too low` (the CLI's own error constant, 0.3.220 and 2.1.261), `organization is out of usage credits`, `usage limit is set to $N` (an admin-provisioned cap) or `api_error_status` 402 | `402`, Account → `exhausted` — permanent until a human tops up, **never** timer-retried (CLAUDE.md non-negotiable 7). Fail over: the next Account may be funded |
 | Stale SDK session | `No conversation found with session ID`, `No message found with message.uuid` (a fork whose rewind point is gone — same recovery, and before it was named here it fell to `unknown`, which does not retry, so the binding survived to fail the next turn too) | Evict the Session mapping, replay once |

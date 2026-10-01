@@ -95,10 +95,9 @@ describe("draining a real listener", () => {
     await body
   })
 
-  test("a second stop cannot close what the first one is already waiting on", async () => {
-    // Not a test of this router — a test of the bun behaviour `drain.ts` is written around, and the
-    // reason it issues exactly one stop. If a future bun honours the flag on the second call, this
-    // fails and the escalation can move back inside the drain.
+  test("a second, unforced stop waits alongside the first and truncates nothing", async () => {
+    // Not a test of this router — a test of the bun behaviour `drain.ts` is written around. A
+    // repeated unforced stop is harmless: both resolve when the response ends, whole.
     const { server, url, serving } = streamingServer(8, 25)
 
     const response = await fetch(url)
@@ -106,9 +105,32 @@ describe("draining a real listener", () => {
     const body = response.text()
 
     void server.stop()
-    await server.stop(true)
+    await server.stop()
 
     expect(await body).toBe("........")
+  })
+
+  test("a forced second stop resets what the first one is waiting on", async () => {
+    // The other half of that contract, and the reason the drain issues exactly one unforced stop
+    // and never follows it with `stop(true)`. Bun 1.3 ignored the flag on a second call and this
+    // response finished; bun 1.4 honours it, and the in-flight response is reset mid-stream. If a
+    // future bun goes back to ignoring it, this fails and the note in `drain.ts` is stale again.
+    const { server, url, serving } = streamingServer(8, 25)
+
+    const response = await fetch(url)
+    await serving
+    // Handled before the stop so the rejection is never, even briefly, unhandled.
+    const body = response.text().then(
+      (text) => ({ text }),
+      (error: unknown) => ({ error }),
+    )
+
+    void server.stop()
+    await server.stop(true)
+
+    const outcome = await body
+    // Truncated, not completed: either the read rejects (ECONNRESET) or it ends short.
+    expect(outcome).not.toEqual({ text: "........" })
   })
 
   test("stops accepting new connections before it starts waiting", async () => {

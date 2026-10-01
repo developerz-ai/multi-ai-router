@@ -42,6 +42,11 @@ export interface ClassifyOptions {
  * a replay in place, or a wait and a fork — and it happens before the failover planner is consulted
  * at all (docs/idea/05-routing-and-failover.md, "a stale session is not a failover"). A dead
  * subprocess carries no such claim, so the next account gets its turn.
+ *
+ * `unknown` is true because that is what the chain does with one: `failoverKind`
+ * (`services/dataplane/attempt.ts`) has no mapping for it and falls back to the status, and every
+ * `unknown` is a `502` — a `server-error`, which fails over. An unreadable failure is still one
+ * account failing; this flag said otherwise for a while and nothing read it.
  */
 const RETRYABLE: Readonly<Record<UpstreamFailureKind, boolean>> = {
   "rate-limited": true,
@@ -52,7 +57,7 @@ const RETRYABLE: Readonly<Record<UpstreamFailureKind, boolean>> = {
   "stale-session": false,
   "busy-session": false,
   "subprocess-crash": true,
-  unknown: false,
+  unknown: true,
 }
 
 /** One table, both transports: an SDK failure answers this question the same way an HTTP one does. */

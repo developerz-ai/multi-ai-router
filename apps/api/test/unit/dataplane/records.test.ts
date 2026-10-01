@@ -94,7 +94,7 @@ describe("attempt record", () => {
         tokens: { tokensIn: 1_000_000, tokensOut: 0, cacheReadTokens: 0, cacheWriteTokens: 0 },
       }),
     )
-    expect(priced.costEstimate).toBe("3.000000")
+    expect(priced.costEstimate).toBe("2.000000")
     expect(priced.costBasis).toBe("metered")
   })
 

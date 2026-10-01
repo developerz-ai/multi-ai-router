@@ -12,6 +12,7 @@ import {
   flag,
   fraction,
   nonEmpty,
+  pathList,
   serverIdleTimeoutSeconds,
   usageBatchSize,
   wholeNumber,
@@ -446,6 +447,13 @@ export interface TranslationConfig {
  */
 export const DEFAULT_SERVER_IDLE_TIMEOUT_SECONDS = 60
 
+/**
+ * The two probes the image's healthcheck and an orchestrator poll. `/` is deliberately not here:
+ * it is the console's entry point, and whether a hit on it is a load balancer or an operator is
+ * something only the deployment knows — an operator whose balancer probes `/` adds it.
+ */
+export const DEFAULT_LOG_QUIET_PATHS: readonly string[] = ["/healthz", "/readyz"]
+
 export interface Env {
   readonly port: number
   /**
@@ -507,6 +515,11 @@ export interface Env {
    * reason they cannot read any of them.
    */
   readonly logReasonMaxChars: number
+  /**
+   * `LOG_QUIET_PATHS`. Exact paths whose successful `request completed` lines log at `debug`
+   * instead of `info` — the probes an orchestrator polls. Failures on them log as always.
+   */
+  readonly logQuietPaths: readonly string[]
   readonly trustProxy: boolean
   readonly publicUrl: string | null
   /**
@@ -693,6 +706,7 @@ export const ENV_FIELDS = {
   LOG_LEVEL: z.enum(LOG_LEVELS).optional(),
   // Refuses zero: a zero-length reason logs failures with no reason at all — a silent absence.
   LOG_REASON_MAX_CHARS: atLeastOne.optional(),
+  LOG_QUIET_PATHS: pathList.optional(),
   TRUST_PROXY: flag.optional(),
   SENTRY_DSN: z.string().optional(),
   SENTRY_ENVIRONMENT: z.string().optional(),
@@ -930,6 +944,7 @@ const envSchema = z.object(ENV_FIELDS).transform((raw, ctx): Env => {
     encryptionKey: raw.ENCRYPTION_KEY,
     logLevel: raw.LOG_LEVEL ?? "info",
     logReasonMaxChars: raw.LOG_REASON_MAX_CHARS ?? 200,
+    logQuietPaths: raw.LOG_QUIET_PATHS ?? DEFAULT_LOG_QUIET_PATHS,
     trustProxy: raw.TRUST_PROXY ?? false,
     publicUrl: raw.PUBLIC_URL ?? null,
     revision: raw.ROUTER_REVISION ?? UNKNOWN_REVISION,

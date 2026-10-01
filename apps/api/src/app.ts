@@ -60,6 +60,8 @@ export interface AppDeps {
   readonly dataPlane?: DataPlaneDeps
   /** Absent means `/metrics` is not mounted at all — a `404`, not an empty exposition. */
   readonly metrics?: MetricsRouteDeps
+  /** `Env.logQuietPaths`. Absent quiets nothing — every completed request logs at `info`. */
+  readonly logQuietPaths?: readonly string[]
   /** `Env.trustProxy`. Off by default: an unvetted `X-Forwarded-For` is a login-throttle bypass. */
   readonly trustProxy?: boolean
   /**
@@ -108,7 +110,7 @@ export function createApp(deps: AppDeps): Hono<AppEnv> {
 
   // Order matters: the id exists before anything logs, and the logger before anything throws.
   app.use("*", requestId())
-  app.use("*", requestLogger(deps.logger))
+  app.use("*", requestLogger(deps.logger, { quietPaths: deps.logQuietPaths ?? [] }))
 
   app.onError(errorHandler(deps.logger))
   app.notFound(notFoundHandler())

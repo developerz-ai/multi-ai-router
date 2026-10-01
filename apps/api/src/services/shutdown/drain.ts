@@ -29,11 +29,12 @@ export interface DrainableServer {
   /**
    * Stops listening. Unforced, the promise resolves when the last in-flight request has ended.
    *
-   * The `true` overload is deliberately not used past that first call, and it is not an oversight:
-   * once an unforced stop is in flight, bun ignores the flag on a later one and the second call
-   * simply waits for natural completion alongside the first (measured against bun 1.3, and
-   * `test/integration/shutdown.test.ts` re-measures it). So what closes the responses this function
-   * gives up on is the caller's exit, which is the caller's to decide anyway.
+   * The `true` overload is deliberately not used, and it is not an oversight. Bun 1.4 honours the
+   * flag on a later call — a forced stop issued while an unforced one is in flight resets every open
+   * response at once (measured against bun 1.4, and `test/integration/shutdown.test.ts` re-measures
+   * it; bun 1.3 ignored the flag there). The drain still issues exactly one unforced stop: what
+   * closes the responses this function gives up on is the caller's exit, which follows the flush the
+   * deadline exists to protect and is the caller's to decide anyway.
    */
   stop(closeActiveConnections?: boolean): Promise<void>
 }
@@ -84,9 +85,10 @@ export async function drainServer(input: DrainInput): Promise<DrainOutcome> {
     clearTimeout(timer)
   }
 
-  // Returning is the whole escalation. Nothing here forces the survivors closed — see the note on
-  // `stop` — and nothing here should: the caller now flushes what it is holding and exits, and the
-  // exit is what ends them. Reported rather than silent, so the truncation is one line in the log
-  // with a number on it instead of a client-side mystery.
+  // Returning is the whole escalation. Nothing here forces the survivors closed — bun would let a
+  // second, forced stop do it (see the note on `stop`) — and nothing here should: the caller now
+  // flushes what it is holding and exits, and the exit is what ends them. Reported rather than
+  // silent, so the truncation is one line in the log with a number on it instead of a client-side
+  // mystery.
   return { pending, abandoned: server.pendingRequests, waitedMs: now() - started, timedOut: true }
 }

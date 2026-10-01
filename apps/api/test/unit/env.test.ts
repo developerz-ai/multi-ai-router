@@ -206,6 +206,16 @@ describe("parseEnv", () => {
     })
   })
 
+  test("quiets the two probes by default, and not the console root", () => {
+    expect(parseEnv(base).logQuietPaths).toEqual(["/healthz", "/readyz"])
+  })
+
+  test("reads LOG_QUIET_PATHS as a trimmed comma-separated list", () => {
+    const env = parseEnv({ ...base, LOG_QUIET_PATHS: " /healthz, /readyz ,/ ," })
+
+    expect(env.logQuietPaths).toEqual(["/healthz", "/readyz", "/"])
+  })
+
   test("treats an empty variable as unset", () => {
     const env = parseEnv({ ...base, PORT: "", LOG_LEVEL: "", TRUST_PROXY: "" })
 
@@ -372,6 +382,16 @@ describe("parseEnv", () => {
 
     test("names PORT when it is not a number", () => {
       expect(expectEnvError({ ...base, PORT: "eight-thousand" }).variables).toEqual(["PORT"])
+    })
+
+    test("names LOG_QUIET_PATHS when an entry is not a path", () => {
+      // A bare `healthz` would match nothing, silently — refused rather than ignored.
+      expect(expectEnvError({ ...base, LOG_QUIET_PATHS: "/healthz,readyz" }).variables).toEqual([
+        "LOG_QUIET_PATHS",
+      ])
+      expect(expectEnvError({ ...base, LOG_QUIET_PATHS: " , " }).variables).toEqual([
+        "LOG_QUIET_PATHS",
+      ])
     })
 
     test("names LOG_LEVEL when it is not one of the four levels", () => {

@@ -1,11 +1,19 @@
 import { describe, expect, test } from "bun:test"
-import { RequestTooLargeError } from "@multi-ai-router/core"
+import {
+  InvalidRequestError,
+  RequestTooLargeError,
+  UnsupportedContentEncodingError,
+} from "@multi-ai-router/core"
 import {
   createRoutingScanner,
   declaredBodyBytes,
   MODEL_NAME_MAX_BYTES,
+  missingModelError,
+  modelTooLongError,
   type RequestBodySource,
   readRequestBody,
+  refuseEncodedBody,
+  requestContentEncoding,
   resolveSessionKey,
   rewriteModel,
 } from "../../../src/services/dataplane"
@@ -289,5 +297,80 @@ describe("session key", () => {
     const first = resolveSessionKey(new Headers(), "key-1", prefix).key
     const second = resolveSessionKey(new Headers(), "key-2", prefix).key
     expect(second).not.toBe(first)
+  })
+})
+
+/**
+ * The refusals a body earns before it names a model. Production logged 66 identical
+ * "must name a model" 400s from one key in fourteen hours, under `translation_failed`, with no way
+ * to tell an empty body from a compressed one — so each case now says which it is.
+ */
+describe("preflight refusals", () => {
+  const encoded = (value: string) => new Headers({ "content-encoding": value })
+
+  test("a compressed body is a 415 that names the encoding, not a missing model", () => {
+    const refuse = () => refuseEncodedBody(encoded("gzip"))
+
+    expect(refuse).toThrow(UnsupportedContentEncodingError)
+    try {
+      refuse()
+    } catch (error) {
+      expect(error).toMatchObject({ status: 415, code: "unsupported_content_encoding" })
+      expect(String((error as Error).message)).toContain("Content-Encoding: gzip")
+    }
+  })
+
+  test("every coding in a list is refused, whatever its case", () => {
+    expect(requestContentEncoding(encoded("GZIP, br"))).toBe("gzip, br")
+    expect(() => refuseEncodedBody(encoded("Zstd"))).toThrow(UnsupportedContentEncodingError)
+  })
+
+  test("a hostile header value cannot become an unbounded error body", () => {
+    try {
+      refuseEncodedBody(encoded("x".repeat(5_000)))
+      throw new Error("expected a refusal")
+    } catch (error) {
+      expect((error as Error).message.length).toBeLessThan(200)
+    }
+  })
+
+  test("an unencoded body passes: no header, an empty one, or an explicit identity", () => {
+    expect(() => refuseEncodedBody(new Headers())).not.toThrow()
+    expect(() => refuseEncodedBody(encoded(""))).not.toThrow()
+    expect(() => refuseEncodedBody(encoded("identity"))).not.toThrow()
+    expect(requestContentEncoding(encoded(" Identity "))).toBeNull()
+  })
+
+  test("an empty body says it is empty", () => {
+    const error = missingModelError(0)
+
+    expect(error).toBeInstanceOf(InvalidRequestError)
+    expect(error).toMatchObject({ status: 400, code: "invalid_request" })
+    expect(error.message).toContain("empty")
+  })
+
+  test("a body with bytes but no model keeps the name-a-model sentence", () => {
+    const error = missingModelError(17)
+
+    expect(error).toMatchObject({ status: 400, code: "invalid_request" })
+    expect(error.message).toContain("must name a model")
+    expect(error.message).not.toContain("empty")
+  })
+
+  test("the scanner finds no model in the bodies that used to share one sentence", async () => {
+    for (const body of ["", "null", "not json", '[{"model":"m"}]', '{"model":42}']) {
+      const read = await readRequestBody(sent(body))
+      expect(read.fields.model).toBeNull()
+      expect(missingModelError(read.bytes.length).message).toContain(
+        body.length === 0 ? "empty" : "must name a model",
+      )
+    }
+  })
+
+  test("a model name past the ceiling is an invalid request that names the ceiling", () => {
+    const error = modelTooLongError()
+
+    expect(error).toMatchObject({ status: 400, code: "invalid_request" })
+    expect(error.message).toContain(`${MODEL_NAME_MAX_BYTES} bytes`)
   })
 })

@@ -4,6 +4,7 @@ import {
   CredentialDecryptError,
   CreditsExhaustedError,
   CsrfTokenError,
+  InvalidRequestError,
   isRouterError,
   KeyRateLimitedError,
   KeyRevokedError,
@@ -17,6 +18,7 @@ import {
   type RouterErrorCode,
   ScopeViolationError,
   TranslationError,
+  UnsupportedContentEncodingError,
   UpstreamAuthError,
   UpstreamTimeoutError,
 } from "../../src/index"
@@ -77,6 +79,13 @@ const cases: readonly ErrorCase[] = [
     ctor: RequestTooLargeError,
     code: "request_too_large",
     status: 413,
+  },
+  { name: "InvalidRequestError", ctor: InvalidRequestError, code: "invalid_request", status: 400 },
+  {
+    name: "UnsupportedContentEncodingError",
+    ctor: UnsupportedContentEncodingError,
+    code: "unsupported_content_encoding",
+    status: 415,
   },
 ]
 

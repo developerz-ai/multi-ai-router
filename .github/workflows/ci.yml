@@ -23,7 +23,7 @@ env:
   # the Dockerfile — or the reverse — turns the `test` job red, so the image can
   # no longer ship a bun the suite never ran. Moving the pin is one commit across
   # both files plus a re-resolved digest; docs/RELEASING.md has the procedure.
-  BUN_VERSION: "1.3.0"
+  BUN_VERSION: "1.4.2"
   # Biome/Vite colourise when they detect a TTY; Actions is not one, so force it
   # for readable log output.
   FORCE_COLOR: "1"

@@ -10,6 +10,7 @@ import {
 import type { Logger } from "../logging/logger"
 import { captureException } from "../observability"
 import type { AppEnv } from "../types"
+import { failureContext } from "./logger"
 
 /**
  * The one place a thrown value becomes an HTTP response.
@@ -28,6 +29,9 @@ export function errorHandler(fallbackLog: Logger): ErrorHandler<AppEnv> {
       path: c.req.path,
       status: response.status,
       requestId: c.get("requestId"),
+      // What the request carried, by allowlist: enough to tell an empty body from a compressed one
+      // from the wrong content type, and never a header that holds a credential.
+      ...failureContext(c.req.raw.headers),
     }
     if (isRouterError(err)) {
       const level = response.status >= 500 ? "error" : "warn"

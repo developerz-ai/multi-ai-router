@@ -41,9 +41,9 @@ function harness(options: {
   })
 
   const logs: Record<string, unknown>[] = []
-  const run = () =>
+  const run = (now: Date = NOW) =>
     task.run({
-      now: NOW,
+      now,
       signal: controller.signal,
       logger: createLogger({
         level: "debug",
@@ -114,6 +114,134 @@ describe("the hourly model-catalog sweep", () => {
     expect(refreshed).toEqual(["bad", "good"])
     expect(result).toMatchObject({ outcome: "partial", itemsProcessed: 1 })
     expect(logs.some((line) => line.reason === "discovery_failed")).toBe(true)
+  })
+
+  /**
+   * Production: an endpoint with no model listing answered `discovery_failed` every hour, never
+   * acquired a `refreshed_at`, and so sorted first on every tick — with a batch's worth of those,
+   * nothing else is ever asked.
+   */
+  test("an account whose listing always fails does not hold the head of the queue", async () => {
+    const accounts = [account("a-dead"), account("b"), account("c")]
+    const stored = new Map<string, Date>()
+    const order: string[] = []
+    let clock = NOW
+    const task = createModelCatalogRefreshTask({
+      accounts: { list: async () => accounts },
+      catalog: {
+        lastRefreshedAt: async () =>
+          [...stored].map(([accountId, refreshedAt]) => ({ accountId, refreshedAt })),
+      },
+      refresh: async (row) => {
+        order.push(row.id)
+        if (row.id === "a-dead") return { kind: "failed", reason: "discovery_failed" }
+        stored.set(row.id, clock)
+        return { kind: "refreshed", models: 1 }
+      },
+      intervalMs: 3_600_000,
+      batchSize: 1,
+    })
+    const tick = async (at: Date) => {
+      clock = at
+      await task.run({
+        now: at,
+        signal: new AbortController().signal,
+        logger: createLogger({ level: "debug", write: () => undefined }),
+      })
+    }
+
+    await tick(NOW)
+    await tick(new Date(NOW.getTime() + 3_600_000))
+    await tick(new Date(NOW.getTime() + 7_200_000))
+    await tick(new Date(NOW.getTime() + 10_800_000))
+
+    // One slot per tick: the dead account takes its turn, then waits behind the others — and
+    // comes round again, because being asked in vain is not being dropped.
+    expect(order).toEqual(["a-dead", "b", "c", "a-dead"])
+  })
+
+  test("an account skipped for having no listing rotates the same way", async () => {
+    const { run, refreshed } = harness({
+      accounts: [account("a-none"), account("b")],
+      outcome: (row) =>
+        row.id === "a-none"
+          ? { kind: "skipped", reason: "http:no-model-listing", detail: "http-status:404" }
+          : { kind: "failed", reason: "discovery_failed" },
+      batchSize: 1,
+    })
+
+    await run(NOW)
+    await run(new Date(NOW.getTime() + 3_600_000))
+
+    expect(refreshed).toEqual(["a-none", "b"])
+  })
+
+  test("a failure and a skip both log the listing's own detail beside the stable reason", async () => {
+    const { run, logs } = harness({
+      accounts: [account("bad"), account("none")],
+      outcome: (row) =>
+        row.id === "bad"
+          ? {
+              kind: "failed",
+              reason: "discovery_failed",
+              detail: "could not read the model listing: http-status:401",
+            }
+          : {
+              kind: "skipped",
+              reason: "http:no-model-listing",
+              detail: "could not read the model listing: http-status:404",
+            },
+    })
+
+    await run()
+
+    expect(
+      logs.find((line) => line.msg === "model catalog refresh failed for an account"),
+    ).toMatchObject({
+      level: "warn",
+      reason: "discovery_failed",
+      detail: "could not read the model listing: http-status:401",
+    })
+    expect(
+      logs.find((line) => line.msg === "model catalog refresh skipped an account"),
+    ).toMatchObject({
+      level: "info",
+      reason: "http:no-model-listing",
+      detail: "could not read the model listing: http-status:404",
+    })
+  })
+
+  test("an account that left the fleet takes its attempt record with it", async () => {
+    const fleet = [account("a-dead"), account("b")]
+    const order: string[] = []
+    const task = createModelCatalogRefreshTask({
+      accounts: { list: async () => [...fleet] },
+      catalog: { lastRefreshedAt: async () => [] },
+      refresh: async (row) => {
+        order.push(row.id)
+        return { kind: "failed", reason: "discovery_failed" }
+      },
+      intervalMs: 3_600_000,
+      batchSize: 1,
+    })
+    const tick = (at: Date) =>
+      task.run({
+        now: at,
+        signal: new AbortController().signal,
+        logger: createLogger({ level: "debug", write: () => undefined }),
+      })
+
+    await tick(NOW)
+    // Deleted and re-created under the same id: it is a new account, never asked, so it is first.
+    fleet.shift()
+    await tick(new Date(NOW.getTime() + 3_600_000))
+    // `c` has never been asked either. A stale entry would rank the newcomer behind it; pruned,
+    // the two tie and the id decides.
+    fleet.unshift(account("a-dead"))
+    fleet.push(account("c"))
+    await tick(new Date(NOW.getTime() + 7_200_000))
+
+    expect(order).toEqual(["a-dead", "b", "a-dead"])
   })
 
   test("a skip is not a failure, and says why at info", async () => {

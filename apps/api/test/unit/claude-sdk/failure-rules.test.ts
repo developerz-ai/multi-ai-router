@@ -311,3 +311,65 @@ describe("a session the CLI is already running", () => {
     expect(classification.status).toBe(503)
   })
 })
+
+describe("a credential refresh that lost the CLI's own lock", () => {
+  /** Verbatim from the production pod log (v2.13.1), and from the 2.1.286 string table. */
+  const CONTENDED =
+    "Failed to refresh OAuth token: another Claude Code process is refreshing it or exited mid-refresh. This is usually transient; retry in a minute, and if it persists close other Claude Code processes or sign in again"
+
+  test("it is a transient 503 that fails over — never unknown, never a dead credential", () => {
+    const { classification, clientMessage } = classifySdkFailure(resultError(CONTENDED))
+
+    expect(classification.kind).toBe("server-error")
+    expect(classification.kind).not.toBe("auth")
+    expect(classification.status).toBe(503)
+    expect(classification.retryable).toBe(true)
+    expect(classification.signal).toBe("claude-sdk:credential-refresh-contended")
+    expect(clientMessage).not.toContain("does not recognize")
+    expect(clientMessage).not.toContain("Claude Code process")
+  })
+
+  test("the account is neither parked needs_reauth nor exhausted by it", () => {
+    const { classification, clientMessage } = classifySdkFailure(resultError(CONTENDED))
+
+    const kind = failoverKind(classification.kind, classification.status)
+    expect(kind).toBe("server-error")
+    const state = recordFailure(HEALTHY, { kind, message: clientMessage, status: 503 }, NOW, {
+      authKind: "oauth",
+    })
+    expect(state.status).not.toBe("needs_reauth")
+    expect(state.status).not.toBe("exhausted")
+  })
+
+  test("the other two spellings of the same lock are the same class", () => {
+    for (const message of [
+      "Could not refresh your login because another Claude Code process is refreshing it (or exited mid-refresh) · Try again in a minute; if it keeps happening, close other Claude Code windows or sign in again with /login",
+      // Contains "could not be refreshed" — the auth rule's phrase — which is why order matters.
+      "OAuth access token could not be refreshed: another Claude Code process is holding the refresh lock",
+    ]) {
+      const { classification } = classifySdkFailure(new Error(message))
+
+      expect(classification.signal).toBe("claude-sdk:credential-refresh-contended")
+      expect(classification.kind).toBe("server-error")
+    }
+  })
+
+  test("a refresh that failed because the credential is dead stays auth", () => {
+    for (const message of [
+      "Failed to authenticate: OAuth session expired and could not be refreshed",
+      "OAuth refresh token is no longer valid; run /login to re-authenticate",
+    ]) {
+      const { classification } = classifySdkFailure(new Error(message))
+
+      expect(classification.kind).toBe("auth")
+      expect(classification.signal).toBe("claude-sdk:credential-expired")
+    }
+  })
+
+  test("a bare 'failed to refresh', with no contention half, is not claimed by this rule", () => {
+    const { classification } = classifySdkFailure(new Error("Failed to refresh OAuth token"))
+
+    expect(classification.signal).not.toBe("claude-sdk:credential-refresh-contended")
+    expect(classification.kind).toBe("unknown")
+  })
+})

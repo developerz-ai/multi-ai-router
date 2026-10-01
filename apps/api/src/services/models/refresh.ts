@@ -36,8 +36,19 @@ export type CatalogRefreshOutcome =
       readonly source?: ModelListingSource
     }
   /** Nothing was asked: this Account has no listing to read right now. Not a failure. */
-  | { readonly kind: "skipped"; readonly reason: string }
-  | { readonly kind: "failed"; readonly reason: string }
+  | { readonly kind: "skipped"; readonly reason: string; readonly detail?: string }
+  | {
+      readonly kind: "failed"
+      /** The stable code — what a dashboard groups by. */
+      readonly reason: string
+      /**
+       * What actually went wrong, in the listing's own words (`could not read the model listing:
+       * http-status:401`). Without it every failure logs as the same `discovery_failed` and an
+       * operator cannot tell a dead credential from a wrong base URL. Never credential material:
+       * it is a failure classification signal or an endpoint-resolution error, not a response body.
+       */
+      readonly detail?: string
+    }
 
 /**
  * Whether this Account is one the sweep asks at all.
@@ -66,6 +77,21 @@ export function isRefreshable(account: Pick<AccountRow, "provider" | "status">):
   return transport === "http"
 }
 
+/**
+ * The statuses that mean **the endpoint has no model listing**, as opposed to the listing failing.
+ *
+ * `404` and `405` are how an OpenAI-compatible endpoint that implements only `/chat/completions`
+ * answers a GET on `/models` — common behind an operator-supplied base URL. That is a property of
+ * the endpoint, not an incident: asking again in an hour gets the same answer, and warning about it
+ * hourly buries the failures worth reading. So it is a skip, with the detail kept for whoever does
+ * look — a mistyped base URL answers `404` too, and the reason names the status so that reading is
+ * still available.
+ *
+ * Every other status stays a failure. `401`/`403` are a credential the health path should hear
+ * about, and a `5xx` is an upstream that may well answer next tick.
+ */
+const NO_LISTING_STATUSES: ReadonlySet<number> = new Set([404, 405])
+
 export async function refreshAccountCatalog(
   deps: CatalogRefreshDeps,
   account: AccountRow,
@@ -83,7 +109,12 @@ export async function refreshAccountCatalog(
   }
 
   const listed = await listUpstreamModels(deps, account)
-  if (!listed.ok) return { kind: "failed", reason: listed.code }
+  if (!listed.ok) {
+    if (listed.status !== undefined && NO_LISTING_STATUSES.has(listed.status)) {
+      return { kind: "skipped", reason: "http:no-model-listing", detail: listed.message }
+    }
+    return { kind: "failed", reason: listed.code, detail: listed.message }
+  }
 
   // An empty listing is written, unlike on the discover button. There, `[]` would mean "this
   // account serves nothing" to routing and is refused for it; here the table only describes, so an

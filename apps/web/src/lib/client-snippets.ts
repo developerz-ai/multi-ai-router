@@ -152,7 +152,7 @@ export function clientRecipes(
         },
         {
           label: "Anthropic dialect",
-          text: `export ANTHROPIC_API_BASE="${origin}"\nexport ANTHROPIC_API_KEY="${keyValue}"\naider --model anthropic/claude-sonnet-4-5`,
+          text: `export ANTHROPIC_API_BASE="${origin}"\nexport ANTHROPIC_API_KEY="${keyValue}"\naider --model anthropic/claude-sonnet-5-5`,
         },
       ],
       caveat:
@@ -222,7 +222,7 @@ export function clientRecipes(
             `curl ${origin}/v1/messages \\`,
             `  -H "x-api-key: ${keyValue}" \\`,
             '  -H "content-type: application/json" \\',
-            `  -d '{"model":"claude-sonnet-4-5","max_tokens":64,"messages":[{"role":"user","content":"ping"}]}'`,
+            `  -d '{"model":"claude-sonnet-5-5","max_tokens":64,"messages":[{"role":"user","content":"ping"}]}'`,
           ].join("\n"),
         },
       ],

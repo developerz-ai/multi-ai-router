@@ -35,7 +35,7 @@ import { ZAI_WINDOWS } from "./zai"
  * cannot age visibly is one a reader has no way to judge. Update it in the same commit as any edit
  * under `windows/`, and never without one.
  */
-export const CONTEXT_TABLE_AS_OF = "2026-07-28"
+export const CONTEXT_TABLE_AS_OF = "2026-10-01"
 
 const WINDOWS: Partial<Record<ProviderId, ContextTable>> = {
   "anthropic-api": ANTHROPIC_WINDOWS,

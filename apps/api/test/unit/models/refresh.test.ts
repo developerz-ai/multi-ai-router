@@ -119,9 +119,63 @@ describe("refreshing one account's catalog", () => {
 
     const outcome = await refreshAccountCatalog(deps, accountRow(), NOW)
 
-    expect(outcome).toEqual({ kind: "failed", reason: "discovery_failed" })
+    expect(outcome).toMatchObject({ kind: "failed", reason: "discovery_failed" })
     // A stale description beats an empty one, and the credential's health is the health path's job.
     expect(writes).toEqual([])
+  })
+
+  /**
+   * The prod symptom: an hourly `reason: "discovery_failed"` warn with nothing beside it, so nobody
+   * could say whether the endpoint was down, the key was dead, or the path did not exist. The
+   * listing always knew; the refresh dropped it.
+   */
+  test("a failure says why, not only that — the status travels to whoever logs it", async () => {
+    const { deps } = harness({ error: { message: "nope" } }, 500)
+
+    const outcome = await refreshAccountCatalog(deps, accountRow(), NOW)
+
+    expect(outcome.kind).toBe("failed")
+    if (outcome.kind !== "failed") return
+    expect(outcome.reason).toBe("discovery_failed")
+    expect(outcome.detail).toContain("500")
+  })
+
+  test("the detail never carries the credential or the upstream's body", async () => {
+    const { deps } = harness({ error: { message: "bad key plaintext-key" } }, 401)
+
+    const outcome = await refreshAccountCatalog(deps, accountRow(), NOW)
+
+    expect(JSON.stringify(outcome)).not.toContain("plaintext-key")
+  })
+
+  test("a dead credential stays a failure — only a missing listing is a skip", async () => {
+    for (const status of [401, 403, 429, 500, 503]) {
+      const { deps } = harness({ error: { message: "nope" } }, status)
+      expect((await refreshAccountCatalog(deps, accountRow(), NOW)).kind).toBe("failed")
+    }
+  })
+
+  /**
+   * An OpenAI-compatible endpoint that serves only `/chat/completions` answers `GET /models` with
+   * 404 or 405, every hour, forever. That is the endpoint's shape, not an incident.
+   */
+  test("an endpoint with no model listing is skipped rather than failed, and nothing is written", async () => {
+    for (const status of [404, 405]) {
+      const { deps, writes } = harness({ error: { message: "not found" } }, status)
+
+      const outcome = await refreshAccountCatalog(
+        deps,
+        accountRow({ provider: "openai-compatible", baseUrl: "https://qwen.example/v1" }),
+        NOW,
+      )
+
+      expect(outcome.kind).toBe("skipped")
+      if (outcome.kind !== "skipped") return
+      expect(outcome.reason).toBe("http:no-model-listing")
+      // A mistyped base URL answers 404 too, so the status stays readable.
+      expect(outcome.detail).toContain(String(status))
+      expect(writes).toEqual([])
+    }
   })
 
   /**

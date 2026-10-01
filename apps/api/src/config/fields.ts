@@ -70,6 +70,23 @@ export const fraction = z
   .transform(Number)
   .refine((v) => v >= 0 && v <= 1, "must be between 0 and 1")
 
+/**
+ * A comma-separated list of exact request paths. Each must start with `/`: a bare `healthz` would
+ * silently match nothing, and a knob that silently does nothing is worse than one that fails boot.
+ */
+export const pathList = z
+  .string()
+  .transform((v) =>
+    v
+      .split(",")
+      .map((path) => path.trim())
+      .filter((path) => path.length > 0),
+  )
+  .refine(
+    (paths) => paths.length > 0 && paths.every((path) => path.startsWith("/")),
+    "must be a comma-separated list of paths, each starting with /",
+  )
+
 export const absoluteUrl = z.string().refine((v) => URL.canParse(v), "must be an absolute URL")
 
 const ENCRYPTION_KEY_BYTES = 32

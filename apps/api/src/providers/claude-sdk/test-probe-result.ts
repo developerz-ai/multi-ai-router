@@ -1,3 +1,4 @@
+import type { UpstreamFailureKind } from "../types"
 import { classifySdkFailure } from "./errors"
 
 /**
@@ -60,6 +61,21 @@ export function resultFailureMessage(message: {
   const stated = message.result?.trim()
   if (stated !== undefined && stated !== "") return classifySdkFailure(stated).clientMessage
   return `the Claude Agent SDK turn did not succeed (${message.subtype})`
+}
+
+/**
+ * The same reading with its class beside it, for a caller that has to *act* on the failure rather
+ * than render it — the idle sweep tells a spent window (expected, a clock fixes it) from a turn
+ * that broke. Absent when the turn said nothing quotable: no sentence, no class, never a guess.
+ */
+export function resultFailure(message: { readonly subtype: string; readonly result?: string }): {
+  readonly message: string
+  readonly failureKind?: UpstreamFailureKind
+} {
+  const stated = message.result?.trim()
+  if (stated === undefined || stated === "") return { message: resultFailureMessage(message) }
+  const { classification, clientMessage } = classifySdkFailure(stated)
+  return { message: clientMessage, failureKind: classification.kind }
 }
 
 export function snippet(text: string): string {

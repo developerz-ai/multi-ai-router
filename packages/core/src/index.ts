@@ -54,6 +54,7 @@ export {
   CredentialDecryptError,
   CreditsExhaustedError,
   CsrfTokenError,
+  InvalidRequestError,
   isRouterError,
   KeyRateLimitedError,
   KeyRevokedError,
@@ -66,6 +67,7 @@ export {
   RouterError,
   ScopeViolationError,
   TranslationError,
+  UnsupportedContentEncodingError,
   UpstreamAuthError,
   UpstreamTimeoutError,
 } from "./errors"

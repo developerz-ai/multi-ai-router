@@ -251,7 +251,7 @@ export function AccountEditDialog(props: AccountEditDialogProps) {
               class={styles.aliases}
               id={ids.id}
               onInput={(event) => setAliases(event.currentTarget.value)}
-              placeholder="claude-sonnet-4-5 = glm-4.6"
+              placeholder="claude-sonnet-5-5 = glm-4.6"
               rows={3}
               spellcheck={false}
               value={aliases()}

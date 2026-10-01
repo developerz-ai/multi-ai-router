@@ -24,6 +24,8 @@ export const ROUTER_ERROR_CODES = [
   "translation_failed",
   "model_not_found",
   "request_too_large",
+  "invalid_request",
+  "unsupported_content_encoding",
 ] as const
 
 export type RouterErrorCode = (typeof ROUTER_ERROR_CODES)[number]
@@ -255,6 +257,27 @@ export class ModelNotFoundError extends RouterError {
 export class RequestTooLargeError extends RouterError {
   readonly code = "request_too_large"
   readonly status = 413
+}
+
+/**
+ * The request was refused at the router's own edge, before anything was routed or translated: its
+ * body is empty, names no model, or names one too long to be one. `400`, and deliberately not
+ * {@link TranslationError} — nothing was converted, and `translation_failed` on these lines sent
+ * an operator looking for a dialect problem in a request that never reached a dialect.
+ */
+export class InvalidRequestError extends RouterError {
+  readonly code = "invalid_request"
+  readonly status = 400
+}
+
+/**
+ * The request body arrived under a `Content-Encoding` the router does not decode. `415`, the
+ * status RFC 9110 gives exactly this, and its own class because the remedy is not "fix a field":
+ * the body may be perfectly well formed underneath, and the caller only has to stop compressing it.
+ */
+export class UnsupportedContentEncodingError extends RouterError {
+  readonly code = "unsupported_content_encoding"
+  readonly status = 415
 }
 
 /** Narrows an unknown thrown value to a {@link RouterError}. */

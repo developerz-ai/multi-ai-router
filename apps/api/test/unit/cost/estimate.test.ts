@@ -28,13 +28,61 @@ function tokens(overrides: Partial<TokenCounts> = {}): TokenCounts {
 
 describe("pricing a metered attempt", () => {
   test("input and output bill at the model's published per-Mtok rates", () => {
-    // Sonnet 5 at $3 / $15: 1M in and 1M out is $18 exactly.
+    // Sonnet 5 at $2 / $10: 1M in and 1M out is $12 exactly.
     const cost = estimateCost({
       provider: "anthropic-api",
       model: "claude-sonnet-5",
       tokens: tokens({ tokensIn: 1_000_000, tokensOut: 1_000_000 }),
     })
-    expect(cost).toEqual({ costEstimate: "18.000000", costBasis: "metered" })
+    expect(cost).toEqual({ costEstimate: "12.000000", costBasis: "metered" })
+  })
+
+  /**
+   * The gap this guards: lookup is the exact name, then the name with a date pin stripped, and
+   * nothing else — there is no family fallback, so a model released after the table was last
+   * edited prices as unknown and its spend silently reads NULL until a row names it.
+   */
+  test("a model with no row of its own is unknown — a sibling's price is never borrowed", () => {
+    for (const model of ["claude-opus-5-6", "claude-sonnet-5-6", "claude-fable-5-2"]) {
+      expect(lookupRates("anthropic-api", model)).toBeNull()
+    }
+  })
+
+  test("the current lineup is priced at its own published rates, not its predecessor's", () => {
+    const counts = tokens({ tokensIn: 1_000_000, tokensOut: 1_000_000 })
+    const priced = (model: string) =>
+      estimateCost({ provider: "anthropic-api", model, tokens: counts }).costEstimate
+
+    // Opus 5.5 is $4 / $20 — cheaper than Opus 5's $5 / $25, which a family default would have used.
+    expect(priced("claude-opus-5-5")).toBe("24.000000")
+    expect(priced("claude-opus-5")).toBe("30.000000")
+    expect(priced("claude-sonnet-5-5")).toBe("12.000000")
+    expect(priced("claude-fable-5-1")).toBe("60.000000")
+  })
+
+  test("a subscription values the current lineup too, rather than recording NULL", () => {
+    for (const model of ["claude-fable-5-1", "claude-opus-5-5", "claude-sonnet-5-5"]) {
+      const cost = estimateCost({
+        provider: "anthropic-oauth",
+        model,
+        tokens: tokens({ tokensIn: 1_000 }),
+        billing: "subscription",
+      })
+      expect(cost.costBasis).toBe("notional")
+      expect(cost.costEstimate).not.toBeNull()
+    }
+  })
+
+  test("the cache-read multiple is the one the vendor footnotes per model, not one constant", () => {
+    // 0.025x on Fable 5.1, 0.05x on Opus 5.5, the standard 0.1x everywhere else.
+    expect(lookupRates("anthropic-api", "claude-fable-5-1")?.cacheReadPerMtok).toBe(0.25)
+    expect(lookupRates("anthropic-api", "claude-fable-5")?.cacheReadPerMtok).toBe(1)
+    expect(lookupRates("anthropic-api", "claude-opus-5-5")?.cacheReadPerMtok).toBe(0.2)
+    expect(lookupRates("anthropic-api", "claude-sonnet-5-5")?.cacheReadPerMtok).toBe(0.2)
+    // The 5-minute write multiple did not move: 1.25x on every row.
+    expect(lookupRates("anthropic-api", "claude-fable-5-1")?.cacheWritePerMtok).toBe(12.5)
+    expect(lookupRates("anthropic-api", "claude-opus-5-5")?.cacheWritePerMtok).toBe(5)
+    expect(lookupRates("anthropic-api", "claude-sonnet-5-5")?.cacheWritePerMtok).toBe(2.5)
   })
 
   test("cache reads and cache writes are their own rates, not the input rate", () => {
@@ -420,7 +468,7 @@ describe("an injected price lookup", () => {
       }),
     ).toEqual({ costEstimate: "300.000000", costBasis: "metered" })
     // The shipped table itself is untouched — an override layers over it, it does not replace it.
-    expect(lookupRates("anthropic-api", "claude-sonnet-5")?.inputPerMtok).toBe(3)
+    expect(lookupRates("anthropic-api", "claude-sonnet-5")?.inputPerMtok).toBe(2)
   })
 
   test("prices a provider the shipped table has no list for at all", () => {
@@ -493,6 +541,6 @@ describe("model name matching", () => {
   })
 
   test("casing and stray whitespace do not lose a price", () => {
-    expect(lookupRates("anthropic-api", "  Claude-Sonnet-5 ")?.inputPerMtok).toBe(3)
+    expect(lookupRates("anthropic-api", "  Claude-Sonnet-5 ")?.inputPerMtok).toBe(2)
   })
 })

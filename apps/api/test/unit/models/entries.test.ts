@@ -99,6 +99,27 @@ describe("the shipped context table", () => {
     )
   })
 
+  test("a model with no row is unknown — a sibling's window is never borrowed", () => {
+    expect(lookupContextWindow("anthropic-api", "claude-opus-5-6")).toBeNull()
+    expect(lookupContextWindow("anthropic-oauth", "claude-sonnet-5-6")).toBeNull()
+  })
+
+  test("the current lineup is sized, on both Anthropic surfaces", () => {
+    for (const model of ["claude-fable-5-1", "claude-opus-5-5", "claude-sonnet-5-5"]) {
+      for (const provider of ["anthropic-api", "anthropic-oauth"] as const) {
+        expect(lookupContextWindow(provider, model)).toEqual({
+          contextTokens: 1_000_000,
+          maxOutputTokens: 128_000,
+        })
+      }
+    }
+    // The pinned id the overview publishes for Haiku resolves through its family row.
+    expect(lookupContextWindow("anthropic-api", "claude-haiku-4-5-20251001")).toEqual({
+      contextTokens: 200_000,
+      maxOutputTokens: 64_000,
+    })
+  })
+
   test("a subscription reads the same windows as the API — it is the same model", () => {
     expect(lookupContextWindow("anthropic-oauth", "claude-opus-5")).toEqual({
       contextTokens: 1_000_000,

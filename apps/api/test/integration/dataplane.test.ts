@@ -1668,6 +1668,96 @@ describe("request validation", () => {
   })
 
   /**
+   * Three refusals that used to share one sentence under `translation_failed`, which left 66
+   * identical production lines from one key with nothing to tell them apart. Each now names its
+   * own cause, in the caller's dialect, and none writes a usage row: there is no model to put on it.
+   */
+  test("a body naming no model is an invalid request, not a translation failure", async () => {
+    const { app, upstream, usage } = harness({ responses: [() => jsonResponse(200, {})] })
+
+    const res = await app.request("/v1/messages", post(JSON.stringify({ messages: [] }), bearer()))
+    await settle()
+
+    expect(res.status).toBe(400)
+    expect(await res.json()).toMatchObject({
+      type: "error",
+      error: {
+        type: "invalid_request_error",
+        message: expect.stringContaining("must name a model"),
+      },
+    })
+    expect(upstream.calls).toHaveLength(0)
+    expect(usage.rows).toHaveLength(0)
+  })
+
+  test("an empty body says it is empty, in both error shapes", async () => {
+    const { app, upstream, usage } = harness({ responses: [() => jsonResponse(200, {})] })
+
+    const anthropic = await app.request("/v1/messages", post("", bearer()))
+    const openai = await app.request("/v1/chat/completions", post("", bearer()))
+    await settle()
+
+    expect(anthropic.status).toBe(400)
+    expect(await anthropic.json()).toMatchObject({
+      type: "error",
+      error: { type: "invalid_request_error", message: expect.stringContaining("empty") },
+    })
+    expect(openai.status).toBe(400)
+    expect(await openai.json()).toMatchObject({
+      error: { code: "invalid_request", message: expect.stringContaining("empty"), param: null },
+    })
+    expect(upstream.calls).toHaveLength(0)
+    expect(usage.rows).toHaveLength(0)
+  })
+
+  test("a compressed body is a 415 naming the encoding, never 'must name a model'", async () => {
+    const { app, upstream, usage } = harness({ responses: [() => jsonResponse(200, {})] })
+    // The bytes are irrelevant and deliberately a well-formed body: the refusal is decided from the
+    // header alone, before the body is read, and nothing is decompressed to check.
+    const gzip = { ...bearer(), "content-encoding": "gzip" }
+
+    const anthropic = await app.request("/v1/messages", post(MESSAGE, gzip))
+    const openai = await app.request("/v1/chat/completions", post(MESSAGE, gzip))
+    await settle()
+
+    expect(anthropic.status).toBe(415)
+    expect(await anthropic.json()).toMatchObject({
+      type: "error",
+      error: { message: expect.stringContaining("Content-Encoding: gzip") },
+    })
+    expect(openai.status).toBe(415)
+    expect(await openai.json()).toMatchObject({
+      error: { code: "unsupported_content_encoding", param: null },
+    })
+    expect(upstream.calls).toHaveLength(0)
+    expect(usage.rows).toHaveLength(0)
+  })
+
+  test("an explicit identity encoding is served: the body is not encoded", async () => {
+    const { app, upstream } = harness({
+      responses: [() => jsonResponse(200, { usage: { input_tokens: 1, output_tokens: 1 } })],
+    })
+
+    const res = await app.request(
+      "/v1/messages",
+      post(MESSAGE, { ...bearer(), "content-encoding": "identity" }),
+    )
+
+    expect(res.status).toBe(200)
+    expect(upstream.calls).toHaveLength(1)
+  })
+
+  test("the edge refusals count on router_requests_total as the caller's fault", async () => {
+    const { app } = harness({ responses: [() => jsonResponse(200, {})] })
+
+    await app.request("/v1/messages", post("", bearer()))
+    await settle()
+
+    const exposition = await (await app.request("/metrics")).text()
+    expect(exposition).toMatch(/router_requests_total\{[^}]*outcome="client_error"\} 1/)
+  })
+
+  /**
    * The model name is the one client-supplied string the router stores, on every attempt row and on
    * a `usage_daily` row that never expires — so an unbounded one is a write any key holder can make
    * into two tables forever. It is refused at the edge and never truncated: a shortened model name

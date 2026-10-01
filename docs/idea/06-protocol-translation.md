@@ -81,8 +81,8 @@ operator's `sonnet → glm-4.7` — carries one field neither ecosystem defines,
 the canonical id it names today: the SDK's own word for a subscription, the account's alias map
 otherwise, the first in-scope account's answer where several agree. A concrete id carries no such
 field (absent, not null), so a strict client sees exactly the documented shape. OpenAI shape:
-`{ "id": "sonnet", "object": "model", "created": …, "owned_by": "anthropic-oauth", "resolved_model": "claude-sonnet-5" }`;
-Anthropic shape: `{ "type": "model", "id": "sonnet", "display_name": "sonnet", "resolved_model": "claude-sonnet-5" }`.
+`{ "id": "sonnet", "object": "model", "created": …, "owned_by": "anthropic-oauth", "resolved_model": "claude-sonnet-5-5" }`;
+Anthropic shape: `{ "type": "model", "id": "sonnet", "display_name": "sonnet", "resolved_model": "claude-sonnet-5-5" }`.
 Both shapes are served on the one path, chosen by the credential style the client presented
 (`x-api-key` → Anthropic, bearer → OpenAI); `GET /v1/models/:id` resolves the same way. **Resolution
 is information, never a rename**: the request path sends the client's own string upstream unchanged
@@ -551,6 +551,24 @@ One router-origin status is worth naming because it is easy to get wrong: a body
 `invalid_request_error` with `code: "request_too_large"` in the OpenAI one — and never as `400`. Both
 are the caller's to fix, and the remedies are opposites: `400` says the request is malformed and
 sends a developer hunting a bad field in a body that was merely long.
+
+The refusals the router makes **before a body has named a model** are separate from translation and
+say which they are. None is `translation_failed` — nothing was translated — and each is decided from
+what is already in hand (a header, a byte count), never by parsing or decompressing the body:
+
+| Request | Status | `code` | Message says |
+|---|---|---|---|
+| `Content-Encoding` present (anything but `identity`) | `415` | `unsupported_content_encoding` | compressed request bodies are not supported; names the encoding |
+| Zero-length body | `400` | `invalid_request` | the request body is empty |
+| Bytes, but no top-level string `model` (not JSON, a top-level array, a non-string model) | `400` | `invalid_request` | the request body must name a model |
+| A `model` longer than the name ceiling | `400` | `invalid_request` | the model name is longer than the ceiling |
+
+The router does not decode request bodies: routing reads the model name out of the raw bytes and a
+same-dialect body goes upstream untouched, so a compressed body is refused before it is read rather
+than answered "must name a model" — true of the bytes, useless to a caller whose body named one. In
+the Anthropic shape all four render as `invalid_request_error` (the type follows the status, below);
+the OpenAI shape carries the `code`. None writes a `UsageRecord` — there is no model to put on the
+row — and all count on `router_requests_total{outcome="client_error"}`.
 
 The rendered `type` is derived from the **HTTP status**, not copied from the upstream body. The
 vocabularies are per-dialect — `invalid_request_error` is spelled the same in both, `overloaded_error`

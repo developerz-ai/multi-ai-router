@@ -21,6 +21,8 @@ export interface Tally {
   gauged: number
   /** Idle accounts billed a keepalive turn. */
   probed: number
+  /** Keepalive turns answered "the window is spent" — expected, and not counted in `failed`. */
+  spent: number
   /** Subscription accounts whose access token was cold and was warmed by a keepalive turn. */
   warmed: number
   /** Subscription accounts found cold while warming is switched off. */
@@ -62,16 +64,24 @@ export async function isCold(
 }
 
 /**
+ * What one keepalive turn came to. `spent` is a turn that ran and was answered "the window is
+ * spent" — the account is cooling down on its own clock, which is its breaker's and the quota
+ * store's business and never this sweep's. `skipped` is a turn that was never sent.
+ */
+export type KeepAliveResult = "ok" | "spent" | "failed" | "skipped"
+
+/**
  * The keepalive: one small real turn so a live process refreshes and persists the credential.
- * Resolves `true` only when the turn ran and succeeded — the one case a turn-free read may follow.
- * Bounded per tick by `batchSize`, because every warm is a ~245 MB subprocess and a billed turn.
+ * `ok` is the case a turn-free read may follow outright; after `spent` the sweep asks again
+ * whether the credential is cold. Bounded per tick by `batchSize`, because every warm is a
+ * ~245 MB subprocess and a billed turn.
  */
 export async function warm(
   deps: Pick<IdleAccountProbeDeps, "test" | "models" | "warmCredentials" | "batchSize">,
   account: AccountRow,
   logger: Logger,
   tally: Tally,
-): Promise<boolean> {
+): Promise<KeepAliveResult> {
   const model = deps.models[account.provider]
   const reason = !deps.warmCredentials
     ? "keepalive is off"
@@ -88,7 +98,7 @@ export async function warm(
       provider: account.provider,
       reason: reason ?? "no probe model for this provider",
     })
-    return false
+    return "skipped"
   }
   tally.warmed += 1
   return keepAlive(deps, account, model, logger, tally)
@@ -123,30 +133,46 @@ export async function readUsage(
   }
 }
 
-/** The billed turn. Never writes a status: the test already fed the breaker, whose verdict is better. */
+/**
+ * The billed turn. Never writes a status, and neither does the test behind it: a test strikes no
+ * breaker — it only folds the turn's own rate-limit readings into the quota and health stores
+ * (`services/accounts/test-now.ts`). A failed keepalive is therefore a log line and a tally, and
+ * the account's state stays whatever real traffic and those readings last made it.
+ */
 export async function keepAlive(
   deps: Pick<IdleAccountProbeDeps, "test">,
   account: AccountRow,
   model: string,
   logger: Logger,
   tally: Tally,
-): Promise<boolean> {
+): Promise<KeepAliveResult> {
   const result = await deps.test(account.id, model)
   if (!result.tested) {
     // Its own cooldown declined — an operator tested it moments ago. Nothing was billed.
     tally.skipped += 1
-    return false
+    return "skipped"
   }
   tally.probed += 1
   if (result.outcome === "ok") {
     tally.refreshed += 1
     logger.info("idle account kept alive", { accountId: account.id, provider: account.provider })
-    return true
+    return "ok"
   }
-  tally.failed += 1
-  logger.warn("idle account failed its keepalive test", {
+  const fields = {
     accountId: account.id,
     provider: account.provider,
-  })
-  return false
+    // Router-authored by the test's own contract, so it is safe on a log line as it stands.
+    reason: result.message ?? "the test gave no reason",
+    ...(result.failureKind === undefined ? {} : { failureKind: result.failureKind }),
+  }
+  if (result.failureKind === "rate-limited") {
+    // `info`: a subscription at its limit answering "at my limit" is the account working as
+    // designed. It comes back on its own clock, and nothing here retries it.
+    tally.spent += 1
+    logger.info("idle account keepalive found the subscription window spent", fields)
+    return "spent"
+  }
+  tally.failed += 1
+  logger.warn("idle account failed its keepalive test", fields)
+  return "failed"
 }

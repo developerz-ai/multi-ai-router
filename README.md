@@ -383,7 +383,7 @@ Cost comes from a price table shipped with the image and overridable per provide
 
 | Concern | Choice |
 |---|---|
-| Runtime | Bun 1.3+ |
+| Runtime | Bun 1.4+ |
 | Language | TypeScript, strict, no `any` |
 | HTTP | Hono |
 | Validation | Zod at every external boundary |

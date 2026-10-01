@@ -140,6 +140,11 @@ const OUTCOME_BY_ERROR_CODE: Readonly<Record<RouterErrorCode, UsageOutcome>> = {
   credential_decrypt_failed: "credential_decrypt_failed",
   translation_failed: "translation_failed",
   request_too_large: "request_too_large",
+  // Both are refused before the body has named a model, so neither ever writes a `UsageRecord`
+  // (`model` is non-nullable) — these entries only label the refusal on `router_requests_total`.
+  // The caller sent something no account could have been asked to serve: the `client_error` family.
+  invalid_request: "client_error",
+  unsupported_content_encoding: "client_error",
   admin_auth_failed: "router_error",
   csrf_token_invalid: "router_error",
   // `GET /v1/models/:id` never runs an attempt and never writes a `UsageRecord` — this only

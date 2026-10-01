@@ -10,7 +10,7 @@ import { parseEnv } from "../../src/config/env"
  * `oven/bun:1` floats an entire major: the pipeline tests on the bun in `ci.yml`'s `BUN_VERSION` and
  * the image ships whatever `:1` resolved to on build day — 1.9.x against code nobody ran on 1.9.x,
  * with the workflow comment still claiming the two "never diverge". And a version tag is mutable, so
- * even `:1.3.0` can be re-pushed under an old release: rebuilding `v1.0.0` a year from now would
+ * even `:1.4.2` can be re-pushed under an old release: rebuilding `v1.0.0` a year from now would
  * produce a different image from the one that shipped. A tag plus an index digest fixes both.
  *
  * The file read is the assertion, not a shortcut around one — the artifacts under test *are* the
