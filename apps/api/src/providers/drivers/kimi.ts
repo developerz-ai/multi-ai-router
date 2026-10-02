@@ -86,14 +86,18 @@ const ANY_USAGE_LIMIT = new RegExp(`${USAGE_LIMIT_HIT.source}|${QUOTA_REOPENS.so
  * 1. No suspension, ban, deactivation, termination or disabled account/key named: not this rule.
  *    Terms-of-service or violation wording alone is boilerplate ("Usage is subject to our Terms of
  *    Service"), never a verdict.
- * 2. That wording **in the same sentence as** a breach of terms: taken away, whatever clock the
- *    body also names.
+ * 2. That wording **in the same sentence as** a breach laid at the account's door ("for violating",
+ *    "violation of", "due to a violation", "violated"): taken away, whatever clock the body also
+ *    names. The attribution is required — a bare "Terms of Service" beside the pause ("…suspended
+ *    until the window ends, per our Terms of Service") is still boilerplate. Known edge: a sentence
+ *    that only *warns* in those words ("accounts may be suspended for violating our terms") reads
+ *    as a breach, and lands on `auth`'s re-tested cooldown rather than a spent window's.
  * 3. Otherwise it is a pause only when the body carries *both* a reached usage limit and a clock
  *    that reopens it ("temporarily", "until … resets / ends / window", "quota will reset / be
  *    refreshed") — read over the whole message, since Kimi puts them in separate sentences. Either
  *    one alone ("temporarily suspended"; "limit reached, account suspended") stays taken away.
  *
- * Provenance: review of #139 (2026-10-02), rounds 1 and 2 — no such Kimi body has been observed in
+ * Provenance: review of #139 (2026-10-02), rounds 1 to 3 — no such Kimi body has been observed in
  * either direction; the rule exists so the family regexes above never read a removal as a spent
  * window, and so it never reads a spent window as a removal. Blast radius: a Kimi `401`/`403` naming
  * a suspension — `auth` instead of a short cooldown, or the reverse. Scoped to those statuses: a
@@ -102,7 +106,8 @@ const ANY_USAGE_LIMIT = new RegExp(`${USAGE_LIMIT_HIT.source}|${QUOTA_REOPENS.so
 const AUTH_STATUSES = [401, 403]
 const TAKEN_AWAY =
   /\b(?:suspend(?:ed|sion)|banned|deactivated|terminated)\b|\b(?:account|key)\b[^.]{0,30}\bdisabled\b/i
-const TERMS_BREACH = /terms of (?:service|use)|\bviolat(?:ed|ing|ions?)\b/i
+const TERMS_BREACH =
+  /\bviolat(?:ed|ing)\b|\bviolations? of\b|\b(?:for|due to)\b[^.]{0,30}\bviolations?\b/i
 const PAUSE_CLOCK = /\btemporar(?:y|ily)\b|\buntil\b[^.]{0,60}\b(?:resets?|ends?|window)\b/i
 const SENTENCE_END = /(?<=[.!?])\s+/
 
