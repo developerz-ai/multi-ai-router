@@ -454,8 +454,9 @@ disabled)` while the stored row said `active` — the operator's word, minted by
   `ROUTING_AUTH_FAILURE_COOLDOWN_MS`, source `estimated`. Each consecutive refusal doubles the wait
   — 15, 30, 60, 120 minutes by default — up to `ROUTING_AUTH_FAILURE_MAX_COOLDOWN_MS` (4 hours),
   widened by the same jitter as every other step so keys refused together are not re-tested
-  together. The streak counts refusals only: server errors before the first one do not lengthen it,
-  and a success starts it over. A limiter reading riding the same response never shortens the wait
+  together. The streak starts at the first refusal: server errors before it do not lengthen it, and a
+  success starts it over. Once the label is on, a failure that keeps it (a server error on a probe,
+  below the failure threshold) counts toward the streak too — bounded by the cap. A limiter reading riding the same response never shortens the wait
   and never re-labels it — when its reset is the longer one the cooldown takes that instant and
   keeps `credential-rejected`, and the reading is not counted as a second refusal. A probe that is
   merely rate-limited proved the key works and drops the label. It is not a standing block —

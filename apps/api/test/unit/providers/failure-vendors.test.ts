@@ -244,6 +244,37 @@ describe("kimi", () => {
     expect(result?.rateLimit).toBeNull()
   })
 
+  /**
+   * The suspension wording is a guard on Kimi's `403` limit bodies, not a new reading of every
+   * status: a throttle or an overload that happens to say "suspended" / "terminated" / "violation"
+   * keeps its own kind, or a transient fault would park an api-key account as needing a human.
+   */
+  test.each([
+    [
+      429,
+      "rate_limit_reached_error",
+      "Requests temporarily suspended: rate limit violation.",
+      "rate-limited",
+    ],
+    [
+      503,
+      "engine_overloaded_error",
+      "Stream terminated: the engine is overloaded.",
+      "server-error",
+    ],
+    [500, "server_error", "Upstream connection terminated.", "server-error"],
+  ] as const)(
+    "a %d whose message says suspended/terminated keeps its own kind",
+    (status, type, message, kind) => {
+      const result = kimi?.classifyFailure(
+        response(status, { body: { type: "error", error: { type, message } } }),
+      )
+
+      expect(result?.kind).toBe(kind)
+      expect(result?.signal).not.toBe("kimi:account-suspended")
+    },
+  )
+
   /** The reversed order of the same fact: the limit first, `reached` after it. */
   test.each([
     ["Usage limit reached. Try again later.", "kimi:usage-limit", 15 * 60],

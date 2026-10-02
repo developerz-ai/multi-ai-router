@@ -131,7 +131,22 @@ function withEstimatedReset(
   }
 }
 
-/** Rule builders. Every driver's rules are one of these three shapes; none of them copies logic. */
+/**
+ * Rule builders. Every driver's rules are one of the three shapes below, optionally narrowed by
+ * {@link onStatus} or carrying {@link withResetEstimate}; none of them copies logic.
+ */
+
+/**
+ * The same rule, matched only on the given statuses. For a message guard whose words are only a
+ * verdict in one context — "suspended" on a `403` is an account taken away, on a `429` it is a
+ * throttle — so the guard cannot reach a status it was never written for.
+ */
+export function onStatus(
+  statuses: readonly number[],
+  rule: ClassificationRule,
+): ClassificationRule {
+  return { ...rule, when: (facts, status) => statuses.includes(status) && rule.when(facts, status) }
+}
 
 /** The same rule, carrying an estimated reset for responses that name none. */
 export function withResetEstimate(

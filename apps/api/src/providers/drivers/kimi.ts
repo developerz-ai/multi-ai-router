@@ -1,5 +1,5 @@
 import { createHttpDriver } from "../driver"
-import { messageRule, typeRule, withResetEstimate } from "../failure/classify"
+import { messageRule, onStatus, typeRule, withResetEstimate } from "../failure/classify"
 
 /**
  * `kimi` — Anthropic-shaped coding surface, prepaid balance, own model ids (`k3`). An Account
@@ -69,9 +69,11 @@ const ANY_USAGE_LIMIT =
  * window a clock reopens, so this is read first and lands on `auth`: reported as needing a human,
  * re-tested only on the long credential cadence. Provenance: review of #139 (2026-10-02) — no such
  * Kimi body has been observed; the guard exists so the family regexes above cannot ever read one as
- * a spent window. Blast radius: a Kimi `403` naming a suspension, ban, deactivation, terms
+ * a spent window. Blast radius: a Kimi `401`/`403` naming a suspension, ban, deactivation, terms
  * violation or a disabled account/key — it stays `auth` instead of becoming a short cooldown.
+ * Scoped to those statuses: a `429` or `5xx` saying "suspended" or "terminated" keeps its own kind.
  */
+const AUTH_STATUSES = [401, 403]
 const ACCOUNT_SUSPENDED =
   /\b(?:suspend(?:ed|sion)|banned|deactivated|terminated|terms of (?:service|use)|violat(?:ed|ing|ion))\b|\b(?:account|key)\b[^.]{0,30}\bdisabled\b/i
 
@@ -93,7 +95,8 @@ export const kimiDriver = createHttpDriver({
     typeRule("credits-exhausted", "kimi:exceeded_current_quota_error", QUOTA_TYPES),
     messageRule("credits-exhausted", "kimi:insufficient-balance", INSUFFICIENT_BALANCE),
     // Ahead of every limit rule: a suspension that also mentions a limit is still a suspension.
-    messageRule("auth", "kimi:account-suspended", ACCOUNT_SUSPENDED),
+    // Auth statuses only — on a 429 or a 5xx the same words describe a throttle or a fault.
+    onStatus(AUTH_STATUSES, messageRule("auth", "kimi:account-suspended", ACCOUNT_SUSPENDED)),
     // Ahead of the auth rules below: these arrive as a 403 and must never be read as one. The
     // specific windows first, so each carries its own signal and re-test cadence; the family last,
     // for a window Kimi has not shipped yet.
