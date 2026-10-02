@@ -707,3 +707,60 @@ describe("a rejected API key", () => {
     expect(overlayHealth(disabled.snapshot, store.stateOf("key")).status).toBe("disabled")
   })
 })
+
+/**
+ * Review of #139: `recordFailure` labels a rejected key, then `applyRateLimit` folds the limiter
+ * reading that rode the *same* response through the breaker's `trip`. When that reading's reset was
+ * longer than the auth cooldown, `trip` built a fresh, ordinary cooldown and the label was gone — a
+ * refused key reported as a spent window. A reading says when a limiter refills; it never says
+ * whether a key works.
+ */
+describe("a limiter reading riding a rejected key's response", () => {
+  const COOLDOWN = 900_000
+  const HOUR = 3_600_000
+  const after = (ms: number): Date => new Date(NOW.getTime() + ms)
+  const store = () => createHealthStore({ authFailureCooldownMs: COOLDOWN, jitter: () => 0 })
+  const reject = (s: ReturnType<typeof createHealthStore>, now: Date): void =>
+    s.recordFailure("key", { kind: "auth", status: 401, message: "401" }, now, {
+      authKind: "api-key",
+    })
+  const longReading = (resetsAt: Date) =>
+    signal({ limited: true, resetsAt, resetSource: "provider-reported" })
+
+  test("keeps the label when its reset is longer than the auth cooldown", () => {
+    const s = store()
+    reject(s, NOW)
+    s.applyRateLimit("key", longReading(after(HOUR)), NOW)
+
+    const breaker = s.stateOf("key").breaker
+    expect(breaker.status).toBe("cooling_down")
+    expect(breaker.cooldownUntil).toEqual(after(HOUR))
+    expect(breaker.cooldownReason).toBe("credential-rejected")
+  })
+
+  test("is not a second rejection: the streak counts responses, not readings", () => {
+    const s = store()
+    reject(s, NOW)
+    s.applyRateLimit("key", longReading(after(HOUR)), NOW)
+    expect(s.stateOf("key").breaker.consecutiveFailures).toBe(1)
+
+    // The probe after it is refused again: the second step (2 x 15 min), not the third.
+    reject(s, after(HOUR))
+    expect(s.stateOf("key").breaker.cooldownUntil).toEqual(after(HOUR + 2 * COOLDOWN))
+  })
+
+  test("a probe answered 429 proved the key works: its own reading does not bring the label back", () => {
+    const s = store()
+    reject(s, NOW)
+    s.recordFailure(
+      "key",
+      { kind: "rate-limited", retryAfterSeconds: 60, message: "429" },
+      after(COOLDOWN),
+    )
+    s.applyRateLimit("key", longReading(after(COOLDOWN + HOUR)), after(COOLDOWN))
+
+    const breaker = s.stateOf("key").breaker
+    expect(breaker.status).toBe("cooling_down")
+    expect(breaker.cooldownReason).toBeUndefined()
+  })
+})

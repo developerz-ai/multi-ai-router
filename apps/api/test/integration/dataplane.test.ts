@@ -6,6 +6,7 @@ import type { UsageRecord } from "../../src/services/usage"
 import {
   account,
   jsonResponse,
+  NOW,
   newRouterKey,
   slowStream,
   subscriptionAccount,
@@ -522,6 +523,46 @@ describe("failover", () => {
 
     expect(second.status).toBe(503)
     expect(second.headers.get("Retry-After")).toBeNull()
+    expect(upstream.calls).toHaveLength(1)
+  })
+
+  test("a 401 whose limiter reset outlasts the auth cooldown is still a rejected key", async () => {
+    // Review of #139: the reading that rode the same response lengthened the cooldown through
+    // `foldRateLimit` -> `trip`, and the fresh cooldown it built dropped `credential-rejected`. The
+    // header said when the limiter refills; it said nothing about the key, and the key was refused.
+    const { app, health, upstream, clock } = harness({
+      health: { authFailureCooldownMs: 900_000 },
+      responses: [
+        () =>
+          jsonResponse(
+            401,
+            { type: "error", error: { type: "authentication_error", message: "invalid key" } },
+            {
+              "anthropic-ratelimit-requests-remaining": "0",
+              "anthropic-ratelimit-requests-reset": new Date(
+                NOW.getTime() + 2 * 3_600_000,
+              ).toISOString(),
+            },
+          ),
+        () => jsonResponse(200, {}),
+      ],
+    })
+
+    await app.request("/v1/messages", post(MESSAGE, bearer()))
+    await settle()
+
+    const breaker = health.stateOf("acct-1").breaker
+    expect(breaker.status).toBe("cooling_down")
+    expect(breaker.cooldownReason).toBe("credential-rejected")
+    // The longer instant stands — the limiter's own — and the response counts as one rejection.
+    expect(breaker.cooldownUntil).toEqual(new Date(NOW.getTime() + 2 * 3_600_000))
+    expect(clock.now()).toEqual(NOW)
+    expect(breaker.consecutiveFailures).toBe(1)
+
+    const second = await app.request("/v1/messages", post(MESSAGE, bearer()))
+    const text = await second.text()
+    expect(second.status).toBe(503)
+    expect(text).toContain("credential rejected upstream")
     expect(upstream.calls).toHaveLength(1)
   })
 

@@ -9,8 +9,10 @@
 import { describe, expect, test } from "bun:test"
 import {
   type AttemptFailure,
+  type BreakerOptions,
   type BreakerState,
   backoffMs,
+  DEFAULT_AUTH_FAILURE_MAX_COOLDOWN_MS,
   DEFAULT_FAILURE_THRESHOLD,
   type FailureKind,
   HEALTHY,
@@ -293,5 +295,106 @@ describe("a rejected API key is a long, labeled cooldown — never the operator'
     expect(state.status).toBe("needs_reauth")
     expect(state.cooldownReason).toBeUndefined()
     expect(phase(state, at(86_400_000))).toBe("blocked")
+  })
+})
+
+/**
+ * Review of #139: a key the provider genuinely revoked was re-tested every 15 minutes forever — the
+ * same cadence on the hundredth refusal as on the first, and the same instant for every key refused
+ * together. The cooldown now doubles per consecutive refusal up to a configured cap, jitter widens
+ * each step, and a success starts the count over.
+ */
+describe("a key that stays refused is re-tested less and less often", () => {
+  const BASE = 900_000
+  const HOUR = 3_600_000
+  const reject = (state: BreakerState, now: Date, options: BreakerOptions = {}): BreakerState =>
+    recordFailure(state, failure("auth"), now, {
+      authKind: "api-key",
+      authFailureCooldownMs: BASE,
+      ...options,
+    })
+  /** Refuse `times` times in a row, each refusal at the instant the previous cooldown ended. */
+  const refuse = (times: number, options: BreakerOptions = {}): BreakerState => {
+    let state = HEALTHY
+    let now = NOW
+    for (let index = 0; index < times; index += 1) {
+      state = reject(state, now, options)
+      now = state.cooldownUntil ?? now
+    }
+    return state
+  }
+  const step = (state: BreakerState, from: Date): number =>
+    (state.cooldownUntil?.getTime() ?? 0) - from.getTime()
+
+  test("each refusal doubles the cooldown: 15, 30, 60 minutes", () => {
+    const first = reject(HEALTHY, NOW)
+    expect(step(first, NOW)).toBe(BASE)
+    expect(first.consecutiveFailures).toBe(1)
+
+    const secondAt = first.cooldownUntil ?? NOW
+    const second = reject(first, secondAt)
+    expect(step(second, secondAt)).toBe(2 * BASE)
+    expect(second.consecutiveFailures).toBe(2)
+
+    const thirdAt = second.cooldownUntil ?? NOW
+    const third = reject(second, thirdAt)
+    expect(step(third, thirdAt)).toBe(4 * BASE)
+    expect(third.cooldownReason).toBe("credential-rejected")
+  })
+
+  test("the growth stops at the configured cap", () => {
+    const capped = refuse(10, { authFailureMaxCooldownMs: HOUR })
+    const lastAt = new Date((capped.cooldownUntil?.getTime() ?? 0) - HOUR)
+    expect(step(capped, lastAt)).toBe(HOUR)
+  })
+
+  test("a cap set below the cooldown is read as the cooldown: the first step is never the longest", () => {
+    const first = reject(HEALTHY, NOW, { authFailureMaxCooldownMs: 60_000 })
+    expect(step(first, NOW)).toBe(BASE)
+    const secondAt = first.cooldownUntil ?? NOW
+    expect(step(reject(first, secondAt, { authFailureMaxCooldownMs: 60_000 }), secondAt)).toBe(BASE)
+  })
+
+  test("with nothing configured the cap is four hours", () => {
+    expect(DEFAULT_AUTH_FAILURE_MAX_COOLDOWN_MS).toBe(4 * HOUR)
+    const capped = refuse(12)
+    const lastAt = new Date((capped.cooldownUntil?.getTime() ?? 0) - 4 * HOUR)
+    expect(step(capped, lastAt)).toBe(4 * HOUR)
+  })
+
+  test("jitter widens a step by at most JITTER_FRACTION and never shortens it — at the cap too", () => {
+    const jittered = reject(HEALTHY, NOW, { jitter: 1 })
+    expect(step(jittered, NOW)).toBe(Math.round(BASE * (1 + JITTER_FRACTION)))
+
+    let state = HEALTHY
+    let now = NOW
+    for (let index = 0; index < 10; index += 1) {
+      state = reject(state, now, { authFailureMaxCooldownMs: HOUR, jitter: 1 })
+      if (index < 9) now = state.cooldownUntil ?? now
+    }
+    expect(step(state, now)).toBe(Math.round(HOUR * (1 + JITTER_FRACTION)))
+  })
+
+  test("a success starts the count over", () => {
+    const refused = refuse(3)
+    expect(refused.consecutiveFailures).toBe(3)
+
+    const recovered = recordSuccess()
+    const again = reject(recovered, NOW)
+    expect(step(again, NOW)).toBe(BASE)
+    expect(again.consecutiveFailures).toBe(1)
+  })
+
+  test("a streak of server errors before it does not inflate the first refusal", () => {
+    const flaky = recordFailure(
+      recordFailure(HEALTHY, failure("server-error"), NOW),
+      failure("server-error"),
+      NOW,
+    )
+    expect(flaky.consecutiveFailures).toBe(2)
+
+    const refused = reject(flaky, NOW)
+    expect(step(refused, NOW)).toBe(BASE)
+    expect(refused.consecutiveFailures).toBe(1)
   })
 })

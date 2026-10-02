@@ -337,7 +337,7 @@ that pool — the policy never runs across the union.
 | `5xx` | Retry the next candidate. Count toward the breaker's failure streak. |
 | Connection failure / timeout | Retry the next candidate. Count toward the failure streak. |
 | `4xx` other than `429` | **Do not retry.** A bad request is bad at every account; returning the upstream's error is the honest answer. |
-| `401` / `403` | **Retry the next candidate** — before any byte has reached the client, like every row above. Move the account to `needs_reauth` (OAuth), or — for an API key, or a no-auth endpoint that has grown something in front of it, neither of which has a login to re-run — to a `cooling_down` labeled **`credential-rejected`**, `ROUTING_AUTH_FAILURE_COOLDOWN_MS` long (15 min default), re-tested by one half-open probe when it ends and reported meanwhile as needing a human (see *A rejected key is a re-tested cooldown* below). Through v2.14.0 this row said `disabled`. A rejected credential is *account*-scoped, not request-scoped: the next candidate authenticates with its own. Until v2.9 this row read "do not retry", which meant the first request to land on a subscription whose 30-day login had expired failed `502` while five healthy subscriptions sat beside it; only the *next* request routed around the parked account. The `502` is still what the client hears when **every** candidate failed that way — every one, because the default attempt bound is the pool itself, not a number (`ROUTING_MAX_ATTEMPTS` unset). |
+| `401` / `403` | **Retry the next candidate** — before any byte has reached the client, like every row above. Move the account to `needs_reauth` (OAuth), or — for an API key, or a no-auth endpoint that has grown something in front of it, neither of which has a login to re-run — to a `cooling_down` labeled **`credential-rejected`**, `ROUTING_AUTH_FAILURE_COOLDOWN_MS` long (15 min default, doubling per consecutive refusal up to `ROUTING_AUTH_FAILURE_MAX_COOLDOWN_MS`, 4 h), re-tested by one half-open probe when it ends and reported meanwhile as needing a human (see *A rejected key is a re-tested cooldown* below). Through v2.14.0 this row said `disabled`. A rejected credential is *account*-scoped, not request-scoped: the next candidate authenticates with its own. Until v2.9 this row read "do not retry", which meant the first request to land on a subscription whose 30-day login had expired failed `502` while five healthy subscriptions sat beside it; only the *next* request routed around the parked account. The `502` is still what the client hears when **every** candidate failed that way — every one, because the default attempt bound is the pool itself, not a number (`ROUTING_MAX_ATTEMPTS` unset). |
 
 Rules:
 
@@ -451,9 +451,15 @@ human pressed Re-check; and every pool message meanwhile said `1 more needs a hu
 disabled)` while the stored row said `active` — the operator's word, minted by an upstream. Now:
 
 - The breaker lands it on `cooling_down` with `cooldownReason: "credential-rejected"`, for
-  `ROUTING_AUTH_FAILURE_COOLDOWN_MS`, source `estimated`. A shorter limiter reading riding the same
-  response never shortens it; a probe that is merely rate-limited proved the key works and drops the
-  label. It is not a standing block — nothing is announced, nothing is stored.
+  `ROUTING_AUTH_FAILURE_COOLDOWN_MS`, source `estimated`. Each consecutive refusal doubles the wait
+  — 15, 30, 60, 120 minutes by default — up to `ROUTING_AUTH_FAILURE_MAX_COOLDOWN_MS` (4 hours),
+  widened by the same jitter as every other step so keys refused together are not re-tested
+  together. The streak counts refusals only: server errors before the first one do not lengthen it,
+  and a success starts it over. A limiter reading riding the same response never shortens the wait
+  and never re-labels it — when its reset is the longer one the cooldown takes that instant and
+  keeps `credential-rejected`, and the reading is not counted as a second refusal. A probe that is
+  merely rate-limited proved the key works and drops the label. It is not a standing block —
+  nothing is announced, nothing is stored.
 - The filter drops it as `credential-rejected`, a reason of its own. It is **not** recoverable for
   reporting: it sits in the `needs a human` clause (`kimi credential rejected upstream, re-checked
   after <t> (estimated)`), it is never offered as the pool's `earliest reset`, and alone it is the
@@ -463,8 +469,11 @@ disabled)` while the stored row said `active` — the operator's word, minted by
   "credential rejected upstream — check the key".
 - OAuth is unchanged: `needs_reauth`, stored, ended by a completed login.
 
-The cost, stated: a key the provider genuinely revoked is re-tried once per cooldown, and that one
-request fails over to the next candidate like any other `401`/`403`.
+The cost, stated: a key the provider genuinely revoked is re-tried once per cooldown — about ten
+times in its first day at the defaults, then at most six a day — and that one request fails over to the next
+candidate like any other `401`/`403`. A Kimi `403` that names a suspension, ban or terms violation
+stays `auth` even when it also mentions a usage limit (`kimi:account-suspended`), so a taken-away
+account is never read as a spent window.
 
 ### Exactly one half-open probe
 
@@ -489,7 +498,7 @@ limits it again before it has answered any of them.
 | Rate-limit headers and reset instants | `parseRateLimit` on every upstream response. A *reading*, not a verdict — see the precedence rule below |
 | Subscription quota windows and utilization | Two kinds, never conflated. **Threshold-triggered**: the SDK's `rate_limit_event` events for Claude subs — fires only near the limit, so it is what trips the breaker but cannot rank headroom. **Continuous**: HTTP limiter headers on every response, and provider usage endpoints (Anthropic's OAuth usage endpoint for Claude subs, equivalents elsewhere) — a real percentage at any time, and the only thing `quota-aware` can rank on. Short-TTL cached, deduped per account |
 | Consecutive failure streak | attempt outcomes |
-| Auth failures | `401`/`403` → `needs_reauth` (OAuth), or a `credential-rejected` cooldown re-tested on `ROUTING_AUTH_FAILURE_COOLDOWN_MS` (API key / no auth) — never `disabled` |
+| Auth failures | `401`/`403` → `needs_reauth` (OAuth), or a `credential-rejected` cooldown re-tested on `ROUTING_AUTH_FAILURE_COOLDOWN_MS`, doubling to `ROUTING_AUTH_FAILURE_MAX_COOLDOWN_MS` (API key / no auth) — never `disabled` |
 | Balance / credit signals | `402` and provider-specific out-of-credits bodies → `exhausted` |
 | Latency and error rate | `UsageRecord` rollups — see [08-observability.md](08-observability.md) |
 

@@ -448,6 +448,7 @@ describe("parseEnv", () => {
         baseBackoffMs: 1_000,
         maxBackoffMs: 300_000,
         authFailureCooldownMs: 900_000,
+        authFailureMaxCooldownMs: 14_400_000,
         halfOpenHoldMs: 30_000,
         unknownResetRetryAfterSeconds: 30,
         upstreamTimeoutMs: 600_000,
@@ -466,6 +467,7 @@ describe("parseEnv", () => {
         ROUTING_MAX_BACKOFF_MS: "90000",
         ROUTING_HALF_OPEN_HOLD_MS: "5000",
         ROUTING_AUTH_FAILURE_COOLDOWN_MS: "60000",
+        ROUTING_AUTH_FAILURE_MAX_COOLDOWN_MS: "600000",
       })
 
       expect(env.failover).toMatchObject({
@@ -474,7 +476,18 @@ describe("parseEnv", () => {
         maxBackoffMs: 90_000,
         halfOpenHoldMs: 5_000,
         authFailureCooldownMs: 60_000,
+        authFailureMaxCooldownMs: 600_000,
       })
+    })
+
+    test("a refused key's cooldown cap defaults to four hours", () => {
+      expect(parseEnv(base).failover.authFailureMaxCooldownMs).toBe(4 * 3_600_000)
+    })
+
+    test("a zero auth-failure cooldown cap is refused", () => {
+      expect(
+        expectEnvError({ ...base, ROUTING_AUTH_FAILURE_MAX_COOLDOWN_MS: "0" }).variables,
+      ).toEqual(["ROUTING_AUTH_FAILURE_MAX_COOLDOWN_MS"])
     })
 
     test("a zero auth-failure cooldown is refused: it would re-dial a refused key on every request", () => {

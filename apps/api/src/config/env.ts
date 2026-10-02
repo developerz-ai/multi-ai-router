@@ -316,6 +316,11 @@ export interface FailoverConfig {
    */
   readonly authFailureCooldownMs: number
   /**
+   * Ceiling on that cooldown, which doubles per consecutive refusal: a key refused again and again
+   * is re-tested less and less often, never less often than this.
+   */
+  readonly authFailureMaxCooldownMs: number
+  /**
    * How long the one admitted half-open probe holds a recovering account before the gate reopens.
    *
    * A backstop for a probe that never reports — the chain releases the hold the instant its attempt
@@ -809,6 +814,8 @@ export const ENV_FIELDS = {
   ROUTING_HALF_OPEN_HOLD_MS: atLeastOne.optional(),
   // Refuses zero: a zero cooldown re-dials a refused key on every request.
   ROUTING_AUTH_FAILURE_COOLDOWN_MS: atLeastOne.optional(),
+  // Refuses zero for the same reason. Below the cooldown it is not refused: the cooldown wins.
+  ROUTING_AUTH_FAILURE_MAX_COOLDOWN_MS: atLeastOne.optional(),
   // Refuses zero: `Retry-After: 0` invites an immediate retry storm against accounts that are,
   // by definition, not ready.
   ROUTING_UNKNOWN_RESET_RETRY_AFTER_SECONDS: atLeastOne.optional(),
@@ -1087,6 +1094,7 @@ const envSchema = z.object(ENV_FIELDS).transform((raw, ctx): Env => {
       baseBackoffMs: raw.ROUTING_BASE_BACKOFF_MS ?? 1_000,
       maxBackoffMs: raw.ROUTING_MAX_BACKOFF_MS ?? 300_000,
       authFailureCooldownMs: raw.ROUTING_AUTH_FAILURE_COOLDOWN_MS ?? 900_000,
+      authFailureMaxCooldownMs: raw.ROUTING_AUTH_FAILURE_MAX_COOLDOWN_MS ?? 14_400_000,
       halfOpenHoldMs: raw.ROUTING_HALF_OPEN_HOLD_MS ?? 30_000,
       unknownResetRetryAfterSeconds: raw.ROUTING_UNKNOWN_RESET_RETRY_AFTER_SECONDS ?? 30,
       upstreamTimeoutMs: raw.UPSTREAM_TIMEOUT_MS ?? 600_000,

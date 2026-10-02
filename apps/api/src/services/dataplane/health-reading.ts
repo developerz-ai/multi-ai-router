@@ -1,5 +1,11 @@
 import type { RateLimitSignal } from "../../providers"
-import { type BreakerOptions, mergeQuotaWindows, phase, recordFailure } from "../routing"
+import {
+  type BreakerOptions,
+  type BreakerState,
+  mergeQuotaWindows,
+  phase,
+  recordFailure,
+} from "../routing"
 import type { AccountHealthState } from "./health"
 
 /**
@@ -25,6 +31,7 @@ import type { AccountHealthState } from "./health"
  * 3. **Otherwise the limit becomes a cooldown, through the breaker's own transition.** One
  *    implementation of the never-shorten rule and of provider-reported-reset preference — and one
  *    set of configured numbers, rather than the module defaults this fold used to fall back to.
+ *    What the cooldown is *for* stays the verdict's: see {@link keepVerdictReason}.
  */
 export function foldRateLimit(
   state: AccountHealthState,
@@ -42,19 +49,35 @@ export function foldRateLimit(
   if (!signal.limited) return recorded
   if (phase(state.breaker, now) === "blocked") return recorded
 
+  const tripped = recordFailure(
+    state.breaker,
+    {
+      kind: "rate-limited",
+      resetsAt: signal.resetsAt,
+      retryAfterSeconds: signal.retryAfterSeconds,
+      resetSource: signal.resetSource,
+      message: "upstream reported the limit was reached",
+    },
+    now,
+    breaker,
+  )
+  return { ...recorded, breaker: keepVerdictReason(state.breaker, tripped) }
+}
+
+/**
+ * A reading may lengthen a cooldown; it never re-labels one. When the verdict already in place
+ * says the provider refused the key (`credential-rejected`), a limiter header riding that same
+ * response says when the limiter refills and nothing about the key — so the label survives even
+ * when the reading's reset outlasts the auth cooldown and the breaker built a fresh one for it, and
+ * the reading is not counted as a second refusal (the streak drives the re-test cadence,
+ * `routing/breaker.ts`). A probe that *was* rate-limited reaches here already unlabeled: its own
+ * verdict cleared the label first, so there is nothing to keep.
+ */
+function keepVerdictReason(before: BreakerState, after: BreakerState): BreakerState {
+  if (before.cooldownReason === undefined || after.status !== "cooling_down") return after
   return {
-    ...recorded,
-    breaker: recordFailure(
-      state.breaker,
-      {
-        kind: "rate-limited",
-        resetsAt: signal.resetsAt,
-        retryAfterSeconds: signal.retryAfterSeconds,
-        resetSource: signal.resetSource,
-        message: "upstream reported the limit was reached",
-      },
-      now,
-      breaker,
-    ),
+    ...after,
+    cooldownReason: before.cooldownReason,
+    consecutiveFailures: before.consecutiveFailures,
   }
 }

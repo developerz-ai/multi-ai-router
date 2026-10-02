@@ -97,6 +97,8 @@ export interface HealthStoreOptions {
   readonly maxBackoffMs?: number
   /** How long a rejected API key sits out before one probe re-tests it. `ROUTING_AUTH_FAILURE_COOLDOWN_MS`. */
   readonly authFailureCooldownMs?: number
+  /** Ceiling on that cooldown's doubling per consecutive refusal. `ROUTING_AUTH_FAILURE_MAX_COOLDOWN_MS`. */
+  readonly authFailureMaxCooldownMs?: number
   /**
    * A fresh jitter fraction in `[0, 1]` per transition, defaulting to `Math.random`. Injected
    * because `breaker.ts` deliberately reads no randomness, and because a test that cannot pin the
@@ -218,6 +220,9 @@ export function createHealthStore(options: HealthStoreOptions = {}): HealthStore
     ...(options.authFailureCooldownMs === undefined
       ? {}
       : { authFailureCooldownMs: options.authFailureCooldownMs }),
+    ...(options.authFailureMaxCooldownMs === undefined
+      ? {}
+      : { authFailureMaxCooldownMs: options.authFailureMaxCooldownMs }),
   }
 
   /**
