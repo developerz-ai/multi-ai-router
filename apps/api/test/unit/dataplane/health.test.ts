@@ -90,7 +90,8 @@ describe("health store", () => {
   })
 
   test("a limited header never downgrades needs_reauth, nor shortens a rejected key's cooldown", () => {
-    const store = createHealthStore()
+    // Jitter pinned: a rejected key's cooldown is jittered like every other step since #139's review.
+    const store = createHealthStore({ jitter: () => 0 })
     store.recordFailure("oauth", { kind: "auth", message: "401" }, NOW, { authKind: "oauth" })
     store.recordFailure("key", { kind: "auth", message: "401" }, NOW, { authKind: "api-key" })
 
@@ -672,7 +673,7 @@ describe("a rejected API key", () => {
   })
 
   test("takes the configured cooldown, then admits one probe on its own — no button", () => {
-    const store = createHealthStore({ authFailureCooldownMs: COOLDOWN })
+    const store = createHealthStore({ authFailureCooldownMs: COOLDOWN, jitter: () => 0 })
     reject(store)
 
     expect(store.stateOf("key").breaker.cooldownUntil).toEqual(after(COOLDOWN))
@@ -688,7 +689,7 @@ describe("a rejected API key", () => {
   })
 
   test("is never shown as `disabled` while the operator's row says active", () => {
-    const store = createHealthStore({ authFailureCooldownMs: COOLDOWN })
+    const store = createHealthStore({ authFailureCooldownMs: COOLDOWN, jitter: () => 0 })
     reject(store)
 
     const overlaid = overlayHealth(account("key").snapshot, store.stateOf("key"))

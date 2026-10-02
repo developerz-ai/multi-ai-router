@@ -212,8 +212,11 @@ describe("a standing block reaches the durable writer", () => {
 
     expect(health.stateOf("a").breaker.status).toBe("cooling_down")
     expect(health.stateOf("a").breaker.cooldownReason).toBe("credential-rejected")
-    // The operator's number reaches the transition, not the module default.
-    expect(health.stateOf("a").breaker.cooldownUntil).toEqual(new Date(NOW.getTime() + 120_000))
+    // The operator's number reaches the transition, not the module default — widened only by the
+    // jitter every cooldown step carries.
+    const waited = (health.stateOf("a").breaker.cooldownUntil?.getTime() ?? 0) - NOW.getTime()
+    expect(waited).toBeGreaterThanOrEqual(120_000)
+    expect(waited).toBeLessThanOrEqual(120_000 * (1 + JITTER_FRACTION))
     expect(statusWriter.stats().pending).toBe(0)
   })
 
