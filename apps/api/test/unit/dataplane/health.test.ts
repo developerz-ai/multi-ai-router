@@ -810,6 +810,22 @@ describe("a limiter reading riding a rejected key's response", () => {
     expect(s.stateOf("key").breaker.cooldownUntil).toEqual(after(HOUR + 2 * COOLDOWN))
   })
 
+  /**
+   * Review of #139, round 3. A reading lengthens the refusal's cooldown only to a reset the provider
+   * named. One that names none used to fall through to the breaker's own backoff step, which could
+   * outlast what was left of the cooldown — the router's arithmetic holding a refused key out.
+   */
+  test("a reading that names no reset moves nothing: not the instant, the count or the label", () => {
+    const s = createHealthStore({ authFailureCooldownMs: 1_000, jitter: () => 0 })
+    reject(s, NOW)
+    const refused = s.stateOf("key").breaker
+    expect(refused.cooldownUntil).toEqual(after(1_000))
+
+    s.applyRateLimit("key", signal({ limited: true }), NOW)
+
+    expect(s.stateOf("key").breaker).toEqual(refused)
+  })
+
   test("a probe answered 429 proved the key works: its own reading does not bring the label back", () => {
     const s = store()
     reject(s, NOW)
