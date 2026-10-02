@@ -313,15 +313,22 @@ describe("a key that stays refused is re-tested less and less often", () => {
       authFailureCooldownMs: BASE,
       ...options,
     })
-  /** Refuse `times` times in a row, each refusal at the instant the previous cooldown ended. */
-  const refuse = (times: number, options: BreakerOptions = {}): BreakerState => {
+  /**
+   * Refuse `times` times in a row, each refusal at the instant the previous cooldown ended — so each
+   * is the probe. `lastAt` is the clock the final refusal was recorded at, tracked through the loop
+   * rather than derived from the result: a step measured from it is the breaker's, not the test's.
+   */
+  const refuse = (
+    times: number,
+    options: BreakerOptions = {},
+  ): { readonly state: BreakerState; readonly lastAt: Date } => {
     let state = HEALTHY
-    let now = NOW
+    let lastAt = NOW
     for (let index = 0; index < times; index += 1) {
-      state = reject(state, now, options)
-      now = state.cooldownUntil ?? now
+      lastAt = state.cooldownUntil ?? NOW
+      state = reject(state, lastAt, options)
     }
-    return state
+    return { state, lastAt }
   }
   const step = (state: BreakerState, from: Date): number =>
     (state.cooldownUntil?.getTime() ?? 0) - from.getTime()
@@ -386,9 +393,16 @@ describe("a key that stays refused is re-tested less and less often", () => {
   })
 
   test("the growth stops at the configured cap", () => {
+    // Uncapped, the third refusal is already 60 minutes and the tenth is 128 hours.
+    const below = refuse(2, { authFailureMaxCooldownMs: HOUR })
+    expect(step(below.state, below.lastAt)).toBe(2 * BASE)
+
+    const reached = refuse(3, { authFailureMaxCooldownMs: HOUR })
+    expect(step(reached.state, reached.lastAt)).toBe(HOUR)
+
     const capped = refuse(10, { authFailureMaxCooldownMs: HOUR })
-    const lastAt = new Date((capped.cooldownUntil?.getTime() ?? 0) - HOUR)
-    expect(step(capped, lastAt)).toBe(HOUR)
+    expect(capped.state.consecutiveFailures).toBe(10)
+    expect(step(capped.state, capped.lastAt)).toBe(HOUR)
   })
 
   test("a cap set below the cooldown is read as the cooldown: the first step is never the longest", () => {
@@ -400,9 +414,13 @@ describe("a key that stays refused is re-tested less and less often", () => {
 
   test("with nothing configured the cap is four hours", () => {
     expect(DEFAULT_AUTH_FAILURE_MAX_COOLDOWN_MS).toBe(4 * HOUR)
+    // 15, 30, 60, 120 minutes, then the cap: the fifth refusal reaches it, the twelfth stays on it.
+    const fourth = refuse(4)
+    expect(step(fourth.state, fourth.lastAt)).toBe(2 * HOUR)
+
     const capped = refuse(12)
-    const lastAt = new Date((capped.cooldownUntil?.getTime() ?? 0) - 4 * HOUR)
-    expect(step(capped, lastAt)).toBe(4 * HOUR)
+    expect(capped.state.consecutiveFailures).toBe(12)
+    expect(step(capped.state, capped.lastAt)).toBe(4 * HOUR)
   })
 
   test("jitter widens a step by at most JITTER_FRACTION and never shortens it — at the cap too", () => {
@@ -419,7 +437,7 @@ describe("a key that stays refused is re-tested less and less often", () => {
   })
 
   test("a success starts the count over", () => {
-    const refused = refuse(3)
+    const refused = refuse(3).state
     expect(refused.consecutiveFailures).toBe(3)
 
     const recovered = recordSuccess()
