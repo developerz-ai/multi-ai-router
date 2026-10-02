@@ -342,6 +342,49 @@ describe("a key that stays refused is re-tested less and less often", () => {
     expect(third.cooldownReason).toBe("credential-rejected")
   })
 
+  /**
+   * Review of #139, round 2: the streak counted every refused *response*, and one incident produces
+   * several — each request already in flight when the first refusal landed comes back refused too.
+   * Five at once put a key on a four-hour cooldown the first time it was ever refused. Only a
+   * re-test moves the streak; a refusal landing inside the labeled cooldown is the same refusal.
+   */
+  test("refusals already in flight when the first one landed are one refusal, not a streak", () => {
+    let state = HEALTHY
+    for (let index = 0; index < 5; index += 1) state = reject(state, NOW)
+
+    expect(step(state, NOW)).toBe(BASE)
+    expect(state.consecutiveFailures).toBe(1)
+    expect(state.cooldownReason).toBe("credential-rejected")
+    expect(state.cooldownSource).toBe("estimated")
+
+    // A straggler answering minutes later, with its own jitter: still inside the cooldown, so it
+    // moves neither the count nor the instant the first refusal set.
+    expect(reject(state, at(BASE - 1), { jitter: 1 })).toEqual(state)
+  })
+
+  test("the probe is the re-test: refused once the cooldown has passed, it doubles", () => {
+    let state = HEALTHY
+    for (let index = 0; index < 5; index += 1) state = reject(state, NOW)
+
+    const probeAt = state.cooldownUntil ?? NOW
+    const probed = reject(state, probeAt)
+    expect(step(probed, probeAt)).toBe(2 * BASE)
+    expect(probed.consecutiveFailures).toBe(2)
+
+    // And the requests racing that probe's refusal are, again, the same refusal.
+    expect(reject(probed, probeAt)).toEqual(probed)
+  })
+
+  test("a refusal during an ordinary cooldown still labels it: only a labeled one absorbs", () => {
+    const limited = recordFailure(HEALTHY, failure("rate-limited", { retryAfterSeconds: 60 }), NOW)
+    expect(limited.cooldownReason).toBeUndefined()
+
+    const refused = reject(limited, NOW)
+    expect(refused.cooldownReason).toBe("credential-rejected")
+    expect(step(refused, NOW)).toBe(BASE)
+    expect(refused.consecutiveFailures).toBe(1)
+  })
+
   test("the growth stops at the configured cap", () => {
     const capped = refuse(10, { authFailureMaxCooldownMs: HOUR })
     const lastAt = new Date((capped.cooldownUntil?.getTime() ?? 0) - HOUR)

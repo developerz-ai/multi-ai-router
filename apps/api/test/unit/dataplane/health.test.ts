@@ -681,6 +681,30 @@ describe("a rejected API key", () => {
     expect(store.admitProbe("key", after(COOLDOWN))).toEqual({ admitted: true, held: true })
   })
 
+  /**
+   * Review of #139, round 2, as it was reproduced: five api-key `401`s at one instant, jitter 0,
+   * left the store at `consecutiveFailures: 5` and a 240-minute cooldown on the key's first
+   * incident. The chain records every attempt at its own start, so each in-flight sibling arrives
+   * here inside the cooldown the first one set.
+   */
+  test("five refusals landing together are one incident: fifteen minutes, counted once", () => {
+    const store = createHealthStore({ jitter: () => 0 })
+    for (let index = 0; index < 5; index += 1) reject(store)
+
+    const first = store.stateOf("key").breaker
+    expect(first.cooldownUntil).toEqual(after(COOLDOWN))
+    expect(first.consecutiveFailures).toBe(1)
+    expect(first.cooldownReason).toBe("credential-rejected")
+
+    // The probe, once that cooldown has passed, is the re-test — and a refused one doubles.
+    store.recordFailure("key", { kind: "auth", status: 401, message: "401" }, after(COOLDOWN), {
+      authKind: "api-key",
+    })
+    const second = store.stateOf("key").breaker
+    expect(second.cooldownUntil).toEqual(after(COOLDOWN + 2 * COOLDOWN))
+    expect(second.consecutiveFailures).toBe(2)
+  })
+
   test("a probe that succeeds brings it back", () => {
     const store = createHealthStore({ authFailureCooldownMs: COOLDOWN })
     reject(store)

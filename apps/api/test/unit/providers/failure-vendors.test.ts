@@ -234,6 +234,14 @@ describe("kimi", () => {
     ["You've reached your 5-hour usage limit. This account is banned."],
     ["You've reached your usage limit for this billing cycle. Your account has been disabled."],
     ["Usage limit reached: your account was deactivated for a terms of service violation."],
+    // Round 2 of the review. A breach of terms beside the suspension outranks any clock.
+    [
+      "Your account has been temporarily suspended for violating our terms of service until your usage limit resets.",
+    ],
+    // A clock with no limit clause, and a limit clause with no clock: neither is a spent window.
+    ["Your account has been temporarily suspended."],
+    ["Your account has been suspended. Your quota will reset in the next cycle."],
+    ["You've reached your usage limit. Your account has been suspended until further notice."],
   ])("%s stays an auth failure — a suspension needs a human", (message) => {
     const result = kimi?.classifyFailure(
       response(403, { body: { type: "error", error: { type: "permission_error", message } } }),
@@ -242,6 +250,72 @@ describe("kimi", () => {
     expect(result?.kind).toBe("auth")
     expect(result?.signal).toBe("kimi:account-suspended")
     expect(result?.rateLimit).toBeNull()
+  })
+
+  /**
+   * Review of #139, round 2: the guard above read every "suspended", "disabled" or "terms of
+   * service" as an account taken away, and so flipped a real spent window back to `auth` whenever
+   * Kimi worded the *pause* that way. A limit that was reached and a clock that reopens it is a
+   * window, however the pause between them is named; boilerplate about terms is not a verdict.
+   */
+  test.each([
+    [
+      "Your API access has been temporarily suspended until your 5-hour usage limit resets.",
+      "kimi:usage-limit-5-hour",
+      15 * 60,
+    ],
+    [
+      "You've reached your 5-hour usage limit. Requests are temporarily suspended until the window ends.",
+      "kimi:usage-limit-5-hour",
+      15 * 60,
+    ],
+    [
+      "Your account is temporarily disabled because you have reached your weekly usage limit.",
+      "kimi:usage-limit-weekly",
+      60 * 60,
+    ],
+    [
+      "You've reached your weekly (7-day) usage limit. Usage is subject to our Terms of Service.",
+      "kimi:usage-limit-weekly",
+      60 * 60,
+    ],
+    [
+      "You've reached your 5-hour usage limit. Your quota will reset when the current 5-hour window ends. Usage is subject to our Terms of Service.",
+      "kimi:usage-limit-5-hour",
+      15 * 60,
+    ],
+    // Both at once: the pause named "suspended", and the boilerplate in the sentence after it.
+    [
+      "You've reached your 5-hour usage limit. Requests are temporarily suspended until the window ends. Usage is subject to our Terms of Service.",
+      "kimi:usage-limit-5-hour",
+      15 * 60,
+    ],
+    [
+      "Your access is suspended until your weekly (7-day) usage limit resets.",
+      "kimi:usage-limit-weekly",
+      60 * 60,
+    ],
+    ["Requests are suspended until your usage limit resets.", "kimi:usage-limit", 15 * 60],
+  ])("%s is a spent window, not a suspension", (message, signal, retryAfterSeconds) => {
+    const result = kimi?.classifyFailure(
+      response(403, { body: { type: "error", error: { type: "permission_error", message } } }),
+    )
+
+    expect(result?.kind).toBe("rate-limited")
+    expect(result?.signal).toBe(signal)
+    expect(result?.rateLimit?.resetSource).toBe("estimated")
+    expect(result?.rateLimit?.retryAfterSeconds).toBe(retryAfterSeconds)
+  })
+
+  test("a body that only describes when a limit resets, without a pause, stays an auth failure", () => {
+    const message =
+      "Your 5-hour usage limit resets every five hours. You do not have access to model k3-preview"
+    const result = kimi?.classifyFailure(
+      response(403, { body: { type: "error", error: { type: "permission_error", message } } }),
+    )
+
+    expect(result?.kind).toBe("auth")
+    expect(result?.signal).toBe("http-status:403")
   })
 
   /**
