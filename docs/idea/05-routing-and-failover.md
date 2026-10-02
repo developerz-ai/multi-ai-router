@@ -477,7 +477,10 @@ The cost, stated: a key the provider genuinely revoked is re-tried once per cool
 times in its first day at the defaults, then at most six a day — and that one request fails over to the next
 candidate like any other `401`/`403`. A Kimi `403` that names a suspension, ban or terms violation
 stays `auth` even when it also mentions a usage limit (`kimi:account-suspended`), so a taken-away
-account is never read as a spent window.
+account is never read as a spent window. The reverse holds as well: a body that names a *pause* —
+"temporarily suspended until your 5-hour usage limit resets" — is a spent window, because it carries
+both a reached limit and a clock that reopens it. Either one alone stays `auth`, and terms-of-service
+wording counts only in the same sentence as the suspension, where it outranks any clock.
 
 ### Exactly one half-open probe
 
