@@ -191,6 +191,7 @@ export function createRuntime(deps: RuntimeDeps): Runtime {
     failureThreshold: env.failover.failureThreshold,
     baseBackoffMs: env.failover.baseBackoffMs,
     maxBackoffMs: env.failover.maxBackoffMs,
+    authFailureCooldownMs: env.failover.authFailureCooldownMs,
     probeHoldMs: env.failover.halfOpenHoldMs,
     // Both transports fold a reading in here and nowhere else, which is what makes one hook enough
     // to make every observed window durable.

@@ -7,7 +7,7 @@
  * | Everything cooling down / a window spent | `QuotaExhaustedError` + `Retry-After` | 429 |
  * | Everything out of credits | `CreditsExhaustedError` | 402 |
  * | Mixed causes | the soonest recoverable one — 429 if any account has a reset | — |
- * | Anything else (disabled, needs re-auth, model unsupported) | `NoHealthyAccountError` | 503 |
+ * | Anything else (disabled, needs re-auth, credential rejected, model unsupported) | `NoHealthyAccountError` | 503 |
  *
  * Never a generic `500`, and never a silent fallback outside the key's scope. The message names
  * the actual condition and the accounts it concerns — labels only, never credential material.
@@ -115,7 +115,10 @@ function remainder(rejected: readonly RejectedCandidate[], described: number): s
   const recoverable = rejected.filter((entry) => RECOVERABLE_FILTER_REASONS.includes(entry.reason))
   const exhausted = rejected.filter((entry) => entry.reason === "exhausted")
   const human = rejected.filter(
-    (entry) => entry.reason === "disabled" || entry.reason === "needs-reauth",
+    (entry) =>
+      entry.reason === "disabled" ||
+      entry.reason === "needs-reauth" ||
+      entry.reason === "credential-rejected",
   )
   const unsupported = rejected.filter((entry) => entry.reason === "model-unsupported")
 
@@ -181,10 +184,8 @@ function quotaError(
       retryAfterSeconds: unknownFloorSeconds,
     })
   }
-  const qualifier =
-    resetSource === undefined || resetSource === "provider-reported" ? "" : ` (${resetSource})`
   return new QuotaExhaustedError(
-    `${message}, earliest reset ${resetsAt.toISOString()}${qualifier}`,
+    `${message}, earliest reset ${resetsAt.toISOString()}${qualifier(resetSource)}`,
     {
       resetsAt,
       retryAfterSeconds: retryAfterSeconds(resetsAt, now),
@@ -217,9 +218,28 @@ function labels(entries: readonly RejectedCandidate[]): string {
   return entries.map((entry) => entry.label).join(", ")
 }
 
-/** `kimi needs re-auth`, `ollama disabled` — the label and the condition, in the operator's words. */
+/**
+ * `kimi needs re-auth`, `ollama disabled` — the label and the condition, in the operator's words.
+ *
+ * `disabled` is said only of an account the operator switched off. A key the provider refused is
+ * named as that, with when the router will try it again — the one thing an operator reading this
+ * needs to know to tell "fix the key" from "wait".
+ */
 function describe(entry: RejectedCandidate): string {
-  return `${entry.label} ${entry.reason === "needs-reauth" ? "needs re-auth" : entry.reason}`
+  if (entry.reason === "needs-reauth") return `${entry.label} needs re-auth`
+  if (entry.reason === "credential-rejected") {
+    const retest =
+      entry.resetsAt === undefined
+        ? ""
+        : `, re-checked after ${entry.resetsAt.toISOString()}${qualifier(entry.resetSource)}`
+    return `${entry.label} credential rejected upstream${retest}`
+  }
+  return `${entry.label} ${entry.reason}`
+}
+
+/** ` (estimated)` beside an instant the provider did not report itself; nothing beside one it did. */
+function qualifier(source: ResetSource | undefined): string {
+  return source === undefined || source === "provider-reported" ? "" : ` (${source})`
 }
 
 function accountWord(count: number): string {

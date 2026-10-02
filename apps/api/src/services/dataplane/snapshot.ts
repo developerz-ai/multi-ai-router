@@ -21,7 +21,9 @@ import type { RoutingCatalog } from "./types"
  *
  * The stored status is the operator's word (`disabled`, `needs_reauth` after a failed reauth); the
  * breaker's is the router's. The breaker wins whenever it has something to say, because it is the
- * fresher of the two — but it never promotes an account the operator disabled.
+ * fresher of the two — but it never promotes an account the operator disabled, and it never says
+ * `disabled` itself: that word belongs to the operator, and a key the provider refused overlays as
+ * a `cooling_down` carrying `cooldownReason: "credential-rejected"` (`routing/breaker.ts`).
  *
  * Quota windows follow the same shape and for the same reason. The catalog hydrates what was
  * persisted, which is what a just-booted replica knows; this process's own readings usually say
@@ -49,6 +51,9 @@ export function overlayHealth(
     health: {
       cooldownUntil: state.breaker.cooldownUntil,
       cooldownSource: state.breaker.cooldownSource,
+      ...(state.breaker.cooldownReason === undefined
+        ? {}
+        : { cooldownReason: state.breaker.cooldownReason }),
       consecutiveFailures: state.breaker.consecutiveFailures,
       inFlight: state.inFlight,
       recentTokens: state.recentTokens,

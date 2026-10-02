@@ -7,6 +7,7 @@
  * | `cooling_down` | Excluded. **Temporary — a clock will fix it.** | Reset instant passes, then a half-open probe. |
  * | half-open | One request through as a probe. | Success -> `active`. Failure -> `cooling_down` at the next backoff step. |
  * | `exhausted` | Excluded. **Permanent until a human acts.** The breaker never schedules a retry. | An operator tops up, then a re-check or a successful probe. |
+ * | `cooling_down` + `credential-rejected` | An API key the provider refused. Excluded, reported as needing a human — and still re-tested on a long clock. | Cooldown passes, then a half-open probe. A fixed key (or a misread limit) serves; a dead one cools again. |
  *
  * `cooling_down` and `exhausted` are never conflated, and the difference is mechanical rather
  * than cosmetic: `exhausted` carries **no** `cooldownUntil`, so no amount of clock advance moves
@@ -20,11 +21,22 @@
 import type { AccountStatus, AuthKind, ResetSource } from "@multi-ai-router/core"
 import type { AttemptFailure } from "./failover"
 
+/**
+ * Why a cooldown is not an ordinary one. Absent on every cooldown a limit or a failure streak formed.
+ *
+ * `credential-rejected`: the provider refused this account's key. Routing treats it like any
+ * cooldown — out until the instant, then one probe — but everything that *reports* it says a human
+ * should look at the key, because that is the likelier truth.
+ */
+export type CooldownReason = "credential-rejected"
+
 export interface BreakerState {
   readonly status: AccountStatus
   /** Absent on `active`, and absent on `exhausted` **by definition**. */
   readonly cooldownUntil?: Date
   readonly cooldownSource: ResetSource
+  /** {@link CooldownReason}. Only ever present on `cooling_down`. */
+  readonly cooldownReason?: CooldownReason
   readonly consecutiveFailures: number
 }
 
@@ -42,23 +54,41 @@ export interface BreakerOptions {
   readonly failureThreshold?: number
   /** Jitter fraction in `[0, 1)`, supplied by the caller. 0 keeps the math deterministic. */
   readonly jitter?: number
-  /** Decides where an auth failure lands — see {@link AUTH_FAILURE_STATUS}. */
+  /** Decides where an auth failure lands — see {@link AUTH_FAILURE_LANDING}. */
   readonly authKind?: AuthKind
+  /** How long a rejected API key sits out before it is re-tested. `ROUTING_AUTH_FAILURE_COOLDOWN_MS`. */
+  readonly authFailureCooldownMs?: number
 }
 
 /**
- * Where an auth failure parks the account, by what it authenticates with. Only a refreshable token
- * can be *re*-authorized; a key — or a local endpoint that presents no credential at all and is
- * suddenly behind something that checks one — needs an operator to change the configuration, which
- * is what `disabled` says. No timer revives either.
+ * Where an auth failure lands, by what the account authenticates with.
+ *
+ * A refreshable token (`oauth`) can be *re*-authorized, and nothing else will bring it back:
+ * `needs_reauth`, a standing block a completed login ends.
+ *
+ * A key — or a local endpoint that presents no credential at all and is suddenly behind something
+ * that checks one — lands on a long `cooling_down` labeled `credential-rejected`. Through 2.14.0 it
+ * landed on `disabled`, the operator's own word for "switched off", which no clock or probe ever
+ * left. Two things were wrong with that, and production paid for both on 2026-10-02: an upstream
+ * that answers a *spent plan* with `403` (Kimi does, in at least three wordings) parked a healthy
+ * account until a human noticed, and the router told every caller the account was `disabled` while
+ * its stored row said `active`. A rejected key is still reported as needing a human — it most
+ * likely does — but the account is re-tested on a clock, and one probe is all a dead key costs.
  *
  * Total over `AuthKind`, so a new one is decided here rather than defaulting into the wrong state.
  */
-const AUTH_FAILURE_STATUS: Readonly<Record<AuthKind, AccountStatus>> = {
-  oauth: "needs_reauth",
-  "api-key": "disabled",
-  none: "disabled",
+const AUTH_FAILURE_LANDING: Readonly<Record<AuthKind, "needs-reauth" | "credential-rejected">> = {
+  oauth: "needs-reauth",
+  "api-key": "credential-rejected",
+  none: "credential-rejected",
 }
+
+/**
+ * {@link BreakerOptions.authFailureCooldownMs}. Long enough that a key the provider genuinely
+ * revoked costs one failed request per interval, short enough that a misread limit — or a key an
+ * operator fixed at the provider without touching the router — is back within minutes.
+ */
+export const DEFAULT_AUTH_FAILURE_COOLDOWN_MS = 15 * 60_000
 
 export const DEFAULT_BASE_BACKOFF_MS = 1_000
 export const DEFAULT_MAX_BACKOFF_MS = 300_000
@@ -115,13 +145,18 @@ export function recordFailure(
       }
 
     case "auth":
-      return {
-        // Unstated is the conservative read: an account that may hold a token to refresh.
-        status:
-          options.authKind === undefined ? "needs_reauth" : AUTH_FAILURE_STATUS[options.authKind],
-        cooldownSource: "unknown",
-        consecutiveFailures: state.consecutiveFailures + 1,
+      // Unstated is the conservative read: an account that may hold a token to refresh.
+      if (
+        options.authKind === undefined ||
+        AUTH_FAILURE_LANDING[options.authKind] === "needs-reauth"
+      ) {
+        return {
+          status: "needs_reauth",
+          cooldownSource: "unknown",
+          consecutiveFailures: state.consecutiveFailures + 1,
+        }
       }
+      return rejectCredential(state, now, options)
 
     case "rate-limited":
       return trip(state, failure, now, options, state.consecutiveFailures + 1)
@@ -175,19 +210,43 @@ function trip(
   // failures cannot un-learn the longer reset.
   const existing = state.status === "cooling_down" ? state.cooldownUntil : undefined
   if (existing !== undefined && existing.getTime() >= until.getTime()) {
+    // The longer cooldown stands, and so does what it was for: a limiter header riding the same
+    // `401` that rejected a key says nothing about the key.
     return {
       status: "cooling_down",
       cooldownUntil: existing,
       cooldownSource: state.cooldownSource,
+      ...(state.cooldownReason === undefined ? {} : { cooldownReason: state.cooldownReason }),
       consecutiveFailures: failures,
     }
   }
 
+  // A fresh cooldown is an ordinary one. A probe that was rate-limited was *authenticated*, so a
+  // `credential-rejected` label from before it is no longer true.
   return {
     status: "cooling_down",
     cooldownUntil: until,
     cooldownSource: source,
     consecutiveFailures: failures,
+  }
+}
+
+/**
+ * The provider refused this account's key: out for {@link DEFAULT_AUTH_FAILURE_COOLDOWN_MS} (or
+ * the configured length), labeled, then re-tested by one probe. Never shortens a cooldown already
+ * running. `estimated`, because the length is ours — no provider says when a key it refused works.
+ */
+function rejectCredential(state: BreakerState, now: Date, options: BreakerOptions): BreakerState {
+  const cooldownMs = options.authFailureCooldownMs ?? DEFAULT_AUTH_FAILURE_COOLDOWN_MS
+  const until = new Date(now.getTime() + cooldownMs)
+  const existing = state.status === "cooling_down" ? state.cooldownUntil : undefined
+  const longer = existing !== undefined && existing.getTime() >= until.getTime()
+  return {
+    status: "cooling_down",
+    cooldownUntil: longer ? existing : until,
+    cooldownSource: longer ? state.cooldownSource : "estimated",
+    cooldownReason: "credential-rejected",
+    consecutiveFailures: state.consecutiveFailures + 1,
   }
 }
 

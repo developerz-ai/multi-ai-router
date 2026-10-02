@@ -37,9 +37,11 @@ import type { Logger } from "../../logging/logger"
 
 /**
  * The statuses this writer is allowed to make durable — the two standing blocks the breaker forms
- * on its own. `disabled` is not among them even though the breaker can produce it (an `api-key`
- * account whose key is refused): storing it would make a provider's bad `401` indistinguishable
- * from the operator having switched the account off, and only the operator can undo that one.
+ * on its own. `disabled` is not among them: it is the operator's switch, and storing an observation
+ * as `disabled` would make a provider's bad `401` indistinguishable from the operator having switched
+ * the account off. (The breaker no longer forms it either — an `api-key` account whose key is
+ * refused cools down as `credential-rejected`, `routing/breaker.ts` — but the exclusion stands on
+ * its own: a stored row says `disabled` only because a human said so.)
  */
 export type ObservedAccountStatus = "exhausted" | "needs_reauth"
 

@@ -5,6 +5,20 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+Driven by a production incident on 2026-10-02: from 02:18 UTC every `k3` request to pool `cn-models-team` failed, and the router said `1 more needs a human (kimi disabled)` about an account whose stored status was `active`.
+
+### Fixed
+
+- **Kimi's plan-limit `403`s are a cooldown in every wording, not an auth failure.** Kimi announces a spent plan window as `403 permission_error` in at least three phrasings — weekly (7-day), 5-hour, and billing cycle — and the driver knew only the billing-cycle one. The 5-hour body ("You've reached your 5-hour usage limit. Your quota will reset when the current 5-hour window ends.") fell to `403 → auth`. The driver now matches the property (a limit `reached` within one clause of `usage limit`, or a quota that `will reset` / `will be refreshed`), with one signal per window (`kimi:usage-limit-weekly`, `kimi:usage-limit-5-hour`, `kimi:billing-cycle-limit`, and `kimi:usage-limit` for a window not seen yet). The usage row reads `quota_exhausted`, the client gets `429` + `Retry-After`. A genuine `permission_error` ("You do not have access to model …") stays `auth`.
+- **A limit that names no instant cools down for an estimated length, not a 1-second backoff.** A classification rule may carry an estimated reset (`withResetEstimate`), applied only when the response reported none and always labeled `estimated` — the pool message reads `earliest reset <t> (estimated)`. Kimi: 15 minutes for the 5-hour window, 60 for weekly and billing cycle.
+- **A rejected API key is no longer the operator's `disabled`, and no longer permanent.** An `api-key` or `none` account's `401`/`403` used to park it at an in-memory `disabled`: never probed, never timed out, cleared only by Re-check or a restart, and reported as `disabled` while the row said `active` (the console offered an Enable button that did nothing). It now cools down as `credential-rejected` for `ROUTING_AUTH_FAILURE_COOLDOWN_MS` and is re-tested by one half-open probe. It is still reported as needing a human — `1 more needs a human (kimi credential rejected upstream, re-checked after <t> (estimated))`, a `503` when nothing else is left — and is never offered as the pool's earliest reset. OAuth is unchanged (`needs_reauth`). The admin view carries `availability.cooldownReason`, and the console says "credential rejected upstream — check the key".
+
+### Added
+
+- `ROUTING_AUTH_FAILURE_COOLDOWN_MS` (default `900000`, `0` refused at boot): how long an account whose API key the provider refused sits out before one request re-tests it.
+
 ## [2.14.0] — 2026-10-01
 
 Driven by a read of the 2.13.1 production log and database. (#135)

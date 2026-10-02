@@ -310,6 +310,12 @@ export interface FailoverConfig {
   /** Ceiling on that doubling, so a long outage does not park an account for hours. */
   readonly maxBackoffMs: number
   /**
+   * How long an account whose API key the provider refused (`401`/`403` read as auth) sits out
+   * before one probe re-tests it. A rejected key is still reported as needing a human; this only
+   * decides how often the router checks whether it still does.
+   */
+  readonly authFailureCooldownMs: number
+  /**
    * How long the one admitted half-open probe holds a recovering account before the gate reopens.
    *
    * A backstop for a probe that never reports — the chain releases the hold the instant its attempt
@@ -801,6 +807,8 @@ export const ENV_FIELDS = {
   ROUTING_BASE_BACKOFF_MS: atLeastOne.optional(),
   ROUTING_MAX_BACKOFF_MS: atLeastOne.optional(),
   ROUTING_HALF_OPEN_HOLD_MS: atLeastOne.optional(),
+  // Refuses zero: a zero cooldown re-dials a refused key on every request.
+  ROUTING_AUTH_FAILURE_COOLDOWN_MS: atLeastOne.optional(),
   // Refuses zero: `Retry-After: 0` invites an immediate retry storm against accounts that are,
   // by definition, not ready.
   ROUTING_UNKNOWN_RESET_RETRY_AFTER_SECONDS: atLeastOne.optional(),
@@ -1078,6 +1086,7 @@ const envSchema = z.object(ENV_FIELDS).transform((raw, ctx): Env => {
       failureThreshold: raw.ROUTING_FAILURE_THRESHOLD ?? 3,
       baseBackoffMs: raw.ROUTING_BASE_BACKOFF_MS ?? 1_000,
       maxBackoffMs: raw.ROUTING_MAX_BACKOFF_MS ?? 300_000,
+      authFailureCooldownMs: raw.ROUTING_AUTH_FAILURE_COOLDOWN_MS ?? 900_000,
       halfOpenHoldMs: raw.ROUTING_HALF_OPEN_HOLD_MS ?? 30_000,
       unknownResetRetryAfterSeconds: raw.ROUTING_UNKNOWN_RESET_RETRY_AFTER_SECONDS ?? 30,
       upstreamTimeoutMs: raw.UPSTREAM_TIMEOUT_MS ?? 600_000,
