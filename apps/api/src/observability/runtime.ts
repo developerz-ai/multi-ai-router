@@ -77,6 +77,9 @@ export function createRuntimeMetrics(deps: RuntimeMetricsDeps): RouterMetrics {
           status: snapshot.status,
           quotaWindows: snapshot.quotaWindows,
           breakerPhase: phase(state.breaker, now),
+          credentialRejected:
+            snapshot.status === "cooling_down" &&
+            snapshot.health.cooldownReason === "credential-rejected",
         }
       }),
     )

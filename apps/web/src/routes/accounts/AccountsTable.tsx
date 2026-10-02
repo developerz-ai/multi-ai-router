@@ -98,6 +98,11 @@ export function AccountsTable(props: AccountsTableProps) {
           >
             <span class={styles.spentNote}>window spent — not routable</span>
           </Show>
+          {/* The breaker's re-test of a key the provider refused. Said here because the dot
+              alone reads "cooling down", and this one wants a human to look at the key. */}
+          <Show when={account.availability?.cooldownReason === "credential-rejected"}>
+            <span class={styles.spentNote}>credential rejected upstream — check the key</span>
+          </Show>
         </div>
       ),
     },

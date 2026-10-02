@@ -10,7 +10,7 @@ import {
 import type { TokenSpanUsage, UsageReadRepository } from "@multi-ai-router/db"
 import type { AdminResult } from "../admin/result"
 import { buildSnapshot, type HealthStore, type RoutingCatalog } from "../dataplane"
-import { isWindowSpent } from "../routing"
+import { type CooldownReason, isWindowSpent } from "../routing"
 import type { RecheckService } from "./recheck"
 import type { AccountsService } from "./service"
 import type { AccountView } from "./view"
@@ -113,6 +113,12 @@ export interface AccountAvailability {
   readonly resetsAt: string | null
   /** How much to trust `resetsAt`. Always present, so a countdown is never read bare. */
   readonly resetSource: ResetSource
+  /**
+   * Why a cooldown is not an ordinary one, or null. `credential-rejected`: the provider refused this
+   * account's key — the countdown is when the router re-tests it, and the operator should look at
+   * the key. The status beside it stays `cooling_down`, never `disabled`, which is the operator's.
+   */
+  readonly cooldownReason: CooldownReason | null
   /** When an operator last pressed "Re-check now". Null when nobody has, since this process started. */
   readonly lastCheckedAt: string | null
   readonly consecutiveFailures: number
@@ -174,6 +180,7 @@ export function withAvailability(
           // No instant means nothing to qualify. `unknown` is the honest source, not a default.
           resetSource:
             resetsAt === null ? "unknown" : (observed.health.cooldownSource ?? "unknown"),
+          cooldownReason: observed.health.cooldownReason ?? null,
           lastCheckedAt: deps.recheck.lastCheckedAt(view.id)?.toISOString() ?? null,
           consecutiveFailures: observed.health.consecutiveFailures,
           inFlight: observed.health.inFlight,

@@ -71,7 +71,10 @@ export function evaluateCandidate(
   const cooling = coolingDown(member, now)
   if (cooling) {
     return drop({
-      reason: "cooling-down",
+      reason:
+        account.health.cooldownReason === "credential-rejected"
+          ? "credential-rejected"
+          : "cooling-down",
       ...(account.health.cooldownUntil !== undefined
         ? { resetsAt: account.health.cooldownUntil }
         : {}),

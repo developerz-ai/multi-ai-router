@@ -143,6 +143,12 @@ export interface AccountAvailability {
   readonly resetsAt: string | null
   /** Always present, so a countdown is never rendered without its qualifier. */
   readonly resetSource: ResetSource
+  /**
+   * `credential-rejected`: the provider refused this account's key and the countdown is the
+   * router's re-test, not a refill. Null for an ordinary cooldown. Optional so an older server's
+   * response, which never sends it, still type-checks as "no reason".
+   */
+  readonly cooldownReason?: "credential-rejected" | null
   readonly lastCheckedAt: string | null
   readonly consecutiveFailures: number
   readonly inFlight: number

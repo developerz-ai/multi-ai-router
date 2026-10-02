@@ -102,6 +102,39 @@ describe("the breaker's environment reaches the breaker", () => {
     expect(waited).toBeLessThanOrEqual(5_000 * (1 + JITTER_FRACTION))
   })
 
+  test("ROUTING_AUTH_FAILURE_MAX_COOLDOWN_MS caps how far a refused key's re-test cadence grows", () => {
+    const { health } = runtimeWith({
+      ROUTING_AUTH_FAILURE_COOLDOWN_MS: "120000",
+      ROUTING_AUTH_FAILURE_MAX_COOLDOWN_MS: "150000",
+    })
+    const refuse = (at: Date) =>
+      health.recordFailure("a", { kind: "auth", message: "401" }, at, { authKind: "api-key" })
+
+    refuse(NOW)
+    const secondAt = health.stateOf("a").breaker.cooldownUntil ?? NOW
+    refuse(secondAt)
+
+    // The second step would be 240 s; the operator's cap holds it at 150 s, jittered upward only.
+    const waited = (health.stateOf("a").breaker.cooldownUntil?.getTime() ?? 0) - secondAt.getTime()
+    expect(waited).toBeGreaterThanOrEqual(150_000)
+    expect(waited).toBeLessThanOrEqual(150_000 * (1 + JITTER_FRACTION))
+  })
+
+  test("keys refused in the same millisecond are not all re-tested in the same one", () => {
+    // A provider-wide 401 knocks every key over at once; a flat cadence would re-test them as one
+    // burst, forever.
+    const { health } = runtimeWith({ ROUTING_AUTH_FAILURE_COOLDOWN_MS: "120000" })
+    const resets = new Set<number>()
+    for (let index = 0; index < 8; index += 1) {
+      health.recordFailure(`key-${index}`, { kind: "auth", message: "401" }, NOW, {
+        authKind: "api-key",
+      })
+      resets.add(health.stateOf(`key-${index}`).breaker.cooldownUntil?.getTime() ?? 0)
+    }
+
+    expect(resets.size).toBeGreaterThan(1)
+  })
+
   test("accounts tripped in the same millisecond do not come back in the same one", () => {
     // The whole point of jitter, and it was never supplied: eight accounts knocked over together
     // used to return together and re-stampede whatever knocked them over.
@@ -204,13 +237,19 @@ describe("a standing block reaches the durable writer", () => {
     expect(statusWriter.stats().pending).toBe(0)
   })
 
-  test("the disabled an api-key failure forms is announced and then dropped", () => {
-    // The wire carries every block; the writer refuses this one, so a provider's bad 401 can never
-    // become indistinguishable from the operator having switched the account off.
-    const { health, statusWriter } = runtimeWith({})
+  test("an api-key failure queues nothing — it is a cooldown, and never the operator's disabled", () => {
+    // A provider's bad 401 can never become indistinguishable from the operator having switched
+    // the account off: it is a `credential-rejected` cooldown, which no row stores.
+    const { health, statusWriter } = runtimeWith({ ROUTING_AUTH_FAILURE_COOLDOWN_MS: "120000" })
     health.recordFailure("a", { kind: "auth", message: "401" }, NOW, { authKind: "api-key" })
 
-    expect(health.stateOf("a").breaker.status).toBe("disabled")
+    expect(health.stateOf("a").breaker.status).toBe("cooling_down")
+    expect(health.stateOf("a").breaker.cooldownReason).toBe("credential-rejected")
+    // The operator's number reaches the transition, not the module default — widened only by the
+    // jitter every cooldown step carries.
+    const waited = (health.stateOf("a").breaker.cooldownUntil?.getTime() ?? 0) - NOW.getTime()
+    expect(waited).toBeGreaterThanOrEqual(120_000)
+    expect(waited).toBeLessThanOrEqual(120_000 * (1 + JITTER_FRACTION))
     expect(statusWriter.stats().pending).toBe(0)
   })
 

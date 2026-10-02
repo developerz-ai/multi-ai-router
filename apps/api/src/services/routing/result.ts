@@ -21,6 +21,14 @@ export type FilterReason =
   | "needs-reauth"
   | "exhausted"
   | "cooling-down"
+  /**
+   * The provider refused this account's key. Cooling down on the router's own clock and re-tested
+   * by one probe when it ends, but reported with the accounts a human should look at — and never
+   * as `disabled`, which is the operator's switch and not something an upstream can flip.
+   * Deliberately **not** in {@link RECOVERABLE_FILTER_REASONS}: its instant is a re-test, not a
+   * window refilling, so it must never be offered to a client as the pool's earliest reset.
+   */
+  | "credential-rejected"
   /** Its cooldown passed, but another request is already spending the one probe it earns. */
   | "probe-in-flight"
   | "quota-window-spent"
@@ -86,6 +94,7 @@ export type BindingInvalidationReason =
   | "exhausted"
   | "needs-reauth"
   | "disabled"
+  | "credential-rejected"
   | "model-unsupported"
   | "quota-window-spent"
   | "cooling-down"

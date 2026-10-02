@@ -95,6 +95,10 @@ export interface HealthStoreOptions {
   /** First backoff step. Doubles per consecutive failure. */
   readonly baseBackoffMs?: number
   readonly maxBackoffMs?: number
+  /** How long a rejected API key sits out before one probe re-tests it. `ROUTING_AUTH_FAILURE_COOLDOWN_MS`. */
+  readonly authFailureCooldownMs?: number
+  /** Ceiling on that cooldown's doubling per refused re-test. `ROUTING_AUTH_FAILURE_MAX_COOLDOWN_MS`. */
+  readonly authFailureMaxCooldownMs?: number
   /**
    * A fresh jitter fraction in `[0, 1]` per transition, defaulting to `Math.random`. Injected
    * because `breaker.ts` deliberately reads no randomness, and because a test that cannot pin the
@@ -118,9 +122,11 @@ export interface HealthStoreOptions {
    * Fired when a failure moves an account **into** the breaker's `blocked` phase, so who gets
    * announced cannot drift from who routing treats as permanently out. Once per transition, not
    * once per failure: re-announcing a state the account is already in would turn one
-   * operator-visible event into a line per request. It reports every block formed, including the
-   * `disabled` an `api-key` auth failure produces — which of them are worth *storing* is decided
-   * downstream (`status-writer.ts`). Same contract as {@link onQuotaWindows}.
+   * operator-visible event into a line per request. Which of them are worth *storing* is decided
+   * downstream (`status-writer.ts`). A rejected API key is not among them: it cools down on a clock
+   * (`credential-rejected`, `routing/breaker.ts`) rather than blocking, so there is no standing
+   * verdict to announce — each failed probe is its own `upstream attempt failed` line. Same contract
+   * as {@link onQuotaWindows}.
    */
   readonly onBlocked?: (accountId: string, status: AccountStatus) => void
   /**
@@ -211,6 +217,12 @@ export function createHealthStore(options: HealthStoreOptions = {}): HealthStore
       : { failureThreshold: options.failureThreshold }),
     ...(options.baseBackoffMs === undefined ? {} : { baseBackoffMs: options.baseBackoffMs }),
     ...(options.maxBackoffMs === undefined ? {} : { maxBackoffMs: options.maxBackoffMs }),
+    ...(options.authFailureCooldownMs === undefined
+      ? {}
+      : { authFailureCooldownMs: options.authFailureCooldownMs }),
+    ...(options.authFailureMaxCooldownMs === undefined
+      ? {}
+      : { authFailureMaxCooldownMs: options.authFailureMaxCooldownMs }),
   }
 
   /**
@@ -316,7 +328,7 @@ export function createHealthStore(options: HealthStoreOptions = {}): HealthStore
   }
 }
 
-/** Where an auth failure lands: `api-key` -> `disabled`, `oauth` -> `needs_reauth`. */
+/** Where an auth failure lands: `oauth` -> `needs_reauth`, `api-key` -> a `credential-rejected` cooldown. */
 export function breakerOptionsFor(authKind: AuthKind): BreakerOptions {
   return { authKind }
 }

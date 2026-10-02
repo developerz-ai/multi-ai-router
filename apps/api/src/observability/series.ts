@@ -192,6 +192,19 @@ export function createSeries(options: RegistryOptions = {}) {
     }),
 
     /**
+     * Why a cooldown is not a spent window. A key the provider refused cools down and is re-tested
+     * on a clock (`routing/breaker.ts`), so in the two series above it reads exactly like a limit:
+     * `cooling_down`, `open`. This is the half an alert needs — a human has to fix these. Read from
+     * the same health-overlaid snapshot as `router_accounts`, so an account the operator disabled
+     * reads 0 here as it does in routing. One series per account, zeroed, cleared per scrape.
+     */
+    credentialRejected: registry.gauge({
+      name: "router_credential_rejected",
+      help: "1 while an account is cooling down because the provider refused its credential (a human should check the key), 0 otherwise.",
+      labels: ["account_id"],
+    }),
+
+    /**
      * The gate `HealthStore.admitProbe` enforces — see its own doc comment. Sustained `refused` is
      * exactly the traffic the gate exists to describe: a recovering account with more requests
      * queued behind it than the one probe it allows through.

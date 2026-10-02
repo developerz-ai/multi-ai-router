@@ -16,6 +16,7 @@ import type {
   RoutingPolicy,
   UtilizationSource,
 } from "@multi-ai-router/core"
+import type { CooldownReason } from "./breaker"
 
 /**
  * One limiter's headroom, under the provider's own name for it.
@@ -44,6 +45,12 @@ export interface AccountHealth {
    * guessed reset presented as fact is worse than no reset at all.
    */
   readonly cooldownSource?: ResetSource
+  /**
+   * Why the cooldown is not an ordinary one — today only `credential-rejected`, an API key the
+   * provider refused. Routing still re-tests it on the clock; everything that *reports* it names it
+   * for what it is and puts it with the accounts a human should look at, never as `disabled`.
+   */
+  readonly cooldownReason?: CooldownReason
   /** Consecutive upstream failures — the exponential backoff step. */
   readonly consecutiveFailures: number
   /**

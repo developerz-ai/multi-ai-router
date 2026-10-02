@@ -47,13 +47,14 @@ describe("health store", () => {
     expect(state.breaker.cooldownUntil).toBeUndefined()
   })
 
-  test("an auth failure needs a human: reauth for OAuth, disabled for a key", () => {
+  test("an auth failure: reauth for OAuth, a labeled re-test cooldown for a key", () => {
     const store = createHealthStore()
     store.recordFailure("oauth", { kind: "auth", message: "401" }, NOW, { authKind: "oauth" })
     store.recordFailure("key", { kind: "auth", message: "401" }, NOW, { authKind: "api-key" })
 
     expect(store.stateOf("oauth").breaker.status).toBe("needs_reauth")
-    expect(store.stateOf("key").breaker.status).toBe("disabled")
+    expect(store.stateOf("key").breaker.status).toBe("cooling_down")
+    expect(store.stateOf("key").breaker.cooldownReason).toBe("credential-rejected")
   })
 
   test("a reported limit on an otherwise fine response still cools the account down", () => {
@@ -88,8 +89,9 @@ describe("health store", () => {
     expect(state.breaker.cooldownUntil).toBeUndefined()
   })
 
-  test("a limited header never downgrades needs_reauth or disabled", () => {
-    const store = createHealthStore()
+  test("a limited header never downgrades needs_reauth, nor shortens a rejected key's cooldown", () => {
+    // Jitter pinned: a rejected key's cooldown is jittered like every other step since #139's review.
+    const store = createHealthStore({ jitter: () => 0 })
     store.recordFailure("oauth", { kind: "auth", message: "401" }, NOW, { authKind: "oauth" })
     store.recordFailure("key", { kind: "auth", message: "401" }, NOW, { authKind: "api-key" })
 
@@ -103,8 +105,9 @@ describe("health store", () => {
 
     expect(store.stateOf("oauth").breaker.status).toBe("needs_reauth")
     expect(store.stateOf("oauth").breaker.cooldownUntil).toBeUndefined()
-    expect(store.stateOf("key").breaker.status).toBe("disabled")
-    expect(store.stateOf("key").breaker.cooldownUntil).toBeUndefined()
+    expect(store.stateOf("key").breaker.status).toBe("cooling_down")
+    expect(store.stateOf("key").breaker.cooldownReason).toBe("credential-rejected")
+    expect(store.stateOf("key").breaker.cooldownUntil).toEqual(new Date(NOW.getTime() + 900_000))
   })
 
   test("a concurrent 429 never demotes exhausted back to cooling_down", () => {
@@ -258,7 +261,8 @@ describe("the breaker's configured numbers reach it", () => {
     const store = createHealthStore({ baseBackoffMs: 7_000, jitter: () => 0 })
     store.recordFailure("a", { kind: "auth", message: "401" }, NOW, { authKind: "api-key" })
 
-    expect(store.stateOf("a").breaker.status).toBe("disabled")
+    expect(store.stateOf("a").breaker.status).toBe("cooling_down")
+    expect(store.stateOf("a").breaker.cooldownReason).toBe("credential-rejected")
   })
 
   test("jitter widens the estimated step, so accounts tripped together do not return together", () => {
@@ -584,13 +588,14 @@ describe("standing blocks are announced", () => {
     expect(seen).toEqual([{ accountId: "a", status: "needs_reauth" }])
   })
 
-  test("the disabled an api-key failure forms is announced too — storing it is not this file's call", () => {
-    // The store reports every block it makes; `status-writer.ts` decides which are durable. One
-    // predicate, one file, rather than the same exclusion written in two places that can drift.
+  test("an api-key failure forms no block to announce — it is a re-tested cooldown", () => {
+    // Before 2026-10-02 this was announced as `disabled` and dropped by `status-writer.ts`. It no
+    // longer forms a block at all, so there is nothing to announce and nothing to drop.
     const { store, seen } = blocks()
     store.recordFailure("a", { kind: "auth", message: "401" }, NOW, { authKind: "api-key" })
 
-    expect(seen).toEqual([{ accountId: "a", status: "disabled" }])
+    expect(store.stateOf("a").breaker.status).toBe("cooling_down")
+    expect(seen).toEqual([])
   })
 
   test("a cooldown is not announced — a clock ends it, so nobody needs telling", () => {
@@ -643,5 +648,196 @@ describe("snapshot", () => {
     const disabled = account("a", { snapshot: { status: "disabled" } })
     const overlaid = overlayHealth(disabled.snapshot, createHealthStore().stateOf("a"))
     expect(overlaid.status).toBe("disabled")
+  })
+})
+
+describe("a rejected API key", () => {
+  const COOLDOWN = 900_000
+  const after = (ms: number): Date => new Date(NOW.getTime() + ms)
+  const reject = (store: ReturnType<typeof createHealthStore>): void =>
+    store.recordFailure("key", { kind: "auth", status: 403, message: "403" }, NOW, {
+      authKind: "api-key",
+    })
+
+  test("is not announced as a standing block: there is nothing for the row to store", () => {
+    const blocked: [string, AccountStatus][] = []
+    const store = createHealthStore({
+      authFailureCooldownMs: COOLDOWN,
+      onBlocked: (id, status) => void blocked.push([id, status]),
+    })
+
+    reject(store)
+
+    expect(blocked).toEqual([])
+    expect(store.stateOf("key").breaker.status).toBe("cooling_down")
+  })
+
+  test("takes the configured cooldown, then admits one probe on its own — no button", () => {
+    const store = createHealthStore({ authFailureCooldownMs: COOLDOWN, jitter: () => 0 })
+    reject(store)
+
+    expect(store.stateOf("key").breaker.cooldownUntil).toEqual(after(COOLDOWN))
+    expect(store.admitProbe("key", after(COOLDOWN - 1))).toEqual({ admitted: false, held: false })
+    expect(store.admitProbe("key", after(COOLDOWN))).toEqual({ admitted: true, held: true })
+  })
+
+  /**
+   * Review of #139, round 2, as it was reproduced: five api-key `401`s at one instant, jitter 0,
+   * left the store at `consecutiveFailures: 5` and a 240-minute cooldown on the key's first
+   * incident. The chain records every attempt at its own start, so each in-flight sibling arrives
+   * here inside the cooldown the first one set.
+   */
+  test("five refusals landing together are one incident: fifteen minutes, counted once", () => {
+    const store = createHealthStore({ jitter: () => 0 })
+    for (let index = 0; index < 5; index += 1) reject(store)
+
+    const first = store.stateOf("key").breaker
+    expect(first.cooldownUntil).toEqual(after(COOLDOWN))
+    expect(first.consecutiveFailures).toBe(1)
+    expect(first.cooldownReason).toBe("credential-rejected")
+
+    // The probe, once that cooldown has passed, is the re-test — and a refused one doubles.
+    store.recordFailure("key", { kind: "auth", status: 401, message: "401" }, after(COOLDOWN), {
+      authKind: "api-key",
+    })
+    const second = store.stateOf("key").breaker
+    expect(second.cooldownUntil).toEqual(after(COOLDOWN + 2 * COOLDOWN))
+    expect(second.consecutiveFailures).toBe(2)
+  })
+
+  /**
+   * Review of #139, round 3: the same incident, with siblings that were not refused. Recorded in the
+   * chain's own order — each response's verdict, then the reading that rode it — a `500` and a
+   * short-reset `429` in flight with the `401` each moved the count, and the refused probe that
+   * followed waited 60 minutes instead of 30.
+   */
+  test("siblings of other kinds landing with the refusal are the same incident", () => {
+    const store = createHealthStore({ jitter: () => 0 })
+    const key = { authKind: "api-key" } as const
+
+    reject(store)
+    store.applyRateLimit("key", null, NOW)
+    store.recordFailure("key", { kind: "server-error", status: 500, message: "500" }, NOW, key)
+    store.applyRateLimit("key", null, NOW)
+    store.recordFailure(
+      "key",
+      { kind: "rate-limited", status: 429, retryAfterSeconds: 60, message: "429" },
+      NOW,
+      key,
+    )
+    store.applyRateLimit(
+      "key",
+      signal({ limited: true, retryAfterSeconds: 60, resetSource: "provider-reported" }),
+      NOW,
+    )
+
+    const first = store.stateOf("key").breaker
+    expect(first.cooldownUntil).toEqual(after(COOLDOWN))
+    expect(first.consecutiveFailures).toBe(1)
+    expect(first.cooldownReason).toBe("credential-rejected")
+
+    store.recordFailure("key", { kind: "auth", status: 401, message: "401" }, after(COOLDOWN), key)
+    const second = store.stateOf("key").breaker
+    expect(second.cooldownUntil).toEqual(after(COOLDOWN + 2 * COOLDOWN))
+    expect(second.consecutiveFailures).toBe(2)
+  })
+
+  test("a probe that succeeds brings it back", () => {
+    const store = createHealthStore({ authFailureCooldownMs: COOLDOWN })
+    reject(store)
+    store.recordSuccess("key")
+    expect(store.stateOf("key").breaker.status).toBe("active")
+  })
+
+  test("is never shown as `disabled` while the operator's row says active", () => {
+    const store = createHealthStore({ authFailureCooldownMs: COOLDOWN, jitter: () => 0 })
+    reject(store)
+
+    const overlaid = overlayHealth(account("key").snapshot, store.stateOf("key"))
+
+    expect(overlaid.status).toBe("cooling_down")
+    expect(overlaid.status).not.toBe("disabled")
+    expect(overlaid.health.cooldownReason).toBe("credential-rejected")
+    expect(overlaid.health.cooldownUntil).toEqual(after(COOLDOWN))
+  })
+
+  test("the operator's own `disabled` still wins over it", () => {
+    const store = createHealthStore({ authFailureCooldownMs: COOLDOWN })
+    reject(store)
+    const disabled = account("key", { snapshot: { status: "disabled" } })
+    expect(overlayHealth(disabled.snapshot, store.stateOf("key")).status).toBe("disabled")
+  })
+})
+
+/**
+ * Review of #139: `recordFailure` labels a rejected key, then `applyRateLimit` folds the limiter
+ * reading that rode the *same* response through the breaker's `trip`. When that reading's reset was
+ * longer than the auth cooldown, `trip` built a fresh, ordinary cooldown and the label was gone — a
+ * refused key reported as a spent window. A reading says when a limiter refills; it never says
+ * whether a key works.
+ */
+describe("a limiter reading riding a rejected key's response", () => {
+  const COOLDOWN = 900_000
+  const HOUR = 3_600_000
+  const after = (ms: number): Date => new Date(NOW.getTime() + ms)
+  const store = () => createHealthStore({ authFailureCooldownMs: COOLDOWN, jitter: () => 0 })
+  const reject = (s: ReturnType<typeof createHealthStore>, now: Date): void =>
+    s.recordFailure("key", { kind: "auth", status: 401, message: "401" }, now, {
+      authKind: "api-key",
+    })
+  const longReading = (resetsAt: Date) =>
+    signal({ limited: true, resetsAt, resetSource: "provider-reported" })
+
+  test("keeps the label when its reset is longer than the auth cooldown", () => {
+    const s = store()
+    reject(s, NOW)
+    s.applyRateLimit("key", longReading(after(HOUR)), NOW)
+
+    const breaker = s.stateOf("key").breaker
+    expect(breaker.status).toBe("cooling_down")
+    expect(breaker.cooldownUntil).toEqual(after(HOUR))
+    expect(breaker.cooldownReason).toBe("credential-rejected")
+  })
+
+  test("is not a second rejection: the streak counts responses, not readings", () => {
+    const s = store()
+    reject(s, NOW)
+    s.applyRateLimit("key", longReading(after(HOUR)), NOW)
+    expect(s.stateOf("key").breaker.consecutiveFailures).toBe(1)
+
+    // The probe after it is refused again: the second step (2 x 15 min), not the third.
+    reject(s, after(HOUR))
+    expect(s.stateOf("key").breaker.cooldownUntil).toEqual(after(HOUR + 2 * COOLDOWN))
+  })
+
+  /**
+   * Review of #139, round 3. A reading lengthens the refusal's cooldown only to a reset the provider
+   * named. One that names none used to fall through to the breaker's own backoff step, which could
+   * outlast what was left of the cooldown — the router's arithmetic holding a refused key out.
+   */
+  test("a reading that names no reset moves nothing: not the instant, the count or the label", () => {
+    const s = createHealthStore({ authFailureCooldownMs: 1_000, jitter: () => 0 })
+    reject(s, NOW)
+    const refused = s.stateOf("key").breaker
+    expect(refused.cooldownUntil).toEqual(after(1_000))
+
+    s.applyRateLimit("key", signal({ limited: true }), NOW)
+
+    expect(s.stateOf("key").breaker).toEqual(refused)
+  })
+
+  test("a probe answered 429 proved the key works: its own reading does not bring the label back", () => {
+    const s = store()
+    reject(s, NOW)
+    s.recordFailure(
+      "key",
+      { kind: "rate-limited", retryAfterSeconds: 60, message: "429" },
+      after(COOLDOWN),
+    )
+    s.applyRateLimit("key", longReading(after(COOLDOWN + HOUR)), after(COOLDOWN))
+
+    const breaker = s.stateOf("key").breaker
+    expect(breaker.status).toBe("cooling_down")
+    expect(breaker.cooldownReason).toBeUndefined()
   })
 })
