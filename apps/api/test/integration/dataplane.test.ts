@@ -730,6 +730,104 @@ describe("failover", () => {
  * eligible to every waiting request simultaneously, so the backlog that piled up during the
  * cooldown dispatched onto it in the same millisecond and rate-limited it again.
  */
+/**
+ * Production, 2026-10-02: the `kimi` account answered one `403` at 02:18Z with Kimi's 5-hour
+ * usage-limit body, was parked at an in-memory `disabled` its row never held, and took no traffic
+ * until a human acted — while the router told every caller "1 more needs a human (kimi disabled)".
+ */
+describe("a Kimi usage limit, answered as a 403", () => {
+  const FIVE_HOUR_LIMIT = {
+    type: "error",
+    error: {
+      type: "permission_error",
+      message:
+        "You've reached your 5-hour usage limit. Your quota will reset when the current 5-hour window ends. To continue now, purchase extra usage or upgrade your plan: https://www.kimi.com/membership/subscription",
+    },
+  }
+  const kimiAccount = account("kimi", { provider: "kimi", apiKey: "sk-kimi", cipher: CRYPTOR })
+
+  test("is quota with an estimated reset, and the account comes back on its own", async () => {
+    const { app, health, upstream, usage, clock } = harness({
+      accounts: [kimiAccount],
+      responses: [
+        () => jsonResponse(403, FIVE_HOUR_LIMIT),
+        () => jsonResponse(200, { usage: { input_tokens: 1, output_tokens: 1 } }),
+      ],
+    })
+
+    const first = await app.request("/v1/messages", post(MESSAGE, bearer()))
+    await first.text()
+    await settle()
+
+    // A window spent, not a key refused: the row says quota and the client is told when to return.
+    expect(usage.rows.map((row) => row.outcome)).toEqual(["quota_exhausted"])
+    expect(usage.rows[0]?.httpStatus).toBe(403)
+    expect(first.status).toBe(429)
+    expect(first.headers.get("Retry-After")).not.toBeNull()
+    const breaker = health.stateOf("kimi").breaker
+    expect(breaker.status).toBe("cooling_down")
+    expect(breaker.cooldownSource).toBe("estimated")
+    expect(breaker.cooldownReason).toBeUndefined()
+
+    // While it cools, the pool says so — a clock, never a human, and never `disabled`.
+    const waiting = await app.request("/v1/messages", post(MESSAGE, bearer()))
+    const text = await waiting.text()
+    expect(waiting.status).toBe(429)
+    expect(text).not.toContain("disabled")
+    expect(text).not.toContain("needs a human")
+    expect(text).toContain("(estimated)")
+    expect(upstream.calls).toHaveLength(1)
+
+    // The estimate passes; the next request is the probe, and it is answered.
+    clock.advance(15 * 60_000)
+    const recovered = await app.request("/v1/messages", post(MESSAGE, bearer()))
+    await recovered.text()
+    await settle()
+
+    expect(recovered.status).toBe(200)
+    expect(upstream.calls).toHaveLength(2)
+    expect(health.stateOf("kimi").breaker.status).toBe("active")
+  })
+
+  test("a genuinely refused key still needs a human, is named for what it is, and is re-tested", async () => {
+    const { app, health, upstream, clock } = harness({
+      accounts: [kimiAccount],
+      health: { authFailureCooldownMs: 900_000 },
+      responses: [
+        () =>
+          jsonResponse(403, {
+            type: "error",
+            error: {
+              type: "permission_error",
+              message: "You do not have access to model k3-preview",
+            },
+          }),
+        () => jsonResponse(200, { usage: { input_tokens: 1, output_tokens: 1 } }),
+      ],
+    })
+
+    const first = await app.request("/v1/messages", post(MESSAGE, bearer()))
+    await first.text()
+    await settle()
+    expect(health.stateOf("kimi").breaker.cooldownReason).toBe("credential-rejected")
+
+    const second = await app.request("/v1/messages", post(MESSAGE, bearer()))
+    const text = await second.text()
+    expect(second.status).toBe(503)
+    expect(text).toContain("kimi credential rejected upstream")
+    expect(text).not.toContain("disabled")
+    expect(upstream.calls).toHaveLength(1)
+
+    // No button: the cooldown passes and one request re-tests the key. Fixed upstream, it serves.
+    clock.advance(900_000)
+    const third = await app.request("/v1/messages", post(MESSAGE, bearer()))
+    await third.text()
+    await settle()
+    expect(third.status).toBe(200)
+    expect(health.stateOf("kimi").breaker.status).toBe("active")
+  })
+})
+
 describe("the half-open probe is admitted one at a time", () => {
   const deferred = () => {
     let resolve: (response: Response) => void = () => undefined

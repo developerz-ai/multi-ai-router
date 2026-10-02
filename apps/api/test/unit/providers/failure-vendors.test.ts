@@ -7,9 +7,11 @@ import {
   geminiRateLimitBody,
   geminiUnauthenticatedBody,
   kimiCycleLimitBody,
+  kimiFiveHourLimitBody,
   kimiPermissionDeniedBody,
   kimiQuotaBody,
   kimiRateLimitBody,
+  kimiWeeklyLimitBody,
   miniMaxBalanceBody,
   miniMaxSuccessBody,
   miniMaxThrottleBody,
@@ -127,6 +129,96 @@ describe("kimi", () => {
 
     expect(result?.kind).toBe("auth")
     expect(result?.signal).toBe("http-status:403")
+  })
+
+  /**
+   * The body that parked `kimi` in production on 2026-10-02 at 02:18Z: the 5-hour window, worded
+   * "reset" rather than the billing cycle's "refreshed". It matched no rule, fell to `403 -> auth`,
+   * and the account sat out of rotation until a human pressed a button — for a window Kimi itself
+   * reopens five hours later.
+   */
+  test("a spent 5-hour window is a cooldown with an estimated reset, not an auth failure", () => {
+    const result = kimi?.classifyFailure(response(403, { body: kimiFiveHourLimitBody }))
+
+    expect(result?.kind).toBe("rate-limited")
+    expect(result?.retryable).toBe(true)
+    expect(result?.signal).toBe("kimi:usage-limit-5-hour")
+    // Kimi names no instant ("when the current 5-hour window ends") and sends no headers, so the
+    // reset is ours, and labeled as ours: a guess presented as the provider's word is worse than none.
+    expect(result?.rateLimit?.limited).toBe(true)
+    expect(result?.rateLimit?.resetSource).toBe("estimated")
+    expect(result?.rateLimit?.retryAfterSeconds).toBe(15 * 60)
+    expect(result?.rateLimit?.resetsAt).toBeUndefined()
+  })
+
+  test("a spent weekly window is a cooldown with a longer estimated reset", () => {
+    const result = kimi?.classifyFailure(response(403, { body: kimiWeeklyLimitBody }))
+
+    expect(result?.kind).toBe("rate-limited")
+    expect(result?.signal).toBe("kimi:usage-limit-weekly")
+    expect(result?.rateLimit?.resetSource).toBe("estimated")
+    expect(result?.rateLimit?.retryAfterSeconds).toBe(60 * 60)
+  })
+
+  test("a spent billing cycle carries an estimated reset too, so the breaker does not hammer it", () => {
+    const result = kimi?.classifyFailure(response(403, { body: kimiCycleLimitBody }))
+
+    expect(result?.rateLimit?.resetSource).toBe("estimated")
+    expect(result?.rateLimit?.retryAfterSeconds).toBe(60 * 60)
+  })
+
+  test("a reported Retry-After outranks the estimate — the provider's word is the truth", () => {
+    const result = kimi?.classifyFailure(
+      response(403, { headers: { "retry-after": "120" }, body: kimiFiveHourLimitBody }),
+    )
+
+    expect(result?.kind).toBe("rate-limited")
+    expect(result?.rateLimit?.retryAfterSeconds).toBe(120)
+    expect(result?.rateLimit?.resetSource).not.toBe("estimated")
+  })
+
+  test("a genuine permission_error carries no invented reset", () => {
+    const result = kimi?.classifyFailure(response(403, { body: kimiPermissionDeniedBody }))
+    expect(result?.rateLimit).toBeNull()
+  })
+
+  /**
+   * The wording family, one line per phrasing. Kimi has reordered these words at least three times;
+   * the next reordering should fail exactly one row here rather than park an account in production.
+   */
+  test.each([
+    [
+      "You've reached your 5-hour usage limit. Your quota will reset when the current 5-hour window ends.",
+    ],
+    [
+      "You've reached your weekly (7-day) usage limit. Your quota will reset when the current 7-day window ends.",
+    ],
+    [
+      "You've reached your usage limit for this billing cycle. Your quota will be refreshed in the next cycle.",
+    ],
+    // A curly apostrophe, as a copy-edited body may carry: nothing may hinge on "You've".
+    ["You\u2019ve reached your 5-hour usage limit."],
+    // A window Kimi has not shipped yet, worded the way all three of its siblings are.
+    ["You've reached your daily usage limit."],
+    ["Your quota will reset when the current window ends."],
+  ])("%s is a cooldown, not an auth failure", (message) => {
+    const result = kimi?.classifyFailure(
+      response(403, { body: { type: "error", error: { type: "permission_error", message } } }),
+    )
+
+    expect(result?.kind).toBe("rate-limited")
+    expect(result?.rateLimit?.resetSource).toBe("estimated")
+    expect(result?.rateLimit?.retryAfterSeconds ?? 0).toBeGreaterThan(0)
+  })
+
+  test("a body that only describes a limit, without reaching it, stays an auth failure", () => {
+    const message =
+      "Your usage limit is 1000 requests per day. You do not have access to model k3-preview"
+    const result = kimi?.classifyFailure(
+      response(403, { body: { type: "error", error: { type: "permission_error", message } } }),
+    )
+
+    expect(result?.kind).toBe("auth")
   })
 
   test("rate_limit_reached_error is a cooldown", () => {

@@ -645,3 +645,60 @@ describe("snapshot", () => {
     expect(overlaid.status).toBe("disabled")
   })
 })
+
+describe("a rejected API key", () => {
+  const COOLDOWN = 900_000
+  const after = (ms: number): Date => new Date(NOW.getTime() + ms)
+  const reject = (store: ReturnType<typeof createHealthStore>): void =>
+    store.recordFailure("key", { kind: "auth", status: 403, message: "403" }, NOW, {
+      authKind: "api-key",
+    })
+
+  test("is not announced as a standing block: there is nothing for the row to store", () => {
+    const blocked: [string, AccountStatus][] = []
+    const store = createHealthStore({
+      authFailureCooldownMs: COOLDOWN,
+      onBlocked: (id, status) => void blocked.push([id, status]),
+    })
+
+    reject(store)
+
+    expect(blocked).toEqual([])
+    expect(store.stateOf("key").breaker.status).toBe("cooling_down")
+  })
+
+  test("takes the configured cooldown, then admits one probe on its own — no button", () => {
+    const store = createHealthStore({ authFailureCooldownMs: COOLDOWN })
+    reject(store)
+
+    expect(store.stateOf("key").breaker.cooldownUntil).toEqual(after(COOLDOWN))
+    expect(store.admitProbe("key", after(COOLDOWN - 1))).toEqual({ admitted: false, held: false })
+    expect(store.admitProbe("key", after(COOLDOWN))).toEqual({ admitted: true, held: true })
+  })
+
+  test("a probe that succeeds brings it back", () => {
+    const store = createHealthStore({ authFailureCooldownMs: COOLDOWN })
+    reject(store)
+    store.recordSuccess("key")
+    expect(store.stateOf("key").breaker.status).toBe("active")
+  })
+
+  test("is never shown as `disabled` while the operator's row says active", () => {
+    const store = createHealthStore({ authFailureCooldownMs: COOLDOWN })
+    reject(store)
+
+    const overlaid = overlayHealth(account("key").snapshot, store.stateOf("key"))
+
+    expect(overlaid.status).toBe("cooling_down")
+    expect(overlaid.status).not.toBe("disabled")
+    expect(overlaid.health.cooldownReason).toBe("credential-rejected")
+    expect(overlaid.health.cooldownUntil).toEqual(after(COOLDOWN))
+  })
+
+  test("the operator's own `disabled` still wins over it", () => {
+    const store = createHealthStore({ authFailureCooldownMs: COOLDOWN })
+    reject(store)
+    const disabled = account("key", { snapshot: { status: "disabled" } })
+    expect(overlayHealth(disabled.snapshot, store.stateOf("key")).status).toBe("disabled")
+  })
+})

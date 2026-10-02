@@ -117,6 +117,52 @@ describe("the count in the message equals the rejections it accounts for (#88)",
     )
   })
 
+  /**
+   * The production message of 2026-10-02 07:47Z, minus the defect: kimi's `403` had been read as a
+   * dead key and rendered "1 more needs a human (kimi disabled)" while its row said `active`.
+   */
+  test("a rejected credential needs a human, says so, and is never called disabled", () => {
+    const result = error([
+      rejected("alibaba", "quota-window-spent", {
+        resetsAt: at(86_400_000),
+        resetSource: "provider-reported",
+      }),
+      rejected("kimi", "credential-rejected", { resetsAt: at(900_000), resetSource: "estimated" }),
+      rejected("zai", "model-unsupported"),
+    ])
+
+    expect(result.status).toBe(429)
+    expect(result.message).toContain(
+      `1 more needs a human (kimi credential rejected upstream, re-checked after ${at(900_000).toISOString()} (estimated))`,
+    )
+    expect(result.message).not.toContain("disabled")
+  })
+
+  test("a rejected credential's re-check never poses as the pool's earliest reset", () => {
+    // It is a re-test of a credential a human should look at, not a window refilling. Offering it
+    // as the reset would tell a client to come back in fifteen minutes to a key that may be dead.
+    const result = error([
+      rejected("alibaba", "quota-window-spent", {
+        resetsAt: at(86_400_000),
+        resetSource: "provider-reported",
+      }),
+      rejected("kimi", "credential-rejected", { resetsAt: at(900_000), resetSource: "estimated" }),
+    ])
+
+    expect(result.message).toContain(`earliest reset ${at(86_400_000).toISOString()}`)
+  })
+
+  test("with nothing else in the pool, a rejected credential is the 503 that names it", () => {
+    const result = error([
+      rejected("kimi", "credential-rejected", { resetsAt: at(900_000), resetSource: "estimated" }),
+    ])
+
+    expect(result).toBeInstanceOf(NoHealthyAccountError)
+    expect(result.message).toBe(
+      `no eligible account in pool cn-models-team: kimi credential rejected upstream, re-checked after ${at(900_000).toISOString()} (estimated)`,
+    )
+  })
+
   test("which class wins is unchanged: recoverable over exhausted over the rest", () => {
     expect(error([rejected("a", "disabled"), rejected("b", "exhausted")]).status).toBe(402)
     expect(

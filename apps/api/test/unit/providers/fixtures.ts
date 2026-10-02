@@ -178,6 +178,34 @@ export const kimiCycleLimitBody = {
   },
 }
 
+/**
+ * Recorded live, 2026-10-02T02:18:08Z (router pod log, request 1a13ed07): a spent 5-hour window,
+ * announced as a `403 permission_error`. The URL was truncated in the log line; the rest is verbatim.
+ * Before 2.14.1 this matched no rule, fell to the `403 -> auth` default, and parked the account.
+ */
+export const kimiFiveHourLimitBody = {
+  type: "error",
+  error: {
+    type: "permission_error",
+    message:
+      "You've reached your 5-hour usage limit. Your quota will reset when the current 5-hour window ends. To continue now, purchase extra usage or upgrade your plan: https://www.kimi.com/membership/subscription",
+  },
+}
+
+/**
+ * The weekly phrasing — the most common of Kimi's three (238 of 314 bodies the developerz.ai
+ * platform measured over four days, 2026-08-29). The opening clause is the measured one; the rest
+ * mirrors the 5-hour body's shape.
+ */
+export const kimiWeeklyLimitBody = {
+  type: "error",
+  error: {
+    type: "permission_error",
+    message:
+      "You've reached your weekly (7-day) usage limit. Your quota will reset when the current 7-day window ends. To continue now, purchase extra usage or upgrade your plan: https://www.kimi.com/membership/subscription",
+  },
+}
+
 /** The other `permission_error`: a genuine refusal, which must stay an auth failure. */
 export const kimiPermissionDeniedBody = {
   type: "error",

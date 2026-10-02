@@ -204,3 +204,31 @@ describe("ordering of reasons", () => {
     expect(run([both]).rejected[0]?.reason).toBe("disabled")
   })
 })
+
+describe("a credential the provider rejected", () => {
+  const rejectedKey = (until: Date) =>
+    account("kimi", {
+      status: "cooling_down",
+      health: health({
+        cooldownUntil: until,
+        cooldownSource: "estimated",
+        cooldownReason: "credential-rejected",
+      }),
+    })
+
+  test("is dropped as credential-rejected, never as the operator's `disabled`", () => {
+    const result = run([rejectedKey(at(60_000))])
+
+    expect(result.eligible).toHaveLength(0)
+    expect(result.rejected[0]).toMatchObject({
+      reason: "credential-rejected",
+      resetsAt: at(60_000),
+      resetSource: "estimated",
+    })
+  })
+
+  test("comes back as a half-open probe once its cooldown passes", () => {
+    const result = run([rejectedKey(at(-1))])
+    expect(result.eligible.map((candidate) => candidate.halfOpen)).toEqual([true])
+  })
+})

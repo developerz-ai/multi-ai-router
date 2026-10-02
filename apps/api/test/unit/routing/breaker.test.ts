@@ -203,3 +203,92 @@ describe("backoff", () => {
     expect(backoffMs(1, { baseBackoffMs: 1_000, jitter: -5 })).toBe(1_000)
   })
 })
+
+/**
+ * 2026-10-02: a Kimi key answered one `403` at 02:18Z and the breaker parked the account at
+ * `disabled` — the operator's own word for "switched off" — in memory only, with no reset and no
+ * probe, while the stored row still said `active`. It took a human to notice. A rejected key still
+ * needs a human; what it must not be is a state no clock ever re-tests, wearing the operator's label.
+ */
+describe("a rejected API key is a long, labeled cooldown — never the operator's `disabled`", () => {
+  const COOLDOWN = 900_000
+
+  test.each([["api-key"], ["none"]] as const)(
+    "%s: cooling_down, labeled credential-rejected",
+    (authKind) => {
+      const state = recordFailure(HEALTHY, failure("auth", { status: 403 }), NOW, {
+        authKind,
+        authFailureCooldownMs: COOLDOWN,
+      })
+
+      expect(state.status).toBe("cooling_down")
+      expect(state.status).not.toBe("disabled")
+      expect(state.cooldownReason).toBe("credential-rejected")
+      expect(state.cooldownUntil).toEqual(at(COOLDOWN))
+      // Our own number, not the provider's: Kimi named no instant.
+      expect(state.cooldownSource).toBe("estimated")
+      expect(state.consecutiveFailures).toBe(1)
+    },
+  )
+
+  test("it is re-tested on a clock: open until the cooldown passes, then one half-open probe", () => {
+    const state = recordFailure(HEALTHY, failure("auth"), NOW, {
+      authKind: "api-key",
+      authFailureCooldownMs: COOLDOWN,
+    })
+
+    expect(phase(state, at(COOLDOWN - 1))).toBe("open")
+    expect(phase(state, at(COOLDOWN))).toBe("half-open")
+  })
+
+  test("the cooldown defaults to fifteen minutes when nothing configures it", () => {
+    const state = recordFailure(HEALTHY, failure("auth"), NOW, { authKind: "api-key" })
+    expect(state.cooldownUntil).toEqual(at(15 * 60_000))
+  })
+
+  test("a probe that is rate-limited proved the key works: the label goes", () => {
+    const rejected = recordFailure(HEALTHY, failure("auth"), NOW, {
+      authKind: "api-key",
+      authFailureCooldownMs: COOLDOWN,
+    })
+    const probed = recordFailure(
+      rejected,
+      failure("rate-limited", { retryAfterSeconds: 60 }),
+      at(COOLDOWN),
+    )
+
+    expect(probed.status).toBe("cooling_down")
+    expect(probed.cooldownReason).toBeUndefined()
+  })
+
+  test("a probe that succeeds returns the account to active, with no label", () => {
+    const rejected = recordFailure(HEALTHY, failure("auth"), NOW, { authKind: "api-key" })
+    expect(rejected.cooldownReason).toBe("credential-rejected")
+    expect(recordSuccess()).toEqual(HEALTHY)
+  })
+
+  test("a shorter reading riding the same response never shortens it, and keeps the label", () => {
+    const rejected = recordFailure(HEALTHY, failure("auth"), NOW, {
+      authKind: "api-key",
+      authFailureCooldownMs: COOLDOWN,
+    })
+    const withHeader = recordFailure(
+      rejected,
+      failure("rate-limited", { retryAfterSeconds: 60 }),
+      NOW,
+    )
+
+    expect(withHeader.cooldownUntil).toEqual(at(COOLDOWN))
+    expect(withHeader.cooldownReason).toBe("credential-rejected")
+  })
+
+  test("OAuth is unchanged: a refreshable login really does need one", () => {
+    const state = recordFailure(HEALTHY, failure("auth"), NOW, {
+      authKind: "oauth",
+      authFailureCooldownMs: COOLDOWN,
+    })
+    expect(state.status).toBe("needs_reauth")
+    expect(state.cooldownReason).toBeUndefined()
+    expect(phase(state, at(86_400_000))).toBe("blocked")
+  })
+})
