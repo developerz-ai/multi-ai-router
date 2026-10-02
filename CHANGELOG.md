@@ -19,6 +19,7 @@ Driven by a production incident on 2026-10-02: from 02:18 UTC every `k3` request
 
 ### Added
 
+- `router_credential_rejected{account_id}` gauge: `1` while an account is cooling down because the provider refused its credential. Such an account now reads `router_accounts{status="cooling_down"}` / `router_breaker_state{phase="open"}` like a spent window (through 2.14.0 it read `disabled` / `blocked`), so **re-key any alert on `router_accounts{status="disabled"}` that was standing in for "a key was refused" onto this gauge.**
 - `ROUTING_AUTH_FAILURE_COOLDOWN_MS` (default `900000`, `0` refused at boot): how long an account whose API key the provider refused sits out before one request re-tests it, on its first refusal. Each consecutive refusal doubles it, jittered like every other cooldown step, and a success starts the count over.
 - `ROUTING_AUTH_FAILURE_MAX_COOLDOWN_MS` (default `14400000`, `0` refused at boot): the ceiling on that doubling, so a revoked key is re-tested at most every four hours instead of every fifteen minutes forever.
 

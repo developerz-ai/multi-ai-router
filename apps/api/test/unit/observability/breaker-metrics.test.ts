@@ -145,3 +145,71 @@ describe("router_breaker_probe_admissions_total", () => {
     expect(body).toContain('router_breaker_probe_admissions_total{result="refused"} 4')
   })
 })
+
+/**
+ * Review of #139: a revoked key used to read `router_accounts{status="disabled"}` and
+ * `phase="blocked"`; since it became a re-tested cooldown it reads as an ordinary `cooling_down` /
+ * `open`, indistinguishable from a spent window. This gauge is the half of that state an alert needs:
+ * which accounts are out because the provider refused their key, which a human has to fix.
+ */
+describe("router_credential_rejected", () => {
+  const metricsFor = (
+    health: ReturnType<typeof createHealthStore>,
+    accounts = [account("acct-1")],
+  ) =>
+    createRuntimeMetrics({
+      catalog: catalog(accounts),
+      health,
+      usage: () => ({
+        stats: () => ({ depth: 0, dropped: 0, written: 0, writeFailures: 0, writeDiscarded: 0 }),
+      }),
+      logger: SILENT,
+      now: () => NOW,
+    })
+
+  test("a refused key reads 1, while its breaker reads an ordinary open cooldown", () => {
+    const health = createHealthStore()
+    health.recordFailure("acct-1", { kind: "auth", message: "401" }, NOW, { authKind: "api-key" })
+    const body = metricsFor(health).expose()
+
+    expect(body).toContain('router_credential_rejected{account_id="acct-1"} 1')
+    expect(body).toContain('router_breaker_state{account_id="acct-1",phase="open"} 1')
+  })
+
+  test("a spent window and a healthy account both read 0 — the series is there, not absent", () => {
+    const health = createHealthStore()
+    health.recordFailure("spent", { kind: "rate-limited", retryAfterSeconds: 60 }, NOW)
+    const body = metricsFor(health, [account("spent"), account("fine")]).expose()
+
+    expect(body).toContain('router_credential_rejected{account_id="spent"} 0')
+    expect(body).toContain('router_credential_rejected{account_id="fine"} 0')
+  })
+
+  test("an account the operator disabled reads 0: the operator's word wins, as it does in routing", () => {
+    const health = createHealthStore()
+    health.recordFailure("acct-1", { kind: "auth", message: "401" }, NOW, { authKind: "api-key" })
+    const disabled = account("acct-1", { snapshot: { status: "disabled" } })
+    const body = metricsFor(health, [disabled]).expose()
+
+    expect(body).toContain('router_credential_rejected{account_id="acct-1"} 0')
+  })
+
+  test("a deleted account stops reporting — cleared per scrape", () => {
+    const health = createHealthStore()
+    health.recordFailure("acct-1", { kind: "auth", message: "401" }, NOW, { authKind: "api-key" })
+    let accounts = [account("acct-1")]
+    const metrics = createRuntimeMetrics({
+      catalog: { accounts: () => accounts, pools: () => [] },
+      health,
+      usage: () => ({
+        stats: () => ({ depth: 0, dropped: 0, written: 0, writeFailures: 0, writeDiscarded: 0 }),
+      }),
+      logger: SILENT,
+      now: () => NOW,
+    })
+    expect(metrics.expose()).toContain("router_credential_rejected{")
+
+    accounts = []
+    expect(metrics.expose()).not.toContain("router_credential_rejected{")
+  })
+})

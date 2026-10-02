@@ -37,6 +37,8 @@ export interface AccountMetric {
   readonly quotaWindows?: readonly QuotaWindowState[]
   /** The breaker's own `phase()` — `closed`, `open`, `half-open`, or `blocked`. */
   readonly breakerPhase: string
+  /** Cooling down because the provider refused the credential (`cooldownReason`). */
+  readonly credentialRejected: boolean
 }
 
 /** Every value `phase()` can return, so the gauge can zero the ones an account is not in. */
@@ -277,6 +279,7 @@ export function createMetrics(options: MetricsOptions = {}): RouterMetrics {
       s.quotaReset.clear()
       s.quotaLastChecked.clear()
       s.breakerState.clear()
+      s.credentialRejected.clear()
       const at = now().getTime()
 
       const counts = new Map<string, number>()
@@ -290,6 +293,7 @@ export function createMetrics(options: MetricsOptions = {}): RouterMetrics {
             phase === account.breakerPhase ? 1 : 0,
           )
         }
+        s.credentialRejected.set({ account_id: account.id }, account.credentialRejected ? 1 : 0)
       }
       // Every status of every provider present, zeros included: an alert on `exhausted` must see
       // the number fall to zero, not watch the series vanish.
