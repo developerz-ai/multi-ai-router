@@ -97,7 +97,7 @@ export interface HealthStoreOptions {
   readonly maxBackoffMs?: number
   /** How long a rejected API key sits out before one probe re-tests it. `ROUTING_AUTH_FAILURE_COOLDOWN_MS`. */
   readonly authFailureCooldownMs?: number
-  /** Ceiling on that cooldown's doubling per consecutive refusal. `ROUTING_AUTH_FAILURE_MAX_COOLDOWN_MS`. */
+  /** Ceiling on that cooldown's doubling per refused re-test. `ROUTING_AUTH_FAILURE_MAX_COOLDOWN_MS`. */
   readonly authFailureMaxCooldownMs?: number
   /**
    * A fresh jitter fraction in `[0, 1]` per transition, defaulting to `Math.random`. Injected

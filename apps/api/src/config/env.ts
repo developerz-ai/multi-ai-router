@@ -316,7 +316,7 @@ export interface FailoverConfig {
    */
   readonly authFailureCooldownMs: number
   /**
-   * Ceiling on that cooldown, which doubles per consecutive refusal: a key refused again and again
+   * Ceiling on that cooldown, which doubles per refused re-test: a key refused again and again
    * is re-tested less and less often, never less often than this.
    */
   readonly authFailureMaxCooldownMs: number
