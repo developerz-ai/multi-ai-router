@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.15.0] — 2026-10-02
+
 Driven by a production incident on 2026-10-02: from 02:18 UTC every `k3` request to pool `cn-models-team` failed, and the router said `1 more needs a human (kimi disabled)` about an account whose stored status was `active`.
 
 ### Fixed
