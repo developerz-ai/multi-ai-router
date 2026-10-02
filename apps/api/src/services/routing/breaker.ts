@@ -7,7 +7,7 @@
  * | `cooling_down` | Excluded. **Temporary — a clock will fix it.** | Reset instant passes, then a half-open probe. |
  * | half-open | One request through as a probe. | Success -> `active`. Failure -> `cooling_down` at the next backoff step. |
  * | `exhausted` | Excluded. **Permanent until a human acts.** The breaker never schedules a retry. | An operator tops up, then a re-check or a successful probe. |
- * | `cooling_down` + `credential-rejected` | An API key the provider refused. Excluded, reported as needing a human — and still re-tested on a long clock that doubles per consecutive refusal, up to a cap. | Cooldown passes, then a half-open probe. A fixed key (or a misread limit) serves; a dead one cools again, for longer. |
+ * | `cooling_down` + `credential-rejected` | An API key the provider refused. Excluded, reported as needing a human — and still re-tested on a long clock that doubles per refused re-test, up to a cap. | Cooldown passes, then a half-open probe. A fixed key (or a misread limit) serves; a dead one cools again, for longer. |
  *
  * `cooling_down` and `exhausted` are never conflated, and the difference is mechanical rather
  * than cosmetic: `exhausted` carries **no** `cooldownUntil`, so no amount of clock advance moves
@@ -58,7 +58,7 @@ export interface BreakerOptions {
   readonly authKind?: AuthKind
   /**
    * How long a rejected API key sits out before it is re-tested, on its first refusal.
-   * `ROUTING_AUTH_FAILURE_COOLDOWN_MS`. Doubles per consecutive refusal.
+   * `ROUTING_AUTH_FAILURE_COOLDOWN_MS`. Doubles per refused re-test.
    */
   readonly authFailureCooldownMs?: number
   /** Ceiling on that doubling. `ROUTING_AUTH_FAILURE_MAX_COOLDOWN_MS`. */
@@ -97,9 +97,9 @@ export const DEFAULT_AUTH_FAILURE_COOLDOWN_MS = 15 * 60_000
 
 /**
  * {@link BreakerOptions.authFailureMaxCooldownMs}. A key refused again and again is almost certainly
- * revoked, so each refusal doubles the wait — 15, 30, 60, 120 minutes — but never past this: a key
- * an operator fixes at the provider without touching the router is still found within hours, not
- * days. The operator's "Re-check now" is the immediate path.
+ * revoked, so each refused re-test doubles the wait — 15, 30, 60, 120 minutes — but never past this:
+ * a key an operator fixes at the provider without touching the router is still found within hours,
+ * not days. The operator's "Re-check now" is the immediate path.
  */
 export const DEFAULT_AUTH_FAILURE_MAX_COOLDOWN_MS = 4 * 60 * 60_000
 
@@ -223,8 +223,9 @@ function trip(
   // failures cannot un-learn the longer reset.
   const existing = state.status === "cooling_down" ? state.cooldownUntil : undefined
   if (existing !== undefined && existing.getTime() >= until.getTime()) {
-    // The longer cooldown stands, and so does what it was for: a limiter header riding the same
-    // `401` that rejected a key says nothing about the key.
+    // The longer cooldown stands, and so does what it was for: a limiter header riding the `401`
+    // that rejected a key says nothing about the key. Known race: a sibling request's own `429`, in
+    // flight when the key was refused, keeps the label too though it authenticated — until the probe.
     return {
       status: "cooling_down",
       cooldownUntil: existing,
@@ -248,24 +249,26 @@ function trip(
 /**
  * The provider refused this account's key: out for a while, labeled, then re-tested by one probe.
  *
- * The wait is {@link backoffMs} over the refusal streak, with the auth cooldown as its base and the
- * auth cap as its ceiling — {@link DEFAULT_AUTH_FAILURE_COOLDOWN_MS} on the first refusal, doubling
- * per consecutive one, never past {@link DEFAULT_AUTH_FAILURE_MAX_COOLDOWN_MS} (or the configured
- * numbers), and widened by the same jitter as every other step so keys refused together are not
- * re-tested together. The streak is `consecutiveFailures`, counted only while the state already
- * carries the label: a run of server errors before the first refusal does not make it longer, and a
- * success (`HEALTHY`) starts it over. Never shortens a cooldown already running. `estimated`,
- * because the length is ours — no provider says when a key it refused works.
+ * The wait is {@link backoffMs} over the refusal streak: the auth cooldown as base, the auth cap as
+ * ceiling, the same jitter as every other step so keys refused together are not re-tested together.
+ * The streak is `consecutiveFailures`, counted only while the state already carries the label —
+ * server errors before the first refusal do not lengthen it, and a success starts it over.
+ *
+ * **Only a re-test escalates.** One refusal arrives as many responses — every request in flight
+ * when the first landed is refused too — and counting each put a key on the four-hour cap the first
+ * time it was ever refused. A refusal inside the labeled cooldown (`open`) is that same refusal:
+ * count and instant stand. The probe (`half-open`) is the next. `estimated`: the length is ours.
  */
 function rejectCredential(state: BreakerState, now: Date, options: BreakerOptions): BreakerState {
+  const labeled = state.cooldownReason === "credential-rejected"
+  if (labeled && phase(state, now) === "open") return state
   const base = options.authFailureCooldownMs ?? DEFAULT_AUTH_FAILURE_COOLDOWN_MS
   // A cap below the base would make the first step the longest; the base wins.
   const cap = Math.max(
     base,
     options.authFailureMaxCooldownMs ?? DEFAULT_AUTH_FAILURE_MAX_COOLDOWN_MS,
   )
-  const refusals =
-    (state.cooldownReason === "credential-rejected" ? state.consecutiveFailures : 0) + 1
+  const refusals = (labeled ? state.consecutiveFailures : 0) + 1
   const waitMs = backoffMs(refusals, {
     baseBackoffMs: base,
     maxBackoffMs: cap,

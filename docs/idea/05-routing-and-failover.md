@@ -451,10 +451,13 @@ human pressed Re-check; and every pool message meanwhile said `1 more needs a hu
 disabled)` while the stored row said `active` — the operator's word, minted by an upstream. Now:
 
 - The breaker lands it on `cooling_down` with `cooldownReason: "credential-rejected"`, for
-  `ROUTING_AUTH_FAILURE_COOLDOWN_MS`, source `estimated`. Each consecutive refusal doubles the wait
+  `ROUTING_AUTH_FAILURE_COOLDOWN_MS`, source `estimated`. Each refused **re-test** doubles the wait
   — 15, 30, 60, 120 minutes by default — up to `ROUTING_AUTH_FAILURE_MAX_COOLDOWN_MS` (4 hours),
   widened by the same jitter as every other step so keys refused together are not re-tested
-  together. The streak starts at the first refusal: server errors before it do not lengthen it, and a
+  together. A refusal is counted once, not once per response: every request already in flight when
+  a key is refused comes back refused too, and a refusal that lands while the labeled cooldown is
+  still running moves neither the count nor the instant — five `401`s at once are fifteen minutes,
+  not four hours. Only the probe after the cooldown escalates. The streak starts at the first refusal: server errors before it do not lengthen it, and a
   success starts it over. Once the label is on, a failure that keeps it (a server error on a probe,
   below the failure threshold) counts toward the streak too — bounded by the cap. A limiter reading riding the same response never shortens the wait
   and never re-labels it — when its reset is the longer one the cooldown takes that instant and
