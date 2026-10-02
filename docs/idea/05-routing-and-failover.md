@@ -456,16 +456,19 @@ disabled)` while the stored row said `active` — the operator's word, minted by
   widened by the same jitter as every other step so keys refused together are not re-tested
   together. A refusal is one incident, not one per response: every request already in flight when
   a key is refused comes back too — most of them refused, some answered `5xx` or `429` — and while
-  the labeled cooldown is still running none of them, of any kind, moves the count or the instant.
-  Five `401`s at once are fifteen minutes, not four hours; a `401`, a `500` and a `429` at once are
-  fifteen minutes too, and the refused probe after them waits thirty, not sixty. Only the probe
-  after the cooldown moves the state. (A `402` is not absorbed: it authenticated, and `exhausted` is
-  the truer, terminal state.) The streak starts at the first refusal: server errors before it do
+  the labeled cooldown is still running the breaker absorbs every one of those verdicts, of any
+  kind: none moves the count, the label, or the instant. Five `401`s at once are fifteen minutes,
+  not four hours; a `401`, a `500` and a `429` at once are fifteen minutes too, and the refused
+  probe after them waits thirty, not sixty. Only the probe after the cooldown moves the state. (A
+  `402` is not absorbed: it authenticated, and `exhausted` is the truer, terminal state.) The streak starts at the first refusal: server errors before it do
   not lengthen it, and a success starts it over. A server error on the *probe itself*, below the
-  failure threshold, keeps the label and counts toward the streak — bounded by the cap. A limiter
-  reading riding a response never shortens the wait and never re-labels it — when the reset it
-  names is the longer one the cooldown takes that instant and keeps `credential-rejected`, and the
-  reading is not counted as a second refusal; a reading that names no reset moves nothing. A probe
+  failure threshold, keeps the label and counts toward the streak — bounded by the cap. The one
+  thing that can still move the instant inside the cooldown is a limiter *reading* — the parsed
+  headers riding any of those responses, a sibling `429`'s included. It never shortens the wait and
+  never re-labels it: when the reset the provider named is the longer one the cooldown takes that
+  instant (the account cannot serve before it, whatever the key's state) and keeps
+  `credential-rejected`, and the reading is not counted as a second refusal. A reading that names
+  no reset moves nothing. A probe
   that is merely rate-limited proved the key works and drops the label. It is not a standing block
   — nothing is announced, nothing is stored.
 - The filter drops it as `credential-rejected`, a reason of its own. It is **not** recoverable for

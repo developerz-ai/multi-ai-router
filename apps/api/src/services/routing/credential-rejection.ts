@@ -7,8 +7,10 @@
  * **One refusal is one incident, and only the re-test moves it.** A key is refused once and the
  * refusal arrives as many responses — every request in flight when the first landed comes back
  * too, most refused, some answered `5xx` or `429` by whatever sits in front of the provider. While
- * the labeled cooldown is still running ({@link refusalStands}) none of them changes the refusal
- * count or the instant the re-test is due. The half-open probe is the next thing that does.
+ * the labeled cooldown is still running ({@link refusalStands}) none of those verdicts changes the
+ * refusal count, the label, or the instant the re-test is due. The half-open probe is the next
+ * thing that does — with one exception that is not a verdict at all: a limiter reading naming a
+ * later reset may push the instant out ({@link lengthenRefusal}).
  */
 
 import { backoffMs, reportedReset } from "./backoff"
