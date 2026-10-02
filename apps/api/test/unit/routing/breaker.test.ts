@@ -301,7 +301,7 @@ describe("a rejected API key is a long, labeled cooldown — never the operator'
 /**
  * Review of #139: a key the provider genuinely revoked was re-tested every 15 minutes forever — the
  * same cadence on the hundredth refusal as on the first, and the same instant for every key refused
- * together. The cooldown now doubles per consecutive refusal up to a configured cap, jitter widens
+ * together. The cooldown now doubles per refused re-test up to a configured cap, jitter widens
  * each step, and a success starts the count over.
  */
 describe("a key that stays refused is re-tested less and less often", () => {
@@ -333,7 +333,7 @@ describe("a key that stays refused is re-tested less and less often", () => {
   const step = (state: BreakerState, from: Date): number =>
     (state.cooldownUntil?.getTime() ?? 0) - from.getTime()
 
-  test("each refusal doubles the cooldown: 15, 30, 60 minutes", () => {
+  test("each refused re-test doubles the cooldown: 15, 30, 60 minutes", () => {
     const first = reject(HEALTHY, NOW)
     expect(step(first, NOW)).toBe(BASE)
     expect(first.consecutiveFailures).toBe(1)
@@ -390,6 +390,81 @@ describe("a key that stays refused is re-tested less and less often", () => {
     expect(refused.cooldownReason).toBe("credential-rejected")
     expect(step(refused, NOW)).toBe(BASE)
     expect(refused.consecutiveFailures).toBe(1)
+  })
+
+  /**
+   * Review of #139, round 3: round 2 absorbed the refused siblings and no others. A `5xx`, or a
+   * `429` with a short reset, landing in the same open labeled cooldown kept the label and still
+   * moved the count — so the next refused probe waited 60 minutes where it should have waited 30.
+   * One incident is every response in flight when the key was refused, whatever each one says.
+   */
+  describe("siblings of any kind, in flight when the key was refused", () => {
+    const sibling: Record<
+      "refused" | "errored" | "limited",
+      (state: BreakerState) => BreakerState
+    > = {
+      refused: (state) => reject(state, NOW),
+      errored: (state) => recordFailure(state, failure("server-error", { status: 500 }), NOW),
+      limited: (state) =>
+        recordFailure(state, failure("rate-limited", { retryAfterSeconds: 60 }), NOW),
+    }
+
+    test.each([
+      [["refused", "errored", "limited"]],
+      [["refused", "limited", "errored"]],
+      [["errored", "refused", "limited"]],
+      [["limited", "refused", "errored"]],
+      [["errored", "limited", "refused"]],
+      [["limited", "errored", "refused"]],
+    ] as const)("%j at one instant: one refusal, fifteen minutes", (order) => {
+      let state = HEALTHY
+      for (const kind of order) state = sibling[kind](state)
+
+      expect(state.cooldownReason).toBe("credential-rejected")
+      expect(state.consecutiveFailures).toBe(1)
+      expect(step(state, NOW)).toBe(BASE)
+
+      // And the re-test, refused: the second step, exactly — not the third or the fourth.
+      const probeAt = state.cooldownUntil ?? NOW
+      const probed = reject(state, probeAt)
+      expect(step(probed, probeAt)).toBe(2 * BASE)
+      expect(probed.consecutiveFailures).toBe(2)
+    })
+
+    test.each([
+      ["server-error", {}],
+      ["connection", {}],
+      ["timeout", {}],
+      ["rate-limited", {}],
+      ["rate-limited", { retryAfterSeconds: 60 }],
+      // A sibling's verdict is not the label's to lose, and not the instant's to move — even one
+      // naming a later reset. Whether the key works is the probe's question.
+      ["rate-limited", { resetsAt: at(8 * BASE) }],
+    ] as const)("a straggling %s %j changes nothing, however many arrive", (kind, overrides) => {
+      const refused = reject(HEALTHY, NOW)
+
+      let state = refused
+      for (let index = 0; index < DEFAULT_FAILURE_THRESHOLD + 2; index += 1) {
+        state = recordFailure(state, failure(kind, overrides), at(BASE - 1), { jitter: 1 })
+      }
+      expect(state).toEqual(refused)
+    })
+
+    test("a probe that is rate-limited drops the label even when its reset is not ahead of us", () => {
+      const refused = reject(HEALTHY, NOW)
+      const probeAt = refused.cooldownUntil ?? NOW
+      const probed = recordFailure(
+        refused,
+        failure("rate-limited", { retryAfterSeconds: 0 }),
+        probeAt,
+      )
+
+      // It authenticated. Refused next, that is a first refusal again, not a third.
+      expect(probed.cooldownReason).toBeUndefined()
+      const again = reject(probed, probeAt)
+      expect(step(again, probeAt)).toBe(BASE)
+      expect(again.consecutiveFailures).toBe(1)
+    })
   })
 
   test("the growth stops at the configured cap", () => {

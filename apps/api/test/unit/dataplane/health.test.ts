@@ -705,6 +705,43 @@ describe("a rejected API key", () => {
     expect(second.consecutiveFailures).toBe(2)
   })
 
+  /**
+   * Review of #139, round 3: the same incident, with siblings that were not refused. Recorded in the
+   * chain's own order — each response's verdict, then the reading that rode it — a `500` and a
+   * short-reset `429` in flight with the `401` each moved the count, and the refused probe that
+   * followed waited 60 minutes instead of 30.
+   */
+  test("siblings of other kinds landing with the refusal are the same incident", () => {
+    const store = createHealthStore({ jitter: () => 0 })
+    const key = { authKind: "api-key" } as const
+
+    reject(store)
+    store.applyRateLimit("key", null, NOW)
+    store.recordFailure("key", { kind: "server-error", status: 500, message: "500" }, NOW, key)
+    store.applyRateLimit("key", null, NOW)
+    store.recordFailure(
+      "key",
+      { kind: "rate-limited", status: 429, retryAfterSeconds: 60, message: "429" },
+      NOW,
+      key,
+    )
+    store.applyRateLimit(
+      "key",
+      signal({ limited: true, retryAfterSeconds: 60, resetSource: "provider-reported" }),
+      NOW,
+    )
+
+    const first = store.stateOf("key").breaker
+    expect(first.cooldownUntil).toEqual(after(COOLDOWN))
+    expect(first.consecutiveFailures).toBe(1)
+    expect(first.cooldownReason).toBe("credential-rejected")
+
+    store.recordFailure("key", { kind: "auth", status: 401, message: "401" }, after(COOLDOWN), key)
+    const second = store.stateOf("key").breaker
+    expect(second.cooldownUntil).toEqual(after(COOLDOWN + 2 * COOLDOWN))
+    expect(second.consecutiveFailures).toBe(2)
+  })
+
   test("a probe that succeeds brings it back", () => {
     const store = createHealthStore({ authFailureCooldownMs: COOLDOWN })
     reject(store)

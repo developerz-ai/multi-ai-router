@@ -238,6 +238,13 @@ describe("kimi", () => {
     [
       "Your account has been temporarily suspended for violating our terms of service until your usage limit resets.",
     ],
+    // Round 3: the breach has to be laid at the account's door, in any of the usual phrasings.
+    [
+      "You've reached your usage limit. Your account is temporarily suspended due to a violation until the window ends.",
+    ],
+    [
+      "Your account has been temporarily suspended for a violation of our usage policy until your usage limit resets.",
+    ],
     // A clock with no limit clause, and a limit clause with no clock: neither is a spent window.
     ["Your account has been temporarily suspended."],
     ["Your account has been suspended. Your quota will reset in the next cycle."],
@@ -296,6 +303,17 @@ describe("kimi", () => {
       60 * 60,
     ],
     ["Requests are suspended until your usage limit resets.", "kimi:usage-limit", 15 * 60],
+    // Round 3 of the review. Boilerplate in the *same* sentence as the pause names no breach.
+    [
+      "You've reached your 5-hour usage limit. Requests are temporarily suspended until the window ends, per our Terms of Service.",
+      "kimi:usage-limit-5-hour",
+      15 * 60,
+    ],
+    [
+      "Your access is suspended until your weekly (7-day) usage limit resets, subject to our Terms of Use and our policy on violations.",
+      "kimi:usage-limit-weekly",
+      60 * 60,
+    ],
   ])("%s is a spent window, not a suspension", (message, signal, retryAfterSeconds) => {
     const result = kimi?.classifyFailure(
       response(403, { body: { type: "error", error: { type: "permission_error", message } } }),
