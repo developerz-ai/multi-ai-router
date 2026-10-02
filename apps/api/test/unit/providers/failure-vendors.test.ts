@@ -221,6 +221,46 @@ describe("kimi", () => {
     expect(result?.kind).toBe("auth")
   })
 
+  /**
+   * A limit wording that *also* says the account was taken away. The limit clause alone would read
+   * as a window that reopens on a clock; the rest says no clock will, and that a human has to look.
+   * Review of #139: the family regex had no guard, so this classified `rate-limited`.
+   */
+  test.each([
+    [
+      "Your account has reached its usage limit and has been suspended for violating terms of service.",
+    ],
+    ["You've reached your weekly (7-day) usage limit. Your account has been suspended."],
+    ["You've reached your 5-hour usage limit. This account is banned."],
+    ["You've reached your usage limit for this billing cycle. Your account has been disabled."],
+    ["Usage limit reached: your account was deactivated for a terms of service violation."],
+  ])("%s stays an auth failure — a suspension needs a human", (message) => {
+    const result = kimi?.classifyFailure(
+      response(403, { body: { type: "error", error: { type: "permission_error", message } } }),
+    )
+
+    expect(result?.kind).toBe("auth")
+    expect(result?.signal).toBe("kimi:account-suspended")
+    expect(result?.rateLimit).toBeNull()
+  })
+
+  /** The reversed order of the same fact: the limit first, `reached` after it. */
+  test.each([
+    ["Usage limit reached. Try again later.", "kimi:usage-limit", 15 * 60],
+    ["Your usage limit has been reached.", "kimi:usage-limit", 15 * 60],
+    ["Your 5-hour usage limit has been reached.", "kimi:usage-limit-5-hour", 15 * 60],
+    ["Your weekly (7-day) usage limit has been reached.", "kimi:usage-limit-weekly", 60 * 60],
+  ])("%s is a cooldown too", (message, signal, retryAfterSeconds) => {
+    const result = kimi?.classifyFailure(
+      response(403, { body: { type: "error", error: { type: "permission_error", message } } }),
+    )
+
+    expect(result?.kind).toBe("rate-limited")
+    expect(result?.signal).toBe(signal)
+    expect(result?.rateLimit?.resetSource).toBe("estimated")
+    expect(result?.rateLimit?.retryAfterSeconds).toBe(retryAfterSeconds)
+  })
+
   test("rate_limit_reached_error is a cooldown", () => {
     expect(kimi?.classifyFailure(response(429, { body: kimiRateLimitBody }))?.kind).toBe(
       "rate-limited",

@@ -45,18 +45,35 @@ const INSUFFICIENT_BALANCE = /insufficient balance|balance is insufficient|accou
  * sentence: through 2.14.0 only the billing-cycle sentence was known, the 5-hour one fell to `auth`,
  * and an account Kimi reopens on its own clock sat out of rotation until a human noticed (prod,
  * 2026-10-02 02:18Z). `reached` within one clause of `usage limit` is what separates hitting a limit
- * from describing one ("your usage limit is 1,000 rpm"). Never anchored on "You've": a copy-edited
- * body may carry a curly apostrophe.
+ * from describing one ("your usage limit is 1,000 rpm"), in either order ("usage limit reached", "your
+ * usage limit has been reached"). Never anchored on "You've": a copy-edited body may carry a curly
+ * apostrophe. A body that also says the account was suspended is never one of these — see
+ * `ACCOUNT_SUSPENDED`, which is read first.
  *
  * Blast radius: every Kimi `403` whose message reports a reached limit. Read wrongly as `auth`, an
  * `api-key` account cools down as `credential-rejected` and is re-tested only after
  * `ROUTING_AUTH_FAILURE_COOLDOWN_MS` (`routing/breaker.ts`), and the pool reports it as needing a
  * human.
  */
-const WEEKLY_LIMIT = /reached[^.]{0,40}\b(?:weekly|7-day)\b[^.]{0,20}usage limit/i
-const FIVE_HOUR_LIMIT = /reached[^.]{0,40}\b5-hour\b[^.]{0,20}usage limit/i
+const WEEKLY_LIMIT =
+  /reached[^.]{0,40}\b(?:weekly|7-day)\b[^.]{0,20}usage limit|\b(?:weekly|7-day)\b[^.]{0,20}usage limit[^.]{0,20}\breached\b/i
+const FIVE_HOUR_LIMIT =
+  /reached[^.]{0,40}\b5-hour\b[^.]{0,20}usage limit|\b5-hour\b[^.]{0,20}usage limit[^.]{0,20}\breached\b/i
 const CYCLE_LIMIT = /usage limit for this billing cycle|quota will be refreshed in the next cycle/i
-const ANY_USAGE_LIMIT = /reached[^.]{0,40}usage limit|quota will (?:be refreshed|reset)/i
+const ANY_USAGE_LIMIT =
+  /reached[^.]{0,40}usage limit|usage limit[^.]{0,20}\breached\b|quota will (?:be refreshed|reset)/i
+
+/**
+ * The account itself was taken away, whatever else the body says. A limit clause beside this
+ * ("…reached its usage limit and has been suspended for violating terms of service") is not a
+ * window a clock reopens, so this is read first and lands on `auth`: reported as needing a human,
+ * re-tested only on the long credential cadence. Provenance: review of #139 (2026-10-02) — no such
+ * Kimi body has been observed; the guard exists so the family regexes above cannot ever read one as
+ * a spent window. Blast radius: a Kimi `403` naming a suspension, ban, deactivation, terms
+ * violation or a disabled account/key — it stays `auth` instead of becoming a short cooldown.
+ */
+const ACCOUNT_SUSPENDED =
+  /\b(?:suspend(?:ed|sion)|banned|deactivated|terminated|terms of (?:service|use)|violat(?:ed|ing|ion))\b|\b(?:account|key)\b[^.]{0,30}\bdisabled\b/i
 
 /**
  * How long to assume each limit lasts. Kimi names no instant — "when the current 5-hour window
@@ -75,6 +92,8 @@ export const kimiDriver = createHttpDriver({
   rules: [
     typeRule("credits-exhausted", "kimi:exceeded_current_quota_error", QUOTA_TYPES),
     messageRule("credits-exhausted", "kimi:insufficient-balance", INSUFFICIENT_BALANCE),
+    // Ahead of every limit rule: a suspension that also mentions a limit is still a suspension.
+    messageRule("auth", "kimi:account-suspended", ACCOUNT_SUSPENDED),
     // Ahead of the auth rules below: these arrive as a 403 and must never be read as one. The
     // specific windows first, so each carries its own signal and re-test cadence; the family last,
     // for a window Kimi has not shipped yet.

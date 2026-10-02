@@ -39,8 +39,8 @@ export interface ClassifyOptions {
 /**
  * Whether the router may try the **next candidate account**. `invalid-request` is false: a bad
  * request is bad at every account. `auth` is true for the opposite reason — a rejected credential is
- * *this account's* problem, and the breaker parks the account (`needs_reauth` / `disabled`) before
- * the chain moves on; the next account authenticates with its own credential, so it gets its turn.
+ * *this account's* problem, and the breaker parks the account (`needs_reauth`, or a
+ * `credential-rejected` cooldown for a key) before the chain moves on; the next account authenticates with its own credential, so it gets its turn.
  * Before this was true, the first request to land on an expired subscription failed `502` while
  * healthy accounts sat beside it, and only the *next* request routed around the parked one.
  *
