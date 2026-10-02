@@ -20,24 +20,30 @@
  * decision behind them.
  */
 
+export {
+  backoffMs,
+  DEFAULT_BASE_BACKOFF_MS,
+  DEFAULT_MAX_BACKOFF_MS,
+  JITTER_FRACTION,
+} from "./backoff"
 export { decideBinding } from "./binding"
 export {
   type BreakerOptions,
   type BreakerPhase,
   type BreakerState,
-  backoffMs,
   type CooldownReason,
-  DEFAULT_AUTH_FAILURE_COOLDOWN_MS,
-  DEFAULT_AUTH_FAILURE_MAX_COOLDOWN_MS,
-  DEFAULT_BASE_BACKOFF_MS,
   DEFAULT_FAILURE_THRESHOLD,
-  DEFAULT_MAX_BACKOFF_MS,
   HEALTHY,
-  JITTER_FRACTION,
   phase,
   recordFailure,
   recordSuccess,
 } from "./breaker"
+export {
+  DEFAULT_AUTH_FAILURE_COOLDOWN_MS,
+  DEFAULT_AUTH_FAILURE_MAX_COOLDOWN_MS,
+  lengthenRefusal,
+  refusalStands,
+} from "./credential-rejection"
 export {
   type AttemptFailure,
   classifyStatus,

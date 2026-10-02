@@ -454,16 +454,20 @@ disabled)` while the stored row said `active` — the operator's word, minted by
   `ROUTING_AUTH_FAILURE_COOLDOWN_MS`, source `estimated`. Each refused **re-test** doubles the wait
   — 15, 30, 60, 120 minutes by default — up to `ROUTING_AUTH_FAILURE_MAX_COOLDOWN_MS` (4 hours),
   widened by the same jitter as every other step so keys refused together are not re-tested
-  together. A refusal is counted once, not once per response: every request already in flight when
-  a key is refused comes back refused too, and a refusal that lands while the labeled cooldown is
-  still running moves neither the count nor the instant — five `401`s at once are fifteen minutes,
-  not four hours. Only the probe after the cooldown escalates. The streak starts at the first refusal: server errors before it do not lengthen it, and a
-  success starts it over. Once the label is on, a failure that keeps it (a server error on a probe,
-  below the failure threshold) counts toward the streak too — bounded by the cap. A limiter reading riding the same response never shortens the wait
-  and never re-labels it — when its reset is the longer one the cooldown takes that instant and
-  keeps `credential-rejected`, and the reading is not counted as a second refusal. A probe that is
-  merely rate-limited proved the key works and drops the label. It is not a standing block —
-  nothing is announced, nothing is stored.
+  together. A refusal is one incident, not one per response: every request already in flight when
+  a key is refused comes back too — most of them refused, some answered `5xx` or `429` — and while
+  the labeled cooldown is still running none of them, of any kind, moves the count or the instant.
+  Five `401`s at once are fifteen minutes, not four hours; a `401`, a `500` and a `429` at once are
+  fifteen minutes too, and the refused probe after them waits thirty, not sixty. Only the probe
+  after the cooldown moves the state. (A `402` is not absorbed: it authenticated, and `exhausted` is
+  the truer, terminal state.) The streak starts at the first refusal: server errors before it do
+  not lengthen it, and a success starts it over. A server error on the *probe itself*, below the
+  failure threshold, keeps the label and counts toward the streak — bounded by the cap. A limiter
+  reading riding a response never shortens the wait and never re-labels it — when the reset it
+  names is the longer one the cooldown takes that instant and keeps `credential-rejected`, and the
+  reading is not counted as a second refusal; a reading that names no reset moves nothing. A probe
+  that is merely rate-limited proved the key works and drops the label. It is not a standing block
+  — nothing is announced, nothing is stored.
 - The filter drops it as `credential-rejected`, a reason of its own. It is **not** recoverable for
   reporting: it sits in the `needs a human` clause (`kimi credential rejected upstream, re-checked
   after <t> (estimated)`), it is never offered as the pool's `earliest reset`, and alone it is the
