@@ -61,8 +61,9 @@ describe("cooling down — temporary, a clock will fix it", () => {
   })
 
   test("an auth failure carries no reset instant, so its source really is unknown", () => {
-    // The contrast that makes the value above meaningful: nothing here computed a time.
-    const state = recordFailure(HEALTHY, failure("auth"), NOW, { authKind: "api-key" })
+    // The contrast that makes the value above meaningful: nothing here computed a time. OAuth, since
+    // a rejected API key now does compute one — its re-test cooldown.
+    const state = recordFailure(HEALTHY, failure("auth"), NOW, { authKind: "oauth" })
     expect(state.cooldownUntil).toBeUndefined()
     expect(state.cooldownSource).toBe("unknown")
   })
@@ -150,7 +151,7 @@ describe("exhausted — permanent until a human acts", () => {
   })
 })
 
-describe("auth failures are not cooldowns", () => {
+describe("auth failures never pose as the operator's switch", () => {
   test("an OAuth account needs re-auth", () => {
     const state = recordFailure(HEALTHY, failure("auth"), NOW, { authKind: "oauth" })
     expect(state.status).toBe("needs_reauth")
@@ -158,17 +159,19 @@ describe("auth failures are not cooldowns", () => {
     expect(phase(state, at(86_400_000))).toBe("blocked")
   })
 
-  test("an API-key account is disabled", () => {
+  test("an API-key account is a credential-rejected cooldown, not `disabled`", () => {
     const state = recordFailure(HEALTHY, failure("auth"), NOW, { authKind: "api-key" })
-    expect(state.status).toBe("disabled")
+    expect(state.status).toBe("cooling_down")
+    expect(state.cooldownReason).toBe("credential-rejected")
   })
 
-  test("a no-auth account is disabled too: there is nothing to re-authorize", () => {
+  test("a no-auth account is the same cooldown: there is nothing to re-authorize", () => {
     // A local endpoint that suddenly rejects an anonymous request has grown something in front of
     // it. `needs_reauth` would offer the operator a login this account has never had.
     const state = recordFailure(HEALTHY, failure("auth"), NOW, { authKind: "none" })
-    expect(state.status).toBe("disabled")
-    expect(phase(state, at(86_400_000))).toBe("blocked")
+    expect(state.status).toBe("cooling_down")
+    expect(state.cooldownReason).toBe("credential-rejected")
+    expect(phase(state, at(86_400_000))).toBe("half-open")
   })
 })
 

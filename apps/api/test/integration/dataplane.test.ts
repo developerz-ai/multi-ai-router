@@ -511,10 +511,11 @@ describe("failover", () => {
     await app.request("/v1/messages", post(MESSAGE, bearer()))
     await settle()
 
-    // An `api-key` account whose key was rejected needs the operator to change it: `disabled`, with
-    // no cooldown a header could have written over it.
-    expect(health.stateOf("acct-1").breaker.status).toBe("disabled")
-    expect(health.stateOf("acct-1").breaker.cooldownUntil).toBeUndefined()
+    // An `api-key` account whose key was rejected needs the operator to change it: a labeled
+    // `credential-rejected` cooldown whose length the header's 60s could not shorten.
+    expect(health.stateOf("acct-1").breaker.status).toBe("cooling_down")
+    expect(health.stateOf("acct-1").breaker.cooldownReason).toBe("credential-rejected")
+    expect(health.stateOf("acct-1").breaker.cooldownSource).toBe("estimated")
 
     const second = await app.request("/v1/messages", post(MESSAGE, bearer()))
     await settle()
@@ -550,9 +551,11 @@ describe("failover", () => {
     const [first, second] = usage.rows
     expect(first?.outcome).toBe("upstream_auth_failed")
     expect(second?.outcome).toBe("success")
-    // An `api-key` account whose key was rejected is `disabled` until the operator changes it.
+    // An `api-key` account whose key was rejected sits out as `credential-rejected` — never the
+    // operator's `disabled` — until a probe re-tests it.
     const parked = first?.accountId ?? ""
-    expect(health.stateOf(parked).breaker.status).toBe("disabled")
+    expect(health.stateOf(parked).breaker.status).toBe("cooling_down")
+    expect(health.stateOf(parked).breaker.cooldownReason).toBe("credential-rejected")
     expect(health.stateOf(second?.accountId ?? "").breaker.status).toBe("active")
     // One failed-attempt line, naming the account and the kind.
     const failed = lines.filter((line) => line.msg === "upstream attempt failed")

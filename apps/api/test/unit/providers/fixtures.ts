@@ -181,7 +181,7 @@ export const kimiCycleLimitBody = {
 /**
  * Recorded live, 2026-10-02T02:18:08Z (router pod log, request 1a13ed07): a spent 5-hour window,
  * announced as a `403 permission_error`. The URL was truncated in the log line; the rest is verbatim.
- * Before 2.14.1 this matched no rule, fell to the `403 -> auth` default, and parked the account.
+ * Through 2.14.0 this matched no rule, fell to the `403 -> auth` default, and parked the account.
  */
 export const kimiFiveHourLimitBody = {
   type: "error",

@@ -47,13 +47,14 @@ describe("health store", () => {
     expect(state.breaker.cooldownUntil).toBeUndefined()
   })
 
-  test("an auth failure needs a human: reauth for OAuth, disabled for a key", () => {
+  test("an auth failure: reauth for OAuth, a labeled re-test cooldown for a key", () => {
     const store = createHealthStore()
     store.recordFailure("oauth", { kind: "auth", message: "401" }, NOW, { authKind: "oauth" })
     store.recordFailure("key", { kind: "auth", message: "401" }, NOW, { authKind: "api-key" })
 
     expect(store.stateOf("oauth").breaker.status).toBe("needs_reauth")
-    expect(store.stateOf("key").breaker.status).toBe("disabled")
+    expect(store.stateOf("key").breaker.status).toBe("cooling_down")
+    expect(store.stateOf("key").breaker.cooldownReason).toBe("credential-rejected")
   })
 
   test("a reported limit on an otherwise fine response still cools the account down", () => {
@@ -88,7 +89,7 @@ describe("health store", () => {
     expect(state.breaker.cooldownUntil).toBeUndefined()
   })
 
-  test("a limited header never downgrades needs_reauth or disabled", () => {
+  test("a limited header never downgrades needs_reauth, nor shortens a rejected key's cooldown", () => {
     const store = createHealthStore()
     store.recordFailure("oauth", { kind: "auth", message: "401" }, NOW, { authKind: "oauth" })
     store.recordFailure("key", { kind: "auth", message: "401" }, NOW, { authKind: "api-key" })
@@ -103,8 +104,9 @@ describe("health store", () => {
 
     expect(store.stateOf("oauth").breaker.status).toBe("needs_reauth")
     expect(store.stateOf("oauth").breaker.cooldownUntil).toBeUndefined()
-    expect(store.stateOf("key").breaker.status).toBe("disabled")
-    expect(store.stateOf("key").breaker.cooldownUntil).toBeUndefined()
+    expect(store.stateOf("key").breaker.status).toBe("cooling_down")
+    expect(store.stateOf("key").breaker.cooldownReason).toBe("credential-rejected")
+    expect(store.stateOf("key").breaker.cooldownUntil).toEqual(new Date(NOW.getTime() + 900_000))
   })
 
   test("a concurrent 429 never demotes exhausted back to cooling_down", () => {
@@ -258,7 +260,8 @@ describe("the breaker's configured numbers reach it", () => {
     const store = createHealthStore({ baseBackoffMs: 7_000, jitter: () => 0 })
     store.recordFailure("a", { kind: "auth", message: "401" }, NOW, { authKind: "api-key" })
 
-    expect(store.stateOf("a").breaker.status).toBe("disabled")
+    expect(store.stateOf("a").breaker.status).toBe("cooling_down")
+    expect(store.stateOf("a").breaker.cooldownReason).toBe("credential-rejected")
   })
 
   test("jitter widens the estimated step, so accounts tripped together do not return together", () => {
@@ -584,13 +587,14 @@ describe("standing blocks are announced", () => {
     expect(seen).toEqual([{ accountId: "a", status: "needs_reauth" }])
   })
 
-  test("the disabled an api-key failure forms is announced too — storing it is not this file's call", () => {
-    // The store reports every block it makes; `status-writer.ts` decides which are durable. One
-    // predicate, one file, rather than the same exclusion written in two places that can drift.
+  test("an api-key failure forms no block to announce — it is a re-tested cooldown", () => {
+    // Before 2026-10-02 this was announced as `disabled` and dropped by `status-writer.ts`. It no
+    // longer forms a block at all, so there is nothing to announce and nothing to drop.
     const { store, seen } = blocks()
     store.recordFailure("a", { kind: "auth", message: "401" }, NOW, { authKind: "api-key" })
 
-    expect(seen).toEqual([{ accountId: "a", status: "disabled" }])
+    expect(store.stateOf("a").breaker.status).toBe("cooling_down")
+    expect(seen).toEqual([])
   })
 
   test("a cooldown is not announced — a clock ends it, so nobody needs telling", () => {

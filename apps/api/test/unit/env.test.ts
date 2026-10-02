@@ -447,6 +447,7 @@ describe("parseEnv", () => {
         failureThreshold: 3,
         baseBackoffMs: 1_000,
         maxBackoffMs: 300_000,
+        authFailureCooldownMs: 900_000,
         halfOpenHoldMs: 30_000,
         unknownResetRetryAfterSeconds: 30,
         upstreamTimeoutMs: 600_000,
@@ -464,6 +465,7 @@ describe("parseEnv", () => {
         ROUTING_BASE_BACKOFF_MS: "250",
         ROUTING_MAX_BACKOFF_MS: "90000",
         ROUTING_HALF_OPEN_HOLD_MS: "5000",
+        ROUTING_AUTH_FAILURE_COOLDOWN_MS: "60000",
       })
 
       expect(env.failover).toMatchObject({
@@ -471,7 +473,14 @@ describe("parseEnv", () => {
         baseBackoffMs: 250,
         maxBackoffMs: 90_000,
         halfOpenHoldMs: 5_000,
+        authFailureCooldownMs: 60_000,
       })
+    })
+
+    test("a zero auth-failure cooldown is refused: it would re-dial a refused key on every request", () => {
+      expect(expectEnvError({ ...base, ROUTING_AUTH_FAILURE_COOLDOWN_MS: "0" }).variables).toEqual([
+        "ROUTING_AUTH_FAILURE_COOLDOWN_MS",
+      ])
     })
 
     test("a zero half-open hold is refused: a gate that never holds is not a gate", () => {

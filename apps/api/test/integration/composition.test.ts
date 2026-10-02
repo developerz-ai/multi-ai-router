@@ -204,13 +204,16 @@ describe("a standing block reaches the durable writer", () => {
     expect(statusWriter.stats().pending).toBe(0)
   })
 
-  test("the disabled an api-key failure forms is announced and then dropped", () => {
-    // The wire carries every block; the writer refuses this one, so a provider's bad 401 can never
-    // become indistinguishable from the operator having switched the account off.
-    const { health, statusWriter } = runtimeWith({})
+  test("an api-key failure queues nothing — it is a cooldown, and never the operator's disabled", () => {
+    // A provider's bad 401 can never become indistinguishable from the operator having switched
+    // the account off: it is a `credential-rejected` cooldown, which no row stores.
+    const { health, statusWriter } = runtimeWith({ ROUTING_AUTH_FAILURE_COOLDOWN_MS: "120000" })
     health.recordFailure("a", { kind: "auth", message: "401" }, NOW, { authKind: "api-key" })
 
-    expect(health.stateOf("a").breaker.status).toBe("disabled")
+    expect(health.stateOf("a").breaker.status).toBe("cooling_down")
+    expect(health.stateOf("a").breaker.cooldownReason).toBe("credential-rejected")
+    // The operator's number reaches the transition, not the module default.
+    expect(health.stateOf("a").breaker.cooldownUntil).toEqual(new Date(NOW.getTime() + 120_000))
     expect(statusWriter.stats().pending).toBe(0)
   })
 
