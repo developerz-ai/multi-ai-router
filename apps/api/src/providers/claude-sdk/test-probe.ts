@@ -196,7 +196,7 @@ export function createSdkTestProbe(options: SdkTestProbeOptions): SdkTestProbe {
           ...input,
           options: sdkOptions,
           ownerLaunch: options.ownerLaunch,
-          beforeUpstreamStart: () => {
+          onUpstreamStarted: () => {
             upstreamStarted = true
           },
           run: (sdkOptions) => runQuery({ prompt: held.prompt, options: sdkOptions }),

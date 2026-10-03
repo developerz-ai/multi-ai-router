@@ -21,6 +21,8 @@ import {
  */
 
 export interface BodyReadOptions extends ScannerOptions {
+  /** Request/registry cancellation; its exact typed reason is preserved. */
+  readonly signal?: AbortSignal
   /**
    * Hard ceiling, in bytes. An unbounded read is a denial-of-service surface, not a generosity.
    *
@@ -30,6 +32,10 @@ export interface BodyReadOptions extends ScannerOptions {
    * one an operator cannot move.
    */
   readonly maxBytes?: number
+  /** Injected monotonic clock; only time awaiting reads is reported. */
+  readonly elapsed?: () => number
+  readonly onReadWaitStart?: (started: number) => void
+  readonly onReadWait?: (milliseconds: number) => void
 }
 
 /** Generous, because a long agent transcript with base64 images is a normal request. */
@@ -50,7 +56,9 @@ export async function readRequestBody(
   request: RequestBodySource,
   options: BodyReadOptions = {},
 ): Promise<RequestBody> {
+  options.signal?.throwIfAborted()
   const scanner = createRoutingScanner(options)
+  const elapsed = options.elapsed ?? (() => performance.now())
   const limit = options.maxBytes ?? DEFAULT_MAX_BODY_BYTES
 
   // The cheapest refusal there is: a client announcing four gigabytes is turned away before the
@@ -70,7 +78,15 @@ export async function readRequestBody(
 
   try {
     for (;;) {
-      const { done, value } = await reader.read()
+      const started = elapsed()
+      options.onReadWaitStart?.(started)
+      let reading: BodyChunk
+      try {
+        reading = await readAbortable(reader, options.signal)
+      } finally {
+        options.onReadWait?.(Math.max(0, elapsed() - started))
+      }
+      const { done, value } = reading
       if (done) break
       if (value === undefined) continue
       total += value.length
@@ -84,6 +100,37 @@ export async function readRequestBody(
   }
 
   return { bytes: concat(chunks, total), fields: scanner.result() }
+}
+
+type BodyChunk = { readonly done: boolean; readonly value?: Uint8Array }
+
+/** One listener per pending read: completed chunks retain no abort reactions. */
+async function readAbortable(
+  reader: { read(): Promise<BodyChunk>; cancel(reason?: unknown): Promise<void> },
+  signal: AbortSignal | undefined,
+): Promise<BodyChunk> {
+  if (signal === undefined) return reader.read()
+  signal.throwIfAborted()
+  const aborted = Promise.withResolvers<never>()
+  const onAbort = () => {
+    // Reject first: cancellation can resolve the pending read as EOF synchronously.
+    aborted.reject(signal.reason)
+    try {
+      void reader.cancel(signal.reason).catch(() => {})
+    } catch {
+      // Best effort only; cancellation must not replace the cause or extend shutdown.
+    }
+  }
+  signal.addEventListener("abort", onAbort, { once: true })
+  try {
+    if (signal.aborted) {
+      onAbort()
+      return await aborted.promise
+    }
+    return await Promise.race([reader.read(), aborted.promise])
+  } finally {
+    signal.removeEventListener("abort", onAbort)
+  }
 }
 
 /** RFC 9110's `Content-Length` is `1*DIGIT` and nothing else. */

@@ -187,7 +187,7 @@ export function createMetrics(options: MetricsOptions = {}): RouterMetrics {
   }
 
   const observeTokens = (record: UsageRecord, provider: ProviderId, accountId: string): void => {
-    const model = label(record.model)
+    const model = label(record.model ?? "unknown")
     const directions = [
       ["input", record.tokensIn],
       ["output", record.tokensOut],
@@ -239,7 +239,11 @@ export function createMetrics(options: MetricsOptions = {}): RouterMetrics {
       //
       // Labelled with the **requested** model, not the upstream one: an operator reading this to
       // decide what to price next needs the name their clients ask for.
-      s.costBasis.inc({ provider, model: label(record.model), basis: record.costBasis })
+      s.costBasis.inc({
+        provider,
+        model: label(record.model ?? "unknown"),
+        basis: record.costBasis,
+      })
       if (record.outcome !== USAGE_OUTCOME_SUCCESS) {
         s.upstreamErrors.inc({
           provider,

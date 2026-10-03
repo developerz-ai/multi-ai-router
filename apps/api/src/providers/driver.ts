@@ -19,6 +19,7 @@ import type {
   ProviderCredential,
   ProviderDriver,
   RateLimitSignal,
+  ResponseObservationDescriptor,
   UpstreamErrorFacts,
   UpstreamResponse,
 } from "./types"
@@ -57,6 +58,7 @@ export interface ProviderSurface {
 }
 
 export interface HttpDriverConfig {
+  readonly responseObservation?: ResponseObservationDescriptor
   readonly id: ProviderId
   /**
    * Defaults to `api-key`: most HTTP drivers here are a key, not a token. `none` is the local
@@ -118,6 +120,9 @@ export function createHttpDriver(config: HttpDriverConfig): ProviderDriver {
 
   return {
     id: config.id,
+    ...(config.responseObservation === undefined
+      ? {}
+      : { responseObservation: config.responseObservation }),
     dialect: defaultSurface.dialect,
     authKind: config.authKind ?? "api-key",
     billing: config.billing ?? DEFAULT_ACCOUNT_BILLING,

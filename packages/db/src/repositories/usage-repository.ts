@@ -11,8 +11,7 @@ export const PG_MAX_BIND_PARAMETERS = 65_535
 
 /**
  * Bind parameters one row of `insertMany` spends: one per column the writer sets.
- * `usage_records.id` is not among them — Drizzle emits `default` for it, which is
- * a keyword, not a parameter.
+ * Includes the stable event ID and the final client-facing response status.
  *
  * Stated rather than derived from the table, because "how many columns does the
  * writer set" is not a property the schema knows: a new nullable column costs a
@@ -20,7 +19,7 @@ export const PG_MAX_BIND_PARAMETERS = 65_535
  * builds the real statement and fails when this drifts, so the number cannot go
  * stale quietly.
  */
-export const USAGE_RECORD_BIND_PARAMETERS_PER_ROW = 26
+export const USAGE_RECORD_BIND_PARAMETERS_PER_ROW = 28
 
 /**
  * Rows `insertMany` may carry in one statement.
@@ -35,6 +34,9 @@ export const USAGE_RECORD_BIND_PARAMETERS_PER_ROW = 26
 export const USAGE_RECORD_MAX_BATCH_ROWS = Math.floor(
   PG_MAX_BIND_PARAMETERS / USAGE_RECORD_BIND_PARAMETERS_PER_ROW,
 )
+
+/** Explicit IDs make commit-then-acknowledgment-loss retries idempotent. */
+export type UsageRecordInsert = NewUsageRecordRow & { readonly id: string }
 
 /**
  * Usage persistence. One row per upstream attempt.
@@ -60,7 +62,7 @@ export interface UsageRecordRepository {
    * Caller-bounded at {@link USAGE_RECORD_MAX_BATCH_ROWS} rows — see there for why
    * exceeding it is a total loss rather than a slow path.
    */
-  insertMany(rows: readonly NewUsageRecordRow[]): Promise<number>
+  insertMany(rows: readonly UsageRecordInsert[]): Promise<number>
   /**
    * Deletes records created before `cutoff` in one bounded batch, oldest first,
    * and returns how many went. Exactly `limit` means there is more to do and the
@@ -84,6 +86,7 @@ export function createUsageRecordRepository(db: Database): UsageRecordRepository
       const written = await db
         .insert(usageRecords)
         .values([...rows])
+        .onConflictDoNothing({ target: usageRecords.id })
         .returning({ id: usageRecords.id })
       return written.length
     },

@@ -18,6 +18,7 @@ type Mode =
   | "owner-setup"
   | "owner-ready"
   | "owner-prepare"
+  | "owner-start"
   | "query-setup"
   | "final-guard"
   | "provider-error"
@@ -38,7 +39,7 @@ function fixture(mode: Mode) {
     },
     ready: mode === "owner-ready" ? rejectedReady : Promise.resolve(),
     exited: Promise.resolve(),
-    started: Promise.resolve(),
+    started: mode === "owner-start" ? rejectedReady : Promise.resolve(),
     prepare: async () => {
       if (mode === "owner-prepare") throw new Error("guardian preparation refused")
     },
@@ -124,6 +125,7 @@ for (const mode of [
   "owner-setup",
   "owner-ready",
   "owner-prepare",
+  "owner-start",
   "query-setup",
   "final-guard",
 ] as const) {
@@ -146,7 +148,7 @@ for (const mode of [
         audits: 0,
         quotaWrites: 0,
         healthWrites: 0,
-        activations: 0,
+        activations: mode === "owner-start" ? 1 : 0,
       })
     } finally {
       held?.release()
@@ -170,7 +172,13 @@ test("provider failure after background activation records a real failed test an
   expect(f.concurrency.inFlight).toBe(0)
 })
 
-for (const mode of ["owner-setup", "owner-ready", "owner-prepare", "query-setup"] as const) {
+for (const mode of [
+  "owner-setup",
+  "owner-ready",
+  "owner-prepare",
+  "owner-start",
+  "query-setup",
+] as const) {
   test(`interactive SDK preparation ${mode} reports a classified operator test failure`, async () => {
     const f = fixture(mode)
     const result = await f.service.test(f.account.id, { model: "offline-model", confirmed: true })
@@ -186,7 +194,7 @@ for (const mode of ["owner-setup", "owner-ready", "owner-prepare", "query-setup"
       audits: 1,
       quotaWrites: 0,
       healthWrites: 0,
-      activations: 0,
+      activations: mode === "owner-start" ? 1 : 0,
       guards: 0,
     })
     expect(f.concurrency.inFlight).toBe(0)

@@ -16,13 +16,13 @@ client request that hits a rate-limited account, fails over, and succeeds on the
 
 | Field | Type | Meaning |
 |---|---|---|
-| `id` | id | Row identity |
-| `correlationId` | uuid | Shared by every attempt of one client request. **Router-owned**, always a UUID |
+| `id` / internal `eventId` | uuid | Stable event identity minted before queue admission; retries reuse it and persistence conflicts on this primary key |
+| `correlationId` | uuid | Shared by every attempt of one client request. **Router-owned**, freshly minted for every ingress even when a caller supplies a UUID |
 | `clientRequestId` | string? | The caller's `x-request-id`, verbatim, when it sent one. A **trace** field, never a join key — it is caller-controlled, so two clients both sending `req-1` must not have their chains merged |
 | `attempt` | int | 1-based position in the failover chain |
 | `apiKeyId` / `accountId` / `poolId` / `sessionKey` | refs | Attribution: which key presented, which Account served or failed, which Pool it was selected from, which conversation it belonged to. `poolId` is null when the key's scope was `all` or an explicit account list — no pool was in play |
 | `provider` | enum? | Denormalized so the row survives the Account it names |
-| `model` | string | Exactly what the client sent. Never substituted |
+| `model` | string? | Exactly what the client sent; null when authenticated refusal occurs before a model is identified. No fabricated model sentinel |
 | `upstreamModel` | string? | The name actually put on the wire, after the Account's alias map. A separate **fact**, not a derivation: the alias map is mutable, so re-deriving it later answers "what would we send now", never "what did we send then" |
 | `ingressDialect` | enum? | The API surface the client called |
 | `egressMode` | enum? | `passthrough` \| `translate` \| `agent-sdk` — the per-row twin of the `path` label on `router_overhead_seconds`. Carried instead of an egress *dialect*: the fact worth storing is the relationship between the two, and the SDK path has no egress dialect at all |
@@ -32,7 +32,8 @@ client request that hits a rate-limited account, fails over, and succeeds on the
 | `costEstimate` | decimal? | See below. Null for an unknown model — never silently zero |
 | `costBasis` | enum | `metered` \| `notional` \| `unknown`. Which of the first two a priced attempt takes comes from the **Account's** `billing`, not from its provider — see below |
 | `latencyMs` / `ttfbMs` | int / int? | Router-observed wall time for the attempt; time to the first relayed byte. **TTFB is what makes "zero added time-to-first-token" a measurement** — `latencyMs` is dominated by generation time and hides a buffering regression completely |
-| `routerOverheadMs` | int | Time in the router, excluding upstream — the per-record twin of `router_overhead_seconds` |
+| `routerOverheadMs` | int | Time in the router, excluding upstream and awaited body reads; parser work remains included — the per-record twin of `router_overhead_seconds` |
+| `httpStatus` / `responseStatus` | int? / int? | Independent upstream HTTP response and caller response facts. Null means unavailable; legacy responseStatus remains unknown, never inferred from outcome or upstream status |
 | `outcome` | enum | `success` \| `client_error` \| `translation_failed` \| `request_too_large` \| `key_revoked` \| `scope_violation` \| `key_rate_limited` \| `no_healthy_account` \| `quota_exhausted` \| `credits_exhausted` \| `upstream_error` \| `upstream_timeout` \| `upstream_auth_failed` \| `credential_decrypt_failed` \| `router_error`. Grouped by *whose problem it is* (`packages/core/src/domain/usage.ts`). Three that share a status but never fold together: `quota_exhausted` (a window a clock refills), `credits_exhausted` (a balance a human refills), and `key_rate_limited` (one key spent its own ceiling — not the operator's capacity) |
 | `httpStatus` / `errorClass` | int? / string? | **Upstream** status when it answered — never the status the client was sent. `NULL` means no upstream answered this attempt: the connection failed, or the router refused before dialing (a pool-wide cooldown's `429`, an empty scope's `403`); the client-facing status of those is fixed by `errorClass`/`outcome`. The thrown class's **name** — never a message, never a body |
 | `createdAt` | timestamp | |
@@ -769,3 +770,37 @@ transaction. Defaults, batching rules, and the env knobs are in
 ### Interrupted response accounting
 
 A response whose transport reader fails records failed usage with its original upstream HTTP status and partial token counts. It is never retried after output starts. Client cancellation is recorded as `client_error` with `client_cancelled` where distinguishable and does not strike upstream health; pre-response cancellation returns 499 if a response can still be sent. A cleanly delivered protocol error frame inside an HTTP-200 stream is not yet uniformly recognized across providers.
+
+### Protocol evidence and request lifetime
+
+Usage is observed from bounded upstream JSON/SSE structures, in the actual egress dialect.
+Content text cannot manufacture usage or errors. Anthropic input excludes cache; Chat and
+Responses input includes cache, which is subtracted once. Invalid or out-of-domain counts do not
+poison persistence. The observation ceiling bounds retained protocol state, not relayed bytes:
+chunks remain immediately available, and oversized observation becomes unavailable without an
+invented provider fault or missing-terminal claim. Count-tokens remains an unpriced measurement.
+
+The first observed terminal cause controls accounting. Explicit HTTP-200 protocol failure remains
+a failure after a later caller abort; caller cancellation first is client_error with
+errorClass client_cancelled, no health strike and uncertain recovery. Intentional output-limit
+incompletion is upstream_error with upstream_incomplete, preserved partial counts and no account
+strike. Required completion markers are checked only for descriptors that declare them, and
+unavailable evidence cannot prove truncation. Clean completion followed by later abort remains
+success. Upstream/client statuses and response bytes are preserved after commitment.
+An upstream error status received before caller cancellation retains its provider verdict;
+an SDK deadline that fires first remains 504 after a later caller abort. Pre-relay cancellation
+retains any received upstream status, returns 499 and releases its request lease without awaiting
+body cancellation. Upload waits still outstanding at forced shutdown are excluded from router
+processing overhead, while their elapsed time remains part of request latency.
+
+Selecting an account or constructing an idle SDK guardian is not proof an upstream attempt began.
+HTTP transport admission and the SDK guardian's confirmed B/start evidence establish attribution;
+pre-start refusal retains null account/provider/pool facts. Internal request UUID joins attempts,
+caller request-id is only a trace label, and stable event UUID makes persistence retry idempotent.
+Idempotence does not use correlation UUID: separate failover/restart attempts remain separate rows.
+
+The bounded authenticated-request registry closes admission immediately at shutdown. Existing
+HTTP drain runs first; the producer phase settles remaining accounting before aborting work and
+draining usage writers. Shutdown abandonment records router_error with router_shutdown, observed
+partial counts, no account strike and uncertain recovery; it does not claim provider completion
+or persistence when the writer budget expires. No new whole-runtime shutdown deadline is implied.

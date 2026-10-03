@@ -1,30 +1,20 @@
 import type { Logger } from "../../logging/logger"
 import type { AttemptFailure } from "../routing"
 import type { TranslationContext } from "../translate"
-import { createTokenObserver, NO_TOKEN_OBSERVER } from "../usage"
+import { createResponseObserver } from "../usage"
+import { RouterShutdownError } from "./active-requests"
 import type { UpstreamError } from "./attempt"
 import { breakerOptionsFor } from "./health"
 import type { HealthObservation } from "./health-observation"
 import type { ServableCandidate } from "./plan"
-import { attemptRecord, failureOutcome, SUCCESS_OUTCOME } from "./records"
+import { attemptRecord, failureOutcome } from "./records"
 import type { RecoveryAttempt } from "./recovery-access"
 import { relayResponse } from "./relay"
 import { ClientCancelledError } from "./relay-cancellation"
+import { createRelayTerminal } from "./relay-terminal"
 import { relayTranslatedResponse } from "./relay-translate"
 import type { DispatchRuntime } from "./runtime"
 
-/**
- * What one attempt leaves behind: the bytes the client gets, and the `UsageRecord` that says what
- * it cost. Split from `chain.ts` because the two change for different reasons — that file decides
- * *which account is tried next*, this one decides *how an attempt is accounted for* — and because a
- * success settles long after the chain returned, so its bookkeeping outlives the loop that started
- * it.
- *
- * Every attempt writes a row, including every failure. That is the spec's requirement, not a
- * debugging aid: an operator cannot see a pool degrading from the successes alone.
- */
-
-/** Readings taken when the attempt began. `upstreamMs` is the wait accumulated *before* it. */
 export interface AttemptClock {
   readonly startedAt: Date
   readonly started: number
@@ -42,6 +32,8 @@ export interface AttemptClock {
  * carries the open end here and `settle` closes it at the last relayed byte.
  */
 export interface SuccessClock extends AttemptClock {
+  readonly releaseProbe?: () => void
+  readonly rateLimited?: boolean
   readonly recovery?: RecoveryAttempt
   readonly upstreamStarted: number
   readonly observation?: HealthObservation
@@ -65,86 +57,103 @@ export function relaySuccess(
   response: Response,
   at: SuccessClock,
 ): Response {
-  // A count-tokens answer states `input_tokens` for a prompt that was never run. Reading it would
-  // record — and price — a measurement as though it were a completion, so that one response shape
-  // is relayed and observed for bytes only. See `usage/tokens.ts`. An embeddings answer is the
-  // opposite case and takes the ordinary observer: its `prompt_tokens` were genuinely spent, and
-  // the absent completion count lands as the zero it truthfully is.
-  const counting = ctx.runtime.operation === "count-tokens"
-  const tokens = counting ? NO_TOKEN_OBSERVER : createTokenObserver()
+  const observation = createResponseObserver({
+    dialect: servable.dialect,
+    operation: ctx.runtime.operation,
+    contentType: response.headers.get("content-type"),
+    maximumObservationBytes: ctx.runtime.responseObservationMaxBytes ?? 65_536,
+    ...(servable.driver.responseObservation === undefined
+      ? {}
+      : { descriptor: servable.driver.responseObservation }),
+  })
+  const terminal = createRelayTerminal()
   let firstByteAt: number | undefined
+  let relayedBytes = 0
   let settled = false
-  const settle = (streamed: boolean, failed = false, error?: unknown): void => {
+  const requestAborted = () =>
+    settle(
+      relayedBytes > 0,
+      ctx.request?.signal.reason instanceof RouterShutdownError
+        ? ctx.request.signal.reason
+        : new ClientCancelledError(),
+    )
+  const settle = (streamed: boolean, error?: unknown, eof = false): void => {
     if (settled) return
     settled = true
-    const cancelled = ctx.request?.signal.aborted === true || error instanceof ClientCancelledError
-    const timedOut = error instanceof Error && error.name === "TimeoutError"
-    const failureKind = cancelled ? "client-error" : timedOut ? "timeout" : "connection"
-    at.recovery?.finish(cancelled ? "uncertain" : failed ? "failed" : "succeeded")
-    if (failed && !cancelled) {
-      ctx.runtime.health.recordFailure(
-        servable.account.id,
-        { kind: failureKind, message: "upstream response stream failed" },
-        ctx.runtime.clock.now(),
-        {
-          ...breakerOptionsFor(servable.driver.authKind),
-          recoveryProbe: at.recovery?.designated ?? false,
-        },
-        at.observation,
-      )
-    }
-    // Everything this attempt spent from the call onwards — including every byte relayed off it —
-    // is time the router waited on the upstream, not time it worked. The failure path closes its
-    // span in the chain; the success path has to close its own here, at the moment the last byte
-    // lands, because a stream settles long after the loop returned. Passing only the *previous*
-    // attempts' wait would fold a whole generation into `router_overhead_seconds`, the one series
-    // that must never contain upstream time (CLAUDE.md non-negotiable 8).
-    //
-    // Measured from `upstreamStarted`, not from `started`: the conversion this attempt's body needed
-    // ran between the two, and it is the router's own work.
-    const upstreamMs = at.upstreamMs + (ctx.runtime.clock.elapsed() - at.upstreamStarted)
-    const counts = tokens.counts()
+    if (error !== undefined) terminal.error(error)
+    const facts = eof ? observation.finish() : observation.snapshot()
+    const verdict = terminal.finish(facts)
+    ctx.request?.signal.removeEventListener("abort", requestAborted)
+    const counts = facts.counts
     ctx.runtime.health.endAttempt(servable.account.id, counts.tokensOut)
-    ctx.runtime.record(
-      attemptRecord({
-        ...ctx.runtime.attribution(attempt, servable),
-        tokens: counts,
-        // Zeroed counts are not a zero *bill*: on a model the table prices they would record
-        // `metered $0.000000`, which sums into a spend report as a completion that cost nothing.
-        priced: !counting,
-        timing: ctx.runtime.timing(at.startedAt, at.started, upstreamMs, firstByteAt),
-        outcome: failed ? failureOutcome(failureKind) : SUCCESS_OUTCOME,
-        streamed,
-        httpStatus: response.status,
-        errorClass: failed
-          ? cancelled
-            ? "client_cancelled"
-            : timedOut
-              ? "upstream_timeout"
-              : "upstream_error"
-          : null,
-      }),
-    )
+    try {
+      at.recovery?.finish(at.rateLimited ? "failed" : verdict.recovery)
+      if (verdict.failure !== null) {
+        ctx.runtime.health.recordFailure(
+          servable.account.id,
+          { ...verdict.failure, message: "upstream response stream failed" },
+          ctx.runtime.clock.now(),
+          {
+            ...breakerOptionsFor(servable.driver.authKind),
+            recoveryProbe: at.recovery?.designated ?? false,
+          },
+          at.observation,
+        )
+      } else if (verdict.outcome === "success" && !at.rateLimited) {
+        ctx.runtime.health.recordSuccess(servable.account.id, at.observation)
+      }
+      const upstreamMs = at.upstreamMs + (ctx.runtime.clock.elapsed() - at.upstreamStarted)
+      ctx.runtime.record(
+        attemptRecord({
+          ...ctx.runtime.attribution(attempt, servable),
+          tokens: counts,
+          priced: ctx.runtime.operation !== "count-tokens",
+          timing: ctx.runtime.timing(at.startedAt, at.started, upstreamMs, firstByteAt),
+          outcome: verdict.outcome,
+          streamed,
+          httpStatus: response.status,
+          responseStatus: response.status,
+          errorClass: verdict.errorClass,
+        }),
+      )
+    } finally {
+      try {
+        at.releaseProbe?.()
+      } finally {
+        ctx.runtime.activeRequest?.release()
+      }
+    }
   }
-
+  ctx.request?.signal.addEventListener("abort", requestAborted, { once: true })
+  if (ctx.request?.signal.aborted) requestAborted()
+  const lease = ctx.runtime.activeRequest
+  lease?.setAbandon(() => settle(relayedBytes > 0, new RouterShutdownError()))
+  if (lease?.signal.aborted) settle(false, new RouterShutdownError())
+  const signals = [ctx.request?.signal, lease?.signal].filter(
+    (signal): signal is AbortSignal => signal !== undefined,
+  )
+  const relaySignal = signals.length === 0 ? undefined : AbortSignal.any(signals)
   const observer = {
+    onWireBytes: (bytes: number) => {
+      relayedBytes = bytes
+    },
     onFirstByte: () => {
       firstByteAt = ctx.runtime.clock.elapsed()
     },
-    onChunk: (chunk: Uint8Array) => tokens.observe(chunk),
-    onEnd: (bytes: number) => settle(bytes > 0),
-    // A stream that broke after bytes were on the wire is a truncation, never a retry.
-    onError: (error: unknown, bytes: number) => settle(bytes > 0, true, error),
+    onChunk: (chunk: Uint8Array) => {
+      observation.observe(chunk)
+      terminal.observe(observation.snapshot())
+    },
+    onEnd: (bytes: number) => settle(bytes > 0, undefined, true),
+    onError: (error: unknown, bytes: number) => settle(bytes > 0, error),
   }
-
-  const pair = servable.translation
-  if (pair === null) return relayResponse(response, observer)
-
+  if (servable.translation === null) return relayResponse(response, observer, relaySignal)
   return relayTranslatedResponse({
     upstream: response,
-    pair,
+    pair: servable.translation,
     context: ctx.translation,
     observer,
+    ...(relaySignal === undefined ? {} : { signal: relaySignal }),
     onUnrecognizedStopReason: (reason) =>
       ctx.log?.warn("upstream reported an unrecognized stop reason", {
         accountId: servable.account.id,

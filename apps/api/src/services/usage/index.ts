@@ -11,8 +11,6 @@ export {
 } from "./fromEnv"
 export { type BoundedQueue, createBoundedQueue } from "./queue"
 export {
-  clientRequestIdFrom,
-  correlationIdFrom,
   errorClassOf,
   NO_TOKENS,
   outcomeOf,
@@ -32,6 +30,12 @@ export {
   type UsageWriteFailure,
   type UsageWriter,
 } from "./recorder"
+export { createResponseObserver } from "./response-observer"
+export type {
+  ResponseObservationFacts,
+  ResponseObservationSpec,
+  ResponseObserver,
+} from "./response-observer-types"
 export {
   createTokenObserver,
   NO_TOKEN_OBSERVER,

@@ -23,6 +23,8 @@ export interface SampleIdentity {
 export interface RequestProgress {
   readonly startedAt: Date
   readonly requestStarted: number
+  bodyReadMs: number
+  bodyReadWaitingSince?: number | undefined
   model: string | null
 }
 

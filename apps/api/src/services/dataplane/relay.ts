@@ -27,6 +27,8 @@ export interface RelayObserver {
    * it before the enqueue would put the measurement itself on the path it exists to protect.
    */
   onFirstByte?: () => void
+  /** Total bytes enqueued to the client, including comments; independent of content TTFB. */
+  onWireBytes?: (total: number) => void
   /** Called after the chunk is already on its way to the client. Never before. */
   onChunk?: (chunk: Uint8Array) => void
   /** The upstream stream ended cleanly. `bytes` is the total relayed. */
@@ -35,7 +37,11 @@ export interface RelayObserver {
   onError?: (error: unknown, bytes: number) => void
 }
 
-export function relayResponse(upstream: Response, observer: RelayObserver = {}): Response {
+export function relayResponse(
+  upstream: Response,
+  observer: RelayObserver = {},
+  signal?: AbortSignal,
+): Response {
   const headers = clientHeaders(upstream.headers)
 
   if (upstream.body === null) {
@@ -59,6 +65,7 @@ export function relayResponse(upstream: Response, observer: RelayObserver = {}):
       const first = bytes === 0
       bytes += chunk.length
       try {
+        observer.onWireBytes?.(bytes)
         if (first) observer.onFirstByte?.()
         observer.onChunk?.(chunk)
       } catch {
@@ -70,9 +77,11 @@ export function relayResponse(upstream: Response, observer: RelayObserver = {}):
     },
   })
 
-  upstream.body.pipeTo(passthrough.writable).catch((error: unknown) => {
-    settle(error ?? new Error("response stream cancelled"))
-  })
+  upstream.body
+    .pipeTo(passthrough.writable, signal === undefined ? {} : { signal })
+    .catch((error: unknown) => {
+      settle(error ?? new Error("response stream cancelled"))
+    })
 
   return new Response(
     observeCancellation(passthrough.readable, () => settle(new ClientCancelledError())),

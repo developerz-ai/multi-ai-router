@@ -116,6 +116,7 @@ async function main(): Promise<void> {
   // Readiness and HTTP draining precede runtime producer, auxiliary-pool and writer phases.
   // The orchestrator must cover their complete configured bounds plus the final main-pool close.
   installShutdownHandlers(lifecycle, logger, async () => {
+    runtime.closeAdmission()
     await announceUnready(env, logger)
     await drain(server, env, logger)
     await runtime.stop()

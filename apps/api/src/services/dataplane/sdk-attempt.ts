@@ -1,4 +1,3 @@
-import { UpstreamTimeoutError } from "@multi-ai-router/core"
 import type { Logger } from "../../logging/logger"
 import {
   classifySdkFailure,
@@ -15,6 +14,7 @@ import {
 import { type AttemptOutcome, attemptDeadline, failoverKind } from "./attempt"
 import type { SdkServableCandidate } from "./plan"
 import { errorResponseFailure, rateLimitCapture, releasingWith } from "./sdk-attempt-response"
+import { sdkCancellation } from "./sdk-cancellation"
 
 /**
  * One Claude subscription attempt, in the same shape an HTTP one answers in.
@@ -69,6 +69,7 @@ export interface SdkAttemptInput {
   /** Stamps a `rate_limit_event` reading. Unused when `quota` is undefined. Defaults to the clock. */
   readonly now?: () => Date
   readonly beforeUpstreamStart?: UpstreamStartGuard
+  readonly onUpstreamStarted?: () => void
   readonly timeoutMs: number
   /** The client's own abort signal, so a client that goes away terminates the subprocess. */
   readonly signal?: AbortSignal
@@ -119,16 +120,18 @@ export async function runSdkAttempt(input: SdkAttemptInput): Promise<AttemptOutc
 
   const turn = resolveTurn(input, plan.account.id)
   const rateLimit = rateLimitCapture(input, plan.account.id)
+  const attemptSignal = attemptDeadline(input.timeoutMs, input.signal)
 
   let response: Response
   try {
     response = await invoke({
       beforeUpstreamStart: input.beforeUpstreamStart,
+      onUpstreamStarted: input.onUpstreamStarted,
       accountId: plan.account.id,
       configDir: plan.configDir,
       model: plan.upstreamModel,
       body: input.body,
-      signal: attemptDeadline(input.timeoutMs, input.signal),
+      signal: attemptSignal,
       session: turn.plan,
       onSession: (report) => turn.remember(report.sdkSessionId, report.assistantUuid),
       onRateLimit: rateLimit.capture,
@@ -160,7 +163,7 @@ export async function runSdkAttempt(input: SdkAttemptInput): Promise<AttemptOutc
     // the conversation immediately rather than fail over onto a detached, session-less turn.
     turn.release()
     if (error instanceof UpstreamAdmissionRefused) return { kind: "admission-refused" }
-    return invocationFailure(error, input, turn, rateLimit.signal())
+    return invocationFailure(error, input, turn, rateLimit.signal(), attemptSignal)
   }
 
   // The renderer answers a non-streaming turn that ended in an upstream `error` event with the
@@ -225,8 +228,18 @@ function invocationFailure(
   input: SdkAttemptInput,
   turn: SessionTurn,
   rateLimit: RateLimitSignal | null,
+  attemptSignal: AbortSignal,
 ): AttemptOutcome {
-  if (isDeadline(error)) return failure("timeout", DEADLINE)
+  const cancellation = sdkCancellation(error, attemptSignal, input.signal)
+  if (cancellation === "caller")
+    return {
+      kind: "failure",
+      failure: { kind: "client-error", status: 499, message: "client cancelled the request" },
+      classification: null,
+      rateLimit: null,
+      upstream: null,
+    }
+  if (cancellation === "deadline") return failure("timeout", DEADLINE)
 
   const { classification, clientMessage } = classifySdkFailure(error)
   if (classification.kind === "stale-session") evictBinding(input, turn)
@@ -247,12 +260,6 @@ function invocationFailure(
     rateLimit,
     upstream: null,
   }
-}
-
-function isDeadline(error: unknown): boolean {
-  if (error instanceof UpstreamTimeoutError) return true
-  const name = error instanceof Error ? error.name : ""
-  return name === "TimeoutError" || name === "AbortError"
 }
 
 /**

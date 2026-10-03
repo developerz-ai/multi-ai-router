@@ -126,8 +126,7 @@ export function createUsageRecorderFromEnv(deps: UsageRecorderFromEnvDeps): Usag
         // this stamp is what lets the idle probe find an account nothing has routed to in a week
         // without scanning a table retention prunes. A failure here must not cost the batch that
         // already succeeded — a missed stamp makes an account look idler than it is, which the
-        // probe answers with one free auth check, while a re-thrown error would re-queue records
-        // already written and double-count them.
+        // probe answers with one free auth check, while a re-thrown error would unnecessarily retry an already committed batch.
         const used = batch.flatMap((entry) => (entry.accountId === null ? [] : [entry.accountId]))
         if (used.length === 0) return
         try {

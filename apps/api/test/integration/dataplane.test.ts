@@ -704,10 +704,10 @@ describe("failover", () => {
     // useless to a caller. Surfacing the second erased the wait and handed back a bare `500`.
     expect(res.status).toBe(429)
     expect(res.headers.get("Retry-After")).toBe("30")
-    // Both attempts are recorded — the broken account is still visible to the operator, it just no
-    // longer speaks for the pool. Only one of them reached a socket.
+    // Only the actual upstream attempt is recorded; later credential preparation did not start.
+    // It cannot replace the pool's actionable quota verdict with fictional provider failure.
     expect(upstream.calls).toHaveLength(1)
-    expect(usage.rows.map((row) => row.outcome)).toEqual(["quota_exhausted", "upstream_error"])
+    expect(usage.rows.map((row) => row.outcome)).toEqual(["quota_exhausted"])
   })
 
   test("a mis-encrypted account is still reported when it is all that went wrong", async () => {
@@ -944,7 +944,9 @@ describe("the half-open probe is admitted one at a time", () => {
     const first = app.request("/v1/messages", post(MESSAGE, bearer()))
     await settle()
     probe.resolve(jsonResponse(200, { served: true }))
-    expect((await first).status).toBe(200)
+    const response = await first
+    expect(response.status).toBe(200)
+    await response.text()
 
     // The account is `active` again, so the gate is irrelevant: no hold outlives the verdict.
     const after = await app.request("/v1/messages", post(MESSAGE, bearer()))
@@ -1120,11 +1122,14 @@ describe("cross-dialect and Agent-SDK egress", () => {
     await settle()
 
     expect(res.status).toBe(503)
-    // The attempt happened and is counted — the account was planned, not refused at the gate.
+    // Planning without an SDK transport never starts a provider attempt.
+    expect(usage.rows).toHaveLength(1)
     expect(usage.rows[0]).toMatchObject({
-      accountId: "sub",
-      egressMode: "agent-sdk",
-      provider: "anthropic-oauth",
+      accountId: null,
+      egressMode: null,
+      provider: null,
+      outcome: "no_healthy_account",
+      responseStatus: 503,
     })
   })
 })
@@ -1149,7 +1154,8 @@ describe("the Agent-SDK transport", () => {
     const { app, upstream, usage } = harness({
       accounts: [subscriptionAccount("sub", { configDir: "/data/accounts/sub" })],
       responses: [() => jsonResponse(500, {})],
-      invokeSdk: async ({ configDir, model }) => {
+      invokeSdk: async ({ configDir, model, onUpstreamStarted }) => {
+        onUpstreamStarted?.()
         seen.push({ configDir, model })
         return sdkResponse()
       },
@@ -1176,7 +1182,10 @@ describe("the Agent-SDK transport", () => {
     const { app, usage } = harness({
       accounts: [subscriptionAccount("sub")],
       responses: [() => jsonResponse(500, {})],
-      invokeSdk: async () => sdkResponse(),
+      invokeSdk: async (invocation) => {
+        invocation.onUpstreamStarted?.()
+        return sdkResponse()
+      },
     })
 
     const body = JSON.stringify({
@@ -1207,7 +1216,8 @@ describe("the Agent-SDK transport", () => {
       accounts: [...mixedPool()],
       selection: { unpooledPolicy: "priority-failover" },
       responses: [() => jsonResponse(200, {})],
-      invokeSdk: () => {
+      invokeSdk: (invocation) => {
+        invocation.onUpstreamStarted?.()
         calls += 1
         return calls === 1
           ? Promise.reject(new Error("No conversation found with session ID: sdk-1"))
@@ -1232,7 +1242,8 @@ describe("the Agent-SDK transport", () => {
     const { app } = harness({
       accounts: [subscriptionAccount("sub")],
       responses: [() => jsonResponse(200, {})],
-      invokeSdk: () => {
+      invokeSdk: (invocation) => {
+        invocation.onUpstreamStarted?.()
         calls += 1
         return Promise.reject(new Error("No conversation found with session ID: sdk-1"))
       },
@@ -1251,7 +1262,10 @@ describe("the Agent-SDK transport", () => {
     const { app, usage } = harness({
       accounts: [subscriptionAccount("sub")],
       responses: [() => jsonResponse(200, {})],
-      invokeSdk: () => Promise.reject(new Error("Claude AI usage limit reached")),
+      invokeSdk: (invocation) => {
+        invocation.onUpstreamStarted?.()
+        return Promise.reject(new Error("Claude AI usage limit reached"))
+      },
     })
 
     const res = await app.request("/v1/messages", post(MESSAGE, bearer()))
@@ -1266,7 +1280,10 @@ describe("the Agent-SDK transport", () => {
     const { app, usage } = harness({
       accounts: [subscriptionAccount("sub")],
       responses: [() => jsonResponse(200, {})],
-      invokeSdk: () => Promise.reject(new Error("OAuth token has expired")),
+      invokeSdk: (invocation) => {
+        invocation.onUpstreamStarted?.()
+        return Promise.reject(new Error("OAuth token has expired"))
+      },
     })
 
     const res = await app.request("/v1/messages", post(MESSAGE, bearer()))
@@ -1290,7 +1307,10 @@ describe("the Agent-SDK transport", () => {
       // operator's rather than a hash's.
       selection: { unpooledPolicy: "priority-failover" },
       responses: [() => jsonResponse(200, { usage: { input_tokens: 1, output_tokens: 2 } })],
-      invokeSdk: () => Promise.reject(new Error("the subprocess exited with code 1")),
+      invokeSdk: (invocation) => {
+        invocation.onUpstreamStarted?.()
+        return Promise.reject(new Error("the subprocess exited with code 1"))
+      },
     })
 
     const res = await app.request("/v1/messages", post(MESSAGE, bearer()))
@@ -1308,7 +1328,8 @@ describe("the Agent-SDK transport", () => {
       accounts: [...mixedPool()],
       selection: { unpooledPolicy: "priority-failover" },
       responses: [() => jsonResponse(200, { shouldNotBeReached: true })],
-      invokeSdk: () => {
+      invokeSdk: (invocation) => {
+        invocation.onUpstreamStarted?.()
         sdkCalls += 1
         return Promise.resolve(slow.response)
       },
@@ -1377,7 +1398,7 @@ describe("usage accounting", () => {
     const { app, usage } = harness({
       accounts: [account("acct-1", { provider: "openai-api", apiKey: "sk-one", cipher: CRYPTOR })],
       responses: [
-        () => jsonResponse(200, { usage: { input_tokens: 1_000_000, output_tokens: 0 } }),
+        () => jsonResponse(200, { usage: { prompt_tokens: 1_000_000, completion_tokens: 0 } }),
       ],
     })
 
@@ -1435,7 +1456,7 @@ describe("usage accounting", () => {
         }),
       ],
       responses: [
-        () => jsonResponse(200, { usage: { input_tokens: 1_000_000, output_tokens: 500 } }),
+        () => jsonResponse(200, { usage: { prompt_tokens: 1_000_000, completion_tokens: 500 } }),
       ],
     })
 
@@ -1816,7 +1837,7 @@ describe("request validation", () => {
   /**
    * Three refusals that used to share one sentence under `translation_failed`, which left 66
    * identical production lines from one key with nothing to tell them apart. Each now names its
-   * own cause, in the caller's dialect, and none writes a usage row: there is no model to put on it.
+   * own cause, in the caller's dialect, and each writes a usage row with a null model.
    */
   test("a body naming no model is an invalid request, not a translation failure", async () => {
     const { app, upstream, usage } = harness({ responses: [() => jsonResponse(200, {})] })
@@ -1833,7 +1854,16 @@ describe("request validation", () => {
       },
     })
     expect(upstream.calls).toHaveLength(0)
-    expect(usage.rows).toHaveLength(0)
+    expect(usage.rows).toHaveLength(1)
+    for (const row of usage.rows)
+      expect(row).toMatchObject({
+        accountId: null,
+        model: null,
+        upstreamModel: null,
+        apiKeyId: expect.any(String),
+        outcome: "client_error",
+        responseStatus: 400,
+      })
   })
 
   test("an empty body says it is empty, in both error shapes", async () => {
@@ -1853,7 +1883,16 @@ describe("request validation", () => {
       error: { code: "invalid_request", message: expect.stringContaining("empty"), param: null },
     })
     expect(upstream.calls).toHaveLength(0)
-    expect(usage.rows).toHaveLength(0)
+    expect(usage.rows).toHaveLength(2)
+    for (const row of usage.rows)
+      expect(row).toMatchObject({
+        accountId: null,
+        model: null,
+        upstreamModel: null,
+        apiKeyId: expect.any(String),
+        outcome: "client_error",
+        responseStatus: 400,
+      })
   })
 
   test("a compressed body is a 415 naming the encoding, never 'must name a model'", async () => {
@@ -1876,7 +1915,16 @@ describe("request validation", () => {
       error: { code: "unsupported_content_encoding", param: null },
     })
     expect(upstream.calls).toHaveLength(0)
-    expect(usage.rows).toHaveLength(0)
+    expect(usage.rows).toHaveLength(2)
+    for (const row of usage.rows)
+      expect(row).toMatchObject({
+        accountId: null,
+        model: null,
+        upstreamModel: null,
+        apiKeyId: expect.any(String),
+        outcome: "client_error",
+        responseStatus: 415,
+      })
   })
 
   test("an explicit identity encoding is served: the body is not encoded", async () => {
@@ -1927,9 +1975,17 @@ describe("request validation", () => {
       error: { message: expect.stringContaining(`${MODEL_NAME_MAX_BYTES} bytes`) },
     })
     expect(upstream.calls).toHaveLength(0)
-    // Nothing was attempted, so there is no attempt to account for — and, the point of the
-    // ceiling, the unbounded name never reaches a `usage_records.model` column.
-    expect(usage.rows).toHaveLength(0)
+    // The authenticated refusal is counted without persisting an unbounded model name.
+    expect(usage.rows).toHaveLength(1)
+    for (const row of usage.rows)
+      expect(row).toMatchObject({
+        accountId: null,
+        model: null,
+        upstreamModel: null,
+        apiKeyId: expect.any(String),
+        outcome: "client_error",
+        responseStatus: 400,
+      })
   })
 
   test("a model name exactly at the ceiling is served", async () => {
@@ -1976,7 +2032,16 @@ describe("the request body ceiling", () => {
     expect(res.status).toBe(413)
     expect(body).toMatchObject({ type: "error", error: { type: "request_too_large" } })
     expect(upstream.calls).toHaveLength(0)
-    expect(usage.rows).toHaveLength(0)
+    expect(usage.rows).toHaveLength(1)
+    for (const row of usage.rows)
+      expect(row).toMatchObject({
+        accountId: null,
+        model: null,
+        upstreamModel: null,
+        apiKeyId: expect.any(String),
+        outcome: "request_too_large",
+        responseStatus: 413,
+      })
   })
 
   test("refuses an oversized body with 413 in the OpenAI error shape", async () => {
@@ -2082,7 +2147,8 @@ describe("full-stack integration: one pool, three egress modes", () => {
       scope: "pools",
       poolIds: [MIXED_POOL_ID],
       prices: flatRate,
-      invokeSdk: () => {
+      invokeSdk: (invocation) => {
+        invocation.onUpstreamStarted?.()
         sdkCalls += 1
         return Promise.reject(new Error("the subprocess exited with code 1"))
       },
@@ -2170,7 +2236,8 @@ describe("full-stack integration: one pool, three egress modes", () => {
       pools: [mixedPool()],
       scope: "pools",
       poolIds: [],
-      invokeSdk: () => {
+      invokeSdk: (invocation) => {
+        invocation.onUpstreamStarted?.()
         sdkCalls += 1
         return Promise.resolve(jsonResponse(200, {}))
       },
@@ -2203,7 +2270,8 @@ describe("full-stack integration: one pool, three egress modes", () => {
       pools: [mixedPool()],
       scope: "pools",
       poolIds: [MIXED_POOL_ID],
-      invokeSdk: () => {
+      invokeSdk: (invocation) => {
+        invocation.onUpstreamStarted?.()
         sdkCalls += 1
         return Promise.reject(new Error("the subprocess exited with code 1"))
       },

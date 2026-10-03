@@ -49,7 +49,32 @@ export function readMiniMaxFacts(body: unknown): UpstreamErrorFacts {
   return readErrorFacts(body)
 }
 
+/** Only this provider's declared envelope is inspected on a successful response. */
+export function inspectMiniMaxSuccess(body: unknown) {
+  const parsed = MiniMaxEnvelope.safeParse(body)
+  const code = parsed.success ? parsed.data.base_resp.status_code : 0
+  if (code === 0) return null
+  const value = String(code)
+  const kind = BALANCE_CODES.includes(value)
+    ? "credits-exhausted"
+    : THROTTLE_CODES.includes(value)
+      ? "rate-limited"
+      : AUTH_CODES.includes(value)
+        ? "auth"
+        : INVALID_REQUEST_CODES.includes(value)
+          ? "invalid-request"
+          : "server-error"
+  return {
+    kind,
+    status: 200,
+    retryable: kind !== "invalid-request",
+    signal: `minimax:base_resp-${BALANCE_CODES.includes(value) || THROTTLE_CODES.includes(value) || AUTH_CODES.includes(value) || SERVER_CODES.includes(value) || INVALID_REQUEST_CODES.includes(value) ? value : "unknown"}`,
+    rateLimit: null,
+  } satisfies import("../types").FailureClassification
+}
+
 export const miniMaxDriver = createHttpDriver({
+  responseObservation: { terminalPolicy: "evidence-only", inspectPayload: inspectMiniMaxSuccess },
   id: "minimax",
   surfaces: [{ dialect: "anthropic", baseUrl: BASE_URL, anthropicAuth: "vendor-bearer" }],
   readFacts: readMiniMaxFacts,

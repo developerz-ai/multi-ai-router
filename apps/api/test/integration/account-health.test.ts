@@ -84,7 +84,10 @@ describe("a standing block outlives the process that observed it", () => {
       accounts: [subscriptionAccount("sub")],
       health: hook,
       responses: [() => jsonResponse(500, {})],
-      invokeSdk: () => Promise.reject(new Error("OAuth token has expired")),
+      invokeSdk: (invocation) => {
+        invocation.onUpstreamStarted?.()
+        return Promise.reject(new Error("OAuth token has expired"))
+      },
     })
 
     const res = await app.request("/v1/messages", post(MESSAGE, bearer()))

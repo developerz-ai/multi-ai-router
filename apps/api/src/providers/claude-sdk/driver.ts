@@ -1,7 +1,7 @@
 import type { AccountBilling, AuthKind, Dialect, ProviderId } from "@multi-ai-router/core"
 import { NoHealthyAccountError } from "@multi-ai-router/core"
 import { mapModelAlias } from "../model-alias"
-import type { DriverAccount } from "../types"
+import type { DriverAccount, ResponseObservationDescriptor } from "../types"
 
 /**
  * The Claude subscription transport, as its own contract.
@@ -37,6 +37,7 @@ export interface SdkAccount {
 }
 
 export interface ClaudeSdkDriver {
+  readonly responseObservation?: ResponseObservationDescriptor
   readonly id: ProviderId
   /**
    * The one wire shape this transport produces. Not per-account: the SDK yields its own message

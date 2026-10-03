@@ -13,6 +13,7 @@ import {
   createHealthStore,
   createRouterKeyVerifier,
 } from "../src/services/dataplane"
+import { createActiveRequestRegistry } from "../src/services/dataplane/active-requests"
 import { createUsageRecorder, type UsageRecorder } from "../src/services/usage"
 import type { AppEnv } from "../src/types"
 import {
@@ -69,6 +70,7 @@ export function benchApp(options: BenchAppOptions): BenchApp {
   const key = newRouterKey()
   const metrics = createMetrics()
   const health = createHealthStore()
+  const activeRequests = createActiveRequestRegistry({ maximumEntries: 65_536 })
   const logger = createLogger({ level: LOG_LEVEL, write: () => undefined })
 
   // The real recorder against a writer that keeps nothing: the enqueue is on the request path and
@@ -107,6 +109,7 @@ export function benchApp(options: BenchAppOptions): BenchApp {
       catalog: store,
       health,
       dispatcher: createDispatcher({
+        activeRequests,
         recovery: benchmarkRecovery(store, health),
         catalog: store,
         health,

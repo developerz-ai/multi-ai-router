@@ -37,6 +37,7 @@ function attemptRow(over: Partial<RecentAttemptRow> = {}): RecentAttemptRow {
     egressMode: "passthrough",
     outcome: "success",
     httpStatus: 200,
+    responseStatus: 200,
     errorClass: null,
     latencyMs: 812,
     ttfbMs: 91,

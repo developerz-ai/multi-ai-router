@@ -5,8 +5,6 @@ import {
   QuotaExhaustedError,
 } from "@multi-ai-router/core"
 import {
-  clientRequestIdFrom,
-  correlationIdFrom,
   createUsageRecorder,
   outcomeOf,
   toUsageRecordRow,
@@ -24,6 +22,7 @@ const AT = new Date("2026-01-01T12:00:00.000Z")
 
 function record(overrides: Partial<UsageRecord> = {}): UsageRecord {
   return {
+    eventId: crypto.randomUUID(),
     correlationId: "11111111-1111-4111-8111-111111111111",
     clientRequestId: "req-42",
     attempt: 1,
@@ -48,6 +47,7 @@ function record(overrides: Partial<UsageRecord> = {}): UsageRecord {
     outcome: "success",
     streamed: true,
     httpStatus: 200,
+    responseStatus: 200,
     errorClass: null,
     startedAt: AT,
     finishedAt: AT,
@@ -71,12 +71,13 @@ describe("usage recorder", () => {
     const writer = collectingWriter()
     const recorder = createUsageRecorder(writer)
 
-    recorder.record(record())
+    const event = record()
+    recorder.record(event)
     expect(writer.batches).toHaveLength(0)
     expect(recorder.stats().depth).toBe(1)
 
     await recorder.flush()
-    expect(writer.batches).toEqual([[record()]])
+    expect(writer.batches).toEqual([[event]])
   })
 
   test("writes in batches of the configured size", async () => {
@@ -360,25 +361,6 @@ describe("persistence shape", () => {
 
   test("an unmeasured ttfb is null, never zero", () => {
     expect(toUsageRecordRow(record({ ttfbMs: null })).ttfbMs).toBeNull()
-  })
-})
-
-describe("correlation id vs. the client's request id", () => {
-  test("a caller-supplied id never becomes the join key", () => {
-    // `requestId()` honors any `[A-Za-z0-9_.:-]{1,128}` the client sends. Two clients both sending
-    // `req-1` must not have their attempt chains merged, quite apart from the uuid column.
-    expect(correlationIdFrom("req-42")).toMatch(/^[0-9a-f-]{36}$/)
-    expect(correlationIdFrom("req-42")).not.toBe(correlationIdFrom("req-42"))
-  })
-
-  test("the caller's id is kept instead of discarded", () => {
-    expect(clientRequestIdFrom("req-42")).toBe("req-42")
-  })
-
-  test("a router-minted id is the correlation id and nothing else", () => {
-    const minted = "11111111-1111-4111-8111-111111111111"
-    expect(correlationIdFrom(minted)).toBe(minted)
-    expect(clientRequestIdFrom(minted)).toBeNull()
   })
 })
 

@@ -3,6 +3,7 @@ import type { SdkInvoker, SdkQuotaStore, SessionStore } from "../../providers"
 import type { RateLookup } from "../cost"
 import type { CredentialCipher } from "../crypto/cipher"
 import type { UsageRecord } from "../usage"
+import type { ActiveRequestLease } from "./active-requests"
 import type { SessionKeySource } from "./body/session"
 import type { HealthStore } from "./health"
 import type { ServableCandidate } from "./plan"
@@ -21,6 +22,7 @@ import type { DataPlaneClock, FetchLike, UpstreamOperation } from "./types"
  */
 
 export interface RuntimeInput {
+  readonly activeRequest?: ActiveRequestLease
   readonly recovery?: RecoveryAccess
   readonly quotaSpentThreshold?: number
   readonly unknownResetRetryAfterSeconds?: number
@@ -53,7 +55,9 @@ export interface RuntimeInput {
   readonly sessionKeySource: SessionKeySource
   readonly clock: DataPlaneClock
   readonly timeoutMs: number
+  readonly bodyReadMs?: number
   readonly errorMaxBytes?: number
+  readonly responseObservationMaxBytes?: number
   readonly record: (record: UsageRecord) => void
   /** Correlation id shared by every attempt of this request. */
   readonly correlationId: string
@@ -62,8 +66,8 @@ export interface RuntimeInput {
   /** Exactly what the client asked for. Never substituted. */
   readonly model: string
   /**
-   * The client's own `x-request-id`, when it sent one that is not already a UUID. Null when the
-   * router minted the id. It is a trace label, never the join key — see `clientRequestIdFrom`.
+   * The client's own safe `x-request-id`, including UUIDs. Null when no label was supplied.
+   * Provenance is explicit; the label is never the attempt join key.
    */
   readonly clientRequestId: string | null
   /** Which ingress surface the client called. Fixed per route, never sniffed from the body. */
@@ -157,7 +161,7 @@ export function createRuntime(input: RuntimeInput): DispatchRuntime {
       accountId: null,
       poolId: null,
       provider: null,
-      upstreamModel: input.model,
+      upstreamModel: null,
       egressMode: null,
     }),
 
@@ -167,6 +171,7 @@ export function createRuntime(input: RuntimeInput): DispatchRuntime {
         startedAt,
         finishedAt: input.clock.now(),
         latencyMs: elapsed - attemptStarted,
+        bodyReadMs: input.bodyReadMs ?? 0,
         totalMs: elapsed - input.requestStarted,
         upstreamMs,
         // Measured from when the request entered the router, not from when this attempt began:

@@ -1,9 +1,9 @@
 import type { RouterError } from "@multi-ai-router/core"
 import { type FailoverOptions, selectAccounts } from "../routing"
-import { clientRequestIdFrom, correlationIdFrom } from "../usage"
+import { createRequestIdentity, type UsageRequestIdentity } from "../usage/request-identity"
 import { missingModelError, modelTooLongError, refuseEncodedBody } from "./body/preflight"
-import { readRequestBody } from "./body/read"
 import { DEFAULT_SESSION_HEADERS, resolveSessionKey } from "./body/session"
+import { readTrackedRequestBody } from "./body-progress"
 import { runChain } from "./chain"
 import type { Dispatcher, DispatcherDeps, DispatchInput } from "./dispatcher-config"
 import { DEFAULT_UPSTREAM_TIMEOUT_MS } from "./dispatcher-config"
@@ -13,6 +13,8 @@ import { outcomeForResponse, type RequestProgress, sampleOf, streamed } from "./
 import { planCandidates } from "./plan"
 import { attemptRecord, errorClassOf, outcomeOf } from "./records"
 import { hintRecoveryRejections } from "./recovery-hints"
+import { createRequestAccounting } from "./request-accounting"
+import { requestLifetime } from "./request-lifetime"
 import { createRotationCounters } from "./rotation"
 import { createRuntime } from "./runtime"
 import { sessionBindings } from "./session-binding"
@@ -32,13 +34,8 @@ import { unservableError } from "./unservable"
  * scanned incrementally for two fields, the snapshot is assembled from warm memory, and selection
  * is a pure function. Nothing here opens a socket or touches Postgres.
  *
- * A failure in preflight still writes a `UsageRecord` **once the body has named a model** — an
- * attempt that failed before selection has no account, and the spec wants that row anyway, because
- * "nothing in this key's scope" is exactly the kind of failure an operator needs to see counted.
- * The refusals *before* a model exists write none, deliberately: `UsageRecord.model` is
- * non-nullable by design, so a row for a key over its ceiling, an unreadable or compressed body, or
- * a body that names no model (or one too long to be one) would have to claim a model nobody named. Those
- * refusals are counted on `router_requests_total` by the request observer below instead.
+ * Every authenticated refusal is accounted for, including those before a model is known.
+ * Missing model/account/upstream facts stay null; no selected account is charged for preparation.
  */
 
 /**
@@ -55,25 +52,22 @@ export function createDispatcher(deps: DispatcherDeps): Dispatcher {
   // Per pool, per replica, in memory — the caller-owned half of `round-robin` (`rotation.ts`).
   const rotation = createRotationCounters()
 
-  /**
-   * The request itself. `progress` carries the two readings the observer needs but only this
-   * function learns: when the request started, and what model its body named.
-   */
-  const serve = async (input: DispatchInput, progress: RequestProgress): Promise<Response> => {
+  /** Progress shares the request start and discovered model with accounting. */
+  const serve = async (
+    input: DispatchInput & { readonly identity: UsageRequestIdentity },
+    progress: RequestProgress,
+    record: ReturnType<typeof createRequestAccounting>["record"],
+  ): Promise<Response> => {
     const { startedAt, requestStarted } = progress
     const operation = input.operation ?? "messages"
 
-    // Before the body: refusing a key over its ceiling must cost less than serving it, and no
-    // usage row is written because nothing was attempted — the refusal is counted on
-    // `router_requests_total{outcome="key_rate_limited"}` by the observer below.
     const limit = deps.limiter?.check(input.key, startedAt.getTime())
     if (limit !== undefined && !limit.allowed) throw keyRateLimitedError(input.key, limit)
 
-    // A header read, before the body: the scanner cannot find a model in compressed bytes, and
-    // "must name a model" is the wrong answer to a body that named one (`body/preflight.ts`).
     refuseEncodedBody(input.request.headers)
 
-    const body = await readRequestBody(input.request, options.body)
+    const body = await readTrackedRequestBody(input.request, options.body, progress, clock)
+    input.request.signal.throwIfAborted()
     const model = body.fields.model
     // Before the "name a model" refusal, because the body *did* name one and saying otherwise
     // sends a caller looking for a missing field. Refused rather than truncated: a shortened
@@ -89,11 +83,12 @@ export function createDispatcher(deps: DispatcherDeps): Dispatcher {
       options.sessionHeaders ?? DEFAULT_SESSION_HEADERS,
     )
 
-    // Read before selection because selection may not overrule it: an SDK session id resumes only
-    // on the account that minted it, so this is persisted truth, not a routing preference.
-    const binding = await bindings.read(input.key.id, session.key)
+    // A bound SDK session belongs to its original account before routing selection.
+    const binding = deps.sessions ? await bindings.read(input.key.id, session.key) : undefined
+    input.request.signal.throwIfAborted()
 
     const runtime = createRuntime({
+      ...(input.activeRequest === undefined ? {} : { activeRequest: input.activeRequest }),
       health: deps.health,
       ...(options.selection?.unknownResetRetryAfterSeconds === undefined
         ? {}
@@ -114,12 +109,14 @@ export function createDispatcher(deps: DispatcherDeps): Dispatcher {
       ...(options.upstreamErrorMaxBytes === undefined
         ? {}
         : { errorMaxBytes: options.upstreamErrorMaxBytes }),
-      record: (record) => deps.usage.record(record),
+      bodyReadMs: progress.bodyReadMs,
+      responseObservationMaxBytes: options.responseObservationMaxBytes ?? 65_536,
+      record,
       // Two different ids on purpose: the correlation id is router-owned and joins this
       // request's attempts, while the client's own id is a trace label a caller may repeat or
       // forge. Using the latter as the join key would merge two clients' chains.
-      correlationId: correlationIdFrom(input.requestId),
-      clientRequestId: clientRequestIdFrom(input.requestId),
+      correlationId: input.identity.correlationId,
+      clientRequestId: input.identity.clientRequestId,
       apiKeyId: input.key.id,
       sessionKey: session.key,
       model,
@@ -204,8 +201,7 @@ export function createDispatcher(deps: DispatcherDeps): Dispatcher {
       })
     }
 
-    // Injected, never read off a clock inside a translator: the same recorded body must convert to
-    // the same bytes in a test as it does on the wire.
+    // Injected clock: identical recorded bodies convert to identical bytes.
     const translation = {
       created: Math.floor(startedAt.getTime() / 1000),
       model,
@@ -259,23 +255,37 @@ export function createDispatcher(deps: DispatcherDeps): Dispatcher {
 
   return {
     async dispatch(input) {
+      const scopedInput = {
+        ...input,
+        identity: input.identity ?? createRequestIdentity(input.requestId),
+      }
       const progress: RequestProgress = {
         startedAt: clock.now(),
         requestStarted: clock.elapsed(),
         model: null,
+        bodyReadMs: 0,
       }
-      if (observe === undefined) return serve(input, progress)
-
+      const accounting = createRequestAccounting(scopedInput, progress, clock, (event) =>
+        deps.usage.record(event),
+      )
       const identity = { ingressDialect: input.ingress, keyId: input.key.id }
+      const lifetime = requestLifetime(scopedInput, deps.activeRequests, accounting)
       try {
-        const response = await serve(input, progress)
-        observe(
+        lifetime.assertAvailable()
+        const response = await serve(
+          { ...lifetime.input, identity: scopedInput.identity },
+          progress,
+          lifetime.record,
+        )
+        accounting.respond(response)
+        observe?.(
           sampleOf(identity, progress, outcomeForResponse(response), clock, streamed(response)),
         )
         return response
       } catch (error) {
-        observe(sampleOf(identity, progress, outcomeOf(error), clock, false))
-        throw error
+        const { error: failure, outcome } = lifetime.fail(error)
+        observe?.(sampleOf(identity, progress, outcome, clock, false))
+        throw failure
       }
     },
   }

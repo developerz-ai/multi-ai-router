@@ -23,6 +23,7 @@ import {
 } from "./fields"
 import { validateNumericBounds } from "./numeric-bounds"
 import { RECOVERY_ENV_FIELDS, readRecoveryEnv } from "./recovery"
+import { RELAY_LIFETIME_ENV_FIELDS, readRelayLifetimesEnv } from "./relay-lifetimes"
 
 /**
  * Boot-time environment validation — the reference is
@@ -349,6 +350,8 @@ export interface FailoverConfig {
   readonly upstreamTimeoutMs: number
   /** Maximum failed-response bytes inspected before closing the upstream body. */
   readonly upstreamErrorMaxBytes: number
+  /** Bounded success-body observation; relayed bytes are never delayed. */
+  readonly responseObservationMaxBytes: number
   /**
    * What a request does when its session is bound to an account that is merely cooling down.
    *
@@ -657,6 +660,7 @@ export interface Env {
   readonly adminAuth: AdminAuthConfig
   readonly dataPlane: DataPlaneConfig
   readonly failover: FailoverConfig
+  readonly relayLifetimes: ReturnType<typeof readRelayLifetimesEnv>["relayLifetimes"]
   readonly background: ReturnType<typeof readBackgroundEnv>["background"]
   readonly scheduler: SchedulerConfig
   readonly oauthRefresh: OAuthRefreshConfig
@@ -696,6 +700,7 @@ export { decodeEncryptionKey, ZERO_IS_LEGAL } from "./fields"
  */
 export const ENV_FIELDS = {
   ...BACKGROUND_ENV_FIELDS,
+  ...RELAY_LIFETIME_ENV_FIELDS,
   ...CLI_OWNERSHIP_ENV_FIELDS,
   ...RECOVERY_ENV_FIELDS,
   PORT: wholeNumber.refine((value) => value <= 65_535, "must be at most 65535").optional(),
@@ -857,6 +862,9 @@ export const ENV_FIELDS = {
   UPSTREAM_ERROR_MAX_BYTES: atLeastOne
     .refine((value) => value <= 33_554_432, "must be at most 33554432")
     .optional(),
+  UPSTREAM_RESPONSE_OBSERVATION_MAX_BYTES: atLeastOne
+    .refine((value) => value <= 1_048_576, "must be at most 1048576")
+    .optional(),
   TRANSLATE_DEFAULT_MAX_TOKENS: atLeastOne.optional(),
 } as const
 
@@ -982,6 +990,7 @@ const envSchema = boundedEnvSchema.transform((raw, ctx): Env => {
   return {
     ...readRecoveryEnv(raw),
     ...readBackgroundEnv(raw),
+    ...readRelayLifetimesEnv(raw),
     ...readCliOwnershipEnv(raw),
     port: raw.PORT ?? 8080,
     serverIdleTimeoutSeconds:
@@ -1156,6 +1165,7 @@ const envSchema = boundedEnvSchema.transform((raw, ctx): Env => {
       unknownResetRetryAfterSeconds: raw.ROUTING_UNKNOWN_RESET_RETRY_AFTER_SECONDS ?? 30,
       upstreamTimeoutMs: raw.UPSTREAM_TIMEOUT_MS ?? 600_000,
       upstreamErrorMaxBytes: raw.UPSTREAM_ERROR_MAX_BYTES ?? 65_536,
+      responseObservationMaxBytes: raw.UPSTREAM_RESPONSE_OBSERVATION_MAX_BYTES ?? 65_536,
       boundAccountCoolingDown: raw.ROUTING_BOUND_ACCOUNT_COOLING_DOWN ?? "fail",
     },
     translation: {

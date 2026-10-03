@@ -5,6 +5,8 @@ import type { RateLookup } from "../cost"
 import type { CredentialCipher } from "../crypto/cipher"
 import type { FailoverOptions, SelectionOptions } from "../routing"
 import type { UsageRecorder } from "../usage"
+import type { UsageRequestIdentity } from "../usage/request-identity"
+import type { ActiveRequestLease, ActiveRequestRegistry } from "./active-requests"
 import type { VerifiedKey } from "./auth/verifier"
 import type { BodyReadOptions } from "./body/read"
 import type { HealthStore } from "./health"
@@ -32,6 +34,7 @@ export interface DispatchOptions {
   readonly sessionHeaders?: readonly string[]
   readonly upstreamTimeoutMs?: number
   readonly upstreamErrorMaxBytes?: number
+  readonly responseObservationMaxBytes?: number
   readonly translation?: TranslationOptions
   readonly log?: LogOptions
 }
@@ -62,8 +65,10 @@ export interface TranslationOptions {
 
 /** Long, because a long completion is a normal response, not a hung one. Configurable. */
 export const DEFAULT_UPSTREAM_TIMEOUT_MS = 600_000
+export const DEFAULT_RESPONSE_OBSERVATION_MAX_BYTES = 65_536
 
 export interface DispatcherDeps {
+  readonly activeRequests?: ActiveRequestRegistry
   readonly recovery?: RecoveryAccess
   readonly catalog: RoutingCatalog
   readonly health: HealthStore
@@ -104,6 +109,7 @@ export interface DispatcherDeps {
 }
 
 export interface DispatchInput {
+  readonly activeRequest?: ActiveRequestLease
   readonly ingress: Dialect
   /**
    * What the called route asks of an Account. Omitted is `messages` — inference, which is what
@@ -117,6 +123,8 @@ export interface DispatchInput {
   readonly key: VerifiedKey
   /** The correlation id assigned at ingress and propagated end to end. */
   readonly requestId: string
+  /** Production ingress supplies explicit caller-label provenance. */
+  readonly identity?: UsageRequestIdentity
 }
 
 export interface Dispatcher {

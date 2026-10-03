@@ -3,6 +3,7 @@ import type { UsageRecord } from "../../../src/services/usage/record"
 import { createUsageRecorder } from "../../../src/services/usage/recorder"
 
 const record: UsageRecord = {
+  eventId: crypto.randomUUID(),
   correlationId: crypto.randomUUID(),
   clientRequestId: null,
   attempt: 1,
@@ -27,6 +28,7 @@ const record: UsageRecord = {
   outcome: "success",
   streamed: false,
   httpStatus: 200,
+  responseStatus: 200,
   errorClass: null,
   startedAt: new Date(0),
   finishedAt: new Date(1),

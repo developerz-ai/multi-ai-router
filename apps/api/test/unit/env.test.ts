@@ -473,6 +473,7 @@ describe("parseEnv", () => {
         unknownResetRetryAfterSeconds: 30,
         upstreamTimeoutMs: 600_000,
         upstreamErrorMaxBytes: 65_536,
+        responseObservationMaxBytes: 65_536,
         boundAccountCoolingDown: "fail",
       })
     })

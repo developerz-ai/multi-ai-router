@@ -200,12 +200,19 @@ describe("the upstream span opens when the transport is called, not when the att
       },
     })
 
-    await expect(runChain(it.context)).rejects.toThrow()
+    await expect(runChain(it.context)).rejects.toMatchObject({ status: 503 })
 
     const row = it.rows[0]
-    expect(row?.outcome).toBe("upstream_error")
+    expect(row?.outcome).toBe("no_healthy_account")
+    expect(row?.accountId).toBeNull()
+    expect(row?.provider).toBeNull()
     expect(row?.httpStatus).toBeNull()
+    // Direct chain fixture has no ingress accounting finalizer to stamp the client status.
+    expect(row?.responseStatus).toBeNull()
+    expect(row?.latencyMs).toBe(TRANSLATE_MS + DECRYPT_MS)
     expect(row?.routerOverheadMs).toBe(TRANSLATE_MS + DECRYPT_MS)
+    expect(it.context.runtime.health.stateOf("or-1").breaker.consecutiveFailures).toBe(0)
+    expect(it.context.runtime.health.stateOf("or-1").inFlight).toBe(0)
   })
 
   test("a body with no faithful conversion charges its refusal to the router", async () => {
@@ -323,10 +330,14 @@ describe("leaving a bound account mid-chain is surfaced", () => {
     const runtime = createRuntime({
       health: createHealthStore({ jitter: () => 0 }),
       cipher: CRYPTOR,
-      // Only the HTTP candidate reaches here; the SDK one fails first for want of a transport.
+      // HTTP answers after the started subscription attempt fails.
       call: () => Promise.resolve(jsonResponse(200, { type: "message", content: [] })),
-      // No `invokeSdk`: the subscription attempt fails by name, retryably — the shape of any
-      // mid-chain failure on the bound account, without stubbing the SDK itself.
+      // This fixture represents an actual provider failure after a physical SDK start.
+      invokeSdk: async (input) => {
+        input.beforeUpstreamStart?.()
+        input.onUpstreamStarted?.()
+        throw new Error("offline provider subprocess crashed after start")
+      },
       sessionKeySource: "header",
       clock: testClock,
       timeoutMs: 30_000,

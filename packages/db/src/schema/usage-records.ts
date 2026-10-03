@@ -6,6 +6,7 @@ import {
   integer,
   numeric,
   pgTable,
+  smallint,
   text,
   timestamp,
   uuid,
@@ -71,7 +72,7 @@ export const usageRecords = pgTable(
     sessionKey: text("session_key"),
 
     /** The model the client asked for. Never substituted, only aliased per account. */
-    model: text("model").notNull(),
+    model: text("model"),
     /**
      * The name actually put on the wire, after the account's alias map. Equal to
      * `model` when no alias applied.
@@ -131,6 +132,8 @@ export const usageRecords = pgTable(
     streamed: boolean("streamed").notNull().default(false),
     /** The upstream's status when it answered. NULL means we never reached it. */
     httpStatus: integer("http_status"),
+    /** Actual client-facing response status; NULL on intermediate attempts or legacy rows. */
+    responseStatus: smallint("response_status"),
     /**
      * The thrown class's name — never a message, never a body. Redundant with
      * `outcome` for a `RouterError`, and the only signal there is when `outcome`

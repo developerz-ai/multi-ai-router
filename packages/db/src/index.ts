@@ -138,7 +138,7 @@ export type {
   UsageRecentRepository,
 } from "./repositories/usage-recent-repository"
 export { createUsageRecentRepository } from "./repositories/usage-recent-repository"
-export type { UsageRecordRepository } from "./repositories/usage-repository"
+export type { UsageRecordInsert, UsageRecordRepository } from "./repositories/usage-repository"
 export {
   createUsageRecordRepository,
   PG_MAX_BIND_PARAMETERS,
