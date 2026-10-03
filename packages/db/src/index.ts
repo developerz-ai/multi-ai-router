@@ -10,7 +10,13 @@ export type { AdvisoryLockRun } from "./advisory-lock"
 
 // --- leader election --------------------------------------------------------
 export { advisoryLockKey, advisoryUnlock, tryAdvisoryLock, withAdvisoryLock } from "./advisory-lock"
-export type { Database, DatabaseHandle, DatabaseOptions, SqlConnection } from "./client"
+export type {
+  Database,
+  DatabaseExecutor,
+  DatabaseHandle,
+  DatabaseOptions,
+  SqlConnection,
+} from "./client"
 // --- connection -------------------------------------------------------------
 export { createDatabase, DATABASE_POOL_DEFAULTS } from "./client"
 export type { MigrateOptions } from "./migrate"
@@ -32,12 +38,24 @@ export {
   ADMIN_CREDENTIAL_SINGLETON,
   createAdminCredentialRepository,
 } from "./repositories/admin-credential-repository"
+export { AdminMutationConflictError } from "./repositories/admin-mutation-conflict"
+export type {
+  AdminMutationRepository,
+  AdminMutationScope,
+  AdminMutationSubject,
+} from "./repositories/admin-mutation-repository"
+export { createAdminMutationRepository } from "./repositories/admin-mutation-repository"
 export type { AdminSessionRepository } from "./repositories/admin-session-repository"
 export { createAdminSessionRepository } from "./repositories/admin-session-repository"
 export type { ApiKeyRepository } from "./repositories/api-key-repository"
 export { createApiKeyRepository } from "./repositories/api-key-repository"
 export type { AppendAuditEventInput, AuditRepository } from "./repositories/audit-repository"
 export { createAuditRepository } from "./repositories/audit-repository"
+export type {
+  CatalogSnapshotRepository,
+  CatalogSnapshotRows,
+} from "./repositories/catalog-snapshot-repository"
+export { createCatalogSnapshotRepository } from "./repositories/catalog-snapshot-repository"
 export type {
   AccountCatalogAge,
   ModelCatalogEntry,

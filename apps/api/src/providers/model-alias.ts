@@ -1,3 +1,4 @@
+import { ownEntry } from "@multi-ai-router/core"
 import type { DriverAccount } from "./types"
 
 /**
@@ -11,7 +12,6 @@ import type { DriverAccount } from "./types"
  * the same model, which is the upstream's call to make.
  */
 export function mapModelAlias(account: DriverAccount, requestedModel: string): string {
-  const aliases = account.modelAliases
-  if (!aliases) return requestedModel
-  return aliases[requestedModel] ?? requestedModel
+  const alias = ownEntry(account.modelAliases, requestedModel)
+  return typeof alias === "string" ? alias : requestedModel
 }

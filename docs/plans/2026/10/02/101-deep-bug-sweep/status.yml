@@ -4,16 +4,16 @@ status: in_progress        # not_started | in_progress | blocked | complete | su
 created_by: sebi
 worked_by: "Codex team"
 owner: sebi
-percent: 16
-current_focus: "Wave 1 verification and review; next: routing/database consistency and OAuth support."
+percent: 20
+current_focus: "Wave 2 snapshot freshness, overflow bindings and key limiter coherence under review; next: OAuth lifecycle."
 slices:
   - file: 01-edge-auth-security.md
     status: in_progress
-    percent: 43
+    percent: 52
     findings: 23
   - file: 02-routing-state-persistence.md
-    status: not_started
-    percent: 0
+    status: in_progress
+    percent: 11
     findings: 18
   - file: 03-providers-claude-sdk.md
     status: in_progress
@@ -32,10 +32,12 @@ slices:
     percent: 0
     findings: 8
 evidence:
+  - "102-full-router-audit/evidence/wave2-bench.json: 8000 requests, zero failures/buffered streams; max p99 0.69 ms; no budget violations."
+  - "Wave 2: pinned Bun 1.4.2 bin/check with disposable PostgreSQL: 4417 tests passed, zero failed; lint, typecheck and build passed. Review/CI/merge pending."
   - "Pinned Bun 1.4.2; bin/check with disposable PostgreSQL: 4326 tests passed, zero failed; build passed."
   - "102-full-router-audit/evidence/wave1-bench.json: 8000 requests, zero failures/buffered streams; max p99 1.28 ms."
 notes: "Wave 1 implements credential boundaries, authentication races and SDK isolation. 01.14 not reproduced on real full-body POST with Bun 1.4.0 or pinned 1.4.2: idle=2s, response delayed 7s still succeeds; unconsumed GET reproduces idle close. 01.16 transport failures fixed; clean HTTP-200 protocol error frames remain open. #87 current literal removed; operational rotation remains open."
-last_updated: 2026-10-02
+last_updated: 2026-10-03
 # Percentages measure locally resolved findings; review, release and deployment remain separate gates.
 resolved_findings:
   - "01.2"
@@ -54,3 +56,7 @@ resolved_findings:
   - "03.9"
   - "03.10"
   - "03.11"
+  - "01.12"
+  - "01.18"
+  - "02.5"
+  - "02.12"

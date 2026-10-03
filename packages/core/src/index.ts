@@ -83,5 +83,6 @@ export {
   ROUTER_KEY_RANDOM_LENGTH,
   routerKeyDisplayPrefix,
 } from "./ids"
+export { ownEntry } from "./own-entry"
 export { scrubCredentials } from "./scrub-credentials"
 export { UNKNOWN_REVISION, VERSION } from "./version"

@@ -207,6 +207,11 @@ describing an unbuilt capability are marked. Track progress in
 
 ### Working on it
 
+Use the exact Bun version in [`.bun-version`](.bun-version), also pinned in CI and the
+container. Select it with your runtime manager or put that version's binary on `PATH`.
+`bin/setup` and `bin/check` verify it before installing dependencies or checking the database;
+they report a missing or mismatched version without installing a runtime for you.
+
 `bin/` is the interface — three commands are the whole contract:
 
 ```bash

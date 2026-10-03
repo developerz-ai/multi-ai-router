@@ -127,16 +127,18 @@ function resolveGroup(
   options: SelectionOptions,
 ): ResolvedGroup {
   const filtered = filterCandidates(group.members, request.model, snapshot.now, options)
-  if (filtered.eligible.length > 0 || group.overflow === null) {
+  const boundOverflow = group.overflow?.account.id === request.binding?.accountId
+  if ((filtered.eligible.length > 0 && !boundOverflow) || group.overflow === null) {
     return { ...filtered, notes: [], usedOverflow: false }
   }
 
   // Overflow: a member of last resort, invisible to the policy until the primary set is empty
-  // after filtering. Not on a single 429, not on latency — and still inside the key's scope.
+  // after filtering. An existing healthy overflow binding also stays eligible when primary
+  // accounts recover: moving it would abandon its upstream session. Scope and health still apply.
   const verdict = evaluateCandidate(group.overflow, request.model, snapshot.now, options)
   if (!verdict.ok) {
     return {
-      eligible: [],
+      eligible: filtered.eligible,
       rejected: [...filtered.rejected, verdict.rejected],
       notes: [],
       usedOverflow: false,
@@ -144,7 +146,7 @@ function resolveGroup(
   }
 
   return {
-    eligible: [verdict.candidate],
+    eligible: [...filtered.eligible, verdict.candidate],
     rejected: filtered.rejected,
     notes: [{ kind: "overflow-engaged", accountId: verdict.candidate.account.id }],
     usedOverflow: true,

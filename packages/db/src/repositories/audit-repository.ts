@@ -1,5 +1,5 @@
 import { desc, eq } from "drizzle-orm"
-import type { Database } from "../client"
+import type { DatabaseExecutor } from "../client"
 import { type AuditDetail, type AuditEventRow, auditEvents } from "../schema/audit-events"
 import { deleteOldestBatch } from "./bounded-delete"
 
@@ -41,7 +41,7 @@ export interface AppendAuditEventInput {
   readonly detail?: AuditDetail | null
 }
 
-export function createAuditRepository(db: Database): AuditRepository {
+export function createAuditRepository(db: DatabaseExecutor): AuditRepository {
   return {
     append: async (input) => {
       const rows = await db

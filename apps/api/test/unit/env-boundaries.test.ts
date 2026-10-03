@@ -72,6 +72,36 @@ describe("numeric configuration boundaries", () => {
   })
 })
 
+describe("admin session persistence interval", () => {
+  for (const seconds of ["60", "61"]) {
+    test(`rejects a ${seconds}s touch interval with a one-minute idle window`, () => {
+      rejects("ADMIN_SESSION_TOUCH_INTERVAL_SECONDS", seconds, {
+        ADMIN_SESSION_IDLE_MINUTES: "1",
+      })
+    })
+  }
+
+  test("checks the default touch interval against a configured idle window", () => {
+    expect(() => parseEnv({ ...base, ADMIN_SESSION_IDLE_MINUTES: "1" })).toThrow(
+      /ADMIN_SESSION_TOUCH_INTERVAL_SECONDS/,
+    )
+  })
+
+  test("keeps shorter intervals, eager persistence and the ordinary defaults", () => {
+    for (const seconds of ["0", "59"]) {
+      const env = parseEnv({
+        ...base,
+        ADMIN_SESSION_IDLE_MINUTES: "1",
+        ADMIN_SESSION_TOUCH_INTERVAL_SECONDS: seconds,
+      })
+      expect(env.adminAuth.sessionTouchIntervalSeconds).toBe(Number(seconds))
+    }
+    const env = parseEnv(base)
+    expect(env.adminAuth.sessionIdleMinutes).toBe(43_200)
+    expect(env.adminAuth.sessionTouchIntervalSeconds).toBe(60)
+  })
+})
+
 describe("OIDC boot boundaries", () => {
   for (const variable of ["ADMIN_OIDC_ISSUER_URL", "ADMIN_OIDC_REDIRECT_URI"]) {
     for (const value of [

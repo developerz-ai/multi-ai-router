@@ -3,6 +3,7 @@
  * nothing outside this directory reaches into a file inside it.
  */
 
+export type { KeyMutationKind } from "./mutations"
 export type { CreateKeyBody, KeyScopeInput, RateLimitInput, UpdateKeyBody } from "./schemas"
 export { createKeyBody, keyScopeInput, rateLimitInput, updateKeyBody } from "./schemas"
 export type { ResolvedScope, ScopeResolverDeps } from "./scope"

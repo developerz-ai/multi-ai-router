@@ -233,18 +233,27 @@ It refreshes three ways, and the three cover different failure modes:
 | **After an admin write**, awaited before the response is written | Makes the console **read-after-write consistent**. An operator who adds an account and immediately fires a request gets the account they just added. Affordable precisely because this is the admin plane, where no latency budget applies |
 | **On a jittered timer** (`CATALOG_REFRESH_SECONDS`) | The only mechanism that copes with a **second replica**. There is no broker, so a write made by another process arrives no other way — which makes the interval a bound on staleness, not a cache nicety |
 
+Account, pool, membership and quota rows are read in one read-only, repeatable-read database
+transaction. An edit committed by another replica cannot mix an old pool policy with new members
+in the same installed snapshot.
+
 Three consequences worth stating, because each is a decision rather than an implementation detail:
 
 - **A failed refresh keeps the previous snapshot.** Serving slightly stale routing beats serving
   none: the alternative is a total outage because one periodic query timed out.
-- **Concurrent refreshes share one in-flight promise.** Two identical queries racing to install the
-  same snapshot is waste, not safety.
+- **Ordinary refreshes share one in-flight read.** A post-mutation refresh instead waits for an
+  installed snapshot read after that mutation. Concurrent mutations can share a trailing read;
+  a later mutation during that read requires another. Obsolete reads never install, and an old
+  read failure does not prevent the required trailing read. Routing, pricing and model catalogs
+  share this rule.
 - **Disabled accounts stay in the catalog.** Filtering is routing's job, and a catalog that hides
   them makes "why did nothing match" unanswerable.
 
-The write-through decorators live in `services/admin/coherence.ts` and are **decorators, not
-service dependencies**: cache coherence is not a CRUD service's reason to change, and a service
-that knew about the catalog could no longer be tested without one.
+Coherence adapters live in `services/admin/coherence.ts`. Key and pool services report committed
+mutations before mapping their responses; the composition root invalidates authorization or awaits
+the catalog barrier. Services do not know which caches those callbacks reach. Their row, related
+scope/membership rows and redacted audit events commit in one repository-owned transaction, and
+response construction uses the captured committed data without another database read.
 
 ### The composition root
 

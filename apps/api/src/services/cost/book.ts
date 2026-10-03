@@ -1,5 +1,6 @@
 import type { ProviderId } from "@multi-ai-router/core"
 import type { PriceOverrideRow } from "@multi-ai-router/db"
+import { createSnapshotRefresh } from "../snapshots/refresh"
 import { lookupRates } from "./prices"
 import { type ModelRates, modelLookupKeys } from "./rates"
 
@@ -32,6 +33,8 @@ export interface PriceBook {
   lookup(provider: ProviderId, model: string): ModelRates | null
   /** Re-reads the overrides. Rejects on failure, leaving the last good snapshot in place. */
   refresh(): Promise<void>
+  /** Waits for an installed snapshot whose read began after this mutation committed. */
+  refreshAfterMutation(): Promise<void>
   /** Begins periodic refresh. Idempotent. */
   start(): void
   stop(): void
@@ -59,22 +62,10 @@ export function createPriceBook(deps: PriceBookDeps): PriceBook {
   let overrides: Overrides = EMPTY
   let loadedAt: Date | null = null
   let timer: ReturnType<typeof setTimeout> | null = null
-  // Concurrent refreshes would be two identical queries racing to install the same snapshot;
-  // callers share the one in flight instead.
-  let inFlight: Promise<void> | null = null
-
-  const refresh = (): Promise<void> => {
-    inFlight ??= deps
-      .load()
-      .then((rows) => {
-        overrides = index(rows)
-        loadedAt = now()
-      })
-      .finally(() => {
-        inFlight = null
-      })
-    return inFlight
-  }
+  const { refresh, refreshAfterMutation } = createSnapshotRefresh(deps.load, (rows) => {
+    overrides = index(rows)
+    loadedAt = now()
+  })
 
   const schedule = (): void => {
     timer = setTimeout(() => {
@@ -99,6 +90,7 @@ export function createPriceBook(deps: PriceBookDeps): PriceBook {
       return lookupRates(provider, model)
     },
     refresh,
+    refreshAfterMutation,
     start: () => {
       if (timer === null) schedule()
     },

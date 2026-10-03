@@ -197,8 +197,9 @@ export function createOIDCFlow(deps: OIDCFlowDeps): OIDCFlow {
     async complete({ code, state }) {
       let principal: { email: string; subject: string } | null = null
       try {
-        const doc = await discover()
+        // Invalid callbacks must not turn a cold process into an unauthenticated IdP probe.
         const consumed = await stateStore.consume(state)
+        const doc = await discover()
         const tokenResponse = await exchangeCode(doc.token_endpoint, code, consumed.codeVerifier)
         const verified = await verifyIdToken(
           {

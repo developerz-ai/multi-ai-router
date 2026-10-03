@@ -1,4 +1,9 @@
-import type { ContextTable, ContextWindow, ProviderId } from "@multi-ai-router/core"
+import {
+  type ContextTable,
+  type ContextWindow,
+  ownEntry,
+  type ProviderId,
+} from "@multi-ai-router/core"
 import { modelLookupKeys } from "../../cost"
 import { ANTHROPIC_WINDOWS } from "./anthropic"
 import { MINIMAX_WINDOWS } from "./minimax"
@@ -56,5 +61,5 @@ export function lookupContextWindow(provider: ProviderId, model: string): Contex
   const table = WINDOWS[provider]
   if (table === undefined) return null
   const [name, family] = modelLookupKeys(model)
-  return table[name] ?? table[family] ?? null
+  return ownEntry(table, name) ?? ownEntry(table, family) ?? null
 }

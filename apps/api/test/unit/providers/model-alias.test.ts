@@ -45,6 +45,28 @@ describe("mapModelAlias", () => {
   test("an empty map is passthrough, not an error", () => {
     expect(mapModelAlias(account({ modelAliases: {} }), "sonnet")).toBe("sonnet")
   })
+
+  for (const name of ["constructor", "toString", "__proto__"]) {
+    test(`does not resolve inherited ${name}, but honors an explicit mapping`, () => {
+      expect(mapModelAlias(account({ modelAliases: {} }), name)).toBe(name)
+      const modelAliases = Object.fromEntries([[name, "approved-model"]])
+      expect(mapModelAlias(account({ modelAliases }), name)).toBe("approved-model")
+    })
+  }
+
+  test("ignores string aliases inherited from another object", () => {
+    const modelAliases: Record<string, string> = {}
+    Object.setPrototypeOf(modelAliases, { sonnet: "ambient-model" })
+    expect(mapModelAlias(account({ modelAliases }), "sonnet")).toBe("sonnet")
+  })
+
+  test("malformed persisted alias values cannot replace a model string", () => {
+    for (const value of [42, null, false, {}, []]) {
+      // Simulate an old or externally written row that bypassed the admin schema.
+      const modelAliases = JSON.parse(JSON.stringify({ sonnet: value })) as Record<string, string>
+      expect(mapModelAlias(account({ modelAliases }), "sonnet")).toBe("sonnet")
+    }
+  })
 })
 
 describe("every driver exposes the same mapping", () => {

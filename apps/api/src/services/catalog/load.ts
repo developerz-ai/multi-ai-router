@@ -1,10 +1,5 @@
 import type { QuotaWindowState } from "@multi-ai-router/core"
-import type {
-  AccountRepository,
-  AccountRow,
-  PoolRepository,
-  QuotaWindowRow,
-} from "@multi-ai-router/db"
+import type { AccountRow, CatalogSnapshotRepository, QuotaWindowRow } from "@multi-ai-router/db"
 import type { RoutableAccount } from "../dataplane"
 import type { PoolSnapshot } from "../routing"
 
@@ -16,10 +11,7 @@ import type { PoolSnapshot } from "../routing"
  * (docs/idea/01-architecture.md, performance budget).
  */
 
-export interface CatalogSources {
-  readonly accounts: Pick<AccountRepository, "list" | "listQuotaWindows">
-  readonly pools: Pick<PoolRepository, "list" | "listMembersForPools">
-}
+export type CatalogSources = Pick<CatalogSnapshotRepository, "read">
 
 export interface CatalogData {
   readonly accounts: readonly RoutableAccount[]
@@ -27,16 +19,14 @@ export interface CatalogData {
 }
 
 export async function loadCatalog(sources: CatalogSources): Promise<CatalogData> {
-  // Two queries, not one per pool: membership for every pool arrives in a single
-  // statement. A refresh is off the request path but still runs on a timer.
-  const [accountRows, poolRows] = await Promise.all([
-    sources.accounts.list({}),
-    sources.pools.list(),
-  ])
-  const [members, windowRows] = await Promise.all([
-    sources.pools.listMembersForPools(poolRows.map((pool) => pool.id)),
-    sources.accounts.listQuotaWindows(accountRows.map((account) => account.id)),
-  ])
+  // One repeatable-read snapshot: another replica may commit a complete pool edit between
+  // statements, but this load must never combine its old policy with its new membership.
+  const {
+    accounts: accountRows,
+    pools: poolRows,
+    members,
+    windows: windowRows,
+  } = await sources.read()
 
   // Quota state is durable and routing reads it per request, so it is hydrated
   // here rather than queried: `findSpentWindow` and `continuousHeadroom`

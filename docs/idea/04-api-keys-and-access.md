@@ -187,6 +187,12 @@ three times in total. Full lookup capacity or continued invalidation returns `50
 `key_verification_unavailable` with `Retry-After: 1`; confirmed unknown, revoked, or expired keys
 return `401`.
 
+Key create, edit, revoke and delete operations commit their row, scope targets and redacted audit
+record together. Name checks for API create/rename operations are serialized inside that transaction;
+low-level repository callers remain responsible for uniqueness, and existing duplicate names are not
+rewritten. A successful mutation invalidates authorization before response mapping. Ordinary edits
+preserve the consumed rate-limit window; revocation and deletion also discard its retained state.
+
 ### Accepted in both dialects
 
 | Header | Style | Sent by |

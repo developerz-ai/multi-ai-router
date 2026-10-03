@@ -1,5 +1,6 @@
 import type { RoutableAccount, RoutingCatalog } from "../dataplane"
 import type { PoolSnapshot } from "../routing"
+import { createSnapshotRefresh } from "../snapshots/refresh"
 import type { CatalogData } from "./load"
 
 /**
@@ -30,6 +31,8 @@ import type { CatalogData } from "./load"
 export interface RoutingCatalogStore extends RoutingCatalog {
   /** Re-reads the world. Rejects on failure, leaving the last good snapshot in place. */
   refresh(): Promise<void>
+  /** Waits for an installed snapshot whose read began after this mutation committed. */
+  refreshAfterMutation(): Promise<void>
   /** Begins periodic refresh. Idempotent. */
   start(): void
   stop(): void
@@ -54,22 +57,10 @@ export function createRoutingCatalog(deps: RoutingCatalogStoreDeps): RoutingCata
   let data: CatalogData = EMPTY
   let loadedAt: Date | null = null
   let timer: ReturnType<typeof setTimeout> | null = null
-  // Concurrent refreshes would be two identical queries racing to install the
-  // same snapshot; callers share the one in flight instead.
-  let inFlight: Promise<void> | null = null
-
-  const refresh = (): Promise<void> => {
-    inFlight ??= deps
-      .load()
-      .then((next) => {
-        data = next
-        loadedAt = now()
-      })
-      .finally(() => {
-        inFlight = null
-      })
-    return inFlight
-  }
+  const { refresh, refreshAfterMutation } = createSnapshotRefresh(deps.load, (next) => {
+    data = next
+    loadedAt = now()
+  })
 
   const schedule = (): void => {
     timer = setTimeout(() => {
@@ -85,6 +76,7 @@ export function createRoutingCatalog(deps: RoutingCatalogStoreDeps): RoutingCata
     accounts: (): readonly RoutableAccount[] => data.accounts,
     pools: (): readonly PoolSnapshot[] => data.pools,
     refresh,
+    refreshAfterMutation,
     start: () => {
       if (timer === null) schedule()
     },

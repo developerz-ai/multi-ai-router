@@ -1,5 +1,8 @@
 import { describe, expect, test } from "bun:test"
-import { readFileSync } from "node:fs"
+import { spawnSync } from "node:child_process"
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
 import { fileURLToPath } from "node:url"
 import { parseEnv } from "../../src/config/env"
 
@@ -25,6 +28,7 @@ const ROOT = fileURLToPath(new URL("../../../../", import.meta.url))
 
 const DOCKERFILE = readFileSync(`${ROOT}Dockerfile`, "utf8")
 const CI_WORKFLOW = readFileSync(`${ROOT}.github/workflows/ci.yml`, "utf8")
+const LOCAL_BUN_VERSION = readFileSync(`${ROOT}.bun-version`, "utf8").trim()
 const COMPOSE = readFileSync(`${ROOT}docker-compose.yml`, "utf8")
 const MANIFEST: { engines?: { bun?: string } } = JSON.parse(
   readFileSync(`${ROOT}package.json`, "utf8"),
@@ -69,11 +73,13 @@ describe("the container base image", () => {
     }
   })
 
-  test("runs the runtime CI tested on, named in one place", () => {
+  test("matches the runtime pinned for CI and local development", () => {
     // `ci.yml` pins the bun that `bun install`, `bun test` and `bun run build` all use. The image
     // executing a different one means the suite proved nothing about what ships.
     const ci = CI_WORKFLOW.match(/^\s*BUN_VERSION:\s*"(?<version>[^"]+)"/m)?.groups?.version
     expect(ci).toMatch(/^\d+\.\d+\.\d+$/)
+    expect(LOCAL_BUN_VERSION).toMatch(/^\d+\.\d+\.\d+$/)
+    expect(LOCAL_BUN_VERSION).toBe(ci as string)
 
     for (const base of bases()) {
       expect(base.version).toBe(ci as string)
@@ -116,6 +122,36 @@ describe("the container base image", () => {
       expect(asserts[index]?.[1]).toBe(base.version)
     }
   })
+})
+
+describe("the local Bun prerequisite", () => {
+  for (const version of [null, "0.0.0", "99.0.0", LOCAL_BUN_VERSION]) {
+    test(`checks ${version ?? "a missing binary"} from outside the checkout`, () => {
+      const dir = mkdtempSync(join(tmpdir(), "router-bun-prerequisite-"))
+      try {
+        if (version !== null) {
+          writeFileSync(join(dir, "bun"), "#!/bin/sh\nprintf '%s\\n' \"$FIXTURE_BUN_VERSION\"\n", {
+            mode: 0o755,
+          })
+        }
+        // The fixture is the entire PATH: the guard must not need installed dependencies,
+        // Docker or a database to diagnose the runtime before setup changes anything.
+        const result = spawnSync(`${ROOT}bin/lib/require-bun`, {
+          cwd: tmpdir(),
+          env: { PATH: dir, FIXTURE_BUN_VERSION: version ?? "" },
+          encoding: "utf8",
+        })
+        expect(result.error).toBeUndefined()
+        expect(result.status).toBe(version === LOCAL_BUN_VERSION ? 0 : 1)
+        if (version !== LOCAL_BUN_VERSION) {
+          expect(result.stderr).toContain(`Bun ${LOCAL_BUN_VERSION} is required`)
+          expect(result.stderr).toContain(".bun-version")
+        }
+      } finally {
+        rmSync(dir, { recursive: true, force: true })
+      }
+    })
+  }
 })
 
 describe("the node_modules prune", () => {
@@ -216,6 +252,7 @@ describe("the image labels", () => {
   test("carries the build's revision, defaulting to the honest unknown", () => {
     // Same ARG the running process reports as `router_build_info{revision}`, so the label an
     // operator reads from outside and the metric they read from inside cannot disagree.
+    // biome-ignore lint/suspicious/noTemplateCurlyInString: Docker expands this build-time placeholder.
     expect(label("revision")).toBe("${ROUTER_REVISION}")
     expect(DOCKERFILE).toMatch(/^ARG ROUTER_REVISION=unknown$/m)
   })

@@ -3,6 +3,7 @@ import {
   CLAUDE_SUBSCRIPTION_MODELS,
   type ModelDescriptor,
   type ModelListingSource,
+  ownEntry,
 } from "@multi-ai-router/core"
 import type { ModelCatalogEntry } from "@multi-ai-router/db"
 import type { SdkModelInfo } from "../../providers"
@@ -26,7 +27,11 @@ import { lookupContextWindow } from "./windows"
 /** A live listing, as the SDK stated it. */
 export function subscriptionCatalog(live: readonly SdkModelInfo[]): readonly ModelCatalogEntry[] {
   return live.map((model) =>
-    row(model.id, model.resolvedModel ?? CLAUDE_SUBSCRIPTION_ALIASES[model.id] ?? null, "live"),
+    row(
+      model.id,
+      model.resolvedModel ?? ownEntry(CLAUDE_SUBSCRIPTION_ALIASES, model.id) ?? null,
+      "live",
+    ),
   )
 }
 

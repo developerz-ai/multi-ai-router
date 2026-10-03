@@ -1,18 +1,18 @@
 import type {
-  AccountRepository,
   AccountRow,
+  AdminMutationRepository,
   ApiKeyAccountRow,
   ApiKeyPoolRow,
-  ApiKeyRepository,
   ApiKeyRow,
   AuditEventRow,
-  OauthStateRepository,
   OauthStateRow,
   PoolMemberRow,
-  PoolRepository,
   PoolRow,
 } from "@multi-ai-router/db"
-import type { AuditSink } from "../../src/services/admin"
+import { createMemoryMutations } from "./memory-mutations"
+import type { MemoryStore } from "./memory-store-types"
+
+export type { MemoryAccounts, MemoryKeys, MemoryStore } from "./memory-store-types"
 
 /**
  * In-memory stands-in for the stores the admin services depend on.
@@ -23,55 +23,6 @@ import type { AuditSink } from "../../src/services/admin"
  * is involved, which is what lets the admin API's unit *and* integration tests
  * run with no `DATABASE_URL`.
  */
-
-export type MemoryAccounts = Pick<
-  AccountRepository,
-  | "create"
-  | "list"
-  | "findById"
-  | "findByIds"
-  | "update"
-  | "updateStatus"
-  | "updateStatusWhen"
-  | "disable"
-  | "delete"
->
-
-export type MemoryKeys = Pick<
-  ApiKeyRepository,
-  | "create"
-  | "list"
-  | "findById"
-  | "findByName"
-  | "update"
-  | "delete"
-  | "markRevoked"
-  | "listPoolTargets"
-  | "listAccountTargets"
-  | "listTargetsForKeys"
-  | "listKeysScopedToPool"
-  | "listKeysScopedToAccount"
-  | "replaceScopeTargets"
->
-
-export interface MemoryStore {
-  readonly accounts: MemoryAccounts
-  readonly keys: MemoryKeys
-  readonly pools: PoolRepository
-  readonly oauthStates: OauthStateRepository
-  readonly audit: AuditSink
-  /** The rows themselves, for assertions. */
-  readonly rows: {
-    readonly accounts: AccountRow[]
-    readonly keys: ApiKeyRow[]
-    readonly keyPools: ApiKeyPoolRow[]
-    readonly keyAccounts: ApiKeyAccountRow[]
-    readonly pools: PoolRow[]
-    readonly poolMembers: PoolMemberRow[]
-    readonly oauthStates: OauthStateRow[]
-    readonly audit: AuditEventRow[]
-  }
-}
 
 const EPOCH = new Date("2026-07-24T12:00:00.000Z")
 
@@ -85,7 +36,12 @@ export function createMemoryStore(): MemoryStore {
   const oauthStates: OauthStateRow[] = []
   const audit: AuditEventRow[] = []
 
+  let mutations: AdminMutationRepository | undefined
   return {
+    get mutations() {
+      mutations ??= createMemoryMutations(this)
+      return mutations
+    },
     rows: { accounts, keys, keyPools, keyAccounts, pools, poolMembers, oauthStates, audit },
 
     accounts: {
@@ -98,6 +54,9 @@ export function createMemoryStore(): MemoryStore {
           authMaterial: input.authMaterial ?? null,
           configDir: input.configDir ?? null,
           tokenExpiresAt: input.tokenExpiresAt ?? null,
+          billing: input.billing ?? "metered",
+          lastUsedAt: null,
+          windowTokenLimits: input.windowTokenLimits ?? null,
           baseUrl: input.baseUrl ?? null,
           dialect: input.dialect ?? null,
           modelAliases: input.modelAliases ?? null,
@@ -209,6 +168,8 @@ export function createMemoryStore(): MemoryStore {
       listMembers: async (poolId) => poolMembers.filter((row) => row.poolId === poolId),
       listMembersForPools: async (poolIds) =>
         poolMembers.filter((row) => poolIds.includes(row.poolId)),
+      listMembershipsForAccount: async (accountId) =>
+        poolMembers.filter((row) => row.accountId === accountId),
       replaceMembers: async (poolId, members) => {
         drop(poolMembers, (row) => row.poolId === poolId)
         const created = members.map((member) => ({

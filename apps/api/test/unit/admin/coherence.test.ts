@@ -1,13 +1,8 @@
 import { describe, expect, test } from "bun:test"
 import type { AccountsService } from "../../../src/services/accounts"
-import {
-  withCatalogRefresh,
-  withKeyInvalidation,
-  withPoolCatalogRefresh,
-} from "../../../src/services/admin/coherence"
+import { keyMutationCommitted, withCatalogRefresh } from "../../../src/services/admin/coherence"
 import { conflict, ok } from "../../../src/services/admin/result"
-import type { KeysService } from "../../../src/services/keys"
-import type { PoolsService } from "../../../src/services/pools"
+import { createRateLimiter } from "../../../src/services/dataplane/limits"
 
 /**
  * The coherence decorators wrap a service and run a hook on the success path
@@ -28,16 +23,6 @@ function trackedRefresh() {
   }
 }
 
-function trackedInvalidate() {
-  const calls: string[] = []
-  return {
-    calls,
-    invalidateKey: (keyId: string) => {
-      calls.push(keyId)
-    },
-  }
-}
-
 const VIEW = { id: "acc-1" } as never
 const DELETED = { id: "acc-1", deleted: true as const }
 
@@ -49,33 +34,6 @@ function fakeAccountsService(overrides: Partial<AccountsService> = {}): Accounts
     update: async () => ok(VIEW),
     disable: async () => ok(VIEW),
     remove: async () => ok(DELETED),
-    ...overrides,
-  }
-}
-
-function fakePoolsService(overrides: Partial<PoolsService> = {}): PoolsService {
-  return {
-    list: async () => ok([]),
-    get: async () => ok(VIEW),
-    create: async () => ok(VIEW),
-    update: async () => ok(VIEW),
-    remove: async () => ok(DELETED),
-    ...overrides,
-  }
-}
-
-const REVEALED = { id: "key-1", value: "sk-live-x" } as never
-const KEY_VIEW = { id: "key-1" } as never
-
-function fakeKeysService(overrides: Partial<KeysService> = {}): KeysService {
-  return {
-    list: async () => ok([]),
-    get: async () => ok(KEY_VIEW),
-    create: async () => ok(KEY_VIEW as never),
-    update: async () => ok(KEY_VIEW),
-    reveal: async () => ok(REVEALED),
-    revoke: async () => ok(KEY_VIEW),
-    remove: async () => ok({ id: "key-1", deleted: true as const }),
     ...overrides,
   }
 }
@@ -135,97 +93,46 @@ describe("withCatalogRefresh", () => {
   })
 })
 
-describe("withPoolCatalogRefresh", () => {
-  test("create, update, and remove refresh the catalog on success", async () => {
-    const hooks = trackedRefresh()
-    const service = withPoolCatalogRefresh(fakePoolsService(), hooks)
+describe("committed key mutations", () => {
+  function setup() {
+    const limiter = createRateLimiter()
+    const invalidated: string[] = []
+    const key = { id: "key-1", rateLimitRequests: 1, rateLimitWindowSeconds: 60 }
+    const hooks = {
+      invalidateKey: (id: string) => {
+        invalidated.push(id)
+      },
+      forgetKey: (id: string) => {
+        invalidated.push(id)
+        limiter.forget(id)
+      },
+    }
+    return { limiter, invalidated, key, hooks }
+  }
 
-    await service.create({} as never)
-    await service.update("p", {} as never)
-    await service.remove("p")
-
-    expect(hooks.calls).toEqual(["refresh", "refresh", "refresh"])
+  test("a rename or scope edit invalidates authorization without granting a new rate window", () => {
+    const { limiter, invalidated, key, hooks } = setup()
+    expect(limiter.check(key, 0).allowed).toBe(true)
+    keyMutationCommitted(hooks, key.id, "update")
+    expect(invalidated).toEqual([key.id])
+    expect(limiter.check(key, 1).allowed).toBe(false)
+    // Changed limits are recognized by the limiter, without resetting unrelated edits.
+    expect(limiter.check({ ...key, rateLimitRequests: 2 }, 2).allowed).toBe(true)
   })
 
-  test("list and get never trigger a refresh", async () => {
-    const hooks = trackedRefresh()
-    const service = withPoolCatalogRefresh(fakePoolsService(), hooks)
+  for (const kind of ["revoke", "remove"] as const) {
+    test(`${kind} drops authorization and retained rate-limit state`, () => {
+      const { limiter, invalidated, key, hooks } = setup()
+      limiter.check(key, 0)
+      keyMutationCommitted(hooks, key.id, kind)
+      expect(invalidated).toEqual([key.id])
+      expect(limiter.size).toBe(0)
+    })
+  }
 
-    await service.list()
-    await service.get("p")
-
-    expect(hooks.calls).toEqual([])
-  })
-
-  test("a failed write is not refreshed", async () => {
-    const hooks = trackedRefresh()
-    const service = withPoolCatalogRefresh(
-      fakePoolsService({ remove: async () => conflict("nope") }),
-      hooks,
-    )
-
-    await service.remove("p")
-
-    expect(hooks.calls).toEqual([])
-  })
-})
-
-describe("withKeyInvalidation", () => {
-  test("update, revoke, and remove invalidate that key's cache entry by id", async () => {
-    const hooks = trackedInvalidate()
-    const service = withKeyInvalidation(fakeKeysService(), hooks)
-
-    await service.update("key-1", {} as never)
-    await service.revoke("key-2")
-    await service.remove("key-3")
-
-    expect(hooks.calls).toEqual(["key-1", "key-2", "key-3"])
-  })
-
-  test("create never invalidates: a key that does not exist yet cannot be cached", async () => {
-    const hooks = trackedInvalidate()
-    const service = withKeyInvalidation(fakeKeysService(), hooks)
-
-    await service.create({} as never)
-
-    expect(hooks.calls).toEqual([])
-  })
-
-  test("list, get, and reveal never invalidate", async () => {
-    const hooks = trackedInvalidate()
-    const service = withKeyInvalidation(fakeKeysService(), hooks)
-
-    await service.list()
-    await service.get("key-1")
-    await service.reveal("key-1")
-
-    expect(hooks.calls).toEqual([])
-  })
-
-  test("a failed revoke is not invalidated", async () => {
-    const hooks = trackedInvalidate()
-    const service = withKeyInvalidation(
-      fakeKeysService({ revoke: async () => conflict("already revoked") }),
-      hooks,
-    )
-
-    const result = await service.revoke("key-1")
-
-    expect(result.ok).toBe(false)
-    expect(hooks.calls).toEqual([])
-  })
-
-  test("invalidation is by the id in the request, not by anything on the returned view", async () => {
-    const hooks = trackedInvalidate()
-    // The service returns a view for a different id than requested (a receipt for `remove`, say);
-    // invalidation must still key off the argument, not the response body.
-    const service = withKeyInvalidation(
-      fakeKeysService({ update: async () => ok({ id: "not-the-request-id" } as never) }),
-      hooks,
-    )
-
-    await service.update("key-1", {} as never)
-
-    expect(hooks.calls).toEqual(["key-1"])
+  test("minting a new key does not invalidate existing state", () => {
+    const { invalidated, key, hooks } = setup()
+    keyMutationCommitted(hooks, key.id, "create")
+    expect(invalidated).toEqual([])
   })
 })

@@ -1,0 +1,20 @@
+#!/bin/sh
+# The full local gate must use the same runtime as CI and the released image.
+set -eu
+
+IFS= read -r required < "${0%/*}/../../.bun-version"
+
+if ! command -v bun >/dev/null 2>&1; then
+  printf 'Bun %s is required but bun is not in PATH. Select the version in .bun-version, then retry. See README.md#working-on-it.\n' "$required" >&2
+  exit 1
+fi
+
+if ! actual=$(bun --version); then
+  printf 'Could not read the Bun version. Select Bun %s in PATH, then retry.\n' "$required" >&2
+  exit 1
+fi
+
+if [ "$actual" != "$required" ]; then
+  printf 'Bun %s is required by .bun-version; found %s. Select the pinned version in PATH, then retry. See README.md#working-on-it.\n' "$required" "$actual" >&2
+  exit 1
+fi

@@ -139,6 +139,11 @@ providers" inside the cost estimator once did — answered two different questio
 priced a coding-plan account exactly as it priced a pay-per-token one. Pricing rules:
 [08-observability.md](08-observability.md#cost-estimation).
 
+Model aliases resolve only own string entries in the configured dictionary. An inherited property
+such as `constructor` is not an alias; an explicit own entry with that name is valid. Missing or
+non-string entries leave the requested model unchanged. Shipped price, context-window and
+subscription-label dictionaries likewise ignore inherited properties, keeping unknown names unknown.
+
 ### Quota window state
 
 One entry per window, because windows reset independently and the account is blocked by whichever
@@ -175,6 +180,16 @@ An `exhausted` Account has **no** reset by definition — that is what separates
 `cooling_down`. It carries a "needs top-up" state, never a countdown and never an invented ETA.
 
 ## Pool
+
+Pool mutations commit configuration, the complete membership set and redacted audit events in one
+transaction. Existing pool edits lock the row before reading membership and validating overflow, so
+concurrent edits validate the latest committed state. The response uses the committed snapshot, and
+its catalog refresh finishes before success is returned.
+
+A referenced account or pool deleted between validation and the write causes an atomic rollback
+and a `409 reference_deleted` response. PostgreSQL deadlocks retry the complete transaction up to
+three attempts, including account deletion and its foreign-key cascades; post-commit cache hooks
+run only after the successful commit.
 
 | Field | Type | Notes |
 |---|---|---|
