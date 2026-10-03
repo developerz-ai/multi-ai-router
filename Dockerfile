@@ -1,4 +1,4 @@
-# syntax=docker/dockerfile:1.7
+# syntax=docker/dockerfile:1.27.1@sha256:4edf897a3ffa55b89f906fc8cc78afdb3f1834cc9c7083565e611a8a7d5fe99e
 #
 # multi-ai-router — the router image: Hono API + the SolidJS admin SPA it serves,
 # plus the `claude` CLI the Agent SDK spawns for Claude subscription accounts.

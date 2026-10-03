@@ -212,6 +212,11 @@ container. Select it with your runtime manager or put that version's binary on `
 `bin/setup` and `bin/check` verify it before installing dependencies or checking the database;
 they report a missing or mismatched version without installing a runtime for you.
 
+Dependency updates track stable versions supported by their parents: Solid's compiler still requires
+Babel 7. The scoped esbuild override replaces Drizzle Kit's deprecated loader dependency with a
+patched version; its TypeScript transforms and migration generation/checks are verified alongside
+the full gate. Keep that override until the loader's upstream dependency is patched or replaced.
+
 `bin/` is the interface — three commands are the whole contract:
 
 ```bash
@@ -220,8 +225,9 @@ bin/dev       # each session: API + web, watch mode
 bin/check     # before committing: lint, typecheck, test, build — the CI job list, in order
 ```
 
-`bin/check` needs a database and refuses to start without one, because CI's test job has a real
-Postgres 16 and the migration, advisory-lock, retention and readiness-probe suites gate themselves on
+`bin/check` needs a database and refuses to start without one, because CI's test job uses real
+PostgreSQL 18 (16.15 for local Compose). The migration, advisory-lock, retention
+and readiness-probe suites gate themselves on
 `DATABASE_URL`. Without it they skip, `bun test` folds the skips into the same green summary as a
 pass, and the gate goes green having proved less than the PR will. `bin/setup` writes the dev
 `DATABASE_URL` into `.env`, which is all it takes. A bare `bin/test` still runs on a machine with no

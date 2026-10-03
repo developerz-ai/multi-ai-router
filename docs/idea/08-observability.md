@@ -627,23 +627,38 @@ the DSN and 5xx errors leave the process tagged with `release`, `environment`, a
 `errorClass` / `status` / `path` / `errorCode`. **4xx never leaves** — an exhausted account, a scope
 violation, a rate limit is an operational state, not a defect, and stays in the logs.
 
-The credential-leak rule above applies just as hard here, because a Sentry SDK scrapes request
-headers, request bodies, breadcrumbs and exception messages onto every event — exactly the surfaces
-that carry upstream keys and OAuth tokens on this router. So `beforeSend` is the **same redactor**
+The credential-leak rule above applies just as hard here. Automatic collection of user identity,
+cookies, HTTP headers/bodies/query parameters, AI inputs/outputs, database payloads, queue arguments,
+frame variables and source snippets is explicitly disabled with `dataCollection`; Sentry 11's
+expanded collection defaults cannot opt those surfaces back in. Explicit capture values still need
+scrubbing, so `beforeSend` is the **same redactor**
 the structured log uses (`logging/redact.ts`), not a second one; one scrubbing set covers both
-surfaces, and the gate is a unit test (`test/unit/observability/sentry.test.ts`). The redactor's
+surfaces. Unit tests (`test/unit/observability/sentry.test.ts`) preserve stack metadata while
+scrubbing credentials; an isolated real-SDK transport test (`test/integration/sentry-transport.test.ts`)
+also inspects serialized envelopes, including linked exceptions and explicit capture data. Its
+transport writes only to memory, and synthetic HTTP traffic stays on localhost. The redactor's
 known boundary carries over unchanged: a credential is caught by field name or by a recognisable
 value shape (`sk-`, `Bearer`, JWT, connection string, vendor prefixes), not by guessing at bare
 free-text values with no prefix.
 
 Two properties hold the overhead budget ([06](06-protocol-translation.md), non-negotiable #8):
 
-- **Tracing is off** (`tracesSampleRate: 0`) — no spans.
-- **The request/fetch instrumentations are stripped from the defaults** (`Console`, `Http`,
-  `NodeFetch`, `BunServer`, `ProcessSession`). The router makes an upstream call on every request;
-  patching global `fetch` and `Bun.serve` to scope and breadcrumb each one is overhead on the happy
-  path. Errors are captured explicitly in the Hono error handler instead — on the 5xx path, never
-  the 200 one. What remains of the defaults only does work while an event is being assembled.
+- **Tracing is off** (`tracesSampleRate: 0`, `enableOpenTelemetrySetup: false`), including when
+  `SENTRY_TRACES_SAMPLE_RATE` is inherited from the host. `traceLifecycle: "static"` also prevents
+  automatic span-streaming integration setup. Trace propagation targets are empty.
+  `enableRuntimeChannelInjection: false` prevents NodeClient's independent registration of
+  runtime diagnostics-channel injection even when the integration defaults are disabled.
+- **Integrations are explicitly allowlisted**, with SDK defaults disabled: event filters,
+  function names, linked exceptions, deduplication, process crash/rejection handlers, machine
+  context and module versions. Request/fetch, framework, AI, database and console instrumentation
+  are excluded. Errors are captured explicitly in the Hono error handler on the 5xx path. Stack
+  file/function/line metadata survives; source snippets and automatic locals are excluded.
+
+SDK logs and metrics are dropped by their final send hooks, and client reports/session tracking
+are disabled. The transport carries error envelopes only. Attachments are not used; `beforeSend`
+does not promise to scrub arbitrary attachment bytes. These controls preserve ordinary error
+envelopes for GlitchTip; upstream's Sentry self-hosted compatibility statement alone does not
+establish support for a particular deployed GlitchTip version.
 
 ## Audit events
 
