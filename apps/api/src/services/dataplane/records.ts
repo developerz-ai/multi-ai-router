@@ -33,6 +33,8 @@ export interface AttemptTiming {
   readonly latencyMs: number
   /** Router-observed time for the whole request so far. */
   readonly totalMs: number
+  /** Awaited upload time; separate from parsing and other router work. */
+  readonly bodyReadMs?: number
   /**
    * Time spent **waiting on upstreams** for the whole request so far, this attempt included. On a
    * streamed success that is the drain too: relaying is waiting, not working, and excluding it
@@ -62,6 +64,9 @@ export interface AttemptTiming {
  * byte. Absent is recorded as NULL, never as zero — a TTFB of 0 ms is a claim nobody measured.
  */
 export interface AttemptRecordInput {
+  /** Mint once at event construction, before queue admission; injected in deterministic fixtures. */
+  readonly eventId?: string
+  readonly responseStatus?: number | null
   readonly correlationId: string
   readonly clientRequestId?: string | null
   readonly attempt: number
@@ -69,9 +74,9 @@ export interface AttemptRecordInput {
   readonly accountId: string | null
   readonly poolId?: string | null
   readonly provider: ProviderId | null
-  readonly sessionKey: string
-  readonly model: string
-  readonly upstreamModel: string
+  readonly sessionKey: string | null
+  readonly model: string | null
+  readonly upstreamModel: string | null
   readonly ingressDialect?: Dialect | null
   readonly egressMode?: EgressMode | null
   readonly tokens?: TokenCounts
@@ -104,6 +109,8 @@ export function attemptRecord(input: AttemptRecordInput): UsageRecord {
   const tokens = input.tokens ?? NO_TOKENS
   const ttfbMs = input.timing.ttfbMs
   return {
+    eventId: input.eventId ?? crypto.randomUUID(),
+    responseStatus: input.responseStatus ?? null,
     correlationId: input.correlationId,
     clientRequestId: input.clientRequestId ?? null,
     attempt: input.attempt,
@@ -122,7 +129,7 @@ export function attemptRecord(input: AttemptRecordInput): UsageRecord {
     cacheWriteTokens: tokens.cacheWriteTokens,
     // Priced on the model that went upstream, not on the one the client asked for: the account's
     // alias map decides which name the upstream billed.
-    ...(input.priced === false
+    ...(input.priced === false || input.upstreamModel === null
       ? UNKNOWN_COST
       : estimateCost({
           provider: input.provider,
@@ -133,7 +140,10 @@ export function attemptRecord(input: AttemptRecordInput): UsageRecord {
         })),
     latencyMs: Math.max(0, Math.round(input.timing.latencyMs)),
     ttfbMs: ttfbMs === undefined ? null : Math.max(0, Math.round(ttfbMs)),
-    routerOverheadMs: Math.max(0, Math.round(input.timing.totalMs - input.timing.upstreamMs)),
+    routerOverheadMs: Math.max(
+      0,
+      Math.round(input.timing.totalMs - input.timing.upstreamMs - (input.timing.bodyReadMs ?? 0)),
+    ),
     outcome: input.outcome,
     streamed: input.streamed,
     httpStatus: input.httpStatus,

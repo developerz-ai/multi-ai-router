@@ -122,6 +122,7 @@ const TABLE_COLUMNS: ReadonlyArray<{ table: Table; columns: readonly string[] }>
       "routerOverheadMs",
       "streamed",
       "httpStatus",
+      "responseStatus",
       "errorClass",
       "outcome",
       "createdAt",
@@ -249,8 +250,17 @@ describe("usage records are one row per upstream attempt", () => {
   })
 
   test("what the client asked for and what we sent are separate columns", () => {
-    expect(schema.usageRecords.model.notNull).toBe(true)
+    expect(schema.usageRecords.model.notNull).toBe(false)
+    expect(schema.usageRecords.model.getSQLType()).toBe("text")
     expect(schema.usageRecords.upstreamModel).toBeDefined()
+  })
+
+  test("upstream and caller response statuses are independent nullable facts", () => {
+    expect(schema.usageRecords.httpStatus.getSQLType()).toBe("integer")
+    expect(schema.usageRecords.httpStatus.notNull).toBe(false)
+    expect(schema.usageRecords.responseStatus.getSQLType()).toBe("smallint")
+    expect(schema.usageRecords.responseStatus.notNull).toBe(false)
+    expect(schema.usageRecords.responseStatus.hasDefault).toBe(false)
   })
 
   test("ttfb is its own column — total latency cannot show an added-latency regression", () => {

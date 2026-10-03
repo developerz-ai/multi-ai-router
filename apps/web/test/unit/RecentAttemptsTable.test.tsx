@@ -35,6 +35,7 @@ function attempt(over: Partial<RecentAttempt> = {}): RecentAttempt {
     outcome: "success",
     fault: "none",
     httpStatus: 200,
+    responseStatus: 200,
     errorClass: null,
     latencyMs: 812,
     ttfbMs: 91,
@@ -158,7 +159,7 @@ describe("RecentAttemptsTable", () => {
       expect(headers).toEqual([
         "When",
         "Outcome",
-        "Status / error",
+        "Upstream / response / error",
         "Request",
         "Account / key",
         "Model",
@@ -232,4 +233,39 @@ describe("the empty state", () => {
     expect(state.description).toContain("credits exhausted")
     expect(state.description).toContain("Everything")
   })
+})
+
+test("pre-model refusal shows absent model and actual response independently", () => {
+  withMount(
+    [
+      attempt({
+        model: null,
+        upstreamModel: null,
+        httpStatus: null,
+        responseStatus: 413,
+        outcome: "request_too_large",
+        fault: "client",
+      }),
+    ],
+    (container) => {
+      expect(container.textContent).toContain("model not identified")
+      expect(container.textContent).toContain("upstream never reached")
+      expect(container.textContent).toContain("response 413")
+      expect(container.textContent).not.toContain("sent as")
+    },
+  )
+})
+
+test("legacy unknown response and differing actual statuses are never inferred", () => {
+  withMount(
+    [
+      attempt({ id: "legacy", httpStatus: 200, responseStatus: null }),
+      attempt({ id: "different", httpStatus: 429, responseStatus: 503 }),
+    ],
+    (container) => {
+      expect(container.textContent).toContain("response unknown")
+      expect(container.textContent).toContain("upstream 429")
+      expect(container.textContent).toContain("response 503")
+    },
+  )
 })

@@ -2,6 +2,7 @@ import type { SseEvent, TranslationContext, TranslationPair } from "../translate
 import { createSseParser, encodeSseEvent } from "../translate"
 import { clientHeaders } from "./egress/headers"
 import type { RelayObserver } from "./relay"
+import { readRelayBody } from "./relay-body-read"
 import { ClientCancelledError, observeCancellation } from "./relay-cancellation"
 
 /**
@@ -68,6 +69,7 @@ export const DEFAULT_TRANSLATED_KEEPALIVE_MS = 5_000
 
 export interface TranslatedRelayInput {
   readonly upstream: Response
+  readonly signal?: AbortSignal
   readonly pair: TranslationPair
   readonly context: TranslationContext
   readonly observer?: RelayObserver
@@ -125,6 +127,7 @@ function translatedStream(
   const encoder = new TextEncoder()
 
   let bytes = 0
+  let contentWritten = false
   let settled = false
 
   const now = input.now ?? (() => Date.now())
@@ -137,7 +140,11 @@ function translatedStream(
     let out = ""
     for (const text of comments) out += `:${text}\n\n`
     comments = []
-    controller.enqueue(encoder.encode(out))
+    const chunk = encoder.encode(out)
+    controller.enqueue(chunk)
+    bytes += chunk.length
+    guard(() => observer.onWireBytes?.(bytes))
+    lastWrite = now()
   }
 
   const write = (controller: TransformStreamDefaultController<Uint8Array>, text: string): void => {
@@ -146,8 +153,10 @@ function translatedStream(
     // Enqueue first. Everything after this line happens on time the client already has.
     controller.enqueue(chunk)
     lastWrite = now()
-    const first = bytes === 0
+    const first = !contentWritten
+    contentWritten = true
     bytes += chunk.length
+    guard(() => observer.onWireBytes?.(bytes))
     if (first) guard(() => observer.onFirstByte?.())
   }
 
@@ -157,7 +166,10 @@ function translatedStream(
    */
   const heartbeat = (controller: TransformStreamDefaultController<Uint8Array>): void => {
     if (now() - lastWrite < keepaliveMs) return
-    controller.enqueue(encoder.encode(":\n\n"))
+    const chunk = encoder.encode(":\n\n")
+    controller.enqueue(chunk)
+    bytes += chunk.length
+    guard(() => observer.onWireBytes?.(bytes))
     lastWrite = now()
   }
 
@@ -191,9 +203,11 @@ function translatedStream(
     },
   })
 
-  upstream.pipeTo(transform.writable).catch((error: unknown) => {
-    settle(error ?? new Error("response stream cancelled"))
-  })
+  upstream
+    .pipeTo(transform.writable, input.signal === undefined ? {} : { signal: input.signal })
+    .catch((error: unknown) => {
+      settle(error ?? new Error("response stream cancelled"))
+    })
 
   return observeCancellation(transform.readable, () => settle(new ClientCancelledError()))
 }
@@ -216,15 +230,25 @@ function translatedBody(
   upstream: ReadableStream<Uint8Array>,
 ): ReadableStream<Uint8Array> {
   const { observer = {} } = input
-
-  return new ReadableStream<Uint8Array>({
+  let settled = false
+  const fail = (error: unknown) => {
+    if (settled) return
+    settled = true
+    guard(() => observer.onError?.(error, 0))
+  }
+  const cancelled = new AbortController()
+  const signal =
+    input.signal === undefined
+      ? cancelled.signal
+      : AbortSignal.any([input.signal, cancelled.signal])
+  const body = new ReadableStream<Uint8Array>({
     async start(controller) {
       let raw: Uint8Array
       try {
-        raw = await readAll(upstream)
+        raw = await readRelayBody(upstream, signal)
       } catch (error) {
         controller.error(error)
-        guard(() => observer.onError?.(error, 0))
+        fail(error)
         return
       }
 
@@ -233,10 +257,17 @@ function translatedBody(
       const chunk = translate(input, text) ?? raw
 
       controller.enqueue(chunk)
+      guard(() => observer.onWireBytes?.(chunk.length))
       controller.close()
       guard(() => observer.onFirstByte?.())
+      settled = true
       guard(() => observer.onEnd?.(chunk.length))
     },
+  })
+  return observeCancellation(body, () => {
+    const error = new ClientCancelledError()
+    fail(error)
+    cancelled.abort(error)
   })
 }
 
@@ -252,30 +283,4 @@ function translate(input: TranslatedRelayInput, text: string): Uint8Array | null
   const unrecognized = translated.unrecognizedStopReason
   if (unrecognized !== null) guard(() => input.onUnrecognizedStopReason?.(unrecognized))
   return new TextEncoder().encode(JSON.stringify(translated.body))
-}
-
-async function readAll(stream: ReadableStream<Uint8Array>): Promise<Uint8Array> {
-  const chunks: Uint8Array[] = []
-  let total = 0
-  const reader = stream.getReader()
-  try {
-    for (;;) {
-      const { done, value } = await reader.read()
-      if (done) break
-      if (value === undefined) continue
-      chunks.push(value)
-      total += value.length
-    }
-  } finally {
-    reader.releaseLock()
-  }
-
-  if (chunks.length === 1 && chunks[0] !== undefined) return chunks[0]
-  const bytes = new Uint8Array(total)
-  let at = 0
-  for (const chunk of chunks) {
-    bytes.set(chunk, at)
-    at += chunk.length
-  }
-  return bytes
 }

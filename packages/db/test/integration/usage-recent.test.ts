@@ -3,8 +3,11 @@ import { eq } from "drizzle-orm"
 import { createDatabase, type Database, type DatabaseHandle } from "../../src/client"
 import { defaultMigrationsFolder, runMigrations } from "../../src/migrate"
 import { createUsageRecentRepository } from "../../src/repositories/usage-recent-repository"
-import { createUsageRecordRepository } from "../../src/repositories/usage-repository"
-import { type NewUsageRecordRow, usageRecords } from "../../src/schema/usage-records"
+import {
+  createUsageRecordRepository,
+  type UsageRecordInsert,
+} from "../../src/repositories/usage-repository"
+import { usageRecords } from "../../src/schema/usage-records"
 
 /**
  * The live request feed against a real PostgreSQL 16+.
@@ -46,8 +49,9 @@ const CLIENT_ID = "test-recent-req-42"
 let handle: DatabaseHandle | undefined
 let db: Database
 
-function row(over: Partial<NewUsageRecordRow> = {}): NewUsageRecordRow {
+function row(over: Partial<UsageRecordInsert> = {}): UsageRecordInsert {
   return {
+    id: crypto.randomUUID(),
     correlationId: CHAIN,
     model: MODEL,
     outcome: "success",

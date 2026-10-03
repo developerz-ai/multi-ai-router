@@ -3,8 +3,11 @@ import { eq } from "drizzle-orm"
 import { createDatabase, type Database, type DatabaseHandle } from "../../src/client"
 import { defaultMigrationsFolder, runMigrations } from "../../src/migrate"
 import { createUsageReadRepository } from "../../src/repositories/usage-read-repository"
-import { createUsageRecordRepository } from "../../src/repositories/usage-repository"
-import { type NewUsageRecordRow, usageRecords } from "../../src/schema/usage-records"
+import {
+  createUsageRecordRepository,
+  type UsageRecordInsert,
+} from "../../src/repositories/usage-repository"
+import { usageRecords } from "../../src/schema/usage-records"
 
 /**
  * The per-outcome scan behind "3% failed — of which what?", against a real PostgreSQL 16+.
@@ -41,10 +44,11 @@ let db: Database
  * fixture from eight requests.
  */
 let minted = 0
-function row(over: Partial<NewUsageRecordRow> = {}): NewUsageRecordRow {
+function row(over: Partial<UsageRecordInsert> = {}): UsageRecordInsert {
   minted += 1
   const suffix = String(minted).padStart(12, "0")
   return {
+    id: crypto.randomUUID(),
     correlationId: `44444444-4444-4444-8444-${suffix}`,
     model: MODEL,
     outcome: "success",

@@ -60,6 +60,7 @@ import {
   sessionStoreFromEnv,
   stampLastUsed,
 } from "../services/dataplane"
+import { createActiveRequestRegistry } from "../services/dataplane/active-requests"
 import { accountHealthFacts } from "../services/dataplane/health-observation"
 import {
   type CatalogRefreshDeps,
@@ -136,6 +137,8 @@ export interface Runtime {
   readonly metrics: RouterMetrics
   /** Loads the catalog and starts the background writers. Awaited before the listener opens. */
   start(): Promise<void>
+  /** Close data-plane admission immediately on shutdown, before the HTTP drain. */
+  closeAdmission(): void
   /** Flushes what is queued and stops the timers. */
   stop(): Promise<void>
 }
@@ -513,7 +516,9 @@ export function createRuntime(deps: RuntimeDeps): Runtime {
     now,
   })
 
+  const activeRequests = createActiveRequestRegistry(env.relayLifetimes)
   const dispatcher = createDispatcher({
+    activeRequests,
     recovery: recoveryComponents.access,
     catalog,
     health,
@@ -690,6 +695,7 @@ export function createRuntime(deps: RuntimeDeps): Runtime {
     },
     phases: [
       [
+        { name: "request-admission", run: () => activeRequests.closeAdmission() },
         {
           name: "background-admission",
           run: () => {
@@ -703,6 +709,7 @@ export function createRuntime(deps: RuntimeDeps): Runtime {
         { name: "model-catalog-timers", run: () => modelCatalogStore.stop() },
       ],
       [
+        { name: "active-requests", run: () => activeRequests.stop() },
         { name: "account-connect", run: () => admin.connect.stop() },
         { name: "cli-owners", run: () => ownership.stop() },
         { name: "recovery-coordinator", run: () => recoveryComponents.coordinator.stop() },
@@ -735,6 +742,7 @@ export function createRuntime(deps: RuntimeDeps): Runtime {
     scheduler,
     metrics,
     start: lifecycle.start,
+    closeAdmission: () => activeRequests.closeAdmission(),
     stop: lifecycle.stop,
   }
 }

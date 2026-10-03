@@ -5,6 +5,11 @@ import {
   RetryableRouterError,
 } from "@multi-ai-router/core"
 import { redactValue } from "../logging/redact"
+import {
+  RequestAdmissionUnavailableError,
+  RouterShutdownError,
+} from "../services/dataplane/active-requests"
+import { ClientCancelledError } from "../services/dataplane/relay-cancellation"
 
 /**
  * Turns a thrown value into the HTTP status and the dialect-appropriate JSON body the client
@@ -92,6 +97,23 @@ export function renderErrorBody(
 }
 
 export function toErrorResponse(error: unknown, dialect: Dialect | null): ErrorResponse {
+  if (error instanceof ClientCancelledError)
+    return {
+      status: 499,
+      body: renderErrorBody(dialect, 499, error.message, "client_cancelled"),
+      retryAfterSeconds: null,
+    }
+  if (error instanceof RouterShutdownError || error instanceof RequestAdmissionUnavailableError)
+    return {
+      status: 503,
+      body: renderErrorBody(
+        dialect,
+        503,
+        error.message,
+        error instanceof RouterShutdownError ? "router_shutdown" : "request_admission_unavailable",
+      ),
+      retryAfterSeconds: null,
+    }
   if (!isRouterError(error)) {
     return {
       status: 500,

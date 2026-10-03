@@ -29,6 +29,7 @@ const ENV = {
 
 function record(attempt: number): UsageRecord {
   return {
+    eventId: crypto.randomUUID(),
     correlationId: "11111111-1111-4111-8111-111111111111",
     clientRequestId: null,
     attempt,
@@ -53,6 +54,7 @@ function record(attempt: number): UsageRecord {
     outcome: "success",
     streamed: false,
     httpStatus: 200,
+    responseStatus: 200,
     errorClass: null,
     startedAt: AT,
     finishedAt: AT,

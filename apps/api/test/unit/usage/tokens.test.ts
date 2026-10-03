@@ -9,8 +9,17 @@ import { createTokenObserver } from "../../../src/services/usage"
 
 const encoder = new TextEncoder()
 
-function observe(...chunks: readonly string[]) {
-  const observer = createTokenObserver()
+function observe(
+  dialect: "anthropic" | "openai-chat" | "openai-responses",
+  contentType: string,
+  ...chunks: readonly string[]
+) {
+  const observer = createTokenObserver({
+    dialect,
+    operation: "messages",
+    contentType,
+    maximumObservationBytes: 4096,
+  })
   for (const chunk of chunks) observer.observe(encoder.encode(chunk))
   return observer.counts()
 }
@@ -18,6 +27,8 @@ function observe(...chunks: readonly string[]) {
 describe("token observer", () => {
   test("reads an Anthropic stream: input on message_start, output on message_delta", () => {
     const counts = observe(
+      "anthropic",
+      "text/event-stream",
       'event: message_start\ndata: {"message":{"usage":{"input_tokens":12,"cache_read_input_tokens":300,"cache_creation_input_tokens":40}}}\n\n',
       'event: message_delta\ndata: {"usage":{"output_tokens":7}}\n\n',
       'event: message_delta\ndata: {"usage":{"output_tokens":19}}\n\n',
@@ -32,12 +43,18 @@ describe("token observer", () => {
   })
 
   test("reads a non-streamed Anthropic body the same way", () => {
-    const counts = observe('{"usage":{"input_tokens":5,"output_tokens":9}}')
+    const counts = observe(
+      "anthropic",
+      "application/json",
+      '{"usage":{"input_tokens":5,"output_tokens":9}}',
+    )
     expect(counts).toMatchObject({ tokensIn: 5, tokensOut: 9 })
   })
 
   test("subtracts OpenAI's cached tokens, which prompt_tokens already includes", () => {
     const counts = observe(
+      "openai-chat",
+      "application/json",
       '{"usage":{"prompt_tokens":100,"completion_tokens":20,"prompt_tokens_details":{"cached_tokens":80}}}',
     )
 
@@ -50,12 +67,17 @@ describe("token observer", () => {
   })
 
   test("survives a field split across a chunk boundary", () => {
-    const counts = observe('{"usage":{"output_tok', 'ens":42,"input_tokens":3}}')
+    const counts = observe(
+      "anthropic",
+      "application/json",
+      '{"usage":{"output_tok',
+      'ens":42,"input_tokens":3}}',
+    )
     expect(counts).toMatchObject({ tokensIn: 3, tokensOut: 42 })
   })
 
   test("reports zeros when the upstream said nothing", () => {
-    expect(observe('data: {"type":"ping"}\n\n')).toEqual({
+    expect(observe("anthropic", "text/event-stream", 'data: {"type":"ping"}\n\n')).toEqual({
       tokensIn: 0,
       tokensOut: 0,
       cacheReadTokens: 0,
@@ -64,7 +86,11 @@ describe("token observer", () => {
   })
 
   test("ignores fields it has no column for rather than guessing one", () => {
-    const counts = observe('{"usage":{"total_tokens":999,"reasoning_tokens":50}}')
+    const counts = observe(
+      "anthropic",
+      "application/json",
+      '{"usage":{"total_tokens":999,"reasoning_tokens":50}}',
+    )
     expect(counts.tokensIn).toBe(0)
     expect(counts.tokensOut).toBe(0)
   })

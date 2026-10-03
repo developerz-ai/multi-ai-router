@@ -26,6 +26,8 @@ import type { SessionPlan } from "./session"
  *   the answer to `query()` and reports what the subprocess named itself (§4).
  */
 export interface SdkInvocation {
+  /** Local CLI fork acknowledged; admission is earlier and does not imply remote acceptance. */
+  readonly onUpstreamStarted?: () => void
   readonly beforeUpstreamStart?: UpstreamStartGuard
   readonly beforeBackgroundUpstreamStart?: AsyncBackgroundStartGuard
   /** Which Account this runs as. Rate-limit state and session lineage are keyed by it, never global. */

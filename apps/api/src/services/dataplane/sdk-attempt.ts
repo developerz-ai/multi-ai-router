@@ -69,6 +69,7 @@ export interface SdkAttemptInput {
   /** Stamps a `rate_limit_event` reading. Unused when `quota` is undefined. Defaults to the clock. */
   readonly now?: () => Date
   readonly beforeUpstreamStart?: UpstreamStartGuard
+  readonly onUpstreamStarted?: () => void
   readonly timeoutMs: number
   /** The client's own abort signal, so a client that goes away terminates the subprocess. */
   readonly signal?: AbortSignal
@@ -124,6 +125,7 @@ export async function runSdkAttempt(input: SdkAttemptInput): Promise<AttemptOutc
   try {
     response = await invoke({
       beforeUpstreamStart: input.beforeUpstreamStart,
+      onUpstreamStarted: input.onUpstreamStarted,
       accountId: plan.account.id,
       configDir: plan.configDir,
       model: plan.upstreamModel,

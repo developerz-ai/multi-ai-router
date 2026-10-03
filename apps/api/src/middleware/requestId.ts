@@ -1,9 +1,10 @@
 import type { MiddlewareHandler } from "hono"
+import { createRequestIdentity } from "../services/usage/request-identity"
 import type { AppEnv } from "../types"
 
 /**
- * Assigns the correlation id at ingress and propagates it — one id joins the client request,
- * every upstream attempt, every log line, and every `UsageRecord` row.
+ * Assigns an independent server-owned attempt join key and preserves safe caller trace labels.
+ * Caller labels may repeat; their shape never establishes ownership.
  */
 
 export const REQUEST_ID_HEADER = "x-request-id"
@@ -15,9 +16,11 @@ export function requestId(): MiddlewareHandler<AppEnv> {
   return async (c, next) => {
     const supplied = c.req.header(REQUEST_ID_HEADER)
     const reusable = supplied !== undefined && SAFE_REQUEST_ID.test(supplied)
-    const id = reusable ? supplied : crypto.randomUUID()
-    c.set("requestId", id)
-    c.header(REQUEST_ID_HEADER, id)
+    const identity = createRequestIdentity(reusable ? supplied : undefined)
+    c.set("requestId", identity.requestId)
+    c.set("correlationId", identity.correlationId)
+    c.set("clientRequestId", identity.clientRequestId)
+    c.header(REQUEST_ID_HEADER, identity.requestId)
     await next()
   }
 }

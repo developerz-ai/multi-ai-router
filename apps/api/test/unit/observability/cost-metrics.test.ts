@@ -29,6 +29,7 @@ function samplesOf(body: string, name: string): readonly string[] {
 
 function record(overrides: Partial<UsageRecord> = {}): UsageRecord {
   return {
+    eventId: crypto.randomUUID(),
     correlationId: "corr-1",
     clientRequestId: null,
     attempt: 1,
@@ -53,6 +54,7 @@ function record(overrides: Partial<UsageRecord> = {}): UsageRecord {
     outcome: "success",
     streamed: false,
     httpStatus: 200,
+    responseStatus: 200,
     errorClass: null,
     startedAt: STARTED,
     finishedAt: new Date(STARTED.getTime() + 120),
@@ -188,4 +190,15 @@ describe("router_price_overrides_loaded_timestamp_seconds", () => {
       `${OVERRIDES_LOADED} ${at.getTime() / 1_000}`,
     ])
   })
+})
+
+test("missing model uses a telemetry-only unknown label without mutating the usage fact", () => {
+  const metrics = createMetrics()
+  const usage = record({ model: null })
+  metrics.observeUsage(usage)
+  expect(metrics.expose()).toContain(
+    'router_cost_basis_total{provider="openai-api",model="unknown",basis="metered"} 1',
+  )
+  expect(metrics.expose()).toContain('model="unknown",direction="input"')
+  expect(usage.model).toBeNull()
 })

@@ -103,14 +103,17 @@ export interface RecentAttempt {
   readonly account: RecentSubject
   readonly pool: RecentSubject
   readonly provider: ProviderId | null
-  readonly model: string
+  readonly model: string | null
   readonly upstreamModel: string | null
   readonly ingressDialect: Dialect | null
   readonly egressMode: EgressMode | null
   readonly outcome: UsageOutcome
   /** Whose problem the outcome is. Resolved by the router from `outcome`, never re-derived here. */
   readonly fault: UsageFault
+  /** Upstream HTTP status, independent of the response delivered by the router. */
   readonly httpStatus: number | null
+  /** Null for legacy or unavailable client-response evidence. Never inferred from outcome. */
+  readonly responseStatus: number | null
   readonly errorClass: string | null
   readonly latencyMs: number
   readonly ttfbMs: number | null

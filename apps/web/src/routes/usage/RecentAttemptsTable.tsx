@@ -20,8 +20,8 @@ import styles from "./RecentAttemptsTable.module.scss"
  *
  * Four columns are pairs on purpose, and never a single figure:
  *
- * - **Status / error class.** `null` means the router never reached the upstream at all, which is
- *   a different fact from "it answered 500" and reads as "never reached", not as a blank.
+ * - **Upstream / response status / error class.** Upstream and caller response are independent.
+ *   A null response status is unknown, including legacy rows; it is never inferred.
  * - **Request id / attempt number.** A failover chain of three is three rows under one id. The
  *   caller's own `x-request-id` rides beside the router's, because an operator holding one of them
  *   has no way to know which.
@@ -76,10 +76,13 @@ export function RecentAttemptsTable(props: RecentAttemptsTableProps) {
     },
     {
       id: "why",
-      header: "Status / error",
+      header: "Upstream / response / error",
       cell: (attempt) => (
         <div class={styles.stack}>
-          <span>{attempt.httpStatus === null ? "never reached" : attempt.httpStatus}</span>
+          <span>{`upstream ${attempt.httpStatus === null ? "never reached" : attempt.httpStatus}`}</span>
+          <span
+            class={styles.sub}
+          >{`response ${attempt.responseStatus === null ? "unknown" : attempt.responseStatus}`}</span>
           <Show fallback={<span class={styles.sub}>—</span>} when={attempt.errorClass}>
             {(errorClass) => <span class={styles.mono}>{errorClass()}</span>}
           </Show>
@@ -127,7 +130,7 @@ export function RecentAttemptsTable(props: RecentAttemptsTableProps) {
       header: "Model",
       cell: (attempt) => (
         <div class={styles.stack}>
-          <span class={styles.mono}>{attempt.model}</span>
+          <span class={styles.mono}>{attempt.model ?? "model not identified"}</span>
           <Show when={attempt.upstreamModel !== null && attempt.upstreamModel !== attempt.model}>
             <span class={styles.sub}>{`sent as ${attempt.upstreamModel}`}</span>
           </Show>

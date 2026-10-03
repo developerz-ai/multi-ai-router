@@ -116,7 +116,7 @@ export interface RecentAttemptView {
   readonly pool: RecentSubject
   readonly provider: ProviderId | null
   /** What the client asked for. Never substituted — CLAUDE.md non-negotiable 4. */
-  readonly model: string
+  readonly model: string | null
   /** What went on the wire after the account's alias map. Null when nothing was sent. */
   readonly upstreamModel: string | null
   readonly ingressDialect: Dialect | null
@@ -129,6 +129,7 @@ export interface RecentAttemptView {
   readonly fault: UsageFault
   /** The upstream's status when it answered. Null means we never reached it. */
   readonly httpStatus: number | null
+  readonly responseStatus: number | null
   /** The thrown class's name. Never a message, never a body. */
   readonly errorClass: string | null
   readonly latencyMs: number
@@ -167,6 +168,7 @@ export function toRecentAttemptView(
     outcome: row.outcome,
     fault: usageOutcomeFault(row.outcome),
     httpStatus: row.httpStatus,
+    responseStatus: row.responseStatus,
     errorClass: row.errorClass,
     latencyMs: row.latencyMs,
     ttfbMs: row.ttfbMs,

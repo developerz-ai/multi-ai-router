@@ -50,6 +50,7 @@ export interface AttemptInput {
   readonly timeoutMs: number
   readonly errorMaxBytes?: number
   readonly beforeUpstreamStart?: UpstreamStartGuard
+  readonly onUpstreamStarted?: () => void
   /** The client's own abort signal, so a client that goes away releases the upstream call. */
   readonly signal?: AbortSignal
 }
@@ -96,6 +97,7 @@ export async function runAttempt(input: AttemptInput): Promise<AttemptOutcome> {
   try {
     request.signal.throwIfAborted()
     input.beforeUpstreamStart?.()
+    input.onUpstreamStarted?.()
     response = await input.fetch(request)
   } catch (error) {
     if (error instanceof UpstreamAdmissionRefused) return { kind: "admission-refused" }

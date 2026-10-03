@@ -59,7 +59,7 @@ export interface RecentAttemptRow {
   readonly accountId: string | null
   readonly poolId: string | null
   readonly provider: ProviderId | null
-  readonly model: string
+  readonly model: string | null
   /** What went on the wire after the account's alias map. Null when nothing was sent. */
   readonly upstreamModel: string | null
   readonly ingressDialect: Dialect | null
@@ -67,6 +67,7 @@ export interface RecentAttemptRow {
   readonly outcome: UsageOutcome
   /** The upstream's status when it answered. NULL means we never reached it. */
   readonly httpStatus: number | null
+  readonly responseStatus: number | null
   /** The thrown class's name. Never a message, never a body. */
   readonly errorClass: string | null
   readonly latencyMs: number
@@ -98,6 +99,7 @@ const COLUMNS = {
   egressMode: usageRecords.egressMode,
   outcome: usageRecords.outcome,
   httpStatus: usageRecords.httpStatus,
+  responseStatus: usageRecords.responseStatus,
   errorClass: usageRecords.errorClass,
   latencyMs: usageRecords.latencyMs,
   ttfbMs: usageRecords.ttfbMs,

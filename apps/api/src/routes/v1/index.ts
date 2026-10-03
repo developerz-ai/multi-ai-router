@@ -107,6 +107,14 @@ export function dataPlaneRoutes(deps: DataPlaneRoutesDeps): Hono<RouterKeyEnv> {
         request: c.req.raw,
         key: c.get("routerKey"),
         requestId: c.get("requestId"),
+        ...(c.get("correlationId") === undefined
+          ? {}
+          : {
+              identity: {
+                correlationId: c.get("correlationId"),
+                clientRequestId: c.get("clientRequestId") ?? null,
+              },
+            }),
       }),
     )
   }

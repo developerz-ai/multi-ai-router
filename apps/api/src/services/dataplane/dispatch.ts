@@ -15,6 +15,7 @@ export function dispatch(
   body: Uint8Array | null,
   inPlaceReplay: boolean,
   beforeUpstreamStart?: UpstreamStartGuard,
+  onUpstreamStarted?: () => void,
 ): Promise<AttemptOutcome> {
   const { runtime } = ctx
   if (servable.kind === "sdk") {
@@ -22,6 +23,7 @@ export function dispatch(
       plan: servable,
       body,
       beforeUpstreamStart,
+      onUpstreamStarted,
       invoke: runtime.invokeSdk,
       session: runtime.session,
       quota: runtime.quota,
@@ -38,6 +40,7 @@ export function dispatch(
   return runAttempt({
     plan: servable,
     beforeUpstreamStart,
+    onUpstreamStarted,
     method: ctx.request.method,
     clientHeaders: ctx.request.headers,
     body,

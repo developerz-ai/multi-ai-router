@@ -1,11 +1,11 @@
 import { describe, expect, test } from "bun:test"
+import type { UsageRecordInsert } from "../../../src/repositories/usage-repository"
 import {
   createUsageRecordRepository,
   PG_MAX_BIND_PARAMETERS,
   USAGE_RECORD_BIND_PARAMETERS_PER_ROW,
   USAGE_RECORD_MAX_BATCH_ROWS,
 } from "../../../src/repositories/usage-repository"
-import type { NewUsageRecordRow } from "../../../src/schema/usage-records"
 import { harness } from "./fixtures"
 
 /**
@@ -21,7 +21,8 @@ import { harness } from "./fixtures"
  * ceiling that is quietly one batch too high.
  */
 
-const row: NewUsageRecordRow = {
+const row: UsageRecordInsert = {
+  id: "00000000-0000-0000-0000-000000000002",
   correlationId: "00000000-0000-0000-0000-000000000001",
   clientRequestId: null,
   attempt: 1,
@@ -46,6 +47,7 @@ const row: NewUsageRecordRow = {
   outcome: "success",
   streamed: false,
   httpStatus: null,
+  responseStatus: null,
   errorClass: null,
   createdAt: new Date("2026-06-25T00:00:00.000Z"),
 }
@@ -68,13 +70,15 @@ describe("usage insert bind budget", () => {
     expect(await boundParameters(7)).toBe(7 * USAGE_RECORD_BIND_PARAMETERS_PER_ROW)
   })
 
-  test("emits `id` as a default rather than a parameter", async () => {
+  test("binds a stable event ID and scopes duplicate suppression to that primary key", async () => {
     const h = harness()
     await createUsageRecordRepository(h.db).insertMany([row])
     const { sql } = h.only()
 
     expect(sql).toContain('"id"')
-    expect(sql).toContain("values (default, $1")
+    expect(sql).toContain("values ($1")
+    expect(sql).toContain('on conflict ("id") do nothing')
+    expect(h.only().params[0]).toBe(row.id)
   })
 
   test("fits a full batch inside Postgres' bind ceiling", () => {

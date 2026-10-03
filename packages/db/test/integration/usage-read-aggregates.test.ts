@@ -11,8 +11,9 @@ import {
   type UsageReadRepository,
   type UsageWindow,
 } from "../../src/repositories/usage-read-repository"
+import type { UsageRecordInsert } from "../../src/repositories/usage-repository"
 import { accounts } from "../../src/schema/accounts"
-import { type NewUsageRecordRow, usageRecords } from "../../src/schema/usage-records"
+import { usageRecords } from "../../src/schema/usage-records"
 
 /**
  * Needs a real PostgreSQL 16+.
@@ -64,9 +65,10 @@ function attempt(
   accountId: string,
   correlationId: string,
   at: string,
-  fields: Partial<NewUsageRecordRow>,
-): NewUsageRecordRow {
+  fields: Partial<UsageRecordInsert>,
+): UsageRecordInsert {
   return {
+    id: crypto.randomUUID(),
     correlationId,
     accountId,
     model: "glm-4.6",

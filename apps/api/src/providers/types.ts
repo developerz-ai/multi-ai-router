@@ -224,7 +224,17 @@ export interface ProviderOAuthFlow {
   ): OAuthTokens | null
 }
 
+/** Parsed bounded successful-body evidence; no I/O, raw body logging, or response replacement. */
+export interface ResponseObservationDescriptor {
+  readonly terminalPolicy: "evidence-only" | "require-completion"
+  readonly inspectPayload?: (
+    payload: unknown,
+    event: string | undefined,
+  ) => FailureClassification | null
+}
+
 export interface ProviderDriver {
+  readonly responseObservation?: ResponseObservationDescriptor
   readonly id: ProviderId
   /** The surface used when the Account expresses no preference. */
   readonly dialect: Dialect

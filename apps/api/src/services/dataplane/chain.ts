@@ -1,4 +1,4 @@
-import { isRouterError, NoHealthyAccountError } from "@multi-ai-router/core"
+import { isRouterError } from "@multi-ai-router/core"
 import type { Logger } from "../../logging/logger"
 import {
   type AttemptFailure,
@@ -11,10 +11,13 @@ import {
 } from "../routing"
 import type { TranslationContext } from "../translate"
 import type { AttemptOutcome } from "./attempt"
+import { attemptLifetime } from "./attempt-lifetime"
 import { logAttemptFailure } from "./attempt-log"
 import type { ByteSpan } from "./body/scanner"
 import { bodyFor } from "./chain-body"
 import { answeredFailure, type ChainFailure, foldChainFailure, routerFailure } from "./chain-error"
+import { finishChain } from "./chain-finish"
+import { invalidPreparation } from "./chain-preparation"
 import { recordChainFailure } from "./chain-recovery"
 import { createChainRefusals } from "./chain-refusals"
 import { recordAttemptFailure, relaySuccess } from "./chain-relay"
@@ -23,7 +26,8 @@ import { DEFAULT_LOG_REASON_MAX_CHARS } from "./dispatcher-config"
 import { accountHealthFacts } from "./health-observation"
 import type { ServableCandidate } from "./plan"
 import { admitHalfOpenProbe } from "./probe"
-import { relayUpstreamError } from "./relay-error"
+import { attemptRecord } from "./records"
+import { ClientCancelledError } from "./relay-cancellation"
 import type { DispatchRuntime } from "./runtime"
 import { withSessionRestart } from "./session-restart"
 import type { TranslatedRequestBody } from "./translate-body"
@@ -82,7 +86,7 @@ export async function runChain(ctx: ChainContext): Promise<Response> {
   let upstreamMs = 0
 
   for (;;) {
-    if (ctx.request.signal.aborted) return new Response(null, { status: 499 })
+    if (ctx.request.signal.aborted) throw ctx.request.signal.reason ?? new ClientCancelledError()
     const decision = planNextAttempt(ordered, progress, lastFailure, ctx.failover)
     if (decision.action === "stop") break
 
@@ -115,37 +119,43 @@ export async function runChain(ctx: ChainContext): Promise<Response> {
       runtime.quotaSpentThreshold,
     )
     progress = recordAttempt(progress, accountId, decision.action === "retry-in-place")
-    runtime.health.beginAttempt(accountId)
 
     const attemptStarted = runtime.clock.elapsed()
     const at = { startedAt: attemptStartedAt, started: attemptStarted, upstreamMs }
 
-    // Before the call, never during it: a body with no faithful representation in this account's
-    // dialect is a `400` naming the field, and the spec requires it to land before any upstream is
-    // touched. `client-error` is not retryable, which is the right answer — a bad request is bad at
-    // every account that would need the same conversion.
+    // Reject an unrepresentable request before opening an upstream span.
     let upstreamBody: Uint8Array | null
     try {
       upstreamBody = bodyFor(ctx, servable)
     } catch (error) {
-      runtime.health.endAttempt(accountId)
       probe.release()
       if (!isRouterError(error)) throw error
       held = foldChainFailure(held, routerFailure(error))
       lastFailure = { kind: "client-error", message: error.message }
-      // Nothing added to `upstreamMs`: deciding the body has no faithful conversion is the router's
-      // own work, and every millisecond of it belongs in this refusal's overhead.
-      recordAttemptFailure(ctx, servable, decision.attempt, lastFailure, null, at)
+      runtime.record(
+        attemptRecord({
+          ...runtime.preflightAttribution(),
+          timing: runtime.timing(at.startedAt, at.started, upstreamMs),
+          outcome: "client_error",
+          streamed: false,
+          httpStatus: null,
+          errorClass: error.name,
+        }),
+      )
       continue
     }
 
-    // The upstream span opens *here*, once the body exists — not when the attempt began. Everything
-    // above is the router working rather than waiting: the alias rewrite, and for a translated
-    // candidate a full parse and re-serialization of the client's body, which grows with the
-    // conversation. Opening the span at the attempt's start charged that conversion to the upstream,
-    // which is exactly what `path="translate"` on `router_overhead_seconds` exists to make visible —
-    // the label was reporting the router's most expensive path as its cheapest.
+    // Conversion is router work; the upstream wait starts only after the body exists.
     const upstreamStarted = runtime.clock.elapsed()
+    const lifetime = attemptLifetime(
+      runtime,
+      servable,
+      decision.attempt,
+      at,
+      upstreamStarted,
+      recovery,
+      probe.release,
+    )
 
     let outcome: AttemptOutcome
     try {
@@ -155,32 +165,36 @@ export async function runChain(ctx: ChainContext): Promise<Response> {
         upstreamBody,
         decision.action === "retry-in-place",
         recovery?.beforeUpstreamStart,
+        lifetime.onStarted,
       )
     } catch (error) {
-      // A credential that will not decrypt, or a driver that refused to build the request. This
-      // account cannot serve; the next one still can, and the reason is kept in case none can —
-      // *kept*, not promoted: this account never reached an upstream, so it has no verdict on the
-      // request and cannot speak over one an account that did reach its upstream already gave.
-      //
-      // Nothing is added to `upstreamMs` for the same reason. Both transports answer their own
-      // transport failures with an `AttemptOutcome`, so a throw arriving here happened before a byte
-      // was sent — a slow decrypt is router time, and charging it upstream would hide it under the
-      // one budget it is measured against.
-      runtime.health.endAttempt(accountId)
+      lifetime.assertRunning()
+      // Preparation has no upstream verdict and cannot outrank an earlier provider response.
+      lifetime.end()
       probe.release()
-      if (ctx.request.signal.aborted) return new Response(null, { status: 499 })
+      if (ctx.request.signal.aborted) throw ctx.request.signal.reason ?? new ClientCancelledError()
       held = foldChainFailure(held, isRouterError(error) ? routerFailure(error) : null)
-      lastFailure = { kind: "server-error", message: "the account could not be dispatched to" }
-      recordAttemptFailure(ctx, servable, decision.attempt, lastFailure, null, at)
+      progress = priorProgress
+      ordered = ordered.filter((candidate) => candidate.account.id !== accountId)
+      refusals.recordPreparation()
       continue
     }
+    lifetime.assertRunning(outcome.kind === "success" ? outcome.response : undefined)
+    if (outcome.kind === "success") lifetime.onStarted()
 
     if (
       outcome.kind === "admission-refused" ||
-      (outcome.kind === "failure" && recovery !== undefined && !recovery.started())
+      (outcome.kind === "failure" && !lifetime.started())
     ) {
-      runtime.health.endAttempt(accountId)
+      lifetime.end()
+      if (recovery?.started()) recovery.finish("uncertain")
       probe.release()
+      const invalid = invalidPreparation(runtime, outcome, at)
+      if (invalid !== undefined) {
+        held = foldChainFailure(held, routerFailure(invalid))
+        lastFailure = { kind: "client-error", message: invalid.message }
+        continue
+      }
       progress = priorProgress
       ordered = ordered.filter((candidate) => candidate.account.id !== accountId)
       if (outcome.kind === "admission-refused") refusals.record()
@@ -188,10 +202,13 @@ export async function runChain(ctx: ChainContext): Promise<Response> {
       continue
     }
 
-    if (ctx.request.signal.aborted) {
+    if (
+      ctx.request.signal.aborted &&
+      (outcome.kind === "success" || outcome.failure.kind === "client-error")
+    ) {
       recovery?.finish("uncertain")
       if (outcome.kind === "success") void outcome.response.body?.cancel().catch(() => {})
-      runtime.health.endAttempt(accountId)
+      lifetime.end()
       probe.release()
       upstreamMs += runtime.clock.elapsed() - upstreamStarted
       recordAttemptFailure(
@@ -212,11 +229,7 @@ export async function runChain(ctx: ChainContext): Promise<Response> {
     // Applied after the verdict, never before: `recordSuccess`'s unconditional reset to `active`
     // would otherwise erase a `rejected` reading's cooldown on an otherwise-200 response.
     if (outcome.kind === "success") {
-      if (outcome.rateLimit?.limited) recovery?.finish("failed")
-      runtime.health.recordSuccess(accountId, observation)
       runtime.health.applyRateLimit(accountId, outcome.rateLimit, runtime.clock.now(), observation)
-      // Release the local breaker hold; the durable permit remains consumed until the body settles.
-      probe.release()
       progress = markStreamed(progress)
       // The span stays open: a stream settles long after this returns, and every byte of the drain
       // is still time the router spent waiting. `chain-relay.ts` closes it at the last byte.
@@ -224,7 +237,9 @@ export async function runChain(ctx: ChainContext): Promise<Response> {
         ...at,
         upstreamStarted,
         observation,
-        ...(outcome.rateLimit?.limited || !recovery?.designated ? {} : { recovery }),
+        releaseProbe: probe.release,
+        rateLimited: outcome.rateLimit?.limited ?? false,
+        ...(recovery === undefined ? {} : { recovery }),
       })
       // A new account means a fresh SDK session; state that restart explicitly.
       if (decision.action !== "attempt" || !decision.sessionRestart) return relayed
@@ -238,7 +253,7 @@ export async function runChain(ctx: ChainContext): Promise<Response> {
     recordChainFailure(ctx, servable, outcome, runtime.clock.now(), observation, recovery)
     if (recovery?.designated)
       ordered = ordered.filter((candidate) => candidate.account.id !== accountId)
-    runtime.health.endAttempt(accountId)
+    lifetime.end()
     // After the marks, never before: the failure has already cooled the account down to its next
     // backoff step, so releasing here hands the gate to nobody rather than to the next stampede.
     probe.release()
@@ -279,22 +294,6 @@ export async function runChain(ctx: ChainContext): Promise<Response> {
     )
   }
 
-  // The failure that surfaces is the **most actionable** attempt's, not the last one: `chain-error.ts`
-  // owns that ranking, and the reason it is a ranking rather than an assignment is that a credential
-  // the router cannot read on candidate 3 must never overwrite candidate 1's honest `429`.
-  //
-  // A router-shaped failure — a 429 carrying the wait, a 402 saying a human must top up, a 502
-  // saying the *account's* credential was rejected rather than the caller's — is thrown, so it
-  // renders in the ingress dialect with the status its class fixes. Anything else is the upstream's
-  // own answer, relayed unchanged: a bad request is bad at every account, and the provider's reply
-  // is the honest one.
-  if (held !== null) {
-    if (held.kind === "router") throw held.error
-    return relayUpstreamError(held.upstream, held.dialect)
-  }
-  if (lastFailure !== null) {
-    throw new NoHealthyAccountError(`every attempt failed: ${lastFailure.message}`)
-  }
-  refusals.failIfAny()
-  throw new NoHealthyAccountError("no candidate account could be attempted")
+  runtime.activeRequest?.release()
+  return finishChain(held, lastFailure, refusals.failIfAny)
 }

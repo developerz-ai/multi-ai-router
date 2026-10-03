@@ -55,6 +55,7 @@ function sdkResponse(): Response {
 /** An invoker that reports a session id per Account, the way `system`/`init` does. */
 function sdkWithSessions(seen: SdkInvocation[]) {
   return async (invocation: SdkInvocation): Promise<Response> => {
+    invocation.onUpstreamStarted?.()
     seen.push(invocation)
     invocation.onSession?.({
       sdkSessionId: `sess_${invocation.accountId}`,
@@ -337,6 +338,7 @@ function fleet(
 ) {
   const calls = new Map<string, number>()
   return async (invocation: SdkInvocation): Promise<Response> => {
+    invocation.onUpstreamStarted?.()
     seen.push(invocation)
     const nth = (calls.get(invocation.accountId) ?? 0) + 1
     calls.set(invocation.accountId, nth)

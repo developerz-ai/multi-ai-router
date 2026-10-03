@@ -20,8 +20,12 @@ import type { UsageService } from "./services/usage-read"
  */
 export interface AppEnv {
   Variables: {
-    /** Correlation id assigned at ingress and propagated end to end. */
+    /** Safe trace label echoed at ingress; caller-supplied labels may repeat. */
     requestId: string
+    /** Server-owned attempt join key, independent of the caller's trace label. */
+    correlationId: string
+    /** Safe caller-supplied label, including caller UUIDs; null when absent. */
+    clientRequestId: string | null
     /** Request-scoped logger, pre-bound with `requestId` and `component`. */
     log: Logger
   }

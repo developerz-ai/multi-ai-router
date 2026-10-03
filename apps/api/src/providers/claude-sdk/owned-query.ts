@@ -11,6 +11,7 @@ export async function ownedQuery<T>(input: {
   readonly ownerLaunch?: OwnerLaunchFactory
   readonly beforeBackgroundUpstreamStart?: AsyncBackgroundStartGuard
   readonly beforeUpstreamStart?: UpstreamStartGuard
+  readonly onUpstreamStarted?: () => void
   readonly run: (options: Options) => T
 }): Promise<T> {
   const owner = input.ownerLaunch?.(input.accountId)
@@ -19,7 +20,9 @@ export async function ownedQuery<T>(input: {
       await input.beforeBackgroundUpstreamStart?.()
       input.signal.throwIfAborted()
       input.beforeUpstreamStart?.()
-      return input.run(input.options)
+      const messages = input.run(input.options)
+      input.onUpstreamStarted?.()
+      return messages
     }
     const messages = input.run({ ...input.options, spawnClaudeCodeProcess: owner.spawn })
     await owner.ready
@@ -29,6 +32,8 @@ export async function ownedQuery<T>(input: {
     owner.assertReady()
     input.beforeUpstreamStart?.()
     owner.activate()
+    await owner.started
+    input.onUpstreamStarted?.()
     return messages
   } catch (error) {
     owner?.cancel()
