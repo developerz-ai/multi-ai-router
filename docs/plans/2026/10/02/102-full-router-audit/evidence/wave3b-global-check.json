@@ -1,6 +1,6 @@
 {
   "wave": "W3B global recovery",
-  "state": "implemented_reviewed_validated_pending_merge",
+  "state": "implemented_reviewed_merged_release_deployment_pending",
   "observed_on": "2026-10-03",
   "gate": {
     "status": "passed on reviewed final revision including expired-claim DTO correction",
@@ -69,7 +69,7 @@
     "previous_wave": [
       "102:09.2 and101:02.10 merged inPR146"
     ],
-    "implemented_validated_pending_review_merge": [
+    "implemented_merged_release_pending": [
       "102:03.5",
       "102:03.6",
       "101:02.4",
@@ -81,7 +81,7 @@
     ]
   },
   "limits": [
-    "External review, merge, release and deployment pending; no live issuer compatibility assertion.",
+    "PR147 reviewed and merged through normal protected flow; release and deployment pending. No live issuer compatibility assertion.",
     "At-most-one designated start per durable generation; no remote exactly-once guarantee or instantaneous cross-replica catalog visibility.",
     "No live provider calls."
   ],
@@ -96,5 +96,14 @@
     "Permit-consumption fencing and configured quota threshold before dispatch",
     "Coherent UI timestamp/state generation and truthful busy-without-history DTO",
     "Typed test fixtures and corrected docs/cooldown/provenance"
-  ]
+  ],
+  "merge": {
+    "pr": 147,
+    "commit": "3eedac3fe3fcffb0c9805f4ed2b3ca24b0b58d8e",
+    "merged_at": "2026-10-03T18:29:35Z",
+    "changed_files": 132,
+    "required_checks": "all five passed",
+    "actionable_review_threads_resolved": 9,
+    "flow": "normal protected merge"
+  }
 }

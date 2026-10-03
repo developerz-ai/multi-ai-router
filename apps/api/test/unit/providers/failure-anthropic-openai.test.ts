@@ -41,7 +41,7 @@ describe("anthropic-api", () => {
     expect(result?.kind).toBe("rate-limited")
     expect(result?.retryable).toBe(true)
     expect(result?.rateLimit?.retryAfterSeconds).toBe(30)
-    expect(result?.rateLimit?.resetsAt?.toISOString()).toBe("2026-07-24T14:32:00.000Z")
+    expect(result?.rateLimit?.resetsAt).toBeUndefined()
     expect(result?.rateLimit?.resetSource).toBe("provider-reported")
   })
 
@@ -147,7 +147,7 @@ describe("toRouterError", () => {
     expect(error).toBeInstanceOf(QuotaExhaustedError)
     expect((error as QuotaExhaustedError).status).toBe(429)
     expect((error as QuotaExhaustedError).retryAfterSeconds).toBe(30)
-    expect((error as QuotaExhaustedError).resetsAt?.toISOString()).toBe("2026-07-24T14:32:00.000Z")
+    expect((error as QuotaExhaustedError).resetsAt).toBeUndefined()
   })
 
   test("out of credits becomes a 402 with no retry hint at all", () => {

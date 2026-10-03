@@ -278,13 +278,27 @@ is bounded too, by `DB_POOL_CLOSE_TIMEOUT_SECONDS`, so a wedged query cannot hol
 work the flush has already written
 ([09-deployment.md](09-deployment.md#shutdown--draining)).
 
-The [scheduler](#background-work-and-scheduling) is built here too, and it is the one thing given
-the raw `postgres.js` pool rather than a repository — an advisory lock lives on a *session*, so a
-task needs a connection it can reserve. Composition binds that into a lock capability and hands
-that to the runner, so no service ever holds a connection. Ordering follows from what the lock
-implies: arming the timers is synchronous and is *not* awaited at boot, because the first sweep is
-not a precondition for serving a request; on the way out the scheduler stops **first** and is
-awaited, because a tick in flight is holding a pooled connection and shutdown closes the pool.
+The [scheduler](#background-work-and-scheduling) uses a dedicated bounded auxiliary pool for
+session advisory locks. Task repositories and writers retain the main pool, so a valid main pool
+of one connection remains usable while a task owns its lock. Timers arm synchronously at boot. Local session capacity reports `skipped_capacity` and retries
+after `SCHEDULER_LOCAL_CAPACITY_RETRY_MS`; held task exclusion reports `skipped_locked` and keeps
+its normal jittered interval.
+Shutdown stops background producers within their configured bounds, closes the auxiliary lock
+resources, and then runs the usage, quota and status final drains in parallel while the main pool
+remains alive. `BACKGROUND_SHUTDOWN_DRAIN_MS` bounds scheduler and writer drains; credential
+refresh and recovery coordination retain their own stop budgets. These are separate phase bounds,
+not one whole-runtime deadline. An unresolved acknowledgement is
+reported as uncertain rather than durable. Admission closes before joining the current batch,
+and one final pass handles facts queued during that batch. A failed status write retains its
+original lifecycle, credential and recovery-generation observation; a local forget fence prevents
+it from resurrecting a verdict after reset.
+
+Historical unfinished runs are examined outside the current task lock. Maintenance rotates
+through bounded batches of historical task names, including tasks removed from the current
+registry, and tries each task's own advisory lock. It captures bounded run IDs under exclusion,
+checks the lock-loss signal after the read, and marks only those captured unfinished rows failed.
+A late update cannot close a successor created after the snapshot. Live owners remain visible;
+interrupted rows become eligible for ordinary finished-run retention.
 
 ## Background work and scheduling
 
@@ -404,4 +418,4 @@ An exhausted account may still refresh its credential successfully without clear
 
 A temporary database read or lock-admission failure before the issuer exchange keeps the timer at the configured minimum delay. An exception after the exchange may mean the issuer already rotated the grant, so the unchanged ciphertext is quarantined for the lifetime of the process, including rechecks, disable/enable, and refresher stop/start. Only an authoritative replacement credential or account deletion clears that quarantine; operators must reauthorize the account if writeback remains uncertain. This quarantine is not durable across a process restart during a database outage. Final reconciliation may schedule a newly committed credential if writeback succeeded despite an acknowledgment error; a newer authorization's timer is preserved. Persistence and remote execution are uncertain across that failure boundary, and no exactly-once guarantee is claimed.
 
-Credential refresh shutdown uses the existing `SHUTDOWN_DRAIN_MS` budget as well as HTTP draining. Within that bound, a known parsed rotated grant may finish its credential CAS while the main database pool remains alive. If the deadline expires, shutdown logs that persistence is uncertain and never retries the exchange, then closes the auxiliary refresh-lock pool and main pool. This bounds credential refresh draining only; scheduler and other background flush shutdown bounds remain W4 work.
+Credential refresh shutdown uses the existing `SHUTDOWN_DRAIN_MS` budget as well as HTTP draining. Within that bound, a known parsed rotated grant may finish its credential CAS while the main database pool remains alive. If the deadline expires, shutdown logs that persistence is uncertain and never retries the exchange, then closes the auxiliary refresh-lock pool and main pool. Scheduler and usage/quota/status draining have separate background shutdown bounds; none of these bounds promises persistence after a deadline expires.

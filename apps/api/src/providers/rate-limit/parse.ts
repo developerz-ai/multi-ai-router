@@ -38,8 +38,10 @@ function draftFor(drafts: Map<string, Draft>, limiter: string): Draft {
 }
 
 function parseCount(value: string): number | undefined {
-  const parsed = Number(value.trim())
-  return Number.isFinite(parsed) ? parsed : undefined
+  const trimmed = value.trim()
+  if (trimmed === "") return undefined
+  const parsed = Number(trimmed)
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : undefined
 }
 
 function applyField(draft: Draft, field: string, value: string, absoluteReset: boolean): void {
@@ -111,26 +113,30 @@ function parseRetryAfter(headers: Headers): RetryAfter {
   const millis = headers.get("retry-after-ms")
   if (millis !== null) {
     const parsed = Number(millis.trim())
-    if (Number.isFinite(parsed)) return { seconds: Math.max(0, parsed / 1000) }
+    if (millis.trim() !== "" && Number.isFinite(parsed) && parsed > 0)
+      return { seconds: parsed / 1000 }
   }
 
   const value = headers.get("retry-after")
-  if (value === null) return {}
+  if (value === null || value.trim() === "") return {}
 
   const seconds = Number(value.trim())
-  if (Number.isFinite(seconds)) return { seconds: Math.max(0, seconds) }
+  if (Number.isFinite(seconds)) return seconds > 0 ? { seconds } : {}
 
   const at = parseInstant(value)
   return at ? { at } : {}
 }
 
-function earliest(windows: readonly RateLimitWindow[]): Date | undefined {
-  let soonest: Date | undefined
+function depletedReset(windows: readonly RateLimitWindow[]): RetryAfter {
+  let at: Date | undefined
+  let seconds: number | undefined
   for (const window of windows) {
-    const candidate = window.resetsAt
-    if (candidate && (!soonest || candidate.getTime() < soonest.getTime())) soonest = candidate
+    if (window.remaining === undefined || window.remaining > 0) continue
+    if (window.resetsAt && (!at || window.resetsAt > at)) at = window.resetsAt
+    if (window.resetAfterSeconds !== undefined && window.resetAfterSeconds > 0)
+      seconds = Math.max(seconds ?? 0, window.resetAfterSeconds)
   }
-  return soonest
+  return { at, seconds }
 }
 
 export function parseRateLimitHeaders(response: UpstreamResponse): RateLimitSignal | null {
@@ -146,12 +152,14 @@ export function parseRateLimitHeaders(response: UpstreamResponse): RateLimitSign
     return { limited: true, resetSource: "unknown", windows: [] }
   }
 
-  const resetsAt = earliest(windows) ?? retryAfter.at
-  const reported = resetsAt !== undefined || retryAfter.seconds !== undefined
+  const effective =
+    retryAfter.at || retryAfter.seconds !== undefined ? retryAfter : depletedReset(windows)
+  const resetsAt = effective.at
+  const reported = resetsAt !== undefined || effective.seconds !== undefined
 
   return {
     limited: limitedByStatus || windows.some((window) => window.remaining === 0),
-    retryAfterSeconds: retryAfter.seconds,
+    retryAfterSeconds: effective.seconds,
     resetsAt,
     resetSource: reported ? "provider-reported" : "unknown",
     windows,

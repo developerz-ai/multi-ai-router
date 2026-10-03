@@ -288,7 +288,7 @@ export function createSeries(options: RegistryOptions = {}) {
 
     taskRuns: registry.counter({
       name: "router_task_runs_total",
-      help: "Background task runs by outcome. skipped_locked is normal, not an error.",
+      help: "Background task runs by outcome. skipped_locked is remote contention; skipped_capacity is local pool capacity. Neither is an error.",
       labels: ["task", "outcome"],
     }),
   }

@@ -61,7 +61,37 @@ export function memoryTaskRepository(): MemoryTaskRepository {
 
   return {
     rows,
-
+    listInterruptedTasks: async (cutoff, limit, afterTask) =>
+      [
+        ...new Set(
+          rows
+            .filter(
+              (row) =>
+                row.finishedAt === null &&
+                row.startedAt < cutoff &&
+                (afterTask === undefined || row.task > afterTask),
+            )
+            .map((row) => row.task),
+        ),
+      ]
+        .sort()
+        .slice(0, limit),
+    listInterruptedRunIds: async (task, before, limit) =>
+      rows
+        .filter((row) => row.task === task && row.finishedAt === null && row.startedAt < before)
+        .slice(0, limit)
+        .map((row) => row.id),
+    markInterruptedRunIds: async (ids, now) => {
+      let count = 0
+      for (const row of rows)
+        if (ids.includes(row.id) && row.finishedAt === null) {
+          row.finishedAt = now
+          row.outcome = "failed"
+          row.error = "previous task run did not finish"
+          count++
+        }
+      return count
+    },
     begin: async (task: ScheduledTaskName, now: Date) => {
       const id = crypto.randomUUID()
       rows.push({

@@ -1,3 +1,4 @@
+import { DEFAULT_UNKNOWN_RESET_RETRY_AFTER_SECONDS } from "@multi-ai-router/core"
 /**
  * When every candidate is unavailable, fail honestly and specifically.
  *
@@ -39,7 +40,7 @@ import {
  * Operator-configurable through {@link NoCandidatesInput.unknownResetRetryAfterSeconds}
  * (non-negotiable 11: every interval is config).
  */
-export const DEFAULT_UNKNOWN_RESET_RETRY_AFTER_SECONDS = 30
+export { DEFAULT_UNKNOWN_RESET_RETRY_AFTER_SECONDS } from "@multi-ai-router/core"
 
 export interface NoCandidatesInput {
   readonly scope: ScopeDiagnostics

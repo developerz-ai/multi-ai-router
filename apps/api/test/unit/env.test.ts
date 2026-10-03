@@ -47,6 +47,7 @@ describe("parseEnv", () => {
     expect(env.port).toBe(8080)
     expect(env.serverIdleTimeoutSeconds).toBe(DEFAULT_SERVER_IDLE_TIMEOUT_SECONDS)
     expect(env.shutdownDrainMs).toBe(15_000)
+    expect(env.background.shutdownDrainMs).toBe(15_000)
     expect(env.shutdownReadyGraceMs).toBe(0)
     // Restated from the package that opens the pool, so an unset variable and the documented
     // default cannot become two numbers that merely used to agree.
@@ -90,6 +91,8 @@ describe("parseEnv", () => {
       modelCatalogRefreshBatchSize: 25,
       sweepBatchSize: 1_000,
       jitterFraction: 0.2,
+      lockPoolMaxConnections: 1,
+      localCapacityRetryMs: 1_000,
     })
     expect(env.adminAuth).toEqual({
       sessionIdleMinutes: 43_200,
@@ -142,6 +145,9 @@ describe("parseEnv", () => {
       ADMIN_SESSION_PURGE_INTERVAL_MINUTES: "20",
       SWEEP_BATCH_SIZE: "500",
       SCHEDULER_JITTER_FRACTION: "0.5",
+      SCHEDULER_LOCK_POOL_MAX_CONNECTIONS: "3",
+      SCHEDULER_LOCAL_CAPACITY_RETRY_MS: "5000",
+      BACKGROUND_SHUTDOWN_DRAIN_MS: "25000",
       ADMIN_SESSION_IDLE_MINUTES: "60",
       ADMIN_SESSION_ABSOLUTE_HOURS: "8",
       ADMIN_LOGIN_MAX_ATTEMPTS: "3",
@@ -170,6 +176,7 @@ describe("parseEnv", () => {
     expect(env.accountRecheckCooldownSeconds).toBe(30)
     expect(env.accountTestNowCooldownSeconds).toBe(45)
     expect(env.shutdownReadyGraceMs).toBe(20_000)
+    expect(env.background.shutdownDrainMs).toBe(25_000)
     expect(env.databasePool).toEqual({
       maxConnections: 25,
       idleTimeoutSeconds: 120,
@@ -198,6 +205,8 @@ describe("parseEnv", () => {
       modelCatalogRefreshBatchSize: 8,
       sweepBatchSize: 500,
       jitterFraction: 0.5,
+      lockPoolMaxConnections: 3,
+      localCapacityRetryMs: 5_000,
     })
     expect(env.adminAuth).toEqual({
       sessionIdleMinutes: 60,

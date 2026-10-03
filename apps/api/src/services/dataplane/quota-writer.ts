@@ -2,6 +2,7 @@ import { describeError, type QuotaWindowState } from "@multi-ai-router/core"
 import type { AccountRepository } from "@multi-ai-router/db"
 import type { Logger } from "../../logging/logger"
 import { mergeQuotaWindows } from "../routing/quota"
+import { createWriterLifecycle } from "../shutdown/writer-lifecycle"
 
 /**
  * Quota readings, made durable — off the request path.
@@ -23,7 +24,7 @@ import { mergeQuotaWindows } from "../routing/quota"
  *   why this is a map and `usage/recorder.ts` — which records history and must not lose a row — is
  *   a bounded queue. Reach for that one when the thing being written is a fact about the past.
  * - **A failed write costs freshness, never traffic.** The reading stays live in memory and the
- *   next one re-writes the row, so a batch is dropped rather than retried at the head of a queue.
+ *   failed window is retained for the next flush, merged behind newer pending evidence. Each flush attempts a window once; shutdown adds at most one final pass within its time budget.
  *
  * It is deliberately not a scheduled task. Those hold a `pg_try_advisory_lock` so exactly one
  * replica sweeps, and a reading lives in the memory of the replica that *observed* it — the
@@ -34,11 +35,13 @@ export interface QuotaWindowWriterDeps {
   readonly accounts: Pick<AccountRepository, "upsertQuotaWindow">
   readonly logger: Logger
   /** `QUOTA_WRITE_INTERVAL_MS`. How long a reading may sit in memory before it is durable. */
+  readonly shutdownDrainMs?: number
   readonly flushIntervalMs: number
 }
 
 export interface QuotaWindowWriterStats {
   /** Accounts whose latest reading has not been written yet. */
+  readonly rejectedAfterStop: number
   readonly pending: number
   /** Rows upserted since construction. Monotonic. */
   readonly written: number
@@ -52,7 +55,7 @@ export interface QuotaWindowWriter {
   /** Writes everything pending. Used by tests, by shutdown, and by the flush timer. */
   flush(): Promise<void>
   start(): void
-  /** Stops the timer and writes what is left, so a clean shutdown loses no reading. */
+  /** Closes admission and drains current plus final pending batch within a configured bound. */
   stop(): Promise<void>
   stats(): QuotaWindowWriterStats
 }
@@ -63,6 +66,8 @@ export function createQuotaWindowWriter(deps: QuotaWindowWriterDeps): QuotaWindo
 
   let timer: ReturnType<typeof setInterval> | null = null
   let inFlight: Promise<void> | null = null
+  let unsettled = 0
+  let rejectedAfterStop = 0
   let written = 0
   let writeFailures = 0
 
@@ -72,6 +77,7 @@ export function createQuotaWindowWriter(deps: QuotaWindowWriterDeps): QuotaWindo
     // to a batch already being written, and must not be dropped by the clear that follows it.
     const batch = [...pending.entries()]
     pending.clear()
+    unsettled = batch.length
 
     let failedAccounts = 0
     let lastError: unknown = null
@@ -79,17 +85,22 @@ export function createQuotaWindowWriter(deps: QuotaWindowWriterDeps): QuotaWindo
     for (const [accountId, windows] of batch) {
       let failed = false
       for (const window of windows) {
+        if (!lifecycle.canWrite()) {
+          pending.set(accountId, mergeQuotaWindows(pending.get(accountId) ?? [], [window]))
+          continue
+        }
         try {
           await deps.accounts.upsertQuotaWindow(accountId, window)
           written += 1
         } catch (error) {
-          // Not re-queued: the live reading is still in memory and the next `rate_limit_event`
-          // writes it again. Re-queueing a row the database refuses would loop on the failure.
+          // Retry at the next flush, merging with newer pending facts rather than overwriting them.
+          pending.set(accountId, mergeQuotaWindows(pending.get(accountId) ?? [], [window]))
           writeFailures += 1
           lastError = error
           failed = true
         }
       }
+      unsettled -= 1
       if (failed) failedAccounts += 1
     }
 
@@ -109,13 +120,27 @@ export function createQuotaWindowWriter(deps: QuotaWindowWriterDeps): QuotaWindo
     if (inFlight !== null) return inFlight
     const run = drain().finally(() => {
       inFlight = null
+      unsettled = 0
     })
     inFlight = run
     return run
   }
 
+  const lifecycle = createWriterLifecycle({
+    flush,
+    pending: () => pending.size,
+    outstanding: () => pending.size + unsettled,
+    timeoutMs: deps.shutdownDrainMs ?? 15_000,
+    warn: (pending) =>
+      log.warn("writer shutdown incomplete; unconfirmed writes remain", { pending }),
+  })
+
   return {
     record(accountId, windows) {
+      if (!lifecycle.accepting()) {
+        rejectedAfterStop += 1
+        return
+      }
       if (windows.length === 0) return
       const snapshot = windows.map((window) => ({
         ...window,
@@ -128,6 +153,7 @@ export function createQuotaWindowWriter(deps: QuotaWindowWriterDeps): QuotaWindo
     flush,
 
     start() {
+      if (!lifecycle.start()) return
       if (timer !== null) return
       timer = setInterval(() => {
         void flush()
@@ -141,9 +167,9 @@ export function createQuotaWindowWriter(deps: QuotaWindowWriterDeps): QuotaWindo
         clearInterval(timer)
         timer = null
       }
-      await flush()
+      await lifecycle.stop()
     },
 
-    stats: () => ({ pending: pending.size, written, writeFailures }),
+    stats: () => ({ rejectedAfterStop, pending: pending.size, written, writeFailures }),
   }
 }

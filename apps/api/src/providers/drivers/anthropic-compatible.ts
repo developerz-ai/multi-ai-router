@@ -1,5 +1,6 @@
 import { createHttpDriver } from "../driver"
-import { genericCreditsRule } from "./compatible-rules"
+import { parseCompatibleRateLimit } from "../rate-limit/compatible-body"
+import { genericCreditsRule, reportedQuotaResetRule } from "./compatible-rules"
 
 /**
  * `anthropic-compatible` — the escape hatch for any Anthropic-shaped endpoint. Operator-supplied
@@ -13,5 +14,6 @@ import { genericCreditsRule } from "./compatible-rules"
 export const anthropicCompatibleDriver = createHttpDriver({
   id: "anthropic-compatible",
   surfaces: [{ dialect: "anthropic", baseUrl: null }],
-  rules: [genericCreditsRule],
+  parseRateLimit: parseCompatibleRateLimit,
+  rules: [reportedQuotaResetRule, genericCreditsRule],
 })

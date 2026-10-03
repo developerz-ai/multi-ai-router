@@ -95,6 +95,9 @@ export function createDispatcher(deps: DispatcherDeps): Dispatcher {
 
     const runtime = createRuntime({
       health: deps.health,
+      ...(options.selection?.unknownResetRetryAfterSeconds === undefined
+        ? {}
+        : { unknownResetRetryAfterSeconds: options.selection.unknownResetRetryAfterSeconds }),
       ...(options.selection?.quotaSpentThreshold === undefined
         ? {}
         : { quotaSpentThreshold: options.selection.quotaSpentThreshold }),

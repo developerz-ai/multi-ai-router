@@ -12,6 +12,7 @@ import {
   createPoolRepository,
   createPriceOverrideRepository,
   createScheduledTaskRepository,
+  createSchedulerLockPool,
   createSessionRepository,
   createUsageDailyRepository,
   createUsageRecordRepository,
@@ -69,6 +70,7 @@ import { createUsageRecorderFromEnv, type UsageRecorder } from "../services/usag
 import type { AdminServices } from "../types"
 import { createAdminPlane } from "./admin"
 import { dispatchOptionsFromEnv } from "./dispatch-options"
+import { createRuntimeLifecycle } from "./lifecycle"
 import { createRecoveryComponents } from "./recovery"
 /**
  * The composition root: every long-lived object in the process is constructed here, exactly once,
@@ -91,7 +93,7 @@ import { createRecoveryComponents } from "./recovery"
 export interface RuntimeDeps {
   readonly env: Env
   readonly database: Database
-  /** The pool behind `database`. One consumer, `schedulerFromEnv` — see the note on its deps. */
+  /** Main SQL handle retained for pool diagnostics; scheduler locks use a separate pool. */
   readonly sql: SqlConnection
   /** The same pool's own occupancy sample, for `router_db_pool_connections` — `main.ts`. */
   readonly dbPoolStats: () => PoolSample
@@ -144,6 +146,12 @@ export function createRuntime(deps: RuntimeDeps): Runtime {
     connectTimeoutSeconds: env.databasePool.connectTimeoutSeconds,
     closeTimeoutSeconds: env.databasePool.closeTimeoutSeconds,
   })
+  const schedulerLock = createSchedulerLockPool({
+    url: env.databaseUrl,
+    maxConnections: env.scheduler.lockPoolMaxConnections,
+    connectTimeoutSeconds: env.databasePool.connectTimeoutSeconds,
+    closeTimeoutSeconds: env.databasePool.closeTimeoutSeconds,
+  })
   const accounts = createAccountRepository(database, {
     recoveryCooldownMs: env.recovery.cooldownMs,
   })
@@ -184,6 +192,7 @@ export function createRuntime(deps: RuntimeDeps): Runtime {
     accounts,
     logger,
     flushIntervalMs: env.dataPlane.quotaWriteIntervalMs,
+    shutdownDrainMs: env.background.shutdownDrainMs,
   })
   // The durable half of the breaker, and for the same reason: the replica that observed the verdict
   // is the only one holding it. A cooldown is not written — a clock recovers it — but `exhausted`
@@ -193,6 +202,7 @@ export function createRuntime(deps: RuntimeDeps): Runtime {
     accounts,
     logger,
     flushIntervalMs: env.dataPlane.accountStatusWriteIntervalMs,
+    shutdownDrainMs: env.background.shutdownDrainMs,
     now,
   })
   // The breaker's numbers reach it from exactly one place: `breaker.ts` reads no configuration and
@@ -315,11 +325,12 @@ export function createRuntime(deps: RuntimeDeps): Runtime {
       sample: () => {
         const main = deps.dbPoolStats()
         const auxiliary = refreshLock.poolStats()
+        const scheduled = schedulerLock.poolStats()
         return {
-          inUse: main.inUse + auxiliary.inUse,
-          idle: main.idle + auxiliary.idle,
-          waiting: main.waiting + auxiliary.waiting,
-          max: main.max + auxiliary.max,
+          inUse: main.inUse + auxiliary.inUse + scheduled.inUse,
+          idle: main.idle + auxiliary.idle + scheduled.idle,
+          waiting: main.waiting + auxiliary.waiting + scheduled.waiting,
+          max: main.max + auxiliary.max + scheduled.max,
         }
       },
     },
@@ -370,7 +381,7 @@ export function createRuntime(deps: RuntimeDeps): Runtime {
 
   // --- background work ------------------------------------------------------
   // Every periodic task behind one in-process runner (non-negotiable 13). `schedulerFromEnv` binds
-  // the advisory lock to `deps.sql`, so nothing below is ever handed a connection.
+  // advisory exclusion to its separate pool, so main-pool capacity remains available to task work.
 
   // --- data plane -----------------------------------------------------------
   const verifier = createRouterKeyVerifier({
@@ -561,34 +572,25 @@ export function createRuntime(deps: RuntimeDeps): Runtime {
     // gate routing — stays the operator's, untouched by any timer.
     refreshCatalog: (account, at) => refreshAccountCatalog(catalogRefreshDeps, account, at),
     env,
-    sql: deps.sql,
+    schedulerLock,
     logger,
     now,
     onTick: (result) => metrics.observeTask(result),
   })
 
-  return {
-    admin,
-    verifier,
-    dispatcher,
-    catalog,
-    health,
-    sdkQuota,
-    quotaWriter,
-    statusWriter,
-    models: modelCatalogStore,
-    prices,
-    scheduler,
-    metrics,
-    start: async () => {
+  const lifecycle = createRuntimeLifecycle({
+    logger,
+    start: async (assertStarting) => {
       // Awaited: an empty catalog would look exactly like a deployment with no accounts.
       await catalog.refresh()
+      assertStarting()
       catalog.start()
       recoveryComponents?.coordinator.start()
       // Awaited for the weaker reason: an unloaded book prices off the shipped table, which is
       // wrong rather than absent, and a spend column that corrects itself a second later is worse
       // than one that was right from the first request.
       await prices.refresh()
+      assertStarting()
       prices.start()
       // Not awaited, and the one warm store here that genuinely need not be: an unloaded model
       // catalog makes `GET /v1/catalog` thinner for a moment, which no request path and no report
@@ -607,29 +609,51 @@ export function createRuntime(deps: RuntimeDeps): Runtime {
       scheduler.start()
       // Awaited: rebuilt from `tokenExpiresAt`, so a token that expired during downtime is due now.
       await refresher.start()
+      assertStarting()
       logger.info("runtime ready", {
         component: "runtime",
         accounts: catalog.accounts().length,
         pools: catalog.pools().length,
       })
     },
-    stop: async () => {
-      // First and awaited: a tick in flight holds a connection the caller's pool close would cut.
-      await recoveryComponents?.coordinator.stop()
-      await scheduler.stop()
-      await refresher.stop()
-      await refreshLock.close()
-      admin.connect.stop() // every pending login, so no `claude` subprocess outlives the router
-      catalog.stop()
-      prices.stop()
-      modelCatalogStore.stop()
-      await usage.stop()
-      // Last, and awaited: a reading observed a second before shutdown is the freshest thing anyone
-      // knows about that account's quota, and losing it means the next boot renders a stale gauge.
-      await quotaWriter.stop()
-      // Same, and more so: a verdict lost here is an account that comes back `active`, gets a
-      // request, and fails it again to re-learn what this process already knew.
-      await statusWriter.stop()
-    },
+    phases: [
+      [
+        { name: "account-connect", run: () => admin.connect.stop() },
+        { name: "catalog-timers", run: () => catalog.stop() },
+        { name: "price-timers", run: () => prices.stop() },
+        { name: "model-catalog-timers", run: () => modelCatalogStore.stop() },
+      ],
+      [
+        { name: "recovery-coordinator", run: () => recoveryComponents.coordinator.stop() },
+        { name: "scheduler", run: () => scheduler.stop() },
+        { name: "credential-refresher", run: () => refresher.stop() },
+      ],
+      [
+        { name: "scheduler-lock-pool", run: () => schedulerLock.close() },
+        { name: "refresh-lock-pool", run: () => refreshLock.close() },
+      ],
+      [
+        { name: "usage-writer", run: () => usage.stop() },
+        { name: "quota-writer", run: () => quotaWriter.stop() },
+        { name: "status-writer", run: () => statusWriter.stop() },
+      ],
+    ],
+  })
+
+  return {
+    admin,
+    verifier,
+    dispatcher,
+    catalog,
+    health,
+    sdkQuota,
+    quotaWriter,
+    statusWriter,
+    models: modelCatalogStore,
+    prices,
+    scheduler,
+    metrics,
+    start: lifecycle.start,
+    stop: lifecycle.stop,
   }
 }

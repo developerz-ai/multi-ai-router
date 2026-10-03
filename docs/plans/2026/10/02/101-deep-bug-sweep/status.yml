@@ -4,8 +4,8 @@ status: in_progress        # not_started | in_progress | blocked | complete | su
 created_by: sebi
 worked_by: "Codex team"
 owner: sebi
-percent: 23
-current_focus: "PR144 dependencies merged; W3A PR145 merged; release/deployment pending. Quota prerequisite PR146 merged8aaf241; global recovery reviewed final gate 4675/348 passed; review fixes applied; new-head CI/merge/release/deployment pending."
+percent: 29
+current_focus: "PR147 global recovery merged3eedac3 through normal protected flow; 132 files, all five required checks passed and nine review threads resolved. W4 background lifecycle/provider resets reviewed gate4737/364 and isolated benchmark8k/0fail/0buffer/p99.6666666667ms passed; review/merge/release/deployment pending."
 slices:
   - file: 01-edge-auth-security.md
     status: in_progress
@@ -13,7 +13,7 @@ slices:
     findings: 23
   - file: 02-routing-state-persistence.md
     status: in_progress
-    percent: 17
+    percent: 50
     findings: 18
   - file: 03-providers-claude-sdk.md
     status: in_progress
@@ -32,7 +32,8 @@ slices:
     percent: 0
     findings: 8
 evidence:
-  - "Global recovery local regressions: real PostgreSQL with two independent boots/catalogs/dispatchers, 200 concurrent requests admit one mocked provider start and report 199 HTTP 429 refusals once each with null account usage. Captured quota retirement preserves a newer provider revision; late queued lifecycle/credential/pending changes and fresh spent quota refuse dispatch without health strikes. Reviewed bin/check 4675 tests/348 files/40669 assertions passed with zero failures and lint/typecheck/build passed, including DB/API observed-generation and operator-check-claim suites. Migration 0028 claim regressions passed on PostgreSQL 16/18, 2 tests/11 assertions each. PG16 observed-generation 2 tests/7 assertions and broader lifecycle/publication 14 tests/56 assertions passed. Reviewed isolated production-enabled benchmark: 8000 requests, zero failures/buffered streams, maximum p99 0.65 ms, no violations; RecoveryAccess/final-start guard enabled with an off-path coordination sentinel. Previous 0.9681818182 ms run is a historical pre-review baseline without that guard hook enabled. Review/merge/release/deploy not claimed. Warm quota/floor/rank focused suite 189 passed."
+  - "W4 focused writer/usage/orphan validation: 70 tests/156 assertions across nine actual unit files, including per-row deadline guards and throwing uncertainty-observer safety. Historical orphan retention integration passed PostgreSQL16 and18, one test/four assertions each. Dedicated lock/session/capacity suites passed17 tests/67 assertions across four files on each PostgreSQL16/18 version. Final W4 bin/check passed4737 tests/364 files/40888 assertions, zero failures; lint/typecheck/build passed. Final reviewed production-recovery-enabled benchmark passed8000 samples, zero failures/buffered streams, maxp99 0.6666666667ms, violations empty; added streamingTTFTp95 0.05533235ms passthrough/0.17164840ms translation. Prior0.7647058824ms run is historical pre-review evidence. Review/merge/release/deployment pending; see102-full-router-audit/evidence/wave4-background-check.json."
+  - "Global recovery local regressions: real PostgreSQL with two independent boots/catalogs/dispatchers, 200 concurrent requests admit one mocked provider start and report 199 HTTP 429 refusals once each with null account usage. Captured quota retirement preserves a newer provider revision; late queued lifecycle/credential/pending changes and fresh spent quota refuse dispatch without health strikes. Reviewed bin/check 4675 tests/348 files/40669 assertions passed with zero failures and lint/typecheck/build passed, including DB/API observed-generation and operator-check-claim suites. Migration 0028 claim regressions passed on PostgreSQL 16/18, 2 tests/11 assertions each. PG16 observed-generation 2 tests/7 assertions and broader lifecycle/publication 14 tests/56 assertions passed. Reviewed isolated production-enabled benchmark: 8000 requests, zero failures/buffered streams, maximum p99 0.65 ms, no violations; RecoveryAccess/final-start guard enabled with an off-path coordination sentinel. Previous 0.9681818182 ms run is a historical pre-review baseline without that guard hook enabled. PR147 merged3eedac3 at18:29:35UTC;132files, five required checks passed, nine actionable review threads resolved. Release/deployment pending. Warm quota/floor/rank focused suite 189 passed."
   - "Quota ordering/floor CAS: PR146 merged8aaf241 through normal protected flow at16:56:02UTC; all five required checks passed and CodeRabbit had no actionable comments. Optional developerz was queued at merge, not a completed review verdict. Narrow scope102:09.2 and101:02.10 only. Final bin/check passed4563 tests across321 files, zero failures; PostgreSQL16/18 quota suites each9 tests/18 assertions and fresh migrations passed; DBunits158 tests/480 assertions passed. See102-full-router-audit/evidence/wave3b-quota-check.json. Final benchmark passed8000 samples, zero failures/buffered streams, maximum p99 0.7 ms, no budget violations; see102-full-router-audit/evidence/wave3b-quota-bench.json."
   - "W3A reviewed revision: pinned Bun 1.4.2 bin/check with disposable PostgreSQL 18.6: 4549 tests across 319 files passed, zero failed; lint/typecheck/build passed. Mocked OAuth identity/lifecycle, exact CAS, dedicated lock contention/loss, shutdown/deadline and postcommit catalog regressions covered. No live provider compatibility claim. Final local amd64 image build passed; independent seven-refresher-suite verification: 58 tests, 176 assertions. PR145 merged as 2a0c562 at 16:29:02 UTC through the normal protected flow; all five new-head required CI checks passed and three review threads resolved. Release/deployment pending. See 102-full-router-audit/evidence/wave3a-check.json."
   - "102-full-router-audit/evidence/wave3a-bench.json: prior pre-review benchmark revision (not rerun after review fixes), 8000 requests, zero failures/buffered streams; maximum p99 0.9454545455 ms, violations empty. A CLI-version smoke check ran briefly near benchmark startup. Earlier runs reached about 5 ms under concurrent workload; no causal performance improvement is claimed."
@@ -43,7 +44,7 @@ evidence:
   - "Wave 2: pinned Bun 1.4.2 bin/check with disposable PostgreSQL: 4417 tests passed, zero failed; lint, typecheck and build passed. PR #143 merged as 986189e; all five CI checks passed; CodeRabbit generated no actionable comments. Release/deployment pending."
   - "Pinned Bun 1.4.2; bin/check with disposable PostgreSQL: 4326 tests passed, zero failed; build passed."
   - "102-full-router-audit/evidence/wave1-bench.json: 8000 requests, zero failures/buffered streams; max p99 1.28 ms."
-notes: "W3A implements OAuth identity/refresh ordering and stale verdict fencing; 102:03.2 reconnect recovery remains partial/open until W3B global probe/quota boundary is complete. W3B global recovery probe admission, persisted quota recovery remain open; warm retirement-overlay reconciliation and expired continuous-reading ranking remain open; W4 scheduler/general shutdown work remains open. Wave 1 implements credential boundaries, authentication races and SDK isolation. 01.14 not reproduced on real full-body POST with Bun 1.4.0 or pinned 1.4.2: idle=2s, response delayed 7s still succeeds; unconsumed GET reproduces idle close. 01.16 transport failures fixed; clean HTTP-200 protocol error frames remain open. #87 current literal removed; operational rotation remains open."
+notes: "W3A identity/refresh and W3B global recovery, quota authority retirement, warm overlay reconciliation and expired-reading ranking are merged and validated. W4 scheduler/general shutdown and provider reset/classification are implementing; final W4 validation, release and deployment remain pending. Wave 1 implements credential boundaries, authentication races and SDK isolation. 01.14 not reproduced on real full-body POST with Bun 1.4.0 or pinned 1.4.2: idle=2s, response delayed 7s still succeeds; unconsumed GET reproduces idle close. 01.16 transport failures fixed; clean HTTP-200 protocol error frames remain open. #87 current literal removed; operational rotation remains open."
 last_updated: 2026-10-03
 # Percentages measure locally resolved findings; review, release and deployment remain separate gates.
 resolved_findings:
@@ -71,12 +72,25 @@ resolved_findings:
   - "02.2"
   - "03.6"
 
-implemented_merged_release_pending:
   - "02.10"
-
-implemented_validated_pending_review_merge:
   - "02.1"
   - "02.3"
   - "02.4"
   - "02.8"
   - "02.15"
+
+implemented_merged_release_pending:
+  - "02.10"
+  - "02.1"
+  - "02.3"
+  - "02.4"
+  - "02.8"
+  - "02.15"
+
+implemented_validated_pending_review_merge:
+  - "01.22"
+  - "02.14"
+  - "02.16"
+  - "03.4"
+  - "03.8"
+  - "03.12"

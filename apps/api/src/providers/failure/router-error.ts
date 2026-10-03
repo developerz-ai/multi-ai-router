@@ -1,5 +1,8 @@
 import {
   CreditsExhaustedError,
+  DEFAULT_UNKNOWN_RESET_RETRY_AFTER_SECONDS,
+  InvalidRequestError,
+  latestResetDeadline,
   QuotaExhaustedError,
   type RouterError,
   UpstreamAuthError,
@@ -35,6 +38,7 @@ import type { FailureClassification, RateLimitSignal } from "../types"
 export interface FailureContext {
   readonly signal: RateLimitSignal | null
   readonly now: Date
+  readonly unknownResetRetryAfterSeconds?: number
   /**
    * The router-authored sentence for this failure, when the transport had one that says more than
    * the class does (`SdkFailure.clientMessage`). Read for the `429` alone, because that is the one
@@ -52,14 +56,21 @@ export function toRouterError(
 ): RouterError | null {
   if (classification.kind === "rate-limited") {
     const signal = classification.rateLimit ?? context?.signal ?? null
-    const resetsAt = signal?.resetsAt
-    // A `429` without a `Retry-After` makes a client guess, and guessing clients retry in
-    // lockstep (non-negotiable 7). When only the instant was reported, the wait is derived.
+    const resetsAt =
+      context === undefined
+        ? signal?.resetsAt
+        : (latestResetDeadline(signal ?? {}, context.now) ?? undefined)
+    const reportedSeconds = signal?.retryAfterSeconds
+    const positiveSeconds =
+      reportedSeconds !== undefined && Number.isFinite(reportedSeconds) && reportedSeconds > 0
+        ? reportedSeconds
+        : undefined
     const retryAfterSeconds =
-      signal?.retryAfterSeconds ??
-      (resetsAt !== undefined && context !== undefined
+      resetsAt !== undefined && context !== undefined
         ? secondsUntil(resetsAt, context.now)
-        : undefined)
+        : ((context === undefined ? positiveSeconds : undefined) ??
+          context?.unknownResetRetryAfterSeconds ??
+          DEFAULT_UNKNOWN_RESET_RETRY_AFTER_SECONDS)
     const stated = context?.clientMessage
     return new QuotaExhaustedError(
       stated === undefined
@@ -67,6 +78,10 @@ export function toRouterError(
         : `${stated} (${classification.signal})`,
       { retryAfterSeconds, resetsAt },
     )
+  }
+
+  if (classification.kind === "invalid-request" && classification.status === 403) {
+    return new InvalidRequestError("upstream rejected the request under its content policy")
   }
 
   if (classification.kind === "credits-exhausted") {

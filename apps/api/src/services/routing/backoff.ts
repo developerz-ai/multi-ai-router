@@ -5,6 +5,7 @@
  * A leaf beneath `breaker.ts` and `credential-rejection.ts`, which both step through it.
  */
 
+import { latestResetDeadline } from "@multi-ai-router/core"
 import type { BreakerOptions } from "./breaker"
 import type { AttemptFailure } from "./failover"
 
@@ -27,11 +28,7 @@ export function reportedReset(
   failure: Pick<AttemptFailure, "resetsAt" | "retryAfterSeconds">,
   now: Date,
 ): Date | null {
-  if (failure.resetsAt !== undefined) return failure.resetsAt
-  if (failure.retryAfterSeconds !== undefined) {
-    return new Date(now.getTime() + failure.retryAfterSeconds * 1000)
-  }
-  return null
+  return latestResetDeadline(failure, now)
 }
 
 function clampJitter(value: number): number {

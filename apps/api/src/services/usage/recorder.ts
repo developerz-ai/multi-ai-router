@@ -1,3 +1,4 @@
+import { createWriterLifecycle } from "../shutdown/writer-lifecycle"
 import { createBoundedQueue } from "./queue"
 import type { UsageRecord } from "./record"
 
@@ -39,6 +40,7 @@ export interface UsageWriteFailure {
 }
 
 export interface UsageRecorderOptions {
+  readonly shutdownDrainMs?: number
   /**
    * Queue ceiling. On overflow the oldest records are shed — reporting degrades, traffic does not.
    * A batch awaiting its retry is held beside the queue rather than in it, so peak memory is
@@ -78,6 +80,7 @@ export const DEFAULT_USAGE_BATCH_SIZE = 200
 export const DEFAULT_USAGE_FLUSH_INTERVAL_MS = 1_000
 
 export interface UsageStats {
+  readonly rejectedAfterStop: number
   /** Queued records, the batch waiting for its retry included. */
   readonly depth: number
   readonly dropped: number
@@ -112,6 +115,8 @@ export function createUsageRecorder(
 
   let timer: ReturnType<typeof setInterval> | null = null
   let inFlight: Promise<void> | null = null
+  let rejectedAfterStop = 0
+  let unsettled = 0
   let written = 0
   let writeFailures = 0
   let writeDiscarded = 0
@@ -126,6 +131,7 @@ export function createUsageRecorder(
   const writeBatch = async (batch: readonly UsageRecord[], retried: boolean): Promise<boolean> => {
     const observe = options.onRecord
     if (observe !== undefined && !retried) for (const record of batch) observe(record)
+    unsettled = batch.length
     try {
       await writer.write(batch)
       written += batch.length
@@ -138,11 +144,14 @@ export function createUsageRecorder(
       else retry = batch
       options.onWriteError?.({ error, batch, discarded: retried })
       return false
+    } finally {
+      unsettled = 0
     }
   }
 
   const drainAll = async (): Promise<void> => {
     for (;;) {
+      if (!lifecycle.canWrite()) return
       // Taken before the write so a failure can put it back — and so the retry lands on the *next*
       // pass, one flush interval later, rather than hitting the same unavailable database twice in
       // the same breath.
@@ -164,14 +173,27 @@ export function createUsageRecorder(
     return run
   }
 
+  const lifecycle = createWriterLifecycle({
+    flush,
+    pending: () => queue.depth + (retry?.length ?? 0),
+    outstanding: () => queue.depth + (retry?.length ?? 0) + unsettled,
+    timeoutMs: options.shutdownDrainMs ?? 15_000,
+    warn: (pending) => options.onAbandoned?.(pending),
+  })
+
   return {
     record(record) {
+      if (!lifecycle.accepting()) {
+        rejectedAfterStop += 1
+        return
+      }
       if (!queue.push(record)) options.onShed?.(record)
     },
 
     flush,
 
     start() {
+      if (!lifecycle.start()) return
       if (timer !== null) return
       timer = setInterval(() => {
         void flush()
@@ -185,16 +207,11 @@ export function createUsageRecorder(
         clearInterval(timer)
         timer = null
       }
-      await flush()
-      // The await above may have coalesced onto a pass whose final drain predates records
-      // enqueued since — or ended early on a refused batch. One fresh pass writes what it can
-      // (and gives a held retry batch its one try) instead of abandoning it all silently.
-      if (queue.depth > 0 || retry !== null) await flush()
-      const stranded = queue.depth + (retry?.length ?? 0)
-      if (stranded > 0) options.onAbandoned?.(stranded)
+      await lifecycle.stop()
     },
 
     stats: () => ({
+      rejectedAfterStop,
       depth: queue.depth + (retry?.length ?? 0),
       dropped: queue.dropped,
       written,
@@ -211,6 +228,13 @@ export function createNullUsageRecorder(): UsageRecorder {
     flush: () => Promise.resolve(),
     start: () => undefined,
     stop: () => Promise.resolve(),
-    stats: () => ({ depth: 0, dropped: 0, written: 0, writeFailures: 0, writeDiscarded: 0 }),
+    stats: () => ({
+      rejectedAfterStop: 0,
+      depth: 0,
+      dropped: 0,
+      written: 0,
+      writeFailures: 0,
+      writeDiscarded: 0,
+    }),
   }
 }

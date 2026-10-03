@@ -1,4 +1,4 @@
-import type { AdvisoryLockRun, ScheduledTaskName, ScheduledTaskOutcome } from "@multi-ai-router/db"
+import type { ScheduledTaskName, ScheduledTaskOutcome } from "@multi-ai-router/db"
 import type { Logger } from "../logging/logger"
 
 /**
@@ -65,9 +65,9 @@ export interface ScheduledTask {
  * lock race — not an error, and never a `scheduled_task_runs` row. It is a
  * distinct label on `router_task_runs_total`
  * (docs/idea/08-observability.md#scheduled-task-visibility) precisely so nobody
- * alerts on it.
+ * alerts on it. Local capacity is separate and retries after its configured short delay.
  */
-export type TickStatus = ScheduledTaskOutcome | "skipped_locked"
+export type TickStatus = ScheduledTaskOutcome | "skipped_locked" | "skipped_capacity"
 
 /** The result of one tick, whether it ran, skipped, or fell over. */
 export interface TickResult {
@@ -82,9 +82,15 @@ export interface TickResult {
  * Taking the per-task lock, as a capability rather than a connection.
  *
  * The scheduler is a service, and services do not hold a `SqlConnection` — the
- * production implementation is `advisoryTaskLock(sql)` in `lock.ts`, which is a
- * one-line binding of `withAdvisoryLock`. Injecting the capability is also what
+ * production implementation is `advisoryTaskLock(pool)` in `lock.ts`, which binds a
+ * dedicated scheduler session pool independently of task repositories. Injecting the capability is also what
  * lets the contention tests run without a database: a lock that always answers
  * `{ acquired: false }` is the second replica, exactly.
  */
-export type TaskLock = <T>(key: number, work: () => Promise<T>) => Promise<AdvisoryLockRun<T>>
+export type TaskLock = <T>(
+  key: number,
+  work: (lockSignal?: AbortSignal) => Promise<T>,
+  signal?: AbortSignal,
+) => Promise<
+  { acquired: true; value: T } | { acquired: false; reason?: "busy" | "capacity" | "aborted" }
+>

@@ -439,7 +439,7 @@ knowing which clock each one is on:
 | `router_requests_total`, `router_request_duration_seconds` | Once per client request, where the request ends | Duration is measured to the response being handed back. A **streamed** body drains after that, so a streamed sample is time-to-response, not time-to-last-token — never average the two `streamed` label values together |
 | `router_accounts`, `router_breaker_state`, `router_credential_rejected`, `router_quota_*`, `router_usage_queue_depth`, `router_sdk_subprocess*`, `router_price_overrides_loaded_timestamp_seconds` | Sampled **per scrape** from the same warm state the request path reads | Cannot disagree with the router about which accounts are cooling down, or about how many subprocesses it is holding. A gauge mirrored on every acquire would put bookkeeping on the path the gate exists to bound |
 | `router_price_table_asof_timestamp_seconds` | Set once at construction | The date is compiled into the image; nothing at runtime can move it |
-| `router_task_*` | Each settled scheduler tick | `skipped_locked` records a run that never happened: no duration, no items, and the failure streak is left alone |
+| `router_task_*` | Each settled scheduler tick | `skipped_locked` (held task exclusion) and `skipped_capacity` (local session capacity) record no duration/items and leave the failure streak alone |
 
 Two deliberate absences. `router_overhead_seconds` has no sample for a request rejected before an
 egress path was chosen — there is no `path` to report, and inventing a fourth label value to hold
@@ -741,7 +741,7 @@ in a single-replica deployment the interval is nearly irrelevant. Detail:
 | `router_task_duration_seconds` | histogram | `task` | Run time. Replaces the janitor-specific histogram |
 | `router_task_items_total` | counter | `task` | Items processed — rows deleted, records rolled up, accounts probed, config directories reaped |
 | `router_task_consecutive_failures` | gauge | `task` | Resets to zero on success. Non-zero and climbing is a task failing quietly |
-| `router_task_runs_total` | counter | `task`, `outcome` (`success`\|`failure`\|`skipped_locked`) | `skipped_locked` is normal on a replica that lost the advisory lock, not an error |
+| `router_task_runs_total` | counter | `task`, `outcome` (`success`\|`partial`\|`failed`\|`skipped_locked`\|`skipped_capacity`) | Held task exclusion keeps its usual interval; local capacity pressure retries after `SCHEDULER_LOCAL_CAPACITY_RETRY_MS`. Neither skip is a task failure |
 
 ## Retention
 
