@@ -1,0 +1,53 @@
+{
+  "wave": "W3B quota prerequisite",
+  "state": "implemented_pending_review_merge",
+  "observed_on": "2026-10-03",
+  "finding_scope": [
+    "102:09.2",
+    "101:02.10"
+  ],
+  "gate": {
+    "command": "bin/check",
+    "source_log": "/tmp/router-quota-final-check.log",
+    "passed_tests": 4563,
+    "failed_tests": 0,
+    "test_files": 321,
+    "lint": "passed",
+    "typecheck": "passed",
+    "build": "passed"
+  },
+  "database_validation": {
+    "versions": [
+      "PostgreSQL16",
+      "PostgreSQL18"
+    ],
+    "quota_suite_each": {
+      "passed_tests": 9,
+      "assertions": 18
+    },
+    "fresh_full_migrations": "passed on both",
+    "db_unit_tests": 158,
+    "db_unit_assertions": 480
+  },
+  "regressions": [
+    "Stale quota writes rejected",
+    "Equal-time live observations conservatively merged",
+    "Exact revision/reset floor CAS preserves newer provider evidence",
+    "Current exhausted account excluded at floor write",
+    "Retirement tombstone suppresses equal/older replay; strictly newer observation replaces it"
+  ],
+  "benchmark": {
+    "artifact": "wave3b-quota-bench.json",
+    "samples": 8000,
+    "failures": 0,
+    "buffered": 0,
+    "maximum_p99_ms": 0.7,
+    "violations": []
+  },
+  "limits": [
+    "Review/merge/release/deployment pending.",
+    "Warm retirement-overlay reconciliation and expired continuous-reading ranking remain open for global W3B.",
+    "Global recovery admission and persisted spent-quota recovery remain open.",
+    "No live provider calls performed."
+  ]
+}

@@ -7,6 +7,7 @@ import { createAccountAuthorization } from "./account-authorization"
 import { createAccountLifecycle } from "./account-lifecycle"
 import type { AccountRepository } from "./account-types"
 import { withAdminMutationRetry } from "./admin-mutation-conflict"
+import { createQuotaWindowMutations } from "./quota-window-mutations"
 
 /**
  * Repositories own SQL. Services call these methods and never write a query
@@ -202,26 +203,7 @@ export function createAccountRepository(db: DatabaseExecutor): AccountRepository
       )
     },
 
-    upsertQuotaWindow: async (accountId, state) => {
-      const values = {
-        utilization: state.utilization ?? null,
-        utilizationSource: state.utilizationSource,
-        resetsAt: state.resetsAt ?? null,
-        resetSource: state.resetSource,
-        lastCheckedAt: state.lastCheckedAt,
-      }
-      const rows = await db
-        .insert(quotaWindows)
-        .values({ accountId, window: state.window, ...values })
-        // The (account_id, window) unique index is what makes a re-check
-        // idempotent: probes and the operator's "Re-check now" hit the same row.
-        .onConflictDoUpdate({
-          target: [quotaWindows.accountId, quotaWindows.window],
-          set: values,
-        })
-        .returning()
-      return required(rows[0], "upsertQuotaWindow")
-    },
+    ...createQuotaWindowMutations(db),
 
     listQuotaWindows: async (accountIds) => {
       // An empty set is a caller with nothing to hydrate, not a caller asking

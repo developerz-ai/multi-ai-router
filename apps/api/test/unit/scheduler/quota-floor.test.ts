@@ -38,6 +38,8 @@ function account(id: string): AccountRow {
 
 function window(accountId: string, overrides: Partial<QuotaWindowRow> = {}): QuotaWindowRow {
   return {
+    revision: 0,
+    retiredAt: null,
     id: crypto.randomUUID(),
     accountId,
     window: "five_hour",
@@ -71,23 +73,26 @@ function fakeRepo(
     deps: {
       list: async () => accounts,
       listQuotaWindows: async (ids) => windows.filter((w) => ids.includes(w.accountId)),
-      upsertQuotaWindow: async (accountId, state) => {
-        upserts.push({ accountId, state: state as unknown as Record<string, unknown> })
-        const existing = windows.find((w) => w.accountId === accountId && w.window === state.window)
+      clearObservedQuotaWindow: async ({ accountId, window: kind, expected, now }) => {
+        const existing = windows.find((w) => w.accountId === accountId && w.window === kind)
+        if (
+          existing === undefined ||
+          existing.revision !== expected.revision ||
+          existing.resetsAt?.getTime() !== expected.resetsAt.getTime() ||
+          expected.resetsAt > now
+        )
+          return undefined
         const next: QuotaWindowRow = {
-          id: existing?.id ?? crypto.randomUUID(),
-          accountId,
-          window: state.window,
-          utilization: state.utilization ?? null,
-          utilizationSource: state.utilizationSource,
-          resetsAt: state.resetsAt ?? null,
-          resetSource: state.resetSource,
-          lastCheckedAt: state.lastCheckedAt,
-          createdAt: existing?.createdAt ?? NOW,
+          ...existing,
+          revision: existing.revision + 1,
+          retiredAt: now,
+          utilization: null,
+          utilizationSource: "none",
+          resetsAt: null,
+          resetSource: "unknown",
         }
-        const index = windows.findIndex((w) => w === existing)
-        if (index === -1) windows.push(next)
-        else windows[index] = next
+        upserts.push({ accountId, state: next as unknown as Record<string, unknown> })
+        windows[windows.indexOf(existing)] = next
         return next
       },
     },
@@ -106,6 +111,10 @@ function fakeHealth(lastSignalAt: Record<string, Date | null>) {
   }
 }
 
+function run(task: ReturnType<typeof createQuotaFloorTask>) {
+  return task.run({ now: NOW, logger: silentLogger(), signal: new AbortController().signal })
+}
+
 describe("the quota floor", () => {
   test("clears an expired reading on an idle account to none/unknown, not a zero", async () => {
     const a = account("a1")
@@ -117,11 +126,7 @@ describe("the quota floor", () => {
       idleAfterMs: IDLE_AFTER_MS,
     })
 
-    const result = await task.run({
-      now: NOW,
-      logger: silentLogger(),
-      signal: new AbortController().signal,
-    })
+    const result = await run(task)
 
     expect(result.outcome).toBe("success")
     expect(result.itemsProcessed).toBe(1)
@@ -129,7 +134,7 @@ describe("the quota floor", () => {
     const written = repo.upserts[0]?.state
     expect(written?.utilizationSource).toBe("none")
     expect(written?.resetSource).toBe("unknown")
-    expect(written?.lastCheckedAt).toEqual(NOW)
+    expect(written?.lastCheckedAt).toEqual(new Date(NOW.getTime() - 2 * 60 * 60 * 1000))
     expect(repo.windows[0]?.utilization).toBeNull()
   })
 
@@ -143,11 +148,7 @@ describe("the quota floor", () => {
       idleAfterMs: IDLE_AFTER_MS,
     })
 
-    const result = await task.run({
-      now: NOW,
-      logger: silentLogger(),
-      signal: new AbortController().signal,
-    })
+    const result = await run(task)
 
     expect(result.outcome).toBe("success")
     expect(result.itemsProcessed).toBe(0)
@@ -164,11 +165,7 @@ describe("the quota floor", () => {
       idleAfterMs: IDLE_AFTER_MS,
     })
 
-    const result = await task.run({
-      now: NOW,
-      logger: silentLogger(),
-      signal: new AbortController().signal,
-    })
+    const result = await run(task)
 
     expect(result.itemsProcessed).toBe(0)
     expect(repo.upserts).toHaveLength(0)
@@ -184,11 +181,7 @@ describe("the quota floor", () => {
       idleAfterMs: IDLE_AFTER_MS,
     })
 
-    const result = await task.run({
-      now: NOW,
-      logger: silentLogger(),
-      signal: new AbortController().signal,
-    })
+    const result = await run(task)
 
     expect(result.itemsProcessed).toBe(0)
     expect(repo.upserts).toHaveLength(0)
@@ -204,11 +197,7 @@ describe("the quota floor", () => {
       idleAfterMs: IDLE_AFTER_MS,
     })
 
-    const result = await task.run({
-      now: NOW,
-      logger: silentLogger(),
-      signal: new AbortController().signal,
-    })
+    const result = await run(task)
 
     expect(result.itemsProcessed).toBe(1)
   })
@@ -223,18 +212,10 @@ describe("the quota floor", () => {
       idleAfterMs: IDLE_AFTER_MS,
     })
 
-    const first = await task.run({
-      now: NOW,
-      logger: silentLogger(),
-      signal: new AbortController().signal,
-    })
+    const first = await run(task)
     expect(first.itemsProcessed).toBe(1)
 
-    const second = await task.run({
-      now: NOW,
-      logger: silentLogger(),
-      signal: new AbortController().signal,
-    })
+    const second = await run(task)
     expect(second.itemsProcessed).toBe(0)
   })
 
@@ -244,12 +225,12 @@ describe("the quota floor", () => {
     const repo = fakeRepo([a1, a2], [window("a1"), window("a2")])
     const controller = new AbortController()
     let calls = 0
-    const upsertOriginal = repo.deps.upsertQuotaWindow
+    const upsertOriginal = repo.deps.clearObservedQuotaWindow
     const deps: QuotaFloorDeps["accounts"] = {
       ...repo.deps,
-      upsertQuotaWindow: async (accountId, state) => {
+      clearObservedQuotaWindow: async (input) => {
         calls += 1
-        const row = await upsertOriginal(accountId, state)
+        const row = await upsertOriginal(input)
         if (calls === 1) controller.abort()
         return row
       },
@@ -265,12 +246,48 @@ describe("the quota floor", () => {
     expect(partial.outcome).toBe("partial")
     expect(partial.itemsProcessed).toBe(1)
 
-    const resume = await task.run({
-      now: NOW,
-      logger: silentLogger(),
-      signal: new AbortController().signal,
-    })
+    const resume = await run(task)
     expect(resume.outcome).toBe("success")
     expect(resume.itemsProcessed).toBe(1)
   })
+})
+
+test("floor CAS miss does not count or clear a concurrently fresh provider window", async () => {
+  const repo = fakeRepo([account("a1")], [window("a1")])
+  const clear = repo.deps.clearObservedQuotaWindow
+  const task = createQuotaFloorTask({
+    accounts: {
+      ...repo.deps,
+      clearObservedQuotaWindow: async (input) => {
+        repo.windows[0] = window("a1", {
+          revision: 1,
+          utilization: 1,
+          resetsAt: new Date(NOW.getTime() + 10000),
+        })
+        return clear(input)
+      },
+    },
+    health: fakeHealth({}),
+    intervalMs: INTERVAL_MS,
+    idleAfterMs: IDLE_AFTER_MS,
+  })
+  const result = await run(task)
+  expect(result.itemsProcessed).toBe(0)
+  expect(repo.upserts).toHaveLength(0)
+  expect(repo.windows[0]?.utilization).toBe(1)
+})
+
+test("permanent exhausted status is untouched even with an expired stored reset", async () => {
+  const repo = fakeRepo([{ ...account("a1"), status: "exhausted" }], [window("a1")])
+  const task = createQuotaFloorTask({
+    accounts: repo.deps,
+    health: fakeHealth({}),
+    intervalMs: INTERVAL_MS,
+    idleAfterMs: IDLE_AFTER_MS,
+  })
+  expect(
+    (await task.run({ now: NOW, logger: silentLogger(), signal: new AbortController().signal }))
+      .itemsProcessed,
+  ).toBe(0)
+  expect(repo.upserts).toHaveLength(0)
 })

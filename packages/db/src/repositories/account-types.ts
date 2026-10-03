@@ -113,6 +113,12 @@ export interface AccountRepository extends AddedAccountRepositoryMethods {
    * this returns the rows it has and never synthesizes the rest.
    */
   listQuotaWindows(accountIds: readonly string[]): Promise<QuotaWindowRow[]>
+  clearObservedQuotaWindow(input: {
+    accountId: string
+    window: QuotaWindowState["window"]
+    expected: { revision: number; resetsAt: Date }
+    now: Date
+  }): Promise<QuotaWindowRow | undefined>
 }
 
 export interface CreateAccountInput {

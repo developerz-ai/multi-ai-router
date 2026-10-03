@@ -418,10 +418,15 @@ describe("quota windows", () => {
       signal({ quotaWindows: [window(), window({ window: "seven_day", utilization: 0.5 })] }),
       NOW,
     )
-    store.applyRateLimit("a", signal({ quotaWindows: [window({ utilization: 0.2 })] }), NOW)
+    const later = new Date(NOW.getTime() + 1)
+    store.applyRateLimit(
+      "a",
+      signal({ quotaWindows: [window({ utilization: 0.2, lastCheckedAt: later })] }),
+      later,
+    )
 
     expect(store.stateOf("a").quotaWindows).toEqual([
-      window({ utilization: 0.2 }),
+      window({ utilization: 0.2, lastCheckedAt: later }),
       window({ window: "seven_day", utilization: 0.5 }),
     ])
   })

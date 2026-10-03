@@ -183,6 +183,13 @@
       "when": 1791037432837,
       "tag": "0025_account_lifecycle",
       "breakpoints": true
+    },
+    {
+      "idx": 26,
+      "version": "7",
+      "when": 1791045257715,
+      "tag": "0026_quota_revision",
+      "breakpoints": true
     }
   ]
 }

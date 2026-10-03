@@ -1,7 +1,10 @@
 import type { QuotaWindowKind } from "@multi-ai-router/core"
+import { sql } from "drizzle-orm"
 import {
+  check,
   doublePrecision,
   index,
+  integer,
   pgTable,
   text,
   timestamp,
@@ -39,6 +42,8 @@ export const quotaWindows = pgTable(
      * before should cost a core change, not a core change *and* a migration.
      */
     window: text("window").$type<QuotaWindowKind>().notNull(),
+    revision: integer("revision").notNull().default(0),
+    retiredAt: timestamp("retired_at", { withTimezone: true, mode: "date" }),
 
     /** Fraction of the window consumed, 0..1. NULL is a valid, expected reading. */
     utilization: doublePrecision("utilization"),
@@ -55,6 +60,7 @@ export const quotaWindows = pgTable(
     createdAt: timestamp("created_at", { withTimezone: true, mode: "date" }).notNull().defaultNow(),
   },
   (table) => [
+    check("quota_windows_revision_nonnegative", sql`${table.revision} >= 0`),
     uniqueIndex("quota_windows_account_window_key").on(table.accountId, table.window),
     index("quota_windows_resets_at_idx").on(table.resetsAt),
   ],

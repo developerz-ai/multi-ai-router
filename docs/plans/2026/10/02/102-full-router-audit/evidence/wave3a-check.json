@@ -1,7 +1,7 @@
 {
   "wave": "W3A",
   "observed_on": "2026-10-03",
-  "state": "implemented_locally_review_merge_release_pending",
+  "state": "merged_release_deployment_pending",
   "dependency_merge": {
     "pr": 144,
     "sha": "e41f0edd"
@@ -30,7 +30,7 @@
   ],
   "limits": [
     "No live provider authentication/exchanges performed; no live issuer compatibility assertion.",
-    "Final review completion, merge, release and deployment remain pending for W3A; required PR145 CI passed before these review fixes.",
+    "W3A merged; release and deployment remain pending.",
     "Global recovery admission, persisted quota recovery and quota-floor CAS remain W3B.",
     "General scheduler/writer/process shutdown bounds remain W4.",
     "102:03.2 and its 101:02.1 recovery alias remain partial/open for W3B global probe/quota completion."
@@ -67,5 +67,13 @@
     "Claude login completion compares lifecycle and ciphertext while preserving current disabled/exhausted status; observed authentication recovery still compares needs_reauth.",
     "Refresh refusal classification retains HTTP status when a non-deadline error body is unreadable.",
     "Reusable-code inventory now describes durable authorization attempts, committed catalog barriers, provider identity, distributed refresh locks and observed status CAS."
-  ]
+  ],
+  "merge": {
+    "pr": 145,
+    "sha": "2a0c562",
+    "merged_at": "2026-10-03T16:29:02Z",
+    "flow": "normal protected merge",
+    "required_ci_checks": "all five passed on review-fix head",
+    "review_threads_resolved": 3
+  }
 }

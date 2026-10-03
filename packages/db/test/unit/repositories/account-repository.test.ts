@@ -234,6 +234,8 @@ describe("quota window state", () => {
     "22222222-2222-2222-2222-222222222222",
     ACCOUNT_ID,
     "five_hour",
+    0,
+    null,
     0.42,
     "continuous",
     "2026-07-24 17:00:00+00",
@@ -287,10 +289,15 @@ describe("quota window state", () => {
       lastCheckedAt: NOW,
     })
 
-    // The only timestamps bound are the two `lastCheckedAt` stamps — insert and
-    // conflict-update. No reset is fabricated for an account that has none.
-    const timestamps = stub.only().params.filter((param) => param === NOW_PARAM)
-    expect(timestamps).toHaveLength(2)
+    // Every bound timestamp is provider observation age; ordering guards must not fabricate a reset.
+    const timestamps = stub
+      .only()
+      .params.filter(
+        (param) =>
+          typeof param === "string" && !Number.isNaN(Date.parse(param)) && param.includes("T"),
+      )
+    expect(timestamps.length).toBeGreaterThan(0)
+    expect(timestamps.every((param) => param === NOW_PARAM)).toBe(true)
     expect(stub.only().params).toContain(null)
   })
 
