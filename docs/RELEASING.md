@@ -134,6 +134,24 @@ before running `bin/check`; the gate fails until all runtime pins agree
 (`apps/api/test/integration/image-pins.test.ts`), and the build itself fails if
 a digest turns out to name a bun other than the tag beside it.
 
+## Updating delivery dependencies
+
+Workflow actions are pinned to release commit SHAs with version comments. Resolve a new
+release's tag to its commit, inspect its action manifest and migration notes, then update
+all occurrences together. The actions use Node 24 on GitHub-hosted Ubuntu runners.
+Artifact upload and download move together: keep `archive: true` on digest uploads and
+`digest-mismatch: error` on downloads so the manifest merge receives the same named files.
+
+The Dockerfile frontend and PostgreSQL images also carry version and index digest pins.
+CI uses PostgreSQL 18.6; bundled and development Compose use PostgreSQL 16.15, preserving
+existing volumes on that major. Validate the migration/repository suites against both
+before moving database pins. A Compose database major bump requires a separate data
+migration, including the newer image's data-directory layout.
+
+Validate updated build actions and the frontend with native amd64 and arm64 builds.
+Keep release publishing restricted to `v*` tags, with provenance and SBOM attestations;
+record the actual Buildx and BuildKit versions alongside build evidence.
+
 ## Pre-releases
 
 For a release candidate, bump the version to `X.Y.Z-rc.N` — the constant and

@@ -60,6 +60,28 @@ function fromLines(): readonly string[] {
 }
 
 describe("the container base image", () => {
+  test("pins the build frontend and database images without changing existing volume majors", () => {
+    expect(DOCKERFILE).toMatch(/^# syntax=docker\/dockerfile:\d+\.\d+\.\d+@sha256:[a-f0-9]{64}$/m)
+    expect(CI_WORKFLOW).toMatch(/image: postgres:18\.\d+@sha256:[a-f0-9]{64}/)
+    const development = readFileSync(`${ROOT}docker-compose.dev.yml`, "utf8")
+    const pin = /image: (postgres:16\.\d+@sha256:[a-f0-9]{64})/
+    expect(COMPOSE.match(pin)?.[1]).toBeDefined()
+    expect(development.match(pin)?.[1]).toBe(COMPOSE.match(pin)?.[1])
+  })
+
+  test("pins workflow actions and preserves digest artifact transfer", () => {
+    const release = readFileSync(`${ROOT}.github/workflows/release.yml`, "utf8")
+    for (const workflow of [CI_WORKFLOW, release]) {
+      const actions = [...workflow.matchAll(/\buses:\s*([^\n]+)/g)]
+      expect(actions.length).toBeGreaterThan(0)
+      for (const action of actions) {
+        expect(action[1]).toMatch(/^[\w-]+\/[\w-]+@[a-f0-9]{40}\s+# v\d+\.\d+\.\d+$/)
+      }
+    }
+    expect(release).toMatch(/archive: true\s+name: digests-/)
+    expect(release).toMatch(/merge-multiple: true\s+digest-mismatch: error/)
+  })
+
   test("pins an exact bun version and a digest on every stage", () => {
     const pinned = bases()
 

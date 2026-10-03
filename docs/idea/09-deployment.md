@@ -34,7 +34,7 @@ services:
     restart: unless-stopped
 
   postgres:
-    image: postgres:16
+    image: postgres:16.15@sha256:1a6ab3f5345eb6dbe04a1349529caabdb0ab09293a09590fad07b2246bfa4b54
     environment: { POSTGRES_USER: router, POSTGRES_PASSWORD: router, POSTGRES_DB: router }
     volumes: [postgres-data:/var/lib/postgresql/data]
     healthcheck:
@@ -57,6 +57,11 @@ else, which is why the in-file credentials are acceptable. Publish it and you mu
 
 The repo ships a working [`docker-compose.yml`](../../docker-compose.yml) and
 [`.env.example`](../../.env.example) matching the table below exactly.
+
+The bundled and development Compose files pin PostgreSQL 16.15 by version and index digest,
+so a pull preserves the existing 16 data directory. CI runs PostgreSQL 18.6 to cover managed
+instances on that major; the schema supports PostgreSQL 16+. A database major upgrade requires
+an explicit migration of its data, and is separate from updating the router or these image pins.
 
 ### Using an existing or managed Postgres
 
@@ -501,7 +506,7 @@ needed, and neither breaks it).
 | Restart | `docker compose up -d` |
 | Migrations | Run automatically at boot, before the listener opens. Idempotent. A failed migration exits non-zero and does not serve traffic. |
 | Roll back | Pin the previous tag and `docker compose up -d`. Take a `pg_dump` first — a rolled-back binary may not understand a migrated schema, and migrations are forward-only. |
-| Postgres major version | Pinned to `postgres:16`. A major bump is a deliberate `pg_dump` / `pg_restore` cycle, never something a `docker compose pull` should do to you — the data directory format changes between majors and the new container will refuse to start on the old one. |
+| Postgres major version | Pinned to `postgres:16.15` and an immutable multi-architecture digest. A major bump is a deliberate `pg_dump` / `pg_restore` cycle, never something a `docker compose pull` should do to you — the data directory format changes between majors and the new container will refuse to start on the old one. |
 
 ## Image tags
 

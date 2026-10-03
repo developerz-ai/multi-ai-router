@@ -11,8 +11,8 @@
   },
   "dependencies": {
     "@multi-ai-router/core": "workspace:*",
-    "@solidjs/router": "^0.15.3",
-    "@tanstack/solid-query": "^5.66.0",
+    "@solidjs/router": "^1.0.0",
+    "@tanstack/solid-query": "^5.104.1",
     "solid-js": "^1.9.15"
   },
   "devDependencies": {
@@ -20,6 +20,7 @@
     "@babel/preset-typescript": "^7.29.7",
     "@happy-dom/global-registrator": "^20.14.5",
     "babel-preset-solid": "^1.9.15",
+    "esbuild": "^0.28.2",
     "sass-embedded": "^1.105.1",
     "vite": "^8.3.2",
     "vite-plugin-solid": "^2.11.14"

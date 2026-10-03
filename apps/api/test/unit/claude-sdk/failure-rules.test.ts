@@ -42,6 +42,22 @@ test("stderr preserves a failed SDK result's structured terminal reason", () => 
 })
 
 describe("an expired subscription, in every spelling the CLI has for it", () => {
+  test("SDK 0.3.287 revoked-login wording parks OAuth without returning CLI diagnostics", () => {
+    const diagnostic = "Failed to authenticate: OAuth token revoked"
+    const { classification, clientMessage } = classifySdkFailure(resultError(diagnostic))
+    expect(classification.kind).toBe("auth")
+    expect(classification.status).toBe(401)
+    expect(clientMessage).toBe("the account's Claude subscription needs re-authenticating")
+    expect(clientMessage).not.toContain(diagnostic)
+    const state = recordFailure(
+      HEALTHY,
+      { kind: failoverKind(classification.kind, classification.status), status: 401 },
+      NOW,
+      { authKind: "oauth" },
+    )
+    expect(state.status).toBe("needs_reauth")
+  })
+
   /** The exact production shape: `is_error: true`, `api_error_status: null`, `terminal_reason: "api_error"`. */
   test("the 30-day refresh-token cliff is an auth failure that parks the account needs_reauth", () => {
     const error = resultError(

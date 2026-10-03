@@ -1,0 +1,457 @@
+{
+  "@anthropic-ai/claude-agent-sdk": {
+    "latest": "0.3.288",
+    "tags": {
+      "latest": "0.3.288",
+      "next": "0.3.288"
+    },
+    "engines": {
+      "node": ">=18.0.0"
+    },
+    "peers": {
+      "zod": "^4.0.0",
+      "@anthropic-ai/sdk": ">=0.93.0",
+      "@modelcontextprotocol/sdk": "^1.29.0"
+    },
+    "deprecated": null,
+    "source": "https://registry.npmjs.org/%40anthropic-ai%2Fclaude-agent-sdk"
+  },
+  "@babel/core": {
+    "latest": "8.0.6",
+    "tags": {
+      "bridge6": "6.0.0-bridge.1",
+      "esm": "7.21.4-esm.4",
+      "next": "8.0.0-rc.6",
+      "latest": "8.0.6"
+    },
+    "engines": {
+      "node": "^22.18.0 || >=24.11.0"
+    },
+    "peers": {},
+    "deprecated": null,
+    "source": "https://registry.npmjs.org/%40babel%2Fcore"
+  },
+  "@babel/preset-typescript": {
+    "latest": "8.0.1",
+    "tags": {
+      "esm": "7.21.4-esm.4",
+      "next": "8.0.0-rc.6",
+      "latest": "8.0.1"
+    },
+    "engines": {
+      "node": "^22.18.0 || >=24.11.0"
+    },
+    "peers": {
+      "@babel/core": "^8.0.0"
+    },
+    "deprecated": null,
+    "source": "https://registry.npmjs.org/%40babel%2Fpreset-typescript"
+  },
+  "@biomejs/biome": {
+    "latest": "2.5.15",
+    "tags": {
+      "nightly": "1.9.5-nightly.81fdedb",
+      "beta": "2.0.0-beta.6",
+      "latest": "2.5.15"
+    },
+    "engines": {
+      "node": ">=14.21.3"
+    },
+    "peers": {},
+    "deprecated": null,
+    "source": "https://registry.npmjs.org/%40biomejs%2Fbiome"
+  },
+  "@happy-dom/global-registrator": {
+    "latest": "20.14.5",
+    "tags": {
+      "latest": "20.14.5"
+    },
+    "engines": {
+      "node": ">=20.0.0"
+    },
+    "peers": {},
+    "deprecated": null,
+    "source": "https://registry.npmjs.org/%40happy-dom%2Fglobal-registrator"
+  },
+  "@sentry/bun": {
+    "latest": "11.4.0",
+    "tags": {
+      "v7": "7.120.4",
+      "v8": "8.55.2",
+      "next": "11.0.0-rc.1",
+      "v9": "9.47.2",
+      "latest": "11.4.0",
+      "v10": "10.76.0"
+    },
+    "engines": {
+      "node": ">=20.19.0 <22.0.0 || >=22.12.0 <23.0.0 || >=23.2.0"
+    },
+    "peers": {},
+    "deprecated": null,
+    "source": "https://registry.npmjs.org/%40sentry%2Fbun"
+  },
+  "@solidjs/router": {
+    "latest": "1.0.0",
+    "tags": {
+      "beta": "0.10.0-beta.9",
+      "latest": "1.0.0",
+      "next": "2.0.0-next.35"
+    },
+    "engines": {},
+    "peers": {
+      "solid-js": "^1.8.6"
+    },
+    "deprecated": null,
+    "source": "https://registry.npmjs.org/%40solidjs%2Frouter"
+  },
+  "@tanstack/solid-query": {
+    "latest": "5.104.1",
+    "tags": {
+      "alpha": "6.0.0-alpha.2",
+      "previous": "4.44.0",
+      "beta": "6.0.0-beta.8",
+      "latest": "5.104.1",
+      "rc": "6.0.0-rc.5"
+    },
+    "engines": {},
+    "peers": {
+      "solid-js": "^1.6.0"
+    },
+    "deprecated": null,
+    "source": "https://registry.npmjs.org/%40tanstack%2Fsolid-query"
+  },
+  "@types/bun": {
+    "latest": "1.4.2",
+    "tags": {
+      "ts4.6": "1.0.8",
+      "ts4.7": "1.1.5",
+      "ts4.8": "1.1.13",
+      "ts4.9": "1.1.13",
+      "ts5.0": "1.2.8",
+      "ts5.1": "1.2.19",
+      "ts5.2": "1.3.11",
+      "ts5.3": "1.3.14",
+      "ts5.4": "1.3.14",
+      "ts5.5": "1.3.14",
+      "ts6.0": "1.4.2",
+      "latest": "1.4.2",
+      "ts5.9": "1.4.2",
+      "ts5.7": "1.4.2",
+      "ts5.6": "1.4.2",
+      "ts5.8": "1.4.2"
+    },
+    "engines": {},
+    "peers": {},
+    "deprecated": null,
+    "source": "https://registry.npmjs.org/%40types%2Fbun"
+  },
+  "babel-preset-solid": {
+    "latest": "1.9.15",
+    "tags": {
+      "beta": "1.10.0-beta.0",
+      "latest": "1.9.15",
+      "next": "2.0.0-rc.2"
+    },
+    "engines": {},
+    "peers": {
+      "solid-js": "^1.9.15",
+      "@babel/core": "^7.0.0"
+    },
+    "deprecated": null,
+    "source": "https://registry.npmjs.org/babel-preset-solid"
+  },
+  "drizzle-kit": {
+    "latest": "0.31.11",
+    "tags": {
+      "numeric-modes": "1.0.0-beta.1-867d080",
+      "rqb-v1-schema-fix": "1.0.0-beta.1-b96a4f8",
+      "rqb-typeperf": "1.0.0-beta.1-69a2ca0",
+      "effect": "1.0.0-beta.1-cdf226f",
+      "workflows": "1.0.0-beta.1-37e2608",
+      "sqlite-cloud-studio": "1.0.0-beta.1-bc61bbe",
+      "beta-next-pack": "1.0.0-beta.1-140e6cc",
+      "alternation-engine": "1.0.0-beta.2-6565b14",
+      "kit-cli-wrong-config-hints": "1.0.0-beta.2-a1a6b39",
+      "studio-benchmark": "1.0.0-beta.2-01787d6",
+      "rqb-perf-patch": "1.0.0-beta.2-f9236e3",
+      "kit-duckdb": "1.0.0-beta.3-d4ff358",
+      "mysql-blob-rqb-v2-fix": "1.0.0-beta.5-e0482ac",
+      "beta-fixes": "1.0.0-beta.6-7419dcb",
+      "beelink": "1.0.0-beta.9-c26fd2f",
+      "effect3": "1.0.0-beta.9-635dfc2",
+      "effect-fixes": "1.0.0-beta.10-9f1399e",
+      "bun-timestampstring-patch": "1.0.0-beta.10-4a698ad",
+      "drizzle-seed/bug-fixes": "1.0.0-beta.10-7f0f68a",
+      "issues": "1.0.0-beta.11-165921d",
+      "effect-cache-fix": "1.0.0-beta.11-88ca292",
+      "data-migrator": "1.0.0-beta.11-c3fb442",
+      "update/migrator-strategy": "1.0.0-beta.12-5845444",
+      "drizzle-effect": "1.0.0-beta.13-f16bdca",
+      "pg-prepare-nameless": "1.0.0-beta.13-4ef3fca",
+      "kit-introspect": "1.0.0-beta.13-ba3365d",
+      "effect-validator": "1.0.0-beta.14-56118cc",
+      "sql-explicit-origin": "1.0.0-beta.15-90d1d1a",
+      "beta.16": "1.0.0-beta.16-2ffd1a5",
+      "node-sqlite": "1.0.0-beta.16-c2458b2",
+      "sqlite-indexes": "1.0.0-beta.16-501e9b2",
+      "beta.17": "1.0.0-beta.17-160831b",
+      "kit/node-sqlite": "1.0.0-beta.17-8a36f93",
+      "fix-duckdb": "1.0.0-beta.17-c09bdc5",
+      "latest": "0.31.11",
+      "fix-jiti-tsconfig-paths": "1.0.0-beta.18-905b79a",
+      "query-comments": "1.0.0-beta.19-dca1773",
+      "conditions-wrap": "1.0.0-beta.19-c49995f",
+      "beta21": "1.0.0-beta.21-b0c345d",
+      "casing-rework": "1.0.0-beta.21-3269112",
+      "issues2": "1.0.0-beta.22-17a476d",
+      "beta": "1.0.0-beta.22",
+      "netlify-constructor": "1.0.0-beta.22-d23690d",
+      "revert-netlify": "1.0.0-beta.23-c10d10c",
+      "codecs": "1.0.0-beta.23-5d05836",
+      "pg-introspect": "1.0.0-rc.1-929a083",
+      "rc1-fixes": "1.0.0-rc.2-8feace6",
+      "turso-sls": "1.0.0-rc.2-640c81e",
+      "jiti-import-fix": "1.0.0-rc.2-67a3509",
+      "mysql-update": "1.0.0-rc.2-2be6d1e",
+      "rc4": "1.0.0-rc.4-5d5b77c",
+      "ai": "1.0.0-rc.3-abc2ef6",
+      "sqlite-update": "1.0.0-rc.4-ca0f029",
+      "rc": "1.0.0-rc.4",
+      "rc5": "1.0.0-rc.5-5935859"
+    },
+    "engines": {},
+    "peers": {},
+    "deprecated": null,
+    "source": "https://registry.npmjs.org/drizzle-kit"
+  },
+  "drizzle-orm": {
+    "latest": "0.45.3",
+    "tags": {
+      "numeric-modes": "1.0.0-beta.1-867d080",
+      "rqb-v1-schema-fix": "1.0.0-beta.1-b96a4f8",
+      "rqb-typeperf": "1.0.0-beta.1-69a2ca0",
+      "effect": "1.0.0-beta.1-cdf226f",
+      "workflows": "1.0.0-beta.1-37e2608",
+      "sqlite-cloud-studio": "1.0.0-beta.1-bc61bbe",
+      "beta-next-pack": "1.0.0-beta.1-140e6cc",
+      "alternation-engine": "1.0.0-beta.2-6565b14",
+      "kit-cli-wrong-config-hints": "1.0.0-beta.2-a1a6b39",
+      "studio-benchmark": "1.0.0-beta.2-01787d6",
+      "rqb-perf-patch": "1.0.0-beta.2-f9236e3",
+      "kit-duckdb": "1.0.0-beta.3-d4ff358",
+      "mysql-blob-rqb-v2-fix": "1.0.0-beta.5-e0482ac",
+      "beta-fixes": "1.0.0-beta.6-7419dcb",
+      "beelink": "1.0.0-beta.9-c26fd2f",
+      "effect3": "1.0.0-beta.9-635dfc2",
+      "effect-fixes": "1.0.0-beta.10-9f1399e",
+      "bun-timestampstring-patch": "1.0.0-beta.10-4a698ad",
+      "drizzle-seed/bug-fixes": "1.0.0-beta.10-7f0f68a",
+      "issues": "1.0.0-beta.11-165921d",
+      "effect-cache-fix": "1.0.0-beta.11-88ca292",
+      "data-migrator": "1.0.0-beta.11-c3fb442",
+      "update/migrator-strategy": "1.0.0-beta.12-5845444",
+      "drizzle-effect": "1.0.0-beta.13-f16bdca",
+      "pg-prepare-nameless": "1.0.0-beta.13-4ef3fca",
+      "kit-introspect": "1.0.0-beta.13-ba3365d",
+      "effect-validator": "1.0.0-beta.14-56118cc",
+      "sql-explicit-origin": "1.0.0-beta.15-90d1d1a",
+      "beta.16": "1.0.0-beta.16-2ffd1a5",
+      "node-sqlite": "1.0.0-beta.16-c2458b2",
+      "sqlite-indexes": "1.0.0-beta.16-501e9b2",
+      "beta.17": "1.0.0-beta.17-160831b",
+      "kit/node-sqlite": "1.0.0-beta.17-8a36f93",
+      "fix-duckdb": "1.0.0-beta.17-c09bdc5",
+      "fix-jiti-tsconfig-paths": "1.0.0-beta.18-905b79a",
+      "query-comments": "1.0.0-beta.19-dca1773",
+      "conditions-wrap": "1.0.0-beta.19-c49995f",
+      "latest": "0.45.3",
+      "beta21": "1.0.0-beta.21-b0c345d",
+      "casing-rework": "1.0.0-beta.21-3269112",
+      "issues2": "1.0.0-beta.22-17a476d",
+      "beta": "1.0.0-beta.22",
+      "netlify-constructor": "1.0.0-beta.22-d23690d",
+      "revert-netlify": "1.0.0-beta.23-c10d10c",
+      "codecs": "1.0.0-beta.23-5d05836",
+      "pg-introspect": "1.0.0-rc.1-929a083",
+      "rc1-fixes": "1.0.0-rc.2-8feace6",
+      "turso-sls": "1.0.0-rc.2-640c81e",
+      "jiti-import-fix": "1.0.0-rc.2-67a3509",
+      "mysql-update": "1.0.0-rc.2-2be6d1e",
+      "rc4": "1.0.0-rc.4-5d5b77c",
+      "ai": "1.0.0-rc.3-e9dfa4b",
+      "rc": "1.0.0-rc.4",
+      "postgres": "1.0.0-rc.4-fb12281",
+      "rc5": "1.0.0-rc.5-5935859"
+    },
+    "engines": {},
+    "peers": {
+      "pg": ">=8",
+      "gel": ">=2",
+      "knex": "*",
+      "kysely": "*",
+      "mysql2": ">=2",
+      "sql.js": ">=1",
+      "sqlite3": ">=5",
+      "postgres": ">=3",
+      "@types/pg": "*",
+      "bun-types": "*",
+      "@netlify/db": ">=0.4.0",
+      "expo-sqlite": ">=14.0.0",
+      "@types/sql.js": "*",
+      "@libsql/client": ">=0.10.0",
+      "@prisma/client": "*",
+      "@upstash/redis": ">=1.34.7",
+      "better-sqlite3": ">=7",
+      "@xata.io/client": "*",
+      "@vercel/postgres": ">=0.8.0",
+      "@opentelemetry/api": "^1.4.1",
+      "@libsql/client-wasm": ">=0.10.0",
+      "@electric-sql/pglite": ">=0.2.0",
+      "@planetscale/database": ">=1.13",
+      "@tidbcloud/serverless": "*",
+      "@types/better-sqlite3": "*",
+      "@aws-sdk/client-rds-data": ">=3",
+      "@neondatabase/serverless": ">=0.10.0",
+      "@cloudflare/workers-types": ">=4",
+      "@op-engineering/op-sqlite": ">=2"
+    },
+    "deprecated": null,
+    "source": "https://registry.npmjs.org/drizzle-orm"
+  },
+  "hono": {
+    "latest": "4.13.12",
+    "tags": {
+      "v4": "4.0.0-rc.4",
+      "next": "4.5.0-rc.2",
+      "latest": "4.13.12"
+    },
+    "engines": {
+      "node": ">=16.9.0"
+    },
+    "peers": {},
+    "deprecated": null,
+    "source": "https://registry.npmjs.org/hono"
+  },
+  "postgres": {
+    "latest": "3.4.9",
+    "tags": {
+      "beta": "3.0.0-rc.3",
+      "latest": "3.4.9"
+    },
+    "engines": {
+      "node": ">=12"
+    },
+    "peers": {},
+    "deprecated": null,
+    "source": "https://registry.npmjs.org/postgres"
+  },
+  "sass-embedded": {
+    "latest": "1.105.1",
+    "tags": {
+      "latest": "1.105.1"
+    },
+    "engines": {
+      "node": ">=20.19.0"
+    },
+    "peers": {},
+    "deprecated": null,
+    "source": "https://registry.npmjs.org/sass-embedded"
+  },
+  "solid-js": {
+    "latest": "1.9.15",
+    "tags": {
+      "beta": "1.10.0-beta.0",
+      "latest": "1.9.15",
+      "next": "2.0.0-rc.13"
+    },
+    "engines": {},
+    "peers": {},
+    "deprecated": null,
+    "source": "https://registry.npmjs.org/solid-js"
+  },
+  "typescript": {
+    "latest": "7.0.2",
+    "tags": {
+      "dev": "3.9.4",
+      "tag-for-publishing-older-releases": "4.1.6",
+      "insiders": "4.6.2-insiders.20220225",
+      "beta": "6.0.0-beta",
+      "rc": "7.0.1-rc",
+      "latest": "7.0.2",
+      "next": "7.1.0-dev.20261003.1"
+    },
+    "engines": {
+      "node": ">=16.20.0"
+    },
+    "peers": {},
+    "deprecated": null,
+    "source": "https://registry.npmjs.org/typescript"
+  },
+  "vite": {
+    "latest": "8.3.2",
+    "tags": {
+      "alpha": "6.0.0-alpha.24",
+      "previous": "7.3.6",
+      "beta": "8.3.0-beta.1",
+      "latest": "8.3.2"
+    },
+    "engines": {
+      "node": "^20.19.0 || >=22.12.0"
+    },
+    "peers": {
+      "tsx": "^4.8.1",
+      "jiti": ">=1.21.0",
+      "less": "^4.0.0",
+      "sass": "^1.70.0",
+      "yaml": "^2.4.2",
+      "stylus": ">=0.54.8",
+      "terser": "^5.16.0",
+      "esbuild": "^0.27.0 || ^0.28.0",
+      "sugarss": "^5.0.0",
+      "@types/node": "^20.19.0 || >=22.12.0",
+      "sass-embedded": "^1.70.0",
+      "@vitejs/devtools": "^0.7.1"
+    },
+    "deprecated": null,
+    "source": "https://registry.npmjs.org/vite"
+  },
+  "vite-plugin-solid": {
+    "latest": "2.11.14",
+    "tags": {
+      "beta": "2.11.0-beta.0",
+      "latest": "2.11.14",
+      "next": "3.0.0-next.27"
+    },
+    "engines": {},
+    "peers": {
+      "vite": "^3.0.0 || ^4.0.0 || ^5.0.0 || ^6.0.0 || ^7.0.0 || ^8.0.0 || ^9.0.0",
+      "solid-js": "^1.7.2",
+      "@testing-library/jest-dom": "^5.16.6 || ^5.17.0 || ^6.0.0 || ^7.0.0"
+    },
+    "deprecated": null,
+    "source": "https://registry.npmjs.org/vite-plugin-solid"
+  },
+  "zod": {
+    "latest": "4.6.5",
+    "tags": {
+      "next": "3.25.0-beta.20250519T094321",
+      "alpha": "3.25.68-alpha.11",
+      "beta": "4.1.13-beta.0",
+      "canary": "4.5.0-canary.20260828T171753",
+      "latest": "4.6.5"
+    },
+    "engines": {},
+    "peers": {},
+    "deprecated": null,
+    "source": "https://registry.npmjs.org/zod"
+  },
+  "esbuild": {
+    "latest": "0.28.2",
+    "peers": {},
+    "engines": {
+      "node": ">=18"
+    },
+    "source": "https://registry.npmjs.org/esbuild/latest",
+    "usage": "Explicit Vite optional peer 0.28.2; Drizzle loader remains scoped patched0.25.12."
+  }
+}
