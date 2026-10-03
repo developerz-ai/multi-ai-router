@@ -21,12 +21,12 @@ const ALG = "RS256"
 /** RFC 7519 §4.1 — the standard claims we actually use. */
 const idTokenClaimsSchema = z.object({
   iss: z.string(),
-  aud: z.union([z.string(), z.array(z.string())]),
+  aud: z.union([z.string().min(1), z.array(z.string().min(1)).min(1)]),
   sub: z.string(),
   /** Seconds since epoch, integer. */
-  exp: z.number(),
+  exp: z.number().int().nonnegative(),
   /** Seconds since epoch, integer. */
-  iat: z.number(),
+  iat: z.number().int().nonnegative(),
   /** RFC 7519 §4.1.2 — `azp` is the authorized party when `aud` is an array. */
   azp: z.string().optional(),
   /** Email + verified-ness. The IdP is the source of truth for both. */
@@ -173,6 +173,19 @@ export async function verifyIdToken(
     throw new OIDCIdTokenInvalidError(
       `id_token aud does not include client id "${input.audience}"`,
       "wrong_audience",
+    )
+  }
+
+  if ((aud.length > 1 || claims.azp !== undefined) && claims.azp !== input.audience) {
+    throw new OIDCIdTokenInvalidError(
+      "id_token authorized party does not match client",
+      "wrong_audience",
+    )
+  }
+  if (claims.iat > now + skew || claims.iat > claims.exp) {
+    throw new OIDCIdTokenInvalidError(
+      "id_token issued-at is in the future or after expiry",
+      "not_yet_valid",
     )
   }
 

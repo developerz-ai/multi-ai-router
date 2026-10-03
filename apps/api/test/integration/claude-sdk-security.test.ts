@@ -133,6 +133,7 @@ describe("registering the client's own tools widens nothing", () => {
     expect(launch.options.permissionMode).toBe("dontAsk")
     expect(launch.options.settingSources).toEqual([])
     expect(launch.options.strictMcpConfig).toBe(true)
+    expect(launch.options.verbatimPrompts).toBe(true)
     expect(launch.options.skills).toEqual([])
     expect(Object.keys(launch.options.mcpServers ?? {})).toEqual([PASSTHROUGH_SERVER_NAME])
   })
@@ -175,11 +176,12 @@ describe("registering the client's own tools widens nothing", () => {
 })
 
 describe("subprocess isolation is set explicitly, verbatim, every launch", () => {
-  test("settingSources: [] and tools: [] are the literal values, never omitted", () => {
+  test("settings, tools, and prompt expansion are explicitly isolated", () => {
     const launch = launchFor("/data/accounts/sub")
     expect(launch.options.settingSources).toEqual([])
     expect(launch.options.tools).toEqual([])
     expect(launch.options.strictMcpConfig).toBe(true)
+    expect(launch.options.verbatimPrompts).toBe(true)
     expect(launch.options.skills).toEqual([])
   })
 })
@@ -297,6 +299,7 @@ describe("the probe's query() launch — one of three call sites", () => {
     expect(options.permissionMode).toBe("dontAsk")
     expect(options.settingSources).toEqual([])
     expect(options.strictMcpConfig).toBe(true)
+    expect(options.verbatimPrompts).toBe(true)
     expect(options.skills).toEqual([])
     expect(options.maxTurns).toBe(1)
   })
@@ -488,6 +491,7 @@ describe("the launch the production invoker actually builds", () => {
     expect(options.permissionMode).toBe("dontAsk")
     expect(options.settingSources).toEqual([])
     expect(options.strictMcpConfig).toBe(true)
+    expect(options.verbatimPrompts).toBe(true)
     expect(options.skills).toEqual([])
   })
 

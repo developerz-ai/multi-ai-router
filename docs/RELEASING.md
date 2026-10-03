@@ -147,20 +147,18 @@ enforces the match, so an rc tag on a tree bumped to plain `1.3.0` fails.
 
 An `-rc` is not re-tagged into a release — it is superseded by a clean tag:
 
-1. If the code changed at all since the last `-rc` (even a one-line fix),
-   go through steps 1–4 above again against the new state — an `-rc` earns
-   its stable tag by being identical to what was validated, not by renaming.
-2. If nothing changed, tag the exact same commit the last `-rc` pointed at
-   with the plain `vX.Y.Z` (no hyphen). The build runs again from source —
-   there is no promote-in-place step in `release.yml` that copies a
-   pre-release's image forward — but the digest will match if the inputs
-   didn't change.
-3. `latest` and the GitHub Release's "Latest" flag only ever land on a
-   hyphen-free tag, so this is the step where the release actually becomes
-   the one `docker compose pull` picks up by default.
-4. Leave the superseded `-rc` tag(s) and their GitHub pre-releases in place
-   — don't delete them. They're the record of what was validated along the
-   way.
+1. Prepare a reviewed stable-version commit even when application code is unchanged:
+   change the source version, every workspace manifest and the OCI version label from
+   `X.Y.Z-rc.N` to `X.Y.Z`, and finalize the changelog using steps 1–4 above.
+2. Run `bin/verify-version vX.Y.Z` and `bin/check` on that commit. Merge only after
+   review and CI pass, then tag the merged stable-version commit `vX.Y.Z`.
+   The RC commit still declares `X.Y.Z-rc.N`; tagging it directly as stable is
+   rejected by the release guard.
+3. The stable tag rebuilds from source. Version and revision are artifact inputs,
+   so do not expect its digest to equal the RC digest. Verify the stable image
+   and deployment using the release checks above.
+4. `latest` and the GitHub Release's "Latest" flag only land on a hyphen-free
+   tag. Keep superseded RC tags and GitHub pre-releases as the validation record.
 
 ## Rollback
 

@@ -254,7 +254,7 @@ describe("endpoint", () => {
 })
 
 describe("header swap", () => {
-  test("strips the router key and hop-by-hop headers, keeps everything else", () => {
+  test("forwards protocol negotiation without client credentials or account routing", () => {
     const client = new Headers({
       authorization: "Bearer mar_live_secret",
       "x-api-key": "mar_live_secret",
@@ -262,6 +262,10 @@ describe("header swap", () => {
       "anthropic-beta": "some-future-flag",
       connection: "keep-alive",
       cookie: "session=1",
+      "openai-organization": "client-org",
+      "openai-project": "client-project",
+      "x-goog-api-key": "client-key",
+      "x-custom-header": "untrusted",
     })
 
     const out = upstreamHeaders(client, new Headers({ "x-api-key": "sk-upstream" }))
@@ -269,6 +273,10 @@ describe("header swap", () => {
     expect(out.get("authorization")).toBeNull()
     expect(out.get("cookie")).toBeNull()
     expect(out.get("connection")).toBeNull()
+    expect(out.get("openai-organization")).toBeNull()
+    expect(out.get("openai-project")).toBeNull()
+    expect(out.get("x-goog-api-key")).toBeNull()
+    expect(out.get("x-custom-header")).toBeNull()
     // A beta flag the router has never heard of survives — that is what passthrough is for.
     expect(out.get("anthropic-beta")).toBe("some-future-flag")
     expect(out.get("content-type")).toBe("application/json")
@@ -296,7 +304,7 @@ describe("header swap", () => {
     expect(out.get("content-length")).toBeNull()
     expect(out.get("set-cookie")).toBeNull()
     expect(out.get("content-type")).toBe("text/event-stream")
-    expect(out.get("anthropic-ratelimit-requests-remaining")).toBe("9")
+    expect(out.get("anthropic-ratelimit-requests-remaining")).toBeNull()
   })
 })
 

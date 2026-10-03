@@ -26,6 +26,7 @@ export interface Pump {
   heartbeat(write: () => void): void
   /** Client bytes went out; the keep-alive clock restarts. */
   wrote(): void
+  terminate(reason?: unknown): void
   close(): void
 }
 
@@ -54,10 +55,11 @@ export async function drain(
 export function sseResponse(pump: Pump, primed: Primed): Response {
   const encoder = new TextEncoder()
 
+  let cancelled = false
   const body = new ReadableStream<Uint8Array>({
     async start(controller) {
       const write = (text: string): void => {
-        if (text.length === 0) return
+        if (cancelled || text.length === 0) return
         // Enqueue first. Everything after this line happens on time the client already has.
         controller.enqueue(encoder.encode(text))
         pump.wrote()
@@ -68,15 +70,18 @@ export function sseResponse(pump: Pump, primed: Primed): Response {
         write(encode(primed.frames))
         if (!primed.done) await drain(pump, (frames) => write(encode(frames)))
       } catch (error) {
+        pump.terminate(error)
         // Bytes are already out, so the status cannot say this. The frame does.
         write(encode(pump.fail(error)))
       } finally {
         pump.close()
-        controller.close()
+        if (!cancelled) controller.close()
       }
     },
 
-    cancel() {
+    cancel(reason) {
+      cancelled = true
+      pump.terminate(reason)
       pump.close()
     },
   })

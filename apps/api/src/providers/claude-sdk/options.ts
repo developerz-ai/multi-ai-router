@@ -116,33 +116,7 @@ export function createQueryLaunch(input: QueryLaunchInput): QueryLaunch {
   const detach = (): void => input.signal.removeEventListener("abort", onAbort)
 
   const options: Options = {
-    abortController: controller,
-    // Isolation. Each of these three is a distinct path from this host's state into a caller's
-    // request; all three must be set explicitly, and none may be dropped as cleanup.
-    settingSources: [],
-    strictMcpConfig: true,
-    skills: [],
-    // Tools. The base set is empty and the allowlist decides the rest — see `allowlist.ts`.
-    tools: [],
-    allowedTools: [...PERMITTED_TOOLS],
-    permissionMode: "dontAsk",
-    canUseTool: permitOnlyAllowlisted,
-    // Transport.
-    cwd: input.configDir,
-    // `QUERY_ENV_OVERRIDES` after the inherited environment, so no inherited value can win — the
-    // claude.ai-connector door and the scratchpad block are isolation decisions (`env.ts`).
-    env: {
-      ...subprocessEnv({ configDir: input.configDir, inherited: input.inheritedEnv }),
-      ...QUERY_ENV_OVERRIDES,
-    },
-    // Explicit, because the SDK's default is a *detection*: it spawns `bun cli.js` whenever
-    // `process.versions.bun` exists, wherever `bun` may or may not be on the child's PATH
-    // (Meridian query.ts pins `node` because embedded-Bun hosts broke on exactly that). Our image
-    // ships Bun as the runtime — the router itself runs under it — so `bun` is the decision; the
-    // point is that it is written here, not autodetected. Moot while the resolved `claude` is the
-    // platform-native binary, load-bearing the day a resolution rung lands on a `cli.js`.
-    executable: "bun",
-    pathToClaudeCodeExecutable: input.cliPath,
+    ...isolatedOptions({ ...input, controller }),
     model: input.model,
     maxTurns: MAX_TURNS,
     // `stream_event` messages exist only under this flag, and they are the one SDK message type
@@ -186,6 +160,46 @@ function sessionOptions(plan: SessionPlan | undefined, busyFork: boolean): Parti
       : { resume: plan.sdkSessionId }
   }
   return { resume: plan.sdkSessionId, forkSession: true, resumeSessionAt: plan.resumeSessionAt }
+}
+
+/** Every query entry point uses these same host-isolation and execution-denial settings. */
+export function isolatedOptions(input: {
+  readonly configDir: string
+  readonly cliPath: string
+  readonly controller: AbortController
+  readonly inheritedEnv?: NodeJS.ProcessEnv
+}): Options {
+  return {
+    abortController: input.controller,
+    // Isolation. Each closes a distinct path from this host's state into a caller's request;
+    // all must be set explicitly, and none may be dropped as cleanup.
+    settingSources: [],
+    strictMcpConfig: true,
+    skills: [],
+    // Client messages are literal text, never CLI commands or host-file @mentions.
+    verbatimPrompts: true,
+    // Tools. The base set is empty and the allowlist decides the rest — see `allowlist.ts`.
+    tools: [],
+    allowedTools: [...PERMITTED_TOOLS],
+    permissionMode: "dontAsk",
+    canUseTool: permitOnlyAllowlisted,
+    // Transport.
+    cwd: input.configDir,
+    // `QUERY_ENV_OVERRIDES` after the inherited environment, so no inherited value can win — the
+    // claude.ai-connector door and the scratchpad block are isolation decisions (`env.ts`).
+    env: {
+      ...subprocessEnv({ configDir: input.configDir, inherited: input.inheritedEnv }),
+      ...QUERY_ENV_OVERRIDES,
+    },
+    // Explicit, because the SDK's default is a *detection*: it spawns `bun cli.js` whenever
+    // `process.versions.bun` exists, wherever `bun` may or may not be on the child's PATH
+    // (Meridian query.ts pins `node` because embedded-Bun hosts broke on exactly that). Our image
+    // ships Bun as the runtime — the router itself runs under it — so `bun` is the decision; the
+    // point is that it is written here, not autodetected. Moot while the resolved `claude` is the
+    // platform-native binary, load-bearing the day a resolution rung lands on a `cli.js`.
+    executable: "bun",
+    pathToClaudeCodeExecutable: input.cliPath,
+  }
 }
 
 /**

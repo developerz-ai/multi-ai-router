@@ -12,11 +12,14 @@ import {
   flag,
   fraction,
   nonEmpty,
+  oidcScopes,
+  oidcUrl,
   pathList,
   serverIdleTimeoutSeconds,
   usageBatchSize,
   wholeNumber,
 } from "./fields"
+import { validateNumericBounds } from "./numeric-bounds"
 
 /**
  * Boot-time environment validation — the reference is
@@ -76,6 +79,8 @@ export interface AdminOidcConfig {
   readonly scopes: readonly string[]
   /** Maximum tolerated clock skew between the router and the IdP, in seconds. */
   readonly clockSkewSeconds: number
+  /** Deadline for each IdP discovery, JWKS or token request. */
+  readonly requestTimeoutMs: number
 }
 
 export interface RetentionConfig {
@@ -165,6 +170,8 @@ export interface AdminAuthConfig {
   readonly sessionAbsoluteHours: number
   /** Failed logins per throttle key before it locks. */
   readonly loginMaxAttempts: number
+  readonly loginMaxConcurrent: number
+  readonly loginMaxTrackedIps: number
   /** Failures older than this stop counting toward the lock. */
   readonly loginAttemptWindowMinutes: number
   /** How long a tripped throttle key stays locked. */
@@ -182,6 +189,8 @@ export interface AdminAuthConfig {
    * table is the truth, the cache is only what stops a read per admin request.
    */
   readonly sessionCacheMax: number
+  /** Maximum time before this replica rechecks durable session revocation. */
+  readonly sessionRevalidateSeconds: number
   /**
    * Drops `Secure` and the `__Host-` prefix from the session cookie. Off by
    * default and warned about at boot: it is the escape hatch for a plain-HTTP
@@ -337,6 +346,8 @@ export interface FailoverConfig {
   readonly unknownResetRetryAfterSeconds: number
   /** How long the router waits on one upstream. Long, because a long completion is normal. */
   readonly upstreamTimeoutMs: number
+  /** Maximum failed-response bytes inspected before closing the upstream body. */
+  readonly upstreamErrorMaxBytes: number
   /**
    * What a request does when its session is bound to an account that is merely cooling down.
    *
@@ -677,7 +688,7 @@ export { decodeEncryptionKey, ZERO_IS_LEGAL } from "./fields"
  * about zero, whether or not anyone remembered to make one.
  */
 export const ENV_FIELDS = {
-  PORT: wholeNumber.optional(),
+  PORT: wholeNumber.refine((value) => value <= 65_535, "must be at most 65535").optional(),
   SERVER_IDLE_TIMEOUT_SECONDS: serverIdleTimeoutSeconds.optional(),
   SHUTDOWN_DRAIN_MS: wholeNumber.optional(),
   SHUTDOWN_READY_GRACE_MS: wholeNumber.optional(),
@@ -702,14 +713,17 @@ export const ENV_FIELDS = {
   // `nonEmpty` would win on first write because `toEnvValidationError` keeps
   // only the first issue per path, which is the wrong ordering for a doc
   // pointer.
-  ADMIN_OIDC_ISSUER_URL: z.string().optional(),
+  ADMIN_OIDC_ISSUER_URL: oidcUrl
+    .refine((value) => !URL.parse(value)?.search, "must not contain a query string")
+    .optional(),
   ADMIN_OIDC_CLIENT_ID: z.string().optional(),
   ADMIN_OIDC_CLIENT_SECRET: z.string().optional(),
-  ADMIN_OIDC_REDIRECT_URI: z.string().optional(),
+  ADMIN_OIDC_REDIRECT_URI: oidcUrl.optional(),
   ADMIN_OIDC_ADMIN_EMAIL: z.string().optional(),
   ADMIN_OIDC_ADMIN_SUBJECT: z.string().optional(),
-  ADMIN_OIDC_SCOPES: z.string().optional(),
+  ADMIN_OIDC_SCOPES: oidcScopes.optional(),
   ADMIN_OIDC_CLOCK_SKEW_SECONDS: atLeastOne.optional(),
+  ADMIN_OIDC_REQUEST_TIMEOUT_MS: atLeastOne.optional(),
   // The named opt-out of the fail-closed loopback rule for the local admin
   // password — see `services/admin-auth/boot.ts`. Off by default, on purpose.
   ADMIN_LOCAL_LOGIN_ALLOW_PUBLIC: flag.optional(),
@@ -787,10 +801,13 @@ export const ENV_FIELDS = {
   ADMIN_SESSION_IDLE_MINUTES: atLeastOne.optional(),
   ADMIN_SESSION_ABSOLUTE_HOURS: atLeastOne.optional(),
   ADMIN_LOGIN_MAX_ATTEMPTS: atLeastOne.optional(),
+  ADMIN_LOGIN_MAX_CONCURRENT: atLeastOne.optional(),
+  ADMIN_LOGIN_MAX_TRACKED_IPS: atLeastOne.optional(),
   ADMIN_LOGIN_ATTEMPT_WINDOW_MINUTES: atLeastOne.optional(),
   ADMIN_LOGIN_LOCKOUT_MINUTES: atLeastOne.optional(),
   ADMIN_SESSION_TOUCH_INTERVAL_SECONDS: wholeNumber.optional(),
   ADMIN_SESSION_CACHE_MAX: atLeastOne.optional(),
+  ADMIN_SESSION_REVALIDATE_SECONDS: atLeastOne.optional(),
   SESSION_COOKIE_INSECURE: flag.optional(),
   CATALOG_REFRESH_SECONDS: atLeastOne.optional(),
   KEY_CACHE_MAX: atLeastOne.optional(),
@@ -824,10 +841,14 @@ export const ENV_FIELDS = {
   // the drift guard's zero rule does not apply.
   ROUTING_BOUND_ACCOUNT_COOLING_DOWN: z.enum(["fail", "rebind"]).optional(),
   UPSTREAM_TIMEOUT_MS: atLeastOne.optional(),
+  UPSTREAM_ERROR_MAX_BYTES: atLeastOne
+    .refine((value) => value <= 33_554_432, "must be at most 33554432")
+    .optional(),
   TRANSLATE_DEFAULT_MAX_TOKENS: atLeastOne.optional(),
 } as const
 
-const envSchema = z.object(ENV_FIELDS).transform((raw, ctx): Env => {
+const boundedEnvSchema = z.object(ENV_FIELDS).superRefine(validateNumericBounds)
+const envSchema = boundedEnvSchema.transform((raw, ctx): Env => {
   // OIDC is all-or-nothing at parse time. All four absent means "local login
   // only", which is legal — whether *some* sign-in method exists is decided
   // after migrations, because the local credential's existence is a row in the
@@ -891,6 +912,7 @@ const envSchema = z.object(ENV_FIELDS).transform((raw, ctx): Env => {
         adminSubject: raw.ADMIN_OIDC_ADMIN_SUBJECT ?? null,
         scopes: (raw.ADMIN_OIDC_SCOPES ?? "openid profile email").split(/\s+/u).filter(Boolean),
         clockSkewSeconds: raw.ADMIN_OIDC_CLOCK_SKEW_SECONDS ?? 60,
+        requestTimeoutMs: raw.ADMIN_OIDC_REQUEST_TIMEOUT_MS ?? 10_000,
       }
     : null
 
@@ -1063,10 +1085,13 @@ const envSchema = z.object(ENV_FIELDS).transform((raw, ctx): Env => {
       sessionIdleMinutes: raw.ADMIN_SESSION_IDLE_MINUTES ?? 43_200,
       sessionAbsoluteHours: raw.ADMIN_SESSION_ABSOLUTE_HOURS ?? 720,
       loginMaxAttempts: raw.ADMIN_LOGIN_MAX_ATTEMPTS ?? 5,
+      loginMaxConcurrent: raw.ADMIN_LOGIN_MAX_CONCURRENT ?? 4,
+      loginMaxTrackedIps: raw.ADMIN_LOGIN_MAX_TRACKED_IPS ?? 10_000,
       loginAttemptWindowMinutes: raw.ADMIN_LOGIN_ATTEMPT_WINDOW_MINUTES ?? 15,
       loginLockoutMinutes: raw.ADMIN_LOGIN_LOCKOUT_MINUTES ?? 15,
       sessionTouchIntervalSeconds: raw.ADMIN_SESSION_TOUCH_INTERVAL_SECONDS ?? 60,
       sessionCacheMax: raw.ADMIN_SESSION_CACHE_MAX ?? 1_000,
+      sessionRevalidateSeconds: raw.ADMIN_SESSION_REVALIDATE_SECONDS ?? 60,
       sessionCookieInsecure: raw.SESSION_COOKIE_INSECURE ?? false,
       localLoginAllowPublic: raw.ADMIN_LOCAL_LOGIN_ALLOW_PUBLIC ?? false,
     },
@@ -1098,6 +1123,7 @@ const envSchema = z.object(ENV_FIELDS).transform((raw, ctx): Env => {
       halfOpenHoldMs: raw.ROUTING_HALF_OPEN_HOLD_MS ?? 30_000,
       unknownResetRetryAfterSeconds: raw.ROUTING_UNKNOWN_RESET_RETRY_AFTER_SECONDS ?? 30,
       upstreamTimeoutMs: raw.UPSTREAM_TIMEOUT_MS ?? 600_000,
+      upstreamErrorMaxBytes: raw.UPSTREAM_ERROR_MAX_BYTES ?? 65_536,
       boundAccountCoolingDown: raw.ROUTING_BOUND_ACCOUNT_COOLING_DOWN ?? "fail",
     },
     translation: {

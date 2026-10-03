@@ -3,9 +3,11 @@ import type { AttemptFailure } from "../routing"
 import type { TranslationContext } from "../translate"
 import { createTokenObserver, NO_TOKEN_OBSERVER } from "../usage"
 import type { UpstreamError } from "./attempt"
+import { breakerOptionsFor } from "./health"
 import type { ServableCandidate } from "./plan"
 import { attemptRecord, failureOutcome, SUCCESS_OUTCOME } from "./records"
 import { relayResponse } from "./relay"
+import { ClientCancelledError } from "./relay-cancellation"
 import { relayTranslatedResponse } from "./relay-translate"
 import type { DispatchRuntime } from "./runtime"
 
@@ -49,6 +51,7 @@ export interface AttemptRelay {
   readonly runtime: DispatchRuntime
   readonly translation: TranslationContext
   readonly log: Logger | undefined
+  readonly request?: Request
 }
 
 export function relaySuccess(
@@ -66,7 +69,21 @@ export function relaySuccess(
   const counting = ctx.runtime.operation === "count-tokens"
   const tokens = counting ? NO_TOKEN_OBSERVER : createTokenObserver()
   let firstByteAt: number | undefined
-  const settle = (streamed: boolean): void => {
+  let settled = false
+  const settle = (streamed: boolean, failed = false, error?: unknown): void => {
+    if (settled) return
+    settled = true
+    const cancelled = ctx.request?.signal.aborted === true || error instanceof ClientCancelledError
+    const timedOut = error instanceof Error && error.name === "TimeoutError"
+    const failureKind = cancelled ? "client-error" : timedOut ? "timeout" : "connection"
+    if (failed && !cancelled) {
+      ctx.runtime.health.recordFailure(
+        servable.account.id,
+        { kind: failureKind, message: "upstream response stream failed" },
+        ctx.runtime.clock.now(),
+        breakerOptionsFor(servable.driver.authKind),
+      )
+    }
     // Everything this attempt spent from the call onwards — including every byte relayed off it —
     // is time the router waited on the upstream, not time it worked. The failure path closes its
     // span in the chain; the success path has to close its own here, at the moment the last byte
@@ -87,10 +104,16 @@ export function relaySuccess(
         // `metered $0.000000`, which sums into a spend report as a completion that cost nothing.
         priced: !counting,
         timing: ctx.runtime.timing(at.startedAt, at.started, upstreamMs, firstByteAt),
-        outcome: SUCCESS_OUTCOME,
+        outcome: failed ? failureOutcome(failureKind) : SUCCESS_OUTCOME,
         streamed,
         httpStatus: response.status,
-        errorClass: null,
+        errorClass: failed
+          ? cancelled
+            ? "client_cancelled"
+            : timedOut
+              ? "upstream_timeout"
+              : "upstream_error"
+          : null,
       }),
     )
   }
@@ -102,7 +125,7 @@ export function relaySuccess(
     onChunk: (chunk: Uint8Array) => tokens.observe(chunk),
     onEnd: (bytes: number) => settle(bytes > 0),
     // A stream that broke after bytes were on the wire is a truncation, never a retry.
-    onError: () => settle(true),
+    onError: (error: unknown, bytes: number) => settle(bytes > 0, true, error),
   }
 
   const pair = servable.translation

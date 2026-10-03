@@ -58,6 +58,15 @@ because its effect is an absence; it is an isolation guarantee and must not be d
 Same class as stripping inherited `ANTHROPIC_API_KEY` / `ANTHROPIC_BASE_URL` / `ANTHROPIC_AUTH_TOKEN`
 from the subprocess environment, which also prevents it from looping back through our own router.
 
+Every SDK query also sets `verbatimPrompts: true`: client messages stay literal, without CLI
+slash-command dispatch or `@path` host-file expansion. On the shipped CLI this also skips turn-start
+attachments such as MCP resource mentions, nested `CLAUDE.md` files, and skill listings. This option
+requires Claude Code 2.1.248 or newer, including custom CLI overrides; the pinned SDK ships 2.1.286.
+It does not disable attachments between tool calls, so the independent tool-denial and
+environment-isolation gates remain required.
+Dispatch, idle queries, and account test probes share these options and assert them in regression
+tests.
+
 ## Secrets at rest
 
 | | |
@@ -306,3 +315,15 @@ Not operator actions — properties of the image, listed so a reviewer can check
 | [04-api-keys-and-access.md](04-api-keys-and-access.md) | Key lifecycle, scopes, pool binding, rate limits |
 | [09-deployment.md](09-deployment.md) | Env validation, volume layout, retention knobs |
 | [11-anthropic-agent-sdk.md](11-anthropic-agent-sdk.md) | Why Claude subs hold no bearer token, how the per-Account config dirs work, and the tool-passthrough mechanics in full (§7) |
+
+## Transport and authentication boundaries
+
+Upstream HTTP requests use manual redirect handling. Any 3xx ends that attempt as a transport failure; credentials and prompts never follow a redirect, including a same-origin redirect. Only `accept`, `content-type`, `anthropic-beta`, `anthropic-version`, `openai-beta`, and `x-request-id` client headers may reach a provider; driver-owned authentication and account headers are applied last. Responses expose only `content-type`, `retry-after`, and `cache-control`, plus router-owned headers. Connection-nominated hop-by-hop fields are dropped even when otherwise allowlisted.
+
+Error bodies are read up to `UPSTREAM_ERROR_MAX_BYTES` (64 KiB by default). Oversized bodies are cancelled and replaced entirely, so a truncated credential prefix cannot escape. Both dialect paths redact known credential patterns, sensitive JSON fields, and the exact selected account credential and private driver-header values (including account-routing IDs) before logging or returning errors. Successful response bytes remain untouched.
+
+Local key-cache invalidation fences pending repository and scope loads as well as completed cache entries. Identical pending verifications share one load; expired or invalidated results cannot be installed in the cache. Other replicas retain the configured key-cache TTL bound.
+
+Password verification reserves per-IP admission and a global `ADMIN_LOGIN_MAX_CONCURRENT` slot before expensive hashing. `ADMIN_LOGIN_MAX_TRACKED_IPS` bounds source tracking and refuses new sources when saturated. OIDC starts consume per-IP admission before discovery or state persistence. Discovery, token exchange, and JWKS reads use `ADMIN_OIDC_REQUEST_TIMEOUT_MS`; ID tokens validate issue time and the authorized party for multiple audiences.
+
+The repository's debugger configuration contains no login credential. Operators must supply authentication at runtime; removing the old literal does not rotate historical copies. Issue #87 tracks operational rotation and session invalidation.

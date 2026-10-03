@@ -30,6 +30,7 @@ export interface DispatchOptions {
   /** Headers a client may name its conversation with. See `body/session.ts`. */
   readonly sessionHeaders?: readonly string[]
   readonly upstreamTimeoutMs?: number
+  readonly upstreamErrorMaxBytes?: number
   readonly translation?: TranslationOptions
   readonly log?: LogOptions
 }

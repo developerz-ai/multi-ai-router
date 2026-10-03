@@ -28,11 +28,11 @@ describe("sessionExpiryMs", () => {
 describe("createMemorySessionStore", () => {
   test("stores, reads back, and overwrites on save", async () => {
     const store = createMemorySessionStore()
-    await store.save(session())
+    await store.create(session())
 
     expect(await store.get("session-1")).toMatchObject({ username: "admin" })
 
-    await store.save(session({ lastSeenAtMs: 500, idleExpiryMs: 5_000 }))
+    await store.create(session({ lastSeenAtMs: 500, idleExpiryMs: 5_000 }))
     expect(await store.get("session-1")).toMatchObject({ lastSeenAtMs: 500, idleExpiryMs: 5_000 })
   })
 
@@ -42,7 +42,7 @@ describe("createMemorySessionStore", () => {
 
   test("delete is a real invalidation, not a flag", async () => {
     const store = createMemorySessionStore()
-    await store.save(session())
+    await store.create(session())
     await store.delete("session-1")
 
     expect(await store.get("session-1")).toBeUndefined()
@@ -50,9 +50,9 @@ describe("createMemorySessionStore", () => {
 
   test("deleteExpired drops sessions past either bound and keeps live ones", async () => {
     const store = createMemorySessionStore()
-    await store.save(session({ id: "idle-out", idleExpiryMs: 100, absoluteExpiryMs: 99_999 }))
-    await store.save(session({ id: "capped-out", idleExpiryMs: 99_999, absoluteExpiryMs: 100 }))
-    await store.save(session({ id: "live", idleExpiryMs: 99_999, absoluteExpiryMs: 99_999 }))
+    await store.create(session({ id: "idle-out", idleExpiryMs: 100, absoluteExpiryMs: 99_999 }))
+    await store.create(session({ id: "capped-out", idleExpiryMs: 99_999, absoluteExpiryMs: 100 }))
+    await store.create(session({ id: "live", idleExpiryMs: 99_999, absoluteExpiryMs: 99_999 }))
 
     expect(await store.deleteExpired(1_000, 100)).toBe(2)
     expect(await store.get("live")).toBeDefined()
@@ -62,9 +62,9 @@ describe("createMemorySessionStore", () => {
 
   test("deleteExpired stops at the limit, so a full batch means there is more", async () => {
     const store = createMemorySessionStore()
-    await store.save(session({ id: "a", idleExpiryMs: 100 }))
-    await store.save(session({ id: "b", idleExpiryMs: 100 }))
-    await store.save(session({ id: "c", idleExpiryMs: 100 }))
+    await store.create(session({ id: "a", idleExpiryMs: 100 }))
+    await store.create(session({ id: "b", idleExpiryMs: 100 }))
+    await store.create(session({ id: "c", idleExpiryMs: 100 }))
 
     expect(await store.deleteExpired(1_000, 2)).toBe(2)
     expect(await store.deleteExpired(1_000, 2)).toBe(1)

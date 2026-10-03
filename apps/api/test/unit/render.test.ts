@@ -3,6 +3,7 @@ import {
   CredentialDecryptError,
   CreditsExhaustedError,
   KeyRevokedError,
+  KeyVerificationUnavailableError,
   NoHealthyAccountError,
   QuotaExhaustedError,
   type RouterError,
@@ -24,6 +25,7 @@ const cases: ReadonlyArray<readonly [RouterError, number, string]> = [
   [new CreditsExhaustedError("out of credits"), 402, "credits_exhausted"],
   [new ScopeViolationError("out of scope"), 403, "scope_violation"],
   [new KeyRevokedError("revoked"), 401, "key_revoked"],
+  [new KeyVerificationUnavailableError("retry shortly"), 503, "key_verification_unavailable"],
   [new UpstreamTimeoutError("too slow"), 504, "upstream_timeout"],
   [new CredentialDecryptError("cannot decrypt"), 500, "credential_decrypt_failed"],
   [new TranslationError("no counterpart for logprobs"), 400, "translation_failed"],
@@ -55,6 +57,18 @@ describe("toErrorResponse", () => {
     )
 
     expect(response.retryAfterSeconds).toBe(42)
+  })
+
+  test("key verification pressure renders a retryable service error in both dialects", () => {
+    const error = new KeyVerificationUnavailableError("retry shortly", { retryAfterSeconds: 1 })
+    for (const dialect of ["anthropic", "openai-chat"] as const) {
+      const response = toErrorResponse(error, dialect)
+      expect(response.status).toBe(503)
+      expect(response.retryAfterSeconds).toBe(1)
+      expect(response.body.error.type).toBe(
+        dialect === "anthropic" ? "overloaded_error" : "server_error",
+      )
+    }
   })
 
   test("renders a router error in the Anthropic shape for Anthropic ingress", () => {

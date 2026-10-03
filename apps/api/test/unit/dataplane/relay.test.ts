@@ -144,7 +144,7 @@ describe("stream relay", () => {
     const relayed = relayResponse(upstream)
 
     expect(relayed.status).toBe(200)
-    expect(relayed.headers.get("x-custom")).toBe("kept")
+    expect(relayed.headers.get("x-custom")).toBeNull()
     expect(await relayed.text()).toBe("{}")
   })
 })

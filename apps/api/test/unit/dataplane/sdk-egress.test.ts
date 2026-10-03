@@ -97,9 +97,13 @@ describe("planning a subscription attempt", () => {
     expect(servable.dialect).toBe("anthropic")
   })
 
-  test("the account's alias map still decides the model the SDK is asked for", () => {
+  test("the SDK keeps the model already resolved by routing", () => {
     const entry = subscriptionAccount("sub", { modelAliases: { sonnet: "claude-sonnet-4-6" } })
-    const plan = planCandidates([candidateFor("sub", "sonnet")], catalog([entry]), "anthropic")
+    const plan = planCandidates(
+      [candidateFor("sub", "claude-sonnet-4-6")],
+      catalog([entry]),
+      "anthropic",
+    )
 
     expect(plan.servable[0]?.upstreamModel).toBe("claude-sonnet-4-6")
   })

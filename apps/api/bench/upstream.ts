@@ -20,7 +20,7 @@ import type { Dialect } from "@multi-ai-router/core"
  * slow one and is reported as such.
  */
 
-/** Correlates one client request with one upstream trip. A client header, so it survives egress. */
+/** Test-only correlation injected by the benchmark transport after the production header boundary. */
 export const TRIP_HEADER = "x-bench-trip"
 
 export interface Trip {

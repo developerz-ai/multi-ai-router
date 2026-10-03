@@ -77,6 +77,7 @@ export interface HarnessOptions {
   readonly prices?: RateLookup
   /** The body ceiling, as the composition root passes `env.dataPlane.maxRequestBodyBytes`. */
   readonly maxBodyBytes?: number
+  readonly upstreamErrorMaxBytes?: number
   /**
    * The warm model catalog behind `GET /v1/catalog`. Omitted means this router was built without
    * one — the route still exists and answers an empty list, the same as a deployment whose hourly
@@ -156,6 +157,9 @@ export function harness(options: HarnessOptions) {
         clock: testClock,
         onRequest: (sample) => metrics.observeRequest(sample),
         options: {
+          ...(options.upstreamErrorMaxBytes === undefined
+            ? {}
+            : { upstreamErrorMaxBytes: options.upstreamErrorMaxBytes }),
           failover: { maxAttempts: options.maxAttempts ?? 3 },
           ...(options.selection === undefined ? {} : { selection: options.selection }),
           ...(options.maxBodyBytes === undefined

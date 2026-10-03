@@ -479,7 +479,9 @@ describe("the subprocess slot", () => {
     }))
 
     const { invoke } = invoker(spy, concurrency)
-    void invoke(invocation({ body: body({ messages: [], stream: true }) }))
+    void invoke(
+      invocation({ body: body({ messages: [{ role: "user", content: "hello" }], stream: true }) }),
+    )
     await Promise.resolve()
 
     const controller = new AbortController()

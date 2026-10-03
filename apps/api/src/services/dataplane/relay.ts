@@ -1,4 +1,5 @@
 import { clientHeaders } from "./egress/headers"
+import { ClientCancelledError, observeCancellation } from "./relay-cancellation"
 
 /**
  * Stream relay. **This is the hard requirement, not a preference.**
@@ -70,12 +71,15 @@ export function relayResponse(upstream: Response, observer: RelayObserver = {}):
   })
 
   upstream.body.pipeTo(passthrough.writable).catch((error: unknown) => {
-    settle(error)
+    settle(error ?? new Error("response stream cancelled"))
   })
 
-  return new Response(passthrough.readable, {
-    status: upstream.status,
-    statusText: upstream.statusText,
-    headers,
-  })
+  return new Response(
+    observeCancellation(passthrough.readable, () => settle(new ClientCancelledError())),
+    {
+      status: upstream.status,
+      statusText: upstream.statusText,
+      headers,
+    },
+  )
 }

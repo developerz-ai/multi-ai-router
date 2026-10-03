@@ -181,6 +181,12 @@ UI shows in lists (`mar_live_8f3c…`). It is too short to be useful to an attac
 The rate-limit window is charged last, and by the dispatcher rather than the verifier: a verified
 key is **cached**, so a limiter living inside verification would only ever see the cache misses.
 
+Concurrent misses for the same key share one lookup. Pending lookups are bounded, and an admin
+invalidation fences any older result before it can enter the cache. A fenced lookup reloads up to
+three times in total. Full lookup capacity or continued invalidation returns `503`
+`key_verification_unavailable` with `Retry-After: 1`; confirmed unknown, revoked, or expired keys
+return `401`.
+
 ### Accepted in both dialects
 
 | Header | Style | Sent by |

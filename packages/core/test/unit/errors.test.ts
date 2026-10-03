@@ -8,6 +8,7 @@ import {
   isRouterError,
   KeyRateLimitedError,
   KeyRevokedError,
+  KeyVerificationUnavailableError,
   ModelNotFoundError,
   NoHealthyAccountError,
   QuotaExhaustedError,
@@ -46,6 +47,12 @@ const cases: readonly ErrorCase[] = [
   },
   { name: "ScopeViolationError", ctor: ScopeViolationError, code: "scope_violation", status: 403 },
   { name: "KeyRevokedError", ctor: KeyRevokedError, code: "key_revoked", status: 401 },
+  {
+    name: "KeyVerificationUnavailableError",
+    ctor: KeyVerificationUnavailableError,
+    code: "key_verification_unavailable",
+    status: 503,
+  },
   {
     name: "KeyRateLimitedError",
     ctor: KeyRateLimitedError,

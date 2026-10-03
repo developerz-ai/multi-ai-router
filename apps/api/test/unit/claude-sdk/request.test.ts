@@ -6,13 +6,18 @@ import { readSdkRequest } from "../../../src/providers"
  *
  * Everything downstream — the prompt, the tool registration, the system prompt, the response shape
  * — reads this and nothing else, so a field this module drops is a field the SDK never hears about.
- * The properties asserted below are therefore all "absence stays absence": an unreadable body is
- * empty rather than an error, and a missing field is missing rather than defaulted into a claim the
- * client never made (docs/idea/11-anthropic-agent-sdk.md §6).
+ * Optional fields remain absent unless supplied. Invalid Messages envelopes are refused before
+ * a subprocess can execute (docs/idea/11-anthropic-agent-sdk.md §6).
  */
 
 function body(value: unknown): Uint8Array {
-  return new TextEncoder().encode(JSON.stringify(value))
+  return new TextEncoder().encode(
+    JSON.stringify(
+      typeof value === "object" && value !== null
+        ? { messages: [{ role: "user", content: "hello" }], ...value }
+        : value,
+    ),
+  )
 }
 
 describe("what a launch reads out of an Anthropic Messages body", () => {
@@ -33,21 +38,31 @@ describe("what a launch reads out of an Anthropic Messages body", () => {
     ])
   })
 
-  test("a role this build does not know is read as the user's, never the assistant's", () => {
-    const request = readSdkRequest(body({ messages: [{ role: "system", content: "x" }] }))
-    expect(request.messages[0]?.role).toBe("user")
+  test("unsupported message roles are rejected", () => {
+    expect(() => readSdkRequest(body({ messages: [{ role: "system", content: "x" }] }))).toThrow(
+      "messages.0.role",
+    )
   })
 
   test("stream is only true when the client said so", () => {
-    expect(readSdkRequest(body({ messages: [], stream: true })).stream).toBe(true)
-    expect(readSdkRequest(body({ messages: [], stream: false })).stream).toBe(false)
-    expect(readSdkRequest(body({ messages: [] })).stream).toBe(false)
+    expect(
+      readSdkRequest(body({ messages: [{ role: "user", content: "hello" }], stream: true })).stream,
+    ).toBe(true)
+    expect(
+      readSdkRequest(body({ messages: [{ role: "user", content: "hello" }], stream: false }))
+        .stream,
+    ).toBe(false)
+    expect(readSdkRequest(body({ messages: [{ role: "user", content: "hello" }] })).stream).toBe(
+      false,
+    )
   })
 
   test("a system string passes through, and an empty one is absence", () => {
     expect(readSdkRequest(body({ system: "be terse" })).system).toBe("be terse")
     expect(readSdkRequest(body({ system: "" })).system).toBeNull()
-    expect(readSdkRequest(body({ messages: [] })).system).toBeNull()
+    expect(
+      readSdkRequest(body({ messages: [{ role: "user", content: "hello" }] })).system,
+    ).toBeNull()
   })
 
   test("system blocks flatten to the SDK's string list, dropping what has no text", () => {
@@ -71,7 +86,7 @@ describe("what a launch reads out of an Anthropic Messages body", () => {
   test("the client's tools come out in one read, ready for registration", () => {
     const request = readSdkRequest(
       body({
-        messages: [],
+        messages: [{ role: "user", content: "hello" }],
         tools: [
           { name: "get_weather", description: "d", input_schema: { type: "object" } },
           { name: "search" },
@@ -89,7 +104,9 @@ describe("what a launch reads out of an Anthropic Messages body", () => {
 
 describe("tool_choice, the one Anthropic field this layer used to drop on the floor", () => {
   test('absent is null, read the same as "auto" downstream', () => {
-    expect(readSdkRequest(body({ messages: [] })).toolChoice).toBeNull()
+    expect(
+      readSdkRequest(body({ messages: [{ role: "user", content: "hello" }] })).toolChoice,
+    ).toBeNull()
   })
 
   test("each shape the translator can emit round-trips verbatim", () => {
@@ -164,16 +181,22 @@ describe("tool_choice, the one Anthropic field this layer used to drop on the fl
 })
 
 describe("a body that cannot be read", () => {
-  test("null, empty, unparseable, and non-object bodies all read as an empty request", () => {
-    const empty = { messages: [], system: null, tools: [], stream: false, toolChoice: null }
-
-    expect(readSdkRequest(null)).toEqual(empty)
-    expect(readSdkRequest(new Uint8Array())).toEqual(empty)
-    expect(readSdkRequest(new TextEncoder().encode("{not json"))).toEqual(empty)
-    expect(readSdkRequest(body("a string"))).toEqual(empty)
+  test("null, empty, unparseable, and non-object bodies are invalid requests", () => {
+    for (const input of [
+      null,
+      new Uint8Array(),
+      new TextEncoder().encode("{not json"),
+      body("a string"),
+    ]) {
+      expect(() => readSdkRequest(input)).toThrow()
+    }
   })
 
-  test("a body with no messages is empty rather than a refusal", () => {
-    expect(readSdkRequest(body({ model: "claude-opus-5" })).messages).toEqual([])
+  test("missing and empty messages are invalid requests", () => {
+    for (const input of [{ model: "claude-opus-5" }, { messages: [] }]) {
+      expect(() => readSdkRequest(new TextEncoder().encode(JSON.stringify(input)))).toThrow(
+        "messages",
+      )
+    }
   })
 })

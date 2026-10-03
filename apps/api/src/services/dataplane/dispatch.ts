@@ -40,6 +40,7 @@ export function dispatch(
     fetch: runtime.call,
     cipher: runtime.cipher,
     timeoutMs: runtime.timeoutMs,
+    ...(runtime.errorMaxBytes === undefined ? {} : { errorMaxBytes: runtime.errorMaxBytes }),
     signal: ctx.request.signal,
   })
 }

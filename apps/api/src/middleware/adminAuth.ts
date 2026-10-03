@@ -1,6 +1,6 @@
 import { AdminAuthError, ROUTER_KEY_PREFIX } from "@multi-ai-router/core"
 import type { MiddlewareHandler } from "hono"
-import { getCookie } from "hono/cookie"
+import { getCookie, setCookie } from "hono/cookie"
 import type { AdminAuthService } from "../services/admin-auth"
 import {
   type AdminSession,
@@ -9,7 +9,9 @@ import {
   CSRF_HEADER,
   isMutatingMethod,
   SESSION_COOKIE_NAME,
+  sessionCookieOptions,
   sessionCookiePrefix,
+  sessionExpiryMs,
 } from "../services/admin-auth"
 import { bearerToken } from "../services/dataplane"
 import type { AppEnv } from "../types"
@@ -75,13 +77,26 @@ export function adminAuth(
       return
     }
 
-    const session = await service.authenticate(getCookie(c, SESSION_COOKIE_NAME, prefix))
+    const cookieValue = getCookie(c, SESSION_COOKIE_NAME, prefix)
+    const session = await service.authenticate(cookieValue)
 
     if (isMutatingMethod(c.req.method)) {
       service.assertCsrf(session, c.req.header(CSRF_HEADER))
     }
 
     c.set("adminSession", session)
+    if (cookieValue !== undefined) {
+      const remaining = Math.max(
+        0,
+        Math.floor((sessionExpiryMs(session) - session.lastSeenAtMs) / 1000),
+      )
+      setCookie(
+        c,
+        SESSION_COOKIE_NAME,
+        cookieValue,
+        sessionCookieOptions(remaining, sessionCookieInsecure),
+      )
+    }
     await next()
   }
 }

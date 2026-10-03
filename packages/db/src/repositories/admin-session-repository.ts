@@ -1,4 +1,4 @@
-import { asc, eq, inArray, lte, or, sql } from "drizzle-orm"
+import { and, asc, eq, gt, inArray, lte, or, sql } from "drizzle-orm"
 import type { Database } from "../client"
 import { type AdminSessionRow, adminSessions } from "../schema/admin-sessions"
 
@@ -15,14 +15,10 @@ import { type AdminSessionRow, adminSessions } from "../schema/admin-sessions"
  */
 export interface AdminSessionRepository {
   find(idHash: string): Promise<AdminSessionRow | undefined>
-  /**
-   * Writes the row, or slides an existing one. On conflict only `last_seen_at`
-   * and `idle_expiry_at` move: a slide never changes who the session belongs
-   * to, its CSRF token, when it was minted, or the absolute cap — those were
-   * fixed at login, and an upsert that rewrote them would let a stale replica
-   * silently reissue a session under different terms.
-   */
-  upsert(row: AdminSessionRow): Promise<void>
+  /** Inserts a newly minted session; never modifies an existing identity. */
+  create(row: AdminSessionRow): Promise<void>
+  /** Slides only a live existing session. A revoked/expired row cannot be recreated. */
+  touch(row: AdminSessionRow): Promise<boolean>
   /** Deletes one session. Returns whether a row existed to delete. */
   delete(idHash: string): Promise<boolean>
   /**
@@ -45,14 +41,26 @@ export function createAdminSessionRepository(db: Database): AdminSessionReposito
       return rows[0]
     },
 
-    upsert: async (row) => {
-      await db
-        .insert(adminSessions)
-        .values(row)
-        .onConflictDoUpdate({
-          target: adminSessions.idHash,
-          set: { lastSeenAt: row.lastSeenAt, idleExpiryAt: row.idleExpiryAt },
+    create: async (row) => {
+      await db.insert(adminSessions).values(row).onConflictDoNothing()
+    },
+
+    touch: async (row) => {
+      const updated = await db
+        .update(adminSessions)
+        .set({
+          lastSeenAt: sql`greatest(${adminSessions.lastSeenAt}, ${row.lastSeenAt.toISOString()}::timestamptz)`,
+          idleExpiryAt: sql`greatest(${adminSessions.idleExpiryAt}, ${row.idleExpiryAt.toISOString()}::timestamptz)`,
         })
+        .where(
+          and(
+            eq(adminSessions.idHash, row.idHash),
+            gt(adminSessions.idleExpiryAt, row.lastSeenAt),
+            gt(adminSessions.absoluteExpiryAt, row.lastSeenAt),
+          ),
+        )
+        .returning({ idHash: adminSessions.idHash })
+      return updated.length > 0
     },
 
     delete: async (idHash) => {

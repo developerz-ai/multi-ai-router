@@ -750,3 +750,7 @@ transaction. Defaults, batching rules, and the env knobs are in
 | [06-protocol-translation.md](06-protocol-translation.md) | The passthrough performance rules `router_overhead_seconds` measures |
 | [07-security.md](07-security.md) | Redaction rules and what never reaches a log |
 | [11-anthropic-agent-sdk.md](11-anthropic-agent-sdk.md) | The `rate_limit_event` stream that feeds every quota figure here |
+
+### Interrupted response accounting
+
+A response whose transport reader fails records failed usage with its original upstream HTTP status and partial token counts. It is never retried after output starts. Client cancellation is recorded as `client_error` with `client_cancelled` where distinguishable and does not strike upstream health; pre-response cancellation returns 499 if a response can still be sent. A cleanly delivered protocol error frame inside an HTTP-200 stream is not yet uniformly recognized across providers.

@@ -80,6 +80,7 @@ export async function runChain(ctx: ChainContext): Promise<Response> {
   let upstreamMs = 0
 
   for (;;) {
+    if (ctx.request.signal.aborted) return new Response(null, { status: 499 })
     const decision = planNextAttempt(ordered, progress, lastFailure, ctx.failover)
     if (decision.action === "stop") break
 
@@ -147,10 +148,31 @@ export async function runChain(ctx: ChainContext): Promise<Response> {
       // one budget it is measured against.
       runtime.health.endAttempt(accountId)
       probe.release()
+      if (ctx.request.signal.aborted) return new Response(null, { status: 499 })
       held = foldChainFailure(held, isRouterError(error) ? routerFailure(error) : null)
       lastFailure = { kind: "server-error", message: "the account could not be dispatched to" }
       recordAttemptFailure(ctx, servable, decision.attempt, lastFailure, null, at)
       continue
+    }
+
+    if (ctx.request.signal.aborted) {
+      if (outcome.kind === "success") void outcome.response.body?.cancel().catch(() => {})
+      runtime.health.endAttempt(accountId)
+      probe.release()
+      upstreamMs += runtime.clock.elapsed() - upstreamStarted
+      recordAttemptFailure(
+        ctx,
+        servable,
+        decision.attempt,
+        {
+          kind: "client-error",
+          status: 499,
+          message: "client cancelled the request",
+        },
+        null,
+        { ...at, upstreamMs },
+      )
+      return new Response(null, { status: 499 })
     }
 
     // Applied after the verdict, never before: `recordSuccess`'s unconditional reset to `active`

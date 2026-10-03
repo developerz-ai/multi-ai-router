@@ -2,7 +2,7 @@
  * Tunables for the admin authentication plane — session lifetime and login throttling.
  *
  * CLAUDE.md rule 11: every retention window, interval, and limit is configuration, never a
- * constant in code. The operator-facing half lives in `config/env.ts` as five variables;
+ * constant in code. The operator-facing half lives in `config/env.ts` as environment variables;
  * {@link adminAuthConfigFromEnv} is the only place that converts them into the seconds this
  * service works in, and {@link DEFAULT_ADMIN_AUTH_ENV} is the one copy of the defaults on this
  * side of that boundary. The factory still takes overrides so a test can compress a
@@ -25,6 +25,8 @@ export interface AdminAuthConfig {
   readonly absoluteTtlSeconds: number
   /** Failed logins tolerated per throttle key before the key locks. */
   readonly maxFailedAttempts: number
+  readonly maxConcurrentLogins: number
+  readonly maxTrackedIps: number
   /** Failures older than this stop counting — an operator's typo yesterday is not evidence. */
   readonly attemptWindowSeconds: number
   /** How long a key stays locked once it trips. */
@@ -56,6 +58,8 @@ export interface AdminAuthEnvConfig {
   readonly adminSessionIdleMinutes: number
   readonly adminSessionAbsoluteHours: number
   readonly adminLoginMaxAttempts: number
+  readonly adminLoginMaxConcurrent: number
+  readonly adminLoginMaxTrackedIps: number
   readonly adminLoginAttemptWindowMinutes: number
   readonly adminLoginLockoutMinutes: number
   readonly adminSessionTouchIntervalSeconds: number
@@ -66,6 +70,8 @@ export const DEFAULT_ADMIN_AUTH_ENV: AdminAuthEnvConfig = {
   adminSessionIdleMinutes: 43_200,
   adminSessionAbsoluteHours: 720,
   adminLoginMaxAttempts: 5,
+  adminLoginMaxConcurrent: 4,
+  adminLoginMaxTrackedIps: 10_000,
   adminLoginAttemptWindowMinutes: 15,
   adminLoginLockoutMinutes: 15,
   adminSessionTouchIntervalSeconds: 60,
@@ -79,6 +85,8 @@ export function adminAuthConfigFromEnv(env: AdminAuthEnvConfig): AdminAuthConfig
     idleTtlSeconds: env.adminSessionIdleMinutes * SECONDS_PER_MINUTE,
     absoluteTtlSeconds: env.adminSessionAbsoluteHours * SECONDS_PER_HOUR,
     maxFailedAttempts: env.adminLoginMaxAttempts,
+    maxConcurrentLogins: env.adminLoginMaxConcurrent,
+    maxTrackedIps: env.adminLoginMaxTrackedIps,
     attemptWindowSeconds: env.adminLoginAttemptWindowMinutes * SECONDS_PER_MINUTE,
     lockoutSeconds: env.adminLoginLockoutMinutes * SECONDS_PER_MINUTE,
     touchIntervalSeconds: env.adminSessionTouchIntervalSeconds,

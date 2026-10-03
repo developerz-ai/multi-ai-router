@@ -278,7 +278,12 @@ describe("reading a request into the lineage view", () => {
 })
 
 describe("the headerless fingerprint", () => {
-  const seed = { accountId: "acct-1", clientCwd: null, firstUserText: "fix the failing test" }
+  const seed = {
+    apiKeyId: "key-1",
+    accountId: "acct-1",
+    clientCwd: null,
+    firstUserText: "fix the failing test",
+  }
 
   test("the same opening on the same account is the same key", () => {
     expect(sessionFingerprint(seed)).toBe(sessionFingerprint({ ...seed }))

@@ -77,7 +77,7 @@ export interface SdkQuotaStore {
    */
   ingestGauge(accountId: string, reading: SdkUsageGaugeReading, now: Date): SdkQuotaSnapshot
   /** The Account's current reading, or null when it has never reported one. */
-  snapshot(accountId: string): SdkQuotaSnapshot | null
+  snapshot(accountId: string, now: Date): SdkQuotaSnapshot | null
   /** Drops every reading for an Account — deletion, and the operator's "Re-check now". */
   forget(accountId: string): void
 }
@@ -113,13 +113,13 @@ export function createSdkQuotaStore(): SdkQuotaStore {
             ? previous.utilization
             : undefined,
         source: alarmed ? "threshold-triggered" : (previous?.source ?? "none"),
-        resetsAt: reading.resetsAt ?? previous?.resetsAt,
+        resetsAt: reading.resetsAt ?? futureReset(previous, now),
         lastCheckedAt: now,
       })
       state.usingOverage = reading.usingOverage
       applyOverage(state, reading, key, now)
 
-      return snapshotOf(state, "verdict")
+      return snapshotOf(state, "verdict", now)
     },
 
     ingestGauge(accountId, reading, now) {
@@ -130,19 +130,19 @@ export function createSdkQuotaStore(): SdkQuotaStore {
           limiter: window.kind,
           kind: window.kind,
           // Only an event may say rejected; a gauge never lifts or sets that verdict.
-          limited: previous?.limited ?? false,
+          limited: previous !== undefined && isLimited(previous, now),
           utilization: window.utilization ?? undefined,
           source: window.utilization === null ? (previous?.source ?? "none") : "continuous",
-          resetsAt: window.resetsAt ?? previous?.resetsAt,
+          resetsAt: window.resetsAt ?? futureReset(previous, now),
           lastCheckedAt: now,
         })
       }
-      return snapshotOf(state, "reading")
+      return snapshotOf(state, "reading", now)
     },
 
-    snapshot(accountId) {
+    snapshot(accountId, now) {
       const state = accounts.get(accountId)
-      return state === undefined ? null : snapshotOf(state, "verdict")
+      return state === undefined ? null : snapshotOf(state, "verdict", now)
     },
 
     forget(accountId) {
@@ -206,7 +206,7 @@ function applyOverage(
  * `reading` is the gauge path: the same windows, but the signal never claims a refusal the gauge
  * did not make — the health store's fold would otherwise re-record a rate-limit failure per gauge.
  */
-function snapshotOf(state: AccountQuota, mode: "verdict" | "reading"): SdkQuotaSnapshot {
+function snapshotOf(state: AccountQuota, mode: "verdict" | "reading", now: Date): SdkQuotaSnapshot {
   const windows: QuotaWindowState[] = []
   const limiterWindows: RateLimitWindow[] = []
   let limited = false
@@ -225,9 +225,9 @@ function snapshotOf(state: AccountQuota, mode: "verdict" | "reading"): SdkQuotaS
     }
     limiterWindows.push({ limiter: bucket.limiter, ...reading })
 
-    if (!bucket.limited || mode === "reading") continue
+    if (!isLimited(bucket, now) || mode === "reading") continue
     limited = true
-    if (bucket.resetsAt !== undefined && (resetsAt === undefined || bucket.resetsAt < resetsAt)) {
+    if (bucket.resetsAt !== undefined && (resetsAt === undefined || bucket.resetsAt > resetsAt)) {
       resetsAt = bucket.resetsAt
     }
   }
@@ -250,6 +250,14 @@ function snapshotOf(state: AccountQuota, mode: "verdict" | "reading"): SdkQuotaS
       ...(resetsAt === undefined ? {} : { resetsAt }),
     },
   }
+}
+
+function futureReset(bucket: QuotaBucket | undefined, now: Date): Date | undefined {
+  return bucket?.resetsAt !== undefined && bucket.resetsAt > now ? bucket.resetsAt : undefined
+}
+
+function isLimited(bucket: QuotaBucket, now: Date): boolean {
+  return bucket.limited && (bucket.resetsAt === undefined || bucket.resetsAt > now)
 }
 
 function resetSourceOf(bucket: QuotaBucket): ResetSource {

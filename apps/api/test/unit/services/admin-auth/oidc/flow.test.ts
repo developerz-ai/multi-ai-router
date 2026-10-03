@@ -294,3 +294,36 @@ describe("createOIDCFlow", () => {
     expect(flow.complete({ code, state })).rejects.toBeInstanceOf(AdminAuthError)
   })
 })
+
+for (const delayedBody of [false, true]) {
+  test(`discovery deadline reaches the request and response body (body=${delayedBody})`, async () => {
+    const { h } = await buildHarness()
+    let observedSignal: AbortSignal | null | undefined
+    const flow = createOIDCFlow({
+      config: baseConfig(),
+      requestTimeoutMs: 10,
+      stateStore: { states: h.store.oauthStates, cipher: h.cipher, stateMinutes: 10 },
+      fetch: async (_url, init) => {
+        observedSignal = init?.signal
+        if (!observedSignal) throw new Error("deadline missing")
+        const signal = observedSignal
+        if (delayedBody)
+          return new Response(
+            new ReadableStream({
+              start(controller) {
+                signal.addEventListener("abort", () => controller.error(signal.reason), {
+                  once: true,
+                })
+              },
+            }),
+          )
+        return new Promise<Response>((_resolve, reject) => {
+          signal.addEventListener("abort", () => reject(signal.reason), { once: true })
+        })
+      },
+    })
+    await expect(flow.start()).rejects.toBeDefined()
+    expect(observedSignal?.aborted).toBe(true)
+    expect(h.store.rows.oauthStates).toHaveLength(0)
+  })
+}

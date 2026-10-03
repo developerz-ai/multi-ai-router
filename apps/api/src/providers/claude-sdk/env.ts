@@ -32,7 +32,13 @@
 export const CLAUDE_CONFIG_DIR_VAR = "CLAUDE_CONFIG_DIR"
 
 /** Every variable starting with one of these is dropped. Case-insensitive. */
-export const STRIPPED_ENV_PREFIXES: readonly string[] = Object.freeze(["ANTHROPIC_"])
+export const STRIPPED_ENV_PREFIXES: readonly string[] = Object.freeze([
+  "ANTHROPIC_",
+  "CLAUDE_CODE_USE_",
+  "AWS_",
+  "AZURE_",
+  "GOOGLE_",
+])
 
 /** Exact names dropped on top of the prefixes. Case-insensitive. */
 export const STRIPPED_ENV_NAMES: readonly string[] = Object.freeze([
@@ -49,6 +55,9 @@ export const STRIPPED_ENV_NAMES: readonly string[] = Object.freeze([
   "ADMIN_OIDC_CLIENT_SECRET",
   "ADMIN_API_TOKEN",
   "METRICS_TOKEN",
+  "SENTRY_DSN",
+  "CLOUD_ML_REGION",
+  "ANTHROPIC_VERTEX_PROJECT_ID",
 ])
 
 /**

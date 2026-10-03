@@ -1,19 +1,19 @@
 plan: 102-full-router-audit
 title: "Full router audit — code, infrastructure and production"
-status: not_started
+status: in_progress
 created_by: sebi
-worked_by: ""
+worked_by: "Codex team"
 owner: sebi
-percent: 0
-current_focus: "Begin with SDK isolation and credential containment; coordinate DB interfaces before parallel implementation."
+percent: 29
+current_focus: "Wave 1 verification and review; next: routing/database consistency and OAuth support."
 slices:
   - file: 01-transport.md
-    status: not_started
-    percent: 0
+    status: in_progress
+    percent: 44
     findings: 9
   - file: 02-auth.md
-    status: not_started
-    percent: 0
+    status: in_progress
+    percent: 75
     findings: 8
   - file: 03-routing.md
     status: not_started
@@ -24,8 +24,8 @@ slices:
     percent: 0
     findings: 1
   - file: 05-claude-sdk.md
-    status: not_started
-    percent: 0
+    status: in_progress
+    percent: 100
     findings: 3
   - file: 06-translation.md
     status: not_started
@@ -48,8 +48,8 @@ slices:
     percent: 0
     findings: 4
   - file: 11-config.md
-    status: not_started
-    percent: 0
+    status: in_progress
+    percent: 100
     findings: 3
   - file: 12-web.md
     status: not_started
@@ -59,6 +59,26 @@ slices:
     status: not_started
     percent: 0
     findings: 1
-evidence: []
-notes: "Plan-only audit complete; implementation not started. Local unit suites pass; large-prompt benchmark fails. Production reads only. Evidence files linked in overview.md and 13-production.md."
+evidence:
+  - "Pinned Bun 1.4.2; bin/check with disposable PostgreSQL: 4326 tests passed, zero failed; build passed."
+  - "102-full-router-audit/evidence/wave1-bench.json: 8000 requests, zero failures/buffered streams; max p99 1.28 ms."
+notes: "Wave 1 covers SDK isolation and failure delivery, credential containment, key and session races, login/OIDC bounds and configuration validation. #87 rotation and session invalidation remain operational follow-up. 01.9 transport-reader failures fixed; protocol error-frame accounting remains open."
 last_updated: 2026-10-02
+# Percentages measure locally resolved findings; review, release and deployment remain separate gates.
+resolved_findings:
+  - "01.1"
+  - "01.2"
+  - "01.7"
+  - "01.8"
+  - "02.2"
+  - "02.3"
+  - "02.4"
+  - "02.5"
+  - "02.6"
+  - "02.7"
+  - "05.1"
+  - "05.2"
+  - "05.3"
+  - "11.1"
+  - "11.2"
+  - "11.3"

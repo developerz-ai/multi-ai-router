@@ -1,242 +1,242 @@
-import { describe, expect, test } from "bun:test"
+import { expect, test } from "bun:test"
 import type { AdminSessionRepository, AdminSessionRow } from "@multi-ai-router/db"
 import { createLogger } from "../../../src/logging/logger"
 import {
   createPostgresSessionStore,
   hashSessionId,
 } from "../../../src/services/admin-auth/postgresSessionStore"
-import type { AdminSession } from "../../../src/services/admin-auth/sessionStore"
+import { type AdminSession, sessionExpiryMs } from "../../../src/services/admin-auth/sessionStore"
 
-/**
- * The store's contract over a fake repository — no database. What is asserted
- * is the *shape* of each call: which writes are awaited, which are fired, what
- * the cache absorbs, and that nothing but a hash ever reaches the repository.
- * The SQL underneath is `packages/db/test/integration/admin-session-repository.test.ts`.
- */
-
-function session(overrides: Partial<AdminSession> = {}): AdminSession {
+function session(id = "session-1"): AdminSession {
   return {
-    id: "session-1",
+    id,
     username: "admin",
     csrfToken: "csrf",
     createdAtMs: 0,
     lastSeenAtMs: 0,
     idleExpiryMs: 1_000,
     absoluteExpiryMs: 10_000,
-    ...overrides,
   }
 }
 
-interface FakeRepository extends AdminSessionRepository {
-  readonly rows: Map<string, AdminSessionRow>
-  readonly calls: string[]
-  /** When set, the next `upsert` rejects with it. */
-  failNextUpsert: Error | undefined
-  /** Resolves every pending `upsert` — they hang until released so a test can observe ordering. */
-  releaseUpserts: () => void
+function deferred() {
+  let release = () => {}
+  const promise = new Promise<void>((resolve) => {
+    release = resolve
+  })
+  return { promise, release }
 }
 
-function fakeRepository(): FakeRepository {
+function harness() {
   const rows = new Map<string, AdminSessionRow>()
-  const calls: string[] = []
-  let pending: Array<() => void> = []
-  const repo: FakeRepository = {
-    rows,
-    calls,
-    failNextUpsert: undefined,
-    releaseUpserts: () => {
-      const batch = pending
-      pending = []
-      for (const release of batch) release()
+  let now = 0
+  let reads = 0
+  let readGate: ReturnType<typeof deferred> | undefined
+  let writeGate: ReturnType<typeof deferred> | undefined
+  const repository: AdminSessionRepository = {
+    find: async (id) => {
+      reads++
+      const row = rows.get(id)
+      await readGate?.promise
+      return row
     },
-    find: async (idHash) => {
-      calls.push(`find:${idHash}`)
-      return rows.get(idHash)
+    create: async (row) => {
+      await writeGate?.promise
+      rows.set(row.idHash, row)
     },
-    upsert: (row) => {
-      calls.push(`upsert:${row.idHash}`)
-      const failure = repo.failNextUpsert
-      repo.failNextUpsert = undefined
-      return new Promise<void>((resolve, reject) => {
-        pending.push(() => {
-          if (failure !== undefined) {
-            reject(failure)
-            return
-          }
-          const existing = rows.get(row.idHash)
-          rows.set(
-            row.idHash,
-            existing === undefined
-              ? row
-              : { ...existing, lastSeenAt: row.lastSeenAt, idleExpiryAt: row.idleExpiryAt },
-          )
-          resolve()
-        })
-      })
+    touch: async (row) => {
+      await writeGate?.promise
+      const old = rows.get(row.idHash)
+      if (
+        old === undefined ||
+        Math.min(old.idleExpiryAt.getTime(), old.absoluteExpiryAt.getTime()) <=
+          row.lastSeenAt.getTime()
+      )
+        return false
+      rows.set(row.idHash, { ...old, lastSeenAt: row.lastSeenAt, idleExpiryAt: row.idleExpiryAt })
+      return true
     },
-    delete: async (idHash) => {
-      calls.push(`delete:${idHash}`)
-      return rows.delete(idHash)
-    },
-    deleteExpiredBefore: async (cutoff, limit) => {
-      calls.push(`deleteExpiredBefore:${cutoff.toISOString()}:${limit}`)
-      return 0
+    delete: async (id) => rows.delete(id),
+    deleteExpiredBefore: async (at, limit) => {
+      let deleted = 0
+      for (const [id, row] of rows) {
+        if (
+          deleted < limit &&
+          Math.min(row.idleExpiryAt.getTime(), row.absoluteExpiryAt.getTime()) <= at.getTime()
+        ) {
+          rows.delete(id)
+          deleted++
+        }
+      }
+      return deleted
     },
   }
-  return repo
-}
-
-function harness(options: { cacheMaxEntries?: number } = {}) {
-  const repository = fakeRepository()
-  const lines: string[] = []
-  const logger = createLogger({ level: "debug", write: (line) => lines.push(line) })
-  const store = createPostgresSessionStore({
+  const replica = (cacheMaxEntries = 10) =>
+    createPostgresSessionStore({
+      repository,
+      logger: createLogger({ level: "silent" }),
+      cacheMaxEntries,
+      revalidateAfterMs: 100,
+      now: () => now,
+    })
+  return {
+    rows,
     repository,
-    logger,
-    cacheMaxEntries: options.cacheMaxEntries ?? 100,
-  })
-  return { repository, lines, store }
+    replica,
+    reads: () => reads,
+    advance: (ms: number) => {
+      now += ms
+    },
+    pauseReads: () => {
+      readGate = deferred()
+      return readGate
+    },
+    pauseWrites: () => {
+      writeGate = deferred()
+      return writeGate
+    },
+  }
 }
 
-/** Lets the microtask queue drain so a fired-and-forgotten promise settles. */
-const settle = () => new Promise<void>((resolve) => setTimeout(resolve, 0))
-
-describe("hashSessionId", () => {
-  test("is deterministic, hex, and not the id", () => {
-    expect(hashSessionId("abc")).toBe(hashSessionId("abc"))
-    expect(hashSessionId("abc")).toMatch(/^[0-9a-f]{64}$/)
-    expect(hashSessionId("abc")).not.toContain("abc")
-    expect(hashSessionId("abc")).not.toBe(hashSessionId("abd"))
-  })
+test("session hashes are deterministic, distinct, and conceal the bearer", () => {
+  expect(hashSessionId("abc")).toMatch(/^[a-f0-9]{64}$/)
+  expect(hashSessionId("abc")).toBe(hashSessionId("abc"))
+  expect(hashSessionId("abc")).not.toBe(hashSessionId("abd"))
 })
 
-describe("createPostgresSessionStore", () => {
-  test("a login save awaits the upsert and the repository only ever sees the hash", async () => {
-    const { repository, store } = harness()
-    const s = session()
-
-    let saved = false
-    const saving = store.save(s).then(() => {
-      saved = true
-    })
-    await settle()
-    expect(saved).toBe(false)
-    expect(repository.calls).toEqual([`upsert:${hashSessionId(s.id)}`])
-
-    repository.releaseUpserts()
-    await saving
-    expect(saved).toBe(true)
-    expect(repository.rows.get(hashSessionId(s.id))).toMatchObject({ username: "admin" })
-    expect(JSON.stringify([...repository.rows.values()])).not.toContain(s.id)
+test("initial creation waits for durable storage before caching", async () => {
+  const h = harness()
+  const store = h.replica()
+  const gate = h.pauseWrites()
+  let done = false
+  const pending = store.create(session()).then(() => {
+    done = true
   })
+  await Promise.resolve()
+  expect(done).toBe(false)
+  gate.release()
+  await pending
+  expect(await store.get(session().id)).toEqual(session())
+  expect(JSON.stringify([...h.rows.values()])).not.toContain(session().id)
+})
 
-  test("a miss reads the row once and converts it; the second get makes no repository call", async () => {
-    const { repository, store } = harness()
-    const s = session({ id: "durable", createdAtMs: 5_000, lastSeenAtMs: 6_000 })
-    repository.rows.set(hashSessionId(s.id), {
-      idHash: hashSessionId(s.id),
-      username: s.username,
-      csrfToken: s.csrfToken,
-      createdAt: new Date(s.createdAtMs),
-      lastSeenAt: new Date(s.lastSeenAtMs),
-      idleExpiryAt: new Date(s.idleExpiryMs),
-      absoluteExpiryAt: new Date(s.absoluteExpiryMs),
-    })
+test("reads coalesce in cache until bounded revalidation", async () => {
+  const h = harness()
+  const first = h.replica()
+  await first.create(session())
+  const second = h.replica()
+  expect(await second.get(session().id)).toEqual(session())
+  await second.get(session().id)
+  expect(h.reads()).toBe(1)
+  h.advance(100)
+  await second.get(session().id)
+  expect(h.reads()).toBe(2)
+})
 
-    expect(await store.get("durable")).toEqual(s)
-    expect(await store.get("durable")).toEqual(s)
-    expect(repository.calls).toEqual([`find:${hashSessionId("durable")}`])
-  })
+test("a stale replica slide cannot recreate a logged-out row", async () => {
+  const h = harness()
+  const first = h.replica()
+  const second = h.replica()
+  await first.create(session())
+  await second.get(session().id)
+  await first.delete(session().id)
+  expect(await second.touch({ ...session(), lastSeenAtMs: 1 })).toBe(false)
+  expect(h.rows.size).toBe(0)
+  expect(await second.get(session().id)).toBeUndefined()
+})
 
-  test("an unknown id is a miss, not an error", async () => {
-    const { store } = harness()
-    expect(await store.get("nope")).toBeUndefined()
-  })
+test("remote logout becomes visible even without a slide", async () => {
+  const h = harness()
+  const first = h.replica()
+  const second = h.replica()
+  await first.create(session())
+  await second.get(session().id)
+  await first.delete(session().id)
+  h.advance(100)
+  expect(await second.get(session().id)).toBeUndefined()
+})
 
-  test("a slide save returns before the upsert settles and updates the cache immediately", async () => {
-    const { repository, store } = harness()
-    const s = session()
-    const login = store.save(s)
-    repository.releaseUpserts()
-    await login
+test("a read begun before logout cannot repopulate the cache", async () => {
+  const h = harness()
+  await h.replica().create(session())
+  const store = h.replica()
+  const gate = h.pauseReads()
+  const pending = store.get(session().id)
+  await store.delete(session().id)
+  gate.release()
+  expect(await pending).toBeUndefined()
+  expect(await store.get(session().id)).toBeUndefined()
+})
 
-    const slid = { ...s, lastSeenAtMs: 500, idleExpiryMs: 5_000 }
-    // Resolves although the fake never released the second upsert.
-    await store.save(slid)
-    expect(await store.get(s.id)).toEqual(slid)
-    expect(repository.calls.filter((c) => c.startsWith("upsert:"))).toHaveLength(2)
-    repository.releaseUpserts()
-  })
+test("an in-flight touch cannot resurrect a local logout", async () => {
+  const h = harness()
+  const store = h.replica()
+  await store.create(session())
+  const gate = h.pauseWrites()
+  const pending = store.touch({ ...session(), lastSeenAtMs: 1 })
+  await store.delete(session().id)
+  gate.release()
+  expect(await pending).toBe(false)
+  expect(await store.get(session().id)).toBeUndefined()
+})
 
-  test("a rejected slide is logged at warn and never thrown", async () => {
-    const { repository, lines, store } = harness()
-    const s = session()
-    const login = store.save(s)
-    repository.releaseUpserts()
-    await login
+test("logout waits out initial creation and removes its durable result", async () => {
+  const h = harness()
+  const store = h.replica()
+  const gate = h.pauseWrites()
+  const create = store.create(session())
+  const logout = store.delete(session().id)
+  gate.release()
+  await Promise.all([create, logout])
+  expect(await store.get(session().id)).toBeUndefined()
+})
 
-    repository.failNextUpsert = new Error("connection reset")
-    await store.save({ ...s, lastSeenAtMs: 500 })
-    repository.releaseUpserts()
-    await settle()
+test("touch fails for absent or expired sessions and preserves a live slide", async () => {
+  const h = harness()
+  const store = h.replica()
+  expect(await store.touch(session())).toBe(false)
+  await store.create(session())
+  const slid = { ...session(), lastSeenAtMs: 500, idleExpiryMs: 1_500 }
+  expect(await store.touch(slid)).toBe(true)
+  expect(await store.get(session().id)).toEqual(slid)
+  expect(await store.touch({ ...slid, lastSeenAtMs: sessionExpiryMs(slid) })).toBe(false)
+})
 
-    const warning = lines.find((l) => l.includes("admin session slide not persisted"))
-    expect(warning).toBeDefined()
-    expect(warning).toContain("connection reset")
-    expect(warning).toContain('"level":"warn"')
-    expect(warning).not.toContain(s.id)
-  })
+test("expiry sweeps are bounded and cache eviction respects capacity", async () => {
+  const h = harness()
+  const store = h.replica(2)
+  for (const id of ["a", "b", "c"]) await store.create(session(id))
+  await store.get("b")
+  expect(h.reads()).toBe(0)
+  await store.get("a")
+  expect(h.reads()).toBe(1)
+  expect(await store.deleteExpired(1_000, 1)).toBe(1)
+  expect(h.rows.size).toBe(2)
+})
 
-  test("delete evicts the cache entry and deletes the row by hash", async () => {
-    const { repository, store } = harness()
-    const s = session()
-    const login = store.save(s)
-    repository.releaseUpserts()
-    await login
+test("a failed initial write never becomes an authenticated cached session", async () => {
+  const h = harness()
+  h.repository.create = async () => {
+    throw new Error("write unavailable")
+  }
+  const store = h.replica()
+  await expect(store.create(session())).rejects.toThrow("write unavailable")
+  expect(await store.get(session().id)).toBeUndefined()
+})
 
-    await store.delete(s.id)
-    expect(repository.calls).toContain(`delete:${hashSessionId(s.id)}`)
-    expect(repository.rows.size).toBe(0)
-    // The cache is gone too: the next read goes to the repository and misses.
-    expect(await store.get(s.id)).toBeUndefined()
-    expect(repository.calls).toContain(`find:${hashSessionId(s.id)}`)
-  })
-
-  test("deleteExpired evicts expired cache entries and forwards cutoff and limit", async () => {
-    const { repository, store } = harness()
-    const dead = session({ id: "dead", idleExpiryMs: 100 })
-    const live = session({ id: "live", idleExpiryMs: 99_999, absoluteExpiryMs: 99_999 })
-    const logins = Promise.all([store.save(dead), store.save(live)])
-    repository.releaseUpserts()
-    await logins
-
-    await store.deleteExpired(1_000, 50)
-    expect(repository.calls.at(-1)).toBe(`deleteExpiredBefore:${new Date(1_000).toISOString()}:50`)
-
-    // "dead" is out of the cache: a read now consults the repository (which still holds it —
-    // the fake's sweep deletes nothing, which is what proves the read was a miss).
-    repository.calls.length = 0
-    await store.get("dead")
-    expect(repository.calls).toEqual([`find:${hashSessionId("dead")}`])
-    await store.get("live")
-    expect(repository.calls).toEqual([`find:${hashSessionId("dead")}`])
-  })
-
-  test("the cache is bounded: the oldest entry is evicted first", async () => {
-    const { repository, store } = harness({ cacheMaxEntries: 2 })
-    const logins = Promise.all([
-      store.save(session({ id: "a" })),
-      store.save(session({ id: "b" })),
-      store.save(session({ id: "c" })),
-    ])
-    repository.releaseUpserts()
-    await logins
-
-    repository.calls.length = 0
-    await store.get("c")
-    await store.get("b")
-    expect(repository.calls).toEqual([])
-    await store.get("a")
-    expect(repository.calls).toEqual([`find:${hashSessionId("a")}`])
-  })
+test("reads and slides during a pending logout cannot restore its cache", async () => {
+  const h = harness()
+  const store = h.replica()
+  await store.create(session())
+  const deletion = deferred()
+  h.repository.delete = async (id) => {
+    await deletion.promise
+    return h.rows.delete(id)
+  }
+  const pending = store.delete(session().id)
+  expect(await store.get(session().id)).toBeUndefined()
+  expect(await store.touch({ ...session(), lastSeenAtMs: 1 })).toBe(false)
+  deletion.release()
+  await pending
+  expect(await store.get(session().id)).toBeUndefined()
 })

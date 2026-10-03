@@ -1,3 +1,4 @@
+import { InvalidRequestError } from "@multi-ai-router/core"
 import { isRetryableFailureKind } from "../failure/classify"
 import type { FailureClassification } from "../types"
 import {
@@ -117,6 +118,19 @@ const RULES: readonly SdkRule[] = [...SDK_FAILURE_RULES, ...STATUS_RULES]
 
 export function classifySdkFailure(error: unknown): SdkFailure {
   const text = readSdkFailure(error)
+  if (error instanceof InvalidRequestError) {
+    return {
+      classification: {
+        kind: "invalid-request",
+        status: 400,
+        retryable: false,
+        signal: "claude-sdk:invalid-request",
+        rateLimit: null,
+      },
+      clientMessage: error.message,
+      text,
+    }
+  }
   const haystack: Haystack = {
     message: text.message.toLowerCase(),
     all: `${text.message}\n${text.stderrTail}`.toLowerCase(),

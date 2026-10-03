@@ -103,6 +103,9 @@ export function createDispatcher(deps: DispatcherDeps): Dispatcher {
       sessionKeySource: session.source,
       clock,
       timeoutMs: options.upstreamTimeoutMs ?? DEFAULT_UPSTREAM_TIMEOUT_MS,
+      ...(options.upstreamErrorMaxBytes === undefined
+        ? {}
+        : { errorMaxBytes: options.upstreamErrorMaxBytes }),
       record: (record) => deps.usage.record(record),
       // Two different ids on purpose: the correlation id is router-owned and joins this
       // request's attempts, while the client's own id is a trace label a caller may repeat or

@@ -270,6 +270,6 @@ describe("folding a gauge into the quota store", () => {
     expect(gauged.signal.limited).toBe(false)
 
     // The verdict is still there for the event path to report.
-    expect(store.snapshot("sub")?.signal.limited).toBe(true)
+    expect(store.snapshot("sub", NOW)?.signal.limited).toBe(true)
   })
 })

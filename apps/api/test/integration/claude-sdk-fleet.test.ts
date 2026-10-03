@@ -92,9 +92,11 @@ describe("twenty coding agents on six subscriptions", () => {
         seen.push(invocation)
         arrived += 1
         peakQueued = Math.max(peakQueued, concurrency.queued)
+        const freshSessionId = `sess_${invocation.accountId}_${arrived}`
         await gate
         invocation.onSession?.({
-          sdkSessionId: `sess_${invocation.accountId}_${invocation.session.kind}`,
+          sdkSessionId:
+            invocation.session.kind === "fresh" ? freshSessionId : invocation.session.sdkSessionId,
           assistantUuid: "uuid-1",
         })
         return sdkStream()

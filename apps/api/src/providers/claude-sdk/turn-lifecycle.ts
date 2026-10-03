@@ -22,9 +22,9 @@ import type { PromptBlock } from "./prompt"
  * **One epilogue, fire-and-forget, exactly once.** However the consumer let go — exhausted, ended at
  * `result`, returned early because the client hung up, or failed — the same sequence runs: wait for
  * a gauge already in flight (bounded by its own timeout), release the prompt, close the SDK
- * iterator so the subprocess is terminated, then `onEnd` (the slot, the abort bridge, the session
- * report). The slot is held through the gauge on purpose: a subprocess that is alive is a subprocess
- * the memory bound has to count.
+ * iterator so the subprocess is terminated, then `onEnd` (the slot and the abort bridge). The
+ * session report runs at consumer completion, before the gauge, so the next request can resume.
+ * The slot is held through the gauge: a live subprocess still counts toward the memory bound.
  */
 
 export interface HeldPrompt {
@@ -66,6 +66,8 @@ export interface TurnObserver {
    * move time-to-first-token. Whatever it returns is awaited before the subprocess is ended.
    */
   onFirstContent(): Promise<void>
+  /** Runs when the consumer finishes, before the asynchronous gauge epilogue. Must not throw. */
+  onAnswerEnd?(): void
   /**
    * Runs once the turn has nothing left to ask of the subprocess — the place to release the held
    * prompt, so the SDK's own input loop ends before the iterator is closed under it. Must not throw.
@@ -130,6 +132,7 @@ async function* iterate(
       if (isResult(step.value)) return
     }
   } finally {
+    observer.onAnswerEnd?.()
     void epilogue()
   }
 }
