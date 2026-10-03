@@ -1,0 +1,48 @@
+{
+  "scope": "shipped amd64 static helper; Linux Docker hardening; synthetic processes/files only",
+  "uid": 1000,
+  "readOnlyRoot": true,
+  "capabilities": "none",
+  "noNewPrivileges": true,
+  "bunVersion": "1.4.2",
+  "helperSha256": "b789ce046eafe0837dd225607a3dbc16bdd5256d441a868e91f6d5cf88c5e25f",
+  "sourceHashes": {
+    "native/config-owner.c": "5e0cc3991768d4054e78c1ff95578e806b7713db95c745a38a81d6cb49a2cd03",
+    "native/config-owner-state.h": "398e5b379522777ddf65c898dc7be864a299261444ef98229ad2d45e662fc886",
+    "native/config-owner-protocol.h": "f798131ab03d4a9f1bda161b625214eae835505f0c1653b99e93f44294b68e6b",
+    "native/build.ts": "f15f16fbf27e4054e396470eb0e08a020e4a65da067e0693621d6685be8a0548",
+    "apps/api/src/providers/claude-sdk/owner-launch.ts": "db9152670ee03f868be53e47035ee320ec972b8ecdd6346ae04b4d436f8cab51"
+  },
+  "compilerFlags": [
+    "-static",
+    "-O2",
+    "-Wall",
+    "-Wextra",
+    "-Werror",
+    "-fstack-protector-strong"
+  ],
+  "results": {
+    "activation": {
+      "protocol": "RABQ",
+      "parentCommands": "P,S",
+      "stdioUnchanged": true,
+      "ownerRetired": true
+    },
+    "descendants": {
+      "detachedAdoption": true,
+      "termGraceThenKill": true,
+      "reaped": true,
+      "principalCode": 0
+    },
+    "metadata": {
+      "nativeHold": true,
+      "pausedCleanupDeferred": true,
+      "callbackCompletedBeforeRelease": true,
+      "explicitRelease": "D",
+      "physicalCleanup": true,
+      "stableLockRetained": true,
+      "tombstonePermanent": true
+    }
+  },
+  "shippedImageId": "sha256:6605624be9959b3e8c13f2001c08982aed11d692bde18495d979c90e9264be03"
+}

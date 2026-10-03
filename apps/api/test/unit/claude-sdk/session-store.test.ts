@@ -320,6 +320,7 @@ describe("row writes are ordered per session", () => {
       },
       release: () => open(),
       repository: {
+        clearAccount: async () => 0,
         findByKey: async () => undefined,
         upsert: async (input) => {
           const wait = gate

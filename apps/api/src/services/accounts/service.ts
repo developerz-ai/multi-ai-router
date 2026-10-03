@@ -31,7 +31,13 @@ export interface AccountsService {
   create(body: CreateAccountBody): Promise<AdminResult<AccountView>>
   update(id: string, body: UpdateAccountBody): Promise<AdminResult<AccountView>>
   disable(id: string): Promise<AdminResult<AccountView>>
-  remove(id: string): Promise<AdminResult<{ readonly id: string; readonly deleted: true }>>
+  remove(id: string): Promise<
+    AdminResult<{
+      readonly id: string
+      readonly deleted: true
+      readonly cleanup: "removed" | "deferred" | "not_applicable"
+    }>
+  >
 }
 
 export interface AccountsServiceDeps {
@@ -44,6 +50,18 @@ export interface AccountsServiceDeps {
   readonly cipher: Pick<CredentialCipher, "encrypt">
   /** Only ever touched for a provider the registry says carries a `CLAUDE_CONFIG_DIR`. */
   readonly configDirs: AccountConfigDirs
+  /** Publish durable filesystem tombstone and close account owner admission before the barrier. */
+  readonly revokeDeletedAccount: (account: {
+    readonly id: string
+    readonly configDir: string | null
+  }) => Promise<void>
+  /** Strict deletion barrier: remove catalog/session admission after durable delete. */
+  readonly deletionCommitted: (accountId: string) => Promise<void>
+  /** Shared-volume authority cancels owners and removes only under exclusive ownership. */
+  readonly cleanupDeletedAccount: (account: {
+    readonly id: string
+    readonly configDir: string | null
+  }) => Promise<"removed" | "deferred" | "not_applicable">
   readonly audit: AuditRecorder
   /** Await the local routing barrier after commit, before audit or response work. */
   readonly mutationCommitted?: (accountId: string) => Promise<void>
@@ -219,15 +237,18 @@ export function createAccountsService(deps: AccountsServiceDeps): AccountsServic
         )
       }
 
-      // Directory first, and only then the row. The other order can strand cleartext OAuth
-      // credentials on the volume with nothing left pointing at them; this order can at worst
-      // leave a row whose subscription is logged out, which is visible and fixable by re-login.
-      if (found.value.configDir !== null) await deps.configDirs.remove(found.value.id)
-
       const deleted = await deps.accounts.delete(id)
       if (!deleted) return notFound(`no account with id "${id}"`)
 
-      await deps.mutationCommitted?.(id)
+      try {
+        await deps.revokeDeletedAccount({ id, configDir: found.value.configDir })
+      } finally {
+        // Even a filesystem tombstone failure must not leave a deleted row locally routable.
+        await deps.deletionCommitted(id)
+      }
+      // Cleanup precedes optional audit work. Deferred cleanup keeps owned credentials intact;
+      // durable deletion already prevents a late credential CAS from resurrecting the account.
+      const cleanup = await deps.cleanupDeletedAccount({ id, configDir: found.value.configDir })
       await deps.audit.record({
         kind: AUDIT_KINDS.accountDeleted,
         subjectType: AUDIT_SUBJECTS.account,
@@ -235,7 +256,7 @@ export function createAccountsService(deps: AccountsServiceDeps): AccountsServic
         detail: { label: found.value.label, provider: found.value.provider },
       })
 
-      return ok({ id, deleted: true })
+      return ok({ id, deleted: true, cleanup })
     },
   }
 }

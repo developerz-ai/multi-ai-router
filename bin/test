@@ -4,6 +4,13 @@ set -eu
 
 cd "$(dirname "$0")/.."
 
+# Native ownership tests must exercise the current C source, including on a fresh clone.
+if [ "$(uname -s)" = Linux ]; then
+  bin/build-cli-owner
+else
+  echo "Linux CLI ownership tests are unsupported on this host; use the router container." >&2
+fi
+
 # Exclude tmp/ — the cloned upstream repos we read for provider research. They
 # ship thousands of their own tests that fail here (missing deps, DOM globals we
 # don't configure) and would drown ours. tmp/ is gitignored, but `bun test` does

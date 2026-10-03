@@ -34,6 +34,7 @@ import { createCredentialCipher } from "../../src/services/crypto/cipher"
 import { createHealthStore } from "../../src/services/dataplane"
 import { createKeysService } from "../../src/services/keys"
 import { createPoolsService } from "../../src/services/pools"
+import { accountDeletionFixture } from "../support/account-deletion"
 import { createMemoryConfigDirs } from "../support/config-dirs"
 import { createMemoryStore } from "../support/memory-store"
 
@@ -93,6 +94,7 @@ function harness(
     claude: createClaudeConnectService({
       accounts: store.accounts,
       configDirs: configDirs.dirs,
+      ...accountDeletionFixture(configDirs.dirs),
       login,
       credentials: options.credentials ?? fakeCredentials(),
       audit,
@@ -228,14 +230,21 @@ function fakeLogin(): FakeLogin {
     start: async () => {
       const state = nextState()
       const submitted: string[] = []
+      const exit = Promise.withResolvers<void>()
       const handle: FakeHandle = {
         authorizeUrl: `https://claude.com/cai/oauth/authorize?code=true&client_id=9d1c250a&state=${state}`,
         state,
         submitted,
         submit: async (value) => {
           submitted.push(value)
+          exit.resolve()
         },
-        cancel: () => undefined,
+        exited: exit.promise,
+        cancel: () => exit.resolve(),
+        cancelAsync: async () => {
+          exit.resolve()
+          await exit.promise
+        },
       }
       handles.push(handle)
       return handle

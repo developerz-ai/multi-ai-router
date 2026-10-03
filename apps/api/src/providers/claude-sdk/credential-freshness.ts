@@ -1,6 +1,7 @@
 import type { Logger } from "../../logging/logger"
 import type { AccountConfigDirs } from "./config-dir"
 import type { CredentialMetadata, CredentialMetadataReader } from "./credential-metadata"
+import { CredentialMetadataOwnershipUnavailable } from "./ownership-errors"
 
 /**
  * Who may spawn a `claude` subprocess against an Account whose access token is about to be
@@ -44,9 +45,10 @@ import type { CredentialMetadata, CredentialMetadataReader } from "./credential-
  * prevent. It sits on the Agent-SDK path, which CLAUDE.md non-negotiable 8 names as the labelled
  * exception to the overhead budget, and it is followed by spawning a ~245 MB binary.
  *
- * **Fail open, always.** Every failure of `ensureFresh` — an unreadable file, a stalled winner, a
+ * **Credential reads fail open.** Ordinary credential failures of `ensureFresh` — an unreadable file, a stalled winner, a
  * refresh that never lands — ends in the caller proceeding. An unreadable file makes `wouldRefresh`
  * answer `false`: a probe cannot rotate a token the CLI cannot read either.
+ * Ownership admission failure rejects both methods before any CLI can start.
  *
  * **Metadata, never the token** (CLAUDE.md non-negotiables 1 and 13). This module reads two instants
  * and a boolean through {@link CredentialMetadataReader}, whose return type has no field that could
@@ -72,7 +74,7 @@ export interface CredentialFreshness {
    * the Account's access token is not near expiry, which is the overwhelmingly common case.
    *
    * Never rejects for a credential reason — a caller that cannot be helped is let through. It
-   * rejects only when `signal` aborts, carrying the signal's own reason so the caller classifies
+   * rejects when filesystem ownership is unavailable or `signal` aborts, carrying the signal's own reason so the caller classifies
    * the abort exactly as it classifies every other one.
    */
   ensureFresh(accountId: string, signal: AbortSignal): Promise<void>
@@ -82,7 +84,7 @@ export interface CredentialFreshness {
    * is written. `true` inside {@link CredentialFreshnessDeps.coldMarginMs} of expiry, or past it.
    *
    * `false` for an Account with no tokens (nothing to rotate), an expiry the file never carried
-   * (the CLI would not refresh on unknown either), or a file that cannot be read. Never throws.
+   * (the CLI would not refresh on unknown either), or a file that cannot be read. Rejects if filesystem ownership is unavailable.
    */
   wouldRefresh(accountId: string): Promise<boolean>
 }
@@ -139,6 +141,7 @@ export function createCredentialFreshness(deps: CredentialFreshnessDeps): Creden
       try {
         metadata = await deps.reader.read(deps.configDirs.pathFor(accountId))
       } catch (error) {
+        if (error instanceof CredentialMetadataOwnershipUnavailable) throw error
         deps.logger?.warn("claude credential freshness unreadable", {
           accountId,
           reason: error instanceof Error ? error.message : String(error),
@@ -158,6 +161,7 @@ export function createCredentialFreshness(deps: CredentialFreshnessDeps): Creden
       try {
         state = await classify(accountId)
       } catch (error) {
+        if (error instanceof CredentialMetadataOwnershipUnavailable) throw error
         // Unknown, not blocked. The message names a path or an errno at most, and goes through the
         // redactor like every other field.
         deps.logger?.warn("claude credential freshness unreadable", {
@@ -194,7 +198,8 @@ export function createCredentialFreshness(deps: CredentialFreshnessDeps): Creden
         let next: Freshness
         try {
           next = await classify(accountId)
-        } catch {
+        } catch (error) {
+          if (error instanceof CredentialMetadataOwnershipUnavailable) throw error
           break
         }
         if (next !== "refreshing") {

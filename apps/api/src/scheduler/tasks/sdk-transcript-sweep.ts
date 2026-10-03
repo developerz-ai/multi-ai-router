@@ -101,6 +101,8 @@ export function createTranscriptSweepTask(deps: TranscriptSweepDeps): ScheduledT
       })
 
       let removed = 0
+      let deferred = 0
+      let bytes = 0
       let stopped = false
       try {
         for (const entry of plan.sweep) {
@@ -109,8 +111,12 @@ export function createTranscriptSweepTask(deps: TranscriptSweepDeps): ScheduledT
             stopped = true
             break
           }
-          await deps.transcripts.remove(entry)
+          if ((await deps.transcripts.remove(entry)) === false) {
+            deferred += 1
+            continue
+          }
           removed += 1
+          bytes += entry.transcript?.bytes ?? 0
         }
       } catch (error) {
         // Caught so the count survives: what was removed is gone whatever happens next, and the
@@ -128,13 +134,14 @@ export function createTranscriptSweepTask(deps: TranscriptSweepDeps): ScheduledT
         root: deps.transcripts.root,
         surveyed: entries.length,
         removed,
-        bytes: plan.bytes,
+        bytes,
+        deferred,
         withinRetention: plan.young,
         remaining: plan.remaining,
       })
 
       return {
-        outcome: stopped || plan.remaining ? "partial" : "success",
+        outcome: stopped || plan.remaining || deferred > 0 ? "partial" : "success",
         itemsProcessed: removed,
       }
     },

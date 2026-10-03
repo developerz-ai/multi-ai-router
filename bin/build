@@ -14,7 +14,9 @@ cd "$(dirname "$0")/.."
 # Start clean: a stale dist/ silently shipping a previous build's SPA is the kind
 # of bug that only shows up in production.
 rm -rf dist
-mkdir -p dist/api dist/web
+mkdir -p dist/api dist/web dist/libexec
+bin/build-cli-owner
+cp native/config-owner dist/libexec/router-cli-owner
 
 # The API bundles to a single file. --target=bun keeps bun-native APIs intact
 # (node targets would rewrite them) and matches the runtime stage's entrypoint.

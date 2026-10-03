@@ -13,6 +13,7 @@ import type {
   PoolMemberRow,
   PoolRepository,
   PoolRow,
+  RecoveryRow,
 } from "@multi-ai-router/db"
 
 export type MemoryAccounts = Pick<
@@ -28,6 +29,7 @@ export type MemoryAccounts = Pick<
   | "commitAuthorization"
   | "create"
   | "list"
+  | "readEligibleBackgroundAccount"
   | "findById"
   | "findByIds"
   | "update"
@@ -64,6 +66,7 @@ export interface MemoryStore {
   /** The rows themselves, for assertions. */
   readonly rows: {
     readonly accounts: AccountRow[]
+    readonly recoveries: Map<string, Pick<RecoveryRow, "generation" | "state">>
     readonly keys: ApiKeyRow[]
     readonly keyPools: ApiKeyPoolRow[]
     readonly keyAccounts: ApiKeyAccountRow[]

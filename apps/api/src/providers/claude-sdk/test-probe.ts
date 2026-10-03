@@ -1,12 +1,15 @@
 import type { Options, SDKMessage, SDKUserMessage } from "@anthropic-ai/claude-agent-sdk"
 import { query } from "@anthropic-ai/claude-agent-sdk"
 import type { UpstreamFailureKind } from "../types"
+import { type AsyncBackgroundStartGuard, UpstreamAdmissionRefused } from "../upstream-admission"
 import { createCliProbe } from "./cli-probe"
-import type { SdkConcurrency, SdkSlot } from "./concurrency"
-import { ALWAYS_FRESH, type CredentialFreshness } from "./credential-freshness"
+import type { SdkConcurrency } from "./concurrency"
+import type { CredentialFreshness } from "./credential-freshness"
 import { classifySdkFailure, readSdkFailure } from "./errors"
 import { isolatedOptions } from "./options"
+import { type OwnerLaunchFactory, ownedQuery } from "./owned-query"
 import { type CliResolution, resolveClaudeCli } from "./resolve-cli"
+import { prepareSdkProbe } from "./test-probe-preparation"
 import { detailOf, resultFailure, snippet, statedResult } from "./test-probe-result"
 import { holdPrompt } from "./turn-lifecycle"
 import type { SdkUsageGauge, SdkUsageGaugeSource } from "./usage-gauge"
@@ -42,6 +45,7 @@ import type { SdkUsageGauge, SdkUsageGaugeSource } from "./usage-gauge"
  */
 
 export interface SdkTestProbeInput {
+  readonly beforeBackgroundUpstreamStart?: AsyncBackgroundStartGuard
   /** Which Account this probe runs as — its per-Account subprocess slot is taken under this id. */
   readonly accountId: string
   /** The isolated `CLAUDE_CONFIG_DIR` this Account's subprocess runs against. */
@@ -140,6 +144,7 @@ export interface SdkTestProbeOptions {
   /** Injected in tests. Defaults to the real ladder over this host's filesystem. */
   readonly resolveCli?: () => CliResolution
   /** Injected in tests, for the reason `SdkInvokerDeps.runQuery` is: no test may spawn a `claude`. */
+  readonly ownerLaunch?: OwnerLaunchFactory
   readonly runQuery?: SdkProbeQueryFn
   /**
    * The plan-usage reading, asked once the turn has answered — a billed probe is the one moment a
@@ -156,29 +161,14 @@ export function createSdkTestProbe(options: SdkTestProbeOptions): SdkTestProbe {
 
   return {
     async run(input) {
-      // Resolved before a slot is taken: a router with no binary answers immediately, rather than
-      // occupying capacity a live request could have used in order to discover it cannot spawn.
-      const resolution = resolveCli()
-      if (!resolution.ok) {
-        return {
-          ok: false,
-          message: "this router has no usable claude binary to spawn — see /readyz",
-          // Nothing spawned, so nothing was reported. Empty, never absent: a caller folding
-          // readings in must not have to distinguish "no events" from "this path forgot".
-          rateLimitInfos: [],
-        }
-      }
-
-      await (options.freshness ?? ALWAYS_FRESH).ensureFresh(input.accountId, input.signal)
-
-      let slot: SdkSlot
-      try {
-        slot = await options.concurrency.acquire(input.accountId, input.signal)
-      } catch {
-        // The only way out of the queue other than a slot is the caller's own signal, and the probe
-        // is that caller. Nothing spawned, so there is nothing to report but the ceiling.
-        return { ok: false, message: AT_CEILING, rateLimitInfos: [] }
-      }
+      const prepared = await prepareSdkProbe(input, {
+        resolveCli,
+        freshness: options.freshness,
+        concurrency: options.concurrency,
+        ceilingMessage: AT_CEILING,
+      })
+      if (!prepared.ok) return prepared.result
+      const { slot } = prepared
 
       const controller = new AbortController()
       const onAbort = (): void => controller.abort(input.signal.reason)
@@ -186,7 +176,7 @@ export function createSdkTestProbe(options: SdkTestProbeOptions): SdkTestProbe {
       else input.signal.addEventListener("abort", onAbort, { once: true })
 
       const sdkOptions: Options = {
-        ...isolatedOptions({ configDir: input.configDir, cliPath: resolution.path, controller }),
+        ...isolatedOptions({ configDir: input.configDir, cliPath: prepared.path, controller }),
         model: input.model,
         // One turn: the probe asks one question and reads one answer, never an agent loop.
         maxTurns: 1,
@@ -199,9 +189,18 @@ export function createSdkTestProbe(options: SdkTestProbeOptions): SdkTestProbe {
       // because the probe is the admin plane's own button and a bounded wait there costs nothing
       // the client is timing.
       let gauged: Promise<void> = Promise.resolve()
+      let upstreamStarted = false
 
       try {
-        const messages = runQuery({ prompt: held.prompt, options: sdkOptions })
+        const messages = await ownedQuery({
+          ...input,
+          options: sdkOptions,
+          ownerLaunch: options.ownerLaunch,
+          beforeUpstreamStart: () => {
+            upstreamStarted = true
+          },
+          run: (sdkOptions) => runQuery({ prompt: held.prompt, options: sdkOptions }),
+        })
         for await (const message of messages) {
           // Collected before the result is examined, because a turn that ends in a spent window
           // still reported that window on its way there — and that reading is the whole answer to
@@ -235,6 +234,9 @@ export function createSdkTestProbe(options: SdkTestProbeOptions): SdkTestProbe {
           rateLimitInfos,
         }
       } catch (error) {
+        if (error instanceof UpstreamAdmissionRefused) throw error
+        if (!upstreamStarted && input.beforeBackgroundUpstreamStart !== undefined)
+          throw new UpstreamAdmissionRefused("SDK probe preparation unavailable")
         const failure = classifySdkFailure(error)
         return {
           ok: false,

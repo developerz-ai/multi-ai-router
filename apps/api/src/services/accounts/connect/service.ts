@@ -62,7 +62,9 @@ export interface ConnectService {
   /** The OAuth redirect callback. Bound by `state` alone, so no account id is passed or trusted. */
   redeem(query: OAuthCallbackQuery): Promise<AdminResult<ConnectCompleted>>
   /** Terminates every pending CLI login. Called on shutdown; the OAuth flow holds no process. */
-  stop(): void
+  closeAdmission(): void
+  revoke(accountId: string): void
+  stop(): Promise<void>
 }
 
 export interface ConnectServiceDeps {
@@ -108,6 +110,8 @@ export function createConnectService(deps: ConnectServiceDeps): ConnectService {
 
     redeem: (query) => deps.oauth.redeem(query),
 
+    closeAdmission: () => deps.claude.closeAdmission(),
+    revoke: (accountId) => deps.claude.revoke(accountId),
     stop: () => deps.claude.stop(),
   }
 }

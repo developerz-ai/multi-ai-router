@@ -4,6 +4,7 @@ node_modules/
 .pnp.js
 
 # Build output
+native/config-owner
 dist/
 build/
 apps/web/dist/

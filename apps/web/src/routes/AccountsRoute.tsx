@@ -27,6 +27,7 @@ import { useTableUsage } from "../lib/queries/table-usage"
 import styles from "./AccountsRoute.module.scss"
 import { AccountConnect } from "./accounts/AccountConnect"
 import { AccountDeleteDialog } from "./accounts/AccountDeleteDialog"
+import { AccountDeletionNotice } from "./accounts/AccountDeletionNotice"
 import { AccountEditDialog } from "./accounts/AccountEditDialog"
 import { AccountFormDialog } from "./accounts/AccountFormDialog"
 import { AccountsFilters } from "./accounts/AccountsFilters"
@@ -36,24 +37,15 @@ import { ProviderGroup } from "./accounts/ProviderGroup"
 import { ReconnectSequence } from "./accounts/ReconnectSequence"
 import { SubscriptionBanner } from "./accounts/SubscriptionBanner"
 
-/**
- * The fleet, grouped by provider.
- *
- * Pooling is the product, so nothing here assumes one account per provider — six Claude
- * subscriptions side by side is the normal case, which is exactly why they read as one section
- * with one header (how many, how many routable, when the next login dies) over a dense table,
- * rather than as six rows lost among eleven. Groups with a problem come first; the filters still
- * narrow the whole page.
- */
+/** Account CRUD, recovery controls and deletion cleanup outcomes. */
 export default function AccountsRoute() {
   const now = createNow()
-  // Grouping classifies logins in days, so it reads a coarse clock: rebuilding every group on the
-  // one-second tick would re-mount seven tables a second and dismiss any tooltip mid-read.
   const groupingNow = createNow(60_000)
   const [status, setStatus] = createSignal<AccountStatus | "">("")
   const [provider, setProvider] = createSignal<ProviderId | "">("")
   const [adding, setAdding] = createSignal(false)
   const [editing, setEditing] = createSignal<AccountView | null>(null)
+  const [deferredDeletionLabel, setDeferredDeletionLabel] = createSignal<string | null>(null)
   const [pendingDelete, setPendingDelete] = createSignal<AccountView | null>(null)
   const [connecting, setConnecting] = createSignal<AccountView | null>(null)
   /** The accounts a "Reconnect all" run walks, or null while none is running. */
@@ -72,13 +64,9 @@ export default function AccountsRoute() {
   const accountList = () => (accounts.isSuccess ? (accounts.data ?? []) : [])
 
   const groups = createMemo(() => groupAccountsByProvider(accountList(), groupingNow()))
-  // `For` keys by identity and provider ids are strings, so the sections keep their DOM — and
-  // their collapsed state — across every refetch; the group objects underneath are looked up.
   const groupOrder = createMemo(() => groups().map((group) => group.provider))
   const groupFor = (provider: string) => groups().find((group) => group.provider === provider)
 
-  // Asked of the descriptor, never of a list kept here: a provider that grows a login becomes
-  // connectable the day its driver file lands (CLAUDE.md non-negotiable 12).
   const providerFor = (account: AccountView) => findProvider(providerList(), account.provider)
 
   const connectFlowFor = (account: AccountView): ProviderConnectFlow | null =>
@@ -141,8 +129,6 @@ export default function AccountsRoute() {
       <PageHeader
         actions={
           <>
-            {/* The same probe path the half-open transition uses — one code
-                path, a server-side cooldown, never a second mechanism. */}
             <Button busy={recheckAll.isPending} onClick={() => recheckAll.mutate()} tone="neutral">
               Re-check all
             </Button>
@@ -168,6 +154,10 @@ export default function AccountsRoute() {
       />
 
       <AccountsNotices discover={discover} recheckAll={recheckAll} />
+      <AccountDeletionNotice
+        label={deferredDeletionLabel()}
+        onDismiss={() => setDeferredDeletionLabel(null)}
+      />
 
       <AccountsFilters
         onProvider={setProvider}
@@ -251,9 +241,6 @@ export default function AccountsRoute() {
           create.mutate(input, {
             onSuccess: (account) => {
               closeForm()
-              // A provider that takes a login lands here unauthorised on purpose — the row exists
-              // so the one-shot `state` has something to bind to. Going straight into Connect is
-              // the rest of the same gesture, not a second task the operator has to remember.
               if (connectFlowFor(account) !== null) setConnecting(account)
             },
           })
@@ -297,7 +284,14 @@ export default function AccountsRoute() {
         busy={remove.isPending}
         error={remove.error}
         onClose={closeDelete}
-        onConfirm={(account) => remove.mutate(account.id, { onSuccess: closeDelete })}
+        onConfirm={(account) =>
+          remove.mutate(account.id, {
+            onSuccess: (result) => {
+              setDeferredDeletionLabel(result.cleanup === "deferred" ? account.label : null)
+              closeDelete()
+            },
+          })
+        }
       />
     </>
   )

@@ -524,7 +524,7 @@ describe("the subprocess slot", () => {
     // Drained rather than counted: how many microtasks sit between the call and the launch is an
     // implementation detail (the refresh-window gate added one), and a test that hardcodes it
     // breaks on changes that do not change what it is asserting.
-    for (let tick = 0; tick < 50 && Object.keys(launchedCwd).length < 2; tick += 1) {
+    for (let tick = 0; tick < 50 && (releaseA === undefined || releaseB === undefined); tick += 1) {
       await Promise.resolve()
     }
 

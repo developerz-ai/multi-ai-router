@@ -6,9 +6,11 @@ import {
   type SessionEntry,
 } from "./cache"
 import { readConversation } from "./conversation"
+import { createSessionDeletionFence } from "./deletion-fence"
 import { scopedKey, sessionFingerprint } from "./fingerprint"
 import { claimSessionTurn, createSessionClaims, type SessionClaims } from "./inflight"
 import { hashMessages, resolveLineage, type SessionPlan } from "./lineage"
+import { createSessionWrites } from "./writes"
 
 /**
  * Session lineage as the rest of the router uses it: one read before selection, one plan before an
@@ -36,7 +38,7 @@ export interface StoredBinding {
 }
 
 export interface SessionStoreDeps {
-  readonly repository: Pick<SessionRepository, "findByKey" | "upsert">
+  readonly repository: Pick<SessionRepository, "findByKey" | "upsert" | "clearAccount">
   readonly now: () => Date
   readonly cache?: Partial<SessionCacheOptions>
   /** Reported, never thrown. Composition points this at the logger. */
@@ -97,6 +99,8 @@ export interface SessionStore {
   binding(apiKeyId: string, sessionKey: string): Promise<StoredBinding | undefined>
   /** Selection refused the binding. Drop it here and in Postgres; never move it to the new pick. */
   invalidate(apiKeyId: string, sessionKey: string): void
+  /** Drop local lineage immediately; durable deletion clears targeted bindings transactionally. */
+  invalidateAccount(accountId: string): Promise<void>
   /**
    * Before an SDK attempt: resume, fork, or start fresh, and how to record whichever happens.
    *
@@ -117,35 +121,11 @@ export function createSessionStore(deps: SessionStoreDeps): SessionStore {
     negativeTtlMs: deps.cache?.negativeTtlMs ?? DEFAULT_SESSION_CACHE_NEGATIVE_TTL_MS,
     ...(deps.cache?.now === undefined ? {} : { now: deps.cache.now }),
   })
-
-  /**
-   * Row writes, ordered **per session key**. Every write is still fire-and-forget from the
-   * caller's side — nothing on the request path waits on Postgres — but within one key the
-   * upserts land in the order they were issued. Without this, an `invalidate` (clear) and the
-   * `remember` (bind) of the same request were two independent floating promises, and the clear
-   * landing second left the row empty behind a cache that says bound; two requests rebinding the
-   * same session concurrently could interleave the same way. The chain never grows unbounded: a
-   * key's tail entry is removed the moment it settles with nothing queued behind it.
-   */
-  /** Which conversations are mid-turn right now. Per store, never a process singleton. */
   const claims: SessionClaims = createSessionClaims()
-
-  const pending = new Map<string, Promise<void>>()
-  const write = (key: string, input: Parameters<SessionRepository["upsert"]>[0]): void => {
-    const run = (): Promise<void> =>
-      deps.repository.upsert(input).then(
-        () => undefined,
-        (error: unknown) => deps.onError?.("write", error),
-      )
-    const previous = pending.get(key)
-    // Issued synchronously when nothing is in flight for this key, so an unqueued write costs the
-    // same instant it always did; queued only behind its own key's predecessor.
-    const tail = previous === undefined ? run() : previous.then(run)
-    pending.set(key, tail)
-    void tail.finally(() => {
-      if (pending.get(key) === tail) pending.delete(key)
-    })
-  }
+  const fence = createSessionDeletionFence(
+    Math.max(1, deps.cache?.maxEntries ?? DEFAULT_SESSION_CACHE_MAX_ENTRIES),
+  )
+  const write = createSessionWrites(deps.repository, fence, deps.onError)
 
   return {
     async binding(apiKeyId, sessionKey) {
@@ -153,15 +133,20 @@ export function createSessionStore(deps: SessionStoreDeps): SessionStore {
       const cached = cache.get(key)
       if (cached !== undefined) return cached ?? undefined
 
+      const reading = fence.read()
       let row: SessionRow | undefined
       try {
         row = await deps.repository.findByKey(apiKeyId, sessionKey)
       } catch (error) {
         // Not cached: a transient read failure must not be remembered as "no binding".
+        reading.release()
         deps.onError?.("read", error)
         return undefined
       }
 
+      const valid = reading.valid(row?.accountId ?? null)
+      reading.release()
+      if (!valid) return undefined
       const entry = entryOf(row)
       cache.set(key, entry)
       return entry ?? undefined
@@ -180,6 +165,17 @@ export function createSessionStore(deps: SessionStoreDeps): SessionStore {
         // Untouched on purpose: a cleared row still ages out on its own idle clock.
         lastUsedAt: deps.now(),
       })
+    },
+
+    async invalidateAccount(accountId) {
+      fence.invalidate(accountId)
+      cache.dropAccount(accountId)
+      try {
+        await deps.repository.clearAccount(accountId)
+      } catch (error) {
+        deps.onError?.("write", error)
+        throw error
+      }
     },
 
     resolve(input) {
@@ -220,14 +216,18 @@ export function createSessionStore(deps: SessionStoreDeps): SessionStore {
       // next real turn resumes from — the durable lineage advanced by a request nobody saw.
       if (!claim.held) return { plan, remember: () => {}, release: claim.release }
 
+      const lease = fence.hold(input.accountId)
       const hashes = hashMessages(conversation.messages)
       const carried = plan.kind === "fresh" ? [] : (session?.lineage.assistantUuids ?? [])
 
       return {
         plan,
-        release: claim.release,
+        release: () => {
+          claim.release()
+          lease.release()
+        },
         remember: (sdkSessionId, assistantUuid) => {
-          if (!claim.own(sdkSessionId)) return
+          if (!lease.valid() || !claim.own(sdkSessionId)) return
           const lineage = nextLineage(hashes, carried, assistantUuid)
           cache.set(key, { accountId: input.accountId, sdkSessionId, lineage })
           if (fingerprint !== null) cache.alias(fingerprint, key)

@@ -10,6 +10,8 @@ import {
   PERMITTED_TOOLS,
 } from "../../../src/providers"
 
+import { CredentialMetadataOwnershipUnavailable } from "../../../src/providers/claude-sdk/ownership-errors"
+
 /**
  * The turn-free `query()`: a subprocess that comes up, completes its handshake, and is read without
  * a message ever being sent. Two things are pinned here that the callers (the model lister, the
@@ -247,6 +249,26 @@ describe("an idle Agent SDK query", () => {
     expect(fake.launches).toEqual([])
     // The slot it took for the second look was handed back.
     expect(concurrency.inFlight).toBe(0)
+  })
+
+  test("a rejected post-queue ownership check releases the slot without launching", async () => {
+    const { fake, runQuery } = fakeQuery()
+    const concurrency = createSdkConcurrency({ global: 1, perAccount: 1 })
+    const failure = new CredentialMetadataOwnershipUnavailable()
+    let checks = 0
+    const freshness: CredentialFreshness = {
+      ensureFresh: async () => {},
+      wouldRefresh: async () => {
+        checks++
+        if (checks === 2) throw failure
+        return false
+      },
+    }
+    await expect(open(runQuery, { concurrency, freshness })).rejects.toBe(failure)
+    expect(checks).toBe(2)
+    expect(fake.launches).toEqual([])
+    expect(concurrency.inFlight).toBe(0)
+    expect(concurrency.queued).toBe(0)
   })
 
   test("a warm credential spawns exactly as before, and never enters the refresh window", async () => {

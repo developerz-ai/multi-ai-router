@@ -24,6 +24,7 @@ import { createKeysService } from "../../src/services/keys"
 import { createPoolsService } from "../../src/services/pools"
 import { createSettingsService } from "../../src/services/settings"
 import { createUsageService } from "../../src/services/usage-read"
+import { accountDeletionFixture } from "../support/account-deletion"
 import { createMemoryConfigDirs } from "../support/config-dirs"
 import { createMemoryStore } from "../support/memory-store"
 import {
@@ -345,6 +346,7 @@ describe("the full app, mounted end to end", () => {
           keys: store.keys,
           cipher: adminCipher,
           configDirs: configDirs.dirs,
+          ...accountDeletionFixture(configDirs.dirs),
           audit,
           now,
         }),

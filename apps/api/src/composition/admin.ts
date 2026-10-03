@@ -25,7 +25,9 @@ import {
   type SdkQuotaStore,
   type SdkUsageGauge,
 } from "../providers"
+import type { AccountCliOwnership } from "../providers/claude-sdk/account-ownership"
 import type { AccountConfigDirs } from "../providers/claude-sdk/config-dir"
+import type { OwnerLaunchConfig } from "../providers/claude-sdk/owner-launch"
 import { scheduledTaskIntervals } from "../scheduler"
 import {
   type CredentialRefresher,
@@ -40,6 +42,7 @@ import {
   withAvailability,
   withCredentialMetadata,
 } from "../services/accounts"
+import type { createBackgroundStartGuard } from "../services/accounts/background-admission"
 import { type CoherenceHooks, createAuditRecorder, keyMutationCommitted } from "../services/admin"
 import {
   adminAuthConfigFromEnv,
@@ -58,6 +61,7 @@ import { createPoolsService } from "../services/pools"
 import { createSettingsService } from "../services/settings"
 import { catalogLabels, createUsageService } from "../services/usage-read"
 import type { AdminServices } from "../types"
+import { ownedCredentialMetadataReader } from "./credential-ownership"
 
 /**
  * The admin plane's assembly, split from the composition root because it changes for a different
@@ -76,6 +80,12 @@ import type { AdminServices } from "../types"
  */
 
 export interface AdminPlaneDeps {
+  readonly ownership: { manager: AccountCliOwnership; config: OwnerLaunchConfig }
+  readonly backgroundStartGuard: (
+    expected: Parameters<typeof createBackgroundStartGuard>[1],
+    signal?: AbortSignal,
+  ) => () => Promise<void>
+  readonly accountDeletionCommitted: (id: string) => Promise<void>
   readonly recovery: {
     repository: RecoveryRepository
     coordinator: { demand(accountId: string): void }
@@ -161,6 +171,7 @@ export function createAdminPlane(deps: AdminPlaneDeps): AdminPlane {
   // Both halves of running the `claude` binary against an account's directory, and every login flow
   // behind the one service the admin plane mounts.
   const cli = claudeCliFromEnv({
+    ownership: deps.ownership,
     accounts,
     configDirs,
     audit,
@@ -218,6 +229,7 @@ export function createAdminPlane(deps: AdminPlaneDeps): AdminPlane {
   // "Test now": one real, opt-in completion against one account. Its own cooldown and its own
   // audit kind — see `services/accounts/test-now.ts` for why it is never folded into `recheck`.
   const testNow = createTestNowService({
+    createBackgroundStartGuard: deps.backgroundStartGuard,
     accounts,
     cipher,
     audit,
@@ -227,6 +239,7 @@ export function createAdminPlane(deps: AdminPlaneDeps): AdminPlane {
     // Re-resolved per call inside the probe itself (`resolveClaudeCli`), for the same reason
     // `claudeCliFromEnv` re-resolves rather than resolving once at boot.
     sdkProbe: createSdkTestProbe({
+      ownerLaunch: deps.ownership.manager.ownerLaunch,
       cliPathOverride: env.claudeCliPath,
       concurrency: deps.sdkConcurrency,
       freshness: deps.credentialFreshness,
@@ -241,6 +254,12 @@ export function createAdminPlane(deps: AdminPlaneDeps): AdminPlane {
   })
 
   const accountsService = createAccountsService({
+    revokeDeletedAccount: async (account) => {
+      connect.revoke(account.id)
+      await deps.ownership.manager.revokeDeletedAccount(account)
+    },
+    deletionCommitted: deps.accountDeletionCommitted,
+    cleanupDeletedAccount: deps.ownership.manager.cleanupDeletedAccount,
     accounts,
     keys,
     cipher,
@@ -264,7 +283,11 @@ export function createAdminPlane(deps: AdminPlaneDeps): AdminPlane {
   // stale `active`.
   const decoratedAccounts = withCredentialMetadata(availableAccounts, {
     accounts,
-    reader: createCredentialMetadataReader(),
+    reader: ownedCredentialMetadataReader(
+      createCredentialMetadataReader(),
+      deps.ownership.manager,
+      configDirs.root,
+    ),
     configDirs,
     ttlMs: env.adminCredentialMetadataTtlSeconds * 1_000,
     now,

@@ -18,6 +18,7 @@ export interface SubscriptionAccount {
   readonly status: AccountStatus
   readonly lifecycleVersion: number
   readonly authMaterial: string | null
+  readonly configDir: string | null
 }
 
 /**
@@ -58,5 +59,6 @@ export async function findSubscriptionAccount(
     status: row.status,
     lifecycleVersion: row.lifecycleVersion,
     authMaterial: row.authMaterial,
+    configDir: row.configDir,
   })
 }

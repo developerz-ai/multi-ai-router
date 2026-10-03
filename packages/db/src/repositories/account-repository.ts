@@ -1,12 +1,14 @@
 import type { AccountStatus } from "@multi-ai-router/core"
-import { and, asc, eq, inArray, isNull, lt, ne, or, sql } from "drizzle-orm"
+import { and, asc, eq, inArray, sql } from "drizzle-orm"
 import type { DatabaseExecutor } from "../client"
 import { type AccountRow, accounts } from "../schema/accounts"
 import { quotaWindows } from "../schema/quota-windows"
+import { sessions } from "../schema/sessions"
 import { createAccountAuthorization } from "./account-authorization"
 import { createAccountLifecycle } from "./account-lifecycle"
 import type { AccountRepository } from "./account-types"
 import { withAdminMutationRetry } from "./admin-mutation-conflict"
+import { createBackgroundAccountEligibility } from "./background-account-eligibility"
 import { createQuotaWindowMutations } from "./quota-window-mutations"
 
 /**
@@ -147,6 +149,17 @@ export function createAccountRepository(
         db.transaction(async (tx) => {
           // Account cascades lock pools too. Either side of a concurrent pool edit can lose
           // deadlock detection; rollback this transaction/savepoint before retrying the delete.
+          // Fence late FK-dependent session writes before clearing only this account's lineage.
+          const held = await tx
+            .select({ id: accounts.id })
+            .from(accounts)
+            .where(eq(accounts.id, id))
+            .for("update")
+          if (held.length === 0) return false
+          await tx
+            .update(sessions)
+            .set({ accountId: null, sdkSessionId: null, lineageState: null })
+            .where(eq(sessions.accountId, id))
           const rows = await tx.delete(accounts).where(eq(accounts.id, id)).returning({
             id: accounts.id,
           })
@@ -190,26 +203,7 @@ export function createAccountRepository(
         .where(inArray(accounts.id, [...new Set(ids)]))
     },
 
-    findIdle: async ({ before, limit }) => {
-      if (limit <= 0) return []
-      return (
-        db
-          .select()
-          .from(accounts)
-          .where(
-            and(
-              // Never used counts as idle — see the interface note.
-              or(isNull(accounts.lastUsedAt), lt(accounts.lastUsedAt, before)),
-              // The operator's own switch is not ours to spend money probing.
-              ne(accounts.status, "disabled"),
-            ),
-          )
-          // NULLs first: an account that never served anything is the most neglected of all, and
-          // Postgres sorts NULLs last under ASC unless told otherwise.
-          .orderBy(sql`${accounts.lastUsedAt} asc nulls first`)
-          .limit(limit)
-      )
-    },
+    ...createBackgroundAccountEligibility(db),
 
     ...createQuotaWindowMutations(db),
 

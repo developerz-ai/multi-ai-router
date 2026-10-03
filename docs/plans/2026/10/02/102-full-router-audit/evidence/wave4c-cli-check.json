@@ -1,0 +1,109 @@
+{
+  "wave": "W4C CLI account lifecycle",
+  "state": "implemented_validated_review_merge_release_deployment_pending",
+  "observed_on": "2026-10-03",
+  "full_gate": {
+    "status": "passed",
+    "source_log": "/tmp/router-pr149-review-fix-check.log",
+    "passed_tests": 4840,
+    "failed_tests": 0,
+    "test_files": 390,
+    "assertions": 41348,
+    "lint": "passed",
+    "typecheck": "passed",
+    "build": "passed",
+    "source_test_build_digest_files": 1258,
+    "digest_drift": false,
+    "digest_artifact": "tmp/pr149-review-fix-source-digests.json"
+  },
+  "image": {
+    "status": "passed",
+    "source_log": "/tmp/router-pr149-review-fix-image.log",
+    "platform": "linux/amd64",
+    "user": "bun",
+    "image_id": "6605624be9959b3e8c13f2001c08982aed11d692bde18495d979c90e9264be03"
+  },
+  "benchmark": {
+    "status": "passed on reviewed source including scoped session fencing",
+    "artifact": "wave4c-bench.json",
+    "source_artifact": "/tmp/router-pr149-review-fix-bench.json",
+    "samples": 8000,
+    "failures": 0,
+    "buffered": 0,
+    "maximum_p99_ms": 0.4997476022211004,
+    "violations": [],
+    "streaming_added_ttft_p95_ms": {
+      "passthrough": 0.06132835000062182,
+      "translation": 0.16021175000005308
+    }
+  },
+  "closure_proposals": {
+    "101": [
+      "02.11",
+      "03.13",
+      "03.14"
+    ],
+    "additional_leads": [
+      "L08"
+    ]
+  },
+  "coverage": [
+    "Active-only background selection and frozen lifecycle/credential final-start DB authority after asynchronous preparation.",
+    "Probe model selected from supported account catalog; no unverified Kimi k2 default.",
+    "Stored config path must match the single managed account path before provision/login/metadata/SDK launch.",
+    "Durable account deletion, permanent filesystem tombstone, independent catalog/session invalidation and ownership-safe cleanup precede optional audit append.",
+    "Shared-root durable owner markers, Linux subreaper descendant quiescence, idle ready/preparation handshake, tombstone refusal and fail-closed deferred cleanup; offline stub children only.",
+    "Pending-before-URL cancellation, late credential CAS refusal, bounded stop and metadata lifetime ownership.",
+    "Actual dispatcher ordinary/designated owner setup/readiness/preparation failures are503 with one accountNULL usage record and no admission/health/quota consumption.",
+    "Safe deletion cleanup DTO and deferred-cleanup UI notice.",
+    "Tombstoned transcript removal returns explicit deferred refusal; sweep counts no removed session or bytes and remains partial."
+  ],
+  "limits": [
+    "Reviewed source gate, image, benchmark and matching hardened proof passed; new-head CI, review-thread resolution, merge, release and deployment remain pending.",
+    "No live provider requests or production mutation/deployment.",
+    "ARM evidence is static build/QEMU execution scope only, not native ARM hardware validation.",
+    "Unknown/crashed durable owners remain deferred; marker age is never proof of process exit.",
+    "Per-replica interactive pending login affinity remains explicit; no claim distributed login handle transfer.",
+    "Release/infrastructure termination grace and deployment verification remain pending."
+  ],
+  "native_shipped_proof": {
+    "status": "passed on final reviewed immutable shipped image",
+    "artifact": "wave4c-shipped-proof.json",
+    "source_artifact": "tmp/wave4c-shipped-proof/result.json",
+    "scope": "shipped amd64 static helper; Linux Docker hardening; synthetic processes/files only",
+    "uid": 1000,
+    "read_only_root": true,
+    "capabilities": "none",
+    "no_new_privileges": true,
+    "image_id": "6605624be9959b3e8c13f2001c08982aed11d692bde18495d979c90e9264be03",
+    "checks": [
+      "actual idle activation R\u2192P/A stable exclusion\u2192final background DB/warm eligibility\u2192abort/assertReady\u2192ordinary guard\u2192S",
+      "detached descendant adoption and term-grace/kill/reaping",
+      "metadata hold survives child exit; foreign cleanup deferred until explicit D/Q release",
+      "physical cleanup succeeds after last confirmed owner; stable lock and permanent tombstone retained"
+    ]
+  },
+  "historical_pre_review_benchmark": {
+    "status": "passed; routing code unchanged by subsequent truthful transcript-count fix; CI will benchmark final head",
+    "artifact": "wave4c-bench.json",
+    "source_artifact": "/tmp/router-w4c-reviewed-bench.json",
+    "samples": 8000,
+    "failures": 0,
+    "buffered": 0,
+    "maximum_p99_ms": 0.7941176470588236,
+    "violations": [],
+    "streaming_added_ttft_p95_ms": {
+      "passthrough": 0.05801485,
+      "translation": 0.1057654
+    }
+  },
+  "review_fixes": {
+    "status": "four findings fixed; new-head CI and review-thread resolution pending",
+    "findings": [
+      "account-scoped session leases and bounded unknown-read deletion history",
+      "interactive Test now preparation classification distinct from background refusal",
+      "non-Linux setup skips Linux-only compiler/helper and continues",
+      "findIdle active-only recovery-fenced contract documentation"
+    ]
+  }
+}

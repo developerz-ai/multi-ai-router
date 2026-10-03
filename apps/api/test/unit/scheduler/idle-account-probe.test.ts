@@ -83,6 +83,17 @@ function harness(options: HarnessOptions) {
     accounts: {
       list: async () => [...(options.all ?? options.idle)],
       findIdle: async ({ limit }) => options.idle.slice(0, limit),
+      readEligibleBackgroundAccount: async (id, expected) => {
+        const row = (options.all ?? options.idle).find((current) => current.id === id)
+        return row !== undefined &&
+          row.status === "active" &&
+          row.lifecycleVersion === expected.lifecycleVersion &&
+          row.authMaterial === expected.authMaterial &&
+          row.provider === expected.provider &&
+          row.configDir === expected.configDir
+          ? row
+          : undefined
+      },
     },
     test: async (accountId, model) => {
       tested.push({ accountId, model })
@@ -287,6 +298,7 @@ describe("the billed keepalive over idle accounts", () => {
       accounts: {
         list: async () => [account()],
         findIdle: async () => [account()],
+        readEligibleBackgroundAccount: async () => account(),
       },
       test: async () => {
         order.push("test")
@@ -449,6 +461,7 @@ describe("what the run row says about the sweep itself", () => {
       accounts: {
         list: async () => [account()],
         findIdle: async () => [],
+        readEligibleBackgroundAccount: async () => account(),
       },
       test: async () => ({ tested: false }),
       auth: {
@@ -484,6 +497,7 @@ describe("what the run row says about the sweep itself", () => {
     const task = createIdleAccountProbeTask({
       accounts: {
         list: async () => [],
+        readEligibleBackgroundAccount: async () => account(),
         findIdle: async ({ before }) => {
           seen = before
           return []

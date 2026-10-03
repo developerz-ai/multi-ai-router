@@ -66,6 +66,7 @@ export type { ApiKeyRepository } from "./repositories/api-key-repository"
 export { createApiKeyRepository } from "./repositories/api-key-repository"
 export type { AppendAuditEventInput, AuditRepository } from "./repositories/audit-repository"
 export { createAuditRepository } from "./repositories/audit-repository"
+export type { BackgroundAccountSubject } from "./repositories/background-account-eligibility"
 export type {
   CatalogSnapshotRepository,
   CatalogSnapshotRows,

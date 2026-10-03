@@ -18,9 +18,22 @@ command -v docker >/dev/null || die "docker not found — the dev database runs 
 docker info >/dev/null 2>&1  || die "docker is installed but not running"
 ok "bun $(bun --version), docker present and running"
 
+setup_platform="$(uname -s)"
+if [ "$setup_platform" = Linux ]; then
+  command -v "${CC:-cc}" >/dev/null || die "C compiler/static libc headers missing — install build-essential on Debian/Ubuntu; CLI ownership requires Linux"
+fi
+
 step "Installing dependencies"
 bun install
 ok "dependencies installed"
+
+if [ "$setup_platform" = Linux ]; then
+  step "Building the CLI ownership guardian"
+  bin/build-cli-owner
+  ok "native CLI ownership guardian built"
+else
+  printf '%s\n' "CLI shared-root ownership requires Linux; use the router container for Claude subscription accounts on this host."
+fi
 
 DEV_DB_PORT="${DEV_DB_PORT:-5433}"
 export DEV_DB_PORT

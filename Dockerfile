@@ -56,7 +56,7 @@ RUN [ "$(bun --version)" = "1.4.2" ] || { \
 # source edit does not re-run an apt fetch. `tini-static` rather than `tini`: it is the same program
 # with no libc to trip over on the way across stages — the trap documented at the `claude` COPY.
 RUN apt-get update \
- && apt-get install -y --no-install-recommends tini \
+ && apt-get install -y --no-install-recommends tini gcc libc6-dev \
  && rm -rf /var/lib/apt/lists/*
 
 # Manifests first, source second: this layer only busts when a dependency
@@ -169,6 +169,7 @@ RUN [ "$(bun --version)" = "1.4.2" ] || { \
 # Non-root by default. The oven/bun images already ship an unprivileged `bun`
 # user (uid/gid 1000); reusing it avoids inventing a second account.
 ENV NODE_ENV=production
+ENV CLAUDE_OWNERSHIP_HELPER_PATH=/usr/local/libexec/router-cli-owner
 
 # Which commit this image is, reported by `router_build_info{revision}` and the
 # boot log. Baked in rather than derived at runtime: the runtime stage has no
@@ -221,6 +222,9 @@ LABEL org.opencontainers.image.title="multi-ai-router" \
 # which is what keeps the reaping working when something puts *another* init above it — `docker run
 # --init` or compose's `init: true` — since tini disables reaping when it is not PID 1 and nothing
 # else in the image would notice.
+COPY --from=builder /src/dist/libexec/router-cli-owner /usr/local/libexec/router-cli-owner
+RUN test "$(/usr/local/libexec/router-cli-owner; echo $?)" = 64
+
 COPY --from=builder /usr/bin/tini-static /usr/bin/tini
 RUN tini --version
 

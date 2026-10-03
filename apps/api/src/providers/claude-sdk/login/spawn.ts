@@ -50,6 +50,8 @@ export interface LoginSpawnInput {
   readonly cwd: string
   /** The whole environment the child gets. Never merged with this process's own. */
   readonly env: Record<string, string>
+  readonly signal?: AbortSignal
+  readonly accountId?: string
 }
 
 export type LoginSpawn = (input: LoginSpawnInput) => LoginProcess
@@ -139,6 +141,8 @@ function launch(
     return spawn({
       command: [options.cliPath, ...CLAUDE_LOGIN_ARGV],
       cwd: input.configDir,
+      signal: input.signal,
+      accountId: input.accountId,
       env: {
         ...subprocessEnv({ configDir: input.configDir, inherited: options.inheritedEnv }),
         ...LOGIN_ENV_OVERRIDES,
@@ -164,9 +168,16 @@ function handle(
     child.kill()
   }
 
+  const exited = child.exited.then(() => undefined)
+  void exited.catch(() => {})
   return {
     authorizeUrl,
     state,
+    exited,
+    cancelAsync: async () => {
+      cancel()
+      await child.exited
+    },
     submit: async (codeAndState) => {
       if (spent) {
         throw new ClaudeLoginError(
@@ -242,6 +253,8 @@ function readOutput(child: LoginProcess): OutputReader {
     return found
   })()
 
+  const exited = child.exited.then(() => undefined)
+  void exited.catch(() => {})
   return {
     authorizeUrl,
     finished,

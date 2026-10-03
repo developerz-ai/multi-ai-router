@@ -11,6 +11,7 @@ import {
   openIdleQuery,
   rejectOnAbort,
 } from "./idle-query"
+import type { OwnerLaunchFactory } from "./owned-query"
 import { type CliResolution, resolveClaudeCli } from "./resolve-cli"
 
 /**
@@ -77,6 +78,7 @@ export interface SdkModelListerOptions {
   /** Injected in tests. Defaults to the real ladder over this host's filesystem. */
   readonly resolveCli?: () => CliResolution
   /** Injected in tests, for the reason `SdkInvokerDeps.runQuery` is: no test may spawn a `claude`. */
+  readonly ownerLaunch?: OwnerLaunchFactory
   readonly runQuery?: IdleQueryFn
   /** Told why an answer was `null`, with the upstream's own words (safe for the log redactor only). */
   readonly onUnavailable?: (reason: SdkModelListUnavailable, detail: string) => void
@@ -120,6 +122,7 @@ export function createSdkModelLister(options: SdkModelListerOptions): SdkModelLi
           configDir: input.configDir,
           cliPath: resolution.path,
           concurrency: options.concurrency,
+          ownerLaunch: options.ownerLaunch,
           ...(options.freshness === undefined ? {} : { freshness: options.freshness }),
           timeoutMs: input.timeoutMs,
           ...(input.signal === undefined ? {} : { signal: input.signal }),

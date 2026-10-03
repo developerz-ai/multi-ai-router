@@ -142,9 +142,13 @@ export function disableAccount(id: string): Promise<AccountView> {
   return request<AccountView>({ method: "POST", path: `/accounts/${id}/disable` })
 }
 
+export interface AccountDeletedView extends DeletedView {
+  readonly cleanup: "removed" | "deferred" | "not_applicable"
+}
+
 /** 409s naming every key whose scope would be narrowed. That sentence is the point. */
-export function deleteAccount(id: string): Promise<DeletedView> {
-  return request<DeletedView>({ method: "DELETE", path: `/accounts/${id}` })
+export function deleteAccount(id: string): Promise<AccountDeletedView> {
+  return request<AccountDeletedView>({ method: "DELETE", path: `/accounts/${id}` })
 }
 
 export function recheckAccount(id: string): Promise<RecheckResult> {

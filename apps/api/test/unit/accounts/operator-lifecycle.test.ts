@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import { createAccountsService } from "../../../src/services/accounts/service"
 import { createCredentialCipher } from "../../../src/services/crypto/cipher"
+import { accountDeletionFixture } from "../../support/account-deletion"
 import { createMemoryConfigDirs } from "../../support/config-dirs"
 import { createMemoryStore } from "../../support/memory-store"
 
@@ -13,8 +14,13 @@ function harness(options: { auditFails?: boolean; barrierFails?: boolean } = {})
     accounts: store.accounts,
     keys: store.keys,
     configDirs: dirs.dirs,
+    ...accountDeletionFixture(dirs.dirs),
     cipher: createCredentialCipher({ key: new Uint8Array(32).fill(7) }),
     now: () => NOW,
+    deletionCommitted: async (id) => {
+      events.push(`barrier:${id}`)
+      if (options.barrierFails) throw new Error("catalog unavailable")
+    },
     mutationCommitted: async (id) => {
       events.push(`barrier:${id}`)
       if (options.barrierFails) throw new Error("catalog unavailable")
