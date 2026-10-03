@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import type { AccountRow } from "@multi-ai-router/db"
 import { listUpstreamModels } from "../../../src/services/models"
+import { accountRow as durableAccountRow } from "../../support/account-row"
 
 /**
  * Reading a provider's model listing — the one call the operator's discover button and the hourly
@@ -16,7 +17,7 @@ import { listUpstreamModels } from "../../../src/services/models"
 const NOW = new Date("2026-07-28T12:00:00.000Z")
 
 function accountRow(overrides: Partial<AccountRow> = {}): AccountRow {
-  return {
+  return durableAccountRow({
     id: "acc-1",
     label: "acc-1",
     provider: "zai",
@@ -36,7 +37,7 @@ function accountRow(overrides: Partial<AccountRow> = {}): AccountRow {
     createdAt: NOW,
     updatedAt: NOW,
     ...overrides,
-  } as AccountRow
+  })
 }
 
 function answering(body: unknown, status = 200) {

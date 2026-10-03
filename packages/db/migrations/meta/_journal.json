@@ -176,6 +176,13 @@
       "when": 1788636577457,
       "tag": "0024_model_catalog_source",
       "breakpoints": true
+    },
+    {
+      "idx": 25,
+      "version": "7",
+      "when": 1791037432837,
+      "tag": "0025_account_lifecycle",
+      "breakpoints": true
     }
   ]
 }

@@ -1,5 +1,6 @@
 import { type AuthKind, CredentialDecryptError } from "@multi-ai-router/core"
 import type { ProviderCredential } from "../../../providers"
+import { readStoredOAuth } from "../../accounts/refresh/credential"
 import type { CredentialCipher } from "../../crypto/cipher"
 import type { RoutableAccount } from "../types"
 
@@ -25,11 +26,6 @@ import type { RoutableAccount } from "../types"
  * yields `null` and the attempt goes out with no auth header. A credential it does hold is still
  * read and presented — a local endpoint put behind a proxy is the normal reason to have one.
  */
-
-interface StoredOAuth {
-  readonly accessToken?: unknown
-  readonly access_token?: unknown
-}
 
 const NO_MATERIAL = "account holds no credential material"
 const UNREADABLE = "stored credential is not in a form this router recognizes"
@@ -57,21 +53,11 @@ export function accountCredential(
     return { kind: "api-key", apiKey: plaintext }
   }
 
-  const token = accessToken(plaintext)
-  if (token === null) throw new CredentialDecryptError(`account ${account.id}: ${UNREADABLE}`)
-  return { kind: "oauth", accessToken: token }
-}
-
-function accessToken(plaintext: string): string | null {
-  let parsed: unknown
-  try {
-    parsed = JSON.parse(plaintext)
-  } catch {
-    return null
+  const held = readStoredOAuth(plaintext)
+  if (held === null) throw new CredentialDecryptError(`account ${account.id}: ${UNREADABLE}`)
+  return {
+    kind: "oauth",
+    accessToken: held.accessToken,
+    ...(held.providerAccountId === null ? {} : { providerAccountId: held.providerAccountId }),
   }
-  if (typeof parsed !== "object" || parsed === null) return null
-
-  const stored = parsed as StoredOAuth
-  const value = stored.accessToken ?? stored.access_token
-  return typeof value === "string" && value.length > 0 ? value : null
 }

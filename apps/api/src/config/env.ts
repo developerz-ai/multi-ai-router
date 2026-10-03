@@ -442,6 +442,7 @@ export interface SchedulerConfig {
  * the Agent SDK owns and the router never schedules a refresh for one (non-negotiable 1).
  */
 export interface OAuthRefreshConfig {
+  readonly lockPoolMaxConnections: number
   /** Share of a token's remaining lifetime allowed to elapse first. `0.75` leaves a quarter. */
   readonly leadFraction: number
   /** Floor on any refresh delay, and the first step of the retry backoff. Never zero. */
@@ -794,6 +795,9 @@ export const ENV_FIELDS = {
   OAUTH_REFRESH_LEAD_FRACTION: fraction
     .refine((v) => v > 0 && v < 1, "must be between 0 and 1, exclusive")
     .optional(),
+  OAUTH_REFRESH_LOCK_POOL_MAX_CONNECTIONS: atLeastOne
+    .refine((value) => value <= 32, "must be at most 32")
+    .optional(),
   OAUTH_REFRESH_MIN_DELAY_SECONDS: atLeastOne.optional(),
   OAUTH_REFRESH_MAX_ATTEMPTS: atLeastOne.optional(),
   ADMIN_SESSION_IDLE_MINUTES: atLeastOne.optional(),
@@ -1084,6 +1088,7 @@ const envSchema = boundedEnvSchema.transform((raw, ctx): Env => {
       jitterFraction: raw.SCHEDULER_JITTER_FRACTION ?? 0.2,
     },
     oauthRefresh: {
+      lockPoolMaxConnections: raw.OAUTH_REFRESH_LOCK_POOL_MAX_CONNECTIONS ?? 1,
       leadFraction: raw.OAUTH_REFRESH_LEAD_FRACTION ?? 0.75,
       minDelaySeconds: raw.OAUTH_REFRESH_MIN_DELAY_SECONDS ?? 30,
       maxAttempts: raw.OAUTH_REFRESH_MAX_ATTEMPTS ?? 5,

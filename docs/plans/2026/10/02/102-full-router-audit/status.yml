@@ -4,12 +4,12 @@ status: in_progress
 created_by: sebi
 worked_by: "Codex team"
 owner: sebi
-percent: 38
-current_focus: "Waves 1 and 2 merged; supported dependency upgrades in progress; OAuth identity and lifecycle fencing next."
+percent: 46
+current_focus: "PR144 dependencies merged; W3A final local validation passed; external review/merge/release/deployment pending. W3B recovery admission and quota consistency next."
 slices:
   - file: 01-transport.md
     status: in_progress
-    percent: 44
+    percent: 56
     findings: 9
   - file: 02-auth.md
     status: in_progress
@@ -17,7 +17,7 @@ slices:
     findings: 8
   - file: 03-routing.md
     status: in_progress
-    percent: 33
+    percent: 67
     findings: 9
   - file: 04-providers.md
     status: not_started
@@ -60,13 +60,16 @@ slices:
     percent: 0
     findings: 1
 evidence:
+  - "W3A final revision: pinned Bun 1.4.2 bin/check with disposable PostgreSQL 18.6: 4536 tests passed, zero failed; lint/typecheck/build passed. Mocked OAuth identity/lifecycle, exact CAS, dedicated lock contention/loss, shutdown/deadline and postcommit catalog regressions covered. No live provider compatibility claim. Final local amd64 image build passed; independent seven-refresher-suite verification: 58 tests, 176 assertions. External review, merge, release and deployment pending. See 102-full-router-audit/evidence/wave3a-check.json."
+  - "102-full-router-audit/evidence/wave3a-bench.json: latest local run on the final validated revision, 8000 requests, zero failures/buffered streams; maximum p99 0.9454545455 ms, violations empty. A CLI-version smoke check ran briefly near benchmark startup. Earlier runs reached about 5 ms under concurrent workload; no causal performance improvement is claimed."
+  - "Dependency PR #144 merged as e41f0edd through the normal protected flow; dependency wave release/deployment remains separate."
   - "Dependency wave: Bun 1.4.2 bin/check with disposable PostgreSQL 18.6: 4425 tests passed, zero failed; lint/typecheck/build passed. PostgreSQL 16 integration regressions: 88 repository and 497 API tests passed. Latest supported dependency tree has zero reported advisories; frozen install preserves lockfile; Drizzle generate/check unchanged. Local amd64 image builds, Bun 1.4.2 and Claude CLI 2.1.288 verified; native arm64 release validation pending."
   - "102-full-router-audit/evidence/dependency-bench.json: 8000 requests, zero failures/buffered streams; maximum p99 1.25 ms, no budget violations."
   - "102-full-router-audit/evidence/wave2-bench.json: 8000 requests, zero failures/buffered streams; max p99 0.69 ms; no budget violations."
   - "Wave 2: pinned Bun 1.4.2 bin/check with disposable PostgreSQL: 4417 tests passed, zero failed; lint, typecheck and build passed. Transaction rollback, concurrent names/scopes/membership and one-connection catalog snapshots covered. PR #143 merged as 986189e; all five CI checks passed; CodeRabbit generated no actionable comments. Release/deployment pending."
   - "Pinned Bun 1.4.2; bin/check with disposable PostgreSQL: 4326 tests passed, zero failed; build passed."
   - "102-full-router-audit/evidence/wave1-bench.json: 8000 requests, zero failures/buffered streams; max p99 1.28 ms."
-notes: "Wave 1 covers SDK isolation and failure delivery, credential containment, key and session races, login/OIDC bounds and configuration validation. #87 rotation and session invalidation remain operational follow-up. 01.9 transport-reader failures fixed; protocol error-frame accounting remains open."
+notes: "W3A implements OAuth identity/refresh ordering and stale verdict fencing; 102:03.2 reconnect recovery remains partial/open until W3B global probe/quota boundary is complete. W3B global recovery probe admission, persisted quota recovery and quota-floor CAS remain open; W4 scheduler/general shutdown work remains open. Wave 1 covers SDK isolation and failure delivery, credential containment, key and session races, login/OIDC bounds and configuration validation. #87 rotation and session invalidation remain operational follow-up. 01.9 transport-reader failures fixed; protocol error-frame accounting remains open."
 last_updated: 2026-10-03
 # Percentages measure locally resolved findings; review, release and deployment remain separate gates.
 resolved_findings:
@@ -91,3 +94,7 @@ resolved_findings:
   - "03.4"
   - "03.9"
   - "08.2"
+  - "01.5"
+  - "03.3"
+  - "03.7"
+  - "03.8"

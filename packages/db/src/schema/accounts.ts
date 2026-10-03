@@ -5,7 +5,9 @@ import {
   type Dialect,
   type WindowTokenLimits,
 } from "@multi-ai-router/core"
+import { sql } from "drizzle-orm"
 import {
+  check,
   index,
   integer,
   jsonb,
@@ -39,6 +41,10 @@ export const accounts = pgTable(
     label: text("label").notNull(),
     provider: providerId("provider").notNull(),
     status: accountStatus("status").notNull().default("active"),
+    lifecycleVersion: integer("lifecycle_version").notNull().default(0),
+    healthRecoveryVersion: integer("health_recovery_version").notNull().default(0),
+    authRecoveryVersion: integer("auth_recovery_version").notNull().default(0),
+    authorizationAttemptId: uuid("authorization_attempt_id"),
 
     /**
      * Whether this account is a per-token bill or a flat fee, which decides
@@ -152,6 +158,9 @@ export const accounts = pgTable(
     updatedAt: timestamp("updated_at", { withTimezone: true, mode: "date" }).notNull().defaultNow(),
   },
   (table) => [
+    check("accounts_lifecycle_version_nonnegative", sql`${table.lifecycleVersion} >= 0`),
+    check("accounts_health_recovery_version_nonnegative", sql`${table.healthRecoveryVersion} >= 0`),
+    check("accounts_auth_recovery_version_nonnegative", sql`${table.authRecoveryVersion} >= 0`),
     index("accounts_provider_idx").on(table.provider),
     index("accounts_status_idx").on(table.status),
     // The idle probe's only query orders the whole table by this. Small table, but the

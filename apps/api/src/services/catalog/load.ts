@@ -77,6 +77,9 @@ function toRoutableAccount(
 ): RoutableAccount {
   return {
     id: row.id,
+    lifecycleVersion: row.lifecycleVersion,
+    healthRecoveryVersion: row.healthRecoveryVersion,
+    authRecoveryVersion: row.authRecoveryVersion,
     snapshot: {
       id: row.id,
       label: row.label,

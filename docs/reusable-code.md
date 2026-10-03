@@ -465,3 +465,7 @@ never a `fetch` call inline in a route component.
 - [`apps/api/README.md`](../apps/api/README.md) — boot sequence, endpoints, transport gotchas
 - [`apps/web/README.md`](../apps/web/README.md) — design tokens, Solid idioms, component rules
 - [`docs/idea/01-architecture.md`](idea/01-architecture.md) — repo layout, layering, dependency rules
+
+### Account intent and observation repositories
+
+Operator edits use updateOperatorAccount, not a generic update. Background status observations use transitionObservedStatus with original lifecycle/ciphertext/configured status; confirmed Claude recovery uses recoverObservedAuthentication. OAuth begin/cancel/commit use durable authorization-attempt identity. Refresh saves use saveRefreshedCredential with exact ciphertext-only CAS, preserving current status and intent versions. Services await their committed-mutation catalog hook before audit/DTO work; the request path never reads the database. The account-row test helper supplies every required durable epoch, while the memory lifecycle adapter models atomic CAS and attempt retirement for service interleavings.

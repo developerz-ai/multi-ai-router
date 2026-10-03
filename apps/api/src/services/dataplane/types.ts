@@ -20,6 +20,9 @@ import type { AccountSnapshot, PoolSnapshot } from "../routing"
  */
 export interface RoutableAccount {
   readonly id: string
+  readonly lifecycleVersion: number
+  readonly healthRecoveryVersion: number
+  readonly authRecoveryVersion: number
   /** The routing view. `status` and `health` are overlaid from the health store per request. */
   readonly snapshot: AccountSnapshot
   /** The provider view: base URL override, chosen surface, alias map. Never the credential. */

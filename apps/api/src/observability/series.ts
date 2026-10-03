@@ -223,7 +223,7 @@ export function createSeries(options: RegistryOptions = {}) {
      */
     dbPoolConnections: registry.gauge({
       name: "router_db_pool_connections",
-      help: "Postgres connections by state — in_use, idle, waiting. Approximated from in-flight statements; the fixed pool ceiling is DB_POOL_MAX.",
+      help: "Postgres connections by state — in_use, idle, waiting. Approximated from in-flight statements; includes the main DB_POOL_MAX and auxiliary OAuth refresh lock pool ceilings.",
       labels: ["state"],
     }),
 

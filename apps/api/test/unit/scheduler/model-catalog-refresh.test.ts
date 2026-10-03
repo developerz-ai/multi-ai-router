@@ -3,6 +3,7 @@ import type { AccountRow } from "@multi-ai-router/db"
 import { createLogger } from "../../../src/logging/logger"
 import { createModelCatalogRefreshTask } from "../../../src/scheduler"
 import type { CatalogRefreshOutcome } from "../../../src/services/models"
+import { accountRow as durableAccountRow } from "../../support/account-row"
 
 /**
  * The hourly catalog sweep's loop: batching, ordering, abort, and what it reports.
@@ -15,7 +16,7 @@ import type { CatalogRefreshOutcome } from "../../../src/services/models"
 const NOW = new Date("2026-07-28T12:00:00.000Z")
 
 function account(id: string, overrides: Partial<AccountRow> = {}): AccountRow {
-  return { id, label: id, provider: "zai", status: "active", ...overrides } as AccountRow
+  return durableAccountRow({ id, label: id, provider: "zai", status: "active", ...overrides })
 }
 
 function harness(options: {

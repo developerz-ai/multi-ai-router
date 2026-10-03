@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import type { AccountRow, ModelCatalogEntry } from "@multi-ai-router/db"
 import { isRefreshable, refreshAccountCatalog } from "../../../src/services/models"
+import { accountRow as durableAccountRow } from "../../support/account-row"
 
 /**
  * One account's catalog refresh: what it asks, what it writes, and — most importantly — what it
@@ -17,7 +18,7 @@ import { isRefreshable, refreshAccountCatalog } from "../../../src/services/mode
 const NOW = new Date("2026-07-28T12:00:00.000Z")
 
 function accountRow(overrides: Partial<AccountRow> = {}): AccountRow {
-  return {
+  return durableAccountRow({
     id: "acc-1",
     label: "acc-1",
     provider: "zai",
@@ -37,7 +38,7 @@ function accountRow(overrides: Partial<AccountRow> = {}): AccountRow {
     createdAt: NOW,
     updatedAt: NOW,
     ...overrides,
-  } as AccountRow
+  })
 }
 
 function harness(body: unknown, status = 200) {

@@ -341,8 +341,8 @@ answers with the provider's authorization URL.
 | `redirect_uri` | `PUBLIC_URL + /admin/accounts/oauth/callback` when a `PUBLIC_URL` is set, otherwise the first-party client's `http://localhost:1455/auth/callback`. Stored on the pending row and **replayed** at the exchange — the provider binds the code to the exact value, and `PUBLIC_URL` may be edited in between |
 | Redirect capture | The browser lands on `GET /admin/accounts/oauth/callback`. Unguarded by design: a provider's redirect is a cross-site navigation, so the `SameSite=Strict` session cookie is not sent, and the `state` is the authorization. It answers a small self-contained HTML page, the one non-JSON surface on the admin plane |
 | Paste capture | `POST /:id/connect/complete` with whatever the address bar held — the whole callback URL, a bare query string, or the `code#state` shorthand. Available in *both* modes: a callback the browser cannot load still leaves the code in the address bar, which is what makes an unreachable `PUBLIC_URL` a non-event |
-| The exchange | One code exchange, one write: `{accessToken, refreshToken}` encrypted into `authMaterial`, `tokenExpiresAt` from `expires_in`, `needs_reauth` cleared — and nothing else, because a `disabled` Account stays disabled |
-| Restart / cancel | A second `POST /:id/connect` retires whatever the last one left redeemable, and `DELETE /:id/connect` does the same on demand. One live authorization per Account |
+| The exchange | One code exchange, one write: `{accessToken, refreshToken, providerAccountId}` encrypted into `authMaterial`, `tokenExpiresAt` from `expires_in`, `needs_reauth` cleared — and nothing else, because a `disabled` Account stays disabled |
+| Restart / cancel | A second `POST /:id/connect` retires whatever the last one left redeemable, and `DELETE /:id/connect` does the same on demand. One live durable authorization attempt per Account; begin/cancel also invalidate an already consumed callback still waiting to commit |
 | Which audit kind | Derived, not declared: an Account that already held a credential was re-connected (`account.reauthorized`), one that did not was connected (`account.connected`). The event records the capture mode and never a code, a `state`, or a token |
 
 Every rejection — unknown, consumed, expired, unbound, or bound to a different Account — answers
@@ -615,3 +615,9 @@ redacted.
 | [05-routing-and-failover.md](05-routing-and-failover.md) | How quota signals become account selection |
 | [06-protocol-translation.md](06-protocol-translation.md) | Ingress × egress dialect matrix |
 | [08-observability.md](08-observability.md) | Usage records, health surfaces, metrics |
+
+### First-party OpenAI OAuth identity
+
+OpenAI OAuth credentials retain normalized provider account identity inside the encrypted token envelope. Initial authorization derives identity from the new ID-token claims first, then new access-token claims, and refuses credentials without usable identity. Refresh accepts fresh identity first, then preserves held normalized identity or derives it from the held legacy access token when fresh claims are omitted. A fresh authorization never inherits the previous login's identity. Egress sends the identity from the same encrypted credential as the bearer token; no account identity or ID token appears in admin DTOs or audit logs.
+
+Refresh runs off the request path under a dedicated PostgreSQL advisory-lock session and rereads current credentials before exchange. A successful rotation saves with exact old-ciphertext CAS, preserving concurrent disabled/exhausted status and operator epochs. A superseded grant is not exchanged again immediately. Unknown upstream rotation after a lost response remains an issuer/transport limitation; the lock does not establish remote exactly-once execution. Claude tokens stay exclusively owned by the Agent SDK/CLI.

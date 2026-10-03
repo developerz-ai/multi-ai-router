@@ -19,6 +19,7 @@ import { recordAttemptFailure, relaySuccess } from "./chain-relay"
 import { dispatch } from "./dispatch"
 import { DEFAULT_LOG_REASON_MAX_CHARS } from "./dispatcher-config"
 import { breakerOptionsFor } from "./health"
+import { accountHealthFacts } from "./health-observation"
 import type { ServableCandidate } from "./plan"
 import { admitHalfOpenProbe } from "./probe"
 import { relayUpstreamError } from "./relay-error"
@@ -88,6 +89,10 @@ export async function runChain(ctx: ChainContext): Promise<Response> {
     if (servable === undefined) break
 
     const accountId = servable.account.id
+    const observation = runtime.health.captureAttempt(
+      accountId,
+      accountHealthFacts(servable.account),
+    )
     const attemptStartedAt = runtime.clock.now()
 
     // Before the attempt is counted, because a refused probe is not an attempt: another request is
@@ -178,8 +183,8 @@ export async function runChain(ctx: ChainContext): Promise<Response> {
     // Applied after the verdict, never before: `recordSuccess`'s unconditional reset to `active`
     // would otherwise erase a `rejected` reading's cooldown on an otherwise-200 response.
     if (outcome.kind === "success") {
-      runtime.health.recordSuccess(accountId)
-      runtime.health.applyRateLimit(accountId, outcome.rateLimit, attemptStartedAt)
+      runtime.health.recordSuccess(accountId, observation)
+      runtime.health.applyRateLimit(accountId, outcome.rateLimit, attemptStartedAt, observation)
       // Released on the verdict, not when the stream settles: the probe's question was "is this
       // account back?", and it has been answered. Holding the gate for the length of a generation
       // would keep a recovered account out of every other request's snapshot for minutes.
@@ -190,6 +195,7 @@ export async function runChain(ctx: ChainContext): Promise<Response> {
       const relayed = relaySuccess(ctx, servable, decision.attempt, outcome.response, {
         ...at,
         upstreamStarted,
+        observation,
       })
       // Failover left the bound account behind, so this answer came from a fresh upstream
       // session: said out loud, never silently (`session-restart.ts`). The binding itself is
@@ -212,8 +218,9 @@ export async function runChain(ctx: ChainContext): Promise<Response> {
       outcome.failure,
       attemptStartedAt,
       breakerOptionsFor(servable.driver.authKind),
+      observation,
     )
-    runtime.health.applyRateLimit(accountId, outcome.rateLimit, attemptStartedAt)
+    runtime.health.applyRateLimit(accountId, outcome.rateLimit, attemptStartedAt, observation)
     runtime.health.endAttempt(accountId)
     // After the marks, never before: the failure has already cooled the account down to its next
     // backoff step, so releasing here hands the gate to nobody rather than to the next stampede.

@@ -9,55 +9,21 @@ import {
   recordFailure,
   recordSuccess,
 } from "../routing"
+import {
+  createHealthObservations,
+  type HealthAccountFacts,
+  type HealthObservation,
+} from "./health-observation"
 import { foldRateLimit } from "./health-reading"
-
-/**
- * The in-memory health state the pure selection functions read, through `snapshot.ts`.
- *
- * Every signal folds in here and nowhere else: rate-limit headers parsed off each response,
- * consecutive failure streaks, auth failures, and out-of-credits classifications
- * (docs/idea/05-routing-and-failover.md#health-signals-feeding-it). Routing then reads one
- * immutable snapshot and reads nothing else — no clock, no store, no lock.
- *
- * `cooling_down` and `exhausted` stay separate all the way down, mechanically: `exhausted` carries
- * no cooldown instant, so no amount of clock advance moves it and nothing here schedules a retry.
- * They differ in durability for the same reason: a restart's first failing request re-derives a
- * cooldown, but `exhausted` and `needs_reauth` end only when a human acts, so a verdict living in
- * one replica's memory tells nobody after a deploy. Those transitions are announced through {@link
- * HealthStoreOptions.onBlocked} and written to `accounts.status` (`status-writer.ts`).
- *
- * This is also where the breaker's numbers are *supplied*. `breaker.ts` reads no configuration and
- * no randomness of its own, so the operator's thresholds and a fresh jitter fraction are merged in
- * here, on every transition the store makes — including the one `applyRateLimit` folds in, which
- * would otherwise silently use the module defaults.
- */
+import { recoverHealth } from "./health-recovery"
 
 export interface AccountHealthState {
   readonly breaker: BreakerState
-  /** In-flight requests — the `least-used` measure. */
   readonly inFlight: number
   readonly recentTokens: number
-  /**
-   * The limiter windows the last upstream response reported. Kept as the provider worded them:
-   * HTTP limiter names (`requests`, `input-tokens`) have no `QuotaWindowKind` equivalent, and
-   * inventing one would record a fact the provider never stated.
-   */
   readonly limiterWindows: readonly RateLimitWindow[]
-  /**
-   * The same readings in the router's own window vocabulary, for the providers that speak it —
-   * today the Claude subscription transport (docs/idea/11-anthropic-agent-sdk.md §5). Every
-   * quota-driven surface reads these, through `overlayHealth`: `quota-window-spent`, `quota-aware`,
-   * `/metrics`, the console's countdowns. Empty means this process has heard nothing yet, so the
-   * stored rows stand rather than being erased by a claim we cannot make.
-   */
   readonly quotaWindows: readonly QuotaWindowState[]
   readonly lastSignalAt: Date | null
-  /**
-   * Deadline of the one half-open probe testing this account, or null when none is. Set by
-   * {@link HealthStore.admitProbe}, cleared by {@link HealthStore.releaseProbe}, and read by the
-   * pure filter through {@link overlayHealth} — which is how "one request through as a probe"
-   * becomes something a stateless selection can enforce.
-   */
   readonly probeHeldUntil: Date | null
 }
 
@@ -71,79 +37,29 @@ const FRESH: AccountHealthState = {
   probeHeldUntil: null,
 }
 
-/**
- * How long an admitted probe holds a recovering account when nothing releases it.
- *
- * A backstop, not a schedule: the chain releases the hold the moment its attempt reaches a verdict,
- * so this only matters when a process dies between admitting and releasing. Long enough that a real
- * request reaches an upstream verdict, short enough that a lost probe cannot park a healthy account
- * out of rotation for a coffee break.
- */
 export const DEFAULT_PROBE_HOLD_MS = 30_000
 
-/**
- * The breaker's configured shape, supplied once for every transition this store makes.
- *
- * The alternative — every call site passing the numbers — is how `ROUTING_FAILURE_THRESHOLD`,
- * `ROUTING_BASE_BACKOFF_MS`, and `ROUTING_MAX_BACKOFF_MS` came to be parsed at boot and read by
- * nothing: one caller passed `{ authKind }`, another passed nothing at all, and the module defaults
- * quietly won both times.
- */
 export interface HealthStoreOptions {
-  /** Consecutive 5xx / connection failures before the breaker trips. */
   readonly failureThreshold?: number
-  /** First backoff step. Doubles per consecutive failure. */
   readonly baseBackoffMs?: number
   readonly maxBackoffMs?: number
-  /** How long a rejected API key sits out before one probe re-tests it. `ROUTING_AUTH_FAILURE_COOLDOWN_MS`. */
   readonly authFailureCooldownMs?: number
-  /** Ceiling on that cooldown's doubling per refused re-test. `ROUTING_AUTH_FAILURE_MAX_COOLDOWN_MS`. */
   readonly authFailureMaxCooldownMs?: number
-  /**
-   * A fresh jitter fraction in `[0, 1]` per transition, defaulting to `Math.random`. Injected
-   * because `breaker.ts` deliberately reads no randomness, and because a test that cannot pin the
-   * fraction cannot assert a backoff. Without it every account tripped in the same second comes
-   * back in the same millisecond and stampedes the provider that just rate-limited them.
-   *
-   * It moves only the *estimated* schedule: a provider-reported reset is the truth and is never
-   * nudged off the instant the provider named.
-   */
   readonly jitter?: () => number
-  /** {@link DEFAULT_PROBE_HOLD_MS}. */
   readonly probeHoldMs?: number
-  /**
-   * Fired whenever a signal carried named quota windows, with the whole reading afterwards. The
-   * durable side of quota state hangs off here because this is the one place both transports fold
-   * a reading into. It must not block and must not throw: `applyRateLimit` runs on the request
-   * path, and a reading is worth zero milliseconds of a client's latency (non-negotiable 8).
-   */
   readonly onQuotaWindows?: (accountId: string, windows: readonly QuotaWindowState[]) => void
-  /**
-   * Fired when a failure moves an account **into** the breaker's `blocked` phase, so who gets
-   * announced cannot drift from who routing treats as permanently out. Once per transition, not
-   * once per failure: re-announcing a state the account is already in would turn one
-   * operator-visible event into a line per request. Which of them are worth *storing* is decided
-   * downstream (`status-writer.ts`). A rejected API key is not among them: it cools down on a clock
-   * (`credential-rejected`, `routing/breaker.ts`) rather than blocking, so there is no standing
-   * verdict to announce — each failed probe is its own `upstream attempt failed` line. Same contract
-   * as {@link onQuotaWindows}.
-   */
-  readonly onBlocked?: (accountId: string, status: AccountStatus) => void
-  /**
-   * Fired by {@link HealthStore.reset}, after the marks are dropped. Everything this store holds
-   * goes; state the same request path keeps *elsewhere* — the Agent SDK's per-Account quota
-   * buckets, a status verdict queued for the row — has to go with it, or the next
-   * `rate_limit_event` re-publishes the window (or the write re-asserts the block) the operator
-   * just dismissed.
-   */
+  readonly onBlocked?: (
+    accountId: string,
+    status: AccountStatus,
+    observation?: HealthObservation,
+  ) => void
   readonly onReset?: (accountId: string) => void
 }
 
-/** Whether this caller may probe, and whether it took the hold it therefore has to release. */
 export interface ProbeAdmission {
   readonly admitted: boolean
-  /** True only when a hold was taken. A caller that took none must not release another's. */
   readonly held: boolean
+  readonly token?: number
 }
 
 const ADMITTED_WITHOUT_HOLD: ProbeAdmission = { admitted: true, held: false }
@@ -151,61 +67,36 @@ const REFUSED: ProbeAdmission = { admitted: false, held: false }
 
 export interface HealthStore {
   stateOf(accountId: string): AccountHealthState
-  /** Marks an attempt started, so `least-used` sees load rather than history. */
+  reconcile(accountId: string, facts: HealthAccountFacts): void
+  captureAttempt(accountId: string, facts: HealthAccountFacts): HealthObservation
   beginAttempt(accountId: string): void
-  /** Marks it finished, folding the tokens it spent into the recent-spend measure. */
   endAttempt(accountId: string, tokens?: number): void
-  recordSuccess(accountId: string): void
+  recordSuccess(accountId: string, observation?: HealthObservation): void
   recordFailure(
     accountId: string,
     failure: AttemptFailure,
     now: Date,
     options?: BreakerOptions,
+    observation?: HealthObservation,
   ): void
-  /**
-   * Folds one response's rate-limit reading in. A reported limit cools the account down — unless
-   * the account already holds a verdict no clock undoes, which this never overwrites.
-   */
-  applyRateLimit(accountId: string, signal: RateLimitSignal | null, now: Date): void
-  /**
-   * Admits **one** half-open probe onto a recovering account, or refuses.
-   *
-   * The breaker says a `cooling_down` account whose reset has passed gets one request through as a
-   * probe. Nothing enforced that: the reset instant passing made the account eligible to *every*
-   * request at once, so a thousand callers queued behind a 5-minute cooldown all dispatched onto it
-   * in the same millisecond — which is how a provider that rate-limited an account gets a thousand
-   * requests the instant it stops. This is the compare-and-swap that makes "one" true.
-   *
-   * A refusal is not a queue and not a failure: the caller drops the candidate and walks on, and
-   * every request whose snapshot was built *after* the hold was taken never sees the account as a
-   * candidate at all — the filter drops it as `probe-in-flight`, a `429` with the hold's expiry.
-   *
-   * Admitted with `held: false` means there was nothing to gate, because the account is `active`
-   * again: another request's probe already succeeded and this one is holding a stale label.
-   */
+  applyRateLimit(
+    accountId: string,
+    signal: RateLimitSignal | null,
+    now: Date,
+    observation?: HealthObservation,
+  ): void
   admitProbe(accountId: string, now: Date): ProbeAdmission
-  /** Releases the hold, whatever the probe's verdict was. Only the caller that took it may call. */
-  releaseProbe(accountId: string): void
-  /**
-   * Cumulative half-open gate decisions since boot, for `router_breaker_probe_admissions_total`.
-   * Counts only the gate itself — `admitted` is a hold taken, `refused` is another caller finding
-   * one already there. An account that was never half-open (already `closed`, or still `blocked`)
-   * never reaches the gate and moves neither number.
-   */
+  releaseProbe(accountId: string, token?: number): void
   probeStats(): { readonly admitted: number; readonly refused: number }
-  /**
-   * Drops every mark for an account — the operator's "Re-check now", and account deletion.
-   *
-   * The probe hold goes with them, deliberately: `recheck` clears the breaker precisely so the
-   * account becomes a half-open probe again, and leaving a stale hold behind would make the button
-   * wait out a probe nobody is running.
-   */
   reset(accountId: string): void
   entries(): ReadonlyMap<string, AccountHealthState>
 }
 
 export function createHealthStore(options: HealthStoreOptions = {}): HealthStore {
   const states = new Map<string, AccountHealthState>()
+  const observations = createHealthObservations()
+  const probeTokens = new Map<string, number>()
+  let nextProbeToken = 0
   const jitter = options.jitter ?? Math.random
   const probeHoldMs = options.probeHoldMs ?? DEFAULT_PROBE_HOLD_MS
   let probeAdmitted = 0
@@ -225,10 +116,6 @@ export function createHealthStore(options: HealthStoreOptions = {}): HealthStore
       : { authFailureMaxCooldownMs: options.authFailureMaxCooldownMs }),
   }
 
-  /**
-   * The configured breaker plus one fresh jitter fraction. A caller's own options win, because the
-   * only thing a caller knows that this store does not is `authKind` — a fact about the attempt.
-   */
   const breakerOptions = (caller?: BreakerOptions): BreakerOptions => ({
     ...configured,
     jitter: jitter(),
@@ -242,6 +129,17 @@ export function createHealthStore(options: HealthStoreOptions = {}): HealthStore
 
   return {
     stateOf: read,
+    reconcile(accountId, facts) {
+      const kind = observations.reconcile(accountId, facts)
+      if (kind === null) return
+      const previous = read(accountId)
+      const recovered = recoverHealth(previous, kind, facts)
+      if (recovered !== previous) {
+        states.set(accountId, recovered)
+        probeTokens.delete(accountId)
+      }
+    },
+    captureAttempt: observations.capture,
 
     beginAttempt(accountId) {
       write(accountId, { inFlight: read(accountId).inFlight + 1 })
@@ -255,37 +153,35 @@ export function createHealthStore(options: HealthStoreOptions = {}): HealthStore
       })
     },
 
-    recordSuccess(accountId) {
+    recordSuccess(accountId, observation) {
+      const before = read(accountId).breaker
+      if (
+        before.status === "exhausted" ||
+        before.status === "needs_reauth" ||
+        before.status === "disabled"
+      )
+        return
+      if (!observations.acceptsSuccess(accountId, observation)) return
       write(accountId, { breaker: recordSuccess() })
     },
 
-    recordFailure(accountId, failure, now, caller) {
+    recordFailure(accountId, failure, now, caller, observation) {
+      if (!observations.accepts(accountId, observation)) return
       const before = read(accountId).breaker
-      // The same precedence rule `foldRateLimit` documents (`health-reading.ts`): a terminal
-      // verdict outranks any later failure. Two attempts run concurrently, one answers `402` and
-      // the other `429` — folding the `429` in second would demote `exhausted` back to
-      // `cooling_down`, hand a dead balance a `Retry-After`, and put it back on the half-open
-      // probe's timer (non-negotiable 7). `blocked` is the breaker's own name for "no timer will
-      // change this", so who is protected here cannot drift from who routing treats as out.
       if (phase(before, now) === "blocked") return
       const after = recordFailure(before, failure, now, breakerOptions(caller))
+      if (after !== before) observations.advanceVerdict(accountId)
       write(accountId, { breaker: after })
-      // `blocked` is the breaker's own name for "no timer will change this", so who gets announced
-      // cannot drift from who routing treats as permanently out. A changed status is what makes
-      // this the *moment* the account became an operator's problem rather than a repeat of it.
       if (after.status !== before.status && phase(after, now) === "blocked") {
-        options.onBlocked?.(accountId, after.status)
+        options.onBlocked?.(accountId, after.status, observation)
       }
     },
 
-    applyRateLimit(accountId, signal, now) {
-      if (signal === null) return
-      // The whole rule — record the reading, never let it overwrite a terminal verdict, otherwise
-      // cool down through the breaker's own transition — lives in `health-reading.ts`, pure.
+    applyRateLimit(accountId, signal, now, observation) {
+      if (signal === null || !observations.accepts(accountId, observation)) return
       const folded = foldRateLimit(read(accountId), signal, now, breakerOptions())
+      if (folded.breaker !== read(accountId).breaker) observations.advanceVerdict(accountId)
       states.set(accountId, folded)
-      // Fired on the reading rather than the verdict: an account whose window just filled is
-      // exactly the one whose gauge has to say so, tripped breaker or not.
       if (signal.quotaWindows !== undefined) {
         options.onQuotaWindows?.(accountId, folded.quotaWindows)
       }
@@ -293,11 +189,6 @@ export function createHealthStore(options: HealthStoreOptions = {}): HealthStore
 
     admitProbe(accountId, now) {
       const state = read(accountId)
-      // The breaker's own name for "recovering", so who may probe cannot drift from who is
-      // recovering. `closed` means another probe already brought the account back and this caller is
-      // carrying a stale label: there is nothing left to gate, and refusing a healthy account would
-      // drop it from the chain for no reason. `open` and `blocked` are the reverse — the label is
-      // stale the other way and the account is genuinely unavailable now.
       const live = phase(state.breaker, now)
       if (live === "closed") return ADMITTED_WITHOUT_HOLD
       if (live !== "half-open") return REFUSED
@@ -309,11 +200,15 @@ export function createHealthStore(options: HealthStoreOptions = {}): HealthStore
       }
 
       write(accountId, { probeHeldUntil: new Date(now.getTime() + probeHoldMs) })
+      const token = ++nextProbeToken
+      probeTokens.set(accountId, token)
       probeAdmitted += 1
-      return { admitted: true, held: true }
+      return { admitted: true, held: true, token }
     },
 
-    releaseProbe(accountId) {
+    releaseProbe(accountId, token) {
+      if (token !== undefined && probeTokens.get(accountId) !== token) return
+      probeTokens.delete(accountId)
       if (states.has(accountId)) write(accountId, { probeHeldUntil: null })
     },
 
@@ -321,6 +216,8 @@ export function createHealthStore(options: HealthStoreOptions = {}): HealthStore
 
     reset(accountId) {
       states.delete(accountId)
+      observations.forget(accountId)
+      probeTokens.delete(accountId)
       options.onReset?.(accountId)
     },
 
@@ -328,7 +225,6 @@ export function createHealthStore(options: HealthStoreOptions = {}): HealthStore
   }
 }
 
-/** Where an auth failure lands: `oauth` -> `needs_reauth`, `api-key` -> a `credential-rejected` cooldown. */
 export function breakerOptionsFor(authKind: AuthKind): BreakerOptions {
   return { authKind }
 }

@@ -1,0 +1,66 @@
+{
+  "wave": "W3A",
+  "observed_on": "2026-10-03",
+  "state": "implemented_locally_review_merge_release_pending",
+  "dependency_merge": {
+    "pr": 144,
+    "sha": "e41f0edd"
+  },
+  "runtime": "Bun 1.4.2",
+  "database": "disposable PostgreSQL 18.6",
+  "gate": {
+    "command": "bin/check",
+    "source_log": "/tmp/router-wave3a-complete-check.log",
+    "passed_tests": 4536,
+    "failed_tests": 0,
+    "test_files": 317,
+    "lint": "passed",
+    "typecheck": "passed",
+    "build": "passed",
+    "revision_scope": "Final W3A code validation after timer DB-read recovery, ambiguous CAS quarantine, acknowledgement coherence and overlap guards."
+  },
+  "validation_scope": [
+    "Mocked OAuth identity connect, refresh and egress",
+    "Durable authorization attempt identity and lifecycle CAS",
+    "Dedicated refresh lock with main-pool max1, contention and lock loss",
+    "Timer ownership, stable due date and stale observation suppression including DB-read recovery, ambiguous CAS quarantine and overlapping timer/commit acknowledgement guards",
+    "Strict catalog barrier before audit and catalog-only retry",
+    "Transport/body deadlines and bounded refresh shutdown",
+    "Old auth failure and late success verdict fencing"
+  ],
+  "limits": [
+    "No live provider authentication/exchanges performed; no live issuer compatibility assertion.",
+    "External review, CI, merge, release and deployment remain pending for W3A.",
+    "Global recovery admission, persisted quota recovery and quota-floor CAS remain W3B.",
+    "General scheduler/writer/process shutdown bounds remain W4.",
+    "102:03.2 and its 101:02.1 recovery alias remain partial/open for W3B global probe/quota completion."
+  ],
+  "benchmark": {
+    "artifact": "wave3a-bench.json",
+    "requests": 8000,
+    "failures": 0,
+    "buffered": 0,
+    "maximum_p99_ms": 0.9454545454545454,
+    "violations": [],
+    "context": "CLI-version smoke verification ran briefly near startup, so this is a latest local run, not a claim of complete isolation. Earlier concurrent-workload runs reached about 5 ms; no causal performance improvement is claimed.",
+    "revision_scope": "Latest local run on the final validated W3A revision.",
+    "source_log_or_artifact": "/tmp/router-wave3a-complete-bench.json",
+    "streaming_added_ttft_p95_ms": {
+      "passthrough": 0.05703215,
+      "translated": 0.1328077
+    }
+  },
+  "next_wave": "W3B: account recovery admission and quota consistency",
+  "image": {
+    "source_log": "/tmp/router-wave3a-complete-image.log",
+    "local_amd64_build": "passed",
+    "release_or_deployment": "pending"
+  },
+  "independent_refresh_validation": {
+    "suite_count": 7,
+    "passed_tests": 58,
+    "assertions": 176,
+    "failed_tests": 0
+  },
+  "changed_file_count": 119
+}

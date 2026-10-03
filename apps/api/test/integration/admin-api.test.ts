@@ -111,6 +111,7 @@ function harness(
       // failure, not a silent 404.
       fetch: options.oauthFetch ?? (() => Promise.reject(new Error("no upstream in this harness"))),
       exchangeTimeoutMs: 1_000,
+      refreshCatalogAfterMutation: async () => {},
       now,
     }),
   })
@@ -734,7 +735,11 @@ describe("the OAuth callback route", () => {
 
   /** Always answers the token exchange the same way, whatever provider or account calls it. */
   function fakeOAuthFetch(
-    response: Response = tokenResponse({ access_token: "at-1", expires_in: 3600 }),
+    response: Response = tokenResponse({
+      access_token: "at-1",
+      expires_in: 3600,
+      id_token: `header.${Buffer.from(JSON.stringify({ "https://api.openai.com/auth": { chatgpt_account_id: "synthetic-account" } })).toString("base64url")}.sig`,
+    }),
   ) {
     return (async () => response) as typeof fetch
   }

@@ -1,4 +1,4 @@
-import type { AccountRepository } from "@multi-ai-router/db"
+import type { AccountRepository, AccountRow } from "@multi-ai-router/db"
 import type { Logger } from "../../logging/logger"
 import type { AccountConfigDirs } from "../../providers/claude-sdk/config-dir"
 import type {
@@ -37,20 +37,14 @@ import type { AccountCredentialView, AccountView } from "./view"
  *   has; the access token's own `expiresAt` is a separate, much shorter clock, and the one
  *   `providers/claude-sdk/credential-freshness.ts` serializes around.
  *
- * **Parking.** A `present: false` read against a row that is still `active` is a login that died
- * between probes, and it is parked through the same conditional status write the auth probe uses
- * (`accounts.updateStatusWhen(id, ["active"], "needs_reauth")`) with the same audit kind. The
- * returned view then says `needs_reauth`, so a read never shows an Account as routable when this
- * very read found it is not.
- *
- * **Cache.** One read per account per `ttlMs`, because the console polls and the file barely moves.
- * The one exception: a cached *dead* result is never trusted against an `active` row. That pairing
- * is exactly what a reconnect creates (row flipped to `active`, cache still says blank), and acting
- * on it would park the Account the operator just logged in again — so the disk is re-read instead.
- * It is also what the park decision itself keys on, so a park is never made off a stale read.
+ * **Parking.** Private durable facts are captured before opening the metadata file. A blank
+ * result parks only the exact active lifecycle and ciphertext observed, so a delayed read cannot
+ * undo reconnect or operator intent. Cached metadata is scoped to those same facts. The public
+ * view carries none of them. List captures all private rows in one admin-plane query.
  */
 
 export interface CredentialMetadataDeps {
+  readonly accounts: Pick<AccountRepository, "findById" | "findByIds">
   readonly reader: Pick<CredentialMetadataReader, "read">
   readonly configDirs: Pick<AccountConfigDirs, "pathFor">
   /** `ADMIN_CREDENTIAL_METADATA_TTL_SECONDS`, in ms. Config, not a constant. */
@@ -60,11 +54,12 @@ export interface CredentialMetadataDeps {
    * Moves an `active` row to `needs_reauth`. Resolves `true` when the row moved, `false` when it
    * was no longer `active`. Optional: a deployment that wires none only reports.
    */
-  readonly park?: (accountId: string, now: Date) => Promise<boolean>
+  readonly park?: (observed: AccountRow, now: Date) => Promise<boolean>
   readonly logger?: Logger
 }
 
 interface CacheEntry {
+  readonly observation: Pick<AccountRow, "lifecycleVersion" | "authMaterial" | "status">
   readonly readAt: number
   readonly value: CredentialMetadata
 }
@@ -75,28 +70,55 @@ export function withCredentialMetadata(
 ): AccountsService {
   const cache = new Map<string, CacheEntry>()
 
-  const lookup = async (view: AccountView, now: Date): Promise<CredentialMetadata> => {
-    const cached = cache.get(view.id)
-    const stored = storedStatus(view)
-    const fresh = cached !== undefined && now.getTime() - cached.readAt < deps.ttlMs
+  const owners = new Map<string, object>()
+  const lookup = async (observed: AccountRow, now: Date): Promise<CredentialMetadata> => {
+    const cached = cache.get(observed.id)
+    const same =
+      cached !== undefined &&
+      cached.observation.lifecycleVersion === observed.lifecycleVersion &&
+      cached.observation.authMaterial === observed.authMaterial &&
+      cached.observation.status === observed.status
     if (
       cached !== undefined &&
-      fresh &&
-      !(cached.value.hasTokens === false && stored === "active")
-    ) {
+      same &&
+      now.getTime() - cached.readAt < deps.ttlMs &&
+      !(cached.value.hasTokens === false && observed.status === "active")
+    )
       return cached.value
+
+    const owner = {}
+    owners.set(observed.id, owner)
+    try {
+      const value = await deps.reader.read(deps.configDirs.pathFor(observed.id))
+      if (owners.get(observed.id) === owner) {
+        cache.set(observed.id, {
+          readAt: now.getTime(),
+          value,
+          observation: {
+            lifecycleVersion: observed.lifecycleVersion,
+            authMaterial: observed.authMaterial,
+            status: observed.status,
+          },
+        })
+      }
+      return value
+    } finally {
+      if (owners.get(observed.id) === owner) owners.delete(observed.id)
     }
-    const value = await deps.reader.read(deps.configDirs.pathFor(view.id))
-    cache.set(view.id, { readAt: now.getTime(), value })
-    return value
   }
 
-  const overlayOne = async (view: AccountView, now: Date): Promise<AccountView> => {
-    if (!describeProvider(view.provider).requiresConfigDir) return { ...view, credential: null }
+  const overlayOne = async (
+    view: AccountView,
+    observed: AccountRow | undefined,
+    now: Date,
+  ): Promise<AccountView> => {
+    if (!describeProvider(view.provider).requiresConfigDir || observed === undefined) {
+      return { ...view, credential: null }
+    }
 
     let metadata: CredentialMetadata
     try {
-      metadata = await lookup(view, now)
+      metadata = await lookup(observed, now)
     } catch (error) {
       // Unknown, not dead. The message names a path or an errno at most — never file contents —
       // and goes through the redactor like every other field.
@@ -108,11 +130,11 @@ export function withCredentialMetadata(
     }
 
     const credential = toCredentialView(metadata)
-    if (credential.present || storedStatus(view) !== "active" || deps.park === undefined) {
+    if (credential.present || observed.status !== "active" || deps.park === undefined) {
       return { ...view, credential }
     }
 
-    const parked = await deps.park(view.id, now)
+    const parked = await deps.park(observed, now)
     if (!parked) return { ...view, credential }
     deps.logger?.info("claude credential expired, account parked", {
       accountId: view.id,
@@ -121,9 +143,14 @@ export function withCredentialMetadata(
     return { ...view, status: "needs_reauth", credential }
   }
 
-  const overlay = (views: readonly AccountView[]): Promise<readonly AccountView[]> => {
+  const overlay = async (views: readonly AccountView[]): Promise<readonly AccountView[]> => {
     const now = deps.now()
-    return Promise.all(views.map((view) => overlayOne(view, now)))
+    const ids = views
+      .filter((view) => describeProvider(view.provider).requiresConfigDir)
+      .map((view) => view.id)
+    const rows = ids.length === 0 ? [] : await deps.accounts.findByIds(ids)
+    const captured = new Map(rows.map((row) => [row.id, row]))
+    return Promise.all(views.map((view) => overlayOne(view, captured.get(view.id), now)))
   }
 
   return {
@@ -134,17 +161,13 @@ export function withCredentialMetadata(
     },
     get: async (id) => {
       const result: AdminResult<AccountView> = await service.get(id)
-      return result.ok ? { ok: true, value: await overlayOne(result.value, deps.now()) } : result
+      if (!result.ok) return result
+      const observed = describeProvider(result.value.provider).requiresConfigDir
+        ? await deps.accounts.findById(id)
+        : undefined
+      return { ok: true, value: await overlayOne(result.value, observed, deps.now()) }
     },
   }
-}
-
-/**
- * The status as stored, which is what the conditional park is decided against. `withAvailability`
- * may already have overlaid the live one onto `status` and kept the stored one beside it.
- */
-function storedStatus(view: AccountView): AccountView["status"] {
-  return view.availability?.configuredStatus ?? view.status
 }
 
 function toCredentialView(metadata: CredentialMetadata): AccountCredentialView {
@@ -157,7 +180,7 @@ function toCredentialView(metadata: CredentialMetadata): AccountCredentialView {
 }
 
 export interface CredentialParkDeps {
-  readonly accounts: Pick<AccountRepository, "updateStatusWhen">
+  readonly accounts: Pick<AccountRepository, "transitionObservedStatus">
   readonly audit: AuditRecorder
   /** The warm catalog must stop selecting the row the moment the write lands — see `admin/coherence.ts`. */
   readonly refreshCatalog?: () => Promise<void>
@@ -170,11 +193,22 @@ export interface CredentialParkDeps {
  */
 export function createCredentialPark(
   deps: CredentialParkDeps,
-): (accountId: string, now: Date) => Promise<boolean> {
-  return async (accountId, now) => {
-    const row = await deps.accounts.updateStatusWhen(accountId, ["active"], "needs_reauth", now)
+): (observed: AccountRow, now: Date) => Promise<boolean> {
+  return async (observed, now) => {
+    if (observed.status !== "active") return false
+    const row = await deps.accounts.transitionObservedStatus({
+      id: observed.id,
+      expected: {
+        lifecycleVersion: observed.lifecycleVersion,
+        authMaterial: observed.authMaterial,
+        status: observed.status,
+      },
+      status: "needs_reauth",
+      now,
+    })
     if (row === undefined) return false
 
+    await deps.refreshCatalog?.()
     await deps.audit.record({
       kind: AUDIT_KINDS.accountUpdated,
       subjectType: AUDIT_SUBJECTS.account,
@@ -192,7 +226,6 @@ export function createCredentialPark(
           "the claude CLI has blanked this account's tokens; it needs an interactive re-login",
       },
     })
-    await deps.refreshCatalog?.()
     return true
   }
 }

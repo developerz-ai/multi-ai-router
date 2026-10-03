@@ -64,6 +64,9 @@ function routable(quotaWindows?: readonly QuotaWindowState[]): RoutableAccount {
       modelAliases: null,
     },
     authMaterial: null,
+    lifecycleVersion: 0,
+    healthRecoveryVersion: 0,
+    authRecoveryVersion: 0,
     configDir: "/data/claude/one",
   }
 }

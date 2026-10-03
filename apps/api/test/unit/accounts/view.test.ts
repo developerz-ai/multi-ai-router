@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import type { AccountRow } from "@multi-ai-router/db"
 import { toAccountView } from "../../../src/services/accounts/view"
+import { accountRow as durableAccountRow } from "../../support/account-row"
 
 // The row → admin-view mapping. Most of it is a rename, but two facts carry weight:
 // `authMaterial` must collapse to a boolean, and `lastUsedAt` must survive the mapping —
@@ -10,7 +11,7 @@ import { toAccountView } from "../../../src/services/accounts/view"
 const NOW = new Date("2026-07-24T12:00:00.000Z")
 
 function row(overrides: Partial<AccountRow> = {}): AccountRow {
-  return {
+  return durableAccountRow({
     id: "11111111-1111-4111-8111-111111111111",
     label: "claude one",
     provider: "anthropic-oauth",
@@ -30,7 +31,7 @@ function row(overrides: Partial<AccountRow> = {}): AccountRow {
     createdAt: NOW,
     updatedAt: NOW,
     ...overrides,
-  }
+  })
 }
 
 describe("toAccountView lastUsedAt", () => {
@@ -50,4 +51,29 @@ describe("toAccountView credential fact", () => {
     expect(view.hasCredential).toBe(true)
     expect(JSON.stringify(view)).not.toContain("ciphertext")
   })
+})
+
+test("internal lifecycle and authorization facts never enter a serialized account view", () => {
+  const serialized = JSON.stringify(
+    toAccountView(
+      row({
+        lifecycleVersion: 4,
+        healthRecoveryVersion: 2,
+        authRecoveryVersion: 3,
+        authorizationAttemptId: "private-attempt-id",
+        authMaterial: "private-envelope",
+      }),
+    ),
+  )
+  for (const key of [
+    "lifecycleVersion",
+    "healthRecoveryVersion",
+    "authRecoveryVersion",
+    "authorizationAttemptId",
+    "authMaterial",
+    "private-attempt-id",
+    "private-envelope",
+  ]) {
+    expect(serialized).not.toContain(key)
+  }
 })

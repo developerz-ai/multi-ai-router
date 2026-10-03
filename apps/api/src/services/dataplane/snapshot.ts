@@ -5,6 +5,7 @@ import {
   type RoutingSnapshot,
 } from "../routing"
 import type { AccountHealthState, HealthStore } from "./health"
+import { accountHealthFacts } from "./health-observation"
 import type { RotationCounters } from "./rotation"
 import type { RoutingCatalog } from "./types"
 
@@ -35,7 +36,10 @@ export function overlayHealth(
   account: AccountSnapshot,
   state: AccountHealthState,
 ): AccountSnapshot {
-  const configuredBlocks = account.status === "disabled" || account.status === "needs_reauth"
+  const configuredBlocks =
+    account.status === "disabled" ||
+    account.status === "needs_reauth" ||
+    account.status === "exhausted"
   const status =
     configuredBlocks || state.breaker.status === "active" ? account.status : state.breaker.status
   const quotaWindows = mergeQuotaWindows(account.quotaWindows ?? [], state.quotaWindows)
@@ -92,15 +96,19 @@ function toLimiterReading(window: {
  */
 export function buildSnapshot(
   catalog: RoutingCatalog,
-  health: Pick<HealthStore, "stateOf">,
+  health: Pick<HealthStore, "stateOf"> & Partial<Pick<HealthStore, "reconcile">>,
   now: Date,
   rotation?: Pick<RotationCounters, "current">,
 ): RoutingSnapshot {
+  const accounts = catalog.accounts()
+  for (const account of accounts) {
+    health.reconcile?.(account.id, accountHealthFacts(account))
+  }
   const pools = catalog.pools()
   return {
-    accounts: catalog
-      .accounts()
-      .map((account) => overlayHealth(account.snapshot, health.stateOf(account.id))),
+    accounts: accounts.map((account) =>
+      overlayHealth(account.snapshot, health.stateOf(account.id)),
+    ),
     pools:
       rotation === undefined
         ? pools

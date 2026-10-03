@@ -4,6 +4,7 @@ import { createLogger } from "../../../src/logging/logger"
 import type { SdkUsageGaugeProbeOutcome, UpstreamFailureKind } from "../../../src/providers"
 import { createIdleAccountProbeTask, IDLE_PROBE_MODELS } from "../../../src/scheduler"
 import type { ClaudeAuthReport } from "../../../src/services/health/claudeAuthProbe"
+import { accountRow as durableAccountRow } from "../../support/account-row"
 
 /**
  * The daily credential sweep, in its two halves: the free logged-in check over every account, and
@@ -20,14 +21,14 @@ const NOW = new Date("2026-07-28T03:00:00.000Z")
 const SEVEN_DAYS_MS = 7 * 24 * 60 * 60 * 1_000
 
 function account(overrides: Partial<AccountRow> = {}): AccountRow {
-  return {
+  return durableAccountRow({
     id: "acc-1",
     label: "claude-a",
     provider: "anthropic-oauth",
     status: "active",
     lastUsedAt: null,
     ...overrides,
-  } as AccountRow
+  })
 }
 
 function report(loggedIn: boolean): ClaudeAuthReport {
@@ -82,7 +83,6 @@ function harness(options: HarnessOptions) {
     accounts: {
       list: async () => [...(options.all ?? options.idle)],
       findIdle: async ({ limit }) => options.idle.slice(0, limit),
-      updateStatusWhen: async () => undefined,
     },
     test: async (accountId, model) => {
       tested.push({ accountId, model })
@@ -287,7 +287,6 @@ describe("the billed keepalive over idle accounts", () => {
       accounts: {
         list: async () => [account()],
         findIdle: async () => [account()],
-        updateStatusWhen: async () => undefined,
       },
       test: async () => {
         order.push("test")
@@ -450,7 +449,6 @@ describe("what the run row says about the sweep itself", () => {
       accounts: {
         list: async () => [account()],
         findIdle: async () => [],
-        updateStatusWhen: async () => undefined,
       },
       test: async () => ({ tested: false }),
       auth: {
@@ -490,7 +488,6 @@ describe("what the run row says about the sweep itself", () => {
           seen = before
           return []
         },
-        updateStatusWhen: async () => undefined,
       },
       test: async () => ({ tested: false }),
       models: {},

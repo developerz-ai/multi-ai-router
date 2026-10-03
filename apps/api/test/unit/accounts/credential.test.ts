@@ -9,6 +9,7 @@ import type { AccountsService } from "../../../src/services/accounts/service"
 import type { AccountView } from "../../../src/services/accounts/view"
 import type { AuditEventInput } from "../../../src/services/admin/audit"
 import { ok } from "../../../src/services/admin/result"
+import { accountRow } from "../../support/account-row"
 import { createMemoryConfigDirs } from "../../support/config-dirs"
 
 /**
@@ -81,6 +82,18 @@ function serviceOf(views: readonly AccountView[]): AccountsService {
   }
 }
 
+function privateRow(view: AccountView): AccountRow {
+  return accountRow({
+    ...view,
+    authMaterial: null,
+    tokenExpiresAt: null,
+    lastUsedAt: null,
+    createdAt: new Date(view.createdAt),
+    updatedAt: new Date(view.updatedAt),
+    status: view.availability?.configuredStatus ?? view.status,
+  })
+}
+
 interface Harness {
   readonly service: AccountsService
   readonly reads: string[]
@@ -103,6 +116,13 @@ function harness(
     logs.push(`${level} ${msg}`)
   }
   const service = withCredentialMetadata(serviceOf(views), {
+    accounts: {
+      findById: async (id) => {
+        const found = views.find((view) => view.id === id)
+        return found === undefined ? undefined : privateRow(found)
+      },
+      findByIds: async (ids) => views.filter((view) => ids.includes(view.id)).map(privateRow),
+    },
     reader: {
       read: async (configDir) => {
         reads.push(configDir)
@@ -115,8 +135,8 @@ function harness(
     ...(options.park === false
       ? {}
       : {
-          park: async (accountId: string) => {
-            parked.push(accountId)
+          park: async (observed: AccountRow) => {
+            parked.push(observed.id)
             return options.parkResult ?? true
           },
         }),
@@ -347,7 +367,7 @@ describe("what the view can never carry", () => {
 
 describe("createCredentialPark", () => {
   const row = (status: AccountRow["status"]): AccountRow =>
-    ({ id: SUB_ID, provider: "anthropic-oauth", status }) as AccountRow
+    accountRow({ id: SUB_ID, provider: "anthropic-oauth", status })
 
   test("writes active → needs_reauth conditionally, audits it, and refreshes the catalog", async () => {
     const writes: string[] = []
@@ -355,9 +375,9 @@ describe("createCredentialPark", () => {
     let refreshed = 0
     const park = createCredentialPark({
       accounts: {
-        updateStatusWhen: async (id, from, to) => {
-          writes.push(`${id} ${from.join(",")} -> ${to}`)
-          return row(to)
+        transitionObservedStatus: async ({ id, expected, status }) => {
+          writes.push(`${id} ${expected.status} -> ${status}`)
+          return row(status)
         },
       },
       audit: {
@@ -370,7 +390,7 @@ describe("createCredentialPark", () => {
       },
     })
 
-    expect(await park(SUB_ID, NOW)).toBe(true)
+    expect(await park(row("active"), NOW)).toBe(true)
     expect(writes).toEqual([`${SUB_ID} active -> needs_reauth`])
     expect(events).toHaveLength(1)
     expect(events[0]?.kind).toBe("account.updated")
@@ -386,7 +406,7 @@ describe("createCredentialPark", () => {
   test("a row that was no longer active is not audited and reports false", async () => {
     const events: AuditEventInput[] = []
     const park = createCredentialPark({
-      accounts: { updateStatusWhen: async () => undefined },
+      accounts: { transitionObservedStatus: async () => undefined },
       audit: {
         record: async (event) => {
           events.push(event)
@@ -394,7 +414,7 @@ describe("createCredentialPark", () => {
       },
     })
 
-    expect(await park(SUB_ID, NOW)).toBe(false)
+    expect(await park(row("active"), NOW)).toBe(false)
     expect(events).toEqual([])
   })
 })

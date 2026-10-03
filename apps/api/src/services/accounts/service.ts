@@ -37,7 +37,7 @@ export interface AccountsService {
 export interface AccountsServiceDeps {
   readonly accounts: Pick<
     AccountRepository,
-    "create" | "list" | "findById" | "update" | "disable" | "delete"
+    "create" | "list" | "findById" | "updateOperatorAccount" | "disable" | "delete"
   >
   /** Read-only here: a destructive account change must say which keys it breaks. */
   readonly keys: Pick<ApiKeyRepository, "listKeysScopedToAccount">
@@ -45,6 +45,8 @@ export interface AccountsServiceDeps {
   /** Only ever touched for a provider the registry says carries a `CLAUDE_CONFIG_DIR`. */
   readonly configDirs: AccountConfigDirs
   readonly audit: AuditRecorder
+  /** Await the local routing barrier after commit, before audit or response work. */
+  readonly mutationCommitted?: (accountId: string) => Promise<void>
   readonly now: () => Date
 }
 
@@ -117,6 +119,7 @@ export function createAccountsService(deps: AccountsServiceDeps): AccountsServic
           throw error
         })
 
+      await deps.mutationCommitted?.(row.id)
       await deps.audit.record({
         kind: AUDIT_KINDS.accountCreated,
         subjectType: AUDIT_SUBJECTS.account,
@@ -149,9 +152,9 @@ export function createAccountsService(deps: AccountsServiceDeps): AccountsServic
       })
       if (!checked.ok) return checked
 
-      const row = await deps.accounts.update(
+      const row = await deps.accounts.updateOperatorAccount({
         id,
-        {
+        patch: {
           ...(body.label === undefined ? {} : { label: body.label }),
           ...(body.credential === undefined
             ? {}
@@ -168,10 +171,11 @@ export function createAccountsService(deps: AccountsServiceDeps): AccountsServic
           ...(body.billing === undefined ? {} : { billing: body.billing }),
           ...(body.status === undefined ? {} : { status: body.status }),
         },
-        deps.now(),
-      )
+        now: deps.now(),
+      })
       if (row === undefined) return notFound(`no account with id "${id}"`)
 
+      await deps.mutationCommitted?.(row.id)
       await deps.audit.record({
         kind: AUDIT_KINDS.accountUpdated,
         subjectType: AUDIT_SUBJECTS.account,
@@ -187,6 +191,7 @@ export function createAccountsService(deps: AccountsServiceDeps): AccountsServic
       const row = await deps.accounts.disable(id, deps.now())
       if (row === undefined) return notFound(`no account with id "${id}"`)
 
+      await deps.mutationCommitted?.(row.id)
       await deps.audit.record({
         kind: AUDIT_KINDS.accountDisabled,
         subjectType: AUDIT_SUBJECTS.account,
@@ -222,6 +227,7 @@ export function createAccountsService(deps: AccountsServiceDeps): AccountsServic
       const deleted = await deps.accounts.delete(id)
       if (!deleted) return notFound(`no account with id "${id}"`)
 
+      await deps.mutationCommitted?.(id)
       await deps.audit.record({
         kind: AUDIT_KINDS.accountDeleted,
         subjectType: AUDIT_SUBJECTS.account,

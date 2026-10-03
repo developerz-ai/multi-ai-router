@@ -55,7 +55,7 @@ export interface DriverAccount {
  */
 export type ProviderCredential =
   | { readonly kind: "api-key"; readonly apiKey: string }
-  | { readonly kind: "oauth"; readonly accessToken: string }
+  | { readonly kind: "oauth"; readonly accessToken: string; readonly providerAccountId?: string }
 
 /**
  * What a driver is shown of an upstream response. `body` is present only when the caller already
@@ -181,6 +181,7 @@ export interface OAuthTokenRequest {
  * replaces it.
  */
 export interface OAuthTokens {
+  readonly providerAccountId?: string
   readonly accessToken: string
   readonly refreshToken: string | null
   readonly expiresInSeconds: number | null
@@ -214,7 +215,13 @@ export interface ProviderOAuthFlow {
   }): OAuthTokenRequest
   refresh(input: { readonly refreshToken: string }): OAuthTokenRequest
   /** Zod at the boundary: a reshaped payload yields `null`, never a half-populated token set. */
-  readTokens(body: unknown): OAuthTokens | null
+  readTokens(
+    body: unknown,
+    context?: {
+      readonly previousProviderAccountId?: string
+      readonly previousAccessToken?: string
+    },
+  ): OAuthTokens | null
 }
 
 export interface ProviderDriver {

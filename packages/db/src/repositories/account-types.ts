@@ -9,7 +9,9 @@ import type {
 import type { AccountRow, ModelAliasMap, SupportedModelList } from "../schema/accounts"
 import type { QuotaWindowRow } from "../schema/quota-windows"
 
-export interface AccountRepository {
+import type { AddedAccountRepositoryMethods } from "./account-lifecycle-types"
+
+export interface AccountRepository extends AddedAccountRepositoryMethods {
   /** `input.authMaterial` must already be an encryption envelope, never a raw credential. */
   create(input: CreateAccountInput): Promise<AccountRow>
   /** Oldest first, so the admin list is stable across calls. */

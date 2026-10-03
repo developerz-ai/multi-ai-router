@@ -25,8 +25,17 @@ const accountRow = [
   "claude-max-seb",
   "anthropic-oauth",
   "active",
+  0,
+  0,
+  0,
+  null,
   "subscription",
   ENVELOPE,
+  null,
+  null,
+  null,
+  null,
+  null,
   null,
   null,
   null,
@@ -168,7 +177,8 @@ describe("status is the lifecycle, and disable is the soft delete", () => {
 
     expect(stub.only().sql).toContain('update "accounts" set')
     expect(stub.only().sql).not.toContain("delete")
-    expect(stub.only().params).toEqual(["disabled", NOW_PARAM, ACCOUNT_ID])
+    expect(stub.only().params).toEqual(["disabled", null, NOW_PARAM, ACCOUNT_ID])
+    expect(stub.only().sql).toContain('"lifecycle_version" + 1')
   })
 
   test("updateStatusWhen narrows on the id and on the statuses it may overwrite", async () => {

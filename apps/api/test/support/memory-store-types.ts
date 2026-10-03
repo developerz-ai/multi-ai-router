@@ -17,6 +17,15 @@ import type {
 
 export type MemoryAccounts = Pick<
   AccountRepository,
+  | "saveRefreshedCredential"
+  | "transitionObservedStatus"
+  | "updateOperatorAccount"
+  | "recheckAccount"
+  | "recoverObservedAuthentication"
+  | "confirmAccountAuthorization"
+  | "beginAccountAuthorization"
+  | "cancelAccountAuthorization"
+  | "commitAuthorization"
   | "create"
   | "list"
   | "findById"

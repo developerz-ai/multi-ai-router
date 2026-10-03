@@ -489,9 +489,10 @@ account is never read as a spent window. The reverse holds as well: a body that 
 both a reached limit and a clock that reopens it. Either one alone stays `auth`, and terms-of-service
 wording counts only in the same sentence as the suspension, where it outranks any clock.
 
-### Exactly one half-open probe
+### One half-open probe per account per replica
 
-"One request is allowed through as a probe" is a gate, not a label. A cooldown expiring makes the
+Each replica admits one half-open probe for an account at a time. Admission is held in that
+replica's warm health store; it is not a fleet-wide exclusion guarantee. A cooldown expiring makes the
 account eligible to **every** waiting request at the same instant, so without one, the backlog that
 piled up during a five-minute cooldown dispatches onto the recovering account together and rate
 limits it again before it has answered any of them.
@@ -502,8 +503,8 @@ limits it again before it has answered any of them.
 | **A refusal costs nothing** | The chain drops that candidate and walks on — no attempt spent, no `UsageRecord`, no upstream contacted. Nothing happened to that account. |
 | **The hold is a routing state** | It rides in the health snapshot, so every request selecting *after* it was taken is filtered out as `probe-in-flight` — a `429` carrying the hold's expiry, because a clock fixes this in milliseconds. Never a `500`, and never a queue. |
 | **Released on the verdict** | The moment the attempt is classified, not when its stream settles: the probe's question was "is this account back?", and it has been answered. `ROUTING_HALF_OPEN_HOLD_MS` is the backstop for a probe that never reports at all. |
-| **Per account, never global** | Many accounts of one provider is the normal case. One account recovering must not gate another, and a pool with a healthy member keeps serving at full speed. |
-| **One gate, one recovery path** | The operator's **Re-check now** clears the account's marks — the hold among them — so the next request becomes the probe and the ones behind it wait for its verdict. It does not get a gate of its own. |
+| **Per account and replica** | One account recovering does not gate another. Separate replicas may each admit a probe; distributed recovery admission remains W3B. |
+| **Manual recovery intent** | **Re-check now** installs an explicit full-health recovery epoch. It does not create a durable fleet-wide probe permit or promise that exactly one subsequent request will reach the provider. |
 
 ### Health signals feeding it
 
@@ -725,29 +726,28 @@ Display **"needs top-up"**, never a countdown, and never invent an ETA.
 
 ### "Re-check now"
 
-A button, per account and for all accounts at once. Providers sometimes reset early, lift a limit
-for everyone, or restore a balance out of band — **the router must not sit on a stale clock it
-computed itself** while capacity is available.
+A button, per account and for all accounts at once. It records an explicit recovery intent and
+installs the resulting account state in the local warm catalog before completing.
 
 | Property | Behavior |
 |---|---|
-| What it does | Re-queries the provider's live quota/usage signal, updates utilization and reset times, and returns the account to `active` immediately if it is healthy again. |
-| Throttled | A short **server-side** per-account cooldown between manual checks, so the button cannot hammer a provider. |
-| Inline outcome | "still limited, resets 14:32" / "back online" / "still out of credits" — shown next to the button. |
-| Last checked | Always visible, whether the last check was manual or automatic. |
-| **One code path** | It is the *same* probe the circuit breaker runs on its half-open transition, triggered manually. Not a second implementation — there is exactly one way to ask a provider "are you back?". |
-| **Lifts the stored block too** | Clearing only this process's memory of an `exhausted` would leave the persisted row standing, the account filtered out, and the operator pressing a button that visibly does nothing. So the row is cleared as well, and the warm catalog is refreshed before the response — guarded to `exhausted` alone. It never touches `disabled` (the operator's own switch) or `needs_reauth` (which ends with a completed login, not with a button that sends nothing). |
+| What it does | Atomically increments the account lifecycle and full-health recovery epochs, clearing a currently stored `exhausted` to `active`. Reconciliation clears breaker/backoff state while preserving usage accounting and provider quota evidence. It does not query an upstream quota endpoint. |
+| Throttled | A short **server-side**, per-account cooldown on this replica. Concurrent presses reserve it before waiting for SQL. This is not a fleet-wide rate guarantee. |
+| Inline outcome | Reports whether the recheck committed, when another is allowed, and any configured status it cleared. A CLI-managed account may also report its local Claude authentication check. No absent quota reading is invented. |
+| Last checked | The replica records the time of its accepted manual recheck; refusal returns that same time and next allowed instant. |
+| **Claude authentication** | After commit, the local `claude auth status` check receives the current returned row. Only a confirmed check against the exact observed `needs_reauth` may recover authentication. No billed turn is sent. |
+| **Stored status authority** | Recheck preserves `disabled` and `needs_reauth`. It clears only current `exhausted`; a successful guarded Claude auth check may subsequently recover `needs_reauth`. The catalog barrier precedes audit and response work. |
+| **Remaining recovery work** | Exactly one recovery probe globally across replicas and persisted quota recovery are W3B. Existing quota evidence can still limit selection after a manual recovery intent. |
 
 Reset instants and utilization are also exposed on the API so an operator can alert on them
 externally; see [08-observability.md](08-observability.md).
 
 ### "Test now"
 
-A second, distinct button, per account. **Re-check now sends nothing** — it re-queries a quota
-signal and clears breaker marks, so it can never answer "does this credential actually complete a
-request?" Test now answers exactly that: it addresses this one account directly, bypassing pool
-membership, key scope, and failover, and sends the smallest real completion the account's dialect
-can make.
+A second, distinct button, per account. **Re-check now sends no billed provider turn**: it records
+recovery intent and may run a local Claude auth check. Test now answers whether this credential
+completes a request: it addresses the account directly, bypassing pool membership, key scope and
+failover, and sends the smallest real completion the account's dialect can make.
 
 | Property | Behavior |
 |---|---|
@@ -829,3 +829,9 @@ Two variations on the same four accounts:
 | [04-api-keys-and-access.md](04-api-keys-and-access.md) | Key scope — how a key resolves to a candidate set |
 | [06-protocol-translation.md](06-protocol-translation.md) | What happens to the request once an account is chosen |
 | [08-observability.md](08-observability.md) | Usage records, health surfaces, metrics |
+
+### Authorized recovery and stale verdicts
+
+Lifecycle versions fence stale observations; they do not alone clear breaker or quota state. Full-health recovery has its own cumulative version and authentication recovery another. Explicit enable/recheck clears breaker/backoff state while preserving in-flight accounting, recent usage and quota evidence. Authorization recovery clears authentication-associated verdicts only where the current configured status permits. Successful login or routine refresh never implicitly enables a disabled account or clears billing exhaustion. Same-lifecycle delayed success also carries the local verdict version, preventing it from erasing a newer failure.
+
+Recheck commits its lifecycle/full-health recovery intent atomically, clears only a currently exhausted configured status, then supplies that committed row to any Claude auth check. A confirmed auth check recovers only the exact observed needs_reauth lifecycle/ciphertext/status. Durable queued writes compare all original facts, including NULL credentials. This change does not establish exactly one recovery probe globally across replicas and does not replace persisted quota evidence during recheck.

@@ -211,12 +211,26 @@ describe("an observed quota reading reaches the durable writer", () => {
  * unwired hook reads exactly like the bug — the account is parked, routing knows, and the row the
  * console reads still says `active` an hour after the deploy that lost the verdict.
  */
+const durableFacts = {
+  lifecycleVersion: 0,
+  healthRecoveryVersion: 0,
+  authRecoveryVersion: 0,
+  authMaterial: "fixture-encrypted-material",
+  status: "active" as const,
+}
+
 describe("a standing block reaches the durable writer", () => {
   test("out of credits queues a status write", () => {
     const { health, statusWriter } = runtimeWith({})
     expect(statusWriter.stats().pending).toBe(0)
 
-    health.recordFailure("a", { kind: "credits-exhausted", message: "402" }, NOW)
+    health.recordFailure(
+      "a",
+      { kind: "credits-exhausted", message: "402" },
+      NOW,
+      undefined,
+      health.captureAttempt("a", durableFacts),
+    )
 
     // Queued, not written: nothing has touched the (deliberately unreachable) database.
     expect(statusWriter.stats()).toMatchObject({ pending: 1, written: 0 })
@@ -224,7 +238,13 @@ describe("a standing block reaches the durable writer", () => {
 
   test("an oauth auth failure queues one too", () => {
     const { health, statusWriter } = runtimeWith({})
-    health.recordFailure("a", { kind: "auth", message: "401" }, NOW, { authKind: "oauth" })
+    health.recordFailure(
+      "a",
+      { kind: "auth", message: "401" },
+      NOW,
+      { authKind: "oauth" },
+      health.captureAttempt("a", durableFacts),
+    )
 
     expect(statusWriter.stats().pending).toBe(1)
   })
@@ -253,9 +273,15 @@ describe("a standing block reaches the durable writer", () => {
     expect(statusWriter.stats().pending).toBe(0)
   })
 
-  test("Re-check now drops a queued verdict, so it cannot undo the button press", () => {
+  test("an explicit local health reset drops its queued verdict", () => {
     const { health, statusWriter } = runtimeWith({})
-    health.recordFailure("a", { kind: "credits-exhausted", message: "402" }, NOW)
+    health.recordFailure(
+      "a",
+      { kind: "credits-exhausted", message: "402" },
+      NOW,
+      undefined,
+      health.captureAttempt("a", durableFacts),
+    )
     expect(statusWriter.stats().pending).toBe(1)
 
     health.reset("a")
