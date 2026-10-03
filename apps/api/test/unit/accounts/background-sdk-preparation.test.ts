@@ -169,3 +169,27 @@ test("provider failure after background activation records a real failed test an
   expect(f.counts()).toMatchObject({ audits: 1, quotaWrites: 1, activations: 1, guards: 2 })
   expect(f.concurrency.inFlight).toBe(0)
 })
+
+for (const mode of ["owner-setup", "owner-ready", "owner-prepare", "query-setup"] as const) {
+  test(`interactive SDK preparation ${mode} reports a classified operator test failure`, async () => {
+    const f = fixture(mode)
+    const result = await f.service.test(f.account.id, { model: "offline-model", confirmed: true })
+    expect(result.ok).toBe(true)
+    if (result.ok) {
+      expect(result.value).toMatchObject({ tested: true, outcome: "failed" })
+      expect(JSON.stringify(result.value)).not.toContain(
+        "background account admission was declined",
+      )
+    }
+    expect(f.service.lastCheckedAt(f.account.id)).toEqual(NOW)
+    expect(f.counts()).toMatchObject({
+      audits: 1,
+      quotaWrites: 0,
+      healthWrites: 0,
+      activations: 0,
+      guards: 0,
+    })
+    expect(f.concurrency.inFlight).toBe(0)
+    expect(f.concurrency.queued).toBe(0)
+  })
+}

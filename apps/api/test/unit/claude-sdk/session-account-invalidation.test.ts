@@ -63,3 +63,49 @@ test("queued remembers from the old generation never reach SQL after deletion", 
   expect(writes).toBe(1)
   turn.release()
 })
+
+test("deleting A preserves B pending reads and live remembers", async () => {
+  const repo = memorySessions([
+    { apiKeyId: "k", key: "b", accountId: "b", sdkSessionId: "old-b", lastUsedAt: now },
+  ])
+  const read = Promise.withResolvers<Awaited<ReturnType<typeof repo.findByKey>>>()
+  const store = createSessionStore({
+    repository: { ...repo, findByKey: () => read.promise },
+    now: () => now,
+  })
+  const binding = store.binding("k", "b")
+  const turn = store.resolve({ ...input, accountId: "b", sessionKey: "other-b" })
+  await store.invalidateAccount("a")
+  read.resolve(repo.rows.get("k::b"))
+  expect(await binding).toMatchObject({ accountId: "b", sdkSessionId: "old-b" })
+  turn.remember("new-b")
+  turn.release()
+  await Bun.sleep(0)
+  expect(repo.rows.get("k::other-b")?.sdkSessionId).toBe("new-b")
+})
+
+test("deleting A preserves ordered B writes and queued unrelated clears", async () => {
+  const repo = memorySessions()
+  const held = Promise.withResolvers<void>()
+  let writes = 0
+  const store = createSessionStore({
+    repository: {
+      ...repo,
+      upsert: async (value) => {
+        if (++writes === 1) await held.promise
+        return repo.upsert(value)
+      },
+    },
+    now: () => now,
+  })
+  const turn = store.resolve({ ...input, accountId: "b" })
+  turn.remember("first-b")
+  turn.remember("queued-b")
+  store.invalidate("k", "s")
+  await store.invalidateAccount("a")
+  held.resolve()
+  await Bun.sleep(0)
+  expect(repo.writes.map((row) => row.sdkSessionId)).toEqual(["first-b", "queued-b", null])
+  expect(repo.rows.get("k::s")?.accountId).toBeNull()
+  turn.release()
+})

@@ -235,7 +235,7 @@ export function createSdkTestProbe(options: SdkTestProbeOptions): SdkTestProbe {
         }
       } catch (error) {
         if (error instanceof UpstreamAdmissionRefused) throw error
-        if (!upstreamStarted)
+        if (!upstreamStarted && input.beforeBackgroundUpstreamStart !== undefined)
           throw new UpstreamAdmissionRefused("SDK probe preparation unavailable")
         const failure = classifySdkFailure(error)
         return {

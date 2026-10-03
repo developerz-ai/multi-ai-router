@@ -302,6 +302,13 @@ while its URL is pending; its later URL cannot be registered for the deleted acc
 owner exit is awaited in the concurrent producer shutdown phase, while the first phase only
 closes admission and requests cancellation.
 
+Session invalidation revokes only the deleted account’s active turn and queued-write leases.
+Unrelated accounts continue to remember their bindings, and null-account clears remain valid.
+Reads whose account is unknown until the DB response use sequence tickets and bounded deletion
+history, pruned as those reads settle. Under history pressure, older unknown reads fail closed;
+that fallback does not cancel unrelated admitted turns or queued writes. No permanent in-memory
+account tombstone map grows with every deletion.
+
 CLI construction first registers an idle guardian. After SDK concurrency and credential waits,
 its preparation handshake reacquires the stable account lock and refuses a published tombstone.
 While that lock remains held, the background path rereads authoritative account identity and

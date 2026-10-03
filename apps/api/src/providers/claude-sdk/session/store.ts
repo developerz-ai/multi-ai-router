@@ -6,6 +6,7 @@ import {
   type SessionEntry,
 } from "./cache"
 import { readConversation } from "./conversation"
+import { createSessionDeletionFence } from "./deletion-fence"
 import { scopedKey, sessionFingerprint } from "./fingerprint"
 import { claimSessionTurn, createSessionClaims, type SessionClaims } from "./inflight"
 import { hashMessages, resolveLineage, type SessionPlan } from "./lineage"
@@ -120,13 +121,11 @@ export function createSessionStore(deps: SessionStoreDeps): SessionStore {
     negativeTtlMs: deps.cache?.negativeTtlMs ?? DEFAULT_SESSION_CACHE_NEGATIVE_TTL_MS,
     ...(deps.cache?.now === undefined ? {} : { now: deps.cache.now }),
   })
-
-  /** Which conversations are mid-turn right now. Per store, never a process singleton. */
   const claims: SessionClaims = createSessionClaims()
-
-  // One generation fences in-flight reads, turns, and queued writes without deletion tombstones.
-  let generation = 0
-  const write = createSessionWrites(deps.repository, () => generation, deps.onError)
+  const fence = createSessionDeletionFence(
+    Math.max(1, deps.cache?.maxEntries ?? DEFAULT_SESSION_CACHE_MAX_ENTRIES),
+  )
+  const write = createSessionWrites(deps.repository, fence, deps.onError)
 
   return {
     async binding(apiKeyId, sessionKey) {
@@ -134,17 +133,20 @@ export function createSessionStore(deps: SessionStoreDeps): SessionStore {
       const cached = cache.get(key)
       if (cached !== undefined) return cached ?? undefined
 
-      const readingGeneration = generation
+      const reading = fence.read()
       let row: SessionRow | undefined
       try {
         row = await deps.repository.findByKey(apiKeyId, sessionKey)
       } catch (error) {
         // Not cached: a transient read failure must not be remembered as "no binding".
+        reading.release()
         deps.onError?.("read", error)
         return undefined
       }
 
-      if (readingGeneration !== generation) return undefined
+      const valid = reading.valid(row?.accountId ?? null)
+      reading.release()
+      if (!valid) return undefined
       const entry = entryOf(row)
       cache.set(key, entry)
       return entry ?? undefined
@@ -166,7 +168,7 @@ export function createSessionStore(deps: SessionStoreDeps): SessionStore {
     },
 
     async invalidateAccount(accountId) {
-      generation++
+      fence.invalidate(accountId)
       cache.dropAccount(accountId)
       try {
         await deps.repository.clearAccount(accountId)
@@ -177,7 +179,6 @@ export function createSessionStore(deps: SessionStoreDeps): SessionStore {
     },
 
     resolve(input) {
-      const turnGeneration = generation
       const conversation = readConversation(input.body)
       const key = scopedKey(input.apiKeyId, input.sessionKey)
       const fingerprint =
@@ -215,14 +216,18 @@ export function createSessionStore(deps: SessionStoreDeps): SessionStore {
       // next real turn resumes from — the durable lineage advanced by a request nobody saw.
       if (!claim.held) return { plan, remember: () => {}, release: claim.release }
 
+      const lease = fence.hold(input.accountId)
       const hashes = hashMessages(conversation.messages)
       const carried = plan.kind === "fresh" ? [] : (session?.lineage.assistantUuids ?? [])
 
       return {
         plan,
-        release: claim.release,
+        release: () => {
+          claim.release()
+          lease.release()
+        },
         remember: (sdkSessionId, assistantUuid) => {
-          if (turnGeneration !== generation || !claim.own(sdkSessionId)) return
+          if (!lease.valid() || !claim.own(sdkSessionId)) return
           const lineage = nextLineage(hashes, carried, assistantUuid)
           cache.set(key, { accountId: input.accountId, sdkSessionId, lineage })
           if (fingerprint !== null) cache.alias(fingerprint, key)
