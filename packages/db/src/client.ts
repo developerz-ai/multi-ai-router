@@ -9,6 +9,12 @@ export type SqlConnection = ReturnType<typeof postgres>
 /** A Drizzle instance typed against the full router schema. */
 export type Database = PostgresJsDatabase<typeof schema>
 
+/** Query surface shared by a pooled database and one transaction (including savepoints). */
+export type DatabaseExecutor = Pick<
+  Database,
+  "select" | "insert" | "update" | "delete" | "execute" | "transaction"
+>
+
 export interface DatabaseOptions {
   /** PostgreSQL 16+ connection string, from `DATABASE_URL`. */
   readonly url: string

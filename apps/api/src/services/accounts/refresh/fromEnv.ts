@@ -29,7 +29,7 @@ export interface RefresherFromEnvDeps {
   readonly env: Pick<Env, "oauthRefresh" | "failover">
   readonly logger: Logger
   readonly now: () => Date
-  readonly catalog: Pick<RoutingCatalogStore, "refresh">
+  readonly catalog: Pick<RoutingCatalogStore, "refreshAfterMutation">
 }
 
 export function refresherFromEnv(deps: RefresherFromEnvDeps): CredentialRefresher {
@@ -46,6 +46,6 @@ export function refresherFromEnv(deps: RefresherFromEnvDeps): CredentialRefreshe
       maxAttempts: deps.env.oauthRefresh.maxAttempts,
       timeoutMs: deps.env.failover.upstreamTimeoutMs,
     },
-    onStatusChanged: () => deps.catalog.refresh(),
+    onStatusChanged: () => deps.catalog.refreshAfterMutation(),
   })
 }

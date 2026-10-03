@@ -13,7 +13,7 @@ step() { printf '\n\033[1m▸ %s\033[0m\n' "$*"; }
 die()  { printf '\033[0;31m✘\033[0m  %s\n' "$*" >&2; exit 1; }
 
 step "Checking prerequisites"
-command -v bun    >/dev/null || die "bun not found — https://bun.sh"
+bin/lib/require-bun
 command -v docker >/dev/null || die "docker not found — the dev database runs in a container"
 docker info >/dev/null 2>&1  || die "docker is installed but not running"
 ok "bun $(bun --version), docker present and running"

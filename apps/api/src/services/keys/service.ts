@@ -1,14 +1,9 @@
-import { generateRouterKey, routerKeyDisplayPrefix } from "@multi-ai-router/core"
-import type {
-  AccountRepository,
-  ApiKeyRepository,
-  ApiKeyRow,
-  PoolRepository,
-} from "@multi-ai-router/db"
+import type { AdminMutationRepository, ApiKeyRepository, ApiKeyRow } from "@multi-ai-router/db"
 import { AUDIT_KINDS, AUDIT_SUBJECTS, type AuditRecorder } from "../admin/audit"
-import { type AdminResult, conflict, invalid, notFound, ok } from "../admin/result"
+import { type AdminResult, notFound, ok } from "../admin/result"
+import { createKeyMutations, type KeyMutationKind } from "./mutations"
 import type { CreateKeyBody, UpdateKeyBody } from "./schemas"
-import { type ResolvedScope, resolveScopeInput } from "./scope"
+import { readKeyTargets } from "./snapshot"
 import { type ApiKeyView, type RevealedKey, toKeyView } from "./view"
 
 /**
@@ -38,20 +33,11 @@ export interface KeysService {
 export interface KeysServiceDeps {
   readonly keys: Pick<
     ApiKeyRepository,
-    | "create"
-    | "list"
-    | "findById"
-    | "findByName"
-    | "update"
-    | "delete"
-    | "markRevoked"
-    | "listPoolTargets"
-    | "listAccountTargets"
-    | "listTargetsForKeys"
-    | "replaceScopeTargets"
+    "list" | "findById" | "listPoolTargets" | "listAccountTargets" | "listTargetsForKeys"
   >
-  readonly pools: Pick<PoolRepository, "findByIds">
-  readonly accounts: Pick<AccountRepository, "findByIds">
+  readonly mutations: AdminMutationRepository
+  /** Runs immediately after commit, before rendering a response. */
+  readonly onCommitted: (id: string, kind: KeyMutationKind) => void
   readonly cipher: { encrypt(plaintext: string): string; decrypt(envelope: string): string }
   readonly audit: AuditRecorder
   readonly now: () => Date
@@ -60,21 +46,9 @@ export interface KeysServiceDeps {
 }
 
 export function createKeysService(deps: KeysServiceDeps): KeysService {
-  const generate = deps.generate ?? generateRouterKey
-
-  const targetsOf = async (id: string) => ({
-    poolIds: (await deps.keys.listPoolTargets(id)).map((row) => row.poolId),
-    accountIds: (await deps.keys.listAccountTargets(id)).map((row) => row.accountId),
-  })
-
   const load = async (id: string): Promise<AdminResult<ApiKeyRow>> => {
     const row = await deps.keys.findById(id)
     return row === undefined ? notFound(`no key with id "${id}"`) : ok(row)
-  }
-
-  const nameTaken = async (name: string, exceptId?: string): Promise<boolean> => {
-    const existing = await deps.keys.findByName(name)
-    return existing !== undefined && existing.id !== exceptId
   }
 
   return {
@@ -95,101 +69,7 @@ export function createKeysService(deps: KeysServiceDeps): KeysService {
 
     get: async (id) => {
       const found = await load(id)
-      return found.ok ? ok(toKeyView(found.value, await targetsOf(id))) : found
-    },
-
-    create: async (body) => {
-      const scope = await resolveScopeInput(deps, body.scope ?? { kind: "all" })
-      if (!scope.ok) return scope
-
-      const expiry = checkExpiry(body.expiresAt, deps.now())
-      if (!expiry.ok) return expiry
-
-      if (await nameTaken(body.name)) {
-        return conflict(`a key named "${body.name}" already exists`)
-      }
-
-      const value = generate()
-      const prefix = routerKeyDisplayPrefix(value)
-      if (prefix === null) {
-        // The generator and the prefix function are both in core and agree by
-        // construction; a mismatch is a bug in this process, not a bad request.
-        throw new Error("key generation produced a value with no valid display prefix")
-      }
-
-      const row = await deps.keys.create({
-        name: body.name,
-        value: deps.cipher.encrypt(value),
-        prefix,
-        scope: scope.value.kind,
-        rateLimitRequests: body.rateLimit?.requests ?? null,
-        rateLimitWindowSeconds: body.rateLimit?.windowSeconds ?? null,
-        expiresAt: body.expiresAt ?? null,
-      })
-      await deps.keys.replaceScopeTargets(row.id, scope.value)
-
-      await deps.audit.record({
-        kind: AUDIT_KINDS.keyCreated,
-        subjectType: AUDIT_SUBJECTS.key,
-        subjectId: row.id,
-        // Never the value, never the ciphertext, never the prefix: a name, the
-        // scope shape, and how many targets it names.
-        detail: {
-          name: row.name,
-          scope: row.scope,
-          poolCount: scope.value.poolIds.length,
-          accountCount: scope.value.accountIds.length,
-          expires: row.expiresAt !== null,
-        },
-      })
-
-      return ok({ ...toKeyView(row, scope.value), value })
-    },
-
-    update: async (id, body) => {
-      const found = await load(id)
-      if (!found.ok) return found
-
-      const expiry = checkExpiry(body.expiresAt ?? undefined, deps.now())
-      if (!expiry.ok) return expiry
-
-      let scope: ResolvedScope | null = null
-      if (body.scope !== undefined) {
-        const resolved = await resolveScopeInput(deps, body.scope)
-        if (!resolved.ok) return resolved
-        scope = resolved.value
-      }
-
-      if (body.name !== undefined && (await nameTaken(body.name, id))) {
-        return conflict(`a key named "${body.name}" already exists`)
-      }
-
-      const row = await deps.keys.update(
-        id,
-        {
-          ...(body.name === undefined ? {} : { name: body.name }),
-          ...(scope === null ? {} : { scope: scope.kind }),
-          ...(body.rateLimit === undefined
-            ? {}
-            : {
-                rateLimitRequests: body.rateLimit?.requests ?? null,
-                rateLimitWindowSeconds: body.rateLimit?.windowSeconds ?? null,
-              }),
-          ...(body.expiresAt === undefined ? {} : { expiresAt: body.expiresAt }),
-        },
-        deps.now(),
-      )
-      if (row === undefined) return notFound(`no key with id "${id}"`)
-      if (scope !== null) await deps.keys.replaceScopeTargets(id, scope)
-
-      await deps.audit.record({
-        kind: AUDIT_KINDS.keyUpdated,
-        subjectType: AUDIT_SUBJECTS.key,
-        subjectId: row.id,
-        detail: { name: row.name, fields: Object.keys(body).sort(), scope: row.scope },
-      })
-
-      return ok(toKeyView(row, await targetsOf(id)))
+      return found.ok ? ok(toKeyView(found.value, await readKeyTargets(deps.keys, id))) : found
     },
 
     reveal: async (id) => {
@@ -212,49 +92,6 @@ export function createKeysService(deps: KeysServiceDeps): KeysService {
       })
     },
 
-    revoke: async (id) => {
-      const found = await load(id)
-      if (!found.ok) return found
-      if (found.value.revoked) {
-        return conflict(`key "${found.value.name}" is already revoked`, "already_revoked")
-      }
-
-      const now = deps.now()
-      await deps.keys.markRevoked(id, now)
-
-      await deps.audit.record({
-        kind: AUDIT_KINDS.keyRevoked,
-        subjectType: AUDIT_SUBJECTS.key,
-        subjectId: id,
-        detail: { name: found.value.name },
-      })
-
-      // Revocation is immediate for new requests; in-flight ones finish.
-      const revoked: ApiKeyRow = { ...found.value, revoked: true, revokedAt: now, updatedAt: now }
-      return ok(toKeyView(revoked, await targetsOf(id)))
-    },
-
-    remove: async (id) => {
-      const found = await load(id)
-      if (!found.ok) return found
-
-      const deleted = await deps.keys.delete(id)
-      if (!deleted) return notFound(`no key with id "${id}"`)
-
-      await deps.audit.record({
-        kind: AUDIT_KINDS.keyDeleted,
-        subjectType: AUDIT_SUBJECTS.key,
-        subjectId: id,
-        detail: { name: found.value.name },
-      })
-
-      return ok({ id, deleted: true })
-    },
+    ...createKeyMutations(deps),
   }
-}
-
-/** A key minted already expired works for exactly no requests; say so at the door. */
-function checkExpiry(expiresAt: Date | undefined, now: Date): AdminResult<null> {
-  if (expiresAt === undefined || expiresAt.getTime() > now.getTime()) return ok(null)
-  return invalid(`"expiresAt" is in the past: ${expiresAt.toISOString()}`, "expiry_in_past")
 }

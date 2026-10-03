@@ -13,6 +13,7 @@
  * requested-side inverse of that same check rather than a second, hand-kept opinion of it.
  */
 
+import { ownEntry } from "@multi-ai-router/core"
 import type { AccountSnapshot } from "./types"
 
 export interface ModelResolution {
@@ -25,7 +26,8 @@ export interface ModelResolution {
 }
 
 export function resolveModel(account: AccountSnapshot, requestedModel: string): ModelResolution {
-  const alias = account.modelAliases?.[requestedModel]
+  const entry = ownEntry(account.modelAliases, requestedModel)
+  const alias = typeof entry === "string" ? entry : undefined
   const upstreamModel = alias ?? requestedModel
   const declared = account.supportedModels
 

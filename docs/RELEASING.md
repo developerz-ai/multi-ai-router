@@ -112,11 +112,13 @@ Nothing here is manual or ad hoc — if a step needs to change, it changes in
 
 The `Dockerfile` pins `oven/bun` by **version and index digest** on both
 stages, and `.github/workflows/ci.yml` pins `BUN_VERSION` to the same version.
+The developer pin in `.bun-version` matches both; `bin/setup` and `bin/check`
+refuse another version before installing dependencies or checking the database.
 That is what makes the image run the bun the suite was tested on, and what
 makes a rebuild of an old tag reproduce the old image rather than whatever
 `:1` resolves to today.
 
-To move it — one commit, all four places:
+Move the runtime pins together in one commit:
 
 ```sh
 docker buildx imagetools inspect oven/bun:X.Y.Z        # copy the top-level Digest:
@@ -125,8 +127,10 @@ docker buildx imagetools inspect oven/bun:X.Y.Z-slim   # …and this one
 
 Use the **top-level** `Digest:` (the manifest list), never a per-arch entry: a
 per-arch digest resolves on one release runner and fails on the other. Then
-update `BUN_VERSION` in `ci.yml`, and `engines.bun` in the root `package.json`
-if the floor moves. `bin/check` fails until all of them agree
+update both `FROM` versions and digests plus their `bun --version` assertions,
+`BUN_VERSION` in `ci.yml`, `.bun-version`, and `engines.bun` in the root
+`package.json` if the supported floor moves. Select the new Bun binary in `PATH`
+before running `bin/check`; the gate fails until all runtime pins agree
 (`apps/api/test/integration/image-pins.test.ts`), and the build itself fails if
 a digest turns out to name a bun other than the tag beside it.
 

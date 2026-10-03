@@ -1,6 +1,6 @@
 import type { RoutingPolicy } from "@multi-ai-router/core"
 import { asc, eq, inArray } from "drizzle-orm"
-import type { Database } from "../client"
+import type { DatabaseExecutor } from "../client"
 import { type PoolMemberRow, type PoolRow, poolMembers, pools } from "../schema/pools"
 
 /**
@@ -68,7 +68,7 @@ export interface PoolMemberInput {
   readonly priority?: number
 }
 
-export function createPoolRepository(db: Database): PoolRepository {
+export function createPoolRepository(db: DatabaseExecutor): PoolRepository {
   return {
     create: async (input) => {
       const rows = await db

@@ -667,25 +667,27 @@ stays visible to the operator. It just does not answer the client.
 ### Overflow (optional, opt-in)
 
 A Pool may designate one of its **members** as the **overflow Account** — typically a paid API key
-— used **only** when every other member is cooling down or exhausted.
+— selected for a new session only when every other member is ineligible.
 
 | Property | Value |
 |---|---|
 | Default | **Off.** Spending real money is opted into, never inferred. |
 | Membership | **The overflow must be a member of the Pool.** The designation withholds that membership from the policy; it never admits an Account from outside. |
 | Trigger | The primary candidate set — the members *other than* the overflow — is empty after filtering. Not on a single 429, not on latency. |
+| Existing session | A healthy, in-scope binding to the overflow remains first when primary members recover. A disabled, removed or out-of-scope overflow cannot regain eligibility through the binding. |
 | Scope | The same intersection as everything else, `pool_members ∩ key_scope`, with no exception for the overflow. |
 | Visibility | Every overflow-served request is marked as such in its `UsageRecord`, so "why did we spend money last night" has an answer. |
 
 Overflow is distinct from `priority-failover`: that policy orders the pool's own members;
-overflow is a member of last resort that is otherwise invisible to the policy.
+overflow is a member of last resort, included only when primary candidates are unavailable or an
+existing session is already bound to it.
 
 **Why membership is required.** The candidate set is `pool_members ∩ key_scope` and nothing
 widens it. An overflow outside the membership sits outside that intersection: a key scoped to
 pool `team-a` would spend a corporate Account it never named — and see its models in `/v1/models`
 — the instant every member of `team-a` cooled down. Requiring membership keeps the invariant true
 by construction and costs the operator nothing: put the paid key in the pool, mark it the
-overflow, and it stays held back until it is the only thing left. The admin plane refuses a write
+overflow, and it stays held back for new sessions until it is the only thing left. The admin plane refuses a write
 that would break the rule (`overflow_not_member`, `400`), including an edit that drops the
 overflow's own membership, and routing ignores an overflow reference that predates the rule
 rather than honoring it.

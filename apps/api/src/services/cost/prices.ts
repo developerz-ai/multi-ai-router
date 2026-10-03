@@ -1,4 +1,4 @@
-import { ProviderId } from "@multi-ai-router/core"
+import { ownEntry, ProviderId } from "@multi-ai-router/core"
 import { type ModelRates, type ModelTable, modelLookupKeys, type ShippedRate } from "./rates"
 import { ANTHROPIC_MODELS } from "./tables/anthropic"
 import { CEREBRAS_MODELS } from "./tables/cerebras"
@@ -84,7 +84,7 @@ export function lookupRates(provider: ProviderId, model: string): ModelRates | n
   const table = PRICES[provider]
   if (table === undefined) return null
   const [name, family] = modelLookupKeys(model)
-  return table[name] ?? table[family] ?? null
+  return ownEntry(table, name) ?? ownEntry(table, family) ?? null
 }
 
 /**

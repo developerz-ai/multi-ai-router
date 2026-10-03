@@ -43,6 +43,49 @@ describe("resolveModel", () => {
     })
     expect(resolveModel(stale, "sonnet").supported).toBe(false)
   })
+
+  for (const name of ["constructor", "toString", "__proto__"]) {
+    test(`treats ${name} as an ordinary model unless explicitly aliased`, () => {
+      const plain = account("a", { modelAliases: {}, supportedModels: [name] })
+      expect(resolveModel(plain, name)).toEqual({
+        upstreamModel: name,
+        supported: true,
+        aliased: false,
+      })
+      const explicit = account("a", {
+        modelAliases: Object.fromEntries([[name, "approved-model"]]),
+        supportedModels: ["approved-model"],
+      })
+      expect(resolveModel(explicit, name)).toEqual({
+        upstreamModel: "approved-model",
+        supported: true,
+        aliased: true,
+      })
+    })
+  }
+
+  test("an inherited string alias cannot change admission against the declared models", () => {
+    const modelAliases: Record<string, string> = {}
+    Object.setPrototypeOf(modelAliases, { sonnet: "approved-model" })
+    const inherited = account("a", { modelAliases, supportedModels: ["approved-model"] })
+    expect(resolveModel(inherited, "sonnet")).toEqual({
+      upstreamModel: "sonnet",
+      supported: false,
+      aliased: false,
+    })
+  })
+
+  test("malformed persisted aliases leave model admission and identity unchanged", () => {
+    for (const value of [42, null, false, {}, []]) {
+      const modelAliases = JSON.parse(JSON.stringify({ sonnet: value })) as Record<string, string>
+      const malformed = account("a", { modelAliases, supportedModels: ["sonnet"] })
+      expect(resolveModel(malformed, "sonnet")).toEqual({
+        upstreamModel: "sonnet",
+        supported: true,
+        aliased: false,
+      })
+    }
+  })
 })
 
 describe("advertisedModels", () => {

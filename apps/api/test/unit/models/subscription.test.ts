@@ -70,6 +70,20 @@ describe("building a subscription's catalog rows", () => {
     expect(row?.resolvedModel).toBe(CLAUDE_SUBSCRIPTION_ALIASES.opus)
   })
 
+  for (const id of ["constructor", "toString", "__proto__"]) {
+    test(`an unknown live model named ${id} cannot inherit a shipped alias`, () => {
+      const [row] = subscriptionCatalog([{ id, resolvedModel: null, displayName: null }])
+      expect(row).toEqual({
+        modelId: id,
+        resolvedModel: null,
+        contextTokens: null,
+        maxOutputTokens: null,
+        contextSource: null,
+        listingSource: "live",
+      })
+    })
+  }
+
   test("the shipped fallback is every shipped model plus every alias, labelled shipped", () => {
     const rows = shippedSubscriptionCatalog()
 

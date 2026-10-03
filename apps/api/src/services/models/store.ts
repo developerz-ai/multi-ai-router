@@ -4,6 +4,7 @@ import {
   ModelListingSource,
 } from "@multi-ai-router/core"
 import type { ModelCatalogRow } from "@multi-ai-router/db"
+import { createSnapshotRefresh } from "../snapshots/refresh"
 
 /**
  * The warm model catalog: what each Account's upstream last said it serves, held in memory and
@@ -16,9 +17,9 @@ import type { ModelCatalogRow } from "@multi-ai-router/db"
  * Everything that can be slow is a `refresh`.
  *
  * Refreshed the three ways the price book is: awaited at boot, on a jittered timer so an hourly
- * sweep run by *another* replica lands here without a broker, and — unlike the price book — never
- * awaited by an admin write, because nothing an operator does through the console writes this
- * table. Only the sweep does.
+ * sweep run by *another* replica lands here without a broker, and after discovery writes such as
+ * a newly completed subscription login. Post-write refreshes wait for a new read; they never join
+ * a query that could have started before the discovery committed.
  *
  * A failed refresh keeps the previous snapshot: a slightly stale catalog beats an empty one, and an
  * empty one reads as "this router serves nothing".
@@ -41,6 +42,8 @@ export interface ModelCatalogStore {
   modelsOf(accountId: string): readonly ModelDescriptor[]
   /** Re-reads the table. Rejects on failure, leaving the last good snapshot in place. */
   refresh(): Promise<void>
+  /** A discovery just wrote new rows; do not join an older read. */
+  refreshAfterMutation(): Promise<void>
   /** Begins periodic refresh. Idempotent. */
   start(): void
   stop(): void
@@ -68,22 +71,10 @@ export function createModelCatalogStore(deps: ModelCatalogStoreDeps): ModelCatal
   let snapshot: Snapshot = EMPTY
   let loadedAt: Date | null = null
   let timer: ReturnType<typeof setTimeout> | null = null
-  // Concurrent refreshes would be two identical queries racing to install the same snapshot;
-  // callers share the one in flight instead.
-  let inFlight: Promise<void> | null = null
-
-  const refresh = (): Promise<void> => {
-    inFlight ??= deps
-      .load()
-      .then((rows) => {
-        snapshot = index(rows)
-        loadedAt = now()
-      })
-      .finally(() => {
-        inFlight = null
-      })
-    return inFlight
-  }
+  const { refresh, refreshAfterMutation } = createSnapshotRefresh(deps.load, (rows) => {
+    snapshot = index(rows)
+    loadedAt = now()
+  })
 
   const schedule = (): void => {
     timer = setTimeout(() => {
@@ -100,6 +91,7 @@ export function createModelCatalogStore(deps: ModelCatalogStoreDeps): ModelCatal
       snapshot.get(accountId)?.get(upstreamModel.trim().toLowerCase()) ?? null,
     modelsOf: (accountId) => [...(snapshot.get(accountId)?.values() ?? [])],
     refresh,
+    refreshAfterMutation,
     start: () => {
       if (timer === null) schedule()
     },

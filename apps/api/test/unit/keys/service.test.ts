@@ -20,9 +20,9 @@ function harness(now: Date = NOW): {
 } {
   const store = createMemoryStore()
   const service = createKeysService({
+    mutations: store.mutations,
+    onCommitted: () => {},
     keys: store.keys,
-    pools: store.pools,
-    accounts: store.accounts,
     cipher: createCredentialCipher({ key: new Uint8Array(32).fill(3) }),
     audit: createAuditRecorder(store.audit),
     now: () => now,

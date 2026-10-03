@@ -177,10 +177,8 @@ export interface AdminAuthConfig {
   /** How long a tripped throttle key stays locked. */
   readonly loginLockoutMinutes: number
   /**
-   * How long a session's idle-window slide may go unpersisted. An operator clicking around gets
-   * one `admin_sessions` write per interval instead of one per request; the in-memory value is
-   * authoritative for every response regardless — see `services/admin-auth/service.ts`. `0` is
-   * legal and means "persist every slide".
+   * How long a session's idle-window slide may go unpersisted. Must be shorter than the idle
+   * window so a persisted session cannot expire before its next slide. `0` persists every slide.
    */
   readonly sessionTouchIntervalSeconds: number
   /**
@@ -934,6 +932,19 @@ const envSchema = boundedEnvSchema.transform((raw, ctx): Env => {
     return z.NEVER
   }
 
+  const sessionIdleMinutes = raw.ADMIN_SESSION_IDLE_MINUTES ?? 43_200
+  const sessionTouchIntervalSeconds = raw.ADMIN_SESSION_TOUCH_INTERVAL_SECONDS ?? 60
+  if (sessionTouchIntervalSeconds >= sessionIdleMinutes * 60) {
+    ctx.addIssue({
+      code: "custom",
+      path: ["ADMIN_SESSION_TOUCH_INTERVAL_SECONDS"],
+      message:
+        `must be less than ADMIN_SESSION_IDLE_MINUTES * 60 (${sessionIdleMinutes * 60} seconds) ` +
+        `so an active session is persisted before its idle window expires`,
+    })
+    return z.NEVER
+  }
+
   const usageDays = raw.RETENTION_USAGE_DAYS ?? 90
   // Two years of daily aggregates: long enough that "what did this cost me last year" is still
   // answerable, and the first bound this table has ever had.
@@ -1082,14 +1093,14 @@ const envSchema = boundedEnvSchema.transform((raw, ctx): Env => {
       // sessions now live in Postgres — the eight-hour idle window only ever logged the operator
       // out. The trade (a stolen cookie lives up to 30 d; logout is a real invalidation) is
       // written down in docs/idea/13-admin-oidc.md.
-      sessionIdleMinutes: raw.ADMIN_SESSION_IDLE_MINUTES ?? 43_200,
+      sessionIdleMinutes,
       sessionAbsoluteHours: raw.ADMIN_SESSION_ABSOLUTE_HOURS ?? 720,
       loginMaxAttempts: raw.ADMIN_LOGIN_MAX_ATTEMPTS ?? 5,
       loginMaxConcurrent: raw.ADMIN_LOGIN_MAX_CONCURRENT ?? 4,
       loginMaxTrackedIps: raw.ADMIN_LOGIN_MAX_TRACKED_IPS ?? 10_000,
       loginAttemptWindowMinutes: raw.ADMIN_LOGIN_ATTEMPT_WINDOW_MINUTES ?? 15,
       loginLockoutMinutes: raw.ADMIN_LOGIN_LOCKOUT_MINUTES ?? 15,
-      sessionTouchIntervalSeconds: raw.ADMIN_SESSION_TOUCH_INTERVAL_SECONDS ?? 60,
+      sessionTouchIntervalSeconds,
       sessionCacheMax: raw.ADMIN_SESSION_CACHE_MAX ?? 1_000,
       sessionRevalidateSeconds: raw.ADMIN_SESSION_REVALIDATE_SECONDS ?? 60,
       sessionCookieInsecure: raw.SESSION_COOKIE_INSECURE ?? false,

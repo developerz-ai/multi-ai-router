@@ -1,6 +1,6 @@
 import type { KeyScope } from "@multi-ai-router/core"
 import { and, asc, eq, gt, inArray, isNull, or } from "drizzle-orm"
-import type { Database } from "../client"
+import type { DatabaseExecutor } from "../client"
 import {
   type ApiKeyAccountRow,
   type ApiKeyPoolRow,
@@ -106,7 +106,7 @@ export interface ScopeTargetRows {
   readonly accounts: readonly ApiKeyAccountRow[]
 }
 
-export function createApiKeyRepository(db: Database): ApiKeyRepository {
+export function createApiKeyRepository(db: DatabaseExecutor): ApiKeyRepository {
   return {
     findUsableByPrefix: (prefix, now) =>
       db

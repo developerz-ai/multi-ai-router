@@ -1,6 +1,5 @@
 import type { AccountsService } from "../accounts"
-import type { KeysService } from "../keys"
-import type { PoolsService } from "../pools"
+import type { KeyMutationKind } from "../keys"
 import type { AdminResult } from "./result"
 
 /**
@@ -12,11 +11,10 @@ import type { AdminResult } from "./result"
  * in the console still routes, and a revoked key still authenticates, until the
  * cache expires.
  *
- * These decorators pay it at the moment of the write. They are **decorators and
- * not service dependencies** deliberately: cache coherence is not the accounts
- * service's reason to change, and a service that knew about the catalog could no
- * longer be tested without one. Each service stays a pure CRUD unit; this file
- * is the only thing that knows a cache exists.
+ * Account decorators and committed-mutation callbacks pay it at the moment of
+ * the write. Services report a committed domain change without knowing which
+ * caches it affects. Key callbacks run before response mapping, so a committed
+ * revocation cannot remain cached if subsequent response work fails.
  *
  * A hook runs **only on success**. A rejected write changed nothing, so
  * refreshing after it would be a query bought for no reason — and on the failure
@@ -34,6 +32,8 @@ export interface CoherenceHooks {
   readonly refreshCatalog: () => Promise<void>
   /** Drops one key from the verification cache. */
   readonly invalidateKey: (keyId: string) => void
+  /** Drops authorization and rate-limit state after revocation or deletion. */
+  readonly forgetKey: (keyId: string) => void
 }
 
 /** Runs `after` when the result succeeded, then returns the result untouched. */
@@ -63,45 +63,12 @@ export function withCatalogRefresh(
   }
 }
 
-/** Pool membership, policy, and the overflow account are all read from the catalog. */
-export function withPoolCatalogRefresh(
-  service: PoolsService,
-  hooks: Pick<CoherenceHooks, "refreshCatalog">,
-): PoolsService {
-  return {
-    list: () => service.list(),
-    get: (id) => service.get(id),
-    create: async (body) => onSuccess(await service.create(body), hooks.refreshCatalog),
-    update: async (id, body) => onSuccess(await service.update(id, body), hooks.refreshCatalog),
-    remove: async (id) => onSuccess(await service.remove(id), hooks.refreshCatalog),
-  }
-}
-
-/**
- * Key writes invalidate that key's cache entry and nothing else.
- *
- * `revoke` and `remove` are the two that must not wait for a TTL — a withdrawal
- * of access that takes effect in sixty seconds is not a withdrawal. `update` is
- * included because it can narrow a scope, which is the same thing by degrees.
- * `create` is absent on purpose: a key that does not exist yet cannot be cached,
- * and the negative-cache TTL is short precisely so a freshly minted key starts
- * working without one.
- *
- * Invalidation is by id, so it is applied to the id in the request rather than
- * to the returned view — `remove` returns a receipt, not a key.
- */
-export function withKeyInvalidation(
-  service: KeysService,
-  hooks: Pick<CoherenceHooks, "invalidateKey">,
-): KeysService {
-  return {
-    list: () => service.list(),
-    get: (id) => service.get(id),
-    create: (body) => service.create(body),
-    reveal: (id) => service.reveal(id),
-    update: async (id, body) =>
-      onSuccess(await service.update(id, body), () => hooks.invalidateKey(id)),
-    revoke: async (id) => onSuccess(await service.revoke(id), () => hooks.invalidateKey(id)),
-    remove: async (id) => onSuccess(await service.remove(id), () => hooks.invalidateKey(id)),
-  }
+/** Runs immediately after a committed key mutation, before response mapping or other work. */
+export function keyMutationCommitted(
+  hooks: Pick<CoherenceHooks, "invalidateKey" | "forgetKey">,
+  keyId: string,
+  kind: KeyMutationKind,
+): void {
+  if (kind === "update") hooks.invalidateKey(keyId)
+  else if (kind === "revoke" || kind === "remove") hooks.forgetKey(keyId)
 }

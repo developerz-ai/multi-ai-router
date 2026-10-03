@@ -124,7 +124,6 @@ jobs:
   bench:
     runs-on: ubuntu-24.04
     timeout-minutes: 10
-    needs: test
     permissions:
       contents: read
     # Report, not a gate: CLAUDE.md non-negotiable 8 makes both the <5ms p99 overhead budget and the

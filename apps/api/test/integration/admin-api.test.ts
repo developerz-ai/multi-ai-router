@@ -173,10 +173,10 @@ function harness(
     adminPoolRoutes({
       guard,
       service: createPoolsService({
+        mutations: store.mutations,
+        onCommitted: () => {},
         pools: store.pools,
         accounts: store.accounts,
-        keys: store.keys,
-        audit,
         now,
       }),
     }),
@@ -186,9 +186,9 @@ function harness(
     adminKeyRoutes({
       guard,
       service: createKeysService({
+        mutations: store.mutations,
+        onCommitted: () => {},
         keys: store.keys,
-        pools: store.pools,
-        accounts: store.accounts,
         cipher,
         audit,
         now,

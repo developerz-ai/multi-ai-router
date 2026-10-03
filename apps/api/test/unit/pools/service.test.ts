@@ -1,6 +1,5 @@
 import { describe, expect, test } from "bun:test"
 import { RoutingPolicy } from "@multi-ai-router/core"
-import { createAuditRecorder } from "../../../src/services/admin"
 import { createPoolBody, createPoolsService, updatePoolBody } from "../../../src/services/pools"
 import { createMemoryStore, type MemoryStore } from "../../support/memory-store"
 
@@ -17,10 +16,10 @@ const MISSING = "11111111-1111-4111-8111-111111111111"
 function harness(): { service: ReturnType<typeof createPoolsService>; store: MemoryStore } {
   const store = createMemoryStore()
   const service = createPoolsService({
+    mutations: store.mutations,
+    onCommitted: () => {},
     pools: store.pools,
     accounts: store.accounts,
-    keys: store.keys,
-    audit: createAuditRecorder(store.audit),
     now: () => NOW,
   })
   return { service, store }

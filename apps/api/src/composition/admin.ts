@@ -3,6 +3,7 @@ import {
   type AdminCredentialRepository,
   type ApiKeyRepository,
   type AuditRepository,
+  createAdminMutationRepository,
   createUsageReadRepository,
   createUsageRecentRepository,
   type Database,
@@ -40,9 +41,8 @@ import {
 import {
   type CoherenceHooks,
   createAuditRecorder,
+  keyMutationCommitted,
   withCatalogRefresh,
-  withKeyInvalidation,
-  withPoolCatalogRefresh,
 } from "../services/admin"
 import {
   adminAuthConfigFromEnv,
@@ -70,10 +70,9 @@ import type { AdminServices } from "../types"
  * Two rules hold across the whole bundle, and both are why it is built in one place rather than per
  * route:
  *
- * 1. **A CRUD service knows nothing about caches.** The `services/admin/coherence.ts` decorators
- *    make an admin write take effect on the request path *before* the response is written. Without
- *    them, an account disabled in the console keeps routing and a revoked key keeps authenticating
- *    until a TTL ends.
+ * 1. **A CRUD service knows nothing about caches.** Committed-mutation callbacks and account
+ *    decorators apply writes to the warm caches before the response. Key/pool writes and audits
+ *    commit atomically; their callbacks run before response mapping.
  * 2. **The console reaches into the data plane exactly twice, on purpose.** `recheck` clears an
  *    account's breaker marks and the settings service refreshes the price book. Neither can touch a
  *    request in flight.
@@ -155,6 +154,7 @@ export interface AdminPlane {
 export function createAdminPlane(deps: AdminPlaneDeps): AdminPlane {
   const { env, logger, now, accounts, keys, cipher, catalog, health, configDirs } = deps
   const audit = createAuditRecorder(deps.auditEvents)
+  const mutations = createAdminMutationRepository(deps.database)
 
   // Both halves of running the `claude` binary against an account's directory, and every login flow
   // behind the one service the admin plane mounts.
@@ -315,14 +315,21 @@ export function createAdminPlane(deps: AdminPlaneDeps): AdminPlane {
       // request path, `withAvailability` answers a read with what the router currently observes
       // rather than with the row the operator last wrote.
       accounts: decoratedAccounts,
-      pools: withPoolCatalogRefresh(
-        createPoolsService({ pools: deps.pools, accounts, keys, audit, now }),
-        deps.coherence,
-      ),
-      keys: withKeyInvalidation(
-        createKeysService({ keys, pools: deps.pools, accounts, cipher, audit, now }),
-        deps.coherence,
-      ),
+      pools: createPoolsService({
+        pools: deps.pools,
+        accounts,
+        now,
+        mutations,
+        onCommitted: () => deps.coherence.refreshCatalog(),
+      }),
+      keys: createKeysService({
+        keys,
+        cipher,
+        audit,
+        now,
+        mutations,
+        onCommitted: (id, kind) => keyMutationCommitted(deps.coherence, id, kind),
+      }),
       usage: createUsageService({
         usage: createUsageReadRepository(deps.database),
         recent: createUsageRecentRepository(deps.database),
@@ -343,7 +350,7 @@ export function createAdminPlane(deps: AdminPlaneDeps): AdminPlane {
         now,
         // Read-after-write on cost: a saved override is pricing requests by the time the console
         // sees the response, the same guarantee the coherence decorators give the catalog.
-        onPricesChanged: () => deps.prices.refresh(),
+        onPricesChanged: () => deps.prices.refreshAfterMutation(),
       }),
       recheck,
       testNow,

@@ -1,6 +1,6 @@
 import { and, asc, inArray, lt, type SQL } from "drizzle-orm"
 import type { PgColumn, PgTable } from "drizzle-orm/pg-core"
-import type { Database } from "../client"
+import type { DatabaseExecutor } from "../client"
 
 /**
  * The one shape every retention sweep deletes with. Stated once here rather than
@@ -20,7 +20,7 @@ import type { Database } from "../client"
  * non-negotiable 11); this function is handed a cutoff.
  */
 export interface BoundedDeleteOptions {
-  readonly db: Database
+  readonly db: DatabaseExecutor
   readonly table: PgTable
   /** The primary key the batch is deleted by. */
   readonly id: PgColumn

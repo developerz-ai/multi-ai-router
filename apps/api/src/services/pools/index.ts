@@ -3,6 +3,7 @@
  * nothing outside this directory reaches into a file inside it.
  */
 
+export type { PoolMutationKind } from "./mutations"
 export type { CreatePoolBody, PoolMemberInputBody, UpdatePoolBody } from "./schemas"
 export { createPoolBody, poolMemberInput, updatePoolBody } from "./schemas"
 export type { PoolsService, PoolsServiceDeps } from "./service"

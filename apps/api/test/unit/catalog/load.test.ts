@@ -37,8 +37,7 @@ function row(overrides: Partial<AccountRow> = {}): AccountRow {
 
 function sources(rows: readonly AccountRow[]): CatalogSources {
   return {
-    accounts: { list: async () => [...rows], listQuotaWindows: async () => [] },
-    pools: { list: async () => [], listMembersForPools: async () => [] },
+    read: async () => ({ accounts: [...rows], pools: [], members: [], windows: [] }),
   }
 }
 

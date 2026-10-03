@@ -5,6 +5,7 @@ import {
   createAdminSessionRepository,
   createApiKeyRepository,
   createAuditRepository,
+  createCatalogSnapshotRepository,
   createModelCatalogRepository,
   createOauthStateRepository,
   createPoolRepository,
@@ -211,8 +212,9 @@ export function createRuntime(deps: RuntimeDeps): Runtime {
       statusWriter.forget(accountId)
     },
   })
+  const catalogSnapshots = createCatalogSnapshotRepository(database)
   const catalog = createRoutingCatalog({
-    load: () => loadCatalog({ accounts, pools }),
+    load: () => loadCatalog(catalogSnapshots),
     refreshIntervalMs: env.dataPlane.catalogRefreshSeconds * 1_000,
     now,
   })
@@ -397,7 +399,7 @@ export function createRuntime(deps: RuntimeDeps): Runtime {
   const refreshSubscriptionModels = createSubscriptionModelRefresh({
     accounts,
     refresh: (account, at) => refreshAccountCatalog(catalogRefreshDeps, account, at),
-    onRefreshed: () => modelCatalogStore.refresh(),
+    onRefreshed: () => modelCatalogStore.refreshAfterMutation(),
     logger: logger.child({ component: "model-catalog" }),
     now,
   })
@@ -457,9 +459,10 @@ export function createRuntime(deps: RuntimeDeps): Runtime {
     refreshSubscriptionModels,
     sessionStore: adminSessions,
     coherence: {
-      refreshCatalog: () => catalog.refresh(),
-      // A revoked key must stop authenticating *and* stop occupying a rate-limit window.
-      invalidateKey: (keyId: string) => {
+      refreshCatalog: () => catalog.refreshAfterMutation(),
+      // Editing authorization does not reset a key's already-spent rate-limit window.
+      invalidateKey: (keyId: string) => verifier.invalidate(keyId),
+      forgetKey: (keyId: string) => {
         verifier.invalidate(keyId)
         limiter.forget(keyId)
       },

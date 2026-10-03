@@ -7,7 +7,7 @@
 export type { AuditEventInput, AuditRecorder, AuditSink } from "./audit"
 export { AUDIT_KINDS, AUDIT_SUBJECTS, createAuditRecorder } from "./audit"
 export type { CoherenceHooks } from "./coherence"
-export { withCatalogRefresh, withKeyInvalidation, withPoolCatalogRefresh } from "./coherence"
+export { keyMutationCommitted, withCatalogRefresh } from "./coherence"
 export { readJsonBody, validate, validateId } from "./parse"
 export type { AdminFailure, AdminFailureStatus, AdminResult } from "./result"
 export { conflict, failureBody, invalid, notFound, ok } from "./result"

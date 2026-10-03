@@ -72,6 +72,10 @@ business knowing a table.
 **The HTTP status comes from the error instance.** `error.status` and `error.code` are fixed at class
 declaration. Nothing may re-derive a status from a route, a code string, or a second mapping table.
 
+`ownEntry(record, key)` in `packages/core/src/own-entry.ts` reads only an own dictionary entry,
+returning `undefined` for inherited names or an absent dictionary. Use it for model aliases and
+shipped lookup tables whose key comes from a request or upstream response.
+
 ### Domain types & enums — `packages/core/src/domain/`
 
 | Export | Where | Use it when |
@@ -108,6 +112,8 @@ Each is a Zod schema **and** its `z.infer` type under one name. These are the si
 
 | Thing | Where | Use it when |
 |---|---|---|
+| `createCatalogSnapshotRepository(db)` | `repositories/catalog-snapshot-repository.ts` | Reading accounts, pools, memberships and quota windows from one repeatable-read snapshot before mapping a warm routing catalog |
+| `createAdminMutationRepository(db)` | `repositories/admin-mutation-repository.ts` | Key/pool row, scope/membership and audit operations on one transaction-bound connection; name and row locks precede validation. Commit callbacks run only after the returned transaction succeeds |
 | `createDatabase(options)` → `{ db, sql, close }`, `DATABASE_POOL_DEFAULTS` | `packages/db/src/client.ts` | Opening a pool. A factory, not a singleton — no side effects at import; the owner closes it. Size, the three timeouts and the `close()` deadline are all options, and the API's `DB_POOL_*` schema defaults to the exported constants so an unset variable and the documented default cannot drift |
 | `Database`, `DatabaseHandle`, `SqlConnection`, `DatabaseOptions` | same | Typing anything that takes a handle. `databaseProbe.ts` takes `Pick<DatabaseHandle, "sql">` |
 | `runMigrations({ url })`, `defaultMigrationsFolder()` | `packages/db/src/migrate.ts` | Boot, tests, `bun run migrate`. Advisory-locked and idempotent |
@@ -185,7 +191,8 @@ rejection shape, a body read, or an audit write.
 | `AdminResult<T>`, `ok`, `invalid`, `notFound`, `conflict`, `failureBody` | `services/admin/result.ts` | Reporting an admin CRUD outcome. **Not** a `RouterError` — those are data-plane request outcomes with fixed statuses, and borrowing one points the console at the wrong layer. Only `400` / `404` / `409` exist here; nothing on this plane is a 5xx |
 | `readJsonBody(request)`, `validate(schema, input)`, `validateId(value)` | `services/admin/parse.ts` | The two things every admin route does before calling a service. Hono-free — they take a `Request` and an `unknown` |
 | `createAuditRecorder(sink)`, `AUDIT_KINDS`, `AUDIT_SUBJECTS`, `AuditSink` | `services/admin/audit.ts` | Any admin mutation. Every detail object passes through the tested redactor **inside** the recorder, so the "audit events never contain credential material" guarantee is structural rather than trusted at each call site |
-| `withCatalogRefresh`, `withPoolCatalogRefresh`, `withKeyInvalidation`, `CoherenceHooks` | `services/admin/coherence.ts` | Making a write take effect on the request path before the response is written. **Decorators, not service dependencies** — cache coherence is not a CRUD service's reason to change, and a service that knew about the catalog could not be tested without one |
+| `withCatalogRefresh`, `keyMutationCommitted`, `CoherenceHooks` | `services/admin/coherence.ts` | Applying committed admin changes to warm routing/auth state before response mapping. Key edits invalidate authorization without resetting rate-limit usage; revoke/delete discard both |
+| `createSnapshotRefresh(load, install)` | `services/snapshots/refresh.ts` | Shared serial snapshot loading for routing, prices and model catalogs. Ordinary refreshes coalesce; mutation barriers wait for a post-write read to install, obsolete reads cannot replace it, and failures preserve the last good snapshot |
 | `render(c, result, status?)` | `routes/admin/render.ts` | The one place an `AdminResult` becomes a response. Four copies of it is four chances for one to answer `200` with an error body |
 
 ### Settings, task health and the audit feed — `apps/api/src/services/settings/`
