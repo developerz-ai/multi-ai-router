@@ -43,7 +43,13 @@ export function createRequestAccounting(
     fail(error: unknown) {
       const status = toErrorResponse(error, input.ingress).status
       if (!recorded) {
-        const elapsed = Math.max(0, clock.elapsed() - progress.requestStarted)
+        const finished = clock.elapsed()
+        const elapsed = Math.max(0, finished - progress.requestStarted)
+        const bodyReadMs =
+          progress.bodyReadMs +
+          (progress.bodyReadWaitingSince === undefined
+            ? 0
+            : Math.max(0, finished - progress.bodyReadWaitingSince))
         record(
           attemptRecord({
             ...input.identity,
@@ -64,7 +70,7 @@ export function createRequestAccounting(
               latencyMs: elapsed,
               totalMs: elapsed,
               upstreamMs: 0,
-              bodyReadMs: progress.bodyReadMs,
+              bodyReadMs,
             },
             outcome: error instanceof ClientCancelledError ? "client_error" : outcomeOf(error),
             streamed: false,

@@ -490,6 +490,8 @@ Operator check claims do not retain a database lock across CLI work. Their bound
 | `createRequestAccounting(...)` | `services/dataplane/request-accounting.ts` | Once-only request accounting across pre-model refusal, real attempts and shutdown; no sentinel model |
 | `createActiveRequestRegistry({maximumEntries})` | `services/dataplane/active-requests.ts` | Bounded authenticated lifetimes; closes admission, settles held callbacks before abort, releases entries without waiting for upstream promises |
 | `requestLifetime(...)` / `attemptLifetime(...)` | `services/dataplane/request-lifetime.ts`, `attempt-lifetime.ts` | Admission and actual-start provenance; shutdown before start remains account-null, late producers cannot add a second record |
+| `readTrackedRequestBody(...)` | `services/dataplane/body-progress.ts` | Completed and outstanding upload waits remain distinct from router processing, including forced shutdown before read callbacks settle |
+| `cancelledBeforeRelay(...)` | `services/dataplane/chain-cancellation.ts` | Pre-relay cancellation retains an already received upstream status and releases the request lease even when body cancellation remains pending |
 | `createResponseObserver(spec)` | `services/usage/response-observer.ts` | Bounded upstream-dialect structural usage and protocol evidence; immutable facts, exact byte relay unaffected by observation overflow |
 | `createResponseFraming(...)` | `services/usage/response-framing.ts` | Bounded JSON/SSE framing, discard oversized observation to a frame boundary without manufacturing failure |
 | `createRelayTerminal()` | `services/dataplane/relay-terminal.ts` | First causal verdict, validated EOF policy, cancellation/shutdown distinctions; provider classification keeps fault outcome |

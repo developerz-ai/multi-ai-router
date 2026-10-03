@@ -34,6 +34,7 @@ export interface BodyReadOptions extends ScannerOptions {
   readonly maxBytes?: number
   /** Injected monotonic clock; only time awaiting reads is reported. */
   readonly elapsed?: () => number
+  readonly onReadWaitStart?: (started: number) => void
   readonly onReadWait?: (milliseconds: number) => void
 }
 
@@ -78,6 +79,7 @@ export async function readRequestBody(
   try {
     for (;;) {
       const started = elapsed()
+      options.onReadWaitStart?.(started)
       let reading: BodyChunk
       try {
         reading = await readAbortable(reader, options.signal)

@@ -15,6 +15,11 @@ import { attemptLifetime } from "./attempt-lifetime"
 import { logAttemptFailure } from "./attempt-log"
 import type { ByteSpan } from "./body/scanner"
 import { bodyFor } from "./chain-body"
+import {
+  assertUnstartedCancellation,
+  cancelledBeforeRelay,
+  isCancelledOutcome,
+} from "./chain-cancellation"
 import { answeredFailure, type ChainFailure, foldChainFailure, routerFailure } from "./chain-error"
 import { finishChain } from "./chain-finish"
 import { invalidPreparation } from "./chain-preparation"
@@ -86,7 +91,11 @@ export async function runChain(ctx: ChainContext): Promise<Response> {
   let upstreamMs = 0
 
   for (;;) {
-    if (ctx.request.signal.aborted) throw ctx.request.signal.reason ?? new ClientCancelledError()
+    if (ctx.request.signal.aborted) {
+      runtime.activeRequest?.release()
+      if (held !== null) return finishChain(held, lastFailure, refusals.failIfAny)
+      throw ctx.request.signal.reason ?? new ClientCancelledError()
+    }
     const decision = planNextAttempt(ordered, progress, lastFailure, ctx.failover)
     if (decision.action === "stop") break
 
@@ -180,6 +189,7 @@ export async function runChain(ctx: ChainContext): Promise<Response> {
       continue
     }
     lifetime.assertRunning(outcome.kind === "success" ? outcome.response : undefined)
+    assertUnstartedCancellation(outcome, lifetime.started(), ctx.request.signal)
     if (outcome.kind === "success") lifetime.onStarted()
 
     if (
@@ -202,28 +212,15 @@ export async function runChain(ctx: ChainContext): Promise<Response> {
       continue
     }
 
-    if (
-      ctx.request.signal.aborted &&
-      (outcome.kind === "success" || outcome.failure.kind === "client-error")
-    ) {
+    if (ctx.request.signal.aborted && (outcome.kind === "success" || isCancelledOutcome(outcome))) {
       recovery?.finish("uncertain")
-      if (outcome.kind === "success") void outcome.response.body?.cancel().catch(() => {})
       lifetime.end()
       probe.release()
       upstreamMs += runtime.clock.elapsed() - upstreamStarted
-      recordAttemptFailure(
-        ctx,
-        servable,
-        decision.attempt,
-        {
-          kind: "client-error",
-          status: 499,
-          message: "client cancelled the request",
-        },
-        null,
-        { ...at, upstreamMs },
-      )
-      return new Response(null, { status: 499 })
+      return cancelledBeforeRelay(runtime, servable, decision.attempt, outcome, {
+        ...at,
+        upstreamMs,
+      })
     }
 
     // Applied after the verdict, never before: `recordSuccess`'s unconditional reset to `active`

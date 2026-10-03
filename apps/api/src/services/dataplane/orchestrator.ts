@@ -2,8 +2,8 @@ import type { RouterError } from "@multi-ai-router/core"
 import { type FailoverOptions, selectAccounts } from "../routing"
 import { createRequestIdentity, type UsageRequestIdentity } from "../usage/request-identity"
 import { missingModelError, modelTooLongError, refuseEncodedBody } from "./body/preflight"
-import { readRequestBody } from "./body/read"
 import { DEFAULT_SESSION_HEADERS, resolveSessionKey } from "./body/session"
+import { readTrackedRequestBody } from "./body-progress"
 import { runChain } from "./chain"
 import type { Dispatcher, DispatcherDeps, DispatchInput } from "./dispatcher-config"
 import { DEFAULT_UPSTREAM_TIMEOUT_MS } from "./dispatcher-config"
@@ -66,14 +66,7 @@ export function createDispatcher(deps: DispatcherDeps): Dispatcher {
 
     refuseEncodedBody(input.request.headers)
 
-    const body = await readRequestBody(input.request, {
-      ...options.body,
-      signal: input.request.signal,
-      elapsed: () => clock.elapsed(),
-      onReadWait: (milliseconds) => {
-        progress.bodyReadMs += milliseconds
-      },
-    })
+    const body = await readTrackedRequestBody(input.request, options.body, progress, clock)
     input.request.signal.throwIfAborted()
     const model = body.fields.model
     // Before the "name a model" refusal, because the body *did* name one and saying otherwise

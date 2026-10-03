@@ -787,6 +787,11 @@ incompletion is upstream_error with upstream_incomplete, preserved partial count
 strike. Required completion markers are checked only for descriptors that declare them, and
 unavailable evidence cannot prove truncation. Clean completion followed by later abort remains
 success. Upstream/client statuses and response bytes are preserved after commitment.
+An upstream error status received before caller cancellation retains its provider verdict;
+an SDK deadline that fires first remains 504 after a later caller abort. Pre-relay cancellation
+retains any received upstream status, returns 499 and releases its request lease without awaiting
+body cancellation. Upload waits still outstanding at forced shutdown are excluded from router
+processing overhead, while their elapsed time remains part of request latency.
 
 Selecting an account or constructing an idle SDK guardian is not proof an upstream attempt began.
 HTTP transport admission and the SDK guardian's confirmed B/start evidence establish attribution;
