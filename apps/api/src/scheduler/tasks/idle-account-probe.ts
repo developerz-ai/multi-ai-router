@@ -90,6 +90,7 @@ export const IDLE_PROBE_MODELS: Readonly<Record<string, string>> = {
   "openai-api": "gpt-5",
   minimax: "MiniMax-M2",
   zai: "glm-4.6",
+  kimi: "k2",
 }
 
 /**
@@ -105,13 +106,13 @@ export interface IdleProbeTestResult {
 }
 
 export interface IdleAccountProbeDeps {
-  readonly accounts: Pick<AccountRepository, "list" | "findIdle" | "readEligibleBackgroundAccount">
+  readonly accounts: Pick<AccountRepository, "list" | "findIdle">
   /**
    * The billed half. Its own cooldown still applies, so an operator who just pressed "Test now" by
    * hand does not get a second charge from this task — the refusal comes back as `tested: false`
    * and is counted as a skip, not a failure.
    */
-  readonly test: (accountId: string, model: string, expected: AccountRow) => Promise<IdleProbeTestResult>
+  readonly test: (accountId: string, model: string) => Promise<IdleProbeTestResult>
   /**
    * The free half. Answers `null` for an account with no CLI-managed credential, so it is asked of
    * every account and only the subscriptions cost a subprocess. Absent means no CLI is available:
@@ -181,9 +182,6 @@ export function createIdleAccountProbeTask(deps: IdleAccountProbeDeps): Schedule
             const answer = await checkCredential(deps.auth, account, logger, tally)
             if (answer === "logged-out") loggedOut.add(account.id)
             if (answer !== "logged-in") continue
-            if (await deps.accounts.readEligibleBackgroundAccount(account.id, account) === undefined) {
-              tally.skipped++; continue
-            }
             // The order is the fix: a real turn crosses the refresh and persists it; only then may
             // a turn-free read touch the directory. A cold account that could not be warmed is
             // left alone entirely — `openIdleQuery` would refuse it anyway.

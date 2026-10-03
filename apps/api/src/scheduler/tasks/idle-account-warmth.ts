@@ -77,7 +77,7 @@ export type KeepAliveResult = "ok" | "spent" | "failed" | "skipped"
  * ~245 MB subprocess and a billed turn.
  */
 export async function warm(
-  deps: Pick<IdleAccountProbeDeps, "test" | "models" | "warmCredentials" | "batchSize" | "accounts">,
+  deps: Pick<IdleAccountProbeDeps, "test" | "models" | "warmCredentials" | "batchSize">,
   account: AccountRow,
   logger: Logger,
   tally: Tally,
@@ -140,17 +140,13 @@ export async function readUsage(
  * the account's state stays whatever real traffic and those readings last made it.
  */
 export async function keepAlive(
-  deps: Pick<IdleAccountProbeDeps, "test" | "accounts">,
+  deps: Pick<IdleAccountProbeDeps, "test">,
   account: AccountRow,
   model: string,
   logger: Logger,
   tally: Tally,
 ): Promise<KeepAliveResult> {
-  if (await deps.accounts.readEligibleBackgroundAccount(account.id, account) === undefined) {
-    tally.skipped++; return "skipped"
-  }
-  // Captured identity also reaches the final launch guard after its transport waits.
-  const result = await deps.test(account.id, model, account)
+  const result = await deps.test(account.id, model)
   if (!result.tested) {
     // Its own cooldown declined — an operator tested it moments ago. Nothing was billed.
     tally.skipped += 1

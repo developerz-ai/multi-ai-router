@@ -4,7 +4,7 @@
   "observed_on": "2026-10-03",
   "full_gate": {
     "status": "passed",
-    "source_log": "/tmp/router-wave4-final-check.log",
+    "source_log": "/tmp/router-pr148-corrected-check.log",
     "passed_tests": 4733,
     "failed_tests": 0,
     "test_files": 362,
