@@ -7,6 +7,7 @@ import { breakerOptionsFor } from "./health"
 import type { HealthObservation } from "./health-observation"
 import type { ServableCandidate } from "./plan"
 import { attemptRecord, failureOutcome, SUCCESS_OUTCOME } from "./records"
+import type { RecoveryAttempt } from "./recovery-access"
 import { relayResponse } from "./relay"
 import { ClientCancelledError } from "./relay-cancellation"
 import { relayTranslatedResponse } from "./relay-translate"
@@ -41,6 +42,7 @@ export interface AttemptClock {
  * carries the open end here and `settle` closes it at the last relayed byte.
  */
 export interface SuccessClock extends AttemptClock {
+  readonly recovery?: RecoveryAttempt
   readonly upstreamStarted: number
   readonly observation?: HealthObservation
 }
@@ -78,12 +80,16 @@ export function relaySuccess(
     const cancelled = ctx.request?.signal.aborted === true || error instanceof ClientCancelledError
     const timedOut = error instanceof Error && error.name === "TimeoutError"
     const failureKind = cancelled ? "client-error" : timedOut ? "timeout" : "connection"
+    at.recovery?.finish(cancelled ? "uncertain" : failed ? "failed" : "succeeded")
     if (failed && !cancelled) {
       ctx.runtime.health.recordFailure(
         servable.account.id,
         { kind: failureKind, message: "upstream response stream failed" },
         ctx.runtime.clock.now(),
-        breakerOptionsFor(servable.driver.authKind),
+        {
+          ...breakerOptionsFor(servable.driver.authKind),
+          recoveryProbe: at.recovery?.designated ?? false,
+        },
         at.observation,
       )
     }

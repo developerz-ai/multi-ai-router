@@ -4,6 +4,10 @@ import type { OauthStateRow } from "../schema/oauth-states"
 import type { UpdateAccountInput } from "./account-types"
 
 export interface AccountObservation {
+  /** Undefined retains legacy observation behavior; null fences absence of a recovery row. */
+  readonly recoveryGeneration?: string | null
+  /** External operator checks may mutate only while their durable lease is owned. */
+  readonly operatorCheckToken?: string
   readonly lifecycleVersion: number
   readonly authMaterial: string | null
   readonly status: AccountStatus

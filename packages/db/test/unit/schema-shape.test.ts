@@ -38,6 +38,8 @@ const TABLE_COLUMNS: ReadonlyArray<{ table: Table; columns: readonly string[] }>
   {
     table: schema.quotaWindows,
     columns: [
+      "evidenceState",
+      "blocksRouting",
       "retiredAt",
       "revision",
       "id",

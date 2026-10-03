@@ -3,8 +3,12 @@ import type { DatabaseExecutor } from "../client"
 import { accounts } from "../schema/accounts"
 import { oauthStates } from "../schema/oauth-states"
 import type { AccountAuthorizationMethods } from "./account-lifecycle-types"
+import { publishAccountRecovery } from "./account-recovery-generation"
 
-export function createAccountAuthorization(db: DatabaseExecutor): AccountAuthorizationMethods {
+export function createAccountAuthorization(
+  db: DatabaseExecutor,
+  recoveryCooldownMs = 30_000,
+): AccountAuthorizationMethods {
   return {
     beginAccountAuthorization: ({ id, expectedProvider, attempt, now }) =>
       db.transaction(async (tx) => {
@@ -60,27 +64,31 @@ export function createAccountAuthorization(db: DatabaseExecutor): AccountAuthori
       authMaterial,
       tokenExpiresAt,
       now,
-    }) => {
-      const rows = await db
-        .update(accounts)
-        .set({
-          authMaterial,
-          tokenExpiresAt,
-          updatedAt: now,
-          lifecycleVersion: sql`${accounts.lifecycleVersion} + 1`,
-          authRecoveryVersion: sql`${accounts.authRecoveryVersion} + 1`,
-          authorizationAttemptId: null,
-          status: sql`case when ${accounts.status} = 'needs_reauth' then 'active'::account_status else ${accounts.status} end`,
-        })
-        .where(
-          and(
-            eq(accounts.id, id),
-            eq(accounts.lifecycleVersion, expectedLifecycleVersion),
-            eq(accounts.authorizationAttemptId, attemptId),
-          ),
-        )
-        .returning()
-      return rows[0]
-    },
+    }) =>
+      db.transaction(async (tx) => {
+        const rows = await tx
+          .update(accounts)
+          .set({
+            authMaterial,
+            tokenExpiresAt,
+            updatedAt: now,
+            lifecycleVersion: sql`${accounts.lifecycleVersion} + 1`,
+            authRecoveryVersion: sql`${accounts.authRecoveryVersion} + 1`,
+            authorizationAttemptId: null,
+            status: sql`case when ${accounts.status} = 'needs_reauth' then 'active'::account_status else ${accounts.status} end`,
+          })
+          .where(
+            and(
+              eq(accounts.id, id),
+              eq(accounts.lifecycleVersion, expectedLifecycleVersion),
+              eq(accounts.authorizationAttemptId, attemptId),
+            ),
+          )
+          .returning()
+        const account = rows[0]
+        if (account !== undefined)
+          await publishAccountRecovery(tx, account, recoveryCooldownMs, "authentication-recovered")
+        return account
+      }),
   }
 }

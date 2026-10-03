@@ -178,6 +178,7 @@ export function AccountsTable(props: AccountsTableProps) {
           accountId={account.id}
           busy={props.recheckingId === account.id}
           lastCheckedAt={account.availability?.lastCheckedAt ?? null}
+          recovery={account.availability?.recovery}
           nowMs={props.nowMs}
           onRecheck={props.onRecheck}
         />

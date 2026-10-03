@@ -63,6 +63,7 @@ export function createAccountStatusWriter(deps: AccountStatusWriterDeps): Accoun
             lifecycleVersion: observation.lifecycleVersion,
             authMaterial: observation.authMaterial,
             status: observation.status,
+            recoveryGeneration: observation.recoveryGeneration,
           },
           status,
           now: deps.now(),

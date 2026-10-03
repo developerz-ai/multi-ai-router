@@ -1,6 +1,7 @@
 import type { QuotaWindowKind } from "@multi-ai-router/core"
 import { sql } from "drizzle-orm"
 import {
+  boolean,
   check,
   doublePrecision,
   index,
@@ -43,6 +44,11 @@ export const quotaWindows = pgTable(
      */
     window: text("window").$type<QuotaWindowKind>().notNull(),
     revision: integer("revision").notNull().default(0),
+    evidenceState: text("evidence_state")
+      .$type<"current" | "expired" | "superseded_by_recovery">()
+      .notNull()
+      .default("current"),
+    blocksRouting: boolean("blocks_routing").notNull().default(true),
     retiredAt: timestamp("retired_at", { withTimezone: true, mode: "date" }),
 
     /** Fraction of the window consumed, 0..1. NULL is a valid, expected reading. */

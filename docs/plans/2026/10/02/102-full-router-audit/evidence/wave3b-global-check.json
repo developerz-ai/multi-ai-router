@@ -1,0 +1,100 @@
+{
+  "wave": "W3B global recovery",
+  "state": "implemented_reviewed_validated_pending_merge",
+  "observed_on": "2026-10-03",
+  "gate": {
+    "status": "passed on reviewed final revision including expired-claim DTO correction",
+    "first_attempt": {
+      "passed_tests": 4637,
+      "failed_tests": 1,
+      "limit": "Old breaker assertion corrected; this is not a final passing gate."
+    },
+    "source_log": "/tmp/router-pr147-final-check.log",
+    "passed_tests": 4675,
+    "failed_tests": 0,
+    "test_files": 348,
+    "lint": "passed",
+    "typecheck": "passed",
+    "build": "passed",
+    "assertions": 40669,
+    "observed_generation_suites": [
+      "packages/db/test/integration/account-observation-generation.test.ts",
+      "apps/api/test/unit/accounts/observation-generation.test.ts"
+    ],
+    "operator_check_claim_suites": "Actual API and DB operator claim suites included"
+  },
+  "actual_focused_evidence": {
+    "global_pg18_integration": {
+      "passed_tests": 7,
+      "assertions": 46,
+      "replicas": 2,
+      "concurrent_requests": 200,
+      "designated_mock_starts": 1,
+      "refusals_429": 199
+    },
+    "warm_quota_floor_ranking": {
+      "passed_tests": 189
+    },
+    "atomic_auth_publication": "Current actual DB calls publishAccountRecovery in the account mutation transaction for CLI confirmation, passive auth recovery, browser commit, credential replacement and enable; repository integration coverage exists.",
+    "pg16_observed_generation": {
+      "passed_tests": 2,
+      "assertions": 7
+    },
+    "pg16_lifecycle_publication": {
+      "passed_tests": 14,
+      "assertions": 56
+    },
+    "operator_check_claims_pg16_pg18_each": {
+      "passed_tests": 2,
+      "assertions": 11
+    }
+  },
+  "benchmark": {
+    "status": "passed on reviewed production-enabled harness",
+    "artifact": "wave3b-global-bench.json",
+    "source_artifact": "/tmp/router-pr147-reviewed-bench.json",
+    "samples": 8000,
+    "failures": 0,
+    "buffered": 0,
+    "maximum_p99_ms": 0.65,
+    "violations": [],
+    "streaming_added_ttft_p95_ms": {
+      "passthrough": 0.05555465,
+      "translated": 0.14985435
+    },
+    "harness": "RecoveryAccess and final upstream-start guards enabled; off-path coordination sentinel; no DB/provider calls during benchmark"
+  },
+  "finding_assessment": {
+    "partial": [],
+    "previous_wave": [
+      "102:09.2 and101:02.10 merged inPR146"
+    ],
+    "implemented_validated_pending_review_merge": [
+      "102:03.5",
+      "102:03.6",
+      "101:02.4",
+      "101:02.8",
+      "101:02.3",
+      "102:03.2",
+      "101:02.1",
+      "101:02.15"
+    ]
+  },
+  "limits": [
+    "External review, merge, release and deployment pending; no live issuer compatibility assertion.",
+    "At-most-one designated start per durable generation; no remote exactly-once guarantee or instantaneous cross-replica catalog visibility.",
+    "No live provider calls."
+  ],
+  "historical_benchmark": {
+    "source_artifact": "/tmp/router-global-final-bench.json",
+    "maximum_p99_ms": 0.9681818181818183,
+    "scope": "Pre-review baseline; production recovery guard hook was not enabled in that harness. Not current admission-overhead evidence."
+  },
+  "changed_file_count": 132,
+  "review_fixes": [
+    "Durable operator-check lease before CLI and token-fenced authentication/finalization; same-service single-flight",
+    "Permit-consumption fencing and configured quota threshold before dispatch",
+    "Coherent UI timestamp/state generation and truthful busy-without-history DTO",
+    "Typed test fixtures and corrected docs/cooldown/provenance"
+  ]
+}

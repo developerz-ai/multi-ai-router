@@ -521,18 +521,19 @@ describe("a key that stays refused is re-tested less and less often", () => {
     expect(again.consecutiveFailures).toBe(1)
   })
 
-  test("once labeled, a server error on the probe keeps the label and counts toward the streak", () => {
-    // Pinned as it behaves, not as an ideal: a 5xx below the failure threshold leaves the labeled
-    // cooldown in place, so the next refusal steps past it. Bounded by the cap either way.
+  test("a server error on the probe renews the cooldown and counts toward the streak", () => {
     const refused = reject(HEALTHY, NOW)
     const probeAt = refused.cooldownUntil ?? NOW
     const flaky = recordFailure(refused, failure("server-error"), probeAt)
-    expect(flaky.cooldownReason).toBe("credential-rejected")
+    expect(flaky.status).toBe("cooling_down")
+    expect(flaky.cooldownUntil?.getTime()).toBeGreaterThan(probeAt.getTime())
     expect(flaky.consecutiveFailures).toBe(2)
 
-    const again = reject(flaky, probeAt)
-    expect(step(again, probeAt)).toBe(4 * BASE)
-    expect(again.consecutiveFailures).toBe(3)
+    // The transient probe result starts an ordinary cooldown; a later auth refusal is a new incident.
+    const againAt = flaky.cooldownUntil ?? probeAt
+    const again = reject(flaky, againAt)
+    expect(step(again, againAt)).toBe(BASE)
+    expect(again.consecutiveFailures).toBe(1)
   })
 
   test("a streak of server errors before it does not inflate the first refusal", () => {

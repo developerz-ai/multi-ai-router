@@ -29,8 +29,7 @@ import type { RoutingCatalog } from "./types"
  * Quota windows follow the same shape and for the same reason. The catalog hydrates what was
  * persisted, which is what a just-booted replica knows; this process's own readings usually say
  * more. `mergeQuotaWindows` settles it per kind by `lastCheckedAt` — what neither names survives,
- * and a stored row that is genuinely newer (another replica's reading, or the quota floor retiring
- * an expired window) is not overwritten by a stale in-memory copy of the same window.
+ * and durable retirement defeats same/older local facts through revision and tombstone metadata.
  */
 export function overlayHealth(
   account: AccountSnapshot,
@@ -71,16 +70,17 @@ export function overlayHealth(
 
 /**
  * A limiter reading as selection reads it: the name, the number, and how the number was come by.
- * `limit`, `remaining`, and the reset travel no further — nothing ranks or filters on them, and a
- * field carried without a reader is a field that drifts.
+ * Reset survives so ranking ignores expired facts. Limit and remaining are not consumed here.
  */
 function toLimiterReading(window: {
   readonly limiter: string
+  readonly resetsAt?: Date
   readonly utilization?: number
   readonly utilizationSource: LimiterReading["utilizationSource"]
 }): LimiterReading {
   return {
     limiter: window.limiter,
+    ...(window.resetsAt === undefined ? {} : { resetsAt: window.resetsAt }),
     utilizationSource: window.utilizationSource,
     ...(window.utilization === undefined ? {} : { utilization: window.utilization }),
   }

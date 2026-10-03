@@ -1,5 +1,6 @@
 import type { Options, SDKUserMessage } from "@anthropic-ai/claude-agent-sdk"
 import { query } from "@anthropic-ai/claude-agent-sdk"
+import { UpstreamAdmissionRefused } from "../upstream-admission"
 import { createCliProbe } from "./cli-probe"
 import type { SdkConcurrency, SdkSlot } from "./concurrency"
 import { ALWAYS_FRESH, type CredentialFreshness } from "./credential-freshness"
@@ -172,6 +173,8 @@ export function createSdkInvoker(deps: SdkInvokerDeps): SdkInvoker {
       const held = holdPrompt(prompt)
 
       try {
+        invocation.signal.throwIfAborted()
+        invocation.beforeUpstreamStart?.()
         const messages = runQuery({ prompt: held.prompt, options: started.options })
         // The gauge is asked of the query object itself — the SDK doing the request, inside this
         // Account's own config directory, with a credential this router never sees.
@@ -249,6 +252,7 @@ export function createSdkInvoker(deps: SdkInvokerDeps): SdkInvoker {
         report.fire()
         held.release()
         started.abort(error)
+        if (error instanceof UpstreamAdmissionRefused) throw error
         throw withStderr(error, stderr.tail())
       }
     }
@@ -260,6 +264,7 @@ export function createSdkInvoker(deps: SdkInvokerDeps): SdkInvoker {
       return await attempt(false, slot)
     } catch (error) {
       if (
+        invocation.beforeUpstreamStart?.singleStart !== true &&
         invocation.session.kind === "resume" &&
         classifySdkFailure(error).classification.kind === "busy-session"
       ) {

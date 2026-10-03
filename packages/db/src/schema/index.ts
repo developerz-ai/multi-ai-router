@@ -2,6 +2,9 @@
  * The schema barrel. Everything drizzle-kit reads and everything the Drizzle
  * client is typed against is re-exported here — one file per domain concern.
  */
+
+export * from "./account-operator-checks"
+export * from "./account-recoveries"
 export * from "./accounts"
 export * from "./admin-credentials"
 export * from "./admin-sessions"

@@ -18,12 +18,12 @@ import type { PolicyNote } from "../result"
 import type { Candidate } from "../types"
 import { accountIds, compareDeclared, type Policy, rotate, sortDeclared } from "./order"
 
-export const quotaAware: Policy = ({ candidates, rotationCounter }) => {
+export const quotaAware: Policy = ({ candidates, rotationCounter, now }) => {
   const ranked: { readonly candidate: Candidate; readonly headroom: number }[] = []
   const unranked: Candidate[] = []
 
   for (const candidate of candidates) {
-    const headroom = continuousHeadroom(candidate.account)
+    const headroom = continuousHeadroom(candidate.account, now)
     if (headroom === null) unranked.push(candidate)
     else ranked.push({ candidate, headroom })
   }

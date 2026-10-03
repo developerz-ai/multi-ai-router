@@ -5,6 +5,10 @@ import type {
   RateLimitSignal,
   UpstreamFailureKind,
 } from "../../providers"
+import {
+  UpstreamAdmissionRefused,
+  type UpstreamStartGuard,
+} from "../../providers/upstream-admission"
 import type { CredentialCipher } from "../crypto/cipher"
 import { type AttemptFailure, classifyStatus, type FailureKind } from "../routing"
 import { accountCredential } from "./egress/credential"
@@ -45,6 +49,7 @@ export interface AttemptInput {
   readonly cipher: Pick<CredentialCipher, "decrypt">
   readonly timeoutMs: number
   readonly errorMaxBytes?: number
+  readonly beforeUpstreamStart?: UpstreamStartGuard
   /** The client's own abort signal, so a client that goes away releases the upstream call. */
   readonly signal?: AbortSignal
 }
@@ -58,6 +63,7 @@ export interface UpstreamError {
 }
 
 export type AttemptOutcome =
+  | { readonly kind: "admission-refused" }
   | {
       readonly kind: "success"
       readonly response: Response
@@ -88,8 +94,11 @@ export async function runAttempt(input: AttemptInput): Promise<AttemptOutcome> {
 
   let response: Response
   try {
+    request.signal.throwIfAborted()
+    input.beforeUpstreamStart?.()
     response = await input.fetch(request)
   } catch (error) {
+    if (error instanceof UpstreamAdmissionRefused) return { kind: "admission-refused" }
     return {
       kind: "failure",
       failure: input.signal?.aborted

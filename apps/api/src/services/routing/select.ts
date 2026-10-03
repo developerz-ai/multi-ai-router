@@ -59,6 +59,7 @@ export function selectAccounts(
         : runPolicy(
             group.policy,
             {
+              now: snapshot.now,
               candidates: resolved.eligible,
               sessionKey: request.sessionKey,
               rotationCounter: group.rotationCounter,

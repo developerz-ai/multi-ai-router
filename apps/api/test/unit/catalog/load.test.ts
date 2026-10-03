@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test"
-import type { AccountRow } from "@multi-ai-router/db"
+import type { AccountRow, QuotaWindowRow, RecoveryRow } from "@multi-ai-router/db"
 import { type CatalogSources, loadCatalog } from "../../../src/services/catalog"
+import { accountRow as durableAccountRow } from "../../support/account-row"
 
 /**
  * What the warm routing catalog reads out of Postgres.
@@ -14,7 +15,7 @@ import { type CatalogSources, loadCatalog } from "../../../src/services/catalog"
 const EPOCH = new Date("2026-01-01T00:00:00.000Z")
 
 function row(overrides: Partial<AccountRow> = {}): AccountRow {
-  return {
+  return durableAccountRow({
     id: "11111111-1111-4111-8111-111111111111",
     label: "primary",
     provider: "anthropic-api",
@@ -32,12 +33,18 @@ function row(overrides: Partial<AccountRow> = {}): AccountRow {
     createdAt: EPOCH,
     updatedAt: EPOCH,
     ...overrides,
-  }
+  })
 }
 
 function sources(rows: readonly AccountRow[]): CatalogSources {
   return {
-    read: async () => ({ accounts: [...rows], pools: [], members: [], windows: [] }),
+    read: async () => ({
+      accounts: [...rows],
+      pools: [],
+      members: [],
+      windows: [],
+      recoveries: [],
+    }),
   }
 }
 
@@ -80,5 +87,66 @@ describe("what the catalog carries off the account row", () => {
       ]),
     )
     expect(accounts.map((account) => account.billing)).toEqual(["subscription", "metered"])
+  })
+})
+
+test("atomic catalog hydrates private recovery and public-safe routing evidence", async () => {
+  const account = row()
+  const recovery: RecoveryRow = {
+    accountId: account.id,
+    generation: crypto.randomUUID(),
+    revision: 2,
+    lifecycleVersion: account.lifecycleVersion,
+    credentialFingerprint: "internal-only",
+    state: "issued",
+    reason: "operator-recheck",
+    ownerBootId: crypto.randomUUID(),
+    ownershipEpoch: 1,
+    preparationLeaseUntil: null,
+    permitId: crypto.randomUUID(),
+    issuedAt: EPOCH,
+    outcomeAt: null,
+    requestedAt: EPOCH,
+    nextAllowedAt: EPOCH,
+    quotaRevisions: { five_hour: 1 },
+  }
+  const window: QuotaWindowRow = {
+    id: crypto.randomUUID(),
+    accountId: account.id,
+    window: "five_hour",
+    revision: 2,
+    evidenceState: "expired",
+    blocksRouting: false,
+    retiredAt: EPOCH,
+    utilization: null,
+    utilizationSource: "none",
+    resetsAt: null,
+    resetSource: "unknown",
+    lastCheckedAt: EPOCH,
+    createdAt: EPOCH,
+  }
+  const { accounts } = await loadCatalog({
+    read: async () => ({
+      accounts: [account],
+      pools: [],
+      members: [],
+      windows: [window],
+      recoveries: [recovery],
+    }),
+  })
+  expect(accounts[0]?.recovery).toEqual(recovery)
+  expect(accounts[0]?.snapshot.recovery).toMatchObject({
+    revision: 2,
+    generation: recovery.generation,
+    state: "issued",
+  })
+  expect(accounts[0]?.snapshot.recovery).not.toHaveProperty("permitId")
+  expect(accounts[0]?.snapshot.recovery).not.toHaveProperty("ownerBootId")
+  expect(accounts[0]?.snapshot.recovery).not.toHaveProperty("credentialFingerprint")
+  expect(accounts[0]?.snapshot.quotaWindows?.[0]).toMatchObject({
+    revision: 2,
+    retiredAt: EPOCH,
+    evidenceState: "expired",
+    blocksRouting: false,
   })
 })

@@ -69,6 +69,7 @@ import { createUsageRecorderFromEnv, type UsageRecorder } from "../services/usag
 import type { AdminServices } from "../types"
 import { createAdminPlane } from "./admin"
 import { dispatchOptionsFromEnv } from "./dispatch-options"
+import { createRecoveryComponents } from "./recovery"
 /**
  * The composition root: every long-lived object in the process is constructed here, exactly once,
  * and injected downward.
@@ -143,7 +144,9 @@ export function createRuntime(deps: RuntimeDeps): Runtime {
     connectTimeoutSeconds: env.databasePool.connectTimeoutSeconds,
     closeTimeoutSeconds: env.databasePool.closeTimeoutSeconds,
   })
-  const accounts = createAccountRepository(database)
+  const accounts = createAccountRepository(database, {
+    recoveryCooldownMs: env.recovery.cooldownMs,
+  })
   const keys = createApiKeyRepository(database)
   const pools = createPoolRepository(database)
   const auditEvents = createAuditRepository(database)
@@ -223,10 +226,12 @@ export function createRuntime(deps: RuntimeDeps): Runtime {
     },
   })
   let catalogAccountIds = new Set<string>()
+  let recoveryComponents: ReturnType<typeof createRecoveryComponents> | undefined
   const catalogSnapshots = createCatalogSnapshotRepository(database)
   const catalog = createRoutingCatalog({
     load: () => loadCatalog(catalogSnapshots),
     onInstalled: (loaded) => {
+      recoveryComponents?.reconcile(loaded)
       const nextIds = new Set(loaded.map((account) => account.id))
       for (const id of new Set([...catalogAccountIds, ...health.entries().keys()])) {
         if (!nextIds.has(id)) health.reset(id)
@@ -235,6 +240,15 @@ export function createRuntime(deps: RuntimeDeps): Runtime {
       for (const account of loaded) health.reconcile(account.id, accountHealthFacts(account))
     },
     refreshIntervalMs: env.dataPlane.catalogRefreshSeconds * 1_000,
+    now,
+  })
+  recoveryComponents = createRecoveryComponents({
+    database,
+    accounts,
+    catalog,
+    health,
+    config: env.recovery,
+    logger,
     now,
   })
   // The shipped price table plus the operator's overrides, held in memory for the same reason the
@@ -435,6 +449,7 @@ export function createRuntime(deps: RuntimeDeps): Runtime {
   })
 
   const dispatcher = createDispatcher({
+    recovery: recoveryComponents.access,
     catalog,
     health,
     cipher,
@@ -463,6 +478,7 @@ export function createRuntime(deps: RuntimeDeps): Runtime {
     database,
     accounts,
     refreshLock,
+    recovery: recoveryComponents,
     keys,
     pools,
     auditEvents,
@@ -568,6 +584,7 @@ export function createRuntime(deps: RuntimeDeps): Runtime {
       // Awaited: an empty catalog would look exactly like a deployment with no accounts.
       await catalog.refresh()
       catalog.start()
+      recoveryComponents?.coordinator.start()
       // Awaited for the weaker reason: an unloaded book prices off the shipped table, which is
       // wrong rather than absent, and a spend column that corrects itself a second later is worse
       // than one that was right from the first request.
@@ -598,6 +615,7 @@ export function createRuntime(deps: RuntimeDeps): Runtime {
     },
     stop: async () => {
       // First and awaited: a tick in flight holds a connection the caller's pool close would cut.
+      await recoveryComponents?.coordinator.stop()
       await scheduler.stop()
       await refresher.stop()
       await refreshLock.close()

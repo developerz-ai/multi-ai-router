@@ -32,8 +32,16 @@ export type {
   UpdateAccountInput,
 } from "./account-types"
 
-export function createAccountRepository(db: DatabaseExecutor): AccountRepository {
-  const lifecycle = createAccountLifecycle(db)
+export interface AccountRepositoryOptions {
+  /** Runtime injects the configured duration; 30s fallback supports standalone/test factories. */
+  readonly recoveryCooldownMs?: number
+}
+export function createAccountRepository(
+  db: DatabaseExecutor,
+  options: AccountRepositoryOptions = {},
+): AccountRepository {
+  const recoveryCooldownMs = options.recoveryCooldownMs ?? 30_000
+  const lifecycle = createAccountLifecycle(db, recoveryCooldownMs)
   const setStatus = async (
     id: string,
     status: AccountStatus,
@@ -49,7 +57,7 @@ export function createAccountRepository(db: DatabaseExecutor): AccountRepository
 
   return {
     ...lifecycle,
-    ...createAccountAuthorization(db),
+    ...createAccountAuthorization(db, recoveryCooldownMs),
     create: async (input) => {
       const rows = await db
         .insert(accounts)

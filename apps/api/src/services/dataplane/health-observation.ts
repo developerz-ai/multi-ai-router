@@ -7,12 +7,16 @@ export interface HealthAccountFacts {
   readonly authRecoveryVersion: number
   readonly authMaterial: string | null
   readonly status: AccountStatus
+  readonly recoveryGeneration?: string | null
 }
 
 /** Project only durable facts; do not retain driver, quota, or routing snapshots in observations. */
 export function accountHealthFacts(
   account: Omit<HealthAccountFacts, "status"> & {
-    readonly snapshot: { readonly status: AccountStatus }
+    readonly snapshot: {
+      readonly status: AccountStatus
+      readonly recovery?: { readonly generation: string }
+    }
   },
 ): HealthAccountFacts {
   return {
@@ -21,6 +25,7 @@ export function accountHealthFacts(
     authRecoveryVersion: account.authRecoveryVersion,
     authMaterial: account.authMaterial,
     status: account.snapshot.status,
+    recoveryGeneration: account.snapshot.recovery?.generation ?? null,
   }
 }
 
@@ -35,7 +40,8 @@ export function sameAccountFacts(left: HealthAccountFacts, right: HealthAccountF
     left.healthRecoveryVersion === right.healthRecoveryVersion &&
     left.authRecoveryVersion === right.authRecoveryVersion &&
     left.authMaterial === right.authMaterial &&
-    left.status === right.status
+    left.status === right.status &&
+    (left.recoveryGeneration ?? null) === (right.recoveryGeneration ?? null)
   )
 }
 
@@ -110,6 +116,7 @@ export function createHealthObservations() {
         authRecoveryVersion: facts.authRecoveryVersion,
         authMaterial: facts.authMaterial,
         status: facts.status,
+        recoveryGeneration: facts.recoveryGeneration ?? null,
         observationGeneration: current?.generation ?? 0,
         verdictVersion: current?.verdictVersion ?? 0,
       }

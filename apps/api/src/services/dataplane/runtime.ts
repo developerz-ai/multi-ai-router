@@ -7,6 +7,7 @@ import type { SessionKeySource } from "./body/session"
 import type { HealthStore } from "./health"
 import type { ServableCandidate } from "./plan"
 import type { AttemptRecordInput, AttemptTiming } from "./records"
+import type { RecoveryAccess } from "./recovery-access"
 import type { SdkSessionContext } from "./sdk-attempt"
 import type { DataPlaneClock, FetchLike, UpstreamOperation } from "./types"
 
@@ -20,6 +21,8 @@ import type { DataPlaneClock, FetchLike, UpstreamOperation } from "./types"
  */
 
 export interface RuntimeInput {
+  readonly recovery?: RecoveryAccess
+  readonly quotaSpentThreshold?: number
   readonly health: HealthStore
   readonly cipher: Pick<CredentialCipher, "decrypt">
   readonly call: FetchLike

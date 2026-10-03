@@ -53,7 +53,7 @@ export interface AccountAuthProbe {
    * Null when there is nothing to say: the Account carries no CLI-managed credential, or the CLI
    * could not answer. Neither is reported as a logged-out Account.
    */
-  check(account: AuthProbeSubject): Promise<ClaudeAuthReport | null>
+  check(account: AuthProbeSubject, operatorCheckToken?: string): Promise<ClaudeAuthReport | null>
 }
 
 export interface ClaudeAuthProbeDeps {
@@ -70,7 +70,7 @@ export interface ClaudeAuthProbeDeps {
 
 export function createClaudeAuthProbe(deps: ClaudeAuthProbeDeps): AccountAuthProbe {
   return {
-    check: async (account) => {
+    check: async (account, operatorCheckToken) => {
       // Asked of the provider registry rather than of the stored `configDir`, which is nullable and
       // only as good as the row that was written — see `../accounts/providers.ts`.
       if (!describeProvider(account.provider).requiresConfigDir) return null
@@ -79,7 +79,13 @@ export function createClaudeAuthProbe(deps: ClaudeAuthProbeDeps): AccountAuthPro
       if (status === null) return null
 
       const now = deps.now()
-      const statusChangedTo = await transition(deps, account, status.loggedIn, now)
+      const statusChangedTo = await transition(
+        deps,
+        account,
+        status.loggedIn,
+        now,
+        operatorCheckToken,
+      )
       return { ...status, statusChangedTo, checkedAt: now.toISOString() }
     },
   }
@@ -98,6 +104,7 @@ async function transition(
   account: AuthProbeSubject,
   loggedIn: boolean,
   now: Date,
+  operatorCheckToken?: string,
 ): Promise<AccountStatus | null> {
   if (loggedIn && account.status === "needs_reauth") {
     const changed = await deps.accounts.recoverObservedAuthentication({
@@ -106,6 +113,7 @@ async function transition(
         lifecycleVersion: account.lifecycleVersion,
         authMaterial: account.authMaterial,
         status: "needs_reauth",
+        ...(operatorCheckToken === undefined ? {} : { operatorCheckToken }),
       },
       now,
     })
@@ -123,6 +131,7 @@ async function transition(
         lifecycleVersion: account.lifecycleVersion,
         authMaterial: account.authMaterial,
         status: account.status,
+        ...(operatorCheckToken === undefined ? {} : { operatorCheckToken }),
       },
       status: "needs_reauth",
       now,

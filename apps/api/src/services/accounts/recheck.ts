@@ -1,112 +1,196 @@
-import type { AccountRepository, AccountRow } from "@multi-ai-router/db"
+import type { AccountRepository, AccountRow, RecoveryRepository } from "@multi-ai-router/db"
 import { AUDIT_KINDS, AUDIT_SUBJECTS, type AuditRecorder } from "../admin/audit"
 import { type AdminResult, notFound, ok } from "../admin/result"
 import type { AccountAuthProbe, ClaudeAuthReport } from "../health/claudeAuthProbe"
+import {
+  type AccountRecoveryView,
+  type RecoveryPresentationFacts,
+  toRecoveryView,
+} from "./recovery-view"
 
 export interface RecheckResult {
   readonly accountId: string
-  readonly lastCheckedAt: string
+  readonly lastCheckedAt: string | null
   readonly nextAllowedAt: string
+  /** A new durable request was accepted; this does not report provider health. */
+  readonly checkInProgress?: boolean
   readonly rechecked: boolean
+  readonly recovery?: AccountRecoveryView
   readonly clearedStatus?: "exhausted"
   readonly auth?: ClaudeAuthReport
 }
-
 export interface RecheckService {
   recheck(accountId: string): Promise<AdminResult<RecheckResult>>
   recheckAll(): Promise<AdminResult<readonly RecheckResult[]>>
-  lastCheckedAt(accountId: string): Date | null
 }
-
+/** Runtime's atomic repository supplies database time and durable cooldown. */
+export interface OperatorRecoveryRepository {
+  reserveOperatorCheck(input: Parameters<RecoveryRepository["reserveOperatorCheck"]>[0]): Promise<
+    | { kind: "acquired"; account: AccountRow; claimToken: string; leaseUntil: Date }
+    | {
+        kind: "busy" | "cooldown"
+        account: AccountRow
+        recovery?: RecoveryPresentationFacts & { requestedAt: Date }
+        retryAt: Date
+      }
+    | undefined
+  >
+  finalizeOperatorCheck(input: Parameters<RecoveryRepository["finalizeOperatorCheck"]>[0]): Promise<
+    | {
+        kind: "committed"
+        result: NonNullable<
+          Awaited<ReturnType<OperatorRecoveryRepository["beginOperatorRecovery"]>>
+        >
+      }
+    | {
+        kind: "refused"
+        checkInProgress?: boolean
+        account: AccountRow
+        recovery?: RecoveryPresentationFacts & { requestedAt: Date }
+        retryAt: Date
+      }
+    | undefined
+  >
+  releaseOperatorCheck: RecoveryRepository["releaseOperatorCheck"]
+  readOperatorCooldown(
+    accountId: string,
+  ): ReturnType<OperatorRecoveryRepository["beginOperatorRecovery"]>
+  beginOperatorRecovery(input: Parameters<RecoveryRepository["beginOperatorRecovery"]>[0]): Promise<
+    | {
+        account: AccountRow
+        recovery: RecoveryPresentationFacts & {
+          readonly requestedAt: Date
+        }
+        rechecked: boolean
+        clearedStatus: "exhausted" | null
+      }
+    | undefined
+  >
+}
 export interface RecheckServiceDeps {
-  readonly accounts: Pick<AccountRepository, "list" | "findById" | "recheckAccount">
+  readonly accounts: Pick<AccountRepository, "list" | "findById">
+  readonly auth?: AccountAuthProbe
+  readonly recovery: OperatorRecoveryRepository
   readonly audit: AuditRecorder
   readonly refreshCatalog: () => Promise<void>
-  readonly auth?: AccountAuthProbe
+  /** Synchronous off-path scheduling; never blocks on issuer or exposes the permit. */
+  readonly onRecoveryRequested?: (accountId: string) => void
+  readonly operatorCheckLeaseMs?: number
   readonly cooldownSeconds: number
-  readonly now: () => Date
 }
 
 export function createRecheckService(deps: RecheckServiceDeps): RecheckService {
-  const lastChecked = new Map<string, Date>()
-  const cooldownMs = deps.cooldownSeconds * 1_000
-
-  const refused = (accountId: string, previous: Date): RecheckResult => ({
-    accountId,
-    lastCheckedAt: previous.toISOString(),
-    nextAllowedAt: new Date(previous.getTime() + cooldownMs).toISOString(),
-    rechecked: false,
-  })
-
-  const attempt = async (account: AccountRow, now: Date): Promise<RecheckResult | undefined> => {
-    const previous = lastChecked.get(account.id)
-    if (previous !== undefined && now.getTime() - previous.getTime() < cooldownMs) {
-      return refused(account.id, previous)
-    }
-
-    // Reserve the local button cooldown before awaiting SQL; concurrent callers cannot slip through.
-    lastChecked.set(account.id, now)
-    let fenced: Awaited<ReturnType<AccountRepository["recheckAccount"]>>
-    try {
-      fenced = await deps.accounts.recheckAccount({ id: account.id, now })
-    } catch (error) {
-      if (lastChecked.get(account.id) === now) {
-        if (previous === undefined) lastChecked.delete(account.id)
-        else lastChecked.set(account.id, previous)
-      }
-      throw error
-    }
-    if (fenced === undefined) {
-      if (lastChecked.get(account.id) === now) lastChecked.delete(account.id)
-      return undefined
-    }
-    await deps.refreshCatalog()
-    const auth = (await deps.auth?.check(fenced.account)) ?? undefined
-    const cleared = fenced.clearedStatus
-
-    await deps.audit.record({
-      kind: AUDIT_KINDS.accountRechecked,
-      subjectType: AUDIT_SUBJECTS.account,
-      subjectId: account.id,
-      detail: {
-        provider: account.provider,
-        ...(cleared === null ? {} : { clearedStatus: "exhausted" }),
-        ...(auth === undefined
-          ? {}
-          : { loggedIn: auth.loggedIn, statusChangedTo: auth.statusChangedTo }),
-      },
+  const attempt = async (accountId: string): Promise<AdminResult<RecheckResult>> => {
+    const claimToken = crypto.randomUUID()
+    const claim = await deps.recovery.reserveOperatorCheck({
+      accountId,
+      claimToken,
+      leaseMs: deps.operatorCheckLeaseMs ?? 30_000,
     })
-
-    return {
-      accountId: account.id,
-      lastCheckedAt: now.toISOString(),
-      nextAllowedAt: new Date(now.getTime() + cooldownMs).toISOString(),
-      rechecked: true,
-      ...(cleared === null ? {} : { clearedStatus: "exhausted" as const }),
-      ...(auth === undefined ? {} : { auth }),
+    if (claim === undefined) return notFound("No account has that id")
+    if (claim.kind !== "acquired") return ok(refusedView(accountId, claim))
+    const original = claim.account
+    try {
+      // No database lock crosses the CLI call; its token fences post-lease authentication mutations.
+      const auth = (await deps.auth?.check(original, claimToken)) ?? undefined
+      const finalized = await deps.recovery.finalizeOperatorCheck({
+        accountId,
+        claimToken,
+        generationCandidate: crypto.randomUUID(),
+        cooldownMs: deps.cooldownSeconds * 1_000,
+        ...(auth?.loggedIn === false
+          ? {
+              negativeAuthObservation: {
+                lifecycleVersion: original.lifecycleVersion,
+                authMaterial: original.authMaterial,
+                loggedIn: false as const,
+              },
+            }
+          : {}),
+      })
+      if (finalized === undefined) return notFound("No account has that id")
+      if (finalized.kind === "refused") return ok(refusedView(accountId, finalized))
+      const committed = finalized.result
+      if (committed === undefined) return notFound("No account has that id")
+      // Our reserved authentication check can publish a recovery even when finalization joins its cooldown.
+      await deps.refreshCatalog()
+      if (committed.recovery.state === "pending") deps.onRecoveryRequested?.(accountId)
+      if (committed.rechecked) {
+        // A committed pending restriction must reach local routing even if audit later fails.
+        await deps.audit.record({
+          kind: AUDIT_KINDS.accountRechecked,
+          subjectType: AUDIT_SUBJECTS.account,
+          subjectId: accountId,
+          detail: {
+            provider: committed.account.provider,
+            source: "operator_recovery",
+            ...(committed.clearedStatus === null ? {} : { clearedStatus: committed.clearedStatus }),
+            ...(auth === undefined
+              ? {}
+              : { loggedIn: auth.loggedIn, statusChangedTo: auth.statusChangedTo }),
+          },
+        })
+      }
+      return ok({ ...recheckView(accountId, committed), ...(auth === undefined ? {} : { auth }) })
+    } finally {
+      await deps.recovery.releaseOperatorCheck({ accountId, claimToken })
     }
   }
-
+  const flights = new Map<string, Promise<AdminResult<RecheckResult>>>()
+  const recheck = (accountId: string): Promise<AdminResult<RecheckResult>> => {
+    const held = flights.get(accountId)
+    if (held !== undefined) return held
+    const flight = attempt(accountId).finally(() => {
+      if (flights.get(accountId) === flight) flights.delete(accountId)
+    })
+    flights.set(accountId, flight)
+    return flight
+  }
   return {
-    recheck: async (accountId) => {
-      const account = await deps.accounts.findById(accountId)
-      if (account === undefined) return notFound("No account has that id")
-      const result = await attempt(account, deps.now())
-      if (result === undefined) return notFound("No account has that id")
-      return ok(result)
-    },
-
-    lastCheckedAt: (accountId) => lastChecked.get(accountId) ?? null,
-
+    recheck,
     recheckAll: async () => {
-      const now = deps.now()
       const accounts = await deps.accounts.list({})
       const results: RecheckResult[] = []
       for (const account of accounts) {
-        const result = await attempt(account, now)
-        if (result !== undefined) results.push(result)
+        const result = await recheck(account.id)
+        if (result.ok) results.push(result.value)
+        else if (result.failure.status !== 404) return result
       }
       return ok(results)
     },
+  }
+}
+
+function recheckView(
+  accountId: string,
+  committed: NonNullable<Awaited<ReturnType<OperatorRecoveryRepository["beginOperatorRecovery"]>>>,
+): RecheckResult {
+  const recovery = toRecoveryView(committed.recovery)
+  return {
+    accountId,
+    rechecked: committed.rechecked,
+    lastCheckedAt: committed.recovery.requestedAt.toISOString(),
+    nextAllowedAt: recovery.nextAllowedAt,
+    recovery,
+    ...(committed.clearedStatus === null ? {} : { clearedStatus: committed.clearedStatus }),
+  }
+}
+
+function refusedView(
+  accountId: string,
+  held: {
+    kind: "cooldown" | "busy" | "refused"
+    checkInProgress?: boolean
+    recovery?: RecoveryPresentationFacts & { requestedAt: Date }
+    retryAt: Date
+  },
+): RecheckResult {
+  return {
+    accountId,
+    rechecked: false,
+    checkInProgress: held.kind === "busy" || held.checkInProgress === true,
+    lastCheckedAt: held.recovery?.requestedAt.toISOString() ?? null,
+    nextAllowedAt: held.retryAt.toISOString(),
+    ...(held.recovery === undefined ? {} : { recovery: toRecoveryView(held.recovery) }),
   }
 }

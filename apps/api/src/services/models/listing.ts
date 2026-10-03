@@ -161,6 +161,8 @@ export async function listUpstreamModels(
     timeoutMs: deps.timeoutMs,
   })
 
+  if (outcome.kind === "admission-refused")
+    return fail("discovery_failed", "model discovery is awaiting upstream admission")
   if (outcome.kind === "failure") {
     return fail(
       "discovery_failed",

@@ -28,6 +28,8 @@ export function createQuotaWindowMutations(
           set: {
             ...values,
             retiredAt: null,
+            evidenceState: "current",
+            blocksRouting: true,
             utilization: sql`case when ${equalTime} then greatest(${quotaWindows.utilization}, ${values.utilization}::double precision) else ${values.utilization}::double precision end`,
             utilizationSource: sql`case when ${equalTime} and not ${moreUsed} then ${quotaWindows.utilizationSource} else ${values.utilizationSource}::utilization_source end`,
             resetsAt: sql`case when ${equalTime} then greatest(${quotaWindows.resetsAt}, ${values.resetsAt?.toISOString() ?? null}::timestamptz) else ${values.resetsAt?.toISOString() ?? null}::timestamptz end`,
@@ -53,6 +55,8 @@ export function createQuotaWindowMutations(
         .set({
           utilization: null,
           retiredAt: sql`clock_timestamp()`,
+          evidenceState: "expired",
+          blocksRouting: false,
           utilizationSource: "none",
           resetsAt: null,
           resetSource: "unknown",
@@ -63,6 +67,7 @@ export function createQuotaWindowMutations(
             eq(quotaWindows.accountId, accountId),
             eq(quotaWindows.window, window),
             eq(quotaWindows.revision, expected.revision),
+            eq(quotaWindows.evidenceState, "current"),
             eq(quotaWindows.resetsAt, expected.resetsAt),
             exists(
               db

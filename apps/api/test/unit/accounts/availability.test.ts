@@ -97,7 +97,7 @@ function decorate(
   return withAvailability(serviceOf(views), {
     catalog: catalogOf(accounts),
     health: createHealthStore(),
-    recheck: { lastCheckedAt: () => undefined },
+
     now: () => NOW,
   })
 }
@@ -176,7 +176,7 @@ describe("the quota windows on an account read", () => {
     const service = withAvailability(serviceOf([view()]), {
       catalog: catalogOf([routable([FIVE_HOUR])]),
       health,
-      recheck: { lastCheckedAt: () => undefined },
+
       now: () => NOW,
     })
     const result = await service.list({})
@@ -288,7 +288,7 @@ describe("measuring a window against a configured ceiling", () => {
       {
         catalog: catalogOf([routable([window])]),
         health: createHealthStore(),
-        recheck: { lastCheckedAt: () => undefined },
+
         now: () => NOW,
         usage: {
           tokensSince: async (input) => {

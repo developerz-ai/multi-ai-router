@@ -69,22 +69,20 @@ export interface UpdateAccountInput {
   readonly status?: OperatorStatus
 }
 
-/**
- * What a re-check answers. **`rechecked: false` is a success**: the server-side
- * cooldown declined the press, and the honest rendering is "checked then, next
- * check available at". Treating it as a failure would put a red state on a
- * button pressed twice.
- *
- * A re-check clears the breaker marks so the account is eligible again as a
- * half-open probe. It runs no synthetic request, so it reports no verdict — the
- * next real request is what tests the account.
- */
+/** Durable recovery request progress; acceptance is not an upstream health verdict. */
+export interface AccountRecoveryView {
+  readonly generation: string
+  readonly state: "pending" | "issued" | "succeeded" | "failed" | "uncertain" | "cancelled"
+  readonly nextAllowedAt: string
+  readonly outcomeAt: string | null
+}
 export interface RecheckResult {
   readonly accountId: string
-  readonly lastCheckedAt: string
-  /** `lastCheckedAt` + the server's cooldown. Until then, a press is declined. */
+  readonly lastCheckedAt: string | null
   readonly nextAllowedAt: string
+  readonly checkInProgress?: boolean
   readonly rechecked: boolean
+  readonly recovery?: AccountRecoveryView
 }
 
 /**

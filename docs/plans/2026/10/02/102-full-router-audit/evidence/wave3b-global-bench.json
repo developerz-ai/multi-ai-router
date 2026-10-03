@@ -1,0 +1,92 @@
+{
+  "rows": [
+    {
+      "scenario": "passthrough",
+      "path": "passthrough",
+      "samples": 2000,
+      "failures": 0,
+      "overheadMeanMs": 0.0145,
+      "overheadP50Ms": 0.25201612903225806,
+      "overheadP95Ms": 0.4788306451612903,
+      "overheadP99Ms": 0.498991935483871,
+      "overheadQuantized": true,
+      "addedTtftSamples": 0,
+      "addedTtftP50Ms": null,
+      "addedTtftP95Ms": null,
+      "addedTtftP99Ms": null,
+      "buffered": 0,
+      "streamed": false
+    },
+    {
+      "scenario": "passthrough (stream)",
+      "path": "passthrough",
+      "samples": 2000,
+      "failures": 0,
+      "overheadMeanMs": 0.010000000000000002,
+      "overheadP50Ms": 0.2518891687657431,
+      "overheadP95Ms": 0.47858942065491183,
+      "overheadP99Ms": 0.49874055415617125,
+      "overheadQuantized": true,
+      "addedTtftSamples": 2000,
+      "addedTtftP50Ms": 0.02123349999965285,
+      "addedTtftP95Ms": 0.055554649999703505,
+      "addedTtftP99Ms": 0.08921282999980573,
+      "buffered": 0,
+      "streamed": true
+    },
+    {
+      "scenario": "translate",
+      "path": "translate",
+      "samples": 2000,
+      "failures": 0,
+      "overheadMeanMs": 0.019000000000000006,
+      "overheadP50Ms": 0.25329280648429586,
+      "overheadP95Ms": 0.48125633232016213,
+      "overheadP99Ms": 0.65,
+      "overheadQuantized": true,
+      "addedTtftSamples": 0,
+      "addedTtftP50Ms": null,
+      "addedTtftP95Ms": null,
+      "addedTtftP99Ms": null,
+      "buffered": 0,
+      "streamed": false
+    },
+    {
+      "scenario": "translate (stream)",
+      "path": "translate",
+      "samples": 2000,
+      "failures": 0,
+      "overheadMeanMs": 0.014000000000000007,
+      "overheadP50Ms": 0.25329280648429586,
+      "overheadP95Ms": 0.48125633232016213,
+      "overheadP99Ms": 0.625,
+      "overheadQuantized": true,
+      "addedTtftSamples": 2000,
+      "addedTtftP50Ms": 0.05986049999955867,
+      "addedTtftP95Ms": 0.14985435000089636,
+      "addedTtftP99Ms": 0.23824261000019759,
+      "buffered": 0,
+      "streamed": true
+    }
+  ],
+  "budgets": {
+    "overheadP99Ms": 5,
+    "addedTtftP95Ms": 2
+  },
+  "violations": [],
+  "evidence_context": {
+    "source_artifact": "/tmp/router-pr147-reviewed-bench.json",
+    "revision_scope": "Reviewed PR147 implementation including durable operator-check claims",
+    "samples": 8000,
+    "failures": 0,
+    "buffered": 0,
+    "maximum_p99_ms": 0.65,
+    "harness": "Production RecoveryAccess and final-start guards enabled, with off-path coordination sentinel. No DB or provider calls; isolated local run.",
+    "historical_pre_review_baseline": {
+      "source_artifact": "/tmp/router-global-final-bench.json",
+      "maximum_p99_ms": 0.9681818181818183,
+      "recovery_guard_enabled": false,
+      "note": "Historical baseline, not production guard overhead measurement."
+    }
+  }
+}

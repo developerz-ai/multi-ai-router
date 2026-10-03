@@ -11,7 +11,7 @@ import type { TokenSpanUsage, UsageReadRepository } from "@multi-ai-router/db"
 import type { AdminResult } from "../admin/result"
 import { buildSnapshot, type HealthStore, type RoutingCatalog } from "../dataplane"
 import { type CooldownReason, isWindowSpent } from "../routing"
-import type { RecheckService } from "./recheck"
+import { type AccountRecoveryView, toRecoveryView } from "./recovery-view"
 import type { AccountsService } from "./service"
 import type { AccountView } from "./view"
 
@@ -119,7 +119,9 @@ export interface AccountAvailability {
    * the key. The status beside it stays `cooling_down`, never `disabled`, which is the operator's.
    */
   readonly cooldownReason: CooldownReason | null
-  /** When an operator last pressed "Re-check now". Null when nobody has, since this process started. */
+  /** Safe progress for the latest durable operator or automatic recovery generation. */
+  readonly recovery?: AccountRecoveryView
+  /** Database-time requestedAt for that generation; null when no recovery has been observed. */
   readonly lastCheckedAt: string | null
   readonly consecutiveFailures: number
   readonly inFlight: number
@@ -136,7 +138,6 @@ export interface AvailabilityDeps {
   readonly usage?: Pick<UsageReadRepository, "tokensSince">
   readonly catalog: RoutingCatalog
   readonly health: HealthStore
-  readonly recheck: Pick<RecheckService, "lastCheckedAt">
   readonly now: () => Date
 }
 
@@ -149,6 +150,7 @@ export function withAvailability(
     // so the console cannot disagree with the router about what is available.
     const now = deps.now()
     const snapshot = buildSnapshot(deps.catalog, deps.health, now)
+    const configured = new Map(deps.catalog.accounts().map((account) => [account.id, account]))
     const live = new Map(snapshot.accounts.map((account) => [account.id, account]))
 
     // One query for every (account, window) an operator configured a ceiling for. Accounts with no
@@ -163,6 +165,7 @@ export function withAvailability(
     const measured = await measureTokens(deps, limits, live, now)
 
     return views.map((view) => {
+      const recovery = configured.get(view.id)?.recovery
       const observed = live.get(view.id)
       if (observed === undefined) {
         // In the database but not yet in the warm catalog — a refresh is in flight. Report the
@@ -181,7 +184,8 @@ export function withAvailability(
           resetSource:
             resetsAt === null ? "unknown" : (observed.health.cooldownSource ?? "unknown"),
           cooldownReason: observed.health.cooldownReason ?? null,
-          lastCheckedAt: deps.recheck.lastCheckedAt(view.id)?.toISOString() ?? null,
+          lastCheckedAt: recovery?.requestedAt.toISOString() ?? null,
+          ...(recovery === undefined ? {} : { recovery: toRecoveryView(recovery) }),
           consecutiveFailures: observed.health.consecutiveFailures,
           inFlight: observed.health.inFlight,
           quotaWindows: (observed.quotaWindows ?? []).map((window) =>

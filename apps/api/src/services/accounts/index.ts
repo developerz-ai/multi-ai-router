@@ -54,6 +54,7 @@ export type { ProviderConnectFlow, ProviderDescriptor, ProviderTransport } from 
 export { describeProvider, describeProviders } from "./providers"
 export type { RecheckResult, RecheckService, RecheckServiceDeps } from "./recheck"
 export { createRecheckService } from "./recheck"
+export type { AccountRecoveryView } from "./recovery-view"
 export type {
   CredentialRefreshConfig,
   CredentialRefresher,

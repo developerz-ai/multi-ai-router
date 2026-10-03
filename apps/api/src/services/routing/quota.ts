@@ -14,6 +14,7 @@
  */
 
 import type { QuotaWindowState } from "@multi-ai-router/core"
+import { continuousQuotaHeadroom, mergeQuotaEvidence, retiredEvidence } from "./quota-evidence"
 import type { AccountSnapshot } from "./types"
 
 /** Utilization at or above which a window counts as spent, unless the caller overrides it. */
@@ -29,6 +30,7 @@ export function isWindowSpent(
   now: Date,
   threshold = DEFAULT_QUOTA_SPENT_THRESHOLD,
 ): boolean {
+  if (retiredEvidence(window)) return false
   if (window.utilization === undefined) return false
   if (window.utilization < threshold) return false
   if (window.resetsAt !== undefined && window.resetsAt.getTime() <= now.getTime()) return false
@@ -60,24 +62,8 @@ export function findSpentWindow(
  * every API-key account in the fleet — the accounts that actually publish a continuous reading —
  * and silently degraded to round-robin for the pools most able to use it.
  */
-export function continuousHeadroom(account: AccountSnapshot): number | null {
-  let peakUtilization: number | null = null
-
-  const observe = (reading: {
-    readonly utilization?: number
-    readonly utilizationSource: string
-  }): void => {
-    if (reading.utilizationSource !== "continuous") return
-    if (reading.utilization === undefined) return
-    if (peakUtilization === null || reading.utilization > peakUtilization) {
-      peakUtilization = reading.utilization
-    }
-  }
-
-  for (const window of account.quotaWindows ?? []) observe(window)
-  for (const limiter of account.limiterWindows ?? []) observe(limiter)
-
-  return peakUtilization === null ? null : 1 - peakUtilization
+export function continuousHeadroom(account: AccountSnapshot, now: Date): number | null {
+  return continuousQuotaHeadroom(account, now)
 }
 
 /** The soonest reset across a set of windows — what a `429` puts in `Retry-After`. */
@@ -129,20 +115,5 @@ export function mergeQuotaObservation(
   held: QuotaWindowState,
   incoming: QuotaWindowState,
 ): QuotaWindowState {
-  const delta = incoming.lastCheckedAt.getTime() - held.lastCheckedAt.getTime()
-  if (delta !== 0) return delta > 0 ? incoming : held
-  const moreUsed =
-    incoming.utilization !== undefined &&
-    (held.utilization === undefined || incoming.utilization > held.utilization)
-  const laterReset =
-    incoming.resetsAt !== undefined &&
-    (held.resetsAt === undefined || incoming.resetsAt.getTime() > held.resetsAt.getTime())
-  if (!moreUsed && !laterReset) return held
-  return {
-    ...held,
-    ...(moreUsed
-      ? { utilization: incoming.utilization, utilizationSource: incoming.utilizationSource }
-      : {}),
-    ...(laterReset ? { resetsAt: incoming.resetsAt, resetSource: incoming.resetSource } : {}),
-  }
+  return mergeQuotaEvidence(held, incoming)
 }
