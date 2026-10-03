@@ -1,4 +1,4 @@
-import type { AdvisoryLockRun, ScheduledTaskName, ScheduledTaskOutcome } from "@multi-ai-router/db"
+import type { ScheduledTaskName, ScheduledTaskOutcome } from "@multi-ai-router/db"
 import type { Logger } from "../logging/logger"
 
 /**
@@ -65,9 +65,9 @@ export interface ScheduledTask {
  * lock race — not an error, and never a `scheduled_task_runs` row. It is a
  * distinct label on `router_task_runs_total`
  * (docs/idea/08-observability.md#scheduled-task-visibility) precisely so nobody
- * alerts on it.
+ * alerts on it. Local capacity is separate and retries after its configured short delay.
  */
-export type TickStatus = ScheduledTaskOutcome | "skipped_locked"
+export type TickStatus = ScheduledTaskOutcome | "skipped_locked" | "skipped_capacity"
 
 /** The result of one tick, whether it ran, skipped, or fell over. */
 export interface TickResult {
@@ -91,4 +91,6 @@ export type TaskLock = <T>(
   key: number,
   work: (lockSignal?: AbortSignal) => Promise<T>,
   signal?: AbortSignal,
-) => Promise<AdvisoryLockRun<T>>
+) => Promise<
+  { acquired: true; value: T } | { acquired: false; reason?: "busy" | "capacity" | "aborted" }
+>

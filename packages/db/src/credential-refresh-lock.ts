@@ -3,9 +3,10 @@ import {
   createSessionAdvisoryLockPool,
   type SessionAdvisoryLockPoolHandle,
   type SessionAdvisoryLockPoolOptions,
-  type SessionAdvisoryLockResult,
 } from "./session-advisory-lock"
-export type CredentialRefreshLockResult<T> = SessionAdvisoryLockResult<T>
+export type CredentialRefreshLockResult<T> =
+  | { acquired: true; value: T }
+  | { acquired: false; reason: "busy" | "aborted" }
 export interface CredentialRefreshLock {
   tryRun<T>(
     accountId: string,
@@ -24,7 +25,15 @@ export function createCredentialRefreshLockPool(
 ): CredentialRefreshLockPoolHandle {
   const pool = createSessionAdvisoryLockPool({ ...options, lockClass: 0x7265_6672 })
   return {
-    tryRun: (id, signal, work) => pool.tryRun(advisoryLockKey(id), signal, work),
+    tryRun: async (id, signal, work) => {
+      const result = await pool.tryRun(advisoryLockKey(id), signal, work)
+      return result.acquired
+        ? result
+        : {
+            acquired: false,
+            reason: result.reason === "aborted" ? "aborted" : "busy",
+          }
+    },
     close: pool.close,
     poolStats: pool.poolStats,
   }

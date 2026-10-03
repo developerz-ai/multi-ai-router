@@ -64,9 +64,15 @@ describe.skipIf(!url)("dedicated scheduler advisory session", () => {
       )
       await started
       expect(
-        (await second.tryRun(advisoryLockKey(name), new AbortController().signal, async () => 2))
-          .acquired,
-      ).toBe(false)
+        await second.tryRun(advisoryLockKey(name), new AbortController().signal, async () => 2),
+      ).toEqual({ acquired: false, reason: "busy" })
+      expect(
+        await first.tryRun(
+          advisoryLockKey(`${name}-another-task`),
+          new AbortController().signal,
+          async () => 2,
+        ),
+      ).toEqual({ acquired: false, reason: "capacity" })
       expect(
         (await refresh.tryRun(name, new AbortController().signal, async () => 3)).acquired,
       ).toBe(true)

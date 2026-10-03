@@ -113,11 +113,8 @@ async function main(): Promise<void> {
     trustProxy: env.trustProxy,
   })
 
-  // Order on the way out mirrors the way in: stop being ready, stop taking traffic and let what is
-  // in flight finish, flush what is queued, then close the connection the flush needs. Three of the
-  // four carry a deadline — `SHUTDOWN_READY_GRACE_MS`, `SHUTDOWN_DRAIN_MS`,
-  // `DB_POOL_CLOSE_TIMEOUT_SECONDS` — and the flush is bounded by the work already in hand. Their
-  // sum is what the orchestrator's stop grace has to exceed.
+  // Readiness and HTTP draining precede runtime producer, auxiliary-pool and writer phases.
+  // The orchestrator must cover their complete configured bounds plus the final main-pool close.
   installShutdownHandlers(lifecycle, logger, async () => {
     await announceUnready(env, logger)
     await drain(server, env, logger)

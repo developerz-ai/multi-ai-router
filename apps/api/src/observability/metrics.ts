@@ -255,9 +255,9 @@ export function createMetrics(options: MetricsOptions = {}): RouterMetrics {
     observeTask(tick) {
       const task = tick.task
       s.taskRuns.inc({ task, outcome: tick.status })
-      // A replica that lost the advisory lock did not run: it has no duration, processed nothing,
+      // Remote contention or local capacity did not run: it has no duration, processed nothing,
       // and must not reset the failure streak the replica that *is* running has accumulated.
-      if (tick.status === "skipped_locked") return
+      if (tick.status === "skipped_locked" || tick.status === "skipped_capacity") return
 
       s.taskDuration.observe({ task }, tick.durationMs / 1_000)
       s.taskItems.inc({ task }, tick.itemsProcessed)

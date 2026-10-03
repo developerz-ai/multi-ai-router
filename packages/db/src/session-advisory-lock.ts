@@ -2,9 +2,10 @@ import postgres from "postgres"
 import { DATABASE_POOL_DEFAULTS } from "./client"
 import type { PoolSample } from "./pool-metrics"
 
+/** Capacity is local admission pressure; busy means the same key is already owned. */
 export type SessionAdvisoryLockResult<T> =
   | { acquired: true; value: T }
-  | { acquired: false; reason: "busy" | "aborted" }
+  | { acquired: false; reason: "busy" | "capacity" | "aborted" }
 export interface SessionAdvisoryLock {
   tryRun<T>(
     key: number,
@@ -125,9 +126,10 @@ export function createSessionAdvisoryLockPool(
     work: (lockSignal: AbortSignal) => Promise<T>,
   ): Promise<SessionAdvisoryLockResult<T>> {
     if (stopping || signal.aborted) return { acquired: false, reason: "aborted" }
-    if (current?.retired) return { acquired: false, reason: "busy" }
+    if (current?.retired) return { acquired: false, reason: "capacity" }
     const owner = generation()
-    if (owner.occupied >= max || keys.has(key)) return { acquired: false, reason: "busy" }
+    if (keys.has(key)) return { acquired: false, reason: "busy" }
+    if (owner.occupied >= max) return { acquired: false, reason: "capacity" }
     owner.occupied++
     keys.add(key)
     const controller = new AbortController()

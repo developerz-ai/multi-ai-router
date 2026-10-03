@@ -185,7 +185,6 @@ export function createUsageRecorder(
     record(record) {
       if (!lifecycle.accepting()) {
         rejectedAfterStop += 1
-        options.onShed?.(record)
         return
       }
       if (!queue.push(record)) options.onShed?.(record)

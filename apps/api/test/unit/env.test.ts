@@ -92,6 +92,7 @@ describe("parseEnv", () => {
       sweepBatchSize: 1_000,
       jitterFraction: 0.2,
       lockPoolMaxConnections: 1,
+      localCapacityRetryMs: 1_000,
     })
     expect(env.adminAuth).toEqual({
       sessionIdleMinutes: 43_200,
@@ -145,6 +146,7 @@ describe("parseEnv", () => {
       SWEEP_BATCH_SIZE: "500",
       SCHEDULER_JITTER_FRACTION: "0.5",
       SCHEDULER_LOCK_POOL_MAX_CONNECTIONS: "3",
+      SCHEDULER_LOCAL_CAPACITY_RETRY_MS: "5000",
       BACKGROUND_SHUTDOWN_DRAIN_MS: "25000",
       ADMIN_SESSION_IDLE_MINUTES: "60",
       ADMIN_SESSION_ABSOLUTE_HOURS: "8",
@@ -204,6 +206,7 @@ describe("parseEnv", () => {
       sweepBatchSize: 500,
       jitterFraction: 0.5,
       lockPoolMaxConnections: 3,
+      localCapacityRetryMs: 5_000,
     })
     expect(env.adminAuth).toEqual({
       sessionIdleMinutes: 60,

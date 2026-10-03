@@ -39,6 +39,7 @@ test("usage shutdown reports unresolved in-flight records and refuses admission/
   })
   const abandoned: number[] = []
   let writes = 0
+  let overflowReports = 0
   const recorder = createUsageRecorder(
     {
       write: async () => {
@@ -48,6 +49,9 @@ test("usage shutdown reports unresolved in-flight records and refuses admission/
     },
     {
       shutdownDrainMs: 5,
+      onShed: () => {
+        overflowReports++
+      },
       onAbandoned: (count) => abandoned.push(count),
     },
   )
@@ -58,6 +62,7 @@ test("usage shutdown reports unresolved in-flight records and refuses admission/
   recorder.start()
   recorder.record(record)
   expect(recorder.stats().rejectedAfterStop).toBe(1)
+  expect(overflowReports).toBe(0)
   expect(writes).toBe(1)
   release?.()
   await flight

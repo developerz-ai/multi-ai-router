@@ -245,10 +245,15 @@ describe("the shutdown grace", () => {
       ADMIN_OIDC_ADMIN_EMAIL: "admin@test",
       ENCRYPTION_KEY: Buffer.alloc(32, 7).toString("base64"),
     })
-    // The whole budget, not just the drain: the readiness window runs first and the pool close runs
-    // last, so a grace that only covers the middle step still kills mid-shutdown.
+    // Producers and auxiliary lock closes precede the writer drains; only peers within a phase
+    // run in parallel. Account for every sequential phase before the final main-pool close.
     const budgetMs =
-      env.shutdownReadyGraceMs + env.shutdownDrainMs + env.databasePool.closeTimeoutSeconds * 1_000
+      env.shutdownReadyGraceMs +
+      env.shutdownDrainMs +
+      Math.max(env.background.shutdownDrainMs, env.recovery.shutdownDrainMs, env.shutdownDrainMs) +
+      env.databasePool.closeTimeoutSeconds * 1_000 +
+      env.background.shutdownDrainMs +
+      env.databasePool.closeTimeoutSeconds * 1_000
 
     expect(Number(grace) * 1_000).toBeGreaterThan(budgetMs)
   })

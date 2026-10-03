@@ -280,7 +280,9 @@ work the flush has already written
 
 The [scheduler](#background-work-and-scheduling) uses a dedicated bounded auxiliary pool for
 session advisory locks. Task repositories and writers retain the main pool, so a valid main pool
-of one connection remains usable while a task owns its lock. Timers arm synchronously at boot.
+of one connection remains usable while a task owns its lock. Timers arm synchronously at boot. Local session capacity reports `skipped_capacity` and retries
+after `SCHEDULER_LOCAL_CAPACITY_RETRY_MS`; held task exclusion reports `skipped_locked` and keeps
+its normal jittered interval.
 Shutdown stops background producers within their configured bounds, closes the auxiliary lock
 resources, and then runs the usage, quota and status final drains in parallel while the main pool
 remains alive. `BACKGROUND_SHUTDOWN_DRAIN_MS` bounds scheduler and writer drains; credential

@@ -370,6 +370,7 @@ export interface FailoverConfig {
  */
 export interface SchedulerConfig {
   readonly lockPoolMaxConnections: number
+  readonly localCapacityRetryMs: number
   /** Usage record rollup interval, in minutes. */
   readonly usageRollupIntervalMinutes: number
   /** OAuth state (and PKCE verifier) purge interval, in minutes. */
@@ -1070,6 +1071,7 @@ const envSchema = boundedEnvSchema.transform((raw, ctx): Env => {
     janitorIntervalMinutes: raw.JANITOR_INTERVAL_MINUTES ?? 60,
     scheduler: {
       lockPoolMaxConnections: raw.SCHEDULER_LOCK_POOL_MAX_CONNECTIONS ?? 1,
+      localCapacityRetryMs: raw.SCHEDULER_LOCAL_CAPACITY_RETRY_MS ?? 1_000,
       usageRollupIntervalMinutes: raw.USAGE_ROLLUP_INTERVAL_MINUTES ?? 60,
       oauthStatePurgeIntervalMinutes: raw.OAUTH_STATE_PURGE_INTERVAL_MINUTES ?? 5,
       quotaFloorIntervalMinutes: raw.QUOTA_FLOOR_INTERVAL_MINUTES ?? 30,

@@ -18,6 +18,7 @@ export interface SchedulerDeps {
   /** ±fraction of each interval. Config, never a constant (non-negotiable 11). */
   readonly shutdownDrainMs?: number
   readonly interruptedBatchSize?: number
+  readonly capacityRetryMs?: number
   /** Off-path orphan maintenance, always outside the current task lock. */
   readonly beforeTick?: (signal: AbortSignal) => Promise<void>
   readonly jitterFraction: number
@@ -117,10 +118,11 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       )
 
       if (!run.acquired) {
-        logger.debug("scheduled task skipped", { status: "skipped_locked" })
+        const status = run.reason === "capacity" ? "skipped_capacity" : "skipped_locked"
+        logger.debug("scheduled task skipped", { status })
         return {
           task: task.name,
-          status: "skipped_locked",
+          status,
           itemsProcessed: 0,
           durationMs: elapsed(),
         }
@@ -187,8 +189,14 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       timers.delete(task.name)
       // Always the full interval from here on: `startupDelayMs` describes the *first* gap only,
       // and a task that kept using it would be running on a cadence nobody configured.
-      void run(task).finally(() => {
-        if (started && epoch === ownedEpoch) schedule(task)
+      void run(task).then((result) => {
+        if (started && epoch === ownedEpoch)
+          schedule(
+            task,
+            result.status === "skipped_capacity"
+              ? Math.min(task.intervalMs, deps.capacityRetryMs ?? 1000)
+              : task.intervalMs,
+          )
       })
     }, jitter(delayMs))
     // A sweep must never be the reason the process stays alive.

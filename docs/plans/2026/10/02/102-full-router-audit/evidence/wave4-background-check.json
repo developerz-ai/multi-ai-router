@@ -1,30 +1,30 @@
 {
   "wave": "W4 background lifecycle and provider resets",
-  "state": "implemented_validated_pending_review_merge",
+  "state": "implemented_reviewed_validated_pending_merge",
   "observed_on": "2026-10-03",
   "full_gate": {
     "status": "passed",
-    "source_log": "/tmp/router-pr148-corrected-check.log",
-    "passed_tests": 4733,
+    "source_log": "/tmp/router-pr148-reviewed-check.log",
+    "passed_tests": 4737,
     "failed_tests": 0,
-    "test_files": 362,
-    "assertions": 40869,
+    "test_files": 364,
+    "assertions": 40888,
     "lint": "passed",
     "typecheck": "passed",
     "build": "passed"
   },
   "benchmark": {
-    "status": "passed",
+    "status": "passed on reviewed revision",
     "artifact": "wave4-bench.json",
-    "source_artifact": "/tmp/router-wave4-final-bench.json",
+    "source_artifact": "/tmp/router-pr148-reviewed-bench.json",
     "samples": 8000,
     "failures": 0,
     "buffered": 0,
-    "maximum_p99_ms": 0.7647058823529412,
+    "maximum_p99_ms": 0.6666666666666666,
     "violations": [],
     "streaming_added_ttft_p95_ms": {
-      "passthrough": 0.0538334,
-      "translated": 0.10406345
+      "passthrough": 0.05533235,
+      "translated": 0.1716484
     },
     "harness": "Actual production RecoveryAccess/final-start guards enabled with off-path coordination sentinel; no live provider calls"
   },
@@ -34,7 +34,8 @@
       "failed_tests": 0,
       "assertions": 156,
       "test_files": 9,
-      "source_log": "/tmp/router-writer-reviewed-focused.log"
+      "source_log": "/tmp/router-writer-reviewed-focused.log",
+      "revision": "Pre-review writer focus; post-stop overflow metric correction validated by final reviewed full gate and usage33/69 suites"
     },
     "orphan_retention_pg16_and_pg18_each": {
       "passed_tests": 1,
@@ -43,19 +44,29 @@
       "file": "apps/api/test/integration/interrupted-task-retention.test.ts"
     },
     "dedicated_lock_pg16_and_pg18_each": {
-      "passed_tests": 15,
+      "passed_tests": 17,
       "failed_tests": 0,
-      "assertions": 54,
-      "test_files": 3,
+      "assertions": 67,
+      "test_files": 4,
       "source_logs": [
-        "/tmp/router-w4-lock-pg16.log",
-        "/tmp/router-w4-lock-pg18.log"
+        "/tmp/router-w4-capacity-pg16.log",
+        "/tmp/router-w4-capacity-pg18.log"
       ],
       "coverage": [
         "scheduler lock mainpool1 progress and cross-replica exclusion",
         "session failure/capacity loss bounded shutdown",
         "credential refresh dedicated lock regression"
       ]
+    },
+    "scheduler_units": {
+      "passed_tests": 130,
+      "assertions": 20342,
+      "test_files": 14
+    },
+    "reviewed_usage_metric_suites": {
+      "passed_tests": 33,
+      "assertions": 69,
+      "test_files": 3
     }
   },
   "closure_proposals": [
@@ -85,5 +96,37 @@
     "101:03.12",
     "102:04.1",
     "102:09.1"
-  ]
+  ],
+  "historical_benchmark_before_review_fixes": {
+    "status": "passed",
+    "artifact": "wave4-bench.json",
+    "source_artifact": "/tmp/router-wave4-final-bench.json",
+    "samples": 8000,
+    "failures": 0,
+    "buffered": 0,
+    "maximum_p99_ms": 0.7647058823529412,
+    "violations": [],
+    "streaming_added_ttft_p95_ms": {
+      "passthrough": 0.0538334,
+      "translated": 0.10406345
+    },
+    "harness": "Actual production RecoveryAccess/final-start guards enabled with off-path coordination sentinel; no live provider calls"
+  },
+  "review_fixes": [
+    "Distinguish local scheduler pool capacity from remote advisory contention; soon retry local capacity while maintaining normal remote cadence",
+    "Stop-admission usage refusals count rejectedAfterStop and do not emit queue-overflow callbacks",
+    "Complete shutdown grace accounts for all sequential phases; default55s tested, bundled Compose60s, Kubernetes readiness20s requires at least80s",
+    "Documentation spacing correction"
+  ],
+  "shutdown_grace": {
+    "default_total_bound_ms": 55000,
+    "compose_grace_seconds": 60,
+    "kubernetes_with_readiness_20s_minimum_grace_seconds": 80,
+    "phase_formula": "ready grace + HTTP drain + max concurrent producer drain + max parallel auxiliary pool close + max parallel writer drain + main pool close"
+  },
+  "review_threads": {
+    "actionable": 4,
+    "fixes": "applied and final gate/benchmark validated; awaiting commit/new-head checks/merge",
+    "additional_inline_comments": "64 LGTM comments, no additional actionable findings"
+  }
 }

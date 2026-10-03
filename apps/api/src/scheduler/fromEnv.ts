@@ -49,6 +49,7 @@ export function schedulerFromEnv(deps: SchedulerFromEnvDeps): Scheduler {
     jitterFraction: deps.env.scheduler.jitterFraction,
     shutdownDrainMs: deps.env.background.shutdownDrainMs,
     interruptedBatchSize: deps.env.scheduler.sweepBatchSize,
+    capacityRetryMs: deps.env.scheduler.localCapacityRetryMs,
     logger: deps.logger,
     now: deps.now,
     onTick: deps.onTick,
