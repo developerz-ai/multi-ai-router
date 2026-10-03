@@ -60,7 +60,7 @@ export interface ScheduledTaskDeps {
   readonly adminSessions: AdminSessionStoreForPurge
   readonly accounts: Pick<
     AccountRepository,
-    "list" | "listIds" | "listQuotaWindows" | "upsertQuotaWindow" | "findIdle"
+    "list" | "listIds" | "listQuotaWindows" | "clearObservedQuotaWindow" | "findIdle"
   >
   /**
    * The rollup's catch-up cursor, and the janitor's sweep of the run log itself. The runner uses

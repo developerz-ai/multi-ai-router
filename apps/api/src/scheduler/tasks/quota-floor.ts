@@ -26,7 +26,7 @@ import type { ScheduledTask } from "../types"
  * router is happily selecting. What replaces it is `none` / `unknown`, never a
  * zero: we did not observe a refill, we observed that the old number stopped
  * being a fact, and writing 0% would be inventing a reading. `lastCheckedAt`
- * moves so the gauge beside it stays honest about its own age.
+ * retains the provider observation age; the floor did not obtain a fresh reading.
  *
  * That clear-only shape is also what makes the task safe under the advisory
  * lock. `HealthStore` is *this process's* memory, so the replica holding the
@@ -34,9 +34,9 @@ import type { ScheduledTask } from "../types"
  * call it idle when it is not. The cost of that mistake is one write that
  * removes an already-expired number — never the loss of a live reading.
  *
- * **An `exhausted` account is never touched, and it falls out rather than being
- * special-cased.** Out of credits has no reset by definition, so its row carries
- * a NULL `resetsAt` and the predicate below cannot select it. Nothing here ever
+ * **An `exhausted` account is never touched.** The configured status is
+ * explicitly excluded before reading windows; even an inconsistent legacy
+ * reset cannot turn permanent billing exhaustion into automatic recovery. Nothing here ever
  * puts a countdown on a condition only a human can fix.
  *
  * What is **not** here: fetching a fresh reading. The spec's floor also reads a
@@ -49,7 +49,10 @@ import type { ScheduledTask } from "../types"
  */
 
 export interface QuotaFloorDeps {
-  readonly accounts: Pick<AccountRepository, "list" | "listQuotaWindows" | "upsertQuotaWindow">
+  readonly accounts: Pick<
+    AccountRepository,
+    "list" | "listQuotaWindows" | "clearObservedQuotaWindow"
+  >
   /** Read-only: the floor never marks health, it only asks how fresh the live signal is. */
   readonly health: Pick<HealthStore, "stateOf">
   /** `QUOTA_FLOOR_INTERVAL_MINUTES`, in milliseconds. The runner jitters it. */
@@ -65,7 +68,9 @@ export function createQuotaFloorTask(deps: QuotaFloorDeps): ScheduledTask {
 
     run: async ({ now, logger, signal }) => {
       const accounts = await deps.accounts.list({})
-      const idle = accounts.filter((account) => isIdle(deps, account.id, now))
+      const idle = accounts.filter(
+        (account) => account.status !== "exhausted" && isIdle(deps, account.id, now),
+      )
 
       // Two queries for the whole fleet, not two per account: many accounts of
       // one provider is the normal case here, so anything per-account in the
@@ -83,13 +88,14 @@ export function createQuotaFloorTask(deps: QuotaFloorDeps): ScheduledTask {
           return { outcome: "partial", itemsProcessed: refreshed }
         }
 
-        await deps.accounts.upsertQuotaWindow(window.accountId, {
+        if (window.resetsAt === null) continue
+        const cleared = await deps.accounts.clearObservedQuotaWindow({
+          accountId: window.accountId,
           window: window.window,
-          utilizationSource: "none",
-          resetSource: "unknown",
-          lastCheckedAt: now,
+          expected: { revision: window.revision, resetsAt: window.resetsAt },
+          now,
         })
-        refreshed += 1
+        if (cleared !== undefined) refreshed += 1
       }
 
       logger.info("quota floor", {

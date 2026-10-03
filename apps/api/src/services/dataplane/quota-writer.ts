@@ -1,6 +1,7 @@
 import { describeError, type QuotaWindowState } from "@multi-ai-router/core"
 import type { AccountRepository } from "@multi-ai-router/db"
 import type { Logger } from "../../logging/logger"
+import { mergeQuotaWindows } from "../routing/quota"
 
 /**
  * Quota readings, made durable — off the request path.
@@ -17,7 +18,7 @@ import type { Logger } from "../../logging/logger"
  * - **`record` never awaits, never queries, never throws.** It writes one map entry and returns.
  *   The insert happens on a timer, on its own thread of control (CLAUDE.md non-negotiable 8).
  * - **Pending state coalesces, and coalescing is *correct* here.** A quota window is state, not an
- *   event: the newest reading for an account supersedes the older one outright, so there is no
+ *   event: the newest reading per window supersedes older evidence, with conservative equal-clock ties, so there is no
  *   queue to bound and nothing to shed. Pending can never exceed one entry per account, which is
  *   why this is a map and `usage/recorder.ts` — which records history and must not lose a row — is
  *   a bounded queue. Reach for that one when the thing being written is a fact about the past.
@@ -116,7 +117,12 @@ export function createQuotaWindowWriter(deps: QuotaWindowWriterDeps): QuotaWindo
   return {
     record(accountId, windows) {
       if (windows.length === 0) return
-      pending.set(accountId, windows)
+      const snapshot = windows.map((window) => ({
+        ...window,
+        lastCheckedAt: new Date(window.lastCheckedAt),
+        ...(window.resetsAt === undefined ? {} : { resetsAt: new Date(window.resetsAt) }),
+      }))
+      pending.set(accountId, mergeQuotaWindows(pending.get(accountId) ?? [], snapshot))
     },
 
     flush,

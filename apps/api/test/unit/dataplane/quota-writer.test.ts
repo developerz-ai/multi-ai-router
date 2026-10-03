@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test"
 import type { QuotaWindowState } from "@multi-ai-router/core"
 import type { QuotaWindowRow } from "@multi-ai-router/db"
 import { createLogger, type Logger } from "../../../src/logging/logger"
-import { createQuotaWindowWriter } from "../../../src/services/dataplane"
+import { createQuotaWindowWriter } from "../../../src/services/dataplane/quota-writer"
 import { NOW } from "./fixtures"
 
 /**

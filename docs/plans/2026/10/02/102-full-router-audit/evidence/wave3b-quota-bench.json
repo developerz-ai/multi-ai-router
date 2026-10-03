@@ -1,0 +1,86 @@
+{
+  "rows": [
+    {
+      "scenario": "passthrough",
+      "path": "passthrough",
+      "samples": 2000,
+      "failures": 0,
+      "overheadMeanMs": 0.009000000000000001,
+      "overheadP50Ms": 0.25176233635448136,
+      "overheadP95Ms": 0.4783484390735146,
+      "overheadP99Ms": 0.4984894259818731,
+      "overheadQuantized": true,
+      "addedTtftSamples": 0,
+      "addedTtftP50Ms": null,
+      "addedTtftP95Ms": null,
+      "addedTtftP99Ms": null,
+      "buffered": 0,
+      "streamed": false
+    },
+    {
+      "scenario": "passthrough (stream)",
+      "path": "passthrough",
+      "samples": 2000,
+      "failures": 0,
+      "overheadMeanMs": 0.011000000000000005,
+      "overheadP50Ms": 0.25252525252525254,
+      "overheadP95Ms": 0.4797979797979798,
+      "overheadP99Ms": 0.5,
+      "overheadQuantized": true,
+      "addedTtftSamples": 2000,
+      "addedTtftP50Ms": 0.02067799999986164,
+      "addedTtftP95Ms": 0.07055179999979369,
+      "addedTtftP99Ms": 0.1270082299991918,
+      "buffered": 0,
+      "streamed": true
+    },
+    {
+      "scenario": "translate",
+      "path": "translate",
+      "samples": 2000,
+      "failures": 0,
+      "overheadMeanMs": 0.011500000000000002,
+      "overheadP50Ms": 0.25176233635448136,
+      "overheadP95Ms": 0.4783484390735146,
+      "overheadP99Ms": 0.4984894259818731,
+      "overheadQuantized": true,
+      "addedTtftSamples": 0,
+      "addedTtftP50Ms": null,
+      "addedTtftP95Ms": null,
+      "addedTtftP99Ms": null,
+      "buffered": 0,
+      "streamed": false
+    },
+    {
+      "scenario": "translate (stream)",
+      "path": "translate",
+      "samples": 2000,
+      "failures": 0,
+      "overheadMeanMs": 0.021000000000000008,
+      "overheadP50Ms": 0.2535496957403651,
+      "overheadP95Ms": 0.4817444219066937,
+      "overheadP99Ms": 0.7,
+      "overheadQuantized": true,
+      "addedTtftSamples": 2000,
+      "addedTtftP50Ms": 0.057816999998976826,
+      "addedTtftP95Ms": 0.11150739999775396,
+      "addedTtftP99Ms": 0.21033485000349164,
+      "buffered": 0,
+      "streamed": true
+    }
+  ],
+  "budgets": {
+    "overheadP99Ms": 5,
+    "addedTtftP95Ms": 2
+  },
+  "violations": [],
+  "evidence_context": {
+    "source_artifact": "/tmp/router-quota-final-bench.json",
+    "revision_scope": "Final quota implementation after exhausted-status and equal-time retirement replay fixes",
+    "workload_context": "No competing heavy work during this run; local benchmark, no live provider calls.",
+    "samples": 8000,
+    "failures": 0,
+    "buffered": 0,
+    "maximum_p99_ms": 0.7
+  }
+}
