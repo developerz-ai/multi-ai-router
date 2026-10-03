@@ -4,8 +4,8 @@ status: in_progress
 created_by: sebi
 worked_by: "Codex team"
 owner: sebi
-percent: 54
-current_focus: "PR147 global recovery merged3eedac3 through normal protected flow; 132 files, all five required checks passed and nine review threads resolved. W4 background lifecycle/provider resets reviewed gate4737/364 and isolated benchmark8k/0fail/0buffer/p99.6666666667ms passed; review/merge/release/deployment pending."
+percent: 57
+current_focus: "W4C CLI account lifecycle implemented and validated locally: final bin/check 4829 tests/388 files/41296 assertions passed; benchmark8k/0fail/0buffer/p99.7941176471ms passed; final amd64 image build and matching immutable-image hardened proof passed, review/merge/release/deployment pending. PR148 remains merged54debd0."
 slices:
   - file: 01-transport.md
     status: in_progress
@@ -20,19 +20,19 @@ slices:
     percent: 100
     findings: 9
   - file: 04-providers.md
-    status: not_started
-    percent: 0
+    status: in_progress
+    percent: 100
     findings: 1
   - file: 05-claude-sdk.md
     status: in_progress
     percent: 100
     findings: 3
   - file: 06-translation.md
-    status: not_started
+    status: in_progress
     percent: 0
     findings: 2
   - file: 07-usage.md
-    status: not_started
+    status: in_progress
     percent: 0
     findings: 4
   - file: 08-cost.md
@@ -41,10 +41,10 @@ slices:
     findings: 2
   - file: 09-scheduler.md
     status: in_progress
-    percent: 50
+    percent: 100
     findings: 2
   - file: 10-database.md
-    status: not_started
+    status: in_progress
     percent: 0
     findings: 4
   - file: 11-config.md
@@ -52,15 +52,16 @@ slices:
     percent: 100
     findings: 3
   - file: 12-web.md
-    status: not_started
+    status: in_progress
     percent: 0
     findings: 6
   - file: 13-production.md
-    status: not_started
+    status: in_progress
     percent: 0
     findings: 1
 evidence:
-  - "W4 focused writer/usage/orphan validation: 70 tests/156 assertions across nine actual unit files, including per-row deadline guards and throwing uncertainty-observer safety. Historical orphan retention integration passed PostgreSQL16 and18, one test/four assertions each. Dedicated lock/session/capacity suites passed17 tests/67 assertions across four files on each PostgreSQL16/18 version. Final W4 bin/check passed4737 tests/364 files/40888 assertions, zero failures; lint/typecheck/build passed. Final reviewed production-recovery-enabled benchmark passed8000 samples, zero failures/buffered streams, maxp99 0.6666666667ms, violations empty; added streamingTTFTp95 0.05533235ms passthrough/0.17164840ms translation. Prior0.7647058824ms run is historical pre-review evidence. Review/merge/release/deployment pending; see102-full-router-audit/evidence/wave4-background-check.json."
+  - "W4C final bin/check passed4829 tests/388 files/41296 assertions, zero failures; lint/typecheck/build passed. Offline native guardian/shared-root, late login cancellation, deletion ordering, background final admission, truthful deferred cleanup and actual dispatcher preparation regressions covered. Benchmark8000 requests/zero failures/buffered streams/maxp99.7941176471ms passed; final amd64 image build and matching immutable-image hardened proof passed; review/merge/release/deployment pending. See evidence/wave4c-cli-check.json."
+  - "W4 focused writer/usage/orphan validation: 70 tests/156 assertions across nine actual unit files, including per-row deadline guards and throwing uncertainty-observer safety. Historical orphan retention integration passed PostgreSQL16 and18, one test/four assertions each. Dedicated lock/session/capacity suites passed17 tests/67 assertions across four files on each PostgreSQL16/18 version. Final W4 bin/check passed4737 tests/364 files/40888 assertions, zero failures; lint/typecheck/build passed. Final reviewed production-recovery-enabled benchmark passed8000 samples, zero failures/buffered streams, maxp99 0.6666666667ms, violations empty; added streamingTTFTp95 0.05533235ms passthrough/0.17164840ms translation. Prior0.7647058824ms run is historical pre-review evidence. PR148 reviewed and merged54debd0; release/deployment pending; see102-full-router-audit/evidence/wave4-background-check.json."
   - "Global recovery local regressions: real PostgreSQL with two independent boots/catalogs/dispatchers, 200 concurrent requests admit one mocked provider start and report 199 HTTP 429 refusals once each with null account usage. Captured quota retirement preserves a newer provider revision; late queued lifecycle/credential/pending changes and fresh spent quota refuse dispatch without health strikes. Reviewed bin/check 4675 tests/348 files/40669 assertions passed with zero failures and lint/typecheck/build passed, including DB/API observed-generation and operator-check-claim suites. Migration 0028 claim regressions passed on PostgreSQL 16/18, 2 tests/11 assertions each. PG16 observed-generation 2 tests/7 assertions and broader lifecycle/publication 14 tests/56 assertions passed. Reviewed isolated production-enabled benchmark: 8000 requests, zero failures/buffered streams, maximum p99 0.65 ms, no violations; RecoveryAccess/final-start guard enabled with an off-path coordination sentinel. Previous 0.9681818182 ms run is a historical pre-review baseline without that guard hook enabled. PR147 merged3eedac3 at18:29:35UTC;132files, five required checks passed, nine actionable review threads resolved. Release/deployment pending. Warm quota/floor/rank focused suite 189 passed."
   - "Quota ordering/floor CAS: PR146 merged8aaf241 through normal protected flow at16:56:02UTC; all five required checks passed and CodeRabbit had no actionable comments. Optional developerz was queued at merge, not a completed review verdict. Narrow scope102:09.2 and101:02.10 only. Final bin/check passed4563 tests across321 files, zero failures; PostgreSQL16/18 quota suites each9 tests/18 assertions and fresh migrations passed; DBunits158 tests/480 assertions passed. See102-full-router-audit/evidence/wave3b-quota-check.json. Final benchmark passed8000 samples, zero failures/buffered streams, maximum p99 0.7 ms, no budget violations; see102-full-router-audit/evidence/wave3b-quota-bench.json."
   - "W3A reviewed revision: pinned Bun 1.4.2 bin/check with disposable PostgreSQL 18.6: 4549 tests across 319 files passed, zero failed; lint/typecheck/build passed. Mocked OAuth identity/lifecycle, exact CAS, dedicated lock contention/loss, shutdown/deadline and postcommit catalog regressions covered. No live provider compatibility claim. Final local amd64 image build passed; independent seven-refresher-suite verification: 58 tests, 176 assertions. PR145 merged as 2a0c562 at 16:29:02 UTC through the normal protected flow; all five new-head required CI checks passed and three review threads resolved. Release/deployment pending. See 102-full-router-audit/evidence/wave3a-check.json."
@@ -72,7 +73,7 @@ evidence:
   - "Wave 2: pinned Bun 1.4.2 bin/check with disposable PostgreSQL: 4417 tests passed, zero failed; lint, typecheck and build passed. Transaction rollback, concurrent names/scopes/membership and one-connection catalog snapshots covered. PR #143 merged as 986189e; all five CI checks passed; CodeRabbit generated no actionable comments. Release/deployment pending."
   - "Pinned Bun 1.4.2; bin/check with disposable PostgreSQL: 4326 tests passed, zero failed; build passed."
   - "102-full-router-audit/evidence/wave1-bench.json: 8000 requests, zero failures/buffered streams; max p99 1.28 ms."
-notes: "W3A identity/refresh and W3B global recovery, quota authority retirement, warm overlay reconciliation and expired-reading ranking are merged and validated. W4 scheduler/general shutdown and provider reset/classification are implementing; final W4 validation, release and deployment remain pending. Wave 1 covers SDK isolation and failure delivery, credential containment, key and session races, login/OIDC bounds and configuration validation. #87 rotation and session invalidation remain operational follow-up. 01.9 transport-reader failures fixed; protocol error-frame accounting remains open."
+notes: "W3A identity/refresh and W3B global recovery, quota authority retirement, warm overlay reconciliation and expired-reading ranking are merged and validated. W4 scheduler/general shutdown and provider reset/classification merged as PR148; W4C CLI lifecycle validated locally, review/merge/release/deployment pending. Wave 1 covers SDK isolation and failure delivery, credential containment, key and session races, login/OIDC bounds and configuration validation. #87 rotation and session invalidation remain operational follow-up. 01.9 transport-reader failures fixed; protocol error-frame accounting remains open."
 last_updated: 2026-10-03
 # Percentages measure locally resolved findings; review, release and deployment remain separate gates.
 resolved_findings:
@@ -107,12 +108,14 @@ resolved_findings:
   - "03.5"
   - "03.6"
 
+  - "04.1"
+  - "09.1"
 implemented_merged_release_pending:
   - "09.2"
   - "03.2"
   - "03.5"
   - "03.6"
 
-implemented_validated_pending_review_merge:
+implemented_merged_release_pending_wave4:
   - "04.1"
   - "09.1"

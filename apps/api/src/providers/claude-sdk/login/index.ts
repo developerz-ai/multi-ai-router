@@ -18,6 +18,7 @@ export type {
 export { ClaudeLoginError } from "./contract"
 export type { CredentialFs, CredentialGuard, CredentialState } from "./credentials"
 export { CREDENTIALS_FILE, CREDENTIALS_MODE, createCredentialGuard } from "./credentials"
+export { createOwnedLoginSpawn } from "./owner-spawn"
 export {
   CLAUDE_AUTH_STATUS_ARGV,
   findAuthorizeUrl,

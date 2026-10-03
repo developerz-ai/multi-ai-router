@@ -1,0 +1,14 @@
+#!/bin/sh
+# Build the Linux ownership guardian for this machine's architecture.
+set -eu
+cd "$(dirname "$0")/.."
+if [ "$(uname -s)" != Linux ]; then
+  echo "CLI shared-root ownership requires Linux; use the router container on this platform." >&2
+  exit 1
+fi
+command -v "${CC:-cc}" >/dev/null 2>&1 || {
+  echo "A C compiler and static libc headers are required (Debian/Ubuntu: build-essential)." >&2
+  exit 1
+}
+bun native/build.ts
+chmod 0755 native/config-owner

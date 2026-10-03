@@ -18,9 +18,15 @@ command -v docker >/dev/null || die "docker not found — the dev database runs 
 docker info >/dev/null 2>&1  || die "docker is installed but not running"
 ok "bun $(bun --version), docker present and running"
 
+command -v "${CC:-cc}" >/dev/null || die "C compiler/static libc headers missing — install build-essential on Debian/Ubuntu; CLI ownership requires Linux"
+
 step "Installing dependencies"
 bun install
 ok "dependencies installed"
+
+step "Building the CLI ownership guardian"
+bin/build-cli-owner
+ok "native CLI ownership guardian built"
 
 DEV_DB_PORT="${DEV_DB_PORT:-5433}"
 export DEV_DB_PORT

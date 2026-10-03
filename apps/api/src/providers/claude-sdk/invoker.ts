@@ -7,6 +7,7 @@ import { ALWAYS_FRESH, type CredentialFreshness } from "./credential-freshness"
 import { classifySdkFailure } from "./errors"
 import type { SdkInvocation, SdkInvoker } from "./invoke"
 import { createQueryLaunch, type QueryLaunch } from "./options"
+import { type OwnerLaunchFactory, ownedQuery } from "./owned-query"
 import { buildSdkPrompt } from "./prompt"
 import { renderSdkResponse, type StreamPacing, type Ticker } from "./render"
 import { readSdkRequest } from "./request"
@@ -93,6 +94,7 @@ export interface SdkInvokerDeps {
   /** Injected in tests. Defaults to the real ladder over this host's filesystem. */
   readonly resolveCli?: () => CliResolution
   /** Injected in tests. Defaults to the Agent SDK's own `query()`. */
+  readonly ownerLaunch?: OwnerLaunchFactory
   readonly runQuery?: SdkQueryFn
   /** Idle guard and keep-alive cadence. Defaults to the renderer's own (90 s / 15 s). */
   readonly pacing?: StreamPacing
@@ -173,9 +175,12 @@ export function createSdkInvoker(deps: SdkInvokerDeps): SdkInvoker {
       const held = holdPrompt(prompt)
 
       try {
-        invocation.signal.throwIfAborted()
-        invocation.beforeUpstreamStart?.()
-        const messages = runQuery({ prompt: held.prompt, options: started.options })
+        const messages = await ownedQuery({
+          ...invocation,
+          options: started.options,
+          ownerLaunch: deps.ownerLaunch,
+          run: (options) => runQuery({ prompt: held.prompt, options }),
+        })
         // The gauge is asked of the query object itself — the SDK doing the request, inside this
         // Account's own config directory, with a credential this router never sees.
         const turn = observeTurn(messages, {

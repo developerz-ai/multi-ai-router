@@ -293,6 +293,37 @@ and one final pass handles facts queued during that batch. A failed status write
 original lifecycle, credential and recovery-generation observation; a local forget fence prevents
 it from resurrecting a verdict after reset.
 
+Claude account deletion commits the row removal before filesystem cleanup. It publishes a
+permanent account tombstone and closes local login admission, then crosses the catalog/session
+barrier before bounded cancellation and cleanup. Optional audit failure cannot prevent those
+steps. The deletion response distinguishes removed credentials from deferred cleanup without
+exposing directory paths or owner identity. A login admitted before deletion is cancelled even
+while its URL is pending; its later URL cannot be registered for the deleted account. Known
+owner exit is awaited in the concurrent producer shutdown phase, while the first phase only
+closes admission and requests cancellation.
+
+CLI construction first registers an idle guardian. After SDK concurrency and credential waits,
+its preparation handshake reacquires the stable account lock and refuses a published tombstone.
+While that lock remains held, the background path rereads authoritative account identity and
+eligibility; abort/readiness checks and the ordinary warm guard run immediately before activation. Preparation failure cannot consume a designated
+recovery start. The stable lock covers activation and is released before remote work. Existing
+foreign work may remain active after deletion; its durable marker keeps cleanup deferred until
+confirmed exit. This does not promise immediate cross-replica cancellation of admitted work.
+
+Ordinary credential metadata read failures retain the existing freshness fail-open behavior.
+Failure to acquire durable filesystem ownership fails closed during initial freshness reads,
+cold checks and queued refresh polling: no SDK construction or final upstream admission occurs.
+It is a router preparation failure (503 with null account attribution), not quota evidence.
+
+Physical cleanup requires shared-volume exclusion and zero durable owner markers. Process owners
+register before launch and native supervision tracks descendant quiescence; router metadata work
+retains a native hold owner until its file operations settle and explicitly release it; no helper
+child exit can retire that owner early. A guardian crash leaves an unknown
+marker and cleanup defers. An elapsed timer or an empty local registry cannot prove a foreign
+process has exited. A later normal release may permit cleanup, while unknown owners require
+explicit evidence before reclamation. This is a safety boundary, not a promise to remove every
+crash artifact automatically.
+
 Historical unfinished runs are examined outside the current task lock. Maintenance rotates
 through bounded batches of historical task names, including tasks removed from the current
 registry, and tries each task's own advisory lock. It captures bounded run IDs under exclusion,

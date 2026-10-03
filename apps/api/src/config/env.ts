@@ -6,6 +6,7 @@ import { CLI_REFRESH_LEAD_MS } from "../providers/claude-sdk/credential-freshnes
 import { adminApiTokenProblem } from "../services/admin-auth"
 import type { BoundCooldownBehavior } from "../services/routing"
 import { BACKGROUND_ENV_FIELDS, readBackgroundEnv } from "./background"
+import { CLI_OWNERSHIP_ENV_FIELDS, readCliOwnershipEnv } from "./cli-ownership"
 import {
   absoluteUrl,
   atLeastOne,
@@ -481,6 +482,7 @@ export const DEFAULT_LOG_QUIET_PATHS: readonly string[] = ["/healthz", "/readyz"
 
 export interface Env {
   readonly recovery: ReturnType<typeof readRecoveryEnv>["recovery"]
+  readonly cliOwnership: ReturnType<typeof readCliOwnershipEnv>["cliOwnership"]
   readonly port: number
   /**
    * How long a connection may carry no bytes in either direction before the *server* closes it —
@@ -694,6 +696,7 @@ export { decodeEncryptionKey, ZERO_IS_LEGAL } from "./fields"
  */
 export const ENV_FIELDS = {
   ...BACKGROUND_ENV_FIELDS,
+  ...CLI_OWNERSHIP_ENV_FIELDS,
   ...RECOVERY_ENV_FIELDS,
   PORT: wholeNumber.refine((value) => value <= 65_535, "must be at most 65535").optional(),
   SERVER_IDLE_TIMEOUT_SECONDS: serverIdleTimeoutSeconds.optional(),
@@ -979,6 +982,7 @@ const envSchema = boundedEnvSchema.transform((raw, ctx): Env => {
   return {
     ...readRecoveryEnv(raw),
     ...readBackgroundEnv(raw),
+    ...readCliOwnershipEnv(raw),
     port: raw.PORT ?? 8080,
     serverIdleTimeoutSeconds:
       raw.SERVER_IDLE_TIMEOUT_SECONDS ?? DEFAULT_SERVER_IDLE_TIMEOUT_SECONDS,

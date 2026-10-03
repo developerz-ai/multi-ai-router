@@ -1,4 +1,4 @@
-import type { UpstreamStartGuard } from "../upstream-admission"
+import type { AsyncBackgroundStartGuard, UpstreamStartGuard } from "../upstream-admission"
 import type { TruncatedTurn } from "./render"
 import type { SessionPlan } from "./session"
 
@@ -27,6 +27,7 @@ import type { SessionPlan } from "./session"
  */
 export interface SdkInvocation {
   readonly beforeUpstreamStart?: UpstreamStartGuard
+  readonly beforeBackgroundUpstreamStart?: AsyncBackgroundStartGuard
   /** Which Account this runs as. Rate-limit state and session lineage are keyed by it, never global. */
   readonly accountId: string
   /** The isolated `CLAUDE_CONFIG_DIR`. Already resolved, never empty. */

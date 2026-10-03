@@ -7,3 +7,6 @@ export class UpstreamAdmissionRefused extends Error {
 }
 
 export type UpstreamStartGuard = (() => void) & { readonly singleStart?: boolean }
+
+/** Offpath background work revalidates durable eligibility after preparation waits. */
+export type AsyncBackgroundStartGuard = () => Promise<void>

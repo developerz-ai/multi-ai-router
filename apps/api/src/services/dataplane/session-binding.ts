@@ -57,7 +57,7 @@ function servesSubscriptions(catalog: RoutingCatalog): boolean {
 
 export interface SessionStoreEnvDeps {
   readonly env: Env
-  readonly repository: Pick<SessionRepository, "findByKey" | "upsert">
+  readonly repository: Pick<SessionRepository, "findByKey" | "upsert" | "clearAccount">
   readonly logger: Logger
   readonly now: () => Date
 }

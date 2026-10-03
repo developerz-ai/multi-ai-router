@@ -1,7 +1,9 @@
+import { basename, join } from "node:path"
 import type { AccountRepository, OauthStateRepository } from "@multi-ai-router/db"
 import type { Env } from "../../../config/env"
 import type { Logger } from "../../../logging/logger"
 import { createCliProbe, resolveClaudeCli } from "../../../providers"
+import type { AccountCliOwnership } from "../../../providers/claude-sdk/account-ownership"
 import type { AccountConfigDirs } from "../../../providers/claude-sdk/config-dir"
 import {
   type ClaudeAuthCheck,
@@ -10,7 +12,9 @@ import {
   createClaudeAuthCheck,
   createClaudeCliLogin,
   createCredentialGuard,
+  createOwnedLoginSpawn,
 } from "../../../providers/claude-sdk/login"
+import type { OwnerLaunchConfig } from "../../../providers/claude-sdk/owner-launch"
 import type { AuditRecorder } from "../../admin/audit"
 import type { CredentialCipher } from "../../crypto/cipher"
 import type { HealthStore } from "../../dataplane"
@@ -48,6 +52,7 @@ export interface ClaudeCliStack {
 }
 
 export interface ClaudeCliFromEnvDeps {
+  readonly ownership?: { manager: AccountCliOwnership; config: OwnerLaunchConfig }
   readonly accounts: Pick<
     AccountRepository,
     | "findById"
@@ -57,7 +62,9 @@ export interface ClaudeCliFromEnvDeps {
   >
   readonly configDirs: AccountConfigDirs
   readonly audit: AuditRecorder
-  readonly env: Pick<Env, "claudeCliPath" | "retention">
+  readonly env: Pick<Env, "claudeCliPath" | "retention"> & {
+    readonly background?: Env["background"]
+  }
   readonly logger: Logger
   readonly now: () => Date
   /**
@@ -72,6 +79,12 @@ export interface ClaudeCliFromEnvDeps {
 }
 
 export function claudeCliFromEnv(deps: ClaudeCliFromEnvDeps): ClaudeCliStack {
+  const ownership = deps.ownership
+  const spawn =
+    ownership === undefined
+      ? undefined
+      : createOwnedLoginSpawn(ownership.config, ownership.manager.ownerLaunch)
+  const credentials = createCredentialGuard()
   const cliPath = (): string | null => {
     const resolution = resolveClaudeCli(createCliProbe({ override: deps.env.claudeCliPath }))
     return resolution.ok ? resolution.path : null
@@ -88,7 +101,10 @@ export function claudeCliFromEnv(deps: ClaudeCliFromEnvDeps): ClaudeCliStack {
           "this router has no usable claude binary, so a subscription cannot be connected — see /readyz",
         )
       }
-      return createClaudeCliLogin({ cliPath: path }).start(input)
+      return createClaudeCliLogin({
+        cliPath: path,
+        ...(spawn === undefined ? {} : { spawn }),
+      }).start(input)
     },
   }
 
@@ -97,16 +113,29 @@ export function claudeCliFromEnv(deps: ClaudeCliFromEnvDeps): ClaudeCliStack {
       const path = cliPath()
       return path === null
         ? Promise.resolve(null)
-        : createClaudeAuthCheck({ cliPath: path }).check(configDir)
+        : createClaudeAuthCheck({ cliPath: path, ...(spawn === undefined ? {} : { spawn }) }).check(
+            configDir,
+          )
     },
   }
 
   return {
     connect: createClaudeConnectService({
+      shutdownDrainMs: deps.env.background?.shutdownDrainMs ?? 15_000,
       accounts: deps.accounts,
       configDirs: deps.configDirs,
       login,
-      credentials: createCredentialGuard(),
+      credentials:
+        ownership === undefined
+          ? credentials
+          : {
+              settle: (path) => {
+                const id = basename(path)
+                if (path !== join(deps.configDirs.root, id))
+                  return Promise.reject(new Error("credential directory authority mismatch"))
+                return ownership.manager.withMetadataOwner(id, () => credentials.settle(path))
+              },
+            },
       audit: deps.audit,
       // The same one-shot window the reverse-engineered flows use, and config rather than a
       // constant (non-negotiable 11). Its timer is what terminates an abandoned subprocess.

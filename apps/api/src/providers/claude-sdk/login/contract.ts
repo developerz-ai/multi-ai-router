@@ -89,9 +89,14 @@ export interface ClaudeLoginHandle {
   submit(codeAndState: string): Promise<void>
   /** Terminates the subprocess and releases it. Idempotent, and safe after {@link submit}. */
   cancel(): void
+  /** Actual owner exit, independent of a cancellation request. */
+  readonly exited: Promise<void>
+  cancelAsync(): Promise<void>
 }
 
 export interface ClaudeLoginStartInput {
+  readonly accountId?: string
+  readonly signal?: AbortSignal
   /** This Account's isolated `CLAUDE_CONFIG_DIR`, already provisioned. */
   readonly configDir: string
 }

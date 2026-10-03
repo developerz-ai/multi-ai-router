@@ -1,0 +1,77 @@
+{
+  "rows": [
+    {
+      "scenario": "passthrough",
+      "path": "passthrough",
+      "samples": 2000,
+      "failures": 0,
+      "overheadMeanMs": 0.011500000000000003,
+      "overheadP50Ms": 0.2521432173474534,
+      "overheadP95Ms": 0.4790721129601614,
+      "overheadP99Ms": 0.4992435703479577,
+      "overheadQuantized": true,
+      "addedTtftSamples": 0,
+      "addedTtftP50Ms": null,
+      "addedTtftP95Ms": null,
+      "addedTtftP99Ms": null,
+      "buffered": 0,
+      "streamed": false
+    },
+    {
+      "scenario": "passthrough (stream)",
+      "path": "passthrough",
+      "samples": 2000,
+      "failures": 0,
+      "overheadMeanMs": 0.015000000000000001,
+      "overheadP50Ms": 0.2521432173474534,
+      "overheadP95Ms": 0.4790721129601614,
+      "overheadP99Ms": 0.4992435703479577,
+      "overheadQuantized": true,
+      "addedTtftSamples": 2000,
+      "addedTtftP50Ms": 0.02017500000056316,
+      "addedTtftP95Ms": 0.058014849999653936,
+      "addedTtftP99Ms": 0.10014236999866626,
+      "buffered": 0,
+      "streamed": true
+    },
+    {
+      "scenario": "translate",
+      "path": "translate",
+      "samples": 2000,
+      "failures": 0,
+      "overheadMeanMs": 0.017000000000000008,
+      "overheadP50Ms": 0.25329280648429586,
+      "overheadP95Ms": 0.48125633232016213,
+      "overheadP99Ms": 0.6428571428571428,
+      "overheadQuantized": true,
+      "addedTtftSamples": 0,
+      "addedTtftP50Ms": null,
+      "addedTtftP95Ms": null,
+      "addedTtftP99Ms": null,
+      "buffered": 0,
+      "streamed": false
+    },
+    {
+      "scenario": "translate (stream)",
+      "path": "translate",
+      "samples": 2000,
+      "failures": 0,
+      "overheadMeanMs": 0.024500000000000015,
+      "overheadP50Ms": 0.25510204081632654,
+      "overheadP95Ms": 0.48469387755102045,
+      "overheadP99Ms": 0.7941176470588236,
+      "overheadQuantized": true,
+      "addedTtftSamples": 2000,
+      "addedTtftP50Ms": 0.05970850000085193,
+      "addedTtftP95Ms": 0.10576540000147361,
+      "addedTtftP99Ms": 0.17077505000310333,
+      "buffered": 0,
+      "streamed": true
+    }
+  ],
+  "budgets": {
+    "overheadP99Ms": 5,
+    "addedTtftP95Ms": 2
+  },
+  "violations": []
+}

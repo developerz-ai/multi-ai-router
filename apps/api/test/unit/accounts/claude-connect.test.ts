@@ -20,6 +20,7 @@ import {
   type HealthStore,
   type RoutableAccount,
 } from "../../../src/services/dataplane"
+import { accountDeletionFixture } from "../../support/account-deletion"
 import { createMemoryConfigDirs, type MemoryConfigDirs } from "../../support/config-dirs"
 import { createMemoryStore, type MemoryStore } from "../../support/memory-store"
 
@@ -94,13 +95,25 @@ function fakeLogin(state = STATE, url = URL): FakeLogin {
       }
       const submitted: string[] = []
       const stats = { cancels: 0 }
+      let finished = false
+      let finish = () => {}
+      const exited = new Promise<void>((resolve) => {
+        finish = resolve
+      })
       const handle: FakeHandle = {
         authorizeUrl: url,
         state,
         submitted,
         stats,
+        exited,
+        cancelAsync: async () => {
+          handle.cancel()
+          await exited
+        },
         submit: async (value) => {
           submitted.push(value)
+          finished = true
+          finish()
           if (rejection !== null) {
             const thrown = rejection
             rejection = null
@@ -108,7 +121,11 @@ function fakeLogin(state = STATE, url = URL): FakeLogin {
           }
         },
         cancel: () => {
-          stats.cancels += 1
+          if (!finished) {
+            stats.cancels += 1
+            finished = true
+            finish()
+          }
         },
       }
       handles.push(handle)
@@ -151,6 +168,7 @@ function harness(
     keys: store.keys,
     cipher: createCredentialCipher({ key: new Uint8Array(32).fill(7) }),
     configDirs: configDirs.dirs,
+    ...accountDeletionFixture(configDirs.dirs),
     audit,
     now: () => clock.now,
   })

@@ -1,6 +1,7 @@
-import type { AccountRepository } from "@multi-ai-router/db"
+import type { AccountRepository, AccountRow } from "@multi-ai-router/db"
 import type { Logger } from "../../logging/logger"
 import type { SdkQuotaStore, SdkTestProbe, UpstreamFailureKind } from "../../providers"
+import { UpstreamAdmissionRefused } from "../../providers/upstream-admission"
 import { AUDIT_KINDS, AUDIT_SUBJECTS, type AuditRecorder } from "../admin/audit"
 import { type AdminResult, invalid, notFound, ok } from "../admin/result"
 import type { CredentialCipher } from "../crypto/cipher"
@@ -61,13 +62,22 @@ export interface TestNowResult {
 export interface TestNowService {
   test(
     accountId: string,
-    input: { readonly model: string; readonly confirmed?: boolean },
+    input: {
+      readonly model: string
+      readonly confirmed?: boolean
+      readonly backgroundExpectedAccount?: AccountRow
+    },
   ): Promise<AdminResult<TestNowResult>>
   /** Local opt-in test timestamp; independent of durable recovery cooldown. */
   lastCheckedAt(accountId: string): Date | null
 }
 
 export interface TestNowServiceDeps {
+  /** Internal background-only factory; no admin DTO or ordinary request calls it. */
+  readonly createBackgroundStartGuard?: (
+    expected: AccountRow,
+    signal: AbortSignal,
+  ) => () => Promise<void>
   readonly accounts: Pick<AccountRepository, "findById">
   readonly cipher: Pick<CredentialCipher, "decrypt">
   readonly audit: AuditRecorder
@@ -122,6 +132,12 @@ export function createTestNowService(deps: TestNowServiceDeps): TestNowService {
     lastCheckedAt: (accountId) => lastChecked.get(accountId) ?? null,
 
     test: async (accountId, input) => {
+      const backgroundExpectedAccount =
+        input.backgroundExpectedAccount === undefined
+          ? undefined
+          : { ...input.backgroundExpectedAccount }
+      if (backgroundExpectedAccount !== undefined && backgroundExpectedAccount.id !== accountId)
+        return invalid("background account subject does not match", "background_admission_refused")
       const account = await deps.accounts.findById(accountId)
       if (account === undefined) return notFound("No account has that id")
 
@@ -136,6 +152,29 @@ export function createTestNowService(deps: TestNowServiceDeps): TestNowService {
         return invalid(CONFIRMATION_REQUIRED, "confirmation_required")
       }
 
+      const backgroundGuard =
+        backgroundExpectedAccount === undefined
+          ? undefined
+          : deps.createBackgroundStartGuard?.(
+              backgroundExpectedAccount,
+              AbortSignal.timeout(deps.timeoutMs),
+            )
+      if (backgroundExpectedAccount !== undefined && backgroundGuard === undefined)
+        return invalid(
+          "background account admission is not configured",
+          "background_admission_refused",
+        )
+      if (backgroundGuard !== undefined) {
+        try {
+          await backgroundGuard()
+        } catch (error) {
+          if (!(error instanceof UpstreamAdmissionRefused)) throw error
+          return invalid(
+            "background account admission was declined",
+            "background_admission_refused",
+          )
+        }
+      }
       const now = deps.now()
       const previous = lastChecked.get(accountId)
       if (previous !== undefined && now.getTime() - previous.getTime() < cooldownMs) {
@@ -146,8 +185,15 @@ export function createTestNowService(deps: TestNowServiceDeps): TestNowService {
       const started = performance.now()
       const outcome =
         descriptor.transport === "agent-sdk"
-          ? await runSdkProbe(deps, account, input.model)
-          : await runHttpProbe(deps, call, account, input.model)
+          ? await runSdkProbe(deps, account, input.model, backgroundGuard)
+          : await runHttpProbe(deps, call, account, input.model, backgroundGuard)
+      if (outcome.admissionRefused) {
+        if (lastChecked.get(accountId) === now) {
+          if (previous === undefined) lastChecked.delete(accountId)
+          else lastChecked.set(accountId, previous)
+        }
+        return invalid("background account admission was declined", "background_admission_refused")
+      }
       const latencyMs = Math.round(performance.now() - started)
 
       await deps.audit.record({

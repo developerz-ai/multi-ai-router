@@ -7,6 +7,7 @@ import {
 } from "../../../src/services/accounts"
 import { createAuditRecorder } from "../../../src/services/admin"
 import { createCredentialCipher } from "../../../src/services/crypto/cipher"
+import { accountDeletionFixture } from "../../support/account-deletion"
 import { createMemoryConfigDirs, type MemoryConfigDirs } from "../../support/config-dirs"
 import { createMemoryStore, type MemoryStore } from "../../support/memory-store"
 
@@ -39,6 +40,7 @@ function harness(): Harness {
     keys: store.keys,
     cipher: createCredentialCipher({ key: new Uint8Array(32).fill(7) }),
     configDirs: configDirs.dirs,
+    ...accountDeletionFixture(configDirs.dirs),
     audit: createAuditRecorder(store.audit),
     now: () => NOW,
   })
@@ -147,7 +149,7 @@ describe("the config directory a Claude subscription owns", () => {
     expect(configDirs.calls).toEqual([])
   })
 
-  test("goes with the row, and goes first — credentials outliving their account is the worse half", async () => {
+  test("is cleaned after durable deletion through the ownership capability", async () => {
     const { service, configDirs } = harness()
     const view = await subscription(service)
 

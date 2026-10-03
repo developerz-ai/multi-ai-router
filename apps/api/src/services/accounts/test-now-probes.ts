@@ -6,12 +6,14 @@ import {
   type RateLimitSignal,
   type UpstreamFailureKind,
 } from "../../providers"
+import { UpstreamAdmissionRefused } from "../../providers/upstream-admission"
 import { type FetchLike, type RoutableAccount, runAttempt, upstreamUrl } from "../dataplane"
 import type { TestNowServiceDeps } from "./test-now"
 
 const NO_SDK_PROBE = "this router has no Agent-SDK test probe configured"
 
 export interface ProbeOutcome {
+  readonly admissionRefused?: true
   readonly ok: boolean
   readonly message: string
   /** Raw upstream text, for the log only. Never rendered into the response. */
@@ -23,6 +25,7 @@ export async function runSdkProbe(
   deps: TestNowServiceDeps,
   account: AccountRow,
   model: string,
+  beforeBackgroundUpstreamStart?: () => Promise<void>,
 ): Promise<ProbeOutcome> {
   if (deps.sdkProbe === undefined) return { ok: false, message: NO_SDK_PROBE }
   const configDir = account.configDir?.trim()
@@ -36,12 +39,23 @@ export async function runSdkProbe(
   // The deadline bounds the wait for a subprocess slot as well as the turn itself: the probe shares
   // the dispatch path's ceiling (`claude-sdk/test-probe.ts`), so a saturated replica answers "at the
   // ceiling" rather than queueing a button press behind live traffic indefinitely.
-  const result = await deps.sdkProbe.run({
-    accountId: account.id,
-    configDir,
-    model,
-    signal: AbortSignal.timeout(deps.timeoutMs),
-  })
+  let result: Awaited<ReturnType<NonNullable<TestNowServiceDeps["sdkProbe"]>["run"]>>
+  try {
+    result = await deps.sdkProbe.run({
+      accountId: account.id,
+      configDir,
+      model,
+      signal: AbortSignal.timeout(deps.timeoutMs),
+      ...(beforeBackgroundUpstreamStart === undefined ? {} : { beforeBackgroundUpstreamStart }),
+    })
+  } catch (error) {
+    if (!(error instanceof UpstreamAdmissionRefused)) throw error
+    return {
+      ok: false,
+      admissionRefused: true,
+      message: "background account admission was declined",
+    }
+  }
 
   // The turn is already billed and the SDK already volunteered this account's window state, so the
   // readings are folded in exactly as the dispatch path folds them
@@ -79,6 +93,7 @@ export async function runHttpProbe(
   call: FetchLike,
   account: AccountRow,
   requestedModel: string,
+  beforeBackgroundUpstreamStart?: () => Promise<void>,
 ): Promise<ProbeOutcome> {
   const driver = httpDriver(account.provider)
   if (driver === null) {
@@ -130,7 +145,14 @@ export async function runHttpProbe(
     method: "POST",
     clientHeaders: new Headers(),
     body: probeBody(dialect, upstreamModel, driver.resolveChatCeiling(driverAccount)),
-    fetch: call,
+    fetch:
+      beforeBackgroundUpstreamStart === undefined
+        ? call
+        : async (request) => {
+            await beforeBackgroundUpstreamStart()
+            request.signal.throwIfAborted()
+            return call(request)
+          },
     cipher: deps.cipher,
     timeoutMs: deps.timeoutMs,
   })
@@ -144,6 +166,7 @@ export async function runHttpProbe(
   if (outcome.kind === "admission-refused") {
     return {
       ok: false,
+      admissionRefused: true,
       message: "test attempt unavailable: admission was declined before provider dispatch",
     }
   }

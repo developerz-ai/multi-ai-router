@@ -1,7 +1,9 @@
+import type { AsyncBackgroundStartGuard } from "../upstream-admission"
 import { createCliProbe } from "./cli-probe"
 import type { SdkConcurrency } from "./concurrency"
 import type { CredentialFreshness } from "./credential-freshness"
 import { IdleQueryColdCredentialError, type IdleQueryFn, openIdleQuery } from "./idle-query"
+import type { OwnerLaunchFactory } from "./owned-query"
 import { type CliResolution, resolveClaudeCli } from "./resolve-cli"
 import type { SdkUsageGauge } from "./usage-gauge"
 
@@ -42,6 +44,7 @@ export interface SdkUsageGaugeProbeOptions {
   /** Bounds the slot wait, the handshake, and the read together. Config, never a constant. */
   readonly timeoutMs: number
   readonly resolveCli?: () => CliResolution
+  readonly ownerLaunch?: OwnerLaunchFactory
   readonly runQuery?: IdleQueryFn
 }
 
@@ -53,6 +56,7 @@ export interface SdkUsageGaugeProbe {
   read(input: {
     readonly accountId: string
     readonly configDir: string
+    readonly beforeBackgroundUpstreamStart?: AsyncBackgroundStartGuard
   }): Promise<SdkUsageGaugeProbeOutcome>
 }
 
@@ -62,7 +66,7 @@ export function createSdkUsageGaugeProbe(options: SdkUsageGaugeProbeOptions): Sd
     (() => resolveClaudeCli(createCliProbe({ override: options.cliPathOverride })))
 
   return {
-    read: async ({ accountId, configDir }) => {
+    read: async ({ accountId, configDir, beforeBackgroundUpstreamStart }) => {
       const resolution = resolveCli()
       if (!resolution.ok) return "no_cli"
 
@@ -71,8 +75,10 @@ export function createSdkUsageGaugeProbe(options: SdkUsageGaugeProbeOptions): Sd
         handle = await openIdleQuery({
           accountId,
           configDir,
+          ...(beforeBackgroundUpstreamStart === undefined ? {} : { beforeBackgroundUpstreamStart }),
           cliPath: resolution.path,
           concurrency: options.concurrency,
+          ownerLaunch: options.ownerLaunch,
           ...(options.freshness === undefined ? {} : { freshness: options.freshness }),
           timeoutMs: options.timeoutMs,
           ...(options.runQuery === undefined ? {} : { runQuery: options.runQuery }),

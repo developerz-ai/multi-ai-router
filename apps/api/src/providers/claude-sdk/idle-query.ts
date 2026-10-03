@@ -1,8 +1,10 @@
 import type { Options, SDKUserMessage } from "@anthropic-ai/claude-agent-sdk"
 import { query } from "@anthropic-ai/claude-agent-sdk"
+import type { AsyncBackgroundStartGuard } from "../upstream-admission"
 import type { SdkConcurrency, SdkSlot } from "./concurrency"
 import { ALWAYS_FRESH, type CredentialFreshness } from "./credential-freshness"
 import { isolatedOptions } from "./options"
+import { type OwnerLaunchFactory, ownedQuery } from "./owned-query"
 
 /**
  * An Agent SDK `query()` that **never sends a turn**: the subprocess comes up, completes its
@@ -52,6 +54,7 @@ export type IdleQueryFn = (params: {
 }) => IdleQuery
 
 export interface OpenIdleQueryInput {
+  readonly beforeBackgroundUpstreamStart?: AsyncBackgroundStartGuard
   /** Whose per-Account subprocess slot this takes. */
   readonly accountId: string
   /** The isolated `CLAUDE_CONFIG_DIR`. Also the subprocess's working directory. */
@@ -64,6 +67,7 @@ export interface OpenIdleQueryInput {
   readonly timeoutMs: number
   readonly signal?: AbortSignal
   /** Injected in tests, for the reason `SdkInvokerDeps.runQuery` is: no test may spawn a `claude`. */
+  readonly ownerLaunch?: OwnerLaunchFactory
   readonly runQuery?: IdleQueryFn
   /**
    * The Account's refresh-moment gate (`credential-freshness.ts`). Asked whether a spawn would
@@ -133,9 +137,11 @@ export async function openIdleQuery(input: OpenIdleQueryInput): Promise<IdleQuer
 
   // Asked again with the slot in hand: a queue wait is unbounded below the deadline, and a token
   // that was warm when this caller queued can be cold by the time it may spawn.
-  if (await freshness.wouldRefresh(input.accountId)) {
+  try {
+    if (await freshness.wouldRefresh(input.accountId)) throw new IdleQueryColdCredentialError()
+  } catch (error) {
     slot.release()
-    throw new IdleQueryColdCredentialError()
+    throw error
   }
 
   const controller = new AbortController()
@@ -159,7 +165,12 @@ export async function openIdleQuery(input: OpenIdleQueryInput): Promise<IdleQuer
   }
 
   try {
-    opened = runQuery({ prompt: held.prompt, options: gatedOptions(input, controller) })
+    opened = await ownedQuery({
+      ...input,
+      signal,
+      options: gatedOptions(input, controller),
+      run: (options) => runQuery({ prompt: held.prompt, options }),
+    })
     // Ready means the handshake answered, which is what every idle read is answered from. Raced
     // against the signal because the handshake has no deadline of its own.
     await Promise.race([opened.initializationResult?.(), rejectOnAbort(signal)])

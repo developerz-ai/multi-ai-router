@@ -1,3 +1,4 @@
+import { resolve } from "node:path"
 import { describeError } from "@multi-ai-router/core"
 import {
   createAccountRepository,
@@ -34,6 +35,7 @@ import {
   createSdkUsageGaugeProbe,
   type SdkQuotaStore,
 } from "../providers"
+import { createAccountCliOwnership } from "../providers/claude-sdk/account-ownership"
 import { createAccountConfigDirs } from "../providers/claude-sdk/config-dir"
 import { createSdkTranscripts } from "../providers/claude-sdk/transcripts"
 import { IDLE_PROBE_MODELS, type Scheduler, schedulerFromEnv } from "../scheduler"
@@ -66,9 +68,12 @@ import {
   type ModelCatalogStore,
   refreshAccountCatalog,
 } from "../services/models"
+import { DEFAULT_QUOTA_SPENT_THRESHOLD } from "../services/routing"
 import { createUsageRecorderFromEnv, type UsageRecorder } from "../services/usage"
 import type { AdminServices } from "../types"
 import { createAdminPlane } from "./admin"
+import { createWarmBackgroundStartGuard } from "./background-admission"
+import { ownedCredentialMetadataReader } from "./credential-ownership"
 import { dispatchOptionsFromEnv } from "./dispatch-options"
 import { createRuntimeLifecycle } from "./lifecycle"
 import { createRecoveryComponents } from "./recovery"
@@ -293,17 +298,45 @@ export function createRuntime(deps: RuntimeDeps): Runtime {
   // scheduler's reaper removes what a crash between provisioning and the insert left behind, and a
   // reaper rooted somewhere other than the provisioner would sweep the wrong directory or nothing
   // at all (`scheduler/tasks/config-dir-reap.ts`).
-  const configDirs = createAccountConfigDirs({ root: env.claudeConfigRoot })
+  const rawConfigDirs = createAccountConfigDirs({ root: env.claudeConfigRoot })
+  const ownershipConfig = {
+    ...env.cliOwnership,
+    shutdownDrainMs: env.background.shutdownDrainMs,
+    root: rawConfigDirs.root,
+    helperPath: resolve(env.cliOwnership.helperPath),
+  }
+  const ownership = createAccountCliOwnership(ownershipConfig)
+  const configDirs = {
+    ...rawConfigDirs,
+    provision: (id: string) =>
+      ownership.provisionAccount({ id, configDir: rawConfigDirs.pathFor(id) }),
+    list: async () => (await rawConfigDirs.list()).filter((entry) => entry.name !== ".ownership"),
+    remove: async (id: string) => {
+      const account = { id, configDir: rawConfigDirs.pathFor(id) }
+      await ownership.revokeDeletedAccount(account)
+      const outcome = await ownership.cleanupDeletedAccount(account)
+      if (outcome === "deferred")
+        logger.info("credential directory cleanup deferred", { accountId: id })
+      return outcome
+    },
+  }
   // The transcripts the CLI leaves under those directories, over the validated root: the sweep
   // that removes them is the retention half of the same volume (`scheduler/tasks/sdk-transcript-sweep.ts`).
-  const transcripts = createSdkTranscripts({ root: configDirs.root })
+  const transcripts = createSdkTranscripts({
+    root: configDirs.root,
+    withAccountOwner: ownership.withMetadataOwner,
+  })
   // Only one `claude` subprocess may cross an Account's token-refresh moment, because the refresh
   // token rotates and a second spender gets rejected — after which the losing CLI blanks the
   // credential file and the Account needs an interactive re-login
   // (`providers/claude-sdk/credential-freshness.ts`, docs/idea/11-anthropic-agent-sdk.md §3).
   // Shared by every spawn site for the same reason `sdkConcurrency` is: a gate only some callers
   // honour is not a gate.
-  const credentialReader = createCredentialMetadataReader()
+  const credentialReader = ownedCredentialMetadataReader(
+    createCredentialMetadataReader(),
+    ownership,
+    configDirs.root,
+  )
   const credentialFreshness = createCredentialFreshness({
     reader: credentialReader,
     configDirs,
@@ -403,16 +436,36 @@ export function createRuntime(deps: RuntimeDeps): Runtime {
   // Postgres is the truth, the LRU pair in front of it is the cache. A binding says where a
   // conversation physically lives upstream, so no policy may overrule it and no hash recomputes it.
   const sessionStore = sessionStoreFromEnv({ env, repository: sessions, logger, now })
+  let backgroundAdmissionOpen = true
+  const backgroundStartGuard = (
+    expected: Parameters<typeof createWarmBackgroundStartGuard>[1],
+    signal?: AbortSignal,
+  ) =>
+    createWarmBackgroundStartGuard(
+      {
+        accounts,
+        catalog,
+        access: recoveryComponents.access,
+        now,
+        quotaSpentThreshold: DEFAULT_QUOTA_SPENT_THRESHOLD,
+        logger,
+        accepting: () => backgroundAdmissionOpen,
+      },
+      expected,
+      signal,
+    )
 
   // The Claude subscription transport, over the semaphore pair above. Its quota store is built
   // with the rest of the warm state, since `HealthStore.reset` has to be able to clear it.
   const invokeSdk = createSdkInvoker({
+    ownerLaunch: ownership.ownerLaunch,
     concurrency: sdkConcurrency,
     freshness: credentialFreshness,
     cliPathOverride: env.claudeCliPath,
     usageGauge,
   })
   const usageGaugeProbe = createSdkUsageGaugeProbe({
+    ownerLaunch: ownership.ownerLaunch,
     gauge: usageGauge,
     concurrency: sdkConcurrency,
     freshness: credentialFreshness,
@@ -425,6 +478,7 @@ export function createRuntime(deps: RuntimeDeps): Runtime {
   // subprocess gate — a subscription has no HTTP listing, and without this a pool of them answers
   // `GET /v1/models` with `data: []` (`providers/claude-sdk/model-list.ts`).
   const sdkModelLister = createSdkModelLister({
+    ownerLaunch: ownership.ownerLaunch,
     concurrency: sdkConcurrency,
     freshness: credentialFreshness,
     cliPathOverride: env.claudeCliPath,
@@ -483,6 +537,16 @@ export function createRuntime(deps: RuntimeDeps): Runtime {
   // console's API surface. The two things it needs from here are the warm state a console write
   // must invalidate, and the price book a price edit must refresh.
   const { services: admin, refresher } = createAdminPlane({
+    backgroundStartGuard,
+    ownership: { manager: ownership, config: ownershipConfig },
+    accountDeletionCommitted: async (id) => {
+      health.reset(id)
+      const results = await Promise.allSettled([
+        sessionStore.invalidateAccount(id),
+        catalog.refreshAfterMutation(),
+      ])
+      for (const result of results) if (result.status === "rejected") throw result.reason
+    },
     env,
     logger,
     now,
@@ -544,8 +608,12 @@ export function createRuntime(deps: RuntimeDeps): Runtime {
     configDirs,
     transcripts,
     adminSessions,
-    testAccount: async (accountId, model) => {
-      const result = await admin.testNow.test(accountId, { model, confirmed: true })
+    testAccount: async (accountId, model, expectedAccount) => {
+      const result = await admin.testNow.test(accountId, {
+        model,
+        confirmed: true,
+        backgroundExpectedAccount: expectedAccount,
+      })
       // A refusal (`ok: false`) is a validation outcome — an unknown id, a provider with no
       // implementation. Reported as "not tested" rather than as a failed account, because nothing
       // was sent and the account said nothing about itself.
@@ -557,7 +625,11 @@ export function createRuntime(deps: RuntimeDeps): Runtime {
     // The free half's usage read: a turn-free query per logged-in subscription, so an account
     // nothing routed to today still shows real percentages. Bounded by the same semaphore.
     usageProbe: (account) =>
-      usageGaugeProbe.read({ accountId: account.id, configDir: configDirs.pathFor(account.id) }),
+      usageGaugeProbe.read({
+        accountId: account.id,
+        configDir: configDirs.pathFor(account.id),
+        beforeBackgroundUpstreamStart: backgroundStartGuard(account),
+      }),
     probeModels: IDLE_PROBE_MODELS,
     // Metadata, never a token: one boolean per account, from the same gate every spawn site asks.
     // It is what lets the sweep warm a cold credential with a real turn *before* its turn-free
@@ -618,12 +690,21 @@ export function createRuntime(deps: RuntimeDeps): Runtime {
     },
     phases: [
       [
-        { name: "account-connect", run: () => admin.connect.stop() },
+        {
+          name: "background-admission",
+          run: () => {
+            backgroundAdmissionOpen = false
+          },
+        },
+        { name: "account-connect-admission", run: () => admin.connect.closeAdmission() },
+        { name: "cli-owner-admission", run: () => ownership.closeAdmission() },
         { name: "catalog-timers", run: () => catalog.stop() },
         { name: "price-timers", run: () => prices.stop() },
         { name: "model-catalog-timers", run: () => modelCatalogStore.stop() },
       ],
       [
+        { name: "account-connect", run: () => admin.connect.stop() },
+        { name: "cli-owners", run: () => ownership.stop() },
         { name: "recovery-coordinator", run: () => recoveryComponents.coordinator.stop() },
         { name: "scheduler", run: () => scheduler.stop() },
         { name: "credential-refresher", run: () => refresher.stop() },

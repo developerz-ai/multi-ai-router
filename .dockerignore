@@ -6,6 +6,9 @@
 node_modules/
 **/node_modules/
 
+# Native supervisor is rebuilt for the target image architecture, never copied from the host.
+native/config-owner
+
 # Rebuilt by `bun run build`.
 #
 # NOTE: do not add a bare `build/` or `**/build/` here. Docker matches those

@@ -8,6 +8,7 @@ import type {
   OauthStateRow,
   PoolMemberRow,
   PoolRow,
+  RecoveryRow,
 } from "@multi-ai-router/db"
 import { memoryAccountLifecycle } from "./memory-account-lifecycle"
 import { createMemoryMutations } from "./memory-mutations"
@@ -29,6 +30,7 @@ const EPOCH = new Date("2026-07-24T12:00:00.000Z")
 
 export function createMemoryStore(): MemoryStore {
   const accounts: AccountRow[] = []
+  const recoveries = new Map<string, Pick<RecoveryRow, "generation" | "state">>()
   const keys: ApiKeyRow[] = []
   const keyPools: ApiKeyPoolRow[] = []
   const keyAccounts: ApiKeyAccountRow[] = []
@@ -43,10 +45,20 @@ export function createMemoryStore(): MemoryStore {
       mutations ??= createMemoryMutations(this)
       return mutations
     },
-    rows: { accounts, keys, keyPools, keyAccounts, pools, poolMembers, oauthStates, audit },
+    rows: {
+      accounts,
+      recoveries,
+      keys,
+      keyPools,
+      keyAccounts,
+      pools,
+      poolMembers,
+      oauthStates,
+      audit,
+    },
 
     accounts: {
-      ...memoryAccountLifecycle(accounts, oauthStates),
+      ...memoryAccountLifecycle(accounts, oauthStates, recoveries),
       create: async (input) => {
         const row: AccountRow = {
           id: input.id ?? crypto.randomUUID(),
@@ -81,6 +93,21 @@ export function createMemoryStore(): MemoryStore {
             (filter?.status === undefined || row.status === filter.status) &&
             (filter?.provider === undefined || row.provider === filter.provider),
         ),
+      readEligibleBackgroundAccount: async (id, expected) => {
+        const row = accounts.find((candidate) => candidate.id === id)
+        const state = recoveries.get(id)?.state
+        return row !== undefined &&
+          row.status === "active" &&
+          row.lifecycleVersion === expected.lifecycleVersion &&
+          row.authMaterial === expected.authMaterial &&
+          row.provider === expected.provider &&
+          row.configDir === expected.configDir &&
+          state !== "pending" &&
+          state !== "issued" &&
+          state !== "uncertain"
+          ? row
+          : undefined
+      },
       findById: async (id) => accounts.find((row) => row.id === id),
       findByIds: async (ids) => accounts.filter((row) => ids.includes(row.id)),
       update: async (id, patch, now) => replace(accounts, id, patch, now),
@@ -94,12 +121,16 @@ export function createMemoryStore(): MemoryStore {
         return replace(accounts, id, { status: to }, now)
       },
       disable: (id, now) =>
-        memoryAccountLifecycle(accounts, oauthStates).updateOperatorAccount({
+        memoryAccountLifecycle(accounts, oauthStates, recoveries).updateOperatorAccount({
           id,
           patch: { status: "disabled" },
           now,
         }),
-      delete: async (id) => remove(accounts, id),
+      delete: async (id) => {
+        const deleted = remove(accounts, id)
+        if (deleted) recoveries.delete(id)
+        return deleted
+      },
     },
 
     keys: {

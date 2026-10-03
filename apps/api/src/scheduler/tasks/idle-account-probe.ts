@@ -7,81 +7,10 @@ import type { ScheduledTask, TaskOutcome } from "../types"
 import { isCold, keepAlive, readUsage, type Tally, warm } from "./idle-account-warmth"
 
 /**
- * The daily credential sweep: a free logged-in check over **every** account that holds a CLI-managed
- * credential, then one real request for the accounts traffic has forgotten.
- *
- * **What a Claude subscription's refresh token actually does — and does not.** Its access token
- * lasts hours and is refreshed by the Agent SDK when a `query()` runs. Its refresh token **hard-expires
- * about 30 days after login, however much the account is used in between** — observed in
- * production on every account (`refreshTokenExpiresAt` = login + ~30 d, on accounts that served
- * traffic daily). Nothing this router does can move that date: not traffic, not this sweep, not
- * "Re-check now". Only a re-login can. So the billed turn below keeps an *unused* account's access
- * token warm; it is not, and never was, a way to keep a subscription alive past its month
- * (docs/idea/11-anthropic-agent-sdk.md §3, "Credential lifecycle per Account").
- *
- * **The free check runs over every account, not only idle ones.** The failure this closes was
- * observed on 2026-09-05: three subscriptions whose refresh tokens had expired served traffic
- * daily, so they were never idle and never checked, and sat `active` in the console for a week
- * while every request through them answered `502`. `claude auth status` reads the credential file
- * and contacts nobody, so asking it of every account once a day costs a subprocess each and nothing
- * else — and an expired subscription flips to `needs_reauth` within a day instead of on the next
- * client's failed request. The probe (`services/health/claudeAuthProbe.ts`) owns that transition,
- * in both directions.
- *
- * **The billed half is opt-in (`IDLE_ACCOUNT_PROBE_PAID_TURN`, default off), and stays bounded to
- * idle accounts when it is on.** Checking whether a subscription is alive must never spend usage:
- * a turn refreshes only the *access* token, which the cliff above does not care about, so the
- * operator was paying for a check that could not achieve its aim — and saw usage move on freshly
- * reconnected accounts. With the flag off the sweep bills nothing on any provider. With it on, a
- * dead credential still ends the run for that account: the test would fail, for a reason a human
- * already has to fix, and billing a turn to re-learn that is spending money to confirm a fact we
- * hold. A test does **not** count as use: nothing on that path stamps `lastUsedAt` (only a usage
- * record does, and a probe writes none), so an account traffic has forgotten stays idle and is
- * billed again on every tick it is still idle — bounded by `batchSize` and the test's own cooldown,
- * not by the idle window.
- *
- * **The free half also reads the usage gauge** for every logged-in subscription, through a
- * turn-free query (`providers/claude-sdk/usage-gauge-probe.ts`): the console's per-window
- * percentages for an account nothing routed to today would otherwise stay stale until traffic
- * arrived. One subprocess per account per sweep, no prompt, nothing billed.
- *
- * **A cold credential is warmed with a real turn *before* anything turn-free touches it.** The
- * CLI refreshes the access token at startup once it is expired or inside its own five-minute lead,
- * and persists the rotated refresh token only after the token endpoint answers; a turn-free query
- * is ended the moment its handshake is read, before that write, and the refresh token on disk is
- * then spent — the next process to present it is told `invalid_grant` and the CLI blanks the
- * credential. That, and not a race or an upstream policy, is what deauthenticated six of six
- * production subscriptions on 2026-09-06/07 (docs/idea/11-anthropic-agent-sdk.md §3). So the order
- * per account is fixed: the free check, then — if the token is cold — one small real turn, which
- * runs to completion and persists the refresh, and only then the gauge. `openIdleQuery` refuses a
- * cold credential on its own as well; the sweep simply does not ask. With the keepalive off, or
- * its per-tick batch full, a cold account keeps its old gauge and its old catalog until a client's
- * turn refreshes it, and the sweep says so.
- *
- * **Outcomes are the sweep's, not the accounts'.** An account correctly parked `needs_reauth` is
- * the sweep doing its job — `success`, with a `warn` line naming the account. `partial` means the
- * sweep was cut short: a shutdown between accounts, or an idle batch larger than one tick takes.
- * `failed` means the sweep itself threw, and says why. Before this distinction every logged-out
- * account produced a silent `partial` with an empty error, daily, for weeks.
- *
- * **`disabled` is excluded** from both halves: it is the operator's own switch.
- */
-
-/**
- * Which model each provider's keepalive turn asks for.
- *
- * **This is the one place the router names a model without a client asking**, and it is worth being
- * uncomfortable about: non-negotiable 4 says the client picks the model and the router never
- * substitutes one. The rule holds — nothing here touches a client request. A keepalive has no
- * client to ask, so it either names a model or cannot exist. A provider absent from this map is
- * **not probed at all**, which is the honest failure.
- *
- * Provenance (Anthropic rows): `claude-haiku-4-5-20251001`, the cheapest model in Anthropic's
- * current lineup as of 2026-10-01 — a keepalive asks for one word, so the cheapest model that
- * answers is the right one. Pinned to the dated id rather than an alias so a probe never silently
- * moves to a pricier model. Blast radius: when Anthropic retires the id the keepalive turn fails
- * (logged per account), cold credentials stop being warmed and their gauges go stale — no client
- * request is affected. Replace it here, with the then-cheapest id.
+ * Free CLI auth checks may recover credentials. Paid maintenance is separately opt-in,
+ * restricted to active authoritative subjects with no open recovery generation, and
+ * revalidated at the final transport admission boundary after all queue waits.
+ * A keepalive warms an access token; it never extends a subscription's login lifetime.
  */
 export const IDLE_PROBE_MODELS: Readonly<Record<string, string>> = {
   "anthropic-oauth": "claude-haiku-4-5-20251001",
@@ -90,7 +19,6 @@ export const IDLE_PROBE_MODELS: Readonly<Record<string, string>> = {
   "openai-api": "gpt-5",
   minimax: "MiniMax-M2",
   zai: "glm-4.6",
-  kimi: "k2",
 }
 
 /**
@@ -106,13 +34,17 @@ export interface IdleProbeTestResult {
 }
 
 export interface IdleAccountProbeDeps {
-  readonly accounts: Pick<AccountRepository, "list" | "findIdle">
+  readonly accounts: Pick<AccountRepository, "list" | "findIdle" | "readEligibleBackgroundAccount">
   /**
    * The billed half. Its own cooldown still applies, so an operator who just pressed "Test now" by
    * hand does not get a second charge from this task — the refusal comes back as `tested: false`
    * and is counted as a skip, not a failure.
    */
-  readonly test: (accountId: string, model: string) => Promise<IdleProbeTestResult>
+  readonly test: (
+    accountId: string,
+    model: string,
+    expected: AccountRow,
+  ) => Promise<IdleProbeTestResult>
   /**
    * The free half. Answers `null` for an account with no CLI-managed credential, so it is asked of
    * every account and only the subscriptions cost a subprocess. Absent means no CLI is available:
@@ -176,12 +108,19 @@ export function createIdleAccountProbeTask(deps: IdleAccountProbeDeps): Schedule
         // Every credential first, idle or not — see the module header for the outage this closes.
         if (deps.auth !== undefined) {
           const accounts = await deps.accounts.list({})
-          for (const account of accounts) {
+          for (const observed of accounts) {
+            const account = Object.freeze({ ...observed })
             if (signal.aborted) return partial(logger, tally, processed())
             if (account.status === "disabled") continue
             const answer = await checkCredential(deps.auth, account, logger, tally)
             if (answer === "logged-out") loggedOut.add(account.id)
             if (answer !== "logged-in") continue
+            if (
+              (await deps.accounts.readEligibleBackgroundAccount(account.id, account)) === undefined
+            ) {
+              tally.skipped++
+              continue
+            }
             // The order is the fix: a real turn crosses the refresh and persists it; only then may
             // a turn-free read touch the directory. A cold account that could not be warmed is
             // left alone entirely — `openIdleQuery` would refuse it anyway.
@@ -206,7 +145,8 @@ export function createIdleAccountProbeTask(deps: IdleAccountProbeDeps): Schedule
         const before = new Date(now.getTime() - deps.idleAfterMs)
         const idle = await deps.accounts.findIdle({ before, limit: deps.batchSize })
 
-        for (const account of idle) {
+        for (const observed of idle) {
+          const account = Object.freeze({ ...observed })
           // Between accounts, never mid-turn: a shutdown must not orphan a `claude` subprocess.
           if (signal.aborted) return partial(logger, tally, processed())
 

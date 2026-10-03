@@ -49,6 +49,7 @@ export interface SessionCache {
   set(key: string, entry: SessionEntry | null): void
   /** Invalidation: this key's binding is gone, and so is everything naming its session id. */
   drop(key: string): void
+  dropAccount(accountId: string): void
   /** Points a fingerprint at the session key that owns the binding. */
   alias(fingerprint: string, key: string): void
   /** The session key a fingerprint resolves to, if one is still cached. */
@@ -165,6 +166,12 @@ export function createSessionCache(options: SessionCacheOptions): SessionCache {
       const value = entries.get(key)?.value ?? null
       entries.delete(key)
       if (value !== null) purge(value.sdkSessionId)
+    },
+
+    dropAccount(accountId) {
+      for (const entry of entries.values()) {
+        if (entry.value?.accountId === accountId) purge(entry.value.sdkSessionId)
+      }
     },
 
     alias(fingerprint, key) {

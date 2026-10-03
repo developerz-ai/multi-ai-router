@@ -119,6 +119,10 @@ jobs:
       # GitHub gates the job on the service's health check before any step runs,
       # so no wait-for-postgres loop is needed here. Migrations are applied by the
       # test bootstrap itself (idempotent, same code path as boot).
+      - name: install native test prerequisites
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends gcc libc6-dev
       - run: bin/test
 
   bench:
@@ -178,6 +182,10 @@ jobs:
       # process serves as static assets. Runs on PRs too — a broken Vite build
       # or an unresolvable import must fail here, not inside the image job where
       # only main-branch pushes would notice.
+      - name: install native build prerequisites
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends gcc libc6-dev
       - run: bun run build
 # NOTE: this workflow deliberately publishes NOTHING.
 #

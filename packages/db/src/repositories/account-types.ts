@@ -8,10 +8,15 @@ import type {
 } from "@multi-ai-router/core"
 import type { AccountRow, ModelAliasMap, SupportedModelList } from "../schema/accounts"
 import type { QuotaWindowRow } from "../schema/quota-windows"
-
 import type { AddedAccountRepositoryMethods } from "./account-lifecycle-types"
+import type { BackgroundAccountSubject } from "./background-account-eligibility"
 
 export interface AccountRepository extends AddedAccountRepositoryMethods {
+  /** Durable identity/state check at a background upstream admission boundary. */
+  readEligibleBackgroundAccount(
+    id: string,
+    expected: BackgroundAccountSubject,
+  ): Promise<AccountRow | undefined>
   /** `input.authMaterial` must already be an encryption envelope, never a raw credential. */
   create(input: CreateAccountInput): Promise<AccountRow>
   /** Oldest first, so the admin list is stable across calls. */

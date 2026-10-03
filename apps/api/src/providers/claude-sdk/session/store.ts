@@ -9,6 +9,7 @@ import { readConversation } from "./conversation"
 import { scopedKey, sessionFingerprint } from "./fingerprint"
 import { claimSessionTurn, createSessionClaims, type SessionClaims } from "./inflight"
 import { hashMessages, resolveLineage, type SessionPlan } from "./lineage"
+import { createSessionWrites } from "./writes"
 
 /**
  * Session lineage as the rest of the router uses it: one read before selection, one plan before an
@@ -36,7 +37,7 @@ export interface StoredBinding {
 }
 
 export interface SessionStoreDeps {
-  readonly repository: Pick<SessionRepository, "findByKey" | "upsert">
+  readonly repository: Pick<SessionRepository, "findByKey" | "upsert" | "clearAccount">
   readonly now: () => Date
   readonly cache?: Partial<SessionCacheOptions>
   /** Reported, never thrown. Composition points this at the logger. */
@@ -97,6 +98,8 @@ export interface SessionStore {
   binding(apiKeyId: string, sessionKey: string): Promise<StoredBinding | undefined>
   /** Selection refused the binding. Drop it here and in Postgres; never move it to the new pick. */
   invalidate(apiKeyId: string, sessionKey: string): void
+  /** Drop local lineage immediately; durable deletion clears targeted bindings transactionally. */
+  invalidateAccount(accountId: string): Promise<void>
   /**
    * Before an SDK attempt: resume, fork, or start fresh, and how to record whichever happens.
    *
@@ -118,34 +121,12 @@ export function createSessionStore(deps: SessionStoreDeps): SessionStore {
     ...(deps.cache?.now === undefined ? {} : { now: deps.cache.now }),
   })
 
-  /**
-   * Row writes, ordered **per session key**. Every write is still fire-and-forget from the
-   * caller's side — nothing on the request path waits on Postgres — but within one key the
-   * upserts land in the order they were issued. Without this, an `invalidate` (clear) and the
-   * `remember` (bind) of the same request were two independent floating promises, and the clear
-   * landing second left the row empty behind a cache that says bound; two requests rebinding the
-   * same session concurrently could interleave the same way. The chain never grows unbounded: a
-   * key's tail entry is removed the moment it settles with nothing queued behind it.
-   */
   /** Which conversations are mid-turn right now. Per store, never a process singleton. */
   const claims: SessionClaims = createSessionClaims()
 
-  const pending = new Map<string, Promise<void>>()
-  const write = (key: string, input: Parameters<SessionRepository["upsert"]>[0]): void => {
-    const run = (): Promise<void> =>
-      deps.repository.upsert(input).then(
-        () => undefined,
-        (error: unknown) => deps.onError?.("write", error),
-      )
-    const previous = pending.get(key)
-    // Issued synchronously when nothing is in flight for this key, so an unqueued write costs the
-    // same instant it always did; queued only behind its own key's predecessor.
-    const tail = previous === undefined ? run() : previous.then(run)
-    pending.set(key, tail)
-    void tail.finally(() => {
-      if (pending.get(key) === tail) pending.delete(key)
-    })
-  }
+  // One generation fences in-flight reads, turns, and queued writes without deletion tombstones.
+  let generation = 0
+  const write = createSessionWrites(deps.repository, () => generation, deps.onError)
 
   return {
     async binding(apiKeyId, sessionKey) {
@@ -153,6 +134,7 @@ export function createSessionStore(deps: SessionStoreDeps): SessionStore {
       const cached = cache.get(key)
       if (cached !== undefined) return cached ?? undefined
 
+      const readingGeneration = generation
       let row: SessionRow | undefined
       try {
         row = await deps.repository.findByKey(apiKeyId, sessionKey)
@@ -162,6 +144,7 @@ export function createSessionStore(deps: SessionStoreDeps): SessionStore {
         return undefined
       }
 
+      if (readingGeneration !== generation) return undefined
       const entry = entryOf(row)
       cache.set(key, entry)
       return entry ?? undefined
@@ -182,7 +165,19 @@ export function createSessionStore(deps: SessionStoreDeps): SessionStore {
       })
     },
 
+    async invalidateAccount(accountId) {
+      generation++
+      cache.dropAccount(accountId)
+      try {
+        await deps.repository.clearAccount(accountId)
+      } catch (error) {
+        deps.onError?.("write", error)
+        throw error
+      }
+    },
+
     resolve(input) {
+      const turnGeneration = generation
       const conversation = readConversation(input.body)
       const key = scopedKey(input.apiKeyId, input.sessionKey)
       const fingerprint =
@@ -227,7 +222,7 @@ export function createSessionStore(deps: SessionStoreDeps): SessionStore {
         plan,
         release: claim.release,
         remember: (sdkSessionId, assistantUuid) => {
-          if (!claim.own(sdkSessionId)) return
+          if (turnGeneration !== generation || !claim.own(sdkSessionId)) return
           const lineage = nextLineage(hashes, carried, assistantUuid)
           cache.set(key, { accountId: input.accountId, sdkSessionId, lineage })
           if (fingerprint !== null) cache.alias(fingerprint, key)

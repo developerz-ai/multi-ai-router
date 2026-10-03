@@ -17,6 +17,7 @@ async function completeAfter(
     NOW,
   )
   const configDirs = createMemoryConfigDirs()
+  row.configDir = configDirs.dirs.pathFor(row.id)
   const audit = createAuditRecorder(store.audit)
   const events: string[] = []
   const connect = createClaudeConnectService({
@@ -28,6 +29,8 @@ async function completeAfter(
         state: STATE,
         submit: async () => {},
         cancel: () => {},
+        exited: Promise.resolve(),
+        cancelAsync: async () => {},
       }),
     },
     credentials: {

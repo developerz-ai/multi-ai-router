@@ -71,7 +71,7 @@ account per provider. The `label` is what distinguishes them to a human.
 | `label` | string | Required, human-chosen. The disambiguator between same-provider accounts: `claude-max-seb`, `claude-max-team-2` |
 | `provider` | enum | Provider id |
 | `authMaterial` | encrypted blob | API key, or OAuth access + refresh token. AES-256-GCM. Never returned by any endpoint, so the console's **Edit** dialog carries a write-only box: an empty one leaves the stored value alone and typing into it rotates. That box is absent entirely for a provider with a connect flow — pasting a token by hand is not how a subscription or an OAuth account is authorized. **Empty for Claude subscription accounts** — those hold a `CLAUDE_CONFIG_DIR` path instead, and the SDK owns the credentials inside it ([11-anthropic-agent-sdk.md](11-anthropic-agent-sdk.md)). Also legitimately empty for an `authKind: none` provider (`ollama`), whose upstream authenticates nobody; the request then carries no auth header, and every other provider's empty account is refused at write time |
-| `configDir` | path, optional | Claude subscription accounts only. One isolated `CLAUDE_CONFIG_DIR` per Account so N subscriptions coexist without cross-contamination. Its contents are live credential material. **Assigned by the router, never by the operator**: `<CLAUDE_CONFIG_ROOT>/<id>`, created `0700` with the row and deleted with it. Keyed on `id` because a `label` is renameable and a rename would strand a logged-in directory; a unique index on the column makes "two Accounts, one directory" a write that cannot land |
+| `configDir` | path, optional | Claude subscription accounts only. One isolated `CLAUDE_CONFIG_DIR` per Account so N subscriptions coexist without cross-contamination. Its contents are live credential material. **Assigned by the router, never by the operator**: `<CLAUDE_CONFIG_ROOT>/<id>`, created `0700` with the row; account deletion revokes ownership admission before deferred, exclusive cleanup. Keyed on `id` because a `label` is renameable and a rename would strand a logged-in directory; a unique index on the column makes "two Accounts, one directory" a write that cannot land |
 | `tokenExpiresAt` | timestamp, optional | OAuth accounts only. Drives the per-account refresh schedule; refresh fires at a fraction of the remaining lifetime, never on a `401`, and is re-scheduled each time a new token lands |
 | `refreshState` | in-memory | This account's armed timer and its single-flight guard: every trigger for one account awaits one shared promise, never N racing writes. Plus the backoff counter for failed refreshes. A *request* is never a trigger — it neither starts nor waits on a refresh |
 | `status` | enum | `active` \| `disabled` \| `cooling_down` \| `exhausted` \| `needs_reauth`. Two kinds of writer share the column, which is why every observed write is guarded — see below |
@@ -82,6 +82,13 @@ account per provider. The `label` is what distinguishes them to a human.
 | `weight` | number | Bias for the `weighted` policy. The account's own default; a Pool membership carries its own and wins where it is set |
 | `priority` | number | Strict order for the `priority-failover` policy. Same relationship to a membership's own value |
 | `health` | in-memory | Cooldown expiry, recent failures, in-flight count, quota headroom. Snapshotted and injected into selection |
+
+The account-delete response includes `cleanup: removed | deferred | not_applicable` separately from
+`deleted: true`. Deletion is already durable when cleanup is deferred. The console closes the
+confirmation dialog and shows a dismissible notice that the account cannot route while its
+credential directory awaits confirmed owner exit; unknown exits may require operator follow-up.
+No directory path, boot identity or owner marker is rendered in that notice.
+
 
 **Who writes `status`, and what may overwrite what.** The column holds two different kinds of fact.
 `active` and `disabled` are the **operator's** — a setting, written from the console. `cooling_down`,

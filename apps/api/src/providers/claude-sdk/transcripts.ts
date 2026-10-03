@@ -1,5 +1,6 @@
 import { lstat, readdir, rm, unlink } from "node:fs/promises"
 import { join, resolve } from "node:path"
+import { UpstreamAdmissionRefused } from "../upstream-admission"
 
 /**
  * The session transcripts the `claude` CLI leaves under every Account's `CLAUDE_CONFIG_DIR`, and
@@ -69,7 +70,7 @@ export interface SdkTranscripts {
   /** Every session's artifacts under every account directory. Reads no file's contents. */
   survey(): Promise<readonly TranscriptEntry[]>
   /** Removes one session's transcript and directory. Idempotent; a vanished artifact is fine. */
-  remove(entry: TranscriptEntry): Promise<void>
+  remove(entry: TranscriptEntry): Promise<boolean | undefined>
 }
 
 export interface TranscriptDirent {
@@ -98,11 +99,20 @@ export interface SdkTranscriptsOptions {
   /** `CLAUDE_CONFIG_ROOT`, already validated by `createAccountConfigDirs`. */
   readonly root: string
   readonly fs?: TranscriptFs
+  readonly withAccountOwner?: <T>(accountId: string, task: () => Promise<T>) => Promise<T>
 }
 
 export function createSdkTranscripts(options: SdkTranscriptsOptions): SdkTranscripts {
   const root = resolve(options.root)
   const fs = options.fs ?? nodeTranscriptFs
+  const owned = async <T>(id: string, task: () => Promise<T>): Promise<T | undefined> => {
+    try {
+      return await (options.withAccountOwner?.(id, task) ?? task())
+    } catch (error) {
+      if (error instanceof UpstreamAdmissionRefused) return undefined
+      throw error
+    }
+  }
 
   const projectPath = (accountId: string, project: string): string =>
     join(root, accountId, PROJECTS_DIR, project)
@@ -114,13 +124,15 @@ export function createSdkTranscripts(options: SdkTranscriptsOptions): SdkTranscr
       const entries: TranscriptEntry[] = []
       for (const account of await fs.list(root)) {
         if (account.kind !== "dir" || !UUID.test(account.name)) continue
-        for (const project of await fs.list(join(root, account.name, PROJECTS_DIR))) {
-          if (project.kind !== "dir" || !PROJECT_SLUG.test(project.name)) continue
-          const dir = projectPath(account.name, project.name)
-          for (const session of await surveyProject(fs, dir, await fs.list(dir))) {
-            entries.push({ accountId: account.name, project: project.name, ...session })
+        await owned(account.name, async () => {
+          for (const project of await fs.list(join(root, account.name, PROJECTS_DIR))) {
+            if (project.kind !== "dir" || !PROJECT_SLUG.test(project.name)) continue
+            const dir = projectPath(account.name, project.name)
+            for (const session of await surveyProject(fs, dir, await fs.list(dir))) {
+              entries.push({ accountId: account.name, project: project.name, ...session })
+            }
           }
-        }
+        })
       }
       return entries
     },
@@ -133,14 +145,18 @@ export function createSdkTranscripts(options: SdkTranscriptsOptions): SdkTranscr
       if (!PROJECT_SLUG.test(entry.project)) {
         throw new Error("transcript removal refused: entry does not name a project slug")
       }
-      const dir = projectPath(entry.accountId, entry.project)
-      const transcript = join(dir, `${entry.sessionId}${TRANSCRIPT_SUFFIX}`)
-      const sessionDir = join(dir, entry.sessionId)
+      const completed = await owned(entry.accountId, async () => {
+        const dir = projectPath(entry.accountId, entry.project)
+        const transcript = join(dir, `${entry.sessionId}${TRANSCRIPT_SUFFIX}`)
+        const sessionDir = join(dir, entry.sessionId)
 
-      // Rule 2, at the moment it matters: whatever was surveyed, only a plain file and a plain
-      // directory are removed now. A link that appeared since is left exactly where it is.
-      if ((await fs.stat(transcript))?.kind === "file") await fs.removeFile(transcript)
-      if ((await fs.stat(sessionDir))?.kind === "dir") await fs.removeDir(sessionDir)
+        // Rule 2, at the moment it matters: whatever was surveyed, only a plain file and a plain
+        // directory are removed now. A link that appeared since is left exactly where it is.
+        if ((await fs.stat(transcript))?.kind === "file") await fs.removeFile(transcript)
+        if ((await fs.stat(sessionDir))?.kind === "dir") await fs.removeDir(sessionDir)
+        return true
+      })
+      return completed === true
     },
   }
 }

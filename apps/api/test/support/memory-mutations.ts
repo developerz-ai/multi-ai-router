@@ -13,10 +13,18 @@ export function createMemoryMutations(store: MemoryStore): AdminMutationReposito
       const previous = preceding
       preceding = turn
       await previous
-      const snapshots = Object.values(store.rows).map((rows) => ({
-        rows: rows as unknown[],
-        before: structuredClone(rows) as unknown[],
-      }))
+      const restore = Object.values(store.rows).map((collection) => {
+        if (collection instanceof Map) {
+          const before = structuredClone(collection)
+          return () => {
+            collection.clear()
+            for (const [id, recovery] of before) collection.set(id, recovery)
+          }
+        }
+        const rows = collection as unknown[]
+        const before = structuredClone(rows)
+        return () => rows.splice(0, rows.length, ...before)
+      })
       const scope: AdminMutationScope = {
         keys: store.keys,
         pools: store.pools,
@@ -26,7 +34,7 @@ export function createMemoryMutations(store: MemoryStore): AdminMutationReposito
       try {
         return await work(scope)
       } catch (error) {
-        for (const { rows, before } of snapshots) rows.splice(0, rows.length, ...before)
+        for (const rollback of restore) rollback()
         throw error
       } finally {
         release()

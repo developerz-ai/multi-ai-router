@@ -14,8 +14,8 @@ import type { ScheduledTask, TaskOutcome } from "../types"
  *
  * Two ways one is created, and only the first is closed elsewhere:
  *
- * - **Account deleted.** `AccountsService.remove` removes the directory with the row, so the
- *   ordinary path leaves nothing behind. A crash between the two halves does.
+ * - **Account deleted.** `AccountsService.remove` deletes the row and requests ownership-safe cleanup.
+ *   Active or uncertain owners defer cleanup; a later sweep retries it.
  * - **Crash between provision and insert.** `provision` runs *before* `accounts.create`
  *   (`services/accounts/service.ts`) because the directory has to exist before anything can log in
  *   to it. The insert's own failure path takes the directory back; a process that dies in that
@@ -139,6 +139,7 @@ export function createConfigDirReapTask(deps: ConfigDirReapDeps): ScheduledTask 
       })
 
       let removed = 0
+      let deferred = 0
       let stopped = false
       try {
         for (const orphan of plan.reap) {
@@ -146,7 +147,15 @@ export function createConfigDirReapTask(deps: ConfigDirReapDeps): ScheduledTask 
             stopped = true
             break
           }
-          await deps.configDirs.remove(orphan.accountId)
+          const cleanup = await deps.configDirs.remove(orphan.accountId)
+          if (cleanup === "deferred") {
+            deferred += 1
+            logger.warn("orphaned claude config directory cleanup deferred", {
+              accountId: orphan.accountId,
+            })
+            continue
+          }
+          if (cleanup === "not_applicable") continue
           removed += 1
           // One line per directory, at `warn`: this deletes credentials, and an orphan is rare
           // enough that "never logged" is the normal volume. An operator asking "where did that
@@ -171,13 +180,14 @@ export function createConfigDirReapTask(deps: ConfigDirReapDeps): ScheduledTask 
         root: deps.configDirs.root,
         surveyed: entries.length,
         removed,
+        deferred,
         claimed: plan.claimed,
         withinGrace: plan.young,
         foreign: plan.foreign,
       })
 
       return {
-        outcome: stopped || plan.remaining ? "partial" : "success",
+        outcome: stopped || plan.remaining || deferred > 0 ? "partial" : "success",
         itemsProcessed: removed,
       }
     },

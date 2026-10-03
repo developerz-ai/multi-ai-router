@@ -1,6 +1,7 @@
-import { chmod, lstat, mkdir, readdir, rm } from "node:fs/promises"
+import { lstat, readdir, rm } from "node:fs/promises"
 import { homedir } from "node:os"
 import { isAbsolute, join, relative, resolve } from "node:path"
+import { makeAnchoredDirectory, setDirectoryMode } from "./config-dir-fs"
 
 /**
  * Where one Claude subscription Account's `CLAUDE_CONFIG_DIR` lives, and who creates it.
@@ -77,7 +78,7 @@ export interface AccountConfigDirs {
    * Bounded to `<root>/<accountId>` by construction, which is why it takes an id and not the path
    * stored on the row: a directory this router did not mint is not this router's to `rm -rf`.
    */
-  remove(accountId: string): Promise<void>
+  remove(accountId: string): Promise<undefined | "removed" | "deferred" | "not_applicable">
   /**
    * Every directory directly under `root`, classified and dated. Reads no file inside one — the
    * contents are the SDK's, and a reaper deciding what is abandoned only ever needs the name and
@@ -138,6 +139,7 @@ export function createAccountConfigDirs(options: AccountConfigDirsOptions): Acco
 
     remove: async (accountId) => {
       await fs.removeDir(pathFor(accountId))
+      return undefined
     },
 
     list: async () => {
@@ -157,9 +159,9 @@ export function createAccountConfigDirs(options: AccountConfigDirsOptions): Acco
 
 const nodeConfigDirFs: ConfigDirFs = {
   makeDir: async (path, mode) => {
-    await mkdir(path, { recursive: true, mode })
+    await makeAnchoredDirectory(path, mode)
   },
-  setMode: (path, mode) => chmod(path, mode),
+  setMode: setDirectoryMode,
   removeDir: (path) => rm(path, { recursive: true, force: true }),
 
   listDirs: async (path) => {

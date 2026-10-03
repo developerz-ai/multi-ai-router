@@ -7,10 +7,12 @@ import {
   type CredentialGuard,
   parsePastedCode,
 } from "../../../providers/claude-sdk/login"
+import { UpstreamAdmissionRefused } from "../../../providers/upstream-admission"
 import { AUDIT_KINDS, AUDIT_SUBJECTS, type AuditRecorder } from "../../admin/audit"
 import { type AdminResult, conflict, invalid, ok } from "../../admin/result"
 import { timingSafeEqualStrings } from "../../admin-auth"
 import type { HealthStore } from "../../dataplane"
+import { createClaudeLoginLifetime } from "./claude-lifetime"
 import { createPendingLogins } from "./claude-pending"
 import { findSubscriptionAccount, loginFailure, type SubscriptionAccount } from "./claude-subject"
 import { createAccountTurns } from "./turns"
@@ -41,10 +43,13 @@ export interface ClaudeConnectService {
   begin(accountId: string, mode: ClaudeConnectMode): Promise<AdminResult<ClaudeConnectStarted>>
   complete(accountId: string, pasted: string): Promise<AdminResult<ClaudeConnectCompleted>>
   cancel(accountId: string): Promise<AdminResult<ClaudeConnectCancelled>>
-  stop(): void
+  closeAdmission(): void
+  revoke(accountId: string): void
+  stop(): Promise<void>
 }
 
 export interface ClaudeConnectDeps {
+  readonly shutdownDrainMs?: number
   readonly accounts: Pick<AccountRepository, "findById" | "confirmAccountAuthorization">
   readonly configDirs: AccountConfigDirs
   readonly login: ClaudeCliLogin
@@ -64,6 +69,10 @@ export function createClaudeConnectService(deps: ClaudeConnectDeps): ClaudeConne
   const ttlMs = deps.pendingLoginMinutes * 60_000
   const log = deps.logger?.child({ component: "claude-connect" })
 
+  const lifetime = createClaudeLoginLifetime(deps.shutdownDrainMs ?? 15_000, (owners) => {
+    log?.warn("claude login shutdown acknowledgement uncertain", { owners })
+  })
+
   const rejected = (accountId: string, message: string, code: string): AdminResult<never> => {
     log?.info("claude login rejected", { accountId, code })
     return invalid(message, code)
@@ -73,167 +82,189 @@ export function createClaudeConnectService(deps: ClaudeConnectDeps): ClaudeConne
     findSubscriptionAccount(deps.accounts, accountId)
 
   return {
-    // In the account's turn: reads the pending login, then replaces it, two awaits later
-    // (`./turns.ts` — that window is what let two `begin`s produce two live CLIs for one row).
     begin: (accountId, mode) =>
-      turns.take(accountId, async () => {
-        const account = await subscription(accountId)
-        if (!account.ok) return account
+      turns.take(accountId, () =>
+        lifetime.run(accountId, async (signal) => {
+          if (lifetime.isClosed(accountId))
+            return conflict("account login admission is closed", "account_unavailable")
+          const account = await subscription(accountId)
+          if (!account.ok) return account
 
-        // A second `begin` supersedes the first: one Account has one pending login, and leaving the
-        // old subprocess running would mean two live states for one row. Queued, so what this
-        // displaces is always a registered login and never one still starting.
-        pending.discard(accountId)
+          if (account.value.configDir !== deps.configDirs.pathFor(accountId))
+            return invalid(
+              "account config directory does not match this router root",
+              "config_dir_mismatch",
+            )
 
-        // Idempotent, and it re-asserts `0700` on a directory that already exists — a login must
-        // never be the thing that discovers the directory was never made.
-        const configDir = await deps.configDirs.provision(accountId)
+          pending.discard(accountId)
 
-        let handle: ClaudeLoginHandle
-        try {
-          handle = await deps.login.start({ configDir })
-        } catch (error) {
-          return loginFailure(error, accountId, log)
-        }
+          const configDir = await deps.configDirs.provision(accountId)
 
-        // `stop()` is synchronous and cannot reach a CLI that has not printed its URL yet, so the
-        // check belongs where the handle first exists: the login shutdown could not see is the one
-        // that would outlive the router.
-        if (pending.stopping) {
-          handle.cancel()
-          return conflict(
-            "this router is shutting down — connect this account once it is back",
-            "shutting_down",
+          let handle: ClaudeLoginHandle
+          try {
+            handle = await deps.login.start({ configDir, accountId, signal })
+          } catch (error) {
+            return loginFailure(error, accountId, log)
+          }
+
+          lifetime.observe(accountId, handle)
+          if (pending.stopping || signal.aborted || lifetime.isClosed(accountId)) {
+            handle.cancel()
+            return conflict(
+              "this router is shutting down — connect this account once it is back",
+              "shutting_down",
+            )
+          }
+
+          const current = await subscription(accountId)
+          if (
+            !current.ok ||
+            current.value.lifecycleVersion !== account.value.lifecycleVersion ||
+            current.value.authMaterial !== account.value.authMaterial ||
+            current.value.configDir !== configDir ||
+            lifetime.isClosed(accountId) ||
+            signal.aborted
+          ) {
+            handle.cancel()
+            return conflict("account changed while login was starting", "account_unavailable")
+          }
+          const expiresAt = new Date(deps.now().getTime() + ttlMs)
+          pending.hold(
+            accountId,
+            { handle, configDir, mode, expiresAt, subject: account.value },
+            ttlMs,
           )
-        }
+          log?.info("claude login started", { accountId, mode, expiresAt: expiresAt.toISOString() })
 
-        const expiresAt = new Date(deps.now().getTime() + ttlMs)
-        pending.hold(
-          accountId,
-          { handle, configDir, mode, expiresAt, subject: account.value },
-          ttlMs,
-        )
-        log?.info("claude login started", { accountId, mode, expiresAt: expiresAt.toISOString() })
+          return ok({
+            accountId,
+            mode,
+            authorizeUrl: handle.authorizeUrl,
+            expiresAt: expiresAt.toISOString(),
+            capture: "paste",
+          })
+        }),
+      ),
 
-        return ok({
-          accountId,
-          mode,
-          authorizeUrl: handle.authorizeUrl,
-          expiresAt: expiresAt.toISOString(),
-          capture: "paste",
-        })
-      }),
-
-    // The turn is held for the whole exchange, not just the claim: a `begin` admitted mid-submit
-    // would put a second CLI on the directory this one is about to write `.credentials.json` into.
     complete: (accountId, pasted) =>
-      turns.take(accountId, async () => {
-        const account = await subscription(accountId)
-        if (!account.ok) return account
+      turns.take(accountId, () =>
+        lifetime.run(accountId, async () => {
+          const account = await subscription(accountId)
+          if (!account.ok) return account
 
-        // Consumed before it is checked. One-shot means a mismatched or expired paste burns the
-        // login too — otherwise a wrong value is just a retry, which is the whole attack this guard
-        // exists to stop (docs/idea/07-security.md).
-        const found = pending.release(accountId)
-        if (found === undefined) {
-          return rejected(
+          const found = pending.release(accountId)
+          if (found === undefined) {
+            return rejected(
+              accountId,
+              "no login is pending for this account — start one and paste the code within the window",
+              "no_pending_login",
+            )
+          }
+
+          if (deps.now() >= found.expiresAt) {
+            found.handle.cancel()
+            return rejected(accountId, "that login expired — start a new one", "login_expired")
+          }
+
+          const parsed = parsePastedCode(pasted)
+          if (parsed === null) {
+            found.handle.cancel()
+            return rejected(
+              accountId,
+              "paste the whole value from the authorization page, in the form code#state",
+              "malformed_paste",
+            )
+          }
+          if (!timingSafeEqualStrings(parsed.state, found.handle.state)) {
+            found.handle.cancel()
+            return rejected(
+              accountId,
+              "that code belongs to a different login — start a new one and paste the value it gives you",
+              "state_mismatch",
+            )
+          }
+
+          try {
+            await found.handle.submit(pasted.trim())
+          } catch (error) {
+            return loginFailure(error, accountId, log)
+          }
+
+          let state: Awaited<ReturnType<CredentialGuard["settle"]>>
+          try {
+            state = await deps.credentials.settle(found.configDir)
+          } catch (error) {
+            if (!(error instanceof UpstreamAdmissionRefused)) throw error
+            return conflict(
+              "account changed before credential validation",
+              "authorization_superseded",
+            )
+          }
+          if (state === "absent" || state === "unreadable") {
+            return rejected(
+              accountId,
+              "the claude CLI finished without leaving a usable credential — start the login again",
+              "no_credential",
+            )
+          }
+
+          if (!lifetime.canCommit(accountId))
+            return conflict(
+              "account login completion is no longer admitted",
+              "authorization_superseded",
+            )
+          const loginStartedStatus = found.subject.status
+          const committed = await deps.accounts.confirmAccountAuthorization({
+            id: accountId,
+            expected: {
+              lifecycleVersion: found.subject.lifecycleVersion,
+              authMaterial: found.subject.authMaterial,
+            },
+            now: deps.now(),
+          })
+          if (committed === undefined) {
+            return conflict(
+              "this account changed while login was pending — start a new login",
+              "authorization_superseded",
+            )
+          }
+          await deps.refreshCatalog?.()
+
+          log?.info("claude login completed", {
             accountId,
-            "no login is pending for this account — start one and paste the code within the window",
-            "no_pending_login",
-          )
-        }
-
-        if (deps.now() >= found.expiresAt) {
-          found.handle.cancel()
-          return rejected(accountId, "that login expired — start a new one", "login_expired")
-        }
-
-        const parsed = parsePastedCode(pasted)
-        if (parsed === null) {
-          found.handle.cancel()
-          // Says what the value looks like, never what was pasted: the paste is credential material.
-          return rejected(
-            accountId,
-            "paste the whole value from the authorization page, in the form code#state",
-            "malformed_paste",
-          )
-        }
-        if (!timingSafeEqualStrings(parsed.state, found.handle.state)) {
-          found.handle.cancel()
-          return rejected(
-            accountId,
-            "that code belongs to a different login — start a new one and paste the value it gives you",
-            "state_mismatch",
-          )
-        }
-
-        try {
-          await found.handle.submit(pasted.trim())
-        } catch (error) {
-          return loginFailure(error, accountId, log)
-        }
-
-        const state = await deps.credentials.settle(found.configDir)
-        if (state === "absent" || state === "unreadable") {
-          return rejected(
-            accountId,
-            "the claude CLI finished without leaving a usable credential — start the login again",
-            "no_credential",
-          )
-        }
-
-        const loginStartedStatus = found.subject.status
-        const committed = await deps.accounts.confirmAccountAuthorization({
-          id: accountId,
-          expected: {
-            lifecycleVersion: found.subject.lifecycleVersion,
-            authMaterial: found.subject.authMaterial,
-          },
-          now: deps.now(),
-        })
-        if (committed === undefined) {
-          return conflict(
-            "this account changed while login was pending — start a new login",
-            "authorization_superseded",
-          )
-        }
-        await deps.refreshCatalog?.()
-
-        log?.info("claude login completed", {
-          accountId,
-          mode: found.mode,
-          loginStartedStatus,
-          status: committed.status,
-          repaired: state === "repaired",
-        })
-        try {
-          deps.onConnected?.(accountId)
-        } catch {
-          // A listener's failure is its own; the login landed regardless.
-        }
-
-        await deps.audit.record({
-          kind:
-            found.mode === "reconnect"
-              ? AUDIT_KINDS.accountReauthorized
-              : AUDIT_KINDS.accountConnected,
-          subjectType: AUDIT_SUBJECTS.account,
-          subjectId: accountId,
-          // Names and flags. There is no field here that could hold a code, a state, or a token.
-          detail: {
-            label: account.value.label,
-            provider: account.value.provider,
+            mode: found.mode,
             loginStartedStatus,
             status: committed.status,
-          },
-        })
+            repaired: state === "repaired",
+          })
+          try {
+            deps.onConnected?.(accountId)
+          } catch {}
 
-        return ok({ accountId, mode: found.mode, connected: true, repaired: state === "repaired" })
-      }),
+          await deps.audit.record({
+            kind:
+              found.mode === "reconnect"
+                ? AUDIT_KINDS.accountReauthorized
+                : AUDIT_KINDS.accountConnected,
+            subjectType: AUDIT_SUBJECTS.account,
+            subjectId: accountId,
+            detail: {
+              label: account.value.label,
+              provider: account.value.provider,
+              loginStartedStatus,
+              status: committed.status,
+            },
+          })
 
-    // Also queued: an operator who cancels while the CLI is still starting means "leave nothing
-    // pending", and answering that before the login exists would report a cancel that cancelled
-    // nothing and then let the subprocess register anyway.
+          return ok({
+            accountId,
+            mode: found.mode,
+            connected: true,
+            repaired: state === "repaired",
+          })
+        }),
+      ),
+
     cancel: (accountId) =>
       turns.take(accountId, async () => {
         const account = await subscription(accountId)
@@ -244,8 +275,17 @@ export function createClaudeConnectService(deps: ClaudeConnectDeps): ClaudeConne
         return ok({ accountId, cancelled: found !== undefined })
       }),
 
-    // The registry sets its flag first: a login still inside `login.start` cannot be terminated from
-    // here, so it reads that flag when its handle appears and terminates itself.
-    stop: pending.stop,
+    closeAdmission: () => {
+      pending.stop()
+      lifetime.closeAdmission()
+    },
+    revoke: (accountId) => {
+      pending.discard(accountId)
+      lifetime.revoke(accountId)
+    },
+    stop: () => {
+      pending.stop()
+      return lifetime.stop()
+    },
   }
 }

@@ -77,7 +77,10 @@ export type KeepAliveResult = "ok" | "spent" | "failed" | "skipped"
  * ~245 MB subprocess and a billed turn.
  */
 export async function warm(
-  deps: Pick<IdleAccountProbeDeps, "test" | "models" | "warmCredentials" | "batchSize">,
+  deps: Pick<
+    IdleAccountProbeDeps,
+    "test" | "models" | "warmCredentials" | "batchSize" | "accounts"
+  >,
   account: AccountRow,
   logger: Logger,
   tally: Tally,
@@ -106,12 +109,16 @@ export async function warm(
 
 /** The gauge read, free: a failure here is a reading not taken, logged and never a run outcome. */
 export async function readUsage(
-  deps: Pick<IdleAccountProbeDeps, "usage">,
+  deps: Pick<IdleAccountProbeDeps, "usage" | "accounts">,
   account: AccountRow,
   logger: Logger,
   tally: Tally,
 ): Promise<void> {
   if (deps.usage === undefined) return
+  if ((await deps.accounts.readEligibleBackgroundAccount(account.id, account)) === undefined) {
+    tally.skipped++
+    return
+  }
   try {
     const outcome = await deps.usage(account)
     if (outcome === "read") tally.gauged += 1
@@ -140,13 +147,17 @@ export async function readUsage(
  * the account's state stays whatever real traffic and those readings last made it.
  */
 export async function keepAlive(
-  deps: Pick<IdleAccountProbeDeps, "test">,
+  deps: Pick<IdleAccountProbeDeps, "test" | "accounts">,
   account: AccountRow,
   model: string,
   logger: Logger,
   tally: Tally,
 ): Promise<KeepAliveResult> {
-  const result = await deps.test(account.id, model)
+  if ((await deps.accounts.readEligibleBackgroundAccount(account.id, account)) === undefined) {
+    tally.skipped++
+    return "skipped"
+  }
+  const result = await deps.test(account.id, model, account)
   if (!result.tested) {
     // Its own cooldown declined — an operator tested it moments ago. Nothing was billed.
     tally.skipped += 1
