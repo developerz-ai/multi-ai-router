@@ -1,7 +1,8 @@
 import type { QuotaWindowState } from "@multi-ai-router/core"
-import type { AccountRow, CatalogSnapshotRepository, QuotaWindowRow } from "@multi-ai-router/db"
+import type { AccountRow, CatalogSnapshotRepository, RecoveryRow } from "@multi-ai-router/db"
 import type { RoutableAccount } from "../dataplane"
 import type { PoolSnapshot } from "../routing"
+import { toQuotaEvidence } from "../routing/quota-evidence"
 
 /**
  * Reads the world out of Postgres and shapes it into what routing consumes.
@@ -26,6 +27,7 @@ export async function loadCatalog(sources: CatalogSources): Promise<CatalogData>
     pools: poolRows,
     members,
     windows: windowRows,
+    recoveries,
   } = await sources.read()
 
   // Quota state is durable and routing reads it per request, so it is hydrated
@@ -38,10 +40,11 @@ export async function loadCatalog(sources: CatalogSources): Promise<CatalogData>
   const windowsByAccount = new Map<string, QuotaWindowState[]>()
   for (const row of windowRows) {
     const bucket = windowsByAccount.get(row.accountId) ?? []
-    bucket.push(toQuotaWindowState(row))
+    bucket.push(toQuotaEvidence(row))
     windowsByAccount.set(row.accountId, bucket)
   }
 
+  const recoveryByAccount = new Map(recoveries.map((row) => [row.accountId, row]))
   const membersByPool = new Map<string, { accountId: string; weight: number; priority: number }[]>()
   for (const member of members) {
     const bucket = membersByPool.get(member.poolId) ?? []
@@ -54,7 +57,9 @@ export async function loadCatalog(sources: CatalogSources): Promise<CatalogData>
   }
 
   return {
-    accounts: accountRows.map((row) => toRoutableAccount(row, windowsByAccount.get(row.id))),
+    accounts: accountRows.map((row) =>
+      toRoutableAccount(row, windowsByAccount.get(row.id), recoveryByAccount.get(row.id)),
+    ),
     pools: poolRows.map((pool) => ({
       id: pool.id,
       name: pool.name,
@@ -74,9 +79,11 @@ export async function loadCatalog(sources: CatalogSources): Promise<CatalogData>
 function toRoutableAccount(
   row: AccountRow,
   quotaWindows: readonly QuotaWindowState[] | undefined,
+  recovery: RecoveryRow | undefined,
 ): RoutableAccount {
   return {
     id: row.id,
+    ...(recovery === undefined ? {} : { recovery }),
     lifecycleVersion: row.lifecycleVersion,
     healthRecoveryVersion: row.healthRecoveryVersion,
     authRecoveryVersion: row.authRecoveryVersion,
@@ -97,6 +104,18 @@ function toRoutableAccount(
         ? {}
         : { supportedModels: row.supportedModels }),
       ...(quotaWindows === undefined ? {} : { quotaWindows }),
+      ...(recovery === undefined
+        ? {}
+        : {
+            recovery: {
+              revision: recovery.revision,
+              generation: recovery.generation,
+              lifecycleVersion: recovery.lifecycleVersion,
+              state: recovery.state,
+              nextAllowedAt: recovery.nextAllowedAt,
+              quotaRevisions: { ...recovery.quotaRevisions },
+            },
+          }),
     },
     driver: {
       id: row.id,
@@ -108,22 +127,5 @@ function toRoutableAccount(
     billing: row.billing,
     authMaterial: row.authMaterial,
     configDir: row.configDir,
-  }
-}
-
-/**
- * A stored window as routing states it. NULL becomes absent, not zero: a source
- * that reports nothing has told us nothing, and `0` would read as "wide open" to
- * `isWindowSpent` — the one misreading that would route traffic at an account
- * the provider has already cut off.
- */
-function toQuotaWindowState(row: QuotaWindowRow): QuotaWindowState {
-  return {
-    window: row.window,
-    utilizationSource: row.utilizationSource,
-    resetSource: row.resetSource,
-    lastCheckedAt: row.lastCheckedAt,
-    ...(row.utilization === null ? {} : { utilization: row.utilization }),
-    ...(row.resetsAt === null ? {} : { resetsAt: row.resetsAt }),
   }
 }

@@ -28,6 +28,7 @@ import type { CooldownReason } from "./breaker"
  * `quota-aware` asks and the reason this is carried at all rather than dropped as unrenderable.
  */
 export interface LimiterReading {
+  readonly resetsAt?: Date
   /** `requests`, `input-tokens`, `tokens` — the provider's word, kept verbatim. */
   readonly limiter: string
   /** Fraction consumed, 0..1. Absent when the provider reported no headroom. */
@@ -69,7 +70,18 @@ export interface AccountHealth {
   readonly recentTokens: number
 }
 
+export interface RecoverySnapshot {
+  readonly localAvailable?: boolean
+  readonly retryAt?: Date
+  readonly revision: number
+  readonly generation: string
+  readonly lifecycleVersion: number
+  readonly state: "pending" | "issued" | "succeeded" | "failed" | "uncertain" | "cancelled"
+  readonly nextAllowedAt: Date
+  readonly quotaRevisions: Readonly<Record<string, number>>
+}
 export interface AccountSnapshot {
+  readonly recovery?: RecoverySnapshot
   readonly id: string
   readonly label: string
   readonly provider: ProviderId

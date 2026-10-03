@@ -11,6 +11,7 @@ import {
   type OauthStateRepository,
   type PoolRepository,
   type PriceOverrideRepository,
+  type RecoveryRepository,
   type ScheduledTaskRepository,
   type UsageDailyRepository,
 } from "@multi-ai-router/db"
@@ -75,6 +76,10 @@ import type { AdminServices } from "../types"
  */
 
 export interface AdminPlaneDeps {
+  readonly recovery: {
+    repository: RecoveryRepository
+    coordinator: { demand(accountId: string): void }
+  }
   readonly env: Env
   readonly logger: Logger
   readonly now: () => Date
@@ -205,7 +210,8 @@ export function createAdminPlane(deps: AdminPlaneDeps): AdminPlane {
     // the same read-after-write guarantee every other admin write has.
     refreshCatalog: deps.coherence.refreshCatalog,
     cooldownSeconds: env.accountRecheckCooldownSeconds,
-    now,
+    recovery: deps.recovery.repository,
+    onRecoveryRequested: (accountId) => deps.recovery.coordinator.demand(accountId),
   })
 
   // "Test now": one real, opt-in completion against one account. Its own cooldown and its own
@@ -247,7 +253,6 @@ export function createAdminPlane(deps: AdminPlaneDeps): AdminPlane {
   const availableAccounts = withAvailability(accountsService, {
     catalog,
     health,
-    recheck,
     now,
     // Reads how many tokens the router itself recorded inside each configured window's span, so
     // the console can draw a bar where the provider reports no utilization. One query, and only

@@ -9,6 +9,7 @@ import type { VerifiedKey } from "./auth/verifier"
 import type { BodyReadOptions } from "./body/read"
 import type { HealthStore } from "./health"
 import type { RateLimiter } from "./limits"
+import type { RecoveryAccess } from "./recovery-access"
 import type {
   DataPlaneClock,
   FetchLike,
@@ -63,6 +64,7 @@ export interface TranslationOptions {
 export const DEFAULT_UPSTREAM_TIMEOUT_MS = 600_000
 
 export interface DispatcherDeps {
+  readonly recovery?: RecoveryAccess
   readonly catalog: RoutingCatalog
   readonly health: HealthStore
   readonly cipher: Pick<CredentialCipher, "decrypt">

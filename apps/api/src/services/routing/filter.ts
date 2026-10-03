@@ -20,6 +20,7 @@
 
 import { resolveModel } from "./model"
 import { DEFAULT_QUOTA_SPENT_THRESHOLD, findSpentWindow } from "./quota"
+import { hasRecoveryPermit, recoveryAllowsQuota, recoveryIsGated } from "./recovery-filter"
 import type { RejectedCandidate } from "./result"
 import type { Candidate, ScopedAccount, SelectionOptions } from "./types"
 
@@ -68,7 +69,16 @@ export function evaluateCandidate(
   // `exhausted` has no reset by definition — that absence is what distinguishes it from a cooldown.
   if (account.status === "exhausted") return drop({ reason: "exhausted" })
 
-  const cooling = coolingDown(member, now)
+  const permit = hasRecoveryPermit(account)
+  if (recoveryIsGated(account) && !permit) {
+    return drop({
+      reason: "probe-in-flight",
+      resetsAt: account.recovery?.retryAt ?? account.recovery?.nextAllowedAt,
+      resetSource: "estimated",
+    })
+  }
+  const cooling =
+    coolingDown(member, now) && (!permit || account.health.cooldownUntil !== undefined)
   if (cooling) {
     return drop({
       reason:
@@ -103,7 +113,10 @@ export function evaluateCandidate(
     now,
     options.quotaSpentThreshold ?? DEFAULT_QUOTA_SPENT_THRESHOLD,
   )
-  if (spent !== null) {
+  if (
+    spent !== null &&
+    !recoveryAllowsQuota(account, now, options.quotaSpentThreshold ?? DEFAULT_QUOTA_SPENT_THRESHOLD)
+  ) {
     return drop({
       reason: "quota-window-spent",
       window: spent.window,
@@ -120,7 +133,7 @@ export function evaluateCandidate(
     candidate: {
       ...member,
       upstreamModel: resolution.upstreamModel,
-      halfOpen: account.status === "cooling_down",
+      halfOpen: account.status === "cooling_down" || permit,
     },
   }
 }

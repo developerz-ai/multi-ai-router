@@ -5,7 +5,7 @@ created_by: sebi
 worked_by: "Codex team"
 owner: sebi
 percent: 46
-current_focus: "PR144 dependencies merged; W3A PR145 merged; release/deployment pending. Quota observation ordering and floor CAS implemented; review/merge pending. Global recovery admission remains later W3B."
+current_focus: "PR144 dependencies merged; W3A PR145 merged; release/deployment pending. Quota prerequisite PR146 merged8aaf241; global recovery final gate4661/343 passed; review/merge/release/deployment pending."
 slices:
   - file: 01-transport.md
     status: in_progress
@@ -60,7 +60,8 @@ slices:
     percent: 0
     findings: 1
 evidence:
-  - "Quota ordering/floor CAS: implemented_pending_review_merge for 102:09.2 and 101:02.10 only. Final bin/check passed4563 tests across321files, zero failures; PostgreSQL16/18 quota suites each9tests/18assertions and fresh migrations passed; DBunits158tests/480assertions passed. See102-full-router-audit/evidence/wave3b-quota-check.json. Final benchmark passed8000samples, zero failures/buffered streams, maximum p99 0.7ms, no budget violations; see102-full-router-audit/evidence/wave3b-quota-bench.json."
+  - "Global recovery local regressions: real PostgreSQL with two independent boots/catalogs/dispatchers, 200 concurrent requests admit one mocked provider start and report 199429 refusals once each with null account usage. Captured quota retirement preserves a newer provider revision; late queued lifecycle/credential/pending changes and fresh spent quota refuse dispatch without health strikes. Final bin/check4661tests/343files/40593assertions passed with zero failures and lint/typecheck/build passed, including both DB/API observed-generation suites. PG16 observed-generation2tests/7assertions and broader lifecycle/publication14tests/56assertions passed. Isolated benchmark8000requests, zero failures/buffered streams, maxp99 0.9681818182ms, no violations; measured before final test/helper revalidation. Review/merge/release/deploy not claimed. Warm quota/floor/rank focused suite189passed."
+  - "Quota ordering/floor CAS: PR146 merged8aaf241 through normal protected flow at16:56:02UTC; all five required checks passed and CodeRabbit had no actionable comments. Optional developerz was queued at merge, not a completed review verdict. Narrow scope102:09.2 and101:02.10 only. Final bin/check passed4563 tests across321files, zero failures; PostgreSQL16/18 quota suites each9tests/18assertions and fresh migrations passed; DBunits158tests/480assertions passed. See102-full-router-audit/evidence/wave3b-quota-check.json. Final benchmark passed8000samples, zero failures/buffered streams, maximum p99 0.7ms, no budget violations; see102-full-router-audit/evidence/wave3b-quota-bench.json."
   - "W3A reviewed revision: pinned Bun 1.4.2 bin/check with disposable PostgreSQL 18.6: 4549 tests across 319 files passed, zero failed; lint/typecheck/build passed. Mocked OAuth identity/lifecycle, exact CAS, dedicated lock contention/loss, shutdown/deadline and postcommit catalog regressions covered. No live provider compatibility claim. Final local amd64 image build passed; independent seven-refresher-suite verification: 58 tests, 176 assertions. PR145 merged as 2a0c562 at 16:29:02 UTC through the normal protected flow; all five new-head required CI checks passed and three review threads resolved. Release/deployment pending. See 102-full-router-audit/evidence/wave3a-check.json."
   - "102-full-router-audit/evidence/wave3a-bench.json: prior pre-review benchmark revision (not rerun after review fixes), 8000 requests, zero failures/buffered streams; maximum p99 0.9454545455 ms, violations empty. A CLI-version smoke check ran briefly near benchmark startup. Earlier runs reached about 5 ms under concurrent workload; no causal performance improvement is claimed."
   - "Dependency PR #144 merged as e41f0edd through the normal protected flow; dependency wave release/deployment remains separate."
@@ -100,5 +101,10 @@ resolved_findings:
   - "03.7"
   - "03.8"
 
-implemented_pending_review_merge:
+implemented_merged_release_pending:
   - "09.2"
+
+implemented_validated_pending_review_merge:
+  - "03.2"
+  - "03.5"
+  - "03.6"

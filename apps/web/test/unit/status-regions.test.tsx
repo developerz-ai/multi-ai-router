@@ -61,7 +61,7 @@ describe("AccountRecheck live region", () => {
 
   test("the status region is mounted before any press, carrying the idle line", () => {
     mount(new QueryClient(), (container) => {
-      expect(statusRegion(container).textContent).toContain("Not checked since restart")
+      expect(statusRegion(container).textContent).toContain("No recovery requested")
     })
   })
 
@@ -72,12 +72,20 @@ describe("AccountRecheck live region", () => {
       lastCheckedAt: "2026-07-31T11:58:00.000Z",
       nextAllowedAt: "2026-07-31T12:03:00.000Z",
       rechecked: false,
+      recovery: {
+        generation: "g",
+        state: "issued",
+        nextAllowedAt: "2026-07-31T12:03:00.000Z",
+        outcomeAt: null,
+      },
     }
     client.setQueryData(queryKeys.accounts.recheck("acc-1"), result)
     mount(client, (container) => {
       const region = statusRegion(container)
       expect(region.textContent).toContain("On cooldown")
-      expect(region.textContent).toContain("Checked")
+      expect(region.textContent).toContain("Requested")
+      expect(region.textContent).toContain("reserved — awaiting outcome")
+      expect(region.textContent).not.toContain("healthy")
     })
   })
 })

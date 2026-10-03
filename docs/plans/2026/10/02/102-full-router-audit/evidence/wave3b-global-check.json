@@ -1,0 +1,76 @@
+{
+  "wave": "W3B global recovery",
+  "state": "implemented_validated_pending_review_merge",
+  "observed_on": "2026-10-03",
+  "gate": {
+    "status": "passed",
+    "first_attempt": {
+      "passed_tests": 4637,
+      "failed_tests": 1,
+      "limit": "Old breaker assertion corrected; this is not a final passing gate."
+    },
+    "source_log": "/tmp/router-global-ready-check.log",
+    "passed_tests": 4661,
+    "failed_tests": 0,
+    "test_files": 343,
+    "lint": "passed",
+    "typecheck": "passed",
+    "build": "passed",
+    "assertions": 40593,
+    "observed_generation_suites": [
+      "packages/db/test/integration/account-observation-generation.test.ts",
+      "apps/api/test/unit/accounts/observation-generation.test.ts"
+    ]
+  },
+  "actual_focused_evidence": {
+    "global_pg18_integration": {
+      "passed_tests": 7,
+      "assertions": 46,
+      "replicas": 2,
+      "concurrent_requests": 200,
+      "designated_mock_starts": 1,
+      "refusals_429": 199
+    },
+    "warm_quota_floor_ranking": {
+      "passed_tests": 189
+    },
+    "atomic_auth_publication": "Current actual DB calls publishAccountRecovery in the account mutation transaction for CLI confirmation, passive auth recovery, browser commit, credential replacement and enable; repository integration coverage exists.",
+    "pg16_observed_generation": {
+      "passed_tests": 2,
+      "assertions": 7
+    },
+    "pg16_lifecycle_publication": {
+      "passed_tests": 14,
+      "assertions": 56
+    }
+  },
+  "benchmark": {
+    "status": "passed on measured pre-final-test/helper revision",
+    "artifact": "wave3b-global-bench.json",
+    "samples": 8000,
+    "failures": 0,
+    "buffered": 0,
+    "maximum_p99_ms": 0.9681818181818183,
+    "violations": []
+  },
+  "finding_assessment": {
+    "partial": [],
+    "previous_wave": [
+      "102:09.2 and101:02.10 merged inPR146"
+    ],
+    "implemented_validated_pending_review_merge": [
+      "102:03.5",
+      "102:03.6",
+      "101:02.4",
+      "101:02.8",
+      "101:02.3",
+      "102:03.2",
+      "101:02.1"
+    ]
+  },
+  "limits": [
+    "External review, merge, release and deployment pending; no live issuer compatibility assertion.",
+    "At-most-one designated start per durable generation; no remote exactly-once guarantee or instantaneous cross-replica catalog visibility.",
+    "No live provider calls."
+  ]
+}

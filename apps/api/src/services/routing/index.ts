@@ -96,6 +96,7 @@ export {
   isWindowSpent,
   mergeQuotaWindows,
 } from "./quota"
+export { retiredEvidence, toQuotaEvidence } from "./quota-evidence"
 export type {
   BindingDecision,
   BindingInvalidationReason,
@@ -123,6 +124,7 @@ export type {
   LimiterReading,
   PoolMembership,
   PoolSnapshot,
+  RecoverySnapshot,
   RoutingSnapshot,
   ScopedAccount,
   ScopeGroup,

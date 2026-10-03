@@ -1,4 +1,9 @@
-import type { AccountRepository, AccountRow, OauthStateRow } from "@multi-ai-router/db"
+import type {
+  AccountObservation,
+  AccountRepository,
+  AccountRow,
+  OauthStateRow,
+} from "@multi-ai-router/db"
 
 type Methods = Pick<
   AccountRepository,
@@ -12,16 +17,22 @@ type Methods = Pick<
   | "cancelAccountAuthorization"
   | "commitAuthorization"
 >
-type Observation = Pick<AccountRow, "lifecycleVersion" | "authMaterial" | "status">
+type Observation = AccountObservation
 
 /** Compare and replace synchronously: these tests must model the database CAS, not read/write races. */
-export function memoryAccountLifecycle(rows: AccountRow[], states: OauthStateRow[]): Methods {
+export function memoryAccountLifecycle(
+  rows: AccountRow[],
+  states: OauthStateRow[],
+  recoveries: ReadonlyMap<string, { readonly generation: string }> = new Map(),
+): Methods {
   const find = (id: string) => rows.find((row) => row.id === id)
   const matches = (row: AccountRow | undefined, expected: Observation): row is AccountRow =>
     row !== undefined &&
     row.lifecycleVersion === expected.lifecycleVersion &&
     row.authMaterial === expected.authMaterial &&
-    row.status === expected.status
+    row.status === expected.status &&
+    (expected.recoveryGeneration === undefined ||
+      (recoveries.get(row.id)?.generation ?? null) === expected.recoveryGeneration)
   const write = (row: AccountRow, patch: Partial<AccountRow>, now: Date): AccountRow => {
     const next = {
       ...row,

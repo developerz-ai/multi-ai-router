@@ -35,9 +35,12 @@ export type {
   AccountLifecycleMethods,
   AccountObservation,
 } from "./repositories/account-lifecycle-types"
+export { createRecoveryRepository } from "./repositories/account-recovery-repository"
+export type { RecoveryRepository } from "./repositories/account-recovery-types"
 export type {
   AccountListFilter,
   AccountRepository,
+  AccountRepositoryOptions,
   CreateAccountInput,
 } from "./repositories/account-repository"
 // --- repositories -----------------------------------------------------------
@@ -141,6 +144,8 @@ export {
   USAGE_RECORD_BIND_PARAMETERS_PER_ROW,
   USAGE_RECORD_MAX_BATCH_ROWS,
 } from "./repositories/usage-repository"
+export type { RecoveryReason, RecoveryRow, RecoveryState } from "./schema/account-recoveries"
+export { accountRecoveries } from "./schema/account-recoveries"
 // --- row types --------------------------------------------------------------
 export type {
   AccountRow,

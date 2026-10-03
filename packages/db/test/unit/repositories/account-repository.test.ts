@@ -235,6 +235,8 @@ describe("quota window state", () => {
     ACCOUNT_ID,
     "five_hour",
     0,
+    "current",
+    true,
     null,
     0.42,
     "continuous",

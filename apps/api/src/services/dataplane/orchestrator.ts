@@ -12,6 +12,7 @@ import { keyRateLimitedError } from "./limits"
 import { outcomeForResponse, type RequestProgress, sampleOf, streamed } from "./observe"
 import { planCandidates } from "./plan"
 import { attemptRecord, errorClassOf, outcomeOf } from "./records"
+import { hintRecoveryRejections } from "./recovery-hints"
 import { createRotationCounters } from "./rotation"
 import { createRuntime } from "./runtime"
 import { sessionBindings } from "./session-binding"
@@ -94,6 +95,7 @@ export function createDispatcher(deps: DispatcherDeps): Dispatcher {
 
     const runtime = createRuntime({
       health: deps.health,
+      ...(deps.recovery === undefined ? {} : { recovery: deps.recovery }),
       cipher: deps.cipher,
       call,
       ...(deps.invokeSdk === undefined ? {} : { invokeSdk: deps.invokeSdk }),
@@ -136,7 +138,7 @@ export function createDispatcher(deps: DispatcherDeps): Dispatcher {
 
     // Scope intersection, filtering, and policy — one pure call over an injected snapshot.
     const selection = selectAccounts(
-      buildSnapshot(deps.catalog, deps.health, clock.now(), rotation),
+      buildSnapshot(deps.recovery?.catalog ?? deps.catalog, deps.health, clock.now(), rotation),
       {
         sessionKey: session.key,
         model,
@@ -156,6 +158,7 @@ export function createDispatcher(deps: DispatcherDeps): Dispatcher {
     // conversation stays resumable, so the request fails honestly instead. An `invalidated` one
     // is *not* dropped here — see below: the store mutation waits for a replacement to exist,
     // because dropping it and then failing anyway loses the conversation for nothing.
+    hintRecoveryRejections(selection.decision.rejected, deps.recovery, model, clock.now())
     if (!selection.ok) return fail(selection.error)
 
     const plan = planCandidates(selection.candidates, deps.catalog, input.ingress, operation)

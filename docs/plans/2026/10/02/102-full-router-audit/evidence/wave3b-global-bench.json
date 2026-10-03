@@ -1,0 +1,85 @@
+{
+  "rows": [
+    {
+      "scenario": "passthrough",
+      "path": "passthrough",
+      "samples": 2000,
+      "failures": 0,
+      "overheadMeanMs": 0.03150000000000002,
+      "overheadP50Ms": 0.2560163850486431,
+      "overheadP95Ms": 0.4864311315924219,
+      "overheadP99Ms": 0.8648648648648648,
+      "overheadQuantized": true,
+      "addedTtftSamples": 0,
+      "addedTtftP50Ms": null,
+      "addedTtftP95Ms": null,
+      "addedTtftP99Ms": null,
+      "buffered": 0,
+      "streamed": false
+    },
+    {
+      "scenario": "passthrough (stream)",
+      "path": "passthrough",
+      "samples": 2000,
+      "failures": 0,
+      "overheadMeanMs": 0.04150000000000002,
+      "overheadP50Ms": 0.2587991718426501,
+      "overheadP95Ms": 0.49171842650103514,
+      "overheadP99Ms": 0.9067796610169492,
+      "overheadQuantized": true,
+      "addedTtftSamples": 2000,
+      "addedTtftP50Ms": 0.027148999998644285,
+      "addedTtftP95Ms": 0.0572284000014406,
+      "addedTtftP99Ms": 0.09899724999999306,
+      "buffered": 0,
+      "streamed": true
+    },
+    {
+      "scenario": "translate",
+      "path": "translate",
+      "samples": 2000,
+      "failures": 0,
+      "overheadMeanMs": 0.05750000000000003,
+      "overheadP50Ms": 0.2609603340292276,
+      "overheadP95Ms": 0.4958246346555323,
+      "overheadP99Ms": 0.963768115942029,
+      "overheadQuantized": true,
+      "addedTtftSamples": 0,
+      "addedTtftP50Ms": null,
+      "addedTtftP95Ms": null,
+      "addedTtftP99Ms": null,
+      "buffered": 0,
+      "streamed": false
+    },
+    {
+      "scenario": "translate (stream)",
+      "path": "translate",
+      "samples": 2000,
+      "failures": 0,
+      "overheadMeanMs": 0.07400000000000005,
+      "overheadP50Ms": 0.2663825253063399,
+      "overheadP95Ms": 0.6045454545454545,
+      "overheadP99Ms": 0.9681818181818183,
+      "overheadQuantized": true,
+      "addedTtftSamples": 2000,
+      "addedTtftP50Ms": 0.07011899999997695,
+      "addedTtftP95Ms": 0.13361850000219416,
+      "addedTtftP99Ms": 0.2684826800010705,
+      "buffered": 0,
+      "streamed": true
+    }
+  ],
+  "budgets": {
+    "overheadP99Ms": 5,
+    "addedTtftP95Ms": 2
+  },
+  "violations": [],
+  "evidence_context": {
+    "source_artifact": "/tmp/router-global-final-bench.json",
+    "samples": 8000,
+    "failures": 0,
+    "buffered": 0,
+    "maximum_p99_ms": 0.9681818181818183,
+    "context": "Isolated local run; completed before final observed-generation test/shared-memory-helper revalidation. Production source unchanged by those final test/helper adaptations. No provider calls or remote exactly-once claim."
+  }
+}

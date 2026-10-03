@@ -1,6 +1,6 @@
 {
   "wave": "W3B quota prerequisite",
-  "state": "implemented_pending_review_merge",
+  "state": "merged_release_deployment_pending",
   "observed_on": "2026-10-03",
   "finding_scope": [
     "102:09.2",
@@ -45,9 +45,18 @@
     "violations": []
   },
   "limits": [
-    "Review/merge/release/deployment pending.",
+    "Release/deployment pending.",
     "Warm retirement-overlay reconciliation and expired continuous-reading ranking remain open for global W3B.",
     "Global recovery admission and persisted spent-quota recovery remain open.",
     "No live provider calls performed."
-  ]
+  ],
+  "merge": {
+    "pr": 146,
+    "sha": "8aaf241",
+    "merged_at": "2026-10-03T16:56:02Z",
+    "flow": "normal protected merge",
+    "required_ci_checks": "all five passed",
+    "coderabbit": "no actionable comments",
+    "optional_developerz": "queued at merge; no verdict claimed"
+  }
 }

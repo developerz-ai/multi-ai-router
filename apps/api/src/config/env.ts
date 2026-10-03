@@ -20,6 +20,7 @@ import {
   wholeNumber,
 } from "./fields"
 import { validateNumericBounds } from "./numeric-bounds"
+import { RECOVERY_ENV_FIELDS, readRecoveryEnv } from "./recovery"
 
 /**
  * Boot-time environment validation — the reference is
@@ -476,6 +477,7 @@ export const DEFAULT_SERVER_IDLE_TIMEOUT_SECONDS = 60
 export const DEFAULT_LOG_QUIET_PATHS: readonly string[] = ["/healthz", "/readyz"]
 
 export interface Env {
+  readonly recovery: ReturnType<typeof readRecoveryEnv>["recovery"]
   readonly port: number
   /**
    * How long a connection may carry no bytes in either direction before the *server* closes it —
@@ -687,6 +689,7 @@ export { decodeEncryptionKey, ZERO_IS_LEGAL } from "./fields"
  * about zero, whether or not anyone remembered to make one.
  */
 export const ENV_FIELDS = {
+  ...RECOVERY_ENV_FIELDS,
   PORT: wholeNumber.refine((value) => value <= 65_535, "must be at most 65535").optional(),
   SERVER_IDLE_TIMEOUT_SECONDS: serverIdleTimeoutSeconds.optional(),
   SHUTDOWN_DRAIN_MS: wholeNumber.optional(),
@@ -969,6 +972,7 @@ const envSchema = boundedEnvSchema.transform((raw, ctx): Env => {
   }
 
   return {
+    ...readRecoveryEnv(raw),
     port: raw.PORT ?? 8080,
     serverIdleTimeoutSeconds:
       raw.SERVER_IDLE_TIMEOUT_SECONDS ?? DEFAULT_SERVER_IDLE_TIMEOUT_SECONDS,

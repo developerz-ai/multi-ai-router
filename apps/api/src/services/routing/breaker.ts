@@ -54,6 +54,8 @@ export interface BreakerOptions {
   readonly maxBackoffMs?: number
   /** Consecutive 5xx / connection failures before the breaker trips. */
   readonly failureThreshold?: number
+  /** Actual designated recovery attempts retrip on an account failure. */
+  readonly recoveryProbe?: boolean
   /** Jitter fraction in `[0, 1)`, supplied by the caller. 0 keeps the math deterministic. */
   readonly jitter?: number
   /** Decides where an auth failure lands — see {@link AUTH_FAILURE_LANDING}. */
@@ -166,7 +168,11 @@ export function recordFailure(
     default: {
       if (refusalStands(state, now)) return state
       const failures = state.consecutiveFailures + 1
-      if (failures < (options.failureThreshold ?? DEFAULT_FAILURE_THRESHOLD)) {
+      if (
+        !options.recoveryProbe &&
+        phase(state, now) !== "half-open" &&
+        failures < (options.failureThreshold ?? DEFAULT_FAILURE_THRESHOLD)
+      ) {
         return { ...state, consecutiveFailures: failures }
       }
       return trip(state, failure, now, options, failures)

@@ -11,6 +11,7 @@ import type { PolicyNote } from "../result"
 import type { Candidate } from "../types"
 
 export interface PolicyInput {
+  readonly now: Date
   /** Already scope-intersected and filtered. Never empty when a policy runs. */
   readonly candidates: readonly Candidate[]
   readonly sessionKey: string

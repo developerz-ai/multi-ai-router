@@ -12,13 +12,14 @@ import {
 import type { TranslationContext } from "../translate"
 import type { AttemptOutcome } from "./attempt"
 import { logAttemptFailure } from "./attempt-log"
-import { rewriteModel } from "./body/read"
 import type { ByteSpan } from "./body/scanner"
+import { bodyFor } from "./chain-body"
 import { answeredFailure, type ChainFailure, foldChainFailure, routerFailure } from "./chain-error"
+import { recordChainFailure } from "./chain-recovery"
+import { createChainRefusals } from "./chain-refusals"
 import { recordAttemptFailure, relaySuccess } from "./chain-relay"
 import { dispatch } from "./dispatch"
 import { DEFAULT_LOG_REASON_MAX_CHARS } from "./dispatcher-config"
-import { breakerOptionsFor } from "./health"
 import { accountHealthFacts } from "./health-observation"
 import type { ServableCandidate } from "./plan"
 import { admitHalfOpenProbe } from "./probe"
@@ -74,6 +75,7 @@ export async function runChain(ctx: ChainContext): Promise<Response> {
   const byId = new Map(ctx.plan.map((entry) => [entry.candidate.account.id, entry]))
   const { runtime } = ctx
 
+  const refusals = createChainRefusals(ctx)
   let progress = NO_ATTEMPTS
   let lastFailure: AttemptFailure | null = null
   /** The most actionable failure any attempt has produced so far. See `chain-error.ts`. */
@@ -100,11 +102,15 @@ export async function runChain(ctx: ChainContext): Promise<Response> {
     // than joining a stampede onto it.
     const probe = admitHalfOpenProbe(runtime.health, decision.candidate, attemptStartedAt)
     if (!probe.admitted) {
+      refusals.record()
+      runtime.recovery?.hint(accountId, "cooldown-expired")
       ordered = ordered.filter((candidate) => candidate.account.id !== accountId)
       ctx.log?.debug("half-open probe already in flight", { accountId })
       continue
     }
 
+    const priorProgress = progress
+    const recovery = runtime.recovery?.prepare(servable.account, decision.candidate)
     progress = recordAttempt(progress, accountId, decision.action === "retry-in-place")
     runtime.health.beginAttempt(accountId)
 
@@ -140,7 +146,13 @@ export async function runChain(ctx: ChainContext): Promise<Response> {
 
     let outcome: AttemptOutcome
     try {
-      outcome = await dispatch(ctx, servable, upstreamBody, decision.action === "retry-in-place")
+      outcome = await dispatch(
+        ctx,
+        servable,
+        upstreamBody,
+        decision.action === "retry-in-place",
+        recovery?.beforeUpstreamStart,
+      )
     } catch (error) {
       // A credential that will not decrypt, or a driver that refused to build the request. This
       // account cannot serve; the next one still can, and the reason is kept in case none can —
@@ -160,7 +172,17 @@ export async function runChain(ctx: ChainContext): Promise<Response> {
       continue
     }
 
+    if (outcome.kind === "admission-refused") {
+      runtime.health.endAttempt(accountId)
+      probe.release()
+      progress = priorProgress
+      ordered = ordered.filter((candidate) => candidate.account.id !== accountId)
+      refusals.record()
+      continue
+    }
+
     if (ctx.request.signal.aborted) {
+      recovery?.finish("uncertain")
       if (outcome.kind === "success") void outcome.response.body?.cancel().catch(() => {})
       runtime.health.endAttempt(accountId)
       probe.release()
@@ -183,11 +205,10 @@ export async function runChain(ctx: ChainContext): Promise<Response> {
     // Applied after the verdict, never before: `recordSuccess`'s unconditional reset to `active`
     // would otherwise erase a `rejected` reading's cooldown on an otherwise-200 response.
     if (outcome.kind === "success") {
+      if (outcome.rateLimit?.limited) recovery?.finish("failed")
       runtime.health.recordSuccess(accountId, observation)
       runtime.health.applyRateLimit(accountId, outcome.rateLimit, attemptStartedAt, observation)
-      // Released on the verdict, not when the stream settles: the probe's question was "is this
-      // account back?", and it has been answered. Holding the gate for the length of a generation
-      // would keep a recovered account out of every other request's snapshot for minutes.
+      // Release the local breaker hold; the durable permit remains consumed until the body settles.
       probe.release()
       progress = markStreamed(progress)
       // The span stays open: a stream settles long after this returns, and every byte of the drain
@@ -196,6 +217,7 @@ export async function runChain(ctx: ChainContext): Promise<Response> {
         ...at,
         upstreamStarted,
         observation,
+        ...(outcome.rateLimit?.limited || !recovery?.designated ? {} : { recovery }),
       })
       // Failover left the bound account behind, so this answer came from a fresh upstream
       // session: said out loud, never silently (`session-restart.ts`). The binding itself is
@@ -208,19 +230,9 @@ export async function runChain(ctx: ChainContext): Promise<Response> {
       return withSessionRestart(relayed, "failover")
     }
 
-    // Order is load-bearing. The classified failure is this response's *verdict* and lands first;
-    // the parsed headers are a reading that rode along with it and land second, where
-    // `applyRateLimit` can see the verdict already in place and decline to overwrite a terminal one.
-    // Reversed, a `402` carrying `x-ratelimit-remaining-requests: 0` would cool the account down
-    // before anything knew its balance was dead.
-    runtime.health.recordFailure(
-      accountId,
-      outcome.failure,
-      attemptStartedAt,
-      breakerOptionsFor(servable.driver.authKind),
-      observation,
-    )
-    runtime.health.applyRateLimit(accountId, outcome.rateLimit, attemptStartedAt, observation)
+    recordChainFailure(ctx, servable, outcome, attemptStartedAt, observation, recovery)
+    if (recovery?.designated)
+      ordered = ordered.filter((candidate) => candidate.account.id !== accountId)
     runtime.health.endAttempt(accountId)
     // After the marks, never before: the failure has already cooled the account down to its next
     // backoff step, so releasing here hands the gate to nobody rather than to the next stampede.
@@ -275,23 +287,6 @@ export async function runChain(ctx: ChainContext): Promise<Response> {
   if (lastFailure !== null) {
     throw new NoHealthyAccountError(`every attempt failed: ${lastFailure.message}`)
   }
+  refusals.failIfAny()
   throw new NoHealthyAccountError("no candidate account could be attempted")
-}
-
-/**
- * The body this account gets. Passthrough: identical bytes, unless the account's alias map renames
- * the model — the one edit a passthrough body ever receives. Translate: rebuilt field by field,
- * which a Claude subscription also takes since the SDK's prompt is built from Anthropic-shaped
- * bytes either way.
- *
- * @throws TranslationError when a translated body has a field with no target representation.
- */
-function bodyFor(ctx: ChainContext, servable: ServableCandidate): Uint8Array | null {
-  const pair = servable.translation
-  if (pair !== null) {
-    return ctx.translated.bodyFor(pair, servable.upstreamModel, servable.chatCeiling)
-  }
-  if (ctx.bodyBytes.length === 0) return null
-  if (ctx.modelSpan === null || servable.upstreamModel === ctx.runtime.model) return ctx.bodyBytes
-  return rewriteModel(ctx.bodyBytes, ctx.modelSpan, servable.upstreamModel)
 }

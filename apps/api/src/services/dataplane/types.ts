@@ -1,4 +1,5 @@
 import type { AccountBilling, Dialect, UsageOutcome } from "@multi-ai-router/core"
+import type { RecoveryRow } from "@multi-ai-router/db"
 import type { DriverAccount } from "../../providers"
 import type { AccountSnapshot, PoolSnapshot } from "../routing"
 
@@ -19,6 +20,8 @@ import type { AccountSnapshot, PoolSnapshot } from "../routing"
  * and nowhere else — upstream credentials cross exactly one boundary.
  */
 export interface RoutableAccount {
+  /** Durable recovery facts loaded off-path with the account and quota snapshot. */
+  readonly recovery?: RecoveryRow
   readonly id: string
   readonly lifecycleVersion: number
   readonly healthRecoveryVersion: number

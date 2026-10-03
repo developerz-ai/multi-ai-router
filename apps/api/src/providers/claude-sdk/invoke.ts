@@ -1,3 +1,4 @@
+import type { UpstreamStartGuard } from "../upstream-admission"
 import type { TruncatedTurn } from "./render"
 import type { SessionPlan } from "./session"
 
@@ -25,6 +26,7 @@ import type { SessionPlan } from "./session"
  *   the answer to `query()` and reports what the subprocess named itself (§4).
  */
 export interface SdkInvocation {
+  readonly beforeUpstreamStart?: UpstreamStartGuard
   /** Which Account this runs as. Rate-limit state and session lineage are keyed by it, never global. */
   readonly accountId: string
   /** The isolated `CLAUDE_CONFIG_DIR`. Already resolved, never empty. */

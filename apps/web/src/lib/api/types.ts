@@ -149,6 +149,7 @@ export interface AccountAvailability {
    * response, which never sends it, still type-checks as "no reason".
    */
   readonly cooldownReason?: "credential-rejected" | null
+  readonly recovery?: import("./accounts").AccountRecoveryView
   readonly lastCheckedAt: string | null
   readonly consecutiveFailures: number
   readonly inFlight: number

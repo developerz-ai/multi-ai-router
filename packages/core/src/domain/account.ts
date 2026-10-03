@@ -151,5 +151,10 @@ export const QuotaWindowState = z.object({
   resetsAt: z.date().optional(),
   resetSource: ResetSource,
   lastCheckedAt: z.date(),
+  /** Durable evidence metadata; providers never synthesize these fields. */
+  revision: z.number().int().nonnegative().optional(),
+  evidenceState: z.enum(["current", "expired", "superseded_by_recovery"]).optional(),
+  blocksRouting: z.boolean().optional(),
+  retiredAt: z.date().optional(),
 })
 export type QuotaWindowState = z.infer<typeof QuotaWindowState>

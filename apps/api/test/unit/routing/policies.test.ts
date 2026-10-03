@@ -7,9 +7,20 @@ import { describe, expect, test } from "bun:test"
 import { RoutingPolicy } from "@multi-ai-router/core"
 import type { BindingDecision, PolicyInput } from "../../../src/services/routing"
 import { runPolicy } from "../../../src/services/routing"
-import { account, alarm, candidate, candidates, continuous, health, ids, limiter } from "./fixtures"
+import {
+  account,
+  alarm,
+  candidate,
+  candidates,
+  continuous,
+  health,
+  ids,
+  limiter,
+  NOW,
+} from "./fixtures"
 
 const input = (overrides: Partial<PolicyInput> = {}): PolicyInput => ({
+  now: NOW,
   candidates: candidates(account("a"), account("b"), account("c")),
   sessionKey: "session-alpha",
   rotationCounter: 0,
