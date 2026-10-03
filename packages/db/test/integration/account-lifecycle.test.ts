@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test"
-import { inArray } from "drizzle-orm"
+import { eq, inArray } from "drizzle-orm"
 import { createDatabase, type DatabaseHandle } from "../../src/client"
 import { defaultMigrationsFolder, runMigrations } from "../../src/migrate"
 import {
@@ -23,6 +23,10 @@ afterAll(async () => {
   if (handle && ids.length) await handle.db.delete(accounts).where(inArray(accounts.id, ids))
   await handle?.close()
 })
+function database(): DatabaseHandle {
+  if (handle === undefined) throw new Error("database fixture not initialized")
+  return handle
+}
 async function seed(
   status: "active" | "disabled" | "exhausted" | "needs_reauth" = "active",
   authMaterial: string | null = "cipher-r1",
@@ -131,5 +135,71 @@ describe.skipIf(!url)("account lifecycle atomic observations", () => {
         await repo.confirmAccountAuthorization({ id: row.id, expected: row, now }),
       ).toMatchObject({ status, lifecycleVersion: 1, authRecoveryVersion: 1 })
     }
+  })
+  test("CLI confirmation accepts background status drift and preserves current restrictions", async () => {
+    for (const status of ["needs_reauth", "exhausted", "cooling_down", "disabled"] as const) {
+      const original = await seed("active", null)
+      await database().db.update(accounts).set({ status }).where(eq(accounts.id, original.id))
+      const confirmed = await repo.confirmAccountAuthorization({
+        id: original.id,
+        expected: { lifecycleVersion: original.lifecycleVersion, authMaterial: null },
+        now,
+      })
+      expect(confirmed).toMatchObject({
+        status: status === "needs_reauth" ? "active" : status,
+        lifecycleVersion: 1,
+        authRecoveryVersion: 1,
+        healthRecoveryVersion: 0,
+        authMaterial: null,
+      })
+      expect(
+        await repo.confirmAccountAuthorization({ id: original.id, expected: original, now }),
+      ).toBeUndefined()
+    }
+  })
+  test("CLI confirmation rejects intervening operator intents and credential rotation", async () => {
+    for (const mutation of ["disable", "recheck", "credential", "rotation"] as const) {
+      const original = await seed()
+      if (mutation === "disable") await repo.disable(original.id, now)
+      if (mutation === "recheck") await repo.recheckAccount({ id: original.id, now })
+      if (mutation === "credential")
+        await repo.updateOperatorAccount({
+          id: original.id,
+          patch: { authMaterial: "manual" },
+          now,
+        })
+      if (mutation === "rotation")
+        await repo.saveRefreshedCredential({
+          id: original.id,
+          expectedAuthMaterial: "cipher-r1",
+          authMaterial: "rotated",
+          tokenExpiresAt: null,
+          now,
+        })
+      const before = await repo.findById(original.id)
+      expect(
+        await repo.confirmAccountAuthorization({ id: original.id, expected: original, now }),
+      ).toBeUndefined()
+      expect(await repo.findById(original.id)).toEqual(before)
+    }
+  })
+  test("observed authentication recovery still rejects background billing status drift", async () => {
+    const original = await seed("needs_reauth", null)
+    await database()
+      .db.update(accounts)
+      .set({ status: "exhausted" })
+      .where(eq(accounts.id, original.id))
+    expect(
+      await repo.recoverObservedAuthentication({
+        id: original.id,
+        expected: { ...original, status: "needs_reauth" },
+        now,
+      }),
+    ).toBeUndefined()
+    expect(await repo.findById(original.id)).toMatchObject({
+      status: "exhausted",
+      lifecycleVersion: 0,
+      authRecoveryVersion: 0,
+    })
   })
 })

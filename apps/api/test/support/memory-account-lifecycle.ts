@@ -42,7 +42,12 @@ export function memoryAccountLifecycle(rows: AccountRow[], states: OauthStateRow
   }
   const confirm: Methods["confirmAccountAuthorization"] = async ({ id, expected, now }) => {
     const row = find(id)
-    if (!matches(row, expected)) return undefined
+    if (
+      row === undefined ||
+      row.lifecycleVersion !== expected.lifecycleVersion ||
+      row.authMaterial !== expected.authMaterial
+    )
+      return undefined
     return write(
       row,
       {
@@ -112,7 +117,11 @@ export function memoryAccountLifecycle(rows: AccountRow[], states: OauthStateRow
         clearedStatus,
       }
     },
-    recoverObservedAuthentication: confirm,
+    recoverObservedAuthentication: (input) => {
+      if (!matches(find(input.id), input.expected) || input.expected.status !== "needs_reauth")
+        return Promise.resolve(undefined)
+      return confirm(input)
+    },
     confirmAccountAuthorization: confirm,
     beginAccountAuthorization: async ({ id, expectedProvider, attempt, now }) => {
       const row = find(id)

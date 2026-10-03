@@ -5,7 +5,7 @@ created_by: sebi
 worked_by: "Codex team"
 owner: sebi
 percent: 23
-current_focus: "PR144 dependencies merged; W3A final local validation passed; external review/merge/release/deployment pending. W3B recovery admission and quota consistency next."
+current_focus: "PR144 dependencies merged; W3A review fixes validated locally; final review completion/merge/release/deployment pending. W3B recovery admission and quota consistency next."
 slices:
   - file: 01-edge-auth-security.md
     status: in_progress
@@ -32,8 +32,8 @@ slices:
     percent: 0
     findings: 8
 evidence:
-  - "W3A final revision: pinned Bun 1.4.2 bin/check with disposable PostgreSQL 18.6: 4536 tests passed, zero failed; lint/typecheck/build passed. Mocked OAuth identity/lifecycle, exact CAS, dedicated lock contention/loss, shutdown/deadline and postcommit catalog regressions covered. No live provider compatibility claim. Final local amd64 image build passed; independent seven-refresher-suite verification: 58 tests, 176 assertions. External review, merge, release and deployment pending. See 102-full-router-audit/evidence/wave3a-check.json."
-  - "102-full-router-audit/evidence/wave3a-bench.json: latest local run on the final validated revision, 8000 requests, zero failures/buffered streams; maximum p99 0.9454545455 ms, violations empty. A CLI-version smoke check ran briefly near benchmark startup. Earlier runs reached about 5 ms under concurrent workload; no causal performance improvement is claimed."
+  - "W3A reviewed revision: pinned Bun 1.4.2 bin/check with disposable PostgreSQL 18.6: 4549 tests across 319 files passed, zero failed; lint/typecheck/build passed. Mocked OAuth identity/lifecycle, exact CAS, dedicated lock contention/loss, shutdown/deadline and postcommit catalog regressions covered. No live provider compatibility claim. Final local amd64 image build passed; independent seven-refresher-suite verification: 58 tests, 176 assertions. Final review completion, merge, release and deployment pending. See 102-full-router-audit/evidence/wave3a-check.json."
+  - "102-full-router-audit/evidence/wave3a-bench.json: prior pre-review benchmark revision (not rerun after review fixes), 8000 requests, zero failures/buffered streams; maximum p99 0.9454545455 ms, violations empty. A CLI-version smoke check ran briefly near benchmark startup. Earlier runs reached about 5 ms under concurrent workload; no causal performance improvement is claimed."
   - "Dependency PR #144 merged as e41f0edd through the normal protected flow; dependency wave release/deployment remains separate."
   - "Dependency wave: Bun 1.4.2 bin/check with disposable PostgreSQL 18.6: 4425 tests passed, zero failed; lint/typecheck/build passed. PostgreSQL 16 integration regressions: 88 repository and 497 API tests passed. Latest supported dependency tree has zero reported advisories; frozen install preserves lockfile; Drizzle generate/check unchanged. Local amd64 image builds, Bun 1.4.2 and Claude CLI 2.1.288 verified; native arm64 release validation pending."
   - "102-full-router-audit/evidence/dependency-bench.json: 8000 requests, zero failures/buffered streams; maximum p99 1.25 ms, no budget violations."

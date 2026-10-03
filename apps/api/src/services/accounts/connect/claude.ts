@@ -182,13 +182,12 @@ export function createClaudeConnectService(deps: ClaudeConnectDeps): ClaudeConne
           )
         }
 
-        const previousStatus = found.subject.status
+        const loginStartedStatus = found.subject.status
         const committed = await deps.accounts.confirmAccountAuthorization({
           id: accountId,
           expected: {
             lifecycleVersion: found.subject.lifecycleVersion,
             authMaterial: found.subject.authMaterial,
-            status: found.subject.status,
           },
           now: deps.now(),
         })
@@ -203,7 +202,8 @@ export function createClaudeConnectService(deps: ClaudeConnectDeps): ClaudeConne
         log?.info("claude login completed", {
           accountId,
           mode: found.mode,
-          previousStatus,
+          loginStartedStatus,
+          status: committed.status,
           repaired: state === "repaired",
         })
         try {
@@ -220,7 +220,12 @@ export function createClaudeConnectService(deps: ClaudeConnectDeps): ClaudeConne
           subjectType: AUDIT_SUBJECTS.account,
           subjectId: accountId,
           // Names and flags. There is no field here that could hold a code, a state, or a token.
-          detail: { label: account.value.label, provider: account.value.provider, previousStatus },
+          detail: {
+            label: account.value.label,
+            provider: account.value.provider,
+            loginStartedStatus,
+            status: committed.status,
+          },
         })
 
         return ok({ accountId, mode: found.mode, connected: true, repaired: state === "repaired" })

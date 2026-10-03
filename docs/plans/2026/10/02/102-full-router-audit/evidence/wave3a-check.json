@@ -10,14 +10,14 @@
   "database": "disposable PostgreSQL 18.6",
   "gate": {
     "command": "bin/check",
-    "source_log": "/tmp/router-wave3a-complete-check.log",
-    "passed_tests": 4536,
+    "source_log": "/tmp/router-pr145-reviewed-check.log",
+    "passed_tests": 4549,
     "failed_tests": 0,
-    "test_files": 317,
+    "test_files": 319,
     "lint": "passed",
     "typecheck": "passed",
     "build": "passed",
-    "revision_scope": "Final W3A code validation after timer DB-read recovery, ambiguous CAS quarantine, acknowledgement coherence and overlap guards."
+    "revision_scope": "Reviewed W3A code after Claude authorization status-race preservation, unreadable refresh error-body classification and reusable-code inventory corrections."
   },
   "validation_scope": [
     "Mocked OAuth identity connect, refresh and egress",
@@ -30,7 +30,7 @@
   ],
   "limits": [
     "No live provider authentication/exchanges performed; no live issuer compatibility assertion.",
-    "External review, CI, merge, release and deployment remain pending for W3A.",
+    "Final review completion, merge, release and deployment remain pending for W3A; required PR145 CI passed before these review fixes.",
     "Global recovery admission, persisted quota recovery and quota-floor CAS remain W3B.",
     "General scheduler/writer/process shutdown bounds remain W4.",
     "102:03.2 and its 101:02.1 recovery alias remain partial/open for W3B global probe/quota completion."
@@ -43,7 +43,7 @@
     "maximum_p99_ms": 0.9454545454545454,
     "violations": [],
     "context": "CLI-version smoke verification ran briefly near startup, so this is a latest local run, not a claim of complete isolation. Earlier concurrent-workload runs reached about 5 ms; no causal performance improvement is claimed.",
-    "revision_scope": "Latest local run on the final validated W3A revision.",
+    "revision_scope": "Prior pre-review W3A revision measured by /tmp/router-wave3a-complete-bench.json; benchmark not rerun after the review fixes.",
     "source_log_or_artifact": "/tmp/router-wave3a-complete-bench.json",
     "streaming_added_ttft_p95_ms": {
       "passthrough": 0.05703215,
@@ -52,15 +52,20 @@
   },
   "next_wave": "W3B: account recovery admission and quota consistency",
   "image": {
-    "source_log": "/tmp/router-wave3a-complete-image.log",
+    "source_log": "/tmp/router-pr145-reviewed-image.log",
     "local_amd64_build": "passed",
     "release_or_deployment": "pending"
   },
   "independent_refresh_validation": {
-    "suite_count": 7,
-    "passed_tests": 58,
-    "assertions": 176,
+    "suite_count": 8,
+    "passed_tests": 61,
+    "assertions": 202,
     "failed_tests": 0
   },
-  "changed_file_count": 119
+  "changed_file_count": 121,
+  "review_fixes": [
+    "Claude login completion compares lifecycle and ciphertext while preserving current disabled/exhausted status; observed authentication recovery still compares needs_reauth.",
+    "Refresh refusal classification retains HTTP status when a non-deadline error body is unreadable.",
+    "Reusable-code inventory now describes durable authorization attempts, committed catalog barriers, provider identity, distributed refresh locks and observed status CAS."
+  ]
 }

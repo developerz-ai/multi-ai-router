@@ -1,3 +1,4 @@
+import type { AccountStatus } from "@multi-ai-router/core"
 import { and, eq, sql } from "drizzle-orm"
 import type { DatabaseExecutor } from "../client"
 import { accounts } from "../schema/accounts"
@@ -13,11 +14,12 @@ export function observedAccount(id: string, expected: AccountObservation) {
 }
 
 export function createAccountLifecycle(db: DatabaseExecutor): AccountLifecycleMethods {
-  const confirm: AccountLifecycleMethods["confirmAccountAuthorization"] = async ({
-    id,
-    expected,
-    now,
-  }) => {
+  const completeAuthorization = async (
+    id: string,
+    expected: Pick<AccountObservation, "lifecycleVersion" | "authMaterial">,
+    now: Date,
+    observedStatus?: AccountStatus,
+  ) => {
     const rows = await db
       .update(accounts)
       .set({
@@ -26,7 +28,14 @@ export function createAccountLifecycle(db: DatabaseExecutor): AccountLifecycleMe
         status: sql`case when ${accounts.status} = 'needs_reauth' then 'active'::account_status else ${accounts.status} end`,
         updatedAt: now,
       })
-      .where(observedAccount(id, expected))
+      .where(
+        and(
+          eq(accounts.id, id),
+          eq(accounts.lifecycleVersion, expected.lifecycleVersion),
+          sql`${accounts.authMaterial} is not distinct from ${expected.authMaterial}`,
+          ...(observedStatus === undefined ? [] : [eq(accounts.status, observedStatus)]),
+        ),
+      )
       .returning()
     return rows[0]
   }
@@ -104,8 +113,9 @@ export function createAccountLifecycle(db: DatabaseExecutor): AccountLifecycleMe
       }),
     recoverObservedAuthentication: (input) => {
       if (input.expected.status !== "needs_reauth") return Promise.resolve(undefined)
-      return confirm(input)
+      return completeAuthorization(input.id, input.expected, input.now, "needs_reauth")
     },
-    confirmAccountAuthorization: confirm,
+    confirmAccountAuthorization: ({ id, expected, now }) =>
+      completeAuthorization(id, expected, now),
   }
 }

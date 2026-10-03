@@ -73,5 +73,10 @@
     "overheadP99Ms": 5,
     "addedTtftP95Ms": 2
   },
-  "violations": []
+  "violations": [],
+  "evidence_context": {
+    "source_artifact": "/tmp/router-wave3a-complete-bench.json",
+    "revision_scope": "Prior pre-review W3A revision; not rerun after PR145 review fixes.",
+    "workload_context": "CLI-version smoke verification ran briefly near startup. Earlier concurrent-workload runs reached about 5 ms; no causal performance improvement or complete isolation is claimed."
+  }
 }

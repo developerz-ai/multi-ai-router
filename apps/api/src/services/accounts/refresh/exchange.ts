@@ -65,9 +65,9 @@ export async function refreshCredential(
   try {
     body = await readOAuthResponse(response, requestSignal)
   } catch {
-    return signal.aborted
-      ? skipped()
-      : failed(requestSignal.aborted ? "unreachable" : "unreadable-tokens")
+    if (signal.aborted) return skipped()
+    if (requestSignal.aborted) return failed("unreachable")
+    body = null
   }
   if (!response.ok) {
     return signal.aborted

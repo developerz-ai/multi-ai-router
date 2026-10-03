@@ -39,10 +39,10 @@ export interface AccountLifecycleMethods {
     expected: AccountObservation & { status: "needs_reauth" }
     now: Date
   }): Promise<AccountRow | undefined>
-  /** Successful Claude CLI completion; expected is the original pending subject. */
+  /** Successful CLI completion fences operator intent; background status may change without L. */
   confirmAccountAuthorization(input: {
     id: string
-    expected: AccountObservation
+    expected: Pick<AccountObservation, "lifecycleVersion" | "authMaterial">
     now: Date
   }): Promise<AccountRow | undefined>
 }
