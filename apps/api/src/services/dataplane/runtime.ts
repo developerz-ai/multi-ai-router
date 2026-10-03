@@ -49,6 +49,7 @@ export interface RuntimeInput {
   readonly sessionKeySource: SessionKeySource
   readonly clock: DataPlaneClock
   readonly timeoutMs: number
+  readonly errorMaxBytes?: number
   readonly record: (record: UsageRecord) => void
   /** Correlation id shared by every attempt of this request. */
   readonly correlationId: string

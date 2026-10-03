@@ -68,7 +68,7 @@ afterAll(async () => {
 describe.skipIf(!runnable)("the admin session repository against a live database", () => {
   test("upsert then find round-trips every column", async () => {
     const stored = row("round-trip")
-    await repository.upsert(stored)
+    await repository.create(stored)
 
     expect(await repository.find(stored.idHash)).toEqual(stored)
     expect(await repository.find(`${PREFIX}never-written`)).toBeUndefined()
@@ -76,28 +76,28 @@ describe.skipIf(!runnable)("the admin session repository against a live database
 
   test("an upsert onto an existing row is a slide: only last_seen and idle_expiry move", async () => {
     const original = row("slide")
-    await repository.upsert(original)
+    await repository.create(original)
 
-    await repository.upsert({
+    await repository.touch({
       ...original,
       username: "impostor@example.test",
       csrfToken: "rotated",
       createdAt: FAR,
-      lastSeenAt: LATER,
+      lastSeenAt: new Date(NOW.getTime() + 60_000),
       idleExpiryAt: MUCH_LATER,
       absoluteExpiryAt: new Date(FAR.getTime() + 86_400_000),
     })
 
     expect(await repository.find(original.idHash)).toEqual({
       ...original,
-      lastSeenAt: LATER,
+      lastSeenAt: new Date(NOW.getTime() + 60_000),
       idleExpiryAt: MUCH_LATER,
     })
   })
 
   test("delete reports whether a row was there", async () => {
     const stored = row("delete")
-    await repository.upsert(stored)
+    await repository.create(stored)
 
     expect(await repository.delete(stored.idHash)).toBe(true)
     expect(await repository.delete(stored.idHash)).toBe(false)
@@ -108,7 +108,7 @@ describe.skipIf(!runnable)("the admin session repository against a live database
     const idleOut = row("idle-out", { idleExpiryAt: NOW, absoluteExpiryAt: FAR })
     const cappedOut = row("capped-out", { idleExpiryAt: FAR, absoluteExpiryAt: LATER })
     const live = row("live", { idleExpiryAt: FAR, absoluteExpiryAt: FAR })
-    for (const r of [idleOut, cappedOut, live]) await repository.upsert(r)
+    for (const r of [idleOut, cappedOut, live]) await repository.create(r)
 
     // Cutoff equals `idleOut`'s bound exactly: `<=`, so it goes; `cappedOut`'s
     // bound is later and stays. `<` here would leave a session `authenticate()`
@@ -117,7 +117,7 @@ describe.skipIf(!runnable)("the admin session repository against a live database
     expect(await repository.find(idleOut.idHash)).toBeUndefined()
     expect(await repository.find(cappedOut.idHash)).toBeDefined()
 
-    await repository.upsert(idleOut)
+    await repository.create(idleOut)
     // Both expired, limit one: soonest-expired first, and the count is the
     // "there is more" signal.
     expect(await repository.deleteExpiredBefore(MUCH_LATER, 1)).toBe(1)
@@ -127,5 +127,28 @@ describe.skipIf(!runnable)("the admin session repository against a live database
     expect(await repository.deleteExpiredBefore(MUCH_LATER, 1)).toBe(0)
 
     expect(await repository.find(live.idHash)).toBeDefined()
+  })
+})
+
+describe.skipIf(!runnable)("session touch cannot restore revoked authority", () => {
+  test("touch of a deleted session cannot recreate it", async () => {
+    const stored = row("revoked")
+    await repository.create(stored)
+    await repository.delete(stored.idHash)
+    expect(await repository.touch({ ...stored, lastSeenAt: new Date(NOW.getTime() + 1000) })).toBe(
+      false,
+    )
+    expect(await repository.find(stored.idHash)).toBeUndefined()
+  })
+  test("touch refuses expired sessions and never moves activity backwards", async () => {
+    const stored = row("expired")
+    await repository.create(stored)
+    expect(await repository.touch({ ...stored, lastSeenAt: LATER, idleExpiryAt: FAR })).toBe(false)
+    const recent = { ...stored, lastSeenAt: new Date(NOW.getTime() + 2000), idleExpiryAt: FAR }
+    expect(await repository.touch(recent)).toBe(true)
+    expect(await repository.touch({ ...stored, lastSeenAt: new Date(NOW.getTime() + 1000) })).toBe(
+      true,
+    )
+    expect(await repository.find(stored.idHash)).toEqual(recent)
   })
 })

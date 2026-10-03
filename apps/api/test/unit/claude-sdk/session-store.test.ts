@@ -193,15 +193,15 @@ describe("resolving a turn against an account", () => {
   test("a headerless client whose session key shifted still finds its session by fingerprint", () => {
     const store = storeWith(memorySessions())
 
-    store
-      .resolve({
-        apiKeyId: "key-1",
-        sessionKey: "fp_first",
-        keySource: "fingerprint",
-        accountId: "acct-1",
-        body: opening,
-      })
-      .remember("sess_1")
+    const first = store.resolve({
+      apiKeyId: "key-1",
+      sessionKey: "fp_first",
+      keySource: "fingerprint",
+      accountId: "acct-1",
+      body: opening,
+    })
+    first.remember("sess_1")
+    first.release()
 
     const later = store.resolve({
       apiKeyId: "key-1",

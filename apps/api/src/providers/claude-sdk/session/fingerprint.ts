@@ -3,7 +3,7 @@ import { FIRST_USER_TEXT_LIMIT } from "./conversation"
 
 /**
  * The headerless client's session key: `sha256(clientCwd + "\n" + firstUserText[0:2000])[0:16]`,
- * **scoped by Account** (docs/idea/11-anthropic-agent-sdk.md §4).
+ * **scoped by router key and Account** (docs/idea/11-anthropic-agent-sdk.md §4).
  *
  * Every part of that seed is load-bearing, and each was a bug somewhere before it was a rule:
  *
@@ -15,8 +15,9 @@ import { FIRST_USER_TEXT_LIMIT } from "./conversation"
  *   including it would make the fingerprint change every turn and never match anything.
  * - **Only the first user message is in.** A conversation grows by appending; its opening does not
  *   move. Hashing the whole history would produce a new key per turn, which is the same failure.
- * - **The Account scopes it.** An SDK session id resumes only on the Account that created it, so a
- *   fingerprint shared across Accounts is both a guaranteed cache miss and one subscription's
+ * - **The router key and Account scope it.** Different keys never share a transcript, even when
+ *   their opening text and pooled Account coincide. An SDK session id resumes only on the Account
+ *   that created it, so a fingerprint shared across Accounts is both a guaranteed cache miss and one subscription's
  *   conversation reaching another's.
  *
  * This is *not* the router's HTTP session key (`services/dataplane/body/read.ts`), which is scoped
@@ -29,6 +30,8 @@ import { FIRST_USER_TEXT_LIMIT } from "./conversation"
 const FINGERPRINT_HEX = 16
 
 export interface FingerprintSeed {
+  /** Router-key ownership is enforced before resolving any session alias. */
+  readonly apiKeyId: string
   /** The Account the resulting session lives on. Scoping, not salt: it is not hashed. */
   readonly accountId: string
   /** The client's own working directory when it reported one. `null` for every remote client. */
@@ -45,7 +48,7 @@ export function sessionFingerprint(seed: FingerprintSeed): string {
     )
     .digest("hex")
     .slice(0, FINGERPRINT_HEX)
-  return scopedKey(seed.accountId, digest)
+  return scopedKey(seed.apiKeyId, scopedKey(seed.accountId, digest))
 }
 
 /**

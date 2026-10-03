@@ -302,6 +302,7 @@ export function createRuntime(deps: RuntimeDeps): Runtime {
     repository: createAdminSessionRepository(database),
     logger,
     cacheMaxEntries: env.adminAuth.sessionCacheMax,
+    revalidateAfterMs: env.adminAuth.sessionRevalidateSeconds * 1_000,
   })
 
   // The continuous half of a subscription's quota picture (`providers/claude-sdk/usage-gauge.ts`):

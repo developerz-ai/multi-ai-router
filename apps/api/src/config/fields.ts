@@ -22,7 +22,11 @@ import { z } from "zod"
 
 export const nonEmpty = z.string().min(1)
 
-export const wholeNumber = z.string().regex(/^\d+$/, "must be a whole number").transform(Number)
+export const wholeNumber = z
+  .string()
+  .regex(/^\d+$/, "must be a whole number")
+  .transform(Number)
+  .refine(Number.isSafeInteger, "must be a finite safe integer")
 
 /** For a ceiling where zero is not "unlimited" but "nothing ever runs". */
 export const atLeastOne = wholeNumber.refine((v) => v >= 1, "must be at least 1")
@@ -88,6 +92,24 @@ export const pathList = z
   )
 
 export const absoluteUrl = z.string().refine((v) => URL.canParse(v), "must be an absolute URL")
+
+/** Browser redirects and discovery cannot use an opaque URL or embed credentials. */
+export const oidcUrl = z.string().refine((value) => {
+  // Empty is handled by the all-or-nothing OIDC block, including local-only installs.
+  if (value === "") return true
+  const url = URL.parse(value)
+  return (
+    url !== null &&
+    (url.protocol === "http:" || url.protocol === "https:") &&
+    url.username === "" &&
+    url.password === "" &&
+    url.hash === ""
+  )
+}, "must be an absolute HTTP(S) URL without credentials or a fragment")
+
+export const oidcScopes = z
+  .string()
+  .refine((value) => value.split(/\s+/u).includes("openid"), "must include the openid scope")
 
 const ENCRYPTION_KEY_BYTES = 32
 const BASE64_SHAPE = /^[A-Za-z0-9+/_-]+={0,2}$/

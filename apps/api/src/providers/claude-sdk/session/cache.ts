@@ -6,7 +6,7 @@ import type { SessionLineageState } from "@multi-ai-router/db"
  * | Cache | Key | Serves |
  * |---|---|---|
  * | session | `apiKeyId` + the client's session key | clients that name their conversation |
- * | fingerprint | `accountId` + `sha256(cwd + first user text)` | headerless clients |
+ * | fingerprint | `apiKeyId` + `accountId` + `sha256(cwd + first user text)` | headerless clients |
  *
  * **Postgres is the persisted truth; this is the cache** (docs/idea/11-anthropic-agent-sdk.md §4).
  * An SDK session id resumes only on the Account that minted it, so the binding is a fact about
@@ -176,8 +176,9 @@ export function createSessionCache(options: SessionCacheOptions): SessionCache {
       const previous = aliases.get(fingerprint)
       aliases.delete(fingerprint)
       if (previous !== undefined && previous.sdkSessionId !== target.sdkSessionId) {
+        // A shared opening can name independent explicit conversations. Moving its fallback
+        // alias must not erase either conversation's authoritative direct binding.
         unlink(previous.sdkSessionId, "fingerprints", fingerprint)
-        purge(previous.sdkSessionId)
       }
 
       while (aliases.size >= options.maxEntries) evictOldestAlias()

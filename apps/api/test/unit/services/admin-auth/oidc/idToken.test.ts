@@ -235,3 +235,17 @@ describe("verifyIdToken", () => {
     }
   })
 })
+
+for (const overrides of [
+  { iat: Math.floor(Date.now() / 1000) + 3600 },
+  { aud: [CLIENT_ID, "other-client"] },
+  { azp: "other-client" },
+  { iat: 1.5 },
+]) {
+  test(`rejects invalid issued-at or authorized-party claims ${JSON.stringify(overrides)}`, async () => {
+    const { token, jwks } = await buildJwksAndToken(overrides)
+    await expect(
+      verifyIdToken({ token, issuer: ISSUER, audience: CLIENT_ID, nonce: "test-nonce" }, { jwks }),
+    ).rejects.toBeInstanceOf(OIDCIdTokenInvalidError)
+  })
+}

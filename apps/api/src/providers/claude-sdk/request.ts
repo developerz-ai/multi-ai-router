@@ -1,3 +1,4 @@
+import { InvalidRequestError } from "@multi-ai-router/core"
 import { z } from "zod"
 import {
   anthropicToolChoiceSchema,
@@ -21,23 +22,22 @@ import { type DeclaredTool, readToolList } from "./tools"
  * content block this build has never seen must still reach the model as *something* rather than
  * fail a turn (`prompt.ts` decides what).
  *
- * An unreadable body is not an error here either. It yields an empty request, which every consumer
- * already has an honest answer for: no messages is a prompt with nothing in it, no tools is a plain
- * chat turn, and `stream: false` is one JSON object back.
+ * Invalid Messages envelopes are rejected before acquiring a subprocess slot. Unknown content
+ * block types remain available to the prompt renderer's supported fallback.
  */
 
 /** A content block as the client sent it. `type` is the only field this layer branches on. */
 const blockSchema = z.looseObject({ type: z.string() })
 
 const messageSchema = z.looseObject({
-  role: z.string(),
+  role: z.enum(["user", "assistant"]),
   content: z.union([z.string(), z.array(blockSchema)]),
 })
 
 const systemSchema = z.union([z.string(), z.array(z.looseObject({ type: z.string() }))])
 
 const requestSchema = z.looseObject({
-  messages: z.array(messageSchema).nullish(),
+  messages: z.array(messageSchema).min(1),
   system: systemSchema.nullish(),
   tools: z.unknown().optional(),
   stream: z.boolean().nullish(),
@@ -83,33 +83,46 @@ export interface SdkRequest {
   readonly toolChoice: ParsedAnthropicToolChoice | null
 }
 
-const EMPTY: SdkRequest = {
-  messages: [],
-  system: null,
-  tools: [],
-  stream: false,
-  toolChoice: null,
-}
-
 export function readSdkRequest(body: Uint8Array | null): SdkRequest {
-  if (body === null || body.length === 0) return EMPTY
+  if (body === null || body.length === 0)
+    throw new InvalidRequestError("the Claude SDK request body must contain a Messages request")
 
   let parsed: unknown
   try {
     parsed = JSON.parse(new TextDecoder().decode(body))
   } catch {
-    return EMPTY
+    throw new InvalidRequestError("the Claude SDK request body must be valid JSON")
   }
 
   const result = requestSchema.safeParse(parsed)
-  if (!result.success) return EMPTY
+  if (!result.success) {
+    const field = result.error.issues[0]?.path.join(".") || "body"
+    throw new InvalidRequestError(
+      `the Claude SDK request has invalid ${field}; messages must be a non-empty array with user or assistant content`,
+    )
+  }
+  rejectServerTools(result.data.tools)
 
   return {
-    messages: (result.data.messages ?? []).map(readMessage),
+    messages: result.data.messages.map(readMessage),
     system: readSystem(result.data.system),
     tools: readToolList(result.data.tools),
     stream: result.data.stream === true,
     toolChoice: readToolChoice(result.data.tool_choice),
+  }
+}
+
+/** Server tools require upstream execution, which subscription passthrough cannot provide. */
+function rejectServerTools(value: unknown): void {
+  if (!Array.isArray(value)) return
+  for (const [index, tool] of value.entries()) {
+    if (typeof tool !== "object" || tool === null) continue
+    const type: unknown = Reflect.get(tool, "type")
+    if (type !== undefined && type !== "custom") {
+      throw new InvalidRequestError(
+        `tools[${index}].type is unsupported for Claude subscriptions; only client tools are supported`,
+      )
+    }
   }
 }
 
@@ -158,10 +171,7 @@ function recognizedToolChoiceType(value: unknown): string | null {
 }
 
 function readMessage(message: z.infer<typeof messageSchema>): SdkRequestMessage {
-  // Anthropic's own two roles, and anything else is a client bug. `user` is the safe reading:
-  // an unknown role rendered as the assistant's would put words in the model's mouth.
-  const role: SdkRequestRole = message.role === "assistant" ? "assistant" : "user"
-  return { role, content: message.content }
+  return { role: message.role, content: message.content }
 }
 
 /**

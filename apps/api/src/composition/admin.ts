@@ -273,6 +273,8 @@ export function createAdminPlane(deps: AdminPlaneDeps): AdminPlane {
           adminSessionIdleMinutes: env.adminAuth.sessionIdleMinutes,
           adminSessionAbsoluteHours: env.adminAuth.sessionAbsoluteHours,
           adminLoginMaxAttempts: env.adminAuth.loginMaxAttempts,
+          adminLoginMaxConcurrent: env.adminAuth.loginMaxConcurrent,
+          adminLoginMaxTrackedIps: env.adminAuth.loginMaxTrackedIps,
           adminLoginAttemptWindowMinutes: env.adminAuth.loginAttemptWindowMinutes,
           adminLoginLockoutMinutes: env.adminAuth.loginLockoutMinutes,
           adminSessionTouchIntervalSeconds: env.adminAuth.sessionTouchIntervalSeconds,
@@ -283,6 +285,7 @@ export function createAdminPlane(deps: AdminPlaneDeps): AdminPlane {
           env.adminOidc === null
             ? null
             : createOIDCFlow({
+                requestTimeoutMs: env.adminOidc.requestTimeoutMs,
                 config: {
                   issuerUrl: env.adminOidc.issuerUrl,
                   clientId: env.adminOidc.clientId,

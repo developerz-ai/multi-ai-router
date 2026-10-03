@@ -95,10 +95,13 @@ describe("parseEnv", () => {
       sessionIdleMinutes: 43_200,
       sessionAbsoluteHours: 720,
       loginMaxAttempts: 5,
+      loginMaxConcurrent: 4,
+      loginMaxTrackedIps: 10_000,
       loginAttemptWindowMinutes: 15,
       loginLockoutMinutes: 15,
       sessionTouchIntervalSeconds: 60,
       sessionCacheMax: 1_000,
+      sessionRevalidateSeconds: 60,
       sessionCookieInsecure: false,
       localLoginAllowPublic: false,
     })
@@ -142,10 +145,13 @@ describe("parseEnv", () => {
       ADMIN_SESSION_IDLE_MINUTES: "60",
       ADMIN_SESSION_ABSOLUTE_HOURS: "8",
       ADMIN_LOGIN_MAX_ATTEMPTS: "3",
+      ADMIN_LOGIN_MAX_CONCURRENT: "2",
+      ADMIN_LOGIN_MAX_TRACKED_IPS: "500",
       ADMIN_LOGIN_ATTEMPT_WINDOW_MINUTES: "5",
       ADMIN_LOGIN_LOCKOUT_MINUTES: "30",
       ADMIN_SESSION_TOUCH_INTERVAL_SECONDS: "5",
       ADMIN_SESSION_CACHE_MAX: "50",
+      ADMIN_SESSION_REVALIDATE_SECONDS: "15",
       SESSION_COOKIE_INSECURE: "true",
       DB_POOL_MAX: "25",
       DB_POOL_IDLE_TIMEOUT_SECONDS: "120",
@@ -197,10 +203,13 @@ describe("parseEnv", () => {
       sessionIdleMinutes: 60,
       sessionAbsoluteHours: 8,
       loginMaxAttempts: 3,
+      loginMaxConcurrent: 2,
+      loginMaxTrackedIps: 500,
       loginAttemptWindowMinutes: 5,
       loginLockoutMinutes: 30,
       sessionTouchIntervalSeconds: 5,
       sessionCacheMax: 50,
+      sessionRevalidateSeconds: 15,
       sessionCookieInsecure: true,
       localLoginAllowPublic: false,
     })
@@ -232,6 +241,7 @@ describe("parseEnv", () => {
         ADMIN_OIDC_ADMIN_SUBJECT: "subject-123",
         ADMIN_OIDC_SCOPES: "openid email",
         ADMIN_OIDC_CLOCK_SKEW_SECONDS: "30",
+        ADMIN_OIDC_REQUEST_TIMEOUT_MS: "7000",
       })
 
       expect(env.adminOidc).toEqual({
@@ -243,6 +253,7 @@ describe("parseEnv", () => {
         adminSubject: "subject-123",
         scopes: ["openid", "email"],
         clockSkewSeconds: 30,
+        requestTimeoutMs: 7_000,
       })
     })
 
@@ -452,6 +463,7 @@ describe("parseEnv", () => {
         halfOpenHoldMs: 30_000,
         unknownResetRetryAfterSeconds: 30,
         upstreamTimeoutMs: 600_000,
+        upstreamErrorMaxBytes: 65_536,
         boundAccountCoolingDown: "fail",
       })
     })

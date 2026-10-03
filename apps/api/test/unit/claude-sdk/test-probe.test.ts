@@ -231,6 +231,7 @@ describe("the Agent-SDK test probe", () => {
     const launched = spy.launches[0]
     expect(launched).toBeDefined()
     if (launched === undefined) return
+    expect(launched.executable).toBe("bun")
     expect(launched.settingSources).toEqual([])
     expect(launched.strictMcpConfig).toBe(true)
     expect(launched.skills).toEqual([])

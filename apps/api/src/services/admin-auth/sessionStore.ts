@@ -32,7 +32,8 @@ export function sessionExpiryMs(session: AdminSession): number {
 
 export interface SessionStore {
   get(id: string): Promise<AdminSession | undefined>
-  save(session: AdminSession): Promise<void>
+  create(session: AdminSession): Promise<void>
+  touch(session: AdminSession): Promise<boolean>
   delete(id: string): Promise<void>
   /**
    * Drops sessions already past their expiry, at most `limit` of them, and returns how many went.
@@ -49,9 +50,17 @@ export function createMemorySessionStore(): SessionStore {
     get(id) {
       return Promise.resolve(sessions.get(id))
     },
-    save(session) {
+    create(session) {
       sessions.set(session.id, session)
       return Promise.resolve()
+    },
+    touch(session) {
+      const previous = sessions.get(session.id)
+      if (previous === undefined || sessionExpiryMs(previous) <= session.lastSeenAtMs) {
+        return Promise.resolve(false)
+      }
+      sessions.set(session.id, session)
+      return Promise.resolve(true)
     },
     delete(id) {
       sessions.delete(id)

@@ -9,6 +9,12 @@ import type { CredentialCipher } from "../crypto/cipher"
 import { type AttemptFailure, classifyStatus, type FailureKind } from "../routing"
 import { accountCredential } from "./egress/credential"
 import { upstreamHeaders } from "./egress/headers"
+import {
+  DEFAULT_UPSTREAM_ERROR_MAX_BYTES,
+  readErrorBody,
+  redactAttemptText,
+  sanitizeErrorBody,
+} from "./error-body"
 import type { FetchLike, RoutableAccount } from "./types"
 
 /**
@@ -38,6 +44,7 @@ export interface AttemptInput {
   readonly fetch: FetchLike
   readonly cipher: Pick<CredentialCipher, "decrypt">
   readonly timeoutMs: number
+  readonly errorMaxBytes?: number
   /** The client's own abort signal, so a client that goes away releases the upstream call. */
   readonly signal?: AbortSignal
 }
@@ -78,6 +85,7 @@ export async function runAttempt(input: AttemptInput): Promise<AttemptOutcome> {
     headers,
     ...(input.body === null ? {} : { body: input.body }),
     signal: attemptDeadline(input.timeoutMs, input.signal),
+    redirect: "manual",
   })
 
   let response: Response
@@ -86,7 +94,9 @@ export async function runAttempt(input: AttemptInput): Promise<AttemptOutcome> {
   } catch (error) {
     return {
       kind: "failure",
-      failure: transportFailure(error),
+      failure: input.signal?.aborted
+        ? { kind: "client-error", status: 499, message: "client cancelled the request" }
+        : transportFailure(error),
       classification: null,
       rateLimit: null,
       upstream: null,
@@ -98,16 +108,50 @@ export async function runAttempt(input: AttemptInput): Promise<AttemptOutcome> {
     headers: response.headers,
   })
 
+  if (response.status >= 300 && response.status < 400) {
+    void response.body?.cancel().catch(() => {})
+    return {
+      kind: "failure",
+      failure: {
+        kind: "server-error",
+        status: response.status,
+        message: "upstream redirects are not permitted",
+      },
+      classification: null,
+      rateLimit: null,
+      upstream: null,
+    }
+  }
+
   if (response.status < 400) {
     return { kind: "success", response, rateLimit }
   }
 
-  const bodyText = await readBodyText(response)
-  const classification = plan.driver.classifyFailure({
+  const secret =
+    credential === null
+      ? null
+      : credential.kind === "api-key"
+        ? credential.apiKey
+        : credential.accessToken
+  const bodyText = sanitizeErrorBody(
+    await readErrorBody(response, input.errorMaxBytes ?? DEFAULT_UPSTREAM_ERROR_MAX_BYTES),
+    secret,
+  )
+  const classified = plan.driver.classifyFailure({
     status: response.status,
     headers: response.headers,
     body: parseJson(bodyText),
   })
+  const classification =
+    classified === null
+      ? null
+      : {
+          ...classified,
+          ...(classified.message === undefined
+            ? {}
+            : { message: redactAttemptText(classified.message, secret) }),
+          signal: redactAttemptText(classified.signal, secret),
+        }
 
   return {
     kind: "failure",
@@ -191,14 +235,6 @@ function transportFailure(error: unknown): AttemptFailure {
 export function attemptDeadline(timeoutMs: number, client: AbortSignal | undefined): AbortSignal {
   const timeout = AbortSignal.timeout(timeoutMs)
   return client === undefined ? timeout : AbortSignal.any([timeout, client])
-}
-
-async function readBodyText(response: Response): Promise<string> {
-  try {
-    return await response.text()
-  } catch {
-    return ""
-  }
 }
 
 function parseJson(text: string): unknown {

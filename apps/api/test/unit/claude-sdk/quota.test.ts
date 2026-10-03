@@ -226,7 +226,7 @@ describe("ingesting a rate-limit event", () => {
 
     expect(ingest(store, "not an event")).toBeNull()
     expect(ingest(store, null)).toBeNull()
-    expect(store.snapshot("sub")?.signal.limited).toBe(true)
+    expect(store.snapshot("sub", NOW)?.signal.limited).toBe(true)
   })
 })
 
@@ -274,10 +274,10 @@ describe("the store itself", () => {
     const store = createSdkQuotaStore()
     store.ingest("sub-a", { status: "rejected", rateLimitType: "five_hour" }, NOW)
 
-    expect(store.snapshot("sub-a")?.signal.limited).toBe(true)
-    expect(store.snapshot("sub-b")).toBeNull()
+    expect(store.snapshot("sub-a", NOW)?.signal.limited).toBe(true)
+    expect(store.snapshot("sub-b", NOW)).toBeNull()
     // Never a process singleton: a second store starts empty, in this process and in every test.
-    expect(createSdkQuotaStore().snapshot("sub-a")).toBeNull()
+    expect(createSdkQuotaStore().snapshot("sub-a", NOW)).toBeNull()
   })
 
   test("forgetting an account drops every reading it had", () => {
@@ -286,6 +286,6 @@ describe("the store itself", () => {
 
     store.forget("sub")
 
-    expect(store.snapshot("sub")).toBeNull()
+    expect(store.snapshot("sub", NOW)).toBeNull()
   })
 })

@@ -273,6 +273,7 @@ describe("an idle Agent SDK query", () => {
     const launched = fake.launches[0]
     expect(launched).toBeDefined()
     if (launched === undefined) return
+    expect(launched.executable).toBe("bun")
     expect(launched.settingSources).toEqual([])
     expect(launched.strictMcpConfig).toBe(true)
     expect(launched.skills).toEqual([])

@@ -1,4 +1,4 @@
-import { STDERR_TAIL_LIMIT } from "./errors"
+import { readSdkFailure, STDERR_TAIL_LIMIT } from "./errors"
 import type { SdkInvocation, SdkSessionReport } from "./invoke"
 
 /**
@@ -73,26 +73,29 @@ export function createStderrTail(): StderrTail {
  * Attaches the subprocess's own last words to the failure, which is where `classifySdkFailure`
  * looks for them (`errors.ts`).
  *
- * Only ever *adds*: an error that already carries stderr keeps its own, and an abort or a deadline
- * is rethrown untouched so its `name` still reads as the deadline it was (`sdk-attempt.ts`).
+ * Only ever *adds*: an error that already carries stderr keeps its own. The carrier retains the
+ * original name and structured result facts so diagnostics cannot change failure classification.
  */
 export function withStderr(error: unknown, tail: string): unknown {
   if (tail === "" || typeof error !== "object" || error === null) return error
   if (typeof Reflect.get(error, "stderr") === "string") return error
   if (!(error instanceof Error)) return error
 
-  const carried = new SdkSubprocessError(error.message, tail)
-  carried.name = error.name
-  return carried
+  return new SdkSubprocessError(error, tail)
 }
 
 /** An SDK failure with the subprocess's stderr tail beside it. Never rendered to a client. */
 class SdkSubprocessError extends Error {
   readonly stderr: string
+  readonly apiErrorStatus: number | null
+  readonly terminalReason: string | null
 
-  constructor(message: string, stderr: string) {
-    super(message)
-    this.name = "SdkSubprocessError"
-    this.stderr = stderr
+  constructor(error: Error, stderr: string) {
+    super(error.message, { cause: error })
+    const failure = readSdkFailure(error)
+    this.name = error.name
+    this.stderr = stderr.slice(-STDERR_TAIL_LIMIT)
+    this.apiErrorStatus = failure.apiErrorStatus
+    this.terminalReason = failure.terminalReason
   }
 }

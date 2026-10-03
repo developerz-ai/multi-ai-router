@@ -306,3 +306,15 @@ Not operator actions — properties of the image, listed so a reviewer can check
 | [04-api-keys-and-access.md](04-api-keys-and-access.md) | Key lifecycle, scopes, pool binding, rate limits |
 | [09-deployment.md](09-deployment.md) | Env validation, volume layout, retention knobs |
 | [11-anthropic-agent-sdk.md](11-anthropic-agent-sdk.md) | Why Claude subs hold no bearer token, how the per-Account config dirs work, and the tool-passthrough mechanics in full (§7) |
+
+## Transport and authentication boundaries
+
+Upstream HTTP requests use manual redirect handling. Any 3xx ends that attempt as a transport failure; credentials and prompts never follow a redirect, including a same-origin redirect. Only `accept`, `content-type`, `anthropic-beta`, `anthropic-version`, `openai-beta`, and `x-request-id` client headers may reach a provider; driver-owned authentication and account headers are applied last. Responses expose only `content-type`, `retry-after`, and `cache-control`, plus router-owned headers. Connection-nominated hop-by-hop fields are dropped even when otherwise allowlisted.
+
+Error bodies are read up to `UPSTREAM_ERROR_MAX_BYTES` (64 KiB by default). Oversized bodies are cancelled and replaced entirely, so a truncated credential prefix cannot escape. Both dialect paths redact known credential patterns, sensitive JSON fields, and the exact selected account credential before logging or returning errors. Successful response bytes remain untouched.
+
+Local key-cache invalidation fences pending repository and scope loads as well as completed cache entries. Identical pending verifications share one load; expired or invalidated results cannot be installed in the cache. Other replicas retain the configured key-cache TTL bound.
+
+Password verification reserves per-IP admission and a global `ADMIN_LOGIN_MAX_CONCURRENT` slot before expensive hashing. `ADMIN_LOGIN_MAX_TRACKED_IPS` bounds source tracking and refuses new sources when saturated. OIDC starts consume per-IP admission before discovery or state persistence. Discovery, token exchange, and JWKS reads use `ADMIN_OIDC_REQUEST_TIMEOUT_MS`; ID tokens validate issue time and the authorized party for multiple audiences.
+
+The repository's debugger configuration contains no login credential. Operators must supply authentication at runtime; removing the old literal does not rotate historical copies. Issue #87 tracks operational rotation and session invalidation.

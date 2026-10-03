@@ -1,9 +1,8 @@
-import type { Options, PermissionResult, SDKUserMessage } from "@anthropic-ai/claude-agent-sdk"
+import type { Options, SDKUserMessage } from "@anthropic-ai/claude-agent-sdk"
 import { query } from "@anthropic-ai/claude-agent-sdk"
-import { PERMITTED_TOOLS } from "./allowlist"
 import type { SdkConcurrency, SdkSlot } from "./concurrency"
 import { ALWAYS_FRESH, type CredentialFreshness } from "./credential-freshness"
-import { QUERY_ENV_OVERRIDES, subprocessEnv } from "./env"
+import { isolatedOptions } from "./options"
 
 /**
  * An Agent SDK `query()` that **never sends a turn**: the subprocess comes up, completes its
@@ -172,23 +171,10 @@ export async function openIdleQuery(input: OpenIdleQueryInput): Promise<IdleQuer
   return { query: opened, signal, timedOut: () => deadline.aborted, close }
 }
 
-/** The same sandbox `options.ts` and `test-probe.ts` build — a third copy that must not drift. */
+/** The shared sandbox, with the idle query's turn budget. */
 function gatedOptions(input: OpenIdleQueryInput, controller: AbortController): Options {
   return {
-    abortController: controller,
-    // Isolation. Each is a distinct path from this host's state into a caller's subprocess; all
-    // must be set explicitly, and none may be dropped as cleanup.
-    settingSources: [],
-    strictMcpConfig: true,
-    skills: [],
-    tools: [],
-    // The one reviewed allowlist (`allowlist.ts`), never a second literal that could drift from it.
-    allowedTools: [...PERMITTED_TOOLS],
-    permissionMode: "dontAsk",
-    canUseTool: denyEveryTool,
-    cwd: input.configDir,
-    env: { ...subprocessEnv({ configDir: input.configDir }), ...QUERY_ENV_OVERRIDES },
-    pathToClaudeCodeExecutable: input.cliPath,
+    ...isolatedOptions({ configDir: input.configDir, cliPath: input.cliPath, controller }),
     // Nothing is ever sent, so one is the honest bound: an idle query needs no turn at all.
     maxTurns: 1,
     includePartialMessages: false,
@@ -228,9 +214,4 @@ export function rejectOnAbort(signal: AbortSignal): Promise<never> {
     if (signal.aborted) reject(signal.reason)
     else signal.addEventListener("abort", () => reject(signal.reason), { once: true })
   })
-}
-
-/** No tool an idle query could grant — nothing is ever asked of a model. */
-async function denyEveryTool(): Promise<PermissionResult> {
-  return { behavior: "deny", message: "an idle query grants no tools" }
 }

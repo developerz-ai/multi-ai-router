@@ -2,6 +2,7 @@ import type { SseEvent, TranslationContext, TranslationPair } from "../translate
 import { createSseParser, encodeSseEvent } from "../translate"
 import { clientHeaders } from "./egress/headers"
 import type { RelayObserver } from "./relay"
+import { ClientCancelledError, observeCancellation } from "./relay-cancellation"
 
 /**
  * The relay for a translated response — a sibling of `relay.ts`, never a mode inside it.
@@ -191,10 +192,10 @@ function translatedStream(
   })
 
   upstream.pipeTo(transform.writable).catch((error: unknown) => {
-    settle(error)
+    settle(error ?? new Error("response stream cancelled"))
   })
 
-  return transform.readable
+  return observeCancellation(transform.readable, () => settle(new ClientCancelledError()))
 }
 
 function render(events: readonly SseEvent[]): string {

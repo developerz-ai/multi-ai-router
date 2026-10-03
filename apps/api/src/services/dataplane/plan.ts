@@ -153,7 +153,7 @@ export function planCandidates(
       account,
       dialect: egress.mode === "passthrough" ? egress.dialect : egress.to,
       // The alias map is the operator's, applied by the driver, outbound-only, identity on a miss.
-      upstreamModel: egress.driver.mapModelAlias(account.driver, candidate.upstreamModel),
+      upstreamModel: candidate.upstreamModel,
       // The SDK renders into Anthropic Messages and never into openai-chat, so it is asked nothing
       // here and carries the default rather than a value some later reader might believe.
       chatCeiling:

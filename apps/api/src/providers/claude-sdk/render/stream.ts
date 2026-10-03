@@ -13,38 +13,10 @@ import { createMessageFold } from "./message"
 import { drain, jsonResponse, type Primed, type Pump, sseResponse } from "./respond"
 
 /**
- * SDK messages in, an Anthropic Messages `Response` out — the front door of re-synthesis.
- *
- * §6 opens with the sentence this module exists to honour: **there is nothing to proxy.** Even
- * `POST /v1/messages` against a Claude subscription is rebuilt rather than relayed, because the SDK
- * never speaks HTTP to us; it yields its own message objects and exactly one of their types carries
- * anything a client may see. So this discriminates on `message.type` and routes each one to the
- * single place it belongs (docs/idea/11-anthropic-agent-sdk.md §6):
- *
- * | Type | Where it goes |
- * |---|---|
- * | `stream_event` | The envelope — the **only** payload that reaches the client |
- * | `system` (`init`) | `session_id` to the observer, for the Session mapping (§4) |
- * | `rate_limit_event` | Account quota state via the observer (§5). Never forwarded |
- * | `result` | The **authoritative** usage and stop reason for the terminal `message_delta` |
- * | `assistant` | Its `uuid` to the observer, for the undo fork point (§4). No frame: the content was already seen as `stream_event`s, and its `usage` covers one internal iteration rather than the turn |
- * | `user` | Nothing: the SDK's own internal tool results, which `tools/` accounts for |
- *
- * **The status is decided before the first byte.** The response is not constructed until the first
- * client frame exists, so a stall or a subprocess death on the way to it surfaces as a real HTTP
- * status — a `504` from the idle guard, the classified failure otherwise — instead of a `200`
- * carrying an apology. After that first byte the contract inverts: nothing is retried, and a
- * failure is spelled as a terminal SSE `error` frame, the only honest close for a response already
- * in flight (§6, `server.ts:2333`). Awaiting the first frame costs nothing — it is the first thing
- * that would have been written anyway.
- *
- * **A non-streaming client is served by the same events.** `includePartialMessages: true` is
- * unconditional (`options.ts`), so `stream: false` folds the identical frame sequence into one body
- * (`message.ts`) rather than reading the SDK a second, differently-shaped way.
- *
- * The OpenAI dialects are not this module's problem, and deliberately so: the SDK is rendered to
- * Anthropic **once**, and `services/translate` carries it the rest of the way. A second SDK →
- * OpenAI renderer would be a second place for the loss to happen differently (§6).
+ * SDK events become Anthropic frames; other messages supply session, quota, usage, or failure facts.
+ * Streaming starts at the first frame and reports later failures as terminal errors. Non-streaming
+ * folds the same events in memory, so its failures can still change the HTTP status.
+ * See docs/idea/11-anthropic-agent-sdk.md §6.
  */
 
 export interface SdkRenderObserver {
@@ -118,6 +90,7 @@ export interface SdkRenderInput {
   readonly ticker?: Ticker
   /** Injected id generation, so a test can assert an exact id. */
   readonly newId?: () => string
+  readonly terminate?: (reason?: unknown) => void
   readonly observer?: SdkRenderObserver
 }
 
@@ -129,12 +102,7 @@ export interface SdkRenderInput {
 const ERROR_TYPE = "api_error"
 const GENERIC_ERROR = "the Claude Agent SDK stream failed"
 
-/**
- * A non-streaming turn that ended in an upstream `error` event answers with the upstream's own
- * body, and must not answer `200` while doing it. `502` is the honest reading of "the upstream said
- * no and this build cannot yet say which no it was" — reading an SDK failure's *class* off the
- * subprocess is `errors.ts`'s job, not the renderer's (docs/idea/11-anthropic-agent-sdk.md §9).
- */
+/** Upstream error frames without a classified failure become non-streaming 502 responses. */
 const UPSTREAM_ERROR_STATUS = 502
 
 export async function renderSdkResponse(input: SdkRenderInput): Promise<Response> {
@@ -144,19 +112,12 @@ export async function renderSdkResponse(input: SdkRenderInput): Promise<Response
   try {
     primed = await pump.prime()
   } catch (error) {
+    pump.terminate(error)
     pump.close()
     throw error
   }
 
-  // **A streaming truncation is never retryable, and that is a fact about the shape rather than a
-  // policy.** A block can only be *open* if its `content_block_start` was forwarded, and on this
-  // path a forwarded frame is a written byte — so by the time a turn can be called truncated, the
-  // client already holds part of it and "never retry after bytes are on the wire" applies with
-  // nothing left to decide. The non-streaming path answers the same question the other way for the
-  // same reason: nothing is written until the whole object is, so a truncated fold is still free to
-  // be a real status, and it is (`UPSTREAM_ERROR_STATUS` below), which is what lets the chain try
-  // another account there. Two paths, one rule, opposite outcomes — see
-  // `test/unit/dataplane/sdk-stream-ending.test.ts`.
+  // Only streaming has delivered client bytes here. Non-streaming failures remain retryable.
   if (input.stream) return sseResponse(pump, primed)
 
   // No byte is on the wire until the whole object is, so a failure here is still allowed to be a
@@ -166,6 +127,9 @@ export async function renderSdkResponse(input: SdkRenderInput): Promise<Response
     fold.push(primed.frames)
     if (!primed.done) await drain(pump, (frames) => fold.push(frames))
     return jsonResponse(fold.body(), fold.failed() ? UPSTREAM_ERROR_STATUS : 200)
+  } catch (error) {
+    pump.terminate(error)
+    throw error
   } finally {
     pump.close()
   }
@@ -249,13 +213,9 @@ function createPump(input: SdkRenderInput): Pump {
       }
       case "result":
         sawResult = true
-        // A failed turn that produced nothing for the client is a failure with a real status, not
-        // an empty `200`: thrown here, it reaches the invoker before any byte is out, where
-        // `errors.ts` reads its sentence and its structured facts. Once content has started the
-        // contract has inverted — the frames already sent are the answer, and a `result` that
-        // then reports an error (a turn cap after a captured tool call, say) closes the message
-        // rather than retracting it.
-        if (message.isError && !envelope.started) {
+        // Frames folded in memory are not delivered bytes. Every actual failed result is an
+        // error; the streaming response converts it to a terminal error after its first byte.
+        if (message.isError) {
           throw new SdkResultError({
             text: message.errorText,
             apiErrorStatus: message.apiErrorStatus,
@@ -316,6 +276,10 @@ function createPump(input: SdkRenderInput): Pump {
       return envelope.fail(ERROR_TYPE, message)
     },
 
+    terminate(reason) {
+      input.terminate?.(reason)
+    },
+
     heartbeat(write) {
       onHeartbeat = write
     },
@@ -327,9 +291,8 @@ function createPump(input: SdkRenderInput): Pump {
     close() {
       onHeartbeat = null
       guard.close()
-      // Release the iterator so a generator's `finally` runs. The *subprocess* is terminated by the
-      // abort signal, never from here. A source that refuses to close is not this module's failure,
-      // so its rejection is swallowed rather than surfaced as an unhandled one.
+      // Failure/cancellation aborts before this close, settling any pending SDK read so the
+      // generator's finally can run. Successful turns retain their normal gauge epilogue.
       iterator.return?.().catch(() => {})
     },
   }

@@ -13,8 +13,9 @@ so a subscription Account reuses this page's translators rather than adding a ro
 
 ## The core rule
 
-> **Same-dialect is byte passthrough.** Headers are swapped, the body is untouched, the stream is
-> forwarded verbatim.
+> **Successful same-dialect traffic is byte passthrough.** Protocol headers are allowlisted,
+> the request body is untouched except an explicit model alias, and successful streams are forwarded verbatim.
+> Failure bodies are bounded and scrubbed before they can reach a client or log.
 
 Passthrough is always preferred, because it has zero translation loss: a new upstream feature, a new
 content block type, a beta flag we have never heard of all survive a passthrough, and none of them
@@ -229,7 +230,7 @@ a degraded conversion, which is what keeps "servable" meaning "a translator exis
 | Which conversion | `services/translate/registry.ts`, keyed by (ingress, egress). **Request and response run in opposite directions** — an `anthropic` client on an `openai-chat` account sends a body converted *toward* openai-chat and reads one converted *back* toward anthropic |
 | Request body | Converted once per target dialect, lazily, and only when a translate candidate is actually reached. The **model** is re-applied per attempt, because two accounts of one dialect can carry different alias maps |
 | Response | `relay-translate.ts`, a sibling of the passthrough relay and never a mode inside it, so no edit here can put a parser on the passthrough path |
-| Upstream errors | Re-rendered into the **ingress** dialect on this path only. A passthrough error is relayed unchanged, because it is already the right shape and re-rendering it would drop fields the provider stated |
+| Upstream errors | Re-rendered into the **ingress** dialect on this path only. A passthrough error retains its JSON shape and nonsecret fields, but credentials are scrubbed; bodies exceeding `UPSTREAM_ERROR_MAX_BYTES` are cancelled and replaced with a safe diagnostic |
 
 A chain may mix modes freely: an `anthropic` request over a pool holding one Anthropic account and
 one OpenAI-compatible account plans a passthrough attempt and a translated one, in the order routing

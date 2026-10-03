@@ -1,17 +1,11 @@
-import type {
-  Options,
-  PermissionResult,
-  SDKMessage,
-  SDKUserMessage,
-} from "@anthropic-ai/claude-agent-sdk"
+import type { Options, SDKMessage, SDKUserMessage } from "@anthropic-ai/claude-agent-sdk"
 import { query } from "@anthropic-ai/claude-agent-sdk"
 import type { UpstreamFailureKind } from "../types"
-import { PERMITTED_TOOLS } from "./allowlist"
 import { createCliProbe } from "./cli-probe"
 import type { SdkConcurrency, SdkSlot } from "./concurrency"
 import { ALWAYS_FRESH, type CredentialFreshness } from "./credential-freshness"
-import { QUERY_ENV_OVERRIDES, subprocessEnv } from "./env"
 import { classifySdkFailure, readSdkFailure } from "./errors"
+import { isolatedOptions } from "./options"
 import { type CliResolution, resolveClaudeCli } from "./resolve-cli"
 import { detailOf, resultFailure, snippet, statedResult } from "./test-probe-result"
 import { holdPrompt } from "./turn-lifecycle"
@@ -192,24 +186,7 @@ export function createSdkTestProbe(options: SdkTestProbeOptions): SdkTestProbe {
       else input.signal.addEventListener("abort", onAbort, { once: true })
 
       const sdkOptions: Options = {
-        abortController: controller,
-        // Isolation, identical to the dispatch path (`options.ts`) — a probe is a real request.
-        settingSources: [],
-        strictMcpConfig: true,
-        skills: [],
-        tools: [],
-        // The one reviewed allowlist (`allowlist.ts`), never a second literal that could drift
-        // from it: this is one of three `query()` call sites (with `invoker.ts` and `idle-query.ts`),
-        // and the security gate
-        // test asserts both launches carry the same constant.
-        allowedTools: [...PERMITTED_TOOLS],
-        permissionMode: "dontAsk",
-        canUseTool: denyEveryTool,
-        cwd: input.configDir,
-        // The same forced overrides the dispatch path applies, for the same reasons (`env.ts`):
-        // a probe is a real, billed turn on the operator's own credential.
-        env: { ...subprocessEnv({ configDir: input.configDir }), ...QUERY_ENV_OVERRIDES },
-        pathToClaudeCodeExecutable: resolution.path,
+        ...isolatedOptions({ configDir: input.configDir, cliPath: resolution.path, controller }),
         model: input.model,
         // One turn: the probe asks one question and reads one answer, never an agent loop.
         maxTurns: 1,
@@ -275,9 +252,4 @@ export function createSdkTestProbe(options: SdkTestProbeOptions): SdkTestProbe {
       }
     },
   }
-}
-
-/** No tool this probe could grant — it asks one question and reads one answer. */
-async function denyEveryTool(): Promise<PermissionResult> {
-  return { behavior: "deny", message: "this probe grants no tools" }
 }

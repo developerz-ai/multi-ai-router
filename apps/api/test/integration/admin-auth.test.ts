@@ -635,3 +635,41 @@ describe("admin api token", () => {
     expect((await post(h.app, KEYS, { cookie, [CSRF_HEADER]: "" })).status).toBe(403)
   })
 })
+
+for (const insecure of [false, true]) {
+  test(`browser cookie slides within its absolute lifetime (insecure=${insecure})`, async () => {
+    const h = await harness(
+      { idleTtlSeconds: 100, absoluteTtlSeconds: 150, touchIntervalSeconds: 1 },
+      insecure,
+    )
+    const login = await completeLogin(h)
+    h.clock.nowMs += 50_000
+    const first = await get(h.app, SESSION, { cookie: login.cookie })
+    expect(first.status).toBe(200)
+    expect(first.headers.get("set-cookie")).toContain("Max-Age=100")
+    h.clock.nowMs += 40_000
+    const second = await get(h.app, SESSION, { cookie: login.cookie })
+    expect(second.headers.get("set-cookie")).toContain("Max-Age=60")
+    expect(second.headers.get("set-cookie")).toContain(sessionCookieFullName(insecure))
+    h.clock.nowMs += 60_000
+    expect((await get(h.app, SESSION, { cookie: login.cookie })).status).toBe(401)
+  })
+}
+
+test("static bearer authentication never sets a browser cookie", async () => {
+  const token = "admin-token-for-cookie-test-not-a-real-secret"
+  const h = await harness({}, false, token)
+  const response = await get(h.app, SESSION, { authorization: `Bearer ${token}` })
+  expect(response.status).toBe(200)
+  expect(response.headers.get("set-cookie")).toBeNull()
+})
+
+test("OIDC starts enforce admission before creating new state", async () => {
+  const h = await harness({ maxFailedAttempts: 2 })
+  expect((await get(h.app, START)).status).toBe(302)
+  expect((await get(h.app, START)).status).toBe(302)
+  const limited = await get(h.app, START)
+  expect(limited.status).toBe(429)
+  expect(Number(limited.headers.get("retry-after"))).toBeGreaterThan(0)
+  expect(h.store.rows.oauthStates).toHaveLength(2)
+})

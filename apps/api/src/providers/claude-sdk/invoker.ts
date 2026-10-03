@@ -1,13 +1,13 @@
 import type { Options, SDKUserMessage } from "@anthropic-ai/claude-agent-sdk"
 import { query } from "@anthropic-ai/claude-agent-sdk"
 import { createCliProbe } from "./cli-probe"
-import type { SdkConcurrency } from "./concurrency"
+import type { SdkConcurrency, SdkSlot } from "./concurrency"
 import { ALWAYS_FRESH, type CredentialFreshness } from "./credential-freshness"
 import { classifySdkFailure } from "./errors"
 import type { SdkInvocation, SdkInvoker } from "./invoke"
 import { createQueryLaunch, type QueryLaunch } from "./options"
 import { buildSdkPrompt } from "./prompt"
-import { renderSdkResponse, type StreamPacing } from "./render"
+import { renderSdkResponse, type StreamPacing, type Ticker } from "./render"
 import { readSdkRequest } from "./request"
 import { type CliResolution, resolveClaudeCli } from "./resolve-cli"
 import { createPassthrough, type Passthrough } from "./tools"
@@ -95,6 +95,7 @@ export interface SdkInvokerDeps {
   readonly runQuery?: SdkQueryFn
   /** Idle guard and keep-alive cadence. Defaults to the renderer's own (90 s / 15 s). */
   readonly pacing?: StreamPacing
+  readonly ticker?: Ticker
   /**
    * The per-turn plan-usage reading. Absent means no gauge is asked and the turn ends exactly as it
    * always did — a deployment that wires none simply keeps showing alarms instead of percentages.
@@ -130,8 +131,8 @@ export function createSdkInvoker(deps: SdkInvokerDeps): SdkInvoker {
   const freshness = deps.freshness ?? ALWAYS_FRESH
 
   return async (invocation: SdkInvocation): Promise<Response> => {
-    const cli = usableCli()
     const request = readSdkRequest(invocation.body)
+    const cli = usableCli()
     const prompt = buildSdkPrompt({ messages: request.messages, plan: invocation.session })
 
     // Held before the subprocess exists and released when its output stream ends. Aborting while
@@ -143,7 +144,7 @@ export function createSdkInvoker(deps: SdkInvokerDeps): SdkInvoker {
     let slot = await deps.concurrency.acquire(invocation.accountId, invocation.signal)
 
     /** One `query()` turn. Releases nothing on failure — the caller below owns the slot's end. */
-    const attempt = async (busySessionFork: boolean): Promise<Response> => {
+    const attempt = async (busySessionFork: boolean, ownSlot: SdkSlot): Promise<Response> => {
       const stderr = createStderrTail()
       // The passthrough's early stop terminates the subprocess, and the launch is what owns that
       // ability — so the two are tied together after both exist rather than at construction.
@@ -177,11 +178,11 @@ export function createSdkInvoker(deps: SdkInvokerDeps): SdkInvoker {
         const turn = observeTurn(messages, {
           onFirstContent: () =>
             deps.usageGauge?.observe(invocation.accountId, messages) ?? Promise.resolve(),
+          onAnswerEnd: report.fire,
           onSettled: held.release,
           onEnd: () => {
-            report.fire()
             started.detach()
-            slot.release()
+            ownSlot.release()
           },
         })
         const filtered = passthrough === null ? turn : passthrough.filter(turn)
@@ -190,6 +191,11 @@ export function createSdkInvoker(deps: SdkInvokerDeps): SdkInvoker {
           messages: filtered,
           model: invocation.model,
           stream: request.stream,
+          terminate: (reason) => {
+            held.release()
+            started.abort(reason)
+          },
+          ...(deps.ticker === undefined ? {} : { ticker: deps.ticker }),
           ...(deps.pacing === undefined ? {} : { pacing: deps.pacing }),
           observer: {
             onSession: report.session,
@@ -251,7 +257,7 @@ export function createSdkInvoker(deps: SdkInvokerDeps): SdkInvoker {
     // failure — including one thrown before the launch existed — via the handlers below. The
     // releases are once-guarded per slot (`concurrency.ts`), so the overlap with `done` is safe.
     try {
-      return await attempt(false)
+      return await attempt(false, slot)
     } catch (error) {
       if (
         invocation.session.kind === "resume" &&
@@ -263,7 +269,7 @@ export function createSdkInvoker(deps: SdkInvokerDeps): SdkInvoker {
         await freshness.ensureFresh(invocation.accountId, invocation.signal)
         slot = await deps.concurrency.acquire(invocation.accountId, invocation.signal)
         try {
-          return await attempt(true)
+          return await attempt(true, slot)
         } catch (retried) {
           slot.release()
           throw retried

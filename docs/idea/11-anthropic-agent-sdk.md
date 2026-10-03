@@ -1170,3 +1170,13 @@ mechanism, not the model.
     delivers it to the client. Do we bill from `result` regardless, and how do we reconcile that in the UI?
 11. **Multi-arch.** Does the `claude` CLI ship a working `linux/arm64` (and musl-arm64) binary for
     every version we might pin? A missing platform package degrades silently to a `PATH` lookup.
+
+## Session and lifecycle isolation
+
+Fingerprint aliases are scoped by router-key identity and Account. Alias resolution verifies that the target belongs to that key. In-flight claims cover the explicit session key and the actual Account/SDK-session identity, so alternate client headers cannot resume the same in-flight session. Independent fresh conversations sharing an opening remain independent; moving a fingerprint alias never removes an existing direct binding. Aliases are memory-only; restart every replica when deploying this fix to remove old unscoped entries.
+
+All query entry points share explicit isolation options, including the Bun executable, empty built-in tool allowlist, denied host tool execution, and `settingSources: []`. Provider-switch variables, cloud credentials, and `SENTRY_DSN` are stripped. Messages require a nonempty user/assistant array and typed content blocks. Native server/computer tools are rejected with a field-specific 400 before any concurrency slot or CLI lookup; client custom tools retain passthrough behavior.
+
+A rejected quota bucket blocks only until its reported reset. Expired resets cannot be inherited by new events or revived by usage gauges. Several simultaneously rejected buckets remain blocked until the latest reset among them.
+
+An actual failed SDK result remains a failure even after `message_start` or closed content blocks. Non-streaming calls fail before responding; streaming calls emit one terminal error without a normal stop or retry. The synthetic successful client-tool early-stop remains supported. Idle failure and downstream cancellation abort the subprocess before closing its iterator, and each retry owns its own concurrency permit. Session identity and lineage are saved synchronously at answer completion, before any delayed quota-gauge cleanup; the subprocess permit remains held until that cleanup finishes. Transport reader failures are recorded as failed usage; recognizing every provider's error frame within an otherwise clean HTTP-200 stream remains separate work.

@@ -21,7 +21,7 @@ export type ThrottleDecision =
   | { readonly allowed: false; readonly retryAfterSeconds: number }
 
 export interface LoginThrottle {
-  /** Denies while any of the keys is locked. Never mutates. */
+  /** Denies locked keys and new keys beyond capacity; evicts expired buckets. */
   check(keys: readonly string[], nowMs: number): ThrottleDecision
   recordFailure(keys: readonly string[], nowMs: number): void
   /** A successful login clears the keys it was charged against. */
@@ -39,9 +39,6 @@ interface Bucket {
   lockedUntilMs: number
 }
 
-/** Guards against unbounded growth under a spray from many addresses. */
-const MAX_TRACKED_KEYS = 10_000
-
 export function createLoginThrottle(config: AdminAuthConfig): LoginThrottle {
   const buckets = new Map<string, Bucket>()
   const windowMs = config.attemptWindowSeconds * 1000
@@ -55,6 +52,12 @@ export function createLoginThrottle(config: AdminAuthConfig): LoginThrottle {
 
   return {
     check(keys, nowMs) {
+      if (buckets.size >= config.maxTrackedIps) {
+        evictStale(nowMs)
+        if (keys.some((key) => !buckets.has(key)) && buckets.size >= config.maxTrackedIps) {
+          return { allowed: false, retryAfterSeconds: Math.max(1, config.lockoutSeconds) }
+        }
+      }
       let lockedUntilMs = 0
       for (const key of keys) {
         const bucket = buckets.get(key)
@@ -68,7 +71,7 @@ export function createLoginThrottle(config: AdminAuthConfig): LoginThrottle {
     },
 
     recordFailure(keys, nowMs) {
-      if (buckets.size >= MAX_TRACKED_KEYS) evictStale(nowMs)
+      if (buckets.size >= config.maxTrackedIps) evictStale(nowMs)
       for (const key of keys) {
         const existing = buckets.get(key)
         const bucket =

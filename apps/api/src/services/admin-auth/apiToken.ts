@@ -6,7 +6,7 @@ import type { AdminSession } from "./sessionStore"
  * `ADMIN_API_TOKEN` — the admin plane's **non-browser** credential.
  *
  * The admin plane has always been a real REST API; what it had no way to accept was a caller that
- * is not a browser. A session cookie is minted by a login, lives in memory, dies on restart, and
+ * is not a browser. A session cookie is minted by a login, resolves to durable session state, and
  * carries a CSRF token the caller has to echo — workable for the console, and the wrong shape for
  * a deploy script, a CI job, a Terraform provider, or an agent driving the router. This is the same
  * answer `METRICS_TOKEN` gives Prometheus: one static bearer, set by the operator, checked in

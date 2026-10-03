@@ -89,8 +89,19 @@ export function createRouterKeyVerifier(deps: RouterKeyVerifierDeps): RouterKeyV
   })
   // keyId -> the digests caching it, so a revocation can find them without scanning.
   const byKeyId = new Map<string, Set<string>>()
+  const inFlight = new Map<string, Promise<VerifiedKey>>()
+  const maxPending = deps.cache?.maxEntries ?? DEFAULT_KEY_CACHE_MAX_ENTRIES
+  let generation = 0
 
   const remember = (digest: string, entry: CacheEntry): void => {
+    if (byKeyId.size >= maxPending) {
+      for (const [id, digests] of byKeyId) {
+        for (const cachedDigest of digests) {
+          if (cache.get(cachedDigest) === undefined) digests.delete(cachedDigest)
+        }
+        if (digests.size === 0) byKeyId.delete(id)
+      }
+    }
     cache.set(digest, entry, entry.ok ? ttlMs : negativeTtlMs)
     if (!entry.ok) return
     const digests = byKeyId.get(entry.key.id) ?? new Set<string>()
@@ -130,35 +141,52 @@ export function createRouterKeyVerifier(deps: RouterKeyVerifierDeps): RouterKeyV
         return cached.key
       }
 
-      // The query already excludes revoked and expired rows, so a prefix that returns nothing and
-      // a prefix whose rows do not match are the same answer to the caller — deliberately.
-      const rows = await deps.repository.findUsableByPrefix(prefix, now())
-      const row = match(rows, presented)
-      if (row === null) {
-        remember(digest, { ok: false })
-        throw new KeyRevokedError(UNKNOWN_KEY)
-      }
+      const pending = inFlight.get(digest)
+      if (pending !== undefined) return pending
+      if (inFlight.size >= maxPending) throw new KeyRevokedError(UNKNOWN_KEY)
+      const startedGeneration = generation
+      const load = async (): Promise<VerifiedKey> => {
+        // The query already excludes revoked and expired rows, so a prefix that returns nothing and
+        // a prefix whose rows do not match are the same answer to the caller — deliberately.
+        const rows = await deps.repository.findUsableByPrefix(prefix, now())
+        if (startedGeneration !== generation) throw new KeyRevokedError(UNKNOWN_KEY)
+        const row = match(rows, presented)
+        if (row === null) {
+          remember(digest, { ok: false })
+          throw new KeyRevokedError(UNKNOWN_KEY)
+        }
 
-      const key: VerifiedKey = {
-        id: row.id,
-        name: row.name,
-        prefix: row.prefix,
-        scope: await deps.loadScope(row),
-        rateLimitRequests: row.rateLimitRequests,
-        rateLimitWindowSeconds: row.rateLimitWindowSeconds,
-        expiresAt: row.expiresAt,
+        const key: VerifiedKey = {
+          id: row.id,
+          name: row.name,
+          prefix: row.prefix,
+          scope: await deps.loadScope(row),
+          rateLimitRequests: row.rateLimitRequests,
+          rateLimitWindowSeconds: row.rateLimitWindowSeconds,
+          expiresAt: row.expiresAt,
+        }
+        if (startedGeneration !== generation || isExpired(key, now())) {
+          throw new KeyRevokedError(UNKNOWN_KEY)
+        }
+        remember(digest, { ok: true, key })
+        deps.onVerified?.(key)
+        return key
       }
-      remember(digest, { ok: true, key })
-      deps.onVerified?.(key)
-      return key
+      const loading = load().finally(() => {
+        if (inFlight.get(digest) === loading) inFlight.delete(digest)
+      })
+      inFlight.set(digest, loading)
+      return loading
     },
 
     invalidate(keyId) {
+      generation += 1
       for (const digest of byKeyId.get(keyId) ?? []) cache.delete(digest)
       byKeyId.delete(keyId)
     },
 
     invalidateAll() {
+      generation += 1
       cache.clear()
       byKeyId.clear()
     },

@@ -909,12 +909,16 @@ describe("the half-open probe is admitted one at a time", () => {
 
   test("one request reaches the recovering account; the backlog behind it waits", async () => {
     const probe = deferred()
-    const { app, upstream } = await recovering(() => probe.promise)
+    const admitted = deferred()
+    const { app, upstream } = await recovering(() => {
+      admitted.resolve(jsonResponse(200, {}))
+      return probe.promise
+    })
 
     // The probe goes out and stays in flight — the window a real upstream takes to answer, and
     // exactly the window in which a stampede happens.
     const first = app.request("/v1/messages", post(MESSAGE, bearer()))
-    await settle()
+    await admitted.promise
 
     const backlog = await Promise.all(
       Array.from({ length: 25 }, () => app.request("/v1/messages", post(MESSAGE, bearer()))),
@@ -1333,7 +1337,7 @@ describe("the Agent-SDK transport", () => {
       accountId: "sub",
       egressMode: "agent-sdk",
       streamed: true,
-      outcome: "success",
+      outcome: "upstream_error",
     })
   })
 })

@@ -7,7 +7,7 @@ import {
 } from "./cache"
 import { readConversation } from "./conversation"
 import { scopedKey, sessionFingerprint } from "./fingerprint"
-import { createSessionClaims, type SessionClaims } from "./inflight"
+import { claimSessionTurn, createSessionClaims, type SessionClaims } from "./inflight"
 import { hashMessages, resolveLineage, type SessionPlan } from "./lineage"
 
 /**
@@ -189,24 +189,27 @@ export function createSessionStore(deps: SessionStoreDeps): SessionStore {
         conversation === null
           ? null
           : sessionFingerprint({
+              apiKeyId: input.apiKeyId,
               accountId: input.accountId,
               clientCwd: input.clientCwd ?? null,
               firstUserText: conversation.firstUserText,
             })
 
-      // Taken before the plan is decided, because whether it was granted is one of the plan's
-      // inputs. Keyed by the conversation rather than by the Account: the collision this prevents
-      // is two turns of one conversation, wherever each of them would have run.
-      const claim = claims.acquire(key)
-      const session = boundSession(cache, key, input.accountId, fingerprint)
-      const plan = resolveLineage({
+      const session = boundSession(cache, key, input.apiKeyId, input.accountId, fingerprint)
+      const candidate = resolveLineage({
         session,
         conversation,
         keySource: input.keySource,
-        sessionBusy: !claim.held,
         ...(input.forkOrSubagent === undefined ? {} : { forkOrSubagent: input.forkOrSubagent }),
         ...(input.sessionGone === undefined ? {} : { sessionGone: input.sessionGone }),
       })
+      const claim = claimSessionTurn(
+        claims,
+        key,
+        input.accountId,
+        candidate.kind === "fresh" ? null : candidate.sdkSessionId,
+      )
+      const plan: SessionPlan = claim.held ? candidate : { kind: "fresh", reason: "session-busy" }
 
       // Nothing readable arrived, so there is nothing to hash and nothing worth remembering. The
       // plan already says so by name.
@@ -224,6 +227,7 @@ export function createSessionStore(deps: SessionStoreDeps): SessionStore {
         plan,
         release: claim.release,
         remember: (sdkSessionId, assistantUuid) => {
+          if (!claim.own(sdkSessionId)) return
           const lineage = nextLineage(hashes, carried, assistantUuid)
           cache.set(key, { accountId: input.accountId, sdkSessionId, lineage })
           if (fingerprint !== null) cache.alias(fingerprint, key)
@@ -246,6 +250,7 @@ export function createSessionStore(deps: SessionStoreDeps): SessionStore {
 function boundSession(
   cache: SessionCache,
   key: string,
+  apiKeyId: string,
   accountId: string,
   fingerprint: string | null,
 ): { readonly sdkSessionId: string; readonly lineage: SessionLineageState } | null {
@@ -254,10 +259,10 @@ function boundSession(
 
   if (fingerprint === null) return null
   const aliased = cache.aliased(fingerprint)
-  if (aliased === undefined) return null
+  if (aliased === undefined || !aliased.startsWith(scopedKey(apiKeyId, ""))) return null
 
   const entry = cache.get(aliased)
-  // The fingerprint is already Account-scoped, so a mismatch here means the alias outlived the
+  // The fingerprint is key- and Account-scoped, so a mismatch means the alias outlived the
   // binding it named. Answering with it would resume on an Account that never saw this session.
   if (entry === undefined || entry === null) return null
   return entry.accountId === accountId ? entry : null

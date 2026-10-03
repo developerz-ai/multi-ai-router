@@ -80,6 +80,7 @@ export interface OIDCFlowDeps {
   readonly stateStore: OIDCStateStoreDeps
   /** The current `fetch` for token-exchange requests. Injected so tests can stub the IdP. */
   readonly fetch?: typeof fetch
+  readonly requestTimeoutMs?: number
   /** Clock, for tests. */
   readonly now?: () => Date
 }
@@ -89,13 +90,9 @@ export function createOIDCFlow(deps: OIDCFlowDeps): OIDCFlow {
   const now = deps.now ?? ((): Date => new Date())
   const execFetch: typeof fetch = deps.fetch ?? fetch
   const discoveryFetch = async (url: string | URL, init?: RequestInit): Promise<Response> => {
-    const controller = new AbortController()
-    const timer = setTimeout(() => controller.abort(), 10_000)
-    try {
-      return await execFetch(url, init)
-    } finally {
-      clearTimeout(timer)
-    }
+    const timeout = AbortSignal.timeout(deps.requestTimeoutMs ?? 10_000)
+    const signal = init?.signal == null ? timeout : AbortSignal.any([timeout, init.signal])
+    return execFetch(url, { ...init, signal })
   }
   const stateStore = createOIDCStateStore(deps.stateStore)
 
@@ -157,15 +154,11 @@ export function createOIDCFlow(deps: OIDCFlowDeps): OIDCFlow {
     params.set("client_id", config.clientId)
     if (config.clientSecret !== null) params.set("client_secret", config.clientSecret)
     params.set("code_verifier", codeVerifier)
-    const exec = deps.fetch ?? fetch
-    const controller = new AbortController()
-    const timer = setTimeout(() => controller.abort(), 15_000)
-    try {
-      const res = await exec(tokenEndpoint, {
+    {
+      const res = await discoveryFetch(tokenEndpoint, {
         method: "POST",
         headers: { "content-type": "application/x-www-form-urlencoded" },
         body: params.toString(),
-        signal: controller.signal,
       })
       if (!res.ok) {
         // The status only. A token-endpoint error body quotes the request back — including the
@@ -181,8 +174,6 @@ export function createOIDCFlow(deps: OIDCFlowDeps): OIDCFlow {
         })
       }
       return { id_token: body.id_token }
-    } finally {
-      clearTimeout(timer)
     }
   }
 

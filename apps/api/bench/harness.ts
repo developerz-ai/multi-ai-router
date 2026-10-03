@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks"
 import type { ProviderId } from "@multi-ai-router/core"
 import { Hono } from "hono"
 import { createLogger } from "../src/logging/logger"
@@ -22,7 +23,7 @@ import {
   keyRepository,
   newRouterKey,
 } from "../test/unit/dataplane/fixtures"
-import type { StubUpstream } from "./upstream"
+import { type StubUpstream, TRIP_HEADER } from "./upstream"
 
 /**
  * The router, booted in memory, wired the way the composition root wires it.
@@ -91,6 +92,9 @@ export function benchApp(options: BenchAppOptions): BenchApp {
   // belong to the data-plane sub-app, and hoisting them here would type the shared middleware
   // against an environment the middleware does not require.
   const app = new Hono<AppEnv>()
+  const trips = new AsyncLocalStorage<string>()
+  // Benchmark correlation is out of band: production deliberately strips arbitrary headers.
+  app.use("*", (context, next) => trips.run(context.req.header(TRIP_HEADER) ?? "", next))
   app.use("*", requestId())
   app.use("*", requestLogger(logger))
   app.onError(errorHandler(logger))
@@ -106,7 +110,10 @@ export function benchApp(options: BenchAppOptions): BenchApp {
         health,
         cipher: cryptor,
         usage: recorder,
-        fetch: options.upstream.fetch,
+        fetch: (request) => {
+          request.headers.set(TRIP_HEADER, trips.getStore() ?? "")
+          return options.upstream.fetch(request)
+        },
         onRequest: (sample) => metrics.observeRequest(sample),
       }),
     }),

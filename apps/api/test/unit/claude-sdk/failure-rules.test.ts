@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import { classifySdkFailure } from "../../../src/providers"
 import { SdkResultError } from "../../../src/providers/claude-sdk/result-error"
+import { withStderr } from "../../../src/providers/claude-sdk/turn-support"
 import { failoverKind } from "../../../src/services/dataplane/attempt"
 import { HEALTHY, recordFailure } from "../../../src/services/routing"
 
@@ -20,6 +21,25 @@ function resultError(
 ) {
   return new SdkResultError({ text, apiErrorStatus, terminalReason })
 }
+
+test("stderr preserves the structured status of a failed SDK result", () => {
+  const error = withStderr(resultError("request failed", 401), "normal CLI diagnostics")
+  const { classification, text } = classifySdkFailure(error)
+  expect(classification.kind).toBe("auth")
+  expect(text.apiErrorStatus).toBe(401)
+  expect(text.stderrTail).toBe("normal CLI diagnostics")
+})
+
+test("stderr preserves a failed SDK result's structured terminal reason", () => {
+  const error = withStderr(
+    resultError("the turn could not start", null, "prompt_too_long"),
+    "normal CLI diagnostics",
+  )
+  const { classification, text } = classifySdkFailure(error)
+  expect(classification.kind).toBe("invalid-request")
+  expect(classification.signal).toBe("claude-sdk:prompt-too-long")
+  expect(text.terminalReason).toBe("prompt_too_long")
+})
 
 describe("an expired subscription, in every spelling the CLI has for it", () => {
   /** The exact production shape: `is_error: true`, `api_error_status: null`, `terminal_reason: "api_error"`. */

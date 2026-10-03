@@ -75,16 +75,14 @@ describe("a failed result before any content", () => {
 })
 
 describe("a failed result after content has reached the client", () => {
-  test("closes the message it already sent rather than retracting it", async () => {
+  test("rejects an actual failed result because non-streaming content is still unsent", async () => {
     const stream = sdkQueryStream({
       turns: [sdkTurn({ blocks: [TEXT_BLOCK] })],
       result: { subtype: "error_max_turns", is_error: true, errors: ["max turns"] },
     })
 
-    const response = await renderSdkResponse({ messages: stream, model: "m", stream: false })
-    const body = (await response.json()) as { content: { text: string }[] }
-
-    expect(response.status).toBe(200)
-    expect(body.content[0]?.text).toBe("hi")
+    await expect(
+      renderSdkResponse({ messages: stream, model: "m", stream: false }),
+    ).rejects.toBeInstanceOf(SdkResultError)
   })
 })

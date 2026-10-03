@@ -35,6 +35,8 @@
  *   fork — remains the backstop for a collision this map cannot see.
  */
 
+import { scopedKey } from "./fingerprint"
+
 /** A held claim on one session key. Releasing twice is a no-op; releasing is never optional. */
 export interface SessionClaim {
   /** False when another turn already owns the key — this turn must detach. */
@@ -52,6 +54,35 @@ export interface SessionClaims {
   acquire(key: string): SessionClaim
   /** How many keys are currently claimed. For tests and, one day, a gauge. */
   readonly size: number
+}
+
+/** Claims actual SDK sessions, never unrelated conversations sharing an opening fingerprint. */
+export function claimSessionTurn(
+  claims: SessionClaims,
+  key: string,
+  accountId: string,
+  sdkSessionId: string | null,
+): SessionClaim & { own(sdkSessionId: string): boolean } {
+  const direct = claims.acquire(scopedKey("session", key))
+  const sdkClaims = new Map<string, SessionClaim>()
+  let released = false
+  const own = (id: string): boolean => {
+    if (released) return false
+    const existing = sdkClaims.get(id)
+    if (existing !== undefined) return existing.held
+    const claim = claims.acquire(scopedKey("sdk", scopedKey(accountId, id)))
+    sdkClaims.set(id, claim)
+    return claim.held
+  }
+  const release = (): void => {
+    if (released) return
+    released = true
+    direct.release()
+    for (const claim of sdkClaims.values()) claim.release()
+  }
+  const held = direct.held && (sdkSessionId === null || own(sdkSessionId))
+  if (!held) release()
+  return { held, own, release }
 }
 
 const REFUSED: SessionClaim = { held: false, release: () => {} }
