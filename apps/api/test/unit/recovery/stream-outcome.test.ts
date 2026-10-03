@@ -60,6 +60,7 @@ function fixture(response: Response, signal?: AbortSignal) {
       observation,
       recovery: {
         designated: true,
+        started: () => true,
         finish: (state) => {
           states.push(state)
         },

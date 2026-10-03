@@ -2,6 +2,7 @@ import { and, asc, eq, inArray, sql } from "drizzle-orm"
 import type { DatabaseExecutor } from "../client"
 import { accountRecoveries } from "../schema/account-recoveries"
 import { accounts } from "../schema/accounts"
+import { createOperatorChecks } from "./account-operator-check"
 import { createRecoveryBegin } from "./account-recovery-begin"
 import { createRecoveryOutcomes } from "./account-recovery-outcome"
 import { createRecoveryPermits } from "./account-recovery-permit"
@@ -21,6 +22,7 @@ export function createRecoveryRepository(db: DatabaseExecutor): RecoveryReposito
         )
       return row === undefined ? undefined : { ...row, rechecked: false, clearedStatus: null }
     },
+    ...createOperatorChecks(db),
     ...createRecoveryBegin(db),
     ...createRecoveryPermits(db),
     ...createRecoveryOutcomes(db),

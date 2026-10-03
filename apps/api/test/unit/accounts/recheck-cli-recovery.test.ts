@@ -6,6 +6,7 @@ import {
 } from "../../../src/services/accounts/recheck"
 import type { AccountAuthProbe } from "../../../src/services/health/claudeAuthProbe"
 import { accountRow } from "../../support/account-row"
+import { operatorCheckRepository } from "../../support/operator-check-repository"
 
 function harness(
   initial: AccountRow,
@@ -18,7 +19,7 @@ function harness(
   const service = createRecheckService({
     accounts: { findById: async () => row, list: async () => [row] },
     auth,
-    recovery: { beginOperatorRecovery: begin, readOperatorCooldown: read },
+    recovery: operatorCheckRepository({ begin, read, find: () => row }),
     cooldownSeconds: 60,
     refreshCatalog: async () => {},
     audit: { record: async () => {} },
@@ -94,7 +95,7 @@ test("negative CLI evidence keeps exhausted status and never schedules a permit"
   const response = await h.service.recheck(original.id)
   if (!response.ok) throw new Error("expected result")
   expect(response.value.clearedStatus).toBeUndefined()
-  expect(response.value.recovery.state).toBe("cancelled")
+  expect(response.value.recovery?.state).toBe("cancelled")
   expect(h.demanded()).toBe(0)
 })
 
@@ -164,4 +165,37 @@ test("durable cooldown skips a positive CLI mutation until expiry", async () => 
   expect(accepted.ok && accepted.value.rechecked).toBe(true)
   expect(cliCalls).toBe(1)
   expect(h.current().lifecycleVersion).toBe(8)
+})
+
+test("concurrent presses within one service await one authentication probe", async () => {
+  const original = accountRow()
+  let release!: () => void
+  let entered!: () => void
+  const started = new Promise<void>((resolve) => {
+    entered = resolve
+  })
+  const paused = new Promise<void>((resolve) => {
+    release = resolve
+  })
+  let calls = 0
+  const h = harness(
+    original,
+    {
+      check: async () => {
+        calls++
+        entered()
+        await paused
+        return null
+      },
+    },
+    async () => result(original, "pending"),
+  )
+  const first = h.service.recheck(original.id)
+  await started
+  const second = h.service.recheck(original.id)
+  expect(second).toBe(first)
+  expect(calls).toBe(1)
+  release()
+  expect(await second).toEqual(await first)
+  expect(h.demanded()).toBe(1)
 })

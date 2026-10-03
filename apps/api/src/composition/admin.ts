@@ -210,6 +210,7 @@ export function createAdminPlane(deps: AdminPlaneDeps): AdminPlane {
     // the same read-after-write guarantee every other admin write has.
     refreshCatalog: deps.coherence.refreshCatalog,
     cooldownSeconds: env.accountRecheckCooldownSeconds,
+    operatorCheckLeaseMs: env.recovery.operatorCheckLeaseMs,
     recovery: deps.recovery.repository,
     onRecoveryRequested: (accountId) => deps.recovery.coordinator.demand(accountId),
   })

@@ -119,8 +119,9 @@ export interface AccountAvailability {
    * the key. The status beside it stays `cooling_down`, never `disabled`, which is the operator's.
    */
   readonly cooldownReason: CooldownReason | null
-  /** When an operator last pressed "Re-check now". Null when nobody has, since this process started. */
+  /** Safe progress for the latest durable operator or automatic recovery generation. */
   readonly recovery?: AccountRecoveryView
+  /** Database-time requestedAt for that generation; null when no recovery has been observed. */
   readonly lastCheckedAt: string | null
   readonly consecutiveFailures: number
   readonly inFlight: number

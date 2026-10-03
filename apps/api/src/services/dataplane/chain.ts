@@ -110,7 +110,11 @@ export async function runChain(ctx: ChainContext): Promise<Response> {
     }
 
     const priorProgress = progress
-    const recovery = runtime.recovery?.prepare(servable.account, decision.candidate)
+    const recovery = runtime.recovery?.prepare(
+      servable.account,
+      decision.candidate,
+      runtime.quotaSpentThreshold,
+    )
     progress = recordAttempt(progress, accountId, decision.action === "retry-in-place")
     runtime.health.beginAttempt(accountId)
 
@@ -172,12 +176,16 @@ export async function runChain(ctx: ChainContext): Promise<Response> {
       continue
     }
 
-    if (outcome.kind === "admission-refused") {
+    if (
+      outcome.kind === "admission-refused" ||
+      (outcome.kind === "failure" && recovery !== undefined && !recovery.started())
+    ) {
       runtime.health.endAttempt(accountId)
       probe.release()
       progress = priorProgress
       ordered = ordered.filter((candidate) => candidate.account.id !== accountId)
-      refusals.record()
+      if (outcome.kind === "admission-refused") refusals.record()
+      else refusals.recordPreparation()
       continue
     }
 

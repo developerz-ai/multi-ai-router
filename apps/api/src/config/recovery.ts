@@ -13,6 +13,10 @@ export const RECOVERY_ENV_FIELDS = {
   RECOVERY_COOLDOWN_MS: timerMs.optional(),
   RECOVERY_SHUTDOWN_DRAIN_MS: timerMs.optional(),
   RECOVERY_RETRY_AFTER_MS: timerMs.optional(),
+  // The production CLI status check allows 15s plus 1s pipe drain; reserve additional slack.
+  RECOVERY_OPERATOR_CHECK_LEASE_MS: timerMs
+    .refine((value) => value >= 17_000, "must be at least 17000 to cover the CLI status deadline")
+    .optional(),
   ROUTING_QUOTA_STALE_AFTER_MS: timerMs.optional(),
 }
 
@@ -30,6 +34,7 @@ export function readRecoveryEnv(raw: RecoveryEnv) {
       cooldownMs: raw.RECOVERY_COOLDOWN_MS ?? 30_000,
       shutdownDrainMs: raw.RECOVERY_SHUTDOWN_DRAIN_MS ?? 15_000,
       retryAfterMs: raw.RECOVERY_RETRY_AFTER_MS ?? 1_000,
+      operatorCheckLeaseMs: raw.RECOVERY_OPERATOR_CHECK_LEASE_MS ?? 30_000,
       quotaStaleAfterMs: raw.ROUTING_QUOTA_STALE_AFTER_MS ?? 600_000,
     },
   }

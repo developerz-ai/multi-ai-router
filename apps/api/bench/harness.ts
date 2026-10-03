@@ -23,6 +23,7 @@ import {
   keyRepository,
   newRouterKey,
 } from "../test/unit/dataplane/fixtures"
+import { benchmarkRecovery } from "./recovery"
 import { type StubUpstream, TRIP_HEADER } from "./upstream"
 
 /**
@@ -106,6 +107,7 @@ export function benchApp(options: BenchAppOptions): BenchApp {
       catalog: store,
       health,
       dispatcher: createDispatcher({
+        recovery: benchmarkRecovery(store, health),
         catalog: store,
         health,
         cipher: cryptor,

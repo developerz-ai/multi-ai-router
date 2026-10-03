@@ -5,6 +5,7 @@ import type { AuditEventInput } from "../../../src/services/admin"
 import type { AccountAuthProbe } from "../../../src/services/health/claudeAuthProbe"
 import { accountRow } from "../../support/account-row"
 import { memoryAccountLifecycle } from "../../support/memory-account-lifecycle"
+import { operatorCheckRepository } from "../../support/operator-check-repository"
 
 const NOW = new Date("2026-01-01T12:00:00.000Z")
 const row = (id: string, status: AccountStatus = "cooling_down") =>
@@ -50,15 +51,16 @@ function harness(
       list: async () => rows,
       findById: async (id) => rows.find((row) => row.id === id),
     },
-    recovery: {
-      readOperatorCooldown: async (id) => {
+    recovery: operatorCheckRepository({
+      find: (id) => rows.find((row) => row.id === id),
+      read: async (id) => {
         const account = rows.find((row) => row.id === id),
           recovery = recoveries.get(id)
         return account !== undefined && recovery !== undefined && clock < recovery.nextAllowedAt
           ? { account, recovery, rechecked: false, clearedStatus: null }
           : undefined
       },
-      beginOperatorRecovery: (input) => {
+      begin: (input) => {
         const run = turn.then(async () => {
           const account = rows.find((row) => row.id === input.accountId)
           if (account === undefined) return undefined
@@ -95,7 +97,7 @@ function harness(
         )
         return run
       },
-    },
+    }),
     audit: {
       record: async (event) => {
         order.push("audit")
@@ -246,8 +248,8 @@ describe("recheck", () => {
     await barrierStarted.promise
     expect(completed).toBe(false)
     expect(h.audited).toEqual([])
-    expect((await second).ok).toBe(true)
     barrier.resolve()
+    expect((await second).ok).toBe(true)
     expect((await first).ok).toBe(true)
     expect(h.commits).toEqual(["a"])
   })

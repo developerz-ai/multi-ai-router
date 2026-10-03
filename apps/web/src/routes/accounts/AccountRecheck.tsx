@@ -4,16 +4,15 @@ import type { AccountRecoveryView, RecheckResult } from "../../lib/api/accounts"
 import { formatRelative, formatTimestamp } from "../../lib/format"
 import { useLastRecheck } from "../../lib/queries/accounts"
 import styles from "./AccountRecheck.module.scss"
+import { recoveryPresentation } from "./recovery-presentation"
 
 export interface AccountRecheckProps {
   readonly accountId: string
   readonly busy: boolean
   readonly nowMs: number
-  /**
-   * `availability.lastCheckedAt` from the accounts read — what the *server* remembers, so a cold
-   * load and another operator's press both show a time rather than "not checked".
-   */
+  /** The catalog projection of the latest durable recovery generation. */
   readonly recovery?: AccountRecoveryView
+  /** Database requestedAt for that same generation, including automatic recovery. */
   readonly lastCheckedAt: string | null
   readonly onRecheck: (id: string) => void
 }
@@ -22,9 +21,10 @@ export interface AccountRecheckProps {
 export function AccountRecheck(props: AccountRecheckProps) {
   const last = useLastRecheck(() => props.accountId)
   const result = (): RecheckResult | null => (last.isSuccess ? (last.data ?? null) : null)
-  // Server-remembered time, used until this tab makes a press of its own.
-  const progress = () => props.recovery ?? result()?.recovery
-  const checkedAt = (): string | null => result()?.lastCheckedAt ?? props.lastCheckedAt
+  const presentation = () =>
+    recoveryPresentation({ requestedAt: props.lastCheckedAt, recovery: props.recovery }, result())
+  const progress = () => presentation().recovery
+  const checkedAt = () => presentation().requestedAt
 
   return (
     <div class={styles.root}>
@@ -41,20 +41,34 @@ export function AccountRecheck(props: AccountRecheckProps) {
           into the DOM together with its own text announces unreliably, so the region wraps the
           slot and every update — the first timestamp, the press verdict — swaps inside it. */}
       <span class={styles.note} role="status">
+        <Show when={result()?.checkInProgress}>
+          <span class={styles.line}>
+            Authentication check in progress — retry{" "}
+            {formatRelative(
+              result()?.nextAllowedAt ?? new Date(props.nowMs).toISOString(),
+              props.nowMs,
+            )}
+          </span>
+        </Show>
         <Show
           fallback={
             // No durable recovery request has been observed.
             <span class={styles.line}>No recovery requested</span>
           }
-          when={checkedAt()}
+          when={checkedAt() || result()?.checkInProgress}
         >
-          {(checked) => (
+          {(_checked) => (
             <>
               <span class={styles.line}>
-                Requested {formatTimestamp(checked())} ({formatRelative(checked(), props.nowMs)})
+                <Show when={checkedAt()} fallback="Authentication check in progress">
+                  {(at) => (
+                    <>
+                      Requested {formatTimestamp(at())} ({formatRelative(at(), props.nowMs)})
+                    </>
+                  )}
+                </Show>
               </span>
-              {/* Only a press from this tab knows whether the cooldown declined it; the read
-                  carries the timestamp but not that verdict. */}
+              {/* Timestamp and progress come from one coherent generation source. */}
               <Show when={progress()}>
                 {(recovery) => (
                   <>
@@ -76,7 +90,7 @@ export function AccountRecheck(props: AccountRecheckProps) {
   )
 }
 
-function recoveryMessage(state: RecheckResult["recovery"]["state"]): string {
+function recoveryMessage(state: AccountRecoveryView["state"]): string {
   switch (state) {
     case "pending":
       return "Recovery pending"

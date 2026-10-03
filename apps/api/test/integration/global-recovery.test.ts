@@ -37,7 +37,7 @@ for (const newerReading of [false, true]) {
           f.second.components.coordinator.bootId,
         )
         const recheck = await f.first.recheck.recheck(f.account.id)
-        expect(recheck.ok && recheck.value.recovery.state).toBe("pending")
+        expect(recheck.ok && recheck.value.recovery?.state).toBe("pending")
         f.second.components.coordinator.demand(f.account.id)
         await Promise.all([
           f.first.components.coordinator.tick(),

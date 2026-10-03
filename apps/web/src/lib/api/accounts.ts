@@ -78,10 +78,11 @@ export interface AccountRecoveryView {
 }
 export interface RecheckResult {
   readonly accountId: string
-  readonly lastCheckedAt: string
+  readonly lastCheckedAt: string | null
   readonly nextAllowedAt: string
+  readonly checkInProgress?: boolean
   readonly rechecked: boolean
-  readonly recovery: AccountRecoveryView
+  readonly recovery?: AccountRecoveryView
 }
 
 /**

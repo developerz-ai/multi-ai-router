@@ -10,7 +10,7 @@ describe("HTTP final upstream admission", () => {
     let decrypted = false
     let calls = 0
     const driver = httpDriver("anthropic-api")
-    if (driver === undefined) throw new Error("missing HTTP fixture driver")
+    if (driver == null) throw new Error("missing HTTP fixture driver")
     const result = await runAttempt({
       plan: {
         account: account("a", { cipher: cryptor }),
@@ -43,7 +43,7 @@ describe("HTTP final upstream admission", () => {
   })
   test("already cancelled request does not consume admission", async () => {
     const driver = httpDriver("anthropic-api")
-    if (driver === undefined) throw new Error("missing HTTP fixture driver")
+    if (driver == null) throw new Error("missing HTTP fixture driver")
     const controller = new AbortController()
     controller.abort()
     let admitted = false

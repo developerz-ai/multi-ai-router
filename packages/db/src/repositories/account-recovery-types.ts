@@ -1,7 +1,36 @@
 import type { RecoveryReason, RecoveryRow } from "../schema/account-recoveries"
 import type { AccountRow } from "../schema/accounts"
 import type { AccountObservation } from "./account-lifecycle-types"
+export type OperatorCheckView = {
+  account: AccountRow
+  recovery?: RecoveryRow
+  retryAt: Date
+  checkInProgress?: boolean
+}
 export interface RecoveryRepository {
+  reserveOperatorCheck(input: {
+    accountId: string
+    claimToken: string
+    leaseMs: number
+  }): Promise<
+    | { kind: "acquired"; account: AccountRow; claimToken: string; leaseUntil: Date }
+    | (OperatorCheckView & { kind: "busy" | "cooldown" })
+    | undefined
+  >
+  finalizeOperatorCheck(
+    input: Parameters<RecoveryRepository["beginOperatorRecovery"]>[0] & {
+      claimToken: string
+    },
+  ): Promise<
+    | {
+        kind: "committed"
+        result: NonNullable<Awaited<ReturnType<RecoveryRepository["beginOperatorRecovery"]>>>
+      }
+    | (OperatorCheckView & { kind: "refused" })
+    | undefined
+  >
+  releaseOperatorCheck(input: { accountId: string; claimToken: string }): Promise<void>
+
   readOperatorCooldown(accountId: string): Promise<
     | {
         account: AccountRow

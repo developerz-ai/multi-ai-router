@@ -197,6 +197,13 @@
       "when": 1791046678895,
       "tag": "0027_global_recovery",
       "breakpoints": true
+    },
+    {
+      "idx": 28,
+      "version": "7",
+      "when": 1791051262950,
+      "tag": "0028_operator_check_claims",
+      "breakpoints": true
     }
   ]
 }

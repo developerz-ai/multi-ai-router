@@ -14,6 +14,8 @@ export function recordChainFailure(
   observation: HealthObservation,
   recovery: RecoveryAttempt | undefined,
 ) {
+  // SDK preparation can fail before the final start guard consumes any provider authority.
+  if (recovery !== undefined && !recovery.started()) return
   ctx.runtime.health.recordFailure(
     servable.account.id,
     outcome.failure,

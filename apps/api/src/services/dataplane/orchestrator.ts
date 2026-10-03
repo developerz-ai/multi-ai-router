@@ -95,6 +95,9 @@ export function createDispatcher(deps: DispatcherDeps): Dispatcher {
 
     const runtime = createRuntime({
       health: deps.health,
+      ...(options.selection?.quotaSpentThreshold === undefined
+        ? {}
+        : { quotaSpentThreshold: options.selection.quotaSpentThreshold }),
       ...(deps.recovery === undefined ? {} : { recovery: deps.recovery }),
       cipher: deps.cipher,
       call,

@@ -1,6 +1,7 @@
 import type { AccountStatus } from "@multi-ai-router/core"
 import { and, eq, sql } from "drizzle-orm"
 import type { DatabaseExecutor } from "../client"
+import { accountOperatorChecks } from "../schema/account-operator-checks"
 import { accountRecoveries } from "../schema/account-recoveries"
 import { accounts } from "../schema/accounts"
 import type { AccountLifecycleMethods, AccountObservation } from "./account-lifecycle-types"
@@ -13,6 +14,11 @@ function observedGeneration(id: string, expected: string | null | undefined) {
     ? sql`not exists (select 1 from ${accountRecoveries} where ${accountRecoveries.accountId} = ${id})`
     : sql`exists (select 1 from ${accountRecoveries} where ${accountRecoveries.accountId} = ${id} and ${accountRecoveries.generation} = ${expected})`
 }
+function observedOperatorCheck(id: string, token: string | undefined) {
+  return token === undefined
+    ? undefined
+    : sql`exists (select 1 from ${accountOperatorChecks} where ${accountOperatorChecks.accountId} = ${id} and ${accountOperatorChecks.claimToken} = ${token} and ${accountOperatorChecks.leaseUntil} > clock_timestamp())`
+}
 export function observedAccount(id: string, expected: AccountObservation) {
   return and(
     eq(accounts.id, id),
@@ -20,6 +26,7 @@ export function observedAccount(id: string, expected: AccountObservation) {
     sql`${accounts.authMaterial} is not distinct from ${expected.authMaterial}`,
     eq(accounts.status, expected.status),
     observedGeneration(id, expected.recoveryGeneration),
+    observedOperatorCheck(id, expected.operatorCheckToken),
   )
 }
 
@@ -34,9 +41,10 @@ export function createAccountLifecycle(
     now: Date,
     observedStatus?: AccountStatus,
     recoveryGeneration?: string | null,
+    operatorCheckToken?: string,
   ) =>
     db.transaction(async (tx) => {
-      if (recoveryGeneration !== undefined)
+      if (recoveryGeneration !== undefined || operatorCheckToken !== undefined)
         await tx.select({ id: accounts.id }).from(accounts).where(eq(accounts.id, id)).for("update")
       const rows = await tx
         .update(accounts)
@@ -53,6 +61,7 @@ export function createAccountLifecycle(
             sql`${accounts.authMaterial} is not distinct from ${expected.authMaterial}`,
             ...(observedStatus === undefined ? [] : [eq(accounts.status, observedStatus)]),
             observedGeneration(id, recoveryGeneration),
+            observedOperatorCheck(id, operatorCheckToken),
           ),
         )
         .returning()
@@ -79,7 +88,7 @@ export function createAccountLifecycle(
     transitionObservedStatus: async ({ id, expected, status, now }) => {
       if (status === expected.status) return undefined
       const mutate = async (executor: DatabaseExecutor) => {
-        if (expected.recoveryGeneration !== undefined)
+        if (expected.recoveryGeneration !== undefined || expected.operatorCheckToken !== undefined)
           await executor
             .select({ id: accounts.id })
             .from(accounts)
@@ -92,7 +101,9 @@ export function createAccountLifecycle(
           .returning()
         return rows[0]
       }
-      return expected.recoveryGeneration === undefined ? mutate(db) : db.transaction(mutate)
+      return expected.recoveryGeneration === undefined && expected.operatorCheckToken === undefined
+        ? mutate(db)
+        : db.transaction(mutate)
     },
     updateOperatorAccount: async ({ id, patch, now }) => {
       const credential = patch.authMaterial !== undefined
@@ -161,6 +172,7 @@ export function createAccountLifecycle(
         input.now,
         "needs_reauth",
         input.expected.recoveryGeneration,
+        input.expected.operatorCheckToken,
       )
     },
     confirmAccountAuthorization: ({ id, expected, now }) =>

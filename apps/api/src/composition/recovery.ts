@@ -21,13 +21,15 @@ export function createRecoveryComponents(deps: {
   config: Env["recovery"]
   logger: Logger
   now: () => Date
+  quotaSpentThreshold?: number
 }) {
+  const quotaSpentThreshold = deps.quotaSpentThreshold ?? DEFAULT_QUOTA_SPENT_THRESHOLD
   let held = new Map(deps.catalog.accounts().map((account) => [account.id, account]))
   const repository = createRecoveryRepository(deps.database)
   const coordinator = createRecoveryCoordinator({
     repository,
     accounts: deps.accounts,
-    config: { ...deps.config, quotaSpentThreshold: DEFAULT_QUOTA_SPENT_THRESHOLD },
+    config: { ...deps.config, quotaSpentThreshold },
     now: deps.now,
     schedule: (work, delay) => {
       const timer = setTimeout(work, delay)
@@ -64,6 +66,7 @@ export function createRecoveryComponents(deps: {
     now: deps.now,
     retryAfterMs: deps.config.retryAfterMs,
     quotaStaleAfterMs: deps.config.quotaStaleAfterMs,
+    quotaSpentThreshold,
   })
   return {
     repository,

@@ -88,6 +88,23 @@ describe("AccountRecheck live region", () => {
       expect(region.textContent).not.toContain("healthy")
     })
   })
+  test("a competing authentication check has progress without inventing a generation timestamp", () => {
+    const client = new QueryClient()
+    const result: RecheckResult = {
+      accountId: "acc-1",
+      lastCheckedAt: null,
+      nextAllowedAt: "2026-07-31T12:03:00.000Z",
+      rechecked: false,
+      checkInProgress: true,
+    }
+    client.setQueryData(queryKeys.accounts.recheck("acc-1"), result)
+    mount(client, (container) => {
+      const text = statusRegion(container).textContent
+      expect(text).toContain("Authentication check in progress")
+      expect(text).not.toContain("Requested")
+      expect(text).not.toContain("healthy")
+    })
+  })
 })
 
 describe("AccountTestNow live region", () => {

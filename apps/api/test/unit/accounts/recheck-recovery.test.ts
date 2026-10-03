@@ -5,6 +5,7 @@ import {
   type OperatorRecoveryRepository,
 } from "../../../src/services/accounts/recheck"
 import { accountRow } from "../../support/account-row"
+import { operatorCheckRepository } from "../../support/operator-check-repository"
 
 const REQUESTED = new Date("2026-10-03T18:00:00Z")
 const NEXT = new Date("2026-10-03T18:01:00Z")
@@ -27,7 +28,10 @@ function composed(
     events,
     service: createRecheckService({
       accounts: { list: async () => [accountRow()], findById: async () => accountRow() },
-      recovery: { ...repository, readOperatorCooldown: async () => undefined },
+      recovery: operatorCheckRepository({
+        begin: repository.beginOperatorRecovery,
+        find: () => accountRow(),
+      }),
       cooldownSeconds: 60,
       refreshCatalog: async () => {
         events.push("barrier")
@@ -101,7 +105,7 @@ test("committed generation installs locally before demand, audit and response", 
   expect(h.events).toEqual(["barrier", "demand", "audit"])
 })
 
-test("existing generation response does not create local callbacks or fabricate another check", async () => {
+test("reserved check joining an uncertain generation installs without another demand or audit", async () => {
   const prior = committed()
   const h = composed({
     beginOperatorRecovery: async () => ({
@@ -113,15 +117,15 @@ test("existing generation response does not create local callbacks or fabricate 
   const result = await h.service.recheck(accountRow().id)
   if (!result.ok) throw new Error("existing generation must be a normal response")
   expect(result.value.rechecked).toBe(false)
-  expect(result.value.recovery.state).toBe("uncertain")
+  expect(result.value.recovery?.state).toBe("uncertain")
   expect(result.value.lastCheckedAt).toBe(REQUESTED.toISOString())
-  expect(h.events).toEqual([])
+  expect(h.events).toEqual(["barrier"])
 })
 
 test("two service instances expose the same atomic repository generation across a refused press", async () => {
   const prior = committed()
   let requested = false
-  const repository: OperatorRecoveryRepository = {
+  const repository: Pick<OperatorRecoveryRepository, "beginOperatorRecovery"> = {
     beginOperatorRecovery: async () => {
       const accepted = !requested
       requested = true
@@ -137,9 +141,9 @@ test("two service instances expose the same atomic repository generation across 
   expect(results.filter((result) => result.ok && result.value.rechecked)).toHaveLength(1)
   for (const result of results) {
     if (!result.ok) throw new Error("expected normal result")
-    expect(result.value.recovery.generation).toBe(prior.recovery.generation)
+    expect(result.value.recovery?.generation).toBe(prior.recovery.generation)
     expect(result.value.nextAllowedAt).toBe(NEXT.toISOString())
   }
   expect(first.events).toEqual(["barrier", "demand", "audit"])
-  expect(second.events).toEqual([])
+  expect(second.events).toEqual(["barrier", "demand"])
 })

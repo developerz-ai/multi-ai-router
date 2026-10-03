@@ -18,6 +18,7 @@ import type { RoutableAccount, RoutingCatalog } from "./types"
 
 export interface RecoveryAttempt {
   readonly designated: boolean
+  started(): boolean
   readonly beforeUpstreamStart?: UpstreamStartGuard
   finish(state: "succeeded" | "failed" | "uncertain"): void
 }
@@ -27,7 +28,11 @@ export interface RecoveryAccess {
   readonly catalog: RoutingCatalog
   currentSnapshot(accountId: string): AccountSnapshot | undefined
   hint(accountId: string, reason: AutomaticRecoveryRequest["reason"]): void
-  prepare(account: RoutableAccount, candidate: Candidate): RecoveryAttempt
+  prepare(
+    account: RoutableAccount,
+    candidate: Candidate,
+    quotaSpentThreshold?: number,
+  ): RecoveryAttempt
   forget(accountId: string): void
 }
 export function createRecoveryAccess(deps: {
@@ -39,6 +44,7 @@ export function createRecoveryAccess(deps: {
   now: () => Date
   retryAfterMs: number
   quotaStaleAfterMs: number
+  quotaSpentThreshold?: number
 }): RecoveryAccess {
   const current = deps.readAccount
   const observation = (account: RoutableAccount): AccountObservation => ({
@@ -93,12 +99,18 @@ export function createRecoveryAccess(deps: {
         : overlayHealth(account.snapshot, deps.health.stateOf(id))
     },
     hint,
-    prepare(account, candidate) {
+    prepare(
+      account,
+      candidate,
+      quotaSpentThreshold = deps.quotaSpentThreshold ?? DEFAULT_QUOTA_SPENT_THRESHOLD,
+    ) {
       const recovery = candidate.account.recovery
       const gated =
         recovery !== undefined && recovery.state !== "succeeded" && recovery.state !== "cancelled"
+      let started = false
       if (!candidate.halfOpen && !gated)
         return {
+          started: () => started,
           designated: false,
           beforeUpstreamStart: () => {
             const latest = current(account.id)
@@ -112,9 +124,10 @@ export function createRecoveryAccess(deps: {
             if (
               live.status !== "active" ||
               recoveryIsGated(live) ||
-              findSpentWindow(live, deps.now()) !== null
+              findSpentWindow(live, deps.now(), quotaSpentThreshold) !== null
             )
               throw new UpstreamAdmissionRefused()
+            started = true
           },
           finish: () => {},
         }
@@ -123,6 +136,7 @@ export function createRecoveryAccess(deps: {
       let consumed: RecoveryCapability | undefined
       return {
         designated: true,
+        started: () => consumed !== undefined,
         beforeUpstreamStart: Object.assign(
           () => {
             const latest = current(account.id)
@@ -146,7 +160,7 @@ export function createRecoveryAccess(deps: {
                         },
                 },
                 now,
-                DEFAULT_QUOTA_SPENT_THRESHOLD,
+                quotaSpentThreshold,
               )
             )
               throw new UpstreamAdmissionRefused()
