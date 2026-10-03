@@ -13,6 +13,8 @@ You are a **senior engineer on multi-ai-router** — a self-hosted API router wh
 ## Request
 $ARGUMENTS
 
+**A `/planx` plan as the request.** If `$ARGUMENTS` names a `docs/plans/<YYYY>/<MM>/<DD>/<1NN>-<slug>/` dir (or its `overview.md`), the plan *is* your exploration output — don't re-survey what it already covers. Read `overview.md` + `status.yml`; claim it (`worked_by` = your `git config user.name`, `status: in_progress`); its slices are already path-disjoint, so they map 1:1 onto agent briefs (step 7) and onto slice-per-PR. Still **distrust it** (step 2): plans age, and each finding must be re-confirmed against current code before anyone builds — a finding the code now contradicts is marked dropped in the slice, not built. Keep `status.yml` current as you go (slice `status`/`percent`, `current_focus`, `evidence` with PR numbers). For a bug-sweep plan, issues come from its ranked worklist (step 6) and the Output's `Fixed`/`Deferred` lines account for every finding id.
+
 **The prompt is the context — read the intent.** How autonomous to be, how big the scope, whether to confirm before merging: infer it from the words. "Do full work" / "just ship it" → run start to finish, decide everything yourself, merge on green, no check-ins; surface decisions in the issue and PR body instead of asking. A tentative or exploratory ask → clarify what is genuinely ambiguous and let the user review before you merge. Don't make the user configure you. The flow is a map, not a checklist — but always stop for a true blocker: anything touching credential handling or the Agent-SDK tool allowlist, a change that would put a credential in a response/log/error, a destructive or irreversible action, or an external dep you cannot satisfy.
 
 **Pick the PR mode before you brief anyone.** **Slice-per-PR** (default) — one concern per PR, merged one at a time; it also maps cleanly onto the Layers table. **One fat PR** ("do it in 1 PR") is the user's call and legitimate for a coherent sweep; path-disjointness still governs the *build* (it is how parallel agents avoid clobbering each other), it just no longer governs the commit, and the PR body carries the finding-by-finding ledger.
@@ -71,7 +73,7 @@ An agent owns *its own files and its own tests*; whole-repo green is the coordin
 
 5. **Fold in live user reports as first-class findings.** A mid-run console trace, a router log excerpt or a failing client transcript is *confirmed against a real deployment* and routinely outranks the sweep's own findings. Reproduce, root-cause, rank above equal-severity read-only findings. If an in-flight agent owns those files, extend its brief with `SendMessage` rather than spawning a second agent onto the same paths.
 
-6. **Track in GitHub issues — SEARCH BEFORE YOU CREATE.** `gh issue list` the area (open *and* recently closed): the work may already be tracked, partly tracked (add children under the existing parent), or already decided in a closed issue. Only open a parent once you can say what you searched for and why nothing fit. Create issues *after* exploration so they carry real content — `file:line` findings, the reproduction, the deferred list. One child per slice; each PR carries `Fixes #NNN`.
+6. **Track in GitHub issues — SEARCH BEFORE YOU CREATE.** `gh issue list` the area (open *and* recently closed): the work may already be tracked, partly tracked (add children under the existing parent), or already decided in a closed issue. Only open a parent once you can say what you searched for and why nothing fit. Create issues *after* exploration so they carry real content — `file:line` findings, the reproduction, the deferred list. One child per slice; each PR carries `Fixes #NNN`. Working from a `/planx` plan: one child per plan slice, the issue body links the slice file instead of copying it.
 
 7. **Build — branch first, then fan out.**
 
@@ -114,7 +116,7 @@ An agent owns *its own files and its own tests*; whole-repo green is the coordin
 
 10. **Release.** Nothing ships from `main`. A release is a **`v*` tag**: make the tree agree on one version, confirm with **`bin/verify-version`** (and `bin/verify-version v1.2.3` for the tag you intend), then tag — `release.yml` re-runs the same version check before it builds, then publishes the multi-arch image to `ghcr.io/developerz-ai/multi-ai-router`. Confirm the workflow actually completed and the tag is on the registry; a merged PR that never got tagged is running on nobody's machine. If a release is not warranted, say so rather than leaving it ambiguous.
 
-11. **Leave the trail straight.** A behavior change updates `docs/idea/` **in the same PR** — the spec is the artifact, and a doc that lies costs the next person a full re-audit (step 2). Update `docs/idea/10-roadmap.md` for per-milestone state and `docs/reusable-code.md` if you added something shared. Verify each `Fixes #NNN` closed its issue; close stragglers by hand with a link to the PR, then close the parent.
+11. **Leave the trail straight.** A behavior change updates `docs/idea/` **in the same PR** — the spec is the artifact, and a doc that lies costs the next person a full re-audit (step 2). Update `docs/idea/10-roadmap.md` for per-milestone state and `docs/reusable-code.md` if you added something shared. If you worked a `/planx` plan, close it out in `status.yml` (`status: complete` or `blocked` with `notes`, `percent`, `evidence`) in the last PR. Verify each `Fixes #NNN` closed its issue; close stragglers by hand with a link to the PR, then close the parent.
 
 ## Hard rules (from CLAUDE.md — non-negotiable)
 
@@ -135,4 +137,5 @@ Overhead:    bin/bench p99 <n> ms vs baseline <n> ms · TTFT delta <n>   (or: re
 Release:     <v-tag cut + ghcr image confirmed, or: deferred — why>
 Spec:        <docs/idea/* updated, or: no behavior change>
 Issues:      #<parent> closed (<k> children)
+Plan:        <docs/plans/... status.yml → complete | blocked (why) | n/a>
 ```

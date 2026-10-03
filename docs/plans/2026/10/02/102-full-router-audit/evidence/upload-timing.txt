@@ -1,0 +1,2 @@
+{"delayMs":0,"status":200,"overhead":["router_overhead_seconds_sum{ingress_dialect=\"anthropic\",path=\"passthrough\"} 0.007","router_overhead_seconds_count{ingress_dialect=\"anthropic\",path=\"passthrough\"} 1"]}
+{"delayMs":100,"status":200,"overhead":["router_overhead_seconds_sum{ingress_dialect=\"anthropic\",path=\"passthrough\"} 0.101","router_overhead_seconds_count{ingress_dialect=\"anthropic\",path=\"passthrough\"} 1"]}

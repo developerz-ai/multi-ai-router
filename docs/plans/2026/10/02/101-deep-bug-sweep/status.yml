@@ -1,0 +1,36 @@
+plan: 101-deep-bug-sweep
+title: Deep bug sweep — top to bottom (v2.15.0)
+status: not_started        # not_started | in_progress | blocked | complete | superseded
+created_by: sebi
+worked_by: ""
+owner: sebi
+percent: 0
+current_focus: "01.14 + 01.13 (slow non-stream request → pool-wide cooldown), then 01.15 (NN 4 double alias)"
+slices:
+  - file: 01-edge-auth-security.md
+    status: not_started
+    percent: 0
+    findings: 23
+  - file: 02-routing-state-persistence.md
+    status: not_started
+    percent: 0
+    findings: 18
+  - file: 03-providers-claude-sdk.md
+    status: not_started
+    percent: 0
+    findings: 17
+  - file: 04-translation.md
+    status: not_started
+    percent: 0
+    findings: 19
+  - file: 05-web-console.md
+    status: not_started
+    percent: 0
+    findings: 14
+  - file: 06-prod-observations.md
+    status: not_started
+    percent: 0
+    findings: 8
+evidence: []
+notes: "06.1-06.6 and 03.6 cross-reference fixes owned by other slices. 06.7/06.8 are fixed in ../infrastructure. Only slice 02 writes migrations."
+last_updated: 2026-10-02

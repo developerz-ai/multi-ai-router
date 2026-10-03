@@ -1,0 +1,64 @@
+plan: 102-full-router-audit
+title: "Full router audit — code, infrastructure and production"
+status: not_started
+created_by: sebi
+worked_by: ""
+owner: sebi
+percent: 0
+current_focus: "Begin with SDK isolation and credential containment; coordinate DB interfaces before parallel implementation."
+slices:
+  - file: 01-transport.md
+    status: not_started
+    percent: 0
+    findings: 9
+  - file: 02-auth.md
+    status: not_started
+    percent: 0
+    findings: 8
+  - file: 03-routing.md
+    status: not_started
+    percent: 0
+    findings: 9
+  - file: 04-providers.md
+    status: not_started
+    percent: 0
+    findings: 1
+  - file: 05-claude-sdk.md
+    status: not_started
+    percent: 0
+    findings: 3
+  - file: 06-translation.md
+    status: not_started
+    percent: 0
+    findings: 2
+  - file: 07-usage.md
+    status: not_started
+    percent: 0
+    findings: 4
+  - file: 08-cost.md
+    status: not_started
+    percent: 0
+    findings: 2
+  - file: 09-scheduler.md
+    status: not_started
+    percent: 0
+    findings: 2
+  - file: 10-database.md
+    status: not_started
+    percent: 0
+    findings: 4
+  - file: 11-config.md
+    status: not_started
+    percent: 0
+    findings: 3
+  - file: 12-web.md
+    status: not_started
+    percent: 0
+    findings: 6
+  - file: 13-production.md
+    status: not_started
+    percent: 0
+    findings: 1
+evidence: []
+notes: "Plan-only audit complete; implementation not started. Local unit suites pass; large-prompt benchmark fails. Production reads only. Evidence files linked in overview.md and 13-production.md."
+last_updated: 2026-10-02
