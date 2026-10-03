@@ -229,14 +229,14 @@ describe("a refused usage batch, as an operator reads it", () => {
     expect(drops[1]?.dropped).toBe(498)
   })
 
-  test("records still unwritten at shutdown are named as lost, at error", async () => {
+  test("records still unwritten when the bounded drain ends are reported at error", async () => {
     const { lines, recorder } = harness(() => new Error("database is down"))
 
     for (let attempt = 1; attempt <= 6; attempt += 1) recorder.record(record(attempt))
     await recorder.stop()
 
-    // stop() gave the writer its passes; whatever the refusals stranded is data loss and says so.
-    const abandoned = lines.find((line) => line.msg.includes("unwritten at shutdown"))
+    // The bounded passes ended without acknowledgement; report the unresolved records.
+    const abandoned = lines.find((line) => line.msg.includes("unwritten when shutdown drain ended"))
     expect(abandoned).toMatchObject({ level: "error" })
     expect(abandoned?.records ?? 0).toBeGreaterThan(0)
   })

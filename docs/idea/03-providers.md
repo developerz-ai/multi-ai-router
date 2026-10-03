@@ -123,6 +123,23 @@ Every member is **pure**: no clock, no store, no logger, no network. `RateLimitS
 minimum whether the account is limited now, the reported reset instant (if any), and per-window
 utilization (if any), each labeled with its source.
 
+Rate-limit normalization preserves relative durations until the failure verdict clock is known.
+Explicit `Retry-After` information takes precedence over limiter headers. Without it, only depleted
+limiters contribute aggregate reset constraints; the cooldown waits for the latest applicable
+absolute or relative deadline. Unrelated non-depleted windows remain visible without extending
+that cooldown. Empty, nonpositive or malformed durations do not become an immediate retry.
+Client `Retry-After` rounds a positive fraction up to at least one second. A genuinely missing
+reset uses configured `ROUTING_UNKNOWN_RESET_RETRY_AFTER_SECONDS` for the client retry hint and
+the breaker's configured backoff for local scheduling; neither is labeled provider-reported.
+
+Compatible drivers additionally recognize the sanitized audited 429 sentence stating that an
+exhausted quota will reset at `MM-DD HH:MM:SS UTC`. A valid response `Date` supplies its year;
+the parser accepts only a valid future occurrence within 31 days, including December/January
+rollover. Header reset information wins. Missing/invalid reference dates retain temporary
+rate-limit classification with unknown reset, rather than inventing a timestamp or permanent
+credit exhaustion. This is coverage of that exact observed format; other vendor body reset
+formats and live compatibility remain unverified.
+
 **`billing` is a default, not the answer.** It says how this provider is *sold*, which is a fact
 about the provider and therefore belongs in its one file
 ([non-negotiable 12](../../CLAUDE.md)) — not in a list somewhere else that has to be edited every

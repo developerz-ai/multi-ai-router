@@ -83,7 +83,8 @@ export function notFoundHandler(): NotFoundHandler<AppEnv> {
 
 function send(c: Context<AppEnv>, response: ErrorResponse): Response {
   if (response.retryAfterSeconds !== null) {
-    c.header("Retry-After", String(response.retryAfterSeconds))
+    const seconds = response.retryAfterSeconds
+    c.header("Retry-After", String(Number.isFinite(seconds) ? Math.max(1, Math.ceil(seconds)) : 1))
   }
   return c.json(response.body, response.status as ContentfulStatusCode)
 }

@@ -240,7 +240,7 @@ describe("account status writer", () => {
     expect(accounts.writes.map((entry) => entry.id)).toEqual(["a", "b"])
   })
 
-  test("a failed write costs visibility, never traffic — one line, whatever the batch", async () => {
+  test("a failed write retains the verdict for retry without failing traffic — one line, whatever the batch", async () => {
     const sink = logger()
     const write = writer(failing, sink.logger)
 
@@ -248,7 +248,7 @@ describe("account status writer", () => {
     write.record("b", "needs_reauth", observation())
     await write.flush()
 
-    expect(write.stats()).toMatchObject({ pending: 0, written: 0, writeFailures: 2 })
+    expect(write.stats()).toMatchObject({ pending: 2, written: 0, writeFailures: 2 })
     expect(sink.lines).toHaveLength(1)
     expect(sink.lines[0]).toMatchObject({
       component: "account-status",

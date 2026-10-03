@@ -144,6 +144,8 @@ export {
   USAGE_RECORD_BIND_PARAMETERS_PER_ROW,
   USAGE_RECORD_MAX_BATCH_ROWS,
 } from "./repositories/usage-repository"
+export type { SchedulerLockPoolHandle, SchedulerLockPoolOptions } from "./scheduler-lock"
+export { createSchedulerLockPool } from "./scheduler-lock"
 export type { RecoveryReason, RecoveryRow, RecoveryState } from "./schema/account-recoveries"
 export { accountRecoveries } from "./schema/account-recoveries"
 // --- row types --------------------------------------------------------------

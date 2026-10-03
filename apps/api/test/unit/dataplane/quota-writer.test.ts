@@ -119,7 +119,7 @@ describe("quota window writer", () => {
     expect(accounts.upserts.map((entry) => entry.accountId)).toEqual(["a", "b"])
   })
 
-  test("a failed write loses the row, never the request — one line, whatever the batch", async () => {
+  test("a failed write retains the reading for retry without failing traffic — one line, whatever the batch", async () => {
     const sink = logger()
     const writer = createQuotaWindowWriter({
       accounts: repository(true),
@@ -131,7 +131,7 @@ describe("quota window writer", () => {
     writer.record("b", [window()])
     await writer.flush()
 
-    expect(writer.stats()).toMatchObject({ pending: 0, written: 0, writeFailures: 3 })
+    expect(writer.stats()).toMatchObject({ pending: 2, written: 0, writeFailures: 3 })
     expect(sink.lines).toHaveLength(1)
     expect(sink.lines[0]).toMatchObject({
       component: "quota",

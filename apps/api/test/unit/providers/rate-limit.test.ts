@@ -37,9 +37,9 @@ describe("Anthropic rate-limit headers", () => {
     expect(tokens.utilization).toBeCloseTo(0.75, 5)
   })
 
-  test("labels the reported reset as provider-reported and takes the earliest", () => {
+  test("explicit Retry-After overrides aggregate limiter reset without erasing window facts", () => {
     expect(signal?.resetSource).toBe("provider-reported")
-    expect(signal?.resetsAt?.toISOString()).toBe("2026-07-24T14:32:00.000Z")
+    expect(signal?.resetsAt).toBeUndefined()
     expect(windowNamed(signal?.windows ?? [], "requests").resetSource).toBe("provider-reported")
   })
 

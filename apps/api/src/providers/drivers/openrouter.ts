@@ -1,5 +1,5 @@
 import { createHttpDriver } from "../driver"
-import { codeRule, messageRule } from "../failure/classify"
+import { codeRule, messageRule, onStatus } from "../failure/classify"
 
 /**
  * `openrouter` — an aggregator, and a prepaid balance. Model ids are namespaced (`vendor/model`),
@@ -21,9 +21,22 @@ export const openRouterDriver = createHttpDriver({
   id: "openrouter",
   surfaces: [{ dialect: "openai-chat", baseUrl: BASE_URL }],
   rules: [
+    onStatus(
+      [403],
+      messageRule(
+        "invalid-request",
+        "openrouter:moderation",
+        /moderation|flagged.*content|content.*flagged/i,
+      ),
+    ),
+    {
+      kind: "server-error",
+      signal: "openrouter:http-408",
+      when: (_facts, status) => status === 408,
+    },
     messageRule("credits-exhausted", "openrouter:insufficient-credits", INSUFFICIENT_CREDITS),
     codeRule("credits-exhausted", "openrouter:code-402", ["402"]),
     codeRule("rate-limited", "openrouter:code-429", ["429"]),
-    codeRule("auth", "openrouter:code-401", ["401", "403"]),
+    codeRule("auth", "openrouter:code-401", ["401"]),
   ],
 })

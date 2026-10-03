@@ -39,6 +39,7 @@ export interface UsageRecorderFromEnvDeps {
   /** Only the queue's and this module's own knobs: no business reading the rest of the env. */
   readonly env: {
     readonly logReasonMaxChars: number
+    readonly background?: { readonly shutdownDrainMs: number }
     readonly dataPlane: Pick<
       Env["dataPlane"],
       "usageQueueMax" | "usageBatchSize" | "usageFlushIntervalMs" | "usageLogReportIntervalMs"
@@ -140,6 +141,7 @@ export function createUsageRecorderFromEnv(deps: UsageRecorderFromEnvDeps): Usag
       maxQueued: usageQueueMax,
       batchSize: usageBatchSize,
       flushIntervalMs: usageFlushIntervalMs,
+      shutdownDrainMs: deps.env.background?.shutdownDrainMs ?? 15_000,
       onShed: () => reportShed(undefined),
       onWriteError: ({ error, batch, discarded }) => {
         const failure = { reason: reasonOf(error), size: batch.length }
@@ -148,7 +150,7 @@ export function createUsageRecorderFromEnv(deps: UsageRecorderFromEnvDeps): Usag
       },
       // Unthrottled and at `error`: it fires at most once, at stop(), and it means rows are gone.
       onAbandoned: (records) => {
-        log.error("usage records unwritten at shutdown — records lost", { records })
+        log.error("usage records unwritten when shutdown drain ended", { records })
       },
       ...(deps.onRecord === undefined ? {} : { onRecord: deps.onRecord }),
     },

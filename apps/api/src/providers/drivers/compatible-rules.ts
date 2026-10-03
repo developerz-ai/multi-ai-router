@@ -41,3 +41,14 @@ export const throttleStatusRule: ClassificationRule = {
   signal: "vendor:http-429",
   when: (_facts, status) => status === 429,
 }
+
+/** Sanitized monthly quota fixture; a missing/ambiguous date stays an unknown temporary reset. */
+export const reportedQuotaResetRule: ClassificationRule = {
+  kind: "rate-limited",
+  signal: "compatible:reported-body-reset",
+  when: (facts, status) =>
+    status === 429 &&
+    /quota (?:has been )?exhausted\. The quota will reset at \d{2}-\d{2} \d{2}:\d{2}:\d{2} UTC\./i.test(
+      facts.message ?? "",
+    ),
+}

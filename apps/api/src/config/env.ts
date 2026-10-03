@@ -5,6 +5,7 @@ import { z } from "zod"
 import { CLI_REFRESH_LEAD_MS } from "../providers/claude-sdk/credential-freshness"
 import { adminApiTokenProblem } from "../services/admin-auth"
 import type { BoundCooldownBehavior } from "../services/routing"
+import { BACKGROUND_ENV_FIELDS, readBackgroundEnv } from "./background"
 import {
   absoluteUrl,
   atLeastOne,
@@ -368,6 +369,7 @@ export interface FailoverConfig {
  * onto request spikes or onto each other after a restart.
  */
 export interface SchedulerConfig {
+  readonly lockPoolMaxConnections: number
   /** Usage record rollup interval, in minutes. */
   readonly usageRollupIntervalMinutes: number
   /** OAuth state (and PKCE verifier) purge interval, in minutes. */
@@ -652,6 +654,7 @@ export interface Env {
   readonly adminAuth: AdminAuthConfig
   readonly dataPlane: DataPlaneConfig
   readonly failover: FailoverConfig
+  readonly background: ReturnType<typeof readBackgroundEnv>["background"]
   readonly scheduler: SchedulerConfig
   readonly oauthRefresh: OAuthRefreshConfig
   readonly translation: TranslationConfig
@@ -689,6 +692,7 @@ export { decodeEncryptionKey, ZERO_IS_LEGAL } from "./fields"
  * about zero, whether or not anyone remembered to make one.
  */
 export const ENV_FIELDS = {
+  ...BACKGROUND_ENV_FIELDS,
   ...RECOVERY_ENV_FIELDS,
   PORT: wholeNumber.refine((value) => value <= 65_535, "must be at most 65535").optional(),
   SERVER_IDLE_TIMEOUT_SECONDS: serverIdleTimeoutSeconds.optional(),
@@ -973,6 +977,7 @@ const envSchema = boundedEnvSchema.transform((raw, ctx): Env => {
 
   return {
     ...readRecoveryEnv(raw),
+    ...readBackgroundEnv(raw),
     port: raw.PORT ?? 8080,
     serverIdleTimeoutSeconds:
       raw.SERVER_IDLE_TIMEOUT_SECONDS ?? DEFAULT_SERVER_IDLE_TIMEOUT_SECONDS,
@@ -1064,6 +1069,7 @@ const envSchema = boundedEnvSchema.transform((raw, ctx): Env => {
     },
     janitorIntervalMinutes: raw.JANITOR_INTERVAL_MINUTES ?? 60,
     scheduler: {
+      lockPoolMaxConnections: raw.SCHEDULER_LOCK_POOL_MAX_CONNECTIONS ?? 1,
       usageRollupIntervalMinutes: raw.USAGE_ROLLUP_INTERVAL_MINUTES ?? 60,
       oauthStatePurgeIntervalMinutes: raw.OAUTH_STATE_PURGE_INTERVAL_MINUTES ?? 5,
       quotaFloorIntervalMinutes: raw.QUOTA_FLOOR_INTERVAL_MINUTES ?? 30,

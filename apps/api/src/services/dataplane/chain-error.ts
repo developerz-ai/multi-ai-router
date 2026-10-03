@@ -136,6 +136,7 @@ export interface AnsweredFailureContext {
   readonly rateLimit: RateLimitSignal | null
   /** The attempt's clock reading, for deriving a `Retry-After` from a reported instant. */
   readonly now: Date
+  readonly unknownResetRetryAfterSeconds?: number
   /**
    * The router-authored sentence for this failure (`AttemptFailure.message`). Rendered only when
    * the transport produced a classification but no upstream body — never the SDK's own words.
@@ -175,6 +176,9 @@ export function answeredFailure(
       : {
           signal: context.rateLimit,
           now: context.now,
+          ...(context.unknownResetRetryAfterSeconds === undefined
+            ? {}
+            : { unknownResetRetryAfterSeconds: context.unknownResetRetryAfterSeconds }),
           // Only for a transport that classified **without** a body — the Agent SDK. There
           // `AttemptFailure.message` is the router-authored sentence; on the HTTP path the same
           // field carries the classification's signal token, which is a log breadcrumb and not a

@@ -24,8 +24,11 @@ export function parseDurationSeconds(value: string): number | null {
 
   let total = 0
   let matched = false
+  let consumed = 0
   DURATION_PART.lastIndex = 0
   for (const part of trimmed.matchAll(DURATION_PART)) {
+    if (part.index !== consumed) return null
+    consumed += part[0].length
     const amount = Number(part[1])
     const unit = part[2]
     if (!Number.isFinite(amount) || unit === undefined) continue
@@ -34,10 +37,10 @@ export function parseDurationSeconds(value: string): number | null {
     total += amount * factor
     matched = true
   }
-  if (matched) return total
+  if (matched) return consumed === trimmed.length && Number.isFinite(total) ? total : null
 
   const plain = Number(trimmed)
-  return Number.isFinite(plain) ? plain : null
+  return /^\d+(?:\.\d+)?$/.test(trimmed) && Number.isFinite(plain) ? plain : null
 }
 
 /** Anthropic's RFC 3339 reset headers, and any other absolute instant a provider reports. */

@@ -82,9 +82,13 @@ export interface TickResult {
  * Taking the per-task lock, as a capability rather than a connection.
  *
  * The scheduler is a service, and services do not hold a `SqlConnection` — the
- * production implementation is `advisoryTaskLock(sql)` in `lock.ts`, which is a
- * one-line binding of `withAdvisoryLock`. Injecting the capability is also what
+ * production implementation is `advisoryTaskLock(pool)` in `lock.ts`, which binds a
+ * dedicated scheduler session pool independently of task repositories. Injecting the capability is also what
  * lets the contention tests run without a database: a lock that always answers
  * `{ acquired: false }` is the second replica, exactly.
  */
-export type TaskLock = <T>(key: number, work: () => Promise<T>) => Promise<AdvisoryLockRun<T>>
+export type TaskLock = <T>(
+  key: number,
+  work: (lockSignal?: AbortSignal) => Promise<T>,
+  signal?: AbortSignal,
+) => Promise<AdvisoryLockRun<T>>

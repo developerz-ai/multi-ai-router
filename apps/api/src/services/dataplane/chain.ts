@@ -30,7 +30,6 @@ import type { TranslatedRequestBody } from "./translate-body"
 
 /**
  * The failover chain: dispatch to the head, advance on a retryable failure, stop honestly.
- *
  * **Once any byte has been written to the client, failover is over.** That is enforced by
  * structure, not by a flag someone has to remember to check: the success branch returns the relayed
  * response and never re-enters the loop. `markStreamed` records the same fact for the failover
@@ -215,7 +214,7 @@ export async function runChain(ctx: ChainContext): Promise<Response> {
     if (outcome.kind === "success") {
       if (outcome.rateLimit?.limited) recovery?.finish("failed")
       runtime.health.recordSuccess(accountId, observation)
-      runtime.health.applyRateLimit(accountId, outcome.rateLimit, attemptStartedAt, observation)
+      runtime.health.applyRateLimit(accountId, outcome.rateLimit, runtime.clock.now(), observation)
       // Release the local breaker hold; the durable permit remains consumed until the body settles.
       probe.release()
       progress = markStreamed(progress)
@@ -227,9 +226,7 @@ export async function runChain(ctx: ChainContext): Promise<Response> {
         observation,
         ...(outcome.rateLimit?.limited || !recovery?.designated ? {} : { recovery }),
       })
-      // Failover left the bound account behind, so this answer came from a fresh upstream
-      // session: said out loud, never silently (`session-restart.ts`). The binding itself is
-      // re-pointed by the SDK attempt's own `remember` — dropped-then-rebound, never migrated.
+      // A new account means a fresh SDK session; state that restart explicitly.
       if (decision.action !== "attempt" || !decision.sessionRestart) return relayed
       ctx.log?.warn("bound session restarted on another account", {
         accountId,
@@ -238,7 +235,7 @@ export async function runChain(ctx: ChainContext): Promise<Response> {
       return withSessionRestart(relayed, "failover")
     }
 
-    recordChainFailure(ctx, servable, outcome, attemptStartedAt, observation, recovery)
+    recordChainFailure(ctx, servable, outcome, runtime.clock.now(), observation, recovery)
     if (recovery?.designated)
       ordered = ordered.filter((candidate) => candidate.account.id !== accountId)
     runtime.health.endAttempt(accountId)
@@ -271,7 +268,10 @@ export async function runChain(ctx: ChainContext): Promise<Response> {
         servable.translation === null ? null : runtime.ingressDialect,
         {
           rateLimit: outcome.rateLimit,
-          now: attemptStartedAt,
+          now: runtime.clock.now(),
+          ...(runtime.unknownResetRetryAfterSeconds === undefined
+            ? {}
+            : { unknownResetRetryAfterSeconds: runtime.unknownResetRetryAfterSeconds }),
           clientMessage: outcome.failure.message,
           failureKind: outcome.failure.kind,
         },

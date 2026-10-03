@@ -1,4 +1,9 @@
-import { type Dialect, isRouterError, RetryableRouterError } from "@multi-ai-router/core"
+import {
+  DEFAULT_UNKNOWN_RESET_RETRY_AFTER_SECONDS,
+  type Dialect,
+  isRouterError,
+  RetryableRouterError,
+} from "@multi-ai-router/core"
 import { redactValue } from "../logging/redact"
 
 /**
@@ -99,7 +104,10 @@ export function toErrorResponse(error: unknown, dialect: Dialect | null): ErrorR
     body: renderErrorBody(dialect, error.status, error.message, error.code),
     // Every failure a clock will fix carries the wait it knows about; nothing else invents one.
     retryAfterSeconds:
-      error instanceof RetryableRouterError ? (error.retryAfterSeconds ?? null) : null,
+      error instanceof RetryableRouterError
+        ? (error.retryAfterSeconds ??
+          (error.status === 429 ? DEFAULT_UNKNOWN_RESET_RETRY_AFTER_SECONDS : null))
+        : null,
   }
 }
 

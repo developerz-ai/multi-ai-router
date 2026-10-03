@@ -1,4 +1,4 @@
-import { and, desc, eq, isNotNull } from "drizzle-orm"
+import { and, asc, desc, eq, gt, inArray, isNotNull, isNull, lt } from "drizzle-orm"
 import type { Database } from "../client"
 import type { scheduledTask, scheduledTaskOutcome } from "../schema/enums"
 import { type ScheduledTaskRunRow, scheduledTaskRuns } from "../schema/scheduled-task-runs"
@@ -22,6 +22,19 @@ import { deleteOldestBatch } from "./bounded-delete"
 export interface ScheduledTaskRepository {
   /** Opens a run and returns its id. Call only after the advisory lock is held. */
   begin(task: ScheduledTaskName, now: Date): Promise<string>
+  /** Distinct historical task names with unfinished runs older than cutoff. */
+  listInterruptedTasks(
+    cutoff: Date,
+    limit: number,
+    afterTask?: ScheduledTaskName,
+  ): Promise<readonly ScheduledTaskName[]>
+  /** Same-task lock must be held; call before begin of the replacement run. */
+  listInterruptedRunIds(
+    task: ScheduledTaskName,
+    before: Date,
+    limit: number,
+  ): Promise<readonly string[]>
+  markInterruptedRunIds(ids: readonly string[], now: Date): Promise<number>
   /**
    * Closes the run. `undefined` when no run has that id, which means someone
    * deleted the row underneath a live task rather than that the work failed.
@@ -96,6 +109,49 @@ export interface FinishScheduledTaskInput {
 
 export function createScheduledTaskRepository(db: Database): ScheduledTaskRepository {
   return {
+    listInterruptedTasks: async (cutoff, limit, afterTask) => {
+      const rows = await db
+        .selectDistinct({ task: scheduledTaskRuns.task })
+        .from(scheduledTaskRuns)
+        .where(
+          and(
+            isNull(scheduledTaskRuns.finishedAt),
+            lt(scheduledTaskRuns.startedAt, cutoff),
+            afterTask === undefined ? undefined : gt(scheduledTaskRuns.task, afterTask),
+          ),
+        )
+        .orderBy(asc(scheduledTaskRuns.task))
+        .limit(limit)
+      return rows.map((row) => row.task)
+    },
+    listInterruptedRunIds: async (task, before, limit) => {
+      const rows = await db
+        .select({ id: scheduledTaskRuns.id })
+        .from(scheduledTaskRuns)
+        .where(
+          and(
+            eq(scheduledTaskRuns.task, task),
+            isNull(scheduledTaskRuns.finishedAt),
+            lt(scheduledTaskRuns.startedAt, before),
+          ),
+        )
+        .orderBy(asc(scheduledTaskRuns.startedAt), asc(scheduledTaskRuns.id))
+        .limit(limit)
+      return rows.map((row) => row.id)
+    },
+    markInterruptedRunIds: async (ids, now) => {
+      if (ids.length === 0) return 0
+      const rows = await db
+        .update(scheduledTaskRuns)
+        .set({
+          finishedAt: now,
+          outcome: "failed",
+          error: "previous task owner ended without a recorded outcome",
+        })
+        .where(and(inArray(scheduledTaskRuns.id, [...ids]), isNull(scheduledTaskRuns.finishedAt)))
+        .returning({ id: scheduledTaskRuns.id })
+      return rows.length
+    },
     begin: async (task, now) => {
       const rows = await db
         .insert(scheduledTaskRuns)

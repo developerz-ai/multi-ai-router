@@ -1,37 +1,13 @@
-import { describeError } from "@multi-ai-router/core"
 import {
   advisoryLockKey,
   type ScheduledTaskName,
   type ScheduledTaskRepository,
 } from "@multi-ai-router/db"
 import type { Logger } from "../logging/logger"
-import { redactValue } from "../logging/redact"
+import { describe, indexTasks } from "./runner-support"
 import type { ScheduledTask, TaskLock, TaskOutcome, TickResult } from "./types"
 
-/**
- * The periodic-task runner: in-process jittered timers, one Postgres advisory
- * lock per task, one `scheduled_task_runs` row per tick that actually ran.
- * There is no broker, no worker container, and no system cron — the rationale is
- * recorded in docs/idea/01-architecture.md, "Background work and scheduling".
- *
- * Three properties this file exists to guarantee, so no task has to:
- *
- * - **Exactly one replica runs a given tick.** `pg_try_advisory_lock` is taken
- *   before any work; a replica that loses returns `skipped_locked` instantly and
- *   writes nothing. Leader election without a leader-election system.
- * - **A wedged task is visible.** The run row is opened *before* the work and
- *   closed after, so a process killed mid-sweep leaves a stale `startedAt` with
- *   a NULL `finishedAt` — which is the state an operator needs to see, and the
- *   state a single row written at the end would erase.
- * - **An error never escapes a tick.** A task that throws is recorded as
- *   `failed` with its message, logged, and rescheduled. A periodic timer must
- *   not be able to take the process down, and the next tick is the retry.
- *
- * Deliberately *not* the catalog refresh, which is the other timer in this
- * process and the opposite of this one in every respect: no lock, every replica,
- * no row (docs/idea/08-observability.md, "The catalog refresh is not a
- * scheduled task").
- */
+/** Jittered background tasks with distributed exclusion and bounded shutdown. */
 
 export interface SchedulerDeps {
   /** Registry of periodic tasks. Names must be distinct — the lock key is derived from the name. */
@@ -40,6 +16,10 @@ export interface SchedulerDeps {
   readonly logger: Logger
   readonly lock: TaskLock
   /** ±fraction of each interval. Config, never a constant (non-negotiable 11). */
+  readonly shutdownDrainMs?: number
+  readonly interruptedBatchSize?: number
+  /** Off-path orphan maintenance, always outside the current task lock. */
+  readonly beforeTick?: (signal: AbortSignal) => Promise<void>
   readonly jitterFraction: number
   readonly now?: () => Date
   /** Injected so a test is deterministic; production leaves it alone. */
@@ -54,7 +34,7 @@ export interface SchedulerDeps {
 export interface Scheduler {
   /** Arms every task's timer. Idempotent — a second call is a no-op, not a second set of timers. */
   start(): void
-  /** Disarms the timers, aborts in-flight work, and waits for it. Safe to call unstarted. */
+  /** Disarms timers, aborts work, and drains within the configured budget. */
   stop(): Promise<void>
   /**
    * Runs one tick immediately, off the timer — the operator's "run now" and the
@@ -64,19 +44,15 @@ export interface Scheduler {
   runNow(name: ScheduledTaskName): Promise<TickResult>
 }
 
-/**
- * Ceiling on the message persisted to `scheduled_task_runs.error` and rendered
- * on the settings screen. Not an operator knob: it bounds a column, it does not
- * express a policy.
- */
-const MAX_ERROR_CHARS = 500
-
 export function createScheduler(deps: SchedulerDeps): Scheduler {
   const now = deps.now ?? (() => new Date())
   const random = deps.random ?? Math.random
   const tasks = indexTasks(deps.tasks)
   const timers = new Map<ScheduledTaskName, ReturnType<typeof setTimeout>>()
+  const fences = new Set<AbortController>()
   const inFlight = new Map<ScheduledTaskName, Promise<TickResult>>()
+  let epoch = 0
+  let stopping: Promise<void> | undefined
   let started = false
   let abort = new AbortController()
 
@@ -91,9 +67,14 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
   }
 
   /** Runs the task, converting a throw into the `failed` row it deserves. */
-  const attempt = async (task: ScheduledTask, at: Date, logger: Logger): Promise<TaskOutcome> => {
+  const attempt = async (
+    task: ScheduledTask,
+    at: Date,
+    logger: Logger,
+    signal: AbortSignal,
+  ): Promise<TaskOutcome> => {
     try {
-      const outcome = await task.run({ now: at, logger, signal: abort.signal })
+      const outcome = await task.run({ now: at, logger, signal })
       return outcome.error === undefined ? outcome : { ...outcome, error: describe(outcome.error) }
     } catch (error) {
       return { outcome: "failed", itemsProcessed: 0, error: describe(error) }
@@ -101,17 +82,39 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
   }
 
   const tick = async (task: ScheduledTask): Promise<TickResult> => {
+    const signal = abort.signal
+    const fence = new AbortController()
+    fences.add(fence)
     const startedAt = now()
     const logger = deps.logger.child({ component: "scheduler", task: task.name })
     const elapsed = (): number => now().getTime() - startedAt.getTime()
 
     try {
-      const run = await deps.lock(advisoryLockKey(task.name), async () => {
-        const runId = await deps.repo.begin(task.name, startedAt)
-        const outcome = await attempt(task, startedAt, logger)
-        await deps.repo.finish(runId, outcome, now())
-        return outcome
-      })
+      await deps.beforeTick?.(signal)
+      signal.throwIfAborted()
+      const run = await deps.lock(
+        advisoryLockKey(task.name),
+        async (lockSignal) => {
+          const taskSignal =
+            lockSignal === undefined ? signal : AbortSignal.any([signal, lockSignal])
+          taskSignal.throwIfAborted()
+          const interruptedIds = await deps.repo.listInterruptedRunIds(
+            task.name,
+            startedAt,
+            deps.interruptedBatchSize ?? 1000,
+          )
+          taskSignal.throwIfAborted()
+          await deps.repo.markInterruptedRunIds(interruptedIds, startedAt)
+          taskSignal.throwIfAborted()
+          const runId = await deps.repo.begin(task.name, startedAt)
+          const outcome = await attempt(task, startedAt, logger, taskSignal)
+          lockSignal?.throwIfAborted()
+          fence.signal.throwIfAborted()
+          await deps.repo.finish(runId, outcome, now())
+          return outcome
+        },
+        fence.signal,
+      )
 
       if (!run.acquired) {
         logger.debug("scheduled task skipped", { status: "skipped_locked" })
@@ -142,7 +145,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       }
     } catch (error) {
       // The bookkeeping itself fell over — the lock or the run row, not the
-      // task. Nothing was recorded and nothing can be; the next tick retries.
+      // task. Any unfinished run stays visible until a later owner reconciles it.
       const reason = describe(error)
       logger.error("scheduled task bookkeeping failed", { status: "failed", reason })
       return {
@@ -152,6 +155,8 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
         durationMs: elapsed(),
         error: reason,
       }
+    } finally {
+      fences.delete(fence)
     }
   }
 
@@ -165,7 +170,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
         return result
       })
       .finally(() => {
-        inFlight.delete(task.name)
+        if (inFlight.get(task.name) === pending) inFlight.delete(task.name)
       })
     inFlight.set(task.name, pending)
     return pending
@@ -176,11 +181,14 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
    * runs rather than a rate a slow sweep can fall behind.
    */
   const schedule = (task: ScheduledTask, delayMs = task.intervalMs): void => {
+    const ownedEpoch = epoch
     const timer = setTimeout(() => {
+      if (epoch !== ownedEpoch || !started || timers.get(task.name) !== timer) return
+      timers.delete(task.name)
       // Always the full interval from here on: `startupDelayMs` describes the *first* gap only,
       // and a task that kept using it would be running on a cadence nobody configured.
       void run(task).finally(() => {
-        if (started) schedule(task)
+        if (started && epoch === ownedEpoch) schedule(task)
       })
     }, jitter(delayMs))
     // A sweep must never be the reason the process stays alive.
@@ -188,27 +196,9 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
     timers.set(task.name, timer)
   }
 
-  /**
-   * The first gap after a boot, measured from when the task **last actually ran** rather than from
-   * when this process started.
-   *
-   * Without this a long-interval task on a short-lived pod never runs at all: the timer restarts
-   * from zero on every boot, so a 24-hour sweep on a container that restarts more often than daily
-   * is armed, reported as scheduled, and silently never fires. That is not hypothetical — on
-   * 2026-09-06 `idle_account_probe` had run **zero** times in a ten-hour-old pod, which is why the
-   * sweep that exists to notice a dying credential noticed nothing.
-   *
-   * `ScheduledTaskRun` already records every run precisely so a wedged task is visible
-   * (CLAUDE.md non-negotiable 13); this makes the scheduler *read* what it writes. `startedAt` is
-   * the cursor rather than `finishedAt`, and `lastRun` rather than the successful-only variant: the
-   * question here is "when did we last attempt this", so a task that fails every time still waits
-   * its interval instead of re-running on every restart.
-   *
-   * A task that has never run keeps the configured first gap, which is what `startupDelayMs`
-   * describes. A lookup failure falls back to the same value — a scheduler that will not start
-   * because Postgres hiccuped would be a worse failure than one tick at the wrong time.
-   */
+  /** Resume the interval from the persisted last run, with lifecycle-owned startup lookup. */
   const scheduleFirst = async (task: ScheduledTask): Promise<void> => {
+    const ownedEpoch = epoch
     let delayMs = task.startupDelayMs ?? task.intervalMs
     try {
       const last = await deps.repo.lastRun(task.name)
@@ -223,12 +213,13 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       })
     }
     // `stop()` may have won the race with this lookup; arming a timer now would outlive it.
-    if (started) schedule(task, delayMs)
+    if (started && epoch === ownedEpoch) schedule(task, delayMs)
   }
 
   return {
     start() {
-      if (started) return
+      if (started || stopping !== undefined || inFlight.size > 0) return
+      epoch++
       started = true
       if (abort.signal.aborted) abort = new AbortController()
       for (const task of tasks.values()) void scheduleFirst(task)
@@ -238,14 +229,35 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       })
     },
 
-    async stop() {
+    stop() {
+      if (stopping !== undefined) return stopping
       started = false
+      epoch++
       for (const timer of timers.values()) clearTimeout(timer)
       timers.clear()
       abort.abort()
-      // Waiting matters: an in-flight tick holds an advisory lock on a reserved
-      // connection, and shutdown closes the pool next.
-      await Promise.allSettled([...inFlight.values()])
+      const budget = deps.shutdownDrainMs ?? 15_000
+      let timer: ReturnType<typeof setTimeout> | undefined
+      const owned = Promise.race([
+        Promise.allSettled([...inFlight.values()]),
+        new Promise<void>((resolve) => {
+          timer = setTimeout(() => {
+            for (const fence of fences) fence.abort(new Error("scheduler drain deadline"))
+            deps.logger.warn("scheduler drain timed out; interrupted runs remain visible", {
+              component: "scheduler",
+              tasks: [...inFlight.keys()],
+            })
+            resolve()
+          }, budget)
+        }),
+      ])
+        .then(() => undefined)
+        .finally(() => {
+          clearTimeout(timer)
+          if (stopping === owned) stopping = undefined
+        })
+      stopping = owned
+      return owned
     },
 
     runNow(name) {
@@ -258,33 +270,4 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       return run(task)
     },
   }
-}
-
-function indexTasks(tasks: readonly ScheduledTask[]): Map<ScheduledTaskName, ScheduledTask> {
-  const indexed = new Map<ScheduledTaskName, ScheduledTask>()
-  for (const task of tasks) {
-    if (indexed.has(task.name)) {
-      // Two tasks under one name would share a lock key and silently serialize
-      // against each other, which reads as "the second one never runs".
-      throw new Error(`createScheduler: duplicate task name "${task.name}"`)
-    }
-    indexed.set(task.name, task)
-  }
-  return indexed
-}
-
-/**
- * Messages only — never a stack, never a query. This string is persisted and rendered.
- *
- * The whole `cause` chain, innermost first: a task failing on an ORM statement carries the
- * driver's complaint one `cause` down from a wrapper whose message *is* the statement text, and
- * front-anchored truncation of the wrapper alone persisted 500 chars of SQL with the actual
- * reason discarded. Redacted before the cap, so truncation cannot split a credential and leave
- * its tail in the persisted half.
- */
-function describe(error: unknown): string {
-  const scrubbed = redactValue(describeError(error, Number.POSITIVE_INFINITY))
-  return scrubbed.length <= MAX_ERROR_CHARS
-    ? scrubbed
-    : `${scrubbed.slice(0, MAX_ERROR_CHARS - 1)}…`
 }

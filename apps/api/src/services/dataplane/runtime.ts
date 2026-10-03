@@ -23,6 +23,7 @@ import type { DataPlaneClock, FetchLike, UpstreamOperation } from "./types"
 export interface RuntimeInput {
   readonly recovery?: RecoveryAccess
   readonly quotaSpentThreshold?: number
+  readonly unknownResetRetryAfterSeconds?: number
   readonly health: HealthStore
   readonly cipher: Pick<CredentialCipher, "decrypt">
   readonly call: FetchLike

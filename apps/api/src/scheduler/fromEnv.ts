@@ -1,6 +1,8 @@
-import type { ScheduledTaskRepository, SqlConnection } from "@multi-ai-router/db"
+import type { ScheduledTaskRepository, SchedulerLockPoolHandle } from "@multi-ai-router/db"
+import type { Env } from "../config/env"
 import type { Logger } from "../logging/logger"
 import { advisoryTaskLock } from "./lock"
+import { createInterruptedRunMaintenance } from "./orphan-runs"
 import { createScheduler, type Scheduler } from "./runner"
 import { createScheduledTasks, type ScheduledTaskDeps } from "./tasks"
 import type { TickResult } from "./types"
@@ -17,13 +19,14 @@ import type { TickResult } from "./types"
  */
 
 export interface SchedulerFromEnvDeps extends ScheduledTaskDeps {
+  readonly env: ScheduledTaskDeps["env"] & Pick<Env, "background">
   /** The runner's own run log. Widened from the registry's read-only slice, which it satisfies. */
   readonly scheduledTasks: ScheduledTaskRepository
   /**
-   * The pool behind the database handle. One consumer, here: an advisory lock lives on a *session*,
-   * so a tick needs a connection it can reserve for the whole of its work.
+   * Independent auxiliary pool: a tick reserves its lock session while task repositories
+   * retain access to the main database pool, including when its maximum is one.
    */
-  readonly sql: SqlConnection
+  readonly schedulerLock: SchedulerLockPoolHandle
   readonly logger: Logger
   readonly now?: () => Date
   /** Called once per settled tick, including skips. Feeds the `router_task_*` series. */
@@ -31,11 +34,21 @@ export interface SchedulerFromEnvDeps extends ScheduledTaskDeps {
 }
 
 export function schedulerFromEnv(deps: SchedulerFromEnvDeps): Scheduler {
+  const lock = advisoryTaskLock(deps.schedulerLock)
   return createScheduler({
     tasks: createScheduledTasks(deps),
     repo: deps.scheduledTasks,
-    lock: advisoryTaskLock(deps.sql),
+    lock,
+    beforeTick: createInterruptedRunMaintenance({
+      repo: deps.scheduledTasks,
+      lock,
+      cutoffAgeMs: deps.env.retention.taskRunsDays * 24 * 60 * 60 * 1000,
+      batchSize: deps.env.scheduler.sweepBatchSize,
+      now: deps.now,
+    }),
     jitterFraction: deps.env.scheduler.jitterFraction,
+    shutdownDrainMs: deps.env.background.shutdownDrainMs,
+    interruptedBatchSize: deps.env.scheduler.sweepBatchSize,
     logger: deps.logger,
     now: deps.now,
     onTick: deps.onTick,

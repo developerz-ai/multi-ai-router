@@ -1,5 +1,6 @@
 import { createHttpDriver } from "../driver"
-import { genericCreditsRule } from "./compatible-rules"
+import { parseCompatibleRateLimit } from "../rate-limit/compatible-body"
+import { genericCreditsRule, reportedQuotaResetRule } from "./compatible-rules"
 
 /**
  * `openai-compatible` — the escape hatch for any vLLM / Ollama / LiteLLM / vendor endpoint that
@@ -9,5 +10,6 @@ import { genericCreditsRule } from "./compatible-rules"
 export const openAiCompatibleDriver = createHttpDriver({
   id: "openai-compatible",
   surfaces: [{ dialect: "openai-chat", baseUrl: null }],
-  rules: [genericCreditsRule],
+  parseRateLimit: parseCompatibleRateLimit,
+  rules: [reportedQuotaResetRule, genericCreditsRule],
 })
