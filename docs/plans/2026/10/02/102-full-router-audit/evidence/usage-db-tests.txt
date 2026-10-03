@@ -1,0 +1,519 @@
+bun test v1.4.0 (34cbb9a40)
+
+apps/api/test/unit/usage/tokens.test.ts:
+(pass) token observer > reads an Anthropic stream: input on message_start, output on message_delta [0.46ms]
+(pass) token observer > reads a non-streamed Anthropic body the same way [0.07ms]
+(pass) token observer > subtracts OpenAI's cached tokens, which prompt_tokens already includes [0.17ms]
+(pass) token observer > survives a field split across a chunk boundary [0.13ms]
+(pass) token observer > reports zeros when the upstream said nothing [0.14ms]
+(pass) token observer > ignores fields it has no column for rather than guessing one [0.11ms]
+
+apps/api/test/unit/usage/axis.test.ts:
+(pass) buildAxis > hourly buckets start on the hour and run to now [0.33ms]
+(pass) buildAxis > a daily window is one point per day [0.05ms]
+(pass) buildAxis > a lifetime window is capped rather than returning tens of thousands of points [0.21ms]
+(pass) buildAxis > a window shorter than one bucket still gets a bucket [0.06ms]
+(pass) densify > a bucket with no traffic is zero, not missing [0.08ms]
+(pass) densify > the result is always the axis length, so two rows line up [0.04ms]
+
+apps/api/test/unit/usage/failures.test.ts:
+(pass) foldFailures > keeps rate limited and out of credits apart, never as one capacity figure [0.24ms]
+(pass) foldFailures > drops success from the split while still counting it in the denominator [0.07ms]
+(pass) foldFailures > counts the denominator from its own scan, not from the stitched total [0.05ms]
+(pass) foldFailures > says the counts are a floor when the window outruns the rows behind them [0.02ms]
+(pass) foldFailures > is not partial when the scan saw every attempt the summary counted [0.03ms]
+(pass) foldFailures > is not partial when the scan saw more than the rollup did [0.02ms]
+(pass) foldFailures > errors is exactly the sum of the split, so the parts add up to the whole [0.05ms]
+(pass) foldFailures > orders biggest first so the failure worth reading is at the top [0.04ms]
+(pass) foldFailures > breaks ties on the name, so two equal counts never swap between refreshes [0.66ms]
+(pass) foldFailures > omits an outcome that did not happen rather than reporting it as zero [0.06ms]
+(pass) foldFailures > a window with no rows at all folds to the empty split, not to a throw [0.04ms]
+(pass) foldFailures > every failure outcome core defines survives the fold [0.16ms]
+
+apps/api/test/unit/usage/from-env.test.ts:
+(pass) a refused usage batch, as an operator reads it > warns while it still has a retry left, and only errors once records are gone [2.98ms]
+(pass) a refused usage batch, as an operator reads it > quotes the database's complaint, bounded — the statement is not the message [0.38ms]
+(pass) a refused usage batch, as an operator reads it > a wrapped refusal speaks its cause first — the wrapper names the statement, not the reason [0.29ms]
+(pass) a refused usage batch, as an operator reads it > a credential-bearing cause survives the chain-join scrubbed, never verbatim [0.32ms]
+(pass) a refused usage batch, as an operator reads it > a multi-address connect refusal reads as its sub-errors, not as an empty AggregateError [0.37ms]
+(pass) a refused usage batch, as an operator reads it > says it once per window however many batches are refused [0.62ms]
+(pass) a refused usage batch, as an operator reads it > a burst that stops mid-window still reports its tail — the trailing count [0.95ms]
+(pass) a refused usage batch, as an operator reads it > records still unwritten at shutdown are named as lost, at error [0.60ms]
+
+apps/api/test/unit/usage/usage-recent.test.ts:
+(pass) the recent query > defaults to a bounded page and no filter at all [2.87ms]
+(pass) the recent query > a limit out of range is refused, never silently clamped [0.52ms]
+(pass) the recent query > an outcome and a failed flag are two spellings of one filter, so both is a 400 [0.41ms]
+(pass) the recent query > an unknown outcome is refused rather than matching nothing [0.05ms]
+(pass) the recent query > a request id may be the caller's own label, not only a uuid [0.43ms]
+(pass) the outcome filter > failed=true is every non-success outcome, derived from core's enum [0.17ms]
+(pass) the outcome filter > failed=false is successes only — the boolean is a filter, not a switch [0.07ms]
+(pass) the outcome filter > a named outcome narrows to exactly it [0.07ms]
+(pass) the outcome filter > quota_exhausted and credits_exhausted are separately selectable [0.07ms]
+(pass) the feed > passes the parsed filter straight through to one bounded read [0.77ms]
+(pass) the feed > names the key, account and pool behind an attempt [0.21ms]
+(pass) the feed > an attempt whose subject is gone still renders, marked deleted [0.22ms]
+(pass) the feed > an attempt that never reached an account is 'none', not 'deleted' [0.25ms]
+(pass) the feed > carries the diagnosis an aggregate cannot: ids, error class, latency split [0.20ms]
+(pass) the feed > resolves whose problem the outcome is, so the console needs no copy of the taxonomy [0.20ms]
+(pass) the feed > carries no field that could hold credential material [0.22ms]
+(pass) the feed > echoes the limit that was asked for, not the number of rows that existed [0.19ms]
+
+apps/api/test/unit/usage/usage-read.test.ts:
+(pass) window resolution > today runs to now, not to the end of the day [0.05ms]
+(pass) window resolution > a long window buckets by day, a short custom range by hour [0.06ms]
+(pass) window resolution > a named window and a custom range are mutually exclusive [0.91ms]
+(pass) window resolution > a custom range needs both ends [0.12ms]
+(pass) breakdown labelling > a known id gets its name [1.74ms]
+(pass) breakdown labelling > a deleted subject still renders, marked deleted [0.29ms]
+(pass) breakdown labelling > a null id means the dimension did not apply, which is not the same as deleted [0.22ms]
+(pass) breakdown labelling > a model is its own label and is never marked deleted [0.23ms]
+(pass) the failure split > rides on the summary, with quota and credits as two numbers [0.24ms]
+(pass) the failure split > is folded against the summary's own total, so it can say when it is a floor [0.20ms]
+(pass) the failure split > a quiet window is an empty split, not a missing field [0.16ms]
+
+apps/api/test/unit/usage/recorder.test.ts:
+(pass) usage recorder > records nothing on the request path — the batch reaches the writer on flush [0.31ms]
+(pass) usage recorder > writes in batches of the configured size [0.20ms]
+(pass) usage recorder > never blocks on a writer that has not settled [0.54ms]
+(pass) usage recorder > sheds the oldest under overflow rather than applying backpressure [0.18ms]
+(pass) usage recorder > stop flushes what is left [0.16ms]
+(pass) a write the database refuses > goes back for one more try, so a blip loses nothing [0.26ms]
+(pass) a write the database refuses > is retried before anything queued since, so attempts land in the order they happened [0.26ms]
+(pass) a write the database refuses > is discarded when the retry is refused too — one retry, never a loop [0.26ms]
+(pass) a write the database refuses > ends the pass rather than burning the whole queue against the same writer [0.19ms]
+(pass) a write the database refuses > does not re-observe the retry — a blip must not invent attempts on the dashboard [0.16ms]
+(pass) a write the database refuses > counts the batch it is holding as queued, so the depth gauge stays honest [0.18ms]
+(pass) stop() — invisible loss is the one thing this module promises not to do > records the writer keeps refusing are counted as abandoned, never silently stranded [0.24ms]
+(pass) stop() — invisible loss is the one thing this module promises not to do > gives late records a fresh pass instead of abandoning them behind an ended drain [0.15ms]
+(pass) stop() — invisible loss is the one thing this module promises not to do > a clean shutdown reports nothing abandoned [0.14ms]
+(pass) persistence shape > maps onto the row the schema defines [0.05ms]
+(pass) persistence shape > drops nothing — every field on the record reaches a column [0.06ms]
+(pass) persistence shape > the client's model and the aliased one stay separate facts [0.03ms]
+(pass) persistence shape > an unmeasured ttfb is null, never zero [0.03ms]
+(pass) correlation id vs. the client's request id > a caller-supplied id never becomes the join key [0.21ms]
+(pass) correlation id vs. the client's request id > the caller's id is kept instead of discarded [0.04ms]
+(pass) correlation id vs. the client's request id > a router-minted id is the correlation id and nothing else [0.03ms]
+(pass) outcome of a thrown error > a router error reports under its own stable outcome [0.28ms]
+(pass) outcome of a thrown error > an unclassified throw is a router fault, not an invented upstream timeout [0.03ms]
+
+apps/api/test/unit/usage/queue.test.ts:
+(pass) bounded queue > returns items oldest first [0.05ms]
+(pass) bounded queue > drains at most the requested batch size [0.07ms]
+(pass) bounded queue > sheds the oldest on overflow and never refuses the newest [0.07ms]
+(pass) bounded queue > stays at its ceiling under sustained overflow rather than growing [0.30ms]
+(pass) bounded queue > hands records back in order across a reclaim that leaves the queue non-empty [0.65ms]
+(pass) bounded queue > sheds without copying the buffer, and without growing one the writer never drains [5.97ms]
+(pass) bounded queue > refuses a ceiling that cannot hold anything [0.09ms]
+
+apps/api/test/unit/cost/estimate.test.ts:
+(pass) pricing a metered attempt > input and output bill at the model's published per-Mtok rates [0.26ms]
+(pass) pricing a metered attempt > a model with no row of its own is unknown — a sibling's price is never borrowed [0.06ms]
+(pass) pricing a metered attempt > the current lineup is priced at its own published rates, not its predecessor's [0.09ms]
+(pass) pricing a metered attempt > a subscription values the current lineup too, rather than recording NULL [0.06ms]
+(pass) pricing a metered attempt > the cache-read multiple is the one the vendor footnotes per model, not one constant [0.09ms]
+(pass) pricing a metered attempt > cache reads and cache writes are their own rates, not the input rate [0.06ms]
+(pass) pricing a metered attempt > a priced model with no tokens cost nothing, and that is a measurement [0.03ms]
+(pass) pricing a metered attempt > a model a vendor publishes at zero is metered zero, not unknown [0.03ms]
+(pass) pricing a metered attempt > fractions land at the column's six-decimal scale [0.04ms]
+(pass) pricing the nine providers that used to report nothing > openai-api prices gpt-5.6-sol rather than reporting unknown [0.05ms]
+(pass) pricing the nine providers that used to report nothing > openai-oauth prices gpt-5.6-sol rather than reporting unknown
+(pass) pricing the nine providers that used to report nothing > gemini prices gemini-2.5-flash rather than reporting unknown
+(pass) pricing the nine providers that used to report nothing > zai prices glm-4.7 rather than reporting unknown
+(pass) pricing the nine providers that used to report nothing > kimi prices kimi-k3 rather than reporting unknown
+(pass) pricing the nine providers that used to report nothing > minimax prices minimax-m2.7 rather than reporting unknown
+(pass) pricing the nine providers that used to report nothing > groq prices llama-3.3-70b-versatile rather than reporting unknown
+(pass) pricing the nine providers that used to report nothing > deepseek prices deepseek-v4-pro rather than reporting unknown
+(pass) pricing the nine providers that used to report nothing > xai prices grok-4.5 rather than reporting unknown
+(pass) pricing the nine providers that used to report nothing > mistral prices mistral-large-latest rather than reporting unknown
+(pass) pricing the nine providers that used to report nothing > together prices moonshotai/kimi-k3 rather than reporting unknown [0.03ms]
+(pass) pricing the nine providers that used to report nothing > cerebras prices gpt-oss-120b rather than reporting unknown
+(pass) which basis a priced attempt reports under > a subscription account is notional at the public API price, not metered [0.06ms]
+(pass) which basis a priced attempt reports under > a coding-plan account on a metered provider is notional too [0.07ms]
+(pass) which basis a priced attempt reports under > saying nothing prices as metered, which is what an unstated account row holds [0.05ms]
+(pass) which basis a priced attempt reports under > the basis is the account's, never the provider's — the same provider answers both ways [0.15ms]
+(pass) which basis a priced attempt reports under > a subscription on an unpriced model reports unknown, not a notional nothing [0.05ms]
+(pass) a long-context tier replaces the standard card, it does not top it up > a prompt one token under the threshold bills at the standard rate [0.03ms]
+(pass) a long-context tier replaces the standard card, it does not top it up > a prompt at the threshold bills the entire request at the long-context rate [0.03ms]
+(pass) a long-context tier replaces the standard card, it does not top it up > the threshold is measured against the whole prompt, cached tokens included [0.05ms]
+(pass) a long-context tier replaces the standard card, it does not top it up > a model with no published tier is one price whatever the prompt [0.10ms]
+(pass) what the table does not know > an unpriced model is null and unknown, never zero [0.04ms]
+(pass) what the table does not know > the four providers with no price to ship stay unknown by design [0.08ms]
+(pass) what the table does not know > an attempt that never selected an account has no provider to price against [0.04ms]
+(pass) what the table does not know > an unpriced attempt is unknown whatever the account's billing says [0.08ms]
+(pass) what the table does not know > a count no column can hold reports unknown rather than failing the insert [0.04ms]
+(pass) listing the shipped table > every standard row agrees with the single-model lookup [1.06ms]
+(pass) listing the shipped table > a tiered model lists its tier as a second row under the same name [0.47ms]
+(pass) listing the shipped table > both anthropic surfaces are listed, priced identically and separately [0.82ms]
+(pass) listing the shipped table > every provider with a driver and a published price list is in the table [0.36ms]
+(pass) listing the shipped table > the order is stable across calls and groups a provider's models together [1.06ms]
+(pass) listing the shipped table > no shipped row carries a rate that could only be a placeholder [1.27ms]
+(pass) dating the shipped table > the table states the day it was checked, in a form a metric can parse [0.09ms]
+(pass) an injected price lookup > wins over the shipped table for a model the shipped table also prices [0.09ms]
+(pass) an injected price lookup > prices a provider the shipped table has no list for at all [0.04ms]
+(pass) an injected price lookup > is genuinely consulted: a lookup that knows nothing reports unknown [0.04ms]
+(pass) an injected price lookup > an override with no tier is one price whatever the prompt [0.04ms]
+(pass) an injected price lookup > omitting it prices exactly as passing the shipped table does [0.07ms]
+(pass) model name matching > a dated snapshot prices as its family [0.05ms]
+(pass) model name matching > an openai-style dated snapshot prices as its family too [0.02ms]
+(pass) model name matching > a snapshot the vendor prices apart from its family keeps its own rate [0.02ms]
+(pass) model name matching > casing and stray whitespace do not lose a price [0.03ms]
+
+apps/api/test/unit/cost/price-book.test.ts:
+(pass) what an override changes > an override wins over the shipped rate for the same model [0.43ms]
+(pass) what an override changes > a model nobody overrode keeps its shipped rate [0.11ms]
+(pass) what an override changes > an override is scoped to its provider [0.09ms]
+(pass) what an override changes > an override prices a provider the shipped table has no list for [0.09ms]
+(pass) what an override changes > a model neither table knows stays null, never zero [0.15ms]
+(pass) what an override changes > before the first load the book is exactly the shipped table [0.04ms]
+(pass) matching the model name > a dated snapshot resolves to an override written on the family [0.10ms]
+(pass) matching the model name > an override on the dated pin beats the family it belongs to [0.11ms]
+(pass) refreshing off the request path > a failed refresh keeps the previous snapshot and reports the error [0.22ms]
+(pass) refreshing off the request path > concurrent refreshes share the one load in flight [0.16ms]
+(pass) refreshing off the request path > the timer refreshes on its own, and stop() disarms it [51.77ms]
+(pass) refreshing off the request path > start() is idempotent and stop() is safe before it [0.17ms]
+
+apps/api/test/unit/scheduler/quota-floor.test.ts:
+(pass) the quota floor > clears an expired reading on an idle account to none/unknown, not a zero [1.08ms]
+(pass) the quota floor > an account traffic just reached is left untouched even with an expired window [0.19ms]
+(pass) the quota floor > an idle account whose reset has not passed yet is left alone [0.18ms]
+(pass) the quota floor > an exhausted account (null resetsAt) never matches and is never touched [0.15ms]
+(pass) the quota floor > an account never seen at all counts as idle [0.14ms]
+(pass) the quota floor > a second run against an already-cleared window is a no-op [0.17ms]
+(pass) the quota floor > a shutdown mid-drain reports partial and the next tick finishes it [0.34ms]
+
+apps/api/test/unit/scheduler/idle-account-probe.test.ts:
+(pass) the free check over every credential > an expired account that is not idle is still found, parked, and named — a success [1.74ms]
+(pass) the free check over every credential > every account gets a structured line, and a disabled one is never asked [0.79ms]
+(pass) the free check over every credential > an account the CLI cannot speak for is neither counted nor parked [0.31ms]
+(pass) the free check over every credential > no CLI means no free check — idle accounts go straight to the paid test [0.50ms]
+(pass) the paid turn is opt-in — checking on a subscription must never spend usage > with the flag off, nothing is ever tested, however idle [0.32ms]
+(pass) the paid turn is opt-in — checking on a subscription must never spend usage > the free half still reads the usage gauge for every logged-in subscription, turn-free [0.52ms]
+(pass) the paid turn is opt-in — checking on a subscription must never spend usage > a gauge read that throws is a reading not taken, never a failed sweep [0.58ms]
+(pass) the billed keepalive over idle accounts > spends one real request on an account traffic has forgotten [0.25ms]
+(pass) the billed keepalive over idle accounts > a logged-out idle account is left to the human and never tested [0.48ms]
+(pass) the billed keepalive over idle accounts > the free check runs before the paid one, not after it [0.36ms]
+(pass) the billed keepalive over idle accounts > an indefinite auth answer falls through to the paid test rather than to needs_reauth [0.18ms]
+(pass) the billed keepalive over idle accounts > a provider with no probe model is skipped, never sent a guessed one [0.19ms]
+(pass) the billed keepalive over idle accounts > its own cooldown declining a press costs nothing and is not a failure [0.21ms]
+(pass) the billed keepalive over idle accounts > a failed keepalive is logged per account, without a second opinion about status [0.28ms]
+(pass) the billed keepalive over idle accounts > a failed keepalive's warn line says why — the reason and the class, not just the fact [0.30ms]
+(pass) the billed keepalive over idle accounts > a failure that gave no reason still says so, rather than logging nothing [0.37ms]
+(pass) the billed keepalive over idle accounts > a spent subscription window is an expected outcome: info, with the reason, never a warn [0.39ms]
+(pass) the probe models the sweep names for itself > Anthropic accounts are probed with the cheapest current model, pinned by dated id [0.04ms]
+(pass) what the run row says about the sweep itself > an aborted run stops before spending anything and reports partial [0.28ms]
+(pass) what the run row says about the sweep itself > an idle backlog larger than one batch is partial: the next tick continues [0.29ms]
+(pass) what the run row says about the sweep itself > a probe that throws fails the run and says why [0.52ms]
+(pass) what the run row says about the sweep itself > nothing to do is a quiet success, not a no-op that looks like a failure [0.16ms]
+(pass) what the run row says about the sweep itself > the idle cutoff is the configured threshold behind now [0.24ms]
+(pass) the credential keepalive > warms a cold logged-in account with a real turn, and only then reads its gauge [0.50ms]
+(pass) the credential keepalive > leaves a warm credential alone and reads its gauge straight away [0.23ms]
+(pass) the credential keepalive > with the keepalive off, a cold credential is reported, not billed, and not read [0.29ms]
+(pass) the credential keepalive > a turn that failed, or was declined by the cooldown, leaves the gauge unread [0.37ms]
+(pass) the credential keepalive > warms at most a batch per tick; the rest are named and left for the next one [0.43ms]
+(pass) the credential keepalive > a gauge that still answers cold after the turn is logged, never a failed sweep [0.40ms]
+(pass) the credential keepalive > a logged-out account is never warmed — its credential is already gone [0.22ms]
+(pass) the credential keepalive > without the cold seam the keepalive does nothing at all [0.19ms]
+(pass) a keepalive turn answered by a spent window > still cold afterwards: the gauge stays unread, exactly as for any failed turn [0.33ms]
+(pass) a keepalive turn answered by a spent window > warm afterwards — the process refreshed before it was refused — so the gauge is read [0.40ms]
+(pass) a keepalive turn answered by a spent window > a turn that failed for any other reason is not re-asked, warm or not [0.38ms]
+
+apps/api/test/unit/scheduler/usage-rollup.test.ts:
+(pass) rollupFrom: the scan window > with no prior success, backfills to the retention floor [0.19ms]
+(pass) rollupFrom: the scan window > a recent successful run still re-closes yesterday, not just today [0.06ms]
+(pass) rollupFrom: the scan window > a short retention window pulls the floor forward past yesterday [0.10ms]
+(pass) rollupDays: the batches, and their order > a backfill is one day per statement, oldest first, ending on today [0.11ms]
+(pass) rollupDays: the batches, and their order > a `from` inside today still yields today, not nothing [0.05ms]
+(pass) rollupDays: the batches, and their order > a `from` at or past `now` yields no statement at all [0.05ms]
+(pass) the usage rollup task > an already-aborted signal reports partial without touching the rollup [0.55ms]
+(pass) the usage rollup task > a floor past `now` is a genuine no-op, not an empty scan [0.17ms]
+(pass) the usage rollup task > a backfill is issued one bounded statement per day, never one across the window [0.37ms]
+(pass) the usage rollup task > a shutdown mid-backfill stops between days and reports partial [0.32ms]
+(pass) the usage rollup task > the steady state re-closes yesterday and today, and recomputes rather than accumulates [0.36ms]
+
+apps/api/test/unit/scheduler/sweep.test.ts:
+(pass) runSweeps with a batch size of zero > never learns the category is drained, and no macrotask gets a turn [9.85ms]
+(pass) runSweeps with a batch size of zero > a batch size of one drains normally, so the loop itself is not the problem [0.51ms]
+
+apps/api/test/unit/scheduler/runner.test.ts:
+(pass) lock contention > a lock that never frees skips the tick and writes nothing [1.42ms]
+(pass) the injected clock > stamps the run row and the duration, not the wall clock [1.03ms]
+(pass) a throwing task > is recorded failed instead of escaping the tick [0.61ms]
+(pass) a throwing task > persists the cause chain innermost first — the statement never crowds out the reason [0.57ms]
+(pass) a throwing task > still reschedules the next tick after failing [32.17ms]
+(pass) one tick at a time > two runNow calls for the same task share the in-flight tick [0.42ms]
+(pass) one tick at a time > runNow rejects a task name nothing registered [0.15ms]
+(pass) the bookkeeping itself failing > a lock/repo failure is reported failed without crashing the tick [0.43ms]
+(pass) the first tick > waits a full interval by default [60.59ms]
+(pass) the first tick > comes early when the task asks, and the interval takes over after it [46.23ms]
+(pass) the first tick after a restart > runs immediately when the interval already elapsed while the process was down [82.21ms]
+(pass) the first tick after a restart > still waits out the remainder when the last run was recent [91.72ms]
+
+apps/api/test/unit/scheduler/model-catalog-refresh.test.ts:
+(pass) the hourly model-catalog sweep > refreshes what is due and counts the models it stored [2.11ms]
+(pass) the hourly model-catalog sweep > a fleet larger than one batch rotates rather than starving its tail [0.45ms]
+(pass) the hourly model-catalog sweep > accounts with nothing to ask never enter the batch [0.31ms]
+(pass) the hourly model-catalog sweep > a failure is partial, named, and does not stop the rest of the batch [0.39ms]
+(pass) the hourly model-catalog sweep > an account whose listing always fails does not hold the head of the queue [1.02ms]
+(pass) the hourly model-catalog sweep > an account skipped for having no listing rotates the same way [0.35ms]
+(pass) the hourly model-catalog sweep > a failure and a skip both log the listing's own detail beside the stable reason [0.35ms]
+(pass) the hourly model-catalog sweep > an account that left the fleet takes its attempt record with it [0.64ms]
+(pass) the hourly model-catalog sweep > a skip is not a failure, and says why at info [0.29ms]
+(pass) the hourly model-catalog sweep > an aborted run stops before the first account and reports partial [0.25ms]
+(pass) the hourly model-catalog sweep > nothing to do is a quiet success [0.14ms]
+(pass) the hourly model-catalog sweep > the summary reports how many were due beside how many exist [0.49ms]
+(pass) the hourly model-catalog sweep > asks for an early first tick, without changing its own cadence [0.11ms]
+(pass) the hourly model-catalog sweep > never delays the first tick past a cadence shorter than the delay itself [0.02ms]
+
+apps/api/test/unit/scheduler/sdk-transcript-sweep.test.ts:
+(pass) deciding what may go > a transcript inside the retention window waits, however large [0.25ms]
+(pass) deciding what may go > a transcript past the window is removable, and the bytes are counted [0.13ms]
+(pass) deciding what may go > candidates come oldest first and stop at the batch limit, reporting there is more [0.15ms]
+(pass) deciding what may go > the window is the injected number, never a constant [0.04ms]
+(pass) what the survey is allowed to see > a credential, a settings file, and the CLI's own state are never candidates [2.47ms]
+(pass) what the survey is allowed to see > a symlink is not surveyed, and one planted after the survey is not removed [0.38ms]
+(pass) what the survey is allowed to see > a session is dated by its newest artifact, so a directory still in use keeps its transcript [0.17ms]
+(pass) what the survey is allowed to see > removal rebuilds the path from validated parts and refuses anything else [0.19ms]
+(pass) the task > removes what is past the window across every account, and reports the bytes [0.62ms]
+(pass) the task > a batch smaller than the backlog is partial, and the next tick continues [0.48ms]
+(pass) the task > an aborted run stops between sessions and reports partial [0.40ms]
+(pass) the task > a removal that throws fails the run, keeps the count, and names the cause [0.47ms]
+
+apps/api/test/unit/scheduler/janitor.test.ts:
+(pass) the janitor sweep > drains every category in one tick, and a second tick is a no-op [0.89ms]
+(pass) the janitor sweep > each category is measured against its own window, off one clock [0.41ms]
+(pass) the janitor sweep > a shutdown mid-drain reports partial, and the next tick finishes it [0.45ms]
+
+apps/api/test/unit/scheduler/oauth-purge.test.ts:
+(pass) the OAuth state purge > drains every expired row in one tick, and a second tick is a no-op [0.43ms]
+(pass) the OAuth state purge > the cutoff passed is the tick's own clock, not shifted by the caller [0.16ms]
+(pass) the OAuth state purge > a shutdown mid-drain reports partial, and the next tick finishes it [0.39ms]
+(pass) the OAuth state purge > a row not yet past expires_at is left alone [0.16ms]
+
+apps/api/test/unit/scheduler/config-dir-reap.test.ts:
+(pass) deciding what may go > a directory an account still names is never a candidate, however old [0.24ms]
+(pass) deciding what may go > an unclaimed directory inside the grace window waits — the row may still be landing [0.05ms]
+(pass) deciding what may go > an unclaimed directory past the grace window is removable [0.13ms]
+(pass) deciding what may go > a name that is not an account id is not this router's to remove [0.05ms]
+(pass) deciding what may go > a case variant of a live account id is read as claimed, never gambled on [0.04ms]
+(pass) deciding what may go > candidates come oldest first and stop at the batch limit, reporting there is more [0.10ms]
+(pass) deciding what may go > exactly at the grace boundary the directory stays — the cutoff is strict [0.06ms]
+(pass) the reap task > removes the abandoned directory and leaves the live and the foreign ones alone [1.52ms]
+(pass) the reap task > surveys the volume before it reads the accounts, so a new row can only save a directory [0.20ms]
+(pass) the reap task > removes by account id, so the path can only ever be one under the root [0.14ms]
+(pass) the reap task > a volume with nothing abandoned on it is a successful no-op [0.14ms]
+(pass) the reap task > the batch limit makes a tick partial, and the next tick finishes the backlog [0.24ms]
+(pass) the reap task > shutdown mid-batch stops between removals and reports partial, never failed [0.25ms]
+(pass) the reap task > a removal that throws fails the run but keeps the count of what already went [0.45ms]
+(pass) the reap task > every removal is logged with the account whose credentials went [0.32ms]
+
+apps/api/test/unit/scheduler/admin-session-purge.test.ts:
+(pass) the admin session purge > drains every expired session in one tick against the tick's own clock, in batches [0.42ms]
+(pass) the admin session purge > nothing expired is a no-op, not a failure [0.12ms]
+(pass) the admin session purge > a shutdown mid-drain reports partial, and the next tick finishes it [0.28ms]
+(pass) the admin session purge > carries the `admin_session_purge` name the `scheduled_task` enum expects [0.04ms]
+
+packages/db/test/unit/fold-token-spans.test.ts:
+(pass) folding bucketed token rows > places each slot and reports the total as their sum [0.41ms]
+(pass) folding bucketed token rows > gaps are zeros, not absences [0.06ms]
+(pass) folding bucketed token rows > an account that recorded nothing is a flat zero line, not a missing row [0.04ms]
+(pass) folding bucketed token rows > each (account, window) pair folds separately [0.06ms]
+(pass) folding bucketed token rows > a string total is a number [0.05ms]
+(pass) folding bucketed token rows > with no buckets asked for, the total still arrives and the series is empty [0.04ms]
+(pass) folding bucketed token rows > an out-of-range slot still counts toward the total [0.07ms]
+(pass) folding bucketed token rows > nothing in is nothing out [0.05ms]
+
+packages/db/test/unit/schema-shape.test.ts:
+(pass) table columns > accounts exposes exactly its documented columns [0.13ms]
+(pass) table columns > quota_windows exposes exactly its documented columns [0.02ms]
+(pass) table columns > pools exposes exactly its documented columns [0.01ms]
+(pass) table columns > pool_members exposes exactly its documented columns
+(pass) table columns > api_keys exposes exactly its documented columns [0.01ms]
+(pass) table columns > api_key_pools exposes exactly its documented columns
+(pass) table columns > api_key_accounts exposes exactly its documented columns
+(pass) table columns > sessions exposes exactly its documented columns [0.01ms]
+(pass) table columns > usage_records exposes exactly its documented columns [0.01ms]
+(pass) table columns > usage_daily exposes exactly its documented columns
+(pass) table columns > audit_events exposes exactly its documented columns
+(pass) table columns > scheduled_task_runs exposes exactly its documented columns
+(pass) table columns > oauth_states exposes exactly its documented columns
+(pass) table columns > every table has a uuid primary key with a database-side default [0.17ms]
+(pass) table columns > every timestamp carries a time zone [0.44ms]
+(pass) session binding is persisted truth on the SDK path > sessions carry both the account binding and the SDK session id [0.03ms]
+(pass) session binding is persisted truth on the SDK path > the binding is optional — the plain HTTP path recomputes placement [0.03ms]
+(pass) session binding is persisted truth on the SDK path > a session always belongs to the key that owns it [0.05ms]
+(pass) usage records are one row per upstream attempt > attempts of one client request are joinable by correlation id [0.06ms]
+(pass) usage records are one row per upstream attempt > cache tokens are broken out and router overhead is recorded [0.04ms]
+(pass) usage records are one row per upstream attempt > cost is nullable — an unknown model is never silently zero [0.02ms]
+(pass) usage records are one row per upstream attempt > the client's own request id is stored, and is not the join key [0.02ms]
+(pass) usage records are one row per upstream attempt > what the client asked for and what we sent are separate columns [0.02ms]
+(pass) usage records are one row per upstream attempt > ttfb is its own column — total latency cannot show an added-latency regression [0.02ms]
+(pass) usage records are one row per upstream attempt > the pool an account was selected from is recorded, not re-derived [0.03ms]
+(pass) usage records are one row per upstream attempt > streamed is always known, so a streamed attempt is auditable as never retried [0.03ms]
+(pass) usage records are one row per upstream attempt > the upstream status and the thrown class name are both kept [0.02ms]
+(pass) quota window state carries its own trustworthiness > utilization is nullable, because a threshold-triggered source reports nothing [0.03ms]
+(pass) quota window state carries its own trustworthiness > both sources are always present, so a gauge is never read bare [0.03ms]
+(pass) quota window state carries its own trustworthiness > resetsAt is nullable — an exhausted account has no reset by definition [0.02ms]
+(pass) quota window state carries its own trustworthiness > lastCheckedAt is required, because a reading without one is unreadable [0.01ms]
+(pass) accounts > Claude subscription accounts hold a config dir instead of auth material [0.02ms]
+(pass) accounts > weight and priority exist for the weighted and failover policies [0.03ms]
+(pass) accounts > the model alias map is jsonb and optional [0.02ms]
+(pass) accounts > the supported-model list is jsonb, optional, and has no default [0.02ms]
+(pass) accounts > billing is required and defaults to the metered case [0.02ms]
+(pass) api keys are retrievable, not hashed > the encrypted value and its indexed display prefix are both stored [0.03ms]
+(pass) api keys are retrievable, not hashed > revocation is a flag, so historical usage stays joinable [0.02ms]
+
+packages/db/test/unit/enums.test.ts:
+(pass) postgres enums track @multi-ai-router/core > every shared enum is built from core's option list, in order [0.07ms]
+(pass) closed sets are enums, open labels are text > a quota window kind is text — providers define their own windows [0.04ms]
+(pass) closed sets are enums, open labels are text > an attempt outcome is text, for the same reason [0.03ms]
+(pass) closed sets are enums, open labels are text > the sets where an unknown value is a bug stay real postgres enums [0.08ms]
+(pass) documented enum values > account status is exactly the five documented states [0.04ms]
+(pass) documented enum values > exhausted is a state of its own, never folded into cooling_down [0.03ms]
+(pass) documented enum values > routing policy is exactly the six pool policies, sticky first [0.03ms]
+(pass) documented enum values > provider ids keep anthropic-oauth and anthropic-api separate [0.03ms]
+(pass) documented enum values > key scope is all | pools | accounts [0.02ms]
+(pass) documented enum values > utilization and reset sources are carried, and separate [0.02ms]
+(pass) documented enum values > cost basis separates metered from notional spend [0.03ms]
+(pass) documented enum values > scheduled tasks and their outcomes are enumerated [0.03ms]
+
+packages/db/test/unit/indexes.test.ts:
+(pass) the indexes the access patterns actually need > key verification is a display-prefix lookup, not a table scan [0.68ms]
+(pass) the indexes the access patterns actually need > usage breakdowns filter by time window alone, never by key or account [0.37ms]
+(pass) the indexes the access patterns actually need > the attempts of one client request are retrievable together [0.08ms]
+(pass) the indexes the access patterns actually need > a support request names a client request id, and that is a lookup [0.06ms]
+(pass) the indexes the access patterns actually need > the retention sweep can delete raw usage by age [0.05ms]
+(pass) the indexes the access patterns actually need > session lookup is unique per owning key [0.12ms]
+(pass) the indexes the access patterns actually need > the idle-session sweep has an index to work from [0.05ms]
+(pass) the indexes the access patterns actually need > the daily rollup is idempotent per (day, key, account, pool, model) [0.27ms]
+(pass) the indexes the access patterns actually need > the rollup grain coalesces a null pool, or every unscoped total would double [0.15ms]
+
+packages/db/test/unit/migration-drift.test.ts:
+(pass) committed migrations carry every declared enum value > the schema declares enums at all — an empty sweep would pass vacuously [0.03ms]
+(pass) committed migrations carry every declared enum value > account_billing is migrated with exactly the values the schema declares [0.93ms]
+(pass) committed migrations carry every declared enum value > account_status is migrated with exactly the values the schema declares [0.45ms]
+(pass) committed migrations carry every declared enum value > cost_basis is migrated with exactly the values the schema declares [0.34ms]
+(pass) committed migrations carry every declared enum value > key_scope is migrated with exactly the values the schema declares [0.31ms]
+(pass) committed migrations carry every declared enum value > provider_id is migrated with exactly the values the schema declares [0.27ms]
+(pass) committed migrations carry every declared enum value > reset_source is migrated with exactly the values the schema declares [0.31ms]
+(pass) committed migrations carry every declared enum value > routing_policy is migrated with exactly the values the schema declares [0.27ms]
+(pass) committed migrations carry every declared enum value > scheduled_task is migrated with exactly the values the schema declares [0.29ms]
+(pass) committed migrations carry every declared enum value > scheduled_task_outcome is migrated with exactly the values the schema declares [0.27ms]
+(pass) committed migrations carry every declared enum value > utilization_source is migrated with exactly the values the schema declares [0.29ms]
+
+packages/db/test/unit/repositories/oauth-state-repository.test.ts:
+(pass) create > inserts one oauth_states row and returns it [5.82ms]
+(pass) create > stores the PKCE verifier as ciphertext, never plaintext, verbatim [1.13ms]
+(pass) create > writes explicit nulls for the manual paste mode, which has no redirect [0.70ms]
+(pass) create > throws when the statement returns no row [0.63ms]
+(pass) consume > redeems a state in one atomic update, guarded by unconsumed and unexpired [1.86ms]
+(pass) consume > returns undefined for an unknown, already-consumed, or expired state alike [0.61ms]
+(pass) consume > is a single statement — no separate read before the write [0.64ms]
+
+packages/db/test/unit/repositories/admin-credential-repository.test.ts:
+(pass) get > selects by the singleton id, limited to one row [1.75ms]
+(pass) get > answers undefined when the door is off [0.35ms]
+(pass) upsertHash > is one insert-on-conflict against the singleton id, hash verbatim [0.84ms]
+(pass) upsertHash > throws when the write returns no row [0.52ms]
+(pass) remove > deletes by the singleton id and reports whether one existed [0.83ms]
+
+packages/db/test/unit/repositories/usage-batch-limit.test.ts:
+(pass) usage insert bind budget > spends exactly USAGE_RECORD_BIND_PARAMETERS_PER_ROW parameters on one row [0.72ms]
+(pass) usage insert bind budget > scales linearly, so the ceiling is a division and not an estimate [1.85ms]
+(pass) usage insert bind budget > emits `id` as a default rather than a parameter [0.55ms]
+(pass) usage insert bind budget > fits a full batch inside Postgres' bind ceiling [0.03ms]
+(pass) usage insert bind budget > is the largest batch that fits — one more row overruns [0.03ms]
+(pass) usage insert bind budget > leaves room for the default batch size many times over [0.02ms]
+
+packages/db/test/unit/repositories/bounded-delete.test.ts:
+(pass) every sweep deletes a bounded batch, oldest first > usage records: one statement, id-limited by an ordered subselect [0.84ms]
+(pass) every sweep deletes a bounded batch, oldest first > usage records: narrows by age with a strict comparison, never a range scan of the table [0.46ms]
+(pass) every sweep deletes a bounded batch, oldest first > usage records: returns rows affected, so a full batch reads as partial [1.37ms]
+(pass) every sweep deletes a bounded batch, oldest first > audit events: one statement, id-limited by an ordered subselect [0.61ms]
+(pass) every sweep deletes a bounded batch, oldest first > audit events: narrows by age with a strict comparison, never a range scan of the table [0.34ms]
+(pass) every sweep deletes a bounded batch, oldest first > audit events: returns rows affected, so a full batch reads as partial [1.31ms]
+(pass) every sweep deletes a bounded batch, oldest first > revoked keys: one statement, id-limited by an ordered subselect [0.75ms]
+(pass) every sweep deletes a bounded batch, oldest first > revoked keys: narrows by age with a strict comparison, never a range scan of the table [0.43ms]
+(pass) every sweep deletes a bounded batch, oldest first > revoked keys: returns rows affected, so a full batch reads as partial [1.31ms]
+(pass) every sweep deletes a bounded batch, oldest first > idle sessions: one statement, id-limited by an ordered subselect [0.61ms]
+(pass) every sweep deletes a bounded batch, oldest first > idle sessions: narrows by age with a strict comparison, never a range scan of the table [0.35ms]
+(pass) every sweep deletes a bounded batch, oldest first > idle sessions: returns rows affected, so a full batch reads as partial [1.70ms]
+(pass) every sweep deletes a bounded batch, oldest first > expired oauth states: one statement, id-limited by an ordered subselect [0.47ms]
+(pass) every sweep deletes a bounded batch, oldest first > expired oauth states: narrows by age with a strict comparison, never a range scan of the table [0.37ms]
+(pass) every sweep deletes a bounded batch, oldest first > expired oauth states: returns rows affected, so a full batch reads as partial [1.10ms]
+(pass) what each sweep is allowed to reach > revoked keys: the flag narrows the batch, not just the timestamp [0.65ms]
+(pass) what each sweep is allowed to reach > revoked keys: a revocation with no timestamp has no age and is never purged [0.64ms]
+(pass) what each sweep is allowed to reach > audit events: age is the only predicate a caller can supply [0.67ms]
+(pass) what each sweep is allowed to reach > usage records: the sweep touches raw attempts only, never the rollup [0.46ms]
+(pass) what each sweep is allowed to reach > idle sessions: aged on last use, so a live conversation is never swept [0.52ms]
+
+packages/db/test/unit/repositories/session-repository.test.ts:
+(pass) findByKey > scopes the lookup to the api key, so two keys never share a binding [0.91ms]
+(pass) findByKey > returns undefined when nothing matches [0.51ms]
+(pass) upsert > inserts on first use, keyed on (apiKeyId, key) [0.83ms]
+(pass) upsert > an absent field leaves the stored value alone on conflict [0.56ms]
+(pass) upsert > an explicit null clears the binding instead of leaving it untouched [0.63ms]
+(pass) upsert > throws when the statement returns no row [0.61ms]
+(pass) clearAccount > invalidates every binding onto an account, and returns how many [0.55ms]
+(pass) clearAccount > never touches lastUsedAt — a cleared row still ages out on its own clock [0.30ms]
+(pass) clearAccount > returns zero when no session is bound to the account [0.32ms]
+
+packages/db/test/unit/repositories/scheduled-task-repository.test.ts:
+(pass) begin > opens a run for the task and returns its id [0.51ms]
+(pass) begin > throws when the statement returns no row [0.34ms]
+(pass) finish > closes the run with the outcome and the finish stamp [0.69ms]
+(pass) finish > leaves itemsProcessed at the zero begin() wrote when the caller omits it [0.43ms]
+(pass) finish > writes the redacted error message when the caller supplies one [0.49ms]
+(pass) finish > returns undefined when no run has that id [0.44ms]
+(pass) lastRun > reads the most recent run of a task, newest first [0.82ms]
+(pass) lastRun > returns undefined when the task has never run [0.55ms]
+(pass) lastRun > is not filtered to successful runs — a failed or still-running run is what an operator needs to see [0.44ms]
+
+packages/db/test/unit/repositories/account-repository.test.ts:
+(pass) create > inserts one accounts row and returns it [1.14ms]
+(pass) create > stores auth material verbatim — the repository never encrypts or inspects it [0.46ms]
+(pass) create > writes an explicit null when an account holds no router-managed credential [0.38ms]
+(pass) create > leaves weight, priority and status to the schema defaults when unset [0.56ms]
+(pass) reads return the stored ciphertext untouched > findById narrows by id and returns the envelope as stored [0.64ms]
+(pass) reads return the stored ciphertext untouched > findById returns undefined when nothing matches [0.40ms]
+(pass) reads return the stored ciphertext untouched > list without a filter returns every account, oldest first [0.54ms]
+(pass) reads return the stored ciphertext untouched > list with a status filter narrows in SQL, not in memory [0.48ms]
+(pass) reads return the stored ciphertext untouched > no read method selects anything but the ciphertext column [0.78ms]
+(pass) status is the lifecycle, and disable is the soft delete > updateStatus sets the status and the updated_at stamp it was given [0.53ms]
+(pass) status is the lifecycle, and disable is the soft delete > updateStatus returns undefined for an unknown id [0.48ms]
+(pass) status is the lifecycle, and disable is the soft delete > disable updates the row instead of deleting it, so history stays joinable [0.47ms]
+(pass) status is the lifecycle, and disable is the soft delete > updateStatusWhen narrows on the id and on the statuses it may overwrite [0.59ms]
+(pass) status is the lifecycle, and disable is the soft delete > updateStatusWhen returns undefined when the row held something outside the guard [0.49ms]
+(pass) status is the lifecycle, and disable is the soft delete > an empty guard admits nothing, and issues no statement at all [0.12ms]
+(pass) quota window state > upserts one window per account, keyed on (account_id, window) [0.77ms]
+(pass) quota window state > writes NULL when a threshold-triggered source reports no utilization [0.40ms]
+(pass) quota window state > an exhausted account carries no reset, and none is invented [0.49ms]
+(pass) quota window state > listQuotaWindows reads every window for a set of accounts in one query [0.53ms]
+(pass) quota window state > listQuotaWindows orders by account then window, so grouping is stable [0.36ms]
+(pass) quota window state > listQuotaWindows asks nothing of the database for an empty set [0.10ms]
+
+ 426 pass
+ 0 fail
+ 24216 expect() calls
+Ran 426 tests across 33 files. [1253.00ms]
+
+[0;33m⚠  DATABASE_URL is unset — these suites SKIPPED, they did not pass:[0m
+     apps/api/test/integration/admin-session-persistence.test.ts
+     apps/api/test/integration/databaseProbe.test.ts
+     packages/db/test/integration/account-find-idle.test.ts
+     packages/db/test/integration/account-mark-used.test.ts
+     packages/db/test/integration/account-status.test.ts
+     packages/db/test/integration/admin-credential-repository.test.ts
+     packages/db/test/integration/admin-session-repository.test.ts
+     packages/db/test/integration/client.test.ts
+     packages/db/test/integration/migrations.test.ts
+     packages/db/test/integration/model-catalog.test.ts
+     packages/db/test/integration/retention.test.ts
+     packages/db/test/integration/scheduler.test.ts
+     packages/db/test/integration/usage-outcomes.test.ts
+     packages/db/test/integration/usage-read-aggregates.test.ts
+     packages/db/test/integration/usage-recent.test.ts
+     packages/db/test/integration/usage-tokens-since.test.ts
+   Migrations, advisory-lock contention, retention deletes and the readiness
+   probe are unproven by this run. Give it a database with: bin/setup
+

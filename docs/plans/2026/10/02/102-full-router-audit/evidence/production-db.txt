@@ -1,0 +1,114 @@
+BEGIN
+          captured_at          | current_database | read_only | db_size 
+-------------------------------+------------------+-----------+---------
+ 2026-10-02 23:59:14.167022+00 | multi_ai_router  | on        | 126 MB
+(1 row)
+
+ migrations 
+------------
+         25
+(1 row)
+
+     provider      |  status   |   billing    | count 
+-------------------+-----------+--------------+-------
+ anthropic-oauth   | active    | subscription |     6
+ openrouter        | exhausted | metered      |     1
+ zai               | active    | metered      |     1
+ kimi              | active    | metered      |     1
+ minimax           | active    | metered      |     1
+ openai-compatible | active    | subscription |     1
+(6 rows)
+
+     provider      |       outcome        | http_status | cost_basis | count | overhead_avg_ms |  overhead_p99_ms   
+-------------------+----------------------+-------------+------------+-------+-----------------+--------------------
+                   | quota_exhausted      |             | unknown    |   161 |           75.84 | 245.60000000000034
+ kimi              | success              |         200 | unknown    |   109 |           95.47 |                256
+ kimi              | client_error         |         400 | unknown    |    32 |          131.13 |                260
+ kimi              | quota_exhausted      |         403 | unknown    |     6 |           82.00 | 217.30000000000004
+ kimi              | upstream_timeout     |             | unknown    |     3 |            6.67 |                  8
+ kimi              | upstream_auth_failed |         403 | unknown    |     1 |          159.00 |                159
+ zai               | success              |         200 | metered    |     1 |            7.00 |                  7
+ openai-compatible | quota_exhausted      |         429 | unknown    |     1 |           22.00 |                 22
+(8 rows)
+
+ provider | upstream_model | cost_basis | count 
+----------+----------------+------------+-------
+ zai      | glm-5.2        | metered    |     1
+ kimi     | k3             | unknown    |   109
+(2 rows)
+
+    day     | raw_requests | raw_attempts | no_account 
+------------+--------------+--------------+------------
+ 2026-09-26 |         4151 |         4153 |        531
+ 2026-09-27 |           13 |           13 |         10
+ 2026-09-28 |           10 |           10 |          9
+ 2026-09-29 |           17 |           17 |         12
+ 2026-09-30 |           10 |           10 |          8
+ 2026-10-01 |           31 |           31 |          8
+ 2026-10-02 |          314 |          314 |        161
+(7 rows)
+
+    day     | rolled_requests | rolled_attempts |         last_updated          
+------------+-----------------+-----------------+-------------------------------
+ 2026-09-26 |            3622 |            3622 | 2026-09-27 23:10:00.454349+00
+ 2026-09-27 |               3 |               3 | 2026-09-28 23:42:38.888328+00
+ 2026-09-28 |               1 |               1 | 2026-09-29 23:12:28.485635+00
+ 2026-09-29 |               5 |               5 | 2026-09-30 23:12:05.833981+00
+ 2026-09-30 |               2 |               2 | 2026-10-01 23:53:43.34273+00
+ 2026-10-01 |              23 |              23 | 2026-10-02 23:35:49.100447+00
+ 2026-10-02 |             152 |             152 | 2026-10-02 23:35:49.111191+00
+(7 rows)
+
+         task          | outcome | count |        latest_start        |       latest_finish        
+-----------------------+---------+-------+----------------------------+----------------------------
+ janitor_sweep         | success |    24 | 2026-10-02 23:54:10.429+00 | 2026-10-02 23:54:10.467+00
+ usage_rollup          | success |    23 | 2026-10-02 23:35:48.96+00  | 2026-10-02 23:35:49.121+00
+ oauth_state_purge     | success |   289 | 2026-10-02 23:59:05.35+00  | 2026-10-02 23:59:05.359+00
+ quota_floor_refresh   | success |    49 | 2026-10-02 23:47:45.283+00 | 2026-10-02 23:47:45.296+00
+ config_dir_reap       | success |     4 | 2026-10-02 20:16:33.797+00 | 2026-10-02 20:16:33.812+00
+ admin_session_purge   | success |    48 | 2026-10-02 23:31:30.404+00 | 2026-10-02 23:31:30.417+00
+ idle_account_probe    | success |     4 | 2026-10-02 23:35:45.402+00 | 2026-10-02 23:35:57.131+00
+ model_catalog_refresh | success |    23 | 2026-10-02 23:51:30.285+00 | 2026-10-02 23:51:40.037+00
+ model_catalog_refresh | partial |     1 | 2026-10-02 06:26:19.589+00 | 2026-10-02 06:26:28.81+00
+ sdk_transcript_sweep  | success |    24 | 2026-10-02 23:06:34.253+00 | 2026-10-02 23:06:34.264+00
+(10 rows)
+
+ dangling_runs 
+---------------
+             0
+(1 row)
+
+ state  | wait_event_type | count 
+--------+-----------------+-------
+ active |                 |     1
+ idle   | Client          |     2
+(2 rows)
+
+       relname        | n_live_tup | n_dead_tup 
+----------------------+------------+------------
+ usage_records        |     308109 |          0
+ scheduled_task_runs  |      14543 |        949
+ audit_events         |        623 |          0
+ usage_daily          |        287 |         12
+ model_catalog        |        110 |          0
+ __drizzle_migrations |         25 |          0
+ quota_windows        |         18 |         49
+ accounts             |         11 |         46
+ pool_members         |         10 |         25
+ api_keys             |          5 |         32
+ api_key_pools        |          4 |          3
+ api_key_accounts     |          2 |          0
+ pools                |          2 |          8
+ admin_sessions       |          1 |         18
+ admin_credentials    |          0 |          0
+ price_overrides      |          0 |          0
+ sessions             |          0 |         34
+ oauth_states         |          0 |         39
+(18 rows)
+
+          name          | groups 
+------------------------+--------
+ recent_failover_groups |      2
+(1 row)
+
+ROLLBACK

@@ -1,0 +1,26 @@
+NAME                               PHASE     IMAGE                                          RESTARTS   NODE
+multi-ai-router-8674b5f6df-zz5rj   Running   ghcr.io/developerz-ai/multi-ai-router:2.15.0   0          worker-2
+
+NAME                               CPU(cores)   MEMORY(bytes)   
+multi-ai-router-8674b5f6df-zz5rj   8m           83Mi            
+
+Cluster in healthy state
+[{"lastTransitionTime":"2026-07-09T10:40:40Z","message":"Cluster is Ready","reason":"ClusterIsReady","status":"True","type":"Ready"},{"lastTransitionTime":"2026-09-21T16:27:15Z","message":"Continuous archiving is working","reason":"ContinuousArchivingSuccess","status":"True","type":"ContinuousArchiving"},{"lastTransitionTime":"2026-10-02T01:18:03Z","message":"Backup was successful","reason":"LastBackupSucceeded","status":"True","type":"LastBackupSucceeded"}]
+2026-10-02T01:17:51Z
+
+NAME                            PHASE       STARTED                STOPPED
+postgres-daily-20260921140449   completed   2026-09-21T14:04:50Z   2026-09-21T14:15:36Z
+postgres-daily-20260922010000   completed   2026-09-22T01:00:00Z   2026-09-22T01:10:38Z
+postgres-daily-20260923010000   completed   2026-09-23T01:00:00Z   2026-09-23T01:12:20Z
+postgres-daily-20260924010000   completed   2026-09-24T01:00:00Z   2026-09-24T01:13:14Z
+postgres-daily-20260925010000   completed   2026-09-25T01:00:01Z   2026-09-25T01:15:30Z
+postgres-daily-20260926010000   completed   2026-09-26T01:00:00Z   2026-09-26T01:14:46Z
+postgres-daily-20260927010000   completed   2026-09-27T01:00:01Z   2026-09-27T01:14:34Z
+postgres-daily-20260928010000   completed   2026-09-28T01:00:00Z   2026-09-28T01:15:57Z
+postgres-daily-20260929010000   completed   2026-09-29T01:00:01Z   2026-09-29T01:17:33Z
+postgres-daily-20260930010000   completed   2026-09-30T01:00:01Z   2026-09-30T01:16:08Z
+postgres-daily-20261001010000   completed   2026-10-01T01:00:01Z   2026-10-01T01:16:42Z
+postgres-daily-20261002010000   completed   2026-10-02T01:00:01Z   2026-10-02T01:17:51Z
+
+TIME   REASON   MESSAGE
+

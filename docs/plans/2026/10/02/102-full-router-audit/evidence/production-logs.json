@@ -1,0 +1,52 @@
+{
+  "capturedAt": "2026-10-02T23:59:14.078Z",
+  "pod": "multi-ai-router-8674b5f6df-zz5rj",
+  "first": "2026-10-02T15:58:44.894146806Z",
+  "last": "2026-10-02T23:59:10.647812442Z",
+  "count": 1638,
+  "levels": {
+    "info": 1522,
+    "warn": 116
+  },
+  "messages": {
+    "glitchtip error tracking enabled": 1,
+    "migrations applied": 1,
+    "scheduler started": 1,
+    "credential refresh timers armed": 1,
+    "runtime ready": 1,
+    "claude cli resolved": 1,
+    "router listening": 1,
+    "oauth state purge": 97,
+    "admin session purge": 16,
+    "scheduled task ran": 164,
+    "request completed": 1135,
+    "request failed": 107,
+    "quota floor": 16,
+    "usage rollup": 8,
+    "sdk transcript sweep": 8,
+    "upstream attempt failed": 7,
+    "janitor sweep": 8,
+    "subscription model listing skipped: access token inside the CLI's refresh window, left for a real turn": 14,
+    "model catalog refresh skipped an account": 14,
+    "model catalog refresh": 8,
+    "account credential checked": 12,
+    "claude credential refresh window entered": 6,
+    "idle account kept alive": 4,
+    "account test failed": 2,
+    "idle account keepalive found the subscription window spent": 2,
+    "idle account probe": 2,
+    "config dir reap": 1
+  },
+  "statuses": {
+    "GET / 200": 961,
+    "POST /v1/messages 400": 57,
+    "POST /v1/messages 429": 50,
+    "GET /api/admin/accounts 200": 2,
+    "GET /v1/models 200": 2,
+    "POST /v1/messages 200": 63
+  },
+  "errors": {
+    "InvalidRequestError": 57,
+    "QuotaExhaustedError": 50
+  }
+}

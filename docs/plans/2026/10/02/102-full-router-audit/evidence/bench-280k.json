@@ -1,0 +1,80 @@
+{
+  "rows": [
+    {
+      "scenario": "passthrough",
+      "path": "passthrough",
+      "samples": 1000,
+      "failures": 0,
+      "overheadMeanMs": 2.214999999999974,
+      "overheadP50Ms": 1.5330243337195828,
+      "overheadP95Ms": 3.6206896551724137,
+      "overheadP99Ms": 5,
+      "overheadQuantized": false,
+      "addedTtftSamples": 0,
+      "addedTtftP50Ms": null,
+      "addedTtftP95Ms": null,
+      "addedTtftP99Ms": null,
+      "buffered": 0,
+      "streamed": false
+    },
+    {
+      "scenario": "passthrough (stream)",
+      "path": "passthrough",
+      "samples": 1000,
+      "failures": 0,
+      "overheadMeanMs": 2.254999999999976,
+      "overheadP50Ms": 1.5886610373944512,
+      "overheadP95Ms": 4.1655629139072845,
+      "overheadP99Ms": 4.960264900662252,
+      "overheadQuantized": false,
+      "addedTtftSamples": 1000,
+      "addedTtftP50Ms": 0.022507499999846914,
+      "addedTtftP95Ms": 0.045672299999341685,
+      "addedTtftP99Ms": 0.12486043999946526,
+      "buffered": 0,
+      "streamed": true
+    },
+    {
+      "scenario": "translate",
+      "path": "translate",
+      "samples": 1000,
+      "failures": 0,
+      "overheadMeanMs": 2.5439999999999556,
+      "overheadP50Ms": 1.704225352112676,
+      "overheadP95Ms": 4.706766917293233,
+      "overheadP99Ms": 11.11111111111111,
+      "overheadQuantized": false,
+      "addedTtftSamples": 0,
+      "addedTtftP50Ms": null,
+      "addedTtftP95Ms": null,
+      "addedTtftP99Ms": null,
+      "buffered": 0,
+      "streamed": false
+    },
+    {
+      "scenario": "translate (stream)",
+      "path": "translate",
+      "samples": 1000,
+      "failures": 0,
+      "overheadMeanMs": 2.387999999999967,
+      "overheadP50Ms": 1.6527415143603132,
+      "overheadP95Ms": 4.543778801843318,
+      "overheadP99Ms": 10,
+      "overheadQuantized": false,
+      "addedTtftSamples": 1000,
+      "addedTtftP50Ms": 0.05723099999977421,
+      "addedTtftP95Ms": 0.09795384999970332,
+      "addedTtftP99Ms": 0.14961135000048625,
+      "buffered": 0,
+      "streamed": true
+    }
+  ],
+  "budgets": {
+    "overheadP99Ms": 5,
+    "addedTtftP95Ms": 2
+  },
+  "violations": [
+    "translate: p99 overhead 11.11 ms exceeds the 5 ms budget",
+    "translate (stream): p99 overhead 10.00 ms exceeds the 5 ms budget"
+  ]
+}

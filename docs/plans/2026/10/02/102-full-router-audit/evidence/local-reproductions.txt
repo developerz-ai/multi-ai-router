@@ -1,0 +1,6 @@
+{"case":"07.1 Responses cached input","expectedUncached":60,"actual":{"tokensIn":100,"tokensOut":5,"cacheReadTokens":40,"cacheWriteTokens":0}}
+{"case":"07.2 PG integer overflow accepted","actual":{"tokensIn":2147483648,"tokensOut":1,"cacheReadTokens":0,"cacheWriteTokens":0}}
+{"case":"07.3 reused caller UUID","sameInternalId":true}
+{"case":"07.4 lifetime axis","count":400,"first":"1970-01-01T00:00:00.000Z","last":"1971-02-04T00:00:00.000Z"}
+{"case":"08.2 refresh snapshot barrier","loads":1,"samePromise":true}
+{"case":"09.2 new quota overwritten by stale sweep","actual":{"accountId":"a","window":"five_hour","resetsAt":null,"lastCheckedAt":"2026-10-02T12:00:00.000Z","utilization":null,"utilizationSource":"none","resetSource":"unknown"}}
