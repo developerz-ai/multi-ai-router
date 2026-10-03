@@ -6,6 +6,7 @@ import {
   createApiKeyRepository,
   createAuditRepository,
   createCatalogSnapshotRepository,
+  createCredentialRefreshLockPool,
   createModelCatalogRepository,
   createOauthStateRepository,
   createPoolRepository,
@@ -56,6 +57,7 @@ import {
   sessionStoreFromEnv,
   stampLastUsed,
 } from "../services/dataplane"
+import { accountHealthFacts } from "../services/dataplane/health-observation"
 import {
   type CatalogRefreshDeps,
   createModelCatalogStore,
@@ -135,6 +137,12 @@ export function createRuntime(deps: RuntimeDeps): Runtime {
   const cipher = createCredentialCipherFromEnv(env)
   const now = (): Date => new Date()
 
+  const refreshLock = createCredentialRefreshLockPool({
+    url: env.databaseUrl,
+    maxConnections: env.oauthRefresh.lockPoolMaxConnections,
+    connectTimeoutSeconds: env.databasePool.connectTimeoutSeconds,
+    closeTimeoutSeconds: env.databasePool.closeTimeoutSeconds,
+  })
   const accounts = createAccountRepository(database)
   const keys = createApiKeyRepository(database)
   const pools = createPoolRepository(database)
@@ -201,7 +209,9 @@ export function createRuntime(deps: RuntimeDeps): Runtime {
     // Every standing block the breaker forms is announced here and nowhere else, which is what
     // makes one hook enough to make every one of them durable. Which of them may be *stored* is
     // the writer's policy, not this file's.
-    onBlocked: (accountId, status) => statusWriter.record(accountId, status),
+    onBlocked: (accountId, status, observation) => {
+      if (observation !== undefined) statusWriter.record(accountId, status, observation)
+    },
     // "Re-check now" and account deletion clear this store; the SDK's own per-Account buckets are
     // the same request path's memory of the same fact and have to go with them, or the next
     // `rate_limit_event` re-publishes the window the operator just dismissed. A queued status
@@ -212,9 +222,18 @@ export function createRuntime(deps: RuntimeDeps): Runtime {
       statusWriter.forget(accountId)
     },
   })
+  let catalogAccountIds = new Set<string>()
   const catalogSnapshots = createCatalogSnapshotRepository(database)
   const catalog = createRoutingCatalog({
     load: () => loadCatalog(catalogSnapshots),
+    onInstalled: (loaded) => {
+      const nextIds = new Set(loaded.map((account) => account.id))
+      for (const id of new Set([...catalogAccountIds, ...health.entries().keys()])) {
+        if (!nextIds.has(id)) health.reset(id)
+      }
+      catalogAccountIds = nextIds
+      for (const account of loaded) health.reconcile(account.id, accountHealthFacts(account))
+    },
     refreshIntervalMs: env.dataPlane.catalogRefreshSeconds * 1_000,
     now,
   })
@@ -278,7 +297,18 @@ export function createRuntime(deps: RuntimeDeps): Runtime {
     health,
     usage: () => usage,
     sdkConcurrency,
-    dbPool: { sample: deps.dbPoolStats },
+    dbPool: {
+      sample: () => {
+        const main = deps.dbPoolStats()
+        const auxiliary = refreshLock.poolStats()
+        return {
+          inUse: main.inUse + auxiliary.inUse,
+          idle: main.idle + auxiliary.idle,
+          waiting: main.waiting + auxiliary.waiting,
+          max: main.max + auxiliary.max,
+        }
+      },
+    },
     prices,
     logger,
     now,
@@ -432,6 +462,7 @@ export function createRuntime(deps: RuntimeDeps): Runtime {
     now,
     database,
     accounts,
+    refreshLock,
     keys,
     pools,
     auditEvents,
@@ -568,7 +599,8 @@ export function createRuntime(deps: RuntimeDeps): Runtime {
     stop: async () => {
       // First and awaited: a tick in flight holds a connection the caller's pool close would cut.
       await scheduler.stop()
-      await refresher.stop() // same reason: an in-flight token write must land before the pool goes
+      await refresher.stop()
+      await refreshLock.close()
       admin.connect.stop() // every pending login, so no `claude` subprocess outlives the router
       catalog.stop()
       prices.stop()

@@ -75,7 +75,6 @@ export {
   refreshDueAt,
   refresherFromEnv,
   retryDelayMs,
-  reviveAfterRefresh,
   timerDelayMs,
   writeStoredOAuth,
 } from "./refresh"

@@ -52,6 +52,8 @@ export function admitHalfOpenProbe(
   const admission = health.admitProbe(accountId, now)
   return {
     admitted: admission.admitted,
-    release: admission.held ? () => health.releaseProbe(accountId) : NOTHING_TO_RELEASE,
+    release: admission.held
+      ? () => health.releaseProbe(accountId, admission.token)
+      : NOTHING_TO_RELEASE,
   }
 }

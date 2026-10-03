@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test"
 import type { AccountRow, QuotaWindowRow } from "@multi-ai-router/db"
 import { createQuotaFloorTask, type QuotaFloorDeps } from "../../../src/scheduler/tasks/quota-floor"
 import { HEALTHY } from "../../../src/services/routing"
+import { accountRow as durableAccountRow } from "../../support/account-row"
 import { NOW, silentLogger } from "./fixtures"
 
 /**
@@ -17,7 +18,7 @@ const IDLE_AFTER_MS = 60 * 60 * 1000 // one hour, matching the interval below
 const INTERVAL_MS = IDLE_AFTER_MS
 
 function account(id: string): AccountRow {
-  return {
+  return durableAccountRow({
     id,
     label: id,
     provider: "anthropic-oauth",
@@ -32,7 +33,7 @@ function account(id: string): AccountRow {
     priority: 0,
     createdAt: NOW,
     updatedAt: NOW,
-  }
+  })
 }
 
 function window(accountId: string, overrides: Partial<QuotaWindowRow> = {}): QuotaWindowRow {

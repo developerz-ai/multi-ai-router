@@ -1,4 +1,4 @@
-import type { AccountRepository } from "@multi-ai-router/db"
+import type { AccountRepository, CredentialRefreshLock } from "@multi-ai-router/db"
 import type { Env } from "../../../config/env"
 import type { Logger } from "../../../logging/logger"
 import type { AuditRecorder } from "../../admin/audit"
@@ -23,18 +23,23 @@ import { type CredentialRefresher, createCredentialRefresher } from "./refresher
  */
 
 export interface RefresherFromEnvDeps {
-  readonly accounts: Pick<AccountRepository, "list" | "findById" | "update" | "updateStatus">
+  readonly accounts: Pick<
+    AccountRepository,
+    "list" | "findById" | "saveRefreshedCredential" | "transitionObservedStatus"
+  >
   readonly cipher: Pick<CredentialCipher, "encrypt" | "decrypt">
   readonly audit: AuditRecorder
-  readonly env: Pick<Env, "oauthRefresh" | "failover">
+  readonly env: Pick<Env, "oauthRefresh" | "failover" | "shutdownDrainMs">
   readonly logger: Logger
   readonly now: () => Date
   readonly catalog: Pick<RoutingCatalogStore, "refreshAfterMutation">
+  readonly refreshLock: Pick<CredentialRefreshLock, "tryRun">
 }
 
 export function refresherFromEnv(deps: RefresherFromEnvDeps): CredentialRefresher {
   return createCredentialRefresher({
     accounts: deps.accounts,
+    refreshLock: deps.refreshLock,
     cipher: deps.cipher,
     audit: deps.audit,
     fetch: (request) => fetch(request),
@@ -45,7 +50,8 @@ export function refresherFromEnv(deps: RefresherFromEnvDeps): CredentialRefreshe
       minDelayMs: deps.env.oauthRefresh.minDelaySeconds * 1_000,
       maxAttempts: deps.env.oauthRefresh.maxAttempts,
       timeoutMs: deps.env.failover.upstreamTimeoutMs,
+      shutdownDrainMs: deps.env.shutdownDrainMs,
     },
-    onStatusChanged: () => deps.catalog.refreshAfterMutation(),
+    refreshCatalogAfterMutation: () => deps.catalog.refreshAfterMutation(),
   })
 }

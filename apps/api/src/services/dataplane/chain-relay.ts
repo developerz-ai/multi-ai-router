@@ -4,6 +4,7 @@ import type { TranslationContext } from "../translate"
 import { createTokenObserver, NO_TOKEN_OBSERVER } from "../usage"
 import type { UpstreamError } from "./attempt"
 import { breakerOptionsFor } from "./health"
+import type { HealthObservation } from "./health-observation"
 import type { ServableCandidate } from "./plan"
 import { attemptRecord, failureOutcome, SUCCESS_OUTCOME } from "./records"
 import { relayResponse } from "./relay"
@@ -41,6 +42,7 @@ export interface AttemptClock {
  */
 export interface SuccessClock extends AttemptClock {
   readonly upstreamStarted: number
+  readonly observation?: HealthObservation
 }
 
 /**
@@ -82,6 +84,7 @@ export function relaySuccess(
         { kind: failureKind, message: "upstream response stream failed" },
         ctx.runtime.clock.now(),
         breakerOptionsFor(servable.driver.authKind),
+        at.observation,
       )
     }
     // Everything this attempt spent from the call onwards — including every byte relayed off it —

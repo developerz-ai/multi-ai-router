@@ -1,5 +1,6 @@
 import type { ClaudeLoginHandle } from "../../../providers/claude-sdk/login"
 import type { ClaudeConnectMode } from "./claude"
+import type { SubscriptionAccount } from "./claude-subject"
 
 /**
  * The registry of logins currently waiting for their `code#state` — one per account, each a live
@@ -18,6 +19,7 @@ export interface PendingLogin {
   readonly configDir: string
   readonly mode: ClaudeConnectMode
   readonly expiresAt: Date
+  readonly subject: SubscriptionAccount
 }
 
 export interface PendingLogins {

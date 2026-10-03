@@ -48,7 +48,13 @@ export interface ClaudeCliStack {
 }
 
 export interface ClaudeCliFromEnvDeps {
-  readonly accounts: Pick<AccountRepository, "findById" | "update" | "updateStatus">
+  readonly accounts: Pick<
+    AccountRepository,
+    | "findById"
+    | "confirmAccountAuthorization"
+    | "transitionObservedStatus"
+    | "recoverObservedAuthentication"
+  >
   readonly configDirs: AccountConfigDirs
   readonly audit: AuditRecorder
   readonly env: Pick<Env, "claudeCliPath" | "retention">
@@ -117,6 +123,7 @@ export function claudeCliFromEnv(deps: ClaudeCliFromEnvDeps): ClaudeCliStack {
       cli,
       audit: deps.audit,
       now: deps.now,
+      mutationCommitted: () => deps.refreshCatalog(),
     }),
   }
 }
@@ -124,7 +131,10 @@ export function claudeCliFromEnv(deps: ClaudeCliFromEnvDeps): ClaudeCliStack {
 export interface ConnectFromEnvDeps {
   /** The `claude` CLI half, already built: the two flows share nothing but this bundle's shape. */
   readonly cli: ClaudeCliStack
-  readonly accounts: Pick<AccountRepository, "findById" | "update">
+  readonly accounts: Pick<
+    AccountRepository,
+    "findById" | "beginAccountAuthorization" | "cancelAccountAuthorization" | "commitAuthorization"
+  >
   readonly oauthStates: OauthStateRepository
   readonly cipher: Pick<CredentialCipher, "encrypt" | "decrypt">
   readonly audit: AuditRecorder
@@ -132,6 +142,7 @@ export interface ConnectFromEnvDeps {
   readonly now: () => Date
   /** So the token this flow just minted gets a refresh timer without waiting for the next boot. */
   readonly refresher: Pick<CredentialRefresher, "sync">
+  readonly refreshCatalogAfterMutation: () => Promise<void>
 }
 
 /**
@@ -161,6 +172,7 @@ export function connectFromEnv(deps: ConnectFromEnvDeps): ConnectService {
       fetch: (request) => fetch(request),
       exchangeTimeoutMs: deps.env.failover.upstreamTimeoutMs,
       now: deps.now,
+      refreshCatalogAfterMutation: deps.refreshCatalogAfterMutation,
       onCredentialWritten: (accountId) => deps.refresher.sync(accountId),
     }),
   })

@@ -9,6 +9,7 @@ import {
 } from "../../../src/providers"
 import { createTestNowService } from "../../../src/services/accounts"
 import type { AuditEventInput } from "../../../src/services/admin"
+import { accountRow as durableAccountRow } from "../../support/account-row"
 
 /**
  * "Test now" — the second, opt-in button beside "Re-check now".
@@ -22,7 +23,7 @@ import type { AuditEventInput } from "../../../src/services/admin"
 const NOW = new Date("2026-01-01T12:00:00.000Z")
 
 function accountRow(overrides: Partial<AccountRow> = {}): AccountRow {
-  return {
+  return durableAccountRow({
     id: "acc-1",
     label: "acc-1",
     provider: "zai",
@@ -38,7 +39,7 @@ function accountRow(overrides: Partial<AccountRow> = {}): AccountRow {
     createdAt: NOW,
     updatedAt: NOW,
     ...overrides,
-  }
+  })
 }
 
 function harness(options: {

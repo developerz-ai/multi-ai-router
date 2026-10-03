@@ -9,6 +9,7 @@ import type {
   PoolMemberRow,
   PoolRow,
 } from "@multi-ai-router/db"
+import { memoryAccountLifecycle } from "./memory-account-lifecycle"
 import { createMemoryMutations } from "./memory-mutations"
 import type { MemoryStore } from "./memory-store-types"
 
@@ -45,12 +46,17 @@ export function createMemoryStore(): MemoryStore {
     rows: { accounts, keys, keyPools, keyAccounts, pools, poolMembers, oauthStates, audit },
 
     accounts: {
+      ...memoryAccountLifecycle(accounts, oauthStates),
       create: async (input) => {
         const row: AccountRow = {
           id: input.id ?? crypto.randomUUID(),
           label: input.label,
           provider: input.provider,
           status: input.status ?? "active",
+          lifecycleVersion: 0,
+          healthRecoveryVersion: 0,
+          authRecoveryVersion: 0,
+          authorizationAttemptId: null,
           authMaterial: input.authMaterial ?? null,
           configDir: input.configDir ?? null,
           tokenExpiresAt: input.tokenExpiresAt ?? null,
@@ -87,7 +93,12 @@ export function createMemoryStore(): MemoryStore {
         if (row === undefined || !from.includes(row.status)) return undefined
         return replace(accounts, id, { status: to }, now)
       },
-      disable: async (id, now) => replace(accounts, id, { status: "disabled" }, now),
+      disable: (id, now) =>
+        memoryAccountLifecycle(accounts, oauthStates).updateOperatorAccount({
+          id,
+          patch: { status: "disabled" },
+          now,
+        }),
       delete: async (id) => remove(accounts, id),
     },
 
@@ -198,6 +209,7 @@ export function createMemoryStore(): MemoryStore {
           accountId: input.accountId ?? null,
           redirectUri: input.redirectUri ?? null,
           consumedAt: null,
+          authorizationLifecycleVersion: input.authorizationLifecycleVersion ?? null,
           expiresAt: input.expiresAt,
           createdAt: EPOCH,
         }

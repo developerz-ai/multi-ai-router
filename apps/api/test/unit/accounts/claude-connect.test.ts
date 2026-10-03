@@ -166,6 +166,9 @@ function harness(
     health,
     refreshCatalog: async () => {
       catalogRefreshes.count += 1
+      for (const row of await store.accounts.list({})) {
+        health.reconcile(row.id, { ...row, status: row.status })
+      }
     },
   })
 
@@ -173,6 +176,10 @@ function harness(
   const routable = async (): Promise<readonly RoutableAccount[]> =>
     (await store.accounts.list({})).map((row) => ({
       id: row.id,
+      lifecycleVersion: row.lifecycleVersion,
+      healthRecoveryVersion: row.healthRecoveryVersion,
+      authRecoveryVersion: row.authRecoveryVersion,
+      billing: row.billing,
       snapshot: {
         id: row.id,
         label: row.label,
@@ -202,6 +209,8 @@ function harness(
     },
     get: async (id) => {
       catalogAccounts = await routable()
+      for (const account of catalogAccounts)
+        health.reconcile(account.id, { ...account, status: account.snapshot.status })
       return decorated.get(id)
     },
   }
@@ -379,6 +388,9 @@ describe("pasting the code back", () => {
     // row left the console overlay reading `needs_reauth` until an operator pressed Re-check.
     const h = harness()
     const id = await h.account()
+    const original = await h.store.accounts.findById(id)
+    if (original === undefined) throw new Error("missing fixture")
+    h.health.reconcile(id, original)
     h.health.recordFailure(id, { kind: "auth", message: "401" }, NOW, { authKind: "oauth" })
     await h.store.accounts.update(id, { status: "needs_reauth" }, NOW)
 
@@ -402,14 +414,17 @@ describe("pasting the code back", () => {
   test("a login on an account whose row already said active still clears a stale live verdict", async () => {
     const h = harness()
     const id = await h.account()
+    const original = await h.store.accounts.findById(id)
+    if (original === undefined) throw new Error("missing fixture")
+    h.health.reconcile(id, original)
     h.health.recordFailure(id, { kind: "auth", message: "401" }, NOW, { authKind: "oauth" })
 
     await h.connect.begin(id, "reconnect")
     await h.connect.complete(id, PASTE)
 
     expect(h.health.stateOf(id).breaker.status).toBe("active")
-    // The row did not change, so there was nothing for the catalog to re-read.
-    expect(h.catalogRefreshes.count).toBe(0)
+    // CLI authorization increments its durable recovery epoch even when status already said active.
+    expect(h.catalogRefreshes.count).toBe(1)
   })
 
   test("a completed login spends no turn: the CLI's own login is the only subprocess", async () => {

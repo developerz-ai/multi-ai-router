@@ -19,10 +19,22 @@ export type {
 } from "./client"
 // --- connection -------------------------------------------------------------
 export { createDatabase, DATABASE_POOL_DEFAULTS } from "./client"
+export type {
+  CredentialRefreshLock,
+  CredentialRefreshLockPoolHandle,
+  CredentialRefreshLockPoolOptions,
+  CredentialRefreshLockResult,
+} from "./credential-refresh-lock"
+export { createCredentialRefreshLockPool } from "./credential-refresh-lock"
 export type { MigrateOptions } from "./migrate"
 // --- migrations -------------------------------------------------------------
 export { defaultMigrationsFolder, runMigrations } from "./migrate"
 export type { PoolSample } from "./pool-metrics"
+export type {
+  AccountAuthorizationMethods,
+  AccountLifecycleMethods,
+  AccountObservation,
+} from "./repositories/account-lifecycle-types"
 export type {
   AccountListFilter,
   AccountRepository,

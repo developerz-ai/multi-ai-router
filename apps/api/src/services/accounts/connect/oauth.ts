@@ -1,4 +1,4 @@
-import { createHash, randomBytes } from "node:crypto"
+import { createHash, randomBytes, randomUUID } from "node:crypto"
 import type { AccountRepository, AccountRow, OauthStateRepository } from "@multi-ai-router/db"
 import { httpDriver, type ProviderOAuthFlow } from "../../../providers"
 import { type AdminResult, invalid, notFound, ok } from "../../admin/result"
@@ -96,8 +96,11 @@ export interface OAuthConnectService {
 }
 
 export interface OAuthConnectDeps extends OAuthExchangeDeps {
-  readonly accounts: Pick<AccountRepository, "findById" | "update">
-  readonly states: Pick<OauthStateRepository, "create" | "consume" | "abandonForAccount">
+  readonly accounts: Pick<
+    AccountRepository,
+    "findById" | "beginAccountAuthorization" | "cancelAccountAuthorization" | "commitAuthorization"
+  >
+  readonly states: Pick<OauthStateRepository, "consume">
   readonly cipher: Pick<CredentialCipher, "encrypt" | "decrypt">
   /** The one-shot window, in minutes. Config, never a constant — `env.retention.oauthStateMinutes`. */
   readonly stateMinutes: number
@@ -137,7 +140,11 @@ export function createOAuthConnectService(deps: OAuthConnectDeps): OAuthConnectS
   /** Where both capture modes meet. Consume first, judge second: a wrong guess burns its state. */
   const exchange = async (presented: Presentation): Promise<AdminResult<OAuthConnectCompleted>> => {
     const pending = await deps.states.consume(presented.state, deps.now())
-    if (pending === undefined || pending.accountId === null) {
+    if (
+      pending === undefined ||
+      pending.accountId === null ||
+      pending.authorizationLifecycleVersion === null
+    ) {
       return invalid(STATE_REJECTED, "state_rejected")
     }
     if (presented.boundTo !== null && presented.boundTo !== pending.accountId) {
@@ -149,7 +156,13 @@ export function createOAuthConnectService(deps: OAuthConnectDeps): OAuthConnectS
     const { row, flow } = account.value
     // The verifier was minted for this provider's flow, which is a different endpoint and a
     // different request shape. Cheap, and it means a bound row cannot be re-pointed underneath.
-    if (row.provider !== pending.provider) return invalid(STATE_REJECTED, "state_rejected")
+    if (
+      row.provider !== pending.provider ||
+      row.authorizationAttemptId !== pending.id ||
+      row.lifecycleVersion !== pending.authorizationLifecycleVersion
+    ) {
+      return invalid(STATE_REJECTED, "state_rejected")
+    }
 
     let codeVerifier: string
     try {
@@ -165,6 +178,8 @@ export function createOAuthConnectService(deps: OAuthConnectDeps): OAuthConnectS
     return completeAuthorization(deps, {
       row,
       flow,
+      attemptId: pending.id,
+      expectedLifecycleVersion: pending.authorizationLifecycleVersion,
       code: presented.code,
       redirectUri: pending.redirectUri ?? flow.loopbackRedirectUri,
       codeVerifier,
@@ -178,23 +193,24 @@ export function createOAuthConnectService(deps: OAuthConnectDeps): OAuthConnectS
       if (!account.ok) return account
       const { row, flow } = account.value
 
-      // One live authorization per account: restarting retires whatever the last start left
-      // redeemable, the same way a second `claude` login supersedes the first.
-      await deps.states.abandonForAccount(accountId, deps.now())
-
       const verifier = randomBytes(VERIFIER_BYTES).toString("base64url")
       const state = randomBytes(STATE_BYTES).toString("base64url")
       const redirectUri = deps.callbackUrl ?? flow.loopbackRedirectUri
       const expiresAt = new Date(deps.now().getTime() + ttlMs)
 
-      await deps.states.create({
-        state,
-        codeVerifier: deps.cipher.encrypt(verifier),
-        provider: row.provider,
-        accountId,
-        redirectUri,
-        expiresAt,
+      const begun = await deps.accounts.beginAccountAuthorization({
+        id: accountId,
+        expectedProvider: row.provider,
+        attempt: {
+          id: randomUUID(),
+          state,
+          codeVerifier: deps.cipher.encrypt(verifier),
+          redirectUri,
+          expiresAt,
+        },
+        now: deps.now(),
       })
+      if (begun === undefined) return invalid(STATE_REJECTED, "state_rejected")
 
       const authorizeUrl = flow.authorizeUrl({
         redirectUri,
@@ -243,8 +259,12 @@ export function createOAuthConnectService(deps: OAuthConnectDeps): OAuthConnectS
     cancel: async (accountId) => {
       const account = await connectable(accountId)
       if (!account.ok) return account
-      const abandoned = await deps.states.abandonForAccount(accountId, deps.now())
-      return ok({ accountId, cancelled: abandoned > 0 })
+      const cancelled = await deps.accounts.cancelAccountAuthorization({
+        id: accountId,
+        now: deps.now(),
+      })
+      if (cancelled === undefined) return notFound(`no account with id "${accountId}"`)
+      return ok({ accountId, cancelled: cancelled.cancelled })
     },
   }
 }

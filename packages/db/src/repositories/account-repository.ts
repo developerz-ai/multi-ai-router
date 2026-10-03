@@ -3,6 +3,8 @@ import { and, asc, eq, inArray, isNull, lt, ne, or, sql } from "drizzle-orm"
 import type { DatabaseExecutor } from "../client"
 import { type AccountRow, accounts } from "../schema/accounts"
 import { quotaWindows } from "../schema/quota-windows"
+import { createAccountAuthorization } from "./account-authorization"
+import { createAccountLifecycle } from "./account-lifecycle"
 import type { AccountRepository } from "./account-types"
 import { withAdminMutationRetry } from "./admin-mutation-conflict"
 
@@ -30,6 +32,7 @@ export type {
 } from "./account-types"
 
 export function createAccountRepository(db: DatabaseExecutor): AccountRepository {
+  const lifecycle = createAccountLifecycle(db)
   const setStatus = async (
     id: string,
     status: AccountStatus,
@@ -44,6 +47,8 @@ export function createAccountRepository(db: DatabaseExecutor): AccountRepository
   }
 
   return {
+    ...lifecycle,
+    ...createAccountAuthorization(db),
     create: async (input) => {
       const rows = await db
         .insert(accounts)
@@ -155,7 +160,8 @@ export function createAccountRepository(db: DatabaseExecutor): AccountRepository
       return rows[0]
     },
 
-    disable: (id, now) => setStatus(id, "disabled", now),
+    disable: (id, now) =>
+      lifecycle.updateOperatorAccount({ id, patch: { status: "disabled" }, now }),
 
     markUsed: async (ids, at) => {
       if (ids.length === 0) return

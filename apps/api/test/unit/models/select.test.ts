@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import type { AccountCatalogAge, AccountRow } from "@multi-ai-router/db"
 import { selectForRefresh } from "../../../src/services/models"
+import { accountRow as durableAccountRow } from "../../support/account-row"
 
 /**
  * Which accounts an hourly tick actually refreshes.
@@ -15,13 +16,13 @@ import { selectForRefresh } from "../../../src/services/models"
 const AT = (iso: string): Date => new Date(iso)
 
 function account(id: string, overrides: Partial<AccountRow> = {}): AccountRow {
-  return {
+  return durableAccountRow({
     id,
     label: id,
     provider: "zai",
     status: "active",
     ...overrides,
-  } as AccountRow
+  })
 }
 
 function age(accountId: string, iso: string): AccountCatalogAge {

@@ -1,297 +1,297 @@
-import { describeError } from "@multi-ai-router/core"
-import type { AccountRepository, AccountRow } from "@multi-ai-router/db"
+import type { AccountRepository, AccountRow, CredentialRefreshLock } from "@multi-ai-router/db"
 import type { Logger } from "../../../logging/logger"
-import { redactValue } from "../../../logging/redact"
 import { httpDriver } from "../../../providers"
 import type { AuditRecorder } from "../../admin/audit"
+import { createRefreshCoherence } from "./coherence"
+import { defaultSchedule, drainRefreshWork } from "./drain"
+import { type RefreshExchangeDeps, type RefreshOutcome, refreshCredential } from "./exchange"
 import {
-  type RefreshExchangeDeps,
-  type RefreshFailure,
-  type RefreshOutcome,
-  refreshCredential,
-} from "./exchange"
-import { type RefreshTiming, refreshDueAt, retryDelayMs, timerDelayMs } from "./schedule"
-import { parkForReauth, reviveAfterRefresh } from "./status"
+  type RefreshExpectation as Expectation,
+  eligible,
+  expectation,
+  matches,
+  type RefreshFlightObservation,
+  type RefreshTimerState as Timing,
+} from "./identity"
+import { createRefreshSafety, refreshErrorLogger } from "./safety"
+import { refreshDueAt, retryDelayMs } from "./schedule"
+import { parkForReauth, sameObservation } from "./status"
+import { createRefreshTimers } from "./timers"
 
-/**
- * Keeping a router-held OAuth token alive: one timer per account, armed at a fraction of that
- * account's own remaining lifetime and re-armed every time a new token lands
- * (`docs/idea/01-architecture.md#credential-refresh-is-not-a-cron-job`).
- *
- * **This is deliberately not a scheduled task.** The scheduler exists for work that is periodic by
- * nature — sweeps, rollups, purges — and each of those runs on a shared interval behind an advisory
- * lock. A refresh is neither: it is due at an instant this account's own token dictates, and a poll
- * frequent enough for a ten-minute token is pure waste against a twenty-four-hour one (CLAUDE.md
- * non-negotiable 13). There is no advisory lock here either: a refresh is idempotent — every
- * replica that runs one writes a valid token set — and paying a lock round trip to avoid a
- * duplicate token request is the more expensive mistake.
- *
- * **Claude subscriptions have no timer here, and cannot get one.** Whether an account is refreshable
- * is asked of the provider registry, never of a list kept in this file: a Claude subscription is
- * served by the Agent SDK, so it has no HTTP driver and therefore no `ProviderOAuthFlow` — its
- * tokens live in its own `CLAUDE_CONFIG_DIR` and the SDK refreshes them (non-negotiable 1). The
- * same question keeps API-key accounts out, and lets a new OAuth provider in the day its driver
- * lands.
- *
- * **A failed refresh is never a failed request.** Nothing on the request path calls into this
- * module — no lazy refresh on a `401`, no awaiting a token mid-dispatch (non-negotiable 8). When a
- * refresh finally gives up, the account is parked at `needs_reauth`, which `routing/filter.ts`
- * drops from candidate selection, and the operator sees it in the console. Requests fail over to
- * the next account in the pool exactly as they would for any other unavailable one.
- *
- * **Single-flight per account.** Every trigger — a timer, a re-arm, an operator — goes through one
- * map of in-flight promises, so two triggers for the same account await one exchange and write one
- * row. Concurrency between *different* accounts is untouched.
- */
+export type { CredentialRefreshConfig, CredentialRefresher } from "./types"
 
-const COMPONENT = "account-refresher"
-const MAX_ERROR_CHARS = 200
-
-export interface CredentialRefreshConfig extends RefreshTiming {
-  /** Transient failures tolerated before the account is parked. Retries back off, then stop. */
-  readonly maxAttempts: number
-  /** How long one token-endpoint call may take. */
-  readonly timeoutMs: number
-}
-
-export interface CredentialRefresher {
-  /** Rebuilds every timer from `tokenExpiresAt`. Awaited at boot; arms nothing it need not. */
-  start(): Promise<void>
-  /** Disarms every timer and awaits what is in flight, so no write outlives the pool. */
-  stop(): Promise<void>
-  /**
-   * Re-reads one account and arms, re-arms, or disarms its timer. Called after a token lands.
-   *
-   * **Never rejects.** A refresher that could not re-arm must not turn a completed authorization
-   * into a failed one; the problem is logged and the next boot rebuilds the schedule.
-   */
-  sync(accountId: string): Promise<void>
-  /** The single-flight entry point: concurrent callers await one exchange. */
-  refreshNow(accountId: string): Promise<RefreshOutcome>
-}
-
+import type { CredentialRefreshConfig, CredentialRefresher } from "./types"
 export interface CredentialRefresherDeps extends Omit<RefreshExchangeDeps, "timeoutMs"> {
-  readonly accounts: Pick<AccountRepository, "list" | "findById" | "update" | "updateStatus">
+  readonly accounts: Pick<
+    AccountRepository,
+    "list" | "findById" | "saveRefreshedCredential" | "transitionObservedStatus"
+  >
+  readonly refreshLock: Pick<CredentialRefreshLock, "tryRun">
+  readonly refreshCatalogAfterMutation: () => Promise<void>
   readonly audit: AuditRecorder
   readonly logger: Logger
   readonly config: CredentialRefreshConfig
-  /** Fired after a status write, so routing drops the account now rather than at the next TTL. */
-  readonly onStatusChanged?: () => void | Promise<void>
-  /** The timer seam. Defaults to `setTimeout`; a test drives its own clock through it. */
   readonly schedule?: (run: () => void, delayMs: number) => () => void
 }
 
-interface Armed {
-  readonly cancel: () => void
-  /** The instant the refresh is actually due, which a long lifetime reaches in several slices. */
-  readonly dueAtMs: number
-}
-
 export function createCredentialRefresher(deps: CredentialRefresherDeps): CredentialRefresher {
-  const timers = new Map<string, Armed>()
+  const timings = new Map<string, Timing>()
   const flights = new Map<string, Promise<RefreshOutcome>>()
-  const attempts = new Map<string, number>()
+  const reads = new Map<string, number>()
   const schedule = deps.schedule ?? defaultSchedule
-  const exchange: RefreshExchangeDeps = { ...deps, timeoutMs: deps.config.timeoutMs }
+  const exchange = { ...deps, timeoutMs: deps.config.timeoutMs }
   let shutdown = new AbortController()
+  let readVersion = 0
   let stopped = false
+  let abandoned = false
+  let stopping: Promise<void> | undefined
 
-  const disarm = (accountId: string): void => {
-    timers.get(accountId)?.cancel()
-    timers.delete(accountId)
+  const forget = (id: string): void => {
+    disarm(id)
+    timings.delete(id)
   }
-
-  const armAt = (accountId: string, dueAtMs: number): void => {
-    disarm(accountId)
-    // A refresh still in flight when `stop()` is called settles and would otherwise arm its next
-    // timer against a router that is already shutting down.
-    if (stopped) return
-    const cancel = schedule(
-      () => {
-        timers.delete(accountId)
-        // A remaining lifetime longer than one timer can express: re-armed in slices until due.
-        if (deps.now().getTime() < dueAtMs) {
-          armAt(accountId, dueAtMs)
+  const log = refreshErrorLogger(deps.logger)
+  const coherence = createRefreshCoherence({
+    refresh: deps.refreshCatalogAfterMutation,
+    schedule,
+    minDelayMs: deps.config.minDelayMs,
+    onError: (error) => log("routing catalog refresh failed after credential mutation", error),
+  })
+  const barrier = coherence.changed
+  const timers = createRefreshTimers({
+    schedule,
+    now: deps.now,
+    stopped: () => stopped,
+    timing: (id) => timings.get(id),
+    due: (id, timing) => {
+      void run(id, timing).catch((error) => log("credential refresh raised", error, id))
+    },
+  })
+  const { disarm, armAt, defer } = timers
+  const safety = createRefreshSafety({
+    timings,
+    armAt,
+    disarm,
+    now: deps.now,
+    minDelayMs: deps.config.minDelayMs,
+    log,
+    barrier,
+    abandoned: () => abandoned,
+  })
+  const armFor = (row: AccountRow, settling = false): void => {
+    if (safety.blocked(row) || !eligible(row) || row.tokenExpiresAt === null) {
+      forget(row.id)
+      return
+    }
+    const held = timings.get(row.id)
+    if (held !== undefined && matches(held, row)) {
+      held.lifecycleVersion = row.lifecycleVersion
+      if (held.pausedLifecycleVersion !== undefined) {
+        if (held.pausedLifecycleVersion === row.lifecycleVersion) {
+          disarm(row.id)
           return
         }
-        void refreshNow(accountId).catch((error: unknown) => {
-          deps.logger.error("credential refresh raised", {
-            component: COMPONENT,
-            accountId,
-            error: describe(error),
-          })
-        })
-      },
-      timerDelayMs(dueAtMs, deps.now().getTime()),
-    )
-    timers.set(accountId, { cancel, dueAtMs })
-  }
-
-  /** Whether this row takes a timer, and arms it. See the note on the provider registry above. */
-  const armFor = (row: AccountRow): boolean => {
-    const refreshable =
-      httpDriver(row.provider)?.oauth !== undefined &&
-      row.authMaterial !== null &&
-      // Both are terminal until a human acts, so a timer against either is a request that cannot
-      // help: `disabled` is the operator's word, and `needs_reauth` means the grant itself is gone.
-      row.status !== "disabled" &&
-      row.status !== "needs_reauth"
-
-    if (!refreshable || row.tokenExpiresAt === null) {
-      disarm(row.id)
-      return false
+        delete held.pausedLifecycleVersion
+        held.attempts = 0
+        held.dueAtMs = Math.max(held.dueAtMs, deps.now().getTime() + deps.config.minDelayMs)
+      }
+      if (!timers.has(row.id) && (settling || !flights.has(row.id))) armAt(row.id, held)
+      return
     }
-    armAt(row.id, refreshDueAt(row.tokenExpiresAt, deps.now(), deps.config).getTime())
-    return true
+    const timing: Timing = {
+      ...expectation(row),
+      attempts: 0,
+      lifecycleVersion: row.lifecycleVersion,
+      dueAtMs: refreshDueAt(row.tokenExpiresAt, deps.now(), deps.config).getTime(),
+    }
+    timings.set(row.id, timing)
+    armAt(row.id, timing)
   }
-
-  const notifyStatusChanged = async (): Promise<void> => {
+  const sync = async (id: string, settling = false): Promise<void> => {
+    const version = ++readVersion
+    reads.set(id, version)
     try {
-      await deps.onStatusChanged?.()
-    } catch (error: unknown) {
-      deps.logger.warn("routing catalog refresh failed after a status change", {
-        component: COMPONENT,
-        error: describe(error),
-      })
+      const row = await deps.accounts.findById(id)
+      if (reads.get(id) !== version || stopped) return
+      if (row === undefined) {
+        safety.deleted(id)
+        forget(id)
+      } else armFor(row, settling)
+    } catch (error) {
+      if (reads.get(id) === version && !stopped && !timers.has(id)) safety.retryHeld(id)
+      log("could not reconcile credential refresh timer", error, id)
+    } finally {
+      if (reads.get(id) === version) reads.delete(id)
     }
   }
-
-  const park = async (row: AccountRow, reason: RefreshFailure): Promise<void> => {
-    deps.logger.error("credential refresh gave up; this account needs re-authorization", {
-      component: COMPONENT,
-      accountId: row.id,
-      provider: row.provider,
-      reason,
-    })
-    if (await parkForReauth(deps, row, reason)) await notifyStatusChanged()
-  }
-
-  const onFailure = async (row: AccountRow, reason: RefreshFailure): Promise<void> => {
-    const tries = (attempts.get(row.id) ?? 0) + 1
-    attempts.set(row.id, tries)
-
-    if (reason === "unreachable" && tries < deps.config.maxAttempts) {
-      deps.logger.warn("credential refresh failed; retrying", {
-        component: COMPONENT,
-        accountId: row.id,
-        provider: row.provider,
-        attempt: tries,
-      })
-      armAt(row.id, deps.now().getTime() + retryDelayMs(tries, deps.config.minDelayMs))
-      return
+  const apply = async (
+    id: string,
+    outcome: RefreshOutcome,
+    expected: Expectation,
+    signal: AbortSignal,
+  ): Promise<RefreshOutcome> => {
+    if (abandoned) return outcome
+    if (outcome.kind === "success") {
+      await barrier()
+      return outcome
     }
-
-    disarm(row.id)
-    attempts.delete(row.id)
-    await park(row, reason)
-  }
-
-  const onSuccess = async (row: AccountRow, expiresAt: Date | null): Promise<void> => {
-    attempts.delete(row.id)
-    if (await reviveAfterRefresh(deps, row)) await notifyStatusChanged()
-
-    if (expiresAt === null) {
-      // Never guessed: this router does not invent a lifetime an issuer declined to state. The
-      // account keeps working on a live token and the breaker is what eventually notices.
-      deps.logger.warn("refreshed token reports no lifetime, so no refresh is scheduled", {
-        component: COMPONENT,
-        accountId: row.id,
-        provider: row.provider,
-      })
-      disarm(row.id)
-      return
+    if (outcome.kind === "skipped") {
+      if (
+        outcome.reason === "busy" ||
+        outcome.reason === "superseded" ||
+        outcome.reason === "aborted"
+      ) {
+        defer(id, expected, deps.config.minDelayMs)
+      }
+      return outcome
     }
-    armAt(row.id, refreshDueAt(expiresAt, deps.now(), deps.config).getTime())
-  }
-
-  const attempt = async (accountId: string): Promise<RefreshOutcome> => {
-    const row = await deps.accounts.findById(accountId)
-    if (row === undefined) {
-      // A deleted account's timer disarms itself the first time it fires. Nothing polls for that.
-      disarm(accountId)
-      attempts.delete(accountId)
-      return { ok: false, reason: "unknown-account" }
+    if (signal.aborted) return { kind: "skipped", reason: "aborted", row: outcome.observed }
+    const latest = await deps.accounts.findById(id)
+    if (signal.aborted) return { kind: "skipped", reason: "aborted" }
+    if (latest === undefined || !sameObservation(latest, outcome.observed)) {
+      defer(id, expected, deps.config.minDelayMs)
+      return {
+        kind: "skipped",
+        reason: "superseded",
+        ...(latest === undefined ? {} : { row: latest }),
+      }
     }
-
-    const flow = httpDriver(row.provider)?.oauth
-    if (flow === undefined || row.status === "disabled") {
-      disarm(accountId)
-      attempts.delete(accountId)
-      return { ok: false, reason: "not-refreshable" }
+    const timing = timings.get(id)
+    const tries = timing !== undefined && matches(timing, latest) ? ++timing.attempts : 1
+    if (outcome.reason === "unreachable" && tries < deps.config.maxAttempts) {
+      defer(id, expected, retryDelayMs(tries, deps.config.minDelayMs))
+      return outcome
     }
-
-    const outcome = await refreshCredential(exchange, row, flow, shutdown.signal)
-    if (outcome.ok) await onSuccess(row, outcome.expiresAt)
-    else await onFailure(row, outcome.reason)
+    if (latest.status === "exhausted") {
+      if (
+        timing === undefined ||
+        !matches(timing, latest) ||
+        !matches(expected, latest) ||
+        timing.lifecycleVersion !== latest.lifecycleVersion
+      )
+        return { kind: "skipped", reason: "superseded" }
+      timing.pausedLifecycleVersion = latest.lifecycleVersion
+      disarm(id)
+      return outcome
+    }
+    const committed = await parkForReauth(
+      { ...deps, refreshCatalogAfterMutation: barrier, canFinalize: () => !abandoned },
+      outcome.observed,
+      outcome.reason,
+    )
+    if (committed === undefined) {
+      defer(id, expected, deps.config.minDelayMs)
+      return { kind: "skipped", reason: "superseded" }
+    }
     return outcome
   }
-
-  const refreshNow = (accountId: string): Promise<RefreshOutcome> => {
-    const inFlight = flights.get(accountId)
-    if (inFlight !== undefined) return inFlight
-    // The stored promise is the one `finally` returns, so the map is already clear by the time an
-    // awaiter resumes: a caller that immediately triggers again gets a fresh exchange.
-    const flight = attempt(accountId).finally(() => flights.delete(accountId))
-    flights.set(accountId, flight)
+  const attempt = async (
+    id: string,
+    expected: Expectation,
+    signal: AbortSignal,
+    observation: RefreshFlightObservation,
+  ): Promise<RefreshOutcome> => {
+    const locked = await deps.refreshLock.tryRun(id, signal, async (lockSignal) => {
+      const row = await deps.accounts.findById(id)
+      if (lockSignal.aborted) return { kind: "skipped", reason: "aborted" } as const
+      if (row === undefined) return { kind: "skipped", reason: "unknown-account" } as const
+      if (safety.blocked(row)) return { kind: "skipped", reason: "not-refreshable", row } as const
+      if (!matches(expected, row)) return { kind: "skipped", reason: "superseded", row } as const
+      const flow = httpDriver(row.provider)?.oauth
+      if (flow === undefined || !eligible(row))
+        return { kind: "skipped", reason: "not-refreshable", row } as const
+      observation.row = row
+      observation.exchangeStarted = true
+      const outcome = await refreshCredential(exchange, row, flow, lockSignal)
+      observation.exchangeFinished = true
+      return outcome
+    })
+    return apply(
+      id,
+      locked.acquired ? locked.value : { kind: "skipped", reason: locked.reason },
+      expected,
+      signal,
+    )
+  }
+  const run = (id: string, expected?: Expectation): Promise<RefreshOutcome> => {
+    if (stopped) return Promise.resolve({ kind: "skipped", reason: "aborted" })
+    const existing = flights.get(id)
+    if (existing !== undefined) return existing
+    const signal = shutdown.signal
+    const observation: RefreshFlightObservation = { exchangeStarted: false }
+    let requested = expected
+    const flight: Promise<RefreshOutcome> = (async (): Promise<RefreshOutcome> => {
+      const row = expected === undefined ? await deps.accounts.findById(id) : undefined
+      if (signal.aborted) return { kind: "skipped", reason: "aborted" }
+      if (expected === undefined && row === undefined)
+        return { kind: "skipped", reason: "unknown-account" }
+      if (row !== undefined) {
+        armFor(row)
+        requested = expectation(row)
+      }
+      return attempt(id, requested ?? expectation(row as AccountRow), signal, observation)
+    })()
+      .catch(async (error) => {
+        await safety.failed(id, requested, observation, signal.aborted, error)
+        throw error
+      })
+      .finally(async () => {
+        try {
+          if (!signal.aborted) await sync(id, true)
+        } finally {
+          if (flights.get(id) === flight) {
+            flights.delete(id)
+            if (!stopped && !timers.has(id)) safety.retryHeld(id)
+          }
+        }
+      })
+    flights.set(id, flight)
     return flight
   }
-
   return {
     start: async () => {
-      shutdown = new AbortController()
-      stopped = false
+      if (stopping !== undefined) await stopping
+      if (flights.size > 0)
+        throw new Error("cannot restart while abandoned refresh work is pending")
+      if (stopped) {
+        shutdown = new AbortController()
+        stopped = false
+        abandoned = false
+      }
+      coherence.start()
       const rows = await deps.accounts.list()
-      const armed = rows.filter((row) => armFor(row)).length
-      deps.logger.info("credential refresh timers armed", { component: COMPONENT, accounts: armed })
+      if (stopped) return
+      for (const row of rows) armFor(row)
     },
-
-    stop: async () => {
+    stop: () => {
+      if (stopping !== undefined) return stopping
+      if (stopped && abandoned) return Promise.resolve()
       stopped = true
       shutdown.abort()
-      for (const timer of timers.values()) timer.cancel()
+      coherence.stopTimers()
       timers.clear()
-      attempts.clear()
-      // Awaited for the same reason the scheduler's stop() awaits its tick: an in-flight write
-      // holds a connection the caller's pool close would otherwise cut mid-statement.
-      await Promise.allSettled([...flights.values()])
-    },
-
-    sync: async (accountId) => {
-      try {
-        const row = await deps.accounts.findById(accountId)
-        // A new token is a fresh start: whatever backoff the old one accumulated is not its debt.
-        attempts.delete(accountId)
-        if (row === undefined) disarm(accountId)
-        else armFor(row)
-      } catch (error: unknown) {
-        deps.logger.warn("could not re-arm this account's refresh timer", {
-          component: COMPONENT,
-          accountId,
-          error: describe(error),
+      timings.clear()
+      const draining = Promise.allSettled([...flights.values()]).then(() => coherence.drain())
+      stopping = drainRefreshWork(
+        draining,
+        deps.config.shutdownDrainMs ?? deps.config.timeoutMs,
+        schedule,
+      )
+        .then((complete) => {
+          if (!complete) {
+            abandoned = true
+            deps.logger.warn("credential refresh drain timed out; grant persistence is uncertain", {
+              component: "account-refresher",
+              flights: flights.size,
+            })
+          }
         })
-      }
+        .finally(() => {
+          stopping = undefined
+        })
+      return stopping
     },
-
-    refreshNow,
+    sync,
+    refreshNow: (id) => run(id),
   }
-}
-
-function defaultSchedule(run: () => void, delayMs: number): () => void {
-  const timer = setTimeout(run, delayMs)
-  // The process must be free to exit on an idle refresher, exactly as it is on an idle scheduler.
-  timer.unref?.()
-  return () => clearTimeout(timer)
-}
-
-/**
- * The full cause chain, innermost first (`describeError`) — a wrapper-only `error.message` is how
- * a fetch failure logs "unable to refresh" while the socket's actual complaint sits one `cause`
- * down, discarded. Never a stack, never a body; scrubbed first and bounded after, so redaction
- * always sees the whole chain (the same order `services/usage/fromEnv.ts` uses).
- */
-function describe(error: unknown): string {
-  const scrubbed = redactValue(describeError(error, Number.POSITIVE_INFINITY))
-  return scrubbed.length <= MAX_ERROR_CHARS
-    ? scrubbed
-    : `${scrubbed.slice(0, MAX_ERROR_CHARS - 1)}…`
 }

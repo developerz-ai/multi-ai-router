@@ -1,82 +1,71 @@
 import { describe, expect, test } from "bun:test"
 import type { AccountStatus } from "@multi-ai-router/core"
-import type { AccountRow } from "@multi-ai-router/db"
 import { createRecheckService } from "../../../src/services/accounts"
 import type { AuditEventInput } from "../../../src/services/admin"
-
-/**
- * "Re-check now" — the button that exists because providers reset early.
- *
- * The two properties worth pinning are that the cooldown cannot be bypassed from the client, and
- * that a refused re-check is not an error. Both are stated in CLAUDE.md's frontend section; both
- * are the kind of thing a later refactor quietly breaks.
- *
- * The third arrived with durable health: a standing `exhausted` on the row outlives the process
- * that observed it, so the button has to lift the stored block as well as the in-memory one, and
- * has to lift *only* that one.
- */
+import type { AccountAuthProbe } from "../../../src/services/health/claudeAuthProbe"
+import { accountRow } from "../../support/account-row"
+import { memoryAccountLifecycle } from "../../support/memory-account-lifecycle"
 
 const NOW = new Date("2026-01-01T12:00:00.000Z")
+const row = (id: string, status: AccountStatus = "cooling_down") =>
+  accountRow({ id, label: id, provider: "zai", status })
 
-function accountRow(id: string, status: AccountStatus = "cooling_down"): AccountRow {
-  return {
-    id,
-    label: id,
-    provider: "zai",
-    status,
-    authMaterial: null,
-    configDir: null,
-    tokenExpiresAt: null,
-    baseUrl: null,
-    dialect: null,
-    modelAliases: null,
-    weight: 100,
-    priority: 0,
-    createdAt: NOW,
-    updatedAt: NOW,
-  }
+function deferred() {
+  let resolve!: () => void
+  const promise = new Promise<void>((done) => {
+    resolve = done
+  })
+  return { promise, resolve }
 }
 
-function harness(cooldownSeconds = 60, rows = [accountRow("a"), accountRow("b")]) {
-  const resets: string[] = []
+function harness(
+  cooldownSeconds = 60,
+  rows = [row("a"), row("b")],
+  options: {
+    beforeCommit?: () => Promise<void>
+    barrier?: () => Promise<void>
+    auditFails?: boolean
+    auth?: AccountAuthProbe
+  } = {},
+) {
+  const commits: string[] = []
+  const order: string[] = []
   const audited: AuditEventInput[] = []
-  let refreshes = 0
+  const repository = memoryAccountLifecycle(rows, [])
   let clock = NOW
-
   const service = createRecheckService({
     accounts: {
       list: async () => rows,
       findById: async (id) => rows.find((row) => row.id === id),
-      // The same guard the repository applies, so a test cannot pass on a statement that would
-      // have overwritten `disabled` in postgres.
-      updateStatusWhen: async (id, from, to, now) => {
-        const index = rows.findIndex((row) => row.id === id)
-        const row = rows[index]
-        if (row === undefined || !from.includes(row.status)) return undefined
-        const next: AccountRow = { ...row, status: to, updatedAt: now }
-        rows[index] = next
-        return next
+      recheckAccount: async (input) => {
+        await options.beforeCommit?.()
+        const committed = await repository.recheckAccount(input)
+        if (committed !== undefined) commits.push(input.id)
+        return committed
       },
     },
-    health: { reset: (accountId) => resets.push(accountId) },
     audit: {
       record: async (event) => {
+        order.push("audit")
+        if (options.auditFails) throw new Error("audit unavailable")
         audited.push(event)
       },
     },
     refreshCatalog: async () => {
-      refreshes += 1
+      order.push("barrier")
+      await options.barrier?.()
     },
+    ...(options.auth === undefined ? {} : { auth: options.auth }),
     cooldownSeconds,
     now: () => clock,
   })
-
   return {
     service,
     rows,
-    resets,
+    commits,
+    order,
     audited,
-    refreshes: () => refreshes,
+    repository,
     advance: (ms: number) => {
       clock = new Date(clock.getTime() + ms)
     },
@@ -84,137 +73,175 @@ function harness(cooldownSeconds = 60, rows = [accountRow("a"), accountRow("b")]
 }
 
 describe("recheck", () => {
-  test("clears the account's breaker marks, which is what makes it eligible again", async () => {
-    const { service, resets } = harness()
-    const result = await service.recheck("a")
-
-    expect(result.ok).toBe(true)
-    if (!result.ok) return
-    expect(result.value.rechecked).toBe(true)
-    // The same call the cooldown-expiry path makes. One recovery path, not two.
-    expect(resets).toEqual(["a"])
+  test("commits a full-health recovery intent and installs it before returning", async () => {
+    const h = harness()
+    const result = await h.service.recheck("a")
+    expect(result.ok && result.value.rechecked).toBe(true)
+    expect(h.rows[0]).toMatchObject({
+      lifecycleVersion: 1,
+      healthRecoveryVersion: 1,
+      authRecoveryVersion: 0,
+      status: "cooling_down",
+    })
+    expect(h.order).toEqual(["barrier", "audit"])
   })
 
-  test("a second press inside the cooldown is refused server-side, not by the client", async () => {
-    const { service, resets } = harness(60)
-    await service.recheck("a")
-    const second = await service.recheck("a")
-
-    expect(second.ok).toBe(true)
-    if (!second.ok) return
-    expect(second.value.rechecked).toBe(false)
-    // The refusal is real: the breaker was not cleared a second time.
-    expect(resets).toEqual(["a"])
+  test("a second press inside cooldown is refused server-side without another commit", async () => {
+    const h = harness()
+    await h.service.recheck("a")
+    const second = await h.service.recheck("a")
+    expect(second.ok && second.value.rechecked).toBe(false)
+    expect(h.commits).toEqual(["a"])
   })
 
-  test("a refused re-check is a normal response carrying when the next one is allowed", async () => {
-    const { service } = harness(60)
+  test("refusal is a normal response carrying the original next allowed instant", async () => {
+    const { service } = harness()
     const first = await service.recheck("a")
     const second = await service.recheck("a")
-
-    expect(second.ok).toBe(true)
-    if (!first.ok || !second.ok) return
-    // Not a 429: the operator asked for a state the system is already in.
+    if (!first.ok || !second.ok) throw new Error("expected normal replies")
     expect(second.value.nextAllowedAt).toBe(first.value.nextAllowedAt)
     expect(second.value.lastCheckedAt).toBe(first.value.lastCheckedAt)
   })
 
-  test("the cooldown expires", async () => {
-    const { service, resets, advance } = harness(60)
-    await service.recheck("a")
-    advance(60_000)
-    const again = await service.recheck("a")
-
-    expect(again.ok).toBe(true)
-    if (!again.ok) return
-    expect(again.value.rechecked).toBe(true)
-    expect(resets).toEqual(["a", "a"])
+  test("cooldown expiry permits exactly another intent", async () => {
+    const h = harness()
+    await h.service.recheck("a")
+    h.advance(60_000)
+    const again = await h.service.recheck("a")
+    expect(again.ok && again.value.rechecked).toBe(true)
+    expect(h.commits).toEqual(["a", "a"])
+    expect(h.rows[0]?.healthRecoveryVersion).toBe(2)
   })
 
-  test("recheck-all applies the cooldown per account, so it is not a way to double the rate", async () => {
-    const { service, resets } = harness(60)
-    await service.recheck("a")
-    const all = await service.recheckAll()
-
-    expect(all.ok).toBe(true)
-    if (!all.ok) return
+  test("recheck-all honors each account's cooldown", async () => {
+    const h = harness()
+    await h.service.recheck("a")
+    const all = await h.service.recheckAll()
+    if (!all.ok) throw new Error("expected normal reply")
     expect(all.value.find((entry) => entry.accountId === "a")?.rechecked).toBe(false)
     expect(all.value.find((entry) => entry.accountId === "b")?.rechecked).toBe(true)
-    expect(resets).toEqual(["a", "b"])
+    expect(h.commits).toEqual(["a", "b"])
   })
 
-  test("a re-check that took effect is audited; a refused one writes nothing", async () => {
-    const { service, audited } = harness(60)
-    await service.recheck("a")
-    await service.recheck("a")
-
-    expect(audited).toHaveLength(1)
-    expect(audited[0]?.kind).toBe("account.rechecked")
-    expect(audited[0]?.subjectId).toBe("a")
-    // No probe was injected, so nothing claims to know whether the account is logged in.
-    expect(audited[0]?.detail).toEqual({ provider: "zai" })
+  test("only a committed recheck is audited and no absent probe result is invented", async () => {
+    const h = harness()
+    await h.service.recheck("a")
+    await h.service.recheck("a")
+    expect(h.audited).toHaveLength(1)
+    expect(h.audited[0]).toMatchObject({
+      kind: "account.rechecked",
+      subjectId: "a",
+      detail: { provider: "zai" },
+    })
   })
 
-  test("lifts a stored exhausted, or the button would be pressing against a durable row", async () => {
-    const { service, rows, refreshes } = harness(60, [accountRow("a", "exhausted")])
-    const result = await service.recheck("a")
-
-    expect(result.ok).toBe(true)
-    if (!result.ok) return
-    expect(result.value.clearedStatus).toBe("exhausted")
-    expect(rows[0]?.status).toBe("active")
-    // Read-after-write: the console re-reads the list the moment this returns.
-    expect(refreshes()).toBe(1)
+  test("lifts only currently exhausted status and reports it", async () => {
+    const h = harness(60, [row("a", "exhausted")])
+    const result = await h.service.recheck("a")
+    expect(result.ok && result.value.clearedStatus).toBe("exhausted")
+    expect(h.rows[0]?.status).toBe("active")
+    expect(h.audited[0]?.detail).toEqual({ provider: "zai", clearedStatus: "exhausted" })
   })
 
-  test("never lifts a disabled — that is the operator's own switch, not a block we observed", async () => {
-    const { service, rows, refreshes } = harness(60, [accountRow("a", "disabled")])
-    const result = await service.recheck("a")
+  for (const status of ["disabled", "needs_reauth"] as const) {
+    test(`preserves ${status} while installing its new recovery epoch`, async () => {
+      const h = harness(60, [row("a", status)])
+      const result = await h.service.recheck("a")
+      expect(result.ok && result.value.clearedStatus).toBeUndefined()
+      expect(h.rows[0]).toMatchObject({ status, lifecycleVersion: 1, healthRecoveryVersion: 1 })
+      expect(h.order).toEqual(["barrier", "audit"])
+    })
+  }
 
-    expect(result.ok).toBe(true)
-    if (!result.ok) return
-    expect(result.value.clearedStatus).toBeUndefined()
-    expect(rows[0]?.status).toBe("disabled")
-    // Nothing changed, so nothing is re-read.
-    expect(refreshes()).toBe(0)
+  test("recheck-all installs each committed row before its audit", async () => {
+    const h = harness(60, [row("a", "exhausted"), row("b", "exhausted")])
+    const all = await h.service.recheckAll()
+    expect(all.ok && all.value.every((entry) => entry.clearedStatus === "exhausted")).toBe(true)
+    expect(h.order).toEqual(["barrier", "audit", "barrier", "audit"])
   })
 
-  test("never lifts a needs_reauth — only a completed login ends that one", async () => {
-    const { service, rows } = harness(60, [accountRow("a", "needs_reauth")])
-    const result = await service.recheck("a")
-
-    expect(result.ok).toBe(true)
-    if (!result.ok) return
-    expect(result.value.clearedStatus).toBeUndefined()
-    expect(rows[0]?.status).toBe("needs_reauth")
+  test("unknown account returns 404 without committing", async () => {
+    const h = harness()
+    const result = await h.service.recheck("missing")
+    expect(!result.ok && result.failure.status).toBe(404)
+    expect(h.commits).toEqual([])
   })
 
-  test("a lifted block is audited, so the log distinguishes it from a reset countdown", async () => {
-    const { service, audited } = harness(60, [accountRow("a", "exhausted")])
-    await service.recheck("a")
-
-    expect(audited[0]?.detail).toEqual({ provider: "zai", clearedStatus: "exhausted" })
+  test("concurrent presses reserve cooldown before SQL and wait for the committed catalog barrier", async () => {
+    const started = deferred()
+    const sql = deferred()
+    const barrierStarted = deferred()
+    const barrier = deferred()
+    const h = harness(60, [row("a")], {
+      beforeCommit: async () => {
+        started.resolve()
+        await sql.promise
+      },
+      barrier: async () => {
+        barrierStarted.resolve()
+        await barrier.promise
+      },
+    })
+    let completed = false
+    const first = h.service.recheck("a").then((result) => {
+      completed = true
+      return result
+    })
+    await started.promise
+    const second = await h.service.recheck("a")
+    expect(second.ok && second.value.rechecked).toBe(false)
+    expect(h.commits).toEqual([])
+    sql.resolve()
+    await barrierStarted.promise
+    expect(completed).toBe(false)
+    expect(h.audited).toEqual([])
+    barrier.resolve()
+    expect((await first).ok).toBe(true)
+    expect(h.commits).toEqual(["a"])
   })
 
-  test("recheck-all refreshes the catalog once, however many rows it cleared", async () => {
-    const { service, refreshes } = harness(60, [
-      accountRow("a", "exhausted"),
-      accountRow("b", "exhausted"),
-    ])
-    const all = await service.recheckAll()
-
-    expect(all.ok).toBe(true)
-    if (!all.ok) return
-    expect(all.value.every((entry) => entry.clearedStatus === "exhausted")).toBe(true)
-    expect(refreshes()).toBe(1)
+  test("SQL failure restores the local cooldown reservation for a retry", async () => {
+    let attempts = 0
+    const h = harness(60, [row("a")], {
+      beforeCommit: async () => {
+        if (++attempts === 1) throw new Error("SQL unavailable")
+      },
+    })
+    await expect(h.service.recheck("a")).rejects.toThrow("SQL unavailable")
+    expect(h.service.lastCheckedAt("a")).toBeNull()
+    const retry = await h.service.recheck("a")
+    expect(retry.ok && retry.value.rechecked).toBe(true)
+    expect(h.commits).toEqual(["a"])
   })
 
-  test("an unknown account id is a 404, not a silent success", async () => {
-    const { service } = harness()
-    const result = await service.recheck("missing")
+  test("auth check receives the atomic returned row after an intervening operator disable", async () => {
+    const rows = [row("a", "exhausted")]
+    const repository = memoryAccountLifecycle(rows, [])
+    let observed: Parameters<AccountAuthProbe["check"]>[0] | undefined
+    const h = harness(60, rows, {
+      beforeCommit: async () => {
+        await repository.updateOperatorAccount({ id: "a", patch: { status: "disabled" }, now: NOW })
+      },
+      auth: {
+        check: async (subject) => {
+          observed = subject
+          return null
+        },
+      },
+    })
+    await h.service.recheck("a")
+    expect(observed).toBe(h.rows[0])
+    expect(observed).toMatchObject({ status: "disabled", lifecycleVersion: 2, authMaterial: null })
+    expect(h.rows[0]?.healthRecoveryVersion).toBe(1)
+    expect(h.audited[0]?.detail).toEqual({ provider: "zai" })
+  })
 
-    expect(result.ok).toBe(false)
-    if (result.ok) return
-    expect(result.failure.status).toBe(404)
+  test("audit failure follows an installed committed recovery and retains cooldown", async () => {
+    const h = harness(60, [row("a", "exhausted")], { auditFails: true })
+    await expect(h.service.recheck("a")).rejects.toThrow("audit unavailable")
+    expect(h.order).toEqual(["barrier", "audit"])
+    expect(h.rows[0]?.status).toBe("active")
+    const refused = await h.service.recheck("a")
+    expect(refused.ok && refused.value.rechecked).toBe(false)
   })
 })

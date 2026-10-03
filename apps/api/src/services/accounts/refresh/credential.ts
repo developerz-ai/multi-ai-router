@@ -21,6 +21,7 @@ export interface StoredOAuthCredential {
    * account unrefreshable rather than merely stale: there is nothing to present.
    */
   readonly refreshToken: string | null
+  readonly providerAccountId: string | null
 }
 
 interface StoredShape {
@@ -28,6 +29,8 @@ interface StoredShape {
   readonly access_token?: unknown
   readonly refreshToken?: unknown
   readonly refresh_token?: unknown
+  readonly providerAccountId?: unknown
+  readonly provider_account_id?: unknown
 }
 
 /** `null` for anything this router cannot read back as a token set. Never throws, never partial. */
@@ -43,17 +46,26 @@ export function readStoredOAuth(plaintext: string): StoredOAuthCredential | null
   const stored = parsed as StoredShape
   const accessToken = text(stored.accessToken ?? stored.access_token)
   if (accessToken === null) return null
-  return { accessToken, refreshToken: text(stored.refreshToken ?? stored.refresh_token) }
+  return {
+    accessToken,
+    refreshToken: text(stored.refreshToken ?? stored.refresh_token),
+    providerAccountId: identity(stored.providerAccountId ?? stored.provider_account_id),
+  }
 }
 
 /** Compact and key-ordered, so a re-encrypted row differs only where the tokens differ. */
 export function writeStoredOAuth(credential: StoredOAuthCredential): string {
   return JSON.stringify({
     accessToken: credential.accessToken,
-    ...(credential.refreshToken === null ? {} : { refreshToken: credential.refreshToken }),
+    refreshToken: credential.refreshToken,
+    providerAccountId: credential.providerAccountId,
   })
 }
 
 function text(value: unknown): string | null {
   return typeof value === "string" && value.length > 0 ? value : null
+}
+
+function identity(value: unknown): string | null {
+  return typeof value === "string" && value.trim() !== "" ? value.trim() : null
 }

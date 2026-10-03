@@ -8,6 +8,7 @@ import {
   refreshAccountCatalog,
   shippedSubscriptionCatalog,
 } from "../../../src/services/models"
+import { accountRow as durableAccountRow } from "../../support/account-row"
 
 /**
  * One subscription's catalog refresh, through the same `refreshAccountCatalog` the sweep calls:
@@ -18,7 +19,7 @@ import {
 const NOW = new Date("2026-07-28T12:00:00.000Z")
 
 function sub(overrides: Partial<AccountRow> = {}): AccountRow {
-  return {
+  return durableAccountRow({
     id: "sub-1",
     label: "sub-1",
     provider: "anthropic-oauth",
@@ -29,7 +30,7 @@ function sub(overrides: Partial<AccountRow> = {}): AccountRow {
     weight: 100,
     priority: 0,
     ...overrides,
-  } as AccountRow
+  })
 }
 
 function harness(answer: SdkModelListing | null) {

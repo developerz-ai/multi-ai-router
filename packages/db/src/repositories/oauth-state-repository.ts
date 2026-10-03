@@ -1,4 +1,4 @@
-import { and, eq, gt, isNull } from "drizzle-orm"
+import { and, eq, gt, isNotNull, isNull, or } from "drizzle-orm"
 import type { Database } from "../client"
 import { type OauthStateRow, oauthStates } from "../schema/oauth-states"
 import { deleteOldestBatch } from "./bounded-delete"
@@ -56,6 +56,7 @@ export interface OauthStateRepository {
 }
 
 export interface CreateOauthStateInput {
+  readonly authorizationLifecycleVersion?: number | null
   /** The opaque value handed to the provider and compared on the way back. */
   readonly state: string
   /** AES-256-GCM envelope of the PKCE `code_verifier`. Never plaintext. */
@@ -92,6 +93,7 @@ export function createOauthStateRepository(db: Database): OauthStateRepository {
       const rows = await db
         .insert(oauthStates)
         .values({
+          authorizationLifecycleVersion: input.authorizationLifecycleVersion ?? null,
           state: input.state,
           codeVerifier: input.codeVerifier,
           nonce: input.nonce ?? null,
@@ -119,6 +121,7 @@ export function createOauthStateRepository(db: Database): OauthStateRepository {
             eq(oauthStates.state, state),
             isNull(oauthStates.consumedAt),
             gt(oauthStates.expiresAt, now),
+            or(isNull(oauthStates.accountId), isNotNull(oauthStates.authorizationLifecycleVersion)),
           ),
         )
         .returning()

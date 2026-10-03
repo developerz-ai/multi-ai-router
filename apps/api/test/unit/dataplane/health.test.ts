@@ -313,7 +313,7 @@ describe("the half-open probe gate", () => {
   test("the first request through takes the probe; the rest are refused", () => {
     const store = cooling()
 
-    expect(store.admitProbe("a", recovered)).toEqual({ admitted: true, held: true })
+    expect(store.admitProbe("a", recovered)).toEqual({ admitted: true, held: true, token: 1 })
     expect(store.admitProbe("a", recovered)).toEqual({ admitted: false, held: false })
     expect(store.admitProbe("a", recovered)).toEqual({ admitted: false, held: false })
   })
@@ -678,7 +678,11 @@ describe("a rejected API key", () => {
 
     expect(store.stateOf("key").breaker.cooldownUntil).toEqual(after(COOLDOWN))
     expect(store.admitProbe("key", after(COOLDOWN - 1))).toEqual({ admitted: false, held: false })
-    expect(store.admitProbe("key", after(COOLDOWN))).toEqual({ admitted: true, held: true })
+    expect(store.admitProbe("key", after(COOLDOWN))).toEqual({
+      admitted: true,
+      held: true,
+      token: 1,
+    })
   })
 
   /**

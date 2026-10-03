@@ -1,8 +1,9 @@
 import { describe, expect, test } from "bun:test"
 import type { AccountStatus } from "@multi-ai-router/core"
-import type { AccountRow } from "@multi-ai-router/db"
+import type { AccountRepository, AccountRow } from "@multi-ai-router/db"
 import { createLogger } from "../../src/logging/logger"
 import { createAccountStatusWriter } from "../../src/services/dataplane"
+import { accountRow } from "../support/account-row"
 import { account, jsonResponse, subscriptionAccount } from "../unit/dataplane/fixtures"
 import { bearer, CRYPTOR, harness, MESSAGE, post, settle } from "./harness"
 
@@ -22,16 +23,18 @@ function rows(initial: Record<string, AccountStatus> = { "acct-1": "active" }) {
   const table = { ...initial }
   return {
     table,
-    updateStatusWhen: async (
-      id: string,
-      from: readonly AccountStatus[],
-      to: AccountStatus,
-      _now: Date,
-    ): Promise<AccountRow | undefined> => {
+    transitionObservedStatus: async ({
+      id,
+      expected,
+      status,
+    }: Parameters<AccountRepository["transitionObservedStatus"]>[0]): Promise<
+      AccountRow | undefined
+    > => {
       const current = table[id]
-      if (current === undefined || !from.includes(current)) return undefined
-      table[id] = to
-      return { id, status: to } as AccountRow
+      if (current === undefined || current !== expected.status || expected.lifecycleVersion !== 0)
+        return undefined
+      table[id] = status
+      return accountRow({ id, status, authMaterial: expected.authMaterial })
     },
   }
 }
@@ -187,4 +190,37 @@ describe("the restarted router reads the block back", () => {
     expect(res.status).toBe(200)
     expect(upstream.calls).toHaveLength(1)
   })
+})
+
+test("an old response stream cannot trip health after a committed recovery", async () => {
+  let failStream: (error: Error) => void = () => {
+    throw new Error("stream not started")
+  }
+  const subject = account("acct-1", { cipher: CRYPTOR })
+  const body = new ReadableStream<Uint8Array>({
+    start(controller) {
+      failStream = (error) => controller.error(error)
+      controller.enqueue(new TextEncoder().encode("data: synthetic\n\n"))
+    },
+  })
+  const { app, health, usage } = harness({
+    accounts: [subject],
+    health: { failureThreshold: 1 },
+    responses: [() => new Response(body, { headers: { "content-type": "text/event-stream" } })],
+  })
+  const response = await app.request("/v1/messages", post(MESSAGE, bearer()))
+  const draining = response.text()
+  health.reconcile(subject.id, {
+    ...subject,
+    status: "active",
+    lifecycleVersion: 1,
+    healthRecoveryVersion: 1,
+  })
+  failStream(new Error("synthetic old stream disconnect"))
+  await draining.catch(() => undefined)
+  await settle()
+  expect(health.stateOf(subject.id).breaker.status).toBe("active")
+  expect(health.stateOf(subject.id).inFlight).toBe(0)
+  expect(usage.rows).toHaveLength(1)
+  expect(usage.rows[0]?.outcome).toBe("upstream_error")
 })

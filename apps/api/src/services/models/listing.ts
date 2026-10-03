@@ -244,6 +244,9 @@ function routableStandIn(account: AccountRow, driverAccount: DriverAccount): Rou
     driver: driverAccount,
     billing: account.billing,
     authMaterial: account.authMaterial,
+    lifecycleVersion: account.lifecycleVersion,
+    healthRecoveryVersion: account.healthRecoveryVersion,
+    authRecoveryVersion: account.authRecoveryVersion,
     configDir: account.configDir,
   }
 }

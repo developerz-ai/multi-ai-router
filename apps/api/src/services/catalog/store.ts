@@ -42,6 +42,8 @@ export interface RoutingCatalogStore extends RoutingCatalog {
 
 export interface RoutingCatalogStoreDeps {
   readonly load: () => Promise<CatalogData>
+  /** Runs before the installed snapshot becomes observable or a mutation barrier resolves. */
+  readonly onInstalled?: (accounts: readonly RoutableAccount[]) => void
   /** Staleness bound for a write made by another replica. Config, never a constant. */
   readonly refreshIntervalMs: number
   readonly now?: () => Date
@@ -58,6 +60,7 @@ export function createRoutingCatalog(deps: RoutingCatalogStoreDeps): RoutingCata
   let loadedAt: Date | null = null
   let timer: ReturnType<typeof setTimeout> | null = null
   const { refresh, refreshAfterMutation } = createSnapshotRefresh(deps.load, (next) => {
+    deps.onInstalled?.(next.accounts)
     data = next
     loadedAt = now()
   })

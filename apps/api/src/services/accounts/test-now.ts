@@ -310,6 +310,9 @@ async function runHttpProbe(
     driver: driverAccount,
     billing: account.billing,
     authMaterial: account.authMaterial,
+    lifecycleVersion: account.lifecycleVersion,
+    healthRecoveryVersion: account.healthRecoveryVersion,
+    authRecoveryVersion: account.authRecoveryVersion,
     configDir: account.configDir,
   }
 

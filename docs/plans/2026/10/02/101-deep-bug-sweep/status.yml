@@ -4,8 +4,8 @@ status: in_progress        # not_started | in_progress | blocked | complete | su
 created_by: sebi
 worked_by: "Codex team"
 owner: sebi
-percent: 21
-current_focus: "Waves 1 and 2 merged; supported dependency upgrades and Sentry privacy migration in progress; OAuth lifecycle next."
+percent: 23
+current_focus: "PR144 dependencies merged; W3A review fixes validated locally; final review completion/merge/release/deployment pending. W3B recovery admission and quota consistency next."
 slices:
   - file: 01-edge-auth-security.md
     status: in_progress
@@ -13,11 +13,11 @@ slices:
     findings: 23
   - file: 02-routing-state-persistence.md
     status: in_progress
-    percent: 11
+    percent: 17
     findings: 18
   - file: 03-providers-claude-sdk.md
     status: in_progress
-    percent: 41
+    percent: 47
     findings: 17
   - file: 04-translation.md
     status: not_started
@@ -32,13 +32,16 @@ slices:
     percent: 0
     findings: 8
 evidence:
+  - "W3A reviewed revision: pinned Bun 1.4.2 bin/check with disposable PostgreSQL 18.6: 4549 tests across 319 files passed, zero failed; lint/typecheck/build passed. Mocked OAuth identity/lifecycle, exact CAS, dedicated lock contention/loss, shutdown/deadline and postcommit catalog regressions covered. No live provider compatibility claim. Final local amd64 image build passed; independent seven-refresher-suite verification: 58 tests, 176 assertions. Final review completion, merge, release and deployment pending. See 102-full-router-audit/evidence/wave3a-check.json."
+  - "102-full-router-audit/evidence/wave3a-bench.json: prior pre-review benchmark revision (not rerun after review fixes), 8000 requests, zero failures/buffered streams; maximum p99 0.9454545455 ms, violations empty. A CLI-version smoke check ran briefly near benchmark startup. Earlier runs reached about 5 ms under concurrent workload; no causal performance improvement is claimed."
+  - "Dependency PR #144 merged as e41f0edd through the normal protected flow; dependency wave release/deployment remains separate."
   - "Dependency wave: Bun 1.4.2 bin/check with disposable PostgreSQL 18.6: 4425 tests passed, zero failed; lint/typecheck/build passed. PostgreSQL 16 integration regressions: 88 repository and 497 API tests passed. Latest supported dependency tree has zero reported advisories; frozen install preserves lockfile; Drizzle generate/check unchanged. Local amd64 image builds, Bun 1.4.2 and Claude CLI 2.1.288 verified; native arm64 release validation pending."
   - "102-full-router-audit/evidence/dependency-bench.json: 8000 requests, zero failures/buffered streams; maximum p99 1.25 ms, no budget violations."
   - "102-full-router-audit/evidence/wave2-bench.json: 8000 requests, zero failures/buffered streams; max p99 0.69 ms; no budget violations."
   - "Wave 2: pinned Bun 1.4.2 bin/check with disposable PostgreSQL: 4417 tests passed, zero failed; lint, typecheck and build passed. PR #143 merged as 986189e; all five CI checks passed; CodeRabbit generated no actionable comments. Release/deployment pending."
   - "Pinned Bun 1.4.2; bin/check with disposable PostgreSQL: 4326 tests passed, zero failed; build passed."
   - "102-full-router-audit/evidence/wave1-bench.json: 8000 requests, zero failures/buffered streams; max p99 1.28 ms."
-notes: "Wave 1 implements credential boundaries, authentication races and SDK isolation. 01.14 not reproduced on real full-body POST with Bun 1.4.0 or pinned 1.4.2: idle=2s, response delayed 7s still succeeds; unconsumed GET reproduces idle close. 01.16 transport failures fixed; clean HTTP-200 protocol error frames remain open. #87 current literal removed; operational rotation remains open."
+notes: "W3A implements OAuth identity/refresh ordering and stale verdict fencing; 102:03.2 reconnect recovery remains partial/open until W3B global probe/quota boundary is complete. W3B global recovery probe admission, persisted quota recovery and quota-floor CAS remain open; W4 scheduler/general shutdown work remains open. Wave 1 implements credential boundaries, authentication races and SDK isolation. 01.14 not reproduced on real full-body POST with Bun 1.4.0 or pinned 1.4.2: idle=2s, response delayed 7s still succeeds; unconsumed GET reproduces idle close. 01.16 transport failures fixed; clean HTTP-200 protocol error frames remain open. #87 current literal removed; operational rotation remains open."
 last_updated: 2026-10-03
 # Percentages measure locally resolved findings; review, release and deployment remain separate gates.
 resolved_findings:
@@ -63,3 +66,5 @@ resolved_findings:
   - "02.5"
   - "02.12"
   - "03.7"
+  - "02.2"
+  - "03.6"

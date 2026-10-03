@@ -327,3 +327,9 @@ Local key-cache invalidation fences pending repository and scope loads as well a
 Password verification reserves per-IP admission and a global `ADMIN_LOGIN_MAX_CONCURRENT` slot before expensive hashing. `ADMIN_LOGIN_MAX_TRACKED_IPS` bounds source tracking and refuses new sources when saturated. OIDC starts consume per-IP admission before discovery or state persistence. Discovery, token exchange, and JWKS reads use `ADMIN_OIDC_REQUEST_TIMEOUT_MS`; ID tokens validate issue time and the authorized party for multiple audiences.
 
 The repository's debugger configuration contains no login credential. Operators must supply authentication at runtime; removing the old literal does not rotate historical copies. Issue #87 tracks operational rotation and session invalidation.
+
+### Private authorization and observation state
+
+Account lifecycle/recovery versions, durable authorization-attempt id, provider account identity and ciphertext remain internal. Explicit DTO mapping exposes none of them. Browser authorization begin captures current lifecycle in the same transaction that retires earlier pending states and installs the new attempt id. Completion must match both lifecycle and attempt, including after a state has already been consumed; cancellation invalidates an exchanged-but-uncommitted attempt. Legacy account pending states without lifecycle capture are rejected; admin OIDC states remain compatible.
+
+Claude metadata reads capture private durable row facts before reading the file, batch-loading list subjects on the admin plane. Their cache is scoped to lifecycle/ciphertext/status, and a blank result can park only the exact observed active row. No metadata read extracts or forwards SDK token contents. A reconnect during disk I/O invalidates the old result's status write. Committed status/credential changes cross the local routing barrier before audit failures can obscure coherence.

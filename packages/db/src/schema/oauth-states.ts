@@ -1,4 +1,4 @@
-import { index, pgTable, text, timestamp, uniqueIndex, uuid } from "drizzle-orm/pg-core"
+import { index, integer, pgTable, text, timestamp, uniqueIndex, uuid } from "drizzle-orm/pg-core"
 import { accounts } from "./accounts"
 
 /**
@@ -45,6 +45,7 @@ export const oauthStates = pgTable(
     provider: text("provider").notNull(),
     accountId: uuid("account_id").references(() => accounts.id, { onDelete: "cascade" }),
 
+    authorizationLifecycleVersion: integer("authorization_lifecycle_version"),
     redirectUri: text("redirect_uri"),
 
     /** Set on first use. A second presentation of a consumed state is rejected. */

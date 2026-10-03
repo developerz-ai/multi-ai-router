@@ -4,6 +4,7 @@ import type { UpdateAccountBody } from "../../../src/services/accounts"
 import { createDiscoverModelsService } from "../../../src/services/accounts"
 import type { AuditEventInput } from "../../../src/services/admin"
 import { ok } from "../../../src/services/admin/result"
+import { accountRow as durableAccountRow } from "../../support/account-row"
 
 /**
  * "Discover models" — ask the upstream what it serves and write the answer into `supportedModels`.
@@ -17,7 +18,7 @@ import { ok } from "../../../src/services/admin/result"
 const NOW = new Date("2026-01-01T12:00:00.000Z")
 
 function accountRow(overrides: Partial<AccountRow> = {}): AccountRow {
-  return {
+  return durableAccountRow({
     id: "acc-1",
     label: "acc-1",
     provider: "zai",
@@ -34,7 +35,7 @@ function accountRow(overrides: Partial<AccountRow> = {}): AccountRow {
     createdAt: NOW,
     updatedAt: NOW,
     ...overrides,
-  }
+  })
 }
 
 function harness(options: {

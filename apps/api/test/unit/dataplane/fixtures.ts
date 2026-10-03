@@ -112,6 +112,9 @@ export function account(id: string, options: AccountOptions = {}): RoutableAccou
   const cryptor = options.cipher ?? cipher()
   return {
     id,
+    lifecycleVersion: 0,
+    healthRecoveryVersion: 0,
+    authRecoveryVersion: 0,
     snapshot: routingView(
       { id, label: id, provider },
       {

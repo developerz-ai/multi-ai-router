@@ -35,6 +35,8 @@ export interface AuthProbeSubject {
   readonly provider: ProviderId
   /** The stored status, which is what the transition below is decided against. */
   readonly status: AccountStatus
+  readonly lifecycleVersion: number
+  readonly authMaterial: string | null
 }
 
 export interface ClaudeAuthReport {
@@ -55,11 +57,15 @@ export interface AccountAuthProbe {
 }
 
 export interface ClaudeAuthProbeDeps {
-  readonly accounts: Pick<AccountRepository, "updateStatus">
+  readonly accounts: Pick<
+    AccountRepository,
+    "transitionObservedStatus" | "recoverObservedAuthentication"
+  >
   readonly configDirs: Pick<AccountConfigDirs, "pathFor">
   readonly cli: ClaudeAuthCheck
   readonly audit: AuditRecorder
   readonly now: () => Date
+  readonly mutationCommitted?: (accountId: string) => Promise<void>
 }
 
 export function createClaudeAuthProbe(deps: ClaudeAuthProbeDeps): AccountAuthProbe {
@@ -94,14 +100,35 @@ async function transition(
   now: Date,
 ): Promise<AccountStatus | null> {
   if (loggedIn && account.status === "needs_reauth") {
-    await deps.accounts.updateStatus(account.id, "active", now)
+    const changed = await deps.accounts.recoverObservedAuthentication({
+      id: account.id,
+      expected: {
+        lifecycleVersion: account.lifecycleVersion,
+        authMaterial: account.authMaterial,
+        status: "needs_reauth",
+      },
+      now,
+    })
+    if (changed === undefined) return null
+    await deps.mutationCommitted?.(account.id)
     await record(deps, account, AUDIT_KINDS.accountReauthorized, { previousStatus: "needs_reauth" })
     return "active"
   }
 
   // `disabled` is the operator's; `needs_reauth` is already where this would put it.
-  if (!loggedIn && account.status !== "disabled" && account.status !== "needs_reauth") {
-    await deps.accounts.updateStatus(account.id, "needs_reauth", now)
+  if (!loggedIn && (account.status === "active" || account.status === "cooling_down")) {
+    const changed = await deps.accounts.transitionObservedStatus({
+      id: account.id,
+      expected: {
+        lifecycleVersion: account.lifecycleVersion,
+        authMaterial: account.authMaterial,
+        status: account.status,
+      },
+      status: "needs_reauth",
+      now,
+    })
+    if (changed === undefined) return null
+    await deps.mutationCommitted?.(account.id)
     await record(deps, account, AUDIT_KINDS.accountUpdated, {
       status: "needs_reauth",
       previousStatus: account.status,

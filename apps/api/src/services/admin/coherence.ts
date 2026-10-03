@@ -11,10 +11,11 @@ import type { AdminResult } from "./result"
  * in the console still routes, and a revoked key still authenticates, until the
  * cache expires.
  *
- * Account decorators and committed-mutation callbacks pay it at the moment of
- * the write. Services report a committed domain change without knowing which
- * caches it affects. Key callbacks run before response mapping, so a committed
- * revocation cannot remain cached if subsequent response work fails.
+ * Committed-mutation callbacks pay it at the moment of the write. Account and
+ * key services await those callbacks before audit or response mapping, so a
+ * committed change cannot remain locally cached if subsequent work fails.
+ * The compatibility account decorator below observes successful returned results;
+ * production account CRUD instead uses its earlier committed callback.
  *
  * A hook runs **only on success**. A rejected write changed nothing, so
  * refreshing after it would be a query bought for no reason — and on the failure

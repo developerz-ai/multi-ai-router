@@ -106,7 +106,7 @@ export interface IdleProbeTestResult {
 }
 
 export interface IdleAccountProbeDeps {
-  readonly accounts: Pick<AccountRepository, "list" | "findIdle" | "updateStatusWhen">
+  readonly accounts: Pick<AccountRepository, "list" | "findIdle">
   /**
    * The billed half. Its own cooldown still applies, so an operator who just pressed "Test now" by
    * hand does not get a second charge from this task — the refusal comes back as `tested: false`

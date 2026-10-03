@@ -3,6 +3,7 @@ import {
   type AdminCredentialRepository,
   type ApiKeyRepository,
   type AuditRepository,
+  type CredentialRefreshLock,
   createAdminMutationRepository,
   createUsageReadRepository,
   createUsageRecentRepository,
@@ -38,12 +39,7 @@ import {
   withAvailability,
   withCredentialMetadata,
 } from "../services/accounts"
-import {
-  type CoherenceHooks,
-  createAuditRecorder,
-  keyMutationCommitted,
-  withCatalogRefresh,
-} from "../services/admin"
+import { type CoherenceHooks, createAuditRecorder, keyMutationCommitted } from "../services/admin"
 import {
   adminAuthConfigFromEnv,
   createAdminAuthService,
@@ -85,6 +81,7 @@ export interface AdminPlaneDeps {
   /** Read-only repositories the usage screen builds its own reader from. */
   readonly database: Database
   readonly accounts: AccountRepository
+  readonly refreshLock: Pick<CredentialRefreshLock, "tryRun">
   readonly keys: ApiKeyRepository
   readonly pools: PoolRepository
   readonly auditEvents: AuditRepository
@@ -175,7 +172,16 @@ export function createAdminPlane(deps: AdminPlaneDeps): AdminPlane {
     },
   })
   // Expiry-driven per account, never a poll (non-negotiable 13); built before `connect` needs it.
-  const refresher = refresherFromEnv({ accounts, cipher, audit, env, logger, now, catalog })
+  const refresher = refresherFromEnv({
+    accounts,
+    cipher,
+    audit,
+    env,
+    logger,
+    now,
+    catalog,
+    refreshLock: deps.refreshLock,
+  })
   const connect = connectFromEnv({
     cli,
     accounts,
@@ -185,6 +191,7 @@ export function createAdminPlane(deps: AdminPlaneDeps): AdminPlane {
     env,
     now,
     refresher,
+    refreshCatalogAfterMutation: deps.coherence.refreshCatalog,
   })
 
   // "Re-check now": clears the breaker marks so the next real request probes the account rather
@@ -192,7 +199,6 @@ export function createAdminPlane(deps: AdminPlaneDeps): AdminPlane {
   // the accounts read overlays its last-checked timestamps.
   const recheck = createRecheckService({
     accounts,
-    health,
     audit,
     auth: cli.authProbe,
     // Clearing a stored `exhausted` is a write to a row the warm catalog is serving, so it joins
@@ -227,10 +233,18 @@ export function createAdminPlane(deps: AdminPlaneDeps): AdminPlane {
     log: logger,
   })
 
-  const accountsService = createAccountsService({ accounts, keys, cipher, configDirs, audit, now })
+  const accountsService = createAccountsService({
+    accounts,
+    keys,
+    cipher,
+    configDirs,
+    audit,
+    now,
+    mutationCommitted: () => deps.coherence.refreshCatalog(),
+  })
   // Decorated once, and shared: "Discover models" writes through the same service the route does,
   // so its write refreshes the warm catalog exactly like an operator's edit would.
-  const availableAccounts = withAvailability(withCatalogRefresh(accountsService, deps.coherence), {
+  const availableAccounts = withAvailability(accountsService, {
     catalog,
     health,
     recheck,
@@ -243,6 +257,7 @@ export function createAdminPlane(deps: AdminPlaneDeps): AdminPlane {
   // Outermost, so a dead login it parks is the status the read returns, not the warm catalog's
   // stale `active`.
   const decoratedAccounts = withCredentialMetadata(availableAccounts, {
+    accounts,
     reader: createCredentialMetadataReader(),
     configDirs,
     ttlMs: env.adminCredentialMetadataTtlSeconds * 1_000,

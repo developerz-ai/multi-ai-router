@@ -1,8 +1,10 @@
 import type { AccountRepository, AccountRow } from "@multi-ai-router/db"
 import type { OAuthTokens, ProviderOAuthFlow } from "../../../providers"
 import { AUDIT_KINDS, AUDIT_SUBJECTS, type AuditRecorder } from "../../admin/audit"
-import { type AdminResult, invalid, ok } from "../../admin/result"
+import { type AdminResult, conflict, invalid, ok } from "../../admin/result"
 import type { CredentialCipher } from "../../crypto/cipher"
+import { awaitOAuthResponse, readOAuthResponse } from "../oauth-response"
+import { writeStoredOAuth } from "../refresh/credential"
 
 /**
  * Spending an authorized code, and writing what it bought onto the Account.
@@ -27,7 +29,7 @@ export interface OAuthConnectCompleted {
 }
 
 export interface OAuthExchangeDeps {
-  readonly accounts: Pick<AccountRepository, "update">
+  readonly accounts: Pick<AccountRepository, "commitAuthorization">
   readonly cipher: Pick<CredentialCipher, "encrypt">
   readonly audit: AuditRecorder
   /** Injected for the same reason the data plane's is: no test may reach a real provider. */
@@ -39,12 +41,15 @@ export interface OAuthExchangeDeps {
    * than the one the row carried a moment ago (`../refresh/`). Optional, and required never to
    * reject: a schedule that could not be re-armed must not turn a completed login into a failure.
    */
+  readonly refreshCatalogAfterMutation: () => Promise<void>
   readonly onCredentialWritten?: (accountId: string) => Promise<void>
 }
 
 export interface AuthorizedCode {
   readonly row: AccountRow
   readonly flow: ProviderOAuthFlow
+  readonly attemptId: string
+  readonly expectedLifecycleVersion: number
   readonly code: string
   /**
    * Replayed from the pending row, never rebuilt: the provider binds the code to the exact value
@@ -61,8 +66,7 @@ export async function completeAuthorization(
 ): Promise<AdminResult<OAuthConnectCompleted>> {
   const tokens = await redeemCode(deps, input)
   if (!tokens.ok) return tokens
-  const mode = await store(deps, input.row, tokens.value, input.capture)
-  return ok({ accountId: input.row.id, mode, connected: true, capture: input.capture })
+  return store(deps, input, tokens.value)
 }
 
 async function redeemCode(
@@ -75,14 +79,16 @@ async function redeemCode(
     codeVerifier: input.codeVerifier,
   })
 
+  const signal = AbortSignal.timeout(deps.exchangeTimeoutMs)
   let response: Response
   try {
-    response = await deps.fetch(
+    response = await awaitOAuthResponse(
+      deps.fetch,
       new Request(built.url, {
         method: built.method,
         headers: { ...built.headers },
         body: built.body,
-        signal: AbortSignal.timeout(deps.exchangeTimeoutMs),
+        signal,
       }),
     )
   } catch {
@@ -92,7 +98,17 @@ async function redeemCode(
     )
   }
 
-  const body: unknown = await response.json().catch(() => null)
+  let body: unknown
+  try {
+    body = await readOAuthResponse(response, signal)
+  } catch {
+    if (signal.aborted)
+      return invalid(
+        "the provider's token endpoint timed out — start the connect flow again",
+        "exchange_unreachable",
+      )
+    body = null
+  }
   if (!response.ok) {
     return invalid(
       `the provider refused the code exchange (HTTP ${response.status}) — start the connect flow again`,
@@ -111,47 +127,71 @@ async function redeemCode(
   return ok(tokens)
 }
 
-/** Writes the credential and says which of the two things just happened. */
+/** The consumed attempt plus lifecycle fences writeback; routine refresh is compatible. */
 async function store(
   deps: OAuthExchangeDeps,
-  row: AccountRow,
+  input: AuthorizedCode,
   tokens: OAuthTokens,
-  capture: OAuthCapture,
-): Promise<"connect" | "reconnect"> {
+): Promise<AdminResult<OAuthConnectCompleted>> {
+  const { row, capture } = input
   const mode = row.authMaterial === null ? "connect" : "reconnect"
-  const expiresIn = tokens.expiresInSeconds
-
-  await deps.accounts.update(
-    row.id,
-    {
-      // The shape `services/dataplane/egress/credential.ts` reads back, and nothing more: the
-      // `id_token` has done its job by the time the tokens are parsed, and the provider's own
-      // account id is re-derived from the access token on every request by the driver.
-      authMaterial: deps.cipher.encrypt(
-        JSON.stringify({
-          accessToken: tokens.accessToken,
-          ...(tokens.refreshToken === null ? {} : { refreshToken: tokens.refreshToken }),
-        }),
-      ),
-      // A fresh authorization *replaces* what the Account held, so an issuer that reported no
-      // lifetime clears the old expiry rather than leaving a stale timer armed against new tokens.
-      tokenExpiresAt:
-        expiresIn === null ? null : new Date(deps.now().getTime() + expiresIn * 1_000),
-      // `needs_reauth` is the one status a login clears. An Account the operator disabled stays
-      // disabled, and connecting is not a way around that.
-      ...(row.status === "needs_reauth" ? { status: "active" as const } : {}),
-    },
-    deps.now(),
-  )
-
-  await deps.audit.record({
-    kind: mode === "reconnect" ? AUDIT_KINDS.accountReauthorized : AUDIT_KINDS.accountConnected,
-    subjectType: AUDIT_SUBJECTS.account,
-    subjectId: row.id,
-    // Names and flags. There is no field here that could hold a code, a state, or a token.
-    detail: { label: row.label, provider: row.provider, capture, previousStatus: row.status },
+  const now = deps.now()
+  const committed = await deps.accounts.commitAuthorization({
+    id: row.id,
+    expectedLifecycleVersion: input.expectedLifecycleVersion,
+    attemptId: input.attemptId,
+    authMaterial: deps.cipher.encrypt(
+      writeStoredOAuth({
+        accessToken: tokens.accessToken,
+        refreshToken: tokens.refreshToken,
+        providerAccountId: tokens.providerAccountId ?? null,
+      }),
+    ),
+    tokenExpiresAt:
+      tokens.expiresInSeconds === null
+        ? null
+        : new Date(now.getTime() + tokens.expiresInSeconds * 1_000),
+    now,
   })
+  if (committed === undefined) {
+    return conflict(
+      "that authorization was superseded — start the connect flow again",
+      "authorization_superseded",
+    )
+  }
 
-  await deps.onCredentialWritten?.(row.id)
-  return mode
+  // This code has already been spent. Coherence failure is not a redeem failure.
+  let coherent = true
+  try {
+    await deps.refreshCatalogAfterMutation()
+  } catch {
+    coherent = false
+  }
+  try {
+    await deps.audit.record({
+      kind: mode === "reconnect" ? AUDIT_KINDS.accountReauthorized : AUDIT_KINDS.accountConnected,
+      subjectType: AUDIT_SUBJECTS.account,
+      subjectId: committed.id,
+      detail: {
+        label: committed.label,
+        provider: committed.provider,
+        capture,
+        previousStatus: row.status,
+      },
+    })
+  } catch {
+    coherent = false
+  } finally {
+    try {
+      await deps.onCredentialWritten?.(committed.id)
+    } catch {
+      coherent = false
+    }
+  }
+  if (!coherent)
+    return conflict(
+      "authorization was saved but routing is temporarily unavailable",
+      "routing_unavailable",
+    )
+  return ok({ accountId: committed.id, mode, connected: true, capture })
 }

@@ -8,7 +8,23 @@ import {
   OVERWRITABLE_BY_OBSERVATION,
   persistable,
 } from "../../../src/services/dataplane"
+import type { HealthObservation } from "../../../src/services/dataplane/health-observation"
+import { accountRow as durableAccountRow } from "../../support/account-row"
+import { createMemoryStore } from "../../support/memory-store"
 import { NOW } from "./fixtures"
+
+function observation(overrides: Partial<HealthObservation> = {}): HealthObservation {
+  return {
+    lifecycleVersion: 0,
+    healthRecoveryVersion: 0,
+    authRecoveryVersion: 0,
+    authMaterial: null,
+    status: "active",
+    observationGeneration: 1,
+    verdictVersion: 0,
+    ...overrides,
+  }
+}
 
 /**
  * The durable half of the breaker.
@@ -34,7 +50,11 @@ function logger(): { logger: Logger; lines: Record<string, unknown>[] } {
 
 interface Write {
   readonly id: string
-  readonly from: readonly AccountStatus[]
+  readonly expected: {
+    lifecycleVersion: number
+    authMaterial: string | null
+    status: AccountStatus
+  }
   readonly to: AccountStatus
 }
 
@@ -44,23 +64,22 @@ function repository(rows: Record<string, AccountStatus> = { a: "active", b: "act
   return {
     rows,
     writes,
-    updateStatusWhen: async (
-      id: string,
-      from: readonly AccountStatus[],
-      to: AccountStatus,
-      _now: Date,
-    ): Promise<AccountRow | undefined> => {
-      writes.push({ id, from, to })
-      const current = rows[id]
-      if (current === undefined || !from.includes(current)) return undefined
-      rows[id] = to
-      return { id, status: to } as AccountRow
+    transitionObservedStatus: async ({ id, expected, status }): Promise<AccountRow | undefined> => {
+      writes.push({ id, expected, to: status })
+      if (
+        rows[id] !== expected.status ||
+        expected.lifecycleVersion !== 0 ||
+        expected.authMaterial !== null
+      )
+        return undefined
+      rows[id] = status
+      return durableAccountRow({ id, status })
     },
   }
 }
 
 const failing: AccountStatusWriterDeps["accounts"] = {
-  updateStatusWhen: async (): Promise<AccountRow | undefined> => {
+  transitionObservedStatus: async (): Promise<AccountRow | undefined> => {
     throw new Error("connection refused")
   },
 }
@@ -100,7 +119,7 @@ describe("account status writer", () => {
     const accounts = repository()
     const write = writer(accounts, logger().logger)
 
-    write.record("a", "exhausted")
+    write.record("a", "exhausted", observation())
     await write.flush()
 
     expect(accounts.rows.a).toBe("exhausted")
@@ -111,7 +130,7 @@ describe("account status writer", () => {
     const accounts = repository()
     const write = writer(accounts, logger().logger)
 
-    write.record("a", "needs_reauth")
+    write.record("a", "needs_reauth", observation())
     expect(accounts.writes).toHaveLength(0)
     expect(write.stats().pending).toBe(1)
 
@@ -124,8 +143,8 @@ describe("account status writer", () => {
     const write = writer(accounts, logger().logger)
 
     // The breaker forms this one from an `api-key` auth failure. It is reported, and not stored.
-    write.record("a", "disabled")
-    write.record("b", "cooling_down")
+    write.record("a", "disabled", observation())
+    write.record("b", "cooling_down", observation())
     await write.flush()
 
     expect(accounts.writes).toHaveLength(0)
@@ -136,7 +155,7 @@ describe("account status writer", () => {
     const accounts = repository({ a: "disabled" })
     const write = writer(accounts, logger().logger)
 
-    write.record("a", "exhausted")
+    write.record("a", "exhausted", observation())
     await write.flush()
 
     expect(accounts.rows.a).toBe("disabled")
@@ -149,7 +168,7 @@ describe("account status writer", () => {
     const accounts = repository({ a: "needs_reauth" })
     const write = writer(accounts, logger().logger)
 
-    write.record("a", "exhausted")
+    write.record("a", "exhausted", observation())
     await write.flush()
 
     // The remedy on the operator's screen does not change while they are carrying it out.
@@ -161,7 +180,7 @@ describe("account status writer", () => {
     const accounts = repository()
     const write = writer(accounts, logger().logger)
 
-    for (let index = 0; index < 100; index += 1) write.record("a", "exhausted")
+    for (let index = 0; index < 100; index += 1) write.record("a", "exhausted", observation())
     expect(write.stats().pending).toBe(1)
 
     await write.flush()
@@ -173,8 +192,8 @@ describe("account status writer", () => {
     const accounts = repository()
     const write = writer(accounts, sink.logger)
 
-    write.record("a", "exhausted")
-    write.record("b", "exhausted")
+    write.record("a", "exhausted", observation())
+    write.record("b", "exhausted", observation())
     await write.flush()
 
     expect(sink.lines).toHaveLength(2)
@@ -189,7 +208,7 @@ describe("account status writer", () => {
     const sink = logger()
     const write = writer(repository({ a: "disabled" }), sink.logger)
 
-    write.record("a", "exhausted")
+    write.record("a", "exhausted", observation())
     await write.flush()
 
     expect(sink.lines).toHaveLength(0)
@@ -199,7 +218,7 @@ describe("account status writer", () => {
     const accounts = repository()
     const write = writer(accounts, logger().logger)
 
-    write.record("a", "exhausted")
+    write.record("a", "exhausted", observation())
     write.forget("a")
     await write.flush()
 
@@ -211,9 +230,9 @@ describe("account status writer", () => {
     const accounts = repository()
     const write = writer(accounts, logger().logger)
 
-    write.record("a", "exhausted")
+    write.record("a", "exhausted", observation())
     const flushing = write.flush()
-    write.record("b", "needs_reauth")
+    write.record("b", "needs_reauth", observation())
     await flushing
 
     expect(write.stats().pending).toBe(1)
@@ -225,8 +244,8 @@ describe("account status writer", () => {
     const sink = logger()
     const write = writer(failing, sink.logger)
 
-    write.record("a", "exhausted")
-    write.record("b", "needs_reauth")
+    write.record("a", "exhausted", observation())
+    write.record("b", "needs_reauth", observation())
     await write.flush()
 
     expect(write.stats()).toMatchObject({ pending: 0, written: 0, writeFailures: 2 })
@@ -243,9 +262,36 @@ describe("account status writer", () => {
     const write = writer(accounts, logger().logger)
 
     write.start()
-    write.record("a", "exhausted")
+    write.record("a", "exhausted", observation())
     await write.stop()
 
     expect(accounts.rows.a).toBe("exhausted")
   })
+})
+
+test("late obsolete callback cannot overwrite a newer pending credential verdict", async () => {
+  const store = createMemoryStore()
+  const row = await store.accounts.create(
+    { label: "synthetic", provider: "openai-oauth", authMaterial: "old-cipher" },
+    NOW,
+  )
+  const old = observation({ authMaterial: row.authMaterial })
+  const replacement = await store.accounts.updateOperatorAccount({
+    id: row.id,
+    patch: { authMaterial: "new-cipher" },
+    now: NOW,
+  })
+  if (replacement === undefined) throw new Error("missing fixture")
+  const fresh = observation({
+    lifecycleVersion: replacement.lifecycleVersion,
+    authRecoveryVersion: replacement.authRecoveryVersion,
+    authMaterial: replacement.authMaterial,
+    observationGeneration: 2,
+  })
+  const write = writer(store.accounts, logger().logger)
+  write.record(row.id, "needs_reauth", fresh)
+  write.record(row.id, "exhausted", old)
+  await write.flush()
+  expect((await store.accounts.findById(row.id))?.status).toBe("needs_reauth")
+  expect(write.stats()).toMatchObject({ written: 1, refused: 0, pending: 0 })
 })

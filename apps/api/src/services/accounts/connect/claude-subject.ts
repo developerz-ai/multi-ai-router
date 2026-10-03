@@ -16,6 +16,8 @@ export interface SubscriptionAccount {
   readonly label: string
   readonly provider: ProviderId
   readonly status: AccountStatus
+  readonly lifecycleVersion: number
+  readonly authMaterial: string | null
 }
 
 /**
@@ -49,5 +51,12 @@ export async function findSubscriptionAccount(
       "not_a_subscription_account",
     )
   }
-  return ok({ id: row.id, label: row.label, provider: row.provider, status: row.status })
+  return ok({
+    id: row.id,
+    label: row.label,
+    provider: row.provider,
+    status: row.status,
+    lifecycleVersion: row.lifecycleVersion,
+    authMaterial: row.authMaterial,
+  })
 }
