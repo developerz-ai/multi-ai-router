@@ -43,6 +43,60 @@ describe("upstream trust boundary", () => {
     })
   }
 
+  for (const format of ["json", "text", "numeric"] as const) {
+    test(`redacts an echoed OAuth account-routing header from ${format} errors`, async () => {
+      const accountId = format === "numeric" ? "123456789012" : "private-tenant-123456"
+      const claims = Buffer.from(
+        JSON.stringify({ "https://api.openai.com/auth": { chatgpt_account_id: accountId } }),
+      ).toString("base64url")
+      const token = `eyJhbGciOiJub25lIn0.${claims}.test-signature`
+      const lines: string[] = []
+      const { app, upstream } = harness({
+        accounts: [
+          {
+            ...account("oauth", { provider: "openai-oauth", cipher: CRYPTOR }),
+            authMaterial: CRYPTOR.encrypt(JSON.stringify({ accessToken: token })),
+          },
+        ],
+        logger: createLogger({
+          level: "debug",
+          write: (line) => {
+            lines.push(line)
+          },
+        }),
+        responses: [
+          () => {
+            if (format === "numeric") {
+              return jsonResponse(400, {
+                error: { message: "Invalid account", reference: Number(accountId) },
+              })
+            }
+            return format === "json"
+              ? new Response(
+                  JSON.stringify({
+                    error: { message: `Rejected ${accountId}: ${token}`, code: "bad_input" },
+                  }).replaceAll("private", "\\u0070rivate"),
+                  { status: 400, headers: { "content-type": "application/json" } },
+                )
+              : new Response(`Rejected ${accountId}: ${token}`, { status: 400 })
+          },
+        ],
+      })
+      const response = await app.request(
+        "/v1/responses",
+        post(JSON.stringify({ model: "gpt-5", input: "hello" }), bearer()),
+      )
+      expect(response.status).toBe(400)
+      expect(upstream.calls[0]?.headers.get("chatgpt-account-id")).toBe(accountId)
+      const body = await response.text()
+      expect(body).toContain("[REDACTED]")
+      for (const output of [body, ...lines]) {
+        expect(output).not.toContain(accountId)
+        expect(output).not.toContain(token)
+      }
+    })
+  }
+
   for (const status of [307, 308]) {
     test(`does not follow ${status} redirects or forward credentials to another origin`, async () => {
       let destinationCalls = 0

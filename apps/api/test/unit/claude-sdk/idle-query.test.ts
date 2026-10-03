@@ -276,6 +276,7 @@ describe("an idle Agent SDK query", () => {
     expect(launched.executable).toBe("bun")
     expect(launched.settingSources).toEqual([])
     expect(launched.strictMcpConfig).toBe(true)
+    expect(launched.verbatimPrompts).toBe(true)
     expect(launched.skills).toEqual([])
     expect(launched.tools).toEqual([])
     expect(launched.allowedTools).toEqual([...PERMITTED_TOOLS])

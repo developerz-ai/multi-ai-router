@@ -170,7 +170,6 @@ export function createAdminAuthService(deps: AdminAuthDeps): AdminAuthService {
 
   const localLoginThrottle = createLoginThrottle(config)
   let activePasswordChecks = 0
-  const activeByIp = new Map<string, number>()
 
   async function completeLocalLogin(input: {
     password: string
@@ -181,11 +180,7 @@ export function createAdminAuthService(deps: AdminAuthDeps): AdminAuthService {
     const keys = [ipThrottleKey(input.ip)]
     const nowMs = now()
     const decision = localLoginThrottle.check(keys, nowMs)
-    if (
-      !decision.allowed ||
-      activePasswordChecks >= config.maxConcurrentLogins ||
-      (activeByIp.get(input.ip) ?? 0) >= config.maxFailedAttempts
-    ) {
+    if (!decision.allowed || activePasswordChecks >= config.maxConcurrentLogins) {
       fireAudit(
         AUDIT_KINDS.adminLoginFailed,
         { ip: input.ip, method: "local", reason: "throttled" },
@@ -199,15 +194,11 @@ export function createAdminAuthService(deps: AdminAuthDeps): AdminAuthService {
     // `verify` cannot either (it runs against a dummy hash when no row exists).
     localLoginThrottle.recordFailure(keys, nowMs)
     activePasswordChecks += 1
-    activeByIp.set(input.ip, (activeByIp.get(input.ip) ?? 0) + 1)
     let verified: boolean
     try {
       verified = (await deps.local?.verify(input.password)) ?? false
     } finally {
       activePasswordChecks -= 1
-      const remaining = (activeByIp.get(input.ip) ?? 1) - 1
-      if (remaining === 0) activeByIp.delete(input.ip)
-      else activeByIp.set(input.ip, remaining)
     }
     if (!verified) {
       fireAudit(

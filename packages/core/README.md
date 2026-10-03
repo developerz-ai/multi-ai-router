@@ -48,6 +48,7 @@ never from a path inside `src/`.
 | `CreditsExhaustedError` | `credits_exhausted` | 402 | Balance drained, plan expired, billing dead. No reset, ever |
 | `ScopeViolationError` | `scope_violation` | 403 | Key scope ∩ pool members is empty, or names an out-of-scope account |
 | `KeyRevokedError` | `key_revoked` | 401 | Presented key is unknown, revoked, or expired |
+| `KeyVerificationUnavailableError` | `key_verification_unavailable` | 503 | Key-verification capacity is full or repeated invalidation prevents a stable lookup. Carries `retryAfterSeconds` |
 | `UpstreamTimeoutError` | `upstream_timeout` | 504 | Upstream or SDK subprocess missed its deadline |
 | `CredentialDecryptError` | `credential_decrypt_failed` | 500 | Wrong/rotated `ENCRYPTION_KEY`, or a corrupt record |
 | `TranslationError` | `translation_failed` | 400 | A cross-dialect conversion would be unfaithful — raised *before* the upstream call |

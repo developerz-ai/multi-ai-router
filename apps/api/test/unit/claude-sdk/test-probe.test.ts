@@ -234,6 +234,7 @@ describe("the Agent-SDK test probe", () => {
     expect(launched.executable).toBe("bun")
     expect(launched.settingSources).toEqual([])
     expect(launched.strictMcpConfig).toBe(true)
+    expect(launched.verbatimPrompts).toBe(true)
     expect(launched.skills).toEqual([])
     expect(launched.tools).toEqual([])
     // The shared reviewed constant, not a second literal that could drift from the dispatch path.

@@ -55,6 +55,8 @@ export function createLoginThrottle(config: AdminAuthConfig): LoginThrottle {
       if (buckets.size >= config.maxTrackedIps) {
         evictStale(nowMs)
         if (keys.some((key) => !buckets.has(key)) && buckets.size >= config.maxTrackedIps) {
+          // Retain even unlocked attempts until expiry: evicting them lets an address spray
+          // erase its own failures repeatedly before reaching the lockout threshold.
           return { allowed: false, retryAfterSeconds: Math.max(1, config.lockoutSeconds) }
         }
       }

@@ -8,7 +8,7 @@ import type {
 import type { CredentialCipher } from "../crypto/cipher"
 import { type AttemptFailure, classifyStatus, type FailureKind } from "../routing"
 import { accountCredential } from "./egress/credential"
-import { upstreamHeaders } from "./egress/headers"
+import { privateHeaderValues, upstreamHeaders } from "./egress/headers"
 import {
   DEFAULT_UPSTREAM_ERROR_MAX_BYTES,
   readErrorBody,
@@ -75,10 +75,8 @@ export type AttemptOutcome =
 export async function runAttempt(input: AttemptInput): Promise<AttemptOutcome> {
   const { plan } = input
   const credential = accountCredential(plan.account, input.cipher, plan.driver.authKind)
-  const headers = upstreamHeaders(
-    input.clientHeaders,
-    plan.driver.buildHeaders(plan.account.driver, credential),
-  )
+  const driverHeaders = plan.driver.buildHeaders(plan.account.driver, credential)
+  const headers = upstreamHeaders(input.clientHeaders, driverHeaders)
 
   const request = new Request(plan.url.toString(), {
     method: input.method,
@@ -133,9 +131,12 @@ export async function runAttempt(input: AttemptInput): Promise<AttemptOutcome> {
       : credential.kind === "api-key"
         ? credential.apiKey
         : credential.accessToken
+  const secrets = [
+    ...new Set([...privateHeaderValues(driverHeaders), ...(secret ? [secret] : [])]),
+  ].sort((a, b) => b.length - a.length)
   const bodyText = sanitizeErrorBody(
     await readErrorBody(response, input.errorMaxBytes ?? DEFAULT_UPSTREAM_ERROR_MAX_BYTES),
-    secret,
+    secrets,
   )
   const classified = plan.driver.classifyFailure({
     status: response.status,
@@ -149,8 +150,8 @@ export async function runAttempt(input: AttemptInput): Promise<AttemptOutcome> {
           ...classified,
           ...(classified.message === undefined
             ? {}
-            : { message: redactAttemptText(classified.message, secret) }),
-          signal: redactAttemptText(classified.signal, secret),
+            : { message: redactAttemptText(classified.message, secrets) }),
+          signal: redactAttemptText(classified.signal, secrets),
         }
 
   return {

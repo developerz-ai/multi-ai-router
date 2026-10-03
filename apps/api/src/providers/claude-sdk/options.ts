@@ -171,11 +171,13 @@ export function isolatedOptions(input: {
 }): Options {
   return {
     abortController: input.controller,
-    // Isolation. Each of these three is a distinct path from this host's state into a caller's
-    // request; all three must be set explicitly, and none may be dropped as cleanup.
+    // Isolation. Each closes a distinct path from this host's state into a caller's request;
+    // all must be set explicitly, and none may be dropped as cleanup.
     settingSources: [],
     strictMcpConfig: true,
     skills: [],
+    // Client messages are literal text, never CLI commands or host-file @mentions.
+    verbatimPrompts: true,
     // Tools. The base set is empty and the allowlist decides the rest — see `allowlist.ts`.
     tools: [],
     allowedTools: [...PERMITTED_TOOLS],

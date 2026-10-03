@@ -1,5 +1,9 @@
 import { createHash } from "node:crypto"
-import { KeyRevokedError, routerKeyDisplayPrefix } from "@multi-ai-router/core"
+import {
+  KeyRevokedError,
+  KeyVerificationUnavailableError,
+  routerKeyDisplayPrefix,
+} from "@multi-ai-router/core"
 import type { ApiKeyRepository, ApiKeyRow } from "@multi-ai-router/db"
 import { timingSafeEqualStrings } from "../../admin-auth"
 import type { CredentialCipher } from "../../crypto/cipher"
@@ -67,7 +71,10 @@ export const DEFAULT_KEY_CACHE_TTL_MS = 60_000
 export const DEFAULT_KEY_CACHE_NEGATIVE_TTL_MS = 5_000
 
 export interface RouterKeyVerifier {
-  /** @throws KeyRevokedError when the key is unknown, revoked, expired, or malformed. */
+  /**
+   * @throws KeyRevokedError when the key is unknown, revoked, expired, or malformed.
+   * @throws KeyVerificationUnavailableError on bounded-load saturation or repeated invalidation.
+   */
   verify(presented: string): Promise<VerifiedKey>
   /** Drops every cached entry for one key. Called by the admin plane on revoke or edit. */
   invalidate(keyId: string): void
@@ -75,6 +82,8 @@ export interface RouterKeyVerifier {
 }
 
 const UNKNOWN_KEY = "The presented router API key is unknown, revoked, or expired"
+const VERIFICATION_BUSY = "Router API key verification is temporarily unavailable; retry shortly"
+const MAX_LOAD_ATTEMPTS = 3
 
 type CacheEntry = { readonly ok: true; readonly key: VerifiedKey } | { readonly ok: false }
 
@@ -143,34 +152,40 @@ export function createRouterKeyVerifier(deps: RouterKeyVerifierDeps): RouterKeyV
 
       const pending = inFlight.get(digest)
       if (pending !== undefined) return pending
-      if (inFlight.size >= maxPending) throw new KeyRevokedError(UNKNOWN_KEY)
-      const startedGeneration = generation
+      if (inFlight.size >= maxPending) {
+        throw new KeyVerificationUnavailableError(VERIFICATION_BUSY, { retryAfterSeconds: 1 })
+      }
       const load = async (): Promise<VerifiedKey> => {
-        // The query already excludes revoked and expired rows, so a prefix that returns nothing and
-        // a prefix whose rows do not match are the same answer to the caller — deliberately.
-        const rows = await deps.repository.findUsableByPrefix(prefix, now())
-        if (startedGeneration !== generation) throw new KeyRevokedError(UNKNOWN_KEY)
-        const row = match(rows, presented)
-        if (row === null) {
-          remember(digest, { ok: false })
-          throw new KeyRevokedError(UNKNOWN_KEY)
-        }
+        // An unrelated key edit also advances the fence. Reload within this same coalesced slot
+        // instead of calling a valid credential revoked, but bound work under continuous edits.
+        for (let attempt = 0; attempt < MAX_LOAD_ATTEMPTS; attempt++) {
+          const startedGeneration = generation
+          // The query excludes revoked and expired rows; a miss and a mismatching prefix are
+          // deliberately indistinguishable to the caller.
+          const rows = await deps.repository.findUsableByPrefix(prefix, now())
+          if (startedGeneration !== generation) continue
+          const row = match(rows, presented)
+          if (row === null) {
+            remember(digest, { ok: false })
+            throw new KeyRevokedError(UNKNOWN_KEY)
+          }
 
-        const key: VerifiedKey = {
-          id: row.id,
-          name: row.name,
-          prefix: row.prefix,
-          scope: await deps.loadScope(row),
-          rateLimitRequests: row.rateLimitRequests,
-          rateLimitWindowSeconds: row.rateLimitWindowSeconds,
-          expiresAt: row.expiresAt,
+          const key: VerifiedKey = {
+            id: row.id,
+            name: row.name,
+            prefix: row.prefix,
+            scope: await deps.loadScope(row),
+            rateLimitRequests: row.rateLimitRequests,
+            rateLimitWindowSeconds: row.rateLimitWindowSeconds,
+            expiresAt: row.expiresAt,
+          }
+          if (startedGeneration !== generation) continue
+          if (isExpired(key, now())) throw new KeyRevokedError(UNKNOWN_KEY)
+          remember(digest, { ok: true, key })
+          deps.onVerified?.(key)
+          return key
         }
-        if (startedGeneration !== generation || isExpired(key, now())) {
-          throw new KeyRevokedError(UNKNOWN_KEY)
-        }
-        remember(digest, { ok: true, key })
-        deps.onVerified?.(key)
-        return key
+        throw new KeyVerificationUnavailableError(VERIFICATION_BUSY, { retryAfterSeconds: 1 })
       }
       const loading = load().finally(() => {
         if (inFlight.get(digest) === loading) inFlight.delete(digest)

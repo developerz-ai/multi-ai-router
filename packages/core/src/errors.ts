@@ -16,6 +16,7 @@ export const ROUTER_ERROR_CODES = [
   "scope_violation",
   "key_revoked",
   "key_rate_limited",
+  "key_verification_unavailable",
   "admin_auth_failed",
   "csrf_token_invalid",
   "upstream_auth_failed",
@@ -110,6 +111,12 @@ export class QuotaExhaustedError extends RetryableRouterError {
 export class KeyRateLimitedError extends RetryableRouterError {
   readonly code = "key_rate_limited"
   readonly status = 429
+}
+
+/** Key verification is temporarily busy or changing; the credential itself is not rejected. */
+export class KeyVerificationUnavailableError extends RetryableRouterError {
+  readonly code = "key_verification_unavailable"
+  readonly status = 503
 }
 
 /**

@@ -66,6 +66,7 @@ const RANK: Readonly<Record<RouterErrorCode, number>> = {
   // rather than a dispatch. None can reach this fold. They rank above everything rather than at the floor so that
   // a future path which *does* route one here surfaces it, instead of silently folding it away.
   key_revoked: 90,
+  key_verification_unavailable: 90,
   scope_violation: 90,
   request_too_large: 90,
   invalid_request: 90,
@@ -73,7 +74,7 @@ const RANK: Readonly<Record<RouterErrorCode, number>> = {
   admin_auth_failed: 90,
   csrf_token_invalid: 90,
   model_not_found: 90,
-  // A clock fixes it, and this is the only rank that carries a `Retry-After`.
+  // A spent window refills on a clock.
   quota_exhausted: 70,
   key_rate_limited: 70,
   // A named human action fixes it: top the balance up, re-authenticate the account.

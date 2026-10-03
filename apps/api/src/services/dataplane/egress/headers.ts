@@ -35,3 +35,12 @@ export function upstreamHeaders(client: Headers, driverHeaders: Headers): Header
 export function clientHeaders(upstream: Headers): Headers {
   return allowedHeaders(upstream, RESPONSE_HEADERS)
 }
+
+/** Driver-only headers may identify a credential or tenant, even under an unknown name. */
+export function privateHeaderValues(driverHeaders: Headers): string[] {
+  const values: string[] = []
+  driverHeaders.forEach((value, name) => {
+    if (value.length > 0 && !REQUEST_HEADERS.has(name)) values.push(value)
+  })
+  return values
+}

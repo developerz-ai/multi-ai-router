@@ -66,6 +66,12 @@ describe("usage outcome taxonomy", () => {
     }
   })
 
+  test("key-verification overload is a router failure, not a client credential failure", () => {
+    const outcome = usageOutcomeForErrorCode("key_verification_unavailable")
+    expect(outcome).toBe("router_error")
+    expect(usageOutcomeFault(outcome)).toBe("router")
+  })
+
   test("a data-plane error code keeps its own identity in the report", () => {
     expect(usageOutcomeForErrorCode("quota_exhausted")).toBe("quota_exhausted")
     expect(usageOutcomeForErrorCode("credits_exhausted")).toBe("credits_exhausted")

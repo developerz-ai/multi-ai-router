@@ -4,12 +4,12 @@ status: in_progress        # not_started | in_progress | blocked | complete | su
 created_by: sebi
 worked_by: "Codex team"
 owner: sebi
-percent: 18
+percent: 16
 current_focus: "Wave 1 verification and review; next: routing/database consistency and OAuth support."
 slices:
   - file: 01-edge-auth-security.md
     status: in_progress
-    percent: 0
+    percent: 43
     findings: 23
   - file: 02-routing-state-persistence.md
     status: not_started
@@ -17,7 +17,7 @@ slices:
     findings: 18
   - file: 03-providers-claude-sdk.md
     status: in_progress
-    percent: 0
+    percent: 35
     findings: 17
   - file: 04-translation.md
     status: not_started
@@ -32,10 +32,11 @@ slices:
     percent: 0
     findings: 8
 evidence:
-  - "Pinned Bun 1.4.2; bin/check with disposable PostgreSQL: 4311 tests passed, zero failed; build passed."
+  - "Pinned Bun 1.4.2; bin/check with disposable PostgreSQL: 4326 tests passed, zero failed; build passed."
   - "102-full-router-audit/evidence/wave1-bench.json: 8000 requests, zero failures/buffered streams; max p99 1.28 ms."
 notes: "Wave 1 implements credential boundaries, authentication races and SDK isolation. 01.14 not reproduced on real full-body POST with Bun 1.4.0 or pinned 1.4.2: idle=2s, response delayed 7s still succeeds; unconsumed GET reproduces idle close. 01.16 transport failures fixed; clean HTTP-200 protocol error frames remain open. #87 current literal removed; operational rotation remains open."
 last_updated: 2026-10-02
+# Percentages measure locally resolved findings; review, release and deployment remain separate gates.
 resolved_findings:
   - "01.2"
   - "01.3"

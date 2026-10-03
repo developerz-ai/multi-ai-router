@@ -36,22 +36,31 @@ export async function readErrorBody(response: Response, maxBytes: number): Promi
   }
 }
 
-export function redactAttemptText(text: string, secret: string | null): string {
-  const exact = secret ? text.replaceAll(secret, REDACTED) : text
+export function redactAttemptText(text: string, secrets: readonly string[]): string {
+  let exact = text
+  for (const secret of secrets) {
+    if (secret.length > 0) exact = exact.replaceAll(secret, REDACTED)
+  }
   return redactValue(exact)
 }
 
 /** Decode JSON strings before redaction so escaped opaque credentials cannot evade matching. */
-export function sanitizeErrorBody(text: string, secret: string | null = null): string {
+export function sanitizeErrorBody(text: string, secrets: readonly string[] = []): string {
   const scrub = (value: unknown, depth: number): unknown => {
-    if (typeof value === "string") return redactAttemptText(value, secret)
-    if (value === null || typeof value !== "object") return value
+    if (typeof value === "string") return redactAttemptText(value, secrets)
+    if (value === null || typeof value !== "object") {
+      // An upstream may coerce an opaque numeric account ID or key to a JSON number.
+      return secrets.some((secret) => secret.length > 0 && String(value).includes(secret))
+        ? REDACTED
+        : value
+    }
     if (depth >= 32) return REDACTED
     if (Array.isArray(value)) return value.map((entry) => scrub(entry, depth + 1))
     return Object.fromEntries(
       Object.entries(value).map(([key, entry]) => [
-        redactAttemptText(key, secret),
-        // Error codes and diagnostic bodies are protocol fields, not OAuth one-shots/prompts here.
+        redactAttemptText(key, secrets),
+        // The log redactor's exact names include code/body/messages to hide OAuth codes and
+        // prompts. Here they are diagnostic protocol fields; recursively scrub their contents.
         !["code", "body", "messages"].includes(key.toLowerCase()) && isSecretFieldName(key)
           ? REDACTED
           : scrub(entry, depth + 1),
@@ -61,6 +70,6 @@ export function sanitizeErrorBody(text: string, secret: string | null = null): s
   try {
     return JSON.stringify(scrub(JSON.parse(text), 0))
   } catch {
-    return redactAttemptText(text, secret)
+    return redactAttemptText(text, secrets)
   }
 }
