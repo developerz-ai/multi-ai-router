@@ -3,6 +3,7 @@ import type { Options, SDKUserMessage } from "@anthropic-ai/claude-agent-sdk"
 import {
   type CliResolution,
   createSdkConcurrency,
+  createSdkUsageGauge,
   createSdkUsageGaugeProbe,
   type IdleQuery,
   type SdkUsageGauge,
@@ -56,6 +57,7 @@ function spyGauge(): SdkUsageGauge & {
   const observed: { accountId: string; source: unknown }[] = []
   return {
     observed,
+    capture: () => undefined,
     observe: async (accountId, source) => {
       observed.push({ accountId, source })
     },
@@ -132,4 +134,53 @@ describe("the idle usage probe", () => {
     expect(state.launched).toEqual([])
     expect(concurrency.inFlight).toBe(0)
   })
+})
+
+test("idle gauge captures authority before queue wait and never recaptures after launch", async () => {
+  const concurrency = createSdkConcurrency({ global: 1, perAccount: 1 })
+  const held = await concurrency.acquire("sub-1", new AbortController().signal)
+  let version = 0,
+    captures = 0,
+    reads = 0,
+    applied = 0
+  const gauge = createSdkUsageGauge({
+    enabled: true,
+    timeoutMs: 1000,
+    minIntervalMs: 0,
+    capture: () => {
+      captures++
+      const original = version
+      return {
+        accepts: () => original === version,
+        onReading: () => {
+          applied++
+        },
+      }
+    },
+  })
+  const fake = fakeQuery()
+  const probe = createSdkUsageGaugeProbe({
+    gauge,
+    concurrency,
+    cliPathOverride: null,
+    timeoutMs: 1000,
+    resolveCli: () => CLI,
+    runQuery: (input) => {
+      const query = fake.runQuery(input)
+      query.usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET = async () => {
+        reads++
+        return { rate_limits_available: true, rate_limits: { five_hour: { utilization: 42 } } }
+      }
+      return query
+    },
+  })
+  const reading = probe.read({ accountId: "sub-1", configDir: "/data/claude/sub-1" })
+  expect(captures).toBe(1)
+  version++
+  held.release()
+  expect(await reading).toBe("read")
+  expect(captures).toBe(1)
+  expect(reads).toBe(0)
+  expect(applied).toBe(0)
+  expect(concurrency.inFlight).toBe(0)
 })

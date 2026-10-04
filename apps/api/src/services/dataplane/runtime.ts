@@ -59,6 +59,7 @@ export interface RuntimeInput {
   readonly errorMaxBytes?: number
   readonly responseObservationMaxBytes?: number
   readonly record: (record: UsageRecord) => void
+  readonly recordTerminal?: (record: UsageRecord) => void
   /** Correlation id shared by every attempt of this request. */
   readonly correlationId: string
   readonly apiKeyId: string

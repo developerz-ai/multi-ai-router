@@ -123,7 +123,7 @@ for (const stream of [false, true]) {
       invokeSdk: createSdkInvoker({
         concurrency,
         resolveCli: () => cli,
-        usageGauge: { observe: () => gauge },
+        usageGauge: { capture: () => undefined, observe: () => gauge },
         runQuery: ({ options }) => {
           resumes.push(options.resume)
           return sdkQueryStream({

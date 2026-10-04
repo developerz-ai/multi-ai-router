@@ -9,6 +9,7 @@ import {
   recordFailure,
   recordSuccess,
 } from "../routing"
+import { mergeQuotaWindows } from "../routing/quota"
 import {
   createHealthObservations,
   type HealthAccountFacts,
@@ -47,11 +48,16 @@ export interface HealthStoreOptions {
   readonly authFailureMaxCooldownMs?: number
   readonly jitter?: () => number
   readonly probeHoldMs?: number
-  readonly onQuotaWindows?: (accountId: string, windows: readonly QuotaWindowState[]) => void
+  readonly onQuotaWindows?: (
+    accountId: string,
+    windows: readonly QuotaWindowState[],
+    observation?: HealthObservation,
+  ) => void
   readonly onBlocked?: (
     accountId: string,
     status: AccountStatus,
     observation?: HealthObservation,
+    quotaWindows?: readonly QuotaWindowState[],
   ) => void
   readonly onReset?: (accountId: string) => void
 }
@@ -68,6 +74,7 @@ const REFUSED: ProbeAdmission = { admitted: false, held: false }
 export interface HealthStore {
   stateOf(accountId: string): AccountHealthState
   reconcile(accountId: string, facts: HealthAccountFacts): void
+  acceptsObservation(accountId: string, observation: HealthObservation): boolean
   captureAttempt(accountId: string, facts: HealthAccountFacts): HealthObservation
   beginAttempt(accountId: string): void
   endAttempt(accountId: string, tokens?: number): void
@@ -95,6 +102,8 @@ export interface HealthStore {
 export function createHealthStore(options: HealthStoreOptions = {}): HealthStore {
   const states = new Map<string, AccountHealthState>()
   const observations = createHealthObservations()
+  // Weak ownership keeps evidence tied to the exact captured attempt, not its account overlay.
+  const acceptedQuota = new WeakMap<HealthObservation, readonly QuotaWindowState[]>()
   const probeTokens = new Map<string, number>()
   let nextProbeToken = 0
   const jitter = options.jitter ?? Math.random
@@ -140,6 +149,7 @@ export function createHealthStore(options: HealthStoreOptions = {}): HealthStore
       }
     },
     captureAttempt: observations.capture,
+    acceptsObservation: observations.accepts,
 
     beginAttempt(accountId) {
       write(accountId, { inFlight: read(accountId).inFlight + 1 })
@@ -173,7 +183,12 @@ export function createHealthStore(options: HealthStoreOptions = {}): HealthStore
       if (after !== before) observations.advanceVerdict(accountId)
       write(accountId, { breaker: after })
       if (after.status !== before.status && phase(after, now) === "blocked") {
-        options.onBlocked?.(accountId, after.status, observation)
+        options.onBlocked?.(
+          accountId,
+          after.status,
+          observation,
+          observation === undefined ? undefined : acceptedQuota.get(observation),
+        )
       }
     },
 
@@ -183,7 +198,16 @@ export function createHealthStore(options: HealthStoreOptions = {}): HealthStore
       if (folded.breaker !== read(accountId).breaker) observations.advanceVerdict(accountId)
       states.set(accountId, folded)
       if (signal.quotaWindows !== undefined) {
-        options.onQuotaWindows?.(accountId, folded.quotaWindows)
+        if (observation !== undefined)
+          acceptedQuota.set(
+            observation,
+            mergeQuotaWindows(acceptedQuota.get(observation) ?? [], signal.quotaWindows),
+          )
+        options.onQuotaWindows?.(
+          accountId,
+          observation === undefined ? folded.quotaWindows : (acceptedQuota.get(observation) ?? []),
+          observation,
+        )
       }
     },
 

@@ -18,6 +18,8 @@ import type {
 
 export type MemoryAccounts = Pick<
   AccountRepository,
+  | "upsertQuotaWindow"
+  | "upsertObservedQuotaWindow"
   | "saveRefreshedCredential"
   | "transitionObservedStatus"
   | "updateOperatorAccount"

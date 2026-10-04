@@ -21,6 +21,7 @@ import {
   usageBatchSize,
   wholeNumber,
 } from "./fields"
+import { METRIC_INVENTORY_ENV_FIELDS, readMetricInventoryEnv } from "./metric-inventory"
 import { validateNumericBounds } from "./numeric-bounds"
 import { RECOVERY_ENV_FIELDS, readRecoveryEnv } from "./recovery"
 import { RELAY_LIFETIME_ENV_FIELDS, readRelayLifetimesEnv } from "./relay-lifetimes"
@@ -660,6 +661,7 @@ export interface Env {
   readonly adminAuth: AdminAuthConfig
   readonly dataPlane: DataPlaneConfig
   readonly failover: FailoverConfig
+  readonly metricInventory: ReturnType<typeof readMetricInventoryEnv>["metricInventory"]
   readonly relayLifetimes: ReturnType<typeof readRelayLifetimesEnv>["relayLifetimes"]
   readonly background: ReturnType<typeof readBackgroundEnv>["background"]
   readonly scheduler: SchedulerConfig
@@ -701,6 +703,7 @@ export { decodeEncryptionKey, ZERO_IS_LEGAL } from "./fields"
 export const ENV_FIELDS = {
   ...BACKGROUND_ENV_FIELDS,
   ...RELAY_LIFETIME_ENV_FIELDS,
+  ...METRIC_INVENTORY_ENV_FIELDS,
   ...CLI_OWNERSHIP_ENV_FIELDS,
   ...RECOVERY_ENV_FIELDS,
   PORT: wholeNumber.refine((value) => value <= 65_535, "must be at most 65535").optional(),
@@ -991,6 +994,7 @@ const envSchema = boundedEnvSchema.transform((raw, ctx): Env => {
     ...readRecoveryEnv(raw),
     ...readBackgroundEnv(raw),
     ...readRelayLifetimesEnv(raw),
+    ...readMetricInventoryEnv(raw),
     ...readCliOwnershipEnv(raw),
     port: raw.PORT ?? 8080,
     serverIdleTimeoutSeconds:

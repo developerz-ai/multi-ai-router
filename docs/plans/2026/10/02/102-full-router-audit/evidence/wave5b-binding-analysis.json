@@ -1,0 +1,51 @@
+{
+  "finding": "L16",
+  "state": "open_measured_budget_breach",
+  "source_log": "/tmp/router-w5b-binding-post-scanner-bench.log",
+  "source_artifact": "/tmp/router-w5b-binding-post-scanner-bench.json",
+  "command": "DATABASE_URL=<disposable PG18 fixture> bin/bench-binding",
+  "scope": "Actual dispatcher, real indexed session repository and session cache, PostgreSQL main pool max1; stub HTTP and SDK invocation only. No providers or real CLI.",
+  "measurement": {
+    "http_scenarios": 32,
+    "measured_http_requests": 3200,
+    "discarded_http_warmup_requests": 640,
+    "measured_sdk_positive_requests": 200,
+    "discarded_sdk_positive_warmup_requests": 40,
+    "deliberate_connection_hold_ms": 20,
+    "http_failures": 0,
+    "http_buffered": 0,
+    "indexed_miss_measured_queries": 1600,
+    "cache_hit_measured_queries": 0
+  },
+  "interpretation": [
+    "L16 remains open: instrumentation and controlled attribution do not resolve the overhead budget breach.",
+    "After the bounded scanner fix, the identical actual PG matrix still breached the budget: worst free-miss overhead p99 15 ms and held-miss 48 ms. Scanner microprofile improvement does not demonstrate SQL latency improvement. These are separate local runs; do not subtract their independent percentiles as causal components.",
+    "Free indexed-miss overhead p99 of 9 ms is the 280000-byte translated nonstream scenario; its binding p99 is 3.986053 ms. Independent percentile summaries must not be subtracted or summed as per-request causal components.",
+    "The 1KB passthrough nonstream free-miss scenario has binding p99 of 5.083681 ms and advertised overhead p99 of 5 ms.",
+    "Held 20 ms single-pool connection amplifies misses; warm positive and negative cache hits issue no SQL.",
+    "The SDK positive-binding measurement is a separately labelled offline mock exception; it does not measure actual process launch or inference.",
+    "Body-read wait, binding wait, advertised overhead, terminal duration and added TTFT remain separate. Binding wait is not subtracted from advertised overhead.",
+    "This is local disposable PG18 evidence, not a production deployment or fleet performance claim."
+  ],
+  "pre_scanner_observations": {
+    "free_indexed_miss_worst_binding_p99_ms": 5.08368100000007,
+    "free_indexed_miss_worst_router_overhead_p99_ms": 9,
+    "held_indexed_miss_worst_binding_p99_ms": 33.051682999999684,
+    "held_indexed_miss_worst_router_overhead_p99_ms": 33,
+    "negative_cache_free_worst_binding_p99_ms": 0.02337600000009843,
+    "negative_cache_held_worst_binding_p99_ms": 0.03329299999950308,
+    "negative_cache_worst_router_overhead_p99_ms": 3,
+    "worst_added_streaming_ttft_p95_ms": 0.2936639999970794
+  },
+  "observations": {
+    "free_indexed_miss_worst_binding_p99_ms": 11.888913000002503,
+    "free_indexed_miss_worst_router_overhead_p99_ms": 15,
+    "held_indexed_miss_worst_binding_p99_ms": 46.82700699999987,
+    "held_indexed_miss_worst_router_overhead_p99_ms": 48,
+    "negative_cache_free_worst_binding_p99_ms": 0.03179000000091037,
+    "negative_cache_held_worst_binding_p99_ms": 0.047889999999824795,
+    "negative_cache_free_worst_router_overhead_p99_ms": 5,
+    "negative_cache_held_worst_router_overhead_p99_ms": 3,
+    "worst_added_streaming_ttft_p95_ms": 0.354631000001973
+  }
+}

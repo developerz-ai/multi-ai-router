@@ -13,6 +13,7 @@ export function recordChainFailure(
   now: Date,
   observation: HealthObservation,
   recovery: RecoveryAttempt | undefined,
+  applyQuota = true,
 ) {
   // SDK preparation can fail before the final start guard consumes any provider authority.
   if (recovery !== undefined && !recovery.started()) return
@@ -27,5 +28,6 @@ export function recordChainFailure(
     observation,
   )
   recovery?.finish("failed")
-  ctx.runtime.health.applyRateLimit(servable.account.id, outcome.rateLimit, now, observation)
+  if (applyQuota)
+    ctx.runtime.health.applyRateLimit(servable.account.id, outcome.rateLimit, now, observation)
 }

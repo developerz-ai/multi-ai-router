@@ -424,6 +424,7 @@ describe("the usage gauge on a probe turn", () => {
       resolveCli: () => CLI,
       runQuery: () => stream,
       usageGauge: {
+        capture: () => undefined,
         observe: async (accountId, source) => {
           observed.push({ accountId, source })
         },

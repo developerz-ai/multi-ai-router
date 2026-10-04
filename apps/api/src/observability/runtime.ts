@@ -1,8 +1,14 @@
+import type { MetricInventory } from "../config/metric-inventory"
 import type { Logger } from "../logging/logger"
 import type { SdkConcurrency } from "../providers"
 import type { PriceBook } from "../services/cost"
-import { type HealthStore, overlayHealth, type RoutingCatalog } from "../services/dataplane"
-import { phase } from "../services/routing"
+import {
+  buildSnapshot,
+  type HealthStore,
+  overlayHealth,
+  type RoutingCatalog,
+} from "../services/dataplane"
+import { phase, type SelectionOptions } from "../services/routing"
 import type { UsageRecorder } from "../services/usage"
 import { createMetrics, type DbPoolSample, type RouterMetrics } from "./metrics"
 
@@ -22,6 +28,8 @@ import { createMetrics, type DbPoolSample, type RouterMetrics } from "./metrics"
  */
 
 export interface RuntimeMetricsDeps {
+  readonly metricInventory?: MetricInventory
+  readonly inventorySelectionOptions?: SelectionOptions
   readonly catalog: RoutingCatalog
   readonly health: HealthStore
   /**
@@ -55,6 +63,10 @@ export interface RuntimeMetricsDeps {
 
 export function createRuntimeMetrics(deps: RuntimeMetricsDeps): RouterMetrics {
   const metrics = createMetrics({
+    ...(deps.inventorySelectionOptions === undefined
+      ? {}
+      : { inventorySelectionOptions: deps.inventorySelectionOptions }),
+    ...(deps.metricInventory === undefined ? {} : { metricInventory: deps.metricInventory }),
     ...(deps.now === undefined ? {} : { now: deps.now }),
     ...(deps.revision === undefined ? {} : { revision: deps.revision }),
     // A metric that hit its ceiling is under-reporting from then on, silently. It is the one
@@ -67,6 +79,9 @@ export function createRuntimeMetrics(deps: RuntimeMetricsDeps): RouterMetrics {
 
   metrics.onCollect(() => {
     const now = at()
+    metrics.setInventory(
+      buildSnapshot(deps.catalog, { stateOf: (id) => deps.health.stateOf(id) }, now),
+    )
     metrics.setAccounts(
       deps.catalog.accounts().map((account) => {
         const state = deps.health.stateOf(account.id)

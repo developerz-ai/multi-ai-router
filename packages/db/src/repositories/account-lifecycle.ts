@@ -7,6 +7,7 @@ import { accounts } from "../schema/accounts"
 import type { AccountLifecycleMethods, AccountObservation } from "./account-lifecycle-types"
 import { duration } from "./account-recovery-common"
 import { publishAccountRecovery } from "./account-recovery-generation"
+import { createQuotaWindowMutations } from "./quota-window-mutations"
 
 function observedGeneration(id: string, expected: string | null | undefined) {
   if (expected === undefined) return undefined
@@ -25,6 +26,12 @@ export function observedAccount(id: string, expected: AccountObservation) {
     eq(accounts.lifecycleVersion, expected.lifecycleVersion),
     sql`${accounts.authMaterial} is not distinct from ${expected.authMaterial}`,
     eq(accounts.status, expected.status),
+    expected.healthRecoveryVersion === undefined
+      ? undefined
+      : eq(accounts.healthRecoveryVersion, expected.healthRecoveryVersion),
+    expected.authRecoveryVersion === undefined
+      ? undefined
+      : eq(accounts.authRecoveryVersion, expected.authRecoveryVersion),
     observedGeneration(id, expected.recoveryGeneration),
     observedOperatorCheck(id, expected.operatorCheckToken),
   )
@@ -85,10 +92,21 @@ export function createAccountLifecycle(
         .returning()
       return rows[0]
     },
-    transitionObservedStatus: async ({ id, expected, status, now }) => {
+    transitionObservedStatus: async ({ id, expected, status, now, quotaWindows }) => {
       if (status === expected.status) return undefined
+      if (
+        quotaWindows !== undefined &&
+        (expected.healthRecoveryVersion === undefined ||
+          expected.authRecoveryVersion === undefined ||
+          expected.recoveryGeneration === undefined)
+      )
+        throw new Error("bundled quota requires complete observation")
       const mutate = async (executor: DatabaseExecutor) => {
-        if (expected.recoveryGeneration !== undefined || expected.operatorCheckToken !== undefined)
+        if (
+          quotaWindows !== undefined ||
+          expected.recoveryGeneration !== undefined ||
+          expected.operatorCheckToken !== undefined
+        )
           await executor
             .select({ id: accounts.id })
             .from(accounts)
@@ -99,9 +117,16 @@ export function createAccountLifecycle(
           .set({ status, updatedAt: now })
           .where(observedAccount(id, expected))
           .returning()
-        return rows[0]
+        const row = rows[0]
+        if (row !== undefined && quotaWindows !== undefined) {
+          const quota = createQuotaWindowMutations(executor)
+          for (const window of quotaWindows) await quota.upsertQuotaWindow(id, window)
+        }
+        return row
       }
-      return expected.recoveryGeneration === undefined && expected.operatorCheckToken === undefined
+      return quotaWindows === undefined &&
+        expected.recoveryGeneration === undefined &&
+        expected.operatorCheckToken === undefined
         ? mutate(db)
         : db.transaction(mutate)
     },

@@ -1,0 +1,5 @@
+#!/bin/sh
+# Offline binding contention characterization on a disposable migrated PostgreSQL database.
+set -eu
+cd "$(dirname "$0")/.."
+exec bun apps/api/bench/binding-contention.ts "$@"

@@ -24,6 +24,7 @@ export function memoryAccountLifecycle(
   rows: AccountRow[],
   states: OauthStateRow[],
   recoveries: ReadonlyMap<string, { readonly generation: string }> = new Map(),
+  persistQuota?: AccountRepository["upsertQuotaWindow"],
 ): Methods {
   const find = (id: string) => rows.find((row) => row.id === id)
   const matches = (row: AccountRow | undefined, expected: Observation): row is AccountRow =>
@@ -31,6 +32,10 @@ export function memoryAccountLifecycle(
     row.lifecycleVersion === expected.lifecycleVersion &&
     row.authMaterial === expected.authMaterial &&
     row.status === expected.status &&
+    (expected.healthRecoveryVersion === undefined ||
+      row.healthRecoveryVersion === expected.healthRecoveryVersion) &&
+    (expected.authRecoveryVersion === undefined ||
+      row.authRecoveryVersion === expected.authRecoveryVersion) &&
     (expected.recoveryGeneration === undefined ||
       (recoveries.get(row.id)?.generation ?? null) === expected.recoveryGeneration)
   const write = (row: AccountRow, patch: Partial<AccountRow>, now: Date): AccountRow => {
@@ -81,9 +86,19 @@ export function memoryAccountLifecycle(
       if (row === undefined || row.authMaterial !== expectedAuthMaterial) return undefined
       return write(row, { authMaterial, tokenExpiresAt }, now)
     },
-    transitionObservedStatus: async ({ id, expected, status, now }) => {
+    transitionObservedStatus: async ({ id, expected, status, now, quotaWindows }) => {
       const row = find(id)
       if (!matches(row, expected) || status === expected.status) return undefined
+      if (quotaWindows !== undefined) {
+        if (
+          persistQuota === undefined ||
+          expected.healthRecoveryVersion === undefined ||
+          expected.authRecoveryVersion === undefined ||
+          expected.recoveryGeneration === undefined
+        )
+          throw new Error("bundled quota requires complete observation and persistence")
+        for (const window of quotaWindows) await persistQuota(id, window)
+      }
       return write(row, { status }, now)
     },
     updateOperatorAccount: async ({ id, patch, now }) => {

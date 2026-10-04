@@ -104,16 +104,23 @@ export async function errorResponseFailure(
 export function rateLimitCapture(
   input: SdkAttemptInput,
   accountId: string,
-): { capture: (info: unknown) => void; signal: () => RateLimitSignal | null } {
+): { capture: (info: unknown) => void; signal: () => RateLimitSignal | null; close: () => void } {
   const { quota } = input
   let latest: RateLimitSignal | null = null
+  let closed = false
   return {
     capture: (info) => {
-      if (quota === undefined) return
+      if (closed || quota === undefined || input.rateLimitObserver?.accepts() === false) return
       const now = input.now?.() ?? new Date()
       const snapshot = quota.ingest(accountId, info, now)
-      if (snapshot !== null) latest = snapshot.signal
+      if (snapshot !== null) {
+        latest = snapshot.signal
+        input.rateLimitObserver?.observe(latest, now)
+      }
     },
     signal: () => latest,
+    close: () => {
+      closed = true
+    },
   }
 }

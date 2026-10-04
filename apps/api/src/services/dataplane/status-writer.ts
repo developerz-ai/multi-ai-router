@@ -1,4 +1,4 @@
-import { type AccountStatus, describeError } from "@multi-ai-router/core"
+import { type AccountStatus, describeError, type QuotaWindowState } from "@multi-ai-router/core"
 import type { AccountRepository } from "@multi-ai-router/db"
 import type { Logger } from "../../logging/logger"
 import { createWriterLifecycle } from "../shutdown/writer-lifecycle"
@@ -29,7 +29,12 @@ export interface AccountStatusWriterStats {
 }
 
 export interface AccountStatusWriter {
-  record(accountId: string, status: AccountStatus, observation: HealthObservation): void
+  record(
+    accountId: string,
+    status: AccountStatus,
+    observation: HealthObservation,
+    quotaWindows?: readonly QuotaWindowState[],
+  ): void
   forget(accountId: string): void
   flush(): Promise<void>
   start(): void
@@ -41,7 +46,12 @@ export function createAccountStatusWriter(deps: AccountStatusWriterDeps): Accoun
   const log = deps.logger.child({ component: "account-status" })
   const pending = new Map<
     string,
-    { status: ObservedAccountStatus; observation: HealthObservation; forgottenVersion: number }
+    {
+      status: ObservedAccountStatus
+      observation: HealthObservation
+      quotaWindows?: readonly QuotaWindowState[]
+      forgottenVersion: number
+    }
   >()
 
   const forgotten = new Map<string, number>()
@@ -63,14 +73,14 @@ export function createAccountStatusWriter(deps: AccountStatusWriterDeps): Accoun
     let failed = 0
     let lastError: unknown = null
 
-    for (const [accountId, { status, observation, forgottenVersion }] of batch) {
+    for (const [accountId, { status, observation, quotaWindows, forgottenVersion }] of batch) {
       if (!lifecycle.canWrite()) {
         const newer = pending.get(accountId)
         if (
           (forgotten.get(accountId) ?? 0) === forgottenVersion &&
           (newer === undefined || newerObservation(observation, newer.observation))
         ) {
-          pending.set(accountId, { status, observation, forgottenVersion })
+          pending.set(accountId, { status, observation, quotaWindows, forgottenVersion })
         }
         unsettled -= 1
         continue
@@ -80,11 +90,14 @@ export function createAccountStatusWriter(deps: AccountStatusWriterDeps): Accoun
           id: accountId,
           expected: {
             lifecycleVersion: observation.lifecycleVersion,
+            healthRecoveryVersion: observation.healthRecoveryVersion,
+            authRecoveryVersion: observation.authRecoveryVersion,
             authMaterial: observation.authMaterial,
             status: observation.status,
             recoveryGeneration: observation.recoveryGeneration,
           },
           status,
+          quotaWindows,
           now: deps.now(),
         })
         if (row === undefined) {
@@ -99,7 +112,7 @@ export function createAccountStatusWriter(deps: AccountStatusWriterDeps): Accoun
           (forgotten.get(accountId) ?? 0) === forgottenVersion &&
           (newer === undefined || newerObservation(observation, newer.observation))
         ) {
-          pending.set(accountId, { status, observation, forgottenVersion })
+          pending.set(accountId, { status, observation, quotaWindows, forgottenVersion })
         }
         writeFailures += 1
         lastError = error
@@ -137,7 +150,7 @@ export function createAccountStatusWriter(deps: AccountStatusWriterDeps): Accoun
   })
 
   return {
-    record(accountId, status, observation) {
+    record(accountId, status, observation, quotaWindows) {
       if (!lifecycle.accepting()) {
         rejectedAfterStop += 1
         return
@@ -148,6 +161,7 @@ export function createAccountStatusWriter(deps: AccountStatusWriterDeps): Accoun
       pending.set(accountId, {
         status,
         observation,
+        quotaWindows: quotaWindows === undefined ? undefined : [...quotaWindows],
         forgottenVersion: forgotten.get(accountId) ?? 0,
       })
     },

@@ -37,7 +37,14 @@ export interface SdkUsageGaugeSource {
   }) => Promise<unknown>
 }
 
+/** Captured before launch; the gauge cannot invent a newer identity for an old query. */
+export interface SdkUsageGaugeObservation {
+  accepts(): boolean
+  onReading(reading: SdkUsageGaugeReading, now: Date): void
+}
+
 export interface SdkUsageGaugeDeps {
+  readonly capture?: (accountId: string) => SdkUsageGaugeObservation | undefined
   /** `CLAUDE_SDK_USAGE_GAUGE`. Off means `observe` resolves immediately and nothing is asked. */
   readonly enabled: boolean
   /** `CLAUDE_SDK_USAGE_GAUGE_TIMEOUT_MS`. The most a reading may take before it is dropped. */
@@ -48,17 +55,22 @@ export interface SdkUsageGaugeDeps {
    * Where a validated reading lands. The composition root folds it into the quota store and the
    * health store; this module knows neither. Must not throw — a throw here is logged and dropped.
    */
-  readonly onReading: (accountId: string, reading: SdkUsageGaugeReading, now: Date) => void
+  readonly onReading?: (accountId: string, reading: SdkUsageGaugeReading, now: Date) => void
   readonly logger?: Logger
   readonly now?: () => Date
 }
 
 export interface SdkUsageGauge {
+  capture(accountId: string): SdkUsageGaugeObservation | undefined
   /**
    * Takes one reading if one is due for this Account. Resolves once the reading has landed or been
    * dropped; never rejects and never throws, so a caller may `void` it or await it as it likes.
    */
-  observe(accountId: string, source: SdkUsageGaugeSource): Promise<void>
+  observe(
+    accountId: string,
+    source: SdkUsageGaugeSource,
+    observation?: SdkUsageGaugeObservation,
+  ): Promise<void>
 }
 
 /** The clock stand-in and the settled promise, so a disabled gauge costs one allocation. */
@@ -76,19 +88,29 @@ export function createSdkUsageGauge(deps: SdkUsageGaugeDeps): SdkUsageGauge {
   }
 
   return {
-    observe(accountId, source) {
-      if (!deps.enabled) return DONE
+    capture: (accountId) => deps.capture?.(accountId),
+    observe(accountId, source, observation) {
+      if (
+        !deps.enabled ||
+        (deps.capture !== undefined && observation === undefined) ||
+        observation?.accepts() === false
+      )
+        return DONE
       const read = source.usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET
       if (typeof read !== "function") return DONE
       const at = now()
       if (!due(accountId, at.getTime())) return DONE
       startedAt.set(accountId, at.getTime())
 
-      return take(accountId, () => read.call(source, { skipBehaviors: true }))
+      return take(accountId, () => read.call(source, { skipBehaviors: true }), observation)
     },
   }
 
-  async function take(accountId: string, read: () => Promise<unknown>): Promise<void> {
+  async function take(
+    accountId: string,
+    read: () => Promise<unknown>,
+    observation?: SdkUsageGaugeObservation,
+  ): Promise<void> {
     let payload: unknown
     try {
       payload = await withTimeout(read(), deps.timeoutMs)
@@ -97,6 +119,7 @@ export function createSdkUsageGauge(deps: SdkUsageGaugeDeps): SdkUsageGauge {
       return
     }
 
+    if (observation?.accepts() === false) return
     const readAt = now()
     const reading = readSdkUsageGauge(payload, readAt)
     if (reading === null) {
@@ -116,7 +139,8 @@ export function createSdkUsageGauge(deps: SdkUsageGaugeDeps): SdkUsageGauge {
     reportedUnavailable.delete(accountId)
 
     try {
-      deps.onReading(accountId, reading, readAt)
+      if (observation !== undefined) observation.onReading(reading, readAt)
+      else deps.onReading?.(accountId, reading, readAt)
     } catch (error) {
       log?.warn("sdk usage gauge reading not applied", { accountId, reason: reasonOf(error) })
     }

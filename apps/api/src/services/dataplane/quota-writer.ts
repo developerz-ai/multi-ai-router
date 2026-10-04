@@ -1,8 +1,9 @@
 import { describeError, type QuotaWindowState } from "@multi-ai-router/core"
 import type { AccountRepository } from "@multi-ai-router/db"
 import type { Logger } from "../../logging/logger"
-import { mergeQuotaWindows } from "../routing/quota"
 import { createWriterLifecycle } from "../shutdown/writer-lifecycle"
+import type { HealthObservation } from "./health-observation"
+import { mergePendingQuota, type PendingQuotaReading } from "./quota-writer-observation"
 
 /**
  * Quota readings, made durable — off the request path.
@@ -32,7 +33,8 @@ import { createWriterLifecycle } from "../shutdown/writer-lifecycle"
  */
 
 export interface QuotaWindowWriterDeps {
-  readonly accounts: Pick<AccountRepository, "upsertQuotaWindow">
+  readonly accounts: Pick<AccountRepository, "upsertQuotaWindow"> &
+    Partial<Pick<AccountRepository, "upsertObservedQuotaWindow">>
   readonly logger: Logger
   /** `QUOTA_WRITE_INTERVAL_MS`. How long a reading may sit in memory before it is durable. */
   readonly shutdownDrainMs?: number
@@ -51,7 +53,11 @@ export interface QuotaWindowWriterStats {
 
 export interface QuotaWindowWriter {
   /** Enqueue one account's whole current reading. Synchronous, non-throwing, off the hot path. */
-  record(accountId: string, windows: readonly QuotaWindowState[]): void
+  record(
+    accountId: string,
+    windows: readonly QuotaWindowState[],
+    observation?: HealthObservation,
+  ): void
   /** Writes everything pending. Used by tests, by shutdown, and by the flush timer. */
   flush(): Promise<void>
   start(): void
@@ -62,7 +68,7 @@ export interface QuotaWindowWriter {
 
 export function createQuotaWindowWriter(deps: QuotaWindowWriterDeps): QuotaWindowWriter {
   const log = deps.logger.child({ component: "quota" })
-  const pending = new Map<string, readonly QuotaWindowState[]>()
+  const pending = new Map<string, PendingQuotaReading>()
 
   let timer: ReturnType<typeof setInterval> | null = null
   let inFlight: Promise<void> | null = null
@@ -82,19 +88,45 @@ export function createQuotaWindowWriter(deps: QuotaWindowWriterDeps): QuotaWindo
     let failedAccounts = 0
     let lastError: unknown = null
 
-    for (const [accountId, windows] of batch) {
+    for (const [accountId, reading] of batch) {
       let failed = false
-      for (const window of windows) {
+      for (const window of reading.windows) {
         if (!lifecycle.canWrite()) {
-          pending.set(accountId, mergeQuotaWindows(pending.get(accountId) ?? [], [window]))
+          pending.set(
+            accountId,
+            mergePendingQuota(
+              { ...reading, windows: [window] },
+              pending.get(accountId) ?? { ...reading, windows: [] },
+            ),
+          )
           continue
         }
         try {
-          await deps.accounts.upsertQuotaWindow(accountId, window)
+          if (reading.observation === undefined) {
+            await deps.accounts.upsertQuotaWindow(accountId, window)
+          } else {
+            if (deps.accounts.upsertObservedQuotaWindow === undefined)
+              throw new Error("observed quota persistence is not configured")
+            const row = await deps.accounts.upsertObservedQuotaWindow({
+              accountId,
+              state: window,
+              expected: {
+                ...reading.observation,
+                recoveryGeneration: reading.observation.recoveryGeneration ?? null,
+              },
+            })
+            if (row === undefined) continue
+          }
           written += 1
         } catch (error) {
           // Retry at the next flush, merging with newer pending facts rather than overwriting them.
-          pending.set(accountId, mergeQuotaWindows(pending.get(accountId) ?? [], [window]))
+          pending.set(
+            accountId,
+            mergePendingQuota(
+              { ...reading, windows: [window] },
+              pending.get(accountId) ?? { ...reading, windows: [] },
+            ),
+          )
           writeFailures += 1
           lastError = error
           failed = true
@@ -136,7 +168,7 @@ export function createQuotaWindowWriter(deps: QuotaWindowWriterDeps): QuotaWindo
   })
 
   return {
-    record(accountId, windows) {
+    record(accountId, windows, observation) {
       if (!lifecycle.accepting()) {
         rejectedAfterStop += 1
         return
@@ -147,7 +179,13 @@ export function createQuotaWindowWriter(deps: QuotaWindowWriterDeps): QuotaWindo
         lastCheckedAt: new Date(window.lastCheckedAt),
         ...(window.resetsAt === undefined ? {} : { resetsAt: new Date(window.resetsAt) }),
       }))
-      pending.set(accountId, mergeQuotaWindows(pending.get(accountId) ?? [], snapshot))
+      pending.set(
+        accountId,
+        mergePendingQuota(pending.get(accountId), {
+          windows: snapshot,
+          ...(observation === undefined ? {} : { observation: { ...observation } }),
+        }),
+      )
     },
 
     flush,

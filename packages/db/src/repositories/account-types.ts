@@ -10,6 +10,7 @@ import type { AccountRow, ModelAliasMap, SupportedModelList } from "../schema/ac
 import type { QuotaWindowRow } from "../schema/quota-windows"
 import type { AddedAccountRepositoryMethods } from "./account-lifecycle-types"
 import type { BackgroundAccountSubject } from "./background-account-eligibility"
+import type { AccountQuotaObservation } from "./observed-quota-window"
 
 export interface AccountRepository extends AddedAccountRepositoryMethods {
   /** Durable identity/state check at a background upstream admission boundary. */
@@ -103,6 +104,12 @@ export interface AccountRepository extends AddedAccountRepositoryMethods {
    * An absent `utilization` is written as NULL on purpose — a source that has
    * stopped reporting must not leave yesterday's number on display.
    */
+  /** Stale account identity/intent returns undefined without writing or retrying. */
+  upsertObservedQuotaWindow(input: {
+    accountId: string
+    state: QuotaWindowState
+    expected: AccountQuotaObservation
+  }): Promise<QuotaWindowRow | undefined>
   upsertQuotaWindow(accountId: string, state: QuotaWindowState): Promise<QuotaWindowRow>
   /**
    * Every persisted window for a set of accounts, in one query, ordered by

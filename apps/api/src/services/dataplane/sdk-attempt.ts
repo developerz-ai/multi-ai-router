@@ -66,6 +66,10 @@ export interface SdkAttemptInput {
    * a turn later than a stream that reported it early.
    */
   readonly quota?: SdkQuotaStore
+  readonly rateLimitObserver?: {
+    readonly accepts: () => boolean
+    readonly observe: (signal: RateLimitSignal, at: Date) => void
+  }
   /** Stamps a `rate_limit_event` reading. Unused when `quota` is undefined. Defaults to the clock. */
   readonly now?: () => Date
   readonly beforeUpstreamStart?: UpstreamStartGuard
@@ -162,6 +166,7 @@ export async function runSdkAttempt(input: SdkAttemptInput): Promise<AttemptOutc
     // existed reaches no `onEnd`, and the *next* attempt of this same request must be able to claim
     // the conversation immediately rather than fail over onto a detached, session-less turn.
     turn.release()
+    rateLimit.close()
     if (error instanceof UpstreamAdmissionRefused) return { kind: "admission-refused" }
     return invocationFailure(error, input, turn, rateLimit.signal(), attemptSignal)
   }
@@ -177,7 +182,11 @@ export async function runSdkAttempt(input: SdkAttemptInput): Promise<AttemptOutc
   // account, which resolves its own turn against this conversation.
   if (response.status >= 400) {
     turn.release()
-    return errorResponseFailure(response, rateLimit.signal())
+    try {
+      return await errorResponseFailure(response, rateLimit.signal())
+    } finally {
+      rateLimit.close()
+    }
   }
 
   // Rate-limit and quota state does not ride the HTTP response here: it arrives as
@@ -190,7 +199,10 @@ export async function runSdkAttempt(input: SdkAttemptInput): Promise<AttemptOutc
   // prevent (`claude-sdk/session/inflight.ts`).
   return {
     kind: "success",
-    response: releasingWith(response, turn.release),
+    response: releasingWith(response, () => {
+      rateLimit.close()
+      turn.release()
+    }),
     rateLimit: rateLimit.signal(),
   }
 }
@@ -216,13 +228,7 @@ function resolveTurn(input: SdkAttemptInput, accountId: string): SessionTurn {
   })
 }
 
-/**
- * What an invoker throwing means.
- *
- * A deadline is the one class read off the error *object* — a composed signal fires with a name,
- * and the idle guard raises its own `504` — because a subprocess that said nothing said nothing in
- * every language. Everything the SDK itself reports is prose and goes to `classifySdkFailure`.
- */
+/** Abort-shaped throws use the first signal cause; provider failures retain their classification. */
 function invocationFailure(
   error: unknown,
   input: SdkAttemptInput,

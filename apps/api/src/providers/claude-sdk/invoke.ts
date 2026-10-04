@@ -1,6 +1,7 @@
 import type { AsyncBackgroundStartGuard, UpstreamStartGuard } from "../upstream-admission"
 import type { TruncatedTurn } from "./render"
 import type { SessionPlan } from "./session"
+import type { SdkUsageGaugeObservation } from "./usage-gauge"
 
 /**
  * The I/O half of the Claude subscription transport: one `query()` call, one answer.
@@ -26,6 +27,7 @@ import type { SessionPlan } from "./session"
  *   the answer to `query()` and reports what the subprocess named itself (§4).
  */
 export interface SdkInvocation {
+  readonly usageGaugeObservation?: SdkUsageGaugeObservation
   /** Local CLI fork acknowledged; admission is earlier and does not imply remote acceptance. */
   readonly onUpstreamStarted?: () => void
   readonly beforeUpstreamStart?: UpstreamStartGuard

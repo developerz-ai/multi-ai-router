@@ -6,14 +6,17 @@ import { errorHandler, notFoundHandler } from "../src/middleware/errorHandler"
 import { requestLogger } from "../src/middleware/logger"
 import { requestId } from "../src/middleware/requestId"
 import { createMetrics, type RouterMetrics } from "../src/observability"
+import type { SessionStore } from "../src/providers"
 import { metricsRoutes } from "../src/routes/metrics"
 import { dataPlaneRoutes } from "../src/routes/v1"
+import type { RequestSample } from "../src/services/dataplane"
 import {
   createDispatcher,
   createHealthStore,
   createRouterKeyVerifier,
 } from "../src/services/dataplane"
 import { createActiveRequestRegistry } from "../src/services/dataplane/active-requests"
+import type { UsageRecord } from "../src/services/usage"
 import { createUsageRecorder, type UsageRecorder } from "../src/services/usage"
 import type { AppEnv } from "../src/types"
 import {
@@ -51,6 +54,12 @@ export interface BenchAppOptions {
   /** Anthropic ingress against an anthropic account is passthrough; anything else translates. */
   readonly provider: ProviderId
   readonly upstream: StubUpstream
+  readonly sessions?: SessionStore
+  readonly bindingKeyId?: string
+  readonly subscriptionPresent?: boolean
+  readonly onBindingWait?: (milliseconds: number) => void
+  readonly onTerminal?: (sample: RequestSample) => void
+  readonly onUsage?: (record: UsageRecord) => void
 }
 
 export interface BenchApp {
@@ -78,15 +87,35 @@ export function benchApp(options: BenchAppOptions): BenchApp {
   // is not, exactly as in production.
   const recorder = createUsageRecorder(
     { write: () => Promise.resolve() },
-    { onRecord: (record) => metrics.observeUsage(record) },
+    {
+      onRecord: (record) => {
+        metrics.observeUsage(record)
+        options.onUsage?.(record)
+      },
+    },
   )
 
   const store = catalog([
     account("bench-account", { provider: options.provider, apiKey: "sk-bench", cipher: cryptor }),
+    ...(options.subscriptionPresent
+      ? [
+          account("binding-presence", {
+            provider: "anthropic-oauth",
+            configDir: "/offline-only",
+            snapshot: { status: "disabled" },
+          }),
+        ]
+      : []),
   ])
 
   const verifier = createRouterKeyVerifier({
-    repository: keyRepository([apiKeyRow(key, cryptor)]),
+    repository: keyRepository([
+      apiKeyRow(
+        key,
+        cryptor,
+        options.bindingKeyId === undefined ? {} : { id: options.bindingKeyId },
+      ),
+    ]),
     cipher: cryptor,
     loadScope: () => Promise.resolve({ kind: "all" }),
   })
@@ -109,6 +138,8 @@ export function benchApp(options: BenchAppOptions): BenchApp {
       catalog: store,
       health,
       dispatcher: createDispatcher({
+        ...(options.sessions === undefined ? {} : { sessions: options.sessions }),
+        ...(options.onBindingWait === undefined ? {} : { onBindingWait: options.onBindingWait }),
         activeRequests,
         recovery: benchmarkRecovery(store, health),
         catalog: store,
@@ -119,7 +150,10 @@ export function benchApp(options: BenchAppOptions): BenchApp {
           request.headers.set(TRIP_HEADER, trips.getStore() ?? "")
           return options.upstream.fetch(request)
         },
-        onRequest: (sample) => metrics.observeRequest(sample),
+        onRequest: (sample) => {
+          metrics.observeRequest(sample)
+          options.onTerminal?.(sample)
+        },
       }),
     }),
   )

@@ -1,0 +1,117 @@
+{
+  "scope": "W5B application validation; review/merge/release/deployment pending",
+  "gate": {
+    "bun": "1.4.2",
+    "postgres": "18.6",
+    "passed": 5004,
+    "failed": 0,
+    "files": 437,
+    "assertions": 48848
+  },
+  "inputs": {
+    "unchanged": 1966,
+    "excludedGenerated": "apps/api/tsconfig.tsbuildinfo",
+    "scope": "prior scanner-fix gate; not a digest verification of the later review-fix gate"
+  },
+  "postgresQuotaFence": {
+    "16": {
+      "passed": 14,
+      "assertions": 40
+    },
+    "18": {
+      "passed": 14,
+      "assertions": 40
+    }
+  },
+  "image": {
+    "id": "sha256:41393917f3a503b95e90791e5d759e3830b8fc82873ab663f4f16d62c7a8f074",
+    "serverSHA256": "3718e85f52d7de78e880dc8648d93653e19341c3a259848d343c3fae289cb4d3",
+    "checkedBundleMatches": true,
+    "uid": 1000,
+    "readOnly": true,
+    "capabilities": 0,
+    "noNewPrivileges": true,
+    "scope": "recovery-inventory fix packaging only; no router/helper/CLI launch, DB or provider calls"
+  },
+  "openLead": "L16 actual indexed-miss and occupied-pool latency remains outside5ms budget; retained15/48ms evidence, no subtraction of binding wait",
+  "monitoring": "L19 application contract only; infrastructure authenticated scrape/rules/controlled notification/runbook remains open",
+  "initialGate": {
+    "bun": "1.4.2",
+    "postgres": "18.6",
+    "passed": 4995,
+    "failed": 0,
+    "files": 433,
+    "assertions": 48806
+  },
+  "reviewFixes": {
+    "status": "locally validated; review of new commit pending",
+    "atomicQuotaStatus": {
+      "postgres16": {
+        "passed": 9,
+        "assertions": 37
+      },
+      "postgres18": {
+        "passed": 9,
+        "assertions": 37
+      },
+      "writerUnits": {
+        "passed": 21,
+        "assertions": 55
+      },
+      "healthUnits": {
+        "passed": 8,
+        "assertions": 19
+      }
+    },
+    "warmBench": {
+      "normalMaxP99Ms": 0.5357142857142857,
+      "largeMaxP99Ms": 3.6153846153846154,
+      "requestsPerRun": 8000,
+      "failures": 0,
+      "buffered": 0
+    },
+    "gate": {
+      "bun": "1.4.2",
+      "postgres": "18.6",
+      "passed": 5003,
+      "failed": 0,
+      "files": 436,
+      "assertions": 48831
+    },
+    "image": {
+      "id": "sha256:f3439cedf25608a70a49bb6146abb1b8f88355aa10fe791c4102f8cd0c6ee63b",
+      "serverSHA256": "1837e908b9fbb4a1cc2d13a4f8a7e0dc3d047c1b2e93087d1bebb1b8c7b19716",
+      "checkedBundleMatches": true,
+      "uid": 1000,
+      "readOnly": true,
+      "capabilities": 0,
+      "noNewPrivileges": true,
+      "scope": "prior quota/status review-fix packaging; recovery-inventory rebuild pending"
+    }
+  },
+  "priorImage": {
+    "id": "sha256:ea8122f6b09e6a7d0dbcbffbc5f83fe68558259220830fc73d256ddf9f2088fd",
+    "serverSHA256": "d4e6ec68faa7db7a6324c2fcb72ecaf959b8cc3ef2b449b242abf4615dddbae1",
+    "checkedBundleMatches": true,
+    "uid": 1000,
+    "readOnly": true,
+    "capabilities": 0,
+    "noNewPrivileges": true,
+    "scope": "prior scanner-fix packaging validation; review-fix image rebuild pending"
+  },
+  "recoveryInventory": {
+    "source": "actual recovery access catalog with replica-local capabilities",
+    "tests": 1,
+    "assertions": 17,
+    "scrapesReservePermits": false,
+    "foreignAndConsumedPermitsCount": 0,
+    "availableLocalPermitCount": 1
+  },
+  "warmBench": {
+    "normalMaxP99Ms": 0.5,
+    "largeMaxP99Ms": 3.8,
+    "requestsPerRun": 8000,
+    "failures": 0,
+    "buffered": 0
+  }
+}

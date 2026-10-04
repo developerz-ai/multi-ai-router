@@ -95,11 +95,12 @@ export interface RequestSample {
   /** What the body named, never substituted. Null when it named nothing at all. */
   readonly model: string | null
   readonly keyId: string
+  readonly requestedPoolIds?: readonly string[]
+  readonly servedPoolId?: string | null
+  readonly bodyReadMs?: number
   readonly outcome: UsageOutcome
   /**
-   * Router-observed time until the response was handed back. A streamed body drains *after* that
-   * point, so a streamed sample measures time-to-response and not time-to-last-token — which is
-   * why `streamed` travels with it, and why the two populations are never averaged together.
+   * Router-observed time through terminal settlement, including a streamed body's lifetime.
    */
   readonly durationMs: number
   readonly streamed: boolean

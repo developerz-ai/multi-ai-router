@@ -163,15 +163,18 @@ Each is a Zod schema **and** its `z.infer` type under one name. These are the si
 | Thing | Where | Use it when |
 |---|---|---|
 | `createRegistry(options)` → `Registry` with `counter` / `gauge` / `histogram` / `onCollect` / `expose` | `observability/registry.ts` | Any new metric primitive. Label names are declared once per metric and checked by the compiler, so a `request_id` label is a type error rather than a review comment. Series are capped per metric — cardinality may degrade, it may not take the process down |
-| `createSeries(options)` → `RouterSeries` | `observability/series.ts` | Adding or renaming a series. **Every** exported metric is declared here and nowhere else; the mapping code never names a metric |
+| `createSeries(options)` → `RouterSeries` | `observability/series.ts` | Adding or renaming a series. Common metric families are declared here; configured inventory families live in `inventory.ts`, and the binding-wait histogram is registered by `createMetrics` |
 | `createMetrics(options)` → `RouterMetrics` | `observability/metrics.ts` | Turning a `UsageRecord`, a finished request, or a scheduler tick into numbers. Never measures anything itself |
 | `createRuntimeMetrics(deps)` → `RouterMetrics` | `observability/runtime.ts` | The production wiring: the registry plus the per-scrape gauges read from the warm catalog and health store. `composition.ts` is its one caller |
+| `countInventory(snapshot, inventory, options)` | `observability/inventory.ts` | Scrape-only configured pool/model availability through the real scope and candidate filter; separates ordinary from actual replica-local recovery capacity without acquiring permits or querying SQL |
+| `RouterMetrics.observeBindingWait(milliseconds)` | `observability/metrics.ts` | Unlabelled awaited session-binding latency; includes pool queue, query and promise wait, without subtracting it from router overhead |
 | `trackPool(sql, max)` → `{ sql, sample() }` | `packages/db/src/pool-metrics.ts` | Counting in-flight/idle/waiting connections against a postgres.js pool, when the driver itself exposes no such stat. Wraps tagged-template calls, `.unsafe` (how Drizzle issues every query), `.begin`, and `.reserve` via one `Proxy` — wrap the raw client with this before handing it to `drizzle(...)`, never after |
 
-Recording is off the critical path by construction: attempt series ride the usage recorder's
-`onRecord` drain, state gauges are sampled per scrape, and the only per-request call is a single
-counter increment at the point a request ends. Never add a metric write inside `attempt.ts` or the
-failover chain.
+Attempt series ride the usage recorder's `onRecord` drain, and state gauges are sampled per
+scrape. The request-end observer runs once at logical terminal settlement. Separately,
+`observeBindingWait` records an unlabelled histogram observation on the request path when an
+awaited subscription session-binding lookup settles. Never add a metric write inside `attempt.ts`
+or the failover chain.
 
 ### Cost estimation — `apps/api/src/services/cost/`
 
@@ -488,6 +491,10 @@ Operator check claims do not retain a database lock across CLI work. Their bound
 |---|---|---|
 | `createRequestIdentity(clientRequestId)` | `services/usage/request-identity.ts` | Fresh internal correlation UUID per ingress; independent caller trace label, including caller UUIDs |
 | `createRequestAccounting(...)` | `services/dataplane/request-accounting.ts` | Once-only request accounting across pre-model refusal, real attempts and shutdown; no sentinel model |
+| `requestTerminalObserver(...)` / `recordTerminal(...)` | `services/dataplane/request-terminal.ts`, `request-accounting.ts` | Emits one logical result after EOF, failure, cancellation or shutdown; intermediate failover rows never count demand; requested pools and final served pool remain separate |
+| `attemptQuota(...)` / `gaugeObservationCapture(...)` | `services/dataplane/attempt-quota.ts`, `gauge-observation.ts` | Original live attempt authority gates SDK event and delayed gauge ingestion before shared quota state changes; late restriction cannot finish recovery as successful |
+| `quotaCatalogReconciler(...)` | `services/dataplane/quota-catalog.ts` | Drops SDK buckets when lifecycle, recovery, credential or configured status changes, retaining independently durable quota evidence |
+| `upsertObservedQuotaWindow(...)` | `packages/db/src/repositories/observed-quota-window.ts` | Account-first transaction fences queued observations against exact lifecycle/recovery epochs, credential, status and nullable recovery generation before existing ordered quota mutation |
 | `createActiveRequestRegistry({maximumEntries})` | `services/dataplane/active-requests.ts` | Bounded authenticated lifetimes; closes admission, settles held callbacks before abort, releases entries without waiting for upstream promises |
 | `requestLifetime(...)` / `attemptLifetime(...)` | `services/dataplane/request-lifetime.ts`, `attempt-lifetime.ts` | Admission and actual-start provenance; shutdown before start remains account-null, late producers cannot add a second record |
 | `readTrackedRequestBody(...)` | `services/dataplane/body-progress.ts` | Completed and outstanding upload waits remain distinct from router processing, including forced shutdown before read callbacks settle |

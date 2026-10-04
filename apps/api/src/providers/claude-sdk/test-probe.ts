@@ -12,7 +12,7 @@ import { type CliResolution, resolveClaudeCli } from "./resolve-cli"
 import { prepareSdkProbe } from "./test-probe-preparation"
 import { detailOf, resultFailure, snippet, statedResult } from "./test-probe-result"
 import { holdPrompt } from "./turn-lifecycle"
-import type { SdkUsageGauge, SdkUsageGaugeSource } from "./usage-gauge"
+import type { SdkUsageGauge, SdkUsageGaugeObservation, SdkUsageGaugeSource } from "./usage-gauge"
 
 /**
  * The "Test now" button's Agent-SDK half: one real, billed `query()` turn against an Account's own
@@ -45,6 +45,7 @@ import type { SdkUsageGauge, SdkUsageGaugeSource } from "./usage-gauge"
  */
 
 export interface SdkTestProbeInput {
+  readonly usageGaugeObservation?: SdkUsageGaugeObservation
   readonly beforeBackgroundUpstreamStart?: AsyncBackgroundStartGuard
   /** Which Account this probe runs as — its per-Account subprocess slot is taken under this id. */
   readonly accountId: string
@@ -161,6 +162,8 @@ export function createSdkTestProbe(options: SdkTestProbeOptions): SdkTestProbe {
 
   return {
     async run(input) {
+      const gaugeObservation =
+        input.usageGaugeObservation ?? options.usageGauge?.capture(input.accountId)
       const prepared = await prepareSdkProbe(input, {
         resolveCli,
         freshness: options.freshness,
@@ -212,7 +215,7 @@ export function createSdkTestProbe(options: SdkTestProbeOptions): SdkTestProbe {
             continue
           }
           if (message.type === "assistant" && options.usageGauge !== undefined) {
-            gauged = options.usageGauge.observe(input.accountId, messages)
+            gauged = options.usageGauge.observe(input.accountId, messages, gaugeObservation)
             continue
           }
           if (message.type !== "result") continue

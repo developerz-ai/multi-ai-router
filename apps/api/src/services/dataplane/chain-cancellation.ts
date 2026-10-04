@@ -32,7 +32,7 @@ export function cancelledBeforeRelay(
 ): Response {
   try {
     if (outcome.kind === "success") void outcome.response.body?.cancel().catch(() => {})
-    runtime.record(
+    ;(runtime.recordTerminal ?? runtime.record)(
       attemptRecord({
         ...runtime.attribution(attempt, servable),
         priced: runtime.operation !== "count-tokens",

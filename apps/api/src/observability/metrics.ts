@@ -1,15 +1,21 @@
-import type { EgressMode, ProviderId, QuotaWindowState, UsageOutcome } from "@multi-ai-router/core"
-import {
-  AccountStatus,
-  UNKNOWN_REVISION,
-  USAGE_OUTCOME_SUCCESS,
-  VERSION,
-} from "@multi-ai-router/core"
-import type { TickResult } from "../scheduler"
+import { setAccountMetrics } from "./account-metrics"
+import type { MetricsOptions, RouterMetrics } from "./metric-types"
+
+export type {
+  AccountMetric,
+  DbPoolSample,
+  MetricsOptions,
+  ProbeAdmissionSample,
+  RouterMetrics,
+  SdkConcurrencySample,
+  UsageQueueSample,
+} from "./metric-types"
+
+import type { EgressMode, ProviderId, UsageOutcome } from "@multi-ai-router/core"
+import { UNKNOWN_REVISION, USAGE_OUTCOME_SUCCESS, VERSION } from "@multi-ai-router/core"
 import { PRICE_TABLE_AS_OF } from "../services/cost"
-import type { RequestSample } from "../services/dataplane"
 import type { UsageRecord } from "../services/usage"
-import type { RegistryOptions } from "./registry"
+import { createInventoryMetrics } from "./inventory"
 import { createSeries } from "./series"
 
 /**
@@ -28,88 +34,6 @@ import { createSeries } from "./series"
  * request proves the router moved on. A chain that gave up leaves its last failure uncounted,
  * which is correct — it moved nowhere.
  */
-
-export interface AccountMetric {
-  readonly id: string
-  readonly provider: ProviderId
-  /** Health-overlaid, not the stored row: what the router currently believes. */
-  readonly status: string
-  readonly quotaWindows?: readonly QuotaWindowState[]
-  /** The breaker's own `phase()` — `closed`, `open`, `half-open`, or `blocked`. */
-  readonly breakerPhase: string
-  /** Cooling down because the provider refused the credential (`cooldownReason`). */
-  readonly credentialRejected: boolean
-}
-
-/** Every value `phase()` can return, so the gauge can zero the ones an account is not in. */
-const BREAKER_PHASES = ["closed", "open", "half-open", "blocked"] as const
-
-/** Cumulative admits/refusals off `HealthStore.probeStats()`, read once per scrape. */
-export interface ProbeAdmissionSample {
-  readonly admitted: number
-  readonly refused: number
-}
-
-/** postgres.js connections by state — `packages/db/src/pool-metrics.ts` computes the sample. */
-export interface DbPoolSample {
-  readonly inUse: number
-  readonly idle: number
-  readonly waiting: number
-}
-
-export interface UsageQueueSample {
-  readonly depth: number
-  /** Cumulative shed count since boot. The delta is what reaches the counter. */
-  readonly dropped: number
-  /** Cumulative records the writer refused, both tries of a batch that failed twice included. */
-  readonly writeFailures: number
-  /** Cumulative records lost because their retry was refused too. A subset of the above. */
-  readonly writeDiscarded: number
-}
-
-/** The subprocess gate's own two numbers, read per scrape — `providers/claude-sdk/concurrency.ts`. */
-export interface SdkConcurrencySample {
-  readonly inFlight: number
-  readonly queued: number
-}
-
-export interface RouterMetrics {
-  /** One client request, at the point it ended. */
-  observeRequest(sample: RequestSample): void
-  /** One upstream attempt. Fed from the usage recorder's drain, off the request path. */
-  observeUsage(record: UsageRecord): void
-  observeTask(tick: TickResult): void
-  /** Replaces the account and quota gauges wholesale. Called per scrape, never per request. */
-  setAccounts(accounts: readonly AccountMetric[]): void
-  setUsageQueue(sample: UsageQueueSample): void
-  /**
-   * Occupancy of the `claude` subprocess ceiling. Per scrape, from the gate's own counters — a
-   * semaphore that reported every acquire would put bookkeeping on the path it is bounding.
-   */
-  setSdkConcurrency(sample: SdkConcurrencySample): void
-  /** Cumulative-to-delta off `HealthStore.probeStats()`, read per scrape like the two above. */
-  setProbeAdmissions(sample: ProbeAdmissionSample): void
-  /** Per scrape, from the pool wrapper's own in-flight count — see `DbPoolSample`. */
-  setDbPool(sample: DbPoolSample): void
-  /**
-   * When the operator's price overrides were last loaded, from the warm book's own `loadedAt()`.
-   * `null` before the first successful load leaves the gauge absent rather than reporting the
-   * epoch, which would read as "loaded in 1970" instead of "not loaded yet".
-   */
-  setPriceOverridesLoadedAt(at: Date | null): void
-  /** Registers a per-scrape sampler — see `collectors.ts`. */
-  onCollect(collect: () => void): void
-  expose(): string
-}
-
-export interface MetricsOptions extends RegistryOptions {
-  readonly now?: () => Date
-  /**
-   * The commit `router_build_info{revision}` reports. Defaults to `UNKNOWN_REVISION` so a build
-   * nobody stamped says so, rather than inheriting some other build's sha.
-   */
-  readonly revision?: string
-}
 
 /**
  * Ceiling on label text taken from a request body. Not an operator knob: a model name is a
@@ -150,6 +74,17 @@ interface PendingHop {
 export function createMetrics(options: MetricsOptions = {}): RouterMetrics {
   const now = options.now ?? (() => new Date())
   const s = createSeries(options)
+  const inventory = createInventoryMetrics(
+    s.registry,
+    options.metricInventory ?? {},
+    options.inventorySelectionOptions,
+  )
+  const bindingWait = s.registry.histogram({
+    name: "router_session_binding_wait_seconds",
+    help: "Elapsed awaited session binding reads, including database pool queue, query and promise wait.",
+    labels: [],
+    buckets: [0.0001, 0.0005, 0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1, 5],
+  })
   const pending = new Map<string, PendingHop>()
   const consecutiveFailures = new Map<string, number>()
   let droppedSeen = 0
@@ -201,7 +136,13 @@ export function createMetrics(options: MetricsOptions = {}): RouterMetrics {
   }
 
   return {
+    setInventory: inventory.collect,
+    observeBindingWait(milliseconds) {
+      if (Number.isFinite(milliseconds) && milliseconds >= 0)
+        bindingWait.observe({}, milliseconds / 1_000)
+    },
     observeRequest(sample) {
+      inventory.observe(sample)
       const ingress_dialect = sample.ingressDialect
       const model = label(sample.model ?? UNKNOWN)
       s.requests.inc({ ingress_dialect, model, key_id: sample.keyId, outcome: sample.outcome })
@@ -277,36 +218,7 @@ export function createMetrics(options: MetricsOptions = {}): RouterMetrics {
       s.taskLastSuccess.set({ task }, now().getTime() / 1_000)
     },
 
-    setAccounts(accounts) {
-      s.accounts.clear()
-      s.quotaUtilization.clear()
-      s.quotaReset.clear()
-      s.quotaLastChecked.clear()
-      s.breakerState.clear()
-      s.credentialRejected.clear()
-      const at = now().getTime()
-
-      const counts = new Map<string, number>()
-      for (const account of accounts) {
-        const key = `${account.provider} ${account.status}`
-        counts.set(key, (counts.get(key) ?? 0) + 1)
-        setQuota(s, account, at)
-        for (const phase of BREAKER_PHASES) {
-          s.breakerState.set(
-            { account_id: account.id, phase },
-            phase === account.breakerPhase ? 1 : 0,
-          )
-        }
-        s.credentialRejected.set({ account_id: account.id }, account.credentialRejected ? 1 : 0)
-      }
-      // Every status of every provider present, zeros included: an alert on `exhausted` must see
-      // the number fall to zero, not watch the series vanish.
-      for (const provider of new Set(accounts.map((account) => account.provider))) {
-        for (const status of AccountStatus.options) {
-          s.accounts.set({ provider, status }, counts.get(`${provider} ${status}`) ?? 0)
-        }
-      }
-    },
+    setAccounts: (accounts) => setAccountMetrics(s, accounts, now),
 
     setUsageQueue(sample) {
       s.usageQueueDepth.set({}, sample.depth)
@@ -351,29 +263,6 @@ export function createMetrics(options: MetricsOptions = {}): RouterMetrics {
     onCollect: (collect) => s.registry.onCollect(collect),
     expose: () => s.registry.expose(),
   }
-}
-
-/**
- * An `exhausted` account has no reset to report, so `router_quota_reset_seconds` is absent for it
- * rather than zero — a countdown of zero reads as "back any second now", which is the opposite of
- * what a drained balance means.
- */
-function setQuota(s: ReturnType<typeof createSeries>, account: AccountMetric, at: number): void {
-  let lastChecked: number | null = null
-  for (const state of account.quotaWindows ?? []) {
-    const account_id = account.id
-    const window = state.window
-    if (state.utilization !== undefined) {
-      s.quotaUtilization.set({ account_id, window }, state.utilization)
-    }
-    if (state.resetsAt !== undefined && account.status !== "exhausted") {
-      const seconds = Math.max(0, (state.resetsAt.getTime() - at) / 1_000)
-      s.quotaReset.set({ account_id, window, source: state.resetSource }, seconds)
-    }
-    const checkedAt = state.lastCheckedAt.getTime()
-    lastChecked = lastChecked === null ? checkedAt : Math.max(lastChecked, checkedAt)
-  }
-  if (lastChecked !== null) s.quotaLastChecked.set({ account_id: account.id }, lastChecked / 1_000)
 }
 
 /**

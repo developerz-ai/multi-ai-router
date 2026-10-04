@@ -83,6 +83,7 @@ export type {
   OauthStateRepository,
 } from "./repositories/oauth-state-repository"
 export { createOauthStateRepository } from "./repositories/oauth-state-repository"
+export type { AccountQuotaObservation } from "./repositories/observed-quota-window"
 export type {
   CreatePoolInput,
   PoolMemberInput,
