@@ -40,7 +40,10 @@ export function dispatchOptionsFromEnv(env: Env): DispatchOptions {
     translation: { defaultMaxTokens: env.translation.defaultMaxTokens },
     // The one limit an unauthenticated-shaped mistake can spend memory on before anything else
     // runs, so it is the operator's to set rather than the reader's to assume.
-    body: { maxBytes: env.dataPlane.maxRequestBodyBytes },
+    body: {
+      maxBytes: env.dataPlane.maxRequestBodyBytes,
+      maximumJsonDepth: env.dataPlane.maximumJsonDepth,
+    },
     // The same ceiling every other quoted `reason` in the process obeys, so the failed-attempt log
     // line cannot become the one line an operator cannot read.
     log: { reasonMaxChars: env.logReasonMaxChars },

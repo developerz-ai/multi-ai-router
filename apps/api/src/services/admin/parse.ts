@@ -1,4 +1,6 @@
+import { RequestTooLargeError } from "@multi-ai-router/core"
 import { z } from "zod"
+import { readBoundedJsonBody } from "./bounded-json"
 import { type AdminResult, invalid, ok } from "./result"
 
 /**
@@ -10,10 +12,14 @@ import { type AdminResult, invalid, ok } from "./result"
  */
 
 /** A body that is not JSON is a validation failure, never a 500. */
-export async function readJsonBody(request: Request): Promise<unknown> {
+export async function readJsonBody(
+  request: Request,
+  options: { readonly maximumBytes: number } = { maximumBytes: 1024 * 1024 },
+): Promise<unknown> {
   try {
-    return await request.json()
-  } catch {
+    return await readBoundedJsonBody(request, options)
+  } catch (error) {
+    if (error instanceof RequestTooLargeError || request.signal.aborted) throw error
     return null
   }
 }

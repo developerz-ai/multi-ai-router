@@ -1,5 +1,11 @@
-import { describeError } from "@multi-ai-router/core"
 import type { Logger } from "../logging/logger"
+
+export class RuntimeShutdownFailure extends Error {
+  constructor(readonly steps: readonly string[]) {
+    super("runtime cleanup failed")
+    this.name = "RuntimeShutdownFailure"
+  }
+}
 
 interface ShutdownStep {
   readonly name: string
@@ -21,19 +27,28 @@ export function createRuntimeLifecycle(deps: {
     if (stopping !== undefined) return stopping
     stopped = true
     stopping = (async () => {
+      const failed: string[] = []
       for (const phase of deps.phases) {
         const results = await Promise.allSettled(
           phase.map((step) => Promise.resolve().then(() => step.run())),
         )
         for (const [index, result] of results.entries()) {
-          if (result.status === "rejected")
-            deps.logger.error("runtime shutdown step failed", {
-              component: "runtime",
-              step: phase[index]?.name,
-              error: describeError(result.reason, Number.POSITIVE_INFINITY),
-            })
+          if (result.status === "rejected") {
+            const step = phase[index]?.name ?? "unknown"
+            failed.push(step)
+            try {
+              deps.logger.error("runtime shutdown step failed", {
+                component: "runtime",
+                step,
+                errorClass: "runtime_shutdown_failure",
+              })
+            } catch {
+              /* Continue cleanup even if logging fails. */
+            }
+          }
         }
       }
+      if (failed.length > 0) throw new RuntimeShutdownFailure(Object.freeze(failed))
     })()
     return stopping
   }
@@ -47,7 +62,11 @@ export function createRuntimeLifecycle(deps: {
           return deps.start(assertStarting)
         })
         .catch(async (error) => {
-          await stop()
+          try {
+            await stop()
+          } catch {
+            /* Preserve the original startup failure. */
+          }
           throw error
         })
       return starting

@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import { createLogger, type Logger } from "../../src/logging/logger"
-import { MODEL_NAME_MAX_BYTES } from "../../src/services/dataplane"
+import { MODEL_NAME_MAX_BYTES, type RoutableAccount } from "../../src/services/dataplane"
 import type { PoolSnapshot } from "../../src/services/routing"
 import type { UsageRecord } from "../../src/services/usage"
 import {
@@ -224,9 +224,11 @@ describe("a local endpoint that authenticates nobody", () => {
 })
 
 describe("failover", () => {
+  // These scenarios assert the first and second account's individual effects. Sticky ordering
+  // depends on the conversation fingerprint; use explicit priorities instead of its hash seed.
   const twoAccounts = [
-    account("acct-1", { apiKey: "sk-one", cipher: CRYPTOR }),
-    account("acct-2", { apiKey: "sk-two", cipher: CRYPTOR }),
+    account("acct-1", { apiKey: "sk-one", cipher: CRYPTOR, snapshot: { priority: 0 } }),
+    account("acct-2", { apiKey: "sk-two", cipher: CRYPTOR, snapshot: { priority: 1 } }),
   ]
 
   const geminiAccount = [account("acct-1", { provider: "gemini", apiKey: "sk-g", cipher: CRYPTOR })]
@@ -238,6 +240,7 @@ describe("failover", () => {
   test("advances to the next candidate on 429", async () => {
     const { app, upstream } = harness({
       accounts: twoAccounts,
+      selection: { unpooledPolicy: "priority-failover" },
       responses: [
         () => jsonResponse(429, { type: "error", error: { type: "rate_limit_error" } }),
         () => jsonResponse(200, { served: true }),
@@ -254,6 +257,7 @@ describe("failover", () => {
   test("advances on 5xx", async () => {
     const { app, upstream } = harness({
       accounts: twoAccounts,
+      selection: { unpooledPolicy: "priority-failover" },
       responses: [() => jsonResponse(503, { error: {} }), () => jsonResponse(200, {})],
     })
 
@@ -265,6 +269,7 @@ describe("failover", () => {
     const body = { type: "error", error: { type: "invalid_request_error", message: "bad" } }
     const { app, upstream } = harness({
       accounts: twoAccounts,
+      selection: { unpooledPolicy: "priority-failover" },
       responses: [() => jsonResponse(400, body), () => jsonResponse(200, {})],
     })
 
@@ -280,6 +285,7 @@ describe("failover", () => {
     const slow = slowStream(["data: partial\n\n"])
     const { app, upstream, usage } = harness({
       accounts: twoAccounts,
+      selection: { unpooledPolicy: "priority-failover" },
       responses: [() => slow.response, () => jsonResponse(200, { shouldNotBeReached: true })],
     })
 
@@ -306,6 +312,7 @@ describe("failover", () => {
     const slow = slowStream(["data: one\n\n", "data: two\n\n"])
     const { app, upstream, usage } = harness({
       accounts: twoAccounts,
+      selection: { unpooledPolicy: "priority-failover" },
       responses: [() => slow.response, () => jsonResponse(200, { shouldNotBeReached: true })],
     })
 
@@ -337,6 +344,7 @@ describe("failover", () => {
     // the client, so failover is not merely allowed, it is expected.
     const { app, upstream } = harness({
       accounts: twoAccounts,
+      selection: { unpooledPolicy: "priority-failover" },
       responses: [
         () => {
           throw new Error("connect failed")
@@ -376,6 +384,7 @@ describe("failover", () => {
     const slow = slowStream(["data: partial\n\n"])
     const { app, upstream, usage } = harness({
       accounts: twoAccounts,
+      selection: { unpooledPolicy: "priority-failover" },
       responses: [() => slow.response, () => jsonResponse(200, { shouldNotBeReached: true })],
     })
 
@@ -570,6 +579,7 @@ describe("failover", () => {
     const { log, lines } = capturedLogger()
     const { app, health, upstream, usage } = harness({
       accounts: twoAccounts,
+      selection: { unpooledPolicy: "priority-failover" },
       logger: log,
       responses: [
         () =>
@@ -668,6 +678,7 @@ describe("failover", () => {
   test("marks the failed account so the next request skips it", async () => {
     const { app, health } = harness({
       accounts: twoAccounts,
+      selection: { unpooledPolicy: "priority-failover" },
       responses: [
         () => jsonResponse(429, {}, { "retry-after": "600" }),
         () => jsonResponse(200, {}),
@@ -730,6 +741,7 @@ describe("failover", () => {
     // candidate 1's `429` and the wait that came with it.
     const { app, usage } = harness({
       accounts: twoAccounts,
+      selection: { unpooledPolicy: "priority-failover" },
       responses: [
         () => jsonResponse(429, {}, { "retry-after": "30" }),
         () => jsonResponse(503, { error: { message: "overloaded" } }),
@@ -747,6 +759,7 @@ describe("failover", () => {
   test("a drained balance never speaks over an account a clock will revive", async () => {
     const { app } = harness({
       accounts: twoAccounts,
+      selection: { unpooledPolicy: "priority-failover" },
       responses: [
         () => jsonResponse(429, {}, { "retry-after": "30" }),
         () =>
@@ -1370,9 +1383,10 @@ describe("usage accounting", () => {
 
   test("writes one row per attempt, joined by one correlation id", async () => {
     const { app, usage } = harness({
+      selection: { unpooledPolicy: "priority-failover" },
       accounts: [
-        account("acct-1", { apiKey: "sk-one", cipher: CRYPTOR }),
-        account("acct-2", { apiKey: "sk-two", cipher: CRYPTOR }),
+        account("acct-1", { apiKey: "sk-one", cipher: CRYPTOR, snapshot: { priority: 0 } }),
+        account("acct-2", { apiKey: "sk-two", cipher: CRYPTOR, snapshot: { priority: 1 } }),
       ],
       responses: [
         () => jsonResponse(429, {}),
@@ -1661,7 +1675,7 @@ describe("GET /v1/models", () => {
     ])
   })
 
-  test("a declared model set is listed with no alias map at all", () => {
+  test("a declared model set is listed with no alias map at all", async () => {
     // The shipped default before the `supported_models` column existed: no aliases anywhere, and
     // therefore an empty catalog on every deployment. `data: []` is what a client's model picker
     // showed, and it is what this asserts can no longer happen.
@@ -1676,12 +1690,9 @@ describe("GET /v1/models", () => {
       responses: [() => jsonResponse(200, {})],
     })
 
-    return app
-      .request("/v1/models", { headers: bearer() })
-      .then((res) => res.json() as Promise<{ data: { id: string }[] }>)
-      .then((body) => {
-        expect(body.data.map((model) => model.id)).toEqual(["claude-opus-5"])
-      })
+    const res = await app.request("/v1/models", { headers: bearer() })
+    const body = (await res.json()) as { data: { id: string }[] }
+    expect(body.data.map((model) => model.id)).toEqual(["claude-opus-5"])
   })
 
   test("an alias onto a model the account does not serve is never advertised", async () => {
@@ -1767,7 +1778,7 @@ describe("GET /v1/models/:id", () => {
     const { app } = harness({ accounts: aliased, responses: [() => jsonResponse(200, {})] })
 
     const res = await app.request("/v1/models/claude-opus-5", { headers: { "x-api-key": KEY } })
-    const body = (await res.json()) as { type: string; id: string }
+    const body = (await res.json()) as { type: string; id: string; display_name: string }
 
     expect(res.status).toBe(200)
     expect(body).toEqual({ type: "model", id: "claude-opus-5", display_name: "claude-opus-5" })
@@ -1991,7 +2002,7 @@ describe("request validation", () => {
   test("a model name exactly at the ceiling is served", async () => {
     const name = "m".repeat(MODEL_NAME_MAX_BYTES)
     const { app, upstream } = harness({
-      accounts: [account({ id: "acct-long-model", modelAliases: {} })],
+      accounts: [account("acct-long-model", { modelAliases: {} })],
       responses: [() => jsonResponse(200, { ok: true })],
     })
     const body = JSON.stringify({ model: name, max_tokens: 16, messages: [] })

@@ -12,10 +12,11 @@ import { DEFAULT_TRANSLATED_KEEPALIVE_MS } from "../../src/services/dataplane/re
 const BUN_SWEEP_MS = 4_000
 
 describe("listenOptions", () => {
-  test("hands Bun.serve the configured port and idle timeout, nothing invented", () => {
+  test("hands Bun.serve the port, idle timeout, and explicit default transport ceiling", () => {
     expect(listenOptions({ port: 8080, serverIdleTimeoutSeconds: 60 })).toEqual({
       port: 8080,
       idleTimeout: 60,
+      maxRequestBodySize: 32 * 1024 * 1024,
     })
   })
 

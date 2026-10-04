@@ -22,6 +22,7 @@ import { render } from "./render"
 export const ADMIN_KEYS_BASE_PATH = "/api/admin/keys"
 
 export interface AdminKeyRoutesDeps {
+  readonly maximumJsonBytes?: number
   readonly service: KeysService
   /** `adminAuth(adminAuthService)`. Required, so no mount can forget the guard. */
   readonly guard: MiddlewareHandler<AdminAuthEnv>
@@ -34,7 +35,10 @@ export function adminKeyRoutes(deps: AdminKeyRoutesDeps): Hono<AdminAuthEnv> {
   routes.get("/", async (c) => render(c, await deps.service.list()))
 
   routes.post("/", async (c) => {
-    const body = validate(createKeyBody, await readJsonBody(c.req.raw))
+    const body = validate(
+      createKeyBody,
+      await readJsonBody(c.req.raw, { maximumBytes: deps.maximumJsonBytes ?? 1048576 }),
+    )
     if (!body.ok) return render(c, body)
     return render(c, await deps.service.create(body.value), 201)
   })
@@ -48,7 +52,10 @@ export function adminKeyRoutes(deps: AdminKeyRoutesDeps): Hono<AdminAuthEnv> {
   routes.patch("/:id", async (c) => {
     const id = validateId(c.req.param("id"))
     if (!id.ok) return render(c, id)
-    const body = validate(updateKeyBody, await readJsonBody(c.req.raw))
+    const body = validate(
+      updateKeyBody,
+      await readJsonBody(c.req.raw, { maximumBytes: deps.maximumJsonBytes ?? 1048576 }),
+    )
     if (!body.ok) return render(c, body)
     return render(c, await deps.service.update(id.value, body.value))
   })

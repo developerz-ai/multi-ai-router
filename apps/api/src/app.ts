@@ -63,6 +63,10 @@ export interface AppDeps {
   /** `Env.logQuietPaths`. Absent quiets nothing — every completed request logs at `info`. */
   readonly logQuietPaths?: readonly string[]
   /** `Env.trustProxy`. Off by default: an unvetted `X-Forwarded-For` is a login-throttle bypass. */
+  readonly adminBodies?: {
+    readonly maximumJsonBytes: number
+    readonly maximumLoginJsonBytes: number
+  }
   readonly trustProxy?: boolean
   /**
    * `Env.adminAuth.sessionCookieInsecure`. Off by default, and the default is the hardened one:
@@ -86,6 +90,10 @@ export interface AppDeps {
 
 /** The transport-shaped settings the admin plane needs, resolved to a value, never absent. */
 interface AdminMountOptions {
+  readonly adminBodies: {
+    readonly maximumJsonBytes: number
+    readonly maximumLoginJsonBytes: number
+  }
   readonly trustProxy: boolean
   readonly sessionCookieInsecure: boolean
   readonly apiToken: string | null
@@ -124,6 +132,10 @@ export function createApp(deps: AppDeps): Hono<AppEnv> {
 
   if (deps.admin !== undefined) {
     mountAdmin(app, deps.admin, {
+      adminBodies: deps.adminBodies ?? {
+        maximumJsonBytes: 1024 * 1024,
+        maximumLoginJsonBytes: 8 * 1024,
+      },
       trustProxy: deps.trustProxy ?? false,
       sessionCookieInsecure: deps.sessionCookieInsecure ?? false,
       apiToken: deps.adminApiToken ?? null,
@@ -155,16 +167,23 @@ export function createApp(deps: AppDeps): Hono<AppEnv> {
  * wrote it in.
  */
 function mountAdmin(app: Hono<AppEnv>, admin: AdminServices, options: AdminMountOptions): void {
-  const { trustProxy, sessionCookieInsecure, apiToken } = options
+  const { trustProxy, sessionCookieInsecure, apiToken, adminBodies } = options
   const guard = adminAuth(admin.auth, sessionCookieInsecure, apiToken)
 
   app.route(
     ADMIN_AUTH_BASE_PATH,
-    adminAuthRoutes({ service: admin.auth, trustProxy, sessionCookieInsecure, apiToken }),
+    adminAuthRoutes({
+      service: admin.auth,
+      trustProxy,
+      sessionCookieInsecure,
+      apiToken,
+      maximumJsonBytes: adminBodies.maximumLoginJsonBytes,
+    }),
   )
   app.route(
     ADMIN_ACCOUNTS_BASE_PATH,
     adminAccountRoutes({
+      maximumJsonBytes: adminBodies.maximumJsonBytes,
       guard,
       service: admin.accounts,
       recheck: admin.recheck,
@@ -177,13 +196,30 @@ function mountAdmin(app: Hono<AppEnv>, admin: AdminServices, options: AdminMount
   // is a cross-site navigation that carries no `SameSite=Strict` cookie, and the one-shot `state`
   // is what authorizes it. See `routes/admin/oauth-callback.ts`.
   app.route("/", oauthCallbackRoutes({ connect: admin.connect }))
-  app.route(ADMIN_POOLS_BASE_PATH, adminPoolRoutes({ guard, service: admin.pools }))
-  app.route(ADMIN_KEYS_BASE_PATH, adminKeyRoutes({ guard, service: admin.keys }))
+  app.route(
+    ADMIN_POOLS_BASE_PATH,
+    adminPoolRoutes({
+      maximumJsonBytes: adminBodies.maximumJsonBytes,
+      guard,
+      service: admin.pools,
+    }),
+  )
+  app.route(
+    ADMIN_KEYS_BASE_PATH,
+    adminKeyRoutes({ maximumJsonBytes: adminBodies.maximumJsonBytes, guard, service: admin.keys }),
+  )
   app.route(ADMIN_USAGE_BASE_PATH, adminUsageRoutes({ guard, service: admin.usage }))
   app.route(ADMIN_PROVIDERS_BASE_PATH, adminProviderRoutes({ guard }))
   // Three paths, one service: the settings screen reads configuration, task health and the audit
   // feed together — see `services/settings/service.ts`.
-  app.route(ADMIN_SETTINGS_BASE_PATH, adminSettingsRoutes({ guard, service: admin.settings }))
+  app.route(
+    ADMIN_SETTINGS_BASE_PATH,
+    adminSettingsRoutes({
+      maximumJsonBytes: adminBodies.maximumJsonBytes,
+      guard,
+      service: admin.settings,
+    }),
+  )
   app.route(ADMIN_TASKS_BASE_PATH, adminTaskRoutes({ guard, service: admin.settings }))
   app.route(ADMIN_AUDIT_BASE_PATH, adminAuditRoutes({ guard, service: admin.settings }))
 }

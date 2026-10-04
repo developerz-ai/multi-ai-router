@@ -232,7 +232,11 @@ export function mockUpstream(responses: readonly (() => Response | Promise<Respo
   }
 }
 
-export function jsonResponse(status: number, body: unknown, headers: HeadersInit = {}): Response {
+export function jsonResponse(
+  status: number,
+  body: unknown,
+  headers: Record<string, string> = {},
+): Response {
   return new Response(JSON.stringify(body), {
     status,
     headers: { "content-type": "application/json", ...headers },

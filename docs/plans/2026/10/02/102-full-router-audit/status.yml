@@ -5,10 +5,14 @@ created_by: sebi
 worked_by: Codex team
 owner: sebi
 percent: 67
-current_focus: W1-W5B merged; ten PRs. PR152 both reviews completed; 19 developerz findings addressed or refuted with evidence.
-  Final bin/check5061pass/451files/49084assertions and PG16/18 regressions passed. Revised-head review and CI remain pending.
-  Small warm benchmark8000requests maxp99.76ms passed; large280KB translated nonstream p997.333ms failed and remains open.
-  L16 cold/session latency, infrastructure monitoring, operational rotation, release and deployment remain open.
+current_focus: W1-W6 merged; eleven PRs. PR152 merged d515309 after five required checks passed at5e2d826,
+  fresh CodeRabbit review found no actionable issues and all25 threads were resolved.
+  W7A runtime/scanner/admin/shutdown and environment responsibility split are integrated locally;
+  review-corrected full gate passed5212 tests with zero failures after fixture ordering and empty-body diagnosis corrections.
+  New-source small warm benchmark passed;280000-byte translated nonstream p99 was6ms and failed.
+  The owner accepted the observed6ms excess on2026-10-04; prior280KB warm7.333ms failure remains recorded.
+  L16 cold/session latency remains open.
+  Infrastructure monitoring, operational rotation, translation/UI follow-ups, release and deployment remain open.
 slices:
 - file: 01-transport.md
   status: in_progress
@@ -36,11 +40,11 @@ slices:
   findings: 2
 - file: 07-usage.md
   status: in_progress
-  percent: 75
+  percent: 100
   findings: 4
 - file: 08-cost.md
   status: in_progress
-  percent: 50
+  percent: 100
   findings: 2
 - file: 09-scheduler.md
   status: in_progress
@@ -48,7 +52,7 @@ slices:
   findings: 2
 - file: 10-database.md
   status: in_progress
-  percent: 25
+  percent: 100
   findings: 4
 - file: 11-config.md
   status: in_progress
@@ -63,6 +67,12 @@ slices:
   percent: 0
   findings: 1
 evidence:
+- 'PR152 merged d5153091579cf0542013d0cbe13cc76d437e5427 at2026-10-04T06:30:19Z through normal protected squash;
+  139files, five required checks SUCCESS at5e2d826, fresh CodeRabbit review no actionable findings, all25threads resolved.
+  Actual developerz prior-head review findings addressed by revision:18fixed/1refuted. PG18 bin/check5061pass/451files/49084assertions,
+  PG16/18 targeted regressions and hardened amd64 image packaging passed. Small warm8k maxp99.76ms passed;
+  large280KB translated nonstream7.333ms failed and is retained. See evidence/wave6-application-check.json.
+  Release/deployment and remaining latency requirements are open.'
 - PR150 merged3cfe375 normalprotected;116files, five required PR/main checks SUCCESS, one actionable thread fixed/resolved. PG18 bin/check4947pass/420files/43060assertions;
   PG16 usage28pass/61assertions. Normal8k0fail0buffermaxp99.600ms;280KB8k0fail0buffermaxp994.960526ms, near5msbudget. Hardened image323bffbc packaging passed;
   serverSHA matchescheckedbuild. No nativeARM/app/provider/deployment claim. See102-full-router-audit/evidence/wave5-usage-check.json and wave5-bench*.json.
@@ -109,12 +119,18 @@ evidence:
   no actionable comments. Release/deployment pending.'
 - 'Pinned Bun 1.4.2; bin/check with disposable PostgreSQL: 4326 tests passed, zero failed; build passed.'
 - '102-full-router-audit/evidence/wave1-bench.json: 8000 requests, zero failures/buffered streams; max p99 1.28 ms.'
-notes: 'W1–W5B merged and locally validated; ten PRs merged. W5B application quota and terminal monitoring passed, but L16 strict database-miss
-  overhead remains open: native read experiments reached 5ms and do not prove the required less-than-5ms budget. W6 historical/accounting implementation
-  is committed in PR #152 with the final full local gate and small warm benchmark passed. Both reviews completed and findings are addressed; the current large warm benchmark failed7.333ms and remains open. The revised head requires fresh review and CI evidence before merge. Scanner/session, translation, console and DX/CI/prompt work remain. #87 operational rotation/session revocation,
-  O12 infrastructure alerting, release and deployment remain open.'
+notes: 'W1–W6 merged and locally validated; eleven PRs. W6 historical accounting/pricing passed bin/check5061 tests,
+  PG16/18 targeted regressions and hardened amd64 packaging. The current large warm benchmark failed the strict5ms budget at6ms; the owner accepted this excess on2026-10-04.
+  The prior7.333ms failure remains recorded; cold/session latency is still open;
+  no release/deployment or cold latency closure is claimed. W7A PR153 review-corrected gate passed5212 tests; previoushead allfive CI passed, newhead checks pending.
+  #87 operational rotation/session revocation, O12 monitoring, translation/console/DX/prompt work and release/deployment remain open.'
 last_updated: 2026-10-04
 resolved_findings:
+- '10.3'
+- '10.2'
+- '10.1'
+- '08.1'
+- '07.4'
 - '01.1'
 - '01.2'
 - '01.7'
@@ -165,3 +181,9 @@ implemented_merged_release_pending_wave5:
 - '07.2'
 - '07.3'
 - '10.4'
+implemented_merged_release_pending_wave6:
+- '07.4'
+- '08.1'
+- '10.1'
+- '10.2'
+- '10.3'

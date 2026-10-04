@@ -449,13 +449,16 @@ means a restarted conversation, not a relocated one. See the table under
 
 Session key derivation, in order:
 
-1. **Client-supplied session header** — used verbatim when present.
-2. **Fingerprint** — otherwise, derived from the first user message plus the working directory. Two
-   invocations of the same agent in the same directory land on the same account; a different project
-   gets its own session.
+1. **Client-supplied session header** — trimmed and bounded to 200 characters when present.
+2. **HTTP fingerprint** — scoped by router key, using up to 1,024 raw bytes of the first nonempty
+   user item or Responses string input. Appended turns and leading non-user items do not contribute.
+   JSON formatting affects this key; identical openings can collide.
+3. **No usable user opening** — a fresh per-request key, with no binding lookup or SDK session
+   mapping. An explicit header still takes precedence.
 
-Both forms are **scoped by Account**: resuming against the wrong Account is both a guaranteed cache
-miss and a leak of one subscription's conversation into another's.
+Durable bindings are keyed by router key and session key; SDK cache entries and fingerprint aliases
+also enforce Account ownership. The SDK alias uses parsed opening text and optional client cwd; it
+is distinct from the HTTP byte fingerprint. No remote working directory is inferred.
 
 What the key is *used for* differs by path, and the difference is the whole point:
 

@@ -20,6 +20,13 @@
  */
 
 /** The slice of `Bun.Server` a drain touches. Structural, so nothing here has to open a port. */
+export class HttpDrainFailure extends Error {
+  constructor() {
+    super("HTTP listener drain failed")
+    this.name = "HttpDrainFailure"
+  }
+}
+
 export interface DrainableServer {
   /**
    * Requests the server is still serving. A streamed response counts until its last byte, which is
@@ -64,12 +71,17 @@ export async function drainServer(input: DrainInput): Promise<DrainOutcome> {
   // Called before anything is awaited, so the socket stops accepting *while* the deadline runs
   // rather than after it. The promise it returns is the drain itself; the race below is the bound.
   //
-  // A rejected stop is still a stop: nothing is left to wait for, and letting the rejection escape
-  // would abandon the flush this function exists to protect.
-  const drained = server.stop().then(
-    () => true,
-    () => true,
-  )
+  // Observe rejected stop without retaining its potentially sensitive reason. The outer
+  // shutdown phases still attempt runtime and database cleanup before exiting nonzero.
+  let drained: Promise<"drained" | "failed">
+  try {
+    drained = server.stop().then(
+      () => "drained",
+      () => "failed",
+    )
+  } catch {
+    drained = Promise.resolve("failed")
+  }
 
   let timer: ReturnType<typeof setTimeout> | undefined
   const expired = new Promise<false>((resolve) => {
@@ -77,7 +89,9 @@ export async function drainServer(input: DrainInput): Promise<DrainOutcome> {
   })
 
   try {
-    if (await Promise.race([drained, expired])) {
+    const result = await Promise.race([drained, expired])
+    if (result === "failed") throw new HttpDrainFailure()
+    if (result === "drained") {
       return { pending, abandoned: 0, waitedMs: now() - started, timedOut: false }
     }
   } finally {

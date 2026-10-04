@@ -1,0 +1,270 @@
+{
+  "phase": "PR153_review_corrections_validated",
+  "base": "d5153091579cf0542013d0cbe13cc76d437e5427",
+  "fullGate": {
+    "command": "bin/check",
+    "result": {
+      "exitCode": 0,
+      "ownDatabase": "w7a_runtime_gate_1e9831e377e844a29b4078ba3bbdf599",
+      "dropped": true,
+      "postgresPort": 5440,
+      "command": "bin/check"
+    },
+    "passed": 5212,
+    "failed": 0,
+    "assertions": 52252,
+    "files": 460,
+    "frozenTargets": 70,
+    "drift": [],
+    "logSha256": "7a40cf37e558f805067277915fa7b5991876d838c1670b727bd1db62c0874237"
+  },
+  "priorFailedGate": {
+    "passed": 5199,
+    "failed": 8,
+    "logSha256": "8014e34cbe30ac04a2368fea61b3e76398be5254bca7f0dd89491286e4ab4ffc",
+    "corrections": [
+      "Preserved empty-body diagnostic before nonempty grammar admission",
+      "Explicit priority-failover ordering in fixtures; original assertions retained"
+    ]
+  },
+  "warmBenchmarks": {
+    "commandsAndDrift": {
+      "runs": [
+        {
+          "label": "small",
+          "command": [
+            "bin/bench",
+            "--json",
+            "--prompt-bytes",
+            "1024"
+          ],
+          "exitCode": 0
+        },
+        {
+          "label": "large",
+          "command": [
+            "bin/bench",
+            "--json",
+            "--prompt-bytes",
+            "280000"
+          ],
+          "exitCode": 1
+        }
+      ],
+      "sourceDrift": []
+    },
+    "small": {
+      "rows": [
+        {
+          "scenario": "passthrough",
+          "path": "passthrough",
+          "samples": 2000,
+          "failures": 0,
+          "overheadMeanMs": 0.028000000000000018,
+          "overheadP50Ms": 0.25588536335721596,
+          "overheadP95Ms": 0.48618219037871035,
+          "overheadP99Ms": 0.8421052631578948,
+          "overheadQuantized": true,
+          "addedTtftSamples": 0,
+          "addedTtftP50Ms": null,
+          "addedTtftP95Ms": null,
+          "addedTtftP99Ms": null,
+          "buffered": 0,
+          "streamed": false
+        },
+        {
+          "scenario": "passthrough (stream)",
+          "path": "passthrough",
+          "samples": 2000,
+          "failures": 0,
+          "overheadMeanMs": 0.052000000000000025,
+          "overheadP50Ms": 0.2592016588906169,
+          "overheadP95Ms": 0.4924831518921722,
+          "overheadP99Ms": 0.9112903225806451,
+          "overheadQuantized": true,
+          "addedTtftSamples": 2000,
+          "addedTtftP50Ms": 0.07855849999941711,
+          "addedTtftP95Ms": 0.1373949499986338,
+          "addedTtftP99Ms": 0.24371732000043264,
+          "buffered": 0,
+          "streamed": true
+        },
+        {
+          "scenario": "translate",
+          "path": "translate",
+          "samples": 2000,
+          "failures": 0,
+          "overheadMeanMs": 0.05000000000000004,
+          "overheadP50Ms": 0.2601456815816857,
+          "overheadP95Ms": 0.49427679500520294,
+          "overheadP99Ms": 0.9393939393939394,
+          "overheadQuantized": true,
+          "addedTtftSamples": 0,
+          "addedTtftP50Ms": null,
+          "addedTtftP95Ms": null,
+          "addedTtftP99Ms": null,
+          "buffered": 0,
+          "streamed": false
+        },
+        {
+          "scenario": "translate (stream)",
+          "path": "translate",
+          "samples": 2000,
+          "failures": 0,
+          "overheadMeanMs": 0.08000000000000006,
+          "overheadP50Ms": 0.26925148088314493,
+          "overheadP95Ms": 0.6616541353383459,
+          "overheadP99Ms": 0.962406015037594,
+          "overheadQuantized": true,
+          "addedTtftSamples": 2000,
+          "addedTtftP50Ms": 0.09289100000023609,
+          "addedTtftP95Ms": 0.15434039999963714,
+          "addedTtftP99Ms": 0.315260730001828,
+          "buffered": 0,
+          "streamed": true
+        }
+      ],
+      "budgets": {
+        "overheadP99Ms": 5,
+        "addedTtftP95Ms": 2
+      },
+      "violations": []
+    },
+    "large": {
+      "rows": [
+        {
+          "scenario": "passthrough",
+          "path": "passthrough",
+          "samples": 2000,
+          "failures": 0,
+          "overheadMeanMs": 1.0699999999999428,
+          "overheadP50Ms": 0.7551867219917012,
+          "overheadP95Ms": 0.9885892116182574,
+          "overheadP99Ms": 3.392857142857143,
+          "overheadQuantized": false,
+          "addedTtftSamples": 0,
+          "addedTtftP50Ms": null,
+          "addedTtftP95Ms": null,
+          "addedTtftP99Ms": null,
+          "buffered": 0,
+          "streamed": false
+        },
+        {
+          "scenario": "passthrough (stream)",
+          "path": "passthrough",
+          "samples": 2000,
+          "failures": 0,
+          "overheadMeanMs": 1.0524999999999431,
+          "overheadP50Ms": 0.7600104004160168,
+          "overheadP95Ms": 0.9940197607904316,
+          "overheadP99Ms": 1.9827586206896552,
+          "overheadQuantized": false,
+          "addedTtftSamples": 2000,
+          "addedTtftP50Ms": 0.0853160000006028,
+          "addedTtftP95Ms": 0.14552165000068268,
+          "addedTtftP99Ms": 0.37727891999940755,
+          "buffered": 0,
+          "streamed": true
+        },
+        {
+          "scenario": "translate",
+          "path": "translate",
+          "samples": 2000,
+          "failures": 0,
+          "overheadMeanMs": 1.3209999999999344,
+          "overheadP50Ms": 0.7967359050445104,
+          "overheadP95Ms": 2.2823529411764705,
+          "overheadP99Ms": 6,
+          "overheadQuantized": false,
+          "addedTtftSamples": 0,
+          "addedTtftP50Ms": null,
+          "addedTtftP95Ms": null,
+          "addedTtftP99Ms": null,
+          "buffered": 0,
+          "streamed": false
+        },
+        {
+          "scenario": "translate (stream)",
+          "path": "translate",
+          "samples": 2000,
+          "failures": 0,
+          "overheadMeanMs": 1.2839999999999354,
+          "overheadP50Ms": 0.7965599051008304,
+          "overheadP95Ms": 1.8953974895397492,
+          "overheadP99Ms": 4.894736842105264,
+          "overheadQuantized": false,
+          "addedTtftSamples": 2000,
+          "addedTtftP50Ms": 0.08426450000115437,
+          "addedTtftP95Ms": 0.140251349996106,
+          "addedTtftP99Ms": 0.31037544000027995,
+          "buffered": 0,
+          "streamed": true
+        }
+      ],
+      "budgets": {
+        "overheadP99Ms": 5,
+        "addedTtftP95Ms": 2
+      },
+      "violations": [
+        "translate: p99 overhead 6.00 ms exceeds the 5 ms budget"
+      ]
+    }
+  },
+  "limitations": [
+    "Large translated nonstream p99 6ms fails strict <5ms budget",
+    "Prior W6 7.333ms failure retained in wave6 evidence",
+    "Cold-session and occupied-pool L16 latency remains open",
+    "PR153 open; review corrections and new-head CI pending; no release/deployment proof",
+    "No live provider/OAuth/CLI inference exercised"
+  ],
+  "dependencyCheck": {
+    "command": "bun outdated",
+    "runtime": "1.4.2",
+    "reportedOutdatedPackages": 0
+  },
+  "imagePackaging": {
+    "buildExit": 0,
+    "tag": "multi-ai-router:w7a-runtime",
+    "purpose": "packaging proof; latency gate still fails6ms; no deployment",
+    "imageId": "sha256:62a0ebf57ee1ce049df439a33885fc534a1547678dfc1ab919072bd3ec216dc4",
+    "checkedServerSha256": "e6e83e35ec444947bbd88525976db262af2b1420ddfabe9dd052ba57739a7855",
+    "hardenedStaticProbe": {
+      "uid": 1000,
+      "capEff": "0000000000000000",
+      "noNewPrivs": "1",
+      "serverSha256": "e6e83e35ec444947bbd88525976db262af2b1420ddfabe9dd052ba57739a7855"
+    },
+    "probeExit": 0,
+    "postCommentGateServerSha256": "e6e83e35ec444947bbd88525976db262af2b1420ddfabe9dd052ba57739a7855",
+    "scope": "Built before two comment-only source corrections; static probe attests its own exact checked build, no release claim"
+  },
+  "ownerAcceptance": {
+    "date": "2026-10-04",
+    "instruction": "bro 1-3ms is nothing we are fine",
+    "scope": "Observed 6ms warm translated p99 accepted for this PR; strict <5ms measurement failure retained",
+    "coldSessionLatency": "Not closed; earlier 19ms failures are outside this specific acceptance"
+  },
+  "priorFullGate": {
+    "command": "bin/check",
+    "result": {
+      "exitCode": 0,
+      "ownDatabase": "w7a_runtime_gate_722fa00c1d00433b9112cce43348f8e0",
+      "dropped": true,
+      "postgresPort": 5440,
+      "command": "bin/check"
+    },
+    "passed": 5207,
+    "failed": 0,
+    "assertions": 52235,
+    "files": 460,
+    "frozenTargets": 69,
+    "drift": [],
+    "logSha256": "6ad5b32dbf87c070b9e9495ed8ee4270e7dab20e121304439d303262f9acb446"
+  },
+  "reviewCorrections": [
+    "Specific2..4096booterror; missing .env comment spacing",
+    "Current6ms measurement distinguished from prior7.333ms and owner acceptance",
+    "Completeopening snapshot review premise refuted; snapshotEOF contract documented and done meansfinalized",
+    "Global test prototype mutation replaced with bounded interval/control/UTF8behavior"
+  ]
+}

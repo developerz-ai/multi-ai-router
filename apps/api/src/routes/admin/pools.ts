@@ -17,6 +17,7 @@ import { render } from "./render"
 export const ADMIN_POOLS_BASE_PATH = "/api/admin/pools"
 
 export interface AdminPoolRoutesDeps {
+  readonly maximumJsonBytes?: number
   readonly service: PoolsService
   /** `adminAuth(adminAuthService)`. Required, so no mount can forget the guard. */
   readonly guard: MiddlewareHandler<AdminAuthEnv>
@@ -29,7 +30,10 @@ export function adminPoolRoutes(deps: AdminPoolRoutesDeps): Hono<AdminAuthEnv> {
   routes.get("/", async (c) => render(c, await deps.service.list()))
 
   routes.post("/", async (c) => {
-    const body = validate(createPoolBody, await readJsonBody(c.req.raw))
+    const body = validate(
+      createPoolBody,
+      await readJsonBody(c.req.raw, { maximumBytes: deps.maximumJsonBytes ?? 1048576 }),
+    )
     if (!body.ok) return render(c, body)
     return render(c, await deps.service.create(body.value), 201)
   })
@@ -43,7 +47,10 @@ export function adminPoolRoutes(deps: AdminPoolRoutesDeps): Hono<AdminAuthEnv> {
   routes.patch("/:id", async (c) => {
     const id = validateId(c.req.param("id"))
     if (!id.ok) return render(c, id)
-    const body = validate(updatePoolBody, await readJsonBody(c.req.raw))
+    const body = validate(
+      updatePoolBody,
+      await readJsonBody(c.req.raw, { maximumBytes: deps.maximumJsonBytes ?? 1048576 }),
+    )
     if (!body.ok) return render(c, body)
     return render(c, await deps.service.update(id.value, body.value))
   })

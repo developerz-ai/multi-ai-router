@@ -27,6 +27,7 @@ export const ADMIN_AUDIT_BASE_PATH = "/api/admin/audit"
 
 /** One shape for all three: one service, and the guard every mount is required to supply. */
 export interface AdminSettingsRoutesDeps {
+  readonly maximumJsonBytes?: number
   readonly service: SettingsService
   /** `adminAuth(adminAuthService)`. Required, so no mount can forget the guard. */
   readonly guard: MiddlewareHandler<AdminAuthEnv>
@@ -41,7 +42,10 @@ export function adminSettingsRoutes(deps: AdminSettingsRoutesDeps): Hono<AdminAu
   // The price overrides are sent as a whole set, so this is one `PATCH` on the collection rather
   // than a row-level CRUD trio — see `services/settings/schema.ts`.
   routes.patch("/", async (c) => {
-    const body = validate(updatePriceOverridesBody, await readJsonBody(c.req.raw))
+    const body = validate(
+      updatePriceOverridesBody,
+      await readJsonBody(c.req.raw, { maximumBytes: deps.maximumJsonBytes ?? 1048576 }),
+    )
     if (!body.ok) return render(c, body)
     return render(c, await deps.service.update(body.value))
   })

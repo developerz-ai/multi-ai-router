@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test"
-import { createRuntimeLifecycle } from "../../../src/composition/lifecycle"
+import { createRuntimeLifecycle, RuntimeShutdownFailure } from "../../../src/composition/lifecycle"
 import { createLogger } from "../../../src/logging/logger"
 
 const logger = () => createLogger({ level: "error", write: () => undefined })
@@ -54,9 +54,12 @@ test("one failing producer still drains all writers and closes both auxiliary po
   expect(second).toBe(first)
   expect(events).toEqual(["producer"])
   producer.resolve()
-  await first
+  const failure = await first.catch((error) => error)
+  expect(failure).toBeInstanceOf(RuntimeShutdownFailure)
+  expect(failure.steps).toEqual(["producer", "scheduler-lock"])
+  expect(failure.message).toBe("runtime cleanup failed")
   expect(events).toEqual(["producer", "scheduler-lock", "refresh-lock", "writer"])
-  await lifecycle.stop()
+  await expect(lifecycle.stop()).rejects.toBe(failure)
   expect(events).toHaveLength(4)
 })
 

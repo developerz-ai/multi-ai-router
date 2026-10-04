@@ -1,4 +1,5 @@
 import { InvalidRequestError, UnsupportedContentEncodingError } from "@multi-ai-router/core"
+import type { ScanResult } from "./scanner"
 import { MODEL_NAME_MAX_BYTES } from "./scanner"
 
 /**
@@ -59,8 +60,8 @@ export function modelTooLongError(): InvalidRequestError {
 
 /**
  * The scanner found no top-level string `"model"`. An empty body is the one case worth its own
- * sentence, because it is the one the byte count alone identifies; everything else — not JSON, a
- * top-level array, a model that is not a string — is honestly "names no model".
+ * sentence, because it is the one the byte count alone identifies. Nonempty malformed JSON is
+ * refused by grammar admission first; a valid object without a string model reaches this error.
  */
 export function missingModelError(bodyBytes: number): InvalidRequestError {
   return new InvalidRequestError(
@@ -68,4 +69,20 @@ export function missingModelError(bodyBytes: number): InvalidRequestError {
       ? "The request body is empty: send a JSON object that names a model"
       : "The request body must name a model: a JSON object with a top-level string `model`",
   )
+}
+
+export function invalidRoutingBodyError(): InvalidRequestError {
+  return new InvalidRequestError(
+    "The request body must be one structurally complete JSON object with a unique top-level model",
+  )
+}
+
+/** Field capture and complete grammar validation precede all model-dependent dispatch. */
+export function admitRoutingModel(fields: ScanResult, bodyBytes: number): string {
+  if (bodyBytes === 0) throw missingModelError(bodyBytes)
+  if (fields.duplicateModel || fields.invalid) throw invalidRoutingBodyError()
+  // Refuse rather than truncate: a shortened model would be a substituted model.
+  if (fields.modelTooLong) throw modelTooLongError()
+  if (fields.model === null) throw missingModelError(bodyBytes)
+  return fields.model
 }
