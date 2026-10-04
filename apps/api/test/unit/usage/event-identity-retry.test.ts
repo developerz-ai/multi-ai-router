@@ -42,7 +42,7 @@ test("production mapping preserves event IDs and final response facts on batch r
   let loseAck = true
   const recorder = createUsageRecorderFromEnv({
     records: {
-      insertMany: async (rows) => {
+      insertBatch: async ({ attempts: rows }) => {
         attempts.push(rows.map((row) => row.id))
         for (const row of rows)
           if (!persisted.has(row.id)) persisted.set(row.id, row.responseStatus ?? null)
@@ -50,7 +50,7 @@ test("production mapping preserves event IDs and final response facts on batch r
           loseAck = false
           throw new Error("commit then ack lost")
         }
-        return rows.length
+        return { insertedAttempts: rows.length, insertedTerminals: 0 }
       },
     },
     accounts: { markUsed: async () => {} },

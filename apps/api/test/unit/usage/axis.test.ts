@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import { resolveWindow } from "../../../src/services/usage-read"
-import { buildAxis, densify } from "../../../src/services/usage-read/axis"
+import { axisBucketWidth, buildAxis, densify } from "../../../src/services/usage-read/axis"
 
 /**
  * The chart axis.
@@ -33,6 +33,18 @@ describe("buildAxis", () => {
     // Epoch to now in days is far past anything a sparkline can render honestly.
     expect(axis.length).toBeLessThanOrEqual(400)
     expect(axis.length).toBeGreaterThan(0)
+    expect(Date.parse(axis.at(-1) ?? "")).toBeGreaterThan(NOW.getTime() - 60 * 24 * 60 * 60 * 1_000)
+  })
+
+  test("a configured small point ceiling still includes the modern end of a lifetime", () => {
+    const window = resolveWindow({ window: "lifetime" }, NOW)
+    const width = axisBucketWidth(window, 12)
+    const axis = buildAxis(window, width)
+    expect(axis.length).toBeLessThanOrEqual(12)
+    expect(Date.parse(axis.at(-1) ?? "") + width * 24 * 60 * 60 * 1_000).toBeGreaterThan(
+      NOW.getTime(),
+    )
+    expect(() => buildAxis(window, 0)).toThrow("bucketWidth")
   })
 
   test("a window shorter than one bucket still gets a bucket", () => {

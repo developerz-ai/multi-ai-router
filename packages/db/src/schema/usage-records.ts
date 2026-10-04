@@ -11,10 +11,7 @@ import {
   timestamp,
   uuid,
 } from "drizzle-orm/pg-core"
-import { accounts } from "./accounts"
-import { apiKeys } from "./api-keys"
 import { costBasis, providerId, type UsageOutcome } from "./enums"
-import { pools } from "./pools"
 
 /**
  * One row per upstream **attempt**, not per client request. A failover chain of
@@ -24,9 +21,10 @@ import { pools } from "./pools"
  * Rows are enqueued in memory and batch-written off the request path — nothing
  * here is ever on the critical path.
  *
- * The account/key/pool references are nullable with ON DELETE SET NULL: revoked
- * keys are purged 30 days after revocation while their historical rows stay, and
- * an attempt that failed before selection (no candidate in scope) has no account.
+ * Nullable account/key/pool IDs are immutable historical facts without foreign
+ * keys: deleting an operational subject preserves attribution. NULL means the
+ * subject was unknown at admission, including legacy values already lost before
+ * this history cutover.
  *
  * Every column added after the first release is nullable, and NULL means exactly
  * *unknown or not applicable* — a row written before the column existed, or an
@@ -57,15 +55,15 @@ export const usageRecords = pgTable(
     /** 1-based position in the failover chain. */
     attempt: integer("attempt").notNull().default(1),
 
-    apiKeyId: uuid("api_key_id").references(() => apiKeys.id, { onDelete: "set null" }),
-    accountId: uuid("account_id").references(() => accounts.id, { onDelete: "set null" }),
+    apiKeyId: uuid("api_key_id"),
+    accountId: uuid("account_id"),
     /**
      * The pool the account was selected *from*. Not derivable by joining: an
      * account belongs to many pools, and which one was in play is a property of
      * the presenting key's scope at request time. NULL when the key's scope was
      * `all` or an explicit account list, so no pool was involved.
      */
-    poolId: uuid("pool_id").references(() => pools.id, { onDelete: "set null" }),
+    poolId: uuid("pool_id"),
     /** Denormalized so the row survives the account it names. */
     provider: providerId("provider"),
 
@@ -149,6 +147,10 @@ export const usageRecords = pgTable(
      */
     outcome: text("outcome").$type<UsageOutcome>().notNull(),
 
+    /** DB receipt bookkeeping; NULL identifies pre-cutover facts, never the event day. */
+    ingestedAt: timestamp("ingested_at", { withTimezone: true, mode: "date" }).default(
+      sql`clock_timestamp()`,
+    ),
     createdAt: timestamp("created_at", { withTimezone: true, mode: "date" }).notNull().defaultNow(),
   },
   (table) => [

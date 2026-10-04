@@ -1,4 +1,7 @@
 import { describe, expect, test } from "bun:test"
+import { QueryClient, QueryClientProvider } from "@tanstack/solid-query"
+import { createComponent } from "solid-js"
+import { render } from "solid-js/web"
 import {
   buildPriceOverridePayload,
   diffOverrides,
@@ -6,8 +9,12 @@ import {
   mergePriceRows,
   type PriceOverride,
   type PriceRate,
+  type SettingsView,
   withRates,
 } from "../../src/lib/api/settings"
+import { filterPriceRows } from "../../src/lib/price-filter"
+import { PriceOverridesSection } from "../../src/routes/settings/PriceOverridesSection"
+import { priceScopeLabel, removalConsequences } from "../../src/routes/settings/price-editing"
 
 /**
  * The price table the settings screen edits, before any of it reaches the wire.
@@ -139,4 +146,180 @@ describe("diffOverrides", () => {
   test("an empty payload removes everything stored", () => {
     expect(diffOverrides(stored, []).removed).toHaveLength(2)
   })
+})
+
+test("account overrides survive beside a global price without leaking to another scope", () => {
+  const accountId = "11111111-1111-4111-8111-111111111111"
+  const base = shippedRate("claude-sonnet-5", 2, 10)
+  const rows = mergePriceRows(
+    [base],
+    [{ ...base, accountId, inputPerMtok: 9, updatedAt: "2026-10-03" }],
+  )
+  expect(rows).toHaveLength(2)
+  expect(rows.find((row) => row.accountId == null)?.rates.inputPerMtok).toBe(2)
+  const payload = buildPriceOverridePayload(rows)
+  expect(payload).toHaveLength(1)
+  expect(payload[0]?.accountId).toBe(accountId)
+  expect(payload[0]?.inputPerMtok).toBe(9)
+})
+
+test("explicit metered override equal to a notional reference must remain explicit", () => {
+  const reference: PriceRate = {
+    provider: "kimi",
+    model: "k3",
+    ...rates(3, 15),
+    notionalOnly: true,
+  }
+  const rows = mergePriceRows([reference], [{ ...reference, updatedAt: "2026-10-03" }])
+  expect(rows[0]?.origin).toBe("overridden")
+  expect(buildPriceOverridePayload(rows)).toHaveLength(1)
+})
+
+test("operator Kimi price is unrestricted while its shipped reference stays notional", () => {
+  const reference: PriceRate = {
+    provider: "kimi",
+    model: "k3",
+    ...rates(3, 15),
+    notionalOnly: true,
+  }
+  const shippedRow = mergePriceRows([reference], [])[0]
+  expect(shippedRow?.notionalOnly).toBe(true)
+  if (shippedRow !== undefined) expect(withRates(shippedRow, rates(9, 20)).notionalOnly).toBe(false)
+  const rows = mergePriceRows([reference], [{ ...reference, updatedAt: "2026-10-03" }])
+  expect(rows[0]?.notionalOnly).toBe(false)
+  expect(rows[0]?.preserveOverride).toBe(true)
+  expect(buildPriceOverridePayload(rows)).toHaveLength(1)
+  const consequences = removalConsequences(
+    { changed: [], removed: [{ ...reference, updatedAt: "2026-10-03" }] },
+    [reference],
+  )
+  expect(consequences[0]).toContain("subscription attribution")
+  expect(consequences[0]).toContain("metered accounts become unpriced")
+  expect(consequences[0]).toContain("unknown spend")
+})
+
+test("rate input scope labels distinguish two same-model accounts and global rates", () => {
+  const accounts = [
+    { id: "a", label: "Primary" },
+    { id: "b", label: "Backup" },
+  ]
+  expect(priceScopeLabel({}, accounts)).toBe("all accounts")
+  expect(priceScopeLabel({ accountId: "a" }, accounts)).toBe("Primary (a)")
+  expect(priceScopeLabel({ accountId: "b" }, accounts)).toBe("Backup (b)")
+  expect(priceScopeLabel({ accountId: "missing" }, accounts)).toBe("Account (missing)")
+})
+
+test("account id substring matches only that account's price row", () => {
+  const rows = mergePriceRows(
+    [shippedRate("claude-sonnet-5", 3, 15)],
+    [
+      {
+        ...shippedRate("claude-sonnet-5", 9, 20),
+        accountId: "account-primary",
+        updatedAt: "2026-10-03",
+      },
+      {
+        ...shippedRate("claude-sonnet-5", 8, 19),
+        accountId: "account-backup",
+        updatedAt: "2026-10-03",
+      },
+    ],
+  )
+  expect(filterPriceRows(rows, " PRIMARY ").map((row) => row.accountId)).toEqual([
+    "account-primary",
+  ])
+})
+test("Reset removes an explicit metered Kimi override rather than submitting its notional fallback", async () => {
+  const reference: PriceRate = {
+    provider: "kimi",
+    model: "k3",
+    ...rates(3, 15),
+    notionalOnly: true,
+  }
+  const retained = override(shippedRate("claude-sonnet-5", 9, 20))
+  const view: SettingsView = {
+    version: "fixture",
+    publicUrl: null,
+    logLevel: "info",
+    janitorIntervalMinutes: 5,
+    retention: {
+      usageDays: 90,
+      auditDays: 90,
+      sessionsHours: 24,
+      revokedKeysDays: 30,
+      oauthStateMinutes: 10,
+    },
+    prices: {
+      shippedAsOf: "2026-10-01",
+      shipped: [reference],
+      overrides: [override(reference), retained],
+    },
+  }
+  const prior = globalThis.fetch,
+    patches: unknown[] = []
+  const client = new QueryClient({
+    defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+  })
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const path = String(input instanceof Request ? input.url : input)
+    if (path.includes("/providers")) return Response.json({ providers: [] })
+    if (init?.method === "PATCH") {
+      patches.push(JSON.parse(String(init.body)))
+      return Response.json(view)
+    }
+    return Response.json(view)
+  }) as typeof fetch
+  const node = document.createElement("div")
+  document.body.append(node)
+  const dispose = render(
+    () =>
+      createComponent(QueryClientProvider, {
+        client,
+        get children() {
+          return createComponent(PriceOverridesSection, {})
+        },
+      }),
+    node,
+  )
+  const settle = () => new Promise<void>((resolve) => setTimeout(resolve, 30))
+  const click = (label: string) => {
+    const button = [...document.querySelectorAll("button")].find(
+      (element) => element.textContent?.trim() === label,
+    )
+    expect(button).toBeDefined()
+    button?.click()
+  }
+  try {
+    await settle()
+    await settle()
+    click("Reset to shipped")
+    await settle()
+    expect(node.querySelector('input[aria-label*="kimi k3"]')).toBeNull()
+    expect(patches).toEqual([])
+    click("Save price overrides")
+    await settle()
+    expect(document.body.textContent).toContain("metered accounts become unpriced")
+    click("Save and remove")
+    await settle()
+    await settle()
+    expect(patches).toEqual([
+      {
+        priceOverrides: [
+          {
+            provider: retained.provider,
+            model: retained.model,
+            inputPerMtok: retained.inputPerMtok,
+            outputPerMtok: retained.outputPerMtok,
+            cacheReadPerMtok: retained.cacheReadPerMtok,
+            cacheWritePerMtok: retained.cacheWritePerMtok,
+          },
+        ],
+      },
+    ])
+  } finally {
+    dispose()
+    node.remove()
+    client.clear()
+    globalThis.fetch = prior
+  }
 })

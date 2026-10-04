@@ -17,6 +17,7 @@ const NOW = new Date("2026-07-25T12:00:00.000Z")
 function row(overrides: Partial<PriceOverrideRow> = {}): PriceOverrideRow {
   return {
     id: "11111111-1111-1111-1111-111111111111",
+    accountId: null,
     provider: "anthropic-api",
     model: "claude-sonnet-5",
     inputPerMtok: 1,

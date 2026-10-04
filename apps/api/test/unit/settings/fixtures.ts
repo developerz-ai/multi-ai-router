@@ -7,6 +7,7 @@ import type {
   ScheduledTaskRunRow,
 } from "@multi-ai-router/db"
 import type { RetentionConfig } from "../../../src/config/env"
+import type { PriceAccount } from "../../../src/services/cost/coverage"
 import { createSettingsService, type SettingsService } from "../../../src/services/settings"
 
 /**
@@ -69,7 +70,13 @@ export function memoryPrices(seed: readonly PriceOverrideInput[] = []): MemoryPr
 }
 
 function toRow(input: PriceOverrideInput, index: number, at: Date): PriceOverrideRow {
-  return { id: `price-${index}`, ...input, createdAt: at, updatedAt: at }
+  return {
+    id: `price-${index}`,
+    ...input,
+    accountId: input.accountId ?? null,
+    createdAt: at,
+    updatedAt: at,
+  }
 }
 
 export type TaskRuns = Partial<Record<ScheduledTaskName, readonly ScheduledTaskRunRow[]>>
@@ -149,6 +156,7 @@ export function recordingAudit(onRecord: () => void = () => undefined) {
 }
 
 export interface HarnessOptions {
+  readonly priceAccounts?: () => readonly PriceAccount[]
   readonly prices?: readonly PriceOverrideInput[]
   readonly runs?: TaskRuns
   readonly auditLog?: readonly AuditEventRow[]
@@ -170,6 +178,7 @@ export function harness(options: HarnessOptions = {}): Harness {
   const audit = recordingAudit(options.onAudit)
   const service = createSettingsService({
     prices,
+    priceAccounts: options.priceAccounts,
     scheduledTasks: memoryTasks(options.runs),
     auditEvents: memoryAuditLog(options.auditLog ?? []),
     audit,

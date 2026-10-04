@@ -1,0 +1,999 @@
+{
+  "scope": "PR152 developerz review corrections locally validated; new-head reviews/CI/merge and release/deployment pending; large warm translation and strict cold/session latency remain OPEN",
+  "gate": {
+    "bun": "1.4.2",
+    "postgres": "18.6",
+    "passed": 5061,
+    "failed": 0,
+    "files": 451,
+    "assertions": 49084,
+    "lint": true,
+    "typecheck": true,
+    "build": true,
+    "ownDatabaseDropped": true
+  },
+  "gateLogSHA256": "04afbd0095482faef1dcd671f1200e380e6589e38c5fb1d2007580deb0f1e848",
+  "priorGateFailures": {
+    "first": {
+      "passed": 5042,
+      "failed": 2,
+      "fixed": [
+        "unstarted request caller status",
+        "exact schema ingestedAt contract"
+      ]
+    },
+    "second": {
+      "passed": 5037,
+      "failed": 7,
+      "fixed": [
+        "isolated aggregate fixture repeatability; production raw retention guards preserved"
+      ]
+    }
+  },
+  "postgres16And18": {
+    "historyRepairRollout": {
+      "tests": 9,
+      "assertions": 37
+    },
+    "actualHistoryHTTP": {
+      "tests": 1,
+      "assertions": 12
+    },
+    "aggregateAndTokensRepeated": {
+      "tests": 21,
+      "assertions": 39,
+      "runsPerVersion": 2
+    },
+    "otherIsolatedSuites": {
+      "tests": 27,
+      "assertions": 82
+    }
+  },
+  "kimiReferenceVerification": {
+    "verifiedAt": "2026-10-04T01:45:33.854071+00:00",
+    "sources": [
+      {
+        "url": "https://platform.kimi.ai/docs/pricing/chat",
+        "sha256": "a7e0a382039aa7f9be49e53f038ad14cfc8dc50aecd8482600e3833779dde79a"
+      },
+      {
+        "url": "https://platform.kimi.ai/docs/pricing/chat.md",
+        "sha256": "27a3d7395175e11aff6a9d76dc83b077a6cc126ad08c58404248bbcff47cfc31"
+      }
+    ],
+    "usdPerMillionTokens": {
+      "kimi-k3": {
+        "input": 3,
+        "output": 15,
+        "cacheRead": 0.3,
+        "cacheWrite5min": 3,
+        "cacheWrite1h": 6
+      },
+      "kimi-k2.7-code-highspeed": {
+        "input": 1.9,
+        "output": 8,
+        "cacheRead": 0.38
+      }
+    },
+    "command": "curl -L -sS -A Mozilla/5.0 officialURL",
+    "interpretation": "Verified platform reference prices only; coding identity and billing eligibility are separately documented. No metered Extra Usage USD equivalence."
+  },
+  "open": [
+    "L16 strict cold indexed-miss latency",
+    "O12 authenticated scrape/rules/controlled notification/runbook",
+    "operational credential rotation/session invalidation",
+    "native arm64 release validation",
+    "release/deployment/post-release comparison",
+    "Queue-shedding/janitor correlated infrastructure alert",
+    "Current280KB warm translated nonstream p99 7.333ms exceeds5ms budget; retained failure and optimization pending"
+  ],
+  "initialGate": {
+    "bun": "1.4.2",
+    "postgres": "18.6",
+    "passed": 5050,
+    "failed": 0,
+    "files": 451,
+    "assertions": 49024,
+    "lint": true,
+    "typecheck": true,
+    "build": true
+  },
+  "initialImage": {
+    "id": "sha256:1364d2186e370cf83a74dd6463e094ca78b364e121320a8e2b8c65045e22d8d0",
+    "serverSHA256": "df6ff70e24c647fca9698ac3a6b18cc548c5b8910ea2e8550ea57c7ba920c0e8",
+    "checkedBundleMatches": true,
+    "uid": 1000,
+    "readOnly": true,
+    "capabilities": 0,
+    "noNewPrivileges": true,
+    "network": "none",
+    "scope": "amd64 packaging only; no router/helper/CLI launch, DB or provider calls"
+  },
+  "image": {
+    "id": "sha256:a31c9cce75e0e6b939096a84c0746a7f49ba08cbd5fef70024a5a3f5361f8fab",
+    "serverSHA256": "7e1a8e012252f30b281c5977e9e84c670809e88c43e4b8c626b0ab71a7e35236",
+    "checkedBundleMatches": true,
+    "migrationSQLSHA256": "bdbaa7b53787f90925d653ffbfe6765cbc7c7d42524fdb4433e3ea1332fb00b0",
+    "migrationSnapshotSHA256": "2fc652da2ba92c469fe086ffddb794877fca6cdad0ec20c5613700d0433c7eb7",
+    "checkedMigrationMatches": true,
+    "uid": 1000,
+    "readOnly": true,
+    "capabilities": 0,
+    "noNewPrivileges": true,
+    "network": "none",
+    "scope": "amd64 packaging only; no router/helper/CLI launch, DB or provider calls"
+  },
+  "reviewFixes": {
+    "originalHead": "eff98105e4facd4f2a46556e0837f7f9629d8a48",
+    "review": 5403914718,
+    "inlineFindings": 6,
+    "outsideFindings": 1,
+    "dbEachPostgres": {
+      "tests": 27,
+      "assertions": 134
+    },
+    "pricing": {
+      "tests": 22,
+      "assertions": 54
+    },
+    "coverageUI": {
+      "tests": 4,
+      "assertions": 26
+    },
+    "historyEnv": {
+      "tests": 184,
+      "assertions": 305
+    },
+    "setBasedMaintenance": true,
+    "indexedCoverage": true,
+    "midnightCompatibility": true
+  },
+  "warmBenchmarks": {
+    "small": {
+      "rows": [
+        {
+          "scenario": "passthrough",
+          "path": "passthrough",
+          "samples": 2000,
+          "failures": 0,
+          "overheadMeanMs": 0.013500000000000007,
+          "overheadP50Ms": 0.25316455696202533,
+          "overheadP95Ms": 0.4810126582278481,
+          "overheadP99Ms": 0.6041666666666667,
+          "overheadQuantized": true,
+          "addedTtftSamples": 0,
+          "addedTtftP50Ms": null,
+          "addedTtftP95Ms": null,
+          "addedTtftP99Ms": null,
+          "buffered": 0,
+          "streamed": false
+        },
+        {
+          "scenario": "passthrough (stream)",
+          "path": "passthrough",
+          "samples": 2000,
+          "failures": 0,
+          "overheadMeanMs": 0.011000000000000006,
+          "overheadP50Ms": 0.2527805864509606,
+          "overheadP95Ms": 0.4802831142568251,
+          "overheadP99Ms": 0.5454545454545455,
+          "overheadQuantized": true,
+          "addedTtftSamples": 2000,
+          "addedTtftP50Ms": 0.0701309999994919,
+          "addedTtftP95Ms": 0.11797550000001138,
+          "addedTtftP99Ms": 0.1892502499999136,
+          "buffered": 0,
+          "streamed": true
+        },
+        {
+          "scenario": "translate",
+          "path": "translate",
+          "samples": 2000,
+          "failures": 0,
+          "overheadMeanMs": 0.02100000000000001,
+          "overheadP50Ms": 0.2541942043721403,
+          "overheadP95Ms": 0.4829689883070666,
+          "overheadP99Ms": 0.76,
+          "overheadQuantized": true,
+          "addedTtftSamples": 0,
+          "addedTtftP50Ms": null,
+          "addedTtftP95Ms": null,
+          "addedTtftP99Ms": null,
+          "buffered": 0,
+          "streamed": false
+        },
+        {
+          "scenario": "translate (stream)",
+          "path": "translate",
+          "samples": 2000,
+          "failures": 0,
+          "overheadMeanMs": 0.02000000000000001,
+          "overheadP50Ms": 0.254323499491353,
+          "overheadP95Ms": 0.4832146490335707,
+          "overheadP99Ms": 0.7333333333333334,
+          "overheadQuantized": true,
+          "addedTtftSamples": 2000,
+          "addedTtftP50Ms": 0.08042500000192376,
+          "addedTtftP95Ms": 0.13648265000101673,
+          "addedTtftP99Ms": 0.23858053000192733,
+          "buffered": 0,
+          "streamed": true
+        }
+      ],
+      "budgets": {
+        "overheadP99Ms": 5,
+        "addedTtftP95Ms": 2
+      },
+      "violations": []
+    },
+    "large": {
+      "rows": [
+        {
+          "scenario": "passthrough",
+          "path": "passthrough",
+          "samples": 2000,
+          "failures": 0,
+          "overheadMeanMs": 0.22050000000000017,
+          "overheadP50Ms": 0.3113325031133251,
+          "overheadP95Ms": 0.892,
+          "overheadP99Ms": 0.9986666666666668,
+          "overheadQuantized": true,
+          "addedTtftSamples": 0,
+          "addedTtftP50Ms": null,
+          "addedTtftP95Ms": null,
+          "addedTtftP99Ms": null,
+          "buffered": 0,
+          "streamed": false
+        },
+        {
+          "scenario": "passthrough (stream)",
+          "path": "passthrough",
+          "samples": 2000,
+          "failures": 0,
+          "overheadMeanMs": 0.3015000000000002,
+          "overheadP50Ms": 0.351123595505618,
+          "overheadP95Ms": 0.9227353463587922,
+          "overheadP99Ms": 0.993783303730018,
+          "overheadQuantized": true,
+          "addedTtftSamples": 2000,
+          "addedTtftP50Ms": 0.07079350000003615,
+          "addedTtftP95Ms": 0.1167749500003083,
+          "addedTtftP99Ms": 0.18685991999996074,
+          "buffered": 0,
+          "streamed": true
+        },
+        {
+          "scenario": "translate",
+          "path": "translate",
+          "samples": 2000,
+          "failures": 0,
+          "overheadMeanMs": 1.3309999999999358,
+          "overheadP50Ms": 0.7805836139169473,
+          "overheadP95Ms": 1.874074074074074,
+          "overheadP99Ms": 7.333333333333334,
+          "overheadQuantized": false,
+          "addedTtftSamples": 0,
+          "addedTtftP50Ms": null,
+          "addedTtftP95Ms": null,
+          "addedTtftP99Ms": null,
+          "buffered": 0,
+          "streamed": false
+        },
+        {
+          "scenario": "translate (stream)",
+          "path": "translate",
+          "samples": 2000,
+          "failures": 0,
+          "overheadMeanMs": 1.1099999999999424,
+          "overheadP50Ms": 0.7714440825190011,
+          "overheadP95Ms": 1.453125,
+          "overheadP99Ms": 3.111111111111111,
+          "overheadQuantized": false,
+          "addedTtftSamples": 2000,
+          "addedTtftP50Ms": 0.07788699999764503,
+          "addedTtftP95Ms": 0.1277866999998878,
+          "addedTtftP99Ms": 0.18920810999836246,
+          "buffered": 0,
+          "streamed": true
+        }
+      ],
+      "budgets": {
+        "overheadP99Ms": 5,
+        "addedTtftP95Ms": 2
+      },
+      "violations": [
+        "translate: p99 overhead 7.33 ms exceeds the 5 ms budget"
+      ]
+    },
+    "scope": "actual current source against warm stub HTTP only; 8000 requests each. Large translated nonstream p99 FAILED7.333ms, retained as open latency bug. No cold/session proof or retry."
+  },
+  "previousWaveMergedEvidence": {
+    "scope": "W5B application validation; PR151 reviewed and merged; release/deployment pending",
+    "gate": {
+      "bun": "1.4.2",
+      "postgres": "18.6",
+      "passed": 5004,
+      "failed": 0,
+      "files": 437,
+      "assertions": 48848
+    },
+    "inputs": {
+      "unchanged": 1966,
+      "excludedGenerated": "apps/api/tsconfig.tsbuildinfo",
+      "scope": "prior scanner-fix gate; not a digest verification of the later review-fix gate"
+    },
+    "postgresQuotaFence": {
+      "16": {
+        "passed": 14,
+        "assertions": 40
+      },
+      "18": {
+        "passed": 14,
+        "assertions": 40
+      }
+    },
+    "image": {
+      "id": "sha256:41393917f3a503b95e90791e5d759e3830b8fc82873ab663f4f16d62c7a8f074",
+      "serverSHA256": "3718e85f52d7de78e880dc8648d93653e19341c3a259848d343c3fae289cb4d3",
+      "checkedBundleMatches": true,
+      "uid": 1000,
+      "readOnly": true,
+      "capabilities": 0,
+      "noNewPrivileges": true,
+      "scope": "recovery-inventory fix packaging only; no router/helper/CLI launch, DB or provider calls"
+    },
+    "openLead": "L16 actual indexed-miss and occupied-pool latency remains outside5ms budget; retained15/48ms evidence, no subtraction of binding wait",
+    "monitoring": "L19 application contract only; infrastructure authenticated scrape/rules/controlled notification/runbook remains open",
+    "initialGate": {
+      "bun": "1.4.2",
+      "postgres": "18.6",
+      "passed": 4995,
+      "failed": 0,
+      "files": 433,
+      "assertions": 48806
+    },
+    "reviewFixes": {
+      "status": "Prior local review-fix validation; final reviewed head and merged verdict recorded in merge metadata",
+      "atomicQuotaStatus": {
+        "postgres16": {
+          "passed": 9,
+          "assertions": 37
+        },
+        "postgres18": {
+          "passed": 9,
+          "assertions": 37
+        },
+        "writerUnits": {
+          "passed": 21,
+          "assertions": 55
+        },
+        "healthUnits": {
+          "passed": 8,
+          "assertions": 19
+        }
+      },
+      "warmBench": {
+        "normalMaxP99Ms": 0.5357142857142857,
+        "largeMaxP99Ms": 3.6153846153846154,
+        "requestsPerRun": 8000,
+        "failures": 0,
+        "buffered": 0
+      },
+      "gate": {
+        "bun": "1.4.2",
+        "postgres": "18.6",
+        "passed": 5003,
+        "failed": 0,
+        "files": 436,
+        "assertions": 48831
+      },
+      "image": {
+        "id": "sha256:f3439cedf25608a70a49bb6146abb1b8f88355aa10fe791c4102f8cd0c6ee63b",
+        "serverSHA256": "1837e908b9fbb4a1cc2d13a4f8a7e0dc3d047c1b2e93087d1bebb1b8c7b19716",
+        "checkedBundleMatches": true,
+        "uid": 1000,
+        "readOnly": true,
+        "capabilities": 0,
+        "noNewPrivileges": true,
+        "scope": "prior quota/status review-fix packaging; recovery-inventory rebuild pending"
+      }
+    },
+    "priorImage": {
+      "id": "sha256:ea8122f6b09e6a7d0dbcbffbc5f83fe68558259220830fc73d256ddf9f2088fd",
+      "serverSHA256": "d4e6ec68faa7db7a6324c2fcb72ecaf959b8cc3ef2b449b242abf4615dddbae1",
+      "checkedBundleMatches": true,
+      "uid": 1000,
+      "readOnly": true,
+      "capabilities": 0,
+      "noNewPrivileges": true,
+      "scope": "prior scanner-fix packaging validation; review-fix image rebuild pending"
+    },
+    "recoveryInventory": {
+      "source": "actual recovery access catalog with replica-local capabilities",
+      "tests": 1,
+      "assertions": 17,
+      "scrapesReservePermits": false,
+      "foreignAndConsumedPermitsCount": 0,
+      "availableLocalPermitCount": 1
+    },
+    "warmBench": {
+      "normalMaxP99Ms": 0.5,
+      "largeMaxP99Ms": 3.8,
+      "requestsPerRun": 8000,
+      "failures": 0,
+      "buffered": 0
+    },
+    "merge": {
+      "pr": 151,
+      "commit": "c030c5bc3a5eb0fc765be3a6691cf1964991a9fb",
+      "mergedAt": "2026-10-04T01:08:57Z",
+      "reviewedHead": "b82a9f0c28535f8d043267e955eb6af7c8b664c4",
+      "codeRabbitReviewRun": "20a75f84-7dc6-4331-91d0-cb7a1afbdf21",
+      "codeRabbitReviewComment": 5974814785,
+      "actionableComments": 0,
+      "requiredChecks": [
+        "lint",
+        "typecheck",
+        "test",
+        "bench",
+        "build"
+      ],
+      "mainCiRun": 37167125809,
+      "mainCiConclusion": "success"
+    }
+  },
+  "reviewFixGateBeforeAdmissionMetric": {
+    "bun": "1.4.2",
+    "postgres": "18.6",
+    "passed": 5050,
+    "failed": 0,
+    "files": 451,
+    "assertions": 49024,
+    "lint": true,
+    "typecheck": true,
+    "build": true
+  },
+  "admissionMetric": {
+    "name": "router_usage_admission_seconds",
+    "scope": "backgroundawaited insertBatch withpoolandlockwait; success/failure/retries/terminal-only; excludesaccountstamp",
+    "observerFailureDoesNotRetryCommit": true,
+    "focusedTests": 84,
+    "assertions": 197
+  },
+  "beforeAdmissionMetricBenchmarks": {
+    "rows": [
+      {
+        "scenario": "passthrough",
+        "path": "passthrough",
+        "samples": 2000,
+        "failures": 0,
+        "overheadMeanMs": 0.015500000000000007,
+        "overheadP50Ms": 0.25329280648429586,
+        "overheadP95Ms": 0.48125633232016213,
+        "overheadP99Ms": 0.625,
+        "overheadQuantized": true,
+        "addedTtftSamples": 0,
+        "addedTtftP50Ms": null,
+        "addedTtftP95Ms": null,
+        "addedTtftP99Ms": null,
+        "buffered": 0,
+        "streamed": false
+      },
+      {
+        "scenario": "passthrough (stream)",
+        "path": "passthrough",
+        "samples": 2000,
+        "failures": 0,
+        "overheadMeanMs": 0.011000000000000006,
+        "overheadP50Ms": 0.25265285497726125,
+        "overheadP95Ms": 0.48004042445679634,
+        "overheadP99Ms": 0.525,
+        "overheadQuantized": true,
+        "addedTtftSamples": 2000,
+        "addedTtftP50Ms": 0.07026850000056584,
+        "addedTtftP95Ms": 0.12782109999907335,
+        "addedTtftP99Ms": 0.19864190000047527,
+        "buffered": 0,
+        "streamed": true
+      },
+      {
+        "scenario": "translate",
+        "path": "translate",
+        "samples": 2000,
+        "failures": 0,
+        "overheadMeanMs": 0.07750000000000005,
+        "overheadP50Ms": 0.2663825253063399,
+        "overheadP95Ms": 0.6055045871559633,
+        "overheadP99Ms": 0.9724770642201834,
+        "overheadQuantized": true,
+        "addedTtftSamples": 0,
+        "addedTtftP50Ms": null,
+        "addedTtftP95Ms": null,
+        "addedTtftP99Ms": null,
+        "buffered": 0,
+        "streamed": false
+      },
+      {
+        "scenario": "translate (stream)",
+        "path": "translate",
+        "samples": 2000,
+        "failures": 0,
+        "overheadMeanMs": 0.06300000000000004,
+        "overheadP50Ms": 0.26567481402763016,
+        "overheadP95Ms": 0.5803571428571429,
+        "overheadP99Ms": 0.9375,
+        "overheadQuantized": true,
+        "addedTtftSamples": 2000,
+        "addedTtftP50Ms": 0.09167700000034529,
+        "addedTtftP95Ms": 0.16050260000083647,
+        "addedTtftP99Ms": 0.3542961699981242,
+        "buffered": 0,
+        "streamed": true
+      }
+    ],
+    "budgets": {
+      "overheadP99Ms": 5,
+      "addedTtftP95Ms": 2
+    },
+    "violations": [],
+    "largePayloadRun": {
+      "rows": [
+        {
+          "scenario": "passthrough",
+          "path": "passthrough",
+          "samples": 2000,
+          "failures": 0,
+          "overheadMeanMs": 0.35500000000000026,
+          "overheadP50Ms": 0.36927621861152143,
+          "overheadP95Ms": 0.9389067524115755,
+          "overheadP99Ms": 1.8,
+          "overheadQuantized": true,
+          "addedTtftSamples": 0,
+          "addedTtftP50Ms": null,
+          "addedTtftP95Ms": null,
+          "addedTtftP99Ms": null,
+          "buffered": 0,
+          "streamed": false
+        },
+        {
+          "scenario": "passthrough (stream)",
+          "path": "passthrough",
+          "samples": 2000,
+          "failures": 0,
+          "overheadMeanMs": 0.7799999999999697,
+          "overheadP50Ms": 0.6698240866035182,
+          "overheadP95Ms": 0.9742895805142084,
+          "overheadP99Ms": 1.8,
+          "overheadQuantized": true,
+          "addedTtftSamples": 2000,
+          "addedTtftP50Ms": 0.094896499999777,
+          "addedTtftP95Ms": 0.1514911999996002,
+          "addedTtftP99Ms": 0.31165786000065054,
+          "buffered": 0,
+          "streamed": true
+        },
+        {
+          "scenario": "translate",
+          "path": "translate",
+          "samples": 2000,
+          "failures": 0,
+          "overheadMeanMs": 1.1664999999999388,
+          "overheadP50Ms": 0.7711496746203904,
+          "overheadP95Ms": 1.5656565656565657,
+          "overheadP99Ms": 4.707317073170732,
+          "overheadQuantized": false,
+          "addedTtftSamples": 0,
+          "addedTtftP50Ms": null,
+          "addedTtftP95Ms": null,
+          "addedTtftP99Ms": null,
+          "buffered": 0,
+          "streamed": false
+        },
+        {
+          "scenario": "translate (stream)",
+          "path": "translate",
+          "samples": 2000,
+          "failures": 0,
+          "overheadMeanMs": 1.200999999999936,
+          "overheadP50Ms": 0.7865329512893984,
+          "overheadP95Ms": 1.7908163265306123,
+          "overheadP99Ms": 4.48936170212766,
+          "overheadQuantized": false,
+          "addedTtftSamples": 2000,
+          "addedTtftP50Ms": 0.09297500000320724,
+          "addedTtftP95Ms": 0.165618550002182,
+          "addedTtftP99Ms": 0.3687785700006861,
+          "buffered": 0,
+          "streamed": true
+        }
+      ],
+      "budgets": {
+        "overheadP99Ms": 5,
+        "addedTtftP95Ms": 2
+      },
+      "violations": [],
+      "promptBytes": 280000
+    },
+    "scope": "review-fix warm mocked-upstream paths; does not close L16 cold indexed misses",
+    "runtime": "Bun1.4.2",
+    "promptBytes": 1024,
+    "initialRun": {
+      "rows": [
+        {
+          "scenario": "passthrough",
+          "path": "passthrough",
+          "samples": 2000,
+          "failures": 0,
+          "overheadMeanMs": 0.009500000000000001,
+          "overheadP50Ms": 0.25176233635448136,
+          "overheadP95Ms": 0.4783484390735146,
+          "overheadP99Ms": 0.4984894259818731,
+          "overheadQuantized": true,
+          "addedTtftSamples": 0,
+          "addedTtftP50Ms": null,
+          "addedTtftP95Ms": null,
+          "addedTtftP99Ms": null,
+          "buffered": 0,
+          "streamed": false
+        },
+        {
+          "scenario": "passthrough (stream)",
+          "path": "passthrough",
+          "samples": 2000,
+          "failures": 0,
+          "overheadMeanMs": 0.009500000000000005,
+          "overheadP50Ms": 0.2523977788995457,
+          "overheadP95Ms": 0.4795557799091368,
+          "overheadP99Ms": 0.4997476022211004,
+          "overheadQuantized": true,
+          "addedTtftSamples": 2000,
+          "addedTtftP50Ms": 0.06346750000011525,
+          "addedTtftP95Ms": 0.17460190000028883,
+          "addedTtftP99Ms": 0.23677520999972326,
+          "buffered": 0,
+          "streamed": true
+        },
+        {
+          "scenario": "translate",
+          "path": "translate",
+          "samples": 2000,
+          "failures": 0,
+          "overheadMeanMs": 0.026000000000000013,
+          "overheadP50Ms": 0.2544529262086514,
+          "overheadP95Ms": 0.48346055979643765,
+          "overheadP99Ms": 0.7586206896551724,
+          "overheadQuantized": true,
+          "addedTtftSamples": 0,
+          "addedTtftP50Ms": null,
+          "addedTtftP95Ms": null,
+          "addedTtftP99Ms": null,
+          "buffered": 0,
+          "streamed": false
+        },
+        {
+          "scenario": "translate (stream)",
+          "path": "translate",
+          "samples": 2000,
+          "failures": 0,
+          "overheadMeanMs": 0.025500000000000016,
+          "overheadP50Ms": 0.2554931016862545,
+          "overheadP95Ms": 0.4854368932038835,
+          "overheadP99Ms": 0.7875,
+          "overheadQuantized": true,
+          "addedTtftSamples": 2000,
+          "addedTtftP50Ms": 0.08134449999852222,
+          "addedTtftP95Ms": 0.1400803500037,
+          "addedTtftP99Ms": 0.23804953000075327,
+          "buffered": 0,
+          "streamed": true
+        }
+      ],
+      "budgets": {
+        "overheadP99Ms": 5,
+        "addedTtftP95Ms": 2
+      },
+      "violations": [],
+      "scope": "Warm in-memory mocked-upstream paths; does not close indexed-database-miss L16",
+      "runtime": "Bun1.4.2",
+      "promptBytes": 1024,
+      "largePayloadRun": {
+        "rows": [
+          {
+            "scenario": "passthrough",
+            "path": "passthrough",
+            "samples": 2000,
+            "failures": 0,
+            "overheadMeanMs": 0.3010000000000002,
+            "overheadP50Ms": 0.3450655624568668,
+            "overheadP95Ms": 0.9278937381404174,
+            "overheadP99Ms": 1.6666666666666665,
+            "overheadQuantized": true,
+            "addedTtftSamples": 0,
+            "addedTtftP50Ms": null,
+            "addedTtftP95Ms": null,
+            "addedTtftP99Ms": null,
+            "buffered": 0,
+            "streamed": false
+          },
+          {
+            "scenario": "passthrough (stream)",
+            "path": "passthrough",
+            "samples": 2000,
+            "failures": 0,
+            "overheadMeanMs": 0.36550000000000027,
+            "overheadP50Ms": 0.3897116134060795,
+            "overheadP95Ms": 0.9351198871650213,
+            "overheadP99Ms": 0.991537376586742,
+            "overheadQuantized": true,
+            "addedTtftSamples": 2000,
+            "addedTtftP50Ms": 0.07072000000061962,
+            "addedTtftP95Ms": 0.12940010000111213,
+            "addedTtftP99Ms": 0.25983198999865614,
+            "buffered": 0,
+            "streamed": true
+          },
+          {
+            "scenario": "translate",
+            "path": "translate",
+            "samples": 2000,
+            "failures": 0,
+            "overheadMeanMs": 1.1394999999999398,
+            "overheadP50Ms": 0.7675227394328519,
+            "overheadP95Ms": 1.3974358974358976,
+            "overheadP99Ms": 4.25,
+            "overheadQuantized": false,
+            "addedTtftSamples": 0,
+            "addedTtftP50Ms": null,
+            "addedTtftP95Ms": null,
+            "addedTtftP99Ms": null,
+            "buffered": 0,
+            "streamed": false
+          },
+          {
+            "scenario": "translate (stream)",
+            "path": "translate",
+            "samples": 2000,
+            "failures": 0,
+            "overheadMeanMs": 1.1524999999999412,
+            "overheadP50Ms": 0.7774694783573807,
+            "overheadP95Ms": 1.6086956521739133,
+            "overheadP99Ms": 3.64516129032258,
+            "overheadQuantized": false,
+            "addedTtftSamples": 2000,
+            "addedTtftP50Ms": 0.08006699999896227,
+            "addedTtftP95Ms": 0.13433965000258463,
+            "addedTtftP99Ms": 0.2219271700009994,
+            "buffered": 0,
+            "streamed": true
+          }
+        ],
+        "budgets": {
+          "overheadP99Ms": 5,
+          "addedTtftP95Ms": 2
+        },
+        "violations": [],
+        "scope": "Warm in-memory mocked-upstream paths; does not close indexed-database-miss L16",
+        "runtime": "Bun1.4.2",
+        "promptBytes": 280000
+      }
+    }
+  },
+  "reviewFixImageBeforeAdmissionMetric": {
+    "id": "sha256:db41f3c749bf8d869a9d0e9cdcab9249b59be9ebdb8777d321e582d7a600d2da",
+    "serverSHA256": "7865aa4c029e8a6c94e262f578f1fc00b1e86550c749ac4a2fccbf03978155cc",
+    "checkedBundleMatches": true,
+    "uid": 1000,
+    "readOnly": true,
+    "capabilities": 0,
+    "noNewPrivileges": true,
+    "network": "none",
+    "scope": "review-fix amd64 packaging only; no router/helper/CLI launch, DB or provider calls"
+  },
+  "preDeveloperzReviewGate": {
+    "bun": "1.4.2",
+    "postgres": "18.6",
+    "passed": 5052,
+    "failed": 0,
+    "files": 451,
+    "assertions": 49030,
+    "lint": true,
+    "typecheck": true,
+    "build": true
+  },
+  "preDeveloperzReviewImage": {
+    "id": "sha256:351fe1211db0d27b6635f4652cad4ed04a960b5499d9ddfe4a9a16f88c194c6d",
+    "serverSHA256": "8590fdbee3fb68e6a8215dc8790e0913ef2dd008a928e28c6561cea642bc7ecf",
+    "checkedBundleMatches": true,
+    "uid": 1000,
+    "readOnly": true,
+    "capabilities": 0,
+    "noNewPrivileges": true,
+    "network": "none",
+    "scope": "finaladmissionmetric amd64 packaging only; no router/helper/CLI launch, DB or provider calls"
+  },
+  "preDeveloperzReviewWarmBenchmarks": {
+    "rows": [
+      {
+        "scenario": "passthrough",
+        "path": "passthrough",
+        "samples": 2000,
+        "failures": 0,
+        "overheadMeanMs": 0.0085,
+        "overheadP50Ms": 0.2513826043237808,
+        "overheadP95Ms": 0.47762694821518353,
+        "overheadP99Ms": 0.497737556561086,
+        "overheadQuantized": true,
+        "addedTtftSamples": 0,
+        "addedTtftP50Ms": null,
+        "addedTtftP95Ms": null,
+        "addedTtftP99Ms": null,
+        "buffered": 0,
+        "streamed": false
+      },
+      {
+        "scenario": "passthrough (stream)",
+        "path": "passthrough",
+        "samples": 2000,
+        "failures": 0,
+        "overheadMeanMs": 0.010500000000000002,
+        "overheadP50Ms": 0.2521432173474534,
+        "overheadP95Ms": 0.4790721129601614,
+        "overheadP99Ms": 0.4992435703479577,
+        "overheadQuantized": true,
+        "addedTtftSamples": 2000,
+        "addedTtftP50Ms": 0.0657134999992195,
+        "addedTtftP95Ms": 0.11244864999889614,
+        "addedTtftP99Ms": 0.17168905000152335,
+        "buffered": 0,
+        "streamed": true
+      },
+      {
+        "scenario": "translate",
+        "path": "translate",
+        "samples": 2000,
+        "failures": 0,
+        "overheadMeanMs": 0.012000000000000004,
+        "overheadP50Ms": 0.2521432173474534,
+        "overheadP95Ms": 0.4790721129601614,
+        "overheadP99Ms": 0.4992435703479577,
+        "overheadQuantized": true,
+        "addedTtftSamples": 0,
+        "addedTtftP50Ms": null,
+        "addedTtftP95Ms": null,
+        "addedTtftP99Ms": null,
+        "buffered": 0,
+        "streamed": false
+      },
+      {
+        "scenario": "translate (stream)",
+        "path": "translate",
+        "samples": 2000,
+        "failures": 0,
+        "overheadMeanMs": 0.02950000000000001,
+        "overheadP50Ms": 0.2535496957403651,
+        "overheadP95Ms": 0.4817444219066937,
+        "overheadP99Ms": 0.6666666666666666,
+        "overheadQuantized": true,
+        "addedTtftSamples": 2000,
+        "addedTtftP50Ms": 0.07971399999951245,
+        "addedTtftP95Ms": 0.1309139500002857,
+        "addedTtftP99Ms": 0.23609044999902828,
+        "buffered": 0,
+        "streamed": true
+      }
+    ],
+    "budgets": {
+      "overheadP99Ms": 5,
+      "addedTtftP95Ms": 2
+    },
+    "violations": [],
+    "largePayloadRun": {
+      "rows": [
+        {
+          "scenario": "passthrough",
+          "path": "passthrough",
+          "samples": 2000,
+          "failures": 0,
+          "overheadMeanMs": 0.20200000000000015,
+          "overheadP50Ms": 0.3019323671497585,
+          "overheadP95Ms": 0.8788819875776398,
+          "overheadP99Ms": 1.6666666666666665,
+          "overheadQuantized": true,
+          "addedTtftSamples": 0,
+          "addedTtftP50Ms": null,
+          "addedTtftP95Ms": null,
+          "addedTtftP99Ms": null,
+          "buffered": 0,
+          "streamed": false
+        },
+        {
+          "scenario": "passthrough (stream)",
+          "path": "passthrough",
+          "samples": 2000,
+          "failures": 0,
+          "overheadMeanMs": 0.33450000000000024,
+          "overheadP50Ms": 0.36231884057971014,
+          "overheadP95Ms": 0.9304635761589404,
+          "overheadP99Ms": 0.9966887417218544,
+          "overheadQuantized": true,
+          "addedTtftSamples": 2000,
+          "addedTtftP50Ms": 0.071578000000045,
+          "addedTtftP95Ms": 0.11665649999986272,
+          "addedTtftP99Ms": 0.19337594999997235,
+          "buffered": 0,
+          "streamed": true
+        },
+        {
+          "scenario": "translate",
+          "path": "translate",
+          "samples": 2000,
+          "failures": 0,
+          "overheadMeanMs": 1.1054999999999402,
+          "overheadP50Ms": 0.7648305084745762,
+          "overheadP95Ms": 1.16,
+          "overheadP99Ms": 3.758620689655172,
+          "overheadQuantized": false,
+          "addedTtftSamples": 0,
+          "addedTtftP50Ms": null,
+          "addedTtftP95Ms": null,
+          "addedTtftP99Ms": null,
+          "buffered": 0,
+          "streamed": false
+        },
+        {
+          "scenario": "translate (stream)",
+          "path": "translate",
+          "samples": 2000,
+          "failures": 0,
+          "overheadMeanMs": 1.1264999999999423,
+          "overheadP50Ms": 0.773224043715847,
+          "overheadP95Ms": 1.5303030303030303,
+          "overheadP99Ms": 3.6363636363636362,
+          "overheadQuantized": false,
+          "addedTtftSamples": 2000,
+          "addedTtftP50Ms": 0.07716049999908137,
+          "addedTtftP95Ms": 0.12551244999849587,
+          "addedTtftP99Ms": 0.21527451999892946,
+          "buffered": 0,
+          "streamed": true
+        }
+      ],
+      "budgets": {
+        "overheadP99Ms": 5,
+        "addedTtftP95Ms": 2
+      },
+      "violations": [],
+      "promptBytes": 280000
+    },
+    "runtime": "Bun1.4.2",
+    "promptBytes": 1024,
+    "scope": "finaladmissionmetric warm mockedupstream paths; coldindexedmiss L16 stillopen"
+  },
+  "developerzReviewFixes": {
+    "reviewedHead": "dbe2f9c014d4a9e65eb9749fe27e41cfe2a80d56",
+    "actualTaskCompleted": "tsk_cd6811e5c0962d7688baf7ddcab8693c",
+    "inlineFindings": 19,
+    "fixed": 18,
+    "refutedAndDocumented": 1,
+    "bindBudgetAndAtomicRollback": true,
+    "linearAdmissionMaps": true,
+    "eventTimeCommittedBackfillCursor": true,
+    "numericRoundingCeiling": true,
+    "fullEncodedCoverage": true,
+    "mountedScopedReset": true,
+    "dbEachPostgres": {
+      "tests": 16,
+      "assertions": 84
+    },
+    "httpEachPostgres": {
+      "tests": 1,
+      "assertions": 12
+    },
+    "pricingUI": {
+      "tests": 75,
+      "assertions": 3197
+    },
+    "schema": "actual house generation from0029; only enum/dayindex changes plus generatedID; db:check passed",
+    "legacyTail": "sealed baseline remains explicitly incomplete; historical membership/cursor was never recorded, so no guessed tail addition"
+  }
+}

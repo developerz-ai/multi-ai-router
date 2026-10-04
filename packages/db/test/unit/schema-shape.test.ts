@@ -125,6 +125,7 @@ const TABLE_COLUMNS: ReadonlyArray<{ table: Table; columns: readonly string[] }>
       "responseStatus",
       "errorClass",
       "outcome",
+      "ingestedAt",
       "createdAt",
     ],
   },

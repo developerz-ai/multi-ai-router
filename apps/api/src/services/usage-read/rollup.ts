@@ -65,7 +65,11 @@ export function splitWindow(
 ): WindowSplit {
   if (lastRollupAt === null) return { closedDays: null, rawSlices: [window] }
 
-  const closedStart = startOfNextUtcDay(window.from)
+  const windowStartDay = startOfUtcDay(window.from)
+  const closedStart =
+    window.from.getTime() === windowStartDay.getTime()
+      ? windowStartDay
+      : startOfNextUtcDay(window.from)
   const closedEnd = new Date(
     Math.min(
       startOfUtcDay(now).getTime(),

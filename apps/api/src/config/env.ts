@@ -25,6 +25,7 @@ import { METRIC_INVENTORY_ENV_FIELDS, readMetricInventoryEnv } from "./metric-in
 import { validateNumericBounds } from "./numeric-bounds"
 import { RECOVERY_ENV_FIELDS, readRecoveryEnv } from "./recovery"
 import { RELAY_LIFETIME_ENV_FIELDS, readRelayLifetimesEnv } from "./relay-lifetimes"
+import { readUsageReadEnv, USAGE_READ_ENV_FIELDS } from "./usage-read"
 
 /**
  * Boot-time environment validation — the reference is
@@ -92,10 +93,9 @@ export interface RetentionConfig {
   readonly sessionsHours: number
   readonly usageDays: number
   /**
-   * How long the *daily aggregates* are kept — the long half of the two-tier retention the rollup
-   * exists for, and necessarily wider than {@link RetentionConfig.usageDays}: a window narrower
-   * than the raw one would have the janitor delete days the rollup re-inserts on its very next
-   * tick, forever. Boot refuses that rather than letting the two sweeps fight.
+   * History must outlive raw detail. Advancing the durable history horizon permits raw
+   * retention to delete unregistered older rows, so a shorter window would discard history
+   * while raw detail should still be retained. Boot refuses that ordering.
    */
   readonly usageDailyDays: number
   readonly auditDays: number
@@ -663,6 +663,7 @@ export interface Env {
   readonly failover: FailoverConfig
   readonly metricInventory: ReturnType<typeof readMetricInventoryEnv>["metricInventory"]
   readonly relayLifetimes: ReturnType<typeof readRelayLifetimesEnv>["relayLifetimes"]
+  readonly usageRead: ReturnType<typeof readUsageReadEnv>["usageRead"]
   readonly background: ReturnType<typeof readBackgroundEnv>["background"]
   readonly scheduler: SchedulerConfig
   readonly oauthRefresh: OAuthRefreshConfig
@@ -701,6 +702,7 @@ export { decodeEncryptionKey, ZERO_IS_LEGAL } from "./fields"
  * about zero, whether or not anyone remembered to make one.
  */
 export const ENV_FIELDS = {
+  ...USAGE_READ_ENV_FIELDS,
   ...BACKGROUND_ENV_FIELDS,
   ...RELAY_LIFETIME_ENV_FIELDS,
   ...METRIC_INVENTORY_ENV_FIELDS,
@@ -977,21 +979,22 @@ const envSchema = boundedEnvSchema.transform((raw, ctx): Env => {
   const usageDailyDays = raw.RETENTION_USAGE_DAILY_DAYS ?? 730
   if (usageDailyDays < usageDays) {
     // Not clamped, because either value could be the one the operator meant and guessing which
-    // silently discards history. The two sweeps would otherwise fight forever: the janitor deletes
-    // a rolled day, the rollup re-inserts it on the next tick because its raw rows are still there.
+    // silently discards history. A shorter history horizon permits deletion of unregistered
+    // raw rows that should still be retained by the longer detail window.
     ctx.addIssue({
       code: "custom",
       path: ["RETENTION_USAGE_DAILY_DAYS"],
       message:
         `must be at least RETENTION_USAGE_DAYS (${usageDays}): daily aggregates are the long ` +
-        `half of usage retention, and a shorter window would delete days the rollup immediately ` +
-        `writes back`,
+        `half of usage retention, and a shorter history horizon would permit deletion of ` +
+        `unregistered raw detail that should still be retained`,
     })
     return z.NEVER
   }
 
   return {
     ...readRecoveryEnv(raw),
+    ...readUsageReadEnv(raw),
     ...readBackgroundEnv(raw),
     ...readRelayLifetimesEnv(raw),
     ...readMetricInventoryEnv(raw),

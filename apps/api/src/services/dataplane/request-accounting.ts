@@ -1,5 +1,5 @@
 import { toErrorResponse } from "../../errors/render"
-import type { UsageRecord } from "../usage"
+import type { UsageRecord, UsageRequestTerminal } from "../usage"
 import type { UsageRequestIdentity } from "../usage/request-identity"
 import { RequestAdmissionUnavailableError, RouterShutdownError } from "./active-requests"
 import type { DispatchInput } from "./dispatcher-config"
@@ -16,6 +16,7 @@ export function createRequestAccounting(
   clock: DataPlaneClock,
   write: (record: UsageRecord) => void,
   onTerminal?: (record: UsageRecord) => void,
+  persistTerminal?: (terminal: UsageRequestTerminal) => void,
 ) {
   const identity = input.identity
   const ingress = input.ingress
@@ -24,17 +25,61 @@ export function createRequestAccounting(
   let recorded = false
   let responseStatus: number | undefined
   let latest: UsageRecord | undefined
+  let winner: UsageRecord | undefined
+  let winnerSelected = false
   let finalized = false
   const finalize = (event: UsageRecord | undefined) => {
     if (finalized || event === undefined) return
     finalized = true
     onTerminal?.(event)
+    persistTerminal?.({
+      correlationId: identity.correlationId,
+      winnerEventId: event.accountId === null ? null : event.eventId,
+      apiKeyId,
+      accountId: event.accountId,
+      poolId: event.poolId,
+      provider: event.provider,
+      model: event.model,
+      upstreamModel: event.upstreamModel,
+      outcome: event.outcome,
+      errorClass: event.errorClass,
+      responseStatus: event.responseStatus,
+      httpStatus: event.httpStatus,
+      startedAt: progress.startedAt,
+      settledAt: clock.now(),
+      attributionKind:
+        event.accountId === null
+          ? "unstarted"
+          : event.errorClass === "router_shutdown" || event.errorClass === "client_cancelled"
+            ? "abandoned"
+            : "winning-attempt",
+    })
   }
   const flush = (status: number | null) => {
     if (pending === undefined) return
-    write({ ...pending, responseStatus: status })
+    write({
+      ...pending,
+      responseStatus:
+        winnerSelected && pending.accountId !== null && pending.eventId !== winner?.eventId
+          ? null
+          : status,
+    })
     pending = undefined
   }
+  const terminalEvent = () =>
+    winnerSelected
+      ? (winner ??
+        (latest === undefined
+          ? undefined
+          : {
+              ...latest,
+              accountId: null,
+              poolId: null,
+              provider: null,
+              upstreamModel: null,
+              httpStatus: null,
+            }))
+      : latest
   const record = (event: UsageRecord) => {
     latest = event
     recorded = true
@@ -44,6 +89,10 @@ export function createRequestAccounting(
   }
   return {
     record,
+    selectTerminal(event: UsageRecord | undefined) {
+      winner = event
+      winnerSelected = true
+    },
     recordTerminal(event: UsageRecord) {
       record(event)
       finalize(event)
@@ -57,9 +106,10 @@ export function createRequestAccounting(
       // A prior failed attempt is intermediate when a new successful relay is returned.
       // An already-set status identifies a synchronous final relay event (e.g. an empty body).
       flush(response.ok ? (pending?.responseStatus ?? null) : response.status)
-      if (!response.ok && latest !== undefined)
+      const event = terminalEvent()
+      if (!response.ok && event !== undefined)
         finalize({
-          ...latest,
+          ...event,
           outcome: outcomeForResponse(response),
           responseStatus: response.status,
         })
@@ -113,12 +163,21 @@ export function createRequestAccounting(
       }
       responseStatus = status
       flush(status)
-      if (latest !== undefined)
+      const event = terminalEvent()
+      if (event !== undefined)
         finalize({
-          ...latest,
+          ...event,
           outcome: error instanceof ClientCancelledError ? "client_error" : outcomeOf(error),
+          errorClass:
+            error instanceof RouterShutdownError
+              ? "router_shutdown"
+              : error instanceof ClientCancelledError
+                ? "client_cancelled"
+                : errorClassOf(error),
           responseStatus: status,
         })
     },
   }
 }
+
+export type RequestAccounting = ReturnType<typeof createRequestAccounting>

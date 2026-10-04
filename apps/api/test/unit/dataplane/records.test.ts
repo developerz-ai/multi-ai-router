@@ -66,6 +66,31 @@ describe("failure kind to usage outcome", () => {
 })
 
 describe("attempt record", () => {
+  test("scoped pricing receives the selected account, billing, upstream alias and cache write count", () => {
+    const lookups: unknown[] = []
+    const record = attemptRecord(
+      input({
+        accountId: "selected-account",
+        billing: "subscription",
+        tokens: { tokensIn: 10, tokensOut: 2, cacheReadTokens: 4, cacheWriteTokens: 3 },
+        prices: (provider, model, context) => {
+          lookups.push({ provider, model, context })
+          return null
+        },
+      }),
+    )
+    expect(lookups).toEqual([
+      {
+        provider: "anthropic-api",
+        model: "glm-4.7",
+        context: { accountId: "selected-account", billing: "subscription", cacheWriteTokens: 3 },
+      },
+    ])
+    expect(record.model).toBe("sonnet")
+    expect(record.upstreamModel).toBe("glm-4.7")
+    expect(record.costEstimate).toBeNull()
+  })
+
   test("carries both model names, so an alias is visible after the fact", () => {
     const record = attemptRecord(input())
     expect(record.model).toBe("sonnet")

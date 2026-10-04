@@ -5,7 +5,7 @@ import { createAuditRepository } from "../../../src/repositories/audit-repositor
 import { createOauthStateRepository } from "../../../src/repositories/oauth-state-repository"
 import { createSessionRepository } from "../../../src/repositories/session-repository"
 import { createUsageRecordRepository } from "../../../src/repositories/usage-repository"
-import { deletedRows, harness } from "./fixtures"
+import { deletedRows, harness, transactionHarness } from "./fixtures"
 
 /**
  * Every retention sweep in the scheduler goes through one delete shape, and two
@@ -30,12 +30,6 @@ interface Sweep {
 }
 
 const SWEEPS: readonly Sweep[] = [
-  {
-    name: "usage records",
-    table: "usage_records",
-    ageColumn: "created_at",
-    run: (db, limit) => createUsageRecordRepository(db).deleteOlderThan(CUTOFF, limit),
-  },
   {
     name: "audit events",
     table: "audit_events",
@@ -135,14 +129,6 @@ describe("what each sweep is allowed to reach", () => {
     expect(stub.only().params).toEqual([CUTOFF_PARAM, 100])
   })
 
-  test("usage records: the sweep touches raw attempts only, never the rollup", async () => {
-    const stub = harness()
-    await createUsageRecordRepository(stub.db).deleteOlderThan(CUTOFF, 100)
-
-    // A totals report must not shrink because the attempts behind it aged out.
-    expect(stub.only().sql).not.toContain("usage_daily")
-  })
-
   test("idle sessions: aged on last use, so a live conversation is never swept", async () => {
     const stub = harness()
     await createSessionRepository(stub.db).deleteIdleBefore(CUTOFF, 100)
@@ -151,4 +137,40 @@ describe("what each sweep is allowed to reach", () => {
     expect(sql).toContain('"sessions"."last_used_at" < $1')
     expect(sql).not.toContain("created_at")
   })
+})
+
+describe("usage detail retention keeps registered history outside the bounded raw deletion", () => {
+  for (const count of [0, 7, 50]) {
+    test(`selects only accounted facts and reports actual deletion count ${count}`, async () => {
+      const stub = transactionHarness(({ sql }) => {
+        if (sql.includes('from "usage_records"') && sql.startsWith("select"))
+          return deletedRows(count)
+        if (sql.startsWith('delete from "usage_records"')) return deletedRows(count)
+        return []
+      })
+      expect(await createUsageRecordRepository(stub.db).deleteOlderThan(CUTOFF, 50)).toBe(count)
+      expect(stub.transactions()).toBe(1)
+      const selection = stub.statements.find(
+        (entry) => entry.sql.startsWith("select") && entry.sql.includes('from "usage_records"'),
+      )
+      expect(selection?.sql).toContain("usage_contributions")
+      expect(selection?.sql).toContain("legacy_pending")
+      expect(selection?.sql).toContain(
+        'order by "usage_records"."created_at", "usage_records"."id" limit',
+      )
+      expect(selection?.params).toContain(CUTOFF_PARAM)
+      expect(selection?.params).toContain(50)
+      const deletion = stub.statements.find((entry) =>
+        entry.sql.startsWith('delete from "usage_records"'),
+      )
+      if (count === 0) expect(deletion).toBeUndefined()
+      else expect(deletion?.sql).toContain("jsonb_array_elements_text")
+      expect(
+        stub.statements.some((entry) => entry.sql.startsWith('delete from "usage_daily"')),
+      ).toBe(false)
+      expect(
+        stub.statements.some((entry) => entry.sql.startsWith('delete from "usage_contributions"')),
+      ).toBe(false)
+    })
+  }
 })

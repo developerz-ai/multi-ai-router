@@ -7,6 +7,8 @@ import type {
 } from "@multi-ai-router/db"
 import { z } from "zod"
 import type { LogLevel, RetentionConfig } from "../../config/env"
+import type { PriceAccount, UnpricedModel } from "../cost/coverage"
+import type { PriceSource } from "../cost/provenance"
 
 /**
  * The settings screen's wire contract: what it reads, the one thing it may write, and the shape
@@ -48,6 +50,7 @@ const MODEL = z.string().trim().toLowerCase().min(1).max(200)
 /** `provider` is core's own schema, never a restated list: the Postgres enum is built from it. */
 export const priceOverrideInput = z
   .object({
+    accountId: z.uuid().nullable().optional(),
     provider: ProviderId,
     model: MODEL,
     inputPerMtok: RATE,
@@ -68,12 +71,12 @@ export const updatePriceOverridesBody = z
     // the unique index — where the failure would be a 500 that names a constraint, not a model.
     const seen = new Set<string>()
     for (const [index, row] of body.priceOverrides.entries()) {
-      const pair = `${row.provider}/${row.model}`
+      const pair = `${row.accountId ?? "global"}/${row.provider}/${row.model}`
       if (seen.has(pair)) {
         ctx.addIssue({
           code: "custom",
           path: ["priceOverrides", index],
-          message: `"${pair}" is listed twice: one rate per provider and model`,
+          message: `"${pair}" is listed twice: one rate per account, provider and model`,
         })
       }
       seen.add(pair)
@@ -107,8 +110,11 @@ export const auditQuery = z.object({
 export type AuditQuery = z.infer<typeof auditQuery>
 
 export interface PriceRateView {
+  readonly accountId?: string | null
   readonly provider: ProviderId
   readonly model: string
+  readonly sourceId?: string
+  readonly notionalOnly?: boolean
   readonly inputPerMtok: number
   readonly outputPerMtok: number
   readonly cacheReadPerMtok: number
@@ -128,12 +134,11 @@ export interface PriceOverrideView extends PriceRateView {
 }
 
 export interface PricesView {
-  /**
-   * The day every shipped row was last checked against its vendor's published price, `YYYY-MM-DD`.
-   * A price table with no date is a table nobody can judge: vendors reprice without asking, and the
-   * honest reading of a cost column is "correct as of this date, where not overridden".
-   */
+  /** Oldest inherited source snapshot date; individual verification is reported in sources. */
   readonly shippedAsOf: string
+  readonly sources: readonly PriceSource[]
+  readonly accounts: readonly PriceAccount[]
+  readonly unpriced: readonly UnpricedModel[]
   /** The table shipped in the image. Read-only: it changes when the image does. */
   readonly shipped: readonly PriceRateView[]
   /** What the operator layered over it. An entry here wins for the pair it names, and nothing else. */
@@ -209,6 +214,9 @@ export interface AuditView {
 /** The rate fields and nothing else — a shipped row and a stored row both narrow through here. */
 export function toPriceRateView(rate: PriceRateView): PriceRateView {
   return {
+    ...(rate.accountId == null ? {} : { accountId: rate.accountId }),
+    ...(rate.sourceId === undefined ? {} : { sourceId: rate.sourceId }),
+    ...(rate.notionalOnly === undefined ? {} : { notionalOnly: rate.notionalOnly }),
     provider: rate.provider,
     model: rate.model,
     inputPerMtok: rate.inputPerMtok,
@@ -220,7 +228,11 @@ export function toPriceRateView(rate: PriceRateView): PriceRateView {
 }
 
 export function toPriceOverrideView(row: PriceOverrideRow): PriceOverrideView {
-  return { ...toPriceRateView(row), updatedAt: row.updatedAt.toISOString() }
+  return {
+    ...toPriceRateView(row),
+    accountId: row.accountId ?? null,
+    updatedAt: row.updatedAt.toISOString(),
+  }
 }
 
 export function toAuditEventView(row: AuditEventRow): AuditEventView {

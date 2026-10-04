@@ -1,0 +1,217 @@
+import { asc, eq, sql } from "drizzle-orm"
+import type { Database } from "../client"
+import { usageAttemptDailyV2, usageRequestDailyV2 } from "../schema/usage-aggregate-v2"
+import { usageContributions } from "../schema/usage-contributions"
+import { usageDaily } from "../schema/usage-daily"
+import { usageHistoryState } from "../schema/usage-history-state"
+import { usageRecords } from "../schema/usage-records"
+import { usageRequestTerminals } from "../schema/usage-request-terminals"
+import { applyUsageContributions, type ContributionRow } from "./usage-contribution-aggregate"
+import { attemptContribution, usagePayloadHash } from "./usage-contribution-values"
+import { boundUsageBatch, lockUsageHistory } from "./usage-history-lock"
+
+export function createUsageHistoryMaintenance(db: Database) {
+  // A committed sweep advances through the indexed event clock. Exhaustion resets this hint so
+  // newly arrived older legacy rows are picked up next sweep; correctness remains receipt-based.
+  let cursor: { createdAt: Date; id: string } | undefined
+  const backfill = async ({ limit }: { limit: number }) => {
+    boundUsageBatch(limit)
+    const committed = await db.transaction(async (tx) => {
+      const { state, dbNow } = await lockUsageHistory(tx)
+      const after = cursor
+      const rows = await tx
+        .select()
+        .from(usageRecords)
+        .where(
+          sql`not exists (select 1 from ${usageContributions} c where c.kind = 'attempt' and c.id = ${usageRecords.id} and c.source <> 'legacy_pending') ${after === undefined ? sql`` : sql`and (${usageRecords.createdAt},${usageRecords.id}) > (${after.createdAt.toISOString()}::timestamptz,${after.id}::uuid)`}`,
+        )
+        .orderBy(asc(usageRecords.createdAt), asc(usageRecords.id))
+        .limit(limit)
+      const days = [...new Set(rows.map((row) => row.createdAt.toISOString().slice(0, 10)))]
+      const banked = days.length
+        ? await tx
+            .selectDistinct({ day: usageDaily.day })
+            .from(usageDaily)
+            .where(
+              sql`${usageDaily.day} in (select jsonb_array_elements_text(${JSON.stringify(days)}::jsonb)::date)`,
+            )
+        : []
+      const baselineDays = new Set(banked.map((row) => row.day))
+      const inputs = rows.map((row) => {
+        const day = row.createdAt.toISOString().slice(0, 10)
+        // NULL IDs may be an old FK deletion after banking; they never prove omitted evidence.
+        const expired = state.retentionBeforeDay !== null && day < state.retentionBeforeDay
+        const source =
+          expired || (row.ingestedAt === null && baselineDays.has(day))
+            ? ("legacy_baseline" as const)
+            : row.ingestedAt === null
+              ? ("legacy_unbanked" as const)
+              : ("legacy_overlap" as const)
+        const input = {
+          id: row.id,
+          kind: "attempt" as const,
+          day,
+          source,
+          payloadHash: usagePayloadHash(row),
+          payload: attemptContribution(row, dbNow),
+        }
+        return input
+      })
+      const admitted =
+        inputs.length === 0
+          ? []
+          : ([
+              ...(await tx.execute(sql`
+        insert into ${usageContributions} (id,kind,day,source,payload_hash,payload)
+        select (p->>'id')::uuid, p->>'kind', (p->>'day')::date, p->>'source', p->>'payloadHash', p->'payload'
+        from jsonb_array_elements(${JSON.stringify(inputs)}::jsonb) p
+        on conflict (kind,id) do update set source = excluded.source where usage_contributions.source = 'legacy_pending'
+        returning id,kind,day,source,payload_hash as "payloadHash",payload,ingested_at as "ingestedAt"`)),
+            ] as unknown as ContributionRow[])
+      await applyUsageContributions(tx, admitted)
+      return { processed: rows.length, remaining: rows.length === limit, last: rows.at(-1) }
+    })
+    cursor =
+      committed.remaining && committed.last !== undefined
+        ? { createdAt: committed.last.createdAt, id: committed.last.id }
+        : undefined
+    return { processed: committed.processed, remaining: committed.remaining }
+  }
+  const rollupDay = async (at: Date) =>
+    db.transaction(async (tx) => {
+      const { state, dbNow } = await lockUsageHistory(tx)
+      const day = at.toISOString().slice(0, 10)
+      if (
+        day >= dbNow.toISOString().slice(0, 10) ||
+        (state.retentionBeforeDay !== null && day < state.retentionBeforeDay)
+      )
+        return 0
+      const [count] = await tx.execute(
+        sql`select count(*)::int as count from ${usageContributions} where day = ${day}::date and source in ('live','legacy_unbanked','legacy_overlap')`,
+      )
+      await tx.delete(usageAttemptDailyV2).where(eq(usageAttemptDailyV2.day, day))
+      await tx.delete(usageRequestDailyV2).where(eq(usageRequestDailyV2.day, day))
+      await applyUsageContributions(tx, [], day)
+      return Number(count?.count ?? 0)
+    })
+  const deleteOlderThan = async (cutoff: Date, limit: number) => {
+    boundUsageBatch(limit)
+    return db.transaction(async (tx) => {
+      const { state, dbNow } = await lockUsageHistory(tx)
+      const requested = cutoff < dbNow ? cutoff : dbNow
+      const day = requested.toISOString().slice(0, 10)
+      const horizon =
+        state.retentionBeforeDay !== null && state.retentionBeforeDay > day
+          ? state.retentionBeforeDay
+          : day
+      await tx
+        .update(usageHistoryState)
+        .set({ retentionBeforeDay: horizon, updatedAt: dbNow })
+        .where(eq(usageHistoryState.id, "v2"))
+      let deleted = 0
+      for (const table of [usageDaily, usageAttemptDailyV2, usageRequestDailyV2]) {
+        const ids = await tx
+          .select({ id: table.id })
+          .from(table)
+          .where(sql`${table.day} < ${horizon}::date`)
+          .orderBy(table.day, table.id)
+          .limit(limit - deleted)
+        if (ids.length)
+          deleted += (
+            await tx
+              .delete(table)
+              .where(
+                sql`${table.id} in (select jsonb_array_elements_text(${JSON.stringify(ids.map((row) => row.id))}::jsonb)::uuid)`,
+              )
+              .returning({ id: table.id })
+          ).length
+        if (deleted >= limit) return deleted
+      }
+      deleted += [
+        ...(await tx.execute(sql`
+        delete from ${usageContributions} where (kind,id) in (
+          select kind,id from ${usageContributions} where day < ${horizon}::date
+          order by day,id,kind limit ${limit - deleted}) returning id`)),
+      ].length
+      return deleted
+    })
+  }
+  const deleteRetainedHistory = async ({
+    retentionDays,
+    limit,
+  }: {
+    retentionDays: number
+    limit: number
+  }) => {
+    if (!Number.isSafeInteger(retentionDays) || retentionDays < 1)
+      throw new Error("usage retention days outside bounds")
+    const [clock] = await db.execute(sql`select clock_timestamp() as now`)
+    return deleteOlderThan(
+      new Date(new Date(clock?.now as string).getTime() - retentionDays * 86400000),
+      limit,
+    )
+  }
+  return { backfill, rollupDay, deleteOlderThan, deleteRetainedHistory }
+}
+
+export function createUsageDetailRetention(db: Database) {
+  const deleteOlderThan = async (cutoff: Date, limit: number) => {
+    boundUsageBatch(limit)
+    return db.transaction(async (tx) => {
+      const { dbNow, state } = await lockUsageHistory(tx)
+      const before = cutoff < dbNow ? cutoff : dbNow
+      const ids = await tx
+        .select({ id: usageRecords.id })
+        .from(usageRecords)
+        .where(
+          sql`${usageRecords.createdAt} < ${before.toISOString()} and (exists (select 1 from ${usageContributions} c where c.kind = 'attempt' and c.id = ${usageRecords.id} and c.source <> 'legacy_pending') or (${state.retentionBeforeDay}::date is not null and ${usageRecords.createdAt} < ${state.retentionBeforeDay}::date))`,
+        )
+        .orderBy(usageRecords.createdAt, usageRecords.id)
+        .limit(limit)
+      let deleted = ids.length
+        ? (
+            await tx
+              .delete(usageRecords)
+              .where(
+                sql`${usageRecords.id} in (select jsonb_array_elements_text(${JSON.stringify(ids.map((row) => row.id))}::jsonb)::uuid)`,
+              )
+              .returning({ id: usageRecords.id })
+          ).length
+        : 0
+      if (deleted < limit) {
+        const terminalIds = await tx
+          .select({ id: usageRequestTerminals.correlationId })
+          .from(usageRequestTerminals)
+          .where(sql`${usageRequestTerminals.settledAt} < ${before.toISOString()}`)
+          .orderBy(usageRequestTerminals.settledAt, usageRequestTerminals.correlationId)
+          .limit(limit - deleted)
+        if (terminalIds.length)
+          deleted += (
+            await tx
+              .delete(usageRequestTerminals)
+              .where(
+                sql`${usageRequestTerminals.correlationId} in (select jsonb_array_elements_text(${JSON.stringify(terminalIds.map((row) => row.id))}::jsonb)::uuid)`,
+              )
+              .returning({ id: usageRequestTerminals.correlationId })
+          ).length
+      }
+      return deleted
+    })
+  }
+  const deleteRetainedBatch = async ({
+    retentionDays,
+    limit,
+  }: {
+    retentionDays: number
+    limit: number
+  }) => {
+    if (!Number.isSafeInteger(retentionDays) || retentionDays < 1)
+      throw new Error("usage retention days outside bounds")
+    const [clock] = await db.execute(sql`select clock_timestamp() as now`)
+    return deleteOlderThan(
+      new Date(new Date(clock?.now as string).getTime() - retentionDays * 86400000),
+      limit,
+    )
+  }
+  return { deleteOlderThan, deleteRetainedBatch }
+}

@@ -1,6 +1,11 @@
 import type { Database } from "../client"
-import { type NewUsageRecordRow, usageRecords } from "../schema/usage-records"
-import { deleteOldestBatch } from "./bounded-delete"
+import type { NewUsageRecordRow } from "../schema/usage-records"
+import {
+  createUsageBatchMutation,
+  type UsageBatchInsert,
+  type UsageBatchResult,
+} from "./usage-batch-mutation"
+import { createUsageDetailRetention } from "./usage-history-maintenance"
 
 /**
  * Postgres' bind ceiling. The extended protocol's Bind message counts parameters
@@ -22,14 +27,11 @@ export const PG_MAX_BIND_PARAMETERS = 65_535
 export const USAGE_RECORD_BIND_PARAMETERS_PER_ROW = 28
 
 /**
- * Rows `insertMany` may carry in one statement.
+ * Maximum raw INSERT rows when all 28 writable cells are bound.
  *
- * This is a hard edge, not a tuning suggestion. One row past it and Postgres
- * rejects the *statement* — every time, for the same reason, forever — and the
- * recorder deliberately never re-queues a batch its writer refused (see
- * `apps/api/src/services/usage/recorder.ts`). So a `USAGE_BATCH_SIZE` above this
- * does not degrade reporting: it loses all of it, from boot, while traffic looks
- * perfectly healthy. `config/env.ts` refuses such a value at boot.
+ * This bounds configured recorder batches at boot. The repository additionally chunks each
+ * table's statements using its conservative schema column count, preserving one transaction
+ * for a larger direct-call batch. It may split before this limit when defaults spend no binds.
  */
 export const USAGE_RECORD_MAX_BATCH_ROWS = Math.floor(
   PG_MAX_BIND_PARAMETERS / USAGE_RECORD_BIND_PARAMETERS_PER_ROW,
@@ -42,26 +44,26 @@ export type UsageRecordInsert = NewUsageRecordRow & { readonly id: string }
  * Usage persistence. One row per upstream attempt.
  *
  * Every method here is **off the request path** — the recorder in
- * `apps/api/src/services/usage/` queues records in memory and calls `insertMany`
+ * `apps/api/src/services/usage/` queues records in memory and calls `insertBatch`
  * from a background flush, so a slow database degrades reporting and never
  * touches latency (docs/idea/01-architecture.md, performance budget).
  *
- * `insertMany` is the whole *mutation* surface on purpose: a per-record insert
- * would be one round trip per attempt, which is the thing the batching exists to
- * avoid. Usage rows are never updated — a corrected attempt is a new attempt,
- * and the rollup reads them as an append-only stream. The only other write is
- * the janitor's age-bounded delete, which can name a row by nothing but its age.
+ * `insertBatch` admits attempts, terminal settlements and contribution receipts atomically;
+ * `insertMany` delegates attempt-only batches. Immutable event facts are never rewritten:
+ * replay checks identity before it can update history. Raw retention is age-bounded and
+ * requires matching admitted evidence, rather than deleting unregistered facts by age alone.
  */
 export interface UsageRecordRepository {
   /**
-   * Persists a batch in one statement. Returns the number of rows written.
+   * Persists raw facts, receipts and history in one transaction with bounded statements.
    *
    * An empty batch is a no-op rather than an error: the flush timer fires on a
    * schedule, not on demand, so it routinely has nothing to do.
    *
-   * Caller-bounded at {@link USAGE_RECORD_MAX_BATCH_ROWS} rows — see there for why
-   * exceeding it is a total loss rather than a slow path.
+   * Recorder batches are bounded at {@link USAGE_RECORD_MAX_BATCH_ROWS}; direct larger batches
+   * are split within the same transaction, including rollback of earlier chunks on failure.
    */
+  insertBatch(input: UsageBatchInsert): Promise<UsageBatchResult>
   insertMany(rows: readonly UsageRecordInsert[]): Promise<number>
   /**
    * Deletes records created before `cutoff` in one bounded batch, oldest first,
@@ -76,29 +78,22 @@ export interface UsageRecordRepository {
    * Rolled-up history in `usage_daily` outlives these rows by design — a totals
    * report must not shrink because the raw attempts aged out.
    */
+  deleteRetainedBatch(input: {
+    readonly retentionDays: number
+    readonly limit: number
+  }): Promise<number>
   deleteOlderThan(cutoff: Date, limit: number): Promise<number>
 }
 
 export function createUsageRecordRepository(db: Database): UsageRecordRepository {
+  const insertBatch = createUsageBatchMutation(db)
   return {
+    insertBatch,
     insertMany: async (rows) => {
       if (rows.length === 0) return 0
-      const written = await db
-        .insert(usageRecords)
-        .values([...rows])
-        .onConflictDoNothing({ target: usageRecords.id })
-        .returning({ id: usageRecords.id })
-      return written.length
+      return (await insertBatch({ attempts: rows, terminals: [] })).insertedAttempts
     },
 
-    deleteOlderThan: (cutoff, limit) =>
-      deleteOldestBatch({
-        db,
-        table: usageRecords,
-        id: usageRecords.id,
-        agedBy: usageRecords.createdAt,
-        cutoff,
-        limit,
-      }),
+    ...createUsageDetailRetention(db),
   }
 }

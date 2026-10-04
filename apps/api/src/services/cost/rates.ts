@@ -1,4 +1,4 @@
-import type { ProviderId } from "@multi-ai-router/core"
+import type { AccountBilling, ProviderId } from "@multi-ai-router/core"
 
 /**
  * The shape of a price and the two helpers every table under `tables/` is written with.
@@ -44,6 +44,8 @@ export interface ModelRates extends RateCard {
 export type ShippedRate = {
   readonly provider: ProviderId
   readonly model: string
+  readonly sourceId?: string
+  readonly notionalOnly?: boolean
   /** Present only on a long-context row. Absent is the standard card, which starts at zero. */
   readonly fromPromptTokens?: number
 } & RateCard
@@ -53,7 +55,16 @@ export type ShippedRate = {
  * override-aware book is the other, which is the whole point: `estimateCost` prices an attempt
  * without knowing whether an operator has edited anything.
  */
-export type RateLookup = (provider: ProviderId, model: string) => ModelRates | null
+export interface RateLookupContext {
+  readonly accountId?: string
+  readonly billing?: AccountBilling
+  readonly cacheWriteTokens?: number
+}
+export type RateLookup = (
+  provider: ProviderId,
+  model: string,
+  context?: RateLookupContext,
+) => ModelRates | null
 
 /**
  * One row, with the two cache numbers defaulted the way an absent published price means.

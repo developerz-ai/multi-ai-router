@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test"
+import { getTableColumns } from "drizzle-orm"
 import type { UsageRecordInsert } from "../../../src/repositories/usage-repository"
 import {
   createUsageRecordRepository,
@@ -6,7 +7,9 @@ import {
   USAGE_RECORD_BIND_PARAMETERS_PER_ROW,
   USAGE_RECORD_MAX_BATCH_ROWS,
 } from "../../../src/repositories/usage-repository"
-import { harness } from "./fixtures"
+import { usageRecords } from "../../../src/schema/usage-records"
+import { usageRequestTerminals } from "../../../src/schema/usage-request-terminals"
+import { transactionHarness } from "./fixtures"
 
 /**
  * `USAGE_RECORD_MAX_BATCH_ROWS` is what `config/env.ts` refuses a `USAGE_BATCH_SIZE`
@@ -52,13 +55,31 @@ const row: UsageRecordInsert = {
   createdAt: new Date("2026-06-25T00:00:00.000Z"),
 }
 
-/** Parameters the real insert statement carries for `count` rows. */
+/** Follow the production transaction far enough to capture its real raw insert statement. */
+async function insertStatement(count: number) {
+  const rows = Array.from({ length: count }, () => ({ ...row, id: crypto.randomUUID() }))
+  const columns = Object.keys(getTableColumns(usageRecords))
+  const h = transactionHarness(({ sql }) => {
+    if (!sql.startsWith('insert into "usage_records"')) return []
+    return rows.map((entry) => {
+      const values: Record<string, unknown> = { ...entry, ingestedAt: new Date() }
+      return columns.map((column) => {
+        const value = values[column]
+        return value instanceof Date ? value.toISOString() : value
+      })
+    })
+  })
+  await createUsageRecordRepository(h.db).insertMany(rows)
+  expect(h.transactions()).toBe(1)
+  const raw = h.statements.filter((entry) => entry.sql.startsWith('insert into "usage_records"'))
+  expect(raw).toHaveLength(1)
+  const statement = raw[0]
+  if (statement === undefined) throw new Error("raw insert absent")
+  return { statement, rows }
+}
+
 async function boundParameters(count: number): Promise<number> {
-  const h = harness()
-  await createUsageRecordRepository(h.db).insertMany(
-    Array.from({ length: count }, () => ({ ...row })),
-  )
-  return h.only().params.length
+  return (await insertStatement(count)).statement.params.length
 }
 
 describe("usage insert bind budget", () => {
@@ -71,14 +92,12 @@ describe("usage insert bind budget", () => {
   })
 
   test("binds a stable event ID and scopes duplicate suppression to that primary key", async () => {
-    const h = harness()
-    await createUsageRecordRepository(h.db).insertMany([row])
-    const { sql } = h.only()
-
-    expect(sql).toContain('"id"')
-    expect(sql).toContain("values ($1")
-    expect(sql).toContain('on conflict ("id") do nothing')
-    expect(h.only().params[0]).toBe(row.id)
+    const { statement, rows } = await insertStatement(1)
+    expect(statement.sql).toContain('"id"')
+    expect(statement.sql).toContain("values ($1")
+    expect(statement.sql).toContain('on conflict ("id") do nothing')
+    expect(statement.sql).toContain("clock_timestamp()")
+    expect(statement.params[0]).toBe(rows[0]?.id)
   })
 
   test("fits a full batch inside Postgres' bind ceiling", () => {
@@ -98,4 +117,53 @@ describe("usage insert bind budget", () => {
     // boot on a stock configuration.
     expect(USAGE_RECORD_MAX_BATCH_ROWS).toBeGreaterThan(200)
   })
+})
+
+test("oversized direct terminal batches and combined receipts use bounded statements in one transaction", async () => {
+  const terminals = Array.from({ length: 11000 }, () => ({
+    correlationId: crypto.randomUUID(),
+    winnerEventId: null,
+    apiKeyId: null,
+    accountId: null,
+    poolId: null,
+    provider: null,
+    model: null,
+    upstreamModel: null,
+    outcome: "success" as const,
+    errorClass: null,
+    responseStatus: 200,
+    httpStatus: null,
+    attributionKind: "unstarted" as const,
+    startedAt: row.createdAt ?? new Date(),
+    settledAt: row.createdAt ?? new Date(),
+  }))
+  const columns = Object.keys(getTableColumns(usageRequestTerminals))
+  const h = transactionHarness(({ sql, params }) => {
+    if (!sql.startsWith('insert into "usage_request_terminals"')) return []
+    const identities = new Set(params)
+    return terminals
+      .filter((terminal) => identities.has(terminal.correlationId))
+      .map((terminal) => {
+        const values: Record<string, unknown> = { ...terminal, ingestedAt: new Date() }
+        return columns.map((column) =>
+          values[column] instanceof Date ? values[column].toISOString() : values[column],
+        )
+      })
+  })
+  expect(await createUsageRecordRepository(h.db).insertBatch({ attempts: [], terminals })).toEqual({
+    insertedAttempts: 0,
+    insertedTerminals: terminals.length,
+  })
+  expect(h.transactions()).toBe(1)
+  const terminalStatements = h.statements.filter((statement) =>
+    statement.sql.startsWith('insert into "usage_request_terminals"'),
+  )
+  const receipts = h.statements.filter((statement) =>
+    statement.sql.startsWith('insert into "usage_contributions"'),
+  )
+  expect(terminalStatements.length).toBeGreaterThan(1)
+  expect(receipts.length).toBeGreaterThan(1)
+  expect(h.statements.every((statement) => statement.params.length <= PG_MAX_BIND_PARAMETERS)).toBe(
+    true,
+  )
 })

@@ -1,4 +1,5 @@
-import { numeric, pgTable, text, timestamp, uniqueIndex, uuid } from "drizzle-orm/pg-core"
+import { numeric, pgTable, text, timestamp, unique, uuid } from "drizzle-orm/pg-core"
+import { accounts } from "./accounts"
 import { providerId } from "./enums"
 
 /**
@@ -14,8 +15,8 @@ import { providerId } from "./enums"
  *
  * `model` is stored **already normalized** — trimmed and lowercased by the caller,
  * matching how `lookupRates` normalizes the name it is asked for. The unique index
- * on `(provider, model)` makes that a rule rather than a convention: two casings
- * of one model would otherwise both insert and only one would ever be found.
+ * on `(account_id, provider, model)` enforces one name per scope, with NULL global
+ * scope treated as equal. Global and scoped rows may share a provider/model pair.
  *
  * There is no retention sweep for this table. It is configuration, not history:
  * rows leave when an operator removes them, never on a clock.
@@ -37,6 +38,7 @@ export const priceOverrides = pgTable(
   "price_overrides",
   {
     id: uuid("id").primaryKey().defaultRandom(),
+    accountId: uuid("account_id").references(() => accounts.id, { onDelete: "cascade" }),
     provider: providerId("provider").notNull(),
     model: text("model").notNull(),
 
@@ -54,7 +56,11 @@ export const priceOverrides = pgTable(
     createdAt: timestamp("created_at", { withTimezone: true, mode: "date" }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true, mode: "date" }).notNull().defaultNow(),
   },
-  (table) => [uniqueIndex("price_overrides_provider_model_key").on(table.provider, table.model)],
+  (table) => [
+    unique("price_overrides_account_provider_model_key")
+      .on(table.accountId, table.provider, table.model)
+      .nullsNotDistinct(),
+  ],
 )
 
 export type PriceOverrideRow = typeof priceOverrides.$inferSelect

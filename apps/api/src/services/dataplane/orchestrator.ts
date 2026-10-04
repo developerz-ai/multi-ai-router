@@ -13,7 +13,7 @@ import type { RequestProgress } from "./observe"
 import { planCandidates } from "./plan"
 import { attemptRecord, errorClassOf, outcomeOf } from "./records"
 import { hintRecoveryRejections } from "./recovery-hints"
-import { createRequestAccounting } from "./request-accounting"
+import { createRequestAccounting, type RequestAccounting } from "./request-accounting"
 import { requestLifetime } from "./request-lifetime"
 import { requestTerminalObserver } from "./request-terminal"
 import { createRotationCounters } from "./rotation"
@@ -63,8 +63,7 @@ export function createDispatcher(deps: DispatcherDeps): Dispatcher {
   const serve = async (
     input: DispatchInput & { readonly identity: UsageRequestIdentity },
     progress: RequestProgress,
-    record: ReturnType<typeof createRequestAccounting>["record"],
-    recordTerminal: ReturnType<typeof createRequestAccounting>["recordTerminal"],
+    accounting: Pick<RequestAccounting, "record" | "recordTerminal" | "selectTerminal">,
   ): Promise<Response> => {
     const { startedAt, requestStarted } = progress
     const operation = input.operation ?? "messages"
@@ -119,8 +118,9 @@ export function createDispatcher(deps: DispatcherDeps): Dispatcher {
         : { errorMaxBytes: options.upstreamErrorMaxBytes }),
       bodyReadMs: progress.bodyReadMs,
       responseObservationMaxBytes: options.responseObservationMaxBytes ?? 65_536,
-      record,
-      recordTerminal,
+      record: accounting.record,
+      recordTerminal: accounting.recordTerminal,
+      selectTerminal: accounting.selectTerminal,
       // Two different ids on purpose: the correlation id is router-owned and joins this
       // request's attempts, while the client's own id is a trace label a caller may repeat or
       // forge. Using the latter as the join key would merge two clients' chains.
@@ -278,6 +278,7 @@ export function createDispatcher(deps: DispatcherDeps): Dispatcher {
         clock,
         (event) => deps.usage.record(event),
         requestTerminalObserver(scopedInput, progress, clock, deps.onRequest),
+        deps.usage.recordTerminal,
       )
       const lifetime = requestLifetime(scopedInput, deps.activeRequests, accounting)
       try {
@@ -285,8 +286,7 @@ export function createDispatcher(deps: DispatcherDeps): Dispatcher {
         const response = await serve(
           { ...lifetime.input, identity: scopedInput.identity },
           progress,
-          lifetime.record,
-          lifetime.recordTerminal,
+          lifetime,
         )
         accounting.respond(response)
         return response

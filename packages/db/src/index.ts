@@ -95,7 +95,10 @@ export type {
   PriceOverrideInput,
   PriceOverrideRepository,
 } from "./repositories/price-override-repository"
-export { createPriceOverrideRepository } from "./repositories/price-override-repository"
+export {
+  createPriceOverrideRepository,
+  PriceOverrideAccountConflict,
+} from "./repositories/price-override-repository"
 export type {
   FinishScheduledTaskInput,
   ScheduledTaskName,
@@ -108,6 +111,11 @@ export type {
   UpsertSessionInput,
 } from "./repositories/session-repository"
 export { createSessionRepository } from "./repositories/session-repository"
+export type { UsageBatchInsert, UsageBatchResult } from "./repositories/usage-batch-mutation"
+export {
+  UsageHistoryExpired,
+  UsageIdentityConflict,
+} from "./repositories/usage-contribution-values"
 export type {
   UsageDailyGroupRow,
   UsageDailyRepository,
@@ -119,6 +127,11 @@ export {
   startOfUtcDay,
   toUtcDay,
 } from "./repositories/usage-daily-repository"
+export { createUsageHistoryRepository } from "./repositories/usage-history-repository"
+export type {
+  UsageHistoryCoverage,
+  UsageHistoryRepository,
+} from "./repositories/usage-history-types"
 export type {
   TokenSpanShape,
   TokenSpanUsage,
@@ -214,3 +227,7 @@ export type { NewUsageDailyRow, UsageDailyRow } from "./schema/usage-daily"
 export { usageDaily } from "./schema/usage-daily"
 export type { NewUsageRecordRow, UsageRecordRow } from "./schema/usage-records"
 export { usageRecords } from "./schema/usage-records"
+export type {
+  UsageRequestTerminalInsert,
+  UsageRequestTerminalRow,
+} from "./schema/usage-request-terminals"
