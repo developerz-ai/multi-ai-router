@@ -29,7 +29,10 @@ function json(body: unknown, status = 200): Response {
   })
 }
 
-function harness(poll: Route[] = [() => json({}, 403)]) {
+function harness(
+  poll: Route[] = [() => json({}, 403)],
+  refreshCatalogAfterMutation: () => Promise<void> = async () => {},
+) {
   const store = createMemoryStore()
   const clock = { now: NOW }
   const cipher = createCredentialCipher({ key: new Uint8Array(32).fill(5) })
@@ -61,7 +64,7 @@ function harness(poll: Route[] = [() => json({}, 403)]) {
     fetch,
     exchangeTimeoutMs: 1_000,
     now: () => clock.now,
-    refreshCatalogAfterMutation: async () => {},
+    refreshCatalogAfterMutation,
   }
   return {
     store,
@@ -153,6 +156,76 @@ describe("device-code sign-in", () => {
     expect(value(await h.device.status(id)).status).toBe("denied")
     expect(h.calls.filter((c) => c.url === POLL_URL)).toHaveLength(1)
     expect((await h.store.accounts.findById(id))?.authMaterial).toBeNull()
+  })
+
+  test("a 5xx from the poll endpoint is not a refusal: it keeps waiting, then connects", async () => {
+    const h = harness([
+      () => json({ error: "bad gateway" }, 502),
+      () => json({ authorization_code: ISSUED_CODE, code_verifier: ISSUED_VERIFIER }),
+    ])
+    const id = await h.account()
+    value(await h.device.begin(id, "connect"))
+    expect(value(await h.device.status(id)).status).toBe("waiting")
+    advance(h, 5)
+    expect(value(await h.device.status(id)).status).toBe("connected")
+    expect((await h.store.accounts.findById(id))?.authMaterial).not.toBeNull()
+  })
+
+  test("a 429 keeps waiting and spaces the next poll out, doubling to a cap", async () => {
+    const h = harness([() => json({}, 429)])
+    const id = await h.account()
+    value(await h.device.begin(id, "connect"))
+    const polls = () => h.calls.filter((c) => c.url === POLL_URL).length
+
+    expect(value(await h.device.status(id)).status).toBe("waiting")
+    expect(polls()).toBe(1)
+    advance(h, 5) // the plain interval: not yet — doubled to 10 s
+    await h.device.status(id)
+    expect(polls()).toBe(1)
+    advance(h, 5)
+    await h.device.status(id)
+    expect(polls()).toBe(2) // now 20 s (4×, the cap)
+    advance(h, 19)
+    await h.device.status(id)
+    expect(polls()).toBe(2)
+    advance(h, 1)
+    await h.device.status(id)
+    expect(polls()).toBe(3)
+    advance(h, 20) // stays at the cap
+    await h.device.status(id)
+    expect(polls()).toBe(4)
+    expect(value(await h.device.status(id)).status).toBe("waiting")
+  })
+
+  test("a 429 with Retry-After is honoured", async () => {
+    const h = harness([
+      () => new Response("{}", { status: 429, headers: { "retry-after": "30" } }),
+      () => json({ authorization_code: ISSUED_CODE, code_verifier: ISSUED_VERIFIER }),
+    ])
+    const id = await h.account()
+    value(await h.device.begin(id, "connect"))
+    await h.device.status(id)
+    advance(h, 29)
+    expect(value(await h.device.status(id)).status).toBe("waiting")
+    expect(h.calls.filter((c) => c.url === POLL_URL)).toHaveLength(1)
+    advance(h, 1)
+    expect(value(await h.device.status(id)).status).toBe("connected")
+  })
+
+  test("a credential saved while routing could not refresh reports the same answer, never expired", async () => {
+    const h = harness(
+      [() => json({ authorization_code: ISSUED_CODE, code_verifier: ISSUED_VERIFIER })],
+      async () => {
+        throw new Error("catalog down")
+      },
+    )
+    const id = await h.account()
+    value(await h.device.begin(id, "connect"))
+    const first = await h.device.status(id)
+    expect(first).toMatchObject({ ok: false, failure: { code: "routing_unavailable" } })
+    expect((await h.store.accounts.findById(id))?.authMaterial).not.toBeNull()
+    advance(h, 5)
+    expect(await h.device.status(id)).toEqual(first)
   })
 
   test("past the TTL it is expired, and the issuer is not asked", async () => {

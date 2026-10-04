@@ -303,7 +303,7 @@ describe("the device-code flow (codex-rs device_code_auth.rs)", () => {
     expect(device.readUserCode({ user_code: "U" })).toBeNull()
   })
 
-  test("403 and 404 are pending, 2xx carries the code, anything else is final", () => {
+  test("403/404 pending, 429/5xx retry, 2xx carries the code, any other 4xx is final", () => {
     expect(device.readPoll(403, null)).toEqual({ kind: "pending" })
     expect(device.readPoll(404, null)).toEqual({ kind: "pending" })
     expect(
@@ -311,6 +311,19 @@ describe("the device-code flow (codex-rs device_code_auth.rs)", () => {
     ).toEqual({ kind: "authorized", code: "c", codeVerifier: "v" })
     expect(device.readPoll(200, { authorization_code: "c" })).toEqual({ kind: "refused" })
     expect(device.readPoll(400, null)).toEqual({ kind: "refused" })
+    expect(device.readPoll(429, null)).toEqual({
+      kind: "retry",
+      throttled: true,
+      retryAfterSeconds: null,
+    })
+    expect(device.readPoll(429, null, new Headers({ "retry-after": "12" }))).toMatchObject({
+      retryAfterSeconds: 12,
+    })
+    expect(device.readPoll(503, null)).toEqual({
+      kind: "retry",
+      throttled: false,
+      retryAfterSeconds: null,
+    })
     expect(device.readPoll(410, null)).toEqual({ kind: "refused" })
   })
 })

@@ -4,7 +4,7 @@ import { z } from "zod"
 import type { OAuthTokenRequest, ProviderDeviceFlow } from "../../../providers"
 import { type AdminResult, invalid, ok } from "../../admin/result"
 import type { CredentialCipher } from "../../crypto/cipher"
-import { awaitOAuthResponse, readOAuthResponse } from "../oauth-response"
+import { sendIssuerRequest } from "./issuer-request"
 import { bindConsumed, connectableAccount, STATE_REJECTED } from "./oauth-binding"
 import {
   completeAuthorization,
@@ -82,9 +82,19 @@ type Handle = z.infer<typeof Handle>
 interface AttemptTrack {
   inFlight: Promise<AdminResult<DeviceConnectStatus>> | null
   nextPollAt: number
-  final: DeviceConnectStatus | null
+  /** Doubles on each throttled answer, up to {@link MAX_BACKOFF}; resets on any other answer. */
+  backoff: number
+  /**
+   * The attempt's outcome once it has one — including a failure after the state was spent (a
+   * refused exchange, or a credential saved while routing could not be refreshed). Repeated
+   * verbatim, so the console never sees a spent attempt turn into "expired".
+   */
+  final: AdminResult<DeviceConnectStatus> | null
   readonly expiresAt: number
 }
+
+/** The ceiling on throttled backoff, as a multiple of the issuer's interval. */
+const MAX_BACKOFF = 4
 
 export function createDeviceConnectService(deps: DeviceConnectDeps): DeviceConnectService {
   const ttlMs = deps.stateMinutes * 60_000
@@ -97,31 +107,7 @@ export function createDeviceConnectService(deps: DeviceConnectDeps): DeviceConne
    */
   const latest = new Map<string, string>()
 
-  const send = async (
-    built: OAuthTokenRequest,
-  ): Promise<{ status: number; body: unknown } | null> => {
-    const signal = AbortSignal.timeout(deps.exchangeTimeoutMs)
-    try {
-      const response = await awaitOAuthResponse(
-        deps.fetch,
-        new Request(built.url, {
-          method: built.method,
-          headers: { ...built.headers },
-          body: built.body,
-          signal,
-        }),
-      )
-      let body: unknown = null
-      try {
-        body = await readOAuthResponse(response, signal)
-      } catch {
-        body = null
-      }
-      return { status: response.status, body }
-    } catch {
-      return null
-    }
-  }
+  const send = (built: OAuthTokenRequest) => sendIssuerRequest(deps, built)
 
   const prune = (now: number) => {
     for (const [id, track] of tracks) if (track.expiresAt <= now) tracks.delete(id)
@@ -201,7 +187,7 @@ export function createDeviceConnectService(deps: DeviceConnectDeps): DeviceConne
     const { row, device } = account.value
     const attemptId = row.authorizationAttemptId
     const finished = tracks.get(attemptId ?? latest.get(accountId) ?? "")?.final
-    if (finished != null) return ok(finished)
+    if (finished != null) return finished
 
     const pending = attemptId === null ? undefined : await deps.states.findLive(attemptId, now)
     const handle = pending?.nonce == null ? null : readHandle(pending.nonce)
@@ -210,6 +196,7 @@ export function createDeviceConnectService(deps: DeviceConnectDeps): DeviceConne
     const track: AttemptTrack = tracks.get(pending.id) ?? {
       inFlight: null,
       nextPollAt: 0,
+      backoff: 1,
       final: null,
       expiresAt: pending.expiresAt.getTime(),
     }
@@ -224,11 +211,11 @@ export function createDeviceConnectService(deps: DeviceConnectDeps): DeviceConne
     if (now.getTime() < track.nextPollAt) return ok(waiting)
 
     track.nextPollAt = now.getTime() + handle.intervalSeconds * 1_000
-    track.inFlight = poll(device, pending.state, handle, accountId, waiting).finally(() => {
+    track.inFlight = poll(device, pending.state, handle, accountId, waiting, track).finally(() => {
       track.inFlight = null
     })
     const result = await track.inFlight
-    if (result.ok && result.value.status !== "waiting") track.final = result.value
+    if (!result.ok || result.value.status !== "waiting") track.final = result
     return result
   }
 
@@ -238,11 +225,23 @@ export function createDeviceConnectService(deps: DeviceConnectDeps): DeviceConne
     handle: Handle,
     accountId: string,
     waiting: DeviceConnectStatus,
+    track: AttemptTrack,
   ): Promise<AdminResult<DeviceConnectStatus>> => {
     const answer = await send(device.pollRequest(handle))
     // A transport blip is not an answer. The TTL bounds how long "waiting" can last.
     if (answer === null) return ok(waiting)
-    const read = device.readPoll(answer.status, answer.body)
+    const read = device.readPoll(answer.status, answer.body, answer.headers)
+    if (read.kind === "retry") {
+      // Overloaded, not refused: keep waiting. Throttled means slow down — the issuer's own
+      // Retry-After when it gave one, otherwise the interval doubled per answer, capped.
+      if (read.throttled) {
+        track.backoff = Math.min(track.backoff * 2, MAX_BACKOFF)
+        const delay = read.retryAfterSeconds ?? handle.intervalSeconds * track.backoff
+        track.nextPollAt = deps.now().getTime() + delay * 1_000
+      }
+      return ok(waiting)
+    }
+    track.backoff = 1
     if (read.kind === "pending") return ok(waiting)
 
     // Final either way, so the state is spent either way: one-shot means once.

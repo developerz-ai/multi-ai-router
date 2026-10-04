@@ -88,8 +88,17 @@ export function openAiDeviceFlow(issuer: string, clientId: string): ProviderDevi
       headers: JSON_HEADERS,
       body: JSON.stringify({ device_auth_id: deviceAuthId, user_code: userCode }),
     }),
-    readPoll: (status, body): DevicePollResult => {
+    readPoll: (status, body, headers): DevicePollResult => {
       if (PENDING_STATUSES.has(status)) return { kind: "pending" }
+      // codex treats every other non-2xx as fatal; a router polling for minutes must not let one
+      // overloaded answer spend an attempt the operator is about to approve.
+      if (status === 429 || status >= 500) {
+        return {
+          kind: "retry",
+          throttled: status === 429,
+          retryAfterSeconds: retryAfterSeconds(headers?.get("retry-after") ?? null),
+        }
+      }
       if (status < 200 || status >= 300) return { kind: "refused" }
       const parsed = CodeIssued.safeParse(body)
       return parsed.success
@@ -101,4 +110,11 @@ export function openAiDeviceFlow(issuer: string, clientId: string): ProviderDevi
         : { kind: "refused" }
     },
   }
+}
+
+/** Delta-seconds only; an HTTP-date `Retry-After` is read as absent and the backoff applies. */
+function retryAfterSeconds(value: string | null): number | null {
+  if (value === null || !/^\d+$/.test(value.trim())) return null
+  const seconds = Number.parseInt(value.trim(), 10)
+  return seconds > 0 ? seconds : null
 }

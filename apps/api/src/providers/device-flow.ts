@@ -29,7 +29,7 @@ export interface ProviderDeviceFlow {
     readonly userCode: string
   }): OAuthTokenRequest
   /** What one poll answer means. Reads the status first; the body only on success. */
-  readPoll(status: number, body: unknown): DevicePollResult
+  readPoll(status: number, body: unknown, headers?: Headers): DevicePollResult
 }
 
 export interface DeviceUserCode {
@@ -44,5 +44,15 @@ export type DevicePollResult =
   | { readonly kind: "pending" }
   /** Approved: an authorization code plus the PKCE verifier the issuer minted for it. */
   | { readonly kind: "authorized"; readonly code: string; readonly codeVerifier: string }
-  /** Anything else — denied, expired upstream, or a shape this build cannot read. Final. */
+  /**
+   * The issuer is overloaded or failing (429, 5xx): no answer about *this* attempt, so it stays
+   * pending. `throttled` asks the caller to back off; `retryAfterSeconds` is the issuer's own
+   * `Retry-After` when it sent one.
+   */
+  | {
+      readonly kind: "retry"
+      readonly throttled: boolean
+      readonly retryAfterSeconds: number | null
+    }
+  /** Any other refusal — denied, expired upstream, or a shape this build cannot read. Final. */
   | { readonly kind: "refused" }
