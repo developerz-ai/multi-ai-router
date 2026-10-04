@@ -203,3 +203,12 @@ export function planCandidates(
 
   return { servable, rejection, endpointError }
 }
+
+/**
+ * A body the router rewrote with `stream: true` because the surface answers only as SSE
+ * (`ResponsesEgressRules.requireStream`). A same-dialect body is the client's own and keeps the
+ * client's own headers (non-negotiable 10).
+ */
+export function forcesUpstreamStream(servable: ServableCandidate): boolean {
+  return servable.translation !== null && servable.responsesEgress.requireStream
+}

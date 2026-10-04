@@ -66,6 +66,8 @@ export interface RecoveryRepository {
     expectedRecoveryRevision: number | null
     reason: Exclude<RecoveryReason, "operator-recheck" | "operator-enable">
     cooldownMs: number
+    /** How long a fenced issued permit's call may still be on the wire (`markUncertain`'s bound). */
+    maximumOutcomeAgeMs: number
   }): Promise<RecoveryRow | undefined>
   assignPending(input: {
     accountId: string

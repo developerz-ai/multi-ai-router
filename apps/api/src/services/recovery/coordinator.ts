@@ -85,6 +85,7 @@ export function createRecoveryCoordinator(deps: RecoveryCoordinatorDeps): Recove
       await deps.repository.beginAutomaticRecovery({
         ...request,
         cooldownMs: deps.config.cooldownMs,
+        maximumOutcomeAgeMs: deps.config.maximumOutcomeMs,
       })
       queues.automaticCompleted(request)
     }

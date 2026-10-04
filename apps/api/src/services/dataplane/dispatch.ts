@@ -2,7 +2,7 @@ import type { UpstreamStartGuard } from "../../providers/upstream-admission"
 import { type AttemptOutcome, runAttempt } from "./attempt"
 import type { attemptQuota } from "./attempt-quota"
 import type { ChainContext } from "./chain"
-import type { ServableCandidate } from "./plan"
+import { forcesUpstreamStream, type ServableCandidate } from "./plan"
 import { runSdkAttempt } from "./sdk-attempt"
 
 /**
@@ -52,5 +52,6 @@ export function dispatch(
     timeoutMs: runtime.timeoutMs,
     ...(runtime.errorMaxBytes === undefined ? {} : { errorMaxBytes: runtime.errorMaxBytes }),
     signal: ctx.request.signal,
+    ...(forcesUpstreamStream(servable) ? { accept: "text/event-stream" } : {}),
   })
 }

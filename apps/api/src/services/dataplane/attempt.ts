@@ -53,6 +53,12 @@ export interface AttemptInput {
   readonly onUpstreamStarted?: () => void
   /** The client's own abort signal, so a client that goes away releases the upstream call. */
   readonly signal?: AbortSignal
+  /**
+   * Replaces the client's `Accept`. Set only for a body the router rewrote to stream for a surface
+   * that answers only as SSE: the client's own value describes the response *it* is owed, not the
+   * one the router asked the upstream for.
+   */
+  readonly accept?: string
 }
 
 /** What the upstream said, when it said something the client should see. */
@@ -84,6 +90,7 @@ export async function runAttempt(input: AttemptInput): Promise<AttemptOutcome> {
   const credential = accountCredential(plan.account, input.cipher, plan.driver.authKind)
   const driverHeaders = plan.driver.buildHeaders(plan.account.driver, credential)
   const headers = upstreamHeaders(input.clientHeaders, driverHeaders)
+  if (input.accept !== undefined) headers.set("accept", input.accept)
 
   const request = new Request(plan.url.toString(), {
     method: input.method,

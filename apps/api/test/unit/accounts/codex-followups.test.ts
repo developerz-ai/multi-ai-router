@@ -152,6 +152,32 @@ describe("B. Test now against a Codex account", () => {
     expect(sent.model).toBe("gpt-5.5")
   })
 
+  test('sends `input` as a list of items, asking for a stream (prod: 400 "Input must be a list")', async () => {
+    const sent: { body: Record<string, unknown>; accept: string | null }[] = []
+    const { service } = testNow(async (request) => {
+      sent.push({
+        body: JSON.parse(await request.text()) as Record<string, unknown>,
+        accept: request.headers.get("accept"),
+      })
+      return sse([["response.completed", { response: { id: "r", status: "completed" } }]])
+    })
+    await service.test("acc-c", { model: "gpt-5.5" })
+    expect(sent[0]?.body.input).toEqual([
+      { type: "message", role: "user", content: [{ type: "input_text", text: "ping" }] },
+    ])
+    expect(sent[0]?.accept).toBe("text/event-stream")
+  })
+
+  test("a forced stream without a content-type is still read to its terminal event", async () => {
+    const { service } = testNow(async () => {
+      const response = sse([["response.created", { response: { id: "r" } }]])
+      response.headers.delete("content-type")
+      return response
+    })
+    const result = await service.test("acc-c", { model: "gpt-5.5" })
+    expect(result).toMatchObject({ ok: true, value: { outcome: "failed" } })
+  })
+
   test("a 200 stream that ends without a completed response is a failure, not ok", async () => {
     const { service } = testNow(async () => sse([["response.created", { response: { id: "r" } }]]))
     const result = await service.test("acc-c", { model: "gpt-5.5" })

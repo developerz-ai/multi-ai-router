@@ -49,6 +49,7 @@ export function recoveryFixture() {
       expectedRecoveryRevision: null,
       reason: "quota-stale",
       cooldownMs: 1000,
+      maximumOutcomeAgeMs: 600000,
     })
     if (begin === undefined) throw new Error("missing pending recovery")
     const ownerBootId = crypto.randomUUID()

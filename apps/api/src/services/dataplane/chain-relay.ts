@@ -6,7 +6,7 @@ import { RouterShutdownError } from "./active-requests"
 import type { UpstreamError } from "./attempt"
 import { breakerOptionsFor } from "./health"
 import type { HealthObservation } from "./health-observation"
-import type { ServableCandidate } from "./plan"
+import { forcesUpstreamStream, type ServableCandidate } from "./plan"
 import { attemptRecord, failureOutcome } from "./records"
 import type { RecoveryAttempt } from "./recovery-access"
 import { relayResponse } from "./relay"
@@ -63,10 +63,12 @@ export function relaySuccess(
   response: Response,
   at: SuccessClock,
 ): Response {
+  const upstreamStreams = forcesUpstreamStream(servable)
   const observation = createResponseObserver({
     dialect: servable.dialect,
     operation: ctx.runtime.operation,
-    contentType: response.headers.get("content-type"),
+    // Usage is read off the upstream's frames; a forced stream is SSE whether or not it said so.
+    contentType: upstreamStreams ? "text/event-stream" : response.headers.get("content-type"),
     maximumObservationBytes: ctx.runtime.responseObservationMaxBytes ?? 65_536,
     ...(servable.driver.responseObservation === undefined
       ? {}
@@ -161,8 +163,8 @@ export function relaySuccess(
     pair: servable.translation,
     context: { ...ctx.translation, includeUsage: ctx.translated?.includeUsage() === true },
     // Only for a client that did not ask to stream; one that did is forwarded event by event.
-    collectStream:
-      servable.responsesEgress.requireStream && ctx.translated?.clientStreams() !== true,
+    collectStream: upstreamStreams && ctx.translated?.clientStreams() !== true,
+    upstreamStreams,
     observer,
     ...(relaySignal === undefined ? {} : { signal: relaySignal }),
     onUnrecognizedStopReason: (reason) =>

@@ -90,6 +90,13 @@ export interface TranslatedRelayInput {
    * for a client that asked to stream — that one is forwarded event by event like any other.
    */
   readonly collectStream?: boolean
+  /**
+   * The driver declared this surface answers only as SSE, so its body is read as SSE whatever its
+   * `content-type` says. The ChatGPT Codex backend answered HTTP 200 with an event stream and no
+   * `content-type` at all (prod, 2026-10-04): keyed on the header, that stream went out raw — zero
+   * client-dialect events to a streaming client, unconverted SSE to a non-streaming one.
+   */
+  readonly upstreamStreams?: boolean
 }
 
 const EVENT_STREAM = "text/event-stream"
@@ -104,16 +111,18 @@ export function relayTranslatedResponse(input: TranslatedRelayInput): Response {
     return new Response(null, init)
   }
 
-  const streamed = upstream.headers.get("content-type")?.includes(EVENT_STREAM) === true
+  const streamed =
+    input.upstreamStreams === true ||
+    upstream.headers.get("content-type")?.includes(EVENT_STREAM) === true
   if (streamed && input.collectStream === true) {
     headers.set("content-type", "application/json")
     return new Response(translatedBody(input, upstream.body, collected), init)
   }
-  const body = streamed
-    ? translatedStream(input, upstream.body)
-    : translatedBody(input, upstream.body, parsed)
-
-  return new Response(body, init)
+  if (!streamed) return new Response(translatedBody(input, upstream.body, parsed), init)
+  // Said outright: the client's SDK decides how to read the body from this header, and the upstream
+  // is not obliged to have sent one.
+  headers.set("content-type", EVENT_STREAM)
+  return new Response(translatedStream(input, upstream.body), init)
 }
 
 function translatedStream(

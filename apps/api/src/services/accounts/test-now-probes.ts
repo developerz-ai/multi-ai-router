@@ -124,6 +124,10 @@ export async function runHttpProbe(
   }
 
   const routable = routableStandIn(account, driverAccount)
+  const responsesEgress = driver.resolveResponsesEgress(driverAccount)
+  // A surface that answers only as SSE gets the probe the dispatch path sends it
+  // (`dataplane/dispatch.ts`): asked for a stream, and read as one whatever its `content-type`.
+  const forcedStream = dialect === "openai-responses" && responsesEgress.requireStream
 
   const outcome = await runAttempt({
     plan: { account: routable, driver, dialect, url, upstreamModel },
@@ -133,8 +137,9 @@ export async function runHttpProbe(
       dialect,
       upstreamModel,
       driver.resolveChatCeiling(driverAccount),
-      driver.resolveResponsesEgress(driverAccount),
+      responsesEgress,
     ),
+    ...(forcedStream ? { accept: "text/event-stream" } : {}),
     fetch:
       beforeBackgroundUpstreamStart === undefined
         ? call
@@ -150,8 +155,10 @@ export async function runHttpProbe(
   if (outcome.kind === "success") {
     // Never relayed anywhere — this call has no client. Draining it is hygiene, not a translation.
     const raw = await outcome.response.arrayBuffer().catch(() => null)
-    const streamed = outcome.response.headers.get("content-type")?.includes("text/event-stream")
-    if (streamed === true && dialect === "openai-responses") {
+    const streamed =
+      forcedStream ||
+      outcome.response.headers.get("content-type")?.includes("text/event-stream") === true
+    if (streamed && dialect === "openai-responses") {
       // A forced stream (`ResponsesEgressRules.requireStream`) answers 200 before it has answered
       // anything; only its terminal event says whether the turn actually completed.
       const final = raw === null ? null : collectResponsesStream(new Uint8Array(raw))
@@ -208,7 +215,12 @@ function probeBody(
   if (dialect === "openai-responses") {
     // The surface's own rules, exactly as a translated request gets them: the Codex backend refuses
     // a ceiling, a non-streaming call and a missing `instructions` (`translate/shared/responses-egress.ts`).
-    const body = { model, input: "ping", max_output_tokens: 16, store: false }
+    // A list of items, not the string shorthand: the Codex backend refuses a string with `400 Input
+    // must be a list` (prod, 2026-10-04), and every Responses surface accepts the list.
+    const input = [
+      { type: "message", role: "user", content: [{ type: "input_text", text: "ping" }] },
+    ]
+    const body = { model, input, max_output_tokens: 16, store: false }
     return text.encode(JSON.stringify(applyResponsesEgressRules(body, responses, undefined)))
   }
   if (dialect === "anthropic") {
