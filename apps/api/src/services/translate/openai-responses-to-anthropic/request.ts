@@ -153,7 +153,10 @@ export function openAiResponsesToAnthropicRequest(
         ? undefined
         : toolsToAnthropic(toolsFromOpenAiResponses(request.tools)),
     tool_choice:
-      request.parallel_tool_calls === undefined || request.parallel_tool_calls === null
+      request.parallel_tool_calls === undefined ||
+      request.parallel_tool_calls === null ||
+      request.tools === undefined ||
+      request.tools.length === 0
         ? request.tool_choice === undefined
           ? undefined
           : toolChoiceToAnthropic(toolChoiceFromOpenAiResponses(request.tool_choice))

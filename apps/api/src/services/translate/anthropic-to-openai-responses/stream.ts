@@ -1,5 +1,6 @@
 import { z } from "zod"
 import { eventType, mergeUsage } from "../shared/anthropic-stream-events"
+import type { ResponsesRecoveryOptions } from "../shared/responses-snapshot-recovery"
 import { createResponsesStreamEmitter } from "../shared/responses-stream"
 import { toOpenAiFinishReason, toResponsesCompletion } from "../shared/stop-reason"
 import type { AnthropicUsage } from "../shared/usage"
@@ -37,7 +38,7 @@ import { frameJson } from "../sse/parse"
  */
 
 /** `created` is a caller-supplied value, never `Date.now()`: a translator holds no clock. */
-export interface AnthropicToOpenAiResponsesStreamOptions {
+export interface AnthropicToOpenAiResponsesStreamOptions extends ResponsesRecoveryOptions {
   /** Unix **seconds**, stamped as `created_at` on every restated response object. */
   readonly created: number
   /** Used until `message_start` names the upstream's own id, and if it never does. */
@@ -215,5 +216,6 @@ export function anthropicToOpenAiResponsesStream(
     },
 
     unrecognizedStopReason: () => unrecognized,
+    translationFailure: () => emitter.translationFailure(),
   }
 }

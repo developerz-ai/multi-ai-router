@@ -175,6 +175,7 @@ const OPENAI_RESPONSES_TO_ANTHROPIC: TranslationPair = {
     }),
   stream: (context) =>
     anthropicToOpenAiResponsesStream({
+      maximumPendingBytes: context.maximumPendingBytes,
       created: context.created,
       id: `${OPENAI_RESPONSES_ID_PREFIX}${context.fallbackId}`,
       model: context.model,

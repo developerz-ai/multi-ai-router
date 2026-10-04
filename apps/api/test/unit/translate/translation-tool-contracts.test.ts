@@ -169,17 +169,76 @@ test("Anthropic caller serial tool policy survives both OpenAI dialects", () => 
   expect(anthropicToOpenAiChatRequest(body)).toMatchObject({ parallel_tool_calls: false })
   expect(anthropicToOpenAiResponsesRequest(body)).toMatchObject({ parallel_tool_calls: false })
 })
-test("both OpenAI callers serial tool policy produces Anthropic auto choice", () => {
-  expect(
-    openAiChatToAnthropicRequest({
-      model: "m",
-      messages: [{ role: "user", content: "hello" }],
-      parallel_tool_calls: false,
-    }),
-  ).toMatchObject({ tool_choice: { type: "auto", disable_parallel_tool_use: true } })
-  expect(
-    openAiResponsesToAnthropicRequest({ model: "m", input: "hello", parallel_tool_calls: false }),
-  ).toMatchObject({ tool_choice: { type: "auto", disable_parallel_tool_use: true } })
+test("OpenAI parallel policy does not synthesize Anthropic choice without tools", () => {
+  for (const tools of [undefined, []]) {
+    for (const parallel_tool_calls of [false, true]) {
+      expect(
+        openAiChatToAnthropicRequest({
+          model: "m",
+          messages: [{ role: "user", content: "hello" }],
+          tools,
+          parallel_tool_calls,
+        }).tool_choice,
+      ).toBeUndefined()
+      expect(
+        openAiResponsesToAnthropicRequest({
+          model: "m",
+          input: "hello",
+          tools,
+          parallel_tool_calls,
+        }).tool_choice,
+      ).toBeUndefined()
+      expect(
+        openAiChatToAnthropicRequest({
+          model: "m",
+          messages: [{ role: "user", content: "hello" }],
+          tools,
+          parallel_tool_calls,
+          tool_choice: "none",
+        }).tool_choice,
+      ).toEqual({ type: "none" })
+      expect(
+        openAiResponsesToAnthropicRequest({
+          model: "m",
+          input: "hello",
+          tools,
+          parallel_tool_calls,
+          tool_choice: "none",
+        }).tool_choice,
+      ).toEqual({ type: "none" })
+    }
+  }
+})
+
+test("OpenAI nonempty tools retain both parallel policies and explicit choice", () => {
+  for (const parallel_tool_calls of [false, true]) {
+    for (const tool_choice of [undefined, "required"] as const) {
+      const expected = {
+        type: tool_choice === undefined ? "auto" : "any",
+        disable_parallel_tool_use: !parallel_tool_calls,
+      }
+      expect(
+        openAiChatToAnthropicRequest({
+          model: "m",
+          messages: [{ role: "user", content: "hello" }],
+          parallel_tool_calls,
+          tool_choice,
+          tools: [
+            { type: "function", function: { name: "lookup", parameters: { type: "object" } } },
+          ],
+        }).tool_choice,
+      ).toEqual(expected)
+      expect(
+        openAiResponsesToAnthropicRequest({
+          model: "m",
+          input: "hello",
+          parallel_tool_calls,
+          tool_choice,
+          tools: [{ type: "function", name: "lookup", parameters: { type: "object" } }],
+        }).tool_choice,
+      ).toEqual(expected)
+    }
+  }
 })
 
 import { createTranslatedRequestBody } from "../../../src/services/dataplane/translate-body"

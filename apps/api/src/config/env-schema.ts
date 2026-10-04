@@ -212,7 +212,7 @@ export const ENV_FIELDS = {
     .optional(),
   TRANSLATE_DEFAULT_MAX_TOKENS: atLeastOne.optional(),
   MAX_TRANSLATION_PENDING_BYTES: atLeastOne
-    .refine((value) => value >= 1024 && value <= 33_554_432)
+    .refine((value) => value >= 1024 && value <= 33_554_432, "must be between 1024 and 33554432")
     .optional(),
 } as const
 

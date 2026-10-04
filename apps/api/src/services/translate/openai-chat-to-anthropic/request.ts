@@ -123,7 +123,10 @@ export function openAiChatToAnthropicRequest(
     stream: request.stream ?? undefined,
     tools: request.tools === undefined ? undefined : toolsToAnthropic(request.tools),
     tool_choice:
-      request.parallel_tool_calls === undefined || request.parallel_tool_calls === null
+      request.parallel_tool_calls === undefined ||
+      request.parallel_tool_calls === null ||
+      request.tools === undefined ||
+      request.tools.length === 0
         ? request.tool_choice === undefined
           ? undefined
           : toolChoiceToAnthropic(request.tool_choice)

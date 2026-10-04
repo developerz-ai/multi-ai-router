@@ -2,15 +2,15 @@
   "scope": "W7B translation and composition integration; release/deployment pending",
   "base": "55904292e2a898fa79d14d5b375eaa07d94972d4",
   "fullGate": {
-    "artifact": "/tmp/router-w7b-final-gate-xr2mrcc9",
+    "artifact": "/tmp/router-pr154-review-final-gate-x4zcfhvz",
     "command": "bin/check",
     "postgresMajor": 18,
-    "testsPassed": 5323,
+    "testsPassed": 5328,
     "testsFailed": 0,
-    "assertions": 59624,
-    "testFiles": 479,
+    "assertions": 59666,
+    "testFiles": 481,
     "exitCode": 0,
-    "ownDatabase": "w7b_final_gate_d8db36ddbdb9439bb494652a89727e67",
+    "ownDatabase": "pr154_review_gate_168a9cd4932a47e7a46f2fae860fafc1",
     "dropped": true,
     "postgresPort": 5440,
     "sourceDrift": []
@@ -76,7 +76,8 @@
         "exitCode": 0
       }
     ],
-    "sourceDrift": []
+    "sourceDrift": [],
+    "sourceHead": "f24c894b4aac29f9820dc22b0efa71e0d76c29ba"
   },
   "packaging": {
     "buildExit": 0,
@@ -93,13 +94,40 @@
       "readOnly": true,
       "entrypoint": "static /bin/sh; no application launch"
     },
-    "probeExit": 0
+    "probeExit": 0,
+    "sourceHead": "f24c894b4aac29f9820dc22b0efa71e0d76c29ba"
   },
-  "reviewMerge": "pending",
+  "reviewMerge": "Corrective local full gate passed; new-head CI/reviews and final packaging pending.",
   "limitations": [
     "No real provider/OAuth/CLI request was used.",
     "No cold-session latency closure.",
     "Prior W7A six-ms warm p99 acceptance and strict failure remain recorded; no changed benchmark budget.",
     "No native ARM, release or production deployment claim."
-  ]
+  ],
+  "previousFullGate": {
+    "artifact": "/tmp/router-w7b-final-gate-xr2mrcc9",
+    "command": "bin/check",
+    "postgresMajor": 18,
+    "testsPassed": 5323,
+    "testsFailed": 0,
+    "assertions": 59624,
+    "testFiles": 479,
+    "exitCode": 0,
+    "ownDatabase": "w7b_final_gate_d8db36ddbdb9439bb494652a89727e67",
+    "dropped": true,
+    "postgresPort": 5440,
+    "sourceDrift": []
+  },
+  "reviewCorrections": {
+    "coderabbitRun": "b3cd58c7-9574-44dc-a1a4-e4e367f6bb01",
+    "bounds": "Inclusive pending-cap bounds now named in boot errors.",
+    "tools": "Parallel policy alone never synthesizes tool choice with absent/empty tools; explicit choices and nonempty-tool inverse policy preserved.",
+    "stream": "Anthropic-to-Responses forwards configured cap and exposes terminal local failure so HTTP200 overflow records router_error once without health strike/retry.",
+    "failureFirst": [
+      "tool choice10pass1fail",
+      "stream option/accounting0pass2fail",
+      "independent old reasoning fixture39pass1fail corrected with nonempty tool"
+    ],
+    "retainedModelCeiling": "Plan10104.12 requires model-aware omitted output ceiling including non-streaming; speculative streaming-only restriction would restore truncation."
+  }
 }

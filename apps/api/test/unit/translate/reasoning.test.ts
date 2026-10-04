@@ -159,7 +159,12 @@ describe("parallel_tool_calls", () => {
 
   /** Anthropic serial policy lives inside `tool_choice`, preserving the caller contract. */
   test("toward anthropic it becomes an explicit serial tool policy", () => {
-    const body = openAiChatToAnthropicRequest(openAiChatRequest({ parallel_tool_calls: false }))
+    const body = openAiChatToAnthropicRequest(
+      openAiChatRequest({
+        parallel_tool_calls: false,
+        tools: [{ type: "function", function: { name: "lookup", parameters: { type: "object" } } }],
+      }),
+    )
     expect(body.tool_choice).toEqual({ type: "auto", disable_parallel_tool_use: true })
   })
 })
