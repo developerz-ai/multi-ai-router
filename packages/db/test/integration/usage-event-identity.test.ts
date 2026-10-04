@@ -1,7 +1,6 @@
-import { afterAll, beforeAll, describe, expect, test } from "bun:test"
+import { beforeAll, describe, expect, test } from "bun:test"
 import { eq, inArray } from "drizzle-orm"
-import { createDatabase, type DatabaseHandle } from "../../src/client"
-import { defaultMigrationsFolder, runMigrations } from "../../src/migrate"
+import type { DatabaseHandle } from "../../src/client"
 import { createUsageRecentRepository } from "../../src/repositories/usage-recent-repository"
 import {
   createUsageRecordRepository,
@@ -10,8 +9,10 @@ import {
 } from "../../src/repositories/usage-repository"
 import { apiKeys } from "../../src/schema/api-keys"
 import { usageRecords } from "../../src/schema/usage-records"
+import { usageHistoryFixture } from "./usage-history-fixture"
 
 const url = process.env.DATABASE_URL ?? ""
+const fixture = usageHistoryFixture()
 let handle: DatabaseHandle
 const ids: string[] = []
 function event(over: Partial<UsageRecordInsert> = {}): UsageRecordInsert {
@@ -31,14 +32,9 @@ function event(over: Partial<UsageRecordInsert> = {}): UsageRecordInsert {
 }
 beforeAll(async () => {
   if (!url) return
-  await runMigrations({ url, migrationsFolder: defaultMigrationsFolder() })
-  handle = createDatabase({ url, maxConnections: 1 })
+  handle = fixture.get()
 })
-afterAll(async () => {
-  if (!url) return
-  await handle.db.delete(usageRecords).where(inArray(usageRecords.id, ids))
-  await handle.close()
-})
+
 describe.skipIf(!url)("stable usage event identity", () => {
   test("retry after acknowledged commit loss keeps one row per event, not per correlation", async () => {
     const repo = createUsageRecordRepository(handle.db)
@@ -105,7 +101,9 @@ describe.skipIf(!url)("stable usage event identity", () => {
     const repo = createUsageRecordRepository(handle.db)
     const original = event({ tokensIn: 7 })
     expect(await repo.insertMany([original])).toBe(1)
-    expect(await repo.insertMany([{ ...original, tokensIn: 999, responseStatus: 200 }])).toBe(0)
+    await expect(
+      repo.insertMany([{ ...original, tokensIn: 999, responseStatus: 200 }]),
+    ).rejects.toThrow("immutable usage identity")
     const [persisted] = await handle.db
       .select()
       .from(usageRecords)
@@ -113,7 +111,7 @@ describe.skipIf(!url)("stable usage event identity", () => {
     expect(persisted?.tokensIn).toBe(7)
     expect(persisted?.responseStatus).toBe(401)
   })
-  test("a replay after subject deletion cannot restore old foreign-key attribution", async () => {
+  test("a replay after subject deletion preserves immutable historical attribution", async () => {
     const [key] = await handle.db
       .insert(apiKeys)
       .values({ name: "usage-retry", value: crypto.randomUUID(), prefix: "fixture" })
@@ -129,17 +127,17 @@ describe.skipIf(!url)("stable usage event identity", () => {
         .select()
         .from(usageRecords)
         .where(eq(usageRecords.id, row.id))
-      expect(persisted?.apiKeyId).toBeNull()
+      expect(persisted?.apiKeyId).toBe(key.id)
     } finally {
       await handle.db.delete(apiKeys).where(eq(apiKeys.id, key.id))
     }
   })
-  test("primary-key suppression does not swallow foreign-key violations", async () => {
+  test("primary-key suppression does not swallow real numeric constraint violations", async () => {
     const repo = createUsageRecordRepository(handle.db)
     const valid = event(),
-      invalid = event({ accountId: crypto.randomUUID() })
+      invalid = event({ tokensIn: 2147483648 })
     await expect(repo.insertMany([valid, invalid])).rejects.toMatchObject({
-      cause: { code: "23503" },
+      cause: { code: "22003" },
     })
     const persisted = await handle.db
       .select()

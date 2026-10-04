@@ -40,8 +40,6 @@ export {
   createUsageRollupTask,
   IDLE_PROBE_MODELS,
   planConfigDirReap,
-  rollupDays,
-  rollupFrom,
   runSweeps,
   scheduledTaskIntervals,
 } from "./tasks"

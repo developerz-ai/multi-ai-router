@@ -15,10 +15,9 @@ import type { UsageOutcomeCount } from "@multi-ai-router/db"
  * So this reports the split. The classification itself stays in core (`UsageOutcome`) and the
  * grouping into remedies stays in the console — this module only counts, and it counts honestly:
  *
- * - **Read from raw rows, over the whole window.** Same source and same reason as the percentiles
- *   in `aggregate.ts`: `usage_daily` has no per-outcome grain, and it skips every attempt that
- *   never reached an account — which is precisely `scope_violation`, `key_revoked` and
- *   `request_too_large`, the failures worth finding.
+ * - **Read from retained raw rows.** Historical additive counts survive retention, but no
+ *   historical per-outcome distribution is inferred from them. These detail counts include
+ *   preselection failures whose account/model attribution is absent.
  * - **`attempts` is the scan's own denominator, not the summary's.** Every share the console draws
  *   divides two numbers from this one scan, so the parts always add up to the whole shown beside
  *   them, whatever the rollup did with the same window.
@@ -31,8 +30,7 @@ export interface UsageFailures {
   /**
    * Attempts this scan covered — the denominator for every count below.
    *
-   * Deliberately not `totals.attempts`: that one is stitched from the rollup plus today's raw
-   * edges, and dividing a raw numerator by a stitched denominator produces a share of nothing.
+   * Deliberately not `totals.attempts`: that one includes retained historical facts, and dividing a raw numerator by a stitched denominator produces a share of nothing.
    */
   readonly attempts: number
   /** Non-success attempts among them. The sum of `byOutcome`, always. */

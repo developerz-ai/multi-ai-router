@@ -15,7 +15,9 @@ export function filterPriceRows(rows: readonly PriceRow[], query: string): reado
   if (needle === "") return rows
   return rows.filter(
     (row) =>
-      row.model.toLowerCase().includes(needle) || row.provider.toLowerCase().includes(needle),
+      row.model.toLowerCase().includes(needle) ||
+      row.provider.toLowerCase().includes(needle) ||
+      (row.accountId?.toLowerCase().includes(needle) ?? false),
   )
 }
 

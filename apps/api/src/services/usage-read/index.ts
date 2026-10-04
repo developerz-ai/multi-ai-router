@@ -26,6 +26,7 @@ export type { WindowSplit } from "./rollup"
 export { addDecimal, mergeGroupRows, splitWindow, sumTotals } from "./rollup"
 export type {
   UsageBreakdownRow,
+  UsageCoverage,
   UsageLabelSets,
   UsageSeriesEntry,
   UsageService,

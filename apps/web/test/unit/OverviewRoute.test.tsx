@@ -2,6 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test"
 import { QueryClient, QueryClientProvider } from "@tanstack/solid-query"
 import { render } from "solid-js/web"
 import OverviewRoute from "../../src/routes/OverviewRoute"
+import { usageCoverage } from "../support/usage-coverage"
 
 /**
  * The dashboard mounted whole against a stubbed `fetch`.
@@ -144,6 +145,7 @@ function usageSummary(): unknown {
     from: "2026-07-27T00:00:00.000Z",
     to: "2026-07-27T12:00:00.000Z",
     totals,
+    coverage: usageCoverage(45),
     latency: { p50Ms: 1, p95Ms: 2, routerOverheadP95Ms: 1, ttfbP95Ms: 1 },
     failures: { attempts: 45, errors: 3, partial: false, byOutcome: [] },
     axis: [],

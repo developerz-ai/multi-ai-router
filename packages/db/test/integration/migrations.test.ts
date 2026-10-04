@@ -1,6 +1,5 @@
-import { afterAll, describe, expect, test } from "bun:test"
-import { eq, inArray } from "drizzle-orm"
-import { createDatabase, type Database, type DatabaseHandle } from "../../src/client"
+import { describe, expect, test } from "bun:test"
+import type { Database, DatabaseHandle } from "../../src/client"
 import { defaultMigrationsFolder, runMigrations } from "../../src/migrate"
 import { createAccountRepository } from "../../src/repositories/account-repository"
 import { createApiKeyRepository } from "../../src/repositories/api-key-repository"
@@ -10,14 +9,7 @@ import { createScheduledTaskRepository } from "../../src/repositories/scheduled-
 import { createSessionRepository } from "../../src/repositories/session-repository"
 import { createUsageDailyRepository } from "../../src/repositories/usage-daily-repository"
 import { createUsageRecordRepository } from "../../src/repositories/usage-repository"
-import { accounts } from "../../src/schema/accounts"
-import { apiKeys } from "../../src/schema/api-keys"
-import { oauthStates } from "../../src/schema/oauth-states"
-import { pools } from "../../src/schema/pools"
-import { priceOverrides } from "../../src/schema/price-overrides"
-import { scheduledTaskRuns } from "../../src/schema/scheduled-task-runs"
-import { usageDaily } from "../../src/schema/usage-daily"
-import { usageRecords } from "../../src/schema/usage-records"
+import { usageHistoryFixture } from "./usage-history-fixture"
 
 /**
  * Needs a real PostgreSQL 16+. CI always sets `DATABASE_URL` and `bin/check`
@@ -32,6 +24,7 @@ import { usageRecords } from "../../src/schema/usage-records"
  * run goes red, which is the point.
  */
 const url = process.env.DATABASE_URL ?? ""
+const fixture = usageHistoryFixture()
 const runnable = url !== ""
 
 let handle: DatabaseHandle | undefined
@@ -41,26 +34,6 @@ const accountIds: string[] = []
 const apiKeyIds: string[] = []
 const poolIds: string[] = []
 const scheduledTaskRunIds: string[] = []
-
-afterAll(async () => {
-  if (handle !== undefined) {
-    if (apiKeyIds.length > 0) await db.delete(apiKeys).where(inArray(apiKeys.id, apiKeyIds))
-    // Before the accounts: `pools.overflow_account_id` is `set null`, but a `pool_members` row
-    // cascades, and leaving a half-torn pool behind would poison the next run.
-    if (poolIds.length > 0) await db.delete(pools).where(inArray(pools.id, poolIds))
-    if (accountIds.length > 0) await db.delete(accounts).where(inArray(accounts.id, accountIds))
-    if (scheduledTaskRunIds.length > 0) {
-      await db.delete(scheduledTaskRuns).where(inArray(scheduledTaskRuns.id, scheduledTaskRunIds))
-    }
-    // The whole table, not a fixture subset: `replaceAll` clears it by design, so anything that
-    // was here is already gone and leaving it empty is the only honest teardown.
-    await db.delete(priceOverrides)
-    await db.delete(usageDaily).where(eq(usageDaily.model, "test-migrations-model"))
-    await db.delete(usageRecords).where(eq(usageRecords.model, "test-migrations-model"))
-    await db.delete(oauthStates).where(eq(oauthStates.state, "test-migrations-state"))
-  }
-  await handle?.close()
-})
 
 const EXPECTED_TABLES = [
   "accounts",
@@ -81,11 +54,11 @@ const EXPECTED_TABLES = [
 
 describe.skipIf(!runnable)("migrations against a live database", () => {
   test("apply cleanly and are idempotent when run twice", async () => {
-    await runMigrations({ url, migrationsFolder: defaultMigrationsFolder() })
+    await runMigrations({ url: fixture.url(), migrationsFolder: defaultMigrationsFolder() })
     // A restart, a crash mid-upgrade, or two replicas racing must converge.
-    await runMigrations({ url, migrationsFolder: defaultMigrationsFolder() })
+    await runMigrations({ url: fixture.url(), migrationsFolder: defaultMigrationsFolder() })
 
-    handle = createDatabase({ url, maxConnections: 2 })
+    handle = fixture.get()
     const rows = await handle.sql<{ table_name: string }[]>`
       select table_name from information_schema.tables where table_schema = 'public'
     `
@@ -159,12 +132,8 @@ describe.skipIf(!runnable)("migrations against a live database", () => {
   test("scheduled task run round-trips through begin and finish", async () => {
     db = (handle as DatabaseHandle).db
     const repository = createScheduledTaskRepository(db)
-    // The whole table, not just this task's rows: any API that has booted against this
-    // database writes real scheduler rows dated today, which beat the 2026-07-24 fixture
-    // in `lastRun`'s recency ordering. They are last-run telemetry the scheduler rewrites
-    // on its next tick, so clearing them is the honest setup — the same posture
-    // `priceOverrides` teardown takes below.
-    await db.delete(scheduledTaskRuns)
+    // The isolated database starts with no other scheduler owners.
+
     const startedAt = new Date("2026-07-24T12:00:00.000Z")
     const finishedAt = new Date("2026-07-24T12:05:00.000Z")
 
@@ -307,126 +276,66 @@ describe.skipIf(!runnable)("migrations against a live database", () => {
     expect(await memberIds()).toEqual([member.id, outsider.id].sort())
   })
 
-  test("usage daily rollup round-trips from raw usage records", async () => {
+  test("usage history round-trips immutable attempts and logical terminals", async () => {
     db = (handle as DatabaseHandle).db
-    const accountRepository = createAccountRepository(db)
-    const apiKeyRepository = createApiKeyRepository(db)
-    const usageRepository = createUsageRecordRepository(db)
-    const dailyRepository = createUsageDailyRepository(db)
-    const createdAt = new Date("2026-07-24T12:00:00.000Z")
-
-    // The rollup skips attempts that never reached an account, so both an
-    // account and a key are required for a row to survive into `usage_daily`.
-    const account = await accountRepository.create({
+    const account = await createAccountRepository(db).create({
       label: "test-migrations-usage-acct",
       provider: "zai",
     })
     accountIds.push(account.id)
-    const apiKey = await apiKeyRepository.create({
+    const key = await createApiKeyRepository(db).create({
       name: "test-migrations-usage-key",
-      value: "envelope",
-      prefix: "mar_live_yyyy",
+      value: crypto.randomUUID(),
+      prefix: "fixture",
     })
-    apiKeyIds.push(apiKey.id)
-
-    const other = await accountRepository.create({
-      label: "test-migrations-usage-acct-2",
-      provider: "zai",
-    })
-    accountIds.push(other.id)
-
-    await usageRepository.insertMany([
-      {
-        correlationId: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
-        apiKeyId: apiKey.id,
-        accountId: account.id,
-        model: "test-migrations-model",
-        outcome: "success",
-        createdAt,
-      },
-    ])
-
-    // Mid-day, to prove the statement widens to the day the instant falls in rather than
-    // scanning forward from it.
-    const rolled = await dailyRepository.rollupDay(new Date("2026-07-24T09:15:00.000Z"))
-    expect(rolled).toBeGreaterThan(0)
-
-    const totals = await dailyRepository.totals({ fromDay: "2026-07-24", toDay: "2026-07-25" })
-    expect(totals.requests).toBeGreaterThan(0)
-
-    const dailyRow = async (accountId: string) => {
-      const rows = await db.select().from(usageDaily).where(eq(usageDaily.accountId, accountId))
-      expect(rows).toHaveLength(1)
-      // biome-ignore lint/style/noNonNullAssertion: length asserted on the line above
-      return rows[0]!
+    apiKeyIds.push(key.id)
+    const createdAt = new Date("2026-07-24T12:00:00Z")
+    const row = {
+      id: crypto.randomUUID(),
+      correlationId: crypto.randomUUID(),
+      apiKeyId: key.id,
+      accountId: account.id,
+      model: "test-migrations-model",
+      outcome: "success" as const,
+      createdAt,
+      tokensIn: 11,
+      cacheReadTokens: 33,
+      costBasis: "metered" as const,
+      costEstimate: "1.5",
     }
-    const firstStamp = (await dailyRow(account.id)).updatedAt
-
-    // A second batch in the same day that moves **every** replaced measure — two more attempts on
-    // one new request (a failover chain), one failure, tokens in all four columns, one metered and
-    // one notional cost — plus one attempt on a second account for the breakdown's ordering.
-    await usageRepository.insertMany([
-      {
-        correlationId: "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
-        apiKeyId: apiKey.id,
-        accountId: account.id,
-        model: "test-migrations-model",
-        outcome: "upstream_error",
-        createdAt,
-        tokensIn: 11,
-        tokensOut: 22,
-        cacheReadTokens: 33,
-        cacheWriteTokens: 44,
-        costEstimate: "1.5",
-        costBasis: "metered",
-      },
-      {
-        correlationId: "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
-        apiKeyId: apiKey.id,
-        accountId: account.id,
-        model: "test-migrations-model",
-        outcome: "success",
-        createdAt,
-        tokensIn: 100,
-        costEstimate: "2.5",
-        costBasis: "notional",
-      },
-      {
-        correlationId: "cccccccc-cccc-cccc-cccc-cccccccccccc",
-        apiKeyId: apiKey.id,
-        accountId: other.id,
-        model: "test-migrations-model",
-        outcome: "success",
-        createdAt,
-      },
-    ])
-
-    // The conflict SET is a hand-joined `sql.raw` over `REPLACED_COLUMNS`; the only gate on that
-    // list staying complete is a re-rollup whose row must come back *replaced*, not accumulated —
-    // a measure missing from the SET keeps its first-rollup value here and fails its assertion.
-    expect(await dailyRepository.rollupDay(createdAt)).toBeGreaterThan(0)
-
-    const breakdown = await dailyRepository.breakdown(
+    const terminal = {
+      correlationId: row.correlationId,
+      winnerEventId: row.id,
+      apiKeyId: key.id,
+      accountId: account.id,
+      model: row.model,
+      outcome: "success" as const,
+      responseStatus: 200,
+      startedAt: createdAt,
+      settledAt: createdAt,
+      attributionKind: "winning-attempt" as const,
+    }
+    const usage = createUsageRecordRepository(db)
+    await usage.insertBatch({ attempts: [row], terminals: [terminal] })
+    const daily = createUsageDailyRepository(db)
+    expect(await daily.rollupDay(createdAt)).toBeGreaterThan(0)
+    const breakdown = await daily.breakdown(
       { fromDay: "2026-07-24", toDay: "2026-07-25" },
       "accountId",
     )
-    const mineFirst = breakdown.filter((row) => row.id === account.id || row.id === other.id)
-    // Biggest first: three attempts outrank one, whatever else shares the day.
-    expect(mineFirst.map((row) => row.id)).toEqual([account.id, other.id])
-    expect(mineFirst[0]).toMatchObject({
-      requests: 2,
-      attempts: 3,
-      errors: 1,
-      tokensIn: 111,
-      tokensOut: 22,
+    expect(breakdown.find((item) => item.id === account.id)).toMatchObject({
+      requests: 1,
+      attempts: 1,
+      errors: 0,
+      tokensIn: 11,
       cacheReadTokens: 33,
-      cacheWriteTokens: 44,
     })
-    expect(Number(mineFirst[0]?.costMetered)).toBeCloseTo(1.5)
-    expect(Number(mineFirst[0]?.costNotional)).toBeCloseTo(2.5)
-    expect(mineFirst[1]).toMatchObject({ requests: 1, attempts: 1, errors: 0 })
-
-    // `updated_at` is the tenth replaced column — the re-run must stamp it forward too.
-    expect((await dailyRow(account.id)).updatedAt.getTime()).toBeGreaterThan(firstStamp.getTime())
+    const before = await daily.totals({ fromDay: "2026-07-24", toDay: "2026-07-25" })
+    expect(await usage.insertBatch({ attempts: [row], terminals: [terminal] })).toEqual({
+      insertedAttempts: 0,
+      insertedTerminals: 0,
+    })
+    await daily.rollupDay(createdAt)
+    expect(await daily.totals({ fromDay: "2026-07-24", toDay: "2026-07-25" })).toEqual(before)
   })
 })

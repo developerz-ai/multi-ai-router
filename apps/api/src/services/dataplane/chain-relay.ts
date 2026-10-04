@@ -1,7 +1,7 @@
 import type { Logger } from "../../logging/logger"
 import type { AttemptFailure } from "../routing"
 import type { TranslationContext } from "../translate"
-import { createResponseObserver } from "../usage"
+import { createResponseObserver, type UsageRecord } from "../usage"
 import { RouterShutdownError } from "./active-requests"
 import type { UpstreamError } from "./attempt"
 import { breakerOptionsFor } from "./health"
@@ -174,17 +174,17 @@ export function recordAttemptFailure(
   failure: AttemptFailure,
   upstream: UpstreamError | null,
   at: AttemptClock,
-): void {
-  ctx.runtime.record(
-    attemptRecord({
-      ...ctx.runtime.attribution(attempt, servable),
-      // Same rule on the way down: a count that never landed is no more priceable than one that did.
-      priced: ctx.runtime.operation !== "count-tokens",
-      timing: ctx.runtime.timing(at.startedAt, at.started, at.upstreamMs),
-      outcome: failureOutcome(failure.kind),
-      streamed: false,
-      httpStatus: upstream?.status ?? null,
-      errorClass: null,
-    }),
-  )
+): UsageRecord {
+  const event = attemptRecord({
+    ...ctx.runtime.attribution(attempt, servable),
+    // Same rule on the way down: a count that never landed is no more priceable than one that did.
+    priced: ctx.runtime.operation !== "count-tokens",
+    timing: ctx.runtime.timing(at.startedAt, at.started, at.upstreamMs),
+    outcome: failureOutcome(failure.kind),
+    streamed: false,
+    httpStatus: upstream?.status ?? null,
+    errorClass: null,
+  })
+  ctx.runtime.record(event)
+  return event
 }

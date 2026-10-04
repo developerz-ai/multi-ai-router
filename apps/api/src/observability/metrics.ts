@@ -85,6 +85,12 @@ export function createMetrics(options: MetricsOptions = {}): RouterMetrics {
     labels: [],
     buckets: [0.0001, 0.0005, 0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1, 5],
   })
+  const usageAdmission = s.registry.histogram({
+    name: "router_usage_admission_seconds",
+    help: "Awaited usage admission duration including database lock, transaction and promise wait.",
+    labels: [],
+    buckets: [0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1, 5, 15],
+  })
   const pending = new Map<string, PendingHop>()
   const consecutiveFailures = new Map<string, number>()
   let droppedSeen = 0
@@ -140,6 +146,10 @@ export function createMetrics(options: MetricsOptions = {}): RouterMetrics {
     observeBindingWait(milliseconds) {
       if (Number.isFinite(milliseconds) && milliseconds >= 0)
         bindingWait.observe({}, milliseconds / 1_000)
+    },
+    observeUsageAdmission(milliseconds) {
+      if (Number.isFinite(milliseconds) && milliseconds >= 0)
+        usageAdmission.observe({}, milliseconds / 1_000)
     },
     observeRequest(sample) {
       inventory.observe(sample)

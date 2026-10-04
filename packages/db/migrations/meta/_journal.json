@@ -211,6 +211,13 @@
       "when": 1791063504423,
       "tag": "0029_usage_event_status",
       "breakpoints": true
+    },
+    {
+      "idx": 30,
+      "version": "7",
+      "when": 1791077096068,
+      "tag": "0030_usage_history",
+      "breakpoints": true
     }
   ]
 }

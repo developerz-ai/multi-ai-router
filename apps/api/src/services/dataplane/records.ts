@@ -134,6 +134,7 @@ export function attemptRecord(input: AttemptRecordInput): UsageRecord {
       : estimateCost({
           provider: input.provider,
           model: input.upstreamModel,
+          ...(input.accountId === null ? {} : { accountId: input.accountId }),
           tokens,
           ...(input.billing === undefined ? {} : { billing: input.billing }),
           ...(input.prices === undefined ? {} : { prices: input.prices }),

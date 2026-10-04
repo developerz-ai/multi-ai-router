@@ -92,7 +92,8 @@ export async function runChain(ctx: ChainContext): Promise<Response> {
   for (;;) {
     if (ctx.request.signal.aborted) {
       runtime.activeRequest?.release()
-      if (held !== null) return finishChain(held, lastFailure, refusals.failIfAny)
+      if (held !== null)
+        return finishChain(held, lastFailure, refusals.failIfAny, runtime.selectTerminal)
       throw ctx.request.signal.reason ?? new ClientCancelledError()
     }
     const decision = planNextAttempt(ordered, progress, lastFailure, ctx.failover)
@@ -282,5 +283,5 @@ export async function runChain(ctx: ChainContext): Promise<Response> {
   }
 
   runtime.activeRequest?.release()
-  return finishChain(held, lastFailure, refusals.failIfAny)
+  return finishChain(held, lastFailure, refusals.failIfAny, runtime.selectTerminal)
 }

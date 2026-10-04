@@ -1,7 +1,5 @@
-import { afterAll, beforeAll, describe, expect, test } from "bun:test"
-import { inArray } from "drizzle-orm"
-import { createDatabase, type Database, type DatabaseHandle } from "../../src/client"
-import { defaultMigrationsFolder, runMigrations } from "../../src/migrate"
+import { beforeAll, describe, expect, test } from "bun:test"
+import type { Database } from "../../src/client"
 import {
   type AccountRepository,
   createAccountRepository,
@@ -10,8 +8,8 @@ import {
   createUsageReadRepository,
   type UsageReadRepository,
 } from "../../src/repositories/usage-read-repository"
-import { accounts } from "../../src/schema/accounts"
 import { usageRecords } from "../../src/schema/usage-records"
+import { usageHistoryFixture } from "./usage-history-fixture"
 
 /**
  * Needs a real PostgreSQL 16+.
@@ -26,7 +24,8 @@ import { usageRecords } from "../../src/schema/usage-records"
  * keyword** in Postgres (it introduces a window-function clause), so the whole query was a syntax
  * error and the accounts screen answered `500`. Nothing but a live planner catches that.
  *
- * It never talks to a provider, only to the database, and removes every row it wrote.
+ * Each suite owns and drops a disposable database. Raw deletion guards remain
+ * active; these direct reader fixtures never leak into shared history coverage.
  */
 const url = process.env.DATABASE_URL ?? ""
 const runnable = url !== ""
@@ -34,7 +33,7 @@ const runnable = url !== ""
 const NOW = new Date("2026-07-28T12:00:00.000Z")
 const HOUR_MS = 60 * 60 * 1_000
 
-let handle: DatabaseHandle | undefined
+const fixture = usageHistoryFixture()
 let db: Database
 let accountsRepo: AccountRepository
 let usage: UsageReadRepository
@@ -43,19 +42,9 @@ const accountIds: string[] = []
 
 beforeAll(async () => {
   if (!runnable) return
-  await runMigrations({ url, migrationsFolder: defaultMigrationsFolder() })
-  handle = createDatabase({ url, maxConnections: 2 })
-  db = handle.db
+  db = fixture.db()
   accountsRepo = createAccountRepository(db)
   usage = createUsageReadRepository(db)
-})
-
-afterAll(async () => {
-  if (handle !== undefined && accountIds.length > 0) {
-    await db.delete(usageRecords).where(inArray(usageRecords.accountId, accountIds))
-    await db.delete(accounts).where(inArray(accounts.id, accountIds))
-  }
-  await handle?.close()
 })
 
 async function seedAccount() {

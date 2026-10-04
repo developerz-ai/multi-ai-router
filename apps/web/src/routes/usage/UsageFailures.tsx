@@ -64,8 +64,8 @@ export function UsageFailures(props: UsageFailuresProps) {
           reads the counts first and the caveat second has already drawn a conclusion. */}
       <Show when={props.failures.partial}>
         <p class={styles.partial}>
-          This window reaches further back than the individual attempt rows are kept, so these are
-          at least this many — the split is complete, the counts are a floor.
+          These counts and percentages cover retained attempts only. Older failure outcomes are
+          unavailable; these counts are a floor for the full history.
         </p>
       </Show>
 

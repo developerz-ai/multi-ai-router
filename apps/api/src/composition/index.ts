@@ -15,7 +15,7 @@ import {
   createScheduledTaskRepository,
   createSchedulerLockPool,
   createSessionRepository,
-  createUsageDailyRepository,
+  createUsageHistoryRepository,
   createUsageRecordRepository,
   type Database,
   type PoolSample,
@@ -177,9 +177,9 @@ export function createRuntime(deps: RuntimeDeps): Runtime {
   // The one-row local admin credential. The auth service reads it live, so a
   // `bin/admin` verb takes effect without a restart.
   const adminCredentials = createAdminCredentialRepository(database)
-  // One repository, both directions: the admin read path reads closed days, the rollup closes them.
-  const usageDaily = createUsageDailyRepository(database)
-  // The scheduler's run log; the usage read path reads it to know which days the rollup closed.
+  // Receipt-admitted event history and bounded migration/retention share one repository.
+  const usageHistory = createUsageHistoryRepository(database)
+  // The scheduler's run log records bounded maintenance outcomes.
   const scheduledTasks = createScheduledTaskRepository(database)
   // What each account's upstream says it serves, and how big. A *description* — the hourly sweep
   // writes it and nothing in selection reads it, which is what lets it refresh on a timer at all
@@ -391,6 +391,7 @@ export function createRuntime(deps: RuntimeDeps): Runtime {
     env,
     logger,
     onRecord: (record) => metrics.observeUsage(record),
+    onAdmissionDuration: (milliseconds) => metrics.observeUsageAdmission(milliseconds),
   })
 
   // The admin console's session state, in Postgres: a redeploy or a crash no longer logs the
@@ -568,7 +569,6 @@ export function createRuntime(deps: RuntimeDeps): Runtime {
     auditEvents,
     oauthStates,
     adminCredentials,
-    usageDaily,
     scheduledTasks,
     priceOverrides,
     cipher,
@@ -610,7 +610,7 @@ export function createRuntime(deps: RuntimeDeps): Runtime {
     auditEvents,
     apiKeys: keys,
     oauthStates,
-    usageDaily,
+    history: usageHistory,
     accounts,
     scheduledTasks,
     health,

@@ -63,7 +63,7 @@ export interface UsageRecord {
   /** Whether bytes reached the client. A streamed attempt is never retried. */
   readonly streamed: boolean
   readonly httpStatus: number | null
-  /** Actual client response status; null for attempts superseded by failover. */
+  /** Caller status known when this immutable event is written; terminal facts own final status. */
   readonly responseStatus: number | null
   /** The thrown class's name — never a message, never a body. */
   readonly errorClass: string | null

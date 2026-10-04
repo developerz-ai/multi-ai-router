@@ -16,7 +16,7 @@ export function finishFailedAttempt(
   held: ChainFailure | null,
 ): ChainFailure | null {
   const { runtime } = ctx
-  recordAttemptFailure(ctx, servable, attempt, outcome.failure, outcome.upstream, at)
+  const winner = recordAttemptFailure(ctx, servable, attempt, outcome.failure, outcome.upstream, at)
   logAttemptFailure(
     ctx.log,
     servable.account.id,
@@ -24,21 +24,19 @@ export function finishFailedAttempt(
     outcome,
     ctx.reasonMaxChars ?? DEFAULT_LOG_REASON_MAX_CHARS,
   )
-  return foldChainFailure(
-    held,
-    answeredFailure(
-      outcome.classification,
-      outcome.upstream,
-      servable.translation === null ? null : runtime.ingressDialect,
-      {
-        rateLimit: outcome.rateLimit,
-        now: runtime.clock.now(),
-        ...(runtime.unknownResetRetryAfterSeconds === undefined
-          ? {}
-          : { unknownResetRetryAfterSeconds: runtime.unknownResetRetryAfterSeconds }),
-        clientMessage: outcome.failure.message,
-        failureKind: outcome.failure.kind,
-      },
-    ),
+  const failure = answeredFailure(
+    outcome.classification,
+    outcome.upstream,
+    servable.translation === null ? null : runtime.ingressDialect,
+    {
+      rateLimit: outcome.rateLimit,
+      now: runtime.clock.now(),
+      ...(runtime.unknownResetRetryAfterSeconds === undefined
+        ? {}
+        : { unknownResetRetryAfterSeconds: runtime.unknownResetRetryAfterSeconds }),
+      clientMessage: outcome.failure.message,
+      failureKind: outcome.failure.kind,
+    },
   )
+  return foldChainFailure(held, failure === null ? null : { ...failure, winner })
 }

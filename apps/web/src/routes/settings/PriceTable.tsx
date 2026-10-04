@@ -6,10 +6,11 @@ import type { PriceRow, RateField } from "../../lib/api/settings"
 import { RATE_FIELDS } from "../../lib/api/settings"
 import { cx } from "../../lib/cx"
 import styles from "./PriceTable.module.scss"
-import { ORIGIN_TONE, RATE_HEADERS, rateSummary } from "./price-editing"
+import { ORIGIN_TONE, priceScopeLabel, RATE_HEADERS, rateSummary } from "./price-editing"
 
 export interface PriceTableProps {
   readonly rows: readonly PriceRow[]
+  readonly accounts?: readonly { readonly id: string; readonly label: string }[]
   /** The text in a cell, which is the operator's keystrokes and not a re-formatted number. */
   readonly value: (row: PriceRow, field: RateField) => string
   readonly invalid: (row: PriceRow, field: RateField) => boolean
@@ -49,7 +50,12 @@ export function PriceTable(props: PriceTableProps) {
       cell: (row) => (
         <div class={styles.identity}>
           <span class={styles.model}>{row.model}</span>
-          <span class={styles.provider}>{row.provider}</span>
+          <span class={styles.provider}>
+            {row.provider} · {priceScopeLabel(row, props.accounts)}
+          </span>
+          <Show when={row.notionalOnly}>
+            <Badge tone="warn">subscription attribution only</Badge>
+          </Show>
           <Badge tone={ORIGIN_TONE[row.origin]}>{row.origin}</Badge>
           <Show when={row.origin === "overridden" ? row.shipped : null}>
             {(shipped) => <span class={styles.shipped}>shipped {rateSummary(shipped())}</span>}
@@ -73,7 +79,7 @@ export function PriceTable(props: PriceTableProps) {
           // The column header names the measure, but a header does not name a
           // control — so each input carries its own label.
           aria-invalid={props.invalid(row, field) ? "true" : undefined}
-          aria-label={`${RATE_HEADERS[field]} rate for ${row.provider} ${row.model}`}
+          aria-label={`${RATE_HEADERS[field]} rate for ${row.provider} ${row.model}, ${priceScopeLabel(row, props.accounts)}`}
           class={cx(styles.rate, props.invalid(row, field) && styles.invalid)}
           inputmode="decimal"
           min="0"

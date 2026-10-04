@@ -24,6 +24,7 @@ import { useUsageSummary } from "../lib/queries/usage"
 import styles from "./UsageRoute.module.scss"
 import { UsageBreakdown } from "./usage/UsageBreakdown"
 import { UsageChart } from "./usage/UsageChart"
+import { UsageCoverage } from "./usage/UsageCoverage"
 import { UsageFailures } from "./usage/UsageFailures"
 import { UsageQuota } from "./usage/UsageQuota"
 import { UsageRecent } from "./usage/UsageRecent"
@@ -157,6 +158,7 @@ export default function UsageRoute() {
       >
         {(data) => (
           <>
+            <UsageCoverage summary={data} />
             <section aria-label="Headline figures" class={styles.tiles}>
               <StatTile
                 label="Requests"
@@ -192,12 +194,12 @@ export default function UsageRoute() {
                   nobody measured, the exact opposite of "no data in this window". */}
               <StatTile
                 label="Latency p95"
-                note={`p50 ${formatMillis(data.totals.latencyP50Ms)}`}
+                note={`Retained attempts · p50 ${formatMillis(data.totals.latencyP50Ms)}`}
                 value={formatMillis(data.totals.latencyP95Ms)}
               />
               <StatTile
                 label="Router overhead p95"
-                note="Budgeted under 5 ms — a regression is a bug"
+                note="Retained attempt measurements"
                 value={formatMillis(data.totals.routerOverheadP95Ms)}
               />
               {/* Fetched and rendered nowhere before this: the router's own budget is zero *added*
@@ -205,7 +207,7 @@ export default function UsageRoute() {
                   regression there — overhead is measured off the critical path, this is on it. */}
               <StatTile
                 label="Time to first byte p95"
-                note="Budgeted at zero added TTFT"
+                note="Retained attempts · includes upstream wait"
                 value={formatMillis(data.totals.ttfbP95Ms)}
               />
             </section>
@@ -219,10 +221,16 @@ export default function UsageRoute() {
 
             <section aria-label="Requests, attempts and errors over time" class={styles.chart}>
               <p class={styles.chartLabel}>
-                Requests, attempts and errors per {data.bucket} ·{" "}
+                Requests, attempts and errors per {data.coverage.bucketWidth} {data.bucket}
+                {data.coverage.bucketWidth === 1 ? "" : "s"} ·{" "}
                 {usageSummaryWindowLabel(data.window)}
               </p>
-              <UsageChart bucket={data.bucket} points={data.series} />
+              <UsageChart
+                bucket={data.bucket}
+                bucketWidth={data.coverage.bucketWidth}
+                incomplete={data.coverage.incomplete}
+                points={data.series}
+              />
             </section>
 
             <fieldset class={styles.dimensions}>

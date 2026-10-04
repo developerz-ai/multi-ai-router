@@ -51,6 +51,7 @@ export interface RouterMetrics {
   /** One client request, at the point it ended. */
   observeRequest(sample: RequestSample): void
   observeBindingWait(milliseconds: number): void
+  observeUsageAdmission(milliseconds: number): void
   /** One upstream attempt. Fed from the usage recorder's drain, off the request path. */
   observeUsage(record: UsageRecord): void
   observeTask(tick: TickResult): void

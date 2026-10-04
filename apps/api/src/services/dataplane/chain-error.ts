@@ -10,6 +10,7 @@ import type { FailureClassification, RateLimitSignal } from "../../providers"
 // owned by another change set right now. Fold into `../../providers` when it does.
 import { type FailureContext, toRouterError } from "../../providers/failure/router-error"
 import type { FailureKind } from "../routing"
+import type { UsageRecord } from "../usage"
 import type { UpstreamError } from "./attempt"
 
 /**
@@ -47,7 +48,7 @@ import type { UpstreamError } from "./attempt"
  * the last.
  */
 
-export type ChainFailure =
+export type ChainFailure = { readonly winner?: UsageRecord } & (
   | { readonly kind: "router"; readonly error: RouterError }
   | {
       readonly kind: "upstream"
@@ -55,6 +56,7 @@ export type ChainFailure =
       /** The dialect the body must be re-rendered into, or `null` when it already is the client's. */
       readonly dialect: Dialect | null
     }
+)
 
 /**
  * Higher wins. Total over the code union deliberately: a new `RouterError` class does not compile

@@ -62,7 +62,7 @@ export function priceOverrideAuditDetail(diff: PriceOverrideDiff): Record<string
 }
 
 function pairKey(rate: PriceRateView): string {
-  return `${rate.provider}/${rate.model}`
+  return `${rate.accountId ?? "global"}/${rate.provider}/${rate.model}`
 }
 
 function sameRates(a: PriceRateView, b: PriceRateView): boolean {

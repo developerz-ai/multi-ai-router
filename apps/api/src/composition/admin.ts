@@ -5,6 +5,7 @@ import {
   type AuditRepository,
   type CredentialRefreshLock,
   createAdminMutationRepository,
+  createUsageHistoryRepository,
   createUsageReadRepository,
   createUsageRecentRepository,
   type Database,
@@ -13,7 +14,6 @@ import {
   type PriceOverrideRepository,
   type RecoveryRepository,
   type ScheduledTaskRepository,
-  type UsageDailyRepository,
 } from "@multi-ai-router/db"
 import type { Env } from "../config/env"
 import type { Logger } from "../logging/logger"
@@ -103,7 +103,6 @@ export interface AdminPlaneDeps {
   readonly oauthStates: OauthStateRepository
   /** The one-row local admin credential; the auth service reads it live per login. */
   readonly adminCredentials: AdminCredentialRepository
-  readonly usageDaily: UsageDailyRepository
   readonly scheduledTasks: ScheduledTaskRepository
   readonly priceOverrides: PriceOverrideRepository
   readonly cipher: CredentialCipher
@@ -375,15 +374,27 @@ export function createAdminPlane(deps: AdminPlaneDeps): AdminPlane {
         onCommitted: (id, kind) => keyMutationCommitted(deps.coherence, id, kind),
       }),
       usage: createUsageService({
-        usage: createUsageReadRepository(deps.database),
+        history: createUsageHistoryRepository(deps.database),
         recent: createUsageRecentRepository(deps.database),
-        daily: deps.usageDaily,
-        scheduledTasks: deps.scheduledTasks,
         labels: catalogLabels({ keys, catalog }),
+        ...env.usageRead,
         now,
       }),
       settings: createSettingsService({
         prices: deps.priceOverrides,
+        priceAccounts: () =>
+          catalog.accounts().map((account) => ({
+            id: account.id,
+            label: account.snapshot.label,
+            provider: account.driver.provider,
+            billing: account.billing,
+            models: [
+              ...new Set([
+                ...(account.snapshot.supportedModels ?? []),
+                ...Object.values(account.driver.modelAliases ?? {}),
+              ]),
+            ],
+          })),
         scheduledTasks: deps.scheduledTasks,
         auditEvents: deps.auditEvents,
         audit,

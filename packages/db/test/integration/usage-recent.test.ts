@@ -1,13 +1,11 @@
-import { afterAll, beforeAll, describe, expect, test } from "bun:test"
-import { eq } from "drizzle-orm"
-import { createDatabase, type Database, type DatabaseHandle } from "../../src/client"
-import { defaultMigrationsFolder, runMigrations } from "../../src/migrate"
+import { beforeAll, describe, expect, test } from "bun:test"
+import type { Database } from "../../src/client"
 import { createUsageRecentRepository } from "../../src/repositories/usage-recent-repository"
 import {
   createUsageRecordRepository,
   type UsageRecordInsert,
 } from "../../src/repositories/usage-repository"
-import { usageRecords } from "../../src/schema/usage-records"
+import { usageHistoryFixture } from "./usage-history-fixture"
 
 /**
  * The live request feed against a real PostgreSQL 16+.
@@ -22,10 +20,11 @@ import { usageRecords } from "../../src/schema/usage-records"
  *   one batch and can share a millisecond; the `id` tiebreaker is what stops a page reshuffling
  *   between two refreshes.
  *
- * Every fixture is stamped in 1999 under one model name, so a run against a shared development
- * database can only ever see and remove its own rows. It never talks to a provider.
+ * Each suite owns and drops a disposable database; retries and retention facts
+ * cannot contaminate a subsequent run. It never talks to a provider.
  */
 const url = process.env.DATABASE_URL ?? ""
+const fixture = usageHistoryFixture()
 const runnable = url !== ""
 
 const MODEL = "test-recent-model"
@@ -40,13 +39,10 @@ const CHAIN = "33333333-3333-4333-8333-333333333333"
 const OTHER_CHAIN = "55555555-5555-4555-8555-555555555555"
 /**
  * A caller's own label — deliberately not a uuid, which is the whole point of the lookup, and
- * deliberately prefixed: a shared development database may hold a real `req-42` from someone's
- * smoke test, and a fixture that assumes otherwise fails for a reason that has nothing to do with
- * the code under test.
+ * deliberately prefixed so fixture labels remain recognizable in diagnostics.
  */
 const CLIENT_ID = "test-recent-req-42"
 
-let handle: DatabaseHandle | undefined
 let db: Database
 
 function row(over: Partial<UsageRecordInsert> = {}): UsageRecordInsert {
@@ -63,9 +59,7 @@ function row(over: Partial<UsageRecordInsert> = {}): UsageRecordInsert {
 
 beforeAll(async () => {
   if (!runnable) return
-  await runMigrations({ url, migrationsFolder: defaultMigrationsFolder() })
-  handle = createDatabase({ url, maxConnections: 2 })
-  db = handle.db
+  db = fixture.db()
 
   await createUsageRecordRepository(db).insertMany([
     // One failover chain: two attempts sharing a correlation id *and* an instant.
@@ -80,11 +74,6 @@ beforeAll(async () => {
       errorClass: "UpstreamError",
     }),
   ])
-})
-
-afterAll(async () => {
-  if (handle !== undefined) await db.delete(usageRecords).where(eq(usageRecords.model, MODEL))
-  await handle?.close()
 })
 
 describe.skipIf(!runnable)("the live request feed against a live database", () => {

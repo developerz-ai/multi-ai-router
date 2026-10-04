@@ -1,6 +1,10 @@
 import { createWriterLifecycle } from "../shutdown/writer-lifecycle"
 import { createBoundedQueue } from "./queue"
 import type { UsageRecord } from "./record"
+import type { UsageRequestTerminal } from "./request-terminal"
+
+type QueuedUsage = UsageRecord | UsageRequestTerminal
+const isAttempt = (event: QueuedUsage): event is UsageRecord => "eventId" in event
 
 /**
  * Usage accounting, off the request path.
@@ -24,13 +28,14 @@ import type { UsageRecord } from "./record"
 
 export interface UsageWriter {
   /** Persists one batch. May reject; the recorder retries it once, then counts it and moves on. */
-  write(batch: readonly UsageRecord[]): Promise<void>
+  write(batch: readonly UsageRecord[], terminals?: readonly UsageRequestTerminal[]): Promise<void>
 }
 
 /** What `onWriteError` is handed: the rejection, the records it refused, and their fate. */
 export interface UsageWriteFailure {
   readonly error: unknown
   readonly batch: readonly UsageRecord[]
+  readonly terminals: readonly UsageRequestTerminal[]
   /**
    * False when the batch went back for its one retry — reporting is late, nothing is lost yet.
    * True when that retry was refused too and the records were dropped. The two are different
@@ -50,7 +55,7 @@ export interface UsageRecorderOptions {
   readonly batchSize?: number
   readonly flushIntervalMs?: number
   /** Called once per shed record, so the drop counter and the warn log have a source. */
-  readonly onShed?: (record: UsageRecord) => void
+  readonly onShed?: (record: QueuedUsage) => void
   /** Called once per refused batch — twice for one that fails, retries, and fails again. */
   readonly onWriteError?: (failure: UsageWriteFailure) => void
   /**
@@ -94,6 +99,7 @@ export interface UsageStats {
 export interface UsageRecorder {
   /** Enqueue. Synchronous, non-throwing, off the critical path. */
   record(record: UsageRecord): void
+  recordTerminal(terminal: UsageRequestTerminal): void
   /**
    * Drains and writes everything queued, stopping at the first refused batch — the next one would
    * meet the same database. Used by tests and by graceful shutdown.
@@ -109,7 +115,7 @@ export function createUsageRecorder(
   writer: UsageWriter,
   options: UsageRecorderOptions = {},
 ): UsageRecorder {
-  const queue = createBoundedQueue<UsageRecord>(options.maxQueued ?? DEFAULT_USAGE_QUEUE_MAX)
+  const queue = createBoundedQueue<QueuedUsage>(options.maxQueued ?? DEFAULT_USAGE_QUEUE_MAX)
   const batchSize = options.batchSize ?? DEFAULT_USAGE_BATCH_SIZE
   const intervalMs = options.flushIntervalMs ?? DEFAULT_USAGE_FLUSH_INTERVAL_MS
 
@@ -125,15 +131,17 @@ export function createUsageRecorder(
    * rather than pushed onto the queue's head so that overflow — which sheds the oldest, and these
    * *are* the oldest — cannot delete it before it gets the retry it is waiting for.
    */
-  let retry: readonly UsageRecord[] | null = null
+  let retry: readonly QueuedUsage[] | null = null
 
   /** Returns false when the pass should end: the writer just refused, so the next batch would too. */
-  const writeBatch = async (batch: readonly UsageRecord[], retried: boolean): Promise<boolean> => {
+  const writeBatch = async (batch: readonly QueuedUsage[], retried: boolean): Promise<boolean> => {
+    const attempts = batch.filter(isAttempt)
+    const terminals = batch.filter((event): event is UsageRequestTerminal => !isAttempt(event))
     const observe = options.onRecord
-    if (observe !== undefined && !retried) for (const record of batch) observe(record)
+    if (observe !== undefined && !retried) for (const record of attempts) observe(record)
     unsettled = batch.length
     try {
-      await writer.write(batch)
+      await writer.write(attempts, terminals)
       written += batch.length
       return true
     } catch (error) {
@@ -142,7 +150,7 @@ export function createUsageRecorder(
       // forever and starve every record behind it.
       if (retried) writeDiscarded += batch.length
       else retry = batch
-      options.onWriteError?.({ error, batch, discarded: retried })
+      options.onWriteError?.({ error, batch: attempts, terminals, discarded: retried })
       return false
     } finally {
       unsettled = 0
@@ -181,14 +189,17 @@ export function createUsageRecorder(
     warn: (pending) => options.onAbandoned?.(pending),
   })
 
+  const enqueue = (event: QueuedUsage): void => {
+    if (!lifecycle.accepting()) {
+      rejectedAfterStop += 1
+      return
+    }
+    if (!queue.push(event)) options.onShed?.(event)
+  }
+
   return {
-    record(record) {
-      if (!lifecycle.accepting()) {
-        rejectedAfterStop += 1
-        return
-      }
-      if (!queue.push(record)) options.onShed?.(record)
-    },
+    record: enqueue,
+    recordTerminal: enqueue,
 
     flush,
 
@@ -225,6 +236,7 @@ export function createUsageRecorder(
 export function createNullUsageRecorder(): UsageRecorder {
   return {
     record: () => undefined,
+    recordTerminal: () => undefined,
     flush: () => Promise.resolve(),
     start: () => undefined,
     stop: () => Promise.resolve(),

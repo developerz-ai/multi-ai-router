@@ -1,6 +1,11 @@
 import type { Database } from "../client"
-import { type NewUsageRecordRow, usageRecords } from "../schema/usage-records"
-import { deleteOldestBatch } from "./bounded-delete"
+import type { NewUsageRecordRow } from "../schema/usage-records"
+import {
+  createUsageBatchMutation,
+  type UsageBatchInsert,
+  type UsageBatchResult,
+} from "./usage-batch-mutation"
+import { createUsageDetailRetention } from "./usage-history-maintenance"
 
 /**
  * Postgres' bind ceiling. The extended protocol's Bind message counts parameters
@@ -62,6 +67,7 @@ export interface UsageRecordRepository {
    * Caller-bounded at {@link USAGE_RECORD_MAX_BATCH_ROWS} rows — see there for why
    * exceeding it is a total loss rather than a slow path.
    */
+  insertBatch(input: UsageBatchInsert): Promise<UsageBatchResult>
   insertMany(rows: readonly UsageRecordInsert[]): Promise<number>
   /**
    * Deletes records created before `cutoff` in one bounded batch, oldest first,
@@ -76,29 +82,22 @@ export interface UsageRecordRepository {
    * Rolled-up history in `usage_daily` outlives these rows by design — a totals
    * report must not shrink because the raw attempts aged out.
    */
+  deleteRetainedBatch(input: {
+    readonly retentionDays: number
+    readonly limit: number
+  }): Promise<number>
   deleteOlderThan(cutoff: Date, limit: number): Promise<number>
 }
 
 export function createUsageRecordRepository(db: Database): UsageRecordRepository {
+  const insertBatch = createUsageBatchMutation(db)
   return {
+    insertBatch,
     insertMany: async (rows) => {
       if (rows.length === 0) return 0
-      const written = await db
-        .insert(usageRecords)
-        .values([...rows])
-        .onConflictDoNothing({ target: usageRecords.id })
-        .returning({ id: usageRecords.id })
-      return written.length
+      return (await insertBatch({ attempts: rows, terminals: [] })).insertedAttempts
     },
 
-    deleteOlderThan: (cutoff, limit) =>
-      deleteOldestBatch({
-        db,
-        table: usageRecords,
-        id: usageRecords.id,
-        agedBy: usageRecords.createdAt,
-        cutoff,
-        limit,
-      }),
+    ...createUsageDetailRetention(db),
   }
 }

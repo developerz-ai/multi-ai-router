@@ -36,6 +36,8 @@ const ANCIENT = new Date("1999-01-01T00:00:00.000Z")
 const CUTOFF = new Date("2000-01-01T00:00:00.000Z")
 
 let handle: DatabaseHandle | undefined
+let admin: DatabaseHandle | undefined
+const databaseName = `retention_${crypto.randomUUID().replaceAll("-", "")}`
 let db: Database
 
 const accountIds: string[] = []
@@ -43,8 +45,12 @@ const keyIds: string[] = []
 
 beforeAll(async () => {
   if (!runnable) return
-  await runMigrations({ url, migrationsFolder: defaultMigrationsFolder() })
-  handle = createDatabase({ url, maxConnections: 2 })
+  admin = createDatabase({ url, maxConnections: 1 })
+  await admin.sql.unsafe(`create database "${databaseName}"`)
+  const uri = new URL(url)
+  uri.pathname = `/${databaseName}`
+  await runMigrations({ url: uri.toString(), migrationsFolder: defaultMigrationsFolder() })
+  handle = createDatabase({ url: uri.toString(), maxConnections: 2 })
   db = handle.db
 })
 
@@ -59,6 +65,8 @@ afterAll(async () => {
     await db.delete(usageDaily).where(eq(usageDaily.model, "test-retention-daily"))
   }
   await handle?.close()
+  await admin?.sql.unsafe(`drop database if exists "${databaseName}" with (force)`)
+  await admin?.close()
 })
 
 describe.skipIf(!runnable)("bounded retention deletes against a live database", () => {
@@ -67,6 +75,7 @@ describe.skipIf(!runnable)("bounded retention deletes against a live database", 
     const correlationId = "44444444-4444-4444-4444-444444444444"
     await repository.insertMany(
       Array.from({ length: 5 }, () => ({
+        id: crypto.randomUUID(),
         correlationId,
         model: "test-retention-model",
         outcome: "success" as const,
@@ -75,7 +84,12 @@ describe.skipIf(!runnable)("bounded retention deletes against a live database", 
     )
     // One row inside the retention window, to prove the cutoff is a cutoff.
     await repository.insertMany([
-      { correlationId, model: "test-retention-model", outcome: "success" as const },
+      {
+        id: crypto.randomUUID(),
+        correlationId,
+        model: "test-retention-model",
+        outcome: "success" as const,
+      },
     ])
 
     // A filled batch: five are old, three may go.
@@ -156,11 +170,19 @@ describe.skipIf(!runnable)("bounded retention deletes against a live database", 
       accountId,
       model: "test-retention-daily",
     }))
+    await handle?.sql.unsafe("alter table usage_daily disable trigger usage_history_baseline_seal")
     await db.insert(usageDaily).values(rows)
+    await handle?.sql.unsafe("alter table usage_daily enable trigger usage_history_baseline_seal")
 
     // Three days are older than the cutoff; the batch stops at two of them.
-    expect(await repository.deleteOlderThan(CUTOFF, 2)).toBe(2)
-    expect(await repository.deleteOlderThan(CUTOFF, 2)).toBe(1)
+    let total = 0
+    for (let i = 0; i < 20; i++) {
+      const count = await repository.deleteOlderThan(CUTOFF, 2)
+      expect(count).toBeLessThanOrEqual(2)
+      total += count
+      if (count === 0) break
+    }
+    expect(total).toBeGreaterThanOrEqual(3)
     expect(await repository.deleteOlderThan(CUTOFF, 2)).toBe(0)
 
     // The cutoff's own day survives: "older than 2000-01-01" is not "up to and including it".

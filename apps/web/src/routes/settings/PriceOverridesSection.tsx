@@ -20,6 +20,7 @@ import { visiblePriceRows } from "../../lib/price-filter"
 import { useProviders } from "../../lib/queries/providers"
 import { useSavePriceOverrides, useSettings } from "../../lib/queries/settings"
 import { PriceAddForm } from "./PriceAddForm"
+import { PriceCoverage } from "./PriceCoverage"
 import styles from "./PriceOverridesSection.module.scss"
 import { PriceTable } from "./PriceTable"
 import { PriceTableControls } from "./PriceTableControls"
@@ -34,21 +35,7 @@ import {
   ZERO_RATES,
 } from "./price-editing"
 
-/**
- * The price table: shipped rows and operator overrides in one list.
- *
- * Three rules this section exists to hold.
- *
- * **Nothing is saved until Save is pressed.** Every edit is a signal here; the
- * edits survive a failed save, because losing a table of typed numbers to a 400
- * is worse than the 400. **The PATCH is the complete set.** Removing an override means sending a list
- * without it, so the confirmation names every row that disappears and what each
- * one falls back to — a shipped price, or no price at all.
- *
- * **Editing state lives outside the `QueryBoundary`.** The boundary re-runs its
- * children whenever the query resolves again, so state held inside would be wiped
- * by a background refetch mid-edit.
- */
+/** Edit overrides locally; Save atomically replaces the stored account/provider/model set. */
 export function PriceOverridesSection() {
   const settings = useSettings()
   const providers = useProviders()
@@ -57,6 +44,7 @@ export function PriceOverridesSection() {
   const [drafts, setDrafts] = createSignal<Readonly<Record<string, RateDraft>>>({})
   const [extras, setExtras] = createSignal<readonly PriceRow[]>([])
   const [dropped, setDropped] = createSignal<readonly string[]>([])
+  const [accountId, setAccountId] = createSignal("")
   const [provider, setProvider] = createSignal("")
   const [model, setModel] = createSignal("")
   const [addError, setAddError] = createSignal<string | null>(null)
@@ -111,7 +99,7 @@ export function PriceOverridesSection() {
 
   const revert = (row: PriceRow) => {
     const shipped = row.shipped
-    if (shipped === null) {
+    if (shipped === null || row.preserveOverride) {
       // An extension has nothing to revert to: removing it un-prices the model.
       setExtras((current) => current.filter((extra) => extra.id !== row.id))
       setDropped((current) => (current.includes(row.id) ? current : [...current, row.id]))
@@ -140,7 +128,7 @@ export function PriceOverridesSection() {
       return
     }
 
-    const id = priceRowId(chosen.id, name)
+    const id = priceRowId(chosen.id, name, accountId() || null)
     if (rows(view).some((row) => row.id === id)) {
       setAddError(`${chosen.id} / ${name} is already listed — edit its row instead.`)
       return
@@ -150,6 +138,7 @@ export function PriceOverridesSection() {
       ...current,
       {
         id,
+        accountId: accountId() || null,
         provider: chosen.id,
         model: name,
         origin: "added",
@@ -201,12 +190,14 @@ export function PriceOverridesSection() {
       >
         {(view) => (
           <>
-            <p class={styles.note}>
-              The shipped rates were last checked against their vendors on{" "}
-              <strong>{view.prices.shippedAsOf}</strong>. They ship inside the image and a vendor
-              reprices without asking, so anything newer than that date is the operator's to correct
-              here.
-            </p>
+            <PriceCoverage
+              prices={view.prices}
+              onPrice={(id, chosenProvider, name) => {
+                setAccountId(id)
+                setProvider(chosenProvider)
+                setModel(name)
+              }}
+            />
 
             <PriceTableControls
               hidden={visible(view).hidden}
@@ -220,6 +211,7 @@ export function PriceOverridesSection() {
             />
 
             <PriceTable
+              accounts={view.prices.accounts}
               invalid={badCell}
               onEdit={edit}
               onRevert={revert}
@@ -228,11 +220,17 @@ export function PriceOverridesSection() {
             />
 
             <PriceAddForm
+              accounts={view.prices.accounts}
+              accountId={accountId()}
+              onAccount={setAccountId}
               error={addError()}
               model={model()}
               onAdd={() => add(view)}
               onModel={setModel}
-              onProvider={setProvider}
+              onProvider={(value) => {
+                setProvider(value)
+                setAccountId("")
+              }}
               provider={provider()}
               providers={providerList()}
             />

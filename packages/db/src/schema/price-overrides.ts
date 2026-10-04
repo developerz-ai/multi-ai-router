@@ -1,4 +1,5 @@
-import { numeric, pgTable, text, timestamp, uniqueIndex, uuid } from "drizzle-orm/pg-core"
+import { numeric, pgTable, text, timestamp, unique, uuid } from "drizzle-orm/pg-core"
+import { accounts } from "./accounts"
 import { providerId } from "./enums"
 
 /**
@@ -37,6 +38,7 @@ export const priceOverrides = pgTable(
   "price_overrides",
   {
     id: uuid("id").primaryKey().defaultRandom(),
+    accountId: uuid("account_id").references(() => accounts.id, { onDelete: "cascade" }),
     provider: providerId("provider").notNull(),
     model: text("model").notNull(),
 
@@ -54,7 +56,11 @@ export const priceOverrides = pgTable(
     createdAt: timestamp("created_at", { withTimezone: true, mode: "date" }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true, mode: "date" }).notNull().defaultNow(),
   },
-  (table) => [uniqueIndex("price_overrides_provider_model_key").on(table.provider, table.model)],
+  (table) => [
+    unique("price_overrides_account_provider_model_key")
+      .on(table.accountId, table.provider, table.model)
+      .nullsNotDistinct(),
+  ],
 )
 
 export type PriceOverrideRow = typeof priceOverrides.$inferSelect
