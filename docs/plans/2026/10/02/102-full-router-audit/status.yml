@@ -5,17 +5,7 @@ created_by: sebi
 worked_by: Codex team
 owner: sebi
 percent: 67
-current_focus: W1-W7A merged; twelve PRs. PR153 merged5590429 after five required checks passed
-  atb58a67a, final CodeRabbit review found no actionable comments and all seven threads were resolved.
-  W7B translation source and protocol specifications are integrated locally on the next serial branch.
-  Final PG18 gate passed5323 tests with zero failures and59624 assertions after correcting
-  the strict bundle guard collision, accounting fixture and ID/index stream identity handling.
-  Composition is split by responsibility; every changed production file is within300 lines.
-  Warm benchmarks passed16000 requests with zero failures or buffered streams; small maxp99.758ms
-  and280KB maxp994.545ms. Packaging, PR review and merge remain pending.
-  The owner accepted the observed W7A280000-byte translated nonstream6ms warm p99 on2026-10-04;
-  its strict failure and prior7.333ms failure remain recorded. L16 cold/session latency remains open.
-  Infrastructure monitoring, operational rotation, UI/developer workflow follow-ups, release and deployment remain open.
+current_focus: W1-W7B merged; thirteen PRs. PR154 (W7B translation terminal contracts) merged13c60a3 on2026-10-04 after five required checks passed at ae6ec03 and all review threads were resolved. Release v2.16.0 (PRs141-154) is cut by the release PR; production deployment is the ../infrastructure pin bump. L16 cold/session latency, infrastructure monitoring, operational rotation (#87) and UI/developer workflow follow-ups remain open.
 
 slices:
 - file: 01-transport.md
