@@ -11,10 +11,10 @@ export async function runBindingContention(url: string, requests = 100, holdMs =
   const keyId = crypto.randomUUID()
   const repository = createSessionRepository(database.db)
   const results = []
-  await database.db
-    .insert(apiKeys)
-    .values({ id: keyId, name: "offline-binding-bench", value: "offline", prefix: keyId })
   try {
+    await database.db
+      .insert(apiKeys)
+      .values({ id: keyId, name: "offline-binding-bench", value: "offline", prefix: keyId })
     for (const promptBytes of [1024, 280000]) {
       for (const provider of ["anthropic-api", "openrouter"] as const) {
         for (const stream of [false, true]) {
@@ -161,8 +161,11 @@ export async function runBindingContention(url: string, requests = 100, holdMs =
       results,
     }
   } finally {
-    await database.sql`delete from api_keys where id = ${keyId}`
-    await database.close()
+    try {
+      await database.sql`delete from api_keys where id = ${keyId}`
+    } finally {
+      await database.close()
+    }
   }
 }
 function summary(values: number[]) {

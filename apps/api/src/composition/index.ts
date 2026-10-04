@@ -234,8 +234,8 @@ export function createRuntime(deps: RuntimeDeps): Runtime {
     // Every standing block the breaker forms is announced here and nowhere else, which is what
     // makes one hook enough to make every one of them durable. Which of them may be *stored* is
     // the writer's policy, not this file's.
-    onBlocked: (accountId, status, observation) => {
-      if (observation !== undefined) statusWriter.record(accountId, status, observation)
+    onBlocked: (accountId, status, observation, windows) => {
+      if (observation !== undefined) statusWriter.record(accountId, status, observation, windows)
     },
     // "Re-check now" and account deletion clear this store; the SDK's own per-Account buckets are
     // the same request path's memory of the same fact and have to go with them, or the next

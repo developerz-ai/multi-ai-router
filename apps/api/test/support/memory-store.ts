@@ -41,6 +41,7 @@ export function createMemoryStore(): MemoryStore {
   const audit: AuditEventRow[] = []
 
   let mutations: AdminMutationRepository | undefined
+  const quota = memoryAccountQuota(accounts, recoveries)
   return {
     get mutations() {
       mutations ??= createMemoryMutations(this)
@@ -59,8 +60,8 @@ export function createMemoryStore(): MemoryStore {
     },
 
     accounts: {
-      ...memoryAccountLifecycle(accounts, oauthStates, recoveries),
-      ...memoryAccountQuota(accounts, recoveries),
+      ...memoryAccountLifecycle(accounts, oauthStates, recoveries, quota.upsertQuotaWindow),
+      ...quota,
       create: async (input) => {
         const row: AccountRow = {
           id: input.id ?? crypto.randomUUID(),

@@ -266,6 +266,12 @@ SDK's own `rate_limit_event` stream events: `status`, `resetsAt`, `rateLimitType
 **primary** source — we do not poll an HTTP usage endpoint to learn what the stream already told us.
 Other providers report through response headers, `Retry-After`, or a provider-specific balance field.
 
+Accepted readings retain their original account and recovery observation through persistence.
+When the same attempt subsequently parks an account for authentication or credits, its accepted
+quota windows and blocked status commit together against that observation. Independent status
+transitions still reject stale readings; another attempt's accumulated windows are not copied into
+the blocked-status write.
+
 **Freshness is bounded by traffic, not by a poll interval.** The signal rides on responses the router
 is already making, so an active Account's reading is as fresh as its last request; an idle Account
 gets only a slow background floor and its reading can be old. That is precisely why **`lastCheckedAt`

@@ -163,17 +163,18 @@ Each is a Zod schema **and** its `z.infer` type under one name. These are the si
 | Thing | Where | Use it when |
 |---|---|---|
 | `createRegistry(options)` → `Registry` with `counter` / `gauge` / `histogram` / `onCollect` / `expose` | `observability/registry.ts` | Any new metric primitive. Label names are declared once per metric and checked by the compiler, so a `request_id` label is a type error rather than a review comment. Series are capped per metric — cardinality may degrade, it may not take the process down |
-| `createSeries(options)` → `RouterSeries` | `observability/series.ts` | Adding or renaming a series. **Every** exported metric is declared here and nowhere else; the mapping code never names a metric |
+| `createSeries(options)` → `RouterSeries` | `observability/series.ts` | Adding or renaming a series. Common metric families are declared here; configured inventory families live in `inventory.ts`, and the binding-wait histogram is registered by `createMetrics` |
 | `createMetrics(options)` → `RouterMetrics` | `observability/metrics.ts` | Turning a `UsageRecord`, a finished request, or a scheduler tick into numbers. Never measures anything itself |
 | `createRuntimeMetrics(deps)` → `RouterMetrics` | `observability/runtime.ts` | The production wiring: the registry plus the per-scrape gauges read from the warm catalog and health store. `composition.ts` is its one caller |
 | `countInventory(snapshot, inventory, options)` | `observability/inventory.ts` | Scrape-only configured pool/model availability through the real scope and candidate filter; separates ordinary from actual replica-local recovery capacity without acquiring permits or querying SQL |
 | `RouterMetrics.observeBindingWait(milliseconds)` | `observability/metrics.ts` | Unlabelled awaited session-binding latency; includes pool queue, query and promise wait, without subtracting it from router overhead |
 | `trackPool(sql, max)` → `{ sql, sample() }` | `packages/db/src/pool-metrics.ts` | Counting in-flight/idle/waiting connections against a postgres.js pool, when the driver itself exposes no such stat. Wraps tagged-template calls, `.unsafe` (how Drizzle issues every query), `.begin`, and `.reserve` via one `Proxy` — wrap the raw client with this before handing it to `drizzle(...)`, never after |
 
-Recording is off the critical path by construction: attempt series ride the usage recorder's
-`onRecord` drain, state gauges are sampled per scrape, and the only per-request call is a single
-counter increment at the point a request ends. Never add a metric write inside `attempt.ts` or the
-failover chain.
+Attempt series ride the usage recorder's `onRecord` drain, and state gauges are sampled per
+scrape. The request-end observer runs once at logical terminal settlement. Separately,
+`observeBindingWait` records an unlabelled histogram observation on the request path when an
+awaited subscription session-binding lookup settles. Never add a metric write inside `attempt.ts`
+or the failover chain.
 
 ### Cost estimation — `apps/api/src/services/cost/`
 

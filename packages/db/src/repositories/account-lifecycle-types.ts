@@ -1,4 +1,4 @@
-import type { AccountStatus, ProviderId } from "@multi-ai-router/core"
+import type { AccountStatus, ProviderId, QuotaWindowState } from "@multi-ai-router/core"
 import type { AccountRow } from "../schema/accounts"
 import type { OauthStateRow } from "../schema/oauth-states"
 import type { UpdateAccountInput } from "./account-types"
@@ -8,6 +8,8 @@ export interface AccountObservation {
   readonly recoveryGeneration?: string | null
   /** External operator checks may mutate only while their durable lease is owned. */
   readonly operatorCheckToken?: string
+  readonly healthRecoveryVersion?: number
+  readonly authRecoveryVersion?: number
   readonly lifecycleVersion: number
   readonly authMaterial: string | null
   readonly status: AccountStatus
@@ -24,6 +26,7 @@ export interface AccountLifecycleMethods {
     id: string
     expected: AccountObservation
     status: AccountStatus
+    quotaWindows?: readonly QuotaWindowState[]
     now: Date
   }): Promise<AccountRow | undefined>
   updateOperatorAccount(input: {
