@@ -1,13 +1,14 @@
 import { ownEntry, ProviderId } from "@multi-ai-router/core"
+import type { RateLookupContext } from "./rates"
 import { type ModelRates, type ModelTable, modelLookupKeys, type ShippedRate } from "./rates"
 import { ANTHROPIC_MODELS } from "./tables/anthropic"
 import { CEREBRAS_MODELS } from "./tables/cerebras"
 import { DEEPSEEK_MODELS } from "./tables/deepseek"
 import { GOOGLE_MODELS } from "./tables/google"
 import { GROQ_MODELS } from "./tables/groq"
+import { KIMI_CODING_REFERENCES } from "./tables/kimi-coding"
 import { MINIMAX_MODELS } from "./tables/minimax"
 import { MISTRAL_MODELS } from "./tables/mistral"
-import { MOONSHOT_MODELS } from "./tables/moonshot"
 import { OPENAI_MODELS } from "./tables/openai"
 import { TOGETHER_MODELS } from "./tables/together"
 import { XAI_MODELS } from "./tables/xai"
@@ -30,21 +31,13 @@ import { ZAI_MODELS } from "./tables/zai"
  * A deployment correcting one stale price must not lose the rest of the table to do it.
  */
 
-/**
- * The day every row in `tables/` was checked against its vendor's own published price.
- *
- * A price table with no date is a table nobody can judge. This one is shipped in an image, vendors
- * reprice without asking, and the honest reading of a cost column is "correct as of this date, to
- * the extent the operator has not overridden it" — so the date travels with the numbers: to
- * `GET /api/admin/settings` for the console, and to `router_price_table_asof_timestamp_seconds`
- * for an alert that fires when it has aged past what a deployment tolerates.
- *
- * Update it in the same commit as any edit under `tables/`, and never without one.
- */
+/** Conservative inherited snapshot date; source verification is reported independently. */
 export const PRICE_TABLE_AS_OF = "2026-10-01"
 
 /**
- * Only providers with a published, model-keyed price list appear here.
+ * Provider tables and explicitly eligible subscription reference identities appear here.
+ * Kimi coding identities are distinct from Moonshot platform names; their reference
+ * rates never price a metered coding account or cache writes with unknown TTL.
  *
  * `anthropic-oauth` shares the Anthropic API table and `openai-oauth` shares the OpenAI one
  * deliberately: a subscription has no per-token price, so those rows are valued at what the same
@@ -69,7 +62,7 @@ const PRICES: Partial<Record<ProviderId, ModelTable>> = {
   "openai-oauth": OPENAI_MODELS,
   gemini: GOOGLE_MODELS,
   zai: ZAI_MODELS,
-  kimi: MOONSHOT_MODELS,
+  kimi: KIMI_CODING_REFERENCES,
   minimax: MINIMAX_MODELS,
   groq: GROQ_MODELS,
   deepseek: DEEPSEEK_MODELS,
@@ -80,11 +73,20 @@ const PRICES: Partial<Record<ProviderId, ModelTable>> = {
 }
 
 /** The rates for one upstream model, or null when this image ships no price for it. */
-export function lookupRates(provider: ProviderId, model: string): ModelRates | null {
+export function lookupRates(
+  provider: ProviderId,
+  model: string,
+  context?: RateLookupContext,
+): ModelRates | null {
+  if (
+    provider === "kimi" &&
+    (context?.billing !== "subscription" || (context.cacheWriteTokens ?? 0) > 0)
+  )
+    return null
   const table = PRICES[provider]
   if (table === undefined) return null
   const [name, family] = modelLookupKeys(model)
-  return ownEntry(table, name) ?? ownEntry(table, family) ?? null
+  return ownEntry(table, name) ?? (provider === "kimi" ? null : ownEntry(table, family)) ?? null
 }
 
 /**
@@ -107,8 +109,15 @@ export function listShippedRates(): readonly ShippedRate[] {
     if (table === undefined) continue
     for (const [model, rates] of Object.entries(table)) {
       const { longContext, ...standard } = rates
-      rows.push({ provider, model, ...standard })
-      if (longContext !== undefined) rows.push({ provider, model, ...longContext })
+      rows.push({
+        provider,
+        model,
+        ...standard,
+        sourceId: sourceFor(provider),
+        ...(provider === "kimi" ? { notionalOnly: true } : {}),
+      })
+      if (longContext !== undefined)
+        rows.push({ provider, model, ...longContext, sourceId: sourceFor(provider) })
     }
   }
   return rows.sort(
@@ -117,4 +126,16 @@ export function listShippedRates(): readonly ShippedRate[] {
       a.model.localeCompare(b.model) ||
       (a.fromPromptTokens ?? 0) - (b.fromPromptTokens ?? 0),
   )
+}
+
+function sourceFor(provider: ProviderId): string {
+  const source: Partial<Record<ProviderId, string>> = {
+    "anthropic-api": "anthropic",
+    "anthropic-oauth": "anthropic",
+    "openai-api": "openai",
+    "openai-oauth": "openai",
+    gemini: "google",
+    kimi: "kimi-coding-reference",
+  }
+  return source[provider] ?? provider
 }

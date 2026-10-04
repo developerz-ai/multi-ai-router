@@ -80,7 +80,9 @@ describe("the settings read", () => {
     const { shipped } = result.value.prices
     expect(shipped.length).toBeGreaterThan(0)
     for (const row of shipped) {
-      const fields = Object.keys(row).sort()
+      const fields = Object.keys(row)
+        .filter((key) => key !== "sourceId" && key !== "notionalOnly")
+        .sort()
       expect(fields).toEqual(row.fromPromptTokens === undefined ? RATE_FIELDS : TIER_FIELDS)
     }
 
@@ -145,6 +147,7 @@ describe("the settings read", () => {
         outputPerMtok: 2,
         cacheReadPerMtok: 0,
         cacheWritePerMtok: 0,
+        accountId: null,
         updatedAt: NOW.toISOString(),
       },
     ])

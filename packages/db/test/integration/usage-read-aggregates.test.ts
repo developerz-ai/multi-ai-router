@@ -1,7 +1,5 @@
-import { afterAll, beforeAll, describe, expect, test } from "bun:test"
-import { inArray } from "drizzle-orm"
-import { createDatabase, type Database, type DatabaseHandle } from "../../src/client"
-import { defaultMigrationsFolder, runMigrations } from "../../src/migrate"
+import { beforeAll, describe, expect, test } from "bun:test"
+import type { Database } from "../../src/client"
 import {
   type AccountRepository,
   createAccountRepository,
@@ -12,8 +10,8 @@ import {
   type UsageWindow,
 } from "../../src/repositories/usage-read-repository"
 import type { UsageRecordInsert } from "../../src/repositories/usage-repository"
-import { accounts } from "../../src/schema/accounts"
 import { usageRecords } from "../../src/schema/usage-records"
+import { usageHistoryFixture } from "./usage-history-fixture"
 
 /**
  * Needs a real PostgreSQL 16+.
@@ -25,9 +23,9 @@ import { usageRecords } from "../../src/schema/usage-records"
  * (`usage-read-repository.ts` documents the hazard). Each of them has to run against a live
  * planner at least once, which is this file — the class of gap that let #77 ship broken.
  *
- * Fixtures live in their own far-future day, so a shared dev database cannot bleed rows into the
- * window under test. It never talks to a provider, only to the database, and removes every row it
- * wrote.
+ * Each suite owns a disposable database and drops it after the assertions. Direct
+ * raw fixtures deliberately have no receipts; production deletion guards remain
+ * active, and repeated runs cannot retain their rows in the shared router database.
  */
 const url = process.env.DATABASE_URL ?? ""
 const runnable = url !== ""
@@ -51,14 +49,13 @@ const BIG_WINDOW: UsageWindow = {
 /** Fits an `integer` column on its own; two of them do not fit an `int` sum. */
 const HALF_OVERFLOW = 1_500_000_000
 
-let handle: DatabaseHandle | undefined
+const fixture = usageHistoryFixture()
 let db: Database
 let accountsRepo: AccountRepository
 let usage: UsageReadRepository
 
 let accountA = ""
 let accountB = ""
-const accountIds: string[] = []
 
 /** One attempt with every measured field spelled out, at a chosen instant. */
 function attempt(
@@ -80,15 +77,12 @@ function attempt(
 
 beforeAll(async () => {
   if (!runnable) return
-  await runMigrations({ url, migrationsFolder: defaultMigrationsFolder() })
-  handle = createDatabase({ url, maxConnections: 2 })
-  db = handle.db
+  db = fixture.db()
   accountsRepo = createAccountRepository(db)
   usage = createUsageReadRepository(db)
 
   accountA = (await accountsRepo.create({ label: `test-agg-a-${Date.now()}`, provider: "zai" })).id
   accountB = (await accountsRepo.create({ label: `test-agg-b-${Date.now()}`, provider: "zai" })).id
-  accountIds.push(accountA, accountB)
 
   const c1 = crypto.randomUUID()
   const c2 = crypto.randomUUID()
@@ -155,14 +149,6 @@ beforeAll(async () => {
       cacheReadTokens: HALF_OVERFLOW,
     },
   ])
-})
-
-afterAll(async () => {
-  if (handle !== undefined && accountIds.length > 0) {
-    await db.delete(usageRecords).where(inArray(usageRecords.accountId, accountIds))
-    await db.delete(accounts).where(inArray(accounts.id, accountIds))
-  }
-  await handle?.close()
 })
 
 describe.skipIf(!runnable)("usage aggregates against a live database", () => {

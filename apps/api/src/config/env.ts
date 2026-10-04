@@ -25,6 +25,7 @@ import { METRIC_INVENTORY_ENV_FIELDS, readMetricInventoryEnv } from "./metric-in
 import { validateNumericBounds } from "./numeric-bounds"
 import { RECOVERY_ENV_FIELDS, readRecoveryEnv } from "./recovery"
 import { RELAY_LIFETIME_ENV_FIELDS, readRelayLifetimesEnv } from "./relay-lifetimes"
+import { readUsageReadEnv, USAGE_READ_ENV_FIELDS } from "./usage-read"
 
 /**
  * Boot-time environment validation — the reference is
@@ -663,6 +664,7 @@ export interface Env {
   readonly failover: FailoverConfig
   readonly metricInventory: ReturnType<typeof readMetricInventoryEnv>["metricInventory"]
   readonly relayLifetimes: ReturnType<typeof readRelayLifetimesEnv>["relayLifetimes"]
+  readonly usageRead: ReturnType<typeof readUsageReadEnv>["usageRead"]
   readonly background: ReturnType<typeof readBackgroundEnv>["background"]
   readonly scheduler: SchedulerConfig
   readonly oauthRefresh: OAuthRefreshConfig
@@ -701,6 +703,7 @@ export { decodeEncryptionKey, ZERO_IS_LEGAL } from "./fields"
  * about zero, whether or not anyone remembered to make one.
  */
 export const ENV_FIELDS = {
+  ...USAGE_READ_ENV_FIELDS,
   ...BACKGROUND_ENV_FIELDS,
   ...RELAY_LIFETIME_ENV_FIELDS,
   ...METRIC_INVENTORY_ENV_FIELDS,
@@ -992,6 +995,7 @@ const envSchema = boundedEnvSchema.transform((raw, ctx): Env => {
 
   return {
     ...readRecoveryEnv(raw),
+    ...readUsageReadEnv(raw),
     ...readBackgroundEnv(raw),
     ...readRelayLifetimesEnv(raw),
     ...readMetricInventoryEnv(raw),

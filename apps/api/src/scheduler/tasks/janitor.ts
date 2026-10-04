@@ -3,7 +3,7 @@ import type {
   AuditRepository,
   ScheduledTaskRepository,
   SessionRepository,
-  UsageDailyRepository,
+  UsageHistoryRepository,
   UsageRecordRepository,
 } from "@multi-ai-router/db"
 import type { RetentionConfig } from "../../config/env"
@@ -44,8 +44,8 @@ import { runSweeps } from "./sweep"
 
 export interface JanitorDeps {
   readonly sessions: Pick<SessionRepository, "deleteIdleBefore">
-  readonly usageRecords: Pick<UsageRecordRepository, "deleteOlderThan">
-  readonly usageDaily: Pick<UsageDailyRepository, "deleteOlderThan">
+  readonly usageRecords: Pick<UsageRecordRepository, "deleteRetainedBatch">
+  readonly history: Pick<UsageHistoryRepository, "deleteRetainedHistory">
   readonly auditEvents: Pick<AuditRepository, "deleteOlderThan">
   readonly taskRuns: Pick<ScheduledTaskRepository, "deleteOlderThan">
   readonly apiKeys: Pick<ApiKeyRepository, "deleteRevokedOlderThan">
@@ -72,8 +72,6 @@ export function createJanitorTask(deps: JanitorDeps): ScheduledTask {
       // Read once, off the tick's clock, so every category is measured against
       // the same instant however long the sweep runs.
       const idleSessions = before(now, retention.sessionsHours * HOUR_MS)
-      const staleUsage = before(now, retention.usageDays * DAY_MS)
-      const staleDailyUsage = before(now, retention.usageDailyDays * DAY_MS)
       const staleAudit = before(now, retention.auditDays * DAY_MS)
       const staleTaskRuns = before(now, retention.taskRunsDays * DAY_MS)
       const purgeableKeys = before(now, retention.revokedKeysDays * DAY_MS)
@@ -86,13 +84,18 @@ export function createJanitorTask(deps: JanitorDeps): ScheduledTask {
           },
           {
             category: "usageRecords",
-            deleteBatch: (limit) => deps.usageRecords.deleteOlderThan(staleUsage, limit),
+            deleteBatch: (limit) =>
+              deps.usageRecords.deleteRetainedBatch({ retentionDays: retention.usageDays, limit }),
           },
           // After the raw rows and never before them: the rollup reads raw and writes daily, so
           // sweeping daily first would only widen the window in which a day exists in neither.
           {
             category: "usageDaily",
-            deleteBatch: (limit) => deps.usageDaily.deleteOlderThan(staleDailyUsage, limit),
+            deleteBatch: (limit) =>
+              deps.history.deleteRetainedHistory({
+                retentionDays: retention.usageDailyDays,
+                limit,
+              }),
           },
           {
             category: "auditEvents",

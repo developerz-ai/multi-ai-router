@@ -2,7 +2,7 @@ import { expect, test } from "bun:test"
 import { createDispatcher, createHealthStore } from "../../../src/services/dataplane"
 import { createActiveRequestRegistry } from "../../../src/services/dataplane/active-requests"
 import type { RequestSample } from "../../../src/services/dataplane/types"
-import type { UsageRecord } from "../../../src/services/usage"
+import type { UsageRecord, UsageRequestTerminal } from "../../../src/services/usage"
 import { account, catalog, cipher, clock } from "./fixtures"
 
 const pool = {
@@ -40,6 +40,7 @@ for (const terminal of ["protocol", "transport", "caller", "shutdown"] as const)
   test(`terminal request observer remains quiet at200 headers and reports ${terminal} exactly once`, async () => {
     const samples: RequestSample[] = []
     const rows: UsageRecord[] = []
+    const facts: UsageRequestTerminal[] = []
     const timer = clock(new Date(0))
     const registry = createActiveRequestRegistry({ maximumEntries: 1 })
     const caller = new AbortController()
@@ -54,7 +55,10 @@ for (const terminal of ["protocol", "transport", "caller", "shutdown"] as const)
       catalog: catalog([account("a"), account("b")], [pool]),
       cipher: cipher(),
       onRequest: (sample) => samples.push(sample),
-      usage: { record: (row) => void rows.push(row) },
+      usage: {
+        record: (row) => void rows.push(row),
+        recordTerminal: (fact) => void facts.push(fact),
+      },
       fetch: async () =>
         new Response(upstream, { headers: { "content-type": "text/event-stream" } }),
     })
@@ -89,9 +93,21 @@ for (const terminal of ["protocol", "transport", "caller", "shutdown"] as const)
       streamed: terminal === "protocol",
     })
     expect(rows).toHaveLength(1)
+    expect(facts).toHaveLength(1)
+    expect(facts[0]).toMatchObject({
+      winnerEventId: rows[0]?.eventId,
+      accountId: rows[0]?.accountId,
+      outcome: samples[0]?.outcome,
+      responseStatus: 200,
+      startedAt: new Date(0),
+      settledAt: new Date(100),
+      attributionKind:
+        terminal === "caller" || terminal === "shutdown" ? "abandoned" : "winning-attempt",
+    })
     await registry.stop()
     expect(samples).toHaveLength(1)
     expect(rows).toHaveLength(1)
+    expect(facts).toHaveLength(1)
   })
 }
 test("failed attempt followed by success produces one terminal demand sample for the served pool", async () => {

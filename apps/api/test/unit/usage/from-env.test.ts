@@ -78,7 +78,7 @@ interface HarnessOptions {
 function harness(reject: () => Error, options: HarnessOptions = {}) {
   const lines: Line[] = []
   const recorder = createUsageRecorderFromEnv({
-    records: { insertMany: () => Promise.reject(reject()) },
+    records: { insertBatch: () => Promise.reject(reject()) },
     accounts: { markUsed: () => Promise.resolve() },
     env: {
       ...ENV,

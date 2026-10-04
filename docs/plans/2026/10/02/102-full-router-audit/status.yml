@@ -5,9 +5,9 @@ created_by: sebi
 worked_by: Codex team
 owner: sebi
 percent: 67
-current_focus: PR150 merged3cfe375 with required PR/main CI green and one review finding resolved. W5 usage identity, dialect-safe bounded observation and
-  causal accounting validated; W5B late SDK quota, terminal demand/inventory and real database-contention measurements in progress. Release/deployment/rotation
-  pending.
+current_focus: PR151 mergedc030c5b after clean CodeRabbit review and five required PR/main checks passed. W6 usage/history/account pricing
+  local gate passed5044tests/451files/48988assertions; PG16/18 history and repeated isolated fixtures passed. Warm benchmarks and PR review/CI/merge pending.
+  L16 strict database-miss latency, infrastructure monitoring, release/deployment and operational rotation remain open.
 slices:
 - file: 01-transport.md
   status: in_progress
@@ -108,10 +108,11 @@ evidence:
   no actionable comments. Release/deployment pending.'
 - 'Pinned Bun 1.4.2; bin/check with disposable PostgreSQL: 4326 tests passed, zero failed; build passed.'
 - '102-full-router-audit/evidence/wave1-bench.json: 8000 requests, zero failures/buffered streams; max p99 1.28 ms.'
-notes: 'W1–W5 core merged and locally validated; W4C PR149 is merged97281e0. W5B L04/L16/L19 remains in progress; no blanket monitoring or large-body CPU
-  attribution closure. Scanner/session, translation, cost/rollup/history, console and DX/CI/prompt work remain in later waves. #87 operational rotation/session
-  revocation and release/deployment remain open.'
-last_updated: 2026-10-03
+notes: 'W1–W5B merged and locally validated; ten PRs merged. W5B application quota and terminal monitoring passed, but L16 strict database-miss
+  overhead remains open: native read experiments reached 5ms and do not prove the required less-than-5ms budget. W6 historical/accounting implementation
+  is uncommitted with full local gate passed; benchmarks, review and CI remain. Scanner/session, translation, console and DX/CI/prompt work remain. #87 operational rotation/session revocation,
+  O12 infrastructure alerting, release and deployment remain open.'
+last_updated: 2026-10-04
 resolved_findings:
 - '01.1'
 - '01.2'

@@ -55,6 +55,7 @@ const BASIS: Readonly<Record<AccountBilling, CostBasis>> = {
 }
 
 export interface CostInput {
+  readonly accountId?: string
   readonly provider: ProviderId | null
   /**
    * The model that actually went **upstream** — after the account's alias map — because that is the
@@ -75,7 +76,11 @@ export interface CostInput {
 export function estimateCost(input: CostInput): CostEstimate {
   const { provider, tokens } = input
   if (provider === null) return UNKNOWN_COST
-  const rates = (input.prices ?? lookupRates)(provider, input.model)
+  const rates = (input.prices ?? lookupRates)(provider, input.model, {
+    accountId: input.accountId,
+    billing: input.billing ?? DEFAULT_ACCOUNT_BILLING,
+    cacheWriteTokens: tokens.cacheWriteTokens,
+  })
   if (rates === null) return UNKNOWN_COST
 
   // The prompt is every input direction, cached or not: what a long-context tier is measured

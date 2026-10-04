@@ -75,13 +75,15 @@ describe("UsageFailures", () => {
 
   test("says the counts are a floor when the window outruns the rows behind them", () => {
     withMount(split({ attempts: 40, errors: 4, partial: true, byOutcome: [] }), (container) => {
-      expect(container.textContent).toContain("at least this many")
+      expect(container.textContent).toContain("counts and percentages cover retained attempts only")
     })
   })
 
   test("says nothing about a floor when the scan covered the whole window", () => {
     withMount(split({ attempts: 40, errors: 0 }), (container) => {
-      expect(container.textContent).not.toContain("at least this many")
+      expect(container.textContent).not.toContain(
+        "counts and percentages cover retained attempts only",
+      )
     })
   })
 

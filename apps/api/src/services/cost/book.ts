@@ -2,7 +2,7 @@ import type { ProviderId } from "@multi-ai-router/core"
 import type { PriceOverrideRow } from "@multi-ai-router/db"
 import { createSnapshotRefresh } from "../snapshots/refresh"
 import { lookupRates } from "./prices"
-import { type ModelRates, modelLookupKeys } from "./rates"
+import { type ModelRates, modelLookupKeys, type RateLookupContext } from "./rates"
 
 /**
  * The warm price book: the operator's price overrides, held in memory and refreshed off the request
@@ -30,7 +30,7 @@ import { type ModelRates, modelLookupKeys } from "./rates"
 
 export interface PriceBook {
   /** Synchronous by design: the request path may never await a query here. */
-  lookup(provider: ProviderId, model: string): ModelRates | null
+  lookup(provider: ProviderId, model: string, context?: RateLookupContext): ModelRates | null
   /** Re-reads the overrides. Rejects on failure, leaving the last good snapshot in place. */
   refresh(): Promise<void>
   /** Waits for an installed snapshot whose read began after this mutation committed. */
@@ -52,7 +52,7 @@ export interface PriceBookDeps {
 }
 
 /** `provider -> normalized model -> rates`. Empty until the first successful load. */
-type Overrides = ReadonlyMap<ProviderId, ReadonlyMap<string, ModelRates>>
+type Overrides = ReadonlyMap<string, ReadonlyMap<string, ModelRates>>
 
 const EMPTY: Overrides = new Map()
 
@@ -78,17 +78,7 @@ export function createPriceBook(deps: PriceBookDeps): PriceBook {
   }
 
   return {
-    lookup: (provider, model) => {
-      const table = overrides.get(provider)
-      if (table !== undefined) {
-        // Both keys are tried against the overrides before the shipped table is consulted at all:
-        // an operator who priced the family meant it to cover the dated pin too.
-        const [name, family] = modelLookupKeys(model)
-        const override = table.get(name) ?? table.get(family)
-        if (override !== undefined) return override
-      }
-      return lookupRates(provider, model)
-    },
+    lookup: (provider, model, context) => lookupIndexed(overrides, provider, model, context),
     refresh,
     refreshAfterMutation,
     start: () => {
@@ -108,9 +98,10 @@ export function createPriceBook(deps: PriceBookDeps): PriceBook {
  * rescue, and a price that silently never matches is invisible until a report is wrong.
  */
 function index(rows: readonly PriceOverrideRow[]): Overrides {
-  const byProvider = new Map<ProviderId, Map<string, ModelRates>>()
+  const byProvider = new Map<string, Map<string, ModelRates>>()
   for (const row of rows) {
-    const table = byProvider.get(row.provider) ?? new Map<string, ModelRates>()
+    const scope = row.accountId == null ? row.provider : `${row.accountId}/${row.provider}`
+    const table = byProvider.get(scope) ?? new Map<string, ModelRates>()
     const [name] = modelLookupKeys(row.model)
     table.set(name, {
       inputPerMtok: row.inputPerMtok,
@@ -118,7 +109,7 @@ function index(rows: readonly PriceOverrideRow[]): Overrides {
       cacheReadPerMtok: row.cacheReadPerMtok,
       cacheWritePerMtok: row.cacheWritePerMtok,
     })
-    byProvider.set(row.provider, table)
+    byProvider.set(scope, table)
   }
   return byProvider
 }
@@ -129,4 +120,33 @@ function index(rows: readonly PriceOverrideRow[]): Overrides {
  */
 function defaultJitter(intervalMs: number): number {
   return Math.round(intervalMs * (0.8 + Math.random() * 0.4))
+}
+
+function lookupIndexed(
+  overrides: Overrides,
+  provider: ProviderId,
+  model: string,
+  context?: RateLookupContext,
+): ModelRates | null {
+  const scoped =
+    context?.accountId === undefined ? undefined : overrides.get(`${context.accountId}/${provider}`)
+  const [exact, familyKey] = modelLookupKeys(model)
+  const accountRate = scoped?.get(exact) ?? scoped?.get(familyKey)
+  if (accountRate !== undefined) return accountRate
+  const table = overrides.get(provider)
+  if (table !== undefined) {
+    // Both keys are tried against the overrides before the shipped table is consulted at all:
+    // an operator who priced the family meant it to cover the dated pin too.
+    const [name, family] = modelLookupKeys(model)
+    const override = table.get(name) ?? table.get(family)
+    if (override !== undefined) return override
+  }
+  return lookupRates(provider, model, context)
+}
+
+/** Admin coverage uses the same precedence as the warm request price book. */
+export function priceLookupForRows(rows: readonly PriceOverrideRow[]) {
+  const overrides = index(rows)
+  return (provider: ProviderId, model: string, context?: RateLookupContext) =>
+    lookupIndexed(overrides, provider, model, context)
 }

@@ -29,7 +29,7 @@ import { createUsageRecorder, type UsageRecorder } from "./recorder"
 export type TrailingTimer = (fire: () => void, delayMs: number) => void
 
 export interface UsageRecorderFromEnvDeps {
-  readonly records: Pick<UsageRecordRepository, "insertMany">
+  readonly records: Pick<UsageRecordRepository, "insertBatch">
   /**
    * Stamped once per flush with every account the batch touched, so "unused for a week" is an
    * indexed question about the account rather than a scan of a table retention prunes. Off the
@@ -120,8 +120,8 @@ export function createUsageRecorderFromEnv(deps: UsageRecorderFromEnvDeps): Usag
 
   return createUsageRecorder(
     {
-      write: async (batch) => {
-        await deps.records.insertMany(batch.map(toUsageRecordRow))
+      write: async (batch, terminals = []) => {
+        await deps.records.insertBatch({ attempts: batch.map(toUsageRecordRow), terminals })
         // One extra statement per *flush*, not per request, and strictly after the records land:
         // this stamp is what lets the idle probe find an account nothing has routed to in a week
         // without scanning a table retention prunes. A failure here must not cost the batch that
@@ -142,8 +142,8 @@ export function createUsageRecorderFromEnv(deps: UsageRecorderFromEnvDeps): Usag
       flushIntervalMs: usageFlushIntervalMs,
       shutdownDrainMs: deps.env.background?.shutdownDrainMs ?? 15_000,
       onShed: () => reportShed(undefined),
-      onWriteError: ({ error, batch, discarded }) => {
-        const failure = { reason: reasonOf(error), size: batch.length }
+      onWriteError: ({ error, batch, terminals, discarded }) => {
+        const failure = { reason: reasonOf(error), size: batch.length + terminals.length }
         if (discarded) reportDiscard(failure)
         else reportRetry(failure)
       },

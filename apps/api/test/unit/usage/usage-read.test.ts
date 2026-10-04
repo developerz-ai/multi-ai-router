@@ -1,5 +1,11 @@
 import { describe, expect, test } from "bun:test"
-import type { UsageGroupRow, UsageOutcomeCount, UsageTotals } from "@multi-ai-router/db"
+import type {
+  UsageGroupRow,
+  UsageHistoryRepository,
+  UsageOutcomeCount,
+  UsageReadRepository,
+  UsageTotals,
+} from "@multi-ai-router/db"
 import {
   createUsageService,
   EMPTY_FAILURES,
@@ -42,20 +48,38 @@ interface Stub {
 }
 
 function service(rows: readonly UsageGroupRow[], stub: Stub = {}) {
+  const raw: UsageReadRepository = {
+    totals: async () => stub.totals ?? ZERO,
+    breakdown: async () => [...rows],
+    series: async () => [],
+    seriesByDimension: async () => [],
+    latency: async () => ({ p50Ms: null, p95Ms: null, routerOverheadP95Ms: null, ttfbP95Ms: null }),
+    outcomes: async () => [...(stub.outcomes ?? [])],
+  }
+  const history: UsageHistoryRepository = {
+    coverage: async () => ({
+      dbNow: NOW,
+      earliestAt: NOW,
+      legacy: false,
+      incomplete: false,
+      rawFrom: NOW,
+      rawTo: NOW,
+      timeBasis: "event-time",
+      requestsBasis: "terminal",
+      historicalPrecision: "day",
+    }),
+    withSnapshot: async (callback) => callback(history, raw),
+    backfill: async () => ({ processed: 0, remaining: false }),
+    rollupDay: async () => 0,
+    deleteOlderThan: async () => 0,
+    deleteRetainedHistory: async () => 0,
+    totals: async () => stub.totals ?? ZERO,
+    series: async () => [],
+    seriesByDimension: async () => [],
+    breakdown: async () => [...rows],
+  }
   return createUsageService({
-    usage: {
-      totals: async () => stub.totals ?? ZERO,
-      latency: async () => ({
-        p50Ms: null,
-        p95Ms: null,
-        routerOverheadP95Ms: null,
-        ttfbP95Ms: null,
-      }),
-      series: async () => [],
-      seriesByDimension: async () => [],
-      breakdown: async () => [...rows],
-      outcomes: async () => [...(stub.outcomes ?? [])],
-    },
+    history,
     // The live feed is its own read and its own test file; a summary that
     // touched it would be reading rows no chart on the screen plots.
     recent: {
@@ -63,17 +87,6 @@ function service(rows: readonly UsageGroupRow[], stub: Stub = {}) {
         throw new Error("the summary must not read raw attempt rows")
       },
     },
-    // Every case below asks for `today`, which has no closed days — the rolled
-    // side is never consulted, and saying so with a throw keeps it that way.
-    daily: {
-      totals: async () => {
-        throw new Error("the rolled table must not be read for a same-day window")
-      },
-      breakdown: async () => {
-        throw new Error("the rolled table must not be read for a same-day window")
-      },
-    },
-    scheduledTasks: { lastSuccess: async () => undefined },
     labels: async () => ({
       keys: new Map([["key-1", "dev-laptops"]]),
       accounts: new Map([["acct-1", "claude-max-01"]]),
@@ -111,7 +124,8 @@ describe("window resolution", () => {
   test("a custom range needs both ends", () => {
     expect(usageWindowQuery.safeParse({ from: NOW.toISOString() }).success).toBe(false)
     expect(
-      usageWindowQuery.safeParse({ from: NOW.toISOString(), to: NOW.toISOString() }).success,
+      usageWindowQuery.safeParse({ from: "2026-03-15T00:00:00.000Z", to: NOW.toISOString() })
+        .success,
     ).toBe(true)
   })
 })
@@ -142,6 +156,13 @@ describe("breakdown labelling", () => {
     if (!result.ok) return
     // A key scoped `all` was placed by no pool at all.
     expect(result.value.byPool[0]).toMatchObject({ id: null, label: null, note: "none" })
+  })
+
+  test("a null model stays unattributed rather than becoming a deleted model", async () => {
+    const result = await service([groupRow(null)]).summary({ window: "today" })
+    expect(result.ok).toBe(true)
+    if (!result.ok) throw new Error("summary failed")
+    expect(result.value.byModel[0]).toMatchObject({ id: null, label: null, note: "none" })
   })
 
   test("a model is its own label and is never marked deleted", async () => {

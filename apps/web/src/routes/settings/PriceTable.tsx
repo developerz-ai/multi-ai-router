@@ -49,7 +49,12 @@ export function PriceTable(props: PriceTableProps) {
       cell: (row) => (
         <div class={styles.identity}>
           <span class={styles.model}>{row.model}</span>
-          <span class={styles.provider}>{row.provider}</span>
+          <span class={styles.provider}>
+            {row.provider} · {row.accountId ?? "all accounts"}
+          </span>
+          <Show when={row.notionalOnly}>
+            <Badge tone="warn">subscription attribution only</Badge>
+          </Show>
           <Badge tone={ORIGIN_TONE[row.origin]}>{row.origin}</Badge>
           <Show when={row.origin === "overridden" ? row.shipped : null}>
             {(shipped) => <span class={styles.shipped}>shipped {rateSummary(shipped())}</span>}

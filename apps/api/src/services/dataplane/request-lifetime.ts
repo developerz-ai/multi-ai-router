@@ -51,6 +51,9 @@ export function requestLifetime(
   return {
     input: { ...input, request, ...(activeRequest === undefined ? {} : { activeRequest }) },
     record,
+    selectTerminal(event: UsageRecord | undefined) {
+      if (!abandoned) accounting.selectTerminal(event)
+    },
     recordTerminal(event: UsageRecord) {
       if (!abandoned) accounting.recordTerminal(event)
     },

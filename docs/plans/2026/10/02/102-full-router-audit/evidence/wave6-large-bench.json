@@ -1,0 +1,80 @@
+{
+  "rows": [
+    {
+      "scenario": "passthrough",
+      "path": "passthrough",
+      "samples": 2000,
+      "failures": 0,
+      "overheadMeanMs": 0.3010000000000002,
+      "overheadP50Ms": 0.3450655624568668,
+      "overheadP95Ms": 0.9278937381404174,
+      "overheadP99Ms": 1.6666666666666665,
+      "overheadQuantized": true,
+      "addedTtftSamples": 0,
+      "addedTtftP50Ms": null,
+      "addedTtftP95Ms": null,
+      "addedTtftP99Ms": null,
+      "buffered": 0,
+      "streamed": false
+    },
+    {
+      "scenario": "passthrough (stream)",
+      "path": "passthrough",
+      "samples": 2000,
+      "failures": 0,
+      "overheadMeanMs": 0.36550000000000027,
+      "overheadP50Ms": 0.3897116134060795,
+      "overheadP95Ms": 0.9351198871650213,
+      "overheadP99Ms": 0.991537376586742,
+      "overheadQuantized": true,
+      "addedTtftSamples": 2000,
+      "addedTtftP50Ms": 0.07072000000061962,
+      "addedTtftP95Ms": 0.12940010000111213,
+      "addedTtftP99Ms": 0.25983198999865614,
+      "buffered": 0,
+      "streamed": true
+    },
+    {
+      "scenario": "translate",
+      "path": "translate",
+      "samples": 2000,
+      "failures": 0,
+      "overheadMeanMs": 1.1394999999999398,
+      "overheadP50Ms": 0.7675227394328519,
+      "overheadP95Ms": 1.3974358974358976,
+      "overheadP99Ms": 4.25,
+      "overheadQuantized": false,
+      "addedTtftSamples": 0,
+      "addedTtftP50Ms": null,
+      "addedTtftP95Ms": null,
+      "addedTtftP99Ms": null,
+      "buffered": 0,
+      "streamed": false
+    },
+    {
+      "scenario": "translate (stream)",
+      "path": "translate",
+      "samples": 2000,
+      "failures": 0,
+      "overheadMeanMs": 1.1524999999999412,
+      "overheadP50Ms": 0.7774694783573807,
+      "overheadP95Ms": 1.6086956521739133,
+      "overheadP99Ms": 3.64516129032258,
+      "overheadQuantized": false,
+      "addedTtftSamples": 2000,
+      "addedTtftP50Ms": 0.08006699999896227,
+      "addedTtftP95Ms": 0.13433965000258463,
+      "addedTtftP99Ms": 0.2219271700009994,
+      "buffered": 0,
+      "streamed": true
+    }
+  ],
+  "budgets": {
+    "overheadP99Ms": 5,
+    "addedTtftP95Ms": 2
+  },
+  "violations": [],
+  "scope": "Warm in-memory mocked-upstream paths; does not close indexed-database-miss L16",
+  "runtime": "Bun1.4.2",
+  "promptBytes": 280000
+}

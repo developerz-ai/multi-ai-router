@@ -140,3 +140,30 @@ describe("diffOverrides", () => {
     expect(diffOverrides(stored, []).removed).toHaveLength(2)
   })
 })
+
+test("account overrides survive beside a global price without leaking to another scope", () => {
+  const accountId = "11111111-1111-4111-8111-111111111111"
+  const base = shippedRate("claude-sonnet-5", 2, 10)
+  const rows = mergePriceRows(
+    [base],
+    [{ ...base, accountId, inputPerMtok: 9, updatedAt: "2026-10-03" }],
+  )
+  expect(rows).toHaveLength(2)
+  expect(rows.find((row) => row.accountId == null)?.rates.inputPerMtok).toBe(2)
+  const payload = buildPriceOverridePayload(rows)
+  expect(payload).toHaveLength(1)
+  expect(payload[0]?.accountId).toBe(accountId)
+  expect(payload[0]?.inputPerMtok).toBe(9)
+})
+
+test("explicit metered override equal to a notional reference must remain explicit", () => {
+  const reference: PriceRate = {
+    provider: "kimi",
+    model: "k3",
+    ...rates(3, 15),
+    notionalOnly: true,
+  }
+  const rows = mergePriceRows([reference], [{ ...reference, updatedAt: "2026-10-03" }])
+  expect(rows[0]?.origin).toBe("overridden")
+  expect(buildPriceOverridePayload(rows)).toHaveLength(1)
+})

@@ -8,6 +8,7 @@ import {
   RECENT_LIMIT_MAX,
   recentQuery,
 } from "../../../src/services/usage-read"
+import { historyFixture } from "./history-fixture"
 
 /**
  * The live request feed — the "why did my request fail" surface.
@@ -58,21 +59,24 @@ function service(rows: readonly RecentAttemptRow[]) {
   }
 
   const usage = createUsageService({
-    usage: {
-      totals: unreached,
-      latency: unreached,
-      series: unreached,
-      seriesByDimension: unreached,
-      breakdown: unreached,
-    },
+    history: historyFixture(
+      {
+        totals: unreached,
+        latency: unreached,
+        series: unreached,
+        seriesByDimension: unreached,
+        breakdown: unreached,
+        outcomes: unreached,
+      },
+      NOW,
+    ),
     recent: {
       recent: async (query) => {
         asked.push(query)
         return [...rows]
       },
     },
-    daily: { totals: unreached, breakdown: unreached },
-    scheduledTasks: { lastSuccess: unreached },
+
     labels: async () => ({
       keys: new Map([["key-1", "dev-laptops"]]),
       accounts: new Map([["acct-1", "claude-max-01"]]),

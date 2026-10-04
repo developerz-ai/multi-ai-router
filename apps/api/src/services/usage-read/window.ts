@@ -19,9 +19,19 @@ export const usageWindowQuery = z
   .refine((query) => !(query.window !== undefined && query.from !== undefined), {
     message: "pass either a named window or a from/to range, not both",
   })
-  .refine((query) => query.from === undefined || query.to !== undefined, {
+  .refine((query) => (query.from === undefined) === (query.to === undefined), {
     message: "a custom range needs both from and to",
   })
+
+  .refine(
+    (query) =>
+      query.from === undefined ||
+      query.to === undefined ||
+      Date.parse(query.from) < Date.parse(query.to),
+    {
+      message: "from must precede to",
+    },
+  )
 
 export type UsageWindowQuery = z.infer<typeof usageWindowQuery>
 

@@ -73,7 +73,7 @@ export interface DispatcherDeps {
   readonly catalog: RoutingCatalog
   readonly health: HealthStore
   readonly cipher: Pick<CredentialCipher, "decrypt">
-  readonly usage: Pick<UsageRecorder, "record">
+  readonly usage: Pick<UsageRecorder, "record"> & Partial<Pick<UsageRecorder, "recordTerminal">>
   /**
    * Enforces the ceiling stored on the key. Omitted means unlimited — a dispatcher built without
    * one behaves exactly as this router did before limits were enforced.

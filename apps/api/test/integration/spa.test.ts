@@ -42,6 +42,7 @@ import {
   memoryTasks,
   RETENTION,
 } from "../unit/settings/fixtures"
+import { historyFixture } from "../unit/usage/history-fixture"
 
 /**
  * The image ships `dist/web/` and the router serves it: `GET /` is the console, not a JSON 404.
@@ -366,17 +367,19 @@ describe("the full app, mounted end to end", () => {
           now,
         }),
         usage: createUsageService({
-          usage: {
-            totals: unreached,
-            latency: unreached,
-            series: unreached,
-            seriesByDimension: unreached,
-            breakdown: unreached,
-          },
+          history: historyFixture(
+            {
+              totals: unreached,
+              latency: unreached,
+              series: unreached,
+              seriesByDimension: unreached,
+              breakdown: unreached,
+              outcomes: unreached,
+            },
+            now(),
+          ),
           recent: { recent: unreached },
-          daily: { totals: unreached, breakdown: unreached },
-          scheduledTasks: memoryTasks(),
-          labels: async () => ({ keys: [], accounts: [], pools: [], models: [] }),
+          labels: async () => ({ keys: new Map(), accounts: new Map(), pools: new Map() }),
           now,
         }),
         settings: createSettingsService({

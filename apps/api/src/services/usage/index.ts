@@ -30,6 +30,7 @@ export {
   type UsageWriteFailure,
   type UsageWriter,
 } from "./recorder"
+export type { UsageRequestTerminal } from "./request-terminal"
 export { createResponseObserver } from "./response-observer"
 export type {
   ResponseObservationFacts,

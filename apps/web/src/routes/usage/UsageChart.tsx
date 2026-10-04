@@ -12,6 +12,8 @@ import styles from "./UsageChart.module.scss"
 export interface UsageChartProps {
   readonly points: readonly UsageChartPoint[]
   readonly bucket: "hour" | "day"
+  readonly bucketWidth?: number
+  readonly incomplete?: boolean
 }
 
 const LEGEND = [
@@ -43,10 +45,14 @@ export function UsageChart(props: UsageChartProps) {
   return (
     <div class={styles.root}>
       <Show when={silent()}>
-        <p class={styles.empty}>No traffic in this window — the lines would all sit on zero.</p>
+        <p class={styles.empty}>
+          {props.incomplete
+            ? "No chart counts are available. Some historical evidence is unavailable."
+            : "No traffic in this window — the lines would all sit on zero."}
+        </p>
       </Show>
       <svg
-        aria-label={`Requests, attempts and errors per ${props.bucket} across the window`}
+        aria-label={`Requests, attempts and errors per ${props.bucketWidth ?? 1} ${props.bucket}${(props.bucketWidth ?? 1) === 1 ? "" : "s"} across the window`}
         class={styles.chart}
         preserveAspectRatio="none"
         role="img"

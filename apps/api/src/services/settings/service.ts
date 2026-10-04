@@ -6,11 +6,13 @@ import type {
   ScheduledTaskName,
   ScheduledTaskRepository,
 } from "@multi-ai-router/db"
-import { scheduledTask } from "@multi-ai-router/db"
+import { PriceOverrideAccountConflict, scheduledTask } from "@multi-ai-router/db"
 import type { Env } from "../../config/env"
 import { AUDIT_KINDS, AUDIT_SUBJECTS, type AuditRecorder } from "../admin"
-import { type AdminResult, ok } from "../admin/result"
-import { listShippedRates, PRICE_TABLE_AS_OF } from "../cost"
+import { type AdminResult, invalid, ok } from "../admin/result"
+import { listShippedRates, PRICE_SOURCES, PRICE_TABLE_AS_OF } from "../cost"
+import { priceLookupForRows } from "../cost/book"
+import { type PriceAccount, unpricedModels } from "../cost/coverage"
 import { diffPriceOverrides, PRICE_OVERRIDES_SETTING, priceOverrideAuditDetail } from "./audit"
 import {
   AUDIT_LIMIT_MAX,
@@ -47,6 +49,7 @@ export interface SettingsService {
 }
 
 export interface SettingsServiceDeps {
+  readonly priceAccounts?: () => readonly PriceAccount[]
   readonly prices: Pick<PriceOverrideRepository, "list" | "replaceAll">
   readonly scheduledTasks: Pick<ScheduledTaskRepository, "lastRun" | "lastSuccess">
   /** Read-only. The audit log is append-only, and this service reads it through two methods. */
@@ -71,18 +74,24 @@ export interface SettingsServiceDeps {
 }
 
 export function createSettingsService(deps: SettingsServiceDeps): SettingsService {
-  const view = (overrides: readonly PriceOverrideRow[]): SettingsView => ({
-    version: VERSION,
-    retention: deps.env.retention,
-    logLevel: deps.env.logLevel,
-    janitorIntervalMinutes: deps.env.janitorIntervalMinutes,
-    publicUrl: deps.env.publicUrl,
-    prices: {
-      shippedAsOf: PRICE_TABLE_AS_OF,
-      shipped: listShippedRates().map(toPriceRateView),
-      overrides: overrides.map(toPriceOverrideView),
-    },
-  })
+  const view = (overrides: readonly PriceOverrideRow[]): SettingsView => {
+    const accounts = deps.priceAccounts?.() ?? []
+    return {
+      version: VERSION,
+      retention: deps.env.retention,
+      logLevel: deps.env.logLevel,
+      janitorIntervalMinutes: deps.env.janitorIntervalMinutes,
+      publicUrl: deps.env.publicUrl,
+      prices: {
+        shippedAsOf: PRICE_TABLE_AS_OF,
+        sources: PRICE_SOURCES,
+        accounts,
+        unpriced: unpricedModels(accounts, priceLookupForRows(overrides)),
+        shipped: listShippedRates().map(toPriceRateView),
+        overrides: overrides.map(toPriceOverrideView),
+      },
+    }
+  }
 
   return {
     read: async () => ok(view(await deps.prices.list())),
@@ -91,7 +100,17 @@ export function createSettingsService(deps: SettingsServiceDeps): SettingsServic
       // Read before write, so the audit event can say how much moved. One extra query on a screen
       // an operator saves by hand; the alternative is an event that says only "something changed".
       const before = await deps.prices.list()
-      const after = await deps.prices.replaceAll(input.priceOverrides, deps.now())
+      let after: PriceOverrideRow[]
+      try {
+        after = await deps.prices.replaceAll(input.priceOverrides, deps.now())
+      } catch (error) {
+        if (error instanceof PriceOverrideAccountConflict)
+          return invalid(
+            "The price account is missing or its provider does not match",
+            error.reason,
+          )
+        throw error
+      }
 
       await deps.onPricesChanged?.()
 

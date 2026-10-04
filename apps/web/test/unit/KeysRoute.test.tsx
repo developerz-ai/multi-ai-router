@@ -3,6 +3,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/solid-query"
 import { render } from "solid-js/web"
 import KeysRoute from "../../src/routes/KeysRoute"
 import { fire, typeInto } from "../support/dom"
+import { usageCoverage } from "../support/usage-coverage"
 
 const PLAINTEXT = "mar_live_9f2c4d6e8a0b2c4d6e8a0b2c"
 const KEY_ID = "44444444-4444-4444-8444-444444444444"
@@ -226,6 +227,7 @@ function usageSummary() {
     from: "2026-07-18T00:00:00.000Z",
     to: "2026-07-25T00:00:00.000Z",
     totals,
+    coverage: usageCoverage(0),
     latency: { p50Ms: null, p95Ms: null, routerOverheadP95Ms: null, ttfbP95Ms: null },
     failures: { attempts: 0, errors: 0, partial: false, byOutcome: [] },
     axis: [],

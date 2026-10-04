@@ -1,13 +1,11 @@
-import { afterAll, beforeAll, describe, expect, test } from "bun:test"
-import { eq } from "drizzle-orm"
-import { createDatabase, type Database, type DatabaseHandle } from "../../src/client"
-import { defaultMigrationsFolder, runMigrations } from "../../src/migrate"
+import { beforeAll, describe, expect, test } from "bun:test"
+import type { Database } from "../../src/client"
 import { createUsageReadRepository } from "../../src/repositories/usage-read-repository"
 import {
   createUsageRecordRepository,
   type UsageRecordInsert,
 } from "../../src/repositories/usage-repository"
-import { usageRecords } from "../../src/schema/usage-records"
+import { usageHistoryFixture } from "./usage-history-fixture"
 
 /**
  * The per-outcome scan behind "3% failed — of which what?", against a real PostgreSQL 16+.
@@ -22,10 +20,11 @@ import { usageRecords } from "../../src/schema/usage-records"
  * - **The window is half-open and bounds the scan.** A row one millisecond past `to` is outside
  *   the window, so a count read beside a total from the same window cannot include it.
  *
- * Every fixture is stamped in 1999 under one model name, so a run against a shared development
- * database can only ever see and remove its own rows. It never talks to a provider.
+ * Every suite owns a disposable database, including its compact receipts and
+ * aggregates, and drops it after the assertions. It never talks to a provider.
  */
 const url = process.env.DATABASE_URL ?? ""
+const fixture = usageHistoryFixture()
 const runnable = url !== ""
 
 const MODEL = "test-outcomes-model"
@@ -35,7 +34,6 @@ const TO = new Date("1999-01-02T00:00:00.000Z")
 /** Exactly `to`, which a half-open window excludes. */
 const PAST_THE_END = TO
 
-let handle: DatabaseHandle | undefined
 let db: Database
 
 /**
@@ -59,9 +57,7 @@ function row(over: Partial<UsageRecordInsert> = {}): UsageRecordInsert {
 
 beforeAll(async () => {
   if (!runnable) return
-  await runMigrations({ url, migrationsFolder: defaultMigrationsFolder() })
-  handle = createDatabase({ url, maxConnections: 2 })
-  db = handle.db
+  db = fixture.db()
 
   await createUsageRecordRepository(db).insertMany([
     row(),
@@ -71,17 +67,11 @@ beforeAll(async () => {
     row({ outcome: "quota_exhausted" }),
     row({ outcome: "quota_exhausted" }),
     row({ outcome: "credits_exhausted" }),
-    // Never reached an account at all, so `usage_daily` skips it by construction — which is
-    // exactly why this reads raw rows.
+    // No account was selected; retained raw readers still expose the failure.
     row({ outcome: "scope_violation", apiKeyId: null, accountId: null }),
     // Outside the window. Counting it would make the split disagree with the totals beside it.
     row({ outcome: "router_error", createdAt: PAST_THE_END }),
   ])
-})
-
-afterAll(async () => {
-  if (handle !== undefined) await db.delete(usageRecords).where(eq(usageRecords.model, MODEL))
-  await handle?.close()
 })
 
 describe.skipIf(!runnable)("the failure split against a live database", () => {

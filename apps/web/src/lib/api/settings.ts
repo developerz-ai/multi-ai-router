@@ -41,6 +41,9 @@ export const RATE_FIELDS: readonly RateField[] = [
 
 /** One priced `(provider, model)` pair. The same model costs different money upstream to upstream. */
 export interface PriceRate extends ModelRates {
+  readonly accountId?: string | null
+  readonly sourceId?: string
+  readonly notionalOnly?: boolean
   readonly provider: ProviderId
   readonly model: string
   /**
@@ -71,6 +74,25 @@ export interface PriceTable {
    * nobody can judge.
    */
   readonly shippedAsOf: string
+  readonly sources?: readonly {
+    id: string
+    url: string
+    snapshotAsOf: string
+    verifiedAt: string | null
+  }[]
+  readonly accounts?: readonly {
+    id: string
+    label: string
+    provider: ProviderId
+    billing: string
+    models: readonly string[]
+  }[]
+  readonly unpriced?: readonly {
+    accountId: string
+    provider: ProviderId
+    model: string | null
+    reason: string
+  }[]
   readonly shipped: readonly PriceRate[]
   readonly overrides: readonly PriceOverride[]
 }
@@ -101,6 +123,9 @@ export type PriceOrigin = "shipped" | "overridden" | "added"
 export interface PriceRow {
   /** `provider:model` — the row's identity in a table and in an edit map. */
   readonly id: string
+  readonly accountId?: string | null
+  readonly notionalOnly?: boolean
+  readonly preserveOverride?: boolean
   readonly provider: ProviderId
   readonly model: string
   readonly origin: PriceOrigin
@@ -116,8 +141,8 @@ export interface PriceRow {
   readonly updatedAt: string | null
 }
 
-export function priceRowId(provider: string, model: string): string {
-  return `${provider}:${model}`
+export function priceRowId(provider: string, model: string, accountId?: string | null): string {
+  return accountId == null ? `${provider}:${model}` : `${accountId}/${provider}:${model}`
 }
 
 export function sameRates(a: ModelRates, b: ModelRates): boolean {
@@ -156,12 +181,13 @@ export function mergePriceRows(
   // replace the first, and the table would show a long-context rate as if it were the ordinary one.
   for (const rate of shipped) {
     if (rate.fromPromptTokens !== undefined) continue
-    const id = priceRowId(rate.provider, rate.model)
+    const id = priceRowId(rate.provider, rate.model, rate.accountId)
     rows.set(id, {
       id,
       provider: rate.provider,
       model: rate.model,
       origin: "shipped",
+      notionalOnly: rate.notionalOnly,
       shipped: ratesOf(rate),
       rates: ratesOf(rate),
       longContext: null,
@@ -172,20 +198,23 @@ export function mergePriceRows(
   for (const rate of shipped) {
     const from = rate.fromPromptTokens
     if (from === undefined) continue
-    const row = rows.get(priceRowId(rate.provider, rate.model))
+    const row = rows.get(priceRowId(rate.provider, rate.model, rate.accountId))
     if (row !== undefined)
       rows.set(row.id, { ...row, longContext: { ...ratesOf(rate), fromPromptTokens: from } })
   }
 
   for (const override of overrides) {
-    const id = priceRowId(override.provider, override.model)
+    const id = priceRowId(override.provider, override.model, override.accountId)
     const held = rows.get(id)
     const base = held?.shipped ?? null
     rows.set(id, {
       id,
       provider: override.provider,
       model: override.model,
-      origin: classify(base, ratesOf(override)),
+      accountId: override.accountId,
+      notionalOnly: held?.notionalOnly,
+      preserveOverride: held?.notionalOnly ?? false,
+      origin: held?.notionalOnly ? "overridden" : classify(base, ratesOf(override)),
       shipped: base,
       rates: ratesOf(override),
       longContext: held?.longContext ?? null,
@@ -200,14 +229,23 @@ export function mergePriceRows(
 
 /** Re-prices a row and re-classifies it, so an edit back to the shipped number reads as shipped. */
 export function withRates(row: PriceRow, rates: ModelRates): PriceRow {
-  return { ...row, rates, origin: classify(row.shipped, rates) }
+  return {
+    ...row,
+    rates,
+    origin: row.preserveOverride ? "overridden" : classify(row.shipped, rates),
+  }
 }
 
 /** The complete set the PATCH replaces the stored table with. Rows equal to shipped are dropped. */
 export function buildPriceOverridePayload(rows: readonly PriceRow[]): readonly PriceRate[] {
   return rows
     .filter((row) => row.origin !== "shipped")
-    .map((row) => ({ provider: row.provider, model: row.model, ...ratesOf(row.rates) }))
+    .map((row) => ({
+      ...(row.accountId == null ? {} : { accountId: row.accountId }),
+      provider: row.provider,
+      model: row.model,
+      ...ratesOf(row.rates),
+    }))
 }
 
 export interface OverrideDiff {
@@ -222,13 +260,19 @@ export function diffOverrides(
   stored: readonly PriceOverride[],
   payload: readonly PriceRate[],
 ): OverrideDiff {
-  const sent = new Map(payload.map((rate) => [priceRowId(rate.provider, rate.model), rate]))
-  const held = new Map(stored.map((rate) => [priceRowId(rate.provider, rate.model), rate]))
+  const sent = new Map(
+    payload.map((rate) => [priceRowId(rate.provider, rate.model, rate.accountId), rate]),
+  )
+  const held = new Map(
+    stored.map((rate) => [priceRowId(rate.provider, rate.model, rate.accountId), rate]),
+  )
 
   return {
-    removed: stored.filter((rate) => !sent.has(priceRowId(rate.provider, rate.model))),
+    removed: stored.filter(
+      (rate) => !sent.has(priceRowId(rate.provider, rate.model, rate.accountId)),
+    ),
     changed: payload.filter((rate) => {
-      const previous = held.get(priceRowId(rate.provider, rate.model))
+      const previous = held.get(priceRowId(rate.provider, rate.model, rate.accountId))
       return previous === undefined || !sameRates(previous, rate)
     }),
   }

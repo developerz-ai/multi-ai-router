@@ -137,7 +137,6 @@ describe("pricing the nine providers that used to report nothing", () => {
     ["openai-oauth", "gpt-5.6-sol"],
     ["gemini", "gemini-2.5-flash"],
     ["zai", "glm-4.7"],
-    ["kimi", "kimi-k3"],
     ["minimax", "minimax-m2.7"],
     ["groq", "llama-3.3-70b-versatile"],
     ["deepseek", "deepseek-v4-pro"],
@@ -200,11 +199,11 @@ describe("which basis a priced attempt reports under", () => {
   })
 
   test("saying nothing prices as metered, which is what an unstated account row holds", () => {
-    expect(estimateCost({ provider: "kimi", model: "kimi-k3", tokens: counts }).costBasis).toBe(
+    expect(estimateCost({ provider: "zai", model: "glm-4.7", tokens: counts }).costBasis).toBe(
       "metered",
     )
     expect(
-      estimateCost({ provider: "kimi", model: "kimi-k3", tokens: counts, billing: "metered" })
+      estimateCost({ provider: "zai", model: "glm-4.7", tokens: counts, billing: "metered" })
         .costBasis,
     ).toBe("metered")
   })
@@ -214,7 +213,6 @@ describe("which basis a priced attempt reports under", () => {
     // shared one answer and a coding plan was indistinguishable from a metered key.
     const pairs = [
       ["zai", "glm-4.7"],
-      ["kimi", "kimi-k3"],
       ["minimax", "minimax-m2.7"],
       ["openai-api", "gpt-5.6-sol"],
     ] as const
@@ -364,8 +362,12 @@ describe("listing the shipped table", () => {
     const rows = listShippedRates().filter((row) => row.fromPromptTokens === undefined)
 
     expect(rows.length).toBeGreaterThan(0)
-    for (const { provider, model, ...rates } of rows) {
-      const looked = lookupRates(provider, model)
+    for (const { provider, model, sourceId: _source, notionalOnly, ...rates } of rows) {
+      const looked = lookupRates(
+        provider,
+        model,
+        notionalOnly ? { billing: "subscription" } : undefined,
+      )
       // The lookup returns the nested shape; a listed row is the flattened standard card.
       const { longContext: _tier, ...standard } = looked ?? {}
       expect(standard).toEqual(rates)

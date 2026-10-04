@@ -36,7 +36,24 @@ client request that hits a rate-limited account, fails over, and succeeds on the
 | `httpStatus` / `responseStatus` | int? / int? | Independent upstream HTTP response and caller response facts. Null means unavailable; legacy responseStatus remains unknown, never inferred from outcome or upstream status |
 | `outcome` | enum | `success` \| `client_error` \| `translation_failed` \| `request_too_large` \| `key_revoked` \| `scope_violation` \| `key_rate_limited` \| `no_healthy_account` \| `quota_exhausted` \| `credits_exhausted` \| `upstream_error` \| `upstream_timeout` \| `upstream_auth_failed` \| `credential_decrypt_failed` \| `router_error`. Grouped by *whose problem it is* (`packages/core/src/domain/usage.ts`). Three that share a status but never fold together: `quota_exhausted` (a window a clock refills), `credits_exhausted` (a balance a human refills), and `key_rate_limited` (one key spent its own ceiling — not the operator's capacity) |
 | `httpStatus` / `errorClass` | int? / string? | **Upstream** status when it answered — never the status the client was sent. `NULL` means no upstream answered this attempt: the connection failed, or the router refused before dialing (a pool-wide cooldown's `429`, an empty scope's `403`); the client-facing status of those is fixed by `errorClass`/`outcome`. The thrown class's **name** — never a message, never a body |
-| `createdAt` | timestamp | |
+| `createdAt` | timestamp | Application attempt start time |
+| `ingestedAt` | timestamp, nullable | Database ingestion time; historical rows remain null |
+
+Logical settlements are separate immutable `usage_request_terminals` facts, keyed by the router's
+`correlationId`. They preserve the winning attempt's event, account, pool, provider and model rather
+than assigning an earlier actionable verdict to the last failed candidate. They carry request ingress
+and settlement timestamps, upstream and caller statuses, outcome, error class and attribution kind;
+they carry no token or cost counters. A stream settles once at EOF, error, cancellation or shutdown.
+An unstarted request has no winning account. Attempt days use application attempt start; request days
+use application settlement. Database ingestion timestamps are bookkeeping, never substitutes for
+event time. Historical UUID dimensions survive deletion of their named subjects.
+
+Attempts and terminals share one bounded background queue and one atomic batch mutation. Durable
+identity receipts admit each contribution once, even after raw detail retention removes its row.
+Late events add to their original event day; acknowledgement loss never adds the same contribution
+again. Legacy baselines are preserved; bounded backfill adopts existing identities without inventing
+missing winners or settlement timestamps. Coverage distinguishes legacy history from exact terminal
+facts and retained raw detail from lifetime totals.
 
 **Written off the request path, always.** Records are handed to an in-memory queue and flushed to
 Postgres in batches by a background writer. A request never waits on an insert, never opens a
@@ -72,11 +89,9 @@ records that arrived after an in-flight flush's final drain, the coalescing race
 refusing writer strands is reported once, at `error`, with the count. Invisible loss is the one
 thing the recorder promises not to do, and dying with the process is not an exemption.
 
-One request writes no record at all: a key refused for exceeding **its own** rate limit
-([04-api-keys-and-access.md](04-api-keys-and-access.md#per-key-controls)). The check runs before the
-body is read, so there is no model and no session to attribute a row to, and a refusal that
-allocated a record per attempt would be an amplifier rather than a limit. It is counted on
-`router_requests_total{key_id,outcome="key_rate_limited"}`, which is per key already.
+An authenticated key rate-limit refusal is an unstarted request: it retains key and correlation
+identity, a NULL model before body parsing, and its caller status. It also contributes one terminal
+request fact; it never invents an upstream account or a token charge.
 
 > **Total prompt size is `tokensIn` + `cacheWriteTokens` + `cacheReadTokens`.** Every total,
 > chart, and cost line here uses the sum. Reporting `tokensIn` alone counts only the uncached
@@ -88,15 +103,21 @@ allocated a record per attempt would be an amplifier rather than a limit. It is 
 | | |
 |---|---|
 | Source | A static price table shipped with the image: one file per vendor under `services/cost/tables/`, assembled by `services/cost/prices.ts` and keyed by `provider + model`. Four numbers per model, per million tokens — input, output, cache read, cache write. Every file records where its numbers came from and what a stale row costs |
-| Dated | `PRICE_TABLE_AS_OF` is the day every row was last checked against its vendor's published price, and it travels with the numbers: `prices.shippedAsOf` on `GET /api/admin/settings`, `router_price_table_asof_timestamp_seconds` on `/metrics`. **Update it in the same commit as any edit under `tables/`, and never without one** — a table nobody can date is a table nobody can judge, and its age is the only staleness signal an operator has |
+| Dated | `PRICE_TABLE_AS_OF` dates the inherited shipped snapshot; it is not a claim that every vendor was reverified. Settings exposes per-source `snapshotAsOf`, `verifiedAt`, currency and provenance URL. A NULL verification date means inherited evidence. Newly checked Kimi coding references carry their own verification date. |
 | Coverage | Twelve vendor tables answer for fourteen providers. `anthropic-api` and `anthropic-oauth` share the Anthropic table; `openai-api` and `openai-oauth` share the OpenAI one; `gemini`, `zai`, `kimi`, `minimax`, `groq`, `deepseek`, `xai`, `mistral`, `together` and `cerebras` each have their own. **Four providers ship no price on purpose** — [below](#the-four-providers-that-ship-no-price) |
-| Override | The operator edits or extends it in `/settings`, stored in `price_overrides` and held in a warm book beside the routing catalog. An override wins for the provider + model it names; the shipped table stays the fallback for everything else, so correcting one stale rate never costs the rest of the table. Same staleness bound as the catalog, because a price edited on another replica reaches this one the same way |
+| Override | Operator rates are scoped to an Account or apply to a provider globally. Account exact/family overrides precede provider exact/family overrides, then eligible shipped rates. Account-scoped rows cascade on deletion and never become global. The warm book refresh after a successful settings edit includes a post-commit snapshot before returning. Settings shows unpriced configured upstream models and unknown model catalogs. |
 | Which model | The **upstream** model, after the Account's alias map — that is the name the upstream billed. A dated snapshot (`…-20251001`, `…-2025-04-14`) prices as its family, which is how the provider prices the pin. A snapshot the vendor prices apart from its family is named in full in its table, and the exact name is tried first |
 | Long-context tiers | A model whose vendor publishes a long-context rate carries a second card that **replaces** the standard one once the prompt reaches its threshold — OpenAI above 272k, Google and xAI above 200k. Replaces, not tops up: those vendors bill the *entire* request at the higher rate once the prompt crosses the line, and charging only the excess would understate a long-context request by roughly half. The prompt measured is `tokensIn + cacheReadTokens + cacheWriteTokens` — how much context the request carried, not how much of it missed the cache. An **override is deliberately flat**: one written for a tiered model replaces both tiers, which is the operator saying "this is the rate, whatever the prompt" |
 | Unknown model | `costEstimate` is null and `costBasis` is `unknown` — never silently zero, never guessed. A family released after the image was built, or an older snapshot the vendor no longer lists, prices as unknown rather than as the nearest thing to it |
 | Priced, no tokens | `0` with a real basis. Zero tokens against a known rate is a measurement, not an admission |
 | Cache rates | A model whose vendor publishes no cached-input price bills cached tokens at the **full input rate** — a discount nobody published is not assumed. A missing cache-*write* price is zero, because every vendor here except Anthropic bills the write as ordinary input on the call that created it, and charging again would double-count it. Anthropic's two are derived from its published multiples of input (1.25× write; 0.1× read, except where the pricing page footnotes a model — 0.025× on Fable 5.1, 0.05× on Opus 5.5) rather than restated per row; a response never says which cache TTL was written, so the 5-minute default is assumed and writes read low, never high |
 | Estimated where computed | On the attempt, when the attempt ran. The price table and the alias map both change; a report needs what it cost then, not what the same tokens would cost today |
+
+Kimi coding identities are explicit: `k3`, `k3-256k` and `kimi-for-coding-highspeed` have
+verified API-equivalent references for subscription attribution. They do not establish metered USD
+Extra Usage charges. K2.8 Preview, guessed date prefixes, metered coding identities and K3 cache
+writes without a known TTL remain unpriced unless the operator supplies an override. Pricing never
+changes the client model or the model sent upstream.
 
 ### The four providers that ship no price
 
@@ -151,8 +172,10 @@ Every dimension supports the same windows, and every window supports the same me
 | **Model** | What are we actually calling? |
 | Session | What did one conversation cost end to end? |
 
-Windows: **lifetime** (never rolls off, because it comes from the daily rollup), **today** (current
-UTC day, live), **7d** and **30d** trailing, and a **custom** `from`/`to` range.
+Windows: **lifetime** (all available history within configured historical retention), **today**
+(current UTC day), **7d** and **30d** trailing, and a **custom** `from`/`to` range. Adaptive chart
+buckets cover the entire effective range within `USAGE_CHART_MAX_POINTS`; they do not discard
+modern activity after the first 400 historical days.
 
 Measures, identical in every dimension × window cell:
 
@@ -162,7 +185,7 @@ Measures, identical in every dimension × window cell:
 | Input / output tokens | Input is the **three-field sum** above |
 | Cache read / cache creation tokens | Broken out, because they are what explains a small `inputTokens` |
 | Estimated cost | Metered and notional as **separate** totals (below) |
-| Error rate | Share of client requests that ended in a non-success outcome, **and the split behind it** ([below](#the-failure-split)) — one percentage is not an answer |
+| Error rate | Share of retained attempts with non-success outcomes, with their own denominator and outcome split ([below](#the-failure-split)); historical attempt errors remain a separate count |
 | p50 / p95 latency | Router-observed, and `router_overhead_seconds` beside it so a slow upstream is not read as a slow router |
 
 ### Where the numbers appear
@@ -191,8 +214,8 @@ directly under the error-rate tile.
 
 | Property | Rule |
 |---|---|
-| Source | Raw `usage_records`, grouped by `outcome` over the window. **Never `usage_daily`**: the rollup's grain is a key *and* an account, so every attempt that never reached one — nothing in scope, a revoked key, a body over the ceiling — is absent there by construction, and those are exactly the failures worth finding |
-| Denominator | `failures.attempts` is that scan's own count, **not** `totals.attempts`. The totals are stitched from the rollup plus today's raw edges, and dividing a raw numerator by a stitched denominator is a share of nothing |
+| Source | Raw `usage_records`, grouped by `outcome` over the window. **Never daily aggregates**: historical totals preserve NULL dimensions, but do not supply a per-outcome distribution |
+| Denominator | `failures.attempts` is that scan's own count, **not** `totals.attempts`. Historical totals come from immutable baselines plus receipt-admitted contributions, and dividing a raw numerator by a stitched denominator is a share of nothing |
 | `partial` | True when the window reaches past the raw rows the counts came from. The counts are then a **floor**, and the console says so before the numbers rather than under them |
 | Grain | One entry per outcome that occurred, biggest first, ties broken by name so a page cannot reshuffle between refreshes. An outcome that did not occur is absent, not a zero |
 | Grouping | The API reports **outcomes**; the console groups them into remedy classes. `quota_exhausted` and `credits_exhausted` are never merged at either layer |
@@ -249,11 +272,12 @@ is the only one of the two that can catch a regression in the "never buffer a st
 
 ### Why it stays fast
 
-Aggregates are read from **rolled-up daily rows**, never by scanning raw `UsageRecord`s: an hourly
-task rolls raw records into per-day, per-(key, account, pool, model) aggregates. Raw rows expire on
-the retention window while the rollup does not, so a lifetime total survives retention and a 30-day
-chart never touches raw data. Today's partial day is the only slice computed from raw rows, bounded
-by a single day's volume. Postgres aggregates; the request path is not involved.
+Full UTC days use materialized additive history; exact partial-day boundaries and hourly series
+use durable contributions. Raw retention therefore cannot erase historical counts. Summary reads,
+including retained raw latency/outcome diagnostics and bounded selected-group percentiles, share a
+repeatable-read database snapshot. Legacy daily baselines cannot supply exact hourly or partial-day
+facts: coverage identifies that gap rather than fabricating zero traffic. History, raw detail and
+current subject labels have separate meanings; the UI states their coverage.
 
 ## Quota, resets, and manual re-check
 
@@ -715,7 +739,7 @@ interval reads `stale`, which is what a wedged task looks like from the outside.
 | Task | Cadence |
 |---|---|
 | Janitor / retention sweeps | jittered interval |
-| Usage rollup (raw → daily aggregates) | hourly; idempotent per (day, key, account, model) |
+| Usage history adoption | `USAGE_ROLLUP_INTERVAL_MINUTES`; bounded receipt registration and restart-safe backfill |
 | Circuit-breaker half-open probes | scheduled per account when its reset passes — not a fixed interval |
 | Quota refresh for idle subscription accounts | slow floor only; active accounts refresh from `rate_limit_event` traffic |
 | Expired OAuth `state` / PKCE verifier purge | every few minutes |
@@ -752,14 +776,19 @@ in a single-replica deployment the interval is nearly irrelevant. Detail:
 
 ## Retention
 
-Usage records, daily aggregates, audit events, sessions, scheduled-task runs, and OAuth state all
-expire on operator-tunable windows swept by the janitor; raw usage rows roll up to daily aggregates
-in Postgres before they expire, which is what keeps lifetime totals correct after the raw rows are
-gone. The aggregates outlive the raw rows by design and are swept on their own, much wider window —
-never a shorter one, which boot refuses, because the janitor and the rollup would then delete and
-re-insert the same days forever. The rollup itself writes **one statement per UTC day**, so a
-first-boot catch-up across the retention floor is a bounded, resumable walk rather than one
-transaction. Defaults, batching rules, and the env knobs are in
+Raw attempts and request terminals use `RETENTION_USAGE_DAYS`; historical aggregates and their
+identity receipts use `RETENTION_USAGE_DAILY_DAYS`. The latter must be at least the raw window.
+Receipt registration precedes raw deletion. Historical retention advances a durable admission
+horizon before bounded deletion: a replay older than that horizon is rejected, so purging receipt
+identities cannot resurrect expired totals. Database clocks control closure and retention; event
+timestamps continue to determine accounting days.
+
+Legacy daily baselines are sealed against old process rollups during a rolling upgrade. Raw rows
+without registered receipts survive old janitor deletes until bounded adoption. Existing rows keep
+NULL ingestion markers; post-cutover writes acquire a database ingestion marker even from an old
+process. Overlap attempts can therefore contribute once, while their missing terminal request
+facts remain explicitly unknown. The scheduler's successful start timestamp is not a rollup
+closure authority. Other janitor windows, batching and cadence remain configured as documented in
 [09-deployment.md](09-deployment.md).
 
 ## Read next

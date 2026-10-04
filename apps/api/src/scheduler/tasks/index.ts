@@ -8,7 +8,7 @@ import type {
   ScheduledTaskName,
   ScheduledTaskRepository,
   SessionRepository,
-  UsageDailyRepository,
+  UsageHistoryRepository,
   UsageRecordRepository,
 } from "@multi-ai-router/db"
 import type { Env } from "../../config/env"
@@ -47,11 +47,11 @@ import { createUsageRollupTask } from "./usage-rollup"
 
 export interface ScheduledTaskDeps {
   readonly sessions: Pick<SessionRepository, "deleteIdleBefore">
-  readonly usageRecords: Pick<UsageRecordRepository, "deleteOlderThan">
+  readonly usageRecords: Pick<UsageRecordRepository, "deleteRetainedBatch">
   readonly auditEvents: Pick<AuditRepository, "deleteOlderThan">
   readonly apiKeys: Pick<ApiKeyRepository, "deleteRevokedOlderThan">
   readonly oauthStates: Pick<OauthStateRepository, "deleteExpiredBefore">
-  readonly usageDaily: Pick<UsageDailyRepository, "rollupDay" | "deleteOlderThan">
+  readonly history: Pick<UsageHistoryRepository, "backfill" | "deleteRetainedHistory">
   /**
    * The admin console's session store, over the shared `admin_sessions` table. Handed in as the
    * store rather than its repository because the store also evicts what the sweep deletes from
@@ -171,7 +171,7 @@ export function createScheduledTasks(deps: ScheduledTaskDeps): readonly Schedule
     createJanitorTask({
       sessions: deps.sessions,
       usageRecords: deps.usageRecords,
-      usageDaily: deps.usageDaily,
+      history: deps.history,
       auditEvents: deps.auditEvents,
       taskRuns: deps.scheduledTasks,
       apiKeys: deps.apiKeys,
@@ -180,9 +180,8 @@ export function createScheduledTasks(deps: ScheduledTaskDeps): readonly Schedule
       batchSize,
     }),
     createUsageRollupTask({
-      usageDaily: deps.usageDaily,
-      scheduledTasks: deps.scheduledTasks,
-      retention: env.retention,
+      history: deps.history,
+      batchSize,
       intervalMs: intervals.usage_rollup,
     }),
     createOauthPurgeTask({
@@ -292,4 +291,4 @@ export { createTranscriptSweepTask, planTranscriptSweep } from "./sdk-transcript
 export type { Sweep, SweepOptions, SweepReport } from "./sweep"
 export { runSweeps } from "./sweep"
 export type { UsageRollupDeps } from "./usage-rollup"
-export { createUsageRollupTask, rollupDays, rollupFrom } from "./usage-rollup"
+export { createUsageRollupTask } from "./usage-rollup"

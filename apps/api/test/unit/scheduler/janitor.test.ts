@@ -38,8 +38,14 @@ describe("the janitor sweep", () => {
 
     const task = createJanitorTask({
       sessions: { deleteIdleBefore: sessions.deleteBatch },
-      usageRecords: { deleteOlderThan: usageRecords.deleteBatch },
-      usageDaily: { deleteOlderThan: usageDaily.deleteBatch },
+      usageRecords: {
+        deleteRetainedBatch: ({ retentionDays, limit }) =>
+          usageRecords.deleteBatch(new Date(NOW.getTime() - retentionDays * 86400000), limit),
+      },
+      history: {
+        deleteRetainedHistory: ({ retentionDays, limit }) =>
+          usageDaily.deleteBatch(new Date(NOW.getTime() - retentionDays * 86400000), limit),
+      },
       auditEvents: { deleteOlderThan: auditEvents.deleteBatch },
       taskRuns: { deleteOlderThan: taskRuns.deleteBatch },
       apiKeys: { deleteRevokedOlderThan: apiKeys.deleteBatch },
@@ -97,8 +103,14 @@ describe("the janitor sweep", () => {
 
     const task = createJanitorTask({
       sessions: { deleteIdleBefore: record("sessions") },
-      usageRecords: { deleteOlderThan: record("usageRecords") },
-      usageDaily: { deleteOlderThan: record("usageDaily") },
+      usageRecords: {
+        deleteRetainedBatch: ({ retentionDays, limit }) =>
+          record("usageRecords")(new Date(NOW.getTime() - retentionDays * 86400000), limit),
+      },
+      history: {
+        deleteRetainedHistory: ({ retentionDays, limit }) =>
+          record("usageDaily")(new Date(NOW.getTime() - retentionDays * 86400000), limit),
+      },
       auditEvents: { deleteOlderThan: record("auditEvents") },
       taskRuns: { deleteOlderThan: record("taskRuns") },
       apiKeys: { deleteRevokedOlderThan: record("revokedKeys") },
@@ -133,8 +145,14 @@ describe("the janitor sweep", () => {
           return removed
         },
       },
-      usageRecords: { deleteOlderThan: empty.deleteBatch },
-      usageDaily: { deleteOlderThan: empty.deleteBatch },
+      usageRecords: {
+        deleteRetainedBatch: ({ retentionDays, limit }) =>
+          empty.deleteBatch(new Date(NOW.getTime() - retentionDays * 86400000), limit),
+      },
+      history: {
+        deleteRetainedHistory: ({ retentionDays, limit }) =>
+          empty.deleteBatch(new Date(NOW.getTime() - retentionDays * 86400000), limit),
+      },
       auditEvents: { deleteOlderThan: empty.deleteBatch },
       taskRuns: { deleteOlderThan: empty.deleteBatch },
       apiKeys: { deleteRevokedOlderThan: empty.deleteBatch },

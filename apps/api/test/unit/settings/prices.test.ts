@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test"
+import { PriceOverrideAccountConflict } from "@multi-ai-router/db"
 import { AUDIT_KINDS, AUDIT_SUBJECTS, validate } from "../../../src/services/admin"
 import {
   diffPriceOverrides,
@@ -114,6 +115,7 @@ describe("the update", () => {
         provider: "anthropic-api",
         model: "claude-sonnet-5",
         ...RATE,
+        accountId: null,
         updatedAt: NOW.toISOString(),
       },
     ])
@@ -227,4 +229,55 @@ describe("the diff behind those counts", () => {
       changed: 0,
     })
   })
+})
+
+test("the same provider/model can have separate global and account prices", () => {
+  const accountId = "11111111-1111-4111-8111-111111111111"
+  expect(
+    body([
+      { provider: "kimi", model: "k3", ...RATE },
+      { accountId, provider: "kimi", model: "k3", ...RATE },
+    ]).ok,
+  ).toBe(true)
+  expect(
+    body([
+      { accountId, provider: "kimi", model: "k3", ...RATE },
+      { accountId, provider: "kimi", model: "K3", ...RATE },
+    ]).ok,
+  ).toBe(false)
+  expect(body([{ accountId: "invalid", provider: "kimi", model: "k3", ...RATE }]).ok).toBe(false)
+})
+
+test("durable account/provider conflicts return a sanitized validation error without audit", async () => {
+  const fixture = harness()
+  fixture.prices.replaceAll = async () => {
+    throw new PriceOverrideAccountConflict(
+      "provider_mismatch",
+      "11111111-1111-4111-8111-111111111111",
+    )
+  }
+  const result = await fixture.service.update({ priceOverrides: [] })
+  expect(result.ok).toBe(false)
+  if (!result.ok) {
+    expect(result.failure.status).toBe(400)
+    expect(result.failure.code).toBe("provider_mismatch")
+  }
+  expect(fixture.audit.events).toHaveLength(0)
+})
+
+test("settings assesses coverage from one consistent warm account projection", async () => {
+  let reads = 0
+  const fixture = harness({
+    priceAccounts: () => {
+      reads++
+      return [{ id: "a", label: "Coding", provider: "kimi", billing: "metered", models: ["k3"] }]
+    },
+  })
+  const result = await fixture.service.read()
+  expect(reads).toBe(1)
+  expect(result.ok).toBe(true)
+  if (result.ok)
+    expect(result.value.prices.unpriced).toEqual([
+      { accountId: "a", provider: "kimi", model: "k3", reason: "missing_rate" },
+    ])
 })

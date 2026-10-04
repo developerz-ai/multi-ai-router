@@ -9,6 +9,7 @@ import { errorHandler, notFoundHandler } from "../../src/middleware/errorHandler
 import { requestId } from "../../src/middleware/requestId"
 import { ADMIN_USAGE_BASE_PATH, adminUsageRoutes } from "../../src/routes/admin/usage"
 import { createUsageService } from "../../src/services/usage-read"
+import { historyFixture } from "../unit/usage/history-fixture"
 
 /**
  * The two halves of the *"why did my request fail"* surface, driven through a real Hono mount:
@@ -56,17 +57,19 @@ function harness(rows: readonly RecentAttemptRow[] = [attemptRow()], guard = stu
   }
 
   const service = createUsageService({
-    usage: {
-      totals: unreached,
-      latency: unreached,
-      series: unreached,
-      seriesByDimension: unreached,
-      breakdown: unreached,
-      outcomes: unreached,
-    },
+    history: historyFixture(
+      {
+        totals: unreached,
+        latency: unreached,
+        series: unreached,
+        seriesByDimension: unreached,
+        breakdown: unreached,
+        outcomes: unreached,
+      },
+      NOW,
+    ),
     recent: { recent: async () => [...rows] },
-    daily: { totals: unreached, breakdown: unreached },
-    scheduledTasks: { lastSuccess: unreached },
+
     labels: async () => ({
       keys: new Map([["key-1", "dev-laptops"]]),
       accounts: new Map([["acct-1", "claude-max-01"]]),
@@ -201,34 +204,29 @@ describe("GET /api/admin/usage — the failure split", () => {
 function summaryHarness(outcomes: readonly UsageOutcomeCount[], guard = stubSession()) {
   const attempts = outcomes.reduce((sum, row) => sum + row.attempts, 0)
   const service = createUsageService({
-    usage: {
-      totals: async () => ({ ...ZERO_TOTALS, attempts }),
-      latency: async () => ({
-        p50Ms: null,
-        p95Ms: null,
-        routerOverheadP95Ms: null,
-        ttfbP95Ms: null,
-      }),
-      series: async () => [],
-      seriesByDimension: async () => [],
-      breakdown: async () => [],
-      outcomes: async () => [...outcomes],
-    },
+    history: historyFixture(
+      {
+        totals: async () => ({ ...ZERO_TOTALS, attempts }),
+        latency: async () => ({
+          p50Ms: null,
+          p95Ms: null,
+          routerOverheadP95Ms: null,
+          ttfbP95Ms: null,
+        }),
+        series: async () => [],
+        seriesByDimension: async () => [],
+        breakdown: async () => [],
+        outcomes: async () => [...outcomes],
+      },
+      NOW,
+    ),
     recent: {
       recent: async () => {
         throw new Error("the summary must not read raw attempt rows")
       },
     },
     // `today` has no closed days, so the rolled table is never the right answer here.
-    daily: {
-      totals: async () => {
-        throw new Error("the rolled table must not be read for a same-day window")
-      },
-      breakdown: async () => {
-        throw new Error("the rolled table must not be read for a same-day window")
-      },
-    },
-    scheduledTasks: { lastSuccess: async () => undefined },
+
     labels: async () => ({ keys: new Map(), accounts: new Map(), pools: new Map() }),
     now: () => NOW,
   })

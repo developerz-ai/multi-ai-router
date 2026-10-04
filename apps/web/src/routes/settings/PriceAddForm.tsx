@@ -7,6 +7,9 @@ import styles from "./PriceAddForm.module.scss"
 export interface PriceAddFormProps {
   /** The registry, so the provider list is never a second copy of `providers/`. */
   readonly providers: readonly ProviderDescriptor[]
+  readonly accounts?: readonly { id: string; label: string; provider: string }[]
+  readonly accountId?: string
+  readonly onAccount?: (id: string) => void
   readonly provider: string
   readonly model: string
   /** The refusal from the last attempt — a duplicate row, or a missing field. */
@@ -33,6 +36,17 @@ export function PriceAddForm(props: PriceAddFormProps) {
   return (
     <form class={styles.form} onSubmit={submit}>
       <SelectField
+        label="Price scope"
+        value={props.accountId ?? ""}
+        onChange={(event) => props.onAccount?.(event.currentTarget.value)}
+        options={[
+          { value: "", label: "All accounts for this provider" },
+          ...(props.accounts ?? [])
+            .filter((account) => props.provider === "" || account.provider === props.provider)
+            .map((account) => ({ value: account.id, label: account.label })),
+        ]}
+      />
+      <SelectField
         hint="Rates are per provider: the same model costs different money upstream to upstream."
         label="Provider"
         onChange={(event) => props.onProvider(event.currentTarget.value)}
@@ -47,7 +61,7 @@ export function PriceAddForm(props: PriceAddFormProps) {
         value={props.provider}
       />
       <TextField
-        hint="Exactly as clients ask for it. Stored lowercase, so one model is one row."
+        hint="The upstream model after account aliases. Stored lowercase, so one model is one row."
         label="Model"
         onInput={(event) => props.onModel(event.currentTarget.value)}
         required
