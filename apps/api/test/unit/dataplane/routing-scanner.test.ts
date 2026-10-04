@@ -211,3 +211,28 @@ test("a BOM outside JSON strings remains an invalid root", () => {
     expect(result.model).toBeNull()
   }
 })
+
+test("snapshot captures a closed user opening before EOF without declaring grammar complete", () => {
+  const scanner = createRoutingScanner()
+  const opening = '{"role":"user","content":"hello"}'
+  scanner.push(encoder.encode(`{"model":"m","messages":[${opening}]`))
+  const snapshot = scanner.result()
+  expect(new TextDecoder().decode(snapshot.conversationPrefix)).toBe(opening)
+  expect(snapshot.invalid).toBe(false)
+  expect(scanner.done).toBe(false)
+  expect(scanner.finish().invalid).toBe(true)
+  expect(scanner.done).toBe(true)
+})
+
+test("completion means explicit EOF, and an unfinished opening has no usable snapshot", () => {
+  const scanner = createRoutingScanner()
+  scanner.push(encoder.encode('{"model":"m","messages":[{"role":"user","content":"hello'))
+  expect(scanner.result().conversationPrefix).toHaveLength(0)
+  expect(scanner.done).toBe(false)
+  scanner.push(encoder.encode('"}]}'))
+  expect(scanner.done).toBe(false)
+  const result = scanner.finish()
+  expect(result.invalid).toBe(false)
+  expect(scanner.done).toBe(true)
+  expect(scanner.result()).toEqual(result)
+})

@@ -13,7 +13,9 @@ export interface ScanResult {
   model: string | null
   modelSpan: { start: number; end: number } | null
   modelTooLong: boolean
+  /** Bounded bytes of a complete usable opening; empty until that opening closes. */
   conversationPrefix: Uint8Array
+  /** Observed error; false on a result() snapshot does not establish EOF validity. */
   invalid: boolean
   duplicateModel: boolean
   depthExceeded: boolean
@@ -28,8 +30,12 @@ export interface ScannerOptions {
   readonly maximumJsonDepth?: number
 }
 export interface RoutingScanner {
+  /** Supply every body chunk before calling finish(). */
   push(chunk: Uint8Array): void
+  /** EOF was explicitly finalized, whether valid or invalid. Never true merely after capture. */
   readonly done: boolean
+  /** Current capture/error snapshot; complete user openings may precede document EOF. */
   result(): ScanResult
+  /** Finalize at EOF: incomplete grammar and split strings/codepoints become invalid. */
   finish(): ScanResult
 }

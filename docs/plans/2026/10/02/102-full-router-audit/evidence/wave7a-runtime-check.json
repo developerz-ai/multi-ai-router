@@ -1,22 +1,22 @@
 {
-  "phase": "locally_validated_not_committed",
+  "phase": "PR153_review_corrections_validated",
   "base": "d5153091579cf0542013d0cbe13cc76d437e5427",
   "fullGate": {
     "command": "bin/check",
     "result": {
       "exitCode": 0,
-      "ownDatabase": "w7a_runtime_gate_722fa00c1d00433b9112cce43348f8e0",
+      "ownDatabase": "w7a_runtime_gate_1e9831e377e844a29b4078ba3bbdf599",
       "dropped": true,
       "postgresPort": 5440,
       "command": "bin/check"
     },
-    "passed": 5207,
+    "passed": 5212,
     "failed": 0,
-    "assertions": 52235,
+    "assertions": 52252,
     "files": 460,
-    "frozenTargets": 69,
+    "frozenTargets": 70,
     "drift": [],
-    "logSha256": "6ad5b32dbf87c070b9e9495ed8ee4270e7dab20e121304439d303262f9acb446"
+    "logSha256": "7a40cf37e558f805067277915fa7b5991876d838c1670b727bd1db62c0874237"
   },
   "priorFailedGate": {
     "passed": 5199,
@@ -214,7 +214,7 @@
     "Large translated nonstream p99 6ms fails strict <5ms budget",
     "Prior W6 7.333ms failure retained in wave6 evidence",
     "Cold-session and occupied-pool L16 latency remains open",
-    "No commit/PR/release/deployment proof",
+    "PR153 open; review corrections and new-head CI pending; no release/deployment proof",
     "No live provider/OAuth/CLI inference exercised"
   ],
   "dependencyCheck": {
@@ -237,5 +237,34 @@
     "probeExit": 0,
     "postCommentGateServerSha256": "e6e83e35ec444947bbd88525976db262af2b1420ddfabe9dd052ba57739a7855",
     "scope": "Built before two comment-only source corrections; static probe attests its own exact checked build, no release claim"
-  }
+  },
+  "ownerAcceptance": {
+    "date": "2026-10-04",
+    "instruction": "bro 1-3ms is nothing we are fine",
+    "scope": "Observed 6ms warm translated p99 accepted for this PR; strict <5ms measurement failure retained",
+    "coldSessionLatency": "Not closed; earlier 19ms failures are outside this specific acceptance"
+  },
+  "priorFullGate": {
+    "command": "bin/check",
+    "result": {
+      "exitCode": 0,
+      "ownDatabase": "w7a_runtime_gate_722fa00c1d00433b9112cce43348f8e0",
+      "dropped": true,
+      "postgresPort": 5440,
+      "command": "bin/check"
+    },
+    "passed": 5207,
+    "failed": 0,
+    "assertions": 52235,
+    "files": 460,
+    "frozenTargets": 69,
+    "drift": [],
+    "logSha256": "6ad5b32dbf87c070b9e9495ed8ee4270e7dab20e121304439d303262f9acb446"
+  },
+  "reviewCorrections": [
+    "Specific2..4096booterror; missing .env comment spacing",
+    "Current6ms measurement distinguished from prior7.333ms and owner acceptance",
+    "Completeopening snapshot review premise refuted; snapshotEOF contract documented and done meansfinalized",
+    "Global test prototype mutation replaced with bounded interval/control/UTF8behavior"
+  ]
 }

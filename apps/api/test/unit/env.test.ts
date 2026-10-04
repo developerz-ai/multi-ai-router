@@ -832,3 +832,11 @@ describe("the credential cold margin", () => {
     )
   })
 })
+
+for (const depth of ["1", "5000"]) {
+  test(`invalid JSON depth ${depth} identifies its accepted range at boot`, () => {
+    const error = expectEnvError({ ...base, MAX_REQUEST_JSON_DEPTH: depth })
+    expect(error.variables).toEqual(["MAX_REQUEST_JSON_DEPTH"])
+    expect(error.message).toContain("must be between 2 and 4096")
+  })
+}

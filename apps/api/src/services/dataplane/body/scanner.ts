@@ -28,6 +28,7 @@ export function createRoutingScanner(options: ScannerOptions = {}) {
     modelSpan: ScanResult["modelSpan"] = null,
     modelTooLong = false,
     depthExceeded = false
+  let finalized = false
   let primitive = false,
     conversationSeen = false
   const strings = createStringValidation(),
@@ -265,9 +266,10 @@ export function createRoutingScanner(options: ScannerOptions = {}) {
       }
     },
     get done() {
-      return false
+      return finalized
     },
     finish() {
+      finalized = true
       if (primitive) finishPrimitive()
       if (!rootFinished || stack.length || inString || strings.pending || strings.invalid)
         invalid = true

@@ -184,7 +184,9 @@ export const ENV_FIELDS = {
   QUOTA_WRITE_INTERVAL_MS: atLeastOne.optional(),
   ACCOUNT_STATUS_WRITE_INTERVAL_MS: atLeastOne.optional(),
   MAX_REQUEST_BODY_BYTES: atLeastOne.optional(),
-  MAX_REQUEST_JSON_DEPTH: atLeastOne.refine((value) => value >= 2 && value <= 4096).optional(),
+  MAX_REQUEST_JSON_DEPTH: atLeastOne
+    .refine((value) => value >= 2 && value <= 4096, "must be between 2 and 4096")
+    .optional(),
   ROUTING_MAX_ATTEMPTS: atLeastOne.optional(),
   ROUTING_FAILURE_THRESHOLD: atLeastOne.optional(),
   ROUTING_BASE_BACKOFF_MS: atLeastOne.optional(),

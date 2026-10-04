@@ -8,9 +8,10 @@ percent: 67
 current_focus: W1-W6 merged; eleven PRs. PR152 merged d515309 after five required checks passed at5e2d826,
   fresh CodeRabbit review found no actionable issues and all25 threads were resolved.
   W7A runtime/scanner/admin/shutdown and environment responsibility split are integrated locally;
-  final full gate passed5207 tests with zero failures after fixture ordering and empty-body diagnosis corrections.
+  review-corrected full gate passed5212 tests with zero failures after fixture ordering and empty-body diagnosis corrections.
   New-source small warm benchmark passed;280000-byte translated nonstream p99 was6ms and failed.
-  Prior280KB warm7.333ms failure and L16 cold/session latency remain open.
+  The owner accepted the observed6ms excess on2026-10-04; prior280KB warm7.333ms failure remains recorded.
+  L16 cold/session latency remains open.
   Infrastructure monitoring, operational rotation, translation/UI follow-ups, release and deployment remain open.
 slices:
 - file: 01-transport.md
@@ -119,8 +120,9 @@ evidence:
 - 'Pinned Bun 1.4.2; bin/check with disposable PostgreSQL: 4326 tests passed, zero failed; build passed.'
 - '102-full-router-audit/evidence/wave1-bench.json: 8000 requests, zero failures/buffered streams; max p99 1.28 ms.'
 notes: 'W1–W6 merged and locally validated; eleven PRs. W6 historical accounting/pricing passed bin/check5061 tests,
-  PG16/18 targeted regressions and hardened amd64 packaging. The current large warm benchmark failed7.333ms and remains open;
-  no release/deployment or cold latency closure is claimed. W7A actual integration checks follow its417-test scratch proof.
+  PG16/18 targeted regressions and hardened amd64 packaging. The current large warm benchmark failed the strict5ms budget at6ms; the owner accepted this excess on2026-10-04.
+  The prior7.333ms failure remains recorded; cold/session latency is still open;
+  no release/deployment or cold latency closure is claimed. W7A PR153 review-corrected gate passed5212 tests; previoushead allfive CI passed, newhead checks pending.
   #87 operational rotation/session revocation, O12 monitoring, translation/console/DX/prompt work and release/deployment remain open.'
 last_updated: 2026-10-04
 resolved_findings:
