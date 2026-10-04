@@ -9,8 +9,10 @@ import type {
   UtilizationSource,
 } from "@multi-ai-router/core"
 import type { ModelAliasMap } from "@multi-ai-router/db"
+import type { ModelFamily } from "../services/routing/model-family"
 import type { ResponsesEgressRules } from "../services/translate/shared/responses-egress"
 import type { ProviderDeviceFlow } from "./device-flow"
+import type { ProviderModelListing } from "./model-listing"
 
 /**
  * The provider driver contract: one interface, many implementations. Adding a provider is one
@@ -131,6 +133,12 @@ export const UPSTREAM_FAILURE_KINDS = [
   "credits-exhausted",
   "auth",
   "invalid-request",
+  /**
+   * This account's upstream does not serve the model asked for. Not `invalid-request`: the request
+   * may be perfectly good at the next account, which serves a different vendor's names. Retryable,
+   * and never held against the account's health — it answered, about a name it was never meant for.
+   */
+  "model-unsupported",
   "server-error",
   /** The SDK no longer holds the session we resumed. Evict the binding, replay once in place. */
   "stale-session",
@@ -244,11 +252,8 @@ export interface ProviderDriver {
   readonly authKind: AuthKind
   /**
    * What an Account of this provider is billed as unless the operator says otherwise — the default
-   * a new Account takes, and a fixed answer where the value is `subscription`.
-   *
-   * Here rather than in a set inside the cost estimator for the reason non-negotiable 12 gives:
-   * adding a provider is a driver file, and "how is this one sold" is a fact about the provider,
-   * not a branch in a shared module that has to be edited every time one is added.
+   * a new Account takes, and a fixed answer where the value is `subscription`. A fact about the
+   * provider, so it lives on the driver (non-negotiable 12), not in the cost estimator.
    */
   readonly billing: AccountBilling
   /**
@@ -257,6 +262,14 @@ export interface ProviderDriver {
    * reason: their exchange belongs to the `claude` CLI (non-negotiable 1).
    */
   readonly oauth?: ProviderOAuthFlow
+  /** A non-stock model listing (`model-listing.ts`). Absent: `{data: [{id}]}` at `/models`. */
+  readonly modelListing?: ProviderModelListing
+  /**
+   * The names an Account of this provider serves when its operator declared no `supportedModels`
+   * (`services/routing/model-family.ts`). Only a single-vendor upstream — a subscription — declares
+   * one; absent keeps the account a passthrough for every name.
+   */
+  readonly modelFamily?: ModelFamily
 
   /** Account override wins over the pinned default. Throws when neither exists. */
   resolveBaseUrl(account: DriverAccount): URL

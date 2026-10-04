@@ -65,6 +65,11 @@ export interface RejectedCandidate {
 export type PolicyNote =
   | { readonly kind: "binding-pinned"; readonly accountId: string }
   | { readonly kind: "half-open-demoted"; readonly accountIds: readonly string[] }
+  /**
+   * Accounts that reach the requested name only through an alias rename, ranked behind every
+   * account serving it natively — a failover tail, not a peer (`policies/index.ts`).
+   */
+  | { readonly kind: "aliased-deferred"; readonly accountIds: readonly string[] }
   | { readonly kind: "overflow-engaged"; readonly accountId: string }
   | { readonly kind: "weights-absent"; readonly accountIds: readonly string[] }
   | {

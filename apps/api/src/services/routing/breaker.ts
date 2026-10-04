@@ -129,9 +129,14 @@ export function recordFailure(
     // a healthy pool into a cooldown cascade and answer the next caller as though there were no
     // capacity (2026-09-06). A conversation whose session is busy is a fact about that
     // conversation; the account it happened on just served, and will serve again.
+    //
+    // `model-unsupported` is the same shape: an upstream refusing a name it never served (prod,
+    // 2026-10-04 — `k3` on a Claude subscription struck it into a probe, and the conversation's
+    // binding then waited on that probe) says nothing about whether it serves its own models.
     case "client-error":
     case "stale-session":
     case "busy-session":
+    case "model-unsupported":
       return state
 
     // No clock refills a drained balance. No reset instant is recorded, deliberately.

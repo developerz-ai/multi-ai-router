@@ -134,7 +134,10 @@ const OPENAI_CHAT_TO_ANTHROPIC: TranslationPair = {
   ingress: "openai-chat",
   egress: "anthropic",
   request: (body, context) =>
-    openAiChatToAnthropicRequest(body, { defaultMaxTokens: context.defaultMaxTokens }),
+    openAiChatToAnthropicRequest(body, {
+      defaultMaxTokens: context.defaultMaxTokens,
+      onDrop: context.onDrop,
+    }),
   response: (body, context) =>
     anthropicToOpenAiChatResponse(body, {
       created: context.created,
@@ -177,7 +180,10 @@ const OPENAI_RESPONSES_TO_ANTHROPIC: TranslationPair = {
   ingress: "openai-responses",
   egress: "anthropic",
   request: (body, context) =>
-    openAiResponsesToAnthropicRequest(body, { defaultMaxTokens: context.defaultMaxTokens }),
+    openAiResponsesToAnthropicRequest(body, {
+      defaultMaxTokens: context.defaultMaxTokens,
+      onDrop: context.onDrop,
+    }),
   response: (body, context) =>
     anthropicToOpenAiResponsesResponse(body, {
       created: context.created,
@@ -223,7 +229,10 @@ const OPENAI_RESPONSES_TO_OPENAI_CHAT: TranslationPair = {
   ingress: "openai-responses",
   egress: "openai-chat",
   request: (body, context) =>
-    openAiResponsesToOpenAiChatRequest(body, { ceiling: context.chatCeiling }),
+    openAiResponsesToOpenAiChatRequest(body, {
+      ceiling: context.chatCeiling,
+      onDrop: context.onDrop,
+    }),
   response: (body, context) =>
     openAiChatToOpenAiResponsesResponse(body, {
       created: context.created,

@@ -8,7 +8,6 @@ import {
   deleteAccount,
   disableAccount,
   discoverAccountModels,
-  getAccount,
   listAccounts,
   type RecheckResult,
   recheckAccount,
@@ -191,31 +190,6 @@ export function useLastRecheck(id: Accessor<string>) {
     queryFn: (): RecheckResult | null => null,
     enabled: false,
     staleTime: Number.POSITIVE_INFINITY,
-  }))
-}
-
-/**
- * One account, re-read on an interval, for the one case where the browser cannot observe what
- * happened: **the OAuth redirect lands on the router, not on this tab.**
- * `GET /admin/accounts/oauth/callback` completes the exchange server-side and the tab holding the
- * connect dialog is never told. Without this it would sit on a pending login until the TTL and
- * then announce that a login which had already succeeded had expired.
- *
- * The interval is a parameter and `false` is a normal value for it: this polls only while a
- * redirect capture is actually outstanding, and stops the moment it lands. It is the only
- * *conditional* poll in the console — the two unconditional ones (scheduled-task health and the
- * live request feed) are surfaces whose whole point is being current, and nothing else should poll
- * at all.
- */
-export function useWatchedAccount(
-  id: Accessor<string | null>,
-  intervalMs: Accessor<number | false>,
-) {
-  return useQuery(() => ({
-    queryKey: queryKeys.accounts.detail(id() ?? ""),
-    queryFn: () => getAccount(id() ?? ""),
-    enabled: id() !== null && intervalMs() !== false,
-    refetchInterval: intervalMs(),
   }))
 }
 

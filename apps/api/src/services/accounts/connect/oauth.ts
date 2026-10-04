@@ -2,7 +2,13 @@ import { createHash, randomBytes, randomUUID } from "node:crypto"
 import type { AccountRepository, OauthStateRepository } from "@multi-ai-router/db"
 import { type AdminResult, invalid, notFound, ok } from "../../admin/result"
 import type { CredentialCipher } from "../../crypto/cipher"
-import { bindConsumed, connectableAccount, STATE_REJECTED } from "./oauth-binding"
+import {
+  bindConsumed,
+  connectableAccount,
+  type FlowLookup,
+  registryFlow,
+  STATE_REJECTED,
+} from "./oauth-binding"
 import {
   completeAuthorization,
   type OAuthCapture,
@@ -111,6 +117,11 @@ export interface OAuthConnectDeps extends OAuthExchangeDeps {
   readonly cipher: Pick<CredentialCipher, "encrypt" | "decrypt">
   /** The one-shot window, in minutes. Config, never a constant — `env.retention.oauthStateMinutes`. */
   readonly stateMinutes: number
+  /**
+   * Which flow a provider declares; the registry's unless given. Exists so the generic paste and
+   * redirect machinery stays testable while every shipped flow is device-only.
+   */
+  readonly flowFor?: FlowLookup
 }
 
 interface Presentation {
@@ -124,17 +135,21 @@ interface Presentation {
 export function createOAuthConnectService(deps: OAuthConnectDeps): OAuthConnectService {
   const ttlMs = deps.stateMinutes * 60_000
 
-  const connectable = (accountId: string) => connectableAccount(deps.accounts, accountId)
+  const flowFor = deps.flowFor ?? registryFlow
+  const connectable = (accountId: string) => connectableAccount(deps.accounts, accountId, flowFor)
 
   /** Where paste and redirect meet. Consume first, judge second: a wrong guess burns its state. */
   const exchange = async (presented: Presentation): Promise<AdminResult<OAuthConnectCompleted>> => {
     const consumed = await deps.states.consume(presented.state, deps.now())
-    const bound = await bindConsumed(deps.accounts, consumed, presented.boundTo)
+    const bound = await bindConsumed(deps.accounts, consumed, presented.boundTo, flowFor)
     if (!bound.ok) return bound
     const { row, flow, pending, lifecycleVersion } = bound.value
     // A device-code attempt carries its issuer handle in `nonce` and is redeemed only by polling
     // (`oauth-device.ts`); a code presented against one was never minted for it.
     if (pending.nonce !== null) return invalid(STATE_REJECTED, "state_rejected")
+    // A provider that declares a device flow connects by it alone; a code that arrives here for one
+    // was minted by a start this build no longer offers.
+    if (flow.device !== undefined) return deviceOnly(row.label)
 
     let codeVerifier: string
     try {
@@ -164,6 +179,7 @@ export function createOAuthConnectService(deps: OAuthConnectDeps): OAuthConnectS
       const account = await connectable(accountId)
       if (!account.ok) return account
       const { row, flow } = account.value
+      if (flow.device !== undefined) return deviceOnly(row.label)
 
       const verifier = randomBytes(VERIFIER_BYTES).toString("base64url")
       const state = randomBytes(STATE_BYTES).toString("base64url")
@@ -202,6 +218,9 @@ export function createOAuthConnectService(deps: OAuthConnectDeps): OAuthConnectS
     },
 
     complete: async (accountId, pasted) => {
+      const account = await connectable(accountId)
+      if (!account.ok) return account
+      if (account.value.flow.device !== undefined) return deviceOnly(account.value.row.label)
       const presented = parseAuthorizationPaste(pasted)
       if (presented === null) {
         // Describes the shape, never the value: a paste is credential material while in flight.
@@ -240,4 +259,16 @@ export function createOAuthConnectService(deps: OAuthConnectDeps): OAuthConnectS
       return ok({ accountId, cancelled: cancelled.cancelled })
     },
   }
+}
+
+/**
+ * Where a provider's OAuth flow declares a device-code sign-in, that is its only connect method:
+ * paste-back needs the browser that approved to hand over a loopback address, which is the thing a
+ * remote router cannot ask of anyone (docs/idea/03-providers.md).
+ */
+function deviceOnly(label: string): AdminResult<never> {
+  return invalid(
+    `account "${label}" connects with a sign-in code — use "Get a code" in the connect dialog`,
+    "device_only",
+  )
 }

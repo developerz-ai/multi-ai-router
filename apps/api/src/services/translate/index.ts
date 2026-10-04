@@ -104,7 +104,7 @@ export {
 export type { TranslatedResponse } from "./shared/response"
 export { collectResponsesStream } from "./shared/responses-collect"
 export type { ResponsesEgressRules } from "./shared/responses-egress"
-export { DEFAULT_RESPONSES_EGRESS } from "./shared/responses-egress"
+export { applyResponsesEgressRules, DEFAULT_RESPONSES_EGRESS } from "./shared/responses-egress"
 export type { ReadResponsesBody, ReadResponsesItem } from "./shared/responses-read"
 export { readResponsesBody } from "./shared/responses-read"
 export type {

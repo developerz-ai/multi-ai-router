@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test"
-import { QueryClient, QueryClientProvider } from "@tanstack/solid-query"
+import { focusManager, QueryClient, QueryClientProvider } from "@tanstack/solid-query"
 import { render } from "solid-js/web"
 import type { AccountView } from "../../src/lib/api/types"
 import { AccountConnect } from "../../src/routes/accounts/AccountConnect"
@@ -73,7 +73,7 @@ function stub(statuses: unknown[], deviceSignIn = true) {
   return calls
 }
 
-function mount() {
+function mount(extra: { autoBegin?: boolean } = {}) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
   const container = document.createElement("div")
   document.body.appendChild(container)
@@ -82,6 +82,7 @@ function mount() {
       <QueryClientProvider client={client}>
         <AccountConnect
           account={ACCOUNT}
+          autoBegin={extra.autoBegin === true}
           connectFlow="oauth"
           nowMs={Date.now()}
           onClose={() => {}}
@@ -143,6 +144,54 @@ describe("device-code sign-in in the connect dialog", () => {
       expect(text).not.toContain("Connected.")
       expect(button("Get a new code")).toBeDefined()
     } finally {
+      dispose()
+    }
+  })
+
+  test("D. device-only: no paste-back, no Start login — Get a code is the whole flow", async () => {
+    const calls = stub([{ status: "waiting", ...STARTED }])
+    const dispose = mount()
+    try {
+      await settle()
+      expect(button("Get a code")).toBeDefined()
+      expect(button("Start login")).toBeUndefined()
+      expect(document.body.querySelector("textarea")).toBeNull()
+      expect(document.body.textContent ?? "").not.toContain("authorization-code exchange")
+      expect(calls.some((c) => c.startsWith("POST") && /\/connect$/.test(c))).toBe(false)
+    } finally {
+      dispose()
+    }
+  })
+
+  test("D. a guided run starts the device sign-in, never paste-back", async () => {
+    const calls = stub([{ status: "waiting", ...STARTED }])
+    const dispose = mount({ autoBegin: true })
+    try {
+      await settle(80)
+      expect(calls.some((c) => c.startsWith("POST") && c.includes("/connect/device"))).toBe(true)
+      expect(calls.some((c) => c.startsWith("POST") && /\/connect$/.test(c))).toBe(false)
+      expect(document.body.textContent ?? "").toContain("QRST-5678")
+    } finally {
+      dispose()
+    }
+  })
+
+  test("E. keeps polling while the console tab is in the background", async () => {
+    const calls = stub([{ status: "waiting", ...STARTED }])
+    const dispose = mount()
+    try {
+      await settle()
+      button("Get a code")?.click()
+      await settle()
+      focusManager.setFocused(false)
+      const before = calls.filter(
+        (c) => c.startsWith("GET") && c.includes("/connect/device"),
+      ).length
+      await settle(2_300)
+      const after = calls.filter((c) => c.startsWith("GET") && c.includes("/connect/device")).length
+      expect(after).toBeGreaterThan(before)
+    } finally {
+      focusManager.setFocused(undefined)
       dispose()
     }
   })

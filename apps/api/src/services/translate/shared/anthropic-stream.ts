@@ -3,6 +3,7 @@ import type { SseEvent } from "../sse/emit"
 import { parseUpstreamError } from "./errors"
 import { createPendingStreamBlocks } from "./pending-stream-blocks"
 import type { ResponsesRecoveryOptions } from "./responses-snapshot-recovery"
+import { ROUTER_THINKING_SIGNATURE } from "./router-thinking"
 import type { AnthropicStopReason } from "./stop-reason"
 import { TranslationStreamError } from "./stream-error"
 
@@ -25,7 +26,8 @@ export interface AnthropicStreamEmitter {
   translationFailure(): Error | null
   identify(id: string | null | undefined, model: string | null | undefined): void
   start(out: SseEvent[]): void
-  text(out: SseEvent[], text: string, startsNewBlock?: boolean): void
+  /** `reasoning` text lands in a router-signed `thinking` block (`router-thinking.ts`). */
+  text(out: SseEvent[], text: string, startsNewBlock?: boolean, kind?: FragmentKind): void
   toolStart(
     out: SseEvent[],
     key: string | number,
@@ -39,9 +41,13 @@ export interface AnthropicStreamEmitter {
   fail(out: SseEvent[], payload: unknown): void
 }
 
+type FragmentKind = "message" | "reasoning"
+const SIGNED = { type: "signature_delta", signature: ROUTER_THINKING_SIGNATURE }
+
 interface OpenBlock {
   readonly index: number
   readonly tool: string | number | null
+  readonly thinking: boolean
 }
 
 export function createAnthropicStreamEmitter(
@@ -65,6 +71,7 @@ export function createAnthropicStreamEmitter(
 
   function closeOpen(out: SseEvent[]): void {
     if (open === null) return
+    if (open.thinking) out.push(event("content_block_delta", { index: open.index, delta: SIGNED }))
     out.push(event("content_block_stop", { index: open.index }))
     open = null
   }
@@ -78,7 +85,7 @@ export function createAnthropicStreamEmitter(
     const index = nextBlock
     nextBlock += 1
     toolBlocks.set(key, index)
-    open = { index, tool: key }
+    open = { index, tool: key, thinking: false }
     out.push(
       event("content_block_start", {
         index,
@@ -94,7 +101,7 @@ export function createAnthropicStreamEmitter(
     // Their arguments are already whole, so each block opens, states them once, and closes.
     for (const call of pending.drain()) {
       if ("text" in call) {
-        emitText(out, call.text)
+        emitFragment(out, call.text, call.kind)
         closeOpen(out)
         continue
       }
@@ -130,20 +137,23 @@ export function createAnthropicStreamEmitter(
     )
   }
 
-  function emitText(out: SseEvent[], text: string) {
+  /** Appends to the open block of the same kind, or opens one; `reasoning` is a `thinking` block. */
+  function emitFragment(out: SseEvent[], text: string, kind: FragmentKind = "message") {
     if (text.length === 0) return
-    const current = open
-    let index: number
-    if (current !== null && current.tool === null) {
-      index = current.index
-    } else {
+    const thinking = kind === "reasoning"
+    if (open === null || open.tool !== null || open.thinking !== thinking) {
       closeOpen(out)
-      index = nextBlock
+      open = { index: nextBlock, tool: null, thinking }
       nextBlock += 1
-      open = { index, tool: null }
-      out.push(event("content_block_start", { index, content_block: { type: "text", text: "" } }))
+      const content_block = thinking
+        ? { type: "thinking", thinking: "", signature: "" }
+        : { type: "text", text: "" }
+      out.push(event("content_block_start", { index: open.index, content_block }))
     }
-    out.push(event("content_block_delta", { index, delta: { type: "text_delta", text } }))
+    const delta = thinking
+      ? { type: "thinking_delta", thinking: text }
+      : { type: "text_delta", text }
+    out.push(event("content_block_delta", { index: open.index, delta }))
   }
 
   function toolDone(out: SseEvent[], key: string | number) {
@@ -154,7 +164,7 @@ export function createAnthropicStreamEmitter(
     for (let block = pending.shift(); block !== undefined; block = pending.shift()) {
       if ("text" in block) {
         if (block.startsNewBlock) closeOpen(out)
-        emitText(out, block.text)
+        emitFragment(out, block.text, block.kind)
         continue
       }
       const index = openToolBlock(out, block.key, block)
@@ -200,14 +210,14 @@ export function createAnthropicStreamEmitter(
 
     start,
 
-    text(out, text, startsNewBlock = false) {
+    text(out, text, startsNewBlock = false, kind = "message") {
       if (terminated || text.length === 0) return
       if (open !== null && open.tool !== null) {
-        if (!pending.text(text, "message", startsNewBlock)) overflow(out)
+        if (!pending.text(text, kind, startsNewBlock)) overflow(out)
         return
       }
       if (startsNewBlock) closeOpen(out)
-      emitText(out, text)
+      emitFragment(out, text, kind)
     },
 
     /**

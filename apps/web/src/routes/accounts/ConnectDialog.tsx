@@ -13,7 +13,7 @@ import {
   isSubmittablePaste,
 } from "../../lib/connect-capture"
 import { formatAbsolute } from "../../lib/reset-countdown"
-import { CaptureNotes, PasteGuide } from "./ConnectCaptureNotes"
+import { CaptureNotes } from "./ConnectCaptureNotes"
 import styles from "./ConnectDialog.module.scss"
 import { ConnectFooter } from "./ConnectFooter"
 import { ConnectResult } from "./ConnectResult"
@@ -24,7 +24,12 @@ export interface ConnectDialogProps {
   readonly account: AccountView | null
   /** `claude-cli` drives the CLI; `oauth` is a code flow the router runs. Null → not connectable. */
   readonly connectFlow: ProviderConnectFlow | null
-  /** The device-code block, where the provider declares one. Rendered beside the paste flow. */
+  /**
+   * The provider declares a device-code sign-in, so that is its only method: no paste-back, no
+   * "Start login" — `devicePanel` is the whole flow.
+   */
+  readonly deviceOnly?: boolean
+  /** The device-code block, where the provider declares one. */
   readonly devicePanel?: JSX.Element
   readonly mode: ConnectMode
   readonly started: ConnectStarted | null
@@ -134,7 +139,7 @@ export function ConnectDialog(props: ConnectDialogProps) {
             <ConnectFooter
               completed={props.completed !== null}
               completing={props.completing}
-              connectable={props.connectFlow !== null}
+              connectable={props.connectFlow !== null && props.deviceOnly !== true}
               beginning={props.beginning}
               formId={formId}
               lastStep={lastStep()}
@@ -169,7 +174,14 @@ export function ConnectDialog(props: ConnectDialogProps) {
             </Banner>
           </Show>
 
-          <Show when={props.connectFlow !== null && pending() === null && props.completed === null}>
+          <Show
+            when={
+              props.connectFlow !== null &&
+              props.deviceOnly !== true &&
+              pending() === null &&
+              props.completed === null
+            }
+          >
             <section class={styles.note}>
               <Show
                 fallback={
@@ -222,7 +234,6 @@ export function ConnectDialog(props: ConnectDialogProps) {
                 <Show when={live()}>
                   <section class={styles.section}>
                     <h3 class={styles.sectionTitle}>Paste what you get back</h3>
-                    <PasteGuide connectFlow={props.connectFlow} started={started()} />
                     <form id={formId} onSubmit={submit}>
                       <Field
                         hint="The whole callback URL, its query string, or the code#state shorthand — unedited."

@@ -1,4 +1,8 @@
-import type { ParsedAnthropicBlock, ParsedAnthropicMessage } from "../shared/anthropic"
+import type {
+  ParsedAnthropicBlock,
+  ParsedAnthropicMessage,
+  ParsedAnthropicRequest,
+} from "../shared/anthropic"
 import { anthropicRequestSchema } from "../shared/anthropic"
 import {
   documentText,
@@ -15,6 +19,7 @@ import type {
   OpenAiResponsesPart,
   OpenAiResponsesRequest,
 } from "../shared/openai-responses"
+import { anthropicAskedForReasoning, openAiEffortFromAnthropic } from "../shared/reasoning-effort"
 import { assertNoStopSequence, parseRequest, rejectField } from "../shared/reject"
 import { toolChoiceForOpenAiChat } from "../shared/tool-choice"
 import {
@@ -42,8 +47,16 @@ import {
  *    no alternation requirement at all and each Anthropic turn is already one item, so folding here
  *    would be a transformation with nothing asking for it.
  *
+ * Reasoning: `output_config.effort` becomes `reasoning.effort` (a `thinking` budget with no effort
+ * lands in a bucket, `shared/reasoning-effort.ts`), and a client that asked for thinking at all gets
+ * `reasoning.summary: "auto"` so the upstream writes a summary that travels back as a `thinking`
+ * block. `include: ["reasoning.encrypted_content"]` is deliberately **not** requested: the handle is
+ * bound to the account that minted it, the next turn may land on another account in the pool, and
+ * a replayed handle the upstream cannot verify fails that turn — so it would be fetched only to be
+ * thrown away.
+ *
  * Dropped silently, as documented: `top_k`, `cache_control`, `thinking` / `redacted_thinking`
- * blocks, `metadata`, and any `anthropic-beta` opt-in (a header, handled by the transport). Dropped
+ * blocks (including router-signed ones, `shared/router-thinking.ts`), `metadata`, and any `anthropic-beta` opt-in (a header, handled by the transport). Dropped
  * and **reported** through `options.onDrop`: server-side and built-in tools, a `tool_choice` naming
  * one, non-text documents, and any block type the target cannot carry; an image inside a
  * `tool_result` is hoisted into a user message item after the `function_call_output`. Refused: a
@@ -117,6 +130,7 @@ export function anthropicToOpenAiResponsesRequest(
         ? undefined
         : !request.tool_choice.disable_parallel_tool_use,
     tool_choice: toolChoice === undefined ? undefined : toolChoiceToOpenAiResponses(toolChoice),
+    reasoning: reasoningFor(request),
     // The router holds no conversation state and an Anthropic client has no way to name a stored
     // response on its next turn, so one left behind is litter nobody can reference or delete.
     store: false,
@@ -209,4 +223,10 @@ function appendMessage(
   }
 
   flush()
+}
+
+function reasoningFor(request: ParsedAnthropicRequest): OpenAiResponsesRequest["reasoning"] {
+  if (!anthropicAskedForReasoning(request)) return undefined
+  const effort = openAiEffortFromAnthropic(request)
+  return effort === undefined ? { summary: "auto" } : { effort, summary: "auto" }
 }

@@ -1,6 +1,7 @@
 import { randomBytes, randomUUID } from "node:crypto"
 import type { AccountRepository, OauthStateRepository } from "@multi-ai-router/db"
 import { z } from "zod"
+import type { Logger } from "../../../logging/logger"
 import type { OAuthTokenRequest, ProviderDeviceFlow } from "../../../providers"
 import { type AdminResult, invalid, ok } from "../../admin/result"
 import type { CredentialCipher } from "../../crypto/cipher"
@@ -14,26 +15,20 @@ import {
 
 /**
  * Device-code sign-in: the router asks the issuer for a user code, the operator enters it at the
- * issuer's page from any browser, and the router polls until the issuer hands back a code — for a
- * router on a remote host, where the loopback redirect has nowhere to land.
+ * issuer's page from any browser, and the router polls until the issuer hands back a code.
  *
  * **Polling is advanced by the console's status poll, not by a timer.** Each
  * `GET /:id/connect/device` makes at most one upstream poll, single-flighted per attempt and held
- * to the issuer's interval; between polls it answers from memory. Chosen over an in-process loop
- * because it has nothing to keep alive: no timer to schedule, nothing lost on restart (the attempt
- * is in Postgres, and any replica can advance it), and an attempt nobody is watching costs the
- * issuer nothing. Closing the dialog cancels the attempt, exactly as for paste. Bounded by the
- * same one-shot TTL (`env.retention.oauthStateMinutes`) as every other attempt.
+ * to the issuer's interval. Nothing to keep alive, nothing lost on restart (the attempt is in
+ * Postgres; any replica can advance it), and an unwatched attempt costs the issuer nothing.
+ * Bounded by the one-shot TTL (`env.retention.oauthStateMinutes`).
  *
- * **Same state, same fences, same writer.** The attempt is an ordinary `oauth_states` row bound to
- * the account through `authorization_attempt_id` and its lifecycle version. The issuer's handle and
- * the user code ride in its encrypted `nonce` column (no migration); the row's own verifier is
- * unused, and paste/redirect refuse a row that carries one (`oauth.ts`). Approval consumes the
- * state, re-checks the binding (`oauth-binding.ts`), and writes through `completeAuthorization` —
- * the one path that writes credentials, fenced again on attempt id and lifecycle version.
+ * **Same state, same fences, same writer.** An ordinary `oauth_states` row bound through
+ * `authorization_attempt_id` and its lifecycle version; the issuer's handle and the user code ride
+ * sealed in its `nonce` column. Approval consumes the state, re-checks the binding
+ * (`oauth-binding.ts`), and writes through `completeAuthorization`, fenced again on both.
  *
- * Never returned or logged: the issuer's `device_auth_id`, the authorization code, the verifier,
- * tokens. Returned: the user code and the verification URL, which the operator has to read.
+ * Never returned or logged: the issuer's `device_auth_id`, the code, the verifier, tokens.
  */
 
 export interface DeviceConnectStarted {
@@ -69,6 +64,8 @@ export interface DeviceConnectDeps extends OAuthExchangeDeps {
   readonly states: Pick<OauthStateRepository, "consume" | "findLive">
   readonly cipher: Pick<CredentialCipher, "encrypt" | "decrypt">
   readonly stateMinutes: number
+  /** One info line when a sign-in lands. Ids and status only — never a code, handle or token. */
+  readonly log?: Pick<Logger, "info">
 }
 
 /** What the encrypted `nonce` holds for a device attempt. */
@@ -100,11 +97,7 @@ export function createDeviceConnectService(deps: DeviceConnectDeps): DeviceConne
   const ttlMs = deps.stateMinutes * 60_000
   /** Per attempt id. Pruned past expiry, so it holds at most the attempts of the last TTL. */
   const tracks = new Map<string, AttemptTrack>()
-  /**
-   * Each account's most recent device attempt. Its outcome must outlive the attempt itself: a
-   * connected login clears `authorization_attempt_id`, and the next status read still owes the
-   * console "connected" rather than "expired".
-   */
+  /** Each account's latest attempt: a connected login clears the row's attempt id, not its answer. */
   const latest = new Map<string, string>()
 
   const send = (built: OAuthTokenRequest) => sendIssuerRequest(deps, built)
@@ -264,7 +257,15 @@ export function createDeviceConnectService(deps: DeviceConnectDeps): DeviceConne
       codeVerifier: read.codeVerifier,
       capture: "device",
     })
-    return completed.ok ? ok({ status: "connected", completed: completed.value }) : completed
+    if (!completed.ok) return completed
+    deps.log?.info("device login completed", {
+      component: "connect",
+      accountId,
+      provider: row.provider,
+      capture: "device",
+      previousStatus: row.status,
+    })
+    return ok({ status: "connected", completed: completed.value })
   }
 
   const readHandle = (sealed: string): Handle | null => {

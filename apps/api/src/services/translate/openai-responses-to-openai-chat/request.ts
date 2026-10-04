@@ -1,4 +1,5 @@
 import type { OpenAiChatCeiling } from "@multi-ai-router/core"
+import { type DropSink, IGNORE_DROPS } from "../shared/drops"
 import type {
   OpenAiChatMessage,
   OpenAiChatPart,
@@ -14,6 +15,7 @@ import { openAiResponsesRequestSchema, UNSUPPORTED } from "../shared/openai-resp
 import {
   assertPlainTextFormat,
   assertStatelessResponses,
+  dropEncryptedReasoning,
   parseRequest,
   rejectField,
   rejectStatefulItem,
@@ -40,8 +42,8 @@ import { toolChoiceFromOpenAiResponses, toolsFromOpenAiResponses } from "../shar
  *
  * **The stateful half is a `400` before any upstream call, and that is the headline of this
  * direction.** `previous_response_id`, `store: true`, `include`, `conversation`, `prompt`,
- * `background: true`, and encrypted `reasoning` / `item_reference` items all mean "continue from, or leave
- * behind, something the provider remembers", and this router remembers
+ * `background: true`, and `item_reference` items all mean "continue from, or leave behind,
+ * something the provider remembers", and this router remembers
  * nothing — it picks an account per request. Served anyway, a `previous_response_id` would become a
  * call carrying only the newest turn and the model would answer a conversation it was never shown,
  * so the refusal names the field and the client learns to send the whole transcript instead.
@@ -50,7 +52,9 @@ import { toolChoiceFromOpenAiResponses, toolsFromOpenAiResponses } from "../shar
  *
  * Assistant text and adjacent function calls share one assistant turn; ordinary same-role
  * messages remain separate. Tool replies stay keyed and images follow the complete reply run.
- * Summary-only reasoning is dropped as a stateless hint; opaque encrypted state is refused.
+ * Reasoning items are dropped: a summary is a stateless hint, and an encrypted handle — account-bound
+ * and unreadable by any chat upstream — is reported through `options.onDrop` along with
+ * `include: ["reasoning.encrypted_content"]`. Neither hides a turn, so neither is refused.
  *
  * **`reasoning.effort` and `parallel_tool_calls` survive the downgrade**, because they are the two
  * dials openai-chat states too — `reasoning_effort` is the same word one level flatter. The effort
@@ -77,6 +81,8 @@ interface ParsedMessageItem {
 export interface OpenAiResponsesToOpenAiChatOptions {
   /** Which spelling of the output ceiling the selected Account accepts. Defaults to `max_tokens`. */
   readonly ceiling?: OpenAiChatCeiling | undefined
+  /** Where a dropped field is reported. Absent, drops are silent (`shared/drops.ts`). */
+  readonly onDrop?: DropSink | undefined
 }
 
 /** @throws TranslationError (400) naming the field that has no openai-chat representation. */
@@ -85,7 +91,8 @@ export function openAiResponsesToOpenAiChatRequest(
   options: OpenAiResponsesToOpenAiChatOptions = {},
 ): OpenAiChatRequest {
   const request = parseRequest(openAiResponsesRequestSchema, body, "openai-responses")
-  assertStatelessResponses(request)
+  const onDrop = options.onDrop ?? IGNORE_DROPS
+  assertStatelessResponses(request, onDrop)
   assertPlainTextFormat(request)
 
   const messages: OpenAiChatMessage[] = []
@@ -104,11 +111,10 @@ export function openAiResponsesToOpenAiChatRequest(
       if (hoisted.length > 0) messages.push({ role: "user", content: hoisted.splice(0) })
     }
     for (const [index, item] of request.input.entries()) {
-      if (
-        item.type === "reasoning" &&
-        (item.encrypted_content == null || item.encrypted_content === "")
-      )
+      if (item.type === "reasoning") {
+        dropEncryptedReasoning(item, `input[${index}]`, onDrop)
         continue
+      }
       if (item.type !== "function_call_output") flushImages()
       appendItem(messages, calls, item, `input[${index}]`, hoisted)
     }
@@ -151,10 +157,8 @@ function appendItem(
   at: string,
   hoisted: OpenAiChatPart[],
 ): void {
-  if (item.type === "reasoning") {
-    if (item.encrypted_content == null || item.encrypted_content === "") return
-    rejectStatefulItem(at, item.type)
-  }
+  // `reasoning` never reaches here: the caller drops it before an item is appended.
+  if (item.type === "reasoning") return
   if (item.type === "item_reference") {
     rejectStatefulItem(at, item.type)
   }

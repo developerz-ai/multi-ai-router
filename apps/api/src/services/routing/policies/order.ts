@@ -56,3 +56,19 @@ export function rotate(candidates: readonly Candidate[], counter: number): reado
 export function accountIds(candidates: readonly Candidate[]): readonly string[] {
   return candidates.map((candidate) => candidate.account.id)
 }
+
+/**
+ * Accounts serving the requested name natively, then those reaching it only through an alias,
+ * each keeping its relative order. Stable, so it composes with every other ordering rule.
+ */
+export function nativeFirst(candidates: readonly Candidate[]): {
+  readonly ordered: readonly Candidate[]
+  readonly deferred: readonly Candidate[]
+} {
+  const native = candidates.filter((candidate) => candidate.aliased !== true)
+  if (native.length === candidates.length || native.length === 0) {
+    return { ordered: candidates, deferred: [] }
+  }
+  const deferred = candidates.filter((candidate) => candidate.aliased === true)
+  return { ordered: [...native, ...deferred], deferred }
+}

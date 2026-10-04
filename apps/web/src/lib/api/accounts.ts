@@ -122,10 +122,6 @@ export function listAccounts(filter: AccountListFilter): Promise<readonly Accoun
   })
 }
 
-export function getAccount(id: string): Promise<AccountView> {
-  return request<AccountView>({ method: "GET", path: `/accounts/${id}` })
-}
-
 export function createAccount(input: CreateAccountInput): Promise<AccountView> {
   return request<AccountView>({ method: "POST", path: "/accounts", body: input })
 }

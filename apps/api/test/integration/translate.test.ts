@@ -382,6 +382,8 @@ describe("a Claude Code turn on translate egress", () => {
     const tools = sent.tools as { function: { name: string } }[]
     expect(tools.map((tool) => tool.function.name)).toEqual(["Read"])
     expect(JSON.stringify(sent)).not.toMatch(/web_search|tool_search|JVBERi0=|"sig"|thinking/)
+    // The effort dial survives the crossing under openai-chat's name.
+    expect(sent.reasoning_effort).toBe("xhigh")
     // The screenshot reached the model, hoisted out of the text-only tool message.
     expect(JSON.stringify(sent)).toContain("data:image/png;base64,AAAA")
 

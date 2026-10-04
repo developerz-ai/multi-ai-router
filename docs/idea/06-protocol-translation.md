@@ -200,8 +200,9 @@ Legend: **passthrough** = bytes untouched · translate = pure conversion pair, l
 re-synthesize = rendered from Agent SDK output, never proxied (below).
 
 **Unsupported**, returning `4xx` rather than a degraded call: a stateful Responses request
-(`previous_response_id`, `store: true`, `include`, `conversation`, `prompt`, `background: true`, and
-encrypted `reasoning` / `item_reference` input items) against non-Responses egress — `400`, the router holds no
+(`previous_response_id`, `store: true`, `include` beyond `reasoning.encrypted_content`,
+`conversation`, `prompt`, `background: true`, and `item_reference` input items) against
+non-Responses egress — `400`, the router holds no
 conversation state; a structured-output constraint (`response_format`, `text.format`) on any
 cross-dialect hop — `400`, the shape is a contract the caller will parse; and any request whose
 required feature has no faithful target representation — `400`, naming the field.
@@ -346,9 +347,11 @@ contiguous result run; remote image URLs are carried through existing validation
 by the translator. Anthropic image Files-API handles are dropped and reported at their original field path, including
 inside tool results. The translator never fetches a provider file.
 
-Stateless reasoning summaries emitted by the router may be replayed into non-Responses egress.
-The summary is omitted rather than presented as assistant text; encrypted reasoning state and
-provider item references still cannot be replayed across providers.
+Reasoning items replayed into non-Responses egress are dropped. A summary is omitted rather than
+presented as assistant text; an `encrypted_content` handle — account-bound, readable by nothing but
+the provider that minted it — is dropped and **reported** by field path (never refused: it hides no
+turn, and Codex replays one on every request), together with `include:
+["reasoning.encrypted_content"]`. Provider item references still cannot be replayed and stay `400`.
 
 Tool streams with no argument fragments emit `{}` once for a no-argument call. Repeated
 indexless fragments with the same call ID extend one call. Toward Anthropic, argument blocks remain
@@ -384,7 +387,7 @@ message_start → content_block_start → content_block_delta* → content_block
 | | |
 |---|---|
 | Clean | Text deltas, tool-call argument deltas, terminal usage, stream termination. |
-| Lossy | Block indices and boundaries are reconstructed, not preserved; a dialect with no "block" concept loses which block a delta belonged to. Reasoning text is dropped toward `openai-chat` and toward `anthropic`. Toward `anthropic`, `message_start` states a zeroed `usage`. Toward `openai-responses`, item ids (`msg_…`, `fc_…`, `rs_…`) are minted from the response id and the item's position, and a thinking or reasoning delta becomes a reasoning *summary* delta — the encrypted reasoning handle a native Responses upstream also emits cannot be synthesized and is not. |
+| Lossy | Block indices and boundaries are reconstructed, not preserved; a dialect with no "block" concept loses which block a delta belonged to. Reasoning text is dropped toward `openai-chat`, and toward `anthropic` from `openai-chat`; a Responses reasoning *summary* becomes an Anthropic `thinking` block signed with the router's tag (below). Toward `anthropic`, `message_start` states a zeroed `usage`. Toward `openai-responses`, item ids (`msg_…`, `fc_…`, `rs_…`) are minted from the response id and the item's position, and a thinking or reasoning delta becomes a reasoning *summary* delta — the encrypted reasoning handle a native Responses upstream also emits cannot be synthesized and is not. |
 | Rejected | Nothing at stream time — once bytes are on the wire the request fails honestly, it is never retranslated. |
 
 **Reasoning text on `openai-chat` is read on the way in and never written on the way out.** OpenAI
@@ -416,6 +419,17 @@ Toward `anthropic` the same text is dropped rather than turned into a `thinking`
 harder reason than vocabulary: a client is entitled to replay an assistant turn verbatim on its next
 request, and Anthropic refuses a `thinking` block whose `signature` this router cannot produce. An
 unsigned block would answer this turn and break the next one.
+
+A **Responses reasoning summary** is the exception: it becomes a `thinking` block (stream:
+`thinking_delta`s, then a `signature_delta`) whose `signature` is the router's tag `mar1:` —
+versioned, naming its origin, carrying no key, account id or upstream handle. Replayed on the next
+turn, every `anthropic → X` translator drops it with all other thinking blocks, and the Agent SDK
+path never replays thinking. The residual edge: a client that moves that transcript to a **real
+Anthropic** upstream mid-conversation goes through same-dialect passthrough, which never parses the
+body, and Anthropic refuses the foreign signature with a `400`. Encrypted reasoning
+(`include: ["reasoning.encrypted_content"]`) is not requested toward Responses for the same pooling
+reason it is dropped on the way in: the handle is bound to one account, the next turn may land on
+another, and a handle that account cannot verify fails the turn.
 
 **Toward `anthropic`, `message_start.usage` is zeroed and the real counts land on `message_delta`.**
 `openai-chat` reports its token counts *last* — on a trailing chunk carrying no choices at all — so
@@ -653,27 +667,29 @@ Be suspicious of any cell not listed here — if it is not documented, it is not
 | Anthropic `document` blocks | → OpenAI | a `text` source travels as text; any other source is **dropped and reported** with its media type |
 | `server_tool_use`, `web_search_tool_result`, unknown block types; non-text/image blocks nested in a `tool_result` | → OpenAI | **dropped and reported** by field path and type — the provider's own artifacts, whose visible outcome is already in the text beside them |
 | An image inside a `tool_result` | → OpenAI | representable URL/base64 images are **hoisted** into user content after the complete tool-reply run, preserving call IDs and image order; Responses-to-Anthropic results retain these image blocks. Anthropic Files-API images are dropped and reported as described above |
-| `thinking`, `output_config`, `context_management`, `metadata`, `container`, `mcp_servers` (request-level) | → OpenAI | dropped silently — knobs of Anthropic's own inference with no target field; `thinking` has its own row below |
+| `thinking`, `output_config`, `context_management`, `metadata`, `container`, `mcp_servers` (request-level) | → OpenAI | dropped silently — knobs of Anthropic's own inference with no target field — except the reasoning dial: `output_config.effort` and a `thinking` budget have their own rows below |
 | Upstream SSE comment lines (`: keep-alive`, `: OPENROUTER PROCESSING`) | translate egress, any pair | **forwarded** as comment lines, ahead of the frames they arrived with. They are how a provider holds a socket open through a long time-to-first-token, and a relay that swallowed them left the client silent for exactly that window. They do not count as the first byte. Passthrough forwards them with everything else |
 | OpenAI built-in tools (`web_search_preview`, `file_search`, `code_interpreter`, …) | `openai-responses` → any | unsupported; `400`. Served inside OpenAI's own inference, so nothing on the other side of the seam runs one |
 | `stop` / `stop_sequences` | → `openai-responses` | no counterpart — the dialect has no stop parameter at all; **rejected** `400`, because a stop sequence decides where the answer ends and dropping it returns text past the delimiter the caller drew |
 | `text.format` (structured output / JSON Schema) | `openai-responses` → any | `{"type":"text"}` passes; anything else is **rejected** `400`. A schema-constrained answer is a contract the caller will parse, and prose in its place is a different answer, not a degraded one |
 | `response_format` (structured output / JSON mode) | `openai-chat` → any | `{"type":"text"}` passes; `json_object` and `json_schema` are **rejected** `400`. The same rule as `text.format` under openai-chat's older name for the same feature — including toward `openai-responses`, which *does* state it, because honoring it one direction and refusing it the other would make "servable" depend on which way the request pointed. Dropped instead, an OpenAI SDK `.parse()`, LangChain `withStructuredOutput()`, Instructor, or `generateObject` call gets prose and fails at its own `JSON.parse`, with nothing on the wire naming the cause |
 | `conversation`, `prompt`, `background: true` | `openai-responses` → any | **rejected** `400`, the same class as `previous_response_id` under three later names: turns the provider would prepend, instruction text stored provider-side, and a queued response to poll by id. `background: false` passes |
-| Responses stateless `reasoning` summary input/output items | → `anthropic`, `openai-chat` | dropped as hints; a replayed summary is not visible assistant text. Nonempty `encrypted_content` and `item_reference` inputs remain rejected `400`. An Anthropic `thinking` block a client can replay needs a `signature` the router cannot produce, and openai-chat has no *published* field — the extension names are read from an upstream, never written toward a client |
+| Responses `reasoning` **input** items | → `anthropic`, `openai-chat` | dropped; a replayed summary is not visible assistant text. A nonempty `encrypted_content` is dropped and **reported** (`input[n].encrypted_content`), and `include: ["reasoning.encrypted_content"]` with it; any other `include` entry and every `item_reference` remain rejected `400` |
+| Responses `reasoning` **output** summary | → `anthropic` | **carried** as a `thinking` block signed `mar1:` (router tag, no secret); see [above](#streaming-sse-event-mapping). Toward `openai-chat` dropped — no *published* field; the extension names are read from an upstream, never written toward a client |
 | Anthropic `thinking` blocks | → `openai-responses` | carried as a reasoning **summary** item; the encrypted reasoning handle is not synthesized |
 | openai-chat `reasoning_content` / `reasoning` | → `openai-responses` | **carried** as a reasoning **summary** item. Both spellings are read — DeepSeek's and OpenRouter's — and `reasoning_content` wins if an upstream states both. See [above](#streaming-sse-event-mapping) |
 | openai-chat `reasoning_content` / `reasoning` | → `anthropic` | dropped. A synthesized `thinking` block carries no `signature`, and Anthropic refuses a replayed one that lacks it — the block would answer this turn and break the next |
-| Anthropic `thinking` request parameter | → any OpenAI dialect | dropped. It is a **token budget** (`budget_tokens`), and no OpenAI dialect states one — only an effort word, which a budget cannot be turned into without inventing a number |
+| Anthropic `output_config.effort` | → any OpenAI dialect | **carried** as `reasoning_effort` / `reasoning.effort`, verbatim: `low`, `medium`, `high`, `xhigh`, `max` are words of both vocabularies |
+| Anthropic `thinking` request parameter | → any OpenAI dialect | with no `output_config.effort`, an `enabled` budget lands in a bucket — `budget_tokens` ≤ 4 096 → `low`, ≤ 16 384 → `medium`, above → `high` (Claude Code's `think` / `megathink` / `ultrathink` presets land one per bucket). `adaptive` and `disabled` name no level and send none (`none` is not sent: several OpenAI reasoning models refuse it). Toward `openai-responses`, `enabled`/`adaptive` or a stated effort also sets `reasoning.summary: "auto"`, so the summary can travel back as a `thinking` block |
 | `reasoning_effort` ⇄ `reasoning.effort` | `openai-chat` ⇄ `openai-responses` | **carried**, verbatim and both ways: OpenAI's own spec points both fields at one shared `ReasoningEffort` schema, so they are the same dial one level of nesting apart. The word is never validated against a list of ours — that set is `none \| minimal \| low \| medium \| high \| xhigh \| max` today, has grown twice past the four everyone remembers, and `none` means "do not think" rather than "invalid". Refusing a word the upstream accepts would be the router deciding how the model behaves |
-| `reasoning.effort` | `openai-responses` → `anthropic` | dropped, and `reasoning_effort` from `openai-chat` with it. Anthropic's thinking budget is a token count, not an effort word, and inventing one would change what the caller pays for |
+| `reasoning.effort` / `reasoning_effort` | `openai-responses` / `openai-chat` → `anthropic` | **carried** as `output_config.effort` — the same dial under Anthropic's name. Clamped only where Anthropic has no such word: `minimal` → `low`; `none` → `thinking: {type: "disabled"}`. A word in neither table is dropped and **reported**; the upstream default applies. A clamp moves a dial, never the model (non-negotiable 4) |
 | `reasoning.summary` | `openai-responses` → any | dropped. It asks the *provider* to write a summary of its own reasoning, and no other dialect states the request |
 | `parallel_tool_calls` / `tool_choice.disable_parallel_tool_use` | all dialect pairs | **carried** between OpenAI dialects; inverse boolean toward/from Anthropic. An absent field stays absent; with nonempty tools, an explicit OpenAI policy without a tool choice maps to Anthropic `type: "auto"`. When tools are absent or empty, the policy alone does not synthesize a choice; an explicit caller choice is preserved |
 | `input_image` naming only a `file_id` | `openai-responses` → any | rejected `400`: a stored file is provider-side state this router cannot resolve into bytes |
 | `max_tokens` / `max_completion_tokens` | → `openai-chat` | not lossy, but **not one name either** — emitted under whichever of the two the selected Account accepts. See [The output ceiling](#the-output-ceiling-one-field-two-names) |
 | Responses item ids | → `openai-responses` | minted by the router from the response id and the item's position — deterministic, but not the provider's own |
 | Beta headers (`anthropic-beta`) | → non-Anthropic, and on the Agent-SDK path | dropped |
-| `temperature`, `top_p`, `top_k`, `max_tokens`, `stop`, `seed`, `n`, `logprobs`, penalties | → `agent-sdk` | **accepted and silently inert** — `query()` has no equivalent for any of them, so a value the caller set has no effect on the request. `reasoning_effort` is the exception, mapped onto the SDK's effort scale (`low`…`max`; OpenAI's `minimal` has no target) |
+| `temperature`, `top_p`, `top_k`, `max_tokens`, `stop`, `seed`, `n`, `logprobs`, penalties | → `agent-sdk` | **accepted and silently inert** — `query()` has no equivalent for any of them, so a value the caller set has no effect on the request. `reasoning_effort` / `reasoning.effort` is the exception: translated to `output_config.effort` like any Anthropic target (`minimal` → `low`, `none` → thinking disabled), then read onto the SDK's effort scale (`low`…`max`) |
 
 **Silently dropping a parameter the caller set is a correctness trap, so the router does not stay
 quiet about it.** Every field a conversion drops that the caller would want to know about — a tool,
@@ -786,7 +802,9 @@ in both directions: an alias onto a model the Account does not serve would be ad
 filtered out as `model-unsupported` (a listing promising a `503`), and a declared name whose own
 alias entry points somewhere unserved is not requestable under that name at all.
 
-An Account declaring **nothing** serves everything: unknown is passthrough, not exclusion. It
+An Account declaring **nothing** serves its provider's model family where the driver declares one (a
+Claude or ChatGPT subscription — [05-routing-and-failover.md](05-routing-and-failover.md#candidate-filtering)),
+and everything otherwise: unknown is passthrough, not exclusion. It
 contributes no enumerable name beyond its alias keys, so a deployment of only such Accounts lists
 nothing rather than inventing a catalog it cannot stand behind — which is why the operator is given
 `POST /api/admin/accounts/:id/models/discover`, one free `GET` at the provider's own listing, to fill

@@ -19,6 +19,7 @@ import {
   writeStoredOAuth,
 } from "../../src/services/accounts"
 import { createCredentialCipher } from "../../src/services/crypto/cipher"
+import { pasteOnlyFlow } from "../support/oauth-flows"
 
 const url = process.env.DATABASE_URL ?? ""
 const NOW = new Date("2026-10-03T12:00:00Z")
@@ -90,6 +91,7 @@ function connector(fetch: (request: Request) => Promise<Response>, barrier = asy
     now: () => NOW,
     stateMinutes: 10,
     refreshCatalogAfterMutation: barrier,
+    flowFor: pasteOnlyFlow,
   })
 }
 function refresher(fetch: (request: Request) => Promise<Response>, lock = locks) {

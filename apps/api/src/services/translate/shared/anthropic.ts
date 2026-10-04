@@ -172,6 +172,17 @@ export const anthropicRequestSchema = z.object({
   stream: z.boolean().optional(),
   tools: z.array(anthropicToolSchema).optional(),
   tool_choice: anthropicToolChoiceSchema.optional(),
+  // Read for the reasoning dial only (`reasoning-effort.ts`), and leniently: before these were
+  // read they were stripped, so a shape this build does not expect falls back to absent rather than
+  // turning a request that used to be served into a `400`.
+  thinking: z
+    .looseObject({ type: z.string(), budget_tokens: z.number().int().positive().optional() })
+    .optional()
+    .catch(undefined),
+  output_config: z
+    .looseObject({ effort: z.string().optional().catch(undefined) })
+    .optional()
+    .catch(undefined),
 })
 
 export type ParsedAnthropicRequest = z.infer<typeof anthropicRequestSchema>
@@ -208,6 +219,16 @@ export interface AnthropicToolResultBlock {
   readonly content: string | readonly (AnthropicTextBlock | AnthropicImageBlock)[]
 }
 
+/**
+ * A `thinking` block this router synthesized from another dialect's reasoning summary. Its
+ * `signature` is the router's tag (`router-thinking.ts`), never one Anthropic minted.
+ */
+export interface AnthropicThinkingBlock {
+  readonly type: "thinking"
+  readonly thinking: string
+  readonly signature: string
+}
+
 export type AnthropicBlock =
   | AnthropicTextBlock
   | AnthropicImageBlock
@@ -238,4 +259,6 @@ export interface AnthropicRequest {
   readonly stream?: boolean | undefined
   readonly tools?: readonly AnthropicTool[] | undefined
   readonly tool_choice?: AnthropicToolChoice | undefined
+  readonly output_config?: { readonly effort: string } | undefined
+  readonly thinking?: { readonly type: "disabled" } | undefined
 }

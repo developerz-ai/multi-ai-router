@@ -30,7 +30,8 @@ export function logAttemptFailure(
   })
 }
 
-function bounded(text: string | undefined, maxChars: number): string | undefined {
+/** An upstream's own words, cut to the configured length for a log line. */
+export function bounded(text: string | undefined, maxChars: number): string | undefined {
   if (text === undefined || text.length <= maxChars) return text
   return `${text.slice(0, Math.max(0, maxChars - 1))}…`
 }

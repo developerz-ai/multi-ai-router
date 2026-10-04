@@ -1,3 +1,4 @@
+import type { ProviderId } from "@multi-ai-router/core"
 import type { AccountRepository, AccountRow, OauthStateRow } from "@multi-ai-router/db"
 import { httpDriver, type ProviderOAuthFlow } from "../../../providers"
 import { type AdminResult, invalid, notFound, ok } from "../../admin/result"
@@ -21,13 +22,19 @@ export interface BoundAttempt extends Connectable {
   readonly lifecycleVersion: number
 }
 
+/** Which OAuth flow a provider declares. The registry's answer unless a test supplies its own. */
+export type FlowLookup = (provider: ProviderId) => ProviderOAuthFlow | undefined
+
+export const registryFlow: FlowLookup = (provider) => httpDriver(provider)?.oauth
+
 export async function connectableAccount(
   accounts: Pick<AccountRepository, "findById">,
   accountId: string,
+  flowFor: FlowLookup = registryFlow,
 ): Promise<AdminResult<Connectable>> {
   const row = await accounts.findById(accountId)
   if (row === undefined) return notFound(`no account with id "${accountId}"`)
-  const flow = httpDriver(row.provider)?.oauth
+  const flow = flowFor(row.provider)
   if (flow === undefined) {
     return invalid(
       `account "${row.label}" is a ${row.provider} account: it is not connected through an authorization flow this router drives`,
@@ -46,6 +53,7 @@ export async function bindConsumed(
   accounts: Pick<AccountRepository, "findById">,
   pending: OauthStateRow | undefined,
   boundTo: string | null,
+  flowFor: FlowLookup = registryFlow,
 ): Promise<AdminResult<BoundAttempt>> {
   if (pending === undefined || pending.accountId === null) {
     return invalid(STATE_REJECTED, "state_rejected")
@@ -54,7 +62,7 @@ export async function bindConsumed(
   if (lifecycleVersion === null || (boundTo !== null && boundTo !== pending.accountId)) {
     return invalid(STATE_REJECTED, "state_rejected")
   }
-  const account = await connectableAccount(accounts, pending.accountId)
+  const account = await connectableAccount(accounts, pending.accountId, flowFor)
   if (!account.ok) return account
   const { row } = account.value
   if (

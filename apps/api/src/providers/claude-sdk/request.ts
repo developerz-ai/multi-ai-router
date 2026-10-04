@@ -4,6 +4,7 @@ import {
   anthropicToolChoiceSchema,
   type ParsedAnthropicToolChoice,
 } from "../../services/translate/shared/anthropic"
+import { type Reasoning, readReasoning } from "./reasoning"
 import { type DeclaredTool, readToolList } from "./tools"
 
 /**
@@ -53,6 +54,10 @@ const requestSchema = z.looseObject({
   // `tool_choice` this build does not recognize costs the *field* — never, via a failed object
   // parse, the whole request (messages, system, and tools with it).
   tool_choice: z.unknown().optional(),
+  // Unknown for the same reason: `reasoning.ts` decides, and a value it cannot carry costs the
+  // option, never the turn.
+  thinking: z.unknown().optional(),
+  output_config: z.unknown().optional(),
 })
 
 export type SdkRequestRole = "user" | "assistant" | "system"
@@ -95,6 +100,12 @@ export interface SdkRequest {
    * schema refuses — which `readToolChoice` throws on rather than degrade.
    */
   readonly toolChoice: ParsedAnthropicToolChoice | null
+  /** The client's `thinking`, as the SDK option. Null when absent or unusable: the SDK default. */
+  readonly thinking: Reasoning["thinking"]
+  /** The client's `output_config.effort`. Null when absent or unusable: the SDK default. */
+  readonly effort: Reasoning["effort"]
+  /** What `reasoning.ts` dropped rather than refuse. Reported, never a `400`. */
+  readonly ignored: Reasoning["ignored"]
 }
 
 export function readSdkRequest(body: Uint8Array | null): SdkRequest {
@@ -123,6 +134,7 @@ export function readSdkRequest(body: Uint8Array | null): SdkRequest {
     tools: readToolList(result.data.tools),
     stream: result.data.stream === true,
     toolChoice: readToolChoice(result.data.tool_choice),
+    ...readReasoning(result.data.thinking, result.data.output_config),
   }
 }
 

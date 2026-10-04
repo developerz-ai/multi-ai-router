@@ -4,7 +4,7 @@
  *
  * An account survives only if **all** of these hold: it is active, its breaker is not cooling
  * down, it is not `exhausted`, no quota window is spent, and it supports the requested model
- * after alias mapping. Filtering never falls back to "try it anyway" — an empty result is an
+ * after alias mapping — by its declared list, else its provider's model family. Filtering never falls back to "try it anyway" — an empty result is an
  * honest, specific error, and *which* error depends on why it is empty, which is exactly what
  * the rejection list carries.
  *
@@ -69,6 +69,14 @@ export function evaluateCandidate(
   // `exhausted` has no reset by definition — that absence is what distinguishes it from a cooldown.
   if (account.status === "exhausted") return drop({ reason: "exhausted" })
 
+  // Before every clock-recoverable reason, and on purpose: an account that cannot serve this model
+  // at all must never read as "cooling down" or "settling a probe". That reading is a `429` and,
+  // for a bound session, a *kept* binding — a Kimi conversation pinned to a Claude subscription,
+  // told to wait for an account that will never serve it (prod, 2026-10-04). Unsupported is the
+  // permanent fact; it invalidates the binding and names a client change.
+  const resolution = resolveModel(account, model)
+  if (!resolution.supported) return drop({ reason: "model-unsupported" })
+
   const permit = hasRecoveryPermit(account)
   if (recoveryIsGated(account) && !permit) {
     return drop({
@@ -125,15 +133,14 @@ export function evaluateCandidate(
     })
   }
 
-  const resolution = resolveModel(account, model)
-  if (!resolution.supported) return drop({ reason: "model-unsupported" })
-
   return {
     ok: true,
     candidate: {
       ...member,
       upstreamModel: resolution.upstreamModel,
       halfOpen: account.status === "cooling_down" || permit,
+      // An identity entry (`opus -> opus`) renames nothing, so it is not a reason to rank behind.
+      aliased: resolution.upstreamModel !== model,
     },
   }
 }

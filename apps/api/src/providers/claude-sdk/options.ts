@@ -1,4 +1,9 @@
-import type { Options, PermissionResult } from "@anthropic-ai/claude-agent-sdk"
+import type {
+  EffortLevel,
+  Options,
+  PermissionResult,
+  ThinkingConfig,
+} from "@anthropic-ai/claude-agent-sdk"
 import { isPermittedTool, PERMITTED_TOOLS, toolDenial } from "./allowlist"
 import { QUERY_ENV_OVERRIDES, subprocessEnv } from "./env"
 import { scrubSystemPrompt } from "./scrub"
@@ -95,6 +100,13 @@ export interface QueryLaunchInput {
    * `fresh` resumes nothing and can never be busy.
    */
   readonly busySessionFork?: boolean
+  /**
+   * The client's `thinking` and `effort`, already narrowed to the SDK's vocabulary
+   * (`reasoning.ts`). Set only when the client sent them: absent leaves the CLI's own defaults.
+   * Neither touches isolation — they are model parameters, spread after the isolated fields.
+   */
+  readonly thinking?: ThinkingConfig | null
+  readonly effort?: EffortLevel | null
 }
 
 export interface QueryLaunch {
@@ -125,6 +137,8 @@ export function createQueryLaunch(input: QueryLaunchInput): QueryLaunch {
     includePartialMessages: true,
     ...(input.onStderr === undefined ? {} : { stderr: input.onStderr }),
     ...systemPromptOption(input.systemPrompt),
+    ...(input.thinking == null ? {} : { thinking: input.thinking }),
+    ...(input.effort == null ? {} : { effort: input.effort }),
     ...sessionOptions(input.session, input.busySessionFork === true),
     ...(input.passthrough === undefined
       ? {}

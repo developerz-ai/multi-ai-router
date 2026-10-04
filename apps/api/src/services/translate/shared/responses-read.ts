@@ -64,6 +64,7 @@ export const responsesEventSchema = z.looseObject({
   text: z.string().nullish().catch(null),
   refusal: z.string().nullish().catch(null),
   content_index: z.number().int().nonnegative().nullish().catch(null),
+  summary_index: z.number().int().nonnegative().nullish().catch(null),
   code: z.string().nullish().catch(null),
   message: z.string().nullish().catch(null),
 })

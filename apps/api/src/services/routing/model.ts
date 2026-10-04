@@ -3,7 +3,9 @@
  * map, then checked against the models the account declares.
  *
  * The client picks the model; the router only renames it where an operator said so. An account
- * with **no** declared model set supports everything — unknown means passthrough, not exclusion.
+ * with **no** declared model set falls back to its provider's model family (`model-family.ts`) —
+ * a subscription serves only its vendor's names — and, for a provider that declares none, supports
+ * everything: unknown means passthrough, not exclusion.
  *
  * **Two sides of one map, and the difference matters.** `supportedModels` is stated
  * **upstream-side** — the names the provider itself answers to, which is the side an alias map
@@ -14,6 +16,7 @@
  */
 
 import { ownEntry } from "@multi-ai-router/core"
+import { inModelFamily } from "./model-family"
 import type { AccountSnapshot } from "./types"
 
 export interface ModelResolution {
@@ -29,17 +32,18 @@ export function resolveModel(account: AccountSnapshot, requestedModel: string): 
   const entry = ownEntry(account.modelAliases, requestedModel)
   const alias = typeof entry === "string" ? entry : undefined
   const upstreamModel = alias ?? requestedModel
+  return { upstreamModel, supported: serves(account, upstreamModel), aliased: alias !== undefined }
+}
+
+/**
+ * The operator's explicit list wins; with none, the provider's family decides; with neither, the
+ * account is a passthrough. Checked upstream-side, after the alias map, on every branch.
+ */
+function serves(account: AccountSnapshot, upstreamModel: string): boolean {
   const declared = account.supportedModels
-
-  if (declared === undefined || declared.length === 0) {
-    return { upstreamModel, supported: true, aliased: alias !== undefined }
-  }
-
-  return {
-    upstreamModel,
-    supported: declared.includes(upstreamModel),
-    aliased: alias !== undefined,
-  }
+  if (declared !== undefined && declared.length > 0) return declared.includes(upstreamModel)
+  if (account.modelFamily !== undefined) return inModelFamily(account.modelFamily, upstreamModel)
+  return true
 }
 
 /**

@@ -234,6 +234,7 @@ export {
 export { readErrorFacts } from "./failure/error-body"
 export { toRouterError } from "./failure/router-error"
 export { mapModelAlias } from "./model-alias"
+export type { ListedModel, ProviderModelListing } from "./model-listing"
 export { parseRateLimitHeaders } from "./rate-limit/parse"
 export type { ProviderSupport } from "./registry"
 export { HTTP_DRIVERS, httpDriver, PROVIDER_REGISTRY } from "./registry"

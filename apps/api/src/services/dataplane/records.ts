@@ -177,6 +177,9 @@ const FAILURE_OUTCOMES: Readonly<Record<FailureKind, UsageOutcome>> = {
   connection: "upstream_error",
   "server-error": "upstream_error",
   "client-error": "client_error",
+  // The caller named a model this account does not serve: a client-side choice, not a pool fault.
+  // Recorded only when no other account served it either — a failover that succeeds records success.
+  "model-unsupported": "client_error",
   "stale-session": "upstream_error",
   "busy-session": "upstream_error",
 }

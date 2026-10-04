@@ -446,12 +446,16 @@ describe("openai-responses -> anthropic request", () => {
     ).toThrow(TranslationError)
   })
 
-  test("encrypted reasoning is refused as stateful", () => {
-    expect(() =>
-      openAiResponsesToAnthropicRequest(
-        openAiResponsesRequest({ input: [{ type: "reasoning", encrypted_content: "opaque" }] }),
-      ),
-    ).toThrow(TranslationError)
+  test("encrypted reasoning is dropped, not refused", () => {
+    const out = openAiResponsesToAnthropicRequest(
+      openAiResponsesRequest({
+        input: [
+          { role: "user", content: "hi" },
+          { type: "reasoning", encrypted_content: "opaque" },
+        ],
+      }),
+    )
+    expect(JSON.stringify(out)).not.toContain("opaque")
   })
 
   test("a structured-output text.format is refused", () => {
@@ -525,13 +529,23 @@ describe("openai-responses -> anthropic response (non-streaming)", () => {
     })
   })
 
-  test("a reasoning item is dropped: no signature this router can mint", () => {
+  test("a reasoning summary becomes a router-signed thinking block", () => {
     const out = openAiResponsesToAnthropicResponse(
       responsesBodyWire({
         output: [
           { type: "reasoning", id: "rs_1", summary: [{ type: "summary_text", text: "scratch" }] },
         ],
       }),
+      {},
+    )
+    expect((out.body as { content: unknown[] }).content).toEqual([
+      { type: "thinking", thinking: "scratch", signature: "mar1:" },
+    ])
+  })
+
+  test("a reasoning item with no summary yields no block", () => {
+    const out = openAiResponsesToAnthropicResponse(
+      responsesBodyWire({ output: [{ type: "reasoning", id: "rs_1", summary: [] }] }),
       {},
     )
     expect((out.body as { content: unknown[] }).content).toEqual([])
@@ -1018,12 +1032,16 @@ describe("openai-responses -> openai-chat request (the downgrade)", () => {
     ).toThrow(TranslationError)
   })
 
-  test("encrypted reasoning is refused as stateful", () => {
-    expect(() =>
-      openAiResponsesToOpenAiChatRequest(
-        openAiResponsesRequest({ input: [{ type: "reasoning", encrypted_content: "opaque" }] }),
-      ),
-    ).toThrow(TranslationError)
+  test("encrypted reasoning is dropped, not refused", () => {
+    const out = openAiResponsesToOpenAiChatRequest(
+      openAiResponsesRequest({
+        input: [
+          { role: "user", content: "hi" },
+          { type: "reasoning", encrypted_content: "opaque" },
+        ],
+      }),
+    )
+    expect(JSON.stringify(out)).not.toContain("opaque")
   })
 
   test("conversation, prompt and background are refused: the same statefulness, later names", () => {

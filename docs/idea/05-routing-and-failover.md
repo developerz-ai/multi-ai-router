@@ -112,11 +112,42 @@ Of the in-scope candidates, an account survives only if **all** of these hold:
 | **Not cooling down** | the breaker's reset instant is still in the future |
 | **Not out of credits** | the account is `exhausted` — a hard stop with no timer, see below |
 | **Quota headroom** | a live quota signal reports the relevant window exhausted (see [03-providers.md](03-providers.md)) |
-| **Supports the model** | the account declares an explicit model set and the requested model — after alias mapping — is not in it |
+| **Supports the model** | the requested model — after alias mapping — is outside the account's explicit model set, or, with no explicit set, outside its provider's model family |
 
-An account with **no** declared model set supports everything: unknown means passthrough, not
-exclusion. Filtering never falls back to "try it anyway" — an empty candidate set is an honest,
-specific error, and which error depends on *why* it is empty.
+An account with **no** declared model set falls back to its **provider's model family**
+(`routing/model-family.ts`): anchored name patterns the driver declares as `modelFamily`. Only a
+single-vendor upstream declares one — today a Claude subscription (`claude-*`, the CLI's aliases
+`opus` `sonnet` `haiku` `fable` `best` `default` `opusplan`, each with an optional `[1m]`-style tag)
+and a ChatGPT/Codex subscription (`gpt-*`, `codex-*`, `o<digit>…`, per codex-rs's model slugs). A
+provider that declares no family — OpenRouter, an OpenAI-compatible base URL, z.ai, every API-key
+driver — keeps the old rule: unknown means passthrough, not exclusion. An explicit
+`supportedModels` always replaces the family, in both directions. The family only narrows the
+candidate set; it never renames a model or picks one (non-negotiable 4). Why it exists: one key
+scoped to Claude subscriptions, a ChatGPT subscription and Chinese-model accounts, all
+undeclared, routed `gpt-5.5` to Claude and `k3` to Claude — an upstream rejection, a struck breaker,
+and a session binding pinned to an account that could never serve the conversation (prod,
+2026-10-04).
+
+The model check runs **before** every clock-recoverable reason (cooldown, probe in flight, spent
+window). An account that cannot serve the model is `model-unsupported`, never "cooling down": the
+first reading invalidates a session binding and names a client change, the second would keep the
+binding and answer `429` for an account no clock will ever make serve that name.
+
+Filtering never falls back to "try it anyway" — an empty candidate set is an honest, specific error,
+and which error depends on *why* it is empty. When every in-scope account was dropped as
+`model-unsupported` the `503` says so in those words and echoes the client's model name: `no account
+serves model "glm-5.3" — a client change (3 accounts in scope: …)`.
+
+### Native before alias
+
+An alias map renames a client's name onto a different model (`claude-opus-5 -> glm-5.2`). When the
+eligible set holds accounts that serve the requested name **natively** and accounts that reach it
+only through such a rename, the natives rank first and the aliased ones become a failover tail —
+after every native account, healthy or half-open probe. Each class keeps the policy's own relative
+order, and the rule holds across the key's pools as well as within one. A scope holding only aliased
+accounts still routes through them: nothing is dropped, only ordered. An honored binding still
+outranks it — the binding is truth. An identity alias (`opus -> opus`) renames nothing and counts as
+native. The deferral is recorded as an `aliased-deferred` policy note.
 
 The declared set (`supportedModels`) is stated **upstream-side**, which is why the check runs after
 the rename. `GET /v1/models` publishes the requested-side inverse of exactly this check, derived
@@ -343,6 +374,7 @@ that pool — the policy never runs across the union.
 | `5xx` | Retry the next candidate. Count toward the breaker's failure streak. |
 | Connection failure / timeout | Retry the next candidate. Count toward the failure streak. |
 | `4xx` other than `429` | **Do not retry.** A bad request is bad at every account; returning the upstream's error is the honest answer. |
+| The upstream refuses the **model name** (`model-unsupported`, driver-classified: the `claude` CLI's "There's an issue with the selected model … may not exist or you may not have access to it", Codex's "`<model>` model is not supported when using Codex with a ChatGPT account") | **Retry the next candidate**, before any byte reaches the client. **No breaker strike, no cooldown, no recovery probe** — the account answered correctly about a name it never served, and the next account may serve that vendor. Recorded as `client_error`. When every candidate refused it, the client hears the first refusal itself: Codex's own `400`, or for a subscription a router-authored `404` "the Claude subscription does not serve the requested model". Routing's [model family](#candidate-filtering) keeps most of these from being attempted at all; this row is for what the family admits and the upstream still refuses. Until 2026-10-04 the first read `unknown` (a `502` that struck the breaker) and the second `invalid-request` (no failover). |
 | `401` / `403` | **Retry the next candidate** — before any byte has reached the client, like every row above. Move the account to `needs_reauth` (OAuth), or — for an API key, or a no-auth endpoint that has grown something in front of it, neither of which has a login to re-run — to a `cooling_down` labeled **`credential-rejected`**, `ROUTING_AUTH_FAILURE_COOLDOWN_MS` long (15 min default, doubling per refused re-test up to `ROUTING_AUTH_FAILURE_MAX_COOLDOWN_MS`, 4 h), re-tested by one half-open probe when it ends and reported meanwhile as needing a human (see *A rejected key is a re-tested cooldown* below). Through v2.14.0 this row said `disabled`. A rejected credential is *account*-scoped, not request-scoped: the next candidate authenticates with its own. Until v2.9 this row read "do not retry", which meant the first request to land on a subscription whose 30-day login had expired failed `502` while five healthy subscriptions sat beside it; only the *next* request routed around the parked account. The `502` is still what the client hears when **every** candidate failed that way — every one, because the default attempt bound is the pool itself, not a number (`ROUTING_MAX_ATTEMPTS` unset). |
 
 Rules:
@@ -365,6 +397,7 @@ Rules:
   into a cooldown and answers the next caller as though it had no capacity. A `subprocess-crash`
   stays counted, deliberately: a dead subprocess may be this account's config directory or may be
   this one request, and an ambiguous fault is what the threshold is for.
+  `model-unsupported` is the second kind that is retryable but blameless.
 - **Once bytes have been streamed to the client, the request fails honestly.** No silent restart.
   Replaying a partially delivered stream would produce a response the client cannot reconcile —
   duplicated tokens, a second `message_start`, a tool call emitted twice. The router surfaces the
