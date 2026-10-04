@@ -1,4 +1,5 @@
 import { ownEntry, ProviderId } from "@multi-ai-router/core"
+import { PRICE_SOURCES } from "./provenance"
 import type { RateLookupContext } from "./rates"
 import { type ModelRates, type ModelTable, modelLookupKeys, type ShippedRate } from "./rates"
 import { ANTHROPIC_MODELS } from "./tables/anthropic"
@@ -32,7 +33,7 @@ import { ZAI_MODELS } from "./tables/zai"
  */
 
 /** Conservative inherited snapshot date; source verification is reported independently. */
-export const PRICE_TABLE_AS_OF = "2026-10-01"
+export const PRICE_TABLE_AS_OF = PRICE_SOURCES.map((source) => source.snapshotAsOf).sort()[0] ?? ""
 
 /**
  * Provider tables and explicitly eligible subscription reference identities appear here.

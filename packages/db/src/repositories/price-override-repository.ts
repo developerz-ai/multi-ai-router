@@ -16,11 +16,11 @@ import { type PriceOverrideRow, priceOverrides } from "../schema/price-overrides
  * every attempt prices from the shipped fallback again.
  *
  * `model` is expected already normalized (trimmed, lowercased) — the unique index
- * on `(provider, model)` makes that a rule, and the warm price book normalizes the
- * name it looks up the same way.
+ * on `(account_id, provider, model)` enforces one normalized name per scope. Global
+ * and account-scoped overrides may share a provider/model pair.
  */
 export interface PriceOverrideRepository {
-  /** Provider then model, so the admin screen renders the same order every time. */
+  /** Account scope, provider then model; stable across repeated admin reads. */
   list(): Promise<PriceOverrideRow[]>
   /**
    * The whole table, replaced in one transaction. Returns the new set, ordered as

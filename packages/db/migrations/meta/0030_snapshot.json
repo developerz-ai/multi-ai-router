@@ -1,5 +1,5 @@
 {
-  "id": "b8d502e2-95bc-4ec5-a250-8f278d6ac2d2",
+  "id": "815c01b6-a978-4ba5-8ba2-5adb2b4ca515",
   "prevId": "b0897273-c893-4340-9a19-d832122a6f38",
   "version": "7",
   "dialect": "postgresql",
@@ -2036,23 +2036,7 @@
           "default": "now()"
         }
       },
-      "indexes": {
-        "usage_attempt_daily_v2_day": {
-          "name": "usage_attempt_daily_v2_day",
-          "columns": [
-            {
-              "expression": "day",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        }
-      },
+      "indexes": {},
       "foreignKeys": {},
       "compositePrimaryKeys": {},
       "uniqueConstraints": {
@@ -2191,23 +2175,7 @@
           "default": "now()"
         }
       },
-      "indexes": {
-        "usage_request_daily_v2_day": {
-          "name": "usage_request_daily_v2_day",
-          "columns": [
-            {
-              "expression": "day",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        }
-      },
+      "indexes": {},
       "foreignKeys": {},
       "compositePrimaryKeys": {},
       "uniqueConstraints": {
@@ -2848,7 +2816,8 @@
         },
         "provider": {
           "name": "provider",
-          "type": "text",
+          "type": "provider_id",
+          "typeSchema": "public",
           "primaryKey": false,
           "notNull": false
         },

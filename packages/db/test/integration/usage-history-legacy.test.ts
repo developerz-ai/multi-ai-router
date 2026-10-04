@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import { eq } from "drizzle-orm"
 import { createAccountRepository } from "../../src/repositories/account-repository"
+import { createUsageHistoryMaintenance } from "../../src/repositories/usage-history-maintenance"
 import { accounts } from "../../src/schema/accounts"
 import { usageContributions } from "../../src/schema/usage-contributions"
 import { usageDaily } from "../../src/schema/usage-daily"
@@ -166,5 +167,90 @@ describe.skipIf(!historyUrl)("conservative resumable legacy history", () => {
       processed: 0,
       remaining: false,
     })
+  })
+  test("event-clock sweep retries rollback/ack loss and revisits newly pending older rows after exhaustion", async () => {
+    const oldest = historyAttempt({
+      id: "ffffffff-ffff-4fff-8fff-ffffffffffff",
+      createdAt: new Date("1984-01-16T12:00:00Z"),
+    })
+    const later = historyAttempt({
+      id: "00000000-0000-4000-8000-000000000018",
+      createdAt: new Date("1984-01-18T12:00:00Z"),
+    })
+    await fixture
+      .db()
+      .insert(usageRecords)
+      .values([
+        { ...oldest, ingestedAt: null },
+        { ...later, ingestedAt: null },
+      ])
+    const database = fixture.db(),
+      wrapped = Object.create(database) as typeof database
+    let loseAcknowledgment = false
+    type Transaction = Parameters<Parameters<typeof database.transaction>[0]>[0]
+    wrapped.transaction = async <T>(
+      run: (tx: Transaction) => Promise<T>,
+      config?: Parameters<typeof database.transaction>[1],
+    ) => {
+      const result = await database.transaction(run, config)
+      if (loseAcknowledgment) {
+        loseAcknowledgment = false
+        throw Error("fixture commit acknowledgement lost")
+      }
+      return result
+    }
+    const maintenance = createUsageHistoryMaintenance(wrapped)
+    await fixture
+      .get()
+      .sql.unsafe(
+        "create function fixture_cursor_failure() returns trigger language plpgsql as $$begin raise exception 'fixture rollback'; end$$",
+      )
+    await fixture
+      .get()
+      .sql.unsafe(
+        "create trigger fixture_cursor_failure before insert on usage_contributions for each row execute function fixture_cursor_failure()",
+      )
+    try {
+      await expect(maintenance.backfill({ limit: 1 })).rejects.toThrow()
+    } finally {
+      await fixture.get().sql.unsafe("drop trigger fixture_cursor_failure on usage_contributions")
+      await fixture.get().sql.unsafe("drop function fixture_cursor_failure()")
+    }
+    expect(
+      await fixture
+        .db()
+        .select()
+        .from(usageContributions)
+        .where(eq(usageContributions.id, oldest.id)),
+    ).toHaveLength(0)
+    loseAcknowledgment = true
+    await expect(maintenance.backfill({ limit: 1 })).rejects.toThrow("acknowledgement lost")
+    expect(
+      await fixture
+        .db()
+        .select()
+        .from(usageContributions)
+        .where(eq(usageContributions.id, oldest.id)),
+    ).toHaveLength(1)
+    expect(
+      await fixture
+        .db()
+        .select()
+        .from(usageContributions)
+        .where(eq(usageContributions.id, later.id)),
+    ).toHaveLength(0)
+    expect(await maintenance.backfill({ limit: 1 })).toEqual({ processed: 1, remaining: true })
+    const late = historyAttempt({ createdAt: new Date("1984-01-17T12:00:00Z") })
+    await fixture
+      .db()
+      .insert(usageRecords)
+      .values({ ...late, ingestedAt: null })
+    await fixture.usage().insertMany([late])
+    expect(await maintenance.backfill({ limit: 1 })).toEqual({ processed: 0, remaining: false })
+    expect(await maintenance.backfill({ limit: 1 })).toEqual({ processed: 1, remaining: true })
+    expect(await maintenance.backfill({ limit: 1 })).toEqual({ processed: 0, remaining: false })
+    expect(
+      await fixture.history().totals({ from: new Date("1984-01-16"), to: new Date("1984-01-19") }),
+    ).toMatchObject({ attempts: 3, tokensIn: 9, requests: 0 })
   })
 })

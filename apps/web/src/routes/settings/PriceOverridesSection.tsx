@@ -100,7 +100,7 @@ export function PriceOverridesSection() {
   const revert = (row: PriceRow) => {
     const shipped = row.shipped
     if (shipped === null || row.preserveOverride) {
-      // An extension has nothing to revert to: removing it un-prices the model.
+      // Remove extensions and explicit overrides whose shipped rate is attribution-only.
       setExtras((current) => current.filter((extra) => extra.id !== row.id))
       setDropped((current) => (current.includes(row.id) ? current : [...current, row.id]))
       return

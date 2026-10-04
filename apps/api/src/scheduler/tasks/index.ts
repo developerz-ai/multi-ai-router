@@ -68,8 +68,8 @@ export interface ScheduledTaskDeps {
     | "readEligibleBackgroundAccount"
   >
   /**
-   * The rollup's catch-up cursor, and the janitor's sweep of the run log itself. The runner uses
-   * this repository too, for writing those rows in the first place.
+   * The janitor's sweep of the task run log. The runner uses this repository separately to
+   * persist task outcomes; contribution backfill tracks progress through durable receipts.
    */
   readonly scheduledTasks: Pick<ScheduledTaskRepository, "lastSuccess" | "deleteOlderThan">
   /** The quota floor's freshness read. It never writes health — see that task's note. */

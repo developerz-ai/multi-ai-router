@@ -1,6 +1,11 @@
 import { expect, test } from "bun:test"
 import type { PriceOverrideRow } from "@multi-ai-router/db"
-import { estimateCost, lookupRates, PRICE_SOURCES } from "../../../src/services/cost"
+import {
+  estimateCost,
+  lookupRates,
+  PRICE_SOURCES,
+  PRICE_TABLE_AS_OF,
+} from "../../../src/services/cost"
 import { priceLookupForRows } from "../../../src/services/cost/book"
 import { unpricedModels } from "../../../src/services/cost/coverage"
 
@@ -101,4 +106,9 @@ test("coverage uses account scope and retains unknown model catalog evidence", (
     "2026-10-03",
   )
   expect(PRICE_SOURCES.find((source) => source.id === "openai")?.verifiedAt).toBeNull()
+})
+
+test("displayed inherited snapshot is derived from the oldest source snapshot", () => {
+  expect(PRICE_SOURCES.some((source) => source.snapshotAsOf === PRICE_TABLE_AS_OF)).toBe(true)
+  for (const source of PRICE_SOURCES) expect(PRICE_TABLE_AS_OF <= source.snapshotAsOf).toBe(true)
 })

@@ -8,6 +8,7 @@ import {
   USAGE_RECORD_MAX_BATCH_ROWS,
 } from "../../../src/repositories/usage-repository"
 import { usageRecords } from "../../../src/schema/usage-records"
+import { usageRequestTerminals } from "../../../src/schema/usage-request-terminals"
 import { transactionHarness } from "./fixtures"
 
 /**
@@ -116,4 +117,53 @@ describe("usage insert bind budget", () => {
     // boot on a stock configuration.
     expect(USAGE_RECORD_MAX_BATCH_ROWS).toBeGreaterThan(200)
   })
+})
+
+test("oversized direct terminal batches and combined receipts use bounded statements in one transaction", async () => {
+  const terminals = Array.from({ length: 11000 }, () => ({
+    correlationId: crypto.randomUUID(),
+    winnerEventId: null,
+    apiKeyId: null,
+    accountId: null,
+    poolId: null,
+    provider: null,
+    model: null,
+    upstreamModel: null,
+    outcome: "success" as const,
+    errorClass: null,
+    responseStatus: 200,
+    httpStatus: null,
+    attributionKind: "unstarted" as const,
+    startedAt: row.createdAt ?? new Date(),
+    settledAt: row.createdAt ?? new Date(),
+  }))
+  const columns = Object.keys(getTableColumns(usageRequestTerminals))
+  const h = transactionHarness(({ sql, params }) => {
+    if (!sql.startsWith('insert into "usage_request_terminals"')) return []
+    const identities = new Set(params)
+    return terminals
+      .filter((terminal) => identities.has(terminal.correlationId))
+      .map((terminal) => {
+        const values: Record<string, unknown> = { ...terminal, ingestedAt: new Date() }
+        return columns.map((column) =>
+          values[column] instanceof Date ? values[column].toISOString() : values[column],
+        )
+      })
+  })
+  expect(await createUsageRecordRepository(h.db).insertBatch({ attempts: [], terminals })).toEqual({
+    insertedAttempts: 0,
+    insertedTerminals: terminals.length,
+  })
+  expect(h.transactions()).toBe(1)
+  const terminalStatements = h.statements.filter((statement) =>
+    statement.sql.startsWith('insert into "usage_request_terminals"'),
+  )
+  const receipts = h.statements.filter((statement) =>
+    statement.sql.startsWith('insert into "usage_contributions"'),
+  )
+  expect(terminalStatements.length).toBeGreaterThan(1)
+  expect(receipts.length).toBeGreaterThan(1)
+  expect(h.statements.every((statement) => statement.params.length <= PG_MAX_BIND_PARAMETERS)).toBe(
+    true,
+  )
 })

@@ -87,8 +87,8 @@ export function createJanitorTask(deps: JanitorDeps): ScheduledTask {
             deleteBatch: (limit) =>
               deps.usageRecords.deleteRetainedBatch({ retentionDays: retention.usageDays, limit }),
           },
-          // After the raw rows and never before them: the rollup reads raw and writes daily, so
-          // sweeping daily first would only widen the window in which a day exists in neither.
+          // Raw retention removes only rows with admitted contribution receipts. History retention
+          // separately advances the durable horizon and removes the older analytical facts.
           {
             category: "usageDaily",
             deleteBatch: (limit) =>

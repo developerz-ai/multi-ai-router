@@ -546,3 +546,30 @@ describe("model name matching", () => {
     expect(lookupRates("anthropic-api", "  Claude-Sonnet-5 ")?.inputPerMtok).toBe(2)
   })
 })
+
+test("six-decimal rounding cannot overflow numeric(14,6)", () => {
+  const justBelow = 100_000_000 - 2 ** -26
+  expect(justBelow).toBeLessThan(100_000_000)
+  expect(justBelow.toFixed(6)).toBe("100000000.000000")
+  const price =
+    (inputPerMtok: number): RateLookup =>
+    () => ({
+      inputPerMtok,
+      outputPerMtok: 0,
+      cacheReadPerMtok: 0,
+      cacheWritePerMtok: 0,
+    })
+  const input = {
+    provider: "openai-api" as const,
+    model: "synthetic",
+    tokens: tokens({ tokensIn: 1_000_000 }),
+  }
+  expect(estimateCost({ ...input, prices: price(justBelow) })).toEqual({
+    costEstimate: null,
+    costBasis: "unknown",
+  })
+  expect(estimateCost({ ...input, prices: price(99_999_999.999999) })).toEqual({
+    costEstimate: "99999999.999999",
+    costBasis: "metered",
+  })
+})

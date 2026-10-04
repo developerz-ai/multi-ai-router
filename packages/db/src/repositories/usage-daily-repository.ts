@@ -11,6 +11,7 @@ export interface UsageDailyGroupRow extends UsageTotals {
 }
 export interface UsageDailyRepository {
   rollupDay(day: Date): Promise<number>
+  /** History horizon retention: purges banked baseline, V2 aggregates and receipts, never raw detail. */
   deleteOlderThan(cutoff: Date, limit: number): Promise<number>
   totals(range: UsageDayRange): Promise<UsageTotals>
   breakdown(range: UsageDayRange, dimension: UsageDimension): Promise<UsageDailyGroupRow[]>

@@ -46,9 +46,9 @@ export async function readSummary(
     Promise.all(dimensions.map((d) => deps.history.breakdown(window, d, maxRows + 1))),
   ])
   const axis = buildAxis(window, width)
-  const folded = foldFailures(outcomes, totals.attempts)
-  const incomplete = coverage.incomplete || folded.attempts > totals.attempts
-  const failures = { ...folded, partial: incomplete || folded.attempts !== totals.attempts }
+  const retainedAttempts = outcomes.reduce((sum, row) => sum + row.attempts, 0)
+  const incomplete = coverage.incomplete || retainedAttempts > totals.attempts
+  const failures = foldFailures(outcomes, totals.attempts, incomplete)
   const selected = rows.map((group) => group.slice(0, maxRows))
   const diagnostics = await Promise.all(
     dimensions.map((dimension, index) =>

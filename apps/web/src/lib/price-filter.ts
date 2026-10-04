@@ -9,7 +9,7 @@ import type { PriceRow } from "./api/settings"
 /** Rows shown while folded. Enough to see the shape of the table, not enough to scroll past. */
 export const PRICE_PAGE_SIZE = 25
 
-/** Substring match on model id or provider id, case-insensitive. Blank matches everything. */
+/** Substring match on model, provider or account id, case-insensitive. Blank matches everything. */
 export function filterPriceRows(rows: readonly PriceRow[], query: string): readonly PriceRow[] {
   const needle = query.trim().toLowerCase()
   if (needle === "") return rows

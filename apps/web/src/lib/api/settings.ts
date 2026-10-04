@@ -121,7 +121,7 @@ export interface SettingsView {
 export type PriceOrigin = "shipped" | "overridden" | "added"
 
 export interface PriceRow {
-  /** `provider:model` — the row's identity in a table and in an edit map. */
+  /** Global `provider:model` or scoped `accountId/provider:model` edit identity. */
   readonly id: string
   readonly accountId?: string | null
   readonly notionalOnly?: boolean

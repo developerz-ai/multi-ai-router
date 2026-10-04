@@ -101,8 +101,12 @@ export function estimateCost(input: CostInput): CostEstimate {
   // other record batched with it down too.
   if (!Number.isFinite(dollars) || dollars < 0 || dollars >= COST_CEILING) return UNKNOWN_COST
 
+  const costEstimate = dollars.toFixed(COST_SCALE)
+  // Rounding can cross the exact integer ceiling even when the unrounded double is below it.
+  if (Number(costEstimate) >= COST_CEILING) return UNKNOWN_COST
+
   return {
-    costEstimate: dollars.toFixed(COST_SCALE),
+    costEstimate,
     costBasis: BASIS[input.billing ?? DEFAULT_ACCOUNT_BILLING],
   }
 }

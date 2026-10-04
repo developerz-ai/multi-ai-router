@@ -15,8 +15,8 @@ import { providerId } from "./enums"
  *
  * `model` is stored **already normalized** — trimmed and lowercased by the caller,
  * matching how `lookupRates` normalizes the name it is asked for. The unique index
- * on `(provider, model)` makes that a rule rather than a convention: two casings
- * of one model would otherwise both insert and only one would ever be found.
+ * on `(account_id, provider, model)` enforces one name per scope, with NULL global
+ * scope treated as equal. Global and scoped rows may share a provider/model pair.
  *
  * There is no retention sweep for this table. It is configuration, not history:
  * rows leave when an operator removes them, never on a clock.

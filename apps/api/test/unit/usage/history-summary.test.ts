@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test"
 import type { UsageReadRepository } from "@multi-ai-router/db"
+import { foldFailures } from "../../../src/services/usage-read/failures"
 import { EMPTY_TOTALS, splitWindow } from "../../../src/services/usage-read/rollup"
 import { readSummary } from "../../../src/services/usage-read/summary"
 import { historyFixture } from "./history-fixture"
@@ -187,4 +188,15 @@ test("closed-day compatibility includes midnight starts and preserves partial ra
     closedDays: { fromDay: "2026-10-02", toDay: "2026-10-03" },
     rawSlices: [{ from, to: new Date("2026-10-02T00:00:00Z") }],
   })
+})
+
+test("failure detail stays partial when equal retained counts cannot prove historical completeness", () => {
+  const counts = [{ outcome: "upstream_error" as const, attempts: 1 }]
+  expect(foldFailures(counts, 1, true)).toEqual({
+    attempts: 1,
+    errors: 1,
+    partial: true,
+    byOutcome: counts,
+  })
+  expect(foldFailures(counts, 1, false).partial).toBe(false)
 })

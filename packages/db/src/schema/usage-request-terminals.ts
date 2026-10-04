@@ -1,6 +1,5 @@
-import type { ProviderId } from "@multi-ai-router/core"
 import { index, pgTable, smallint, text, timestamp, uuid } from "drizzle-orm/pg-core"
-import type { UsageOutcome } from "./enums"
+import { providerId, type UsageOutcome } from "./enums"
 
 /** One immutable logical settlement, separate from the immutable upstream attempts. */
 export const usageRequestTerminals = pgTable(
@@ -11,7 +10,7 @@ export const usageRequestTerminals = pgTable(
     apiKeyId: uuid("api_key_id"),
     accountId: uuid("account_id"),
     poolId: uuid("pool_id"),
-    provider: text("provider").$type<ProviderId>(),
+    provider: providerId("provider"),
     model: text("model"),
     upstreamModel: text("upstream_model"),
     outcome: text("outcome").$type<UsageOutcome>().notNull(),

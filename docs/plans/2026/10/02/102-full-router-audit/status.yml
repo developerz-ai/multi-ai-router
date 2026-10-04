@@ -5,9 +5,10 @@ created_by: sebi
 worked_by: Codex team
 owner: sebi
 percent: 67
-current_focus: PR151 mergedc030c5b after clean CodeRabbit review and five required PR/main checks passed. W6 usage/history/account pricing
-  PR152 initial CI passed; six inline review findings and accessibility/set-based maintenance fixes locally validated5052tests/451files/49030assertions including background admission duration metric. New-head evidence/review/CI and maintainer escalation remain pending.
-  L16 strict database-miss latency, infrastructure monitoring, release/deployment and operational rotation remain open.
+current_focus: W1-W5B merged; ten PRs. PR152 both reviews completed; 19 developerz findings addressed or refuted with evidence.
+  Final bin/check5061pass/451files/49084assertions and PG16/18 regressions passed. Revised-head review and CI remain pending.
+  Small warm benchmark8000requests maxp99.76ms passed; large280KB translated nonstream p997.333ms failed and remains open.
+  L16 cold/session latency, infrastructure monitoring, operational rotation, release and deployment remain open.
 slices:
 - file: 01-transport.md
   status: in_progress
@@ -110,7 +111,7 @@ evidence:
 - '102-full-router-audit/evidence/wave1-bench.json: 8000 requests, zero failures/buffered streams; max p99 1.28 ms.'
 notes: 'W1–W5B merged and locally validated; ten PRs merged. W5B application quota and terminal monitoring passed, but L16 strict database-miss
   overhead remains open: native read experiments reached 5ms and do not prove the required less-than-5ms budget. W6 historical/accounting implementation
-  is uncommitted with full local gate passed; benchmarks, review and CI remain. Scanner/session, translation, console and DX/CI/prompt work remain. #87 operational rotation/session revocation,
+  is committed in PR #152 with the final full local gate and small warm benchmark passed. Both reviews completed and findings are addressed; the current large warm benchmark failed7.333ms and remains open. The revised head requires fresh review and CI evidence before merge. Scanner/session, translation, console and DX/CI/prompt work remain. #87 operational rotation/session revocation,
   O12 infrastructure alerting, release and deployment remain open.'
 last_updated: 2026-10-04
 resolved_findings:

@@ -1,4 +1,4 @@
-import { eq, sql } from "drizzle-orm"
+import { asc, eq, sql } from "drizzle-orm"
 import type { Database } from "../client"
 import { usageAttemptDailyV2, usageRequestDailyV2 } from "../schema/usage-aggregate-v2"
 import { usageContributions } from "../schema/usage-contributions"
@@ -11,17 +11,21 @@ import { attemptContribution, usagePayloadHash } from "./usage-contribution-valu
 import { boundUsageBatch, lockUsageHistory } from "./usage-history-lock"
 
 export function createUsageHistoryMaintenance(db: Database) {
+  // A committed sweep advances through the indexed event clock. Exhaustion resets this hint so
+  // newly arrived older legacy rows are picked up next sweep; correctness remains receipt-based.
+  let cursor: { createdAt: Date; id: string } | undefined
   const backfill = async ({ limit }: { limit: number }) => {
     boundUsageBatch(limit)
-    return db.transaction(async (tx) => {
+    const committed = await db.transaction(async (tx) => {
       const { state, dbNow } = await lockUsageHistory(tx)
+      const after = cursor
       const rows = await tx
         .select()
         .from(usageRecords)
         .where(
-          sql`not exists (select 1 from ${usageContributions} c where c.kind = 'attempt' and c.id = ${usageRecords.id} and c.source <> 'legacy_pending')`,
+          sql`not exists (select 1 from ${usageContributions} c where c.kind = 'attempt' and c.id = ${usageRecords.id} and c.source <> 'legacy_pending') ${after === undefined ? sql`` : sql`and (${usageRecords.createdAt},${usageRecords.id}) > (${after.createdAt.toISOString()}::timestamptz,${after.id}::uuid)`}`,
         )
-        .orderBy(usageRecords.id)
+        .orderBy(asc(usageRecords.createdAt), asc(usageRecords.id))
         .limit(limit)
       const days = [...new Set(rows.map((row) => row.createdAt.toISOString().slice(0, 10)))]
       const banked = days.length
@@ -65,8 +69,13 @@ export function createUsageHistoryMaintenance(db: Database) {
         returning id,kind,day,source,payload_hash as "payloadHash",payload,ingested_at as "ingestedAt"`)),
             ] as unknown as ContributionRow[])
       await applyUsageContributions(tx, admitted)
-      return { processed: rows.length, remaining: rows.length === limit }
+      return { processed: rows.length, remaining: rows.length === limit, last: rows.at(-1) }
     })
+    cursor =
+      committed.remaining && committed.last !== undefined
+        ? { createdAt: committed.last.createdAt, id: committed.last.id }
+        : undefined
+    return { processed: committed.processed, remaining: committed.remaining }
   }
   const rollupDay = async (at: Date) =>
     db.transaction(async (tx) => {

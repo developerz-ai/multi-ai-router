@@ -63,7 +63,8 @@ describe.skipIf(!historyUrl)("idempotent event-time history admission", () => {
       .select()
       .from(usageRecords)
       .where(eq(usageRecords.id, row.id))
-    expect(persisted?.createdAt.toISOString()).toBe(row.createdAt?.toISOString())
+    if (row.createdAt === undefined) throw Error("fixture event time absent")
+    expect(persisted?.createdAt.toISOString()).toBe(row.createdAt.toISOString())
     expect(persisted?.ingestedAt?.getTime()).toBeGreaterThan(new Date("2020-01-01").getTime())
     await fixture.usage().deleteOlderThan(new Date("1984-01-11"), 10)
     await fixture.usage().insertMany([row])
@@ -108,5 +109,48 @@ describe.skipIf(!historyUrl)("idempotent event-time history admission", () => {
     await expect(fixture.usage().insertMany([{ ...row, tokensIn: 99 }])).rejects.toThrow(
       "immutable usage identity",
     )
+  })
+  test("terminal batches beyond one Bind statement commit once and later-chunk failure rolls back", async () => {
+    const attempt = historyAttempt({ createdAt: new Date("1984-01-20T12:00:00Z") })
+    const terminals = Array.from({ length: 4500 }, () =>
+      historyTerminal(attempt, {
+        correlationId: crypto.randomUUID(),
+        winnerEventId: null,
+        attributionKind: "unstarted",
+        settledAt: new Date("1984-01-20T12:00:00Z"),
+      }),
+    )
+    const write = fixture.usage(),
+      window = { from: new Date("1984-01-20"), to: new Date("1984-01-21") }
+    expect(await write.insertBatch({ attempts: [], terminals })).toEqual({
+      insertedAttempts: 0,
+      insertedTerminals: 4500,
+    })
+    expect((await fixture.history().totals(window)).requests).toBe(4500)
+    expect(await write.insertBatch({ attempts: [], terminals })).toEqual({
+      insertedAttempts: 0,
+      insertedTerminals: 0,
+    })
+    const invalid = terminals.map((terminal) => ({
+      ...terminal,
+      correlationId: crypto.randomUUID(),
+    }))
+    const last = invalid.at(-1)
+    if (last === undefined) throw Error("fixture terminal absent")
+    last.responseStatus = 40000
+    await expect(write.insertBatch({ attempts: [attempt], terminals: invalid })).rejects.toThrow()
+    expect((await fixture.history().totals(window)).requests).toBe(4500)
+    expect(
+      await fixture.db().select().from(usageRecords).where(eq(usageRecords.id, attempt.id)),
+    ).toHaveLength(0)
+    const first = invalid[0]
+    if (first === undefined) throw Error("fixture terminal absent")
+    expect(
+      await fixture
+        .db()
+        .select()
+        .from(usageRequestTerminals)
+        .where(eq(usageRequestTerminals.correlationId, first.correlationId)),
+    ).toHaveLength(0)
   })
 })

@@ -56,8 +56,8 @@ export const EMPTY_FAILURES: UsageFailures = {
  * Folds one raw per-outcome scan into the shape the console reads.
  *
  * Pure — counts and a comparison. `stitchedAttempts` is the summary's own total, passed in rather
- * than read again, so `partial` is decided from the two numbers that will actually appear on the
- * screen together.
+ * than read again. `historyIncomplete` includes missing or unregistered historical contributions,
+ * whose absence cannot be proved from equal retained and historical counts alone.
  *
  * Ordering is decided here rather than in SQL: it is at most one row per member of `UsageOutcome`,
  * and "biggest first, ties by name" is a rule worth asserting without a database. The name
@@ -67,6 +67,7 @@ export const EMPTY_FAILURES: UsageFailures = {
 export function foldFailures(
   counts: readonly UsageOutcomeCount[],
   stitchedAttempts: number,
+  historyIncomplete = false,
 ): UsageFailures {
   const attempts = counts.reduce((sum, row) => sum + row.attempts, 0)
   const failures = counts
@@ -76,7 +77,7 @@ export function foldFailures(
   return {
     attempts,
     errors: failures.reduce((sum, row) => sum + row.attempts, 0),
-    partial: attempts < stitchedAttempts,
+    partial: historyIncomplete || attempts < stitchedAttempts,
     byOutcome: failures,
   }
 }

@@ -64,7 +64,7 @@ CREATE TABLE "usage_request_terminals" (
 	"api_key_id" uuid,
 	"account_id" uuid,
 	"pool_id" uuid,
-	"provider" text,
+	"provider" "provider_id",
 	"model" text,
 	"upstream_model" text,
 	"outcome" text NOT NULL,
@@ -86,8 +86,6 @@ ALTER TABLE "usage_records" DROP CONSTRAINT "usage_records_pool_id_pools_id_fk";
 DROP INDEX "price_overrides_provider_model_key";--> statement-breakpoint
 ALTER TABLE "price_overrides" ADD COLUMN "account_id" uuid;--> statement-breakpoint
 ALTER TABLE "usage_records" ADD COLUMN "ingested_at" timestamp with time zone;--> statement-breakpoint
-CREATE INDEX "usage_attempt_daily_v2_day" ON "usage_attempt_daily_v2" USING btree ("day");--> statement-breakpoint
-CREATE INDEX "usage_request_daily_v2_day" ON "usage_request_daily_v2" USING btree ("day");--> statement-breakpoint
 CREATE INDEX "usage_contributions_day_idx" ON "usage_contributions" USING btree ("day");--> statement-breakpoint
 CREATE INDEX "usage_contributions_source_idx" ON "usage_contributions" USING btree ("source","id");--> statement-breakpoint
 CREATE INDEX "usage_request_terminals_settled_idx" ON "usage_request_terminals" USING btree ("settled_at");--> statement-breakpoint

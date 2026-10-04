@@ -1,8 +1,10 @@
 import { describe, expect, test } from "bun:test"
 import { eq } from "drizzle-orm"
 import { createDatabase } from "../../src/client"
+import { createUsageDailyRepository } from "../../src/repositories/usage-daily-repository"
 import { createUsageRecordRepository } from "../../src/repositories/usage-repository"
 import { usageAttemptDailyV2 } from "../../src/schema/usage-aggregate-v2"
+import { usageDaily } from "../../src/schema/usage-daily"
 import { usageRecords } from "../../src/schema/usage-records"
 import {
   historyAttempt,
@@ -132,5 +134,44 @@ describe.skipIf(!historyUrl)("atomic receipt reconciliation", () => {
     const coverage = await fixture.history().coverage()
     expect(coverage.earliestAt?.toISOString()).toBe("1984-01-03T00:01:00.000Z")
     expect(coverage.incomplete).toBe(false)
+  })
+  test("compatibility daily retention removes banked/V2 history and receipts while raw detail stays", async () => {
+    const row = historyAttempt({ createdAt: new Date("1984-01-25T12:00:00Z") })
+    await fixture.usage().insertMany([row])
+    await fixture
+      .get()
+      .sql.unsafe("alter table usage_daily disable trigger usage_history_baseline_seal")
+    try {
+      await fixture.db().insert(usageDaily).values({
+        day: "1984-01-24",
+        apiKeyId: crypto.randomUUID(),
+        accountId: crypto.randomUUID(),
+        model: "wrapper-baseline",
+        attempts: 4,
+      })
+    } finally {
+      await fixture
+        .get()
+        .sql.unsafe("alter table usage_daily enable trigger usage_history_baseline_seal")
+    }
+    const daily = createUsageDailyRepository(fixture.db())
+    expect(await daily.deleteOlderThan(new Date("1984-01-26"), 100)).toBeGreaterThan(0)
+    expect(
+      await fixture.db().select().from(usageDaily).where(eq(usageDaily.day, "1984-01-24")),
+    ).toHaveLength(0)
+    expect(
+      await fixture
+        .db()
+        .select()
+        .from(usageAttemptDailyV2)
+        .where(eq(usageAttemptDailyV2.day, "1984-01-25")),
+    ).toHaveLength(0)
+    expect(
+      await fixture.db().select().from(usageRecords).where(eq(usageRecords.id, row.id)),
+    ).toHaveLength(1)
+    expect(
+      (await fixture.history().totals({ from: new Date("1984-01-24"), to: new Date("1984-01-26") }))
+        .attempts,
+    ).toBe(0)
   })
 })
