@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.18.0] — 2026-10-04
+
+Sign in to ChatGPT/Codex with a code, the way `codex login --device-auth` does on a remote server. (#158)
+
+### Upgrade notes
+
+- **No migrations, no new settings.** The code-based sign-in uses the existing `RETENTION_OAUTH_STATE_MINUTES` (default 10) as its time limit.
+
+### Added
+
+- **Device-code sign-in for ChatGPT/Codex accounts.** In the connect dialog, **Get a code** shows a short code and `https://auth.openai.com/codex/device`; enter the code from any browser and the dialog completes by itself. Nothing has to reach `localhost:1455`, so it works when the browser cannot follow the loopback redirect. Keep the dialog open until it says Connected: its status poll is what checks back with OpenAI (at most once per OpenAI-stated interval, backing off on `429`). OpenAI's device id and the exchanged tokens never leave the router; only the user code and the page link are shown.
+
 ## [2.17.0] — 2026-10-04
 
 ChatGPT/Codex subscriptions work end to end, from any client dialect. (#156)
