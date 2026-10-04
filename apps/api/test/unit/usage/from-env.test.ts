@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import { createLogger } from "../../../src/logging/logger"
+import { createMetrics } from "../../../src/observability"
 import type { UsageRecord } from "../../../src/services/usage"
 import { createUsageRecorderFromEnv } from "../../../src/services/usage"
 import type { TrailingTimer } from "../../../src/services/usage/fromEnv"
@@ -242,4 +243,84 @@ describe("a refused usage batch, as an operator reads it", () => {
     expect(abandoned).toMatchObject({ level: "error" })
     expect(abandoned?.records ?? 0).toBeGreaterThan(0)
   })
+})
+
+test("production admission duration observes success, retry and terminal-only batches, excluding markUsed", async () => {
+  const metrics = createMetrics()
+  let elapsed = 0,
+    attempts = 0,
+    marked = 0
+  const observed: number[] = []
+  const recorder = createUsageRecorderFromEnv({
+    env: ENV,
+    logger: createLogger({ level: "error", write: () => {} }),
+    elapsed: () => elapsed,
+    onAdmissionDuration: (duration) => {
+      observed.push(duration)
+      metrics.observeUsageAdmission(duration)
+    },
+    records: {
+      insertBatch: async () => {
+        attempts++
+        elapsed += attempts === 1 ? 25 : 50
+        if (attempts === 1) throw new Error("retry")
+      },
+    },
+    accounts: {
+      markUsed: async () => {
+        marked++
+        elapsed += 1000
+      },
+    },
+  })
+  recorder.record(record(1))
+  await recorder.flush()
+  await recorder.flush()
+  const event = record(2)
+  recorder.recordTerminal({
+    correlationId: event.correlationId,
+    winnerEventId: event.eventId,
+    apiKeyId: event.apiKeyId,
+    accountId: event.accountId,
+    poolId: event.poolId,
+    provider: event.provider,
+    model: event.model,
+    upstreamModel: event.upstreamModel,
+    outcome: event.outcome,
+    errorClass: null,
+    responseStatus: 200,
+    httpStatus: 200,
+    startedAt: AT,
+    settledAt: AT,
+    attributionKind: "winning-attempt",
+  })
+  await recorder.flush()
+  expect(observed).toEqual([25, 50, 50])
+  expect(marked).toBe(1)
+  const exposed = metrics.expose()
+  expect(exposed).toContain("router_usage_admission_seconds_count 3")
+  expect(exposed).toContain("router_usage_admission_seconds_sum 0.125")
+})
+
+test("throwing admission observer cannot cause a committed write to be retried", async () => {
+  let writes = 0
+  const recorder = createUsageRecorderFromEnv({
+    env: ENV,
+    logger: createLogger({ level: "error", write: () => {} }),
+    elapsed: () => 10,
+    onAdmissionDuration: () => {
+      throw new Error("metric unavailable")
+    },
+    records: {
+      insertBatch: async () => {
+        writes++
+      },
+    },
+    accounts: { markUsed: async () => {} },
+  })
+  recorder.record(record(1))
+  await recorder.flush()
+  await recorder.flush()
+  expect(writes).toBe(1)
+  expect(recorder.stats().writeFailures).toBe(0)
 })

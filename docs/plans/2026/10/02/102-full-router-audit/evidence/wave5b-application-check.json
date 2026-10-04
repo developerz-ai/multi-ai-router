@@ -1,5 +1,5 @@
 {
-  "scope": "W5B application validation; PR151 reviewed and merged; release/deployment pending",
+  "scope": "W5B application validation; review/merge/release/deployment pending",
   "gate": {
     "bun": "1.4.2",
     "postgres": "18.6",
@@ -44,7 +44,7 @@
     "assertions": 48806
   },
   "reviewFixes": {
-    "status": "Prior local review-fix validation; final reviewed head and merged verdict recorded in merge metadata",
+    "status": "locally validated; review of new commit pending",
     "atomicQuotaStatus": {
       "postgres16": {
         "passed": 9,
@@ -113,23 +113,5 @@
     "requestsPerRun": 8000,
     "failures": 0,
     "buffered": 0
-  },
-  "merge": {
-    "pr": 151,
-    "commit": "c030c5bc3a5eb0fc765be3a6691cf1964991a9fb",
-    "mergedAt": "2026-10-04T01:08:57Z",
-    "reviewedHead": "b82a9f0c28535f8d043267e955eb6af7c8b664c4",
-    "codeRabbitReviewRun": "20a75f84-7dc6-4331-91d0-cb7a1afbdf21",
-    "codeRabbitReviewComment": 5974814785,
-    "actionableComments": 0,
-    "requiredChecks": [
-      "lint",
-      "typecheck",
-      "test",
-      "bench",
-      "build"
-    ],
-    "mainCiRun": 37167125809,
-    "mainCiConclusion": "success"
   }
 }

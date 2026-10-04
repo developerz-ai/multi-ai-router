@@ -51,6 +51,8 @@ export interface UsageRecorderFromEnvDeps {
    * from there and never from the request path (CLAUDE.md non-negotiable 8).
    */
   readonly onRecord?: (record: UsageRecord) => void
+  readonly elapsed?: () => number
+  readonly onAdmissionDuration?: (milliseconds: number) => void
   /** Monotonic-enough milliseconds for the log throttle. Injected only by tests. */
   readonly now?: () => number
   /** The wall clock the last-used stamp is written with. Injected only by tests. */
@@ -67,6 +69,7 @@ const defaultTimer: TrailingTimer = (fire, delayMs) => {
 
 export function createUsageRecorderFromEnv(deps: UsageRecorderFromEnvDeps): UsageRecorder {
   const clock = deps.clock ?? (() => new Date())
+  const elapsed = deps.elapsed ?? (() => performance.now())
   const log = deps.logger.child({ component: "usage" })
   const now = deps.now ?? (() => Date.now())
   const timer = deps.timer ?? defaultTimer
@@ -121,7 +124,17 @@ export function createUsageRecorderFromEnv(deps: UsageRecorderFromEnvDeps): Usag
   return createUsageRecorder(
     {
       write: async (batch, terminals = []) => {
-        await deps.records.insertBatch({ attempts: batch.map(toUsageRecordRow), terminals })
+        const admission = { attempts: batch.map(toUsageRecordRow), terminals }
+        const began = elapsed()
+        try {
+          await deps.records.insertBatch(admission)
+        } finally {
+          try {
+            deps.onAdmissionDuration?.(Math.max(0, elapsed() - began))
+          } catch {
+            // Metric failures must never retry an already committed batch.
+          }
+        }
         // One extra statement per *flush*, not per request, and strictly after the records land:
         // this stamp is what lets the idle probe find an account nothing has routed to in a week
         // without scanning a table retention prunes. A failure here must not cost the batch that

@@ -391,6 +391,7 @@ export function createRuntime(deps: RuntimeDeps): Runtime {
     env,
     logger,
     onRecord: (record) => metrics.observeUsage(record),
+    onAdmissionDuration: (milliseconds) => metrics.observeUsageAdmission(milliseconds),
   })
 
   // The admin console's session state, in Postgres: a redeploy or a crash no longer logs the
