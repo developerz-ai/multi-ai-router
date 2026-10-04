@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.17.0] — 2026-10-04
+
+ChatGPT/Codex subscriptions work end to end, from any client dialect. (#156)
+
+### Upgrade notes
+
+- **No migrations, no new required env vars.** `PUBLIC_URL` no longer affects ChatGPT/Codex connect: auth.openai.com only accepts the Codex loopback `http://localhost:1455/auth/callback`, so connect is always paste-back. After signing in, the browser shows a "can't connect" page on localhost; copy the whole address bar URL into the console. An `openai-oauth` account created on 2.16.x and left in `needs_reauth` connects with a fresh **Reconnect**.
+
+### Fixed
+
+- **ChatGPT/Codex connect never completed when `PUBLIC_URL` was set.** The authorize URL named the router's own callback, which the Codex client id does not register, so no code was issued. The console also reported "Connected" off the `updatedAt` bump that starting a connect writes; it now reports success only when the account shows a new credential.
+- **A stalled Claude subscription turn could hang forever.** Upstream pings and SDK `keep_alive` messages re-armed the 90 s idle deadline; only real model output does now. A timer that fires late after an event-loop stall re-reads buffered data once before answering `504`.
+- **Mid-conversation `role: "system"` messages were a `400`.** They are accepted on Claude subscriptions (including `clear_at` and `tool_addition`/`tool_removal`) and translated to `system` (chat completions) or `developer` (responses) for OpenAI-dialect accounts.
+
+### Added
+
+- **Anthropic `/v1/messages` and OpenAI `/v1/chat/completions` clients can use ChatGPT/Codex accounts.** The driver declares Codex's request rules (streamed, `instructions` set, `max_output_tokens`/`temperature`/`top_p` dropped); a client that did not ask to stream gets the upstream stream collected into one response, and a streaming client is forwarded unbuffered. `/v1/responses` stays byte-passthrough.
+- Codex requests carry the `originator` header and the authorize URL the Codex CLI parameters; the ChatGPT account id is also read from a top-level token claim.
+
+### Changed
+
+- `@anthropic-ai/claude-agent-sdk` 0.3.289 (CLI 2.1.289), `hono` 4.13.13.
+
 ## [2.16.0] — 2026-10-04
 
 Driven by the full-router audit (plans 101 and 102): credential containment, multi-replica correctness for recovery, refresh and quota, durable usage history, and bounded resources everywhere. (#141–#154)
