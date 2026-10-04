@@ -359,7 +359,7 @@ export function createRuntime(deps: RuntimeDeps): Runtime {
   // `usage` is a getter because the recorder below reports *into* this: see `observability/`.
   const metrics = createRuntimeMetrics({
     metricInventory: env.metricInventory,
-    catalog,
+    catalog: recoveryComponents.access.catalog,
     health,
     usage: () => usage,
     sdkConcurrency,
