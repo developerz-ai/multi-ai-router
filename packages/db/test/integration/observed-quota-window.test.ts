@@ -60,6 +60,7 @@ describe.skipIf(!url)("durable quota observation identity", () => {
       generationCandidate: crypto.randomUUID(),
       reason: "quota-stale",
       cooldownMs: 1000,
+      maximumOutcomeAgeMs: 600000,
     })
     expect(pending).toBeDefined()
     if (pending === undefined) throw new Error("pending generation missing")
@@ -117,6 +118,7 @@ describe.skipIf(!url)("durable quota observation identity", () => {
           generationCandidate: crypto.randomUUID(),
           reason: "quota-stale",
           cooldownMs: 1000,
+          maximumOutcomeAgeMs: 600000,
         })
       })
       expect(await writing).toBeUndefined()

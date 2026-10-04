@@ -171,3 +171,32 @@ describe("the count in the message equals the rejections it accounts for (#88)",
     ).toBe(429)
   })
 })
+
+// Prod 2026-10-04: an account whose recovery probe settled `uncertain` (quota windows at 18% and
+// 5%) was reported as "rate limited or out of quota". Still a 429 — the hold is clock-recoverable
+// (non-negotiable 7) — but the words name the condition the client is actually waiting on.
+describe("a recovery-probe hold is not reported as quota", () => {
+  test("every rejection a probe hold: says so, and never says quota", () => {
+    const result = error([
+      rejected("codex", "probe-in-flight", { resetsAt: at(1_000), resetSource: "estimated" }),
+    ])
+    expect(result).toBeInstanceOf(QuotaExhaustedError)
+    expect(result.status).toBe(429)
+    expect(result.message).toContain(
+      "1 of 1 account in pool cn-models-team is settling a recovery probe (codex)",
+    )
+    expect(result.message).not.toContain("quota")
+    expect(result.message).not.toContain("rate limited")
+  })
+
+  test("mixed with a cooldown: each condition present is named", () => {
+    const result = error([
+      rejected("a", "cooling-down", { resetsAt: at(10_000) }),
+      rejected("b", "probe-in-flight", { resetsAt: at(1_000), resetSource: "estimated" }),
+    ])
+    expect(result.status).toBe(429)
+    expect(result.message).toContain(
+      "are rate limited or out of quota, or settling a recovery probe (a, b)",
+    )
+  })
+})

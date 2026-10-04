@@ -88,7 +88,7 @@ export function noCandidatesError(input: NoCandidatesInput): RouterError {
   // (#88); the ones a human or a client change would fix are named in their own clause instead.
   if (recoverable.length > 0) {
     return quotaError(
-      `${recoverable.length} of ${total} ${accountWord(total)}${where(input.groups)} ${recoverable.length === 1 ? "is" : "are"} rate limited or out of quota (${labels(recoverable)})${remainder(input.rejected, recoverable.length)}`,
+      `${recoverable.length} of ${total} ${accountWord(total)}${where(input.groups)} ${recoverable.length === 1 ? "is" : "are"} ${recoverableCondition(recoverable)} (${labels(recoverable)})${remainder(input.rejected, recoverable.length)}`,
       earliestRecoverable(recoverable),
       input.now,
       unknownFloor,
@@ -168,6 +168,20 @@ function earliestRecoverable(entries: readonly RejectedCandidate[]): Reset {
       earliest = entry
   }
   return { resetsAt: earliest?.resetsAt, resetSource: earliest?.resetSource }
+}
+
+/**
+ * What the recoverable group is waiting on. A recovery-probe hold is the router's own and says
+ * nothing about the provider's quota, so it is never worded as quota (prod, 2026-10-04: an account
+ * at 18% of its window read "rate limited or out of quota" while it waited on a probe).
+ */
+function recoverableCondition(entries: readonly RejectedCandidate[]): string {
+  const probe = entries.some((entry) => entry.reason === "probe-in-flight")
+  const quota = entries.some((entry) => entry.reason !== "probe-in-flight")
+  if (!probe) return "rate limited or out of quota"
+  return quota
+    ? "rate limited or out of quota, or settling a recovery probe"
+    : "settling a recovery probe"
 }
 
 /** The condition the message names — `cooling down` for every blocked reason misnamed two of them. */

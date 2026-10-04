@@ -18,6 +18,7 @@ describe.skipIf(!url)("observed status recovery generation fence", () => {
       generationCandidate: crypto.randomUUID(),
       reason: "quota-stale",
       cooldownMs: 1000,
+      maximumOutcomeAgeMs: 600000,
     })
     expect(
       await repo.transitionObservedStatus({
@@ -82,6 +83,7 @@ describe.skipIf(!url)("observed status recovery generation fence", () => {
               generationCandidate: crypto.randomUUID(),
               reason: "quota-stale",
               cooldownMs: 1000,
+              maximumOutcomeAgeMs: 600000,
             })
           )?.state,
         ).toBe("pending")

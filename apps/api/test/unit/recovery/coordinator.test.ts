@@ -97,6 +97,8 @@ test("automatic hint is immutable, joins off path, and never creates idle issuan
   expect(captured).toMatchObject({
     expected: { authMaterial: "cipher" },
     expectedRecoveryRevision: null,
+    // The bound a fenced issued permit waits out before an automatic successor (config, not code).
+    maximumOutcomeAgeMs: 10000,
   })
   expect(begins).toBe(1)
   expect(f.counts().issued).toBe(0)

@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.19.1] — 2026-10-04
+
+### Fixed
+
+- **Claude Code on a ChatGPT/Codex account got a malformed response.** The Codex backend answered with an event stream and no `text/event-stream` content-type, so the router took the JSON path and passed the raw Responses SSE through: streaming clients saw no events, non-streaming clients got SSE. A translated request to a forced-stream account now sends `Accept: text/event-stream` and reads the body as SSE regardless of content-type, and its usage is observed as a stream.
+- **ChatGPT/Codex "Test now" and the idle probe failed with "Input must be a list".** The probe now sends `input` as a list of message items.
+- **An `uncertain` recovery blocked an account until an operator pressed Re-check.** It now holds only until its `nextAllowedAt` (the recovery cooldown when its owner recorded it; the maximum outcome age when the permit may still be on the wire), then the next automatic hint starts a fresh probe. A probe hold is reported as "settling a recovery probe", not as quota.
+
+### Known issue
+
+- Usage for a stream whose final event exceeds `responseObservationMaxBytes` (64 KB by default) records success with zero tokens. Codex's `response.completed` echoes the request and can exceed it.
+
 ## [2.19.0] — 2026-10-04
 
 One key can now span Claude subscriptions, a ChatGPT/Codex subscription and Chinese-model accounts, and the model name picks the family. Reasoning settings reach every path. (#160)

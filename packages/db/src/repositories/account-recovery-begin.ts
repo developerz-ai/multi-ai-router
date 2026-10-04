@@ -75,6 +75,7 @@ export function createRecoveryBegin(
     },
     beginAutomaticRecovery: (input) => {
       duration(input.cooldownMs)
+      duration(input.maximumOutcomeAgeMs)
       return db.transaction(async (tx) => {
         const account = await lockAccount(tx, input.accountId)
         if (account === undefined) return undefined
@@ -92,6 +93,16 @@ export function createRecoveryBegin(
               state: held.state === "pending" ? "cancelled" : "uncertain",
               outcomeAt: now,
               revision: sql`${accountRecoveries.revision} + 1`,
+              // A fenced issued permit may still have its call on the wire, so its successor waits
+              // out the same bound that declares an unacknowledged permit uncertain.
+              ...(held.state === "issued" && held.issuedAt !== null
+                ? {
+                    nextAllowedAt: latest(
+                      held.nextAllowedAt,
+                      new Date(held.issuedAt.getTime() + input.maximumOutcomeAgeMs),
+                    ),
+                  }
+                : {}),
             })
             .where(eq(accountRecoveries.accountId, input.accountId))
           return undefined
@@ -112,11 +123,12 @@ export function createRecoveryBegin(
           return held
         if ((held?.revision ?? null) !== input.expectedRecoveryRevision) return undefined
         const now = await recoveryClock(tx)
+        // `uncertain` is bounded like `failed`: its `nextAllowedAt` already covers the outcome bound
+        // (`markUncertain` fires only past it; the fence above extends it), and an owner-recorded
+        // `uncertain` attempt has settled. Terminal-until-an-operator blocked routing indefinitely.
         if (
           held !== undefined &&
-          (held.generation === input.generationCandidate ||
-            held.state === "uncertain" ||
-            held.nextAllowedAt > now)
+          (held.generation === input.generationCandidate || held.nextAllowedAt > now)
         )
           return undefined
         // Only fresh captured recovery revision can start the next automatic generation.
@@ -133,4 +145,8 @@ export function createRecoveryBegin(
       })
     },
   }
+}
+
+function latest(a: Date, b: Date): Date {
+  return a.getTime() >= b.getTime() ? a : b
 }

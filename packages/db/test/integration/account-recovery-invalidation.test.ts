@@ -15,6 +15,7 @@ describe.skipIf(!url)("recovery generation credential and intent invalidation", 
       expectedRecoveryRevision: null,
       reason: "quota-stale" as const,
       cooldownMs: 60000,
+      maximumOutcomeAgeMs: 600000,
     }
     const pending = await recovery.beginAutomaticRecovery(input)
     await accounts.saveRefreshedCredential({
@@ -61,7 +62,7 @@ describe.skipIf(!url)("recovery generation credential and intent invalidation", 
     expect(next).toMatchObject({ state: "pending", revision: 2 })
     expect(next?.generation).not.toBe(pending.generation)
   })
-  test("stale issued becomes uncertain and cannot automatically start another generation", async () => {
+  test("stale issued becomes uncertain, held for the outcome bound before another automatic generation", async () => {
     const issued = await fixture.issue()
     const { accounts, recovery } = fixture.repositories()
     await accounts.saveRefreshedCredential({
@@ -80,6 +81,7 @@ describe.skipIf(!url)("recovery generation credential and intent invalidation", 
       expectedRecoveryRevision: null,
       reason: "cooldown-expired" as const,
       cooldownMs: 1000,
+      maximumOutcomeAgeMs: 600000,
     }
     expect(await recovery.beginAutomaticRecovery(input)).toBeUndefined()
     const [uncertain] = await fixture
@@ -94,15 +96,31 @@ describe.skipIf(!url)("recovery generation credential and intent invalidation", 
       ownerBootId: issued.ownerBootId,
       revision: 3,
     })
+    // The fenced permit may still have a call on the wire: no new start before the outcome bound.
+    expect(uncertain?.nextAllowedAt.getTime()).toBeGreaterThanOrEqual(
+      (uncertain?.issuedAt?.getTime() ?? 0) + input.maximumOutcomeAgeMs,
+    )
+    expect(
+      await recovery.beginAutomaticRecovery({ ...input, expectedRecoveryRevision: 3 }),
+    ).toBeUndefined()
+    expect(await recovery.issue(issued)).toBeUndefined()
     await fixture
       .db()
       .update(accountRecoveries)
       .set({ nextAllowedAt: sql`clock_timestamp() - interval '1 second'` })
       .where(eq(accountRecoveries.accountId, issued.accountId))
-    expect(
-      await recovery.beginAutomaticRecovery({ ...input, expectedRecoveryRevision: 3 }),
-    ).toBeUndefined()
+    const next = await recovery.beginAutomaticRecovery({
+      ...input,
+      generationCandidate: crypto.randomUUID(),
+      expectedRecoveryRevision: 3,
+    })
+    expect(next).toMatchObject({ state: "pending", revision: 4 })
     expect(await recovery.issue(issued)).toBeUndefined()
+    await fixture
+      .db()
+      .update(accountRecoveries)
+      .set({ nextAllowedAt: sql`clock_timestamp() - interval '1 second'` })
+      .where(eq(accountRecoveries.accountId, issued.accountId))
     expect(
       (
         await recovery.beginOperatorRecovery({

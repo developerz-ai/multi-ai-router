@@ -779,6 +779,17 @@ upstream's own bytes either way, so a collected response records its tokens like
 forced stream that ends without a terminal event fails as `translation_protocol_error` after the
 response has started — never retried onto another account.
 
+**A forced stream is read as SSE because the driver said so, not because a header did.** The Codex
+backend answered `200` with an event stream and **no `content-type`** (prod, 2026-10-04); keyed on the
+header, the relay forwarded the raw Responses frames to a streaming Anthropic client (zero Anthropic
+events) and the same raw SSE to its non-streaming retry. So for a translated candidate whose rules
+force a stream, the request sends `Accept: text/event-stream` (as codex-rs does) in place of the
+client's own `Accept`, the relay and the usage observer treat the body as SSE whatever its
+`content-type`, and the client's response states its own `content-type` — `text/event-stream` when
+forwarded, `application/json` when collected. The admin **Test now** probe follows the same rules,
+and sends `input` as a list of message items: the Codex backend refuses the string shorthand with
+`400 Input must be a list`.
+
 ## Model names
 
 **Model names pass through unchanged.** The router never substitutes a model on its own — the central

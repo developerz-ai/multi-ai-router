@@ -21,6 +21,7 @@ describe.skipIf(!url)("durable background account eligibility", () => {
       expectedRecoveryRevision: null,
       reason: "quota-stale",
       cooldownMs: 30000,
+      maximumOutcomeAgeMs: 600000,
     })
     const uncertain = await fixture.issue()
     await fixture.repositories().recovery.outcome({

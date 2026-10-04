@@ -14,6 +14,7 @@ describe.skipIf(!url)("durable recovery ownership and one issuance", () => {
       expectedRecoveryRevision: null,
       reason: "quota-stale" as const,
       cooldownMs: 1000,
+      maximumOutcomeAgeMs: 600000,
     }
     const [first, second] = await Promise.all([
       repo.beginAutomaticRecovery({ ...input, generationCandidate: crypto.randomUUID() }),
@@ -109,16 +110,52 @@ describe.skipIf(!url)("durable recovery ownership and one issuance", () => {
       }),
     ).toBeUndefined()
     expect(await repo.issue(input)).toBeUndefined()
+  })
+  // Prod 2026-10-04: a designated request settled `uncertain` (the client gave up on it) and the
+  // account then refused every request as "settling a recovery probe" until an operator pressed
+  // Re-check — `uncertain` was terminal for automatic recovery. It is bounded by its cooldown now.
+  test("an uncertain outcome holds through its cooldown, then an automatic generation supersedes it", async () => {
+    const input = await fixture.issue()
+    const repo = fixture.repositories().recovery
+    const settled = await repo.outcome({
+      ...input,
+      state: "uncertain",
+      cooldownMs: 60000,
+      quotaSpentThreshold: 1,
+    })
+    expect(settled?.state).toBe("uncertain")
+    const automatic = {
+      accountId: input.accountId,
+      expected: input.expected,
+      expectedRecoveryRevision: settled?.revision ?? null,
+      reason: "cooldown-expired" as const,
+      cooldownMs: 1000,
+      maximumOutcomeAgeMs: 60000,
+    }
     expect(
-      await repo.beginAutomaticRecovery({
-        accountId: input.accountId,
-        generationCandidate: crypto.randomUUID(),
-        expected: input.expected,
-        expectedRecoveryRevision: 3,
-        reason: "quota-stale",
+      await repo.beginAutomaticRecovery({ ...automatic, generationCandidate: crypto.randomUUID() }),
+    ).toBeUndefined()
+    await fixture
+      .db()
+      .update(accountRecoveries)
+      .set({ nextAllowedAt: sql`clock_timestamp() - interval '1 second'` })
+      .where(eq(accountRecoveries.accountId, input.accountId))
+    const next = await repo.beginAutomaticRecovery({
+      ...automatic,
+      generationCandidate: crypto.randomUUID(),
+    })
+    expect(next).toMatchObject({ state: "pending", ownerBootId: null, permitId: null })
+    expect(next?.generation).not.toBe(input.generation)
+    // The superseded permit stays fenced: it can neither settle nor reissue the new generation.
+    expect(
+      await repo.outcome({
+        ...input,
+        state: "succeeded",
         cooldownMs: 1000,
+        quotaSpentThreshold: 1,
       }),
     ).toBeUndefined()
+    expect(await repo.issue(input)).toBeUndefined()
   })
   test("expired pending lease transfers ownership and fences the previous boot", async () => {
     const account = await fixture.seed()
@@ -130,6 +167,7 @@ describe.skipIf(!url)("durable recovery ownership and one issuance", () => {
       expectedRecoveryRevision: null,
       reason: "cooldown-expired",
       cooldownMs: 1000,
+      maximumOutcomeAgeMs: 600000,
     })
     if (pending === undefined) throw new Error("missing pending generation")
     const ownerBootId = crypto.randomUUID()
