@@ -1,6 +1,6 @@
 import type { SseEvent } from "../sse/emit"
 import { parseUpstreamError } from "./errors"
-import { createPendingToolCalls } from "./pending-tool-calls"
+import { createPendingStreamBlocks } from "./pending-stream-blocks"
 import type { ResponsesItemDraft, ResponsesOutputItem, ResponsesStatus } from "./responses-body"
 import {
   responsesBodyJson,
@@ -10,33 +10,13 @@ import {
   responsesItemJson,
   responsesTextPart,
 } from "./responses-body"
+import type { ResponsesRecoveryOptions } from "./responses-snapshot-recovery"
+import { TranslationStreamError } from "./stream-error"
 import type { OpenAiResponsesUsage } from "./usage"
 
-/**
- * The openai-responses SSE event sequence, emitted once for every dialect translated into it.
- *
- * Responses streams *items*, not deltas on one message: each piece of output is announced with
- * `response.output_item.added`, filled in by typed deltas, and closed with a matching `done` before
- * the next one opens — the mapping in
- * `docs/idea/06-protocol-translation.md#streaming-sse-event-mapping`, read from the right-hand
- * column. Every payload carries its `type` **inside** the JSON data object as well as on the
- * `event:` line, because a client reading only the data object is entitled to find it there.
- *
- * **This emitter retains the text it has already sent, and that is not buffering.** Every delta
- * leaves the instant it arrives; what is kept is a copy, because the dialect restates the finished
- * text on `response.output_text.done` and the whole response object on `response.completed` — the
- * field a Responses client reads to get its final answer. An empty terminal object would satisfy a
- * sentence about minimal state by breaking every client that uses the SDK's final-response accessor.
- *
- * **A second call sighted while the first item is still open waits rather than displacing it.** One
- * open item at a time is the dialect's shape, not a licence to drop what does not fit: openai-chat
- * may revisit an earlier `tool_calls[].index`, so opening the second call's item on sight would
- * `done` the first while its arguments were still arriving. Such a call is held by
- * `shared/pending-tool-calls.ts` and given an item of its own the moment `closeItem` runs.
- *
- * Nothing here throws, and a truncated stream is never given a terminator: the caller simply never
- * calls `complete`.
- */
+/** Responses items are closed only when complete. Interleaved fragments wait in source order,
+ * bounded by maximumPendingBytes; the live call's arguments continue incrementally. Completed
+ * payloads are retained because Responses restates them in its final response object. */
 
 /** The two text-shaped items, which differ only in the vocabulary Responses spells them with. */
 const TEXT_ITEMS = {
@@ -54,7 +34,7 @@ const TEXT_ITEMS = {
   },
 } as const
 
-export interface ResponsesStreamEmitterOptions {
+export interface ResponsesStreamEmitterOptions extends ResponsesRecoveryOptions {
   /** Unix **seconds**, stamped as `created_at`. Supplied by the caller: a translator holds no clock. */
   readonly created: number
   /** Used until the upstream names an id of its own, and if it never does. */
@@ -71,6 +51,7 @@ export interface ResponsesStreamEnd {
 
 export interface ResponsesStreamEmitter {
   isTerminated(): boolean
+  translationFailure(): Error | null
   identify(id: string | null | undefined, model: string | null | undefined): void
   /** `response.created` + `response.in_progress`, the pair every Responses stream opens with. */
   start(out: SseEvent[]): void
@@ -99,12 +80,13 @@ export function createResponsesStreamEmitter(
   let model = options.model ?? ""
   let started = false
   let terminated = false
+  let failure: Error | null = null
   let sequence = 0
   let open: ResponsesItemDraft | null = null
   const items: ResponsesOutputItem[] = []
   /** The source's call key → the item index it opened. Never reused, never reset. */
   const toolItems = new Map<string | number, number>()
-  const pending = createPendingToolCalls()
+  const pending = createPendingStreamBlocks(options.maximumPendingBytes)
 
   function event(type: string, payload: Record<string, unknown>): SseEvent {
     const data = JSON.stringify({ type, sequence_number: sequence, ...payload })
@@ -174,6 +156,10 @@ export function createResponsesStreamEmitter(
 
   function streamText(out: SseEvent[], kind: "message" | "reasoning", delta: string): void {
     if (delta.length === 0) return
+    if (open?.kind === "function_call") {
+      if (!pending.text(delta, kind)) overflow(out)
+      return
+    }
     const spec = TEXT_ITEMS[kind]
     let draft = open
     if (draft === null || draft.kind !== kind) {
@@ -214,6 +200,11 @@ export function createResponsesStreamEmitter(
     // Whatever waited for an item gets one now, in the order the upstream introduced the calls.
     // Their arguments are already whole, so each item opens, states them once, and closes.
     for (const call of pending.drain()) {
+      if ("text" in call) {
+        streamText(out, call.kind, call.text)
+        closeOpen(out)
+        continue
+      }
       const draft = openCall(out, call.key, call)
       if (call.args.length > 0) callArgs(out, draft, call.args)
       closeOpen(out)
@@ -227,8 +218,18 @@ export function createResponsesStreamEmitter(
     out.push(event("response.in_progress", { response: body("in_progress") }))
   }
 
+  function overflow(out: SseEvent[]) {
+    terminated = true
+    failure = new TranslationStreamError(
+      "translation_pending_overflow",
+      "Translation pending fragments exceed their configured limit",
+    )
+    out.push(event("error", { code: "translation_pending_overflow", message: failure.message }))
+  }
+
   return {
     isTerminated: () => terminated,
+    translationFailure: () => failure,
 
     identify(nextId, nextModel) {
       id = nextId ?? id
@@ -242,17 +243,19 @@ export function createResponsesStreamEmitter(
     reasoning: (out, delta) => streamText(out, "reasoning", delta),
 
     toolStart(out, key, call) {
+      if (terminated) return
       if (toolItems.has(key)) return
       // A call sighted while another one's item is still open waits for it. Opening this one here
       // would close that one, and every argument it had left to stream would have nowhere to go.
       if (open !== null && open.kind === "function_call") {
-        pending.add(key, { id: call.id, name: call.name })
+        if (!pending.add(key, { id: call.id, name: call.name })) overflow(out)
         return
       }
       openCall(out, key, call)
     },
 
     toolArgs(out, key, partialJson) {
+      if (terminated) return
       if (partialJson.length === 0) return
       const draft = open
       if (draft !== null && draft.key === key) {
@@ -262,7 +265,7 @@ export function createResponsesStreamEmitter(
       // Held for the item this call has not been given yet, and replayed into it when it opens. An
       // item already closed takes nothing: its `done` told the client the call was complete, and
       // reopening it would contradict what it was already told.
-      pending.append(key, partialJson)
+      if (!pending.append(key, partialJson)) overflow(out)
     },
 
     closeItem,

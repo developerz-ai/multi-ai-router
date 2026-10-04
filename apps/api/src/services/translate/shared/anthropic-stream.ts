@@ -1,82 +1,46 @@
 import { renderErrorBody } from "../../../errors/render"
 import type { SseEvent } from "../sse/emit"
 import { parseUpstreamError } from "./errors"
-import { createPendingToolCalls } from "./pending-tool-calls"
+import { createPendingStreamBlocks } from "./pending-stream-blocks"
+import type { ResponsesRecoveryOptions } from "./responses-snapshot-recovery"
 import type { AnthropicStopReason } from "./stop-reason"
+import { TranslationStreamError } from "./stream-error"
 
-/**
- * The Anthropic SSE event sequence, emitted once for every dialect that has to be translated into
- * it.
- *
- * The Anthropic order is the **verified** one and translating toward Anthropic must emit exactly it
- * (docs/idea/06-protocol-translation.md#streaming-sse-event-mapping):
- *
- * ```
- * message_start → content_block_start → content_block_delta* → content_block_stop
- *               → message_delta (stop_reason + usage.output_tokens) → message_stop
- * ```
- *
- * No OpenAI dialect has a block concept: openai-chat streams text as `delta.content` and calls as
- * `delta.tool_calls[]`, openai-responses streams them as items and content parts with indices of its
- * own. Neither carries Anthropic's block boundaries, so this module **invents** them — one open
- * block at a time, closed the moment the content switches kind, with indices that are ours and are
- * mapped to the source's numbering rather than equated with it. That the boundaries are
- * reconstructed rather than preserved is a documented loss, not a bug.
- *
- * **A second call sighted while the first is still streaming waits rather than displacing it.** One
- * open block at a time is Anthropic's shape, but it is not a licence to drop what does not fit:
- * openai-chat is free to revisit an earlier `tool_calls[].index`, so opening the second call's block
- * on sight would close the first while its arguments were still arriving. Such a call is held by
- * `shared/pending-tool-calls.ts` and given a block of its own the moment `closeBlock` runs.
- *
- * It is shared rather than written per source dialect because the sequence is a fact about
- * Anthropic: two copies could emit two different orders, and a client would see which ingress path
- * served it — which is exactly what a translator exists to hide. What varies per source is *when*
- * each call happens and how the finish reason and token counts were read, and that stays with the
- * caller.
- *
- * Nothing here throws. Once bytes are on the wire the request fails honestly.
- */
+/** Anthropic output retains one open block. Only interleaved fragments which cannot enter
+ * that block wait in a bounded first-sighting queue; live tool arguments leave immediately.
+ * A local limit fault is emitted honestly and prevents a later success terminator. */
 
-export interface AnthropicStreamEmitterOptions {
-  /** Used until the upstream names an id of its own, and if it never does. */
+export interface AnthropicStreamEmitterOptions extends ResponsesRecoveryOptions {
   readonly id?: string | undefined
-  /** Used until the upstream names a model. The client's requested name is the right value. */
   readonly model?: string | undefined
 }
 
 export interface AnthropicStreamEnd {
   readonly stopReason: AnthropicStopReason | null
-  /** Already mapped by `shared/usage.ts`: a count nobody measured is absent, never zero. */
   readonly usage: Record<string, number>
 }
 
 export interface AnthropicStreamEmitter {
   isTerminated(): boolean
-  /** Ids and model names pass through verbatim so one stream is traceable across the seam. */
+  translationFailure(): Error | null
   identify(id: string | null | undefined, model: string | null | undefined): void
   start(out: SseEvent[]): void
-  text(out: SseEvent[], text: string): void
-  /**
-   * Opens a `tool_use` block for `key`, or holds the call until the open one closes. Idempotent —
-   * a later sighting of a key that already has a block no-ops.
-   */
+  text(out: SseEvent[], text: string, startsNewBlock?: boolean): void
   toolStart(
     out: SseEvent[],
     key: string | number,
     call: { readonly id?: string | null; readonly name?: string | null },
   ): void
   toolArgs(out: SseEvent[], key: string | number, partialJson: string): void
-  /** Closes the open block, then gives every held call a block of its own and closes that too. */
+  toolDone(out: SseEvent[], key: string | number): void
   closeBlock(out: SseEvent[]): void
+  closeTextBlock(out: SseEvent[]): void
   terminate(out: SseEvent[], end: AnthropicStreamEnd): void
-  /** An upstream error mid-stream. Anthropic spells it as its own event, and the stream is over. */
   fail(out: SseEvent[], payload: unknown): void
 }
 
 interface OpenBlock {
   readonly index: number
-  /** The source's own key for the call this block carries, or null for a text block. */
   readonly tool: string | number | null
 }
 
@@ -87,11 +51,11 @@ export function createAnthropicStreamEmitter(
   let model = options.model ?? ""
   let started = false
   let terminated = false
+  let failure: Error | null = null
   let nextBlock = 0
   let open: OpenBlock | null = null
-  /** The source's call key → the Anthropic block index it was given. Never reused, never reset. */
   const toolBlocks = new Map<string | number, number>()
-  const pending = createPendingToolCalls()
+  const pending = createPendingStreamBlocks(options.maximumPendingBytes)
 
   function event(type: string, payload: Record<string, unknown>): SseEvent {
     // The `type` is repeated inside the payload because Anthropic states it in both places, and a
@@ -99,13 +63,6 @@ export function createAnthropicStreamEmitter(
     return { event: type, data: JSON.stringify({ type, ...payload }) }
   }
 
-  /**
-   * Closes the open block and nothing else.
-   *
-   * Held calls are deliberately left alone: switching to text, or opening a block for the first
-   * call, is not evidence that a *later* call's arguments have all arrived, and flushing one there
-   * would state a call as complete while the upstream was still streaming it.
-   */
   function closeOpen(out: SseEvent[]): void {
     if (open === null) return
     out.push(event("content_block_stop", { index: open.index }))
@@ -136,6 +93,11 @@ export function createAnthropicStreamEmitter(
     // Whatever waited for a block gets one now, in the order the upstream introduced the calls.
     // Their arguments are already whole, so each block opens, states them once, and closes.
     for (const call of pending.drain()) {
+      if ("text" in call) {
+        emitText(out, call.text)
+        closeOpen(out)
+        continue
+      }
       const index = openToolBlock(out, call.key, call)
       if (call.args.length > 0)
         out.push(
@@ -148,15 +110,7 @@ export function createAnthropicStreamEmitter(
     }
   }
 
-  /**
-   * `usage` is zeroed here and stated for real on `message_delta`.
-   *
-   * Every OpenAI dialect reports its counts last, so nothing is known yet — but the field is
-   * required by the shape, and omitting it breaks a strict client on its first event. Anthropic
-   * itself puts the authoritative output count on `message_delta`, so the numbers land where a
-   * client already looks for them. The `UsageRecord` is unaffected: it stores the upstream's own
-   * numbers (`06-protocol-translation.md#usage-and-token-fields`).
-   */
+  /** Starts the required message envelope once. */
   function start(out: SseEvent[]): void {
     if (started) return
     started = true
@@ -176,8 +130,68 @@ export function createAnthropicStreamEmitter(
     )
   }
 
+  function emitText(out: SseEvent[], text: string) {
+    if (text.length === 0) return
+    const current = open
+    let index: number
+    if (current !== null && current.tool === null) {
+      index = current.index
+    } else {
+      closeOpen(out)
+      index = nextBlock
+      nextBlock += 1
+      open = { index, tool: null }
+      out.push(event("content_block_start", { index, content_block: { type: "text", text: "" } }))
+    }
+    out.push(event("content_block_delta", { index, delta: { type: "text_delta", text } }))
+  }
+
+  function toolDone(out: SseEvent[], key: string | number) {
+    if (terminated) return
+    pending.done(key)
+    if (open?.tool !== key) return
+    closeOpen(out)
+    for (let block = pending.shift(); block !== undefined; block = pending.shift()) {
+      if ("text" in block) {
+        if (block.startsNewBlock) closeOpen(out)
+        emitText(out, block.text)
+        continue
+      }
+      const index = openToolBlock(out, block.key, block)
+      if (block.args.length > 0)
+        out.push(
+          event("content_block_delta", {
+            index,
+            delta: { type: "input_json_delta", partial_json: block.args },
+          }),
+        )
+      if (!block.completed) return
+      closeOpen(out)
+    }
+  }
+
+  function overflow(out: SseEvent[]) {
+    terminated = true
+    failure = new TranslationStreamError(
+      "translation_pending_overflow",
+      "Translation pending fragments exceed their configured limit",
+    )
+    out.push({
+      event: "error",
+      data: JSON.stringify(
+        renderErrorBody(
+          "anthropic",
+          500,
+          "Translation pending fragments exceed their configured limit",
+          "translation_pending_overflow",
+        ),
+      ),
+    })
+  }
+
   return {
     isTerminated: () => terminated,
+    translationFailure: () => failure,
 
     identify(nextId, nextModel) {
       id = nextId ?? id
@@ -186,20 +200,14 @@ export function createAnthropicStreamEmitter(
 
     start,
 
-    text(out, text) {
-      if (text.length === 0) return
-      const current = open
-      let index: number
-      if (current !== null && current.tool === null) {
-        index = current.index
-      } else {
-        closeOpen(out)
-        index = nextBlock
-        nextBlock += 1
-        open = { index, tool: null }
-        out.push(event("content_block_start", { index, content_block: { type: "text", text: "" } }))
+    text(out, text, startsNewBlock = false) {
+      if (terminated || text.length === 0) return
+      if (open !== null && open.tool !== null) {
+        if (!pending.text(text, "message", startsNewBlock)) overflow(out)
+        return
       }
-      out.push(event("content_block_delta", { index, delta: { type: "text_delta", text } }))
+      if (startsNewBlock) closeOpen(out)
+      emitText(out, text)
     },
 
     /**
@@ -209,17 +217,19 @@ export function createAnthropicStreamEmitter(
      * would answer as though the model had never called anything.
      */
     toolStart(out, key, call) {
+      if (terminated) return
       if (toolBlocks.has(key)) return
       // A call sighted while another one's block is still open waits for it. Opening this one here
       // would close that one, and every argument it had left to stream would have nowhere to go.
       if (open !== null && open.tool !== null) {
-        pending.add(key, { id: call.id, name: call.name })
+        if (!pending.add(key, { id: call.id, name: call.name })) overflow(out)
         return
       }
       openToolBlock(out, key, call)
     },
 
     toolArgs(out, key, partialJson) {
+      if (terminated) return
       if (partialJson.length === 0) return
       const index = toolBlocks.get(key)
       if (index !== undefined) {
@@ -236,10 +246,14 @@ export function createAnthropicStreamEmitter(
         return
       }
       // Held for the block this call has not been given yet, and replayed into it when it opens.
-      pending.append(key, partialJson)
+      if (!pending.append(key, partialJson)) overflow(out)
     },
 
+    toolDone,
     closeBlock,
+    closeTextBlock(out) {
+      if (open?.tool === null) closeOpen(out)
+    },
 
     terminate(out, end) {
       if (terminated) return

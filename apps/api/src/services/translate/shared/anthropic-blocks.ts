@@ -35,7 +35,27 @@ export function systemText(system: ParsedAnthropicRequest["system"]): string {
     .join(BLOCK_JOIN)
 }
 
-export function imageUrlFromSource(source: ParsedAnthropicImageSource): string {
+export type RepresentableAnthropicImageSource = Exclude<
+  ParsedAnthropicImageSource,
+  { readonly type: "file" }
+>
+
+/** A Files API id belongs to a provider; cross-dialect translation cannot resolve that state. */
+export function readImageSource(
+  source: ParsedAnthropicImageSource,
+  at: string,
+  onDrop: DropSink,
+): RepresentableAnthropicImageSource | null {
+  if (source.type !== "file") return source
+  onDrop({
+    field: at,
+    reason:
+      "is an image with a `file` source, which no OpenAI dialect can carry without provider-side state; dropped",
+  })
+  return null
+}
+
+export function imageUrlFromSource(source: RepresentableAnthropicImageSource): string {
   return source.type === "url" ? source.url : `data:${source.media_type};base64,${source.data}`
 }
 
@@ -43,17 +63,17 @@ export function imageUrlFromSource(source: ParsedAnthropicImageSource): string {
 export interface ToolResultParts {
   readonly text: string
   /** Images the carrier cannot hold, in order. The caller places them in the turn that follows. */
-  readonly images: readonly ParsedAnthropicImageSource[]
+  readonly images: readonly RepresentableAnthropicImageSource[]
 }
 
 /**
  * A `tool_result` block, split into what its target carrier can hold and what it cannot.
  *
- * No OpenAI tool-result carrier holds an image, and a coding agent's `Read` of a screenshot is
+ * The Chat tool-result carrier holds text only, and a coding agent's `Read` of a screenshot is
  * exactly a tool result carrying one. Refusing it was a `400` on a turn the agent could not rewrite;
  * dropping it would answer a question about an image the model never saw. So the image is
- * **hoisted**: returned separately, for the caller to place as user content directly after the tool
- * message — the same position a human pasting the screenshot would give it. Any other nested block
+ * **hoisted**: returned separately, for the caller to place as user content after the entire tool-result
+ * run, preserving all call/result adjacency before the additional image turn. Any other nested block
  * type is dropped and reported by name.
  *
  * @param at the block's path in the client's dialect, so a report names a field the caller can find.
@@ -65,14 +85,16 @@ export function toolResultParts(
 ): ToolResultParts {
   const content = block.content
   const texts: string[] = []
-  const images: ParsedAnthropicImageSource[] = []
+  const images: RepresentableAnthropicImageSource[] = []
   if (typeof content === "string") {
     texts.push(content)
   } else if (content !== undefined) {
     for (const [index, nested] of content.entries()) {
       if (nested.type === "text") texts.push(nested.text)
-      else if (nested.type === "image") images.push(nested.source)
-      else dropBlock(onDrop, `${at}.content[${index}]`, nested.actual, "a tool result")
+      else if (nested.type === "image") {
+        const source = readImageSource(nested.source, `${at}.content[${index}]`, onDrop)
+        if (source !== null) images.push(source)
+      } else dropBlock(onDrop, `${at}.content[${index}]`, nested.actual, "a tool result")
     }
   }
   const text = texts.join(BLOCK_JOIN)

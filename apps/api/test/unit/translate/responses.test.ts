@@ -446,9 +446,11 @@ describe("openai-responses -> anthropic request", () => {
     ).toThrow(TranslationError)
   })
 
-  test("a reasoning item is refused as stateful", () => {
+  test("encrypted reasoning is refused as stateful", () => {
     expect(() =>
-      openAiResponsesToAnthropicRequest(openAiResponsesRequest({ input: [{ type: "reasoning" }] })),
+      openAiResponsesToAnthropicRequest(
+        openAiResponsesRequest({ input: [{ type: "reasoning", encrypted_content: "opaque" }] }),
+      ),
     ).toThrow(TranslationError)
   })
 
@@ -1016,10 +1018,10 @@ describe("openai-responses -> openai-chat request (the downgrade)", () => {
     ).toThrow(TranslationError)
   })
 
-  test("a reasoning item is refused as stateful", () => {
+  test("encrypted reasoning is refused as stateful", () => {
     expect(() =>
       openAiResponsesToOpenAiChatRequest(
-        openAiResponsesRequest({ input: [{ type: "reasoning" }] }),
+        openAiResponsesRequest({ input: [{ type: "reasoning", encrypted_content: "opaque" }] }),
       ),
     ).toThrow(TranslationError)
   })
@@ -1225,7 +1227,12 @@ describe("openai-responses -> openai-chat stream (the downgrade)", () => {
     const events = stream.push(
       responsesFrame("response.failed", { response: { error: { message: "boom" } } }),
     )
-    expect(events).toHaveLength(1)
+    expect(events).toHaveLength(3)
+    expect(JSON.parse(events[0]?.data ?? "null")).toHaveProperty("error")
+    expect(JSON.parse(events[1]?.data ?? "null")).toMatchObject({
+      choices: [{ delta: {}, finish_reason: "stop" }],
+    })
+    expect(events[2]?.data).toBe("[DONE]")
     expect(stream.push(responsesFrame("response.completed", {}))).toEqual([])
   })
 })

@@ -1,5 +1,6 @@
 import { isRouterError } from "@multi-ai-router/core"
 import type { Logger } from "../../logging/logger"
+import type { ModelCatalogStore } from "../models/store"
 import {
   type AttemptFailure,
   type Candidate,
@@ -56,6 +57,8 @@ import type { TranslatedRequestBody } from "./translate-body"
  */
 
 export interface ChainContext {
+  readonly modelMetadata?: Pick<ModelCatalogStore, "describe"> | undefined
+
   readonly runtime: DispatchRuntime
   readonly plan: readonly ServableCandidate[]
   /** The client's request: method, headers, and abort signal are taken from it. */

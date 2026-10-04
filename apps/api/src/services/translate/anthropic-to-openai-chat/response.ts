@@ -1,7 +1,7 @@
 import { z } from "zod"
 import type { OpenAiChatToolCall } from "../shared/openai-chat"
 import type { TranslatedResponse } from "../shared/response"
-import { toOpenAiFinishReason } from "../shared/stop-reason"
+import { CONSERVATIVE_FINISH_REASON, toOpenAiFinishReason } from "../shared/stop-reason"
 import { parseAnthropicUsage, usageToOpenAiChat } from "../shared/usage"
 
 /**
@@ -86,7 +86,7 @@ export function anthropicToOpenAiChatResponse(
             content: texts.length === 0 ? null : texts.join(""),
             ...(toolCalls.length === 0 ? {} : { tool_calls: toolCalls }),
           },
-          finish_reason: stop.value,
+          finish_reason: stop.value ?? CONSERVATIVE_FINISH_REASON,
         },
       ],
       // Omitted rather than zeroed when the upstream sent no usage block at all: a completion whose

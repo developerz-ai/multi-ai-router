@@ -96,7 +96,11 @@ export function openAiChatToAnthropicResponse(
       role: "assistant",
       model: completion?.model ?? options.model ?? "",
       content,
-      stop_reason: stop.value,
+      stop_reason:
+        content.some((block) => block.type === "tool_use") &&
+        (choice?.finish_reason == null || choice.finish_reason === "stop")
+          ? "tool_use"
+          : stop.value,
       // Lossy, and documented: openai-chat has no field naming *which* stop sequence matched.
       stop_sequence: null,
       usage: anthropicUsageCounts(parseOpenAiChatUsage(completion?.usage)),

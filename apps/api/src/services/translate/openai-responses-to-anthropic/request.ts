@@ -1,4 +1,4 @@
-import type { AnthropicBlock, AnthropicRequest } from "../shared/anthropic"
+import type { AnthropicImageBlock, AnthropicRequest, AnthropicTextBlock } from "../shared/anthropic"
 import { DEFAULT_MAX_TOKENS } from "../shared/anthropic"
 import type { AnthropicTurn } from "../shared/anthropic-turns"
 import {
@@ -31,7 +31,7 @@ import {
  *
  * **The stateful half of openai-responses is refused here, before any upstream call.**
  * `previous_response_id`, `store: true`, `include`, `conversation`, `prompt`, `background: true`,
- * and `reasoning` / `item_reference` items all say "continue from, or leave behind, something the
+ * and encrypted `reasoning` / `item_reference` items all say "continue from, or leave behind, something the
  * provider is holding for me", and this router holds nothing: it picks
  * an account per request and keeps no conversation state, so on non-Responses egress there is no
  * stored response to continue from at any account it could choose. A `400` naming the field is the
@@ -106,16 +106,14 @@ export function openAiResponsesToAnthropicRequest(
             {
               type: "tool_result",
               tool_use_id: item.call_id,
-              // A tool result is plain text on the Anthropic side, as a system prompt is.
-              content: blocksText(
-                contentBlocks(item.output, `${at}.output`),
-                `${at}.output`,
-                "tool result",
-              ),
+              content: toolOutput(item.output, `${at}.output`),
             },
           ])
           break
         case "reasoning":
+          if (item.encrypted_content == null || item.encrypted_content === "") break
+          rejectStatefulItem(at, item.type)
+          break
         case "item_reference":
           rejectStatefulItem(at, item.type)
           break
@@ -155,9 +153,16 @@ export function openAiResponsesToAnthropicRequest(
         ? undefined
         : toolsToAnthropic(toolsFromOpenAiResponses(request.tools)),
     tool_choice:
-      request.tool_choice === undefined
-        ? undefined
-        : toolChoiceToAnthropic(toolChoiceFromOpenAiResponses(request.tool_choice)),
+      request.parallel_tool_calls === undefined || request.parallel_tool_calls === null
+        ? request.tool_choice === undefined
+          ? undefined
+          : toolChoiceToAnthropic(toolChoiceFromOpenAiResponses(request.tool_choice))
+        : {
+            ...(request.tool_choice === undefined
+              ? { type: "auto" as const }
+              : toolChoiceToAnthropic(toolChoiceFromOpenAiResponses(request.tool_choice))),
+            disable_parallel_tool_use: !request.parallel_tool_calls,
+          },
   }
 }
 
@@ -169,14 +174,14 @@ export function openAiResponsesToAnthropicRequest(
 function contentBlocks(
   content: ParsedOpenAiResponsesContent | undefined,
   at: string,
-): AnthropicBlock[] {
+): (AnthropicTextBlock | AnthropicImageBlock)[] {
   if (content === undefined) return []
   if (typeof content === "string") {
     // Anthropic rejects an empty text block; an empty Responses content string is simply no content.
     return content.length === 0 ? [] : [{ type: "text", text: content }]
   }
 
-  const blocks: AnthropicBlock[] = []
+  const blocks: (AnthropicTextBlock | AnthropicImageBlock)[] = []
   for (const [index, part] of content.entries()) {
     const field = `${at}[${index}]`
     switch (part.type) {
@@ -207,4 +212,11 @@ function contentBlocks(
     }
   }
   return blocks
+}
+
+function toolOutput(content: ParsedOpenAiResponsesContent | undefined, at: string) {
+  const blocks = contentBlocks(content, at)
+  return blocks.some((block) => block.type === "image")
+    ? blocks
+    : blocksText(blocks, at, "tool result")
 }

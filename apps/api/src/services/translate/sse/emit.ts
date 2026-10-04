@@ -4,12 +4,10 @@ import type { SseFrame } from "./parse"
  * The emitted half of the SSE seam: the event a translator produces, its encoder, and the contract
  * every stream translator satisfies.
  *
- * **One event in, zero or more out, flushed immediately.** A translator holds only the state needed
- * to reconstruct block boundaries — the open block, the tool-call index map, the id and model the
- * upstream named — and never accumulates content
- * (docs/idea/06-protocol-translation.md#performance-rules). Returning an array rather than writing
- * to a sink keeps the whole thing a pure function of the frames it has seen, so a recorded event
- * sequence in is an asserted event sequence out, with no stream plumbing in the test.
+ * Ordinary deltas leave incrementally. Fragments whose target block cannot open yet wait in a
+ * configured bounded queue; a final Responses snapshot can recover a verified missing suffix.
+ * Local limit or consistency faults remain distinct from upstream HTTP/provider verdicts.
+ * Returning events keeps push/flush deterministic and independently testable.
  *
  * Nothing here throws. Once bytes are on the wire the request fails honestly; it is never
  * retranslated and never retried onto another account.
@@ -39,6 +37,8 @@ export interface StreamTranslator {
    * state (`06-protocol-translation.md#stop-and-finish-reasons`).
    */
   unrecognizedStopReason(): string | null
+  /** A local translation fault remains distinct from the upstream HTTP/transport verdict. */
+  translationFailure?(): Error | null
 }
 
 export const NO_EVENTS: readonly SseEvent[] = []

@@ -1,6 +1,6 @@
 import type { Logger } from "../../logging/logger"
 import type { AttemptFailure } from "../routing"
-import type { TranslationContext } from "../translate"
+import type { TranslationContext } from "../translate/registry"
 import { createResponseObserver, type UsageRecord } from "../usage"
 import { RouterShutdownError } from "./active-requests"
 import type { UpstreamError } from "./attempt"
@@ -48,6 +48,7 @@ export interface SuccessClock extends AttemptClock {
 export interface AttemptRelay {
   readonly runtime: DispatchRuntime
   readonly translation: TranslationContext
+  readonly translated?: Pick<import("./translate-body").TranslatedRequestBody, "includeUsage">
   readonly log: Logger | undefined
   readonly request?: Request
 }
@@ -155,7 +156,7 @@ export function relaySuccess(
   return relayTranslatedResponse({
     upstream: response,
     pair: servable.translation,
-    context: ctx.translation,
+    context: { ...ctx.translation, includeUsage: ctx.translated?.includeUsage() === true },
     observer,
     ...(relaySignal === undefined ? {} : { signal: relaySignal }),
     onUnrecognizedStopReason: (reason) =>

@@ -1,5 +1,6 @@
 import { rewriteModel } from "./body/read"
 import type { ChainContext } from "./chain"
+import { modelOutputCeiling } from "./model-output-ceiling"
 import type { ServableCandidate } from "./plan"
 
 /**
@@ -13,7 +14,18 @@ import type { ServableCandidate } from "./plan"
 export function bodyFor(ctx: ChainContext, servable: ServableCandidate): Uint8Array | null {
   const pair = servable.translation
   if (pair !== null) {
-    return ctx.translated.bodyFor(pair, servable.upstreamModel, servable.chatCeiling)
+    return ctx.translated.bodyFor(
+      pair,
+      servable.upstreamModel,
+      servable.chatCeiling,
+      pair.egress === "anthropic"
+        ? modelOutputCeiling(
+            ctx.modelMetadata,
+            servable.candidate.account.id,
+            servable.upstreamModel,
+          )
+        : undefined,
+    )
   }
   if (ctx.bodyBytes.length === 0) return null
   if (ctx.modelSpan === null || servable.upstreamModel === ctx.runtime.model) return ctx.bodyBytes

@@ -9,7 +9,6 @@ import { chatCeiling } from "../shared/openai-chat"
 import type {
   ParsedOpenAiResponsesContent,
   ParsedOpenAiResponsesItem,
-  ParsedOpenAiResponsesPart,
 } from "../shared/openai-responses"
 import { openAiResponsesRequestSchema, UNSUPPORTED } from "../shared/openai-responses"
 import {
@@ -19,6 +18,14 @@ import {
   rejectField,
   rejectStatefulItem,
 } from "../shared/reject"
+import {
+  collapse,
+  contentText,
+  imageUrl,
+  PART_JOIN,
+  partText,
+  userParts,
+} from "../shared/responses-chat-content"
 import { toolChoiceFromOpenAiResponses, toolsFromOpenAiResponses } from "../shared/tools"
 
 /**
@@ -33,7 +40,7 @@ import { toolChoiceFromOpenAiResponses, toolsFromOpenAiResponses } from "../shar
  *
  * **The stateful half is a `400` before any upstream call, and that is the headline of this
  * direction.** `previous_response_id`, `store: true`, `include`, `conversation`, `prompt`,
- * `background: true`, and `reasoning` / `item_reference` items all mean "continue from, or leave
+ * `background: true`, and encrypted `reasoning` / `item_reference` items all mean "continue from, or leave
  * behind, something the provider remembers", and this router remembers
  * nothing — it picks an account per request. Served anyway, a `previous_response_id` would become a
  * call carrying only the newest turn and the model would answer a conversation it was never shown,
@@ -41,11 +48,9 @@ import { toolChoiceFromOpenAiResponses, toolsFromOpenAiResponses } from "../shar
  * `text.format` is refused on the same terms: a schema-constrained answer is a contract the caller
  * will parse, not a hint.
  *
- * **Consecutive same-role items are deliberately not merged**, which is the one structural
- * difference from the `anthropic-to-openai-chat` sibling. Each Responses item is already exactly one
- * message, so the item list *is* the message list, and folding two of them would rewrite a
- * transcript the caller composed. The sibling merges because Anthropic states several content blocks
- * per turn — the opposite problem.
+ * Assistant text and adjacent function calls share one assistant turn; ordinary same-role
+ * messages remain separate. Tool replies stay keyed and images follow the complete reply run.
+ * Summary-only reasoning is dropped as a stateless hint; opaque encrypted state is refused.
  *
  * **`reasoning.effort` and `parallel_tool_calls` survive the downgrade**, because they are the two
  * dials openai-chat states too — `reasoning_effort` is the same word one level flatter. The effort
@@ -58,20 +63,10 @@ import { toolChoiceFromOpenAiResponses, toolsFromOpenAiResponses } from "../shar
  * naming a call that never happened, and any item or content part with no chat counterpart.
  */
 
-/** Parts inside one item join the way `shared/responses-read.ts` joins them on the way back. */
-const PART_JOIN = "\n"
-
 /** What a refusal calls the message a Responses item lands in on this side. */
 const SYSTEM_CARRIER = 'an openai-chat `role:"system"` message'
 const ASSISTANT_CARRIER = 'an openai-chat `role:"assistant"` message'
 const TOOL_CARRIER = 'an openai-chat `role:"tool"` message'
-
-/**
- * A stored file is provider-side state one level below `previous_response_id`, and it is refused for
- * the same reason: the router resolves nothing against a provider it holds no session with.
- */
-const STORED_FILE =
-  "names a file stored inside openai-responses, which this router cannot resolve: it holds no provider-side state, and an openai-chat image part carries a URL and nothing else"
 
 /** The message shape every `message` item lands in, whatever role it states. */
 interface ParsedMessageItem {
@@ -104,9 +99,20 @@ export function openAiResponsesToOpenAiChatRequest(
     // Call ids seen on a `function_call` item, so an output answering a call that never happened is
     // refused here rather than upstream, where it would fail with a message about a body we wrote.
     const calls = new Set<string>()
-    for (const [index, item] of request.input.entries()) {
-      appendItem(messages, calls, item, `input[${index}]`)
+    const hoisted: OpenAiChatPart[] = []
+    const flushImages = () => {
+      if (hoisted.length > 0) messages.push({ role: "user", content: hoisted.splice(0) })
     }
+    for (const [index, item] of request.input.entries()) {
+      if (
+        item.type === "reasoning" &&
+        (item.encrypted_content == null || item.encrypted_content === "")
+      )
+        continue
+      if (item.type !== "function_call_output") flushImages()
+      appendItem(messages, calls, item, `input[${index}]`, hoisted)
+    }
+    flushImages()
   }
 
   if (messages.length === 0) {
@@ -143,8 +149,13 @@ function appendItem(
   calls: Set<string>,
   item: ParsedOpenAiResponsesItem,
   at: string,
+  hoisted: OpenAiChatPart[],
 ): void {
-  if (item.type === "reasoning" || item.type === "item_reference") {
+  if (item.type === "reasoning") {
+    if (item.encrypted_content == null || item.encrypted_content === "") return
+    rejectStatefulItem(at, item.type)
+  }
+  if (item.type === "item_reference") {
     rejectStatefulItem(at, item.type)
   }
 
@@ -156,7 +167,13 @@ function appendItem(
       type: "function",
       function: { name: item.name, arguments: item.arguments ?? "" },
     }
-    messages.push({ role: "assistant", tool_calls: [call] })
+    const previous = messages.at(-1)
+    if (previous?.role === "assistant") {
+      messages[messages.length - 1] = {
+        ...previous,
+        tool_calls: [...(previous.tool_calls ?? []), call],
+      }
+    } else messages.push({ role: "assistant", tool_calls: [call] })
     return
   }
 
@@ -167,7 +184,16 @@ function appendItem(
         "matches no `function_call` item earlier in the transcript, so it answers no tool call",
       )
     }
-    const content = contentText(item.output, `${at}.output`, TOOL_CARRIER)
+    const output = item.output
+    const texts: string[] = []
+    if (Array.isArray(output))
+      for (const [index, part] of output.entries()) {
+        const field = `${at}.output[${index}]`
+        if (part.type === "input_image")
+          hoisted.push({ type: "image_url", image_url: { url: imageUrl(part, field) } })
+        else texts.push(partText(part, field, TOOL_CARRIER))
+      }
+    const content = typeof output === "string" ? output : texts.join(PART_JOIN)
     messages.push({ role: "tool", tool_call_id: item.call_id, content })
     return
   }
@@ -191,84 +217,14 @@ function appendMessage(messages: OpenAiChatMessage[], item: ParsedMessageItem, a
   }
   if (item.role === "assistant") {
     const content = contentText(item.content, field, ASSISTANT_CARRIER)
-    messages.push({ role: "assistant", content })
+    const previous = messages.at(-1)
+    if (previous?.role === "assistant" && previous.tool_calls !== undefined) {
+      messages[messages.length - 1] = {
+        ...previous,
+        content: [previous.content, content].filter(Boolean).join(PART_JOIN),
+      }
+    } else messages.push({ role: "assistant", content })
     return
   }
   messages.push({ role: "user", content: collapse(userParts(item.content, field)) })
-}
-
-function userParts(content: ParsedOpenAiResponsesContent, at: string): OpenAiChatPart[] {
-  if (typeof content === "string") {
-    return content.length === 0 ? [] : [{ type: "text", text: content }]
-  }
-
-  const parts: OpenAiChatPart[] = []
-  for (const [index, part] of content.entries()) {
-    const field = `${at}[${index}]`
-    switch (part.type) {
-      case "input_text":
-      case "output_text":
-        if (part.text.length > 0) parts.push({ type: "text", text: part.text })
-        break
-      case "refusal":
-        // Carried as text: the model declined out loud on an earlier turn, and dropping the sentence
-        // it declined with would replay the conversation as though it had said nothing.
-        if (part.refusal.length > 0) parts.push({ type: "text", text: part.refusal })
-        break
-      case "input_image":
-        parts.push({ type: "image_url", image_url: { url: imageUrl(part, field) } })
-        break
-      default:
-        rejectField(`${field}.type`, `\`${part.actual}\` has no openai-chat counterpart`)
-    }
-  }
-  return parts
-}
-
-/** The text of a content value, for the three carriers that hold text and nothing else. */
-function contentText(
-  content: ParsedOpenAiResponsesContent | undefined,
-  at: string,
-  carrier: string,
-): string {
-  if (content === undefined) return ""
-  if (typeof content === "string") return content
-
-  const texts: string[] = []
-  for (const [index, part] of content.entries()) {
-    texts.push(partText(part, `${at}[${index}]`, carrier))
-  }
-  return texts.join(PART_JOIN)
-}
-
-/**
- * @throws TranslationError (400) when the part has no text form, rather than dropping it — an image
- * the caller attached is content, and losing it quietly answers a different question.
- */
-function partText(part: ParsedOpenAiResponsesPart, at: string, carrier: string): string {
-  if (part.type === "input_text" || part.type === "output_text") return part.text
-  if (part.type === "refusal") return part.refusal
-  if (part.type === "input_image") {
-    rejectField(`${at}.type`, `\`input_image\` cannot be carried in ${carrier}, which is text only`)
-  }
-  rejectField(`${at}.type`, `\`${part.actual}\` has no openai-chat counterpart`)
-}
-
-/** @throws TranslationError (400) when the part names no URL an openai-chat image part can hold. */
-function imageUrl(
-  part: { readonly image_url?: string | null; readonly file_id?: string | null },
-  at: string,
-): string {
-  const url = part.image_url ?? ""
-  if (url.length > 0) return url
-  if ((part.file_id ?? "").length > 0) rejectField(`${at}.file_id`, STORED_FILE)
-  rejectField(`${at}.image_url`, "is absent: an openai-chat image part is a URL")
-}
-
-/** A lone text part is emitted as a plain string — the shape every compatible upstream accepts. */
-function collapse(parts: readonly OpenAiChatPart[]): string | readonly OpenAiChatPart[] {
-  if (parts.length === 0) return ""
-  const only = parts[0]
-  if (parts.length === 1 && only !== undefined && only.type === "text") return only.text
-  return parts
 }

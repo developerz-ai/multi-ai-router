@@ -43,7 +43,7 @@ import { inputFromArguments, toolChoiceToAnthropic, toolsToAnthropic } from "../
  * Refused: `logprobs`, `top_logprobs`, `n > 1`, a `response_format` constraining the answer's shape,
  * audio and file parts, and a `tool_call_id` matching no call earlier in the transcript. Dropped, as
  * documented: `seed`, `frequency_penalty`, `presence_penalty`, `logit_bias`, `user`,
- * `reasoning_effort`, `parallel_tool_calls`, `strict`, and image `detail`.
+ * `reasoning_effort`, `strict`, and image `detail`.
  */
 
 export interface OpenAiChatToAnthropicOptions {
@@ -123,7 +123,16 @@ export function openAiChatToAnthropicRequest(
     stream: request.stream ?? undefined,
     tools: request.tools === undefined ? undefined : toolsToAnthropic(request.tools),
     tool_choice:
-      request.tool_choice === undefined ? undefined : toolChoiceToAnthropic(request.tool_choice),
+      request.parallel_tool_calls === undefined || request.parallel_tool_calls === null
+        ? request.tool_choice === undefined
+          ? undefined
+          : toolChoiceToAnthropic(request.tool_choice)
+        : {
+            ...(request.tool_choice === undefined
+              ? { type: "auto" as const }
+              : toolChoiceToAnthropic(request.tool_choice)),
+            disable_parallel_tool_use: !request.parallel_tool_calls,
+          },
   }
 }
 

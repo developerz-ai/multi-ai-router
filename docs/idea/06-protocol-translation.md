@@ -201,7 +201,7 @@ re-synthesize = rendered from Agent SDK output, never proxied (below).
 
 **Unsupported**, returning `4xx` rather than a degraded call: a stateful Responses request
 (`previous_response_id`, `store: true`, `include`, `conversation`, `prompt`, `background: true`, and
-`reasoning` / `item_reference` input items) against non-Responses egress — `400`, the router holds no
+encrypted `reasoning` / `item_reference` input items) against non-Responses egress — `400`, the router holds no
 conversation state; a structured-output constraint (`response_format`, `text.format`) on any
 cross-dialect hop — `400`, the shape is a contract the caller will parse; and any request whose
 required feature has no faithful target representation — `400`, naming the field.
@@ -285,6 +285,10 @@ Quota signals arrive as SDK `rate_limit_event` messages rather than response hea
 
 ## What translation must cover
 
+Responses refusal deltas are carried as text toward Chat and Anthropic, matching nonstreaming
+refusal content. Fragments of one part concatenate; distinct identified text/refusal parts keep
+their boundaries. Completion events do not replay already emitted text.
+
 ### System prompts
 
 | | |
@@ -298,7 +302,7 @@ Quota signals arrive as SDK `rate_limit_event` messages rather than response hea
 | | |
 |---|---|
 | Clean | `user` / `assistant` roles; text blocks; `image` blocks with a base64 `source` ⇄ OpenAI `image_url` with a `data:` URI; a remote-URL `image_url` ⇄ Anthropic's `source: {type:"url"}`; `tool_result` ⇄ `role: "tool"` message keyed by `tool_call_id`. |
-| Lossy | `detail: "low"/"high"` is dropped. Anthropic `thinking` / `redacted_thinking` blocks have no OpenAI Chat counterpart and are dropped (silently — a documented hint). Toward OpenAI, an **image inside a `tool_result`** is *hoisted*: the tool message carries the text, and the image lands as user content directly after it — the position a person pasting the screenshot would give it. A `document` with a `text` source travels as text. |
+| Lossy | `detail: "low"/"high"` is dropped. Anthropic `thinking` / `redacted_thinking` blocks have no OpenAI Chat counterpart and are dropped (silently — a documented hint). Toward OpenAI, a representable URL/base64 **image inside a `tool_result`** is *hoisted*: the tool message carries the text, and images are collected into user content after the complete tool-reply run. A screenshot never splits the replies to a parallel call batch. A `document` with a `text` source travels as text. |
 | Dropped and **reported** | Toward OpenAI: a `document` with any other source (a base64 PDF, a URL, a Files-API id — reported with its media type); `server_tool_use`, `web_search_tool_result`, and every block type this build does not know; a nested `tool_result` block that is neither text nor image (`tool_reference`, `search_result`). Each is left out and named — field path and block type — on one `translation dropped fields` warn line per conversion ([08](08-observability.md)). Never a `400`: Claude Code puts all of these in an ordinary transcript, and refusing the turn served nothing. |
 | Rejected | Toward Anthropic: audio and file parts; an image source that is neither a base64 `data:` URI nor http(s). Toward OpenAI: a *malformed* known block (a `tool_use` with no `id`) — that body is not a valid Anthropic request. |
 
@@ -318,7 +322,9 @@ Every `role:"tool"` message becomes a `tool_result` block on a **user** turn, so
 merges into one turn — which is exactly the shape Anthropic expects. Toward OpenAI the same merge
 runs for plain-content turns only: alternation is not required there, but several
 OpenAI-compatible upstreams reject two adjacent `user` messages that OpenAI itself accepts. A turn
-carrying `tool_calls` or a `tool_call_id` never merges — it is keyed to one specific call.
+carrying a `tool_call_id` remains separate. Responses assistant text and adjacent `function_call`
+items are assembled into one assistant message with the ordered call list before their replies;
+ordinary user/tool boundaries still end that group.
 
 ### Tool and function calling
 
@@ -328,10 +334,26 @@ carrying `tool_calls` or a `tool_call_id` never merges — it is keyed to one sp
 | OpenAI → Anthropic | inverse; `strict: true` has no Anthropic equivalent and is dropped |
 | Calls | Anthropic `tool_use` block `{id, name, input}` ⇄ OpenAI `tool_calls[].{id, function.{name, arguments}}` — `input` is an object, `arguments` is a **JSON string**; both directions parse/serialize |
 | Results | Anthropic `tool_result` `{tool_use_id, content, is_error}` ⇄ one `role:"tool"` message per call; `is_error` has no OpenAI field and is folded into the result text |
-| Clean | Name, description, JSON Schema parameters, call ids, parallel calls (Anthropic emits several `tool_use` blocks; OpenAI emits several `tool_calls` entries). Ids are preserved verbatim; ordering across blocks/entries is reconstructed and may differ |
-| Lossy | `is_error`, `strict`, `defer_loading`, `eager_input_streaming`, `cache_control` on a tool. `parallel_tool_calls` is **carried** between the two OpenAI dialects, which spell it identically, and dropped toward `anthropic`, which states the same idea as `tool_choice.disable_parallel_tool_use` — a field on a `tool_choice` the caller may not have sent at all |
+| Clean | Name, description, JSON Schema parameters, call ids, parallel calls (Anthropic emits several `tool_use` blocks; OpenAI emits several `tool_calls` entries). Ids and parallel call order are preserved; result messages retain their own call IDs |
+| Lossy | `is_error`, `strict`, `defer_loading`, `eager_input_streaming`, `cache_control` on a tool. `parallel_tool_calls` is carried between the OpenAI dialects and mapped to the inverse Anthropic `tool_choice.disable_parallel_tool_use`. An explicit policy without a tool choice creates `type: "auto"`; an absent policy stays absent |
 | Dropped and **reported** | Anthropic **server-side and built-in** tool types toward OpenAI — a declaration with a `type` and no `input_schema`: `web_search_*`, `tool_search_tool_*`, `code_execution_*`, `bash_*`, `text_editor_*`, `computer_*`, `memory_*`. A capability of Anthropic's own inference, or a tool whose schema Anthropic supplies, that no other upstream can act on. Left out by name; the client's own tools go through. A `tool_choice` naming a dropped tool goes with it, and a toolkit that translated to nothing is omitted rather than sent as `tools: []` (several compatible upstreams refuse the empty list). A `defer_loading: true` tool is sent up front — a target with no tool search gets every tool, which is the faithful reading of "deferred" |
 | Rejected | A tool with no name, or whose schema is not a valid JSON Schema object type — not a valid Anthropic declaration |
+
+Responses `function_call_output` images remain native text/image blocks toward Anthropic.
+Toward Chat, the result text stays in its keyed tool message and images are hoisted after the
+contiguous result run; remote image URLs are carried through existing validation and never fetched
+by the translator. Anthropic image Files-API handles are dropped and reported at their original field path, including
+inside tool results. The translator never fetches a provider file.
+
+Stateless reasoning summaries emitted by the router may be replayed into non-Responses egress.
+The summary is omitted rather than presented as assistant text; encrypted reasoning state and
+provider item references still cannot be replayed across providers.
+
+Tool streams with no argument fragments emit `{}` once for a no-argument call. Repeated
+indexless fragments with the same call ID extend one call. Toward Anthropic, argument blocks remain
+open until the Chat sentinel or stream end so late argument fragments cannot target a closed block.
+A completed tool call with raw Chat `stop` or an absent finish reason maps to `tool_use`; known
+content filtering, truncation, and unknown reported reasons retain their established mappings.
 
 ### Streaming SSE event mapping
 
@@ -411,18 +433,39 @@ boundaries" by breaking every client that uses the SDK's final-response accessor
 stopped early the terminal event is `response.incomplete`, which is the same fact stated in the
 field Responses reserves for it.
 
-**A streamed tool call that cannot have a block yet waits for one; it is never dropped.** openai-chat
-keys a streamed call by a `tool_calls[].index` it is free to revisit — a chunk carrying
-`[{index:0},{index:1}]` followed by more arguments for index 0 is well-formed there, and vLLM,
-SGLang, Fireworks and Together all emit it for parallel calls. Anthropic and Responses hold **one
-open block or item at a time** and have no event that reopens a closed one, so the second call is
-held until the live one closes and then given a block of its own, arguments and all. A reader that
-kept only the block it opened last would answer with a `tool_use` whose `input` is truncated, under a
-`stop_reason` saying the call was complete — a wrong tool invocation no client could detect. Holding
-those fragments is not stream buffering: text is never touched, and the live call's deltas leave as
-they arrive. The same rule covers an upstream that omits `index` altogether (LM Studio, Ollama): an
-entry naming an `id` or a function name starts a call of its own, one naming neither continues the
-call the entry before it addressed, and nothing is folded into whatever came last.
+**Interleaved tool arguments are never silently discarded when text arrives.** The router keeps
+sequential target blocks/items in first-sighting order. The live call's arguments continue to leave
+incrementally; text and later calls which cannot enter that block wait in a bounded queue. A
+confirmed Responses `output_item.done` releases that call's queued text without closing another
+still-streaming call. Chat has no per-call completion event, so its held fragments leave when the
+turn finishes. This is a router ordering policy, not a claim that every indexed event format bans
+concurrent items. Anthropic's high-level TypeScript client callbacks read the latest block even
+when accumulation uses the event index, which makes simultaneous open blocks unsafe for those
+callbacks. See the [official client implementation](https://github.com/anthropics/anthropic-sdk-typescript/blob/main/src/lib/MessageStream.ts).
+
+`MAX_TRANSLATION_PENDING_BYTES` defaults to 1048576 and accepts whole values from 1024 through
+33554432. It bounds each deferred-fragment backlog, item-alias map and snapshot recovery tracker,
+including a per-entry accounting allowance. Empty item announcements also reserve identity space;
+ID-only and index-only fragments for one item use the same tool ordinal and text boundary.
+It is not a response-body or observation ceiling. Ordinary live
+deltas are not held for their final snapshots. Split surrogate fragments release their original
+charged bytes when an entry drains, so repeated drain cycles cannot manufacture an overflow.
+
+**Responses final snapshots can recover only a missing suffix.** Text/refusal `.done` events and
+final message/function-call items are matched by item/content identities, with item-ID/output-index
+aliases reconciled. A full function call stated on `added` or `done` retains its ID, name and complete
+arguments. The tracker keeps a length and incremental SHA-256 digest of UTF-16 code units instead
+of retaining emitted text; this preserves split or lone surrogate units without normalization.
+Repeated equal mirrors emit nothing. A different final prefix, changed final value, conflicting
+identity, or later delta after finalization fails honestly. An unscoped final mirror is ignored
+rather than attached to an arbitrary item. The [Responses event reference](https://developers.openai.com/api/reference/resources/responses/streaming-events)
+defines the final snapshot fields; it does not promise that ordinary providers omit their deltas.
+
+A local consistency or pending-limit fault emits the established target error envelope and settles
+usage once as `router_error`, with `translation_protocol_error` or `translation_pending_overflow`.
+Original upstream HTTP facts and the already-sent client status are preserved. It creates no
+account health strike or retry, and a later upstream completion cannot replace that verdict. The
+Chat error envelope is followed by its protocol close markers, not a successful accounting verdict.
 
 **A truncated stream is never given a synthesized ending.** If the upstream dies before its finish
 reason, the translator emits no `message_delta`, no `message_stop`, and no `[DONE]` — the client
@@ -441,14 +484,15 @@ literally.
 
 ### Stop and finish reasons
 
-The Anthropic `stop_reason` set is closed and complete: `end_turn`, `max_tokens`, `stop_sequence`,
-`tool_use`, `pause_turn`, `refusal`. Every one has a row below; an unrecognized value is a provider
+The recognized Anthropic `stop_reason` set is `end_turn`, `max_tokens`, `stop_sequence`,
+`tool_use`, `pause_turn`, `refusal`, and `model_context_window_exceeded`. Every one has a row below; an unrecognized value is a provider
 change, logged and mapped conservatively to `end_turn` / `stop`, never dropped silently.
 
 | Anthropic `stop_reason` | OpenAI `finish_reason` | Responses | Note |
 |---|---|---|---|
 | `end_turn` | `stop` | `status: "completed"` | clean, both ways |
 | `max_tokens` | `length` | `incomplete_details.reason: "max_output_tokens"` | clean, both ways |
+| `model_context_window_exceeded` | `length` | `incomplete_details.reason: "max_output_tokens"` | context truncation; the narrower cause is lost toward OpenAI |
 | `tool_use` | `tool_calls` | `status: "completed"` with a function-call output item | clean, both ways |
 | `stop_sequence` | `stop` | `status: "completed"` | lossy → OpenAI: *which* sequence matched (`stop_sequence` field) is lost |
 | — | `content_filter` | `incomplete_details.reason: "content_filter"` | lossy → Anthropic: mapped to `end_turn`, the refusal reason is lost |
@@ -469,9 +513,9 @@ what a mid-stream delta needs — and the streaming translator applies the conse
 is emitting the terminal chunk and the upstream named none. It is not reported as an unrecognized
 value: nothing unknown arrived, and a log line per truncated turn would be noise.
 
-**An upstream error mid-stream still has to terminate the stream.** Once bytes are out the status
+**A declared upstream error terminates a translated Chat stream.** Once bytes are out the status
 cannot change, so the failure is spelled in the body — but the client's reader is still reading. The
-error goes out first, so nothing masks it, and is followed by a terminal chunk (if the completion
+error goes out first, so nothing masks it, and toward Chat is followed by a terminal chunk (if the completion
 had not already stated its own ending) and `[DONE]`. Emitting the error and stopping dead left the
 reader waiting at EOF and surfaced as a parse failure with the real cause nowhere in it — opencode's
 `Failed to read … stream` on a long agent turn, 2026-09-06.
@@ -526,7 +570,9 @@ decide whether caching is paying for itself.
 
 The **`UsageRecord` stores the upstream's own numbers**, not the translated ones. OpenAI streams omit
 usage unless `stream_options.include_usage` is set; translating an Anthropic stream toward
-`openai-chat` always emits it, and a missing field is recorded as null, never as zero — zero is a
+`openai-chat` emits the client usage frame only when the original client request explicitly sets
+`stream_options.include_usage: true`. Accounting still observes upstream usage when the client frame
+is omitted. A missing field is recorded as null, never as zero — zero is a
 measurement, and reporting it for a field the upstream never sent invents data.
 
 ### Error shapes
@@ -541,6 +587,11 @@ receives an Anthropic-shaped error even when the account that failed was an Open
 Agent-SDK one. Router-origin errors (`NoHealthyAccountError`, `QuotaExhaustedError`, …) use the same
 shape with a stable HTTP status. `param` and `code` are best-effort and may be null. No error body
 ever carries credential material or the identity of the account that failed.
+
+A recognized nonstreaming error envelope remains an ingress-shaped error even when the upstream
+returns HTTP 200. Chat requires an object `error`; Anthropic requires `type: "error"` with an object
+`error`; Responses requires `type: "error"`, `type: "response.failed"`, or `status: "failed"`.
+The received HTTP status remains unchanged. Unknown vendor envelopes are not inferred as errors.
 
 That last rule is enforced, not trusted: every message leaves through one function, and it runs the
 same value-level scrub the log redactor uses ([08-observability.md](08-observability.md)). Both
@@ -595,12 +646,12 @@ Be suspicious of any cell not listed here — if it is not documented, it is not
 | `seed`, `frequency_penalty`, `presence_penalty`, `logit_bias` | → `anthropic` | dropped (documented, not rejected — they are hints, not contracts) |
 | Anthropic `top_k` | → OpenAI | dropped |
 | Remote-URL images | → `anthropic` | carried as Anthropic's `source: {type:"url"}`, never fetched — see [above](#message-roles-and-content-blocks). `detail: "low"/"high"` is dropped |
-| Absent `max_tokens` | → `anthropic` | Anthropic requires one and OpenAI's is optional, so a configured default is supplied. Not a constant in a branch: the value is a parameter of the translator, defaulted generously, because a low ceiling would truncate an answer the caller never asked to truncate |
+| Absent `max_tokens` | → `anthropic` | Anthropic requires one and OpenAI's is optional. The selected Account's exact upstream model uses its warm, positively sourced output ceiling when available; otherwise the configured translation default applies. Explicit client limits remain unchanged. Each failover candidate uses its own alias and ceiling, without a database lookup on dispatch |
 | Anthropic server-side and built-in tools (web search, tool search, code execution, `bash_*`, `text_editor_*`) | → OpenAI | **dropped and reported by name**; the client's own tools go through. See [Tool and function calling](#tool-and-function-calling) |
 | `tool_choice` naming a dropped tool | → OpenAI | dropped and reported with it; an empty surviving toolkit is omitted, never sent as `tools: []` |
 | Anthropic `document` blocks | → OpenAI | a `text` source travels as text; any other source is **dropped and reported** with its media type |
 | `server_tool_use`, `web_search_tool_result`, unknown block types; non-text/image blocks nested in a `tool_result` | → OpenAI | **dropped and reported** by field path and type — the provider's own artifacts, whose visible outcome is already in the text beside them |
-| An image inside a `tool_result` | → OpenAI | **hoisted** into user content directly after the tool message / `function_call_output`; never dropped, never refused |
+| An image inside a `tool_result` | → OpenAI | representable URL/base64 images are **hoisted** into user content after the complete tool-reply run, preserving call IDs and image order; Responses-to-Anthropic results retain these image blocks. Anthropic Files-API images are dropped and reported as described above |
 | `thinking`, `output_config`, `context_management`, `metadata`, `container`, `mcp_servers` (request-level) | → OpenAI | dropped silently — knobs of Anthropic's own inference with no target field; `thinking` has its own row below |
 | Upstream SSE comment lines (`: keep-alive`, `: OPENROUTER PROCESSING`) | translate egress, any pair | **forwarded** as comment lines, ahead of the frames they arrived with. They are how a provider holds a socket open through a long time-to-first-token, and a relay that swallowed them left the client silent for exactly that window. They do not count as the first byte. Passthrough forwards them with everything else |
 | OpenAI built-in tools (`web_search_preview`, `file_search`, `code_interpreter`, …) | `openai-responses` → any | unsupported; `400`. Served inside OpenAI's own inference, so nothing on the other side of the seam runs one |
@@ -608,7 +659,7 @@ Be suspicious of any cell not listed here — if it is not documented, it is not
 | `text.format` (structured output / JSON Schema) | `openai-responses` → any | `{"type":"text"}` passes; anything else is **rejected** `400`. A schema-constrained answer is a contract the caller will parse, and prose in its place is a different answer, not a degraded one |
 | `response_format` (structured output / JSON mode) | `openai-chat` → any | `{"type":"text"}` passes; `json_object` and `json_schema` are **rejected** `400`. The same rule as `text.format` under openai-chat's older name for the same feature — including toward `openai-responses`, which *does* state it, because honoring it one direction and refusing it the other would make "servable" depend on which way the request pointed. Dropped instead, an OpenAI SDK `.parse()`, LangChain `withStructuredOutput()`, Instructor, or `generateObject` call gets prose and fails at its own `JSON.parse`, with nothing on the wire naming the cause |
 | `conversation`, `prompt`, `background: true` | `openai-responses` → any | **rejected** `400`, the same class as `previous_response_id` under three later names: turns the provider would prepend, instruction text stored provider-side, and a queued response to poll by id. `background: false` passes |
-| Responses `reasoning` output items | → `anthropic`, `openai-chat` | dropped. An Anthropic `thinking` block a client can replay needs a `signature` the router cannot produce, and openai-chat has no *published* field — the extension names are read from an upstream, never written toward a client |
+| Responses stateless `reasoning` summary input/output items | → `anthropic`, `openai-chat` | dropped as hints; a replayed summary is not visible assistant text. Nonempty `encrypted_content` and `item_reference` inputs remain rejected `400`. An Anthropic `thinking` block a client can replay needs a `signature` the router cannot produce, and openai-chat has no *published* field — the extension names are read from an upstream, never written toward a client |
 | Anthropic `thinking` blocks | → `openai-responses` | carried as a reasoning **summary** item; the encrypted reasoning handle is not synthesized |
 | openai-chat `reasoning_content` / `reasoning` | → `openai-responses` | **carried** as a reasoning **summary** item. Both spellings are read — DeepSeek's and OpenRouter's — and `reasoning_content` wins if an upstream states both. See [above](#streaming-sse-event-mapping) |
 | openai-chat `reasoning_content` / `reasoning` | → `anthropic` | dropped. A synthesized `thinking` block carries no `signature`, and Anthropic refuses a replayed one that lacks it — the block would answer this turn and break the next |
@@ -616,7 +667,7 @@ Be suspicious of any cell not listed here — if it is not documented, it is not
 | `reasoning_effort` ⇄ `reasoning.effort` | `openai-chat` ⇄ `openai-responses` | **carried**, verbatim and both ways: OpenAI's own spec points both fields at one shared `ReasoningEffort` schema, so they are the same dial one level of nesting apart. The word is never validated against a list of ours — that set is `none \| minimal \| low \| medium \| high \| xhigh \| max` today, has grown twice past the four everyone remembers, and `none` means "do not think" rather than "invalid". Refusing a word the upstream accepts would be the router deciding how the model behaves |
 | `reasoning.effort` | `openai-responses` → `anthropic` | dropped, and `reasoning_effort` from `openai-chat` with it. Anthropic's thinking budget is a token count, not an effort word, and inventing one would change what the caller pays for |
 | `reasoning.summary` | `openai-responses` → any | dropped. It asks the *provider* to write a summary of its own reasoning, and no other dialect states the request |
-| `parallel_tool_calls` | `openai-chat` ⇄ `openai-responses` | **carried**, both ways: both dialects spell it identically. An absent field stays absent — `false` is the value that changes behaviour, so defaulting one in would be a decision the caller never made |
+| `parallel_tool_calls` / `tool_choice.disable_parallel_tool_use` | all dialect pairs | **carried** between OpenAI dialects; inverse boolean toward/from Anthropic. An absent field stays absent; an explicit OpenAI policy without a tool choice maps to Anthropic `type: "auto"` |
 | `input_image` naming only a `file_id` | `openai-responses` → any | rejected `400`: a stored file is provider-side state this router cannot resolve into bytes |
 | `max_tokens` / `max_completion_tokens` | → `openai-chat` | not lossy, but **not one name either** — emitted under whichever of the two the selected Account accepts. See [The output ceiling](#the-output-ceiling-one-field-two-names) |
 | Responses item ids | → `openai-responses` | minted by the router from the response id and the item's position — deterministic, but not the provider's own |

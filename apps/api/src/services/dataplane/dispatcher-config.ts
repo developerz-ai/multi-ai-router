@@ -3,6 +3,7 @@ import type { Logger } from "../../logging/logger"
 import type { SdkInvoker, SdkQuotaStore, SessionStore } from "../../providers"
 import type { RateLookup } from "../cost"
 import type { CredentialCipher } from "../crypto/cipher"
+import type { ModelCatalogStore } from "../models/store"
 import type { FailoverOptions, SelectionOptions } from "../routing"
 import type { UsageRecorder } from "../usage"
 import type { UsageRequestIdentity } from "../usage/request-identity"
@@ -61,6 +62,7 @@ export interface TranslationOptions {
    * an answer the caller never asked to truncate (`06-protocol-translation.md#known-lossy-edges`).
    */
   readonly defaultMaxTokens?: number
+  readonly maximumPendingBytes?: number
 }
 
 /** Long, because a long completion is a normal response, not a hung one. Configurable. */
@@ -68,6 +70,9 @@ export const DEFAULT_UPSTREAM_TIMEOUT_MS = 600_000
 export const DEFAULT_RESPONSE_OBSERVATION_MAX_BYTES = 65_536
 
 export interface DispatcherDeps {
+  /** Warm upstream-side metadata; no database lookup during dispatch. */
+  readonly modelMetadata?: Pick<ModelCatalogStore, "describe">
+
   readonly activeRequests?: ActiveRequestRegistry
   readonly recovery?: RecoveryAccess
   readonly catalog: RoutingCatalog

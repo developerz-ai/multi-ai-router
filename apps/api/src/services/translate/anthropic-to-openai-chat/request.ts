@@ -5,6 +5,7 @@ import {
   documentText,
   dropBlock,
   imageUrlFromSource,
+  readImageSource,
   systemText,
   toolResultParts,
 } from "../shared/anthropic-blocks"
@@ -38,7 +39,7 @@ import { argumentsFromInput, toolsToOpenAiChat } from "../shared/tools"
  * `anthropic-beta` opt-in (a header, handled by the transport). Dropped and **reported** through
  * `options.onDrop`: server-side and built-in tools, a `tool_choice` naming one, non-text documents,
  * and any block type the target cannot carry. An image inside a `tool_result` is hoisted into a
- * user turn directly after the tool message. Refused: only what is not a valid Anthropic request.
+ * user turn after the originating turn's complete tool-result run. Refused: only what is not a valid Anthropic request.
  *
  * Anthropic **requires** `max_tokens`, so every request through here carries a ceiling the caller
  * chose, and which of openai-chat's two names it is emitted under is the target's answer, not
@@ -98,6 +99,10 @@ export function anthropicToOpenAiChatRequest(
     // An empty list is not "no tools" to every compatible upstream — several refuse `tools: []`
     // outright — so a toolkit that translated to nothing is omitted rather than sent empty.
     tools: tools === undefined || tools.length === 0 ? undefined : tools,
+    parallel_tool_calls:
+      request.tool_choice?.disable_parallel_tool_use === undefined
+        ? undefined
+        : !request.tool_choice.disable_parallel_tool_use,
     tool_choice: toolChoiceForOpenAiChat(request.tool_choice, tools, onDrop),
   }
 }
@@ -122,9 +127,12 @@ function appendMessage(
       case "text":
         if (block.text.length > 0) parts.push({ type: "text", text: block.text })
         break
-      case "image":
-        parts.push({ type: "image_url", image_url: { url: imageUrlFromSource(block.source) } })
+      case "image": {
+        const source = readImageSource(block.source, field, onDrop)
+        if (source !== null)
+          parts.push({ type: "image_url", image_url: { url: imageUrlFromSource(source) } })
         break
+      }
       case "tool_use":
         toolCalls.push({
           id: block.id,
@@ -140,19 +148,12 @@ function appendMessage(
           parts: [{ type: "text", text: result.text }],
           toolCalls: [],
         })
-        // Hoisted: a `role:"tool"` message holds text only, so the image lands in a user turn right
-        // after it — the position a person pasting the screenshot would give it. Plain content, so
-        // `merge` folds it into the rest of this user turn.
-        if (result.images.length > 0) {
-          drafts.push({
-            role: "user",
-            parts: result.images.map((source) => ({
-              type: "image_url",
-              image_url: { url: imageUrlFromSource(source) },
-            })),
-            toolCalls: [],
-          })
-        }
+        parts.push(
+          ...result.images.map((source) => ({
+            type: "image_url" as const,
+            image_url: { url: imageUrlFromSource(source) },
+          })),
+        )
         break
       }
       case "document": {

@@ -1,6 +1,7 @@
 import type { OpenAiChatCeiling } from "@multi-ai-router/core"
 import { TranslationError } from "@multi-ai-router/core"
-import type { TranslationContext, TranslationDrop, TranslationPair } from "../translate"
+import type { TranslationContext, TranslationPair } from "../translate/registry"
+import type { TranslationDrop } from "../translate/shared/drops"
 
 /**
  * The upstream body a translate candidate sends — built lazily, and at most once per target shape.
@@ -15,8 +16,8 @@ import type { TranslationContext, TranslationDrop, TranslationPair } from "../tr
  * accounts of the same dialect can carry different alias maps — `sonnet` to `glm-4.7` on one and
  * to `k3` on the next — and the model is the only field a *rename* can move.
  *
- * The **openai-chat ceiling** is the one thing beyond the model that varies per account, and it is
- * keyed into the cache rather than overlaid: `max_tokens` and `max_completion_tokens` are two names
+ * The openai-chat ceiling and omitted Anthropic token default vary per account and are keyed into
+ * the conversion cache. `max_tokens` and `max_completion_tokens` are two names
  * for one field and only the translator that emits the body gets to decide which one it writes
  * (`OpenAiChatCeiling`). A chain of accounts that agree — the ordinary case — still converts once.
  */
@@ -28,7 +29,13 @@ export interface TranslatedRequestBody {
    * @throws TranslationError (400) naming the field with no representation in the target dialect,
    * or saying the body is not JSON at all. Thrown before any upstream call.
    */
-  bodyFor(pair: TranslationPair, upstreamModel: string, chatCeiling: OpenAiChatCeiling): Uint8Array
+  includeUsage(): boolean
+  bodyFor(
+    pair: TranslationPair,
+    upstreamModel: string,
+    chatCeiling: OpenAiChatCeiling,
+    defaultMaxTokens?: number,
+  ): Uint8Array
 }
 
 /**
@@ -65,8 +72,21 @@ export function createTranslatedRequestBody(
   }
 
   return {
-    bodyFor(pair, upstreamModel, chatCeiling) {
-      const shape = `${pair.egress}|${chatCeiling}`
+    includeUsage() {
+      // Only read the cached cross-dialect parse: passthrough pays no extra decode or parse.
+      if (!parsed || typeof source !== "object" || source === null || !("stream_options" in source))
+        return false
+      const options = source.stream_options
+      return (
+        typeof options === "object" &&
+        options !== null &&
+        "include_usage" in options &&
+        options.include_usage === true
+      )
+    },
+    bodyFor(pair, upstreamModel, chatCeiling, defaultMaxTokens) {
+      const effectiveDefault = defaultMaxTokens ?? context.defaultMaxTokens
+      const shape = `${pair.egress}|${chatCeiling}|${effectiveDefault ?? "fallback"}`
       let translated = converted.get(shape)
       if (translated === undefined) {
         // A translator emits an object; anything else would mean a pair returning a body no
@@ -76,6 +96,7 @@ export function createTranslatedRequestBody(
         const result = pair.request(body(), {
           ...context,
           chatCeiling,
+          defaultMaxTokens: effectiveDefault,
           onDrop: (drop) => void drops.push(drop),
         })
         if (typeof result !== "object" || result === null || Array.isArray(result)) {

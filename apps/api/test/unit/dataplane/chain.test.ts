@@ -65,6 +65,7 @@ const CHAT_REPLY = {
  */
 function costlyTranslation(testClock: TestClock, ms: number): TranslatedRequestBody {
   return {
+    includeUsage: () => false,
     bodyFor: () => {
       testClock.advance(ms)
       return new TextEncoder().encode(JSON.stringify({ model: "gpt-4o", messages: [] }))
@@ -220,6 +221,7 @@ describe("the upstream span opens when the transport is called, not when the att
     const it = chain({
       clock: testClock,
       translated: {
+        includeUsage: () => false,
         bodyFor: () => {
           testClock.advance(TRANSLATE_MS)
           throw new TranslationError("no representation")
@@ -361,7 +363,7 @@ describe("leaving a bound account mid-chain is surfaced", () => {
         bodyBytes: new TextEncoder().encode(BODY),
         modelSpan: null,
         translation: { created: 0, model: "claude-opus-5", fallbackId: "msg_test" },
-        translated: { bodyFor: () => new TextEncoder().encode(BODY) },
+        translated: { includeUsage: () => false, bodyFor: () => new TextEncoder().encode(BODY) },
         failover:
           options.boundAccountId === undefined
             ? undefined

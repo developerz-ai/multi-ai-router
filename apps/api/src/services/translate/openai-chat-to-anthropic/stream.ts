@@ -1,6 +1,7 @@
 import { z } from "zod"
 import { createAnthropicStreamEmitter } from "../shared/anthropic-stream"
 import { createOpenAiChatToolCallReader } from "../shared/openai-chat-tool-calls"
+import type { ResponsesRecoveryOptions } from "../shared/responses-snapshot-recovery"
 import { CONSERVATIVE_STOP_REASON, toAnthropicStopReason } from "../shared/stop-reason"
 import type { OpenAiChatUsage } from "../shared/usage"
 import { anthropicUsageCounts, parseOpenAiChatUsage } from "../shared/usage"
@@ -32,7 +33,7 @@ import { frameJson } from "../sse/parse"
  */
 
 /** Neither field is required: a compatible upstream always names both on its first chunk. */
-export interface OpenAiChatToAnthropicStreamOptions {
+export interface OpenAiChatToAnthropicStreamOptions extends ResponsesRecoveryOptions {
   /** Used until a chunk names the upstream's own id, and if none ever does. */
   readonly id?: string | undefined
   /** Used until a chunk names the model. The client's requested name is the right value. */
@@ -80,6 +81,7 @@ export function openAiChatToAnthropicStream(
 ): StreamTranslator {
   const emitter = createAnthropicStreamEmitter(options)
   const toolCalls = createOpenAiChatToolCallReader()
+  let hasToolCalls = false
   let finishReason: string | null = null
   let usage: OpenAiChatUsage | null = null
   let unrecognized: string | null = null
@@ -95,7 +97,13 @@ export function openAiChatToAnthropicStream(
         ? { value: CONSERVATIVE_STOP_REASON, unrecognized: null }
         : toAnthropicStopReason(finishReason)
     unrecognized = mapped.unrecognized ?? unrecognized
-    emitter.terminate(out, { stopReason: mapped.value, usage: anthropicUsageCounts(usage) })
+    emitter.terminate(out, {
+      stopReason:
+        hasToolCalls && (finishReason === null || finishReason === "stop")
+          ? "tool_use"
+          : mapped.value,
+      usage: anthropicUsageCounts(usage),
+    })
   }
 
   return {
@@ -127,15 +135,15 @@ export function openAiChatToAnthropicStream(
       emitter.start(out)
       emitter.text(out, choice.delta?.content ?? "")
       for (const call of choice.delta?.tool_calls ?? []) {
+        hasToolCalls = true
         const key = toolCalls.key(call)
         emitter.toolStart(out, key, { id: call.id, name: call.function?.name })
         emitter.toolArgs(out, key, call.function?.arguments ?? "")
       }
       if (choice.finish_reason !== null && choice.finish_reason !== undefined) {
         finishReason = choice.finish_reason
-        // The block is closed here rather than at termination: a finish reason means no further
-        // content, and the client learns the block ended without waiting for the usage chunk.
-        emitter.closeBlock(out)
+        // Keep tool blocks addressable until termination; text-only blocks can close promptly.
+        if (!hasToolCalls) emitter.closeBlock(out)
       }
       return out
     },
@@ -150,5 +158,6 @@ export function openAiChatToAnthropicStream(
     },
 
     unrecognizedStopReason: () => unrecognized,
+    translationFailure: () => emitter.translationFailure(),
   }
 }

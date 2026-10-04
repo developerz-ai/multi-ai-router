@@ -162,4 +162,5 @@ export interface TranslationConfig {
    * asked to truncate, which is the one failure a default must not cause silently.
    */
   readonly defaultMaxTokens: number
+  readonly maximumPendingBytes: number
 }

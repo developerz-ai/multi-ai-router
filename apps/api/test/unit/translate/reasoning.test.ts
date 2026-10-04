@@ -157,11 +157,10 @@ describe("parallel_tool_calls", () => {
     ).toBeUndefined()
   })
 
-  /** Anthropic spells it inside `tool_choice`, on a field this build does not emit. */
-  test("toward anthropic it is dropped, as documented", () => {
+  /** Anthropic serial policy lives inside `tool_choice`, preserving the caller contract. */
+  test("toward anthropic it becomes an explicit serial tool policy", () => {
     const body = openAiChatToAnthropicRequest(openAiChatRequest({ parallel_tool_calls: false }))
-    expect(JSON.stringify(body)).not.toContain("parallel")
-    expect(JSON.stringify(body)).not.toContain("disable_parallel_tool_use")
+    expect(body.tool_choice).toEqual({ type: "auto", disable_parallel_tool_use: true })
   })
 })
 

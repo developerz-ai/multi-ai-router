@@ -37,7 +37,10 @@ export function dispatchOptionsFromEnv(env: Env): DispatchOptions {
     upstreamTimeoutMs: failover.upstreamTimeoutMs,
     upstreamErrorMaxBytes: failover.upstreamErrorMaxBytes,
     responseObservationMaxBytes: failover.responseObservationMaxBytes,
-    translation: { defaultMaxTokens: env.translation.defaultMaxTokens },
+    translation: {
+      defaultMaxTokens: env.translation.defaultMaxTokens,
+      maximumPendingBytes: env.translation.maximumPendingBytes,
+    },
     // The one limit an unauthenticated-shaped mistake can spend memory on before anything else
     // runs, so it is the operator's to set rather than the reader's to assume.
     body: {

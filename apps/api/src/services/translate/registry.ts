@@ -19,6 +19,7 @@ import { openAiResponsesToOpenAiChatResponse } from "./openai-responses-to-opena
 import { openAiResponsesToOpenAiChatStream } from "./openai-responses-to-openai-chat/stream"
 import type { DropSink } from "./shared/drops"
 import type { TranslatedResponse } from "./shared/response"
+import { translatedResponseError } from "./shared/response-error"
 import type { StreamTranslator } from "./sse/emit"
 
 /**
@@ -48,6 +49,7 @@ export interface TranslationContext {
    * produce the same output in a test as it does on the wire.
    */
   readonly created: number
+  readonly includeUsage?: boolean | undefined
   /** Exactly what the client asked for. Used until the upstream names a model of its own. */
   readonly model: string
   /**
@@ -60,6 +62,7 @@ export interface TranslationContext {
    * somewhere when a client omits it. The operator's configured value; see `request.ts`.
    */
   readonly defaultMaxTokens?: number | undefined
+  readonly maximumPendingBytes?: number | undefined
   /**
    * Which spelling of the openai-chat output ceiling the **selected Account** accepts.
    *
@@ -115,6 +118,7 @@ const ANTHROPIC_TO_OPENAI_CHAT: TranslationPair = {
     }),
   stream: (context) =>
     openAiChatToAnthropicStream({
+      maximumPendingBytes: context.maximumPendingBytes,
       id: `${ANTHROPIC_ID_PREFIX}${context.fallbackId}`,
       model: context.model,
     }),
@@ -133,6 +137,7 @@ const OPENAI_CHAT_TO_ANTHROPIC: TranslationPair = {
     }),
   stream: (context) =>
     anthropicToOpenAiChatStream({
+      includeUsage: context.includeUsage,
       created: context.created,
       id: `${OPENAI_CHAT_ID_PREFIX}${context.fallbackId}`,
       model: context.model,
@@ -151,6 +156,7 @@ const ANTHROPIC_TO_OPENAI_RESPONSES: TranslationPair = {
     }),
   stream: (context) =>
     openAiResponsesToAnthropicStream({
+      maximumPendingBytes: context.maximumPendingBytes,
       id: `${ANTHROPIC_ID_PREFIX}${context.fallbackId}`,
       model: context.model,
     }),
@@ -187,6 +193,8 @@ const OPENAI_CHAT_TO_OPENAI_RESPONSES: TranslationPair = {
     }),
   stream: (context) =>
     openAiResponsesToOpenAiChatStream({
+      maximumPendingBytes: context.maximumPendingBytes,
+      includeUsage: context.includeUsage,
       created: context.created,
       id: `${OPENAI_CHAT_ID_PREFIX}${context.fallbackId}`,
       model: context.model,
@@ -207,6 +215,7 @@ const OPENAI_RESPONSES_TO_OPENAI_CHAT: TranslationPair = {
     }),
   stream: (context) =>
     openAiChatToOpenAiResponsesStream({
+      maximumPendingBytes: context.maximumPendingBytes,
       created: context.created,
       id: `${OPENAI_RESPONSES_ID_PREFIX}${context.fallbackId}`,
       model: context.model,
@@ -226,7 +235,14 @@ const PAIRS: ReadonlyMap<string, TranslationPair> = new Map(
     OPENAI_RESPONSES_TO_ANTHROPIC,
     OPENAI_CHAT_TO_OPENAI_RESPONSES,
     OPENAI_RESPONSES_TO_OPENAI_CHAT,
-  ].map((pair) => [key(pair.ingress, pair.egress), pair]),
+  ].map((pair) => [
+    key(pair.ingress, pair.egress),
+    {
+      ...pair,
+      response: (body: unknown, context: TranslationContext) =>
+        translatedResponseError(body, pair.ingress, pair.egress) ?? pair.response(body, context),
+    },
+  ]),
 )
 
 /** @returns null when the pair is the same-dialect diagonal, or when no translator exists yet. */

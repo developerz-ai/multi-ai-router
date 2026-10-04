@@ -193,13 +193,15 @@ function translatedStream(
       write(controller, out)
       // The upstream's own bytes, so token counting reads the numbers the provider stated.
       guard(() => observer.onChunk?.(chunk))
+      const failure = translator.translationFailure?.()
+      if (failure != null) settle(failure)
     },
     flush(controller) {
       // A frame the upstream never terminated is still a frame; the translator decides whether the
       // stream earned a terminator, and emits nothing at all when it was truncated.
       const trailing = parser.flush().flatMap((frame) => translator.push(frame))
       write(controller, render([...trailing, ...translator.flush()]))
-      settle(undefined)
+      settle(translator.translationFailure?.() ?? undefined)
     },
   })
 
