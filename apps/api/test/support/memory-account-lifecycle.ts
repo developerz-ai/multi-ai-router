@@ -162,7 +162,7 @@ export function memoryAccountLifecycle(
         provider: expectedProvider,
         accountId: id,
         authorizationLifecycleVersion: row.lifecycleVersion,
-        nonce: null,
+        nonce: attempt.nonce ?? null,
         consumedAt: null,
         createdAt: now,
       }

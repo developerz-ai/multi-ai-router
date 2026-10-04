@@ -367,6 +367,30 @@ Every rejection — unknown, consumed, expired, unbound, or bound to a different
 one sentence, because a callback that explains *why* it refused is a probe oracle. Rules in
 [07-security.md](07-security.md).
 
+### Signing in with a code (device-code flow)
+
+For a router on a remote host, the console also offers **Sign in with a code** — what `codex login
+--device-auth` does — wherever the provider's `ProviderOAuthFlow` declares a `device` flow
+(`providers/device-flow.ts`; ChatGPT's lives in `providers/drivers/openai-oauth-device.ts`). The
+console reads `ProviderDescriptor.deviceSignIn`; no provider is named outside `providers/`.
+
+| ChatGPT/Codex constant | Value (openai/codex `codex-rs/login/src/device_code_auth.rs` @ `de3721a7`) |
+|---|---|
+| User code | `POST https://auth.openai.com/api/accounts/deviceauth/usercode`, JSON `{client_id}` → `{device_auth_id, user_code` (alias `usercode`)`, interval}` — `interval` is a string of seconds. `404` = device login not enabled |
+| Poll | `POST https://auth.openai.com/api/accounts/deviceauth/token`, JSON `{device_auth_id, user_code}`. `403`/`404` = not approved yet; `2xx` = `{authorization_code, code_challenge, code_verifier}`; anything else is final |
+| Verification page | `https://auth.openai.com/codex/device` — shown with the code; the issuer states the code lasts 15 minutes |
+| Exchange | The ordinary `/oauth/token` form exchange with the **issuer-minted** `code_verifier` and `redirect_uri=https://auth.openai.com/deviceauth/callback` |
+
+| Step | |
+|---|---|
+| Start | `POST /:id/connect/device` asks the issuer for a code and records an ordinary attempt on `oauth_states`, bound like any other (`authorization_attempt_id`, lifecycle version). The issuer's `device_auth_id`, the user code and the interval ride AES-256-GCM-sealed in the row's `nonce` column — no migration. Answers the user code, the page, the expiry and the interval; never the `device_auth_id` |
+| Polling | **Advanced by the console's status poll, not a timer.** `GET /:id/connect/device` makes at most one upstream poll per call, single-flighted per attempt and held to the issuer's interval (fallback 5 s, opencode's floor); between polls it answers from memory. Nothing to keep alive, nothing lost on restart (the attempt is in Postgres, any replica can advance it), no background work, and an attempt nobody watches costs the issuer nothing |
+| Lifetime | The same one-shot TTL as every attempt (`RETENTION_OAUTH_STATE_MINUTES`, default 10). Past it the status is `expired` and the issuer is not asked |
+| Approval | Consumes the state, re-checks the binding (`oauth-binding.ts`), and writes through `completeAuthorization` — the one credential writer, fenced again on attempt id and lifecycle version, so a superseded attempt cannot write. Audit `capture: "device"` |
+| Refusal | Any final non-pending answer spends the attempt and reads `denied` |
+| Cross-mode | A paste or redirect presenting a device attempt's `state` is refused: the row's own verifier is a decoy, and the issuer minted the real one |
+| Cancel | `DELETE /:id/connect`, the same as every attempt; closing the dialog does it |
+
 ## `gemini` — Google's OpenAI-compatibility surface
 
 Gemini is reached over the endpoint Google publishes for stock OpenAI clients, **not** the native

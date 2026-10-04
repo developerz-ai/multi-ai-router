@@ -248,6 +248,8 @@ export interface ProviderDescriptor {
    * authorization, so the one-shot `state` has a row to bind to.
    */
   readonly connectFlow: ProviderConnectFlow | null
+  /** The OAuth flow also offers a device-code sign-in. Absent on an older API: read as false. */
+  readonly deviceSignIn?: boolean
   readonly creatable: boolean
   readonly reason: string | null
 }

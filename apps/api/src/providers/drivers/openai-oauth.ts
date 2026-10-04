@@ -15,6 +15,7 @@ import type {
   UpstreamErrorFacts,
   UpstreamResponse,
 } from "../types"
+import { openAiDeviceFlow } from "./openai-oauth-device"
 
 // Pinned from the first-party Codex CLI (openai/codex `codex-rs/login`), cross-checked against
 // opencode's `plugin/openai/codex.ts` (2026-10-04). Blast radius for each: every ChatGPT account.
@@ -268,6 +269,7 @@ export const openAiOAuthDriver: ProviderDriver = {
     authorizeUrl: openAiOAuthAuthorizeUrl,
     codeExchange: openAiOAuthCodeExchange,
     refresh: openAiOAuthRefresh,
+    device: openAiDeviceFlow(OPENAI_OAUTH_ISSUER, OPENAI_OAUTH_CLIENT_ID),
     readTokens: (body, context) => {
       const tokens = readOpenAiOAuthTokens(body, context)
       return tokens?.providerAccountId === undefined ? null : tokens

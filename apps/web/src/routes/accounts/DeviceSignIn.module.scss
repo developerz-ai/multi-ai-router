@@ -1,0 +1,29 @@
+// The device-code block. The code is the one thing the operator copies by eye
+// into another browser, so it is set large and monospaced; everything else is
+// the same muted hint treatment as the paste block beside it.
+
+.code {
+  font-family: var(--font-mono);
+  font-size: var(--text-xl);
+  font-weight: var(--weight-semibold);
+  letter-spacing: 0.08em;
+  color: var(--text);
+}
+
+.status {
+  font-size: var(--text-sm);
+  line-height: var(--line-snug);
+  color: var(--text-muted);
+
+  &:empty {
+    display: none;
+  }
+}
+
+.refused {
+  color: var(--danger);
+}
+
+.ended {
+  color: var(--warn);
+}

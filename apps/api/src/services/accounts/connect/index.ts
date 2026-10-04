@@ -24,6 +24,13 @@ export type {
 } from "./oauth"
 export { createOAuthConnectService, OAUTH_CALLBACK_PATH } from "./oauth"
 export type {
+  DeviceConnectDeps,
+  DeviceConnectService,
+  DeviceConnectStarted,
+  DeviceConnectStatus,
+} from "./oauth-device"
+export { createDeviceConnectService } from "./oauth-device"
+export type {
   AuthorizedCode,
   OAuthCapture,
   OAuthConnectCompleted,

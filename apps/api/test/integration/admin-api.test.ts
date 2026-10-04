@@ -21,6 +21,7 @@ import {
   createAccountsService,
   createClaudeConnectService,
   createConnectService,
+  createDeviceConnectService,
   createDiscoverModelsService,
   createOAuthConnectService,
   createRecheckService,
@@ -89,6 +90,19 @@ function harness(
   app.onError(errorHandler(logger))
   app.notFound(notFoundHandler())
 
+  const oauthDeps = {
+    accounts: store.accounts,
+    states: store.oauthStates,
+    cipher,
+    audit,
+    stateMinutes: options.pendingLoginMinutes ?? 10,
+    // No test reaches a provider unless it opts in via `oauthFetch` — an unexpected call is a
+    // failure, not a silent 404.
+    fetch: options.oauthFetch ?? (() => Promise.reject(new Error("no upstream in this harness"))),
+    exchangeTimeoutMs: 1_000,
+    refreshCatalogAfterMutation: async () => {},
+    now,
+  }
   const connect = createConnectService({
     accounts: store.accounts,
     claude: createClaudeConnectService({
@@ -102,19 +116,8 @@ function harness(
       logger,
       now,
     }),
-    oauth: createOAuthConnectService({
-      accounts: store.accounts,
-      states: store.oauthStates,
-      cipher,
-      audit,
-      stateMinutes: options.pendingLoginMinutes ?? 10,
-      // No test reaches a provider unless it opts in via `oauthFetch` — an unexpected call is a
-      // failure, not a silent 404.
-      fetch: options.oauthFetch ?? (() => Promise.reject(new Error("no upstream in this harness"))),
-      exchangeTimeoutMs: 1_000,
-      refreshCatalogAfterMutation: async () => {},
-      now,
-    }),
+    oauth: createOAuthConnectService(oauthDeps),
+    device: createDeviceConnectService(oauthDeps),
   })
 
   // Mounted at the root, unguarded, exactly as `app.ts` does — the redirect is a cross-site
@@ -871,6 +874,84 @@ describe("the OAuth callback route", () => {
 
     const replay = await callback(app, { code: "code", state })
     expect(replay.status).toBe(400)
+  })
+})
+
+describe("device-code sign-in routes", () => {
+  const DEVICE_AUTH_ID = "dev-auth-ROUTE-SECRET"
+  const ISSUED = { authorization_code: "ac_ROUTE_SECRET", code_verifier: "ver_ROUTE_SECRET" }
+  const ACCESS = `h.${Buffer.from(JSON.stringify({ "https://api.openai.com/auth": { chatgpt_account_id: "acct-r" } })).toString("base64url")}.s`
+
+  /** A mocked auth.openai.com: one user code, one pending poll, then approval. */
+  function issuer() {
+    let polls = 0
+    return (async (input: RequestInfo | URL) => {
+      const url = input instanceof Request ? input.url : String(input)
+      const reply = (body: unknown, status = 200) =>
+        new Response(JSON.stringify(body), {
+          status,
+          headers: { "content-type": "application/json" },
+        })
+      if (url.endsWith("/deviceauth/usercode")) {
+        return reply({ device_auth_id: DEVICE_AUTH_ID, user_code: "WXYZ-9876", interval: "1" })
+      }
+      if (url.endsWith("/deviceauth/token")) {
+        polls += 1
+        return polls === 1 ? reply({}, 403) : reply(ISSUED)
+      }
+      if (url.endsWith("/oauth/token")) {
+        return reply({ access_token: ACCESS, refresh_token: "rt_ROUTE_SECRET", expires_in: 3600 })
+      }
+      throw new Error(`unexpected upstream ${url}`)
+    }) as typeof fetch
+  }
+
+  test("start, wait, approve: the code is shown, nothing secret is returned or logged", async () => {
+    const clock = { now: new Date("2026-10-04T12:00:00.000Z") }
+    const { app, logLines, store } = harness(stubSession(), { oauthFetch: issuer(), clock })
+    const created = await call(app, "POST", ADMIN_ACCOUNTS_BASE_PATH, {
+      label: "codex-device",
+      provider: "openai-oauth",
+    })
+    const id = (created.body as { id: string }).id
+    const base = `${ADMIN_ACCOUNTS_BASE_PATH}/${id}/connect/device`
+
+    const started = await call(app, "POST", base)
+    expect(started.status).toBe(200)
+    expect(started.body).toMatchObject({
+      userCode: "WXYZ-9876",
+      verificationUrl: "https://auth.openai.com/codex/device",
+    })
+    const waiting = await call(app, "GET", base)
+    expect(waiting.body).toMatchObject({ status: "waiting", userCode: "WXYZ-9876" })
+
+    clock.now = new Date(clock.now.getTime() + 1_000)
+    const done = await call(app, "GET", base)
+    expect(done.status).toBe(200)
+    expect(done.body).toMatchObject({ status: "connected", completed: { capture: "device" } })
+    expect((await store.accounts.findById(id))?.authMaterial).not.toBeNull()
+
+    const rendered = [started.text, waiting.text, done.text, ...logLines].join("\n")
+    for (const secret of [
+      DEVICE_AUTH_ID,
+      ISSUED.authorization_code,
+      ISSUED.code_verifier,
+      ACCESS,
+      "rt_ROUTE_SECRET",
+    ]) {
+      expect(rendered).not.toContain(secret)
+    }
+  })
+
+  test("a provider with no device flow is refused", async () => {
+    const { app } = harness()
+    const account = await newAccount(app)
+    const refused = await call(
+      app,
+      "POST",
+      `${ADMIN_ACCOUNTS_BASE_PATH}/${account.id}/connect/device`,
+    )
+    expect(refused.status).toBe(400)
   })
 })
 

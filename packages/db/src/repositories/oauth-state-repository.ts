@@ -45,6 +45,12 @@ export interface OauthStateRepository {
    */
   abandonForAccount(accountId: string, now: Date): Promise<number>
   /**
+   * Reads one attempt by id **without** consuming it, only while it is live (unconsumed and
+   * unexpired). For a device-code attempt, whose status the console polls before anything is
+   * redeemed; redeeming still goes through `consume`.
+   */
+  findLive(id: string, now: Date): Promise<OauthStateRow | undefined>
+  /**
    * Deletes expired states in one bounded batch, oldest first, and returns how
    * many went. Exactly `limit` means there is more and the run should report
    * `partial`.
@@ -144,6 +150,21 @@ export function createOauthStateRepository(db: Database): OauthStateRepository {
         )
         .returning({ id: oauthStates.id })
       return rows.length
+    },
+
+    findLive: async (id, now) => {
+      const rows = await db
+        .select()
+        .from(oauthStates)
+        .where(
+          and(
+            eq(oauthStates.id, id),
+            isNull(oauthStates.consumedAt),
+            gt(oauthStates.expiresAt, now),
+          ),
+        )
+        .limit(1)
+      return rows[0]
     },
 
     // Rides `oauth_states_expires_at_idx`.

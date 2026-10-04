@@ -22,6 +22,7 @@ import { type AccountAuthProbe, createClaudeAuthProbe } from "../../health/claud
 import type { CredentialRefresher } from "../refresh"
 import { type ClaudeConnectService, createClaudeConnectService } from "./claude"
 import { createOAuthConnectService } from "./oauth"
+import { createDeviceConnectService } from "./oauth-device"
 import { type ConnectService, createConnectService } from "./service"
 
 /**
@@ -185,20 +186,23 @@ export interface ConnectFromEnvDeps {
  * for no operator benefit (CLAUDE.md non-negotiable 11 — config, never a constant).
  */
 export function connectFromEnv(deps: ConnectFromEnvDeps): ConnectService {
+  // Both router-driven flows share one set: same store, same TTL, same writer.
+  const oauthDeps = {
+    accounts: deps.accounts,
+    states: deps.oauthStates,
+    cipher: deps.cipher,
+    audit: deps.audit,
+    stateMinutes: deps.env.retention.oauthStateMinutes,
+    fetch: (request: Request) => fetch(request),
+    exchangeTimeoutMs: deps.env.failover.upstreamTimeoutMs,
+    now: deps.now,
+    refreshCatalogAfterMutation: deps.refreshCatalogAfterMutation,
+    onCredentialWritten: (accountId: string) => deps.refresher.sync(accountId),
+  }
   return createConnectService({
     accounts: deps.accounts,
     claude: deps.cli.connect,
-    oauth: createOAuthConnectService({
-      accounts: deps.accounts,
-      states: deps.oauthStates,
-      cipher: deps.cipher,
-      audit: deps.audit,
-      stateMinutes: deps.env.retention.oauthStateMinutes,
-      fetch: (request) => fetch(request),
-      exchangeTimeoutMs: deps.env.failover.upstreamTimeoutMs,
-      now: deps.now,
-      refreshCatalogAfterMutation: deps.refreshCatalogAfterMutation,
-      onCredentialWritten: (accountId) => deps.refresher.sync(accountId),
-    }),
+    oauth: createOAuthConnectService(oauthDeps),
+    device: createDeviceConnectService(oauthDeps),
   })
 }

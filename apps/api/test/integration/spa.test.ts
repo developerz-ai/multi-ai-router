@@ -8,6 +8,7 @@ import {
   createAccountsService,
   createClaudeConnectService,
   createConnectService,
+  createDeviceConnectService,
   createOAuthConnectService,
   createRecheckService,
 } from "../../src/services/accounts"
@@ -304,6 +305,17 @@ describe("the full app, mounted end to end", () => {
     const store = createMemoryStore()
     const adminCipher = createCredentialCipher({ key: new Uint8Array(32).fill(7) })
     const audit = createAuditRecorder(store.audit)
+    const spaOAuthDeps = {
+      accounts: store.accounts,
+      states: store.oauthStates,
+      cipher: adminCipher,
+      audit,
+      stateMinutes: 10,
+      fetch: () => Promise.reject(new Error("no upstream in this harness")),
+      exchangeTimeoutMs: 1_000,
+      refreshCatalogAfterMutation: async () => {},
+      now,
+    }
     const configDirs = createMemoryConfigDirs()
     // Never reached: every admin route below is hit with no session cookie, so the guard rejects
     // before a single service method runs.
@@ -411,16 +423,8 @@ describe("the full app, mounted end to end", () => {
             logger: createLogger({ level: "error", write: () => {} }),
             now,
           }),
-          oauth: createOAuthConnectService({
-            accounts: store.accounts,
-            states: store.oauthStates,
-            cipher: adminCipher,
-            audit,
-            stateMinutes: 10,
-            fetch: () => Promise.reject(new Error("no upstream in this harness")),
-            exchangeTimeoutMs: 1_000,
-            now,
-          }),
+          oauth: createOAuthConnectService(spaOAuthDeps),
+          device: createDeviceConnectService(spaOAuthDeps),
         }),
       },
     }

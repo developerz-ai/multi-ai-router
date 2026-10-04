@@ -1,12 +1,17 @@
-import { useMutation, useQueryClient } from "@tanstack/solid-query"
+import { useMutation, useQuery, useQueryClient } from "@tanstack/solid-query"
+import { type Accessor, createEffect } from "solid-js"
 import {
   beginConnect,
+  beginDeviceConnect,
   type ConnectCancelled,
   type ConnectCompleted,
   type ConnectMode,
   type ConnectStarted,
   cancelConnect,
   completeConnect,
+  type DeviceConnectStarted,
+  type DeviceConnectStatus,
+  getDeviceConnectStatus,
 } from "../api/connect"
 import { queryKeys } from "./query-keys"
 
@@ -69,4 +74,45 @@ async function invalidateAccountReaders(client: ReturnType<typeof useQueryClient
     // Completing or abandoning a login is audited; the log must not wait for a reload.
     client.invalidateQueries({ queryKey: queryKeys.audit.root() }),
   ])
+}
+
+export function useBeginDeviceConnect() {
+  const client = useQueryClient()
+  return useMutation(() => ({
+    mutationFn: (args: {
+      readonly id: string
+      readonly mode: ConnectMode
+    }): Promise<DeviceConnectStarted> => beginDeviceConnect(args),
+    onSettled: () => invalidateAccountReaders(client),
+  }))
+}
+
+/**
+ * A pending device sign-in, re-read at the issuer's own interval while it waits and never once it
+ * has ended. Not cached across dialogs: the key carries the attempt's start time, so a new attempt
+ * on the same account never reads the previous one's outcome.
+ */
+export function useDeviceConnectStatus(
+  id: Accessor<string | null>,
+  attempt: Accessor<DeviceConnectStarted | null>,
+) {
+  const client = useQueryClient()
+  const query = useQuery(() => {
+    const started = attempt()
+    return {
+      queryKey: queryKeys.accounts.connectDevice(id() ?? "", started?.expiresAt ?? ""),
+      queryFn: (): Promise<DeviceConnectStatus> => getDeviceConnectStatus(id() ?? ""),
+      enabled: id() !== null && started !== null,
+      gcTime: 0,
+      refetchInterval: (q: { state: { data: DeviceConnectStatus | undefined } }) =>
+        q.state.data === undefined || q.state.data.status === "waiting"
+          ? (started?.intervalSeconds ?? 5) * 1_000
+          : false,
+    }
+  })
+  // A landed login changed the account; the readers learn it without a reload.
+  createEffect(() => {
+    if (query.data?.status === "connected") void invalidateAccountReaders(client)
+  })
+  return query
 }

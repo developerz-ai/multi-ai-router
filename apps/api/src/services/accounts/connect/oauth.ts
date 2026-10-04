@@ -1,8 +1,8 @@
 import { createHash, randomBytes, randomUUID } from "node:crypto"
-import type { AccountRepository, AccountRow, OauthStateRepository } from "@multi-ai-router/db"
-import { httpDriver, type ProviderOAuthFlow } from "../../../providers"
+import type { AccountRepository, OauthStateRepository } from "@multi-ai-router/db"
 import { type AdminResult, invalid, notFound, ok } from "../../admin/result"
 import type { CredentialCipher } from "../../crypto/cipher"
+import { bindConsumed, connectableAccount, STATE_REJECTED } from "./oauth-binding"
 import {
   completeAuthorization,
   type OAuthCapture,
@@ -68,9 +68,6 @@ export const OAUTH_CALLBACK_PATH = "/admin/accounts/oauth/callback"
 const STATE_BYTES = 32
 const VERIFIER_BYTES = 32
 
-/** One sentence for every way a `state` can fail. See the module note above. */
-const STATE_REJECTED = "that authorization is no longer valid — start the connect flow again"
-
 export interface OAuthConnectStarted {
   readonly accountId: string
   readonly mode: "connect" | "reconnect"
@@ -116,11 +113,6 @@ export interface OAuthConnectDeps extends OAuthExchangeDeps {
   readonly stateMinutes: number
 }
 
-interface Connectable {
-  readonly row: AccountRow
-  readonly flow: ProviderOAuthFlow
-}
-
 interface Presentation {
   readonly code: string
   readonly state: string
@@ -132,45 +124,17 @@ interface Presentation {
 export function createOAuthConnectService(deps: OAuthConnectDeps): OAuthConnectService {
   const ttlMs = deps.stateMinutes * 60_000
 
-  const connectable = async (accountId: string): Promise<AdminResult<Connectable>> => {
-    const row = await deps.accounts.findById(accountId)
-    if (row === undefined) return notFound(`no account with id "${accountId}"`)
-    const flow = httpDriver(row.provider)?.oauth
-    if (flow === undefined) {
-      return invalid(
-        `account "${row.label}" is a ${row.provider} account: it is not connected through an authorization flow this router drives`,
-        "not_an_oauth_account",
-      )
-    }
-    return ok({ row, flow })
-  }
+  const connectable = (accountId: string) => connectableAccount(deps.accounts, accountId)
 
-  /** Where both capture modes meet. Consume first, judge second: a wrong guess burns its state. */
+  /** Where paste and redirect meet. Consume first, judge second: a wrong guess burns its state. */
   const exchange = async (presented: Presentation): Promise<AdminResult<OAuthConnectCompleted>> => {
-    const pending = await deps.states.consume(presented.state, deps.now())
-    if (
-      pending === undefined ||
-      pending.accountId === null ||
-      pending.authorizationLifecycleVersion === null
-    ) {
-      return invalid(STATE_REJECTED, "state_rejected")
-    }
-    if (presented.boundTo !== null && presented.boundTo !== pending.accountId) {
-      return invalid(STATE_REJECTED, "state_rejected")
-    }
-
-    const account = await connectable(pending.accountId)
-    if (!account.ok) return account
-    const { row, flow } = account.value
-    // The verifier was minted for this provider's flow, which is a different endpoint and a
-    // different request shape. Cheap, and it means a bound row cannot be re-pointed underneath.
-    if (
-      row.provider !== pending.provider ||
-      row.authorizationAttemptId !== pending.id ||
-      row.lifecycleVersion !== pending.authorizationLifecycleVersion
-    ) {
-      return invalid(STATE_REJECTED, "state_rejected")
-    }
+    const consumed = await deps.states.consume(presented.state, deps.now())
+    const bound = await bindConsumed(deps.accounts, consumed, presented.boundTo)
+    if (!bound.ok) return bound
+    const { row, flow, pending, lifecycleVersion } = bound.value
+    // A device-code attempt carries its issuer handle in `nonce` and is redeemed only by polling
+    // (`oauth-device.ts`); a code presented against one was never minted for it.
+    if (pending.nonce !== null) return invalid(STATE_REJECTED, "state_rejected")
 
     let codeVerifier: string
     try {
@@ -187,7 +151,7 @@ export function createOAuthConnectService(deps: OAuthConnectDeps): OAuthConnectS
       row,
       flow,
       attemptId: pending.id,
-      expectedLifecycleVersion: pending.authorizationLifecycleVersion,
+      expectedLifecycleVersion: lifecycleVersion,
       code: presented.code,
       redirectUri: pending.redirectUri ?? flow.loopbackRedirectUri,
       codeVerifier,
