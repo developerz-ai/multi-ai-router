@@ -1,4 +1,4 @@
-import { createEffect, createMemo, createSignal, createUniqueId, Show } from "solid-js"
+import { createEffect, createMemo, createSignal, createUniqueId, type JSX, Show } from "solid-js"
 import { Banner } from "../../components/Banner"
 import { CopyValue } from "../../components/CopyValue"
 import { Field } from "../../components/Field"
@@ -24,6 +24,8 @@ export interface ConnectDialogProps {
   readonly account: AccountView | null
   /** `claude-cli` drives the CLI; `oauth` is a code flow the router runs. Null → not connectable. */
   readonly connectFlow: ProviderConnectFlow | null
+  /** The device-code block, where the provider declares one. Rendered beside the paste flow. */
+  readonly devicePanel?: JSX.Element
   readonly mode: ConnectMode
   readonly started: ConnectStarted | null
   readonly completed: ConnectCompleted | null
@@ -252,6 +254,8 @@ export function ConnectDialog(props: ConnectDialogProps) {
               </>
             )}
           </Show>
+
+          {props.devicePanel}
 
           <ConnectResult completed={props.completed} mode={props.mode} />
         </Modal>

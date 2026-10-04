@@ -198,6 +198,7 @@ export type {
   SdkUsageGaugeProbeOutcome,
 } from "./claude-sdk/usage-gauge-probe"
 export { createSdkUsageGaugeProbe } from "./claude-sdk/usage-gauge-probe"
+export type { DevicePollResult, DeviceUserCode, ProviderDeviceFlow } from "./device-flow"
 export type { HttpDriverConfig, ProviderSurface } from "./driver"
 export { createHttpDriver } from "./driver"
 export type { OpenAiOAuthTokens } from "./drivers/openai-oauth"

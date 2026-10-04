@@ -22,6 +22,9 @@ export const queryKeys = {
     list: (filter: AccountListFilter) =>
       ["accounts", "list", filter.status ?? null, filter.provider ?? null] as const,
     detail: (id: string) => ["accounts", "detail", id] as const,
+    /** One device sign-in attempt, keyed by its expiry so a new attempt never reads the last. */
+    connectDevice: (id: string, attempt: string) =>
+      ["accounts", "connect-device", id, attempt] as const,
     /** Last re-check per account. Written by the mutation, read by the row. */
     recheck: (id: string) => ["accounts", "recheck", id] as const,
     /** Last "Test now" per account. Own key, own cache-only read — see `useLastTest`. */

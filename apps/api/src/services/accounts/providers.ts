@@ -69,6 +69,8 @@ export interface ProviderDescriptor {
    * authorization, so there is something for the one-shot `state` to bind to.
    */
   readonly connectFlow: ProviderConnectFlow | null
+  /** The provider's OAuth flow also offers a device-code sign-in (`providers/device-flow.ts`). */
+  readonly deviceSignIn: boolean
   /** False means an account cannot be created for it — the console greys the option out. */
   readonly creatable: boolean
   /** Why an unimplemented or SDK-served provider is what it is. Verbatim from the registry. */
@@ -97,6 +99,7 @@ export function describeProvider(id: ProviderId): ProviderDescriptor {
       requiresConfigDir: false,
       // Asked of the driver, so a new OAuth provider becomes connectable the day its file lands.
       connectFlow: driver.oauth === undefined ? null : "oauth",
+      deviceSignIn: driver.oauth?.device !== undefined,
       creatable: true,
       reason: null,
     }
@@ -117,6 +120,7 @@ export function describeProvider(id: ProviderId): ProviderDescriptor {
       requiresBaseUrl: false,
       requiresConfigDir: true,
       connectFlow: "claude-cli",
+      deviceSignIn: false,
       creatable: true,
       reason: support.reason,
     }
@@ -132,6 +136,7 @@ export function describeProvider(id: ProviderId): ProviderDescriptor {
     requiresBaseUrl: false,
     requiresConfigDir: false,
     connectFlow: null,
+    deviceSignIn: false,
     creatable: false,
     reason: support.reason,
   }

@@ -10,6 +10,7 @@ import type {
 } from "@multi-ai-router/core"
 import type { ModelAliasMap } from "@multi-ai-router/db"
 import type { ResponsesEgressRules } from "../services/translate/shared/responses-egress"
+import type { ProviderDeviceFlow } from "./device-flow"
 
 /**
  * The provider driver contract: one interface, many implementations. Adding a provider is one
@@ -215,6 +216,7 @@ export interface ProviderOAuthFlow {
     readonly codeVerifier: string
   }): OAuthTokenRequest
   refresh(input: { readonly refreshToken: string }): OAuthTokenRequest
+  readonly device?: ProviderDeviceFlow
   /** Zod at the boundary: a reshaped payload yields `null`, never a half-populated token set. */
   readTokens(
     body: unknown,

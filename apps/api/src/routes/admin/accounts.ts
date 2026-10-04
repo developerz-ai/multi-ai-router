@@ -163,6 +163,21 @@ export function adminAccountRoutes(deps: AdminAccountRoutesDeps): Hono<AdminAuth
     return render(c, await deps.connect.complete(id.value, body.value.pasted))
   })
 
+  // Device-code sign-in. `POST` asks the issuer for a user code; `GET` advances the pending attempt
+  // by at most one upstream poll and says where it stands. Cancelled by `DELETE /:id/connect`.
+  routes.post("/:id/connect/device", async (c) => {
+    const id = validateId(c.req.param("id"))
+    if (!id.ok) return render(c, id)
+    const mode = c.req.query("mode") === "reconnect" ? "reconnect" : "connect"
+    return render(c, await deps.connect.beginDevice(id.value, mode))
+  })
+
+  routes.get("/:id/connect/device", async (c) => {
+    const id = validateId(c.req.param("id"))
+    if (!id.ok) return render(c, id)
+    return render(c, await deps.connect.deviceStatus(id.value))
+  })
+
   // Abandons a pending login now instead of at its TTL, terminating the subprocess with it.
   routes.delete("/:id/connect", async (c) => {
     const id = validateId(c.req.param("id"))

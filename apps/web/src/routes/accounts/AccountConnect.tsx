@@ -1,11 +1,24 @@
 import { createEffect, createMemo, createSignal, on } from "solid-js"
-import type { ConnectCompleted, ConnectMode, ConnectStarted } from "../../lib/api/connect"
+import type {
+  ConnectCompleted,
+  ConnectMode,
+  ConnectStarted,
+  DeviceConnectStarted,
+} from "../../lib/api/connect"
+import { findProvider } from "../../lib/api/providers"
 import type { AccountView, ProviderConnectFlow } from "../../lib/api/types"
 import { useWatchedAccount } from "../../lib/queries/accounts"
-import { useBeginConnect, useCancelConnect, useCompleteConnect } from "../../lib/queries/connect"
+import {
+  useBeginConnect,
+  useBeginDeviceConnect,
+  useCancelConnect,
+  useCompleteConnect,
+} from "../../lib/queries/connect"
+import { useProviders } from "../../lib/queries/providers"
 import { connectLabel } from "./account-cells"
 import { ConnectDialog, type ConnectProgress } from "./ConnectDialog"
 import { type LoginBaseline, loginBaseline, redirectLanded } from "./connect-landing"
+import { DeviceSignIn } from "./DeviceSignIn"
 
 export interface AccountConnectProps {
   /** Null while no account is selected. The dialog stays shut. */
@@ -54,16 +67,34 @@ export function AccountConnect(props: AccountConnectProps) {
   /** The row as it stood when the login began. The thing a redirect is detected against. */
   const [baseline, setBaseline] = createSignal<LoginBaseline | null>(null)
 
+  /** A device-code attempt on screen. Exclusive with `started`: each start supersedes the other. */
+  const [deviceStarted, setDeviceStarted] = createSignal<DeviceConnectStarted | null>(null)
+
   const begin = useBeginConnect()
   const complete = useCompleteConnect()
   const cancel = useCancelConnect()
+  const beginDevice = useBeginDeviceConnect()
+  const providers = useProviders()
+
+  /** Read off the provider's own declaration — the console never names a provider here. */
+  const deviceSignIn = () => {
+    const account = props.account
+    const list = Array.isArray(providers.data) ? providers.data : []
+    return (
+      props.connectFlow === "oauth" &&
+      account !== null &&
+      findProvider(list, account.provider)?.deviceSignIn === true
+    )
+  }
 
   const clear = () => {
     setStarted(null)
     setCompleted(null)
     setBaseline(null)
+    setDeviceStarted(null)
     begin.reset()
     complete.reset()
+    beginDevice.reset()
   }
 
   /**
@@ -81,6 +112,7 @@ export function AccountConnect(props: AccountConnectProps) {
     setCompleted(null)
     // The row the operator is looking at: a detail query left over from an earlier login may be stale.
     setBaseline(loginBaseline(account))
+    setDeviceStarted(null)
     begin.mutate({ id: account.id, mode: mode() }, { onSuccess: (result) => setStarted(result) })
   }
 
@@ -116,12 +148,29 @@ export function AccountConnect(props: AccountConnectProps) {
     setCompleted({ accountId: row.id, mode: pending.mode, connected: true })
   })
 
+  const beginDeviceLogin = () => {
+    const account = props.account
+    if (account === null) return
+    setCompleted(null)
+    // The server retires any paste attempt this start supersedes; the screen follows.
+    setStarted(null)
+    begin.reset()
+    beginDevice.mutate(
+      { id: account.id, mode: mode() },
+      { onSuccess: (result) => setDeviceStarted(result) },
+    )
+  }
+
   /** Abandons an unfinished login (terminating its subprocess), then hands control to `then`. */
   const leave = (then: () => void) => {
     const pending = started()
     const account = props.account
     // Completed logins have nothing left to abandon; an unfinished one does.
-    if (pending !== null && completed() === null && account !== null) {
+    if (
+      (pending !== null || deviceStarted() !== null) &&
+      completed() === null &&
+      account !== null
+    ) {
       cancel.mutate(account.id)
     }
     clear()
@@ -135,7 +184,19 @@ export function AccountConnect(props: AccountConnectProps) {
       completed={completed()}
       completing={complete.isPending}
       connectFlow={props.connectFlow}
-      error={begin.error ?? complete.error}
+      devicePanel={
+        deviceSignIn() && props.account !== null && completed() === null ? (
+          <DeviceSignIn
+            accountId={props.account.id}
+            beginning={beginDevice.isPending}
+            nowMs={props.nowMs}
+            onBegin={beginDeviceLogin}
+            onConnected={(result) => setCompleted(result)}
+            started={deviceStarted()}
+          />
+        ) : undefined
+      }
+      error={begin.error ?? complete.error ?? beginDevice.error}
       mode={mode()}
       nowMs={props.nowMs}
       onBegin={beginLogin}

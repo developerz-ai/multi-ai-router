@@ -3,6 +3,11 @@ import { type AdminResult, notFound, ok } from "../../admin/result"
 import { describeProvider } from "../providers"
 import type { ClaudeConnectService } from "./claude"
 import type { OAuthCallbackQuery, OAuthConnectService } from "./oauth"
+import type {
+  DeviceConnectService,
+  DeviceConnectStarted,
+  DeviceConnectStatus,
+} from "./oauth-device"
 import type { OAuthCapture } from "./oauth-exchange"
 
 /**
@@ -61,6 +66,10 @@ export interface ConnectService {
   cancel(accountId: string): Promise<AdminResult<ConnectCancelled>>
   /** The OAuth redirect callback. Bound by `state` alone, so no account id is passed or trusted. */
   redeem(query: OAuthCallbackQuery): Promise<AdminResult<ConnectCompleted>>
+  /** Device-code sign-in, where the provider's OAuth flow declares one (`oauth-device.ts`). */
+  beginDevice(accountId: string, mode: ConnectMode): Promise<AdminResult<DeviceConnectStarted>>
+  /** Advances a pending device sign-in by at most one upstream poll, and says where it stands. */
+  deviceStatus(accountId: string): Promise<AdminResult<DeviceConnectStatus>>
   /** Terminates every pending CLI login. Called on shutdown; the OAuth flow holds no process. */
   closeAdmission(): void
   revoke(accountId: string): void
@@ -71,6 +80,7 @@ export interface ConnectServiceDeps {
   readonly accounts: Pick<AccountRepository, "findById">
   readonly claude: ClaudeConnectService
   readonly oauth: OAuthConnectService
+  readonly device: DeviceConnectService
 }
 
 /** The three calls both flows answer. Neither backend implements it by name — they just match. */
@@ -109,6 +119,10 @@ export function createConnectService(deps: ConnectServiceDeps): ConnectService {
     },
 
     redeem: (query) => deps.oauth.redeem(query),
+    // No backend lookup: the device service reads the provider's own declaration and refuses an
+    // account whose flow has none — a Claude subscription included.
+    beginDevice: (accountId, mode) => deps.device.begin(accountId, mode),
+    deviceStatus: (accountId) => deps.device.status(accountId),
 
     closeAdmission: () => deps.claude.closeAdmission(),
     revoke: (accountId) => deps.claude.revoke(accountId),

@@ -269,3 +269,48 @@ describe("Codex failure wording", () => {
     expect(signal?.retryAfterSeconds).toBe(45)
   })
 })
+
+describe("the device-code flow (codex-rs device_code_auth.rs)", () => {
+  const device = openAiOAuthDriver.oauth?.device
+  if (device === undefined) throw new Error("openai-oauth declares no device flow")
+
+  test("endpoints, verification page and device redirect are pinned", () => {
+    expect(device.verificationUrl).toBe("https://auth.openai.com/codex/device")
+    expect(device.redirectUri).toBe("https://auth.openai.com/deviceauth/callback")
+    expect(device.userCodeRequest()).toMatchObject({
+      url: "https://auth.openai.com/api/accounts/deviceauth/usercode",
+      method: "POST",
+    })
+    expect(JSON.parse(device.userCodeRequest().body)).toEqual({ client_id: OPENAI_OAUTH_CLIENT_ID })
+    const poll = device.pollRequest({ deviceAuthId: "d", userCode: "U" })
+    expect(poll.url).toBe("https://auth.openai.com/api/accounts/deviceauth/token")
+    expect(JSON.parse(poll.body)).toEqual({ device_auth_id: "d", user_code: "U" })
+  })
+
+  test("the user code reads under either spelling; the interval is a string, a number, or absent", () => {
+    expect(device.readUserCode({ device_auth_id: "d", user_code: "U", interval: "7" })).toEqual({
+      deviceAuthId: "d",
+      userCode: "U",
+      intervalSeconds: 7,
+    })
+    expect(device.readUserCode({ device_auth_id: "d", usercode: "U", interval: 3 })?.userCode).toBe(
+      "U",
+    )
+    expect(
+      device.readUserCode({ device_auth_id: "d", user_code: "U", interval: "0" })?.intervalSeconds,
+    ).toBeNull()
+    expect(device.readUserCode({ device_auth_id: "d" })).toBeNull()
+    expect(device.readUserCode({ user_code: "U" })).toBeNull()
+  })
+
+  test("403 and 404 are pending, 2xx carries the code, anything else is final", () => {
+    expect(device.readPoll(403, null)).toEqual({ kind: "pending" })
+    expect(device.readPoll(404, null)).toEqual({ kind: "pending" })
+    expect(
+      device.readPoll(200, { authorization_code: "c", code_verifier: "v", code_challenge: "x" }),
+    ).toEqual({ kind: "authorized", code: "c", codeVerifier: "v" })
+    expect(device.readPoll(200, { authorization_code: "c" })).toEqual({ kind: "refused" })
+    expect(device.readPoll(400, null)).toEqual({ kind: "refused" })
+    expect(device.readPoll(410, null)).toEqual({ kind: "refused" })
+  })
+})

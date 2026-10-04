@@ -267,6 +267,13 @@ export function createMemoryStore(): MemoryStore {
         for (const row of live) row.consumedAt = now
         return live.length
       },
+      findLive: async (id, now) => {
+        const row = oauthStates.find(
+          (candidate) =>
+            candidate.id === id && candidate.consumedAt === null && candidate.expiresAt > now,
+        )
+        return row === undefined ? undefined : { ...row }
+      },
       deleteExpiredBefore: async (cutoff, limit) => {
         const expired = oauthStates.filter((row) => row.expiresAt < cutoff).slice(0, limit)
         drop(oauthStates, (row) => expired.includes(row))

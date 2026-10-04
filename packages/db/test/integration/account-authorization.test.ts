@@ -52,6 +52,24 @@ async function begin(id: string) {
   })
 }
 describe.skipIf(!url)("durable account authorization identity", () => {
+  test("a device attempt carries its sealed handle in nonce, readable while live only", async () => {
+    const row = await seed()
+    if (!handle) throw new Error("fixture missing")
+    const begun = await repo.beginAccountAuthorization({
+      id: row.id,
+      expectedProvider: "openai-oauth",
+      attempt: { ...attempt(), nonce: "sealed-device-handle" },
+      now,
+    })
+    if (!begun) throw new Error("fixture missing")
+    expect(begun.pending.nonce).toBe("sealed-device-handle")
+    const states = createOauthStateRepository(handle.db)
+    expect((await states.findLive(begun.pending.id, now))?.nonce).toBe("sealed-device-handle")
+    expect(await states.findLive(begun.pending.id, new Date(now.getTime() + 60001))).toBeUndefined()
+    await states.consume(begun.pending.state, now)
+    expect(await states.findLive(begun.pending.id, now)).toBeUndefined()
+  })
+
   test("consumed A is fenced by begin B and canceled consumed B", async () => {
     const row = await seed()
     const a = await begin(row.id)

@@ -24,7 +24,7 @@ export type ConnectMode = "connect" | "reconnect"
  * reachable `PUBLIC_URL`, and it is the *only* mode the Claude CLI login has at all. `redirect`
  * is offered when the server minted a callback it can actually receive.
  */
-export type ConnectCapture = "redirect" | "paste"
+export type ConnectCapture = "redirect" | "paste" | "device"
 
 export interface ConnectStarted {
   readonly accountId: string
@@ -86,4 +86,40 @@ export function completeConnect(args: {
 /** Abandons a pending login now rather than at its TTL, terminating any subprocess with it. */
 export function cancelConnect(id: string): Promise<ConnectCancelled> {
   return request<ConnectCancelled>({ method: "DELETE", path: `/accounts/${id}/connect` })
+}
+
+/**
+ * Device-code sign-in, for providers whose OAuth flow offers one (`ProviderDescriptor.deviceSignIn`).
+ * The operator enters `userCode` at `verificationUrl` from any browser; nothing is pasted back.
+ * The issuer's own handle for the attempt never leaves the router — only what the operator reads.
+ */
+export interface DeviceConnectStarted {
+  readonly accountId: string
+  readonly mode: ConnectMode
+  readonly verificationUrl: string
+  readonly userCode: string
+  readonly expiresAt: string
+  readonly intervalSeconds: number
+}
+
+export type DeviceConnectStatus =
+  | ({ readonly status: "waiting" } & DeviceConnectStarted)
+  | { readonly status: "connected"; readonly completed: ConnectCompleted }
+  | { readonly status: "expired"; readonly accountId: string }
+  | { readonly status: "denied"; readonly accountId: string }
+
+export function beginDeviceConnect(args: {
+  readonly id: string
+  readonly mode: ConnectMode
+}): Promise<DeviceConnectStarted> {
+  return request<DeviceConnectStarted>({
+    method: "POST",
+    path: `/accounts/${args.id}/connect/device`,
+    query: { mode: args.mode },
+  })
+}
+
+/** Each read advances the pending attempt by at most one upstream poll, held to its interval. */
+export function getDeviceConnectStatus(id: string): Promise<DeviceConnectStatus> {
+  return request<DeviceConnectStatus>({ method: "GET", path: `/accounts/${id}/connect/device` })
 }

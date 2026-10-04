@@ -62,6 +62,11 @@ export interface AccountAuthorizationMethods {
       state: string
       /** Already encrypted by caller. */
       codeVerifier: string
+      /**
+       * Already encrypted by caller. Set only by a device-code attempt, whose upstream handle
+       * travels here; `null` for every authorization-code attempt (the column's admin-OIDC use).
+       */
+      nonce?: string | null
       redirectUri: string
       expiresAt: Date
     }

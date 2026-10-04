@@ -18,7 +18,7 @@ import { writeStoredOAuth } from "../refresh/credential"
  * that was just presented, so a refusal is reported as its status and nothing else.
  */
 
-export type OAuthCapture = "redirect" | "paste"
+export type OAuthCapture = "redirect" | "paste" | "device"
 
 export interface OAuthConnectCompleted {
   readonly accountId: string
