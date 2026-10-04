@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.20.0] — 2026-10-04
+
+### Added
+
+- **Model sizes on `/v1/models`.** Anthropic-shape entries carry `max_input_tokens` / `max_tokens` (null when unknown); OpenAI-shape entries carry `context_length` / `max_completion_tokens` when known. Values come from each provider's own listing where it states them (Anthropic `max_input_tokens`/`max_tokens`, Codex `context_window`, OpenRouter `context_length`/`max_completion_tokens`, vLLM `max_model_len`), otherwise the shipped tables, served from the warm catalog. Note: Claude Code does not read sizes from a custom endpoint today; set `CLAUDE_CODE_MAX_CONTEXT_TOKENS` client-side.
+
+### Fixed
+
+- **`gpt-6.1-sol[1m]` (Claude Code's "Default" with a context tag) was a 503 "no account serves model".** A trailing context tag like `[1m]` is a client hint: on providers that don't understand it the router matches and sends the base name. Claude subscriptions still receive the tag. An explicit alias or listing of the tagged name wins.
+- **Usage recorded zero tokens when the final stream event exceeded `UPSTREAM_RESPONSE_OBSERVATION_MAX_BYTES`** (Codex `response.completed` echoes the request, ~224 KB in prod). Oversized frames are now scanned once as they pass, retaining only the usage/status fields within the same cap.
+
 ## [2.19.1] — 2026-10-04
 
 ### Fixed
@@ -15,9 +26,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **ChatGPT/Codex "Test now" and the idle probe failed with "Input must be a list".** The probe now sends `input` as a list of message items.
 - **An `uncertain` recovery blocked an account until an operator pressed Re-check.** It now holds only until its `nextAllowedAt` (the recovery cooldown when its owner recorded it; the maximum outcome age when the permit may still be on the wire), then the next automatic hint starts a fresh probe. A probe hold is reported as "settling a recovery probe", not as quota.
 
-### Known issue
-
-- Usage for a stream whose final event exceeds `responseObservationMaxBytes` (64 KB by default) records success with zero tokens. Codex's `response.completed` echoes the request and can exceed it.
 
 ## [2.19.0] — 2026-10-04
 

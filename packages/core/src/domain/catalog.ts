@@ -15,9 +15,9 @@ import { z } from "zod"
  *
  * The two differ in exactly the way a reader cares about. `upstream` was in the provider's own
  * listing for this account's endpoint, so it is current and specific. `shipped` came from the
- * table this image was built with, because the provider's listing carries no such field at all —
- * verified empirically: z.ai, MiniMax, OpenAI and Anthropic all answer `/v1/models` with nothing
- * but an id, an object type and an owner.
+ * table this image was built with, because the provider's listing carries no such field — z.ai,
+ * MiniMax and OpenAI answer `/v1/models` with only an id, an object type and an owner. (Anthropic's
+ * listing does state `max_input_tokens` / `max_tokens`, read as `upstream`.)
  *
  * A shipped number is a real published figure, not a guess, but it ages with the image and cannot
  * know about a model released after it. Collapsing the two into one unlabelled integer would let a

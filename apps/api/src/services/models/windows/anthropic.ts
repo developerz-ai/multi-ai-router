@@ -5,9 +5,10 @@ import type { ContextTable } from "@multi-ai-router/core"
  *
  * Provenance: the published model reference
  * (platform.claude.com/docs/en/about-claude/models/overview), cross-checked against a live aggregator listing on the
- * date `CONTEXT_TABLE_AS_OF` names. Needed as a shipped table because Anthropic's own
- * `GET /v1/models` carries **no** size field at all — it answers `type`, `id`, `display_name` and
- * `created_at`, and nothing about how much fits.
+ * date `CONTEXT_TABLE_AS_OF` names. Needed as a shipped table because a Claude subscription has no
+ * HTTP listing and the Agent SDK's handshake states no size. An `anthropic-api` account's own
+ * `GET /v1/models` does state `max_input_tokens` / `max_tokens`, and that live reading wins over
+ * this table (`entries.ts`); a row here only answers when the listing left the number null.
  *
  * Blast radius of a stale row: the number rendered beside a model in the catalog listing, labelled
  * `shipped` so a reader can tell it from a live reading. Nothing in routing consults it, so a wrong

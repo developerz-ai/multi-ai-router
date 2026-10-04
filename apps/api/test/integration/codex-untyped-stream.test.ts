@@ -49,7 +49,8 @@ const MESSAGE = {
 }
 const RESPONSE = { id: "resp_1", object: "response", model: "gpt-6.1-sol" }
 
-function codexEvents(): string {
+/** `echo` pads `response.completed` the way the live backend does (instructions + tools echoed). */
+function codexEvents(echo = ""): string {
   sequence = 0
   const text = { item_id: "msg_1", output_index: 1, content_index: 0 }
   const summary = { item_id: "rs_1", output_index: 0, summary_index: 0 }
@@ -85,6 +86,7 @@ function codexEvents(): string {
       response: {
         ...RESPONSE,
         status: "completed",
+        ...(echo === "" ? {} : { instructions: echo, tools: [{ type: "function", name: "Bash" }] }),
         output: [REASONING, MESSAGE],
         usage: {
           input_tokens: 21,
@@ -99,8 +101,8 @@ function codexEvents(): string {
 }
 
 /** HTTP 200, an event stream, and no `content-type` at all — what prod saw. */
-function untypedStream(): Response {
-  const response = new Response(new TextEncoder().encode(codexEvents()), { status: 200 })
+function untypedStream(echo = ""): Response {
+  const response = new Response(new TextEncoder().encode(codexEvents(echo)), { status: 200 })
   response.headers.delete("content-type")
   return response
 }
@@ -115,7 +117,7 @@ describe("Codex answers SSE without a content-type", () => {
   test("streaming Anthropic client gets Anthropic SSE, not raw Responses frames", async () => {
     const { app, upstream, usage } = harness({
       accounts: [codexAccount()],
-      responses: [untypedStream],
+      responses: [() => untypedStream()],
     })
     const res = await app.request(
       "/v1/messages",
@@ -145,7 +147,7 @@ describe("Codex answers SSE without a content-type", () => {
   test("non-streaming Anthropic client gets one collected Anthropic JSON message", async () => {
     const { app, upstream, usage } = harness({
       accounts: [codexAccount()],
-      responses: [untypedStream],
+      responses: [() => untypedStream()],
     })
     const res = await app.request(
       "/v1/messages",
@@ -162,5 +164,28 @@ describe("Codex answers SSE without a content-type", () => {
     await settle()
     expect(usage.rows).toHaveLength(1)
     expect(usage.rows[0]).toMatchObject({ outcome: "success", tokensIn: 21, tokensOut: 9 })
+  })
+
+  /**
+   * Prod v2.19.1: the same route recorded success with 0/0 tokens because the 224 KB stream's
+   * `response.completed` exceeded the 64 KB observation cap and its `usage` was never read.
+   */
+  test("usage inside an over-cap response.completed is still recorded", async () => {
+    const echo = "i".repeat(200_000)
+    for (const stream of [true, false]) {
+      const { app, usage } = harness({
+        accounts: [codexAccount()],
+        responses: [() => untypedStream(echo)],
+      })
+      const res = await app.request(
+        "/v1/messages",
+        post(JSON.stringify({ ...REQUEST, stream }), { ...bearer(), accept: "application/json" }),
+      )
+      expect(res.status).toBe(200)
+      expect(await res.text()).toContain("hello")
+      await settle()
+      expect(usage.rows).toHaveLength(1)
+      expect(usage.rows[0]).toMatchObject({ outcome: "success", tokensIn: 21, tokensOut: 9 })
+    }
   })
 })

@@ -47,8 +47,18 @@ leftmost one that applies.
 **`/v1/catalog` is a separate path rather than more fields on `/v1/models`, deliberately.**
 `/v1/models` is a *wire contract*: an OpenAI or Anthropic client parses it with a generated SDK, and
 the router's job there is to answer in the shape those clients expect and nothing more. The catalog
-is the router's own listing, so it can say things neither of those shapes has a place for — how much
-fits, what it costs, and how many accounts stand behind the name.
+is the router's own listing, so it can say things neither of those shapes has a place for — what it
+costs, how many accounts stand behind the name, and where a size came from.
+
+**`/v1/models` does say how big each model is**, because both ecosystems have a place for it and
+clients read it. Served from the warm model catalog, never a query on the request path; per field,
+the first in-scope account that states a number wins over one that does not. Anthropic shape:
+`max_input_tokens` and `max_tokens` — Anthropic's own `ModelInfo` fields, always present, `null`
+when unknown. OpenAI shape: OpenAI's `Model` has no size field, so the OpenAI-compatible convention —
+`context_length` (OpenRouter, Together) and `max_completion_tokens` — **absent when unknown**,
+because an undocumented field is read as `optional(number)` and a `null` would fail it. What each
+provider's listing states, and what Claude Code reads:
+[03-providers.md](03-providers.md#model-sizes--what-each-listing-states).
 
 It is shaped after an aggregator's models endpoint in *what it answers*, not byte-for-byte in how it
 spells it, and the difference is deliberate. Copying that shape exactly would mean publishing
@@ -82,8 +92,8 @@ operator's `sonnet → glm-4.7` — carries one field neither ecosystem defines,
 the canonical id it names today: the SDK's own word for a subscription, the account's alias map
 otherwise, the first in-scope account's answer where several agree. A concrete id carries no such
 field (absent, not null), so a strict client sees exactly the documented shape. OpenAI shape:
-`{ "id": "sonnet", "object": "model", "created": …, "owned_by": "anthropic-oauth", "resolved_model": "claude-sonnet-5-5" }`;
-Anthropic shape: `{ "type": "model", "id": "sonnet", "display_name": "sonnet", "resolved_model": "claude-sonnet-5-5" }`.
+`{ "id": "sonnet", "object": "model", "created": …, "owned_by": "anthropic-oauth", "context_length": 1000000, "max_completion_tokens": 128000, "resolved_model": "claude-sonnet-5-5" }`;
+Anthropic shape: `{ "type": "model", "id": "sonnet", "display_name": "sonnet", "max_input_tokens": 1000000, "max_tokens": 128000, "resolved_model": "claude-sonnet-5-5" }`.
 Both shapes are served on the one path, chosen by the credential style the client presented
 (`x-api-key` → Anthropic, bearer → OpenAI); `GET /v1/models/:id` resolves the same way. **Resolution
 is information, never a rename**: the request path sends the client's own string upstream unchanged

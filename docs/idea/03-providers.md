@@ -95,6 +95,11 @@ interface ProviderDriver {
   // does not. Any other provider handed `null` is refused, never sent unauthenticated.
   buildHeaders(account: DriverAccount, credential: ProviderCredential | null): Headers;
 
+  // True only where the upstream itself reads Claude Code's context tag (`opus[1m]`) on a model
+  // name — today `anthropic-oauth`, whose `claude` CLI does. Absent: routing strips the tag and
+  // sends the base name (05-routing-and-failover.md#context-tags--a-client-hint-not-part-of-the-name).
+  readonly understandsContextTags?: boolean;
+
   // Client model name -> upstream model id, via the Account's alias map.
   // Identity when the Account has no entry for that name.
   mapModelAlias(account: DriverAccount, requestedModel: string): string;
@@ -587,6 +592,55 @@ No bespoke driver, no code change, no release. If a vendor exposes an OpenAI- or
 Anthropic-shaped endpoint, it is already supported. A dedicated Provider id is only worth
 adding when the vendor needs something the generic pair cannot express — OAuth, a mandatory
 header, or a non-standard quota signal.
+
+## Model sizes — what each listing states
+
+The hourly `model_catalog_refresh` sweep reads a context window and an output ceiling from the
+provider's own listing wherever it states one (`services/models/listing.ts`, one Zod union of every
+spelling), labels the row `upstream`, and falls back to the shipped table (`services/models/windows/`,
+`shipped`) only where it does not. Nothing is invented: a model in neither is `null`.
+
+| Provider | Listing | Window field | Output field |
+|---|---|---|---|
+| `anthropic-api` | `GET /v1/models` | `max_input_tokens` | `max_tokens` (both `number \| null`, @anthropic-ai/sdk 0.131 `ModelInfo`) |
+| `anthropic-oauth` | SDK handshake (no size) | shipped table, by resolved id | shipped table |
+| `openai-oauth` | Codex `GET /models?client_version=` | `context_window` (then `max_context_window`) | — |
+| `openrouter` | `GET /models` | `top_provider.context_length`, then `context_length` | `top_provider.max_completion_tokens` |
+| `together` | `GET /models` | `context_length` | — |
+| `groq` | `GET /models` | `context_window` | `max_completion_tokens` |
+| `mistral` | `GET /models` | `max_context_length` | — |
+| `openai-compatible` | `GET /models` | `max_model_len` (vLLM), or any spelling above | any spelling above |
+| `gemini` | OpenAI-compat `GET /models` | none — the compat surface omits the native `inputTokenLimit` | — |
+| `openai-api`, `zai`, `minimax` | `GET /models` | none (verified live) — shipped table | shipped table |
+| `kimi`, `deepseek`, `xai` | `GET /models` | any spelling above if stated (not verified live), else shipped table | same |
+| `cerebras`, `ollama`, `anthropic-compatible` | `GET /models` | whatever spelling above the endpoint uses, else `null` | same |
+
+`GET /v1/models` then publishes the numbers from the warm store — Anthropic shape `max_input_tokens`
+/ `max_tokens`, OpenAI shape `context_length` / `max_completion_tokens`
+([06-protocol-translation.md](06-protocol-translation.md#ingress-surface)).
+
+### What Claude Code reads from a router's `/v1/models`
+
+Verified against the CLI bundled with Agent SDK 0.3.289 (strings of the `claude` binary), so an
+operator knows which knob actually moves a custom model's window:
+
+- **Gateway discovery** — only with `CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY=1` and a
+  non-first-party `ANTHROPIC_BASE_URL`: `GET {base}/v1/models?limit=1000` with `Authorization:
+  Bearer $ANTHROPIC_AUTH_TOKEN` and/or `x-api-key`, parsed as `{data: [{id, display_name?,
+  description?}]}` with Zod `.strip()`, ids filtered to `/(claude|anthropic)/i`, cached to
+  `~/.claude/cache/gateway-models.json`, and used **only as `/model` picker rows**. Sizes are
+  stripped; a non-Claude id never appears.
+- **Dormant size readers** — `models.retrieve(id)` (`GET /v1/models/{id}?beta=true`, logged as
+  `max_input_tokens=… max_tokens=…`) and a `models.list` capability cache
+  (`model-capabilities.json`, schema `{id, max_input_tokens?, max_tokens?}`) exist but are gated off
+  by constant-false flags in this build. They read Anthropic's field names, which is why the router
+  emits exactly those; a `null` fails their `optional(number)` and simply skips the row.
+- **What actually sets the window today** — `[1m]` suffix → 1M; else the CLI's built-in model
+  catalog (`runtime.max_input_tokens ?? context_window`) for an id it knows, or one mapped onto a
+  known id by a `modelPicker` row's `behavesAs` (settings) / `modelOverrides`; else, for an id it
+  does not know, `CLAUDE_CODE_MAX_CONTEXT_TOKENS`; else 200k. Output: catalog `max_output_tokens`,
+  else `CLAUDE_CODE_MAX_OUTPUT_TOKENS`, else 32k default / 128k ceiling. The router cannot set any
+  of these from the wire; the operator sets them on the client.
 
 ## Adding a provider
 

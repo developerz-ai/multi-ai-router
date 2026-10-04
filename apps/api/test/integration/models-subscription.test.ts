@@ -90,6 +90,10 @@ describe("GET /v1/models on a pool of Claude subscriptions", () => {
       created: expect.any(Number),
       owned_by: "anthropic-oauth",
       resolved_model: "claude-sonnet-5-5",
+      // The shipped window of what `sonnet` resolves to, under the names OpenAI-compatible
+      // listings use (OpenRouter's `context_length`, OpenAI's `max_completion_tokens`).
+      context_length: 1_000_000,
+      max_completion_tokens: 128_000,
     })
     expect(body.data.find((row) => row.id === "fable")?.resolved_model).toBe("claude-fable-5-1")
     expect(body.data.find((row) => row.id === "claude-opus-5")).not.toHaveProperty("resolved_model")
@@ -106,6 +110,50 @@ describe("GET /v1/models on a pool of Claude subscriptions", () => {
     expect(body.has_more).toBe(false)
     expect(body.data.every((row) => row.type === "model")).toBe(true)
     expect(body.data.find((row) => row.id === "opus")?.resolved_model).toBe("claude-opus-5-5")
+    // Anthropic's own field names, which Claude Code's model-capability readers parse.
+    expect(body.data.find((row) => row.id === "opus")).toMatchObject({
+      max_input_tokens: 1_000_000,
+      max_tokens: 128_000,
+    })
+    expect(body.data.find((row) => row.id === "haiku")).toMatchObject({
+      max_input_tokens: 200_000,
+      max_tokens: 64_000,
+    })
+  })
+
+  test("an unsized model omits the OpenAI-shape size fields rather than sending null", async () => {
+    // A live listing naming a model no table sizes: the Anthropic shape says null (its documented
+    // `number | null`), the OpenAI shape has no documented field, so it says nothing.
+    const store = createModelCatalogStore({
+      load: async () => [
+        {
+          accountId: "sub-a",
+          modelId: "claude-unreleased-9",
+          contextTokens: null,
+          maxOutputTokens: null,
+          contextSource: null,
+          listingSource: "live",
+          resolvedModel: null,
+          refreshedAt: new Date(),
+        },
+      ],
+      refreshIntervalMs: 60_000,
+    })
+    await store.refresh()
+    const { app } = subscriptionPool(store)
+
+    const openAi = await listed(app)
+    const row = openAi.data.find((entry) => entry.id === "claude-unreleased-9")
+    expect(row).toBeDefined()
+    expect(row).not.toHaveProperty("context_length")
+    expect(row).not.toHaveProperty("max_completion_tokens")
+
+    const res = await app.request("/v1/models", { headers: { "x-api-key": KEY } })
+    const anthropic = (await res.json()) as { data: { id: string }[] }
+    expect(anthropic.data.find((entry) => entry.id === "claude-unreleased-9")).toMatchObject({
+      max_input_tokens: null,
+      max_tokens: null,
+    })
   })
 
   test("GET /v1/models/:id resolves an alias the same way", async () => {

@@ -138,6 +138,27 @@ and which error depends on *why* it is empty. When every in-scope account was dr
 `model-unsupported` the `503` says so in those words and echoes the client's model name: `no account
 serves model "glm-5.3" — a client change (3 accounts in scope: …)`.
 
+### Context tags — a client hint, not part of the name
+
+Claude Code appends a context-window tag to the model it sends — `opus[1m]`, `claude-opus-5-5[1m]`,
+and, when pointed at a non-Claude default, `gpt-6.1-sol[1m]` (`routing/context-tag.ts`: one trailing
+bracketed alphanumeric token after a non-empty name). Only the `claude` CLI reads it, so a provider
+declares `understandsContextTags` ([03-providers.md](03-providers.md#provider-driver-contract)) and
+today only `anthropic-oauth` does: there the tagged name is resolved and sent to `query()` exactly
+as today. On every other account, a tagged name the operator neither aliased nor listed verbatim is
+resolved **as its base name** — the alias map, `supportedModels` and the model family are all
+checked on `gpt-6.1-sol`, and `gpt-6.1-sol` is what goes upstream, including to an Anthropic API key
+(the Messages API has no tagged ids). A passthrough body gets this rename through the same single
+`model`-span rewrite an alias uses — no re-serialization. It is the same model with the hint
+dropped, not a substitution (non-negotiable 4): the resolution carries `strippedContextTag`, the
+usage row keeps the client's tagged name beside the upstream base name, and a base name no account
+serves is still the `model-unsupported` `503`. Why: `claudes gpt` sent `gpt-6.1-sol[1m]`, and a
+ChatGPT account whose discovered list held `gpt-6.1-sol` was refused as `model-unsupported` (prod,
+2026-10-04). `GET /v1/models` lists no tagged spellings.
+
+A stripped name differs from the requested one, so it ranks like an alias (below): an account that
+reads the tag, and so honors the context hint, goes first.
+
 ### Native before alias
 
 An alias map renames a client's name onto a different model (`claude-opus-5 -> glm-5.2`). When the

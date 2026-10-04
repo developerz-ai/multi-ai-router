@@ -23,11 +23,12 @@ import { type FetchLike, routableStandIn, runAttempt, upstreamModelsUrl } from "
 /**
  * One entry, with whatever the provider said about its size.
  *
- * Both numbers are null far more often than not. Verified against the live endpoints: z.ai,
- * MiniMax, OpenAI and Anthropic answer with an id, an object type and an owner and nothing else.
- * The hosts that serve open-weight models (Groq, Together, Cerebras) and the aggregators do state a
- * size, as do Google and Mistral — which is the entire reason this parser reads a size at all
- * rather than leaving every window to the shipped table.
+ * Both numbers are null more often than not: z.ai, MiniMax and OpenAI answer with an id, an object
+ * type and an owner and nothing else. Anthropic's `ModelInfo` now states `max_input_tokens` and
+ * `max_tokens` (`number | null`, @anthropic-ai/sdk 0.131), the hosts that serve open-weight models
+ * (Groq, Together, Cerebras, vLLM) and the aggregators state a size, and so does Mistral — which is
+ * the entire reason this parser reads a size at all rather than leaving every window to the shipped
+ * table.
  */
 export interface UpstreamModelEntry {
   readonly id: string
@@ -84,7 +85,9 @@ const size = z
  *
  * Provenance, one field at a time, so a reader can tell which vendor each exists for:
  * `context_length` is OpenRouter's and Together's, `context_window` is Groq's, `max_context_length`
- * is Mistral's, and `inputTokenLimit`/`outputTokenLimit` are Google's camelCase pair.
+ * is Mistral's, `max_model_len` is vLLM's `ModelCard`, `max_input_tokens`/`max_tokens` are
+ * Anthropic's `ModelInfo` pair, and `inputTokenLimit`/`outputTokenLimit` are Google's native
+ * camelCase pair (its OpenAI-compatible `/models`, which the `gemini` driver reads, states neither).
  * `top_provider` is OpenRouter's per-endpoint block, which is the more specific of its two answers.
  *
  * A loose object throughout: a provider adding a field must never fail the listing, and an entry
@@ -95,10 +98,13 @@ const entrySchema = z.looseObject({
   context_length: size.optional(),
   context_window: size.optional(),
   max_context_length: size.optional(),
+  max_model_len: size.optional(),
+  max_input_tokens: size.optional(),
   inputTokenLimit: size.optional(),
   max_completion_tokens: size.optional(),
   max_output_tokens: size.optional(),
   outputTokenLimit: size.optional(),
+  max_tokens: size.optional(),
   top_provider: z
     .looseObject({
       context_length: size.optional(),
@@ -217,6 +223,8 @@ function toEntry(entry: ParsedEntry): UpstreamModelEntry {
       entry.context_length ??
       entry.context_window ??
       entry.max_context_length ??
+      entry.max_model_len ??
+      entry.max_input_tokens ??
       entry.inputTokenLimit ??
       null,
     maxOutputTokens:
@@ -224,6 +232,8 @@ function toEntry(entry: ParsedEntry): UpstreamModelEntry {
       entry.max_completion_tokens ??
       entry.max_output_tokens ??
       entry.outputTokenLimit ??
+      // Last: Anthropic's spelling of the output ceiling, and the most generic-sounding name here.
+      entry.max_tokens ??
       null,
   }
 }

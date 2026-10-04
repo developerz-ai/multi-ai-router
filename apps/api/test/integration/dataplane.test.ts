@@ -1781,7 +1781,14 @@ describe("GET /v1/models/:id", () => {
     const body = (await res.json()) as { type: string; id: string; display_name: string }
 
     expect(res.status).toBe(200)
-    expect(body).toEqual({ type: "model", id: "claude-opus-5", display_name: "claude-opus-5" })
+    // Anthropic's `ModelInfo` always carries both sizes, null when unknown — and nothing swept here.
+    expect(body).toEqual({
+      type: "model",
+      id: "claude-opus-5",
+      display_name: "claude-opus-5",
+      max_input_tokens: null,
+      max_tokens: null,
+    })
   })
 
   test("404s an id no account in the key's scope serves", async () => {

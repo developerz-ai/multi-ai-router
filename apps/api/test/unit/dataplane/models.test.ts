@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test"
+import type { ModelDescriptor } from "@multi-ai-router/core"
 import { isRouterError, ModelNotFoundError } from "@multi-ai-router/core"
-import type { VerifiedKey } from "../../../src/services/dataplane"
+import type { ReachableModelsCatalog, VerifiedKey } from "../../../src/services/dataplane"
 import { reachableModel, reachableModels } from "../../../src/services/dataplane"
 import type { PoolSnapshot } from "../../../src/services/routing"
 import { account, catalog, health, NOW } from "./fixtures"
@@ -77,7 +78,15 @@ describe("reachableModels", () => {
       NOW,
     )
     // An alias row says what it resolves to under the operator's own map — information only.
-    expect(models).toEqual([{ id: "sonnet", owner: "zai", resolvedModel: "glm-4.7" }])
+    expect(models).toEqual([
+      {
+        id: "sonnet",
+        owner: "zai",
+        resolvedModel: "glm-4.7",
+        contextTokens: null,
+        maxOutputTokens: null,
+      },
+    ])
   })
 
   test("an account declaring no models contributes no name rather than inventing a catalog", () => {
@@ -96,8 +105,20 @@ describe("reachableModels", () => {
       NOW,
     )
     expect(models).toEqual([
-      { id: "claude-haiku-5", owner: "anthropic-api", resolvedModel: null },
-      { id: "claude-opus-5", owner: "anthropic-api", resolvedModel: null },
+      {
+        id: "claude-haiku-5",
+        owner: "anthropic-api",
+        resolvedModel: null,
+        contextTokens: null,
+        maxOutputTokens: null,
+      },
+      {
+        id: "claude-opus-5",
+        owner: "anthropic-api",
+        resolvedModel: null,
+        contextTokens: null,
+        maxOutputTokens: null,
+      },
     ])
   })
 
@@ -126,6 +147,87 @@ describe("reachableModels", () => {
   })
 })
 
+/** A warm catalog holding fixed rows, keyed the way the real store keys them. */
+function warm(rows: Readonly<Record<string, readonly ModelDescriptor[]>>): ReachableModelsCatalog {
+  return {
+    modelsOf: (accountId) => rows[accountId] ?? [],
+    describe: (accountId, upstream) =>
+      (rows[accountId] ?? []).find((row) => row.id.toLowerCase() === upstream.toLowerCase()) ??
+      null,
+  }
+}
+
+function sized(id: string, contextTokens: number | null, maxOutputTokens: number | null) {
+  return {
+    id,
+    contextTokens,
+    maxOutputTokens,
+    contextSource: contextTokens === null ? null : ("upstream" as const),
+    listingSource: "upstream" as const,
+    resolvedModel: null,
+  }
+}
+
+describe("model sizes on the listing", () => {
+  test("each name carries the window its account's catalog states for the upstream id it sends", () => {
+    const models = reachableModels(
+      catalog([account("a", { modelAliases: { sonnet: "glm-4.7" }, provider: "zai" })]),
+      health(),
+      keyWithFullScope(),
+      NOW,
+      warm({ a: [sized("glm-4.7", 200_000, 128_000)] }),
+    )
+    expect(models).toEqual([
+      {
+        id: "sonnet",
+        owner: "zai",
+        resolvedModel: "glm-4.7",
+        contextTokens: 200_000,
+        maxOutputTokens: 128_000,
+      },
+    ])
+  })
+
+  test("across accounts a known size beats an unknown one, and the first known one stands", () => {
+    const models = reachableModels(
+      catalog([
+        account("unswept", { snapshot: { supportedModels: ["m"] } }),
+        account("swept", { snapshot: { supportedModels: ["m"] } }),
+        account("later", { snapshot: { supportedModels: ["m"] } }),
+      ]),
+      health(),
+      keyWithFullScope(),
+      NOW,
+      warm({ swept: [sized("m", 131_072, null)], later: [sized("m", 64_000, 8_192)] }),
+    )
+    // The window is the swept account's; the ceiling only `later` knew, so it is `later`'s.
+    expect(models[0]).toMatchObject({ contextTokens: 131_072, maxOutputTokens: 8_192 })
+  })
+
+  test("a model nothing sized stays null — never a default", () => {
+    const [model] = reachableModels(
+      catalog([account("a", { snapshot: { supportedModels: ["m"] } })]),
+      health(),
+      keyWithFullScope(),
+      NOW,
+      warm({}),
+    )
+    expect(model).toMatchObject({ contextTokens: null, maxOutputTokens: null })
+  })
+
+  test("a probe for a passthrough account's undeclared id still reports what its upstream listed", () => {
+    const model = reachableModel(
+      catalog([account("a")]),
+      health(),
+      keyWithFullScope(),
+      "listed-upstream",
+      NOW,
+      warm({ a: [sized("listed-upstream", 1_000_000, 64_000)] }),
+    )
+    expect(model).toMatchObject({ contextTokens: 1_000_000, maxOutputTokens: 64_000 })
+  })
+})
+
 describe("reachableModel", () => {
   test("finds the requested-side alias name and names its owner", () => {
     const model = reachableModel(
@@ -135,7 +237,13 @@ describe("reachableModel", () => {
       "sonnet",
       NOW,
     )
-    expect(model).toEqual({ id: "sonnet", owner: "zai", resolvedModel: "glm-4.7" })
+    expect(model).toEqual({
+      id: "sonnet",
+      owner: "zai",
+      resolvedModel: "glm-4.7",
+      contextTokens: null,
+      maxOutputTokens: null,
+    })
   })
 
   test("a passthrough account (no declared models) still answers a probe for any id", () => {
@@ -152,6 +260,8 @@ describe("reachableModel", () => {
       id: "whatever-the-client-asked-for",
       owner: "anthropic-api",
       resolvedModel: null,
+      contextTokens: null,
+      maxOutputTokens: null,
     })
   })
 
