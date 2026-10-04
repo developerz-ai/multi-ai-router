@@ -13,9 +13,15 @@
  * **requested-side** — what a client sends. {@link resolveModel} therefore maps first and checks
  * second, and {@link advertisedModels} exists so the catalog `GET /v1/models` publishes is the
  * requested-side inverse of that same check rather than a second, hand-kept opinion of it.
+ *
+ * **Context tags.** Claude Code appends a context-window tag (`[1m]`, `context-tag.ts`) to the model
+ * name it sends. On an account whose provider does not declare `understandsContextTags`, a tagged
+ * name the operator did not alias or list explicitly resolves as its base name, and the base name
+ * is what goes upstream. Same model, hint dropped — not a substitution (non-negotiable 4).
  */
 
 import { ownEntry } from "@multi-ai-router/core"
+import { splitContextTag } from "./context-tag"
 import { inModelFamily } from "./model-family"
 import type { AccountSnapshot } from "./types"
 
@@ -26,9 +32,23 @@ export interface ModelResolution {
   readonly supported: boolean
   /** True when an alias map entry renamed it. Recorded so a surprise rename is debuggable. */
   readonly aliased: boolean
+  /**
+   * The context tag removed from the requested name (`1m`), present only when it was. Like
+   * {@link aliased}, recorded so the rename is debuggable; the usage row carries both names.
+   */
+  readonly strippedContextTag?: string
 }
 
 export function resolveModel(account: AccountSnapshot, requestedModel: string): ModelResolution {
+  const exact = resolveExact(account, requestedModel)
+  if (exact.aliased || account.understandsContextTags === true) return exact
+  const tagged = splitContextTag(requestedModel)
+  // An operator who listed the tagged spelling itself said this upstream answers to it.
+  if (tagged === null || account.supportedModels?.includes(requestedModel) === true) return exact
+  return { ...resolveExact(account, tagged.base), strippedContextTag: tagged.tag }
+}
+
+function resolveExact(account: AccountSnapshot, requestedModel: string): ModelResolution {
   const entry = ownEntry(account.modelAliases, requestedModel)
   const alias = typeof entry === "string" ? entry : undefined
   const upstreamModel = alias ?? requestedModel

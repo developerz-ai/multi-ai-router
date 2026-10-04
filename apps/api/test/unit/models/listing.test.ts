@@ -8,9 +8,9 @@ import { accountRow as durableAccountRow } from "../../support/account-row"
  * sweep now share.
  *
  * Its job is to survive the fact that no two vendors spell a context window the same way, and to
- * be honest about the far more common case: **most listings state no size at all.** That was
- * verified against the live endpoints rather than assumed — z.ai, MiniMax, OpenAI and Anthropic
- * answer with an id, an object type and an owner. The vendors that do state one each pick a
+ * be honest about the common case: **many listings state no size at all.** That was verified
+ * against the live endpoints rather than assumed — z.ai, MiniMax and OpenAI answer with an id, an
+ * object type and an owner. Anthropic's states `max_input_tokens` / `max_tokens`. The vendors that do state one each pick a
  * different field name, which is why the parser reads a union and not one key.
  */
 
@@ -93,6 +93,54 @@ describe("reading a provider's model listing", () => {
     ])
     // Google's camelCase output ceiling came through beside its camelCase window.
     expect(listed[1]?.maxOutputTokens).toBe(65_536)
+  })
+
+  test("Anthropic's listing states both numbers as max_input_tokens and max_tokens", async () => {
+    // Shape of `ModelInfo` in @anthropic-ai/sdk 0.131 (`resources/models.d.ts`): both fields are
+    // always present and `number | null`.
+    const listed = await entries(
+      {
+        data: [
+          {
+            type: "model",
+            id: "claude-opus-5",
+            display_name: "Claude Opus 5",
+            created_at: "2026-05-01T00:00:00Z",
+            capabilities: null,
+            max_input_tokens: 1_000_000,
+            max_tokens: 128_000,
+          },
+          {
+            type: "model",
+            id: "claude-unsized",
+            display_name: "Unsized",
+            created_at: "2026-05-01T00:00:00Z",
+            capabilities: null,
+            max_input_tokens: null,
+            max_tokens: null,
+          },
+        ],
+        has_more: false,
+        first_id: "claude-opus-5",
+        last_id: "claude-unsized",
+      },
+      accountRow({ provider: "anthropic-api" }),
+    )
+
+    expect(listed).toEqual([
+      { id: "claude-opus-5", contextTokens: 1_000_000, maxOutputTokens: 128_000 },
+      { id: "claude-unsized", contextTokens: null, maxOutputTokens: null },
+    ])
+  })
+
+  test("vLLM's max_model_len is read as the window it is", async () => {
+    // vLLM's OpenAI-compatible `ModelCard` — what an `openai-compatible` account usually fronts.
+    const [entry] = await entries({
+      object: "list",
+      data: [{ id: "Qwen/Qwen3-32B", object: "model", owned_by: "vllm", max_model_len: 40_960 }],
+    })
+
+    expect(entry).toEqual({ id: "Qwen/Qwen3-32B", contextTokens: 40_960, maxOutputTokens: null })
   })
 
   test("an aggregator's per-endpoint block beats its model-wide number", async () => {

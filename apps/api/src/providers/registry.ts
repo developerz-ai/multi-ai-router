@@ -104,3 +104,9 @@ export function providerModelFamily(id: ProviderId): ModelFamily | undefined {
   const support = PROVIDER_REGISTRY[id]
   return support.transport === "unimplemented" ? undefined : support.driver.modelFamily
 }
+
+/** Whether the provider's upstream reads a context tag on a model name. Read at catalog build. */
+export function providerUnderstandsContextTags(id: ProviderId): boolean {
+  const support = PROVIDER_REGISTRY[id]
+  return support.transport !== "unimplemented" && support.driver.understandsContextTags === true
+}

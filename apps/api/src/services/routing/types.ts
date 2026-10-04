@@ -102,6 +102,11 @@ export interface AccountSnapshot {
    * {@link supportedModels} is absent or empty. Absent means passthrough: everything.
    */
   readonly modelFamily?: ModelFamily
+  /**
+   * The provider's declaration that its upstream understands a Claude Code context tag (`[1m]`)
+   * on a model name. Absent: a tagged name resolves as its base name (`model.ts`).
+   */
+  readonly understandsContextTags?: boolean
   /** Client model name -> this account's upstream name. Absent means pass the name through. */
   readonly modelAliases?: Readonly<Record<string, string>>
   /** Per-window quota state. Windows reset independently; the account is blocked by any spent one. */

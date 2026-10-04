@@ -374,9 +374,11 @@ listing's, output ceiling included; otherwise it is the shipped table's entirely
 `contextSource` a question with no answer.
 
 Rows are replaced per Account as a set rather than upserted, so a model the upstream stopped
-listing actually leaves. Most upstreams state no size at all — verified against the live endpoints:
-z.ai, MiniMax, OpenAI and Anthropic answer `/v1/models` with an id, an object type and an owner and
-nothing else — so most rows carry `shipped`.
+listing actually leaves. Many upstreams state no size at all — verified against the live endpoints:
+z.ai, MiniMax and OpenAI answer `/v1/models` with an id, an object type and an owner and nothing
+else — so those rows carry `shipped`. Anthropic's listing states `max_input_tokens` / `max_tokens`
+and is read as `upstream`; the per-provider table is in
+[03-providers.md](03-providers.md#model-sizes--what-each-listing-states).
 
 ## ScheduledTaskRun
 

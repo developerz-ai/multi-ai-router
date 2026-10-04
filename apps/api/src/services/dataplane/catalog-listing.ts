@@ -16,10 +16,10 @@ import type { RoutingCatalog } from "./types"
  * The **rich** catalog behind `GET /v1/catalog`: every model the presenting key can reach, with how
  * much fits in it, what it costs, and which providers serve it.
  *
- * A separate endpoint from `GET /v1/models` rather than more fields on it, deliberately.
- * `/v1/models` is a wire contract — an OpenAI or Anthropic client parses it with a generated SDK,
- * and this router's job there is to answer in the shape those clients expect and nothing more. This
- * is the router's *own* listing, so it can say things neither of those shapes has a place for.
+ * A separate endpoint from `GET /v1/models`, deliberately. `/v1/models` is a wire contract — an
+ * OpenAI or Anthropic client parses it with a generated SDK — so it carries only the size fields those
+ * shapes already define (`max_input_tokens`/`max_tokens`, `context_length`/`max_completion_tokens`).
+ * This is the router's *own* listing, so it can say things neither of those shapes has a place for.
  *
  * Scope is enforced by exactly one implementation. The model set comes from the same intersection
  * `reachableModels` uses — pool members ∩ key scope, standing blocks dropped — because a second

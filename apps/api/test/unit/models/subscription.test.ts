@@ -135,9 +135,12 @@ describe("what an account contributes to GET /v1/models", () => {
     expect(listed.map((model) => model.id)).toEqual(
       shippedSubscriptionModels().map((model) => model.id),
     )
+    // The shipped window of whatever `sonnet` resolves to today rides on the alias row.
     expect(listed.find((model) => model.id === "sonnet")).toEqual({
       id: "sonnet",
       resolvedModel: "claude-sonnet-5-5",
+      contextTokens: 1_000_000,
+      maxOutputTokens: 128_000,
     })
     expect(listed.find((model) => model.id === "claude-opus-5")?.resolvedModel).toBeNull()
   })
@@ -192,7 +195,31 @@ describe("what an account contributes to GET /v1/models", () => {
       snapshot({ provider: "zai", modelAliases: { sonnet: "glm-4.7" } }),
       [],
     )
-    expect(listed).toEqual([{ id: "sonnet", resolvedModel: "glm-4.7" }])
+    // Nothing swept for the account yet: the size is unknown, never a default.
+    expect(listed).toEqual([
+      { id: "sonnet", resolvedModel: "glm-4.7", contextTokens: null, maxOutputTokens: null },
+    ])
+  })
+
+  test("an alias row takes the size its account's catalog states for the upstream id it sends", () => {
+    const listed = listableModels(
+      snapshot({ provider: "zai", modelAliases: { sonnet: "glm-4.7" } }),
+      [
+        {
+          id: "GLM-4.7",
+          contextTokens: 200_000,
+          maxOutputTokens: 128_000,
+          contextSource: "shipped",
+          listingSource: "upstream",
+          resolvedModel: null,
+        },
+      ],
+    )
+    // Case-insensitively, as the warm store indexes it: the listing and the alias map are written
+    // by different hands.
+    expect(listed).toEqual([
+      { id: "sonnet", resolvedModel: "glm-4.7", contextTokens: 200_000, maxOutputTokens: 128_000 },
+    ])
   })
 
   test("an HTTP passthrough account's catalog rows stay off the wire listing", () => {

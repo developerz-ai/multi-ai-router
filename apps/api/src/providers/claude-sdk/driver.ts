@@ -59,6 +59,11 @@ export interface ClaudeSdkDriver {
    * Claude. Without it a key mixing subscriptions with other vendors routed `gpt-5.5` here.
    */
   readonly modelFamily: ModelFamily
+  /**
+   * The `claude` CLI reads the `[1m]` context tag off the model name `query()` is given, so the
+   * tagged name goes to it unchanged (`services/routing/context-tag.ts`).
+   */
+  readonly understandsContextTags: true
 
   /**
    * The isolated `CLAUDE_CONFIG_DIR` this account's subprocess runs against.
@@ -102,6 +107,7 @@ export const claudeSdkDriver: ClaudeSdkDriver = {
   authKind: "oauth",
   billing: "subscription",
   modelFamily: CLAUDE_MODEL_FAMILY,
+  understandsContextTags: true,
 
   resolveConfigDir(account) {
     const dir = account.configDir?.trim()

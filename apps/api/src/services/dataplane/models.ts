@@ -45,6 +45,13 @@ export interface ReachableModel {
    * Information only — the request path still sends the client's own string (non-negotiable 4).
    */
   readonly resolvedModel: string | null
+  /**
+   * Context window in tokens, from the warm model catalog — the provider's own listing where it
+   * states one, the shipped table where it does not. Null is **unknown**, never unlimited.
+   */
+  readonly contextTokens: number | null
+  /** Largest completion in tokens, from the same place. Null is unknown. */
+  readonly maxOutputTokens: number | null
 }
 
 /** The warm model catalog, or nothing: a runtime built without one lists routing's view alone. */
@@ -68,16 +75,21 @@ export function reachableModels(
   // Live status, not the catalog's stored one: the health store is what knows an account went
   // `exhausted` thirty seconds ago, and the catalog only knows what the operator last saved.
   const liveStatus = new Map(snapshot.accounts.map((account) => [account.id, account.status]))
-  const merged = new Map<string, { owner: ProviderId; resolvedModel: string | null }>()
+  const merged = new Map<string, Omit<ReachableModel, "id">>()
 
   for (const account of catalog.accounts()) {
     if (!inScope.has(account.id)) continue
     if (isStandingBlock(liveStatus.get(account.id) ?? account.snapshot.status)) continue
     for (const model of listableModels(account.snapshot, models?.modelsOf(account.id) ?? [])) {
       const current = merged.get(model.id)
+      // First known answer wins and a known one beats an unknown one, per field — the rule
+      // `/v1/catalog` folds by (`catalog-listing.ts`): two accounts of one provider agree on a
+      // model's size, and where they differ one has been swept and the other has not.
       merged.set(model.id, {
         owner: current?.owner ?? account.driver.provider,
         resolvedModel: mergeResolution(current?.resolvedModel ?? null, model.resolvedModel),
+        contextTokens: current?.contextTokens ?? model.contextTokens,
+        maxOutputTokens: current?.maxOutputTokens ?? model.maxOutputTokens,
       })
     }
   }
@@ -128,5 +140,15 @@ export function reachableModel(
   const listed = listableModels(account, models?.modelsOf(account.id) ?? []).find(
     (model) => model.id === id,
   )
-  return { id, owner: account.provider, resolvedModel: listed?.resolvedModel ?? null }
+  // A passthrough account serves ids it never advertised; its upstream's listing may still have
+  // sized the one asked for.
+  const described =
+    listed === undefined ? models?.describe(account.id, head.upstreamModel) : undefined
+  return {
+    id,
+    owner: account.provider,
+    resolvedModel: listed?.resolvedModel ?? null,
+    contextTokens: listed?.contextTokens ?? described?.contextTokens ?? null,
+    maxOutputTokens: listed?.maxOutputTokens ?? described?.maxOutputTokens ?? null,
+  }
 }

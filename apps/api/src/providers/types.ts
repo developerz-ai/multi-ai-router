@@ -270,6 +270,11 @@ export interface ProviderDriver {
    * one; absent keeps the account a passthrough for every name.
    */
   readonly modelFamily?: ModelFamily
+  /**
+   * True when the upstream reads a Claude Code context tag (`opus[1m]`) on a model name itself.
+   * Absent: routing strips the tag and sends the base name (`services/routing/context-tag.ts`).
+   */
+  readonly understandsContextTags?: boolean
 
   /** Account override wins over the pinned default. Throws when neither exists. */
   resolveBaseUrl(account: DriverAccount): URL

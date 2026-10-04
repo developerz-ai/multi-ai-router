@@ -23,9 +23,11 @@ import { ZAI_WINDOWS } from "./zai"
  * A provider appears here only if its own listing states no size. That is the entry condition, and
  * it is why several providers with drivers are absent:
  *
- * - `gemini` and `mistral` — their listings carry `inputTokenLimit`/`outputTokenLimit` and
- *   `max_context_length`, so the parser reads a **live** number per account and a shipped row would
- *   only be a staler copy of it.
+ * - `mistral` — its listing carries `max_context_length`, so the parser reads a **live** number per
+ *   account and a shipped row would only be a staler copy of it.
+ * - `gemini` — absent for want of a verified table, not because its listing is sized: the
+ *   OpenAI-compatible `/models` the driver reads states no size (the native `inputTokenLimit` lives
+ *   on a surface this router does not call), so a Gemini model is `null` until a table is added.
  * - `groq`, `together`, `cerebras` — the same: these hosts publish `context_window` /
  *   `context_length` beside each model they serve.
  * - `openrouter` — states `context_length` per model, and is not swept at all besides.

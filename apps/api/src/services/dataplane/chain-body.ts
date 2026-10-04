@@ -4,8 +4,9 @@ import { modelOutputCeiling } from "./model-output-ceiling"
 import type { ServableCandidate } from "./plan"
 
 /**
- * The body this account gets. Passthrough: identical bytes, unless the account's alias map renames
- * the model — the one edit a passthrough body ever receives. Translate: rebuilt field by field,
+ * The body this account gets. Passthrough: identical bytes, unless routing renamed the model — the
+ * account's alias map, or a stripped context tag (`routing/context-tag.ts`) — the one edit a
+ * passthrough body ever receives. Translate: rebuilt field by field,
  * which a Claude subscription also takes since the SDK's prompt is built from Anthropic-shaped
  * bytes either way.
  *

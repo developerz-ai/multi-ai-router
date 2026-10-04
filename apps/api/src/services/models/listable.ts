@@ -29,6 +29,12 @@ import { shippedSubscriptionModels } from "./subscription"
  *
  * Resolution is **information only**. The client's model string goes upstream unchanged
  * (non-negotiable 4); `resolvedModel` tells a picker what `sonnet` means today, nothing more.
+ *
+ * Each name also carries the size its account's catalog states for it, so a client can learn the
+ * real window from the listing it already reads. Looked up by the **upstream** id the name is sent
+ * as first — `sonnet -> glm-4.7` is as big as `glm-4.7` — then by the name, then by what it resolves
+ * to. Null is unknown, never a default: a client reading a missing window as unlimited builds a
+ * request the upstream rejects.
  */
 
 export interface ListedModel {
@@ -36,33 +42,68 @@ export interface ListedModel {
   readonly id: string
   /** What the name resolves to, when it is an alias — the account's map or the SDK's own word. */
   readonly resolvedModel: string | null
+  /** Context window in tokens, from the account's catalog. Null when nothing states one. */
+  readonly contextTokens: number | null
+  /** Output ceiling in tokens, from the same row. Null when nothing states one. */
+  readonly maxOutputTokens: number | null
 }
 
 export function listableModels(
   account: AccountSnapshot,
   catalogRows: readonly ModelDescriptor[],
 ): readonly ListedModel[] {
-  const listed = new Map<string, ListedModel>()
-
-  for (const name of advertisedModels(account)) {
-    listed.set(name, { id: name, resolvedModel: aliasTarget(account, name) })
-  }
-
-  if (PROVIDER_REGISTRY[account.provider].transport !== "agent-sdk") return [...listed.values()]
-
+  const subscription = PROVIDER_REGISTRY[account.provider].transport === "agent-sdk"
   // Live rows first, so the subscription's own word on an alias wins; the shipped table then adds
   // the family aliases and canonical ids the handshake does not spell out (`opus`, `fable`,
   // `claude-opus-5`, …) — a client that types `--model opus` must find it listed, and a freshly
   // connected account lists models before its first sweep.
-  const rows = [...catalogRows, ...shippedSubscriptionModels()]
+  const rows = subscription ? [...catalogRows, ...shippedSubscriptionModels()] : catalogRows
+  const sizeOf = sizeLookup(account, rows)
+  const listed = new Map<string, ListedModel>()
+
+  for (const name of advertisedModels(account)) {
+    const resolvedModel = aliasTarget(account, name)
+    listed.set(name, { id: name, resolvedModel, ...sizeOf(name, resolvedModel) })
+  }
+
+  if (!subscription) return [...listed.values()]
+
   for (const row of rows) {
     if (listed.has(row.id) || !resolveModel(account, row.id).supported) continue
-    listed.set(row.id, {
-      id: row.id,
-      resolvedModel: row.resolvedModel ?? aliasTarget(account, row.id),
-    })
+    const resolvedModel = row.resolvedModel ?? aliasTarget(account, row.id)
+    listed.set(row.id, { id: row.id, resolvedModel, ...sizeOf(row.id, resolvedModel) })
   }
   return [...listed.values()]
+}
+
+type Size = Pick<ListedModel, "contextTokens" | "maxOutputTokens">
+
+const UNKNOWN: Size = { contextTokens: null, maxOutputTokens: null }
+
+/**
+ * Case-insensitive, first row wins — the same keying the warm store uses, because the listing and
+ * an alias map are written by different hands (`MiniMax-M2` vs `minimax-m2`). A row that states no
+ * size is not indexed, so it cannot shadow a later spelling that does.
+ */
+function sizeLookup(
+  account: AccountSnapshot,
+  rows: readonly ModelDescriptor[],
+): (name: string, resolvedModel: string | null) => Size {
+  const byId = new Map<string, Size>()
+  for (const row of rows) {
+    const key = normalize(row.id)
+    if (byId.has(key) || (row.contextTokens === null && row.maxOutputTokens === null)) continue
+    byId.set(key, { contextTokens: row.contextTokens, maxOutputTokens: row.maxOutputTokens })
+  }
+  return (name, resolvedModel) =>
+    byId.get(normalize(resolveModel(account, name).upstreamModel)) ??
+    byId.get(normalize(name)) ??
+    (resolvedModel === null ? undefined : byId.get(normalize(resolvedModel))) ??
+    UNKNOWN
+}
+
+function normalize(id: string): string {
+  return id.trim().toLowerCase()
 }
 
 /**
