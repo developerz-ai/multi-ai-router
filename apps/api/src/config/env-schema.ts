@@ -211,6 +211,9 @@ export const ENV_FIELDS = {
     .refine((value) => value <= 1_048_576, "must be at most 1048576")
     .optional(),
   TRANSLATE_DEFAULT_MAX_TOKENS: atLeastOne.optional(),
+  MAX_TRANSLATION_PENDING_BYTES: atLeastOne
+    .refine((value) => value >= 1024 && value <= 33_554_432, "must be between 1024 and 33554432")
+    .optional(),
 } as const
 
 export const boundedEnvSchema = z.object(ENV_FIELDS).superRefine(validateNumericBounds)

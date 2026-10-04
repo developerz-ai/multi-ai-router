@@ -463,7 +463,7 @@ describe("tools and tool_choice", () => {
 
 describe("malformed request bodies", () => {
   test("a missing max_tokens is a 400 naming the field", () => {
-    const body = anthropicRequest() as Record<string, unknown>
+    const body = anthropicRequest() as unknown as Record<string, unknown>
     delete body.max_tokens
     expect(() => anthropicToOpenAiChatRequest(body)).toThrow(TranslationError)
   })

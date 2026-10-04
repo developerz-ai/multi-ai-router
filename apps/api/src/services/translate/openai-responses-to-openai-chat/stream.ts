@@ -1,9 +1,20 @@
 import { renderErrorBody } from "../../../errors/render"
 import { parseUpstreamError } from "../shared/errors"
+import { responsesFinalEvents } from "../shared/responses-final-events"
+import { createResponsesItemIdentity } from "../shared/responses-item-identity"
 import type { ParsedResponsesEvent } from "../shared/responses-read"
 import { responsesEventSchema } from "../shared/responses-read"
+import {
+  createResponsesSnapshotRecovery,
+  type ResponsesRecoveryOptions,
+} from "../shared/responses-snapshot-recovery"
+import {
+  createResponsesTextBoundary,
+  validResponsesTextIdentity,
+} from "../shared/responses-text-boundary"
 import type { OpenAiFinishReason } from "../shared/stop-reason"
 import { fromResponsesCompletion } from "../shared/stop-reason"
+import { TranslationStreamError } from "../shared/stream-error"
 import { parseOpenAiResponsesUsage, responsesUsageToOpenAiChat } from "../shared/usage"
 import type { SseEvent, StreamTranslator } from "../sse/emit"
 import { DONE, NO_EVENTS } from "../sse/emit"
@@ -34,9 +45,11 @@ import { frameJson } from "../sse/parse"
  */
 
 /** `created` is a caller-supplied value, never `Date.now()`: a translator holds no clock. */
-export interface OpenAiResponsesToOpenAiChatStreamOptions {
+export interface OpenAiResponsesToOpenAiChatStreamOptions extends ResponsesRecoveryOptions {
   /** Unix **seconds**, stamped on every chunk. */
   readonly created: number
+  /** Caller explicitly requested the final usage-only Chat chunk. */
+  readonly includeUsage?: boolean | undefined
   /** Used until `response.created` names the upstream's own id, and if it never does. */
   readonly id?: string | undefined
   /** Used until `response.created` names the model. The client's requested name is the right value. */
@@ -62,6 +75,7 @@ export function openAiResponsesToOpenAiChatStream(
   let id = options.id ?? ""
   let model = options.model ?? ""
   let unrecognized: string | null = null
+  let failure: Error | null = null
   let nextToolCall = 0
   let finished = false
   let closed = false
@@ -94,6 +108,8 @@ export function openAiResponsesToOpenAiChatStream(
     // has a field for, and the item boundary itself has no counterpart.
     if (item === null || item.type !== "function_call") return NO_EVENTS
 
+    const existingKey = item.id ?? event?.output_index ?? null
+    if (existingKey !== null && toolCalls.has(existingKey)) return NO_EVENTS
     const ordinal = nextToolCall
     nextToolCall += 1
     const key = item.id ?? event?.output_index ?? null
@@ -110,9 +126,15 @@ export function openAiResponsesToOpenAiChatStream(
     return [chunk({ tool_calls: [call] }, null)]
   }
 
+  const textBoundary = createResponsesTextBoundary()
+  const recoverSnapshot = createResponsesSnapshotRecovery(options)
+  const identifyItem = createResponsesItemIdentity(options)
+
   function onTextDelta(event: ParsedResponsesEvent | null): readonly SseEvent[] {
-    const delta = event?.delta ?? ""
-    return delta.length === 0 ? NO_EVENTS : [chunk({ content: delta }, null)]
+    const boundary = event === null ? null : textBoundary(event)
+    return boundary === null
+      ? NO_EVENTS
+      : [chunk({ content: `${boundary.separator ? "\n" : ""}${boundary.text}` }, null)]
   }
 
   function onArgumentsDelta(event: ParsedResponsesEvent | null): readonly SseEvent[] {
@@ -133,10 +155,8 @@ export function openAiResponsesToOpenAiChatStream(
    * `response.completed` is both the finish reason and the end of the stream — the spec's table maps
    * it onto the final chunk *and* `data: [DONE]` — so all three leave together.
    *
-   * Usage is always emitted toward openai-chat even though an OpenAI stream omits it unless
-   * `stream_options.include_usage` was set: the numbers exist, and withholding them would make a
-   * translated stream less informative than the one it translates. A count the upstream never sent
-   * is absent, never zero (`06-protocol-translation.md#usage-and-token-fields`).
+   * The usage-only chunk is emitted only when the caller explicitly opted in. Upstream accounting
+   * reads the provider's original stream independently of this client-facing chunk.
    */
   function onCompleted(
     event: ParsedResponsesEvent | null,
@@ -157,7 +177,7 @@ export function openAiResponsesToOpenAiChatStream(
 
     const events: SseEvent[] = [chunk({}, mapped.value)]
     const usage = parseOpenAiResponsesUsage(response?.usage)
-    if (usage !== null) {
+    if (options.includeUsage === true && usage !== null) {
       events.push({
         data: JSON.stringify({
           id,
@@ -173,47 +193,81 @@ export function openAiResponsesToOpenAiChatStream(
     return events
   }
 
-  /** An upstream error mid-stream: an error chunk, then the stream closes without a `[DONE]`. */
+  /** Preserve the failure, then close the Chat protocol; the finish marker is not a success verdict. */
   function onFailed(event: ParsedResponsesEvent | null, payload: unknown): readonly SseEvent[] {
     closed = true
     // `response.failed` carries the detail under `response.error`; a bare `error` event *is* the
     // detail. The whole payload is the fallback, so an unfamiliar shape still says something.
     const detail = parseUpstreamError(event?.response?.error ?? payload, 500)
     const body = renderErrorBody("openai-chat", 500, detail.message, detail.code ?? detail.type)
-    return [{ data: JSON.stringify(body) }]
+    const events: SseEvent[] = [{ data: JSON.stringify(body) }]
+    if (!finished) events.push(chunk({}, "stop"))
+    events.push(DONE)
+    finished = true
+    return events
+  }
+
+  function process(payload: unknown, fallbackType: string | null): readonly SseEvent[] {
+    if (closed) return NO_EVENTS
+    if (!validResponsesTextIdentity(payload, fallbackType)) return NO_EVENTS
+    const identity = identifyItem({
+      ...(payload as Record<string, unknown>),
+      type: (payload as { type?: unknown })?.type ?? fallbackType,
+    })
+    const type = identity.event.type
+    if (
+      !identity.error &&
+      typeof type === "string" &&
+      type.startsWith("response.function_call_arguments.") &&
+      (typeof identity.event.item_id !== "string" || !toolCalls.has(identity.event.item_id))
+    )
+      return NO_EVENTS
+    const recovery = identity.error ? identity : recoverSnapshot(identity.event)
+    if (recovery.error) {
+      failure = new TranslationStreamError(
+        recovery.errorClass ?? "translation_protocol_error",
+        recovery.error,
+      )
+      return onFailed(null, {
+        message: recovery.error,
+        code: recovery.errorClass ?? "translation_protocol_error",
+      })
+    }
+    const parsed = responsesEventSchema.safeParse(recovery.event)
+    const event = parsed.success ? parsed.data : null
+
+    // The `type` inside the data object is authoritative; the `event:` line is the fallback for an
+    // upstream that names its events only there.
+    switch (event?.type ?? fallbackType) {
+      case "response.created":
+        return onCreated(event)
+      case "response.output_item.added":
+        return onItemAdded(event)
+      case "response.output_text.delta":
+      case "response.refusal.delta":
+        return onTextDelta(event)
+      case "response.function_call_arguments.delta":
+        return onArgumentsDelta(event)
+      case "response.completed":
+        return onCompleted(event, "completed")
+      case "response.incomplete":
+        return onCompleted(event, "incomplete")
+      case "response.failed":
+      case "error":
+        return onFailed(event, payload)
+      default:
+        // `response.in_progress`, the `content_part` / `output_item` / `.done` mirrors of deltas
+        // already forwarded, `response.reasoning_summary_text.delta` — no openai-chat counterpart,
+        // the same row as an Anthropic `thinking_delta` — and anything OpenAI adds later.
+        return NO_EVENTS
+    }
   }
 
   return {
     push(frame) {
-      if (closed) return NO_EVENTS
-      const payload = frameJson(frame)
-      const parsed = responsesEventSchema.safeParse(payload)
-      const event = parsed.success ? parsed.data : null
-
-      // The `type` inside the data object is authoritative; the `event:` line is the fallback for an
-      // upstream that names its events only there.
-      switch (event?.type ?? frame.event) {
-        case "response.created":
-          return onCreated(event)
-        case "response.output_item.added":
-          return onItemAdded(event)
-        case "response.output_text.delta":
-          return onTextDelta(event)
-        case "response.function_call_arguments.delta":
-          return onArgumentsDelta(event)
-        case "response.completed":
-          return onCompleted(event, "completed")
-        case "response.incomplete":
-          return onCompleted(event, "incomplete")
-        case "response.failed":
-        case "error":
-          return onFailed(event, payload)
-        default:
-          // `response.in_progress`, the `content_part` / `output_item` / `.done` mirrors of deltas
-          // already forwarded, `response.reasoning_summary_text.delta` — no openai-chat counterpart,
-          // the same row as an Anthropic `thinking_delta` — and anything OpenAI adds later.
-          return NO_EVENTS
-      }
+      return responsesFinalEvents(frameJson(frame)).flatMap((payload) =>
+        process(payload, frame.event),
+      )
     },
 
     flush() {
@@ -226,5 +280,6 @@ export function openAiResponsesToOpenAiChatStream(
     },
 
     unrecognizedStopReason: () => unrecognized,
+    translationFailure: () => failure,
   }
 }

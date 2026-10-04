@@ -51,6 +51,7 @@ const textBlock = z.object({ type: z.literal("text"), text: z.string() })
 const imageSource = z.discriminatedUnion("type", [
   z.object({ type: z.literal("base64"), media_type: z.string(), data: z.string() }),
   z.object({ type: z.literal("url"), url: z.string() }),
+  z.looseObject({ type: z.literal("file"), file_id: z.string().min(1) }),
 ])
 
 const imageBlock = z.object({ type: z.literal("image"), source: imageSource })
@@ -138,11 +139,13 @@ export const anthropicToolSchema = z.looseObject({
   input_schema: z.record(z.string(), z.unknown()).optional(),
 })
 
+const parallelToolPolicy = { disable_parallel_tool_use: z.boolean().optional() }
+
 export const anthropicToolChoiceSchema = z.discriminatedUnion("type", [
-  z.object({ type: z.literal("auto") }),
-  z.object({ type: z.literal("any") }),
-  z.object({ type: z.literal("none") }),
-  z.object({ type: z.literal("tool"), name: z.string() }),
+  z.object({ type: z.literal("auto"), ...parallelToolPolicy }),
+  z.object({ type: z.literal("any"), ...parallelToolPolicy }),
+  z.object({ type: z.literal("none"), ...parallelToolPolicy }),
+  z.object({ type: z.literal("tool"), name: z.string(), ...parallelToolPolicy }),
 ])
 
 export const anthropicRequestSchema = z.object({
@@ -186,11 +189,11 @@ export interface AnthropicToolUseBlock {
   readonly input: Record<string, unknown>
 }
 
-/** Emitted with string content: the one form every `role:"tool"` message can be carried into. */
+/** Native tool results carry text or text/image blocks; Chat hoists images separately. */
 export interface AnthropicToolResultBlock {
   readonly type: "tool_result"
   readonly tool_use_id: string
-  readonly content: string
+  readonly content: string | readonly (AnthropicTextBlock | AnthropicImageBlock)[]
 }
 
 export type AnthropicBlock =

@@ -4,8 +4,8 @@
  */
 
 import { describe, expect, test } from "bun:test"
-import type { SseEvent, SseFrame } from "../../../src/services/translate"
-import { anthropicToOpenAiChatStream } from "../../../src/services/translate"
+import type { SseEvent, SseFrame } from "../../../src/services/translate/index"
+import { anthropicToOpenAiChatStream } from "../../../src/services/translate/index"
 import { anthropicFrame, anthropicUsageWire, payloads } from "./fixtures"
 
 const CREATED = 1_700_000_000
@@ -19,8 +19,13 @@ interface Chunk {
   usage?: Record<string, unknown>
 }
 
-function translator(): ReturnType<typeof anthropicToOpenAiChatStream> {
-  return anthropicToOpenAiChatStream({ created: CREATED, id: "fallback", model: "requested-model" })
+function translator(includeUsage = false): ReturnType<typeof anthropicToOpenAiChatStream> {
+  return anthropicToOpenAiChatStream({
+    created: CREATED,
+    includeUsage,
+    id: "fallback",
+    model: "requested-model",
+  })
 }
 
 /** Feeds a whole recorded stream and returns every event, in order. */
@@ -58,7 +63,7 @@ describe("the text path", () => {
   test("message_start becomes the first chunk, carrying delta.role", () => {
     const [chunk] = payloads(translator().push(messageStart)) as Chunk[]
     expect(chunk?.choices[0]?.delta).toEqual({ role: "assistant", content: "" })
-    expect(chunk?.finish_reason).toBeUndefined()
+    expect(chunk).not.toHaveProperty("finish_reason")
     expect(chunk?.object).toBe("chat.completion.chunk")
     expect(chunk?.created).toBe(CREATED)
   })
@@ -179,7 +184,7 @@ describe("the terminal events", () => {
   })
 
   test("usage arrives on message_delta too, summed across the three input fields", () => {
-    const stream = translator()
+    const stream = translator(true)
     stream.push(messageStart)
     const events = payloads(stream.push(messageDelta("end_turn"))) as Chunk[]
     expect(events).toHaveLength(2)
@@ -192,14 +197,14 @@ describe("the terminal events", () => {
     })
   })
 
-  test("usage is emitted even though an openai stream omits it without include_usage", () => {
+  test("usage is omitted when the caller did not request include_usage", () => {
     const stream = anthropicToOpenAiChatStream({ created: CREATED })
     stream.push(messageStart)
-    expect(payloads(stream.push(messageDelta("end_turn")))).toHaveLength(2)
+    expect(payloads(stream.push(messageDelta("end_turn")))).toHaveLength(1)
   })
 
   test("a count the upstream never sent is null, never zero", () => {
-    const stream = anthropicToOpenAiChatStream({ created: CREATED })
+    const stream = anthropicToOpenAiChatStream({ created: CREATED, includeUsage: true })
     stream.push(anthropicFrame("message_start", { message: { id: "msg_02", usage: null } }))
     const events = payloads(stream.push(messageDelta("end_turn"))) as Chunk[]
     expect(events[1]?.usage).toEqual({
@@ -210,7 +215,7 @@ describe("the terminal events", () => {
   })
 
   test("a message_delta stating no usage still emits its finish chunk", () => {
-    const stream = anthropicToOpenAiChatStream({ created: CREATED })
+    const stream = anthropicToOpenAiChatStream({ created: CREATED, includeUsage: true })
     stream.push(
       anthropicFrame("message_start", { message: { id: "msg_04", usage: { input_tokens: 100 } } }),
     )

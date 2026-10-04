@@ -1,0 +1,133 @@
+{
+  "scope": "W7B translation and composition integration; release/deployment pending",
+  "base": "55904292e2a898fa79d14d5b375eaa07d94972d4",
+  "fullGate": {
+    "artifact": "/tmp/router-pr154-review-final-gate-x4zcfhvz",
+    "command": "bin/check",
+    "postgresMajor": 18,
+    "testsPassed": 5328,
+    "testsFailed": 0,
+    "assertions": 59666,
+    "testFiles": 481,
+    "exitCode": 0,
+    "ownDatabase": "pr154_review_gate_168a9cd4932a47e7a46f2fae860fafc1",
+    "dropped": true,
+    "postgresPort": 5440,
+    "sourceDrift": []
+  },
+  "initialIntegrationFailure": {
+    "artifact": "/tmp/router-w7b-integrated-gate-uhohw403",
+    "passed": 5312,
+    "failed": 2,
+    "causes": [
+      "Strict shipped-bundle guard matched a method parameter named text; parameter renamed fragment without weakening guard.",
+      "Existing chain accounting fixture omitted new required includeUsage method; restored typed fixture contract."
+    ]
+  },
+  "independentCorrections": {
+    "chatAliases": "ID/output-index aliases share tool ordinal and text boundary; empty item announcements reserve bounded identity space.",
+    "anthropicAliases": "Same canonical identity is applied before argument admission and snapshot recovery; live alias arguments remain incremental.",
+    "unscopedFinalMirror": "Item done without item ID/output index is ignored, preserving ordinary live unkeyed calls and preventing duplicate calls.",
+    "surrogateBudget": "Exact reserved bytes released at queue drain; repeated split surrogate cycles cannot manufacture overflow.",
+    "proofLogs": [
+      "/tmp/w7b-chat-alias-focused-final.log",
+      "/tmp/w7b-unscoped-final-before.log",
+      "/tmp/w7b-unscoped-final-after.log",
+      "/tmp/anthropic-identities-baseline.log",
+      "/tmp/anthropic-identities-final-helper.log"
+    ]
+  },
+  "composition": {
+    "responsibilities": [
+      "repositories",
+      "warm state",
+      "CLI resources",
+      "telemetry",
+      "request services",
+      "scheduler",
+      "lifecycle",
+      "contracts"
+    ],
+    "changedProductionFilesMaximumLines": 300,
+    "scope": "Preserves constructor order, shared capabilities, SDK security gates and shutdown ordering."
+  },
+  "benchmark": {
+    "artifact": "/tmp/router-w7b-final-bench-4_0w11io",
+    "status": "PASS; both actual exits0",
+    "runs": [
+      {
+        "label": "small",
+        "command": [
+          "bin/bench",
+          "--json",
+          "--prompt-bytes",
+          "1024"
+        ],
+        "exitCode": 0
+      },
+      {
+        "label": "large",
+        "command": [
+          "bin/bench",
+          "--json",
+          "--prompt-bytes",
+          "280000"
+        ],
+        "exitCode": 0
+      }
+    ],
+    "sourceDrift": [],
+    "sourceHead": "f24c894b4aac29f9820dc22b0efa71e0d76c29ba"
+  },
+  "packaging": {
+    "buildExit": 0,
+    "tag": "multi-ai-router:w7b-translation",
+    "purpose": "W7B packaging proof; no application launch or deployment",
+    "imageId": "sha256:65254f85c91762167952bc226738c9cbe8dd70b59e7999bc27eb1a786db7a44f",
+    "checkedServerSha256": "78797e606ab006f14fa311c462fb7340d51eefd85cbbdfbd087efeffd956707f",
+    "hardenedStaticProbe": {
+      "uid": 1000,
+      "capEff": "0000000000000000",
+      "noNewPrivs": 1,
+      "serverSha256": "78797e606ab006f14fa311c462fb7340d51eefd85cbbdfbd087efeffd956707f",
+      "network": "none",
+      "readOnly": true,
+      "entrypoint": "static /bin/sh; no application launch"
+    },
+    "probeExit": 0,
+    "sourceHead": "f24c894b4aac29f9820dc22b0efa71e0d76c29ba"
+  },
+  "reviewMerge": "Corrective local full gate passed; new-head CI/reviews and final packaging pending.",
+  "limitations": [
+    "No real provider/OAuth/CLI request was used.",
+    "No cold-session latency closure.",
+    "Prior W7A six-ms warm p99 acceptance and strict failure remain recorded; no changed benchmark budget.",
+    "No native ARM, release or production deployment claim."
+  ],
+  "previousFullGate": {
+    "artifact": "/tmp/router-w7b-final-gate-xr2mrcc9",
+    "command": "bin/check",
+    "postgresMajor": 18,
+    "testsPassed": 5323,
+    "testsFailed": 0,
+    "assertions": 59624,
+    "testFiles": 479,
+    "exitCode": 0,
+    "ownDatabase": "w7b_final_gate_d8db36ddbdb9439bb494652a89727e67",
+    "dropped": true,
+    "postgresPort": 5440,
+    "sourceDrift": []
+  },
+  "reviewCorrections": {
+    "coderabbitRun": "b3cd58c7-9574-44dc-a1a4-e4e367f6bb01",
+    "bounds": "Inclusive pending-cap bounds now named in boot errors.",
+    "tools": "Parallel policy alone never synthesizes tool choice with absent/empty tools; explicit choices and nonempty-tool inverse policy preserved.",
+    "stream": "Anthropic-to-Responses forwards configured cap and exposes terminal local failure so HTTP200 overflow records router_error once without health strike/retry.",
+    "failureFirst": [
+      "tool choice10pass1fail",
+      "stream option/accounting0pass2fail",
+      "independent old reasoning fixture39pass1fail corrected with nonempty tool"
+    ],
+    "retainedModelCeiling": "Plan10104.12 requires model-aware omitted output ceiling including non-streaming; speculative streaming-only restriction would restore truncation."
+  }
+}

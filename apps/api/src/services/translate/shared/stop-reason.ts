@@ -1,8 +1,8 @@
 /**
  * Why a completion ended, across every dialect seam.
  *
- * The Anthropic set is **closed and complete** — `end_turn`, `max_tokens`, `stop_sequence`,
- * `tool_use`, `pause_turn`, `refusal` — and every member has a row in the table at
+ * The recognized Anthropic set includes `end_turn`, `max_tokens`, `stop_sequence`,
+ * `tool_use`, `pause_turn`, `refusal`, `model_context_window_exceeded`; each has a row at
  * `docs/idea/06-protocol-translation.md#stop-and-finish-reasons`. A value outside the set is a
  * provider change, not a client error: it is mapped conservatively and **reported**, never dropped
  * silently and never passed through as a token the target dialect does not define.
@@ -29,6 +29,7 @@ export const ANTHROPIC_STOP_REASONS = [
   "tool_use",
   "pause_turn",
   "refusal",
+  "model_context_window_exceeded",
 ] as const
 
 export type AnthropicStopReason = (typeof ANTHROPIC_STOP_REASONS)[number]
@@ -57,6 +58,7 @@ const ABSENT: MappedReason<never> = { value: null, unrecognized: null }
 const TO_OPENAI: Record<AnthropicStopReason, OpenAiFinishReason> = {
   end_turn: "stop",
   max_tokens: "length",
+  model_context_window_exceeded: "length",
   tool_use: "tool_calls",
   // Lossy: openai-chat has no field for *which* sequence matched. The Anthropic response carries it
   // in a separate top-level `stop_sequence`, which has nowhere to go here.

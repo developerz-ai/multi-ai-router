@@ -1,6 +1,7 @@
 import { z } from "zod"
 import { openAiChatReasoningSchema, readOpenAiChatReasoning } from "../shared/openai-chat-reasoning"
 import { createOpenAiChatToolCallReader } from "../shared/openai-chat-tool-calls"
+import type { ResponsesRecoveryOptions } from "../shared/responses-snapshot-recovery"
 import { createResponsesStreamEmitter } from "../shared/responses-stream"
 import { readOpenAiFinishReason, toResponsesCompletion } from "../shared/stop-reason"
 import type { OpenAiChatUsage } from "../shared/usage"
@@ -34,7 +35,7 @@ import { frameJson } from "../sse/parse"
  * because a `thinking` block a client can replay needs a `signature` this router cannot produce.
  */
 
-export interface OpenAiChatToOpenAiResponsesStreamOptions {
+export interface OpenAiChatToOpenAiResponsesStreamOptions extends ResponsesRecoveryOptions {
   /** Unix **seconds**, stamped as `created_at`. Supplied by the caller: a translator holds no clock. */
   readonly created: number
   /** Used until a chunk names the upstream's own id, and if none ever does. */
@@ -85,6 +86,7 @@ export function openAiChatToOpenAiResponsesStream(
 ): StreamTranslator {
   const emitter = createResponsesStreamEmitter(options)
   const toolCalls = createOpenAiChatToolCallReader()
+  let hasToolCalls = false
   let finishReason: string | null = null
   let usage: OpenAiChatUsage | null = null
   let unrecognized: string | null = null
@@ -131,15 +133,15 @@ export function openAiChatToOpenAiResponsesStream(
       emitter.reasoning(out, readOpenAiChatReasoning(choice.delta))
       emitter.text(out, choice.delta?.content ?? "")
       for (const call of choice.delta?.tool_calls ?? []) {
+        hasToolCalls = true
         const key = toolCalls.key(call)
         emitter.toolStart(out, key, { id: call.id, name: call.function?.name })
         emitter.toolArgs(out, key, call.function?.arguments ?? "")
       }
       if (choice.finish_reason !== null && choice.finish_reason !== undefined) {
         finishReason = choice.finish_reason
-        // The item is closed here rather than at termination: a finish reason means no further
-        // content, and the client learns the item ended without waiting for the usage chunk.
-        emitter.closeItem(out)
+        // Keep tool items addressable until termination; text-only items can close promptly.
+        if (!hasToolCalls) emitter.closeItem(out)
       }
       return out
     },
@@ -154,5 +156,6 @@ export function openAiChatToOpenAiResponsesStream(
     },
 
     unrecognizedStopReason: () => unrecognized,
+    translationFailure: () => emitter.translationFailure(),
   }
 }

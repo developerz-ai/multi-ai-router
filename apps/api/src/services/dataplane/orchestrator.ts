@@ -31,10 +31,8 @@ import { unservableError } from "./unservable"
  *     read routing fields -> resolve session -> health snapshot -> select -> plan egress
  *                         -> attempt chain -> relay
  *
- * Everything before the chain is preflight and is deliberately cheap: the body is read once and
- * scanned incrementally for two fields, the snapshot is assembled from warm memory, and selection
- * is a pure function. Nothing here opens a socket or touches Postgres.
- *
+ * Preflight reads and validates the body once, resolves the scoped session binding, and selects
+ * from a warm routing snapshot. A cold session binding uses the store's indexed database lookup.
  * Every authenticated refusal is accounted for, including those before a model is known.
  * Missing model/account/upstream facts stay null; no selected account is charged for preparation.
  */
@@ -216,6 +214,7 @@ export function createDispatcher(deps: DispatcherDeps): Dispatcher {
       model,
       fallbackId: input.requestId,
       defaultMaxTokens: options.translation?.defaultMaxTokens,
+      maximumPendingBytes: options.translation?.maximumPendingBytes,
     }
 
     // The bound account travels into the chain so a mid-chain hop off it is *known* to be one —
@@ -228,6 +227,7 @@ export function createDispatcher(deps: DispatcherDeps): Dispatcher {
     const log = deps.logger?.child({ component: "transport", requestId: input.requestId })
 
     const response = await runChain({
+      modelMetadata: deps.modelMetadata,
       runtime,
       plan: plan.servable,
       request: input.request,

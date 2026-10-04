@@ -1,4 +1,6 @@
 import { z } from "zod"
+import { eventType, mergeUsage } from "../shared/anthropic-stream-events"
+import type { ResponsesRecoveryOptions } from "../shared/responses-snapshot-recovery"
 import { createResponsesStreamEmitter } from "../shared/responses-stream"
 import { toOpenAiFinishReason, toResponsesCompletion } from "../shared/stop-reason"
 import type { AnthropicUsage } from "../shared/usage"
@@ -36,7 +38,7 @@ import { frameJson } from "../sse/parse"
  */
 
 /** `created` is a caller-supplied value, never `Date.now()`: a translator holds no clock. */
-export interface AnthropicToOpenAiResponsesStreamOptions {
+export interface AnthropicToOpenAiResponsesStreamOptions extends ResponsesRecoveryOptions {
   /** Unix **seconds**, stamped as `created_at` on every restated response object. */
   readonly created: number
   /** Used until `message_start` names the upstream's own id, and if it never does. */
@@ -84,6 +86,7 @@ export function anthropicToOpenAiResponsesStream(
   options: AnthropicToOpenAiResponsesStreamOptions,
 ): StreamTranslator {
   const emitter = createResponsesStreamEmitter(options)
+  const emptyTools = new Set<number>()
   let startUsage: AnthropicUsage | null = null
   let unrecognized: string | null = null
 
@@ -104,6 +107,7 @@ export function anthropicToOpenAiResponsesStream(
 
     if (block.type === "tool_use") {
       // Keyed by Anthropic's own block index, which every delta for this call repeats.
+      emptyTools.add(index)
       emitter.toolStart(out, index, { id: block.id, name: block.name })
       return
     }
@@ -125,7 +129,10 @@ export function anthropicToOpenAiResponsesStream(
       emitter.reasoning(out, delta.thinking ?? "")
       return
     }
-    if (delta.type === "input_json_delta") emitter.toolArgs(out, index, delta.partial_json ?? "")
+    if (delta.type === "input_json_delta") {
+      if ((delta.partial_json ?? "").length > 0) emptyTools.delete(index)
+      emitter.toolArgs(out, index, delta.partial_json ?? "")
+    }
   }
 
   /**
@@ -170,6 +177,15 @@ export function anthropicToOpenAiResponsesStream(
         case "content_block_stop":
           // Forwarded, not reconstructed: Anthropic states the boundary, and a Responses item needs
           // exactly that to close with its `done` events before the next one opens.
+          if (
+            typeof payload === "object" &&
+            payload !== null &&
+            "index" in payload &&
+            typeof payload.index === "number" &&
+            emptyTools.delete(payload.index)
+          ) {
+            emitter.toolArgs(out, payload.index, "{}")
+          }
           emitter.closeItem(out)
           break
         case "message_delta":
@@ -200,29 +216,6 @@ export function anthropicToOpenAiResponsesStream(
     },
 
     unrecognizedStopReason: () => unrecognized,
-  }
-}
-
-function eventType(name: string | null, payload: unknown): string | null {
-  if (typeof payload === "object" && payload !== null && "type" in payload) {
-    const type = (payload as { type: unknown }).type
-    if (typeof type === "string") return type
-  }
-  return name
-}
-
-/** The final counts win field by field: `message_start` states input, `message_delta` output. */
-function mergeUsage(
-  start: AnthropicUsage | null,
-  end: AnthropicUsage | null,
-): AnthropicUsage | null {
-  if (start === null) return end
-  if (end === null) return start
-  return {
-    input_tokens: end.input_tokens ?? start.input_tokens,
-    output_tokens: end.output_tokens ?? start.output_tokens,
-    cache_creation_input_tokens:
-      end.cache_creation_input_tokens ?? start.cache_creation_input_tokens,
-    cache_read_input_tokens: end.cache_read_input_tokens ?? start.cache_read_input_tokens,
+    translationFailure: () => emitter.translationFailure(),
   }
 }

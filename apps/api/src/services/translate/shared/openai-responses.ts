@@ -88,7 +88,7 @@ const functionCallOutputItem = z.looseObject({
   output: contentSchema.optional(),
 })
 
-/** Both are kept whole rather than reduced: they are refused, and a refusal names the item type. */
+/** Keep opaque fields whole: stateless reasoning summaries are hints; encrypted state and references are refused. */
 const reasoningItem = z.looseObject({ type: z.literal("reasoning") })
 const itemReferenceItem = z.looseObject({ type: z.literal("item_reference") })
 

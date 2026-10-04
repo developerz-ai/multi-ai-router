@@ -13,7 +13,7 @@
  * distinction it has to make and Responses does not is between a *new* unkeyed call and a
  * *continuation* of one, because openai-chat streams arguments as further entries in the same array:
  *
- * - an entry naming an `id` or a function `name` introduces a call, and gets an ordinal of its own;
+ * - a repeated `id` addresses the same call; an unseen id or name without an id introduces one;
  * - an entry naming neither carries arguments for the call the last entry addressed;
  * - an entry naming an `index` is keyed by it, always, whatever it said before.
  *
@@ -44,6 +44,7 @@ function names(call: OpenAiChatToolCallDelta): boolean {
 }
 
 export function createOpenAiChatToolCallReader(): OpenAiChatToolCallReader {
+  const ids = new Map<string, string | number>()
   let unkeyed = 0
   let last: string | number | null = null
 
@@ -57,7 +58,18 @@ export function createOpenAiChatToolCallReader(): OpenAiChatToolCallReader {
     key(call) {
       if (typeof call.index === "number") {
         last = call.index
+        if (call.id) ids.set(call.id, call.index)
         return call.index
+      }
+      if (call.id) {
+        const known = ids.get(call.id)
+        if (known !== undefined) {
+          last = known
+          return known
+        }
+        const key = mint()
+        ids.set(call.id, key)
+        return key
       }
       if (names(call)) return mint()
       // Arguments for a call nobody has introduced yet: an upstream that streams them without ever

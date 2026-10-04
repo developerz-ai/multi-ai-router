@@ -1,5 +1,7 @@
 import { z } from "zod"
 import { renderErrorBody } from "../../../errors/render"
+import { eventType, mergeUsage, readBlockIndex } from "../shared/anthropic-stream-events"
+import { type ChunkDelta, chatStreamChunk, type ToolCallDelta } from "../shared/chat-stream-chunk"
 import { parseUpstreamError } from "../shared/errors"
 import type { OpenAiFinishReason } from "../shared/stop-reason"
 import { CONSERVATIVE_FINISH_REASON, toOpenAiFinishReason } from "../shared/stop-reason"
@@ -60,23 +62,12 @@ import { frameJson } from "../sse/parse"
 export interface AnthropicToOpenAiChatStreamOptions {
   /** Unix **seconds**, stamped on every chunk. */
   readonly created: number
+  /** Caller explicitly requested the final usage-only Chat chunk. */
+  readonly includeUsage?: boolean | undefined
   /** Used until `message_start` names the upstream's own id, and if it never does. */
   readonly id?: string | undefined
   /** Used until `message_start` names the model. The client's requested name is the right value. */
   readonly model?: string | undefined
-}
-
-interface ToolCallDelta {
-  readonly index: number
-  readonly id?: string | undefined
-  readonly type?: "function" | undefined
-  readonly function: { readonly name?: string | undefined; readonly arguments?: string | undefined }
-}
-
-interface ChunkDelta {
-  readonly role?: "assistant"
-  readonly content?: string
-  readonly tool_calls?: readonly ToolCallDelta[]
 }
 
 const messageStartSchema = z.looseObject({
@@ -125,17 +116,10 @@ export function anthropicToOpenAiChatStream(
   let closed = false
   /** Anthropic block index → openai call ordinal, for the blocks whose deltas have somewhere to go. */
   const toolCalls = new Map<number, number>()
+  const argumentBlocks = new Set<number>()
 
   function chunk(delta: ChunkDelta, finishReason: OpenAiFinishReason | null): SseEvent {
-    return {
-      data: JSON.stringify({
-        id,
-        object: "chat.completion.chunk",
-        created: options.created,
-        model,
-        choices: [{ index: 0, delta, finish_reason: finishReason }],
-      }),
-    }
+    return chatStreamChunk({ id, model, created: options.created }, delta, finishReason)
   }
 
   function onMessageStart(payload: unknown): readonly SseEvent[] {
@@ -186,6 +170,7 @@ export function anthropicToOpenAiChatStream(
 
     const ordinal = toolCalls.get(index)
     if (ordinal === undefined) return NO_EVENTS
+    if ((delta.partial_json ?? "").length > 0) argumentBlocks.add(index)
     const call: ToolCallDelta = {
       index: ordinal,
       function: { arguments: delta.partial_json ?? "" },
@@ -196,10 +181,8 @@ export function anthropicToOpenAiChatStream(
   /**
    * The terminal chunk, plus a usage chunk when the upstream counted.
    *
-   * Usage is always emitted toward openai-chat even though an OpenAI stream omits it unless
-   * `stream_options.include_usage` was set — the numbers exist, and withholding them would make a
-   * translated stream less informative than the one it translates. A count the upstream never sent
-   * is null, never zero (`06-protocol-translation.md#usage-and-token-fields`).
+   * The caller must explicitly opt in with `stream_options.include_usage`. Upstream token
+   * accounting is independent of these client frames. Missing counts stay null rather than zero.
    */
   function onMessageDelta(payload: unknown): readonly SseEvent[] {
     const parsed = messageDeltaSchema.safeParse(payload)
@@ -214,7 +197,7 @@ export function anthropicToOpenAiChatStream(
     const events: SseEvent[] = [chunk({}, mapped.value ?? CONSERVATIVE_FINISH_REASON)]
 
     const usage = mergeUsage(startUsage, parseAnthropicUsage(parsed.data.usage))
-    if (usage !== null) {
+    if (options.includeUsage === true && usage !== null) {
       events.push({
         data: JSON.stringify({
           id,
@@ -266,8 +249,17 @@ export function anthropicToOpenAiChatStream(
           return onBlockStart(payload)
         case "content_block_delta":
           return onBlockDelta(payload)
-        case "content_block_stop":
-          return NO_EVENTS
+        case "content_block_stop": {
+          const index = readBlockIndex(payload)
+          if (typeof index !== "number") return NO_EVENTS
+          const ordinal = toolCalls.get(index)
+          if (ordinal === undefined) return NO_EVENTS
+          toolCalls.delete(index)
+          const hadArguments = argumentBlocks.delete(index)
+          return hadArguments
+            ? NO_EVENTS
+            : [chunk({ tool_calls: [{ index: ordinal, function: { arguments: "{}" } }] }, null)]
+        }
         case "message_delta":
           return onMessageDelta(payload)
         case "message_stop":
@@ -290,29 +282,5 @@ export function anthropicToOpenAiChatStream(
     },
 
     unrecognizedStopReason: () => unrecognized,
-  }
-}
-
-function eventType(name: string | null, payload: unknown): string | null {
-  if (typeof payload === "object" && payload !== null && "type" in payload) {
-    const type = (payload as { type: unknown }).type
-    if (typeof type === "string") return type
-  }
-  return name
-}
-
-/** The final counts win field by field: `message_start` states input, `message_delta` output. */
-function mergeUsage(
-  start: AnthropicUsage | null,
-  end: AnthropicUsage | null,
-): AnthropicUsage | null {
-  if (start === null) return end
-  if (end === null) return start
-  return {
-    input_tokens: end.input_tokens ?? start.input_tokens,
-    output_tokens: end.output_tokens ?? start.output_tokens,
-    cache_creation_input_tokens:
-      end.cache_creation_input_tokens ?? start.cache_creation_input_tokens,
-    cache_read_input_tokens: end.cache_read_input_tokens ?? start.cache_read_input_tokens,
   }
 }

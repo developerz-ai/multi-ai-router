@@ -4,6 +4,7 @@ import {
   documentText,
   dropBlock,
   imageUrlFromSource,
+  readImageSource,
   systemText,
   toolResultParts,
 } from "../shared/anthropic-blocks"
@@ -102,6 +103,10 @@ export function anthropicToOpenAiResponsesRequest(
       chatTools === undefined || chatTools.length === 0
         ? undefined
         : toolsToOpenAiResponses(chatTools),
+    parallel_tool_calls:
+      request.tool_choice?.disable_parallel_tool_use === undefined
+        ? undefined
+        : !request.tool_choice.disable_parallel_tool_use,
     tool_choice: toolChoice === undefined ? undefined : toolChoiceToOpenAiResponses(toolChoice),
     // The router holds no conversation state and an Anthropic client has no way to name a stored
     // response on its next turn, so one left behind is litter nobody can reference or delete.
@@ -139,10 +144,13 @@ function appendMessage(
       case "text":
         if (block.text.length > 0) parts.push({ type: textType, text: block.text })
         break
-      case "image":
+      case "image": {
+        const source = readImageSource(block.source, field, onDrop)
+        if (source === null) break
         if (role === "assistant") rejectField(field, ASSISTANT_IMAGE)
-        parts.push({ type: "input_image", image_url: imageUrlFromSource(block.source) })
+        parts.push({ type: "input_image", image_url: imageUrlFromSource(source) })
         break
+      }
       case "tool_use":
         if (role === "user") rejectField(`${at}.content`, USER_TOOL_USE)
         flush()
@@ -154,25 +162,19 @@ function appendMessage(
         })
         break
       case "tool_result": {
-        flush()
+        // Keep the entire user turn's replies adjacent; user text/images follow the run.
         const result = toolResultParts(block, field, onDrop)
         items.push({
           type: "function_call_output",
           call_id: block.tool_use_id,
           output: result.text,
         })
-        // Hoisted: a `function_call_output` holds text only, so the image becomes a user message
-        // item right after it — see the openai-chat sibling for why that position.
-        if (result.images.length > 0) {
-          items.push({
-            type: "message",
-            role: "user",
-            content: result.images.map((source) => ({
-              type: "input_image",
-              image_url: imageUrlFromSource(source),
-            })),
-          })
-        }
+        parts.push(
+          ...result.images.map((source) => ({
+            type: "input_image" as const,
+            image_url: imageUrlFromSource(source),
+          })),
+        )
         break
       }
       case "document": {

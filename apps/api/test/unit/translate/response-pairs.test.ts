@@ -12,7 +12,7 @@ import { describe, expect, test } from "bun:test"
 import {
   anthropicToOpenAiChatResponse,
   openAiChatToAnthropicResponse,
-} from "../../../src/services/translate"
+} from "../../../src/services/translate/index"
 import { anthropicUsageWire, openAiChatUsageWire } from "./fixtures"
 
 const CREATED = 1_700_000_000
@@ -160,7 +160,7 @@ describe("anthropic -> openai-chat response", () => {
       expect(body.id).toBe("fallback")
       expect(body.model).toBe("requested")
       expect(body.choices[0]?.message.content).toBeNull()
-      expect(body.choices[0]?.finish_reason).toBeNull()
+      expect(body.choices[0]?.finish_reason).toBe("stop")
     }
   })
 })

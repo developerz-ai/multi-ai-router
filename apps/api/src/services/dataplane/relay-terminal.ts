@@ -1,5 +1,6 @@
 import type { UsageOutcome } from "@multi-ai-router/core"
 import type { AttemptFailure } from "../routing"
+import { TranslationStreamError } from "../translate/shared/stream-error"
 import type { ResponseObservationFacts } from "../usage/response-observer-types"
 import { RouterShutdownError } from "./active-requests"
 import { failoverKind } from "./attempt"
@@ -52,7 +53,14 @@ export function createRelayTerminal() {
       }
     },
     error(error: unknown) {
-      if (error instanceof RouterShutdownError) {
+      if (error instanceof TranslationStreamError) {
+        capture({
+          outcome: "router_error",
+          errorClass: error.errorClass,
+          failure: null,
+          recovery: "uncertain",
+        })
+      } else if (error instanceof RouterShutdownError) {
         capture({
           outcome: "router_error",
           errorClass: "router_shutdown",
