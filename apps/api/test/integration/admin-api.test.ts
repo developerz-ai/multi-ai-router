@@ -108,7 +108,6 @@ function harness(
       cipher,
       audit,
       stateMinutes: options.pendingLoginMinutes ?? 10,
-      callbackUrl: null,
       // No test reaches a provider unless it opts in via `oauthFetch` — an unexpected call is a
       // failure, not a silent 404.
       fetch: options.oauthFetch ?? (() => Promise.reject(new Error("no upstream in this harness"))),

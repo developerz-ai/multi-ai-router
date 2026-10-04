@@ -8,6 +8,7 @@ import {
   systemText,
   toolResultParts,
 } from "../shared/anthropic-blocks"
+import { isClearedSystemTurn, systemTurnText } from "../shared/anthropic-system-turns"
 import { type DropSink, IGNORE_DROPS } from "../shared/drops"
 import type {
   OpenAiResponsesItem,
@@ -79,7 +80,15 @@ export function anthropicToOpenAiResponsesRequest(
 
   const input: OpenAiResponsesItem[] = []
   for (const [index, message] of request.messages.entries()) {
-    appendMessage(input, message, `messages[${index}]`, onDrop)
+    const at = `messages[${index}]`
+    if (message.role !== "system") appendMessage(input, message, at, onDrop)
+    else if (!isClearedSystemTurn(request.messages, index)) {
+      // In place, as `developer`: the top-level `system` is the only `instructions`.
+      const text = systemTurnText(message, at, onDrop, TARGET)
+      if (text.length > 0) {
+        input.push({ type: "message", role: "developer", content: [{ type: "input_text", text }] })
+      }
+    }
   }
 
   const instructions = systemText(request.system)
@@ -186,6 +195,11 @@ function appendMessage(
       case "redacted_thinking":
         // Documented drop. Re-sending a reasoning block as plain text would put the model's own
         // scratchpad into the transcript as if a participant had said it.
+        break
+      case "tool_addition":
+      case "tool_removal":
+        // Only meaningful inside a `system` turn (`anthropic-system-turns.ts`).
+        dropBlock(onDrop, field, block.type, TARGET)
         break
       default:
         // The provider's own artifacts (`server_tool_use`, `web_search_tool_result`, …), whose

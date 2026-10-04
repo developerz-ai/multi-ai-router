@@ -25,7 +25,6 @@ async function setup(overrides: {
     exchangeTimeoutMs: 20,
     now: () => NOW,
     stateMinutes: 10,
-    callbackUrl: null,
     ...overrides,
   })
   const begin = await connect.begin(row.id, "connect")

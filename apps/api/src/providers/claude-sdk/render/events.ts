@@ -219,3 +219,14 @@ export function readStopFacts(event: Readonly<Record<string, unknown>>): StopFac
     stopSequence: parsed.data.delta?.stop_sequence ?? null,
   }
 }
+
+/**
+ * A message that proves the pipe is open and nothing more: the wire `ping` the API interleaves into
+ * a stream, and the SDK's own `keep_alive`. Neither is model progress, so neither re-arms the
+ * upstream idle window (`idle-guard.ts`). Everything else — including a frame this build cannot
+ * read — counts, because under-counting progress turns a slow model into a false `504`.
+ */
+export function isLivenessOnly(message: SdkMessageView): boolean {
+  if (message.type === "keep_alive") return true
+  return message.type === "stream_event" && readWireEvent(message.event)?.type === "ping"
+}

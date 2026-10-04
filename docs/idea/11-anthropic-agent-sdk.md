@@ -754,6 +754,10 @@ re-synthesis, not a passthrough.**
 - **Block filtering must skip the whole start/delta/stop triple**, not just the start.
 - **Heartbeats hide upstream stalls.** Our `: ping` resets the client's idle timer, so a separate
   **upstream** idle guard (90 s in Meridian, `streamIdleGuard.ts`) must race each `next()` → `504`.
+  The window measures **model progress**: a wire `ping` or an SDK `keep_alive` does not re-arm it,
+  or a stalled model whose connection keeps pinging never times out (Meridian #1177). A deadline
+  that fires more than 2 s late — a blocked event loop — gets one I/O turn to deliver bytes already
+  in the pipe before it is a `504`, once per window and never for a ping (Meridian #1222).
 - **The status is decided before the first byte.** The response is not constructed until the first
   client frame exists, so a stall or a death on the way to it is a real `504`. After it, a failure
   is a terminal SSE `error` frame inside the `200` — a response in flight cannot retract its status.
@@ -832,6 +836,7 @@ before response.completed" though every event was sent (`openaiResponses.ts:343-
 | `tool_result.is_error` | OpenAI's `tool` role has no error channel; failures read as successes |
 | Anthropic **server** tools, citations, code execution, computer use | The SDK cannot emit `server_tool_use`. Reject `400` naming the field — and do **not** advertise these in `GET /v1/models` |
 | Beta opt-ins | The SDK owns the request; only a filtered subset passes as `betas` (§7) |
+| Mid-conversation `role: "system"` messages | Accepted. Rendered as `[system]`-marked text beside the turn they follow (a trailing one joins the live user turn), hidden once `clear_at: "next_user_message"` has been passed, hashed as their own role for lineage. `output_config` on them is ignored; `tool_addition` / `tool_removal` are named in text only — tools register from `tools` alone |
 | `POST /v1/messages/count_tokens` | The SDK exposes no token-count call, and the one way to get one — forging an `api.anthropic.com` request out of the subscription's own credentials — is the thing this whole document exists to refuse. A subscription account is therefore **not planned** for that route: a mixed pool answers off an Anthropic-dialect account, and a subscription-only pool gets a `503` naming this row. Never an estimate — see [06-protocol-translation.md](06-protocol-translation.md#counting-tokens) |
 
 Meridian injects a canned fallback sentence when the SDK returns no content (`server.ts:2068-2074`).
@@ -1025,7 +1030,7 @@ musl platform package exists (`@anthropic-ai/claude-code-linux-<arch>-musl`). Ei
 belongs on `PATH` as `claude` — a *symlink* or the real executable, never a shell wrapper, which the
 SDK's launcher rejects on some paths — so `claude auth status` and the SDK resolve the same file.
 
-**How our image actually does it, and why it differs.** `@anthropic-ai/claude-agent-sdk` (0.3.220+; pinned `^0.3.286`, whose bundled CLI is 2.1.286; the resolution ladder, the security gates, and the `auth login` / `auth status` shapes were re-verified against it)
+**How our image actually does it, and why it differs.** `@anthropic-ai/claude-agent-sdk` (0.3.220+; pinned `^0.3.289`, whose bundled CLI is 2.1.289; the resolution ladder, the security gates, and the `auth login` / `auth status` shapes were re-verified against it)
 ships the same binary as its *own* prebuilt optional dependency
 (`@anthropic-ai/claude-agent-sdk-<platform>-<arch>`, glibc and musl variants), and its internal
 resolution says so: it fails with "Reinstall `@anthropic-ai/claude-agent-sdk` without

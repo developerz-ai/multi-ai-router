@@ -89,7 +89,6 @@ function connector(fetch: (request: Request) => Promise<Response>, barrier = asy
     exchangeTimeoutMs: 5_000,
     now: () => NOW,
     stateMinutes: 10,
-    callbackUrl: null,
     refreshCatalogAfterMutation: barrier,
   })
 }

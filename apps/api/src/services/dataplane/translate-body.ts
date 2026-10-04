@@ -2,6 +2,7 @@ import type { OpenAiChatCeiling } from "@multi-ai-router/core"
 import { TranslationError } from "@multi-ai-router/core"
 import type { TranslationContext, TranslationPair } from "../translate/registry"
 import type { TranslationDrop } from "../translate/shared/drops"
+import type { ResponsesEgressRules } from "../translate/shared/responses-egress"
 
 /**
  * The upstream body a translate candidate sends — built lazily, and at most once per target shape.
@@ -35,7 +36,10 @@ export interface TranslatedRequestBody {
     upstreamModel: string,
     chatCeiling: OpenAiChatCeiling,
     defaultMaxTokens?: number,
+    responsesEgress?: ResponsesEgressRules,
   ): Uint8Array
+  /** Whether the client asked for a stream — read from the cached parse; false before one. */
+  clientStreams(): boolean
 }
 
 /**
@@ -84,9 +88,18 @@ export function createTranslatedRequestBody(
         options.include_usage === true
       )
     },
-    bodyFor(pair, upstreamModel, chatCeiling, defaultMaxTokens) {
+    clientStreams() {
+      return (
+        parsed &&
+        typeof source === "object" &&
+        source !== null &&
+        "stream" in source &&
+        source.stream === true
+      )
+    },
+    bodyFor(pair, upstreamModel, chatCeiling, defaultMaxTokens, responsesEgress) {
       const effectiveDefault = defaultMaxTokens ?? context.defaultMaxTokens
-      const shape = `${pair.egress}|${chatCeiling}|${effectiveDefault ?? "fallback"}`
+      const shape = `${pair.egress}|${chatCeiling}|${effectiveDefault ?? "fallback"}|${egressKey(responsesEgress)}`
       let translated = converted.get(shape)
       if (translated === undefined) {
         // A translator emits an object; anything else would mean a pair returning a body no
@@ -97,6 +110,7 @@ export function createTranslatedRequestBody(
           ...context,
           chatCeiling,
           defaultMaxTokens: effectiveDefault,
+          responsesEgress,
           onDrop: (drop) => void drops.push(drop),
         })
         if (typeof result !== "object" || result === null || Array.isArray(result)) {
@@ -113,4 +127,10 @@ export function createTranslatedRequestBody(
       return encoder.encode(JSON.stringify({ ...translated, model: upstreamModel }))
     },
   }
+}
+
+/** Part of the conversion cache key: two accounts with different surface rules convert separately. */
+function egressKey(rules: ResponsesEgressRules | undefined): string {
+  if (rules === undefined) return "default"
+  return `${rules.requireStream}|${rules.requireInstructions}|${rules.unsupportedFields.join(",")}`
 }

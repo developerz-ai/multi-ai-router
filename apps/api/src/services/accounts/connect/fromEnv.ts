@@ -21,7 +21,7 @@ import type { HealthStore } from "../../dataplane"
 import { type AccountAuthProbe, createClaudeAuthProbe } from "../../health/claudeAuthProbe"
 import type { CredentialRefresher } from "../refresh"
 import { type ClaudeConnectService, createClaudeConnectService } from "./claude"
-import { createOAuthConnectService, OAUTH_CALLBACK_PATH } from "./oauth"
+import { createOAuthConnectService } from "./oauth"
 import { type ConnectService, createConnectService } from "./service"
 
 /**
@@ -167,7 +167,7 @@ export interface ConnectFromEnvDeps {
   readonly oauthStates: OauthStateRepository
   readonly cipher: Pick<CredentialCipher, "encrypt" | "decrypt">
   readonly audit: AuditRecorder
-  readonly env: Pick<Env, "publicUrl" | "retention" | "failover">
+  readonly env: Pick<Env, "retention" | "failover">
   readonly now: () => Date
   /** So the token this flow just minted gets a refresh timer without waiting for the next boot. */
   readonly refresher: Pick<CredentialRefresher, "sync">
@@ -194,10 +194,6 @@ export function connectFromEnv(deps: ConnectFromEnvDeps): ConnectService {
       cipher: deps.cipher,
       audit: deps.audit,
       stateMinutes: deps.env.retention.oauthStateMinutes,
-      callbackUrl:
-        deps.env.publicUrl === null
-          ? null
-          : new URL(OAUTH_CALLBACK_PATH, deps.env.publicUrl).toString(),
       fetch: (request) => fetch(request),
       exchangeTimeoutMs: deps.env.failover.upstreamTimeoutMs,
       now: deps.now,

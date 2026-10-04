@@ -311,14 +311,15 @@ tokens; a compatible vendor's Bearer key is just a key.
 | Scope | `openid profile email offline_access` |
 | Authorize | `<issuer>/oauth/authorize` |
 | Token | `<issuer>/oauth/token` |
-| Authorize query | `response_type=code`, `client_id`, `redirect_uri`, `scope`, `code_challenge`, `code_challenge_method=S256`, `id_token_add_organizations=true`, `state` |
+| Authorize query | `response_type=code`, `client_id`, `redirect_uri`, `scope`, `code_challenge`, `code_challenge_method=S256`, `id_token_add_organizations=true`, `codex_cli_simplified_flow=true`, `state`, `originator=codex_cli_rs` |
 | Code exchange | `grant_type=authorization_code` + `code`, `redirect_uri`, `client_id`, `code_verifier` (form-encoded) |
 | Refresh | `grant_type=refresh_token` + `refresh_token`, `client_id`, `scope=openid profile email` — **JSON body**, not form-encoded |
-| Loopback redirect | `http://localhost:1455/auth/callback` — the value the first-party client registers |
+| Loopback redirect | `http://localhost:1455/auth/callback` — the **only** redirect the first-party client registers; the issuer refuses any other, the router's own callback included |
 | Base URL | `https://chatgpt.com/backend-api/codex` |
 | Auth header | `Authorization: Bearer <access_token>` |
-| Required header | `chatgpt-account-id: <account id>` |
-| Account-id claim | `https://api.openai.com/auth` → `chatgpt_account_id` |
+| Required headers | `chatgpt-account-id: <account id>`, `originator: codex_cli_rs` |
+| Account-id claim | `https://api.openai.com/auth` → `chatgpt_account_id` (a top-level `chatgpt_account_id` is accepted as a fallback) |
+| Translated bodies | `stream: true` always, `instructions` always (`""` when there is no system prompt), `store: false`; `max_output_tokens`, `temperature`, `top_p` removed and reported as drops. Declared as `CODEX_RESPONSES_EGRESS` — see [06-protocol-translation.md](06-protocol-translation.md#surface-rules) |
 
 All of it lives in `providers/drivers/openai-oauth.ts`, including the two token requests as pure
 builders: the driver owns the *shapes*, the connect flow and the refresher own the fetch, the
@@ -355,9 +356,9 @@ answers with the provider's authorization URL.
 
 | Step | |
 |---|---|
-| `redirect_uri` | `PUBLIC_URL + /admin/accounts/oauth/callback` when a `PUBLIC_URL` is set, otherwise the first-party client's `http://localhost:1455/auth/callback`. Stored on the pending row and **replayed** at the exchange — the provider binds the code to the exact value, and `PUBLIC_URL` may be edited in between |
-| Redirect capture | The browser lands on `GET /admin/accounts/oauth/callback`. Unguarded by design: a provider's redirect is a cross-site navigation, so the `SameSite=Strict` session cookie is not sent, and the `state` is the authorization. It answers a small self-contained HTML page, the one non-JSON surface on the admin plane |
-| Paste capture | `POST /:id/connect/complete` with whatever the address bar held — the whole callback URL, a bare query string, or the `code#state` shorthand. Available in *both* modes: a callback the browser cannot load still leaves the code in the address bar, which is what makes an unreachable `PUBLIC_URL` a non-event |
+| `redirect_uri` | Always the flow's `loopbackRedirectUri` — for ChatGPT `http://localhost:1455/auth/callback` — whether or not `PUBLIC_URL` is set. Every shipped `ProviderOAuthFlow` is a reverse-engineered first-party client whose registration names only its loopback; naming the router's callback made the issuer refuse the authorization outright, so no code existed for either capture mode (production, 2026-10-04). Stored on the pending row and **replayed** at the exchange. `begin` therefore always answers `capture: "paste"` |
+| Redirect capture | Not offered by any shipped flow (above); the route stays wired for a future flow whose client registers the router's callback, which would need an opt-in on its driver. The browser would land on `GET /admin/accounts/oauth/callback`. Unguarded by design: a provider's redirect is a cross-site navigation, so the `SameSite=Strict` session cookie is not sent, and the `state` is the authorization. It answers a small self-contained HTML page, the one non-JSON surface on the admin plane |
+| Paste capture | The primary step. After approving, the browser lands on the loopback, shows a "can't connect" page — expected, nothing listens there — and the address bar holds `…/auth/callback?code=…&state=…`. The operator pastes the whole address into `POST /:id/connect/complete`; a bare query string or the `code#state` shorthand is accepted too. The console says all of this before the paste box |
 | The exchange | One code exchange, one write: `{accessToken, refreshToken, providerAccountId}` encrypted into `authMaterial`, `tokenExpiresAt` from `expires_in`, `needs_reauth` cleared — and nothing else, because a `disabled` Account stays disabled |
 | Restart / cancel | A second `POST /:id/connect` retires whatever the last one left redeemable, and `DELETE /:id/connect` does the same on demand. One live durable authorization attempt per Account; begin/cancel also invalidate an already consumed callback still waiting to commit |
 | Which audit kind | Derived, not declared: an Account that already held a credential was re-connected (`account.reauthorized`), one that did not was connected (`account.connected`). The event records the capture mode and never a code, a `state`, or a token |

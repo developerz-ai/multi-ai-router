@@ -43,6 +43,8 @@ const KNOWN_BLOCK_TYPES: ReadonlySet<string> = new Set([
   "tool_result",
   "thinking",
   "redacted_thinking",
+  "tool_addition",
+  "tool_removal",
 ])
 
 /** `cache_control` is stripped here: no non-Anthropic target has an equivalent hint. */
@@ -87,6 +89,12 @@ const toolResultBlock = z.object({
 const thinkingBlock = z.object({ type: z.literal("thinking"), thinking: z.string() })
 const redactedThinkingBlock = z.object({ type: z.literal("redacted_thinking"), data: z.string() })
 
+/** Beta, inside a mid-conversation `system` turn only. `tool` is read for its name and nothing else. */
+const toolChangeBlock = z.object({
+  type: z.enum(["tool_addition", "tool_removal"]),
+  tool: z.unknown().optional(),
+})
+
 /**
  * A document: read for its `source`, whose `type` decides whether the target can carry it. A
  * `text` source is plain text and travels as such; every other source (a base64 PDF, a URL, a
@@ -123,12 +131,16 @@ export const anthropicBlockSchema = z.union([
   thinkingBlock,
   redactedThinkingBlock,
   documentBlock,
+  toolChangeBlock,
   unsupportedBlock,
 ])
 
+/** `system` is also a mid-conversation role; see `anthropic-system-turns.ts`. */
 export const anthropicMessageSchema = z.object({
-  role: z.enum(["user", "assistant"]),
+  role: z.enum(["user", "assistant", "system"]),
   content: z.union([z.string(), z.array(anthropicBlockSchema)]),
+  /** `system` turns only. Any value but `"next_user_message"` is the default: always shown. */
+  clear_at: z.unknown().optional(),
 })
 
 /** A server-side tool carries a `type` and no `input_schema`; `shared/tools.ts` refuses it by name. */

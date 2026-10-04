@@ -61,7 +61,7 @@ from the subprocess environment, which also prevents it from looping back throug
 Every SDK query also sets `verbatimPrompts: true`: client messages stay literal, without CLI
 slash-command dispatch or `@path` host-file expansion. On the shipped CLI this also skips turn-start
 attachments such as MCP resource mentions, nested `CLAUDE.md` files, and skill listings. This option
-requires Claude Code 2.1.248 or newer, including custom CLI overrides; the pinned SDK ships 2.1.286.
+requires Claude Code 2.1.248 or newer, including custom CLI overrides; the pinned SDK ships 2.1.289.
 It does not disable attachments between tool calls, so the independent tool-denial and
 environment-isolation gates remain required.
 Dispatch, idle queries, and account test probes share these options and assert them in regression

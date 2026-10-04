@@ -9,6 +9,7 @@ import type {
   UtilizationSource,
 } from "@multi-ai-router/core"
 import type { ModelAliasMap } from "@multi-ai-router/db"
+import type { ResponsesEgressRules } from "../services/translate/shared/responses-egress"
 
 /**
  * The provider driver contract: one interface, many implementations. Adding a provider is one
@@ -269,6 +270,9 @@ export interface ProviderDriver {
    * something else answers with the default and is never asked again.
    */
   resolveChatCeiling(account: DriverAccount): OpenAiChatCeiling
+
+  /** What this Account's Responses surface demands of a body the router writes. Pure, in-memory. */
+  resolveResponsesEgress(account: DriverAccount): ResponsesEgressRules
 
   /**
    * Auth plus every provider-mandated header. Never mutates the Account, never logs.

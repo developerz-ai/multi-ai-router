@@ -8,7 +8,11 @@ import {
 } from "@multi-ai-router/core"
 import type { ClaudeSdkDriver, DriverAccount, ProviderDriver } from "../../providers"
 import type { Candidate } from "../routing"
-import type { TranslationPair } from "../translate"
+import {
+  DEFAULT_RESPONSES_EGRESS,
+  type ResponsesEgressRules,
+  type TranslationPair,
+} from "../translate"
 import { upstreamCountTokensUrl, upstreamEmbeddingsUrl, upstreamUrl } from "./egress/endpoint"
 import { type EgressRejection, resolveEgress } from "./egress/mode"
 import type { RoutableAccount, RoutingCatalog, UpstreamOperation } from "./types"
@@ -58,6 +62,8 @@ interface ServablePlan {
    * particular upstream calls something — and because two accounts in one chain can disagree.
    */
   readonly chatCeiling: OpenAiChatCeiling
+  /** What this account's Responses surface demands of a written body. Same kind of fact. */
+  readonly responsesEgress: ResponsesEgressRules
   /**
    * The conversion this attempt runs, or null when the client already speaks the dialect this
    * attempt answers in. On the passthrough path that null is load-bearing: there is deliberately no
@@ -160,6 +166,10 @@ export function planCandidates(
         egress.mode === "agent-sdk"
           ? DEFAULT_OPENAI_CHAT_CEILING
           : egress.driver.resolveChatCeiling(account.driver),
+      responsesEgress:
+        egress.mode === "agent-sdk"
+          ? DEFAULT_RESPONSES_EGRESS
+          : egress.driver.resolveResponsesEgress(account.driver),
       translation: egress.mode === "passthrough" ? null : egress.pair,
       egressMode: egress.mode,
     }

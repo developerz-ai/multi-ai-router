@@ -29,9 +29,17 @@ import { type DeclaredTool, readToolList } from "./tools"
 /** A content block as the client sent it. `type` is the only field this layer branches on. */
 const blockSchema = z.looseObject({ type: z.string() })
 
+/**
+ * `system` is a real mid-conversation role (Anthropic SDK 0.131 `MessageParam.role`): per-turn
+ * instructions, and — beta — `tool_addition` / `tool_removal` blocks. Clients such as Oh My Pi send
+ * one after a tool result. Refusing it failed the whole turn on a subscription Account while the
+ * same body succeeded on an API-key one.
+ */
 const messageSchema = z.looseObject({
-  role: z.enum(["user", "assistant"]),
+  role: z.enum(["user", "assistant", "system"]),
   content: z.union([z.string(), z.array(blockSchema)]),
+  /** `system` only. Unknown values are the default, `"never"`: shown rather than silently hidden. */
+  clear_at: z.unknown().optional(),
 })
 
 const systemSchema = z.union([z.string(), z.array(z.looseObject({ type: z.string() }))])
@@ -47,12 +55,18 @@ const requestSchema = z.looseObject({
   tool_choice: z.unknown().optional(),
 })
 
-export type SdkRequestRole = "user" | "assistant"
+export type SdkRequestRole = "user" | "assistant" | "system"
 
 export interface SdkRequestMessage {
   readonly role: SdkRequestRole
   /** Verbatim: a string body stays a string, blocks stay blocks. `prompt.ts` renders them. */
   readonly content: string | readonly Readonly<Record<string, unknown>>[]
+  /**
+   * A `system` message with `clear_at: "next_user_message"` that a later user message has already
+   * followed. The API keeps it in the array but no longer shows it to the model, so the prompt
+   * skips it — while its position still counts for lineage, because the client resends it.
+   */
+  readonly cleared?: boolean
 }
 
 export interface SdkRequest {
@@ -98,13 +112,13 @@ export function readSdkRequest(body: Uint8Array | null): SdkRequest {
   if (!result.success) {
     const field = result.error.issues[0]?.path.join(".") || "body"
     throw new InvalidRequestError(
-      `the Claude SDK request has invalid ${field}; messages must be a non-empty array with user or assistant content`,
+      `the Claude SDK request has invalid ${field}; messages must be a non-empty array with user, assistant, or system content`,
     )
   }
   rejectServerTools(result.data.tools)
 
   return {
-    messages: result.data.messages.map(readMessage),
+    messages: readMessages(result.data.messages),
     system: readSystem(result.data.system),
     tools: readToolList(result.data.tools),
     stream: result.data.stream === true,
@@ -170,8 +184,14 @@ function recognizedToolChoiceType(value: unknown): string | null {
   return typeof type === "string" && KNOWN_TOOL_CHOICE_TYPES.has(type) ? type : null
 }
 
-function readMessage(message: z.infer<typeof messageSchema>): SdkRequestMessage {
-  return { role: message.role, content: message.content }
+function readMessages(messages: readonly z.infer<typeof messageSchema>[]): SdkRequestMessage[] {
+  const lastUser = messages.findLastIndex((message) => message.role === "user")
+  return messages.map((message, index) => {
+    const read: SdkRequestMessage = { role: message.role, content: message.content }
+    const cleared =
+      message.role === "system" && message.clear_at === "next_user_message" && index < lastUser
+    return cleared ? { ...read, cleared } : read
+  })
 }
 
 /**
