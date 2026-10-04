@@ -1,5 +1,9 @@
 import { describe, expect, test } from "bun:test"
-import { type DrainableServer, drainServer } from "../../../src/services/shutdown/drain"
+import {
+  type DrainableServer,
+  drainServer,
+  HttpDrainFailure,
+} from "../../../src/services/shutdown/drain"
 
 /**
  * The drain's whole job is the deadline, so every test here is about what happens on one side of it
@@ -115,17 +119,16 @@ describe("drainServer", () => {
     expect(server.calls).toEqual([false])
   })
 
-  test("a stop that rejects ends the wait rather than escaping it", async () => {
+  test("a stop that rejects reports sanitized failure rather than claiming a drained listener", async () => {
     const server = fakeServer(1)
     const drained = drainServer({ server, timeoutMs: 10_000 })
 
     server.fail()
-    const outcome = await drained
-
-    // A failed stop is still a stop: there is nothing left to wait for, and an escaping rejection
-    // would take the flush that runs after this with it.
-    expect(outcome.timedOut).toBe(false)
-    expect(outcome.abandoned).toBe(0)
+    const failure = await drained.catch((error) => error)
+    expect(failure).toBeInstanceOf(HttpDrainFailure)
+    expect(failure.message).toBe("HTTP listener drain failed")
+    expect(failure.cause).toBeUndefined()
+    expect(server.calls).toEqual([false])
   })
 
   test("a stop that never settles is bounded rather than awaited", async () => {

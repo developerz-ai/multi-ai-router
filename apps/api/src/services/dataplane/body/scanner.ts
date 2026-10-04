@@ -1,280 +1,288 @@
-/**
- * An incremental byte scanner over a JSON request body.
- *
- * **The passthrough body is opaque.** On same-dialect egress the router extracts exactly two
- * things from it — the model name and the session key — and forwards the rest untouched. Doing
- * that with `JSON.parse` would materialize an entire conversation (megabytes of transcript, base64
- * images, tool schemas) to read two fields, on every request, in the hot path of every developer
- * and every agent. So this reads bytes as they arrive and stops as soon as it has what it needs
- * (docs/idea/06-protocol-translation.md#performance-rules).
- *
- * It is a scanner, not a parser: it tracks string boundaries, escapes, and nesting depth, and
- * knows nothing about the schema beyond two top-level key names. Malformed input yields no
- * captures rather than an exception — the body is the upstream's to reject, not ours.
- *
- * Two captures:
- *
- * - **`model`**, top-level, with the byte span of its value. The span is what lets an Account's
- *   alias map rewrite the name without re-serializing the body.
- * - **A bounded prefix of the messages array**, the fingerprint input. A conversation grows by
- *   appending, so its first message stays byte-identical turn after turn: hashing that prefix is
- *   stable across the turns of one conversation and distinct between two
- *   (docs/idea/05-routing-and-failover.md, "The session key").
- *
- * **Every string it accumulates is bounded.** Two of them could otherwise be unbounded and both
- * are client-controlled: a top-level key, and the `model` value. Nothing else at depth 1 is
- * collected at all — an Anthropic `system` prompt is a top-level string and is routinely
- * kilobytes, and copying it byte by byte into an array to decode and throw away is exactly the
- * per-request cost the scanner exists to avoid (non-negotiable 8).
- */
+import { decodeString } from "./decode"
+import { createOpaqueArrayRun } from "./opaque-array-run"
+import { createOpeningCapture } from "./opening"
+import { createPrimitive, finishValue } from "./primitive"
+import { validateScannerOptions } from "./scanner-options"
+import type { Frame, ScannerOptions, ScanResult } from "./scanner-types"
+import { createStringValidation } from "./string-validation"
+import { canCloseFrame, consumeSeparator, createFrame } from "./structural"
 
-const QUOTE = 0x22
-const BACKSLASH = 0x5c
-const COLON = 0x3a
-const COMMA = 0x2c
-const OPEN_BRACE = 0x7b
-const CLOSE_BRACE = 0x7d
-const OPEN_BRACKET = 0x5b
-const CLOSE_BRACKET = 0x5d
-
-/** Top-level keys whose value is the conversation. First match wins; `messages` is Anthropic and
- * OpenAI Chat, `input` is OpenAI Responses. */
-const CONVERSATION_KEYS = new Set(["messages", "input"])
-
-const MODEL_KEY = "model"
-
-/**
- * Ceiling on the `model` value, in bytes on the wire.
- *
- * The model name is the one client-supplied string the router *stores* — on every attempt row and,
- * through the rollup, on a `usage_daily` row that never expires — and both columns are `text`. So
- * without a ceiling here, any router-key holder can write arbitrarily long strings into two tables
- * forever, and the only place that bounds them today is a metrics label (`observability/metrics.ts`
- * truncates at 64 chars), which is the one consumer that does not persist anything.
- *
- * A constant rather than a knob, unlike `MAX_REQUEST_BODY_BYTES`: how long a model id may be is a
- * property of the *providers*, not of the deployment, and an operator raising it would only be
- * restoring the unbounded write. 256 bytes is roughly twice the longest id any supported provider
- * accepts — a Bedrock inference-profile ARN, the worst case, runs to about 110.
- *
- * The router never truncates it: a shortened model name is a *substituted* model (non-negotiable 4),
- * so an over-long one is refused at the edge instead.
- */
-export const MODEL_NAME_MAX_BYTES = 256
-
-export interface ByteSpan {
-  /** Offset of the first byte of the string's contents — the quote is excluded. */
-  readonly start: number
-  /** Offset one past the last byte of the contents. */
-  readonly end: number
-}
-
-export interface ScanResult {
-  readonly model: string | null
-  readonly modelSpan: ByteSpan | null
-  /**
-   * The body named a `model` longer than {@link MODEL_NAME_MAX_BYTES}, so it was not captured:
-   * `model` and `modelSpan` stay null. A distinct fact from "no model at all", because the two
-   * refusals send a caller looking in opposite directions.
-   */
-  readonly modelTooLong: boolean
-  /** Bounded prefix of the conversation value, verbatim. Empty when none was found. */
-  readonly conversationPrefix: Uint8Array
-}
-
-export interface ScannerOptions {
-  /** How many bytes of the conversation to keep. Bigger is a stabler fingerprint and more work. */
-  readonly conversationPrefixBytes?: number
-}
-
-export const DEFAULT_CONVERSATION_PREFIX_BYTES = 1_024
-
-export interface RoutingScanner {
-  /** Feeds one chunk. Cheap once {@link RoutingScanner.done} is true. */
-  push(chunk: Uint8Array): void
-  /** True when nothing further can be learned — the caller may stop scanning entirely. */
-  readonly done: boolean
-  result(): ScanResult
-}
-
-export function createRoutingScanner(options: ScannerOptions = {}): RoutingScanner {
-  const prefixLimit = options.conversationPrefixBytes ?? DEFAULT_CONVERSATION_PREFIX_BYTES
-  const decoder = new TextDecoder("utf-8")
-
-  let offset = 0
-  let depth = 0
-  let inString = false
-  let escaped = false
-  /** Absolute offset of the current string's first content byte. */
-  let stringStart = -1
-  /** The current string's bytes, collected only where a capture could need them. */
-  let stringBytes: number[] = []
-  let collecting = false
-  /** The current string outgrew {@link MODEL_NAME_MAX_BYTES}, so what was collected is a prefix. */
-  let overlong = false
-  /** Top-level key awaiting its value, or null between a comma and the next key. */
-  let pendingKey: string | null = null
-  let afterColon = false
-
-  let model: string | null = null
-  let modelSpan: ByteSpan | null = null
-  let modelTooLong = false
-  const prefix: number[] = []
-  let capturingConversation = false
-  let conversationSeen = false
-  /** The conversation value is fully captured: it closed, or the prefix limit was reached. */
-  let conversationDone = false
-
-  const finished = (): boolean => (model !== null || modelTooLong) && conversationDone
-
-  /** Appends one byte of the current string, or stops collecting once it is past the ceiling. */
-  const collect = (byte: number): void => {
-    if (stringBytes.length < MODEL_NAME_MAX_BYTES) {
-      stringBytes.push(byte)
-      return
-    }
-    overlong = true
-    collecting = false
-    stringBytes = []
+export * from "./scanner-types"
+export function createRoutingScanner(options: ScannerOptions = {}) {
+  const { prefixLimit: limit, maximumJsonDepth } = validateScannerOptions(options)
+  const stack: Frame[] = []
+  let offset = 0,
+    inString = false,
+    stringStart = 0,
+    stringBytes: number[] = [],
+    capture = false,
+    overlong = false,
+    keyString = false
+  let rootStarted = false,
+    rootFinished = false,
+    rejectedRoot = false,
+    invalid = false,
+    modelSeen = false,
+    duplicateModel = false,
+    model: string | null = null,
+    modelSpan: ScanResult["modelSpan"] = null,
+    modelTooLong = false,
+    depthExceeded = false
+  let primitive = false,
+    conversationSeen = false
+  const strings = createStringValidation(),
+    literal = createPrimitive()
+  const opening = createOpeningCapture(limit),
+    opaqueRun = createOpaqueArrayRun(strings)
+  let inputString = false
+  const top = () => stack[stack.length - 1]
+  function valueDone() {
+    rootFinished = finishValue(stack)
   }
-
-  const closeString = (end: number): void => {
-    const value = collecting ? decoder.decode(Uint8Array.from(stringBytes)) : ""
-    const tooLong = overlong
-    collecting = false
-    overlong = false
-    stringBytes = []
-
-    if (depth !== 1) return
-
-    if (!afterColon) {
-      // A key past the ceiling is longer than either name this scanner looks for, so it names
-      // nothing. Stated here rather than left to the fact that an abandoned collection happens to
-      // decode to the empty string, which is a property of `collect`, not a rule.
-      pendingKey = tooLong ? null : value
-      return
-    }
-    if (pendingKey === MODEL_KEY && model === null && !modelTooLong) {
-      // First match wins either way: a body naming `model` twice is answered by its first value,
-      // and one whose first value is unusable is refused rather than quietly served by its second.
-      if (tooLong) modelTooLong = true
-      else {
-        model = value
-        modelSpan = { start: stringStart, end }
-      }
-    }
-    pendingKey = null
-  }
-
-  return {
-    push(chunk) {
-      if (finished()) {
-        offset += chunk.length
+  function beginValue(byte: number) {
+    const p = top()
+    if (!rootStarted) {
+      rootStarted = true
+      if (byte !== 123) {
+        invalid = true
+        rejectedRoot = true
         return
       }
-
-      for (let index = 0; index < chunk.length; index += 1) {
-        const byte = chunk[index]
-        if (byte === undefined) continue
-        const absolute = offset + index
-
-        if (capturingConversation && prefix.length < prefixLimit) prefix.push(byte)
-        // String branches continue below, so a full fingerprint must settle before those exits.
-        if (capturingConversation && prefix.length >= prefixLimit) {
-          capturingConversation = false
-          conversationDone = true
+    }
+    if (p && p.state !== "value" && !(p.kind === "array" && p.state === "first")) {
+      invalid = true
+      return
+    }
+    if (byte === 34 && stack.length > 1 && opening.bytes === null && !p?.conversation) {
+      inString = true
+      strings.reset()
+      capture = false
+      keyString = false
+      overlong = false
+      return
+    }
+    if (p?.kind === "object" && stack.length === 1 && p.key === "model") {
+      if (modelSeen) duplicateModel = true
+      modelSeen = true
+      if (byte !== 34) invalid = true
+    }
+    const isConversation =
+      p?.kind === "object" && stack.length === 1 && (p.key === "messages" || p.key === "input")
+    if (isConversation && conversationSeen) invalid = true
+    const conversation =
+      p?.kind === "object" &&
+      stack.length === 1 &&
+      (p.key === "messages" || p.key === "input") &&
+      !conversationSeen
+    if (conversation) conversationSeen = true
+    const item = p?.kind === "array" && p.conversation && !opening.done
+    if (item && byte === 123) opening.begin(byte, stack.length + 1)
+    if (opening.bytes !== null) opening.content(p?.key ?? null, stack.length, byte)
+    if (
+      (conversation && p?.key === "input" && byte === 34) ||
+      (item && p?.conversation && p.input && byte === 34)
+    ) {
+      opening.directString(stack.length)
+      inputString = true
+    }
+    if (byte === 123 || byte === 91) {
+      if (stack.length >= maximumJsonDepth) {
+        depthExceeded = true
+        invalid = true
+        return
+      }
+      stack.push(createFrame(byte, !!conversation, !!conversation && p?.key === "input"))
+      return
+    }
+    if (byte === 34) {
+      inString = true
+      strings.reset()
+      keyString = false
+      stringStart = offset + 1
+      overlong = false
+      capture =
+        !!(p?.key === "model" && stack.length === 1) ||
+        !!(opening.bytes !== null && p?.key === "role" && stack.length === opening.depth)
+      if (capture) stringBytes = []
+      return
+    }
+    primitive = true
+    literal.start(byte)
+  }
+  function closeString() {
+    if (!keyString && !capture && opening.bytes === null) {
+      valueDone()
+      return
+    }
+    const p = top()
+    let value = ""
+    if (capture && !overlong) {
+      try {
+        value = decodeString(stringBytes)
+      } catch {
+        invalid = true
+      }
+    }
+    if (keyString) {
+      if (!p) {
+        invalid = true
+        return
+      }
+      p.key = overlong ? null : value
+      if (opening.bytes !== null && stack.length === opening.depth && p.key === "role") {
+        if (opening.roleSeen) invalid = true
+        opening.roleSeen = true
+      }
+      p.state = "colon"
+    } else {
+      if (p?.key === "model" && stack.length === 1 && !duplicateModel) {
+        if (overlong || new TextEncoder().encode(value).length > 256) modelTooLong = true
+        else {
+          model = value
+          modelSpan = { start: stringStart, end: offset }
         }
-        if (finished()) break
-
+      }
+      if (opening.bytes !== null && p?.key === "role" && stack.length === opening.depth)
+        opening.role = value
+      opening.closeValue(p?.key ?? null, stack.length, offset > stringStart)
+      if (inputString) {
+        opening.usable = offset > stringStart
+        opening.finish()
+        inputString = false
+      }
+      valueDone()
+    }
+  }
+  function finishPrimitive() {
+    if (!literal.finish()) invalid = true
+    primitive = false
+    valueDone()
+  }
+  return {
+    push(chunk: Uint8Array) {
+      for (let i = 0; i < chunk.length; i++, offset++) {
+        if (
+          inString &&
+          (!capture || overlong) &&
+          !strings.pending &&
+          (opening.bytes === null || opening.length >= limit)
+        ) {
+          const end = strings.skipString(chunk, i)
+          if (end > i) {
+            offset += end - i
+            i = end
+            if (i === chunk.length) break
+          }
+        }
+        const byte = chunk[i] ?? 0
+        if (opening.bytes !== null) opening.append(byte)
         if (inString) {
-          if (escaped) {
-            escaped = false
-            if (collecting) collect(byte)
+          const closes = strings.byte(byte)
+          if (!closes) {
+            if (capture && stringBytes.length < 1536) stringBytes.push(byte)
+            else if (capture) overlong = true
             continue
           }
-          if (byte === BACKSLASH) {
-            escaped = true
-            if (collecting) collect(byte)
-            continue
-          }
-          if (byte === QUOTE) {
+          if (byte === 34) {
             inString = false
-            closeString(absolute)
+            closeString()
             continue
           }
-          if (collecting) collect(byte)
+          if (byte < 32) invalid = true
+          if (capture && stringBytes.length < 1536) stringBytes.push(byte)
+          else if (capture) overlong = true
           continue
         }
-
-        switch (byte) {
-          case QUOTE:
-            inString = true
-            stringStart = absolute + 1
-            // Only two strings in the whole body are ever accumulated: a top-level key, and the
-            // value of `model`. Everything deeper is transcript, and every other top-level value
-            // is payload — `system` is a string and is routinely kilobytes.
-            collecting = depth === 1 && (!afterColon || pendingKey === MODEL_KEY)
-            overlong = false
-            break
-          case COLON:
-            if (depth === 1) afterColon = true
-            break
-          case COMMA:
-            if (depth === 1) {
-              afterColon = false
-              pendingKey = null
-            }
-            break
-          case OPEN_BRACE:
-          case OPEN_BRACKET:
-            if (
-              depth === 1 &&
-              afterColon &&
-              pendingKey !== null &&
-              CONVERSATION_KEYS.has(pendingKey) &&
-              !conversationSeen
-            ) {
-              conversationSeen = true
-              capturingConversation = true
-              prefix.push(byte)
-            }
-            depth += 1
-            break
-          case CLOSE_BRACE:
-          case CLOSE_BRACKET:
-            depth -= 1
-            if (depth <= 1 && capturingConversation) {
-              capturingConversation = false
-              conversationDone = true
-            }
-            if (depth === 1) {
-              afterColon = false
-              pendingKey = null
-            }
-            break
-          default:
-            break
+        if (primitive) {
+          if (
+            byte !== 44 &&
+            byte !== 93 &&
+            byte !== 125 &&
+            byte !== 32 &&
+            byte !== 10 &&
+            byte !== 13 &&
+            byte !== 9
+          ) {
+            literal.byte(byte)
+            continue
+          }
+          finishPrimitive()
         }
-
-        if (capturingConversation && prefix.length >= prefixLimit) {
-          capturingConversation = false
-          conversationDone = true
+        if (byte === 32 || byte === 10 || byte === 13 || byte === 9 || rejectedRoot) continue
+        if (rootFinished) {
+          invalid = true
+          continue
         }
-        if (finished()) break
+        const p = top()
+        if (
+          byte === 34 &&
+          p?.kind === "array" &&
+          !p.conversation &&
+          opening.bytes === null &&
+          (p.state === "first" || p.state === "value")
+        ) {
+          const after = opaqueRun.scan(chunk, i)
+          offset += after - i - 1
+          i = after - 1
+          inString = opaqueRun.open
+          capture = false
+          keyString = false
+          overlong = false
+          if (!inString) valueDone()
+          continue
+        }
+        if (byte === 125 || byte === 93) {
+          if (!canCloseFrame(p, byte)) {
+            invalid = true
+            continue
+          }
+          opening.closeContainer(stack.length, p.empty)
+          if (opening.bytes !== null && stack.length === opening.depth && byte === 125)
+            opening.finish()
+          stack.pop()
+          valueDone()
+          continue
+        }
+        if (byte === 44 || byte === 58) {
+          if (!consumeSeparator(p, byte)) invalid = true
+          continue
+        }
+        if (p?.kind === "object" && p.state === "key") {
+          if (byte !== 34) {
+            invalid = true
+            continue
+          }
+          inString = true
+          strings.reset()
+          keyString = true
+          stringStart = offset + 1
+          stringBytes = []
+          overlong = false
+          capture = stack.length === 1 || (opening.bytes !== null && stack.length === opening.depth)
+          continue
+        }
+        beginValue(byte)
       }
-
-      offset += chunk.length
     },
-
     get done() {
-      return finished()
+      return false
     },
-
-    result: () => ({
-      model,
-      modelSpan,
-      modelTooLong,
-      conversationPrefix: Uint8Array.from(prefix),
-    }),
+    finish() {
+      if (primitive) finishPrimitive()
+      if (!rootFinished || stack.length || inString || strings.pending || strings.invalid)
+        invalid = true
+      return this.result()
+    },
+    result(): ScanResult {
+      return {
+        model,
+        modelSpan,
+        modelTooLong,
+        conversationPrefix: opening.snapshot(),
+        invalid,
+        duplicateModel,
+        depthExceeded,
+      }
+    },
   }
 }

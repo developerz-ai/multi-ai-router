@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto"
 import { fingerprintSessionKey } from "./read"
 
 /**
@@ -5,7 +6,9 @@ import { fingerprintSessionKey } from "./read"
  *
  * 1. A **client-supplied session header**, when the client sends one. Authoritative — the client
  *    knows its own conversation boundaries better than the router can infer them.
- * 2. Otherwise a **fingerprint** of the conversation's opening bytes (`body/read.ts`).
+ * 2. Otherwise a **fingerprint** of the conversation's captured opening bytes (`body/read.ts`).
+ * 3. Without a usable opening capture, a fresh **unbound** key: no durable binding lookup or SDK
+ *    resume is inferred from an empty fingerprint. Explicit client session headers still win.
  *
  * It feeds `sticky` routing, where the same session and the same candidate set always produce the
  * same account: a warm prompt cache on the HTTP path, and a resumable conversation on the SDK one.
@@ -36,7 +39,7 @@ export const DEFAULT_SESSION_HEADERS: readonly string[] = [
 /** Bounded so a hostile header cannot become an unbounded map key or log field. */
 const MAX_SESSION_KEY_LENGTH = 200
 
-export type SessionKeySource = "header" | "fingerprint"
+export type SessionKeySource = "header" | "fingerprint" | "unbound"
 
 export interface ResolvedSessionKey {
   readonly key: string
@@ -55,5 +58,6 @@ export function resolveSessionKey(
       return { key: supplied.slice(0, MAX_SESSION_KEY_LENGTH), source: "header" }
     }
   }
+  if (conversationPrefix.length === 0) return { key: `unbound_${randomUUID()}`, source: "unbound" }
   return { key: fingerprintSessionKey(apiKeyId, conversationPrefix), source: "fingerprint" }
 }

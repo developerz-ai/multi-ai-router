@@ -129,7 +129,7 @@ export function createRuntime(input: RuntimeInput): DispatchRuntime {
     ...input,
 
     session:
-      store === undefined
+      store === undefined || input.sessionKeySource === "unbound"
         ? undefined
         : {
             store,

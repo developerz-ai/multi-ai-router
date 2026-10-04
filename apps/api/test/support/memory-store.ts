@@ -13,6 +13,7 @@ import type {
 import { memoryAccountLifecycle } from "./memory-account-lifecycle"
 import { memoryAccountQuota } from "./memory-account-quota"
 import { createMemoryMutations } from "./memory-mutations"
+import { drop, remove, replace } from "./memory-row-operations"
 import type { MemoryStore } from "./memory-store-types"
 
 export type { MemoryAccounts, MemoryKeys, MemoryStore } from "./memory-store-types"
@@ -287,39 +288,5 @@ export function createMemoryStore(): MemoryStore {
         return row
       },
     },
-  }
-}
-
-function replace<T extends { id: string; updatedAt: Date }>(
-  rows: T[],
-  id: string,
-  patch: Record<string, unknown>,
-  now: Date,
-): T | undefined {
-  const index = rows.findIndex((row) => row.id === id)
-  if (index === -1) return undefined
-  const current = rows[index]
-  if (current === undefined) return undefined
-  const next = { ...current, ...defined(patch), updatedAt: now } as T
-  rows[index] = next
-  return next
-}
-
-/** Mirrors the repositories: an absent key changes nothing, `null` clears. */
-function defined(patch: Record<string, unknown>): Record<string, unknown> {
-  return Object.fromEntries(Object.entries(patch).filter(([, value]) => value !== undefined))
-}
-
-function remove<T extends { id: string }>(rows: T[], id: string): boolean {
-  const index = rows.findIndex((row) => row.id === id)
-  if (index === -1) return false
-  rows.splice(index, 1)
-  return true
-}
-
-function drop<T>(rows: T[], match: (row: T) => boolean): void {
-  for (let index = rows.length - 1; index >= 0; index -= 1) {
-    const row = rows[index]
-    if (row !== undefined && match(row)) rows.splice(index, 1)
   }
 }

@@ -3,7 +3,6 @@ import { createLogger, type Logger } from "../../src/logging/logger"
 import { errorHandler, notFoundHandler } from "../../src/middleware/errorHandler"
 import { requestLogger } from "../../src/middleware/logger"
 import { requestId } from "../../src/middleware/requestId"
-import type { RouterKeyEnv } from "../../src/middleware/routerKeyAuth"
 import { createMetrics } from "../../src/observability"
 import type { SdkInvoker, SdkQuotaStore, SessionStore } from "../../src/providers"
 import { metricsRoutes } from "../../src/routes/metrics"
@@ -17,6 +16,7 @@ import {
   type RoutableAccount,
 } from "../../src/services/dataplane"
 import type { PoolSnapshot, SelectionOptions } from "../../src/services/routing"
+import type { AppEnv } from "../../src/types"
 import {
   account,
   apiKeyRow,
@@ -123,7 +123,7 @@ export function harness(options: HarnessOptions) {
   })
 
   const logger = options.logger ?? createLogger({ level: "error", write: () => undefined })
-  const app = new Hono<RouterKeyEnv>()
+  const app = new Hono<AppEnv>()
   app.use("*", requestId())
   app.use("*", requestLogger(logger))
   app.onError(errorHandler(logger))

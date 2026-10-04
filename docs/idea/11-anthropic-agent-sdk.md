@@ -417,6 +417,13 @@ carries per-request file trees that change every turn). Meridian scopes by profi
 by Account id** — resuming against the wrong Account is both a cache miss and a leak of one
 subscription's conversation into another's.
 
+The HTTP binding key and the SDK fingerprint alias are different identities. The HTTP key
+uses router-key-scoped, bounded raw bytes from the first nonempty user item, including Responses
+string input; the SDK alias uses parsed opening text and the optional reported client cwd.
+Neither can infer unique boundaries from identical openings. Without a usable user opening and
+without an explicit session header, the request gets a fresh key and bypasses both durable binding
+reads and SDK session mapping writes. An explicit header still permits binding and lineage handling.
+
 ### A turn that stopped mid-answer is a failure, not a completion
 
 **As built** (`render/envelope.ts`, `finish`). When the SDK's message stream ends with content

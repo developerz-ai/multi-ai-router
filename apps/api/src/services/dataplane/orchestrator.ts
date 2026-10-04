@@ -1,7 +1,7 @@
 import type { RouterError } from "@multi-ai-router/core"
 import { type FailoverOptions, selectAccounts } from "../routing"
 import { createRequestIdentity, type UsageRequestIdentity } from "../usage/request-identity"
-import { missingModelError, modelTooLongError, refuseEncodedBody } from "./body/preflight"
+import { admitRoutingModel, refuseEncodedBody } from "./body/preflight"
 import { DEFAULT_SESSION_HEADERS, resolveSessionKey } from "./body/session"
 import { readTrackedRequestBody } from "./body-progress"
 import { runChain } from "./chain"
@@ -75,12 +75,7 @@ export function createDispatcher(deps: DispatcherDeps): Dispatcher {
 
     const body = await readTrackedRequestBody(input.request, options.body, progress, clock)
     input.request.signal.throwIfAborted()
-    const model = body.fields.model
-    // Before the "name a model" refusal, because the body *did* name one and saying otherwise
-    // sends a caller looking for a missing field. Refused rather than truncated: a shortened
-    // model name is a substituted model (non-negotiable 4).
-    if (body.fields.modelTooLong) throw modelTooLongError()
-    if (model === null) throw missingModelError(body.bytes.length)
+    const model = admitRoutingModel(body.fields, body.bytes.length)
     progress.model = model
 
     const session = resolveSessionKey(
@@ -91,7 +86,10 @@ export function createDispatcher(deps: DispatcherDeps): Dispatcher {
     )
 
     // A bound SDK session belongs to its original account before routing selection.
-    const binding = deps.sessions ? await bindings.read(input.key.id, session.key) : undefined
+    const binding =
+      deps.sessions && session.source !== "unbound"
+        ? await bindings.read(input.key.id, session.key)
+        : undefined
     input.request.signal.throwIfAborted()
 
     const runtime = createRuntime({
@@ -107,7 +105,9 @@ export function createDispatcher(deps: DispatcherDeps): Dispatcher {
       cipher: deps.cipher,
       call,
       ...(deps.invokeSdk === undefined ? {} : { invokeSdk: deps.invokeSdk }),
-      ...(deps.sessions === undefined ? {} : { sessions: deps.sessions }),
+      ...(deps.sessions === undefined || session.source === "unbound"
+        ? {}
+        : { sessions: deps.sessions }),
       ...(deps.quota === undefined ? {} : { quota: deps.quota }),
       ...(deps.prices === undefined ? {} : { prices: deps.prices }),
       sessionKeySource: session.source,

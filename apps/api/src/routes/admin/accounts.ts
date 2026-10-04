@@ -60,6 +60,7 @@ import { render } from "./render"
 export const ADMIN_ACCOUNTS_BASE_PATH = "/api/admin/accounts"
 
 export interface AdminAccountRoutesDeps {
+  readonly maximumJsonBytes?: number
   readonly service: AccountsService
   readonly recheck: RecheckService
   readonly testNow: TestNowService
@@ -80,7 +81,10 @@ export function adminAccountRoutes(deps: AdminAccountRoutesDeps): Hono<AdminAuth
   })
 
   routes.post("/", async (c) => {
-    const body = validate(createAccountBody, await readJsonBody(c.req.raw))
+    const body = validate(
+      createAccountBody,
+      await readJsonBody(c.req.raw, { maximumBytes: deps.maximumJsonBytes ?? 1048576 }),
+    )
     if (!body.ok) return render(c, body)
     return render(c, await deps.service.create(body.value), 201)
   })
@@ -97,7 +101,10 @@ export function adminAccountRoutes(deps: AdminAccountRoutesDeps): Hono<AdminAuth
   routes.patch("/:id", async (c) => {
     const id = validateId(c.req.param("id"))
     if (!id.ok) return render(c, id)
-    const body = validate(updateAccountBody, await readJsonBody(c.req.raw))
+    const body = validate(
+      updateAccountBody,
+      await readJsonBody(c.req.raw, { maximumBytes: deps.maximumJsonBytes ?? 1048576 }),
+    )
     if (!body.ok) return render(c, body)
     return render(c, await deps.service.update(id.value, body.value))
   })
@@ -117,7 +124,10 @@ export function adminAccountRoutes(deps: AdminAccountRoutesDeps): Hono<AdminAuth
   routes.post("/:id/test", async (c) => {
     const id = validateId(c.req.param("id"))
     if (!id.ok) return render(c, id)
-    const body = validate(testNowBody, await readJsonBody(c.req.raw))
+    const body = validate(
+      testNowBody,
+      await readJsonBody(c.req.raw, { maximumBytes: deps.maximumJsonBytes ?? 1048576 }),
+    )
     if (!body.ok) return render(c, body)
     return render(c, await deps.testNow.test(id.value, body.value))
   })
@@ -145,7 +155,10 @@ export function adminAccountRoutes(deps: AdminAccountRoutesDeps): Hono<AdminAuth
   routes.post("/:id/connect/complete", async (c) => {
     const id = validateId(c.req.param("id"))
     if (!id.ok) return render(c, id)
-    const body = validate(completeConnectBody, await readJsonBody(c.req.raw))
+    const body = validate(
+      completeConnectBody,
+      await readJsonBody(c.req.raw, { maximumBytes: deps.maximumJsonBytes ?? 1048576 }),
+    )
     if (!body.ok) return render(c, body)
     return render(c, await deps.connect.complete(id.value, body.value.pasted))
   })

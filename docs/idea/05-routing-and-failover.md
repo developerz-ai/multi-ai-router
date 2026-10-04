@@ -153,7 +153,13 @@ whichever candidate wins that comparison.
 | Order | Source |
 |---|---|
 | 1 | A **client-supplied session header**, when the client sends one. Authoritative — the client knows its own conversation boundaries better than we can infer them. |
-| 2 | Otherwise a **fingerprint** of the first user message plus the working directory. Stable across the turns of one conversation, distinct between two conversations started in different projects. |
+| 2 | Otherwise a router-key-scoped **fingerprint** of at most 1,024 raw bytes from the first nonempty user item; Responses string `input` is also an opening. Leading system/developer/assistant items and appended turns do not contribute. |
+| 3 | Without a usable user opening, a fresh per-request key. No durable binding lookup or SDK session mapping is retained. |
+
+The HTTP fingerprint uses raw JSON bytes, including field order, spacing and escapes. Identical
+openings under one router key can collide, and reformatted openings can differ; it cannot infer
+unique conversation boundaries or a remote working directory. Send an explicit session header
+when those boundaries matter. An explicit header remains authoritative even without a user opening.
 
 Sessions are ephemeral and expire on a TTL (see [09-deployment.md](09-deployment.md)); an expired
 session simply re-derives and re-hashes, landing on the same account as long as the candidate set

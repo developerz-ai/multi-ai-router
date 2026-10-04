@@ -44,6 +44,7 @@ import { callbackPage, callbackPageSignedIn } from "./auth-callback-page"
 export const ADMIN_AUTH_BASE_PATH = "/api/admin/auth"
 
 export interface AdminAuthRoutesDeps {
+  readonly maximumJsonBytes?: number
   readonly service: AdminAuthService
   /** `Env.trustProxy`. Off by default: an unvetted `X-Forwarded-For` is a throttle bypass. */
   readonly trustProxy: boolean
@@ -69,7 +70,9 @@ export function adminAuthRoutes(deps: AdminAuthRoutesDeps): Hono<AdminAuthEnv> {
   routes.get("/methods", async (c) => c.json(await deps.service.methods()))
 
   routes.post("/login", async (c) => {
-    const parsed = localLoginBody.safeParse(await readJsonBody(c.req.raw))
+    const parsed = localLoginBody.safeParse(
+      await readJsonBody(c.req.raw, { maximumBytes: deps.maximumJsonBytes ?? 8192 }),
+    )
     if (!parsed.success) {
       // A malformed body is not a credential verdict, so it gets a 400 — but a
       // 400 that says nothing about what the verdict would have been.

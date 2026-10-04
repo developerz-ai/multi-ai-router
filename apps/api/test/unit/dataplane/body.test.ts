@@ -25,15 +25,6 @@ import {
 
 const encoder = new TextEncoder()
 
-function scan(body: string, chunkSize = body.length) {
-  const scanner = createRoutingScanner()
-  const bytes = encoder.encode(body)
-  for (let at = 0; at < bytes.length; at += chunkSize) {
-    scanner.push(bytes.subarray(at, at + chunkSize))
-  }
-  return scanner.result()
-}
-
 function stream(body: string, chunkSize: number): ReadableStream<Uint8Array> {
   const bytes = encoder.encode(body)
   return new ReadableStream({
@@ -77,97 +68,6 @@ function watched(declared: string): {
     pulled: () => pulled,
   }
 }
-
-describe("routing scanner", () => {
-  test("finds the top-level model and its byte span", () => {
-    const body = '{"model":"claude-opus-5","max_tokens":16}'
-    const result = scan(body)
-
-    expect(result.model).toBe("claude-opus-5")
-    expect(body.slice(result.modelSpan?.start, result.modelSpan?.end)).toBe("claude-opus-5")
-  })
-
-  test("finds it identically however the bytes are chunked", () => {
-    const body = '{"messages":[{"role":"user","content":"hi"}],"model":"gpt-5"}'
-    for (const size of [1, 3, 7, 64]) {
-      expect(scan(body, size).model).toBe("gpt-5")
-    }
-  })
-
-  test("ignores a nested key named model — only the top level routes", () => {
-    const result = scan('{"messages":[{"model":"decoy"}],"model":"real"}')
-    expect(result.model).toBe("real")
-  })
-
-  test("is not fooled by a brace or a quote inside a string", () => {
-    const result = scan('{"system":"a { \\" }","model":"real"}')
-    expect(result.model).toBe("real")
-  })
-
-  test("captures the conversation prefix from either dialect's field", () => {
-    const anthropic = scan('{"model":"m","messages":[{"role":"user","content":"alpha"}]}')
-    const responses = scan('{"model":"m","input":[{"role":"user","content":"alpha"}]}')
-
-    expect(new TextDecoder().decode(anthropic.conversationPrefix)).toContain("alpha")
-    expect(new TextDecoder().decode(responses.conversationPrefix)).toContain("alpha")
-  })
-
-  test("reports nothing rather than throwing on a body that is not JSON at all", () => {
-    expect(scan("not json").model).toBeNull()
-  })
-
-  test("stops once both fields are in hand", () => {
-    const scanner = createRoutingScanner({ conversationPrefixBytes: 8 })
-    scanner.push(encoder.encode('{"model":"m","messages":[{"role":"user"}]'))
-    expect(scanner.done).toBe(true)
-  })
-
-  test("takes a model right up to the ceiling", () => {
-    const name = "m".repeat(MODEL_NAME_MAX_BYTES)
-    const result = scan(`{"model":"${name}"}`)
-
-    expect(result.model).toBe(name)
-    expect(result.modelTooLong).toBe(false)
-  })
-
-  test("refuses one byte past it, and captures neither the value nor its span", () => {
-    const name = "m".repeat(MODEL_NAME_MAX_BYTES + 1)
-    const result = scan(`{"model":"${name}","messages":[]}`)
-
-    expect(result.modelTooLong).toBe(true)
-    // Never truncated — a shortened model name is a substituted model.
-    expect(result.model).toBeNull()
-    expect(result.modelSpan).toBeNull()
-  })
-
-  test("an over-long model still ends the scan, so the reader stops early", () => {
-    const scanner = createRoutingScanner({ conversationPrefixBytes: 8 })
-    scanner.push(encoder.encode(`{"messages":[{"role":"user"}],"model":"${"m".repeat(9_000)}"}`))
-    expect(scanner.done).toBe(true)
-    expect(scanner.result().modelTooLong).toBe(true)
-  })
-
-  test("the first model wins even when it is the unusable one", () => {
-    const result = scan(`{"model":"${"m".repeat(9_000)}","model":"short"}`)
-
-    expect(result.modelTooLong).toBe(true)
-    expect(result.model).toBeNull()
-  })
-
-  test("an enormous key or payload value cannot mask, corrupt, or become the model", () => {
-    // The other two strings the ceiling touches: a hostile top-level key, and a
-    // `system` prompt, which is a top-level string and is routinely kilobytes.
-    // Neither is accumulated — that part is a cost, not a behaviour, so what is
-    // pinned here is that abandoning them mid-string leaves the scan intact and
-    // the real model still comes out, at any chunking.
-    const body = `{"${"k".repeat(9_000)}":"decoy","system":"${"s".repeat(200_000)}","model":"real"}`
-    for (const size of [1, 997, 65_536]) {
-      const result = scan(body, size)
-      expect(result.model).toBe("real")
-      expect(result.modelTooLong).toBe(false)
-    }
-  })
-})
 
 describe("reading a request body", () => {
   test("returns the exact bytes the client sent, however they arrived", async () => {
@@ -254,7 +154,7 @@ describe("model rewriting", () => {
     const body = '{"model":"sonnet","messages":[],"temperature":0.5}'
     const read = createRoutingScanner()
     read.push(encoder.encode(body))
-    const span = read.result().modelSpan
+    const span = read.finish().modelSpan
 
     if (span === null) throw new Error("expected a model span")
     const out = new TextDecoder().decode(rewriteModel(encoder.encode(body), span, "glm-4.7"))

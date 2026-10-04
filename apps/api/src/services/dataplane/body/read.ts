@@ -1,3 +1,4 @@
+import { Buffer } from "node:buffer"
 import { createHash } from "node:crypto"
 import { RequestTooLargeError } from "@multi-ai-router/core"
 import {
@@ -14,7 +15,8 @@ import {
  * The body is read into memory because routing cannot begin without the model name and the model
  * name lives inside it — but it is never parsed, never re-serialized, and the exact bytes the
  * client sent are what goes upstream. The scan happens **per chunk as it arrives**, not afterwards
- * over a materialized buffer, and stops early once both fields are in hand.
+ * over a materialized buffer. Routing-field capture is bounded; structural validation continues
+ * through EOF so later duplicate fields or malformed JSON cannot bypass admission.
  *
  * This is not the streaming rule. That rule is about the **response**: upstream bytes are relayed
  * to the client as they arrive and are never accumulated (`relay.ts`).
@@ -99,7 +101,7 @@ export async function readRequestBody(
     reader.releaseLock()
   }
 
-  return { bytes: concat(chunks, total), fields: scanner.result() }
+  return { bytes: concat(chunks, total), fields: scanner.finish() }
 }
 
 type BodyChunk = { readonly done: boolean; readonly value?: Uint8Array }
@@ -152,13 +154,7 @@ export function declaredBodyBytes(headers: Pick<Headers, "get">): number | null 
 
 function concat(chunks: readonly Uint8Array[], total: number): Uint8Array {
   if (chunks.length === 1 && chunks[0] !== undefined) return chunks[0]
-  const bytes = new Uint8Array(total)
-  let at = 0
-  for (const chunk of chunks) {
-    bytes.set(chunk, at)
-    at += chunk.length
-  }
-  return bytes
+  return Buffer.concat(chunks, total)
 }
 
 /**
@@ -188,10 +184,9 @@ function jsonEscape(value: string): string {
  * The session key when the client did not supply one: a fingerprint of the conversation's opening
  * bytes, scoped to the presenting key so two keys never share a session.
  *
- * Stable across the turns of one conversation, because a conversation grows by appending and its
- * first message does not change. Distinct between two conversations, because their first messages
- * differ. The working-directory half of the spec's fingerprint is not available over HTTP — no
- * client sends it in the body — so the header remains the authoritative source when there is one.
+ * Stable when turns append without changing the captured raw opening bytes. The bounded prefix
+ * can collide for identical openings, and JSON reformatting can change it. A remote working
+ * directory is not inferred over HTTP; an explicit session header names conversation boundaries.
  */
 export function fingerprintSessionKey(apiKeyId: string, conversationPrefix: Uint8Array): string {
   const hash = createHash("sha256")
