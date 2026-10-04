@@ -7,7 +7,13 @@ import {
   type UpstreamFailureKind,
 } from "../../providers"
 import { UpstreamAdmissionRefused } from "../../providers/upstream-admission"
-import { type FetchLike, type RoutableAccount, runAttempt, upstreamUrl } from "../dataplane"
+import { type FetchLike, routableStandIn, runAttempt, upstreamUrl } from "../dataplane"
+import { bounded } from "../dataplane/attempt-log"
+import {
+  applyResponsesEgressRules,
+  collectResponsesStream,
+  type ResponsesEgressRules,
+} from "../translate"
 import type { TestNowServiceDeps } from "./test-now"
 
 const NO_SDK_PROBE = "this router has no Agent-SDK test probe configured"
@@ -117,34 +123,18 @@ export async function runHttpProbe(
     return { ok: false, message: messageOf(error) }
   }
 
-  // A single-account stand-in for the routing view `runAttempt` expects. Only `.id` and
-  // `.authMaterial` are ever read on this path (`egress/credential.ts`) — everything else here is
-  // present only to satisfy the shape, never inspected.
-  const routable: RoutableAccount = {
-    id: account.id,
-    snapshot: {
-      id: account.id,
-      label: account.label,
-      provider: account.provider,
-      status: account.status,
-      weight: account.weight,
-      priority: account.priority,
-      health: { consecutiveFailures: 0, inFlight: 0, recentTokens: 0 },
-    },
-    driver: driverAccount,
-    billing: account.billing,
-    authMaterial: account.authMaterial,
-    lifecycleVersion: account.lifecycleVersion,
-    healthRecoveryVersion: account.healthRecoveryVersion,
-    authRecoveryVersion: account.authRecoveryVersion,
-    configDir: account.configDir,
-  }
+  const routable = routableStandIn(account, driverAccount)
 
   const outcome = await runAttempt({
     plan: { account: routable, driver, dialect, url, upstreamModel },
     method: "POST",
     clientHeaders: new Headers(),
-    body: probeBody(dialect, upstreamModel, driver.resolveChatCeiling(driverAccount)),
+    body: probeBody(
+      dialect,
+      upstreamModel,
+      driver.resolveChatCeiling(driverAccount),
+      driver.resolveResponsesEgress(driverAccount),
+    ),
     fetch:
       beforeBackgroundUpstreamStart === undefined
         ? call
@@ -159,7 +149,20 @@ export async function runHttpProbe(
 
   if (outcome.kind === "success") {
     // Never relayed anywhere — this call has no client. Draining it is hygiene, not a translation.
-    await outcome.response.text().catch(() => undefined)
+    const raw = await outcome.response.arrayBuffer().catch(() => null)
+    const streamed = outcome.response.headers.get("content-type")?.includes("text/event-stream")
+    if (streamed === true && dialect === "openai-responses") {
+      // A forced stream (`ResponsesEgressRules.requireStream`) answers 200 before it has answered
+      // anything; only its terminal event says whether the turn actually completed.
+      const final = raw === null ? null : collectResponsesStream(new Uint8Array(raw))
+      if (final === null || final.status === "failed") {
+        return {
+          ok: false,
+          message: "upstream stream ended without a completed response",
+          failureKind: "server-error",
+        }
+      }
+    }
     return { ok: true, message: `upstream answered ${outcome.response.status}` }
   }
 
@@ -171,12 +174,21 @@ export async function runHttpProbe(
     }
   }
 
+  // What the upstream itself said — already scrubbed of this account's credential by `runAttempt`,
+  // bounded to the configured length, and for the log line only (`ProbeOutcome.detail`).
+  const upstreamMessage =
+    deps.reasonMaxChars === undefined
+      ? undefined
+      : bounded(outcome.classification?.message, deps.reasonMaxChars)
   return {
     ok: false,
     message: outcome.classification?.signal ?? `upstream attempt failed (${outcome.failure.kind})`,
     ...(outcome.classification?.kind === undefined
       ? {}
       : { failureKind: outcome.classification.kind }),
+    ...(upstreamMessage === undefined || upstreamMessage.length === 0
+      ? {}
+      : { detail: upstreamMessage }),
   }
 }
 
@@ -186,10 +198,18 @@ export async function runHttpProbe(
  * other name with a `400` the operator would read as "this account is broken"
  * (docs/idea/06-protocol-translation.md#the-output-ceiling-one-field-two-names).
  */
-function probeBody(dialect: Dialect, model: string, ceiling: OpenAiChatCeiling): Uint8Array {
+function probeBody(
+  dialect: Dialect,
+  model: string,
+  ceiling: OpenAiChatCeiling,
+  responses: ResponsesEgressRules,
+): Uint8Array {
   const text = new TextEncoder()
   if (dialect === "openai-responses") {
-    return text.encode(JSON.stringify({ model, input: "ping", max_output_tokens: 16 }))
+    // The surface's own rules, exactly as a translated request gets them: the Codex backend refuses
+    // a ceiling, a non-streaming call and a missing `instructions` (`translate/shared/responses-egress.ts`).
+    const body = { model, input: "ping", max_output_tokens: 16, store: false }
+    return text.encode(JSON.stringify(applyResponsesEgressRules(body, responses, undefined)))
   }
   if (dialect === "anthropic") {
     return text.encode(

@@ -8,11 +8,14 @@ import {
   mergeTurns,
   pushTurn,
 } from "../shared/anthropic-turns"
+import { type DropSink, IGNORE_DROPS } from "../shared/drops"
 import type { ParsedOpenAiResponsesContent } from "../shared/openai-responses"
 import { openAiResponsesRequestSchema, UNSUPPORTED } from "../shared/openai-responses"
+import { anthropicReasoningFromEffort } from "../shared/reasoning-effort"
 import {
   assertPlainTextFormat,
   assertStatelessResponses,
+  dropEncryptedReasoning,
   parseRequest,
   rejectField,
   rejectStatefulItem,
@@ -31,8 +34,8 @@ import {
  *
  * **The stateful half of openai-responses is refused here, before any upstream call.**
  * `previous_response_id`, `store: true`, `include`, `conversation`, `prompt`, `background: true`,
- * and encrypted `reasoning` / `item_reference` items all say "continue from, or leave behind, something the
- * provider is holding for me", and this router holds nothing: it picks
+ * and `item_reference` items all say "continue from, or leave behind, something the provider is
+ * holding for me", and this router holds nothing: it picks
  * an account per request and keeps no conversation state, so on non-Responses egress there is no
  * stored response to continue from at any account it could choose. A `400` naming the field is the
  * only honest answer (`06-protocol-translation.md#translation-matrix`, "Unsupported") — serving the
@@ -46,15 +49,24 @@ import {
  * holding a `tool_use` block and its `function_call_output` a user turn holding a `tool_result`,
  * paired by `call_id`.
  *
+ * An encrypted `reasoning` item is the exception, and is **dropped and reported** rather than
+ * refused: its handle is account-bound and unreadable anywhere else, but unlike a stored response it
+ * hides no turn — the visible transcript beside it is the whole conversation. Codex replays one on
+ * every turn, so refusing it made that client unservable here. `include:
+ * ["reasoning.encrypted_content"]` is dropped with it (`shared/reject.ts`).
+ *
+ * `reasoning.effort` becomes `output_config.effort` (`shared/reasoning-effort.ts`): the same dial,
+ * `minimal` clamped to `low`, `none` stated as thinking disabled.
+ *
  * Refused: a stateful field or item, a structured-output `text.format`, an `input_image` that names
  * only a `file_id`, an item or part type with no anthropic counterpart, and a `call_id` matching no
- * call earlier in the transcript. Dropped, as documented: `reasoning.effort` — Anthropic's extended
- * thinking is a **token budget**, not an effort word, and inventing a budget out of one would change
- * both what the caller pays and how long the answer takes. Image `detail` is dropped by the schema.
+ * call earlier in the transcript. Image `detail` is dropped by the schema.
  */
 
 export interface OpenAiResponsesToAnthropicOptions {
   readonly defaultMaxTokens?: number | undefined
+  /** Where a dropped field is reported. Absent, drops are silent (`shared/drops.ts`). */
+  readonly onDrop?: DropSink | undefined
 }
 
 /** @throws TranslationError (400) naming the field that has no anthropic representation. */
@@ -63,7 +75,8 @@ export function openAiResponsesToAnthropicRequest(
   options: OpenAiResponsesToAnthropicOptions = {},
 ): AnthropicRequest {
   const request = parseRequest(openAiResponsesRequestSchema, body, "openai-responses")
-  assertStatelessResponses(request)
+  const onDrop = options.onDrop ?? IGNORE_DROPS
+  assertStatelessResponses(request, onDrop)
   assertPlainTextFormat(request)
 
   const system: string[] = []
@@ -111,8 +124,8 @@ export function openAiResponsesToAnthropicRequest(
           ])
           break
         case "reasoning":
-          if (item.encrypted_content == null || item.encrypted_content === "") break
-          rejectStatefulItem(at, item.type)
+          // A summary is a hint the model wrote for a reader, not a turn; the handle is dropped.
+          dropEncryptedReasoning(item, at, onDrop)
           break
         case "item_reference":
           rejectStatefulItem(at, item.type)
@@ -166,6 +179,7 @@ export function openAiResponsesToAnthropicRequest(
               : toolChoiceToAnthropic(toolChoiceFromOpenAiResponses(request.tool_choice))),
             disable_parallel_tool_use: !request.parallel_tool_calls,
           },
+    ...anthropicReasoningFromEffort(request.reasoning?.effort, "reasoning.effort", onDrop),
   }
 }
 

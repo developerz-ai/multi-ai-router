@@ -17,6 +17,7 @@ import type {
   UtilizationSource,
 } from "@multi-ai-router/core"
 import type { CooldownReason } from "./breaker"
+import type { ModelFamily } from "./model-family"
 
 /**
  * One limiter's headroom, under the provider's own name for it.
@@ -91,10 +92,16 @@ export interface AccountSnapshot {
   /** Account-level order for `priority-failover`, lower first; a membership may override it. */
   readonly priority: number
   /**
-   * The models this account accepts, after alias mapping. Absent or empty means it supports
-   * everything: unknown is passthrough, not exclusion.
+   * The models this account accepts, after alias mapping. Absent or empty defers to
+   * {@link modelFamily}, and with no family either it supports everything: unknown is
+   * passthrough, not exclusion.
    */
   readonly supportedModels?: readonly string[]
+  /**
+   * The provider's default model family (`model-family.ts`), consulted only when
+   * {@link supportedModels} is absent or empty. Absent means passthrough: everything.
+   */
+  readonly modelFamily?: ModelFamily
   /** Client model name -> this account's upstream name. Absent means pass the name through. */
   readonly modelAliases?: Readonly<Record<string, string>>
   /** Per-window quota state. Windows reset independently; the account is blocked by any spent one. */
@@ -216,6 +223,12 @@ export interface Candidate extends ScopedAccount {
   readonly upstreamModel: string
   /** True when this is a breaker half-open probe rather than a healthy pick. */
   readonly halfOpen: boolean
+  /**
+   * True when this account reaches the requested name only through its alias map — it serves a
+   * different model under that name. Ranked behind accounts that serve the name natively
+   * (`policies/index.ts`). Absent reads as native.
+   */
+  readonly aliased?: boolean
 }
 
 /** A scope-resolved group. The policy runs *within* a group, never across the union of groups. */

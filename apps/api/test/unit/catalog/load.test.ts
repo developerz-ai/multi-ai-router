@@ -66,6 +66,19 @@ describe("loadCatalog and the declared model set", () => {
     const { accounts } = await loadCatalog(sources([row({ supportedModels: [] })]))
     expect(accounts[0]?.snapshot.supportedModels).toBeUndefined()
   })
+
+  test("a subscription carries its provider's model family; a passthrough provider carries none", async () => {
+    // Without it an undeclared Claude subscription served every name, and `gpt-5.5` on a mixed key
+    // landed there (prod, 2026-10-04). `services/routing/model-family.ts`.
+    const { accounts } = await loadCatalog(
+      sources([
+        row({ provider: "anthropic-oauth" }),
+        row({ id: "22222222-2222-4222-8222-222222222222", provider: "zai" }),
+      ]),
+    )
+    expect(accounts[0]?.snapshot.modelFamily?.patterns.length).toBeGreaterThan(0)
+    expect("modelFamily" in (accounts[1]?.snapshot ?? {})).toBe(false)
+  })
 })
 
 describe("what the catalog carries off the account row", () => {

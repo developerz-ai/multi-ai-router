@@ -3,7 +3,7 @@ import type { AccountRow } from "@multi-ai-router/db"
 import { z } from "zod"
 import { type DriverAccount, httpDriver } from "../../providers"
 import type { CredentialCipher } from "../crypto/cipher"
-import { type FetchLike, type RoutableAccount, runAttempt, upstreamModelsUrl } from "../dataplane"
+import { type FetchLike, routableStandIn, runAttempt, upstreamModelsUrl } from "../dataplane"
 
 /**
  * **Ask one upstream what it serves.** One GET, one credential, one answer.
@@ -54,6 +54,11 @@ export type UpstreamListing =
        * credential is dead" (`401`) without parsing prose.
        */
       readonly status?: number
+      /**
+       * What the upstream itself said, already scrubbed of the account's credential by
+       * `runAttempt`. For the log line only — never rendered into a response; unbounded here.
+       */
+      readonly detail?: string
     }
 
 export interface UpstreamListingDeps {
@@ -141,7 +146,11 @@ export async function listUpstreamModels(
   } catch (error) {
     return fail("endpoint_unresolved", messageOf(error))
   }
-  url.searchParams.set("limit", PAGE_LIMIT)
+  // A driver with its own listing states its own query (`providers/model-listing.ts`).
+  const listing = driver.modelListing
+  if (listing === undefined) url.searchParams.set("limit", PAGE_LIMIT)
+  else
+    for (const [name, value] of Object.entries(listing.query())) url.searchParams.set(name, value)
 
   const outcome = await runAttempt({
     plan: {
@@ -170,7 +179,18 @@ export async function listUpstreamModels(
         outcome.classification?.signal ?? `upstream attempt failed (${outcome.failure.kind})`
       }`,
       outcome.upstream?.status,
+      outcome.classification?.message,
     )
+  }
+
+  if (listing !== undefined) {
+    const read = listing.read(await readJson(outcome.response))
+    return read === null
+      ? fail(
+          "discovery_unreadable",
+          "the upstream's model listing is not in the shape its driver declares",
+        )
+      : { ok: true, entries: dedupe(read.map((entry) => ({ ...entry, id: entry.id.trim() }))) }
   }
 
   const parsed = listingSchema.safeParse(await readJson(outcome.response))
@@ -222,34 +242,18 @@ function dedupe(entries: readonly UpstreamModelEntry[]): readonly UpstreamModelE
   return [...byId.values()].sort((left, right) => left.id.localeCompare(right.id))
 }
 
-function fail(code: ListingFailureCode, message: string, status?: number): UpstreamListing {
-  return { ok: false, code, message, ...(status === undefined ? {} : { status }) }
-}
-
-/**
- * A single-account stand-in for the routing view `runAttempt` expects. Only `.id` and
- * `.authMaterial` are ever read on this path (`egress/credential.ts`) — everything else is present
- * only to satisfy the shape, never inspected.
- */
-function routableStandIn(account: AccountRow, driverAccount: DriverAccount): RoutableAccount {
+function fail(
+  code: ListingFailureCode,
+  message: string,
+  status?: number,
+  detail?: string,
+): UpstreamListing {
   return {
-    id: account.id,
-    snapshot: {
-      id: account.id,
-      label: account.label,
-      provider: account.provider,
-      status: account.status,
-      weight: account.weight,
-      priority: account.priority,
-      health: { consecutiveFailures: 0, inFlight: 0, recentTokens: 0 },
-    },
-    driver: driverAccount,
-    billing: account.billing,
-    authMaterial: account.authMaterial,
-    lifecycleVersion: account.lifecycleVersion,
-    healthRecoveryVersion: account.healthRecoveryVersion,
-    authRecoveryVersion: account.authRecoveryVersion,
-    configDir: account.configDir,
+    ok: false,
+    code,
+    message,
+    ...(status === undefined ? {} : { status }),
+    ...(detail === undefined || detail.length === 0 ? {} : { detail }),
   }
 }
 

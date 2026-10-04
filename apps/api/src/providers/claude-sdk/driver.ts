@@ -1,5 +1,6 @@
 import type { AccountBilling, AuthKind, Dialect, ProviderId } from "@multi-ai-router/core"
 import { NoHealthyAccountError } from "@multi-ai-router/core"
+import type { ModelFamily } from "../../services/routing/model-family"
 import { mapModelAlias } from "../model-alias"
 import type { DriverAccount, ResponseObservationDescriptor } from "../types"
 
@@ -53,6 +54,11 @@ export interface ClaudeSdkDriver {
    * attribution (`notional`) and never summed with metered spend.
    */
   readonly billing: AccountBilling
+  /**
+   * What a subscription serves when the Account declares no `supportedModels`: Claude, and only
+   * Claude. Without it a key mixing subscriptions with other vendors routed `gpt-5.5` here.
+   */
+  readonly modelFamily: ModelFamily
 
   /**
    * The isolated `CLAUDE_CONFIG_DIR` this account's subprocess runs against.
@@ -73,6 +79,18 @@ export interface ClaudeSdkDriver {
 }
 
 /**
+ * Provenance: the alias table baked into the bundled `claude` CLI (2.1.286, Agent SDK 0.3.286) —
+ * `sonnet`, `opus`, `haiku`, `fable`, `best`, `opusplan` and the `[1m]` context-tagged spellings —
+ * plus `default`, the CLI's account-default selection, and every concrete `claude-*` id, dated or
+ * tagged. Blast radius: a name outside these patterns is never routed to an undeclared
+ * subscription — a new family alias the CLI ships is a `model-unsupported` 503 until listed here
+ * or in the Account's `supportedModels`.
+ */
+export const CLAUDE_MODEL_FAMILY: ModelFamily = {
+  patterns: [/^claude-/, /^(?:opus|sonnet|haiku|fable|best|default|opusplan)(?:\[[^\]]+\])?$/],
+}
+
+/**
  * Provenance: docs/idea/11-anthropic-agent-sdk.md §1 and §6 — a Claude Max/Pro subscription is
  * served by `@anthropic-ai/claude-agent-sdk`'s `query()`, whose output is re-synthesized into
  * Anthropic Messages. Blast radius: the dialect every subscription request is converted toward, and
@@ -83,6 +101,7 @@ export const claudeSdkDriver: ClaudeSdkDriver = {
   dialect: "anthropic",
   authKind: "oauth",
   billing: "subscription",
+  modelFamily: CLAUDE_MODEL_FAMILY,
 
   resolveConfigDir(account) {
     const dir = account.configDir?.trim()

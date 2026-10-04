@@ -159,6 +159,7 @@ export {
   withSessionRestart,
 } from "./session-restart"
 export { buildSnapshot, overlayHealth } from "./snapshot"
+export { routableStandIn } from "./standalone-account"
 export {
   type AccountStatusWriter,
   type AccountStatusWriterDeps,

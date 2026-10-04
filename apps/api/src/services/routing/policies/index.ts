@@ -8,6 +8,10 @@
  *    operation that carries a session from one account to another.
  * 2. **A half-open probe ranks behind a healthy account.** An account whose cooldown just expired
  *    is eligible, but it is a probe, not a preference.
+ * 3. **An alias rename ranks behind the real thing.** When some candidates serve the requested
+ *    name natively and others only reach it through their alias map (`claude-opus-5 -> glm-5.2`),
+ *    the aliased ones are failover after every native one — healthy or probe. A key whose scope
+ *    holds only aliased accounts still routes through them; nothing is dropped, only ordered.
  *
  * Running a policy module directly bypasses both. Callers use {@link runPolicy}.
  */
@@ -16,7 +20,7 @@ import type { RoutingPolicy } from "@multi-ai-router/core"
 import type { BindingDecision, PolicyNote } from "../result"
 import type { Candidate } from "../types"
 import { leastUsed } from "./least-used"
-import { accountIds, type Policy, type PolicyInput, type PolicyOutput } from "./order"
+import { accountIds, nativeFirst, type Policy, type PolicyInput, type PolicyOutput } from "./order"
 import { priorityFailover } from "./priority-failover"
 import { quotaAware } from "./quota-aware"
 import { roundRobin } from "./round-robin"
@@ -40,11 +44,12 @@ export function runPolicy(
   const chosen = POLICIES[policy]
   const raw = chosen(input)
   const demoted = demoteHalfOpen(raw.ordered)
-  const pinned = pinBinding(demoted.ordered, binding)
+  const deferred = deferAliased(demoted.ordered)
+  const pinned = pinBinding(deferred.ordered, binding)
 
   return {
     ordered: pinned.ordered,
-    notes: [...raw.notes, ...demoted.notes, ...pinned.notes],
+    notes: [...raw.notes, ...demoted.notes, ...deferred.notes, ...pinned.notes],
   }
 }
 
@@ -62,6 +67,16 @@ function demoteHalfOpen(ordered: readonly Candidate[]): Adjustment {
   return {
     ordered: [...healthy, ...probes],
     notes: [{ kind: "half-open-demoted", accountIds: accountIds(probes) }],
+  }
+}
+
+/** Native accounts first, alias-only accounts after. Runs after probe demotion: native wins. */
+function deferAliased(ordered: readonly Candidate[]): Adjustment {
+  const split = nativeFirst(ordered)
+  if (split.deferred.length === 0) return { ordered, notes: [] }
+  return {
+    ordered: split.ordered,
+    notes: [{ kind: "aliased-deferred", accountIds: accountIds(split.deferred) }],
   }
 }
 

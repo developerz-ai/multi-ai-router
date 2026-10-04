@@ -1,7 +1,7 @@
 import { createAnthropicStreamEmitter } from "../shared/anthropic-stream"
 import { responsesFinalEvents } from "../shared/responses-final-events"
 import { createResponsesItemIdentity } from "../shared/responses-item-identity"
-import { responsesEventSchema } from "../shared/responses-read"
+import { type ParsedResponsesEvent, responsesEventSchema } from "../shared/responses-read"
 import {
   createResponsesSnapshotRecovery,
   type ResponsesRecoveryOptions,
@@ -38,9 +38,10 @@ import { frameJson } from "../sse/parse"
  * prefers it: an intermediary is free to drop the `event:` line, and the object is the thing the
  * upstream actually serialized.
  *
- * Dropped, as documented: `response.reasoning_summary_text.delta`. Anthropic's `thinking` block
- * carries a `signature` only Anthropic can mint, so an unsigned one is content the client cannot
- * replay on its next turn — the same call `response.ts` makes about a finished reasoning item.
+ * `response.reasoning_summary_text.delta` opens a `thinking` block, closed with the router's
+ * `signature_delta` (`shared/router-thinking.ts`) — the same call `response.ts` makes about a
+ * finished reasoning item. A second summary part of the same item continues the block after a
+ * newline, the join the non-streaming reading uses.
  */
 
 /** Neither field is required: a compatible upstream names both on `response.created`. */
@@ -66,6 +67,7 @@ export function openAiResponsesToAnthropicStream(
   const resolveIdentity = createResponsesItemIdentity(options)
   const textBoundary = createResponsesTextBoundary()
   const recoverSnapshot = createResponsesSnapshotRecovery(options)
+  const summaryBoundary = createSummaryBoundary()
 
   function process(payload: unknown, fallbackType: string | null): readonly SseEvent[] {
     if (emitter.isTerminated()) return NO_EVENTS
@@ -150,6 +152,14 @@ export function openAiResponsesToAnthropicStream(
         }
         break
 
+      case "response.reasoning_summary_text.delta": {
+        const boundary = summaryBoundary(event)
+        if (boundary === null) break
+        emitter.start(out)
+        emitter.text(out, boundary.text, boundary.newItem, "reasoning")
+        break
+      }
+
       case "response.function_call_arguments.delta": {
         // The same key the `added` event was read with, so the deltas find their own block.
         const key = event.item_id ?? event.output_index ?? `item#${unkeyed}`
@@ -217,5 +227,20 @@ export function openAiResponsesToAnthropicStream(
 
     unrecognizedStopReason: () => unrecognized,
     translationFailure: () => failure ?? emitter.translationFailure(),
+  }
+}
+
+/** Where a summary delta sits: a new reasoning item opens a block, a new part adds a newline. */
+function createSummaryBoundary() {
+  let previous: { item: string | number | null; part: number | null } | undefined
+  return (event: ParsedResponsesEvent): { text: string; newItem: boolean } | null => {
+    const delta = event.delta ?? ""
+    if (delta.length === 0) return null
+    const item = event.item_id ?? event.output_index ?? null
+    const part = event.summary_index ?? null
+    const newItem = previous === undefined || previous.item !== item
+    const newPart = !newItem && previous?.part !== part
+    previous = { item, part }
+    return { text: newPart ? `\n${delta}` : delta, newItem }
   }
 }

@@ -38,6 +38,7 @@ import { createPoolsService } from "../../src/services/pools"
 import { accountDeletionFixture } from "../support/account-deletion"
 import { createMemoryConfigDirs } from "../support/config-dirs"
 import { createMemoryStore } from "../support/memory-store"
+import { pasteOnlyFlow } from "../support/oauth-flows"
 
 /**
  * The admin CRUD plane driven through a real Hono app with `app.request(...)`.
@@ -116,7 +117,9 @@ function harness(
       logger,
       now,
     }),
-    oauth: createOAuthConnectService(oauthDeps),
+    // The callback and paste machinery is generic; every shipped flow is device-only, so it is
+    // exercised with the device declaration removed (`support/oauth-flows.ts`).
+    oauth: createOAuthConnectService({ ...oauthDeps, flowFor: pasteOnlyFlow }),
     device: createDeviceConnectService(oauthDeps),
   })
 

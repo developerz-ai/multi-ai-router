@@ -1,6 +1,11 @@
-import type { AnthropicTextBlock, AnthropicToolUseBlock } from "../shared/anthropic"
+import type {
+  AnthropicTextBlock,
+  AnthropicThinkingBlock,
+  AnthropicToolUseBlock,
+} from "../shared/anthropic"
 import type { TranslatedResponse } from "../shared/response"
 import { readResponsesBody } from "../shared/responses-read"
+import { ROUTER_THINKING_SIGNATURE } from "../shared/router-thinking"
 import { fromResponsesCompletion, toAnthropicStopReason } from "../shared/stop-reason"
 import { anthropicUsageCounts, responsesUsageToOpenAiChat } from "../shared/usage"
 
@@ -18,10 +23,11 @@ import { anthropicUsageCounts, responsesUsageToOpenAiChat } from "../shared/usag
  * this module differs from `request.ts`, where the same undecodable `arguments` string is a `400`
  * naming the call: there, nothing has happened yet and refusing costs the caller nothing.
  *
- * **A `reasoning` item is dropped, not carried.** An Anthropic `thinking` block a client can replay
- * on its next turn needs a `signature` only Anthropic can mint, and this router has no way to produce
- * one. Emitting an unsigned block would hand the client content it cannot send back — a turn that
- * fails on the following request rather than on this one, which is the worse of the two failures.
+ * **A `reasoning` item's summary becomes a `thinking` block**, in place, signed with the router's
+ * tag (`shared/router-thinking.ts`) because only Anthropic can mint a real signature. The tag is
+ * not a secret and carries no state; the item's encrypted handle is never copied anywhere. Replayed
+ * on the next turn, the block is dropped by every `anthropic → X` translator. A reasoning item with
+ * no summary text — an upstream not asked for one — yields no block at all.
  */
 
 export interface OpenAiResponsesToAnthropicResponseOptions {
@@ -37,10 +43,17 @@ export function openAiResponsesToAnthropicResponse(
 ): TranslatedResponse {
   const read = readResponsesBody(body)
 
-  const content: (AnthropicTextBlock | AnthropicToolUseBlock)[] = []
+  const content: (AnthropicTextBlock | AnthropicThinkingBlock | AnthropicToolUseBlock)[] = []
   for (const item of read.items) {
-    // A `reasoning` item is dropped, for the reason above. An item that flattened to no text is
-    // already absent, so no empty text block can be built here — Anthropic rejects one.
+    // An item that flattened to no text is already absent, so no empty text or thinking block can
+    // be built here — Anthropic rejects one.
+    if (item.kind === "reasoning") {
+      content.push({
+        type: "thinking",
+        thinking: item.summary,
+        signature: ROUTER_THINKING_SIGNATURE,
+      })
+    }
     if (item.kind === "text") content.push({ type: "text", text: item.text })
     if (item.kind === "function_call") {
       content.push({

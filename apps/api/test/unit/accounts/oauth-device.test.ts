@@ -6,6 +6,7 @@ import {
 import { createAuditRecorder } from "../../../src/services/admin"
 import { createCredentialCipher } from "../../../src/services/crypto/cipher"
 import { createMemoryStore } from "../../support/memory-store"
+import { pasteOnlyFlow } from "../../support/oauth-flows"
 
 /**
  * Device-code sign-in against a mocked auth.openai.com. Endpoints and shapes are codex-rs's
@@ -55,7 +56,11 @@ function harness(
     }
     throw new Error(`unexpected upstream ${request.url}`)
   }
+  const infos: { msg: string; fields?: Record<string, unknown> }[] = []
   const deps = {
+    log: {
+      info: (msg: string, fields?: Record<string, unknown>) => void infos.push({ msg, fields }),
+    },
     accounts: store.accounts,
     states: store.oauthStates,
     cipher,
@@ -72,6 +77,8 @@ function harness(
     calls,
     device: createDeviceConnectService(deps),
     oauth: createOAuthConnectService(deps),
+    deps,
+    infos,
     account: async () =>
       (await store.accounts.create({ label: "codex-1", provider: "openai-oauth" })).id,
   }
@@ -145,6 +152,20 @@ describe("device-code sign-in", () => {
     expect(h.store.rows.audit.at(-1)?.detail).toMatchObject({ capture: "device" })
     expect(value(await h.device.status(id)).status).toBe("connected")
     for (const secret of SECRETS) expect(JSON.stringify(done)).not.toContain(secret)
+    // F. A completed device login says so on its own line, as the Claude login does — ids only.
+    expect(h.infos).toEqual([
+      {
+        msg: "device login completed",
+        fields: {
+          component: "connect",
+          accountId: id,
+          provider: "openai-oauth",
+          capture: "device",
+          previousStatus: "active",
+        },
+      },
+    ])
+    for (const secret of SECRETS) expect(JSON.stringify(h.infos)).not.toContain(secret)
   })
 
   test("denied by the issuer is final and spends the attempt", async () => {
@@ -248,7 +269,7 @@ describe("device-code sign-in", () => {
     const polling = h.device.status(id)
     await Promise.resolve()
     await new Promise((resolve) => setTimeout(resolve, 0))
-    value(await h.oauth.begin(id, "connect"))
+    value(await h.device.begin(id, "connect"))
     release(json({ authorization_code: ISSUED_CODE, code_verifier: ISSUED_VERIFIER }))
     expect(value(await polling).status).toBe("expired")
     expect(h.calls.some((c) => c.url === TOKEN_URL)).toBe(false)
@@ -261,7 +282,13 @@ describe("device-code sign-in", () => {
     value(await h.device.begin(id, "connect"))
     const state = h.store.rows.oauthStates.at(-1)?.state ?? ""
     const refused = await h.oauth.complete(id, `stolen#${state}`)
-    expect(refused).toMatchObject({ ok: false, failure: { code: "state_rejected" } })
+    expect(refused).toMatchObject({ ok: false, failure: { code: "device_only" } })
+    // And the generic machinery, with the device declaration taken away, still refuses the state.
+    const generic = createOAuthConnectService({ ...h.deps, flowFor: pasteOnlyFlow })
+    expect(await generic.complete(id, `stolen#${state}`)).toMatchObject({
+      ok: false,
+      failure: { code: "state_rejected" },
+    })
     expect(h.calls.some((c) => c.url === TOKEN_URL)).toBe(false)
   })
 

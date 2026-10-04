@@ -224,8 +224,13 @@ export interface OpenAiResponsesRequest {
   readonly tools?: readonly OpenAiResponsesTool[] | undefined
   readonly tool_choice?: OpenAiResponsesToolChoice | undefined
   readonly parallel_tool_calls?: boolean | undefined
-  /** Only `effort`, and only ever the caller's own word: `summary` has no source to come from. */
-  readonly reasoning?: { readonly effort: string } | undefined
+  /**
+   * `effort` is only ever the caller's own word (or its Anthropic equivalent). `summary` is set only
+   * from an Anthropic client that asked for thinking, so the summary can travel back as a block.
+   */
+  readonly reasoning?:
+    | { readonly effort?: string | undefined; readonly summary?: "auto" | undefined }
+    | undefined
   /**
    * Always `false` on a translated request, never the caller's value.
    *

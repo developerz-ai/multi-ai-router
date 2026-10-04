@@ -16,6 +16,7 @@ import { decideBinding } from "./binding"
 import { evaluateCandidate, filterCandidates } from "./filter"
 import { noCandidatesError } from "./no-candidates"
 import { runPolicy } from "./policies"
+import { nativeFirst } from "./policies/order"
 import type { GroupDecision, PolicyNote, RejectedCandidate, SelectionResult } from "./result"
 import { resolveScope } from "./scope"
 import type {
@@ -93,9 +94,12 @@ export function selectAccounts(
     usedOverflow,
   }
 
-  // The policy runs per pool, so a binding honored inside the second pool still outranks the
-  // first pool's head: the binding is truth, the ordering is preference.
-  const candidates = binding.state === "honored" ? hoist(ordered, binding.accountId) : ordered
+  // `runPolicy` already put natives first inside each pool; this carries the same rule across
+  // pools, so a native account in the key's second pool outranks an alias in its first. The policy
+  // runs per pool, so a binding honored inside the second pool still outranks the first pool's
+  // head: the binding is truth, the ordering is preference.
+  const preferred = nativeFirst(ordered).ordered
+  const candidates = binding.state === "honored" ? hoist(preferred, binding.accountId) : preferred
 
   if (binding.state === "blocked" || candidates.length === 0) {
     return {
@@ -103,6 +107,7 @@ export function selectAccounts(
       error: noCandidatesError({
         ...decision,
         now: snapshot.now,
+        model: request.model,
         ...(options.unknownResetRetryAfterSeconds === undefined
           ? {}
           : { unknownResetRetryAfterSeconds: options.unknownResetRetryAfterSeconds }),

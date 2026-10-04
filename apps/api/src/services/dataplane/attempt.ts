@@ -193,6 +193,7 @@ const FAILURE_KINDS: Readonly<Record<UpstreamFailureKind, FailureKind | null>> =
   "credits-exhausted": "credits-exhausted",
   auth: "auth",
   "invalid-request": "client-error",
+  "model-unsupported": "model-unsupported",
   "server-error": "server-error",
   "stale-session": "stale-session",
   // Not `server-error`: it is retryable — the SDK transport already spent its in-place fork — but

@@ -5,8 +5,8 @@
  * Three separate facts, gathered here because they are one story and they were one bug:
  *
  * - **the request dial** — openai-chat's `reasoning_effort` is openai-responses' `reasoning.effort`
- *   one level flatter, so it survives that pair in both directions and is a documented drop toward
- *   `anthropic`, whose extended thinking is a token budget rather than an effort word;
+ *   one level flatter, so it survives that pair in both directions, and Anthropic's
+ *   `output_config.effort` is the same dial again;
  * - **the response text** — a reasoning model reached over openai-chat streams its thinking under a
  *   name OpenAI never published, and Responses has an item type waiting for it;
  * - **`parallel_tool_calls`** — spelled identically by both OpenAI dialects, dropped by neither.
@@ -112,18 +112,16 @@ describe("reasoning_effort <-> reasoning.effort", () => {
   })
 
   /**
-   * Anthropic states extended thinking as a **token budget**. Turning `"high"` into one would invent
-   * both what the caller pays and how long the answer takes, so both directions drop it — the loss
-   * cannot depend on which way the request happened to point.
+   * Anthropic states the same dial as `output_config.effort`, so it is carried from either OpenAI
+   * dialect (`reasoning-crossing.test.ts` covers the clamps and the reverse direction).
    */
-  test("toward anthropic it is dropped, from either OpenAI dialect", () => {
+  test("toward anthropic it becomes output_config.effort, from either OpenAI dialect", () => {
     const fromChat = openAiChatToAnthropicRequest(openAiChatRequest({ reasoning_effort: "high" }))
     const fromResponses = openAiResponsesToAnthropicRequest(
       openAiResponsesRequest({ reasoning: { effort: "high" } }),
     )
     for (const body of [fromChat, fromResponses]) {
-      expect(JSON.stringify(body)).not.toContain("effort")
-      expect(JSON.stringify(body)).not.toContain("thinking")
+      expect(body.output_config).toEqual({ effort: "high" })
     }
   })
 })

@@ -207,6 +207,7 @@ export function createAdminPlane(deps: AdminPlaneDeps): AdminPlane {
     now,
     refresher,
     refreshCatalogAfterMutation: deps.coherence.refreshCatalog,
+    logger,
   })
 
   // "Re-check now": clears the breaker marks so the next real request probes the account rather
@@ -250,6 +251,7 @@ export function createAdminPlane(deps: AdminPlaneDeps): AdminPlane {
     quota: deps.sdkQuota,
     health,
     log: logger,
+    reasonMaxChars: env.logReasonMaxChars,
   })
 
   const accountsService = createAccountsService({
@@ -302,6 +304,8 @@ export function createAdminPlane(deps: AdminPlaneDeps): AdminPlane {
     cipher,
     audit,
     timeoutMs: env.failover.upstreamTimeoutMs,
+    log: logger,
+    reasonMaxChars: env.logReasonMaxChars,
   })
 
   return {

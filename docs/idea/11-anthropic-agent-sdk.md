@@ -825,7 +825,7 @@ before response.completed" though every event was sent (`openaiResponses.ts:343-
 
 | Loss | Why |
 |---|---|
-| **Sampling parameters** (`temperature`, `top_p`, `max_tokens`, `stop`, `top_k`, penalties, `seed`, `n`, `logprobs`) | `query()` has no equivalents. Accepted and **ignored** — document per field. `reasoning_effort` is the exception, mapped to the SDK effort scale (`low`…`max`; OpenAI's `minimal` has no target) |
+| **Sampling parameters** (`temperature`, `top_p`, `max_tokens`, `stop`, `top_k`, penalties, `seed`, `n`, `logprobs`) | `query()` has no equivalents. Accepted and **ignored** — document per field. OpenAI's `reasoning_effort` is dropped by the translator before the Anthropic body exists ([06](06-protocol-translation.md)), so only an Anthropic-dialect `output_config.effort` reaches the SDK (row below) |
 | `n > 1`, `system_fingerprint`, determinism guarantees | Never surfaced |
 | Ids, event boundaries, byte parity | Constructed by us. Avoid Meridian's `msg_${Date.now()}` — it collides under concurrency |
 | Fields the SDK does not surface | Cannot be re-synthesized; "new upstream features survive" does not hold here |
@@ -835,7 +835,8 @@ before response.completed" though every event was sent (`openaiResponses.ts:343-
 | `pause_turn`, `refusal` | No OpenAI target — collapse to `stop`; no `content_filter` path |
 | `tool_result.is_error` | OpenAI's `tool` role has no error channel; failures read as successes |
 | Anthropic **server** tools, citations, code execution, computer use | The SDK cannot emit `server_tool_use`. Reject `400` naming the field — and do **not** advertise these in `GET /v1/models` |
-| Beta opt-ins | The SDK owns the request; only a filtered subset passes as `betas` (§7) |
+| Beta opt-ins | The SDK owns the request; only a filtered subset passes as `betas` (§7). **Not built yet**: the `anthropic-beta` header stops at the data plane and never reaches the SDK seam, and the SDK's `betas` option types one value (`context-1m-2025-08-07`) |
+| `thinking`, `output_config.effort` | Carried to `query()`'s `thinking` (`adaptive` / `enabled{budgetTokens}` / `disabled`, `display` `summarized` / `omitted`) and `effort` (`low`…`max`) only when the client sent them (`reasoning.ts`). A value outside the SDK's vocabulary — a display the CLI does not know, an unknown type or effort — is **dropped and reported** (debug log), never a `400`: the same body is accepted on an API-key Account, and an unknown `--thinking-display` makes the CLI exit before the turn starts. Thinking blocks stream back as `thinking_delta`s |
 | Mid-conversation `role: "system"` messages | Accepted. Rendered as `[system]`-marked text beside the turn they follow (a trailing one joins the live user turn), hidden once `clear_at: "next_user_message"` has been passed, hashed as their own role for lineage. `output_config` on them is ignored; `tool_addition` / `tool_removal` are named in text only — tools register from `tools` alone |
 | `POST /v1/messages/count_tokens` | The SDK exposes no token-count call, and the one way to get one — forging an `api.anthropic.com` request out of the subscription's own credentials — is the thing this whole document exists to refuse. A subscription account is therefore **not planned** for that route: a mixed pool answers off an Anthropic-dialect account, and a subscription-only pool gets a `503` naming this row. Never an estimate — see [06-protocol-translation.md](06-protocol-translation.md#counting-tokens) |
 

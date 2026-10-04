@@ -111,6 +111,8 @@ export interface TestNowServiceDeps {
    * whoever has to add the missing classification rule.
    */
   readonly log?: Pick<Logger, "warn">
+  /** `LOG_REASON_MAX_CHARS`: how much of the upstream's own message a failure line quotes. */
+  readonly reasonMaxChars?: number
 }
 
 const CONFIRMATION_REQUIRED =

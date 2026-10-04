@@ -314,9 +314,11 @@ tokens; a compatible vendor's Bearer key is just a key.
 | Authorize query | `response_type=code`, `client_id`, `redirect_uri`, `scope`, `code_challenge`, `code_challenge_method=S256`, `id_token_add_organizations=true`, `codex_cli_simplified_flow=true`, `state`, `originator=codex_cli_rs` |
 | Code exchange | `grant_type=authorization_code` + `code`, `redirect_uri`, `client_id`, `code_verifier` (form-encoded) |
 | Refresh | `grant_type=refresh_token` + `refresh_token`, `client_id`, `scope=openid profile email` — **JSON body**, not form-encoded |
-| Loopback redirect | `http://localhost:1455/auth/callback` — the **only** redirect the first-party client registers; the issuer refuses any other, the router's own callback included |
+| Loopback redirect | `http://localhost:1455/auth/callback` — the only redirect the first-party client registers. Pinned for the generic code flow's builders; **not used to connect** — ChatGPT connects by device code only (below) |
 | Base URL | `https://chatgpt.com/backend-api/codex` |
 | Auth header | `Authorization: Bearer <access_token>` |
+| Model listing | `GET <base>/models?client_version=<CODEX_CLIENT_VERSION>` → `{models: [{slug, context_window, max_context_window, …}]}`; without `client_version` the backend answers `400`. Pinned in `providers/drivers/openai-oauth-models.ts` (codex-rs `codex-api/src/endpoint/models.rs`, `model-provider/src/models_endpoint.rs` @ `de3721a7`); `client_version` names the newest released CLI (`0.160.0`, 2026-10-04) and only gates which models are listed. Declared as the driver's `modelListing`, so the listing service names no provider |
+| Test now | The probe body goes through the surface's `ResponsesEgressRules` exactly like a translated request (`stream: true`, `instructions: ""`, `store: false`, no `max_output_tokens`), and the SSE is read to its terminal event: a `200` that never completes is a failed test |
 | Required headers | `chatgpt-account-id: <account id>`, `originator: codex_cli_rs` |
 | Account-id claim | `https://api.openai.com/auth` → `chatgpt_account_id` (a top-level `chatgpt_account_id` is accepted as a fallback) |
 | Translated bodies | `stream: true` always, `instructions` always (`""` when there is no system prompt), `store: false`; `max_output_tokens`, `temperature`, `top_p` removed and reported as drops. Declared as `CODEX_RESPONSES_EGRESS` — see [06-protocol-translation.md](06-protocol-translation.md#surface-rules) |
@@ -348,6 +350,13 @@ guess. Only a deactivated plan is `credits-exhausted` — permanent until a huma
 that advertises a `ProviderOAuthFlow` — the four pure builders above under provider-independent
 names. Adding the second OAuth provider is still one file under `providers/drivers/`.
 
+**A flow that declares a device-code sign-in connects by it alone** — ChatGPT/Codex today. For
+such a provider `POST /:id/connect`, `POST /:id/connect/complete` and a redirect callback all
+answer `400 device_only`, and the console shows only **Get a code**; paste-back asked the operator
+to copy a loopback address out of a browser, which is the one thing a remote router cannot ask of
+anyone. The paste and redirect machinery below stays, generic and tested, for a future flow that
+declares no device sign-in. Claude subscriptions are untouched: their login is the `claude` CLI's.
+
 The Account row is created **first**, with no credential and status `needs_reauth`: it is what the
 one-shot `state` binds to, and `needs_reauth` keeps it out of routing until the login lands rather
 than letting selection pick an Account with nothing to authenticate with. `POST /:id/connect` mints
@@ -356,9 +365,9 @@ answers with the provider's authorization URL.
 
 | Step | |
 |---|---|
-| `redirect_uri` | Always the flow's `loopbackRedirectUri` — for ChatGPT `http://localhost:1455/auth/callback` — whether or not `PUBLIC_URL` is set. Every shipped `ProviderOAuthFlow` is a reverse-engineered first-party client whose registration names only its loopback; naming the router's callback made the issuer refuse the authorization outright, so no code existed for either capture mode (production, 2026-10-04). Stored on the pending row and **replayed** at the exchange. `begin` therefore always answers `capture: "paste"` |
+| `redirect_uri` | Always the flow's `loopbackRedirectUri`, whether or not `PUBLIC_URL` is set. Every shipped `ProviderOAuthFlow` is a reverse-engineered first-party client whose registration names only its loopback; naming the router's callback made the issuer refuse the authorization outright, so no code existed for either capture mode (production, 2026-10-04). Stored on the pending row and **replayed** at the exchange. `begin` therefore always answers `capture: "paste"` |
 | Redirect capture | Not offered by any shipped flow (above); the route stays wired for a future flow whose client registers the router's callback, which would need an opt-in on its driver. The browser would land on `GET /admin/accounts/oauth/callback`. Unguarded by design: a provider's redirect is a cross-site navigation, so the `SameSite=Strict` session cookie is not sent, and the `state` is the authorization. It answers a small self-contained HTML page, the one non-JSON surface on the admin plane |
-| Paste capture | The primary step. After approving, the browser lands on the loopback, shows a "can't connect" page — expected, nothing listens there — and the address bar holds `…/auth/callback?code=…&state=…`. The operator pastes the whole address into `POST /:id/connect/complete`; a bare query string or the `code#state` shorthand is accepted too. The console says all of this before the paste box |
+| Paste capture | After approving, the browser lands on the loopback and the address bar holds `…?code=…&state=…`; the operator pastes the whole address (or a bare query string, or `code#state`) into `POST /:id/connect/complete` |
 | The exchange | One code exchange, one write: `{accessToken, refreshToken, providerAccountId}` encrypted into `authMaterial`, `tokenExpiresAt` from `expires_in`, `needs_reauth` cleared — and nothing else, because a `disabled` Account stays disabled |
 | Restart / cancel | A second `POST /:id/connect` retires whatever the last one left redeemable, and `DELETE /:id/connect` does the same on demand. One live durable authorization attempt per Account; begin/cancel also invalidate an already consumed callback still waiting to commit |
 | Which audit kind | Derived, not declared: an Account that already held a credential was re-connected (`account.reauthorized`), one that did not was connected (`account.connected`). The event records the capture mode and never a code, a `state`, or a token |
@@ -369,8 +378,8 @@ one sentence, because a callback that explains *why* it refused is a probe oracl
 
 ### Signing in with a code (device-code flow)
 
-For a router on a remote host, the console also offers **Sign in with a code** — what `codex login
---device-auth` does — wherever the provider's `ProviderOAuthFlow` declares a `device` flow
+The console offers **Sign in with a code** — what `codex login --device-auth` does — as the only
+connect method wherever the provider's `ProviderOAuthFlow` declares a `device` flow
 (`providers/device-flow.ts`; ChatGPT's lives in `providers/drivers/openai-oauth-device.ts`). The
 console reads `ProviderDescriptor.deviceSignIn`; no provider is named outside `providers/`.
 
@@ -387,7 +396,9 @@ console reads `ProviderDescriptor.deviceSignIn`; no provider is named outside `p
 | Polling | **Advanced by the console's status poll, not a timer.** `GET /:id/connect/device` makes at most one upstream poll per call, single-flighted per attempt and held to the issuer's interval (fallback 5 s, opencode's floor); between polls it answers from memory. Nothing to keep alive, nothing lost on restart (the attempt is in Postgres, any replica can advance it), no background work, and an attempt nobody watches costs the issuer nothing |
 | Lifetime | The same one-shot TTL as every attempt (`RETENTION_OAUTH_STATE_MINUTES`, default 10). Past it the status is `expired` and the issuer is not asked |
 | Approval | Consumes the state, re-checks the binding (`oauth-binding.ts`), and writes through `completeAuthorization` — the one credential writer, fenced again on attempt id and lifecycle version, so a superseded attempt cannot write. Audit `capture: "device"` |
-| Refusal | Any final non-pending answer spends the attempt and reads `denied` |
+| Refusal | `429` and `5xx` are not answers: the attempt keeps waiting, and a `429` backs off (its `Retry-After`, else the interval doubled per answer up to 4×). Any other final answer spends the attempt and reads `denied` |
+| Logged | One `device login completed` info line (account id, provider, capture, previous status) beside the audit row; never a code, handle or token |
+| Console | The status query keeps polling while the tab is in the background — the operator is on the issuer's page in another tab at exactly that moment |
 | Cross-mode | A paste or redirect presenting a device attempt's `state` is refused: the row's own verifier is a decoy, and the issuer minted the real one |
 | Cancel | `DELETE /:id/connect`, the same as every attempt; closing the dialog does it |
 
@@ -469,7 +480,7 @@ and the router keeps selecting a credential that can no longer serve a request.
 |---|---|---|
 | `anthropic-api` | message matches `credit balance is too low`; or `error.type` is `billing_error` | Anthropic answers a spent console balance with **`400 invalid_request_error`**. Read the status alone and it classifies as a client mistake |
 | `openai-api` | `error.code` / `error.type` in `insufficient_quota`, `billing_hard_limit_reached`, `account_deactivated` | OpenAI returns **`429`** for a spent balance — the same status it uses for real rate limiting. Status alone marks a dead account `cooling_down` and retries it on a timer forever |
-| `openrouter` | message matches `insufficient credits` / `requires more credits` / `add more using`; or `error.code` is `402` | OpenRouter echoes the numeric HTTP status back in `error.code` rather than a string. The wording rule is what still catches it when the `402` is proxied through with another status |
+| `openrouter` | message matches `insufficient credits` / `requires more credits` / `add more using`; or `error.code` is `402`; or message matches `Key limit exceeded` (a `total` cap, or one naming no window) | OpenRouter echoes the numeric HTTP status back in `error.code` rather than a string. The wording rule is what still catches it when the `402` is proxied through with another status. A per-key spend cap arrives as a **`403`** — read on status alone it was `auth`, and a valid key sat in "credential rejected" (prod, 2026-10-04). A cap that resets `daily` / `weekly` / `monthly` is the opposite case: `rate-limited`, estimated re-test |
 | `zai` | `error.code` in `1113`, `1112`; or message matches `insufficient balance` / `balance is insufficient` / `account balance` | Numeric vendor codes on both surfaces. `130x` is throttling and `100x` is auth — three families that all arrive as one HTTP status |
 | `kimi` | `error.type` is `exceeded_current_quota_error`; or message matches `insufficient balance` / `account … not active` | Anthropic-shaped body, Moonshot's own `type` vocabulary. Without it the account cools down on a timer instead of being flagged for a human |
 | `minimax` | `base_resp.status_code` is `1008` | **MiniMax reports failures in a `base_resp` envelope that can arrive with HTTP 200.** A driver reading only the status sees a success and hands an error body to the client as a completion |

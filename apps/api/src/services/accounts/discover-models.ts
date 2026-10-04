@@ -1,8 +1,10 @@
 import type { AccountRepository, AccountRow } from "@multi-ai-router/db"
+import type { Logger } from "../../logging/logger"
 import { AUDIT_KINDS, AUDIT_SUBJECTS, type AuditRecorder } from "../admin/audit"
 import { type AdminResult, invalid, notFound, ok } from "../admin/result"
 import type { CredentialCipher } from "../crypto/cipher"
 import type { FetchLike } from "../dataplane"
+import { bounded } from "../dataplane/attempt-log"
 import { listUpstreamModels } from "../models"
 import { describeProvider } from "./providers"
 import type { AccountsService } from "./service"
@@ -66,6 +68,10 @@ export interface DiscoverModelsServiceDeps {
   readonly timeoutMs: number
   /** Injected so a test never opens a socket. Defaults to global `fetch`. */
   readonly fetch?: FetchLike
+  /** Where a failed listing is reported, with the upstream's own (scrubbed, bounded) words. */
+  readonly log?: Pick<Logger, "warn">
+  /** `LOG_REASON_MAX_CHARS`: how much of the upstream's message one line quotes. */
+  readonly reasonMaxChars?: number
 }
 
 export function createDiscoverModelsService(
@@ -145,6 +151,21 @@ async function listModels(
     { cipher: deps.cipher, timeoutMs: deps.timeoutMs, fetch: call },
     account,
   )
-  if (!listed.ok) return invalid(listed.message, listed.code)
+  if (!listed.ok) {
+    // The response carries only the router's sentence; the upstream's own words are what make a
+    // 400 diagnosable, and the logger scrubs them again on the way out (`logging/redact.ts`).
+    deps.log?.warn("model discovery failed", {
+      component: "discover-models",
+      accountId: account.id,
+      provider: account.provider,
+      code: listed.code,
+      reason: listed.message,
+      ...(listed.status === undefined ? {} : { status: listed.status }),
+      ...(listed.detail === undefined || deps.reasonMaxChars === undefined
+        ? {}
+        : { upstreamMessage: bounded(listed.detail, deps.reasonMaxChars) }),
+    })
+    return invalid(listed.message, listed.code)
+  }
   return ok(listed.entries.map((entry) => entry.id))
 }

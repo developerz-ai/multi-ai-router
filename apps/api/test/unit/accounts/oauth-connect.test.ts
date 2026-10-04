@@ -5,6 +5,7 @@ import { createOAuthConnectService } from "../../../src/services/accounts"
 import { createAuditRecorder } from "../../../src/services/admin"
 import { createCredentialCipher } from "../../../src/services/crypto/cipher"
 import { createMemoryStore, type MemoryStore } from "../../support/memory-store"
+import { pasteOnlyFlow } from "../../support/oauth-flows"
 
 const NOW = new Date("2026-07-25T09:00:00.000Z")
 const TOKEN_ENDPOINT = "https://auth.openai.com/oauth/token"
@@ -64,6 +65,7 @@ function harness(options: { stateMinutes?: number; upstream?: FakeFetch } = {}):
     now: () => clock.now,
     stateMinutes: options.stateMinutes ?? 10,
     refreshCatalogAfterMutation: async () => {},
+    flowFor: pasteOnlyFlow,
   })
   return {
     connect,
@@ -315,6 +317,28 @@ describe("pasting what the loopback left in the address bar", () => {
     )
     expect(reason.code).toBe("state_rejected")
     expect(h.upstream.requests).toHaveLength(0)
+  })
+})
+describe("a provider whose flow declares a device sign-in", () => {
+  test("refuses paste-back: begin and complete both answer device_only", async () => {
+    const store = createMemoryStore()
+    const connect = createOAuthConnectService({
+      accounts: store.accounts,
+      states: store.oauthStates,
+      cipher: createCredentialCipher({ key: new Uint8Array(32).fill(9) }),
+      audit: createAuditRecorder(store.audit),
+      fetch: async () => {
+        throw new Error("no upstream may be reached")
+      },
+      exchangeTimeoutMs: 5_000,
+      now: () => NOW,
+      stateMinutes: 10,
+      refreshCatalogAfterMutation: async () => {},
+    })
+    const id = (await store.accounts.create({ label: "codex", provider: "openai-oauth" })).id
+    expect(failure(await connect.begin(id, "connect")).code).toBe("device_only")
+    expect(failure(await connect.complete(id, "code#state")).code).toBe("device_only")
+    expect(store.rows.oauthStates).toHaveLength(0)
   })
 })
 describe("cancelling a pending authorization", () => {

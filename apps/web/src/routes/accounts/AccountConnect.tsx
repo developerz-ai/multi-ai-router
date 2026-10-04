@@ -7,7 +7,6 @@ import type {
 } from "../../lib/api/connect"
 import { findProvider } from "../../lib/api/providers"
 import type { AccountView, ProviderConnectFlow } from "../../lib/api/types"
-import { useWatchedAccount } from "../../lib/queries/accounts"
 import {
   useBeginConnect,
   useBeginDeviceConnect,
@@ -17,7 +16,6 @@ import {
 import { useProviders } from "../../lib/queries/providers"
 import { connectLabel } from "./account-cells"
 import { ConnectDialog, type ConnectProgress } from "./ConnectDialog"
-import { type LoginBaseline, loginBaseline, redirectLanded } from "./connect-landing"
 import { DeviceSignIn } from "./DeviceSignIn"
 
 export interface AccountConnectProps {
@@ -38,9 +36,6 @@ export interface AccountConnectProps {
   readonly onNext?: () => void
 }
 
-/** How often a pending redirect capture re-reads the account. Only ever armed while one is live. */
-const REDIRECT_POLL_MS = 3000
-
 /**
  * Owns one login attempt, from start to abandonment.
  *
@@ -50,13 +45,8 @@ const REDIRECT_POLL_MS = 3000
  * `claude` subprocess and burns the pending `state` now instead of leaving both running until
  * their TTL — closing a tab is not consent to leave a process behind.
  *
- * **The redirect capture finishes somewhere this tab cannot see.** The provider sends the browser
- * to the router's own callback, which completes the exchange server-side; nothing is posted back
- * here. So while a redirect start is outstanding, the account is re-read on an interval and the
- * login is declared complete only when the row shows what an exchange alone writes — see
- * `connect-landing.ts`. Never on `updatedAt`: the start writes the row itself, and reading that as
- * success once announced "Connected" over a login the server never exchanged. An inferred
- * completion names no capture mode; only a response from the server may say how the code arrived.
+ * **A provider that declares a device-code sign-in connects by it alone** — the dialog offers "Get
+ * a code" and nothing else, and its status comes from the server, which alone says "connected".
  *
  * The started login is held in a signal, never in the query cache. It is single-use and a second
  * tab reading it from a cache would be reading a `state` this tab is about to spend.
@@ -64,9 +54,6 @@ const REDIRECT_POLL_MS = 3000
 export function AccountConnect(props: AccountConnectProps) {
   const [started, setStarted] = createSignal<ConnectStarted | null>(null)
   const [completed, setCompleted] = createSignal<ConnectCompleted | null>(null)
-  /** The row as it stood when the login began. The thing a redirect is detected against. */
-  const [baseline, setBaseline] = createSignal<LoginBaseline | null>(null)
-
   /** A device-code attempt on screen. Exclusive with `started`: each start supersedes the other. */
   const [deviceStarted, setDeviceStarted] = createSignal<DeviceConnectStarted | null>(null)
 
@@ -90,7 +77,6 @@ export function AccountConnect(props: AccountConnectProps) {
   const clear = () => {
     setStarted(null)
     setCompleted(null)
-    setBaseline(null)
     setDeviceStarted(null)
     begin.reset()
     complete.reset()
@@ -110,8 +96,6 @@ export function AccountConnect(props: AccountConnectProps) {
     const account = props.account
     if (account === null) return
     setCompleted(null)
-    // The row the operator is looking at: a detail query left over from an earlier login may be stale.
-    setBaseline(loginBaseline(account))
     setDeviceStarted(null)
     begin.mutate({ id: account.id, mode: mode() }, { onSuccess: (result) => setStarted(result) })
   }
@@ -123,29 +107,23 @@ export function AccountConnect(props: AccountConnectProps) {
   // `AccountView` — keyed on the object, that wiped a live login and, with `autoBegin`, restarted
   // it in a loop. A memo only notifies when the id itself changes.
   const accountId = createMemo(() => props.account?.id ?? null)
+  /** A guided run's start, held until it is known which method this provider takes. */
+  const [autoPending, setAutoPending] = createSignal(false)
   createEffect(
     on(accountId, (id) => {
       clear()
-      if (id !== null && props.autoBegin === true) beginLogin()
+      setAutoPending(id !== null && props.autoBegin === true)
     }),
   )
-
-  const awaitingRedirect = () =>
-    started()?.capture === "redirect" && completed() === null && props.account !== null
-
-  const watched = useWatchedAccount(
-    () => props.account?.id ?? null,
-    () => (awaitingRedirect() ? REDIRECT_POLL_MS : false),
-  )
-
+  // An OAuth flow's method is the provider's declaration, read from the providers list; a guided
+  // run must not start paste-back for a device-only provider just because that list is still in
+  // flight — the server would refuse it, and the operator would see an error for nothing.
   createEffect(() => {
-    const pending = started()
-    const row = watched.data
-    const before = baseline()
-    if (pending === null || completed() !== null || row === undefined || before === null) return
-    if (row.id !== pending.accountId || !redirectLanded(before, row)) return
-
-    setCompleted({ accountId: row.id, mode: pending.mode, connected: true })
+    if (!autoPending()) return
+    if (props.connectFlow === "oauth" && providers.data === undefined && !providers.isError) return
+    setAutoPending(false)
+    if (deviceSignIn()) beginDeviceLogin()
+    else beginLogin()
   })
 
   const beginDeviceLogin = () => {
@@ -184,6 +162,7 @@ export function AccountConnect(props: AccountConnectProps) {
       completed={completed()}
       completing={complete.isPending}
       connectFlow={props.connectFlow}
+      deviceOnly={deviceSignIn()}
       devicePanel={
         deviceSignIn() && props.account !== null && completed() === null ? (
           <DeviceSignIn

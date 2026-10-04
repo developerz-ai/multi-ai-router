@@ -253,7 +253,7 @@ test("stateless reasoning does not split parallel results or ordered image carri
   ])
   expect(JSON.stringify(out)).not.toContain("hidden")
 })
-test("stateless reasoning between assistant calls preserves one group; encrypted state remains refused", () => {
+test("reasoning between assistant calls preserves one group, encrypted or not", () => {
   const summary = { type: "reasoning", summary: [{ type: "summary_text", text: "hidden" }] }
   const out = responsesChat({
     model: "fixture",
@@ -261,10 +261,9 @@ test("stateless reasoning between assistant calls preserves one group; encrypted
   })
   expect(out.messages[0]?.tool_calls?.map((call) => call.id)).toEqual(["a", "b"])
   expect(out.messages.map((m) => m.role)).toEqual(["assistant", "tool", "tool", "user"])
-  expect(() =>
-    responsesChat({
-      model: "fixture",
-      input: [input[0], { ...summary, encrypted_content: "opaque" }, input[1], input[2], input[3]],
-    }),
-  ).toThrow()
+  const encrypted = responsesChat({
+    model: "fixture",
+    input: [input[0], { ...summary, encrypted_content: "opaque" }, input[1], input[2], input[3]],
+  })
+  expect(encrypted.messages).toEqual(out.messages)
 })

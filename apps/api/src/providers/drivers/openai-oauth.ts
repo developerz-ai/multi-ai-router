@@ -2,7 +2,7 @@ import { UpstreamAuthError } from "@multi-ai-router/core"
 import { z } from "zod"
 import type { ResponsesEgressRules } from "../../services/translate/shared/responses-egress"
 import { createHttpDriver } from "../driver"
-import { codeRule, typeRule } from "../failure/classify"
+import { codeRule, messageRule, onStatus, typeRule } from "../failure/classify"
 import { readErrorFacts } from "../failure/error-body"
 import { parseRateLimitHeaders } from "../rate-limit/parse"
 import type {
@@ -16,6 +16,7 @@ import type {
   UpstreamResponse,
 } from "../types"
 import { openAiDeviceFlow } from "./openai-oauth-device"
+import { CODEX_MODEL_FAMILY, codexModelListing } from "./openai-oauth-models"
 
 // Pinned from the first-party Codex CLI (openai/codex `codex-rs/login`), cross-checked against
 // opencode's `plugin/openai/codex.ts` (2026-10-04). Blast radius for each: every ChatGPT account.
@@ -239,6 +240,8 @@ function parseCodexRateLimit(response: UpstreamResponse): RateLimitSignal | null
 const LIMIT_CODES = ["usage_limit_reached", "rate_limit_exceeded"]
 const DEACTIVATED_CODES = ["account_deactivated"]
 
+const CODEX_MODEL_REFUSED = /model is not supported when using codex/i
+
 const codex = createHttpDriver({
   id: "openai-oauth",
   authKind: "oauth",
@@ -259,11 +262,19 @@ const codex = createHttpDriver({
     codeRule("rate-limited", "openai-oauth:usage_limit_reached", LIMIT_CODES),
     typeRule("credits-exhausted", "openai-oauth:account_deactivated", DEACTIVATED_CODES),
     codeRule("credits-exhausted", "openai-oauth:account_deactivated", DEACTIVATED_CODES),
+    // "The '<model>' model is not supported when using Codex with a ChatGPT account." (prod
+    // 2026-10-04): the model is wrong, not the request, so fail over instead of `invalid-request`.
+    onStatus(
+      [400, 404],
+      messageRule("model-unsupported", "openai-oauth:model-unsupported", CODEX_MODEL_REFUSED),
+    ),
   ],
 })
 
 export const openAiOAuthDriver: ProviderDriver = {
   ...codex,
+  modelFamily: CODEX_MODEL_FAMILY,
+  modelListing: codexModelListing,
   oauth: {
     loopbackRedirectUri: OPENAI_OAUTH_LOOPBACK_REDIRECT_URI,
     authorizeUrl: openAiOAuthAuthorizeUrl,

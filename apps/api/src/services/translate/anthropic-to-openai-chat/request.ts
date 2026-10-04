@@ -19,6 +19,7 @@ import type {
   OpenAiChatToolCall,
 } from "../shared/openai-chat"
 import { chatCeiling } from "../shared/openai-chat"
+import { openAiEffortFromAnthropic } from "../shared/reasoning-effort"
 import { parseRequest, rejectField } from "../shared/reject"
 import { toolChoiceForOpenAiChat } from "../shared/tool-choice"
 import { argumentsFromInput, toolsToOpenAiChat } from "../shared/tools"
@@ -35,9 +36,12 @@ import { argumentsFromInput, toolsToOpenAiChat } from "../shared/tools"
  * 3. Text and `tool_use` blocks of one assistant turn collapse into one message carrying both
  *    `content` and `tool_calls`.
  *
+ * `output_config.effort` becomes `reasoning_effort`, and a `thinking` budget with no effort beside it
+ * lands in an effort bucket (`shared/reasoning-effort.ts`).
+ *
  * Dropped silently, as documented: `top_k`, `cache_control`, `thinking` / `redacted_thinking`
- * blocks, `metadata`, the `thinking` / `output_config` / `context_management` request knobs, and any
- * `anthropic-beta` opt-in (a header, handled by the transport). Dropped and **reported** through
+ * blocks (including the router-signed ones `shared/router-thinking.ts` describes), `metadata`, the
+ * rest of `output_config`, `context_management`, and any `anthropic-beta` opt-in (a header, handled by the transport). Dropped and **reported** through
  * `options.onDrop`: server-side and built-in tools, a `tool_choice` naming one, non-text documents,
  * and any block type the target cannot carry. An image inside a `tool_result` is hoisted into a
  * user turn after the originating turn's complete tool-result run. Refused: only what is not a valid Anthropic request.
@@ -113,6 +117,7 @@ export function anthropicToOpenAiChatRequest(
         ? undefined
         : !request.tool_choice.disable_parallel_tool_use,
     tool_choice: toolChoiceForOpenAiChat(request.tool_choice, tools, onDrop),
+    reasoning_effort: openAiEffortFromAnthropic(request),
   }
 }
 

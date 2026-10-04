@@ -69,6 +69,7 @@ export {
 } from "./filter"
 export { rendezvousRank, rendezvousScore, scoreWithSeed, sessionSeed } from "./hash"
 export { advertisedModels, type ModelResolution, resolveModel } from "./model"
+export { inModelFamily, type ModelFamily } from "./model-family"
 export {
   DEFAULT_UNKNOWN_RESET_RETRY_AFTER_SECONDS,
   type NoCandidatesInput,

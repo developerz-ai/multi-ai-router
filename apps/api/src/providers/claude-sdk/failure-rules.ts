@@ -186,6 +186,22 @@ export const SDK_FAILURE_RULES: readonly SdkRule[] = [
     match: pattern(/claude code(?: \d[\w.+-]*)? does not support this model/),
   },
   {
+    // The CLI's sentence for a model the API does not know or this plan cannot reach — `There's an
+    // issue with the selected model (k3). It may not exist or you may not have access to it. Run
+    // /model to pick a different model.` (production, 2026-10-04: `k3` and `MiniMax-M3` routed to a
+    // subscription). It fell to `unknown`, a `502` that struck the breaker and pushed a healthy
+    // account into a recovery probe. `model-unsupported`: retryable — the next account may serve
+    // that vendor — and never a strike. `404` is what Anthropic's API answers an unknown model with.
+    kind: "model-unsupported",
+    signal: "claude-sdk:model-unsupported",
+    status: 404,
+    clientMessage: "the Claude subscription does not serve the requested model",
+    match: phrase(
+      "issue with the selected model",
+      "may not exist or you may not have access to it",
+    ),
+  },
+  {
     // The one condition non-negotiable 7 forbids conflating with a rate limit: the underlying
     // account is billing-dead, and no clock revives it. `402`, `exhausted`, never timer-retried.
     // Provenance: the CLI's error constant "Credit balance is too low" (0.3.220 and 2.1.261);

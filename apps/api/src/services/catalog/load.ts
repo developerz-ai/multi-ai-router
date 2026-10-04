@@ -1,7 +1,8 @@
 import type { QuotaWindowState } from "@multi-ai-router/core"
 import type { AccountRow, CatalogSnapshotRepository, RecoveryRow } from "@multi-ai-router/db"
+import { providerModelFamily } from "../../providers/registry"
 import type { RoutableAccount } from "../dataplane"
-import type { PoolSnapshot } from "../routing"
+import type { AccountSnapshot, PoolSnapshot } from "../routing"
 import { toQuotaEvidence } from "../routing/quota-evidence"
 
 /**
@@ -103,6 +104,9 @@ function toRoutableAccount(
       ...(row.supportedModels === null || row.supportedModels.length === 0
         ? {}
         : { supportedModels: row.supportedModels }),
+      // The provider's default family narrows an undeclared subscription to its vendor's names; an
+      // explicit list above replaces it (`services/routing/model-family.ts`).
+      ...modelFamilyOf(row),
       ...(quotaWindows === undefined ? {} : { quotaWindows }),
       ...(recovery === undefined
         ? {}
@@ -128,4 +132,9 @@ function toRoutableAccount(
     authMaterial: row.authMaterial,
     configDir: row.configDir,
   }
+}
+
+function modelFamilyOf(row: AccountRow): Pick<AccountSnapshot, "modelFamily"> {
+  const family = providerModelFamily(row.provider)
+  return family === undefined ? {} : { modelFamily: family }
 }

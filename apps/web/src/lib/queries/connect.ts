@@ -104,6 +104,9 @@ export function useDeviceConnectStatus(
       queryFn: (): Promise<DeviceConnectStatus> => getDeviceConnectStatus(id() ?? ""),
       enabled: id() !== null && started !== null,
       gcTime: 0,
+      // The operator is on the issuer's page in another tab while this waits — exactly when a
+      // background tab would otherwise stop asking (production, 2026-10-04: a 16 s gap).
+      refetchIntervalInBackground: true,
       refetchInterval: (q: { state: { data: DeviceConnectStatus | undefined } }) =>
         q.state.data === undefined || q.state.data.status === "waiting"
           ? (started?.intervalSeconds ?? 5) * 1_000

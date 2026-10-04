@@ -2,6 +2,7 @@ import { expect, test } from "bun:test"
 import { createOAuthConnectService } from "../../../src/services/accounts"
 import { createCredentialCipher } from "../../../src/services/crypto/cipher"
 import { createMemoryStore } from "../../support/memory-store"
+import { pasteOnlyFlow } from "../../support/oauth-flows"
 import { deferred, tokenResponse } from "./refresh-fixtures"
 
 const NOW = new Date("2026-10-03T00:00:00Z")
@@ -25,6 +26,7 @@ async function setup(overrides: {
     exchangeTimeoutMs: 20,
     now: () => NOW,
     stateMinutes: 10,
+    flowFor: pasteOnlyFlow,
     ...overrides,
   })
   const begin = await connect.begin(row.id, "connect")

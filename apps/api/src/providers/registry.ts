@@ -1,4 +1,5 @@
 import type { ProviderId } from "@multi-ai-router/core"
+import type { ModelFamily } from "../services/routing/model-family"
 import { type ClaudeSdkDriver, claudeSdkDriver } from "./claude-sdk/driver"
 import { anthropicApiDriver } from "./drivers/anthropic-api"
 import { anthropicCompatibleDriver } from "./drivers/anthropic-compatible"
@@ -94,3 +95,12 @@ export function httpDriver(id: ProviderId): ProviderDriver | null {
 export const HTTP_DRIVERS: readonly ProviderDriver[] = Object.values(PROVIDER_REGISTRY).flatMap(
   (support) => (support.transport === "http" ? [support.driver] : []),
 )
+
+/**
+ * The provider's default model family, whichever transport serves it. Read when the catalog
+ * builds an account's routing snapshot, never per request.
+ */
+export function providerModelFamily(id: ProviderId): ModelFamily | undefined {
+  const support = PROVIDER_REGISTRY[id]
+  return support.transport === "unimplemented" ? undefined : support.driver.modelFamily
+}

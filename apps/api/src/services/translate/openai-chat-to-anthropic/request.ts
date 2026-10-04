@@ -8,12 +8,14 @@ import {
   mergeTurns,
   pushTurn,
 } from "../shared/anthropic-turns"
+import { type DropSink, IGNORE_DROPS } from "../shared/drops"
 import type {
   ParsedOpenAiChatContent,
   ParsedOpenAiChatRequest,
   ParsedOpenAiChatToolCall,
 } from "../shared/openai-chat"
 import { openAiChatRequestSchema } from "../shared/openai-chat"
+import { anthropicReasoningFromEffort } from "../shared/reasoning-effort"
 import {
   assertPlainResponseFormat,
   assertTranslatableToAnthropic,
@@ -33,21 +35,20 @@ import { inputFromArguments, toolChoiceToAnthropic, toolsToAnthropic } from "../
  * `role:"tool"` message becomes a `tool_result` block on a **user** turn, which is where Anthropic
  * puts results — several in a row therefore merge into one turn, exactly as Anthropic expects.
  *
- * **`reasoning_effort` is dropped here and carried toward openai-responses**, and the asymmetry is
- * the point: Anthropic's extended thinking is a **token budget**, not an effort word, so turning
- * `"high"` into a `budget_tokens` would invent both what the caller pays and how long the answer
- * takes. The same drop is stated in the mirror direction for `reasoning.effort`
- * (`06-protocol-translation.md#known-lossy-edges`), so the loss does not depend on which way the
- * request happened to point.
+ * **`reasoning_effort` becomes `output_config.effort`** — the same dial under Anthropic's name, with
+ * `minimal` clamped to `low` and `none` stated as `thinking: {type: "disabled"}`
+ * (`shared/reasoning-effort.ts`). A word Anthropic has no counterpart for is dropped and reported.
  *
  * Refused: `logprobs`, `top_logprobs`, `n > 1`, a `response_format` constraining the answer's shape,
  * audio and file parts, and a `tool_call_id` matching no call earlier in the transcript. Dropped, as
  * documented: `seed`, `frequency_penalty`, `presence_penalty`, `logit_bias`, `user`,
- * `reasoning_effort`, `strict`, and image `detail`.
+ * `strict`, and image `detail`.
  */
 
 export interface OpenAiChatToAnthropicOptions {
   readonly defaultMaxTokens?: number | undefined
+  /** Where a dropped field is reported. Absent, drops are silent (`shared/drops.ts`). */
+  readonly onDrop?: DropSink | undefined
 }
 
 /** @throws TranslationError (400) naming the field that has no anthropic representation. */
@@ -136,6 +137,11 @@ export function openAiChatToAnthropicRequest(
               : toolChoiceToAnthropic(request.tool_choice)),
             disable_parallel_tool_use: !request.parallel_tool_calls,
           },
+    ...anthropicReasoningFromEffort(
+      request.reasoning_effort,
+      "reasoning_effort",
+      options.onDrop ?? IGNORE_DROPS,
+    ),
   }
 }
 

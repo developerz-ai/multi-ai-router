@@ -35,13 +35,25 @@ for (const [name, translate] of [
     expect(JSON.stringify(result)).toContain("Answer")
     expect(JSON.stringify(result)).not.toContain("private reasoning summary")
   })
-  test(`${name} refuses encrypted state and item references`, () => {
-    for (const item of [
-      { type: "reasoning", encrypted_content: "opaque" },
-      { type: "reasoning", encrypted_content: {} },
-      { type: "item_reference", id: "stored" },
-    ]) {
-      expect(() => translate({ model: "fixture", input: [item] })).toThrow()
+  test(`${name} drops encrypted state but refuses item references`, () => {
+    for (const encrypted of ["opaque", {}]) {
+      const result = translate({
+        model: "fixture",
+        input: [
+          { role: "user", content: "Question" },
+          { type: "reasoning", encrypted_content: encrypted },
+        ],
+      })
+      expect(JSON.stringify(result)).not.toContain("opaque")
     }
+    expect(() =>
+      translate({
+        model: "fixture",
+        input: [
+          { role: "user", content: "Question" },
+          { type: "item_reference", id: "stored" },
+        ],
+      }),
+    ).toThrow()
   })
 }

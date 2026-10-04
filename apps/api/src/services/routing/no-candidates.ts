@@ -50,6 +50,8 @@ export interface NoCandidatesInput {
   readonly now: Date
   /** {@link DEFAULT_UNKNOWN_RESET_RETRY_AFTER_SECONDS}. */
   readonly unknownResetRetryAfterSeconds?: number
+  /** The client's own model name, echoed when nothing in scope serves it. */
+  readonly model?: string
 }
 
 export function noCandidatesError(input: NoCandidatesInput): RouterError {
@@ -97,6 +99,15 @@ export function noCandidatesError(input: NoCandidatesInput): RouterError {
     const scope = exhausted.length === total ? "all" : `${exhausted.length} of`
     return new CreditsExhaustedError(
       `${scope} ${total} ${accountWord(total)}${where(input.groups)} ${exhausted.length === 1 ? "is" : "are"} out of credits and ${exhausted.length === 1 ? "needs" : "need"} a top-up (${labels(exhausted)})${remainder(input.rejected, exhausted.length)}`,
+    )
+  }
+
+  // Every account in scope is healthy enough and simply serves other models: no clock and no
+  // operator fixes that, the client named a model this key cannot reach. Say so in those words.
+  if (total > 0 && input.rejected.every((entry) => entry.reason === "model-unsupported")) {
+    const named = input.model === undefined ? "this model" : `model "${input.model}"`
+    return new NoHealthyAccountError(
+      `no account${where(input.groups)} serves ${named} — a client change (${total} ${accountWord(total)} in scope: ${labels(input.rejected)})`,
     )
   }
 

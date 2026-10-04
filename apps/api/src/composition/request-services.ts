@@ -83,6 +83,12 @@ export function createRequestServices(
     freshness: credentialFreshness,
     cliPathOverride: env.claudeCliPath,
     usageGauge,
+    onIgnoredOption: (detail) =>
+      logger.debug("subscription request option dropped", {
+        component: "claude-sdk",
+        field: detail.field,
+        value: detail.value,
+      }),
   })
   const usageGaugeProbe = createSdkUsageGaugeProbe({
     ownerLaunch: ownership.ownerLaunch,

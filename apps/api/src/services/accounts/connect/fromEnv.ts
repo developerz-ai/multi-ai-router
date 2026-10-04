@@ -173,6 +173,8 @@ export interface ConnectFromEnvDeps {
   /** So the token this flow just minted gets a refresh timer without waiting for the next boot. */
   readonly refresher: Pick<CredentialRefresher, "sync">
   readonly refreshCatalogAfterMutation: () => Promise<void>
+  /** Where a completed device sign-in says so, beside its audit row. */
+  readonly logger?: Pick<Logger, "info">
 }
 
 /**
@@ -203,6 +205,9 @@ export function connectFromEnv(deps: ConnectFromEnvDeps): ConnectService {
     accounts: deps.accounts,
     claude: deps.cli.connect,
     oauth: createOAuthConnectService(oauthDeps),
-    device: createDeviceConnectService(oauthDeps),
+    device: createDeviceConnectService({
+      ...oauthDeps,
+      ...(deps.logger === undefined ? {} : { log: deps.logger }),
+    }),
   })
 }

@@ -59,6 +59,7 @@ const RETRYABLE: Readonly<Record<UpstreamFailureKind, boolean>> = {
   "credits-exhausted": true,
   auth: true,
   "invalid-request": false,
+  "model-unsupported": true,
   "server-error": true,
   "stale-session": false,
   "busy-session": false,

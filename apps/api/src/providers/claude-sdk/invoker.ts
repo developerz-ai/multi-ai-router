@@ -9,6 +9,7 @@ import type { SdkInvocation, SdkInvoker } from "./invoke"
 import { createQueryLaunch, type QueryLaunch } from "./options"
 import { type OwnerLaunchFactory, ownedQuery } from "./owned-query"
 import { buildSdkPrompt } from "./prompt"
+import type { IgnoredOption } from "./reasoning"
 import { renderSdkResponse, type StreamPacing, type Ticker } from "./render"
 import { readSdkRequest } from "./request"
 import { type CliResolution, resolveClaudeCli } from "./resolve-cli"
@@ -104,6 +105,8 @@ export interface SdkInvokerDeps {
    * always did — a deployment that wires none simply keeps showing alarms instead of percentages.
    */
   readonly usageGauge?: SdkUsageGauge
+  /** A `thinking` / `effort` value dropped rather than refused (`reasoning.ts`). Debug-logged. */
+  readonly onIgnoredOption?: (detail: IgnoredOption) => void
 }
 
 /**
@@ -135,22 +138,21 @@ export function createSdkInvoker(deps: SdkInvokerDeps): SdkInvoker {
     const gaugeObservation =
       invocation.usageGaugeObservation ?? deps.usageGauge?.capture(invocation.accountId)
     const request = readSdkRequest(invocation.body)
+    for (const detail of request.ignored) deps.onIgnoredOption?.(detail)
     const cli = usableCli()
     const prompt = buildSdkPrompt({ messages: request.messages, plan: invocation.session })
 
     // Held before the subprocess exists and released when its output stream ends. Aborting while
     // queued throws the signal's own reason, which `runSdkAttempt` reads as the deadline it was.
     // `let`, because a busy-session retry ends the first attempt's slot and takes its own.
-    // Before the slot, never after: a caller holding a subprocess budget while it waits for someone
-    // else's refresh would be holding capacity it cannot use.
+    // Freshness before the slot: waiting on another's refresh while holding a slot wastes it.
     await freshness.ensureFresh(invocation.accountId, invocation.signal)
     let slot = await deps.concurrency.acquire(invocation.accountId, invocation.signal)
 
     /** One `query()` turn. Releases nothing on failure — the caller below owns the slot's end. */
     const attempt = async (busySessionFork: boolean, ownSlot: SdkSlot): Promise<Response> => {
       const stderr = createStderrTail()
-      // The passthrough's early stop terminates the subprocess, and the launch is what owns that
-      // ability — so the two are tied together after both exist rather than at construction.
+      // The passthrough's early stop kills the subprocess the launch owns: tied once both exist.
       let launch: QueryLaunch | null = null
       const passthrough: Passthrough | null = createPassthrough({
         tools: request.tools,
@@ -167,6 +169,8 @@ export function createSdkInvoker(deps: SdkInvokerDeps): SdkInvoker {
         session: invocation.session,
         ...(busySessionFork ? { busySessionFork: true } : {}),
         ...(request.system === null ? {} : { systemPrompt: request.system }),
+        thinking: request.thinking,
+        effort: request.effort,
         ...(passthrough === null ? {} : { passthrough }),
       })
       const started = launch
