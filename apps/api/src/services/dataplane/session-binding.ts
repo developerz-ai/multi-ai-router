@@ -39,12 +39,20 @@ const NONE: SessionBindings = {
 export function sessionBindings(
   catalog: RoutingCatalog,
   store: SessionStore | undefined,
+  timing?: { readonly elapsed: () => number; readonly onWait: (milliseconds: number) => void },
 ): SessionBindings {
   if (store === undefined) return NONE
 
   return {
-    read: async (apiKeyId, sessionKey) =>
-      servesSubscriptions(catalog) ? store.binding(apiKeyId, sessionKey) : undefined,
+    async read(apiKeyId, sessionKey) {
+      if (!servesSubscriptions(catalog)) return undefined
+      const started = timing?.elapsed()
+      try {
+        return await store.binding(apiKeyId, sessionKey)
+      } finally {
+        if (started !== undefined) timing?.onWait(Math.max(0, timing.elapsed() - started))
+      }
+    },
     invalidate: (apiKeyId, sessionKey) => store.invalidate(apiKeyId, sessionKey),
   }
 }

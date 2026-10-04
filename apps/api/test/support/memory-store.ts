@@ -11,6 +11,7 @@ import type {
   RecoveryRow,
 } from "@multi-ai-router/db"
 import { memoryAccountLifecycle } from "./memory-account-lifecycle"
+import { memoryAccountQuota } from "./memory-account-quota"
 import { createMemoryMutations } from "./memory-mutations"
 import type { MemoryStore } from "./memory-store-types"
 
@@ -59,6 +60,7 @@ export function createMemoryStore(): MemoryStore {
 
     accounts: {
       ...memoryAccountLifecycle(accounts, oauthStates, recoveries),
+      ...memoryAccountQuota(accounts, recoveries),
       create: async (input) => {
         const row: AccountRow = {
           id: input.id ?? crypto.randomUUID(),

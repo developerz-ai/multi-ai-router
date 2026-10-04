@@ -105,6 +105,8 @@ export interface DispatcherDeps {
   readonly logger?: Logger
   /** Notified once per client request, after it ended. Feeds `router_requests_total`. */
   readonly onRequest?: RequestObserver
+  /** Awaited session lookup, including cache resolution, connection queue and indexed miss. */
+  readonly onBindingWait?: (milliseconds: number) => void
   readonly options?: DispatchOptions
 }
 

@@ -1,0 +1,49 @@
+{
+  "pr": 150,
+  "mergeCommit": "3cfe375912e95fef61a3b135eb28a7d6fbb7b9c0",
+  "reviewedHead": "d81561260074673b83a092a8fe3ee2a6aaf48964",
+  "files": 116,
+  "requiredCI": {
+    "lint": "SUCCESS",
+    "typecheck": "SUCCESS",
+    "test": "SUCCESS",
+    "bench": "SUCCESS",
+    "build": "SUCCESS"
+  },
+  "mainRun": 37161390201,
+  "mainRequiredCI": "all five SUCCESS",
+  "reviewThreads": {
+    "actionable": 1,
+    "resolved": 1
+  },
+  "localGate": {
+    "postgres": "18.6",
+    "bun": "1.4.2",
+    "passed": 4947,
+    "failed": 0,
+    "files": 420,
+    "assertions": 43060
+  },
+  "postgres16Usage": {
+    "passed": 28,
+    "assertions": 61
+  },
+  "image": {
+    "id": "sha256:323bffbc5158b08c6efc4a11cdab484361e7f109f87685be2a38949d9f4aaf2a",
+    "serverSHA256": "c9353e64627972c8d275f63402ffdadae3e41f8b14745ea2fba0268d734c19f5",
+    "checkedBundleMatches": true,
+    "uid": 1000,
+    "readOnly": true,
+    "capabilities": 0,
+    "noNewPrivileges": true,
+    "scope": "packaging only; no router/helper/CLI launch or provider calls"
+  },
+  "remaining": [
+    "L04 late SDK quota propagation",
+    "L16 binding contention measurements",
+    "L19 terminal serving/demand inventory",
+    "release",
+    "deployment",
+    "operational credential/session rotation"
+  ]
+}

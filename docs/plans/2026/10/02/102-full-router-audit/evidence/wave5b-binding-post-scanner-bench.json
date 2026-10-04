@@ -1,0 +1,1813 @@
+{
+  "positive": {
+    "invoked": 240,
+    "results": [
+      {
+        "path": "agent-sdk (offline mock; exception)",
+        "cache": "positive-binding-hit",
+        "occupied": false,
+        "requests": 100,
+        "discardedWarmupRequests": 20,
+        "queries": 0,
+        "failures": 0,
+        "bindingWaitMs": [
+          0.0033350000012433156,
+          0.004081999999471009,
+          0.0032340000034309924,
+          0.004665000000386499,
+          0.004829999998037238,
+          0.00390999999945052,
+          0.0035960000022896565,
+          0.003321999996842351,
+          0.005040999996708706,
+          0.003045999997993931,
+          0.0031810000000405125,
+          0.003545999999914784,
+          0.0032150000042747706,
+          0.0034870000017690472,
+          0.003679000001284294,
+          0.0033830000029411167,
+          0.00360700000601355,
+          0.0031640000015613623,
+          0.0034159999995608814,
+          0.004822000002604909,
+          0.0035669999997480772,
+          0.003714999998919666,
+          0.005433999998786021,
+          0.005278000004182104,
+          0.0038889999996172264,
+          0.003536000003805384,
+          0.0031579999995301478,
+          0.0032160000046133064,
+          0.003363000003446359,
+          0.003213000003597699,
+          0.004938999998557847,
+          0.008458999996946659,
+          0.00361700000212295,
+          0.00401399999827845,
+          0.0033489999987068586,
+          0.00320099999953527,
+          0.003015000002051238,
+          0.009342999997898005,
+          0.0033260000054724514,
+          0.00384699999995064,
+          0.003224000000045635,
+          0.0033929999990505166,
+          0.0033889999976963736,
+          0.004315999998652842,
+          0.0032619999983580783,
+          0.004185999998298939,
+          0.0034890000024461187,
+          0.00356399999873247,
+          0.002954999996291008,
+          0.0035480000005918555,
+          0.0032950000022538006,
+          0.003236000004108064,
+          0.0055119999960879795,
+          0.004668999994464684,
+          0.003306000005977694,
+          0.0036279999985708855,
+          0.00348400000075344,
+          0.0035829999978886917,
+          0.004073000003700145,
+          0.003338000002258923,
+          0.003148999996483326,
+          0.0032770000034361146,
+          0.0030530000003636815,
+          0.003475999998045154,
+          0.003250999994634185,
+          0.003492000003461726,
+          0.030295999997179024,
+          0.003170000003592577,
+          0.0031540000054519624,
+          0.0030439999973168597,
+          0.003099000001384411,
+          0.01518200000282377,
+          0.0037020000017946586,
+          0.003440000000409782,
+          0.02316600000631297,
+          0.0032820000051287934,
+          0.0034490000034566037,
+          0.0030849999966449104,
+          0.002842000001692213,
+          0.003033000000868924,
+          0.003081999995629303,
+          0.003559999997378327,
+          0.0033009999970090576,
+          0.003819999998086132,
+          0.0030179999957908876,
+          0.002998999996634666,
+          0.0028670000028796494,
+          0.0028469999961089343,
+          0.003020999996806495,
+          0.002921999999671243,
+          0.0033030000049620867,
+          0.0029929999946034513,
+          0.005159000000276137,
+          0.002701999997952953,
+          0.0032120000032591633,
+          0.003049999999348074,
+          0.003250000001571607,
+          0.00298800000018673,
+          0.0030470000056084245,
+          0.0028800000000046566
+        ],
+        "routerOverheadMs": [
+          0,
+          0,
+          2,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ]
+      },
+      {
+        "path": "agent-sdk (offline mock; exception)",
+        "cache": "positive-binding-hit",
+        "occupied": true,
+        "requests": 100,
+        "discardedWarmupRequests": 20,
+        "queries": 0,
+        "failures": 0,
+        "bindingWaitMs": [
+          0.004755999994813465,
+          0.003665999996883329,
+          0.0031779999990249053,
+          0.00318400000105612,
+          0.003440000000409782,
+          0.003674999999930151,
+          0.003290000000561122,
+          0.004683999999542721,
+          0.0033530000000610016,
+          0.007856000003812369,
+          0.0033679999978630804,
+          0.0033870000042952597,
+          0.0030360000018845312,
+          0.00342399999499321,
+          0.007045999998808838,
+          0.003594000001612585,
+          0.00275800000235904,
+          0.003188999995472841,
+          0.0028050000037183054,
+          0.0025510000050417148,
+          0.002949999994598329,
+          0.0030780000015511177,
+          0.0035429999988991767,
+          0.003032000000530388,
+          0.0027289999998174608,
+          0.003002999997988809,
+          0.0025939999977708794,
+          0.002516000000468921,
+          0.004443999998329673,
+          0.003320000003441237,
+          0.0030170000027283095,
+          0.002755000001343433,
+          0.004085000000486616,
+          0.005209999995713588,
+          0.004492000000027474,
+          0.004641999999876134,
+          0.004871999997703824,
+          0.0037999999985913746,
+          0.004324000001361128,
+          0.00304100000357721,
+          0.003956000000471249,
+          0.0036319999999250285,
+          0.004390000001876615,
+          0.006459999996877741,
+          0.003095000000030268,
+          0.003705999995872844,
+          0.003178999999363441,
+          0.0034680000026128255,
+          0.0027079999999841675,
+          0.0024990000019897707,
+          0.0033840000032796524,
+          0.002719000003708061,
+          0.0033100000000558794,
+          0.0047469999990426,
+          0.0028099999981350265,
+          0.002927000001363922,
+          0.003024999998160638,
+          0.003112000005785376,
+          0.00277799999457784,
+          0.0029810000050929375,
+          0.0026589999979478307,
+          0.00391700000182027,
+          0.003312999993795529,
+          0.003444000001763925,
+          0.0033350000012433156,
+          0.0028369999999995343,
+          0.003367000004800502,
+          0.003993999998783693,
+          0.00480000000243308,
+          0.003177000005962327,
+          0.003276000003097579,
+          0.003894000001309905,
+          0.004112000002351124,
+          0.0037819999997736886,
+          0.004469999999855645,
+          0.003736999999091495,
+          0.0052460000006249174,
+          0.0037100000045029446,
+          0.005521999999473337,
+          0.004424999999173451,
+          0.0032960000025923364,
+          0.0037659999943571165,
+          0.003192999996826984,
+          0.0031499999968218617,
+          0.0032470000005559996,
+          0.0031919999964884482,
+          0.005699000001186505,
+          0.003687999997055158,
+          0.003483000000414904,
+          0.004153999994741753,
+          0.003416000006836839,
+          0.0033929999990505166,
+          0.0033180000027641654,
+          0.0030939999996917322,
+          0.002892999997129664,
+          0.0036249999975552782,
+          0.0031959999978425913,
+          0.0030480000059469603,
+          0.003528999994159676,
+          0.003093000006629154
+        ],
+        "routerOverheadMs": [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          2,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ]
+      }
+    ]
+  },
+  "scope": "offline actual dispatcher + PostgreSQL single pool; no provider or CLI",
+  "holdMs": 20,
+  "results": [
+    {
+      "promptBytes": 1024,
+      "path": "passthrough",
+      "stream": false,
+      "cache": "unique-indexed-miss",
+      "occupied": false,
+      "requests": 100,
+      "queries": 100,
+      "discardedWarmupRequests": 20,
+      "discardedWarmupQueries": 20,
+      "failures": 0,
+      "buffered": 0,
+      "bindingWaitMs": {
+        "count": 100,
+        "p50": 1.7736999999999625,
+        "p95": 3.3005620000000135,
+        "p99": 7.997564000000011
+      },
+      "routerOverheadMs": {
+        "count": 100,
+        "p50": 2,
+        "p95": 4,
+        "p99": 9
+      },
+      "terminalDurationMs": {
+        "count": 100,
+        "p50": 5.225349000000051,
+        "p95": 7.078815999999961,
+        "p99": 11.897930000000088
+      },
+      "bodyReadWaitMs": {
+        "count": 100,
+        "p50": 0.04054499999995187,
+        "p95": 0.06593499999985397,
+        "p99": 0.08003699999994751
+      },
+      "addedTtftMs": {
+        "count": 0,
+        "p50": null,
+        "p95": null,
+        "p99": null
+      }
+    },
+    {
+      "promptBytes": 1024,
+      "path": "passthrough",
+      "stream": false,
+      "cache": "unique-indexed-miss",
+      "occupied": true,
+      "requests": 100,
+      "queries": 100,
+      "discardedWarmupRequests": 20,
+      "discardedWarmupQueries": 20,
+      "failures": 0,
+      "buffered": 0,
+      "bindingWaitMs": {
+        "count": 100,
+        "p50": 21.24325799999997,
+        "p95": 23.250087999999778,
+        "p99": 26.682298000000173
+      },
+      "routerOverheadMs": {
+        "count": 100,
+        "p50": 22,
+        "p95": 24,
+        "p99": 27
+      },
+      "terminalDurationMs": {
+        "count": 100,
+        "p50": 24.710471000000325,
+        "p95": 29.124179999999797,
+        "p99": 33.69693400000051
+      },
+      "bodyReadWaitMs": {
+        "count": 100,
+        "p50": 0.04048599999987346,
+        "p95": 0.06895600000007107,
+        "p99": 0.11058000000048196
+      },
+      "addedTtftMs": {
+        "count": 0,
+        "p50": null,
+        "p95": null,
+        "p99": null
+      }
+    },
+    {
+      "promptBytes": 1024,
+      "path": "passthrough",
+      "stream": false,
+      "cache": "negative-hit",
+      "occupied": false,
+      "requests": 100,
+      "queries": 0,
+      "discardedWarmupRequests": 20,
+      "discardedWarmupQueries": 0,
+      "failures": 0,
+      "buffered": 0,
+      "bindingWaitMs": {
+        "count": 100,
+        "p50": 0.008548999999220541,
+        "p95": 0.012528999999631196,
+        "p99": 0.028012000000671833
+      },
+      "routerOverheadMs": {
+        "count": 100,
+        "p50": 0,
+        "p95": 0,
+        "p99": 0
+      },
+      "terminalDurationMs": {
+        "count": 100,
+        "p50": 2.9442849999995815,
+        "p95": 3.2237590000004275,
+        "p99": 8.231047000000217
+      },
+      "bodyReadWaitMs": {
+        "count": 100,
+        "p50": 0.03092300000025716,
+        "p95": 0.051589000000603846,
+        "p99": 0.057211999999708496
+      },
+      "addedTtftMs": {
+        "count": 0,
+        "p50": null,
+        "p95": null,
+        "p99": null
+      }
+    },
+    {
+      "promptBytes": 1024,
+      "path": "passthrough",
+      "stream": false,
+      "cache": "negative-hit",
+      "occupied": true,
+      "requests": 100,
+      "queries": 0,
+      "discardedWarmupRequests": 20,
+      "discardedWarmupQueries": 0,
+      "failures": 0,
+      "buffered": 0,
+      "bindingWaitMs": {
+        "count": 100,
+        "p50": 0.010841999999684049,
+        "p95": 0.024583000000347965,
+        "p99": 0.047889999999824795
+      },
+      "routerOverheadMs": {
+        "count": 100,
+        "p50": 0,
+        "p95": 1,
+        "p99": 2
+      },
+      "terminalDurationMs": {
+        "count": 100,
+        "p50": 3.143920999999864,
+        "p95": 5.388992000000144,
+        "p99": 9.110924000000523
+      },
+      "bodyReadWaitMs": {
+        "count": 100,
+        "p50": 0.036091000000851636,
+        "p95": 0.06932100000085484,
+        "p99": 0.08646999999928084
+      },
+      "addedTtftMs": {
+        "count": 0,
+        "p50": null,
+        "p95": null,
+        "p99": null
+      }
+    },
+    {
+      "promptBytes": 1024,
+      "path": "passthrough",
+      "stream": true,
+      "cache": "unique-indexed-miss",
+      "occupied": false,
+      "requests": 100,
+      "queries": 100,
+      "discardedWarmupRequests": 20,
+      "discardedWarmupQueries": 20,
+      "failures": 0,
+      "buffered": 0,
+      "bindingWaitMs": {
+        "count": 100,
+        "p50": 1.7264460000005784,
+        "p95": 4.212404000000788,
+        "p99": 5.923878999999943
+      },
+      "routerOverheadMs": {
+        "count": 100,
+        "p50": 2,
+        "p95": 5,
+        "p99": 7
+      },
+      "terminalDurationMs": {
+        "count": 100,
+        "p50": 9.238464000000022,
+        "p95": 12.602019999999357,
+        "p99": 14.885995999999977
+      },
+      "bodyReadWaitMs": {
+        "count": 100,
+        "p50": 0.05006199999934324,
+        "p95": 0.07635299999947165,
+        "p99": 0.0900580000006812
+      },
+      "addedTtftMs": {
+        "count": 100,
+        "p50": 0.1620199999997567,
+        "p95": 0.28401100000064616,
+        "p99": 0.6791430000002947
+      }
+    },
+    {
+      "promptBytes": 1024,
+      "path": "passthrough",
+      "stream": true,
+      "cache": "unique-indexed-miss",
+      "occupied": true,
+      "requests": 100,
+      "queries": 100,
+      "discardedWarmupRequests": 20,
+      "discardedWarmupQueries": 20,
+      "failures": 0,
+      "buffered": 0,
+      "bindingWaitMs": {
+        "count": 100,
+        "p50": 21.05591699999968,
+        "p95": 23.28002699999979,
+        "p99": 24.41650800000025
+      },
+      "routerOverheadMs": {
+        "count": 100,
+        "p50": 21,
+        "p95": 24,
+        "p99": 25
+      },
+      "terminalDurationMs": {
+        "count": 100,
+        "p50": 28.48729000000094,
+        "p95": 31.588214999999764,
+        "p99": 32.80405800000062
+      },
+      "bodyReadWaitMs": {
+        "count": 100,
+        "p50": 0.04346599999917089,
+        "p95": 0.07287400000041089,
+        "p99": 0.12386299999889161
+      },
+      "addedTtftMs": {
+        "count": 100,
+        "p50": 0.15637799999967683,
+        "p95": 0.22113100000024133,
+        "p99": 0.28406299999915063
+      }
+    },
+    {
+      "promptBytes": 1024,
+      "path": "passthrough",
+      "stream": true,
+      "cache": "negative-hit",
+      "occupied": false,
+      "requests": 100,
+      "queries": 0,
+      "discardedWarmupRequests": 20,
+      "discardedWarmupQueries": 0,
+      "failures": 0,
+      "buffered": 0,
+      "bindingWaitMs": {
+        "count": 100,
+        "p50": 0.0063599999994039536,
+        "p95": 0.011134999998830608,
+        "p99": 0.02444400000058522
+      },
+      "routerOverheadMs": {
+        "count": 100,
+        "p50": 0,
+        "p95": 0,
+        "p99": 1
+      },
+      "terminalDurationMs": {
+        "count": 100,
+        "p50": 7.304811000001791,
+        "p95": 7.962456999999631,
+        "p99": 10.67168700000002
+      },
+      "bodyReadWaitMs": {
+        "count": 100,
+        "p50": 0.04669900000044436,
+        "p95": 0.06993400000101246,
+        "p99": 0.07575600000200211
+      },
+      "addedTtftMs": {
+        "count": 100,
+        "p50": 0.11189800000101968,
+        "p95": 0.1831369999999879,
+        "p99": 0.3277880000005098
+      }
+    },
+    {
+      "promptBytes": 1024,
+      "path": "passthrough",
+      "stream": true,
+      "cache": "negative-hit",
+      "occupied": true,
+      "requests": 100,
+      "queries": 0,
+      "discardedWarmupRequests": 20,
+      "discardedWarmupQueries": 0,
+      "failures": 0,
+      "buffered": 0,
+      "bindingWaitMs": {
+        "count": 100,
+        "p50": 0.006468999999924563,
+        "p95": 0.01150200000120094,
+        "p99": 0.029608000000735046
+      },
+      "routerOverheadMs": {
+        "count": 100,
+        "p50": 0,
+        "p95": 0,
+        "p99": 0
+      },
+      "terminalDurationMs": {
+        "count": 100,
+        "p50": 7.215377000000444,
+        "p95": 7.445496999998795,
+        "p99": 8.110582999999679
+      },
+      "bodyReadWaitMs": {
+        "count": 100,
+        "p50": 0.04021600000123726,
+        "p95": 0.06212999999843305,
+        "p99": 0.08995800000047893
+      },
+      "addedTtftMs": {
+        "count": 100,
+        "p50": 0.10364900000058697,
+        "p95": 0.15569700000014564,
+        "p99": 0.26196299999901385
+      }
+    },
+    {
+      "promptBytes": 1024,
+      "path": "translate",
+      "stream": false,
+      "cache": "unique-indexed-miss",
+      "occupied": false,
+      "requests": 100,
+      "queries": 100,
+      "discardedWarmupRequests": 20,
+      "discardedWarmupQueries": 20,
+      "failures": 0,
+      "buffered": 0,
+      "bindingWaitMs": {
+        "count": 100,
+        "p50": 1.449228999999832,
+        "p95": 2.7954889999982697,
+        "p99": 3.3768809999983205
+      },
+      "routerOverheadMs": {
+        "count": 100,
+        "p50": 2,
+        "p95": 4,
+        "p99": 6
+      },
+      "terminalDurationMs": {
+        "count": 100,
+        "p50": 4.6495969999996305,
+        "p95": 6.443390999998883,
+        "p99": 9.549360999999408
+      },
+      "bodyReadWaitMs": {
+        "count": 100,
+        "p50": 0.03220099999816739,
+        "p95": 0.053769000000102096,
+        "p99": 0.0571220000001631
+      },
+      "addedTtftMs": {
+        "count": 0,
+        "p50": null,
+        "p95": null,
+        "p99": null
+      }
+    },
+    {
+      "promptBytes": 1024,
+      "path": "translate",
+      "stream": false,
+      "cache": "unique-indexed-miss",
+      "occupied": true,
+      "requests": 100,
+      "queries": 100,
+      "discardedWarmupRequests": 20,
+      "discardedWarmupQueries": 20,
+      "failures": 0,
+      "buffered": 0,
+      "bindingWaitMs": {
+        "count": 100,
+        "p50": 21.182369000000108,
+        "p95": 24.63409700000011,
+        "p99": 26.51610199999959
+      },
+      "routerOverheadMs": {
+        "count": 100,
+        "p50": 22,
+        "p95": 25,
+        "p99": 27
+      },
+      "terminalDurationMs": {
+        "count": 100,
+        "p50": 24.56579199999942,
+        "p95": 28.376091000000088,
+        "p99": 32.267728000000716
+      },
+      "bodyReadWaitMs": {
+        "count": 100,
+        "p50": 0.04040700000041397,
+        "p95": 0.07691399999930582,
+        "p99": 0.306205000000773
+      },
+      "addedTtftMs": {
+        "count": 0,
+        "p50": null,
+        "p95": null,
+        "p99": null
+      }
+    },
+    {
+      "promptBytes": 1024,
+      "path": "translate",
+      "stream": false,
+      "cache": "negative-hit",
+      "occupied": false,
+      "requests": 100,
+      "queries": 0,
+      "discardedWarmupRequests": 20,
+      "discardedWarmupQueries": 0,
+      "failures": 0,
+      "buffered": 0,
+      "bindingWaitMs": {
+        "count": 100,
+        "p50": 0.004190999999991618,
+        "p95": 0.008549000000130036,
+        "p99": 0.02244099999916216
+      },
+      "routerOverheadMs": {
+        "count": 100,
+        "p50": 0,
+        "p95": 0,
+        "p99": 0
+      },
+      "terminalDurationMs": {
+        "count": 100,
+        "p50": 2.780237999999372,
+        "p95": 4.474793999999747,
+        "p99": 6.533678999998301
+      },
+      "bodyReadWaitMs": {
+        "count": 100,
+        "p50": 0.027324999999109423,
+        "p95": 0.06035700000029465,
+        "p99": 0.10733600000094157
+      },
+      "addedTtftMs": {
+        "count": 0,
+        "p50": null,
+        "p95": null,
+        "p99": null
+      }
+    },
+    {
+      "promptBytes": 1024,
+      "path": "translate",
+      "stream": false,
+      "cache": "negative-hit",
+      "occupied": true,
+      "requests": 100,
+      "queries": 0,
+      "discardedWarmupRequests": 20,
+      "discardedWarmupQueries": 0,
+      "failures": 0,
+      "buffered": 0,
+      "bindingWaitMs": {
+        "count": 100,
+        "p50": 0.005284999999275897,
+        "p95": 0.010075000000142609,
+        "p99": 0.011532000000443077
+      },
+      "routerOverheadMs": {
+        "count": 100,
+        "p50": 0,
+        "p95": 1,
+        "p99": 1
+      },
+      "terminalDurationMs": {
+        "count": 100,
+        "p50": 3.0334120000006806,
+        "p95": 4.397299000000203,
+        "p99": 4.899277999998958
+      },
+      "bodyReadWaitMs": {
+        "count": 100,
+        "p50": 0.03300400000080117,
+        "p95": 0.06194299999879149,
+        "p99": 0.07637999999860767
+      },
+      "addedTtftMs": {
+        "count": 0,
+        "p50": null,
+        "p95": null,
+        "p99": null
+      }
+    },
+    {
+      "promptBytes": 1024,
+      "path": "translate",
+      "stream": true,
+      "cache": "unique-indexed-miss",
+      "occupied": false,
+      "requests": 100,
+      "queries": 100,
+      "discardedWarmupRequests": 20,
+      "discardedWarmupQueries": 20,
+      "failures": 0,
+      "buffered": 0,
+      "bindingWaitMs": {
+        "count": 100,
+        "p50": 1.7439369999992778,
+        "p95": 6.051680000000488,
+        "p99": 9.919874000002892
+      },
+      "routerOverheadMs": {
+        "count": 100,
+        "p50": 2,
+        "p95": 7,
+        "p99": 10
+      },
+      "terminalDurationMs": {
+        "count": 100,
+        "p50": 8.68146699999852,
+        "p95": 16.83008599999812,
+        "p99": 22.509727000000566
+      },
+      "bodyReadWaitMs": {
+        "count": 100,
+        "p50": 0.050769000001309905,
+        "p95": 0.09379900000203634,
+        "p99": 1.8720329999996466
+      },
+      "addedTtftMs": {
+        "count": 100,
+        "p50": 0.2631760000003851,
+        "p95": 0.354631000001973,
+        "p99": 0.4774299999990035
+      }
+    },
+    {
+      "promptBytes": 1024,
+      "path": "translate",
+      "stream": true,
+      "cache": "unique-indexed-miss",
+      "occupied": true,
+      "requests": 100,
+      "queries": 100,
+      "discardedWarmupRequests": 20,
+      "discardedWarmupQueries": 20,
+      "failures": 0,
+      "buffered": 0,
+      "bindingWaitMs": {
+        "count": 100,
+        "p50": 21.464091000001645,
+        "p95": 27.060692999999446,
+        "p99": 37.557967000000644
+      },
+      "routerOverheadMs": {
+        "count": 100,
+        "p50": 22,
+        "p95": 28,
+        "p99": 38
+      },
+      "terminalDurationMs": {
+        "count": 100,
+        "p50": 29.087500999998156,
+        "p95": 36.089131000000634,
+        "p99": 45.25835399999778
+      },
+      "bodyReadWaitMs": {
+        "count": 100,
+        "p50": 0.049537999999301974,
+        "p95": 0.09335700000156066,
+        "p99": 0.19402500000069267
+      },
+      "addedTtftMs": {
+        "count": 100,
+        "p50": 0.2551430000021355,
+        "p95": 0.34814900000128546,
+        "p99": 0.9775399999998626
+      }
+    },
+    {
+      "promptBytes": 1024,
+      "path": "translate",
+      "stream": true,
+      "cache": "negative-hit",
+      "occupied": false,
+      "requests": 100,
+      "queries": 0,
+      "discardedWarmupRequests": 20,
+      "discardedWarmupQueries": 0,
+      "failures": 0,
+      "buffered": 0,
+      "bindingWaitMs": {
+        "count": 100,
+        "p50": 0.007241999999678228,
+        "p95": 0.012968999999429798,
+        "p99": 0.0218479999966803
+      },
+      "routerOverheadMs": {
+        "count": 100,
+        "p50": 0,
+        "p95": 1,
+        "p99": 1
+      },
+      "terminalDurationMs": {
+        "count": 100,
+        "p50": 6.48387300000104,
+        "p95": 9.746236999999383,
+        "p99": 15.348335000002407
+      },
+      "bodyReadWaitMs": {
+        "count": 100,
+        "p50": 0.050243999998201616,
+        "p95": 0.07514200000150595,
+        "p99": 0.10243200000331854
+      },
+      "addedTtftMs": {
+        "count": 100,
+        "p50": 0.19004900000072666,
+        "p95": 0.287744000001112,
+        "p99": 0.36167099999875063
+      }
+    },
+    {
+      "promptBytes": 1024,
+      "path": "translate",
+      "stream": true,
+      "cache": "negative-hit",
+      "occupied": true,
+      "requests": 100,
+      "queries": 0,
+      "discardedWarmupRequests": 20,
+      "discardedWarmupQueries": 0,
+      "failures": 0,
+      "buffered": 0,
+      "bindingWaitMs": {
+        "count": 100,
+        "p50": 0.008550999998988118,
+        "p95": 0.010460000001330627,
+        "p99": 0.0159349999994447
+      },
+      "routerOverheadMs": {
+        "count": 100,
+        "p50": 0,
+        "p95": 1,
+        "p99": 1
+      },
+      "terminalDurationMs": {
+        "count": 100,
+        "p50": 6.6569519999975455,
+        "p95": 11.122060000001511,
+        "p99": 15.7545769999997
+      },
+      "bodyReadWaitMs": {
+        "count": 100,
+        "p50": 0.04891000000134227,
+        "p95": 0.07569300000250223,
+        "p99": 0.0839799999994284
+      },
+      "addedTtftMs": {
+        "count": 100,
+        "p50": 0.23224699999991572,
+        "p95": 0.31940899999972316,
+        "p99": 0.41512800000054995
+      }
+    },
+    {
+      "promptBytes": 280000,
+      "path": "passthrough",
+      "stream": false,
+      "cache": "unique-indexed-miss",
+      "occupied": false,
+      "requests": 100,
+      "queries": 100,
+      "discardedWarmupRequests": 20,
+      "discardedWarmupQueries": 20,
+      "failures": 0,
+      "buffered": 0,
+      "bindingWaitMs": {
+        "count": 100,
+        "p50": 1.5885959999977786,
+        "p95": 4.591758999999001,
+        "p99": 8.611283000002004
+      },
+      "routerOverheadMs": {
+        "count": 100,
+        "p50": 2,
+        "p95": 5,
+        "p99": 11
+      },
+      "terminalDurationMs": {
+        "count": 100,
+        "p50": 5.29960900000151,
+        "p95": 9.336067000000185,
+        "p99": 17.318757000000915
+      },
+      "bodyReadWaitMs": {
+        "count": 100,
+        "p50": 0.16433799999867915,
+        "p95": 0.5084449999994831,
+        "p99": 0.5437419999980193
+      },
+      "addedTtftMs": {
+        "count": 0,
+        "p50": null,
+        "p95": null,
+        "p99": null
+      }
+    },
+    {
+      "promptBytes": 280000,
+      "path": "passthrough",
+      "stream": false,
+      "cache": "unique-indexed-miss",
+      "occupied": true,
+      "requests": 100,
+      "queries": 100,
+      "discardedWarmupRequests": 20,
+      "discardedWarmupQueries": 20,
+      "failures": 0,
+      "buffered": 0,
+      "bindingWaitMs": {
+        "count": 100,
+        "p50": 21.086927000000287,
+        "p95": 30.81868299999769,
+        "p99": 46.82700699999987
+      },
+      "routerOverheadMs": {
+        "count": 100,
+        "p50": 22,
+        "p95": 32,
+        "p99": 48
+      },
+      "terminalDurationMs": {
+        "count": 100,
+        "p50": 26.06912000000011,
+        "p95": 36.87152200000128,
+        "p99": 51.230922999999166
+      },
+      "bodyReadWaitMs": {
+        "count": 100,
+        "p50": 0.1804119999978866,
+        "p95": 0.9496360000011919,
+        "p99": 2.0399619999989227
+      },
+      "addedTtftMs": {
+        "count": 0,
+        "p50": null,
+        "p95": null,
+        "p99": null
+      }
+    },
+    {
+      "promptBytes": 280000,
+      "path": "passthrough",
+      "stream": false,
+      "cache": "negative-hit",
+      "occupied": false,
+      "requests": 100,
+      "queries": 0,
+      "discardedWarmupRequests": 20,
+      "discardedWarmupQueries": 0,
+      "failures": 0,
+      "buffered": 0,
+      "bindingWaitMs": {
+        "count": 100,
+        "p50": 0.009234999997715931,
+        "p95": 0.017390000000887085,
+        "p99": 0.03179000000091037
+      },
+      "routerOverheadMs": {
+        "count": 100,
+        "p50": 1,
+        "p95": 1,
+        "p99": 5
+      },
+      "terminalDurationMs": {
+        "count": 100,
+        "p50": 3.781571999999869,
+        "p95": 7.741742999998678,
+        "p99": 12.717259000000922
+      },
+      "bodyReadWaitMs": {
+        "count": 100,
+        "p50": 0.17665000000488362,
+        "p95": 0.5411800000001676,
+        "p99": 0.6821710000003804
+      },
+      "addedTtftMs": {
+        "count": 0,
+        "p50": null,
+        "p95": null,
+        "p99": null
+      }
+    },
+    {
+      "promptBytes": 280000,
+      "path": "passthrough",
+      "stream": false,
+      "cache": "negative-hit",
+      "occupied": true,
+      "requests": 100,
+      "queries": 0,
+      "discardedWarmupRequests": 20,
+      "discardedWarmupQueries": 0,
+      "failures": 0,
+      "buffered": 0,
+      "bindingWaitMs": {
+        "count": 100,
+        "p50": 0.01022000000011758,
+        "p95": 0.017386999999871477,
+        "p99": 0.030452000002696877
+      },
+      "routerOverheadMs": {
+        "count": 100,
+        "p50": 1,
+        "p95": 2,
+        "p99": 3
+      },
+      "terminalDurationMs": {
+        "count": 100,
+        "p50": 4.041350000003149,
+        "p95": 9.170828999998776,
+        "p99": 15.20411900000181
+      },
+      "bodyReadWaitMs": {
+        "count": 100,
+        "p50": 0.17202499999984866,
+        "p95": 0.558351000003313,
+        "p99": 0.8678450000079465
+      },
+      "addedTtftMs": {
+        "count": 0,
+        "p50": null,
+        "p95": null,
+        "p99": null
+      }
+    },
+    {
+      "promptBytes": 280000,
+      "path": "passthrough",
+      "stream": true,
+      "cache": "unique-indexed-miss",
+      "occupied": false,
+      "requests": 100,
+      "queries": 100,
+      "discardedWarmupRequests": 20,
+      "discardedWarmupQueries": 20,
+      "failures": 0,
+      "buffered": 0,
+      "bindingWaitMs": {
+        "count": 100,
+        "p50": 1.9213510000008682,
+        "p95": 6.1275580000001355,
+        "p99": 11.888913000002503
+      },
+      "routerOverheadMs": {
+        "count": 100,
+        "p50": 3,
+        "p95": 7,
+        "p99": 15
+      },
+      "terminalDurationMs": {
+        "count": 100,
+        "p50": 10.352433000000019,
+        "p95": 18.460517999999865,
+        "p99": 32.6586810000008
+      },
+      "bodyReadWaitMs": {
+        "count": 100,
+        "p50": 0.17585499999768217,
+        "p95": 0.5384290000038163,
+        "p99": 1.6270190000032017
+      },
+      "addedTtftMs": {
+        "count": 100,
+        "p50": 0.19388400000025285,
+        "p95": 0.3071689999997034,
+        "p99": 1.2171259999995527
+      }
+    },
+    {
+      "promptBytes": 280000,
+      "path": "passthrough",
+      "stream": true,
+      "cache": "unique-indexed-miss",
+      "occupied": true,
+      "requests": 100,
+      "queries": 100,
+      "discardedWarmupRequests": 20,
+      "discardedWarmupQueries": 20,
+      "failures": 0,
+      "buffered": 0,
+      "bindingWaitMs": {
+        "count": 100,
+        "p50": 20.84435400000075,
+        "p95": 26.260989000002155,
+        "p99": 46.282938999996986
+      },
+      "routerOverheadMs": {
+        "count": 100,
+        "p50": 21,
+        "p95": 27,
+        "p99": 47
+      },
+      "terminalDurationMs": {
+        "count": 100,
+        "p50": 29.483578999999736,
+        "p95": 38.49807399999918,
+        "p99": 55.80999000000156
+      },
+      "bodyReadWaitMs": {
+        "count": 100,
+        "p50": 0.19362999999793828,
+        "p95": 0.616903000001912,
+        "p99": 1.138254000001325
+      },
+      "addedTtftMs": {
+        "count": 100,
+        "p50": 0.1862970000001951,
+        "p95": 0.3432549999997718,
+        "p99": 0.895834000002651
+      }
+    },
+    {
+      "promptBytes": 280000,
+      "path": "passthrough",
+      "stream": true,
+      "cache": "negative-hit",
+      "occupied": false,
+      "requests": 100,
+      "queries": 0,
+      "discardedWarmupRequests": 20,
+      "discardedWarmupQueries": 0,
+      "failures": 0,
+      "buffered": 0,
+      "bindingWaitMs": {
+        "count": 100,
+        "p50": 0.008496000002196524,
+        "p95": 0.013678000002983026,
+        "p99": 0.02624199999991106
+      },
+      "routerOverheadMs": {
+        "count": 100,
+        "p50": 1,
+        "p95": 1,
+        "p99": 1
+      },
+      "terminalDurationMs": {
+        "count": 100,
+        "p50": 7.869822000000568,
+        "p95": 11.18713900000148,
+        "p99": 14.430648000001383
+      },
+      "bodyReadWaitMs": {
+        "count": 100,
+        "p50": 0.17355799999495503,
+        "p95": 0.573660000009113,
+        "p99": 0.6135450000001583
+      },
+      "addedTtftMs": {
+        "count": 100,
+        "p50": 0.13846200000261888,
+        "p95": 0.23971999999776017,
+        "p99": 0.33199099999910686
+      }
+    },
+    {
+      "promptBytes": 280000,
+      "path": "passthrough",
+      "stream": true,
+      "cache": "negative-hit",
+      "occupied": true,
+      "requests": 100,
+      "queries": 0,
+      "discardedWarmupRequests": 20,
+      "discardedWarmupQueries": 0,
+      "failures": 0,
+      "buffered": 0,
+      "bindingWaitMs": {
+        "count": 100,
+        "p50": 0.00881900000240421,
+        "p95": 0.02376899999944726,
+        "p99": 0.04142599999613594
+      },
+      "routerOverheadMs": {
+        "count": 100,
+        "p50": 1,
+        "p95": 1,
+        "p99": 3
+      },
+      "terminalDurationMs": {
+        "count": 100,
+        "p50": 8.145905999997922,
+        "p95": 11.379395999996632,
+        "p99": 16.576372000003175
+      },
+      "bodyReadWaitMs": {
+        "count": 100,
+        "p50": 0.17863800000486663,
+        "p95": 0.5624259999895003,
+        "p99": 2.1665260000008857
+      },
+      "addedTtftMs": {
+        "count": 100,
+        "p50": 0.14921999999933178,
+        "p95": 0.22618800000054762,
+        "p99": 0.3182770000057644
+      }
+    },
+    {
+      "promptBytes": 280000,
+      "path": "translate",
+      "stream": false,
+      "cache": "unique-indexed-miss",
+      "occupied": false,
+      "requests": 100,
+      "queries": 100,
+      "discardedWarmupRequests": 20,
+      "discardedWarmupQueries": 20,
+      "failures": 0,
+      "buffered": 0,
+      "bindingWaitMs": {
+        "count": 100,
+        "p50": 1.6259159999972326,
+        "p95": 4.084427000001597,
+        "p99": 5.253728999996383
+      },
+      "routerOverheadMs": {
+        "count": 100,
+        "p50": 3,
+        "p95": 6,
+        "p99": 8
+      },
+      "terminalDurationMs": {
+        "count": 100,
+        "p50": 5.735626000001503,
+        "p95": 9.487726999999722,
+        "p99": 11.418904999998631
+      },
+      "bodyReadWaitMs": {
+        "count": 100,
+        "p50": 0.1659670000008191,
+        "p95": 0.4447279999949387,
+        "p99": 0.5883709999907296
+      },
+      "addedTtftMs": {
+        "count": 0,
+        "p50": null,
+        "p95": null,
+        "p99": null
+      }
+    },
+    {
+      "promptBytes": 280000,
+      "path": "translate",
+      "stream": false,
+      "cache": "unique-indexed-miss",
+      "occupied": true,
+      "requests": 100,
+      "queries": 100,
+      "discardedWarmupRequests": 20,
+      "discardedWarmupQueries": 20,
+      "failures": 0,
+      "buffered": 0,
+      "bindingWaitMs": {
+        "count": 100,
+        "p50": 20.795374000001175,
+        "p95": 23.55553299999883,
+        "p99": 25.49260900000081
+      },
+      "routerOverheadMs": {
+        "count": 100,
+        "p50": 22,
+        "p95": 25,
+        "p99": 30
+      },
+      "terminalDurationMs": {
+        "count": 100,
+        "p50": 24.930594999997993,
+        "p95": 29.18354900000122,
+        "p99": 33.910798999997496
+      },
+      "bodyReadWaitMs": {
+        "count": 100,
+        "p50": 0.1576550000027055,
+        "p95": 0.4785479999918607,
+        "p99": 0.8988639999952284
+      },
+      "addedTtftMs": {
+        "count": 0,
+        "p50": null,
+        "p95": null,
+        "p99": null
+      }
+    },
+    {
+      "promptBytes": 280000,
+      "path": "translate",
+      "stream": false,
+      "cache": "negative-hit",
+      "occupied": false,
+      "requests": 100,
+      "queries": 0,
+      "discardedWarmupRequests": 20,
+      "discardedWarmupQueries": 0,
+      "failures": 0,
+      "buffered": 0,
+      "bindingWaitMs": {
+        "count": 100,
+        "p50": 0.005784999993920792,
+        "p95": 0.009437000000616536,
+        "p99": 0.016407999995863065
+      },
+      "routerOverheadMs": {
+        "count": 100,
+        "p50": 1,
+        "p95": 2,
+        "p99": 3
+      },
+      "terminalDurationMs": {
+        "count": 100,
+        "p50": 3.5910579999981564,
+        "p95": 6.769686999999976,
+        "p99": 7.447680000004766
+      },
+      "bodyReadWaitMs": {
+        "count": 100,
+        "p50": 0.1430400000026566,
+        "p95": 0.32723900000564754,
+        "p99": 2.733872999997402
+      },
+      "addedTtftMs": {
+        "count": 0,
+        "p50": null,
+        "p95": null,
+        "p99": null
+      }
+    },
+    {
+      "promptBytes": 280000,
+      "path": "translate",
+      "stream": false,
+      "cache": "negative-hit",
+      "occupied": true,
+      "requests": 100,
+      "queries": 0,
+      "discardedWarmupRequests": 20,
+      "discardedWarmupQueries": 0,
+      "failures": 0,
+      "buffered": 0,
+      "bindingWaitMs": {
+        "count": 100,
+        "p50": 0.006204999997862615,
+        "p95": 0.011060999997425824,
+        "p99": 0.014970000003813766
+      },
+      "routerOverheadMs": {
+        "count": 100,
+        "p50": 1,
+        "p95": 2,
+        "p99": 3
+      },
+      "terminalDurationMs": {
+        "count": 100,
+        "p50": 3.5695679999989807,
+        "p95": 6.088368000004266,
+        "p99": 8.185984000003373
+      },
+      "bodyReadWaitMs": {
+        "count": 100,
+        "p50": 0.14821299999312032,
+        "p95": 0.493094999997993,
+        "p99": 2.021588999996311
+      },
+      "addedTtftMs": {
+        "count": 0,
+        "p50": null,
+        "p95": null,
+        "p99": null
+      }
+    },
+    {
+      "promptBytes": 280000,
+      "path": "translate",
+      "stream": true,
+      "cache": "unique-indexed-miss",
+      "occupied": false,
+      "requests": 100,
+      "queries": 100,
+      "discardedWarmupRequests": 20,
+      "discardedWarmupQueries": 20,
+      "failures": 0,
+      "buffered": 0,
+      "bindingWaitMs": {
+        "count": 100,
+        "p50": 1.5471529999995255,
+        "p95": 4.510278000001563,
+        "p99": 6.1053049999973155
+      },
+      "routerOverheadMs": {
+        "count": 100,
+        "p50": 3,
+        "p95": 6,
+        "p99": 7
+      },
+      "terminalDurationMs": {
+        "count": 100,
+        "p50": 8.890174000000115,
+        "p95": 13.386869000001752,
+        "p99": 14.302247999999963
+      },
+      "bodyReadWaitMs": {
+        "count": 100,
+        "p50": 0.16217199999664444,
+        "p95": 0.4469769999923301,
+        "p99": 0.5185399999973015
+      },
+      "addedTtftMs": {
+        "count": 100,
+        "p50": 0.17234900000039488,
+        "p95": 0.27910700000211364,
+        "p99": 0.3331850000031409
+      }
+    },
+    {
+      "promptBytes": 280000,
+      "path": "translate",
+      "stream": true,
+      "cache": "unique-indexed-miss",
+      "occupied": true,
+      "requests": 100,
+      "queries": 100,
+      "discardedWarmupRequests": 20,
+      "discardedWarmupQueries": 20,
+      "failures": 0,
+      "buffered": 0,
+      "bindingWaitMs": {
+        "count": 100,
+        "p50": 20.65252899999905,
+        "p95": 23.23384200000146,
+        "p99": 24.180512999999337
+      },
+      "routerOverheadMs": {
+        "count": 100,
+        "p50": 22,
+        "p95": 24,
+        "p99": 26
+      },
+      "terminalDurationMs": {
+        "count": 100,
+        "p50": 28.016514000002644,
+        "p95": 31.459263999997347,
+        "p99": 32.06623099999706
+      },
+      "bodyReadWaitMs": {
+        "count": 100,
+        "p50": 0.16873599999962607,
+        "p95": 0.6583039999895846,
+        "p99": 2.2211309999984223
+      },
+      "addedTtftMs": {
+        "count": 100,
+        "p50": 0.21485500000562752,
+        "p95": 0.29835199999797624,
+        "p99": 0.3338839999996708
+      }
+    },
+    {
+      "promptBytes": 280000,
+      "path": "translate",
+      "stream": true,
+      "cache": "negative-hit",
+      "occupied": false,
+      "requests": 100,
+      "queries": 0,
+      "discardedWarmupRequests": 20,
+      "discardedWarmupQueries": 0,
+      "failures": 0,
+      "buffered": 0,
+      "bindingWaitMs": {
+        "count": 100,
+        "p50": 0.008330999997269828,
+        "p95": 0.015501000001677312,
+        "p99": 0.027922000001126435
+      },
+      "routerOverheadMs": {
+        "count": 100,
+        "p50": 1,
+        "p95": 1,
+        "p99": 2
+      },
+      "terminalDurationMs": {
+        "count": 100,
+        "p50": 7.0732889999999315,
+        "p95": 10.132314000002225,
+        "p99": 11.676737000001594
+      },
+      "bodyReadWaitMs": {
+        "count": 100,
+        "p50": 0.16528100000869017,
+        "p95": 0.23650199999974575,
+        "p99": 0.5527079999956186
+      },
+      "addedTtftMs": {
+        "count": 100,
+        "p50": 0.17298000000300817,
+        "p95": 0.31960099999560043,
+        "p99": 0.4465550000022631
+      }
+    },
+    {
+      "promptBytes": 280000,
+      "path": "translate",
+      "stream": true,
+      "cache": "negative-hit",
+      "occupied": true,
+      "requests": 100,
+      "queries": 0,
+      "discardedWarmupRequests": 20,
+      "discardedWarmupQueries": 0,
+      "failures": 0,
+      "buffered": 0,
+      "bindingWaitMs": {
+        "count": 100,
+        "p50": 0.007456000006641261,
+        "p95": 0.012820000003557652,
+        "p99": 0.01407199999812292
+      },
+      "routerOverheadMs": {
+        "count": 100,
+        "p50": 1,
+        "p95": 1,
+        "p99": 1
+      },
+      "terminalDurationMs": {
+        "count": 100,
+        "p50": 7.045485999995435,
+        "p95": 9.488015999995696,
+        "p99": 10.456810000003316
+      },
+      "bodyReadWaitMs": {
+        "count": 100,
+        "p50": 0.162943000002997,
+        "p95": 0.20759800000087125,
+        "p99": 0.24401099999522557
+      },
+      "addedTtftMs": {
+        "count": 100,
+        "p50": 0.18176600000151666,
+        "p95": 0.30818400000134716,
+        "p99": 0.39248599999700673
+      }
+    }
+  ]
+}

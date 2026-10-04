@@ -9,6 +9,7 @@ import { createAccountLifecycle } from "./account-lifecycle"
 import type { AccountRepository } from "./account-types"
 import { withAdminMutationRetry } from "./admin-mutation-conflict"
 import { createBackgroundAccountEligibility } from "./background-account-eligibility"
+import { createObservedQuotaWindowMutation } from "./observed-quota-window"
 import { createQuotaWindowMutations } from "./quota-window-mutations"
 
 /**
@@ -206,6 +207,7 @@ export function createAccountRepository(
     ...createBackgroundAccountEligibility(db),
 
     ...createQuotaWindowMutations(db),
+    ...createObservedQuotaWindowMutation(db),
 
     listQuotaWindows: async (accountIds) => {
       // An empty set is a caller with nothing to hydrate, not a caller asking

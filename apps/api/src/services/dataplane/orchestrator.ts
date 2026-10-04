@@ -9,12 +9,13 @@ import type { Dispatcher, DispatcherDeps, DispatchInput } from "./dispatcher-con
 import { DEFAULT_UPSTREAM_TIMEOUT_MS } from "./dispatcher-config"
 import { resolveEgress } from "./egress/mode"
 import { keyRateLimitedError } from "./limits"
-import { outcomeForResponse, type RequestProgress, sampleOf, streamed } from "./observe"
+import type { RequestProgress } from "./observe"
 import { planCandidates } from "./plan"
 import { attemptRecord, errorClassOf, outcomeOf } from "./records"
 import { hintRecoveryRejections } from "./recovery-hints"
 import { createRequestAccounting } from "./request-accounting"
 import { requestLifetime } from "./request-lifetime"
+import { requestTerminalObserver } from "./request-terminal"
 import { createRotationCounters } from "./rotation"
 import { createRuntime } from "./runtime"
 import { sessionBindings } from "./session-binding"
@@ -48,7 +49,13 @@ export function createDispatcher(deps: DispatcherDeps): Dispatcher {
   const clock = deps.clock ?? SYSTEM_CLOCK
   const call = deps.fetch ?? ((request: Request) => fetch(request))
   const options = deps.options ?? {}
-  const bindings = sessionBindings(deps.catalog, deps.sessions)
+  const bindings = sessionBindings(
+    deps.catalog,
+    deps.sessions,
+    deps.onBindingWait === undefined
+      ? undefined
+      : { elapsed: clock.elapsed, onWait: deps.onBindingWait },
+  )
   // Per pool, per replica, in memory — the caller-owned half of `round-robin` (`rotation.ts`).
   const rotation = createRotationCounters()
 
@@ -57,6 +64,7 @@ export function createDispatcher(deps: DispatcherDeps): Dispatcher {
     input: DispatchInput & { readonly identity: UsageRequestIdentity },
     progress: RequestProgress,
     record: ReturnType<typeof createRequestAccounting>["record"],
+    recordTerminal: ReturnType<typeof createRequestAccounting>["recordTerminal"],
   ): Promise<Response> => {
     const { startedAt, requestStarted } = progress
     const operation = input.operation ?? "messages"
@@ -112,6 +120,7 @@ export function createDispatcher(deps: DispatcherDeps): Dispatcher {
       bodyReadMs: progress.bodyReadMs,
       responseObservationMaxBytes: options.responseObservationMaxBytes ?? 65_536,
       record,
+      recordTerminal,
       // Two different ids on purpose: the correlation id is router-owned and joins this
       // request's attempts, while the client's own id is a trace label a caller may repeat or
       // forge. Using the latter as the join key would merge two clients' chains.
@@ -251,8 +260,6 @@ export function createDispatcher(deps: DispatcherDeps): Dispatcher {
       : response
   }
 
-  const observe = deps.onRequest
-
   return {
     async dispatch(input) {
       const scopedInput = {
@@ -265,10 +272,13 @@ export function createDispatcher(deps: DispatcherDeps): Dispatcher {
         model: null,
         bodyReadMs: 0,
       }
-      const accounting = createRequestAccounting(scopedInput, progress, clock, (event) =>
-        deps.usage.record(event),
+      const accounting = createRequestAccounting(
+        scopedInput,
+        progress,
+        clock,
+        (event) => deps.usage.record(event),
+        requestTerminalObserver(scopedInput, progress, clock, deps.onRequest),
       )
-      const identity = { ingressDialect: input.ingress, keyId: input.key.id }
       const lifetime = requestLifetime(scopedInput, deps.activeRequests, accounting)
       try {
         lifetime.assertAvailable()
@@ -276,15 +286,12 @@ export function createDispatcher(deps: DispatcherDeps): Dispatcher {
           { ...lifetime.input, identity: scopedInput.identity },
           progress,
           lifetime.record,
+          lifetime.recordTerminal,
         )
         accounting.respond(response)
-        observe?.(
-          sampleOf(identity, progress, outcomeForResponse(response), clock, streamed(response)),
-        )
         return response
       } catch (error) {
-        const { error: failure, outcome } = lifetime.fail(error)
-        observe?.(sampleOf(identity, progress, outcome, clock, false))
+        const { error: failure } = lifetime.fail(error)
         throw failure
       }
     },

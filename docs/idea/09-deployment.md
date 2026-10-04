@@ -694,3 +694,5 @@ All integer settings must be finite safe integers; `PORT` cannot exceed 65535. T
 | `ADMIN_LOGIN_MAX_TRACKED_IPS` | `10000` | Maximum tracked login sources; new sources fail closed at capacity. |
 | `ADMIN_SESSION_REVALIDATE_SECONDS` | `60` | Maximum cached admin-session interval before checking durable revocation. |
 | `ADMIN_OIDC_REQUEST_TIMEOUT_MS` | `10000` | Deadline for identity-provider requests and response-body reads. |
+
+`METRIC_POOL_MODEL_INVENTORY` optionally configures a JSON pool-ID-to-model-array mapping for bounded terminal outcome and availability metrics. Default `{}`; at most 256 pairs, 128 characters per nonempty pool/model label, and 65,536 JSON characters. Duplicate model entries are rejected at boot. This mapping uses client model names; it does not create routing aliases or grant pool access.

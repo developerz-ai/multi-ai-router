@@ -961,7 +961,10 @@ describe("the usage gauge rides the turn, off the response path", () => {
   interface GaugeSpy {
     readonly observed: { accountId: string; source: unknown }[]
     settle(): void
-    readonly gauge: { observe(accountId: string, source: unknown): Promise<void> }
+    readonly gauge: {
+      capture(accountId: string): undefined
+      observe(accountId: string, source: unknown): Promise<void>
+    }
   }
 
   /** A gauge whose reading takes as long as the test says — the turn must never wait for it. */
@@ -975,6 +978,7 @@ describe("the usage gauge rides the turn, off the response path", () => {
       observed,
       settle: () => settle(),
       gauge: {
+        capture: () => undefined,
         observe: (accountId, source) => {
           observed.push({ accountId, source })
           return pending

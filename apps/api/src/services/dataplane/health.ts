@@ -47,7 +47,11 @@ export interface HealthStoreOptions {
   readonly authFailureMaxCooldownMs?: number
   readonly jitter?: () => number
   readonly probeHoldMs?: number
-  readonly onQuotaWindows?: (accountId: string, windows: readonly QuotaWindowState[]) => void
+  readonly onQuotaWindows?: (
+    accountId: string,
+    windows: readonly QuotaWindowState[],
+    observation?: HealthObservation,
+  ) => void
   readonly onBlocked?: (
     accountId: string,
     status: AccountStatus,
@@ -68,6 +72,7 @@ const REFUSED: ProbeAdmission = { admitted: false, held: false }
 export interface HealthStore {
   stateOf(accountId: string): AccountHealthState
   reconcile(accountId: string, facts: HealthAccountFacts): void
+  acceptsObservation(accountId: string, observation: HealthObservation): boolean
   captureAttempt(accountId: string, facts: HealthAccountFacts): HealthObservation
   beginAttempt(accountId: string): void
   endAttempt(accountId: string, tokens?: number): void
@@ -140,6 +145,7 @@ export function createHealthStore(options: HealthStoreOptions = {}): HealthStore
       }
     },
     captureAttempt: observations.capture,
+    acceptsObservation: observations.accepts,
 
     beginAttempt(accountId) {
       write(accountId, { inFlight: read(accountId).inFlight + 1 })
@@ -183,7 +189,7 @@ export function createHealthStore(options: HealthStoreOptions = {}): HealthStore
       if (folded.breaker !== read(accountId).breaker) observations.advanceVerdict(accountId)
       states.set(accountId, folded)
       if (signal.quotaWindows !== undefined) {
-        options.onQuotaWindows?.(accountId, folded.quotaWindows)
+        options.onQuotaWindows?.(accountId, folded.quotaWindows, observation)
       }
     },
 

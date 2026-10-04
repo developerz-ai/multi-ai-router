@@ -179,6 +179,12 @@ export function createRoutingScanner(options: ScannerOptions = {}): RoutingScann
         const absolute = offset + index
 
         if (capturingConversation && prefix.length < prefixLimit) prefix.push(byte)
+        // String branches continue below, so a full fingerprint must settle before those exits.
+        if (capturingConversation && prefix.length >= prefixLimit) {
+          capturingConversation = false
+          conversationDone = true
+        }
+        if (finished()) break
 
         if (inString) {
           if (escaped) {

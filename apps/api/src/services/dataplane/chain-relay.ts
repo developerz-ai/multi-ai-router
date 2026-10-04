@@ -34,6 +34,8 @@ export interface AttemptClock {
 export interface SuccessClock extends AttemptClock {
   readonly releaseProbe?: () => void
   readonly rateLimited?: boolean
+  readonly isRateLimited?: () => boolean
+  readonly onSettled?: () => void
   readonly recovery?: RecoveryAttempt
   readonly upstreamStarted: number
   readonly observation?: HealthObservation
@@ -80,6 +82,7 @@ export function relaySuccess(
   const settle = (streamed: boolean, error?: unknown, eof = false): void => {
     if (settled) return
     settled = true
+    at.onSettled?.()
     if (error !== undefined) terminal.error(error)
     const facts = eof ? observation.finish() : observation.snapshot()
     const verdict = terminal.finish(facts)
@@ -87,7 +90,8 @@ export function relaySuccess(
     const counts = facts.counts
     ctx.runtime.health.endAttempt(servable.account.id, counts.tokensOut)
     try {
-      at.recovery?.finish(at.rateLimited ? "failed" : verdict.recovery)
+      const rateLimited = at.isRateLimited?.() ?? at.rateLimited ?? false
+      at.recovery?.finish(rateLimited ? "failed" : verdict.recovery)
       if (verdict.failure !== null) {
         ctx.runtime.health.recordFailure(
           servable.account.id,
@@ -99,11 +103,11 @@ export function relaySuccess(
           },
           at.observation,
         )
-      } else if (verdict.outcome === "success" && !at.rateLimited) {
+      } else if (verdict.outcome === "success" && !rateLimited) {
         ctx.runtime.health.recordSuccess(servable.account.id, at.observation)
       }
       const upstreamMs = at.upstreamMs + (ctx.runtime.clock.elapsed() - at.upstreamStarted)
-      ctx.runtime.record(
+      ;(ctx.runtime.recordTerminal ?? ctx.runtime.record)(
         attemptRecord({
           ...ctx.runtime.attribution(attempt, servable),
           tokens: counts,

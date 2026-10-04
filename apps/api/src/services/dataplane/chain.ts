@@ -12,7 +12,7 @@ import {
 import type { TranslationContext } from "../translate"
 import type { AttemptOutcome } from "./attempt"
 import { attemptLifetime } from "./attempt-lifetime"
-import { logAttemptFailure } from "./attempt-log"
+import { attemptQuota } from "./attempt-quota"
 import type { ByteSpan } from "./body/scanner"
 import { bodyFor } from "./chain-body"
 import {
@@ -20,21 +20,20 @@ import {
   cancelledBeforeRelay,
   isCancelledOutcome,
 } from "./chain-cancellation"
-import { answeredFailure, type ChainFailure, foldChainFailure, routerFailure } from "./chain-error"
+import { type ChainFailure, foldChainFailure, routerFailure } from "./chain-error"
+import { finishFailedAttempt } from "./chain-failed-attempt"
 import { finishChain } from "./chain-finish"
 import { invalidPreparation } from "./chain-preparation"
 import { recordChainFailure } from "./chain-recovery"
 import { createChainRefusals } from "./chain-refusals"
-import { recordAttemptFailure, relaySuccess } from "./chain-relay"
+import { finishSuccessfulAttempt } from "./chain-success"
 import { dispatch } from "./dispatch"
-import { DEFAULT_LOG_REASON_MAX_CHARS } from "./dispatcher-config"
 import { accountHealthFacts } from "./health-observation"
 import type { ServableCandidate } from "./plan"
 import { admitHalfOpenProbe } from "./probe"
 import { attemptRecord } from "./records"
 import { ClientCancelledError } from "./relay-cancellation"
 import type { DispatchRuntime } from "./runtime"
-import { withSessionRestart } from "./session-restart"
 import type { TranslatedRequestBody } from "./translate-body"
 
 /**
@@ -109,9 +108,7 @@ export async function runChain(ctx: ChainContext): Promise<Response> {
     )
     const attemptStartedAt = runtime.clock.now()
 
-    // Before the attempt is counted, because a refused probe is not an attempt: another request is
-    // already testing this recovering account, so this one drops the candidate and walks on rather
-    // than joining a stampede onto it.
+    // A refused probe is not an attempt; another request already owns recovery.
     const probe = admitHalfOpenProbe(runtime.health, decision.candidate, attemptStartedAt)
     if (!probe.admitted) {
       refusals.record()
@@ -166,6 +163,10 @@ export async function runChain(ctx: ChainContext): Promise<Response> {
       probe.release,
     )
 
+    const quota =
+      servable.kind === "sdk"
+        ? attemptQuota(runtime, accountId, observation, lifetime.started, ctx.request.signal)
+        : undefined
     let outcome: AttemptOutcome
     try {
       outcome = await dispatch(
@@ -175,8 +176,10 @@ export async function runChain(ctx: ChainContext): Promise<Response> {
         decision.action === "retry-in-place",
         recovery?.beforeUpstreamStart,
         lifetime.onStarted,
+        quota,
       )
     } catch (error) {
+      quota?.close()
       lifetime.assertRunning()
       // Preparation has no upstream verdict and cannot outrank an earlier provider response.
       lifetime.end()
@@ -196,6 +199,7 @@ export async function runChain(ctx: ChainContext): Promise<Response> {
       outcome.kind === "admission-refused" ||
       (outcome.kind === "failure" && !lifetime.started())
     ) {
+      quota?.close()
       lifetime.end()
       if (recovery?.started()) recovery.finish("uncertain")
       probe.release()
@@ -213,6 +217,7 @@ export async function runChain(ctx: ChainContext): Promise<Response> {
     }
 
     if (ctx.request.signal.aborted && (outcome.kind === "success" || isCancelledOutcome(outcome))) {
+      quota?.close()
       recovery?.finish("uncertain")
       lifetime.end()
       probe.release()
@@ -223,71 +228,56 @@ export async function runChain(ctx: ChainContext): Promise<Response> {
       })
     }
 
-    // Applied after the verdict, never before: `recordSuccess`'s unconditional reset to `active`
-    // would otherwise erase a `rejected` reading's cooldown on an otherwise-200 response.
     if (outcome.kind === "success") {
-      runtime.health.applyRateLimit(accountId, outcome.rateLimit, runtime.clock.now(), observation)
       progress = markStreamed(progress)
-      // The span stays open: a stream settles long after this returns, and every byte of the drain
-      // is still time the router spent waiting. `chain-relay.ts` closes it at the last byte.
-      const relayed = relaySuccess(ctx, servable, decision.attempt, outcome.response, {
-        ...at,
-        upstreamStarted,
-        observation,
-        releaseProbe: probe.release,
-        rateLimited: outcome.rateLimit?.limited ?? false,
-        ...(recovery === undefined ? {} : { recovery }),
-      })
-      // A new account means a fresh SDK session; state that restart explicitly.
-      if (decision.action !== "attempt" || !decision.sessionRestart) return relayed
-      ctx.log?.warn("bound session restarted on another account", {
-        accountId,
-        attempt: decision.attempt,
-      })
-      return withSessionRestart(relayed, "failover")
+      // Relay settlement closes the upstream span after the last byte.
+      return finishSuccessfulAttempt(
+        ctx,
+        servable,
+        decision.attempt,
+        outcome,
+        {
+          ...at,
+          upstreamStarted,
+          observation,
+          releaseProbe: probe.release,
+          ...(quota === undefined
+            ? { rateLimited: outcome.rateLimit?.limited ?? false }
+            : {
+                isRateLimited: () => quota.limited() || (outcome.rateLimit?.limited ?? false),
+                onSettled: quota.close,
+              }),
+          ...(recovery === undefined ? {} : { recovery }),
+        },
+        decision.action === "attempt" && decision.sessionRestart,
+      )
     }
 
-    recordChainFailure(ctx, servable, outcome, runtime.clock.now(), observation, recovery)
+    quota?.close()
+    recordChainFailure(
+      ctx,
+      servable,
+      outcome,
+      runtime.clock.now(),
+      observation,
+      recovery,
+      servable.kind !== "sdk",
+    )
     if (recovery?.designated)
       ordered = ordered.filter((candidate) => candidate.account.id !== accountId)
     lifetime.end()
-    // After the marks, never before: the failure has already cooled the account down to its next
-    // backoff step, so releasing here hands the gate to nobody rather than to the next stampede.
+    // Release only after cooling the account, preventing another immediate probe.
     probe.release()
     upstreamMs += runtime.clock.elapsed() - upstreamStarted
 
-    recordAttemptFailure(ctx, servable, decision.attempt, outcome.failure, outcome.upstream, {
-      ...at,
-      upstreamMs,
-    })
-    logAttemptFailure(
-      ctx.log,
-      accountId,
+    lastFailure = outcome.failure
+    held = finishFailedAttempt(
+      ctx,
+      servable,
       decision.attempt,
       outcome,
-      ctx.reasonMaxChars ?? DEFAULT_LOG_REASON_MAX_CHARS,
-    )
-
-    lastFailure = outcome.failure
-    held = foldChainFailure(
+      { ...at, upstreamMs },
       held,
-      // A translated attempt's error body is the *account's* dialect. The client is owed its own.
-      // The captured rate-limit reading rides along: on the SDK path the reset instant arrived on
-      // the query stream rather than the throw, and a 429 rendered without it has no Retry-After.
-      answeredFailure(
-        outcome.classification,
-        outcome.upstream,
-        servable.translation === null ? null : runtime.ingressDialect,
-        {
-          rateLimit: outcome.rateLimit,
-          now: runtime.clock.now(),
-          ...(runtime.unknownResetRetryAfterSeconds === undefined
-            ? {}
-            : { unknownResetRetryAfterSeconds: runtime.unknownResetRetryAfterSeconds }),
-          clientMessage: outcome.failure.message,
-          failureKind: outcome.failure.kind,
-        },
-      ),
     )
   }
 

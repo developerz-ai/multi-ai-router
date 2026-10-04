@@ -1,5 +1,6 @@
 import type { UpstreamStartGuard } from "../../providers/upstream-admission"
 import { type AttemptOutcome, runAttempt } from "./attempt"
+import type { attemptQuota } from "./attempt-quota"
 import type { ChainContext } from "./chain"
 import type { ServableCandidate } from "./plan"
 import { runSdkAttempt } from "./sdk-attempt"
@@ -16,6 +17,7 @@ export function dispatch(
   inPlaceReplay: boolean,
   beforeUpstreamStart?: UpstreamStartGuard,
   onUpstreamStarted?: () => void,
+  rateLimitObserver?: ReturnType<typeof attemptQuota>,
 ): Promise<AttemptOutcome> {
   const { runtime } = ctx
   if (servable.kind === "sdk") {
@@ -24,6 +26,7 @@ export function dispatch(
       body,
       beforeUpstreamStart,
       onUpstreamStarted,
+      ...(rateLimitObserver === undefined ? {} : { rateLimitObserver }),
       invoke: runtime.invokeSdk,
       session: runtime.session,
       quota: runtime.quota,

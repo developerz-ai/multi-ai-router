@@ -1,0 +1,107 @@
+{
+  "state": "local_microprofile_not_final_router_benchmark",
+  "scope": "Offline 280000-character prompt scan/decode/parse/translation/stringify/encode pipeline. Before imports then-current production scanner; after imports isolated candidate scanner. Current production source now contains the same early-prefix settlement behavior; this artifact is not a final production benchmark.",
+  "iterations": {
+    "total": 1600,
+    "discarded_warmup": 200,
+    "measured_per_stage": 1400
+  },
+  "sources": {
+    "before_stages": "/tmp/w5b-hotpath-stages.json",
+    "after_stages": "/tmp/w5b-hotpath-after-stages.json",
+    "before_cpu_profile": "/tmp/w5b-hotpath-profile.md",
+    "after_cpu_profile": "/tmp/w5b-hotpath-after-profile.md"
+  },
+  "before": {
+    "sink": 448220800,
+    "stages": {
+      "scan": {
+        "mean": 1.4235814850000004,
+        "p50": 1.2414349999999104,
+        "p99": 3.4783140000000685,
+        "max": 8.856127000000015
+      },
+      "decode": {
+        "mean": 0.12299104571428554,
+        "p50": 0.09126300000025367,
+        "p99": 0.7575709999998708,
+        "max": 2.321290999999974
+      },
+      "parse": {
+        "mean": 0.175220291428574,
+        "p50": 0.1084459999997307,
+        "p99": 1.873075999999969,
+        "max": 4.52018199999975
+      },
+      "translate": {
+        "mean": 0.06104876571428796,
+        "p50": 0.04675400000007812,
+        "p99": 0.1969530000000077,
+        "max": 1.8764370000001236
+      },
+      "stringify": {
+        "mean": 0.1108239371428551,
+        "p50": 0.07306900000003225,
+        "p99": 0.5737549999998919,
+        "max": 3.242492000000084
+      },
+      "encode": {
+        "mean": 0.13976868000000228,
+        "p50": 0.08627500000000055,
+        "p99": 1.598502999999937,
+        "max": 4.27714799999967
+      }
+    }
+  },
+  "after": {
+    "sink": 448220800,
+    "stages": {
+      "scan": {
+        "mean": 0.038071779285714015,
+        "p50": 0.027567000000033204,
+        "p99": 0.11203899999998157,
+        "max": 1.3421849999999722
+      },
+      "decode": {
+        "mean": 0.1163184407142849,
+        "p50": 0.07602799999995113,
+        "p99": 1.1473019999998542,
+        "max": 4.135802000000012
+      },
+      "parse": {
+        "mean": 0.13345156500000108,
+        "p50": 0.09393999999997504,
+        "p99": 1.1707819999999742,
+        "max": 2.089271999999937
+      },
+      "translate": {
+        "mean": 0.02980964214285531,
+        "p50": 0.02217699999994238,
+        "p99": 0.10378700000001118,
+        "max": 1.40462500000001
+      },
+      "stringify": {
+        "mean": 0.10380510928571612,
+        "p50": 0.06245400000011614,
+        "p99": 1.0533209999999826,
+        "max": 5.532186000000024
+      },
+      "encode": {
+        "mean": 0.11969681357142845,
+        "p50": 0.07329699999991135,
+        "p99": 1.1234649999999533,
+        "max": 3.1894609999999375
+      }
+    }
+  },
+  "cpu_sampled_scan_self_percent": {
+    "before": 63.6,
+    "after": 3.2
+  },
+  "finding": "The prior string-handling branches continued before detecting that the conversation fingerprint prefix was full, so a long prompt string continued scanning after required routing facts were complete. The fixed loop settles the prefix before those branches and exits once routing facts are complete.",
+  "limits": [
+    "Stage percentiles and CPU sample percentages are separate observations, not additive causal request-time components.",
+    "This profile identifies bounded-prefix work; it does not close L16 binding latency or prove final router overhead budget compliance.",
+    "Prior real binding measurements of 9 ms free-miss and 33 ms held-miss overhead remain historical evidence. The post-scanner actual PG matrix still reached 15 ms free and 48 ms held; see wave5b-binding-analysis.json. L16 remains open."
+  ]
+}

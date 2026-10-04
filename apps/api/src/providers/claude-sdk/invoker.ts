@@ -118,9 +118,7 @@ export function createSdkInvoker(deps: SdkInvokerDeps): SdkInvoker {
   const runQuery = deps.runQuery ?? ((params) => query(params))
   const override = deps.cliPathOverride ?? null
   const resolveCli = deps.resolveCli ?? (() => resolveClaudeCli(createCliProbe({ override })))
-  // Resolution is a filesystem walk and its answer cannot change while the process runs — a binary
-  // does not move under a live container. A *failed* resolution is not cached, so an operator who
-  // fixes a mount recovers without a restart.
+  // Cache only successful CLI resolution; a repaired mount can recover a previous failure.
   let resolved: UsableCli | null = null
 
   const usableCli = (): UsableCli => {
@@ -134,6 +132,8 @@ export function createSdkInvoker(deps: SdkInvokerDeps): SdkInvoker {
   const freshness = deps.freshness ?? ALWAYS_FRESH
 
   return async (invocation: SdkInvocation): Promise<Response> => {
+    const gaugeObservation =
+      invocation.usageGaugeObservation ?? deps.usageGauge?.capture(invocation.accountId)
     const request = readSdkRequest(invocation.body)
     const cli = usableCli()
     const prompt = buildSdkPrompt({ messages: request.messages, plan: invocation.session })
@@ -185,7 +185,8 @@ export function createSdkInvoker(deps: SdkInvokerDeps): SdkInvoker {
         // Account's own config directory, with a credential this router never sees.
         const turn = observeTurn(messages, {
           onFirstContent: () =>
-            deps.usageGauge?.observe(invocation.accountId, messages) ?? Promise.resolve(),
+            deps.usageGauge?.observe(invocation.accountId, messages, gaugeObservation) ??
+            Promise.resolve(),
           onAnswerEnd: report.fire,
           onSettled: held.release,
           onEnd: () => {

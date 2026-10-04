@@ -61,7 +61,9 @@ import {
   stampLastUsed,
 } from "../services/dataplane"
 import { createActiveRequestRegistry } from "../services/dataplane/active-requests"
+import { gaugeObservationCapture } from "../services/dataplane/gauge-observation"
 import { accountHealthFacts } from "../services/dataplane/health-observation"
+import { quotaCatalogReconciler } from "../services/dataplane/quota-catalog"
 import {
   type CatalogRefreshDeps,
   createModelCatalogStore,
@@ -193,6 +195,7 @@ export function createRuntime(deps: RuntimeDeps): Runtime {
   // Built unconditionally: whether a deployment serves subscriptions is a question about its
   // accounts, not about its wiring, and an operator who connects one must not need a restart.
   const sdkQuota = createSdkQuotaStore()
+  const reconcileSdkQuota = quotaCatalogReconciler(sdkQuota)
   // The durable half of quota state. A reading is observed by whichever replica served the request,
   // so it is written by that replica, off its request path — never by a scheduled task, whose
   // advisory lock would persist one replica's readings and silently drop everyone else's.
@@ -226,7 +229,8 @@ export function createRuntime(deps: RuntimeDeps): Runtime {
     probeHoldMs: env.failover.halfOpenHoldMs,
     // Both transports fold a reading in here and nowhere else, which is what makes one hook enough
     // to make every observed window durable.
-    onQuotaWindows: (accountId, windows) => quotaWriter.record(accountId, windows),
+    onQuotaWindows: (accountId, windows, observation) =>
+      quotaWriter.record(accountId, windows, observation),
     // Every standing block the breaker forms is announced here and nowhere else, which is what
     // makes one hook enough to make every one of them durable. Which of them may be *stored* is
     // the writer's policy, not this file's.
@@ -249,6 +253,7 @@ export function createRuntime(deps: RuntimeDeps): Runtime {
   const catalog = createRoutingCatalog({
     load: () => loadCatalog(catalogSnapshots),
     onInstalled: (loaded) => {
+      reconcileSdkQuota(loaded)
       recoveryComponents?.reconcile(loaded)
       const nextIds = new Set(loaded.map((account) => account.id))
       for (const id of new Set([...catalogAccountIds, ...health.entries().keys()])) {
@@ -353,6 +358,7 @@ export function createRuntime(deps: RuntimeDeps): Runtime {
 
   // `usage` is a getter because the recorder below reports *into* this: see `observability/`.
   const metrics = createRuntimeMetrics({
+    metricInventory: env.metricInventory,
     catalog,
     health,
     usage: () => usage,
@@ -409,10 +415,7 @@ export function createRuntime(deps: RuntimeDeps): Runtime {
     minIntervalMs: env.claudeSdkUsageGauge.minIntervalSeconds * 1_000,
     logger,
     now,
-    onReading: (accountId, reading, at) => {
-      const snapshot = sdkQuota.ingestGauge(accountId, reading, at)
-      health.applyRateLimit(accountId, snapshot.signal, at)
-    },
+    capture: gaugeObservationCapture(catalog, health, sdkQuota),
   })
 
   // --- background work ------------------------------------------------------
@@ -533,6 +536,7 @@ export function createRuntime(deps: RuntimeDeps): Runtime {
     prices: prices.lookup,
     logger,
     onRequest: (sample) => metrics.observeRequest(sample),
+    onBindingWait: (milliseconds) => metrics.observeBindingWait(milliseconds),
     // One tested mapping from parsed env to dispatcher behavior — see `dispatch-options.ts`.
     options: dispatchOptionsFromEnv(env),
   })

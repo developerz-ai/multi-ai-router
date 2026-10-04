@@ -51,6 +51,9 @@ export function requestLifetime(
   return {
     input: { ...input, request, ...(activeRequest === undefined ? {} : { activeRequest }) },
     record,
+    recordTerminal(event: UsageRecord) {
+      if (!abandoned) accounting.recordTerminal(event)
+    },
     assertAvailable() {
       if (unavailable) throw new RequestAdmissionUnavailableError()
       if (abandoned) throw new RouterShutdownError()

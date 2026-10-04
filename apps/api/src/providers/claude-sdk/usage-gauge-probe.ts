@@ -5,7 +5,7 @@ import type { CredentialFreshness } from "./credential-freshness"
 import { IdleQueryColdCredentialError, type IdleQueryFn, openIdleQuery } from "./idle-query"
 import type { OwnerLaunchFactory } from "./owned-query"
 import { type CliResolution, resolveClaudeCli } from "./resolve-cli"
-import type { SdkUsageGauge } from "./usage-gauge"
+import type { SdkUsageGauge, SdkUsageGaugeObservation } from "./usage-gauge"
 
 /**
  * The usage gauge, asked of an Account nothing is routing to.
@@ -54,6 +54,7 @@ export interface SdkUsageGaugeProbe {
    * reading not taken, and the sweep says so per account.
    */
   read(input: {
+    readonly usageGaugeObservation?: SdkUsageGaugeObservation
     readonly accountId: string
     readonly configDir: string
     readonly beforeBackgroundUpstreamStart?: AsyncBackgroundStartGuard
@@ -66,7 +67,13 @@ export function createSdkUsageGaugeProbe(options: SdkUsageGaugeProbeOptions): Sd
     (() => resolveClaudeCli(createCliProbe({ override: options.cliPathOverride })))
 
   return {
-    read: async ({ accountId, configDir, beforeBackgroundUpstreamStart }) => {
+    read: async ({
+      accountId,
+      configDir,
+      beforeBackgroundUpstreamStart,
+      usageGaugeObservation,
+    }) => {
+      const observation = usageGaugeObservation ?? options.gauge.capture(accountId)
       const resolution = resolveCli()
       if (!resolution.ok) return "no_cli"
 
@@ -89,7 +96,7 @@ export function createSdkUsageGaugeProbe(options: SdkUsageGaugeProbeOptions): Sd
       }
       try {
         // The gauge's own timeout and coalescing apply; `observe` never rejects.
-        await options.gauge.observe(accountId, handle.query)
+        await options.gauge.observe(accountId, handle.query, observation)
       } finally {
         await handle.close()
       }

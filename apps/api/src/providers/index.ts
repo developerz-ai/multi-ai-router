@@ -188,6 +188,7 @@ export { holdPrompt, observeTurn } from "./claude-sdk/turn-lifecycle"
 export type {
   SdkUsageGauge,
   SdkUsageGaugeDeps,
+  SdkUsageGaugeObservation,
   SdkUsageGaugeSource,
 } from "./claude-sdk/usage-gauge"
 export { createSdkUsageGauge } from "./claude-sdk/usage-gauge"
