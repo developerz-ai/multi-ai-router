@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.19.0] — 2026-10-04
+
+One key can now span Claude subscriptions, a ChatGPT/Codex subscription and Chinese-model accounts, and the model name picks the family. Reasoning settings reach every path. (#160)
+
+### Upgrade notes
+
+- **No migrations, no new settings.**
+- **Claude and ChatGPT/Codex subscription accounts no longer accept every model name** when they declare no supported models. They accept their own family: `claude-*` plus the CLI aliases (`opus`, `sonnet`, `haiku`, `fable`, `best`, `default`, `opusplan`, with `[1m]` tags) for Claude, and `gpt-*`, `codex-*`, `o<n>` for ChatGPT/Codex. An Account's explicit supported-model list still wins.
+- **ChatGPT/Codex accounts connect only with a code.** The paste-back flow is refused with `device_only` for providers that declare device sign-in.
+
+### Fixed
+
+- **Mixed keys sent models to the wrong family.** `k3` and `MiniMax-M3` reached a Claude subscription and `claude-opus-5-5` reached a ChatGPT account. Each failure struck the account's breaker and pinned the session to it, so later requests got `429` "settling a recovery probe".
+- **A model refusal now fails over.** "Issue with the selected model" (Claude) and "not supported when using Codex" are a retryable `model-unsupported` failure before any bytes are sent, with no breaker strike.
+- **Native names before aliases.** When some accounts serve a name natively and others only through an alias rename (`claude-opus-5 → glm-5.2`), the native accounts are tried first.
+- **ChatGPT/Codex model discovery and Test now returned `400`.** Discovery now sends `client_version`; the account test and idle probe send a Codex-valid streamed request. Both failures now log the provider's (scrubbed) message.
+- **OpenRouter "Key limit exceeded (total limit)" is credits-exhausted**, not a rejected credential.
+- The device sign-in dialog keeps checking while its tab is in the background, and a completed sign-in logs `device login completed`.
+
+### Added
+
+- **Thinking and effort on Claude subscriptions.** `thinking` and `output_config.effort` are passed to the Agent SDK when the client sends them. The tool lockdown is unchanged.
+- **Effort across dialects.** `reasoning_effort` / `reasoning.effort` ⇄ `output_config.effort`; encrypted reasoning items from Responses clients are dropped and reported instead of refused; Responses reasoning summaries come back as Anthropic thinking blocks.
+
 ## [2.18.0] — 2026-10-04
 
 Sign in to ChatGPT/Codex with a code, the way `codex login --device-auth` does on a remote server. (#158)
