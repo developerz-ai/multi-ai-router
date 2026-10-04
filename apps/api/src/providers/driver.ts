@@ -8,6 +8,10 @@ import {
   type OpenAiChatCeiling,
   type ProviderId,
 } from "@multi-ai-router/core"
+import {
+  DEFAULT_RESPONSES_EGRESS,
+  type ResponsesEgressRules,
+} from "../services/translate/shared/responses-egress"
 import { type AnthropicAuthForm, anthropicAuthHeaders, bearerAuthHeaders } from "./auth-headers"
 import { resolveBaseUrl } from "./base-url"
 import { type ClassificationRule, classifyUpstreamFailure } from "./failure/classify"
@@ -55,6 +59,11 @@ export interface ProviderSurface {
    * silently in one direction and `400`s in the other (`OpenAiChatCeiling`).
    */
   readonly chatCeiling?: OpenAiChatCeiling
+  /**
+   * openai-responses surfaces only: what this endpoint demands of a body the router *writes*
+   * (cross-dialect). Defaults to an ordinary Responses upstream. See `ResponsesEgressRules`.
+   */
+  readonly responsesEgress?: ResponsesEgressRules
 }
 
 export interface HttpDriverConfig {
@@ -129,6 +138,8 @@ export function createHttpDriver(config: HttpDriverConfig): ProviderDriver {
     resolveBaseUrl: (account) => resolveBaseUrl(account, surfaceFor(account).baseUrl),
     resolveDialect: (account) => surfaceFor(account).dialect,
     resolveChatCeiling: (account) => surfaceFor(account).chatCeiling ?? DEFAULT_OPENAI_CHAT_CEILING,
+    resolveResponsesEgress: (account) =>
+      surfaceFor(account).responsesEgress ?? DEFAULT_RESPONSES_EGRESS,
     buildHeaders: (account, credential) => {
       requireCredential(config, account, credential)
       return surfaceHeaders(surfaceFor(account), credential)

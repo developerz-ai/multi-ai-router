@@ -49,6 +49,21 @@ export const DEFAULT_STREAM_PACING: StreamPacing = { idleMs: 90_000, heartbeatMs
 export interface Ticker {
   /** Runs `fn` after `delayMs`. @returns a cancel function; calling it twice is harmless. */
   after(delayMs: number, fn: () => void): () => void
+  /**
+   * Monotonic milliseconds. Optional: without it a deadline is never judged late, and the guard
+   * behaves exactly as an on-time timer would.
+   */
+  now?(): number
+  /** Lets pending socket/pipe reads run. Optional; defaults to two `setImmediate` turns. */
+  yieldToIo?(): Promise<void>
+}
+
+/**
+ * Two immediates, not one: under Bun a single `setImmediate` can resume before the I/O poll, and
+ * the poll is the thing being waited for (Meridian's independent-process socket probe, #1222).
+ */
+function yieldTwoImmediates(): Promise<void> {
+  return new Promise((resolve) => setImmediate(() => setImmediate(resolve)))
 }
 
 /** Timers that never hold the process open — a pending ping is not a reason to stay alive. */
@@ -58,7 +73,18 @@ export const systemTicker: Ticker = {
     handle.unref?.()
     return () => clearTimeout(handle)
   },
+  now: () => performance.now(),
+  yieldToIo: yieldTwoImmediates,
 }
+
+/**
+ * How far past its deadline the idle timer may fire before the lateness is read as a blocked event
+ * loop rather than jitter. A blocked loop runs expired timers *before* the I/O poll that would
+ * deliver bytes the upstream sent meanwhile, so without this a live stream is failed as silent.
+ * Crossing it buys one I/O turn — never a longer window, and never for a liveness-only message
+ * (Meridian #1222, `IDLE_DEADLINE_LATE_MS`).
+ */
+export const IDLE_DEADLINE_LATE_MS = 2_000
 
 export interface IdleGuardInput {
   readonly pacing: StreamPacing
@@ -70,13 +96,20 @@ export interface IdleGuardInput {
 
 export interface IdleGuard {
   /**
-   * Races `pending` against the upstream idle deadline.
+   * Races `pending` against the upstream idle window that is currently open.
    *
-   * @throws UpstreamTimeoutError — a `504` — when the subprocess says nothing for `idleMs`. The
-   * pending promise is *not* cancelled here: terminating the subprocess is the abort signal's job,
-   * and this guard only decides that waiting longer is not honest.
+   * The window is opened by the first race after {@link IdleGuard.progress} and stays open across
+   * races until the next one: a read that returns only transport liveness — a wire `ping`, an SDK
+   * `keep_alive` — does not buy another `idleMs`. That is the stall it would otherwise hide: a model
+   * that has stopped producing anything while its connection keeps pinging (Meridian #1177).
+   *
+   * @throws UpstreamTimeoutError — a `504` — when the window closes with nothing from the model.
+   * The pending promise is *not* cancelled here: terminating the subprocess is the abort signal's
+   * job, and this guard only decides that waiting longer is not honest.
    */
   race<T>(pending: Promise<T>): Promise<T>
+  /** The model produced something real. The next race opens a fresh window. */
+  progress(): void
   /** Client bytes went out. Restarts the keep-alive clock. */
   wrote(): void
   /** Stops both clocks. Idempotent, and safe to call from a `finally`. */
@@ -86,12 +119,33 @@ export interface IdleGuard {
 const IDLE_MESSAGE =
   "the Claude Agent SDK produced nothing for the upstream idle window: the subprocess stalled"
 
+/** One open idle window. `expired` resolves when its timer runs; `lateMs` says how late it ran. */
+interface IdleWindow {
+  readonly expired: Promise<void>
+  readonly cancel: () => void
+  lateMs: number
+  /** The one I/O turn a late deadline buys is spent once per window, not once per read. */
+  graceSpent: boolean
+}
+
+const IDLE: unique symbol = Symbol("idle")
+
+type Outcome<T> =
+  | { readonly ok: true; readonly value: T }
+  | { readonly ok: false; readonly error: unknown }
+
+function unwrap<T>(outcome: Outcome<T>): T {
+  if (outcome.ok) return outcome.value
+  throw outcome.error
+}
+
 export function createIdleGuard(input: IdleGuardInput): IdleGuard {
   const ticker = input.ticker ?? systemTicker
   const { idleMs, heartbeatMs } = input.pacing
 
   let closed = false
   let cancelBeat: (() => void) | null = null
+  let window: IdleWindow | null = null
 
   const beat = (): void => {
     if (closed) return
@@ -110,33 +164,59 @@ export function createIdleGuard(input: IdleGuardInput): IdleGuard {
       heartbeatMs > 0 && input.onHeartbeat !== undefined ? ticker.after(heartbeatMs, beat) : null
   }
 
+  const openWindow = (): IdleWindow => {
+    const dueAt = ticker.now === undefined ? null : ticker.now() + idleMs
+    let fire = (): void => {}
+    const expired = new Promise<void>((resolve) => {
+      fire = resolve
+    })
+    const opened: IdleWindow = { expired, cancel: () => {}, lateMs: 0, graceSpent: false }
+    const cancel = ticker.after(idleMs, () => {
+      if (dueAt !== null && ticker.now !== undefined) opened.lateMs = ticker.now() - dueAt
+      fire()
+    })
+    return Object.assign(opened, { cancel })
+  }
+
+  const closeWindow = (): void => {
+    window?.cancel()
+    window = null
+  }
+
   armBeat()
 
   return {
-    race<T>(pending: Promise<T>): Promise<T> {
+    async race<T>(pending: Promise<T>): Promise<T> {
       if (closed || idleMs <= 0) return pending
-      return new Promise<T>((resolve, reject) => {
-        let settled = false
-        const cancelIdle = ticker.after(idleMs, () => {
-          if (settled) return
-          settled = true
-          reject(new UpstreamTimeoutError(IDLE_MESSAGE))
-        })
-        const done = (): boolean => {
-          if (settled) return true
-          settled = true
-          cancelIdle()
-          return false
-        }
-        pending.then(
-          (value) => {
-            if (!done()) resolve(value)
-          },
-          (error: unknown) => {
-            if (!done()) reject(error)
-          },
-        )
-      })
+      window ??= openWindow()
+      const current = window
+
+      let outcome: Outcome<T> | null = null
+      const settled = pending.then(
+        (value): Outcome<T> => {
+          outcome = { ok: true, value }
+          return outcome
+        },
+        (error: unknown): Outcome<T> => {
+          outcome = { ok: false, error }
+          return outcome
+        },
+      )
+      const first = await Promise.race([settled, current.expired.then((): typeof IDLE => IDLE)])
+      if (first !== IDLE) return unwrap(first)
+
+      if (current.lateMs > IDLE_DEADLINE_LATE_MS && !current.graceSpent) {
+        current.graceSpent = true
+        await (ticker.yieldToIo ?? yieldTwoImmediates)()
+        // A narrowing the closure assignment above hides from the compiler.
+        const late = outcome as Outcome<T> | null
+        if (late !== null) return unwrap(late)
+      }
+      throw new UpstreamTimeoutError(IDLE_MESSAGE)
+    },
+
+    progress() {
+      closeWindow()
     },
 
     wrote() {
@@ -148,6 +228,7 @@ export function createIdleGuard(input: IdleGuardInput): IdleGuard {
       closed = true
       cancelBeat?.()
       cancelBeat = null
+      closeWindow()
     },
   }
 }

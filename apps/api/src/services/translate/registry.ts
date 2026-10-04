@@ -20,6 +20,7 @@ import { openAiResponsesToOpenAiChatStream } from "./openai-responses-to-openai-
 import type { DropSink } from "./shared/drops"
 import type { TranslatedResponse } from "./shared/response"
 import { translatedResponseError } from "./shared/response-error"
+import { applyResponsesEgressRules, type ResponsesEgressRules } from "./shared/responses-egress"
 import type { StreamTranslator } from "./sse/emit"
 
 /**
@@ -72,6 +73,11 @@ export interface TranslationContext {
    * Absent means the default — see `OpenAiChatCeiling`.
    */
   readonly chatCeiling?: OpenAiChatCeiling | undefined
+  /**
+   * What the **selected Account's** Responses surface demands of a body written for it — per
+   * candidate for the same reason as `chatCeiling`. Absent means an ordinary Responses upstream.
+   */
+  readonly responsesEgress?: ResponsesEgressRules | undefined
   /**
    * Where a request translator reports a field it dropped by name (`shared/drops.ts`). Injected like
    * the clock: the translator stays pure and never logs, and the caller — which holds the request
@@ -148,7 +154,12 @@ const ANTHROPIC_TO_OPENAI_RESPONSES: TranslationPair = {
   ingress: "anthropic",
   egress: "openai-responses",
   // No `defaultMaxTokens` in this direction either: an anthropic request carries its own ceiling.
-  request: (body, context) => anthropicToOpenAiResponsesRequest(body, { onDrop: context.onDrop }),
+  request: (body, context) =>
+    applyResponsesEgressRules(
+      anthropicToOpenAiResponsesRequest(body, { onDrop: context.onDrop }),
+      context.responsesEgress,
+      context.onDrop,
+    ),
   response: (body, context) =>
     openAiResponsesToAnthropicResponse(body, {
       id: `${ANTHROPIC_ID_PREFIX}${context.fallbackId}`,
@@ -185,7 +196,12 @@ const OPENAI_RESPONSES_TO_ANTHROPIC: TranslationPair = {
 const OPENAI_CHAT_TO_OPENAI_RESPONSES: TranslationPair = {
   ingress: "openai-chat",
   egress: "openai-responses",
-  request: (body) => openAiChatToOpenAiResponsesRequest(body),
+  request: (body, context) =>
+    applyResponsesEgressRules(
+      openAiChatToOpenAiResponsesRequest(body),
+      context.responsesEgress,
+      context.onDrop,
+    ),
   response: (body, context) =>
     openAiResponsesToOpenAiChatResponse(body, {
       created: context.created,

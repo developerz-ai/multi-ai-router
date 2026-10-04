@@ -25,7 +25,12 @@ import { z } from "zod"
 /** Anthropic's own cap on the fingerprint seed (§4). Also bounds what a first message can cost. */
 export const FIRST_USER_TEXT_LIMIT = 2000
 
-export type LineageRole = "user" | "assistant"
+/**
+ * `system` is hashed as itself, not folded into `user`: a mid-conversation instruction and a user
+ * message with the same text are different messages, and only a user message may seed the
+ * fingerprint — a stock reminder would otherwise key unrelated conversations together.
+ */
+export type LineageRole = "user" | "assistant" | "system"
 
 export interface LineageMessage {
   readonly role: LineageRole
@@ -76,7 +81,8 @@ export function readConversation(body: Uint8Array | null): ConversationView | nu
   let endsWithToolResult = false
 
   for (const message of result.data.messages) {
-    const role: LineageRole = message.role === "assistant" ? "assistant" : "user"
+    const role: LineageRole =
+      message.role === "assistant" || message.role === "system" ? message.role : "user"
     // The separator is a NUL escape, never a literal byte in source: no role or rendered
     // block can contain one, so no message can spell another message's normalized form.
     messages.push({ role, normalized: `${role}\u0000${normalizeContent(message.content)}` })
@@ -84,7 +90,8 @@ export function readConversation(body: Uint8Array | null): ConversationView | nu
     if (firstUserText === "" && role === "user") {
       firstUserText = leadingText(message.content).slice(0, FIRST_USER_TEXT_LIMIT)
     }
-    endsWithToolResult = lastBlockIsToolResult(message.content)
+    // A trailing instruction does not end a tool loop: the turn is still the tool result's.
+    if (role !== "system") endsWithToolResult = lastBlockIsToolResult(message.content)
   }
 
   return { messages, firstUserText, endsWithToolResult }

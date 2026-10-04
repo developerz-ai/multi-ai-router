@@ -1,4 +1,5 @@
 import { z } from "zod"
+import { isRecord, renderBlock } from "./prompt-text"
 import type { SdkRequestMessage } from "./request"
 import type { SessionPlan } from "./session"
 
@@ -43,6 +44,7 @@ const FRAME_CLOSE = "</prior_conversation>"
 const ROLE_LABEL: Record<SdkRequestMessage["role"], string> = {
   user: "user",
   assistant: "assistant",
+  system: "system",
 }
 
 const IMAGE_MEDIA_TYPES = ["image/jpeg", "image/png", "image/gif", "image/webp"] as const
@@ -81,22 +83,39 @@ export interface PromptInput {
  * asked for.
  */
 export function buildSdkPrompt(input: PromptInput): readonly PromptBlock[] {
-  const send = messagesToSend(input)
+  const send = messagesToSend(input).filter((message) => message.cleared !== true)
   if (send.length === 0) return [text("")]
 
-  const last = send[send.length - 1]
-  const head = send.slice(0, -1)
+  // Mid-conversation `system` messages travel with the turn they sit beside rather than counting
+  // as turns of their own: a reminder after the live user message belongs to that live turn, and
+  // one before the opening message does not make a first turn into a replay.
+  const lastTurn = send.findLastIndex((message) => message.role !== "system")
+  const last = send[lastTurn]
 
-  // One user turn and nothing before it: the common case, and the only one that needs no framing.
-  if (last !== undefined && last.role === "user" && head.length === 0) return blocksOf(last)
+  // One user turn and nothing before it but instructions: the common case, sent unframed.
+  if (last?.role === "user" && send.slice(0, lastTurn).every(isSystem)) return live(send)
 
   // A turn whose last message is the assistant's is a prefill, which `query()` has no target for.
   // It goes inside the transcript rather than being dropped: the client wrote it, and a model that
-  // sees it framed will not mistake it for its own voice.
-  const framed = last !== undefined && last.role === "assistant" ? send : head
-  const trailing = framed === send ? [] : blocksOf(last)
+  // sees it framed will not mistake it for its own voice. With no turn at all, everything is framed.
+  if (last?.role !== "user") return [text(FRAME_OPEN), ...transcript(send), text(FRAME_CLOSE)]
 
-  return [text(FRAME_OPEN), ...transcript(framed), text(FRAME_CLOSE), ...trailing]
+  const framed = send.slice(0, lastTurn)
+  return [text(FRAME_OPEN), ...transcript(framed), text(FRAME_CLOSE), ...live(send.slice(lastTurn))]
+}
+
+function isSystem(message: SdkRequestMessage): boolean {
+  return message.role === "system"
+}
+
+/**
+ * The live turn: the user message with its instructions in client order. A lone user message is
+ * sent as itself; a `system` message is marked as one, so its text is not read as the user's words.
+ */
+function live(messages: readonly SdkRequestMessage[]): readonly PromptBlock[] {
+  return messages.flatMap((message) =>
+    message.role === "system" ? [text("[system]"), ...blocksOf(message)] : blocksOf(message),
+  )
 }
 
 /**
@@ -151,7 +170,7 @@ function blocksOf(message: SdkRequestMessage | undefined): readonly PromptBlock[
       out.push(image)
       continue
     }
-    const rendered = renderBlock(block)
+    const rendered = renderBlock(block, toolResultImages(block).length)
     if (rendered !== null) pending.push(rendered)
     // A `tool_result`'s nested images are hoisted to sibling top-level blocks, after the
     // transcript line that names them: the SDK's user message has no `tool_result` block to carry
@@ -198,91 +217,6 @@ function toolResultImages(block: Readonly<Record<string, unknown>>): readonly Pr
     if (image !== null) out.push(image)
   }
   return out
-}
-
-/**
- * A block with no user-message equivalent, rendered into the transcript.
- *
- * @returns null for a block that must not be replayed at all.
- */
-function renderBlock(block: Readonly<Record<string, unknown>>): string | null {
-  switch (block.type) {
-    case "text":
-      return typeof block.text === "string" ? block.text : null
-    // Unsigned once replayed, and a model shown its own reasoning as text learns to write more of
-    // it (§6). Absence is the honest rendering.
-    case "thinking":
-    case "redacted_thinking":
-      return null
-    case "tool_use":
-      return renderToolUse(block)
-    case "tool_result":
-      return renderToolResult(block)
-    // Only reached when `readImage` refused the source. Named rather than the generic label below,
-    // so the model can tell the user *why* the image it was told about is not there.
-    case "image":
-      return `[image omitted: unsupported source type ${sourceTypeOf(block.source)}]`
-    default:
-      // Deliberately named rather than dropped: a client using a block type this build has never
-      // seen is told the turn carried one, instead of silently losing it.
-      return `[${String(block.type)} block]`
-  }
-}
-
-function renderToolUse(block: Readonly<Record<string, unknown>>): string {
-  const name = typeof block.name === "string" ? block.name : "a tool"
-  return `[the assistant called ${name} with ${json(block.input)}]`
-}
-
-function renderToolResult(block: Readonly<Record<string, unknown>>): string {
-  const failed = block.is_error === true ? " (it failed)" : ""
-  const images = toolResultImages(block).length
-  return `[the client ran the requested tool${failed} and it returned: ${resultText(block.content, images)}]`
-}
-
-/**
- * A `tool_result`'s content is a string or blocks; its text goes into the transcript line, and its
- * images — hoisted to sibling blocks by `blocksOf` — are *named* here so an image-only result does
- * not read as a tool that returned nothing.
- */
-function resultText(content: unknown, images: number): string {
-  if (typeof content === "string") return content
-  if (!Array.isArray(content)) return json(content)
-
-  const parts: string[] = []
-  for (const block of content) {
-    if (typeof block !== "object" || block === null) continue
-    const value: unknown = Reflect.get(block, "text")
-    if (typeof value === "string") parts.push(value)
-  }
-
-  const note =
-    images === 0 ? null : `${images} image${images === 1 ? "" : "s"}, forwarded below this line`
-  if (parts.length === 0) return note ?? "no textual output"
-  return note === null ? parts.join("\n") : `${parts.join("\n")}\n(and ${note})`
-}
-
-/**
- * What the omission line names as the reason. The media type when the source stated one — a
- * `base64` source only ever fails on it — otherwise the source type itself, which is the failing
- * field for every other shape. Never the data.
- */
-function sourceTypeOf(source: unknown): string {
-  if (!isRecord(source)) return "unknown"
-  if (typeof source.media_type === "string") return source.media_type
-  return typeof source.type === "string" ? source.type : "unknown"
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value)
-}
-
-function json(value: unknown): string {
-  try {
-    return JSON.stringify(value) ?? "nothing"
-  } catch {
-    return "arguments this router could not render"
-  }
 }
 
 function text(value: string): PromptBlock {

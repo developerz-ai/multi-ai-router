@@ -48,9 +48,7 @@ interface Harness {
   readonly upstream: FakeFetch
   account(provider?: "openai-oauth" | "openrouter"): Promise<string>
 }
-function harness(
-  options: { stateMinutes?: number; callbackUrl?: string | null; upstream?: FakeFetch } = {},
-): Harness {
+function harness(options: { stateMinutes?: number; upstream?: FakeFetch } = {}): Harness {
   const store = createMemoryStore()
   const clock = { now: NOW }
   const upstream = options.upstream ?? fakeFetch()
@@ -66,7 +64,6 @@ function harness(
     now: () => clock.now,
     stateMinutes: options.stateMinutes ?? 10,
     refreshCatalogAfterMutation: async () => {},
-    callbackUrl: options.callbackUrl === undefined ? null : options.callbackUrl,
   })
   return {
     connect,
@@ -125,19 +122,27 @@ describe("starting an authorization", () => {
     if (!started.ok) throw new Error(started.failure.message)
     expect(started.value.expiresAt).toBe("2026-07-25T09:02:00.000Z")
   })
-  test("no PUBLIC_URL means paste capture, using the driver's own loopback redirect", async () => {
-    const h = harness({ callbackUrl: null })
+  test("paste capture, using the driver's own loopback redirect", async () => {
+    const h = harness()
     const started = await h.connect.begin(await h.account(), "connect")
     if (!started.ok) throw new Error(started.failure.message)
     expect(started.value.capture).toBe("paste")
     expect(started.value.redirectUri).toBe("http://localhost:1455/auth/callback")
   })
-  test("a configured PUBLIC_URL means redirect capture, using the callback address", async () => {
-    const h = harness({ callbackUrl: "https://router.example/admin/accounts/oauth/callback" })
+  // Production 2026-10-04: with PUBLIC_URL set the authorize URL named the router's callback, which
+  // the first-party ChatGPT client does not register — the issuer refuses it and no code exists to
+  // capture by either mode. The loopback is the only redirect such a client can be sent to.
+  test("the authorize URL names the client's registered loopback, never the router's callback", async () => {
+    const h = harness()
     const started = await h.connect.begin(await h.account(), "connect")
     if (!started.ok) throw new Error(started.failure.message)
-    expect(started.value.capture).toBe("redirect")
-    expect(started.value.redirectUri).toBe("https://router.example/admin/accounts/oauth/callback")
+    expect(started.value.capture).toBe("paste")
+    expect(started.value.redirectUri).toBe("http://localhost:1455/auth/callback")
+    const authorize = new URL(started.value.authorizeUrl)
+    expect(authorize.searchParams.get("redirect_uri")).toBe("http://localhost:1455/auth/callback")
+    expect(started.value.authorizeUrl).not.toContain(
+      encodeURIComponent("/admin/accounts/oauth/callback"),
+    )
   })
   test("refuses an account with no authorization-code flow", async () => {
     const h = harness()
@@ -273,6 +278,43 @@ describe("redeeming the code", () => {
     const state = new URL(started.value.authorizeUrl).searchParams.get("state") ?? ""
     const done = completed(await h.connect.redeem({ code: "code", state }))
     expect(done.mode).toBe("reconnect")
+  })
+})
+describe("pasting what the loopback left in the address bar", () => {
+  async function begun(h: Harness): Promise<{ id: string; state: string }> {
+    const id = await h.account()
+    const started = await h.connect.begin(id, "connect")
+    if (!started.ok) throw new Error(started.failure.message)
+    return { id, state: new URL(started.value.authorizeUrl).searchParams.get("state") ?? "" }
+  }
+
+  test("the whole localhost callback URL completes the exchange against the loopback redirect", async () => {
+    const h = harness()
+    const { id, state } = await begun(h)
+    const pasted = `http://localhost:1455/auth/callback?code=ac_the-code&scope=openid+profile+email+offline_access&state=${encodeURIComponent(state)}`
+    const done = completed(await h.connect.complete(id, pasted))
+    expect(done).toEqual({ accountId: id, mode: "connect", connected: true, capture: "paste" })
+    const sent = new URLSearchParams(h.upstream.bodies[0] ?? "")
+    expect(sent.get("code")).toBe("ac_the-code")
+    expect(sent.get("redirect_uri")).toBe("http://localhost:1455/auth/callback")
+    expect((await h.store.accounts.findById(id))?.authMaterial).not.toBeNull()
+  })
+
+  test("the code#state shorthand completes it too", async () => {
+    const h = harness()
+    const { id, state } = await begun(h)
+    expect(completed(await h.connect.complete(id, ` ac_short#${state}\n`)).capture).toBe("paste")
+  })
+
+  test("a paste whose state was superseded by a second start is rejected, not exchanged", async () => {
+    const h = harness()
+    const { id, state } = await begun(h)
+    await h.connect.begin(id, "connect")
+    const reason = failure(
+      await h.connect.complete(id, `http://localhost:1455/auth/callback?code=c&state=${state}`),
+    )
+    expect(reason.code).toBe("state_rejected")
+    expect(h.upstream.requests).toHaveLength(0)
   })
 })
 describe("cancelling a pending authorization", () => {

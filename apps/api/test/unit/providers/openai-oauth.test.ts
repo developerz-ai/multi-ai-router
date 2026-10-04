@@ -6,6 +6,7 @@ import {
   chatGptAccountId,
   httpDriver,
   OPENAI_AUTH_CLAIM,
+  OPENAI_CODEX_ORIGINATOR,
   OPENAI_OAUTH_AUTHORIZE_URL,
   OPENAI_OAUTH_CLIENT_ID,
   OPENAI_OAUTH_ISSUER,
@@ -71,6 +72,16 @@ describe("the authorization URL", () => {
     expect(params.get("code_challenge_method")).toBe("S256")
     expect(params.get("id_token_add_organizations")).toBe("true")
     expect(params.get("state")).toBe("state-123")
+  })
+  test("asks for the Codex consent page, as the Codex CLI itself does", () => {
+    const params = openAiOAuthAuthorizeUrl({
+      redirectUri: OPENAI_OAUTH_LOOPBACK_REDIRECT_URI,
+      state: "s",
+      codeChallenge: "c",
+    }).searchParams
+    expect(params.get("codex_cli_simplified_flow")).toBe("true")
+    expect(params.get("originator")).toBe(OPENAI_CODEX_ORIGINATOR)
+    expect(OPENAI_CODEX_ORIGINATOR).toBe("codex_cli_rs")
   })
 })
 describe("the two token requests do not agree, on purpose", () => {
@@ -178,6 +189,17 @@ describe("headers, derived from the stored token", () => {
     )
     expect(headers.get("chatgpt-account-id")).toBe("acct_777")
     expect(headers.get("authorization")).toBe(`Bearer ${OAUTH_WITH_CLAIM.accessToken}`)
+    expect(headers.get("originator")).toBe(OPENAI_CODEX_ORIGINATOR)
+  })
+  test("a top-level chatgpt_account_id claim is read when the namespaced one is absent", () => {
+    expect(chatGptAccountId({ accessToken: jwt({ chatgpt_account_id: "acct_flat" }) })).toBe(
+      "acct_flat",
+    )
+    const both = jwt({
+      chatgpt_account_id: "acct_flat",
+      [OPENAI_AUTH_CLAIM]: { chatgpt_account_id: "acct_nested" },
+    })
+    expect(chatGptAccountId({ accessToken: both })).toBe("acct_nested")
   })
   test("refuses to send a request with no derivable account id, naming the account", () => {
     const noClaimToken: ProviderCredential = { kind: "oauth", accessToken: "opaque-no-claim" }

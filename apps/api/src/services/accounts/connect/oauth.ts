@@ -28,6 +28,16 @@ import { parseAuthorizationPaste } from "./oauth-paste"
  *   `redeem` runs;
  * - **paste** — the operator copies what the address bar holds and `complete` runs.
  *
+ * **Every flow shipped today starts in paste mode, `PUBLIC_URL` or not.** A `ProviderOAuthFlow` is a
+ * reverse-engineered *first-party* client (CLAUDE.md, "Reverse-engineered flows"), and such a
+ * client's registration names only its own loopback (`loopbackRedirectUri`). Sending the router's
+ * callback as `redirect_uri` makes the issuer refuse the authorization outright — no code is ever
+ * minted, so neither mode can finish. That is what production hit on 2026-10-04: a ChatGPT connect
+ * whose authorize URL named `PUBLIC_URL`'s callback. So `begin` always names the loopback and says
+ * `paste`; `redeem` stays wired, because the `state` it checks is the same one-shot value and a
+ * flow whose client *does* register the router's callback would need only an opt-in on its driver
+ * (plus the `PUBLIC_URL`-derived callback address, which nothing passes here any more).
+ *
  * Both land in the same private `exchange`, in the same consume-then-check order, because a check
  * only one mode performs is a check an attacker picks the other mode to avoid. Paste is
  * first-class, not a fallback: it is the mode that works with no reachable `PUBLIC_URL` at all,
@@ -104,8 +114,6 @@ export interface OAuthConnectDeps extends OAuthExchangeDeps {
   readonly cipher: Pick<CredentialCipher, "encrypt" | "decrypt">
   /** The one-shot window, in minutes. Config, never a constant — `env.retention.oauthStateMinutes`. */
   readonly stateMinutes: number
-  /** `PUBLIC_URL + OAUTH_CALLBACK_PATH`, or `null` when no `PUBLIC_URL` is set: paste-only then. */
-  readonly callbackUrl: string | null
 }
 
 interface Connectable {
@@ -195,7 +203,8 @@ export function createOAuthConnectService(deps: OAuthConnectDeps): OAuthConnectS
 
       const verifier = randomBytes(VERIFIER_BYTES).toString("base64url")
       const state = randomBytes(STATE_BYTES).toString("base64url")
-      const redirectUri = deps.callbackUrl ?? flow.loopbackRedirectUri
+      // See the module note: the first-party client registers its loopback and nothing else.
+      const redirectUri = flow.loopbackRedirectUri
       const expiresAt = new Date(deps.now().getTime() + ttlMs)
 
       const begun = await deps.accounts.beginAccountAuthorization({
@@ -223,7 +232,7 @@ export function createOAuthConnectService(deps: OAuthConnectDeps): OAuthConnectS
         mode,
         authorizeUrl: authorizeUrl.toString(),
         expiresAt: expiresAt.toISOString(),
-        capture: deps.callbackUrl === null ? "paste" : "redirect",
+        capture: "paste",
         redirectUri,
       })
     },

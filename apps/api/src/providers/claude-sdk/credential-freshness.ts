@@ -60,8 +60,8 @@ import { CredentialMetadataOwnershipUnavailable } from "./ownership-errors"
  * How far ahead of an access token's expiry the `claude` CLI refreshes it on its own.
  *
  * Provenance: CLI 2.1.261 (the binary bundled with Agent SDK 0.3.261), `qO(expiresAt)`; re-verified
- * unchanged in CLI 2.1.273 (Agent SDK 0.3.273, where it is `cF`) and CLI 2.1.286 (Agent SDK 0.3.286,
- * where it is `SN`):
+ * unchanged in CLI 2.1.273 (Agent SDK 0.3.273, where it is `cF`), CLI 2.1.286 (Agent SDK 0.3.286,
+ * where it is `SN`) and CLI 2.1.289 (Agent SDK 0.3.289, where it is `$$`):
  * `Date.now() + 300000 >= expiresAt`. Blast radius: if the CLI widens this, an idle query spawned
  * between the two leads would once again be ended mid-refresh — so the configured cold margin is
  * floored at this value at boot, and the floor is what to raise if the CLI moves.

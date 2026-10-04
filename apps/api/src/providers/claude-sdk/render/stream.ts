@@ -1,7 +1,7 @@
 import { isRouterError } from "@multi-ai-router/core"
 import { SdkResultError } from "../result-error"
 import { type ClientFrame, type Completion, createEnvelope, type Envelope } from "./envelope"
-import { readSdkMessage, readWireEvent } from "./events"
+import { isLivenessOnly, readSdkMessage, readWireEvent } from "./events"
 import {
   createIdleGuard,
   DEFAULT_STREAM_PACING,
@@ -178,6 +178,7 @@ function createPump(input: SdkRenderInput): Pump {
   const handle = (value: unknown): readonly ClientFrame[] => {
     sdkMessages += 1
     const message = readSdkMessage(value)
+    if (message === null || !isLivenessOnly(message)) guard.progress()
     if (message === null) return NO_FRAMES
     lastMessage = message.type
 

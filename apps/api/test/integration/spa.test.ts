@@ -417,7 +417,6 @@ describe("the full app, mounted end to end", () => {
             cipher: adminCipher,
             audit,
             stateMinutes: 10,
-            callbackUrl: null,
             fetch: () => Promise.reject(new Error("no upstream in this harness")),
             exchangeTimeoutMs: 1_000,
             now,

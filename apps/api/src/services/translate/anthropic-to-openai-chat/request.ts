@@ -9,6 +9,7 @@ import {
   systemText,
   toolResultParts,
 } from "../shared/anthropic-blocks"
+import { isClearedSystemTurn, systemTurnText } from "../shared/anthropic-system-turns"
 import { type DropSink, IGNORE_DROPS } from "../shared/drops"
 import type {
   OpenAiChatMessage,
@@ -78,7 +79,15 @@ export function anthropicToOpenAiChatRequest(
   }
 
   for (const [index, message] of request.messages.entries()) {
-    appendMessage(drafts, message, `messages[${index}]`, onDrop)
+    const at = `messages[${index}]`
+    if (message.role !== "system") appendMessage(drafts, message, at, onDrop)
+    else if (!isClearedSystemTurn(request.messages, index)) {
+      // In place, as `system` — not `developer`, which several OpenAI-compatible chat vendors
+      // (Qwen, Kimi, MiniMax, GLM) refuse while every one of them accepts a mid-list `system`.
+      const text = systemTurnText(message, at, onDrop, TARGET)
+      if (text.length > 0)
+        drafts.push({ role: "system", parts: [{ type: "text", text }], toolCalls: [] })
+    }
   }
 
   const tools = request.tools === undefined ? undefined : toolsToOpenAiChat(request.tools, onDrop)
@@ -165,6 +174,11 @@ function appendMessage(
       case "redacted_thinking":
         // Documented drop. Re-sending a reasoning block as plain text would put the model's own
         // scratchpad into the transcript as if a participant had said it.
+        break
+      case "tool_addition":
+      case "tool_removal":
+        // Only meaningful inside a `system` turn (`anthropic-system-turns.ts`).
+        dropBlock(onDrop, field, block.type, TARGET)
         break
       default:
         // `server_tool_use`, `web_search_tool_result`, and whatever Anthropic ships next: the

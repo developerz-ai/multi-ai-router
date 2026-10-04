@@ -13,6 +13,7 @@ import {
   isSubmittablePaste,
 } from "../../lib/connect-capture"
 import { formatAbsolute } from "../../lib/reset-countdown"
+import { CaptureNotes, PasteGuide } from "./ConnectCaptureNotes"
 import styles from "./ConnectDialog.module.scss"
 import { ConnectFooter } from "./ConnectFooter"
 import { ConnectResult } from "./ConnectResult"
@@ -104,13 +105,6 @@ export function ConnectDialog(props: ConnectDialogProps) {
     if (pending() !== null) return "Start again"
     return reconnect() ? "Start re-authorization" : "Start login"
   }
-
-  // Stated as the mechanism this flow has, never as a degraded fallback — it is the mode that
-  // requires nothing of the router to be reachable from the internet.
-  const pasteOnlyReason = () =>
-    props.connectFlow === "claude-cli"
-      ? "The CLI owns its own redirect, so there is no router callback to intercept."
-      : "The router has no public address a provider callback could be delivered to, and this mode needs none."
 
   const submit = (event: SubmitEvent) => {
     event.preventDefault()
@@ -226,6 +220,7 @@ export function ConnectDialog(props: ConnectDialogProps) {
                 <Show when={live()}>
                   <section class={styles.section}>
                     <h3 class={styles.sectionTitle}>Paste what you get back</h3>
+                    <PasteGuide connectFlow={props.connectFlow} started={started()} />
                     <form id={formId} onSubmit={submit}>
                       <Field
                         hint="The whole callback URL, its query string, or the code#state shorthand — unedited."
@@ -252,30 +247,7 @@ export function ConnectDialog(props: ConnectDialogProps) {
                     </form>
                   </section>
 
-                  <Show when={started().capture === "paste"}>
-                    <p class={styles.note}>
-                      Paste is the capture mode for this login. {pasteOnlyReason()} It is the mode
-                      every check on this flow is written against.
-                    </p>
-                  </Show>
-
-                  <Show when={started().capture === "redirect" ? started().redirectUri : undefined}>
-                    {(redirectUri) => (
-                      <section class={styles.section}>
-                        <h3 class={styles.sectionTitle}>Or let the browser come back</h3>
-                        <p class={styles.hint}>
-                          The provider lands the browser back on the router at this address and the
-                          exchange happens there, not in this tab — so leave this dialog open and it
-                          will notice on its own within a few seconds.
-                        </p>
-                        <CopyValue label="Redirect URI" value={redirectUri()} />
-                        <p class={styles.hint}>
-                          The box above stays live either way: a callback the browser cannot load
-                          still leaves the value in the address bar.
-                        </p>
-                      </section>
-                    )}
-                  </Show>
+                  <CaptureNotes connectFlow={props.connectFlow} started={started()} />
                 </Show>
               </>
             )}

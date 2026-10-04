@@ -5,6 +5,7 @@ import { useWatchedAccount } from "../../lib/queries/accounts"
 import { useBeginConnect, useCancelConnect, useCompleteConnect } from "../../lib/queries/connect"
 import { connectLabel } from "./account-cells"
 import { ConnectDialog, type ConnectProgress } from "./ConnectDialog"
+import { type LoginBaseline, loginBaseline, redirectLanded } from "./connect-landing"
 
 export interface AccountConnectProps {
   /** Null while no account is selected. The dialog stays shut. */
@@ -39,10 +40,10 @@ const REDIRECT_POLL_MS = 3000
  * **The redirect capture finishes somewhere this tab cannot see.** The provider sends the browser
  * to the router's own callback, which completes the exchange server-side; nothing is posted back
  * here. So while a redirect start is outstanding, the account is re-read on an interval and the
- * login is declared complete when the row changes underneath it. The comparison is against
- * `updatedAt` captured at the start rather than against `hasCredential`, because a *reconnect*
- * begins on an account that already holds one — "it has a credential" would report success before
- * the operator had authorized anything.
+ * login is declared complete only when the row shows what an exchange alone writes — see
+ * `connect-landing.ts`. Never on `updatedAt`: the start writes the row itself, and reading that as
+ * success once announced "Connected" over a login the server never exchanged. An inferred
+ * completion names no capture mode; only a response from the server may say how the code arrived.
  *
  * The started login is held in a signal, never in the query cache. It is single-use and a second
  * tab reading it from a cache would be reading a `state` this tab is about to spend.
@@ -51,7 +52,7 @@ export function AccountConnect(props: AccountConnectProps) {
   const [started, setStarted] = createSignal<ConnectStarted | null>(null)
   const [completed, setCompleted] = createSignal<ConnectCompleted | null>(null)
   /** The row as it stood when the login began. The thing a redirect is detected against. */
-  const [startedAt, setStartedAt] = createSignal<string | null>(null)
+  const [baseline, setBaseline] = createSignal<LoginBaseline | null>(null)
 
   const begin = useBeginConnect()
   const complete = useCompleteConnect()
@@ -60,7 +61,7 @@ export function AccountConnect(props: AccountConnectProps) {
   const clear = () => {
     setStarted(null)
     setCompleted(null)
-    setStartedAt(null)
+    setBaseline(null)
     begin.reset()
     complete.reset()
   }
@@ -78,7 +79,8 @@ export function AccountConnect(props: AccountConnectProps) {
     const account = props.account
     if (account === null) return
     setCompleted(null)
-    setStartedAt(watched.data?.updatedAt ?? account.updatedAt)
+    // The row the operator is looking at: a detail query left over from an earlier login may be stale.
+    setBaseline(loginBaseline(account))
     begin.mutate({ id: account.id, mode: mode() }, { onSuccess: (result) => setStarted(result) })
   }
 
@@ -107,16 +109,11 @@ export function AccountConnect(props: AccountConnectProps) {
   createEffect(() => {
     const pending = started()
     const row = watched.data
-    const before = startedAt()
+    const before = baseline()
     if (pending === null || completed() !== null || row === undefined || before === null) return
-    if (row.updatedAt === before) return
+    if (row.id !== pending.accountId || !redirectLanded(before, row)) return
 
-    setCompleted({
-      accountId: row.id,
-      mode: pending.mode,
-      connected: true,
-      capture: "redirect",
-    })
+    setCompleted({ accountId: row.id, mode: pending.mode, connected: true })
   })
 
   /** Abandons an unfinished login (terminating its subprocess), then hands control to `then`. */

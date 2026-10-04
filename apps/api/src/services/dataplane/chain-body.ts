@@ -25,6 +25,7 @@ export function bodyFor(ctx: ChainContext, servable: ServableCandidate): Uint8Ar
             servable.upstreamModel,
           )
         : undefined,
+      servable.responsesEgress,
     )
   }
   if (ctx.bodyBytes.length === 0) return null

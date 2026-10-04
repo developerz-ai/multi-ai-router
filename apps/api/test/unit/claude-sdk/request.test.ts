@@ -39,7 +39,7 @@ describe("what a launch reads out of an Anthropic Messages body", () => {
   })
 
   test("unsupported message roles are rejected", () => {
-    expect(() => readSdkRequest(body({ messages: [{ role: "system", content: "x" }] }))).toThrow(
+    expect(() => readSdkRequest(body({ messages: [{ role: "tool", content: "x" }] }))).toThrow(
       "messages.0.role",
     )
   })

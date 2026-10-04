@@ -48,7 +48,10 @@ export interface SuccessClock extends AttemptClock {
 export interface AttemptRelay {
   readonly runtime: DispatchRuntime
   readonly translation: TranslationContext
-  readonly translated?: Pick<import("./translate-body").TranslatedRequestBody, "includeUsage">
+  readonly translated?: Pick<
+    import("./translate-body").TranslatedRequestBody,
+    "includeUsage" | "clientStreams"
+  >
   readonly log: Logger | undefined
   readonly request?: Request
 }
@@ -157,6 +160,9 @@ export function relaySuccess(
     upstream: response,
     pair: servable.translation,
     context: { ...ctx.translation, includeUsage: ctx.translated?.includeUsage() === true },
+    // Only for a client that did not ask to stream; one that did is forwarded event by event.
+    collectStream:
+      servable.responsesEgress.requireStream && ctx.translated?.clientStreams() !== true,
     observer,
     ...(relaySignal === undefined ? {} : { signal: relaySignal }),
     onUnrecognizedStopReason: (reason) =>

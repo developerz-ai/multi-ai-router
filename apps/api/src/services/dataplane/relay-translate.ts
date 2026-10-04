@@ -2,8 +2,8 @@ import type { SseEvent, TranslationContext, TranslationPair } from "../translate
 import { createSseParser, encodeSseEvent } from "../translate"
 import { clientHeaders } from "./egress/headers"
 import type { RelayObserver } from "./relay"
-import { readRelayBody } from "./relay-body-read"
 import { ClientCancelledError, observeCancellation } from "./relay-cancellation"
+import { collected, guard, parsed, translatedBody } from "./relay-translate-body"
 
 /**
  * The relay for a translated response — a sibling of `relay.ts`, never a mode inside it.
@@ -84,6 +84,12 @@ export interface TranslatedRelayInput {
   readonly keepaliveMs?: number
   /** Injected for the same reason. Defaults to the wall clock; nothing here reads one otherwise. */
   readonly now?: () => number
+  /**
+   * The upstream was made to stream (`ResponsesEgressRules.requireStream`) for a client that did
+   * not ask to: its SSE is read whole and folded into the one body that client is owed. Never set
+   * for a client that asked to stream — that one is forwarded event by event like any other.
+   */
+  readonly collectStream?: boolean
 }
 
 const EVENT_STREAM = "text/event-stream"
@@ -98,20 +104,16 @@ export function relayTranslatedResponse(input: TranslatedRelayInput): Response {
     return new Response(null, init)
   }
 
-  const body = upstream.headers.get("content-type")?.includes(EVENT_STREAM)
+  const streamed = upstream.headers.get("content-type")?.includes(EVENT_STREAM) === true
+  if (streamed && input.collectStream === true) {
+    headers.set("content-type", "application/json")
+    return new Response(translatedBody(input, upstream.body, collected), init)
+  }
+  const body = streamed
     ? translatedStream(input, upstream.body)
-    : translatedBody(input, upstream.body)
+    : translatedBody(input, upstream.body, parsed)
 
   return new Response(body, init)
-}
-
-/** Reporting must never break traffic, and an observer belongs to whoever passed it in. */
-function guard(report: () => void): void {
-  try {
-    report()
-  } catch {
-    // A broken observer degrades reporting for this request. It does not break the response.
-  }
 }
 
 function translatedStream(
@@ -218,71 +220,4 @@ function render(events: readonly SseEvent[]): string {
   let out = ""
   for (const event of events) out += encodeSseEvent(event)
   return out
-}
-
-/**
- * The non-streaming path: read the upstream object, convert it, write one body.
- *
- * A body that is not JSON at all is relayed unchanged. The upstream answered with a success status
- * and something we cannot read, and rebuilding that into an empty-but-well-formed completion would
- * report a result nobody produced — the honest answer is the bytes it actually sent.
- */
-function translatedBody(
-  input: TranslatedRelayInput,
-  upstream: ReadableStream<Uint8Array>,
-): ReadableStream<Uint8Array> {
-  const { observer = {} } = input
-  let settled = false
-  const fail = (error: unknown) => {
-    if (settled) return
-    settled = true
-    guard(() => observer.onError?.(error, 0))
-  }
-  const cancelled = new AbortController()
-  const signal =
-    input.signal === undefined
-      ? cancelled.signal
-      : AbortSignal.any([input.signal, cancelled.signal])
-  const body = new ReadableStream<Uint8Array>({
-    async start(controller) {
-      let raw: Uint8Array
-      try {
-        raw = await readRelayBody(upstream, signal)
-      } catch (error) {
-        controller.error(error)
-        fail(error)
-        return
-      }
-
-      guard(() => observer.onChunk?.(raw))
-      const text = new TextDecoder("utf-8").decode(raw)
-      const chunk = translate(input, text) ?? raw
-
-      controller.enqueue(chunk)
-      guard(() => observer.onWireBytes?.(chunk.length))
-      controller.close()
-      guard(() => observer.onFirstByte?.())
-      settled = true
-      guard(() => observer.onEnd?.(chunk.length))
-    },
-  })
-  return observeCancellation(body, () => {
-    const error = new ClientCancelledError()
-    fail(error)
-    cancelled.abort(error)
-  })
-}
-
-/** @returns the converted body, or null when the upstream sent something that is not JSON. */
-function translate(input: TranslatedRelayInput, text: string): Uint8Array | null {
-  let source: unknown
-  try {
-    source = JSON.parse(text)
-  } catch {
-    return null
-  }
-  const translated = input.pair.response(source, input.context)
-  const unrecognized = translated.unrecognizedStopReason
-  if (unrecognized !== null) guard(() => input.onUnrecognizedStopReason?.(unrecognized))
-  return new TextEncoder().encode(JSON.stringify(translated.body))
 }

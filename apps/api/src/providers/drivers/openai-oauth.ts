@@ -1,5 +1,6 @@
 import { UpstreamAuthError } from "@multi-ai-router/core"
 import { z } from "zod"
+import type { ResponsesEgressRules } from "../../services/translate/shared/responses-egress"
 import { createHttpDriver } from "../driver"
 import { codeRule, typeRule } from "../failure/classify"
 import { readErrorFacts } from "../failure/error-body"
@@ -15,19 +16,45 @@ import type {
   UpstreamResponse,
 } from "../types"
 
+// Pinned from the first-party Codex CLI (openai/codex `codex-rs/login`), cross-checked against
+// opencode's `plugin/openai/codex.ts` (2026-10-04). Blast radius for each: every ChatGPT account.
+// Issuer/client id/endpoints changing breaks connect and refresh — accounts go `needs_reauth`.
 export const OPENAI_OAUTH_ISSUER = "https://auth.openai.com"
 export const OPENAI_OAUTH_CLIENT_ID = "app_EMoamEEZ73f0CkXaXp7hrann"
 export const OPENAI_OAUTH_AUTHORIZE_URL = `${OPENAI_OAUTH_ISSUER}/oauth/authorize`
 export const OPENAI_OAUTH_TOKEN_URL = `${OPENAI_OAUTH_ISSUER}/oauth/token`
 
+// Codex CLI's connect scope; `offline_access` is what earns a refresh token. The refresh scope is
+// codex-rs's `RefreshRequest` (opencode omits it; both are accepted). Wrong scope → no refresh token.
 export const OPENAI_OAUTH_SCOPE = "openid profile email offline_access"
 export const OPENAI_OAUTH_REFRESH_SCOPE = "openid profile email"
 
+// The only redirect this client id registers (codex-rs binds port 1455; opencode the same). The
+// issuer refuses any other `redirect_uri`, the router's own callback included — so connect is
+// paste-only (`services/accounts/connect/oauth.ts`). If it moves, every connect fails at authorize.
 export const OPENAI_OAUTH_LOOPBACK_REDIRECT_URI = "http://localhost:1455/auth/callback"
 
+// Codex CLI's identity on the authorize page and on every request (`originator`). opencode sends
+// its own partner value; this router authenticates as the Codex client, so it says Codex. If the
+// backend starts rejecting it, requests fail 4xx and authorize may render the non-simplified page.
+export const OPENAI_CODEX_ORIGINATOR = "codex_cli_rs"
+
+// The Codex Responses surface (`/responses` appended) and its account-routing header, whose value
+// is the `chatgpt_account_id` claim. A missing header is refused upstream — hence it is required.
 export const CHATGPT_CODEX_BASE_URL = "https://chatgpt.com/backend-api/codex"
 export const OPENAI_AUTH_CLAIM = "https://api.openai.com/auth"
 export const CHATGPT_ACCOUNT_ID_HEADER = "chatgpt-account-id"
+export const CODEX_ORIGINATOR_HEADER = "originator"
+
+// What the Codex backend accepts of a Responses body the router *writes* (cross-dialect only; a
+// same-dialect body is relayed untouched). codex-rs `ResponsesApiRequest` always sends `stream: true`
+// and `instructions`, and never a ceiling or sampling field; opencode clears `maxOutputTokens` to
+// "match codex cli". The backend 400s on each deviation, so a translated request breaks outright.
+export const CODEX_RESPONSES_EGRESS: ResponsesEgressRules = {
+  requireStream: true,
+  requireInstructions: true,
+  unsupportedFields: ["max_output_tokens", "temperature", "top_p"],
+}
 
 export function openAiOAuthAuthorizeUrl(input: {
   readonly redirectUri: string
@@ -43,7 +70,10 @@ export function openAiOAuthAuthorizeUrl(input: {
     code_challenge: input.codeChallenge,
     code_challenge_method: "S256",
     id_token_add_organizations: "true",
+    // Both from codex-rs `build_authorize_url`; the first selects the Codex consent page.
+    codex_cli_simplified_flow: "true",
     state: input.state,
+    originator: OPENAI_CODEX_ORIGINATOR,
   }).toString()
   return url
 }
@@ -132,8 +162,13 @@ function accountIdIn(token: string | null | undefined): string | null {
   if (token === null || token === undefined || token === "") return null
   const claims = jwtClaims(token)
   if (claims === null) return null
-  const parsed = AuthClaim.safeParse(claims[OPENAI_AUTH_CLAIM])
-  return parsed.success ? (parsed.data.chatgpt_account_id ?? null) : null
+  // The namespaced claim is what Codex reads; opencode also accepts a top-level one, so do we.
+  const nested = AuthClaim.safeParse(claims[OPENAI_AUTH_CLAIM])
+  if (nested.success && nested.data.chatgpt_account_id !== undefined) {
+    return nested.data.chatgpt_account_id
+  }
+  const flat = AuthClaim.safeParse(claims)
+  return flat.success ? (flat.data.chatgpt_account_id ?? null) : null
 }
 
 export interface ClaimTokens {
@@ -209,7 +244,13 @@ const codex = createHttpDriver({
   // A ChatGPT plan is the flat monthly fee itself: there is no per-token price on this surface at
   // all, so its usage prices as an attribution against the OpenAI API table, never as spend.
   billing: "subscription",
-  surfaces: [{ dialect: "openai-responses", baseUrl: CHATGPT_CODEX_BASE_URL }],
+  surfaces: [
+    {
+      dialect: "openai-responses",
+      baseUrl: CHATGPT_CODEX_BASE_URL,
+      responsesEgress: CODEX_RESPONSES_EGRESS,
+    },
+  ],
   readFacts: readCodexFacts,
   parseRateLimit: parseCodexRateLimit,
   rules: [
@@ -235,6 +276,7 @@ export const openAiOAuthDriver: ProviderDriver = {
   buildHeaders: (account, credential) => {
     const headers = codex.buildHeaders(account, credential)
     headers.set(CHATGPT_ACCOUNT_ID_HEADER, requireChatGptAccountId(account, credential))
+    headers.set(CODEX_ORIGINATOR_HEADER, OPENAI_CODEX_ORIGINATOR)
     return headers
   },
 }

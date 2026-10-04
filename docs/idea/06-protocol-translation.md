@@ -302,6 +302,7 @@ their boundaries. Completion events do not replay already emitted text.
 | | |
 |---|---|
 | Clean | `user` / `assistant` roles; text blocks; `image` blocks with a base64 `source` ⇄ OpenAI `image_url` with a `data:` URI; a remote-URL `image_url` ⇄ Anthropic's `source: {type:"url"}`; `tool_result` ⇄ `role: "tool"` message keyed by `tool_call_id`. |
+| Mid-conversation `system` | Anthropic `role: "system"` turns (per-turn instructions; beta `tool_addition` / `tool_removal` blocks) are kept **in place**: a mid-list `system` message toward openai-chat (adjacent ones fold like any same-role run; not `developer`, which Qwen, Kimi, MiniMax and GLM endpoints refuse while all accept `system`), and a `developer` input item toward openai-responses. Only the top-level `system` field is the system prompt / `instructions`. Text is carried; a tool change is rendered as `[the client added the tool <name>]` / `[the client withdrew the tool <name>]`, the same words the Agent-SDK path uses; any other block is dropped and reported. A turn with `clear_at: "next_user_message"` that a later `user` turn followed is omitted, as the API no longer shows it. A `tool_addition`/`tool_removal` block on a user or assistant turn is dropped and reported. |
 | Lossy | `detail: "low"/"high"` is dropped. Anthropic `thinking` / `redacted_thinking` blocks have no OpenAI Chat counterpart and are dropped (silently — a documented hint). Toward OpenAI, a representable URL/base64 **image inside a `tool_result`** is *hoisted*: the tool message carries the text, and images are collected into user content after the complete tool-reply run. A screenshot never splits the replies to a parallel call batch. A `document` with a `text` source travels as text. |
 | Dropped and **reported** | Toward OpenAI: a `document` with any other source (a base64 PDF, a URL, a Files-API id — reported with its media type); `server_tool_use`, `web_search_tool_result`, and every block type this build does not know; a nested `tool_result` block that is neither text nor image (`tool_reference`, `search_result`). Each is left out and named — field path and block type — on one `translation dropped fields` warn line per conversion ([08](08-observability.md)). Never a `400`: Claude Code puts all of these in an ordinary transcript, and refusing the turn served nothing. |
 | Rejected | Toward Anthropic: audio and file parts; an image source that is neither a base64 `data:` URI nor http(s). Toward OpenAI: a *malformed* known block (a `tool_use` with no `id`) — that body is not a valid Anthropic request. |
@@ -724,6 +725,43 @@ account sends bytes the router does not open, under whichever name it chose; tha
 the client and its provider, and the error it gets back is honest and actionable
 ([The core rule](#the-core-rule)). Inbound, both names are read wherever the router converts *away*
 from `openai-chat`, and `max_completion_tokens` wins when a body carries both.
+
+## Surface rules
+
+The Responses dialect is one wire shape, but an upstream speaking it may accept less than all of it.
+The ChatGPT Codex backend (`openai-oauth`) refuses a request that is not `stream: true`, one with no
+`instructions`, and the `max_output_tokens`, `temperature` and `top_p` fields its first-party client
+never sends — each a `400`, so a translated request otherwise fails outright. Like the output
+ceiling, that is a fact about the **provider**, declared once in its driver as a
+`ResponsesEgressRules` value (`CODEX_RESPONSES_EGRESS` in `providers/drivers/openai-oauth.ts`), and
+handed to the translator per candidate as `TranslationContext.responsesEgress`. No provider name is
+tested anywhere under `services/translate/`.
+
+| Rule | Effect on a body the router wrote |
+|---|---|
+| `requireStream` | `stream: true`, whatever the client asked |
+| `requireInstructions` | `instructions: ""` when the client sent no system prompt |
+| `unsupportedFields` | each removed, and reported as a drop by name (never by value) |
+
+A client that did **not** ask to stream is still owed one JSON body. The forced upstream stream is
+read to its end and folded back into one Responses object (`collectResponsesStream`: the terminal
+event's response, its `output` rebuilt from `response.output_item.done` when the snapshot omits it),
+which the ordinary non-streaming response translator then converts. Reading it whole delays nothing:
+there was never a stream to forward to that client.
+
+**Same-dialect `/v1/responses` is untouched** — a byte relay is never parsed to apply these rules
+(non-negotiable 10). A Codex client already sends what Codex accepts; a generic Responses client
+pointed at a Codex account gets the upstream's own `400`.
+
+**Wiring.** The driver's surface declares the rules (`ProviderSurface.responsesEgress`, read through
+`resolveResponsesEgress` — pure, in memory, no store on the critical path); `dataplane/plan.ts`
+resolves them per candidate beside `chatCeiling`; `translate-body.ts` hands them to the translator
+and keys its conversion cache on them; `chain-relay.ts` asks `relay-translate.ts` to collect only
+when the rules force a stream **and** the client did not ask for one. A client that asked to stream
+is forwarded event by event, exactly as on any other translated account. Usage is read from the
+upstream's own bytes either way, so a collected response records its tokens like any other. A
+forced stream that ends without a terminal event fails as `translation_protocol_error` after the
+response has started — never retried onto another account.
 
 ## Model names
 
