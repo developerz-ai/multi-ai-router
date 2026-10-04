@@ -6,7 +6,7 @@ worked_by: Codex team
 owner: sebi
 percent: 67
 current_focus: PR151 mergedc030c5b after clean CodeRabbit review and five required PR/main checks passed. W6 usage/history/account pricing
-  local gate passed5044tests/451files/48988assertions; PG16/18 history and repeated isolated fixtures passed. Warm benchmarks and PR review/CI/merge pending.
+  PR152 initial CI passed; six inline review findings and accessibility/set-based maintenance fixes locally validated5050tests/451files/49024assertions. New-head evidence/review/CI and maintainer escalation remain pending.
   L16 strict database-miss latency, infrastructure monitoring, release/deployment and operational rotation remain open.
 slices:
 - file: 01-transport.md

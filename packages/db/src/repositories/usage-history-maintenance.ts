@@ -1,4 +1,4 @@
-import { and, eq, sql } from "drizzle-orm"
+import { eq, sql } from "drizzle-orm"
 import type { Database } from "../client"
 import { usageAttemptDailyV2, usageRequestDailyV2 } from "../schema/usage-aggregate-v2"
 import { usageContributions } from "../schema/usage-contributions"
@@ -6,7 +6,7 @@ import { usageDaily } from "../schema/usage-daily"
 import { usageHistoryState } from "../schema/usage-history-state"
 import { usageRecords } from "../schema/usage-records"
 import { usageRequestTerminals } from "../schema/usage-request-terminals"
-import { applyUsageContributions } from "./usage-contribution-aggregate"
+import { applyUsageContributions, type ContributionRow } from "./usage-contribution-aggregate"
 import { attemptContribution, usagePayloadHash } from "./usage-contribution-values"
 import { boundUsageBatch, lockUsageHistory } from "./usage-history-lock"
 
@@ -33,8 +33,7 @@ export function createUsageHistoryMaintenance(db: Database) {
             )
         : []
       const baselineDays = new Set(banked.map((row) => row.day))
-      const admitted = []
-      for (const row of rows) {
+      const inputs = rows.map((row) => {
         const day = row.createdAt.toISOString().slice(0, 10)
         // NULL IDs may be an old FK deletion after banking; they never prove omitted evidence.
         const expired = state.retentionBeforeDay !== null && day < state.retentionBeforeDay
@@ -52,17 +51,19 @@ export function createUsageHistoryMaintenance(db: Database) {
           payloadHash: usagePayloadHash(row),
           payload: attemptContribution(row, dbNow),
         }
-        const [receipt] = await tx
-          .insert(usageContributions)
-          .values(input)
-          .onConflictDoUpdate({
-            target: [usageContributions.kind, usageContributions.id],
-            set: { source },
-            setWhere: eq(usageContributions.source, "legacy_pending"),
-          })
-          .returning()
-        if (receipt !== undefined) admitted.push(receipt)
-      }
+        return input
+      })
+      const admitted =
+        inputs.length === 0
+          ? []
+          : ([
+              ...(await tx.execute(sql`
+        insert into ${usageContributions} (id,kind,day,source,payload_hash,payload)
+        select (p->>'id')::uuid, p->>'kind', (p->>'day')::date, p->>'source', p->>'payloadHash', p->'payload'
+        from jsonb_array_elements(${JSON.stringify(inputs)}::jsonb) p
+        on conflict (kind,id) do update set source = excluded.source where usage_contributions.source = 'legacy_pending'
+        returning id,kind,day,source,payload_hash as "payloadHash",payload,ingested_at as "ingestedAt"`)),
+            ] as unknown as ContributionRow[])
       await applyUsageContributions(tx, admitted)
       return { processed: rows.length, remaining: rows.length === limit }
     })
@@ -117,21 +118,12 @@ export function createUsageHistoryMaintenance(db: Database) {
           ).length
         if (deleted >= limit) return deleted
       }
-      const ids = await tx
-        .select({ id: usageContributions.id, kind: usageContributions.kind })
-        .from(usageContributions)
-        .where(sql`${usageContributions.day} < ${horizon}::date`)
-        .orderBy(usageContributions.day, usageContributions.id)
-        .limit(limit - deleted)
-      for (const receipt of ids)
-        deleted += (
-          await tx
-            .delete(usageContributions)
-            .where(
-              and(eq(usageContributions.id, receipt.id), eq(usageContributions.kind, receipt.kind)),
-            )
-            .returning({ id: usageContributions.id })
-        ).length
+      deleted += [
+        ...(await tx.execute(sql`
+        delete from ${usageContributions} where (kind,id) in (
+          select kind,id from ${usageContributions} where day < ${horizon}::date
+          order by day,id,kind limit ${limit - deleted}) returning id`)),
+      ].length
       return deleted
     })
   }

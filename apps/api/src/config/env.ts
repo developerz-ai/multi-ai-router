@@ -93,10 +93,9 @@ export interface RetentionConfig {
   readonly sessionsHours: number
   readonly usageDays: number
   /**
-   * How long the *daily aggregates* are kept — the long half of the two-tier retention the rollup
-   * exists for, and necessarily wider than {@link RetentionConfig.usageDays}: a window narrower
-   * than the raw one would have the janitor delete days the rollup re-inserts on its very next
-   * tick, forever. Boot refuses that rather than letting the two sweeps fight.
+   * History must outlive raw detail. Advancing the durable history horizon permits raw
+   * retention to delete unregistered older rows, so a shorter window would discard history
+   * while raw detail should still be retained. Boot refuses that ordering.
    */
   readonly usageDailyDays: number
   readonly auditDays: number
@@ -980,15 +979,15 @@ const envSchema = boundedEnvSchema.transform((raw, ctx): Env => {
   const usageDailyDays = raw.RETENTION_USAGE_DAILY_DAYS ?? 730
   if (usageDailyDays < usageDays) {
     // Not clamped, because either value could be the one the operator meant and guessing which
-    // silently discards history. The two sweeps would otherwise fight forever: the janitor deletes
-    // a rolled day, the rollup re-inserts it on the next tick because its raw rows are still there.
+    // silently discards history. A shorter history horizon permits deletion of unregistered
+    // raw rows that should still be retained by the longer detail window.
     ctx.addIssue({
       code: "custom",
       path: ["RETENTION_USAGE_DAILY_DAYS"],
       message:
         `must be at least RETENTION_USAGE_DAYS (${usageDays}): daily aggregates are the long ` +
-        `half of usage retention, and a shorter window would delete days the rollup immediately ` +
-        `writes back`,
+        `half of usage retention, and a shorter history horizon would permit deletion of ` +
+        `unregistered raw detail that should still be retained`,
     })
     return z.NEVER
   }

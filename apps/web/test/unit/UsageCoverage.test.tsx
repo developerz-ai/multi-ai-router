@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test"
 import { render } from "solid-js/web"
+import { formatDate } from "../../src/lib/format"
 import { UsageChart } from "../../src/routes/usage/UsageChart"
 import { UsageCoverage } from "../../src/routes/usage/UsageCoverage"
 import { usageCoverage } from "../support/usage-coverage"
@@ -17,7 +18,7 @@ test("history and retained-detail caveats identify their own denominator and pre
       totalAttempts: 20,
       partial: true,
     },
-    breakdown: { maxRows: 1, truncated: ["accountId"] },
+    breakdown: { maxRows: 1, truncated: ["apiKeyId", "accountId", "poolId", "model"] },
   }
   const node = document.createElement("div")
   document.body.append(node)
@@ -29,8 +30,15 @@ test("history and retained-detail caveats identify their own denominator and pre
     expect(text).toContain("Legacy daily history is preserved")
     expect(text).toContain("Missing evidence is not zero traffic")
     expect(text).toContain("historical denominator is incomplete")
-    expect(text).toContain("Detail covers 2026-10-01")
-    expect(text).toContain("at most 1 rows")
+    expect(text).toContain(
+      `Detail covers ${formatDate(coverage.retainedDetail.from)} to ${formatDate(coverage.retainedDetail.to)}`,
+    )
+    expect(text).not.toContain(coverage.retainedDetail.from)
+    expect(text).not.toContain(coverage.retainedDetail.to)
+    expect(text).toContain("at most 1 row.")
+    expect(text).not.toContain("1 rows")
+    expect(text).toContain("Key, Account, Pool, Model")
+    for (const internal of ["apiKeyId", "accountId", "poolId"]) expect(text).not.toContain(internal)
   } finally {
     dispose()
     node.remove()
@@ -81,6 +89,27 @@ test("pending detail never renders one retained attempt as part of a zero histor
     expect(text).toContain("historical denominator is incomplete")
     expect(text).toContain("0 attempts are currently accounted for")
     expect(text).not.toContain("1 retained attempt of 0")
+  } finally {
+    dispose()
+    node.remove()
+  }
+})
+
+test("plural limits and unavailable detail remain readable without leaking future dimension IDs", () => {
+  const coverage = {
+    ...usageCoverage(),
+    retainedDetail: { from: null, to: null, attempts: 0, totalAttempts: 0, partial: false },
+    breakdown: { maxRows: 2, truncated: ["future_internal_dimension"] },
+  }
+  const node = document.createElement("div")
+  document.body.append(node)
+  const dispose = render(() => <UsageCoverage summary={{ coverage, bucket: "day" }} />, node)
+  try {
+    const text = node.textContent ?? ""
+    expect(text).toContain("at most 2 rows.")
+    expect(text).toContain("No retained detail is available")
+    expect(text).toContain("Other groups")
+    expect(text).not.toContain("future_internal_dimension")
   } finally {
     dispose()
     node.remove()

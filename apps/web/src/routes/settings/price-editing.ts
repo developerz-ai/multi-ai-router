@@ -103,6 +103,8 @@ export function removalConsequences(
     )
     if (override.accountId != null)
       return `${override.accountId} / ${override.provider} / ${override.model} falls back to an eligible provider or shipped price; without one, spend remains unknown.`
+    if (fallback?.notionalOnly)
+      return `${override.provider} / ${override.model} returns to subscription attribution at the shipped reference (${rateSummary(fallback)}); metered accounts become unpriced and report unknown spend.`
     return fallback === undefined
       ? `${override.accountId ?? "all accounts"} / ${override.provider} / ${override.model} loses its only price — its spend is reported as unknown, never as zero.`
       : `${override.accountId ?? "all accounts"} / ${override.provider} / ${override.model} goes back to the shipped price (${rateSummary(fallback)}).`
@@ -115,4 +117,14 @@ export function removalConsequences(
     ...(rest > 0 ? [`…and ${rest} more.`] : []),
     "Cost already recorded on usage rows is not recalculated. This changes what future requests are priced at, not history.",
   ]
+}
+
+/** Every input must distinguish global rates from each account's independent override. */
+export function priceScopeLabel(
+  row: { readonly accountId?: string | null },
+  accounts: readonly { readonly id: string; readonly label: string }[] = [],
+): string {
+  return row.accountId == null
+    ? "all accounts"
+    : `${accounts.find((account) => account.id === row.accountId)?.label ?? "Account"} (${row.accountId})`
 }

@@ -3,6 +3,7 @@ import { eq } from "drizzle-orm"
 import { createDatabase } from "../../src/client"
 import { createUsageRecordRepository } from "../../src/repositories/usage-repository"
 import { usageAttemptDailyV2 } from "../../src/schema/usage-aggregate-v2"
+import { usageRecords } from "../../src/schema/usage-records"
 import {
   historyAttempt,
   historyTerminal,
@@ -109,5 +110,27 @@ describe.skipIf(!historyUrl)("atomic receipt reconciliation", () => {
     } finally {
       await second.close()
     }
+  })
+  test("coverage finds exact first-day time after detail purge and honors horizon for pending rows", async () => {
+    const rows = [
+      historyAttempt({ createdAt: new Date("1984-01-01T20:00:00Z") }),
+      historyAttempt({ createdAt: new Date("1984-01-01T03:00:00Z") }),
+    ]
+    await fixture.usage().insertMany(rows)
+    expect((await fixture.history().coverage()).earliestAt?.toISOString()).toBe(
+      "1984-01-01T03:00:00.000Z",
+    )
+    await fixture.usage().deleteOlderThan(new Date("1984-01-02"), 10)
+    expect((await fixture.history().coverage()).earliestAt?.toISOString()).toBe(
+      "1984-01-01T03:00:00.000Z",
+    )
+    await fixture.history().deleteOlderThan(new Date("1984-01-02"), 1)
+    await fixture
+      .db()
+      .insert(usageRecords)
+      .values(historyAttempt({ createdAt: new Date("1984-01-01T01:00:00Z") }))
+    const coverage = await fixture.history().coverage()
+    expect(coverage.earliestAt?.toISOString()).toBe("1984-01-03T00:01:00.000Z")
+    expect(coverage.incomplete).toBe(false)
   })
 })

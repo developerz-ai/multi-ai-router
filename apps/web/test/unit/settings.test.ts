@@ -8,6 +8,7 @@ import {
   type PriceRate,
   withRates,
 } from "../../src/lib/api/settings"
+import { priceScopeLabel, removalConsequences } from "../../src/routes/settings/price-editing"
 
 /**
  * The price table the settings screen edits, before any of it reaches the wire.
@@ -166,4 +167,38 @@ test("explicit metered override equal to a notional reference must remain explic
   const rows = mergePriceRows([reference], [{ ...reference, updatedAt: "2026-10-03" }])
   expect(rows[0]?.origin).toBe("overridden")
   expect(buildPriceOverridePayload(rows)).toHaveLength(1)
+})
+
+test("operator Kimi price is unrestricted while its shipped reference stays notional", () => {
+  const reference: PriceRate = {
+    provider: "kimi",
+    model: "k3",
+    ...rates(3, 15),
+    notionalOnly: true,
+  }
+  const shippedRow = mergePriceRows([reference], [])[0]
+  expect(shippedRow?.notionalOnly).toBe(true)
+  if (shippedRow !== undefined) expect(withRates(shippedRow, rates(9, 20)).notionalOnly).toBe(false)
+  const rows = mergePriceRows([reference], [{ ...reference, updatedAt: "2026-10-03" }])
+  expect(rows[0]?.notionalOnly).toBe(false)
+  expect(rows[0]?.preserveOverride).toBe(true)
+  expect(buildPriceOverridePayload(rows)).toHaveLength(1)
+  const consequences = removalConsequences(
+    { changed: [], removed: [{ ...reference, updatedAt: "2026-10-03" }] },
+    [reference],
+  )
+  expect(consequences[0]).toContain("subscription attribution")
+  expect(consequences[0]).toContain("metered accounts become unpriced")
+  expect(consequences[0]).toContain("unknown spend")
+})
+
+test("rate input scope labels distinguish two same-model accounts and global rates", () => {
+  const accounts = [
+    { id: "a", label: "Primary" },
+    { id: "b", label: "Backup" },
+  ]
+  expect(priceScopeLabel({}, accounts)).toBe("all accounts")
+  expect(priceScopeLabel({ accountId: "a" }, accounts)).toBe("Primary (a)")
+  expect(priceScopeLabel({ accountId: "b" }, accounts)).toBe("Backup (b)")
+  expect(priceScopeLabel({ accountId: "missing" }, accounts)).toBe("Account (missing)")
 })

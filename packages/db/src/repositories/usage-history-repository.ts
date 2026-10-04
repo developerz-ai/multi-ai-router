@@ -34,14 +34,18 @@ export function createUsageHistoryRepository(
       legacy: boolean
       pending: boolean
     }>(sql`
+      with bounds as (select coalesce((select retention_before_day from ${usageHistoryState} where id='v2'),'-infinity'::date) as horizon),
+      first_receipt_day as (select day from ${usageContributions},bounds where day >= horizon order by day limit 1)
       select clock_timestamp() as now,
-        (select min(at) from (select day::timestamp at time zone 'UTC' as at from ${usageDaily} where day >= coalesce((select retention_before_day from ${usageHistoryState} where id='v2'),'-infinity'::date)
-          union all select (payload->>'eventAt')::timestamptz from ${usageContributions} where day >= coalesce((select retention_before_day from ${usageHistoryState} where id='v2'),'-infinity'::date)
-          union all select created_at from ${usageRecords} where (created_at at time zone 'UTC')::date >= coalesce((select retention_before_day from ${usageHistoryState} where id='v2'),'-infinity'::date)) d) as earliest,
+        least(
+          (select day::timestamp at time zone 'UTC' from ${usageDaily},bounds where day >= horizon order by day limit 1),
+          (select min((payload->>'eventAt')::timestamptz) from ${usageContributions} where day = (select day from first_receipt_day)),
+          (select created_at from ${usageRecords},bounds where created_at >= (horizon::timestamp at time zone 'UTC') order by created_at limit 1)
+        ) as earliest,
         (select min(created_at) from ${usageRecords} where created_at >= ${from.toISOString()} and created_at < ${to.toISOString()}) as "rawFrom", (select max(created_at) from ${usageRecords} where created_at >= ${from.toISOString()} and created_at < ${to.toISOString()}) as "rawTo",
-        (exists(select 1 from ${usageDaily} where day >= ${new Date(Math.floor(from.getTime() / 86400000) * 86400000).toISOString().slice(0, 10)}::date and day < ${new Date(Math.ceil(to.getTime() / 86400000) * 86400000).toISOString().slice(0, 10)}::date and day >= coalesce((select retention_before_day from ${usageHistoryState} where id='v2'),'-infinity'::date))
-          or exists(select 1 from ${usageContributions} where source <> 'live' and (payload->>'eventAt')::timestamptz >= ${from.toISOString()} and (payload->>'eventAt')::timestamptz < ${to.toISOString()})) as legacy,
-        exists(select 1 from ${usageRecords} r where r.created_at >= ${from.toISOString()} and r.created_at < ${to.toISOString()} and (r.created_at at time zone 'UTC')::date >= coalesce((select retention_before_day from ${usageHistoryState} where id='v2'),'-infinity'::date) and not exists(select 1 from ${usageContributions} c where c.kind='attempt' and c.id=r.id and c.source<>'legacy_pending')) as pending`)
+        (exists(select 1 from ${usageDaily},bounds where day >= ${new Date(Math.floor(from.getTime() / 86400000) * 86400000).toISOString().slice(0, 10)}::date and day < ${new Date(Math.ceil(to.getTime() / 86400000) * 86400000).toISOString().slice(0, 10)}::date and day >= horizon)
+          or exists(select 1 from ${usageContributions},bounds where day >= greatest(${new Date(Math.floor(from.getTime() / 86400000) * 86400000).toISOString().slice(0, 10)}::date,horizon) and day < ${new Date(Math.ceil(to.getTime() / 86400000) * 86400000).toISOString().slice(0, 10)}::date and source <> 'live' and (payload->>'eventAt')::timestamptz >= ${from.toISOString()} and (payload->>'eventAt')::timestamptz < ${to.toISOString()})) as legacy,
+        exists(select 1 from ${usageRecords} r,bounds where r.created_at >= greatest(${from.toISOString()}::timestamptz,(horizon::timestamp at time zone 'UTC')) and r.created_at < ${to.toISOString()} and not exists(select 1 from ${usageContributions} c where c.kind='attempt' and c.id=r.id and c.source<>'legacy_pending')) as pending`)
     if (row === undefined) throw new Error("usage coverage unavailable")
     return {
       dbNow: new Date(row.now),

@@ -212,7 +212,7 @@ export function mergePriceRows(
       provider: override.provider,
       model: override.model,
       accountId: override.accountId,
-      notionalOnly: held?.notionalOnly,
+      notionalOnly: false,
       preserveOverride: held?.notionalOnly ?? false,
       origin: held?.notionalOnly ? "overridden" : classify(base, ratesOf(override)),
       shipped: base,
@@ -229,10 +229,12 @@ export function mergePriceRows(
 
 /** Re-prices a row and re-classifies it, so an edit back to the shipped number reads as shipped. */
 export function withRates(row: PriceRow, rates: ModelRates): PriceRow {
+  const origin = row.preserveOverride ? "overridden" : classify(row.shipped, rates)
   return {
     ...row,
     rates,
-    origin: row.preserveOverride ? "overridden" : classify(row.shipped, rates),
+    origin,
+    notionalOnly: row.notionalOnly === true && origin === "shipped",
   }
 }
 

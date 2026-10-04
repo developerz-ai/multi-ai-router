@@ -211,6 +211,7 @@ export function PriceOverridesSection() {
             />
 
             <PriceTable
+              accounts={view.prices.accounts}
               invalid={badCell}
               onEdit={edit}
               onRevert={revert}

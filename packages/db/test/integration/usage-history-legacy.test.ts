@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test"
 import { eq } from "drizzle-orm"
 import { createAccountRepository } from "../../src/repositories/account-repository"
 import { accounts } from "../../src/schema/accounts"
+import { usageContributions } from "../../src/schema/usage-contributions"
 import { usageDaily } from "../../src/schema/usage-daily"
 import { usageRecords } from "../../src/schema/usage-records"
 import { usageRequestTerminals } from "../../src/schema/usage-request-terminals"
@@ -105,5 +106,65 @@ describe.skipIf(!historyUrl)("conservative resumable legacy history", () => {
       (await fixture.history().totals({ from: new Date("1984-01-05"), to: new Date("1984-01-06") }))
         .attempts,
     ).toBe(7)
+  })
+  test("set-based backfill is atomic above 2000 rows and preserves pending receipt facts", async () => {
+    const rows = Array.from({ length: 2201 }, () =>
+      historyAttempt({ createdAt: new Date("1984-01-09T12:00:00Z") }),
+    )
+    await fixture
+      .db()
+      .insert(usageRecords)
+      .values(rows.map((row) => ({ ...row, ingestedAt: null })))
+    const first = rows[0]
+    if (!first) throw new Error("fixture absent")
+    await fixture.usage().insertMany([first])
+    const [held] = await fixture
+      .db()
+      .select()
+      .from(usageContributions)
+      .where(eq(usageContributions.id, first.id))
+    expect(held?.source).toBe("legacy_pending")
+    await fixture
+      .get()
+      .sql.unsafe(
+        "create function fixture_backfill_failure() returns trigger language plpgsql as $$begin raise exception 'fixture backfill failure'; end$$",
+      )
+    await fixture
+      .get()
+      .sql.unsafe(
+        "create trigger fixture_backfill_failure before insert on usage_contributions for each row execute function fixture_backfill_failure()",
+      )
+    try {
+      await expect(fixture.history().backfill({ limit: 5000 })).rejects.toThrow()
+      expect(
+        await fixture
+          .history()
+          .totals({ from: new Date("1984-01-09"), to: new Date("1984-01-10") }),
+      ).toMatchObject({ attempts: 0, tokensIn: 0 })
+    } finally {
+      await fixture.get().sql.unsafe("drop trigger fixture_backfill_failure on usage_contributions")
+      await fixture.get().sql.unsafe("drop function fixture_backfill_failure()")
+    }
+    expect(await fixture.history().backfill({ limit: 5000 })).toEqual({
+      processed: 2201,
+      remaining: false,
+    })
+    const [accepted] = await fixture
+      .db()
+      .select()
+      .from(usageContributions)
+      .where(eq(usageContributions.id, first.id))
+    expect(accepted).toMatchObject({
+      source: "legacy_unbanked",
+      payload: held?.payload,
+      payloadHash: held?.payloadHash,
+    })
+    expect(
+      await fixture.history().totals({ from: new Date("1984-01-09"), to: new Date("1984-01-10") }),
+    ).toMatchObject({ attempts: 2201, requests: 0, tokensIn: 6603 })
+    expect(await fixture.history().backfill({ limit: 5000 })).toEqual({
+      processed: 0,
+      remaining: false,
+    })
   })
 })

@@ -1,17 +1,17 @@
 {
-  "scope": "W6 local application validation; PR review, CI, merge, release and deployment pending",
+  "scope": "PR152 review-fix local validation; new-head review/CI/merge and release/deployment pending",
   "gate": {
     "bun": "1.4.2",
     "postgres": "18.6",
-    "passed": 5044,
+    "passed": 5050,
     "failed": 0,
     "files": 451,
-    "assertions": 48988,
+    "assertions": 49024,
     "lint": true,
     "typecheck": true,
     "build": true
   },
-  "gateLogSHA256": "3f6ef5dd87c0b0eccb01394bdbe66be8066699ba9ae74af9a85ce2822a20f43a",
+  "gateLogSHA256": "216b943523ca8efefcbd40f2a1ae01466a610bf007f290973f66b43eaa429125",
   "priorGateFailures": {
     "first": {
       "passed": 5042,
@@ -48,17 +48,6 @@
       "assertions": 82
     }
   },
-  "image": {
-    "id": "sha256:1364d2186e370cf83a74dd6463e094ca78b364e121320a8e2b8c65045e22d8d0",
-    "serverSHA256": "df6ff70e24c647fca9698ac3a6b18cc548c5b8910ea2e8550ea57c7ba920c0e8",
-    "checkedBundleMatches": true,
-    "uid": 1000,
-    "readOnly": true,
-    "capabilities": 0,
-    "noNewPrivileges": true,
-    "network": "none",
-    "scope": "amd64 packaging only; no router/helper/CLI launch, DB or provider calls"
-  },
   "kimiReferenceVerification": {
     "verifiedAt": "2026-10-04T01:45:33.854071+00:00",
     "sources": [
@@ -93,6 +82,65 @@
     "O12 authenticated scrape/rules/controlled notification/runbook",
     "operational credential rotation/session invalidation",
     "native arm64 release validation",
-    "release/deployment/post-release comparison"
-  ]
+    "release/deployment/post-release comparison",
+    "Dedicated history admission duration metric and queue-shedding/janitor correlated infrastructure alert"
+  ],
+  "initialGate": {
+    "bun": "1.4.2",
+    "postgres": "18.6",
+    "passed": 5050,
+    "failed": 0,
+    "files": 451,
+    "assertions": 49024,
+    "lint": true,
+    "typecheck": true,
+    "build": true
+  },
+  "initialImage": {
+    "id": "sha256:1364d2186e370cf83a74dd6463e094ca78b364e121320a8e2b8c65045e22d8d0",
+    "serverSHA256": "df6ff70e24c647fca9698ac3a6b18cc548c5b8910ea2e8550ea57c7ba920c0e8",
+    "checkedBundleMatches": true,
+    "uid": 1000,
+    "readOnly": true,
+    "capabilities": 0,
+    "noNewPrivileges": true,
+    "network": "none",
+    "scope": "amd64 packaging only; no router/helper/CLI launch, DB or provider calls"
+  },
+  "image": {
+    "id": "sha256:db41f3c749bf8d869a9d0e9cdcab9249b59be9ebdb8777d321e582d7a600d2da",
+    "serverSHA256": "7865aa4c029e8a6c94e262f578f1fc00b1e86550c749ac4a2fccbf03978155cc",
+    "checkedBundleMatches": true,
+    "uid": 1000,
+    "readOnly": true,
+    "capabilities": 0,
+    "noNewPrivileges": true,
+    "network": "none",
+    "scope": "review-fix amd64 packaging only; no router/helper/CLI launch, DB or provider calls"
+  },
+  "reviewFixes": {
+    "originalHead": "eff98105e4facd4f2a46556e0837f7f9629d8a48",
+    "review": 5403914718,
+    "inlineFindings": 6,
+    "outsideFindings": 1,
+    "dbEachPostgres": {
+      "tests": 27,
+      "assertions": 134
+    },
+    "pricing": {
+      "tests": 22,
+      "assertions": 54
+    },
+    "coverageUI": {
+      "tests": 4,
+      "assertions": 26
+    },
+    "historyEnv": {
+      "tests": 184,
+      "assertions": 305
+    },
+    "setBasedMaintenance": true,
+    "indexedCoverage": true,
+    "midnightCompatibility": true
+  }
 }
