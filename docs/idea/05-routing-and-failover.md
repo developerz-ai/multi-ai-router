@@ -258,19 +258,22 @@ overrule:
 
 A bound account that is merely cooling down normally **blocks** the request: the honest `429` +
 `Retry-After`, binding kept, conversation resumable when the clock fixes the account.
-`ROUTING_BOUND_ACCOUNT_COOLING_DOWN=rebind` opts a deployment out of the wait: the binding is
-invalidated and the turn is served fresh on another eligible account. It exists for clients that
-resend their full history every turn. Two guardrails keep `rebind` from ever being *worse* than
-`fail`:
+`ROUTING_BOUND_ACCOUNT_COOLING_DOWN=rebind` opts a deployment out of the wait: the turn is served
+on another eligible account, which **carries** the session's transcript over and resumes it
+([11-anthropic-agent-sdk.md §4](11-anthropic-agent-sdk.md#carrying-a-session-to-another-account));
+only a carry that cannot happen starts fresh. Two guardrails keep `rebind` from ever being *worse*
+than `fail`:
 
 | Guardrail | Statement |
 |---|---|
 | **A probe in flight never rebinds** | `rebind` fires on `cooling-down` and `quota-window-spent` only. `probe-in-flight` is the router's own hold, seconds long and already settling inside another request — dropping a resumable conversation over it would trade seconds for the whole history. It stays `blocked` whatever the operator configured. |
-| **Invalidate only with a replacement in hand** | The stored mapping is dropped only once selection has produced a servable alternative. When every pool account is cooling (one provider, windows depleting together — the common case), the request fails with the same `429`-binding-kept that `fail` produces, and the client's post-reset retry resumes the original session warm. Dropping first and failing anyway was a lost conversation for a rebind that never happened. |
+| **Never drop the binding on refusal** | Selection refusing a binding changes where *this* turn runs, not where the conversation lives. The row is kept; when every pool account is cooling (one provider, windows depleting together — the common case), the request fails with the same `429`-binding-kept that `fail` produces, and the client's post-reset retry resumes the original session warm. |
 
-The store-side mechanics follow from "dropped, never moved": on a successful rebind the SDK
-attempt's own `remember` re-points the row at the account that actually served, and per-session
-row writes are ordered so a clear can never land after the bind that superseded it.
+The store-side mechanics: the row is never re-pointed by hand. The SDK attempt on the new account
+carries the transcript, and its own `remember` re-points the row at the account that actually
+served; per-session row writes are ordered so a clear can never land after the bind that
+superseded it. A turn served by an HTTP account leaves the row where it was, so a later
+subscription turn still carries from the last account that held it.
 
 On the plain **HTTP path** (`anthropic-api`, `openai-api`, OpenRouter, z.ai, …) none of this
 applies: every request carries its full history, so stickiness there is purely the cache

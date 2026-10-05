@@ -6,6 +6,7 @@ import {
 } from "../providers"
 import { createAccountCliOwnership } from "../providers/claude-sdk/account-ownership"
 import { createAccountConfigDirs } from "../providers/claude-sdk/config-dir"
+import { createSessionCarrier } from "../providers/claude-sdk/session-carry"
 import { createSdkTranscripts } from "../providers/claude-sdk/transcripts"
 import { ownedCredentialMetadataReader } from "./credential-ownership"
 
@@ -54,6 +55,15 @@ export function createCliResources(deps: RuntimeDeps, now: () => Date) {
     root: configDirs.root,
     withAccountOwner: ownership.withMetadataOwner,
   })
+  // The other direction over the same volume: a bound conversation's transcript carried to the
+  // Account a failover lands on, under both Accounts' owner holds (`session-carry.ts`).
+  const sessionCarrier = env.claudeSdkSessionCarry.enabled
+    ? createSessionCarrier({
+        root: configDirs.root,
+        maxBytes: env.claudeSdkSessionCarry.maxBytes,
+        withAccountOwner: ownership.withMetadataOwner,
+      })
+    : undefined
   // Only one `claude` subprocess may cross an Account's token-refresh moment, because the refresh
   // token rotates and a second spender gets rejected — after which the losing CLI blanks the
   // credential file and the Account needs an interactive re-login
@@ -83,6 +93,7 @@ export function createCliResources(deps: RuntimeDeps, now: () => Date) {
     ownership,
     configDirs,
     transcripts,
+    sessionCarrier,
     credentialReader,
     credentialFreshness,
   }

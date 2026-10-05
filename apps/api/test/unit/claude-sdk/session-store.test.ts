@@ -7,10 +7,10 @@ import { type MemorySessions, memorySessions, messagesBody, ticker } from "./fix
  * cost a request its answer (docs/idea/11-anthropic-agent-sdk.md §4).
  *
  * Three properties are asserted here rather than assumed. A hit costs no query and a miss costs
- * exactly one, because the performance budget allows that shape and no other. A binding is dropped
- * and never moved, because an SDK session id resumes only on the Account that minted it. And every
- * failure degrades to "no binding", because a slow session table must cost a cold prompt cache, not
- * a failed request.
+ * exactly one, because the performance budget allows that shape and no other. A binding follows its
+ * conversation to another Account only by carrying the transcript there first, because an SDK
+ * session id resumes only where its transcript is. And every failure degrades to "no binding",
+ * because a slow session table must cost a cold prompt cache, not a failed request.
  */
 
 const NOW = new Date("2026-01-01T12:00:00.000Z")
@@ -175,10 +175,10 @@ describe("resolving a turn against an account", () => {
     expect(repository.writes).toHaveLength(0)
   })
 
-  test("a session minted on one account is invisible to another", () => {
+  test("a session minted on one account is planned on another as a carry, never a bare resume", () => {
     const store = storeWith(memorySessions())
 
-    turn(store, opening, "sess_1")
+    turn(store, opening, "sess_1", "uuid-1")
     const elsewhere = store.resolve({
       apiKeyId: "key-1",
       sessionKey: "conv-1",
@@ -187,7 +187,31 @@ describe("resolving a turn against an account", () => {
       body: grown,
     })
 
-    expect(elsewhere.plan).toEqual({ kind: "fresh", reason: "no-session" })
+    // A fork at the last recorded answer: whatever the bound account appended after it — a
+    // failed attempt's turn — stays behind (`carriedPlan`).
+    expect(elsewhere.plan).toEqual({
+      kind: "fork",
+      sdkSessionId: "sess_1",
+      resumeSessionAt: "uuid-1",
+      deltaFrom: 2,
+      carryFrom: "acct-1",
+    })
+  })
+
+  test("without a carrier the carry cannot happen, so the turn starts fresh by name", async () => {
+    const store = storeWith(memorySessions())
+
+    turn(store, opening, "sess_1", "uuid-1")
+    const elsewhere = store.resolve({
+      apiKeyId: "key-1",
+      sessionKey: "conv-1",
+      keySource: "header",
+      accountId: "acct-2",
+      body: grown,
+    })
+    const prepared = await elsewhere.prepare()
+
+    expect(prepared.plan).toEqual({ kind: "fresh", reason: "carry-failed" })
   })
 
   test("a headerless client whose session key shifted still finds its session by fingerprint", () => {

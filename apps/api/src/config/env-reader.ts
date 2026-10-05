@@ -150,6 +150,12 @@ export function readParsedEnv(raw: ParsedEnv, ctx: z.RefinementCtx): Env {
       timeoutMs: raw.CLAUDE_SDK_USAGE_GAUGE_TIMEOUT_MS ?? 5_000,
       minIntervalSeconds: raw.CLAUDE_SDK_USAGE_GAUGE_MIN_INTERVAL_SECONDS ?? 60,
     },
+    claudeSdkSessionCarry: {
+      enabled: raw.CLAUDE_SDK_SESSION_CARRY ?? true,
+      // 32 MiB: production's largest transcripts sit under 2 MB at a ~670k-token context, so this
+      // is headroom, not a limit anyone meets — it only bounds what one carry holds in memory.
+      maxBytes: raw.CLAUDE_SDK_SESSION_CARRY_MAX_BYTES ?? 33_554_432,
+    },
     retention: {
       sessionsHours: raw.RETENTION_SESSIONS_HOURS ?? 24,
       usageDays,

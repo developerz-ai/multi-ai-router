@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import type { SessionStore } from "../../../src/providers"
+import type { SessionStore, SessionTurn } from "../../../src/providers"
 import { sessionBindings } from "../../../src/services/dataplane"
 import { account, catalog, subscriptionAccount } from "./fixtures"
 
@@ -25,11 +25,15 @@ function spyStore(): SessionStore & { readonly reads: string[]; readonly dropped
     invalidate: (apiKeyId, sessionKey) => {
       dropped.push(`${apiKeyId}/${sessionKey}`)
     },
-    resolve: () => ({
-      plan: { kind: "fresh", reason: "no-session" },
-      remember: () => {},
-      release: () => {},
-    }),
+    resolve: () => {
+      const turn: SessionTurn = {
+        plan: { kind: "fresh", reason: "no-session" },
+        prepare: () => Promise.resolve(turn),
+        remember: () => {},
+        release: () => {},
+      }
+      return turn
+    },
   }
 }
 
@@ -38,7 +42,6 @@ describe("whether a request has a binding to read at all", () => {
     const bindings = sessionBindings(catalog([account("api-1")]), undefined)
 
     expect(await bindings.read("key-1", "conv-1")).toBeUndefined()
-    expect(() => bindings.invalidate("key-1", "conv-1")).not.toThrow()
   })
 
   test("a router with only HTTP accounts never queries", async () => {
@@ -56,12 +59,5 @@ describe("whether a request has a binding to read at all", () => {
 
     expect(await bindings.read("key-1", "conv-1")).toMatchObject({ accountId: "acct-1" })
     expect(store.reads).toEqual(["key-1/conv-1"])
-  })
-
-  test("invalidation is forwarded whatever the catalog holds — a binding must always be droppable", () => {
-    const store = spyStore()
-    sessionBindings(catalog([account("api-1")]), store).invalidate("key-1", "conv-1")
-
-    expect(store.dropped).toEqual(["key-1/conv-1"])
   })
 })

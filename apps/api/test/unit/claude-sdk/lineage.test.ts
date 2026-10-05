@@ -1,9 +1,12 @@
 import { describe, expect, test } from "bun:test"
 import {
+  carriedPlan,
   classifyLineage,
   hashMessages,
+  type LineageClass,
   readConversation,
   resolveLineage,
+  type SessionPlan,
   sessionFingerprint,
 } from "../../../src/providers"
 import { messagesBody, toolResultBody } from "./fixtures"
@@ -395,5 +398,53 @@ describe("the headerless fingerprint", () => {
     expect(sessionFingerprint({ ...seed, firstUserText: first.firstUserText })).toBe(
       sessionFingerprint({ ...seed, firstUserText: later.firstUserText }),
     )
+  })
+})
+
+describe("a plan carried in from another account", () => {
+  const resume = (lineage: LineageClass, deltaFrom: number): SessionPlan => ({
+    kind: "resume",
+    sdkSessionId: "sess_a",
+    lineage,
+    deltaFrom,
+  })
+
+  test("a continuation forks at the last recorded answer, so a failed attempt's tail stays behind", () => {
+    expect(carriedPlan(resume("continuation", 4), "acct-a", ["", "uuid-1", "", "uuid-3"])).toEqual({
+      kind: "fork",
+      sdkSessionId: "sess_a",
+      resumeSessionAt: "uuid-3",
+      deltaFrom: 4,
+      carryFrom: "acct-a",
+    })
+  })
+
+  test("a continuation with no recorded answer still resumes rather than starting fresh", () => {
+    expect(carriedPlan(resume("continuation", 2), "acct-a", ["", ""])).toEqual({
+      ...resume("continuation", 2),
+      carryFrom: "acct-a",
+    })
+  })
+
+  test("a compaction keeps its resume: its stored positions name nothing in the incoming messages", () => {
+    expect(carriedPlan(resume("compaction", 2), "acct-a", ["", "uuid-1"])).toEqual({
+      ...resume("compaction", 2),
+      carryFrom: "acct-a",
+    })
+  })
+
+  test("a fork keeps its own rewind point, and a fresh plan carries nothing", () => {
+    const fork: SessionPlan = {
+      kind: "fork",
+      sdkSessionId: "sess_a",
+      resumeSessionAt: "uuid-1",
+      deltaFrom: 2,
+    }
+    expect(carriedPlan(fork, "acct-a", ["", "uuid-1", "", "uuid-3"])).toEqual({
+      ...fork,
+      carryFrom: "acct-a",
+    })
+    const fresh: SessionPlan = { kind: "fresh", reason: "diverged" }
+    expect(carriedPlan(fresh, "acct-a", ["", "uuid-1"])).toBe(fresh)
   })
 })

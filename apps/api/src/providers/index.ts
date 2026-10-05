@@ -130,6 +130,7 @@ export type {
   StoredBinding,
 } from "./claude-sdk/session"
 export {
+  carriedPlan,
   classifyLineage,
   createSessionCache,
   createSessionStore,

@@ -184,6 +184,16 @@ export interface Env {
     /** `CLAUDE_SDK_USAGE_GAUGE_MIN_INTERVAL_SECONDS`. At most one reading per account per interval. */
     readonly minIntervalSeconds: number
   }
+  /**
+   * Carrying a bound SDK session's transcript to the Account a failover lands on, so the
+   * conversation resumes there instead of restarting (`providers/claude-sdk/session-carry.ts`).
+   */
+  readonly claudeSdkSessionCarry: {
+    /** `CLAUDE_SDK_SESSION_CARRY`. Off restores the restart-on-failover behaviour. */
+    readonly enabled: boolean
+    /** `CLAUDE_SDK_SESSION_CARRY_MAX_BYTES`. A larger transcript starts fresh instead. */
+    readonly maxBytes: number
+  }
   readonly retention: RetentionConfig
   readonly janitorIntervalMinutes: number
   readonly adminAuth: AdminAuthConfig

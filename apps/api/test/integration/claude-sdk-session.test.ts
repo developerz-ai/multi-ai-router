@@ -1,6 +1,10 @@
 import { describe, expect, test } from "bun:test"
 import { createLogger, type Logger } from "../../src/logging/logger"
 import { createSdkQuotaStore, createSessionStore, type SdkInvocation } from "../../src/providers"
+import type {
+  SessionCarrier,
+  SessionCarryInput,
+} from "../../src/providers/claude-sdk/session-carry"
 import { memorySessions } from "../unit/claude-sdk/fixtures"
 import { account, subscriptionAccount } from "../unit/dataplane/fixtures"
 import { bearer, CRYPTOR, harness, post, settle } from "./harness"
@@ -12,7 +16,8 @@ import { bearer, CRYPTOR, harness, post, settle } from "./harness"
  * cache-warmth preference a policy may overrule — it is a fact about where the conversation
  * physically lives upstream. These assert the whole loop: the first turn binds, the second resumes
  * on the same Account even against a policy that would prefer another, and an Account that can no
- * longer serve invalidates the mapping rather than carrying it somewhere it means nothing.
+ * longer serve keeps the mapping, so the next subscription that serves can carry the transcript
+ * over (`claude-sdk/session-carry.ts`) instead of restarting the conversation.
  */
 
 const NOW = new Date("2026-01-01T12:00:00.000Z")
@@ -149,7 +154,7 @@ describe("a Claude subscription conversation across turns", () => {
     expect(repository.writes[0]?.fingerprintSource).toBe("fingerprint")
   })
 
-  test("a bound account that can no longer serve drops the mapping rather than carrying it", async () => {
+  test("a bound account that can no longer serve keeps the mapping for a carry, and says it restarted", async () => {
     const seen: SdkInvocation[] = []
     const { repository, store } = sessionStore()
     const accounts = [
@@ -184,10 +189,15 @@ describe("a Claude subscription conversation across turns", () => {
     await settle()
 
     expect(res.status).toBe(200)
-    // Dropped, never moved: the row names no account rather than the one that just served.
-    const cleared = repository.writes.at(-1)
-    expect(cleared?.accountId).toBeNull()
-    expect(cleared?.sdkSessionId).toBeNull()
+    // An HTTP account served it: nothing carried, so the restart is surfaced by its reason.
+    expect(res.headers.get("x-router-session-restart")).toBe("needs-reauth")
+    // Kept, not cleared: the transcript is still on `sub`, and a subscription that serves a later
+    // turn carries it from there. Only a turn that answered may re-point the row.
+    expect(repository.writes.every((write) => write.accountId === "sub")).toBe(true)
+    expect([...repository.rows.values()][0]).toMatchObject({
+      accountId: "sub",
+      sdkSessionId: "sess_sub",
+    })
   })
 
   test("a bound account that is merely cooling down keeps the mapping and answers 429", async () => {
@@ -226,7 +236,7 @@ describe("a Claude subscription conversation across turns", () => {
     expect(rows[0]).toMatchObject({ accountId: "sub", sdkSessionId: "sess_sub" })
   })
 
-  test("`rebind` trades the prior turns for an answer now: the mapping drops and another account serves", async () => {
+  test("`rebind` serves elsewhere now and keeps the mapping, so the transcript can follow later", async () => {
     const seen: SdkInvocation[] = []
     const { repository, store } = sessionStore()
     const headers = { ...bearer(), "x-session-id": "conv-1" }
@@ -257,10 +267,11 @@ describe("a Claude subscription conversation across turns", () => {
     expect(res.status).toBe(200)
     // The restart is surfaced, never silent: prior upstream turns are gone and the client is told.
     expect(res.headers.get("x-router-session-restart")).toBe("cooling-down")
-    // Dropped, never moved — same row shape an unrecoverable account leaves.
-    const cleared = repository.writes.at(-1)
-    expect(cleared?.accountId).toBeNull()
-    expect(cleared?.sdkSessionId).toBeNull()
+    // Kept: the cooling subscription still holds the transcript a later carry starts from.
+    expect([...repository.rows.values()][0]).toMatchObject({
+      accountId: "sub",
+      sdkSessionId: "sess_sub",
+    })
   })
 
   test("`rebind` with nowhere to rebind keeps the mapping and answers the 429 `fail` would", async () => {
@@ -526,6 +537,162 @@ describe("a bound subscription that runs out of quota", () => {
     expect(seen.at(-1)).toMatchObject({
       accountId: "sub-b",
       session: { kind: "resume", sdkSessionId: "sess_sub-b" },
+    })
+  })
+})
+
+describe("a bound conversation carried to another subscription", () => {
+  const IN_AN_HOUR = NOW.getTime() + 3_600_000
+
+  /** A carrier that records its calls and answers as told. The disk half is `session-carry.test.ts`. */
+  function carrier(carried: boolean) {
+    const calls: SessionCarryInput[] = []
+    const value: SessionCarrier = {
+      carry: (input) => {
+        calls.push(input)
+        return Promise.resolve(
+          carried ? { carried: true, bytes: 1 } : { carried: false, reason: "not-found" },
+        )
+      },
+    }
+    return { calls, value }
+  }
+
+  /** Like `fleet`, but a resumed session keeps its id — the CLI's own behaviour on `resume`. */
+  function resumingFleet(seen: SdkInvocation[], spent: (invocation: SdkInvocation) => boolean) {
+    return async (invocation: SdkInvocation): Promise<Response> => {
+      invocation.onUpstreamStarted?.()
+      seen.push(invocation)
+      if (spent(invocation)) throw new Error(`Claude AI usage limit reached|${IN_AN_HOUR}`)
+      const plan = invocation.session
+      invocation.onSession?.({
+        sdkSessionId: plan.kind === "resume" ? plan.sdkSessionId : `sess_${invocation.accountId}`,
+        assistantUuid: `uuid-${seen.length}`,
+      })
+      return sdkResponse()
+    }
+  }
+
+  function carryingStore(carried: boolean) {
+    const repository = memorySessions()
+    const carry = carrier(carried)
+    const store = createSessionStore({ repository, now: () => NOW, carrier: carry.value })
+    return { repository, store, carry }
+  }
+
+  test("a spent window mid-chain: the next subscription continues the same session, no restart", async () => {
+    const seen: SdkInvocation[] = []
+    const { repository, store, carry } = carryingStore(true)
+    const headers = { ...bearer(), "x-session-id": "conv-1" }
+    let spent = false
+    const { app } = harness({
+      accounts: twoSubs(),
+      responses: [],
+      selection: { unpooledPolicy: "priority-failover" },
+      sessions: store,
+      invokeSdk: resumingFleet(seen, (invocation) => spent && invocation.accountId === "sub-a"),
+    })
+
+    await (await app.request("/v1/messages", post(OPENING, headers))).text()
+    await settle()
+    spent = true
+    const second = await app.request("/v1/messages", post(SECOND_TURN, headers))
+    await second.text()
+    await settle()
+
+    expect(second.status).toBe(200)
+    expect(seen.map((call) => call.accountId)).toEqual(["sub-a", "sub-a", "sub-b"])
+    // The transcript moved with the turn, so the upstream conversation is intact: nothing to surface.
+    expect(second.headers.get("x-router-session-restart")).toBeNull()
+    expect(carry.calls).toEqual([
+      { fromAccountId: "sub-a", toAccountId: "sub-b", sdkSessionId: "sess_sub-a" },
+    ])
+    // A delta, not a replay — forked at the first turn's answer, so whatever the failed attempt on
+    // `sub-a` appended to its transcript is left behind.
+    expect(seen[2]?.session).toEqual({
+      kind: "fork",
+      sdkSessionId: "sess_sub-a",
+      resumeSessionAt: "uuid-1",
+      deltaFrom: 2,
+      carryFrom: "sub-a",
+    })
+    // The binding followed the answer to `sub-b`, so the third turn is an ordinary resume there.
+    expect([...repository.rows.values()][0]).toMatchObject({
+      accountId: "sub-b",
+      sdkSessionId: "sess_sub-b",
+    })
+    const third = await app.request("/v1/messages", post(THIRD_TURN, headers))
+    await third.text()
+    expect(seen.at(-1)).toMatchObject({
+      accountId: "sub-b",
+      session: { kind: "resume", sdkSessionId: "sess_sub-b" },
+    })
+    expect(seen.at(-1)?.session).not.toHaveProperty("carryFrom")
+  })
+
+  test("`rebind` off a cooling subscription carries the session before the first byte", async () => {
+    const seen: SdkInvocation[] = []
+    const { store, carry } = carryingStore(true)
+    const headers = { ...bearer(), "x-session-id": "conv-1" }
+
+    const first = harness({
+      accounts: twoSubs(),
+      responses: [],
+      selection: { unpooledPolicy: "priority-failover" },
+      sessions: store,
+      invokeSdk: resumingFleet(seen, () => false),
+    })
+    await (await first.app.request("/v1/messages", post(OPENING, headers))).text()
+    await settle()
+
+    const second = harness({
+      accounts: [
+        subscriptionAccount("sub-a", { snapshot: { priority: 0, status: "cooling_down" } }),
+        subscriptionAccount("sub-b", { snapshot: { priority: 1 } }),
+      ],
+      responses: [],
+      selection: { unpooledPolicy: "priority-failover", boundAccountCoolingDown: "rebind" },
+      sessions: store,
+      invokeSdk: resumingFleet(seen, () => false),
+    })
+    const res = await second.app.request("/v1/messages", post(SECOND_TURN, headers))
+    await res.text()
+
+    expect(res.status).toBe(200)
+    expect(res.headers.get("x-router-session-restart")).toBeNull()
+    expect(carry.calls).toHaveLength(1)
+    expect(seen.at(-1)).toMatchObject({
+      accountId: "sub-b",
+      session: { kind: "fork", sdkSessionId: "sess_sub-a", carryFrom: "sub-a" },
+    })
+  })
+
+  test("a carry that fails starts fresh on the new subscription and says so", async () => {
+    const seen: SdkInvocation[] = []
+    const { repository, store } = carryingStore(false)
+    const headers = { ...bearer(), "x-session-id": "conv-1" }
+    let spent = false
+    const { app } = harness({
+      accounts: twoSubs(),
+      responses: [],
+      selection: { unpooledPolicy: "priority-failover" },
+      sessions: store,
+      invokeSdk: resumingFleet(seen, (invocation) => spent && invocation.accountId === "sub-a"),
+    })
+
+    await (await app.request("/v1/messages", post(OPENING, headers))).text()
+    await settle()
+    spent = true
+    const second = await app.request("/v1/messages", post(SECOND_TURN, headers))
+    await second.text()
+    await settle()
+
+    expect(second.status).toBe(200)
+    expect(second.headers.get("x-router-session-restart")).toBe("failover")
+    expect(seen[2]?.session).toEqual({ kind: "fresh", reason: "carry-failed" })
+    expect([...repository.rows.values()][0]).toMatchObject({
+      accountId: "sub-b",
+      sdkSessionId: "sess_sub-b",
     })
   })
 })

@@ -124,8 +124,9 @@ export type BindingDecision =
       readonly resetSource?: ResetSource
     }
   /**
-   * The binding is dropped, never moved. The next request starts a fresh upstream session on a
-   * new account and the loss of prior turns is surfaced, never silently truncated.
+   * The bound account cannot serve this turn. The row is kept; the SDK attempt on whichever account
+   * serves carries the transcript there (`claude-sdk/session-carry.ts`), and a turn that cannot
+   * carry it starts fresh and surfaces the loss, never silently truncated.
    */
   | {
       readonly state: "invalidated"

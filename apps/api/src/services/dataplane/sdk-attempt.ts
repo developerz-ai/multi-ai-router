@@ -107,6 +107,7 @@ export interface SdkSessionContext {
 /** No store wired: every turn is a fresh SDK session, which is correct, just cold. */
 const NO_SESSION: SessionTurn = {
   plan: { kind: "fresh", reason: "no-session" },
+  prepare: () => Promise.resolve(NO_SESSION),
   remember: () => {},
   release: () => {},
 }
@@ -122,7 +123,9 @@ export async function runSdkAttempt(input: SdkAttemptInput): Promise<AttemptOutc
   // account later in the same pool still serves the request instead of the whole chain dying here.
   if (invoke === undefined) return failure("server-error", NO_TRANSPORT)
 
-  const turn = resolveTurn(input, plan.account.id)
+  // Before the slot and the subprocess: a session bound on another account is carried here first,
+  // or the plan turns fresh — the launch must never resume an id this account has never seen.
+  const turn = await resolveTurn(input, plan.account.id).prepare()
   const rateLimit = rateLimitCapture(input, plan.account.id)
   const attemptSignal = attemptDeadline(input.timeoutMs, input.signal)
 
@@ -204,6 +207,9 @@ export async function runSdkAttempt(input: SdkAttemptInput): Promise<AttemptOutc
       turn.release()
     }),
     rateLimit: rateLimit.signal(),
+    ...(turn.plan.kind !== "fresh" && turn.plan.carryFrom !== undefined
+      ? { sessionCarried: true }
+      : {}),
   }
 }
 

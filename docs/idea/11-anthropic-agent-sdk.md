@@ -590,8 +590,10 @@ other); requests marked as a fork or subagent child; anything after the SDK repo
 
 - `Session → (Account, sdkSessionId, lineage state)` is a new obligation on an entity
   [02-domain-model.md](02-domain-model.md) already has.
-- **Sticky routing becomes correctness, not optimization.** An SDK session id is only resumable on
-  the Account that created it; a policy that moves a Session must invalidate the mapping, not carry it.
+- **Sticky routing becomes correctness, not optimization.** An SDK session id is only resumable
+  where its transcript file is. A turn that lands on another Account must **carry the transcript
+  there first** or start fresh — never resume an id the new Account has never seen (below,
+  "Carrying a session to another Account").
 - Meridian persists mappings in a JSON file guarded by advisory **lock files** — a scheme that exists
   only because a JSON file has no cross-process coordination. We have **PostgreSQL**: the mapping is
   a real table with real transactions, the in-memory LRU pair sits in front of it, and any sweep that
@@ -607,8 +609,10 @@ other); requests marked as a fork or subagent child; anything after the SDK repo
 ### As built
 
 `apps/api/src/providers/claude-sdk/session/`: `conversation.ts` (request → one hashable string per
-message), `fingerprint.ts`, `lineage.ts` (the six classes and the never-resume rules), `cache.ts`
-(the pair, with coordinated eviction), `store.ts` (Postgres behind both). The binding reaches
+message), `fingerprint.ts`, `lineage.ts` (the seven classes), `plan.ts` (the never-resume rules and
+the plan), `cache.ts` (the pair, with coordinated eviction), `store.ts` (Postgres behind both),
+`turn.ts` (prepare → launch → remember for one turn). The transcript carry is
+`providers/claude-sdk/session-carry.ts`. The binding reaches
 routing through `services/dataplane/session-binding.ts`, which populates the `SelectionRequest.binding`
 `services/routing/` already consumed.
 
@@ -622,7 +626,42 @@ Decisions taken while building it, each narrower than the spec text above:
 | A binding is written only once the SDK **names a session id** | An Account with no session id to resume is a pin with no payoff, and pinning one costs the next turn a failover that a cooling-down Account would otherwise still have |
 | `assistantUuids[i]` is written one **past** the end of the hashes it accompanies | That is the index the client will send this answer back at next turn — the position an undo has to be able to name. Absent, an undo starts fresh rather than forking at a guessed point |
 | A read or write failure degrades to "no binding" and is logged, never thrown | A slow session table costs a cold prompt cache. Turning it into a `500` would fail requests over a cache |
-| `resolve()` runs **per attempt**, not per request | A failover to a second subscription Account is a different set of SDK sessions; the first Account's plan would resume one the second has never heard of |
+| `resolve()` runs **per attempt**, not per request | A failover to a second subscription Account plans against *that* Account: a binding elsewhere becomes a carry (`carryFrom`), never a bare resume of an id the second Account has never seen |
+| A refused binding is **kept**, not cleared | Selection refusing the bound Account changes where this turn runs, not where the conversation lives. Clearing it was what turned every quota-driven rebind into a full-history text replay on a cold Account (prod, 2026-10-05: ~670k tokens re-sent per turn). Only `remember` — a turn that answered — re-points the row |
+
+#### Carrying a session to another Account
+
+A local `claude` user whose quota runs out mid-session runs `/login` with another subscription
+and carries on: the transcript lives at `~/.claude/projects/<cwd-slug>/<session>.jsonl`, and
+logging in swaps only `.credentials.json` beside it. The router keeps one `CLAUDE_CONFIG_DIR` per
+Account, so the same session on another Account is the same file in another directory. Carrying it
+is the router's `/login`.
+
+| Step | What happens |
+|---|---|
+| Plan | `store.resolve` for Account B finds the key's binding on Account A. It classifies lineage exactly as it would on A and returns the resume/fork plan with `carryFrom: A` |
+| Carry | `SessionTurn.prepare()`, before the slot and the subprocess: under A's owner hold, find `projects/<slug containing A>/<session>.jsonl` (≤ `CLAUDE_SDK_SESSION_CARRY_MAX_BYTES`); under B's, write it to `projects/<same slug, A→B>/` with A's config-dir path rewritten to B's (the CLI stamps its cwd into every line), via a sibling temp file and `rename` |
+| Launch | The unchanged plan: `resume` (or `forkSession` + `resumeSessionAt`) on B, sending only the delta — the same warm-transcript turn A would have run. The session id stays the same; the carried uuids still name the same messages, so a later undo still forks |
+| Record | `remember` on B re-points the row to B. Failure on B records nothing; the row still names A and the next turn carries again |
+| Fallback | Any carry failure (`not-found` — swept or never written, `too-large`, `target-missing`, `owner-unavailable`, `io-error`) turns the plan `fresh` (`carry-failed`), which replays history as the framed text it always did, with no uuids carried. A carried id the CLI still cannot find is the `stale-session` row in §9: evict, replay once in place |
+| Surface | `x-router-session-restart` is set only when the answering turn did **not** carry: a carried session lost nothing |
+
+Bounds, each a decision:
+
+- **Transcript only.** Never `.credentials.json` or anything else at the config-dir root — the
+  carry reads exactly one `<uuid>.jsonl`, with the same closed-by-construction rules as the sweep
+  (§3): ids validated as uuids, symlinks refused on both sides (`O_NOFOLLOW`, `lstat`), paths
+  rebuilt from validated parts. Non-negotiable 1 is untouched: the file is the conversation, not
+  the login.
+- **Not the `<session>/` directory.** Tool results and subagent transcripts are read back only by
+  host tools, and none run here (non-negotiable 2).
+- **Direct key only.** A fingerprint alias is Account-scoped; an alias naming another Account's
+  session outlived its binding and is never carried.
+- **Owner holds on both Accounts**, so a carry never writes into a directory being deleted, and
+  never reads one the deletion has already revoked.
+- **Off the HTTP path entirely**, and on the SDK path only on the turn that changes Account — the
+  labeled exception to the overhead budget, a few-MB copy before a subprocess spawn.
+- `CLAUDE_SDK_SESSION_CARRY=false` restores restart-on-failover.
 
 ---
 
@@ -1115,7 +1154,7 @@ error types:
 | Credential refresh contended | `another claude code process is refreshing`, `exited mid-refresh`, `holding the refresh lock` — the CLI lost its own credential-refresh lock ("Failed to refresh OAuth token: another Claude Code process is refreshing it or exited mid-refresh…", production v2.13.1; the SDK reports it as `server_error`). Matched on the contention half only, and ordered **before** Expired credential, because one spelling contains `could not be refreshed` | **503**, `server-error`, retryable: fail over to the next Account. **Never** `needs_reauth` and never `exhausted` — the credential is alive, the token is the CLI's to refresh, and the next process to take the lock does. Before this row it fell to `unknown` and the operator read "a reason this router does not recognize" |
 | Rate limited | `429`, `rate limit`, `usage limit reached`, `hit your … limit` (session, weekly, monthly spend, fast), `you've reached your <tier> limit` (one to three qualifier words — the credits-era per-tier banner), `you're out of usage credits` (a member's spent top-up; the included window still refills) | 429 + circuit breaker; fail over to the next Account |
 | Credits exhausted | `credit balance is too low` (the CLI's own error constant, 0.3.220 and 2.1.261), `organization is out of usage credits`, `usage limit is set to $N` (an admin-provisioned cap) or `api_error_status` 402 | `402`, Account → `exhausted` — permanent until a human tops up, **never** timer-retried (CLAUDE.md non-negotiable 7). Fail over: the next Account may be funded |
-| Stale SDK session | `No conversation found with session ID`, `No message found with message.uuid` (a fork whose rewind point is gone — same recovery, and before it was named here it fell to `unknown`, which does not retry, so the binding survived to fail the next turn too) | Evict the Session mapping, replay once |
+| Stale SDK session | `No conversation found with session ID`, `No message found with message.uuid` (a fork whose rewind point is gone — same recovery, and before it was named here it fell to `unknown`, which does not retry, so the binding survived to fail the next turn too). Also the backstop for a carried transcript the CLI could not find (§4) | Evict the Session mapping, replay once |
 | Busy session | `is currently running as a background agent` (0.3.x), `is running as a background session` (2.1.x, on **stderr** behind an `exit 1` — listing only the older phrase sent this to `subprocess-exit` and cost a conversation its account mid-turn, 2026-09-06). Should now be rare rather than routine: the concurrent-turn case is detached before it reaches the CLI (§4) | **One in-place retry as a fork** (`invoker.ts`): same Account, `forkSession: true` at the tip — the fork inherits the full transcript warm, where a failover would replay it cold. Legal because the refusal is thrown before any stream output and the renderer never throws after the first byte. A fork that comes back busy is a real `503` for the chain |
 | Extra Usage gated | `third-party apps now draw from your extra usage`, or `extra usage` together with `claude.ai/settings/usage` — Anthropic's answer to a request it metered as a third-party app (production, 2026-09-05) | **429**, `rate-limited`: cool this Account down and fail over to the next. Ordered **before** the bare `api_error_status` 400, which had it reading as `invalid-request` — not retryable, so the chain stopped with five healthy subscriptions unasked and the client was told its request was malformed. The client-facing sentence names Extra Usage and `claude.ai/settings/usage`, because that is the remedy; the fix that stops it arising is the fingerprint scrub (§8) |
 | Overage required | `extra usage` + `1m`, or the CLI's verbatim long-context sentences (`Extra usage is required for long context`, `Usage credits are required for long context`, `out of extra usage`) | Drop the extended-context variant, cool down — the included window still refills on a clock, so this is never `exhausted` |

@@ -15,6 +15,8 @@ export type FreshReason =
   | "subagent-child"
   | "session-gone"
   | "no-rollback-point"
+  /** The session lives on another Account and its transcript could not be carried here. */
+  | "carry-failed"
 
 /** What the SDK launch does with this turn. `deltaFrom` indexes the incoming messages. */
 export type SessionPlan =
@@ -23,6 +25,7 @@ export type SessionPlan =
       readonly sdkSessionId: string
       readonly lineage: LineageClass
       readonly deltaFrom: number
+      readonly carryFrom?: string
     }
   | {
       readonly kind: "fork"
@@ -30,6 +33,12 @@ export type SessionPlan =
       /** The SDK assistant message the fork rewinds to — `resumeSessionAt` verbatim. */
       readonly resumeSessionAt: string
       readonly deltaFrom: number
+      /**
+       * The Account the session was bound to, when that is not the Account this attempt runs on.
+       * Its transcript has to be carried here before the launch can resume it
+       * (`claude-sdk/session-carry.ts`); a carry that fails turns the plan `fresh`.
+       */
+      readonly carryFrom?: string
     }
   | { readonly kind: "fresh"; readonly reason: FreshReason }
 
@@ -122,6 +131,38 @@ export function resolveLineage(input: ResolveLineageInput): SessionPlan {
     default:
       return { kind: "fresh", reason: "diverged" }
   }
+}
+
+/**
+ * The plan for a session carried in from `carryFrom` (`claude-sdk/session-carry.ts`).
+ *
+ * A plain continuation is turned into a **fork at the last recorded answer**. The bound Account's
+ * transcript is not guaranteed to end there: an attempt that failed on it — the spent window that
+ * caused this very failover — may already have appended the user's turn and the CLI's synthetic
+ * "usage limit reached" reply. Rewinding to the answer the lineage recorded drops exactly that,
+ * and the delta from there is the same one a resume would have sent. Compaction and modified
+ * continuations keep their resume: their stored positions do not index the incoming messages, so
+ * there is no rewind point to name. No uuid, likewise — a resume is still better than fresh.
+ */
+export function carriedPlan(
+  plan: SessionPlan,
+  carryFrom: string,
+  uuids: readonly string[],
+): SessionPlan {
+  if (plan.kind === "fresh") return plan
+  if (plan.kind === "resume" && plan.lineage === "continuation") {
+    const point = rollbackPoint(uuids, plan.deltaFrom)
+    if (point !== null) {
+      return {
+        kind: "fork",
+        sdkSessionId: plan.sdkSessionId,
+        resumeSessionAt: point.uuid,
+        deltaFrom: point.at + 1,
+        carryFrom,
+      }
+    }
+  }
+  return { ...plan, carryFrom }
 }
 
 /**

@@ -1,4 +1,5 @@
 import type { SessionLineageState, SessionRepository, SessionRow } from "@multi-ai-router/db"
+import type { SessionCarrier, SessionCarryOutcome } from "../session-carry"
 import {
   createSessionCache,
   type SessionCache,
@@ -9,9 +10,12 @@ import { readConversation } from "./conversation"
 import { createSessionDeletionFence } from "./deletion-fence"
 import { scopedKey, sessionFingerprint } from "./fingerprint"
 import { claimSessionTurn, createSessionClaims, type SessionClaims } from "./inflight"
-import { hashMessages, nextLineage } from "./lineage"
-import { resolveLineage, type SessionPlan } from "./plan"
+import { hashMessages } from "./lineage"
+import { carriedPlan, resolveLineage, type SessionPlan } from "./plan"
+import { heldTurn, type SessionTurn, unrecordedTurn } from "./turn"
 import { createSessionWrites } from "./writes"
+
+export type { SessionTurn } from "./turn"
 
 /**
  * Session lineage as the rest of the router uses it: one read before selection, one plan before an
@@ -27,9 +31,11 @@ import { createSessionWrites } from "./writes"
  * cold prompt cache and nothing else — the turn is still answered, just from a fresh SDK session.
  * That is why every path below degrades to "no binding" rather than throwing.
  *
- * The binding is dropped, never moved (`services/routing/binding.ts`). An SDK session id is
- * meaningless off the Account that minted it, so re-pointing a row at a new Account would hand the
- * next request a resume token the new upstream has never seen.
+ * **A binding follows its conversation to another Account by carrying the transcript there.** An
+ * SDK session id resumes only where its transcript file is, so a turn that lands on a different
+ * Account than the binding names plans a resume *with* `carryFrom`, and `SessionTurn.prepare`
+ * copies the file before the launch (`claude-sdk/session-carry.ts`). The row is never re-pointed
+ * by hand: the turn's own `remember` moves it once the new Account has actually answered.
  */
 
 /** What selection needs: an Account, and the session id that only resumes there. */
@@ -44,6 +50,15 @@ export interface SessionStoreDeps {
   readonly cache?: Partial<SessionCacheOptions>
   /** Reported, never thrown. Composition points this at the logger. */
   readonly onError?: (operation: "read" | "write", error: unknown) => void
+  /**
+   * Moves a transcript between Accounts' config directories. Absent, a turn that lands off its
+   * bound Account starts fresh (`carry-failed`), which is what every turn did before carrying.
+   */
+  readonly carrier?: SessionCarrier
+  /** Every carry attempt's outcome, for the log line. */
+  readonly onCarry?: (
+    outcome: SessionCarryOutcome & { readonly fromAccountId: string; readonly toAccountId: string },
+  ) => void
 }
 
 export const DEFAULT_SESSION_CACHE_MAX_ENTRIES = 4_096
@@ -67,38 +82,17 @@ export interface ResolveTurnInput {
   readonly forkOrSubagent?: boolean
 }
 
-export interface SessionTurn {
-  readonly plan: SessionPlan
-  /**
-   * What the SDK told us, once it says it. Fire-and-forget: the cache is updated synchronously so
-   * the next turn on this replica resumes even if the row is still in flight.
-   *
-   * **A detached turn remembers nothing** — see {@link SessionStore.resolve}. It is a no-op there
-   * rather than a flag the caller has to check, because the one thing that must not happen is a
-   * hidden one-shot's throwaway session becoming the conversation's binding.
-   *
-   * @param assistantUuid the SDK message uuid this turn produced, when known. It is what an undo
-   * later rewinds to, and its absence costs exactly that: an undo starts fresh instead of forking.
-   */
-  remember(sdkSessionId: string, assistantUuid?: string): void
-  /**
-   * This turn is finished with the SDK session, so the next turn of the conversation may have it.
-   *
-   * Idempotent, and called **unconditionally** — from the turn's own end inside the invoker, and
-   * again from the attempt's failure path, because those two cannot coordinate and a claim that
-   * leaks parks a conversation on fresh sessions until the process restarts. A turn that holds no
-   * claim releases nothing (`session/inflight.ts`).
-   */
-  release(): void
-}
-
 export interface SessionStore {
   /**
    * The persisted binding for a session key, read through the cache. Called once per request,
    * before selection, because selection may not overrule it.
    */
   binding(apiKeyId: string, sessionKey: string): Promise<StoredBinding | undefined>
-  /** Selection refused the binding. Drop it here and in Postgres; never move it to the new pick. */
+  /**
+   * The bound session is gone for good — the SDK disowned the id. Drop it here and in Postgres.
+   * A binding merely sitting on an Account that cannot serve right now is *not* invalidated: the
+   * next attempt carries it (`SessionTurn.prepare`).
+   */
   invalidate(apiKeyId: string, sessionKey: string): void
   /** Drop local lineage immediately; durable deletion clears targeted bindings transactionally. */
   invalidateAccount(accountId: string): Promise<void>
@@ -193,13 +187,17 @@ export function createSessionStore(deps: SessionStoreDeps): SessionStore {
             })
 
       const session = boundSession(cache, key, input.apiKeyId, input.accountId, fingerprint)
-      const candidate = resolveLineage({
+      const resolved = resolveLineage({
         session,
         conversation,
         keySource: input.keySource,
         ...(input.forkOrSubagent === undefined ? {} : { forkOrSubagent: input.forkOrSubagent }),
         ...(input.sessionGone === undefined ? {} : { sessionGone: input.sessionGone }),
       })
+      const candidate =
+        session?.carryFrom === undefined
+          ? resolved
+          : carriedPlan(resolved, session.carryFrom, session.lineage.assistantUuids)
       const claim = claimSessionTurn(
         claims,
         key,
@@ -210,55 +208,74 @@ export function createSessionStore(deps: SessionStoreDeps): SessionStore {
 
       // Nothing readable arrived, so there is nothing to hash and nothing worth remembering. The
       // plan already says so by name.
-      if (conversation === null) return { plan, remember: () => {}, release: claim.release }
+      if (conversation === null) return unrecordedTurn(plan, claim.release)
 
       // A detached turn is not the conversation: it runs, it answers, and it leaves no trace. Were
       // it to remember, a throwaway one-shot's fresh session would become the binding the user's
       // next real turn resumes from — the durable lineage advanced by a request nobody saw.
-      if (!claim.held) return { plan, remember: () => {}, release: claim.release }
+      if (!claim.held) return unrecordedTurn(plan, claim.release)
 
-      const lease = fence.hold(input.accountId)
-      const hashes = hashMessages(conversation.messages)
-      const uuids = plan.kind === "fresh" ? [] : (session?.lineage.assistantUuids ?? [])
-      // A fork's uuids past its rollback point name the abandoned branch.
-      const carried = plan.kind === "fork" ? uuids.slice(0, plan.deltaFrom) : uuids
-
-      return {
+      const carrier = deps.carrier
+      return heldTurn(
+        {
+          cache,
+          write,
+          now: deps.now,
+          key,
+          apiKeyId: input.apiKeyId,
+          sessionKey: input.sessionKey,
+          keySource: input.keySource,
+          accountId: input.accountId,
+          fingerprint,
+          hashes: hashMessages(conversation.messages),
+          storedUuids: session?.lineage.assistantUuids ?? [],
+          claim,
+          lease: fence.hold(input.accountId),
+          ...(carrier === undefined
+            ? {}
+            : {
+                carry: async (fromAccountId, sdkSessionId) => {
+                  const toAccountId = input.accountId
+                  const outcome = await carrier.carry({ fromAccountId, toAccountId, sdkSessionId })
+                  deps.onCarry?.({ ...outcome, fromAccountId, toAccountId })
+                  return outcome.carried
+                },
+              }),
+        },
         plan,
-        release: () => {
-          claim.release()
-          lease.release()
-        },
-        remember: (sdkSessionId, assistantUuid) => {
-          if (!lease.valid() || !claim.own(sdkSessionId)) return
-          const lineage = nextLineage(hashes, carried, assistantUuid)
-          cache.set(key, { accountId: input.accountId, sdkSessionId, lineage })
-          if (fingerprint !== null) cache.alias(fingerprint, key)
-          write(key, {
-            apiKeyId: input.apiKeyId,
-            key: input.sessionKey,
-            accountId: input.accountId,
-            sdkSessionId,
-            lineageState: lineage,
-            fingerprintSource: input.keySource,
-            lastUsedAt: deps.now(),
-          })
-        },
-      }
+      )
     },
   }
 }
 
-/** The binding for *this* Account: the session key first, then the fingerprint alias behind it. */
+/**
+ * The binding this turn can rejoin: the session key first, then the fingerprint alias behind it.
+ *
+ * A direct binding on **another** Account is still this conversation — the request names it by
+ * key — so it comes back with `carryFrom`, and the transcript follows the turn. An alias never
+ * does: the fingerprint is Account-scoped, so an alias naming another Account's session is one that
+ * outlived the binding it pointed at.
+ */
 function boundSession(
   cache: SessionCache,
   key: string,
   apiKeyId: string,
   accountId: string,
   fingerprint: string | null,
-): { readonly sdkSessionId: string; readonly lineage: SessionLineageState } | null {
+): {
+  readonly sdkSessionId: string
+  readonly lineage: SessionLineageState
+  readonly carryFrom?: string
+} | null {
   const direct = cache.get(key)
-  if (direct !== undefined && direct !== null && direct.accountId === accountId) return direct
+  if (direct !== undefined && direct !== null) {
+    if (direct.accountId === accountId) return direct
+    return {
+      sdkSessionId: direct.sdkSessionId,
+      lineage: direct.lineage,
+      carryFrom: direct.accountId,
+    }
+  }
 
   if (fingerprint === null) return null
   const aliased = cache.aliased(fingerprint)

@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.22.0] — 2026-10-05
+
+A Claude subscription conversation now survives a switch to another subscription. When the bound account runs out of quota, cools down, or loses its login, the next subscription carries the conversation's SDK transcript into its own config directory and continues it — the router's equivalent of a local `/login` mid-session — instead of restarting it.
+
+### Upgrade notes
+
+- **New optional settings, both defaulted:** `CLAUDE_SDK_SESSION_CARRY` (`true`), `CLAUDE_SDK_SESSION_CARRY_MAX_BYTES` (32 MiB). `false` restores restart-on-failover.
+- **`x-router-session-restart` is now set only when history was actually lost.** A turn that carried its session to another account sends no header.
+
+### Changed
+
+- **Failover keeps the conversation.** A turn that lands on a different subscription than its binding (preflight `rebind`, an exhausted / `needs_reauth` / out-of-scope bound account, or a mid-chain hop off a spent window) copies `projects/<slug>/<session>.jsonl` from the bound account's `CLAUDE_CONFIG_DIR` to the serving one's — transcript only, never a credential; symlinks refused on both sides; atomic rename; both accounts' owner holds — and continues it with the same delta a resume would send, forked at the last recorded answer so a failed attempt's appended tail stays behind. Previously the binding was dropped and the whole history was replayed as framed text on a fresh session: lossy, and in production ~670k tokens per turn.
+- **A refused binding is kept, not cleared.** Only the turn that answered on the new account re-points it. A carry that cannot happen (transcript swept, too large, owner refused) starts fresh exactly as before and is logged and surfaced.
+
 ## [2.21.1] — 2026-10-05
 
 ### Fixed
