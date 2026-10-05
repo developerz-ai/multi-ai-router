@@ -7,7 +7,7 @@
  * an SDK session already holds, a **cache** pair with coordinated eviction, and a **store** that
  * puts Postgres behind all of it.
  *
- * Only the store is stateful. Everything else is a pure function, so the six lineage classes are
+ * Only the store is stateful. Everything else is a pure function, so the seven lineage classes are
  * asserted against arrays rather than against a running SDK.
  */
 
@@ -19,14 +19,10 @@ export type { FingerprintSeed } from "./fingerprint"
 export { scopedKey, sessionFingerprint } from "./fingerprint"
 export type { SessionClaim, SessionClaims } from "./inflight"
 export { createSessionClaims } from "./inflight"
-export type {
-  FreshReason,
-  LineageClass,
-  LineageOverlap,
-  ResolveLineageInput,
-  SessionPlan,
-} from "./lineage"
-export { classifyLineage, hashMessages, resolveLineage } from "./lineage"
+export type { LineageClass, LineageOverlap } from "./lineage"
+export { classifyLineage, hashMessages } from "./lineage"
+export type { FreshReason, ResolveLineageInput, SessionPlan } from "./plan"
+export { resolveLineage } from "./plan"
 export type {
   ResolveTurnInput,
   SessionStore,

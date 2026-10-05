@@ -9,7 +9,7 @@ import {
 import { messagesBody, toolResultBody } from "./fixtures"
 
 /**
- * The six lineage classes and the never-resume rules
+ * The seven lineage classes and the never-resume rules
  * (docs/idea/11-anthropic-agent-sdk.md §4).
  *
  * Every one of them is a correctness decision. Getting `continuation` wrong costs a cold prompt
@@ -35,6 +35,29 @@ describe("classifying an incoming conversation against a stored one", () => {
 
     expect(overlap.lineage).toBe("modified-continuation")
     expect(overlap.deltaFrom).toBe(5)
+  })
+
+  test("a replaced stored tail is a rewrite, whose delta starts where the histories part", () => {
+    // Stored: the turn, its answer, then a hidden suggestion one-shot. Incoming: the real next turn
+    // on top of the same answer. The user's message sits *inside* the stored length.
+    const overlap = classifyLineage(
+      hashes("u1", "a1", "u2", "a2", "suggest"),
+      hashes("u1", "a1", "u2", "a2", "real", "reminder"),
+    )
+
+    expect(overlap.lineage).toBe("rewrite")
+    expect(overlap.deltaFrom).toBe(4)
+    expect(overlap.preserved).toBe(4)
+  })
+
+  test("a replaced tail of the same length is a rewrite too, not a fresh replay", () => {
+    const overlap = classifyLineage(
+      hashes("u1", "a1", "u2", "a2", "suggest"),
+      hashes("u1", "a1", "u2", "a2", "real"),
+    )
+
+    expect(overlap.lineage).toBe("rewrite")
+    expect(overlap.deltaFrom).toBe(4)
   })
 
   test("a client-side compaction is a contiguous stored suffix reappearing after position 0", () => {
@@ -109,7 +132,67 @@ describe("resolving what the SDK launch does with the turn", () => {
     if (plan.kind !== "resume") return
     expect(plan.sdkSessionId).toBe("sess_1")
     expect(plan.lineage).toBe("continuation")
-    expect(plan.deltaFrom).toBe(1)
+    // Index 1 is the session's own answer echoed back; it already holds that.
+    expect(plan.deltaFrom).toBe(2)
+  })
+
+  test("a trailing assistant message is a prefill, so it is not skipped as an echo", () => {
+    const first = view(messagesBody([{ role: "user", text: "hello" }]))
+    const prefill = view(
+      messagesBody([
+        { role: "user", text: "hello" },
+        { role: "assistant", text: "Sure," },
+      ]),
+    )
+
+    const plan = resolveLineage({
+      session: stored(hashMessages(first.messages)),
+      conversation: prefill,
+      keySource: "header",
+    })
+
+    expect(plan).toMatchObject({ kind: "resume", deltaFrom: 1 })
+  })
+
+  test("a real turn after a hidden one-shot forks at the shared answer and sends the turn", () => {
+    const turns = [
+      { role: "user", text: "why so slow?" },
+      { role: "assistant", text: "the gate" },
+    ] as const
+    const afterSuggestion = view(
+      messagesBody([...turns, { role: "user", text: "[SUGGESTION MODE: predict]" }]),
+    )
+    const real = view(messagesBody([...turns, { role: "user", text: "keep it under 8gb" }]))
+
+    // The main turn's answer landed at index 1; the one-shot's answer at index 3.
+    const plan = resolveLineage({
+      session: stored(hashMessages(afterSuggestion.messages), ["", "uuid-answer", "", "uuid-x"]),
+      conversation: real,
+      keySource: "header",
+    })
+
+    expect(plan).toEqual({
+      kind: "fork",
+      sdkSessionId: "sess_1",
+      resumeSessionAt: "uuid-answer",
+      deltaFrom: 2,
+    })
+  })
+
+  test("a rewrite with no uuid to rewind to replays fresh rather than dropping the turn", () => {
+    const base = [
+      { role: "user", text: "one" },
+      { role: "assistant", text: "two" },
+    ] as const
+    const plan = resolveLineage({
+      session: stored(
+        hashMessages(view(messagesBody([...base, { role: "user", text: "x" }])).messages),
+      ),
+      conversation: view(messagesBody([...base, { role: "user", text: "y" }])),
+      keySource: "header",
+    })
+
+    expect(plan).toEqual({ kind: "fresh", reason: "no-rollback-point" })
   })
 
   test("an undo forks at the SDK message uuid it rewinds to", () => {

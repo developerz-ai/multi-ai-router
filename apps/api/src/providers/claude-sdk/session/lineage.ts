@@ -1,18 +1,19 @@
 import { createHash } from "node:crypto"
 import type { SessionLineageState } from "@multi-ai-router/db"
-import type { ConversationView, LineageMessage } from "./conversation"
+import type { LineageMessage } from "./conversation"
 
 /**
  * Is the conversation in front of us a legal descendant of the one this SDK session holds — and if
  * so, how do we rejoin it? (docs/idea/11-anthropic-agent-sdk.md §4)
  *
  * A pure function over stored hashes and incoming hashes. No clock, no store, no SDK. That matters
- * because every one of the six classes below is a *correctness* decision, not an optimization:
+ * because every one of the seven classes below is a *correctness* decision, not an optimization:
  *
  * | Class | Condition | Action |
  * |---|---|---|
  * | continuation | stored is a prefix of incoming and it grew | `resume`, send the delta |
- * | modified continuation | most of the prefix survives and it grew | `resume`, restate the hashes |
+ * | modified continuation | most of the prefix survives, it grew, the stored tail realigns | `resume`, restate the hashes |
+ * | rewrite | most of the prefix survives, then the stored tail is **replaced** by new content | rewind before it, send from there |
  * | compaction | a contiguous stored **suffix** reappears after position 0 | `resume` from after it |
  * | undo | the prefix is preserved and the conversation **shrank** | `forkSession` + `resumeSessionAt` |
  * | diverged | no meaningful overlap | fresh session |
@@ -48,6 +49,7 @@ const MIN_COMPACTION_OVERLAP = 2
 export type LineageClass =
   | "continuation"
   | "modified-continuation"
+  | "rewrite"
   | "compaction"
   | "undo"
   | "diverged"
@@ -86,21 +88,31 @@ export function classifyLineage(
     return { lineage: "replay", deltaFrom: 0, preserved: matched }
   }
 
-  if (incoming.length > stored.length) {
-    if (matched === stored.length) {
-      return { lineage: "continuation", deltaFrom: stored.length, preserved: matched }
-    }
-    if (matched >= Math.ceil(stored.length * MODIFIED_PREFIX_MIN_RATIO)) {
-      return { lineage: "modified-continuation", deltaFrom: stored.length, preserved: matched }
-    }
-    return compactionOr("diverged", stored, incoming, matched)
+  if (incoming.length > stored.length && matched === stored.length) {
+    return { lineage: "continuation", deltaFrom: stored.length, preserved: matched }
   }
 
-  // It shrank. A preserved prefix is an undo; a preserved *suffix* somewhere after position 0 is
-  // the client having summarized its own history in front of it.
-  if (matched === incoming.length) {
+  // It shrank with nothing new. A preserved prefix is an undo.
+  if (incoming.length <= stored.length && matched === incoming.length) {
     return { lineage: "undo", deltaFrom: incoming.length, preserved: matched }
   }
+
+  if (matched >= Math.ceil(stored.length * MODIFIED_PREFIX_MIN_RATIO)) {
+    // The stored tail still sits where it was: something earlier was mutated in place, and the
+    // session already holds it in its old form. Only what lies past the stored end is new.
+    const last = stored.length - 1
+    if (incoming.length > stored.length && incoming[last] === stored[last]) {
+      return { lineage: "modified-continuation", deltaFrom: stored.length, preserved: matched }
+    }
+    // The tail after `matched` was *replaced* — a client's hidden one-shot (a prompt suggestion,
+    // a title) advanced the session, then the real turn arrived on top of the answer before it.
+    // Every incoming message past `matched` is unseen; sending only what lies past the stored end
+    // dropped the user's actual message and answered a bare system reminder instead.
+    return { lineage: "rewrite", deltaFrom: matched, preserved: matched }
+  }
+
+  // A preserved *suffix* somewhere after position 0 is the client having summarized its own
+  // history in front of it.
   return compactionOr("diverged", stored, incoming, matched)
 }
 
@@ -160,121 +172,20 @@ function commonPrefix(stored: readonly string[], incoming: readonly string[]): n
   return matched
 }
 
-/** Why a turn starts a fresh SDK session instead of rejoining one. Every value is client-visible
- * only as a cold prompt cache, never as an error — a fresh session still answers the question. */
-export type FreshReason =
-  | "no-session"
-  /** Another turn of this same conversation is running right now — `session/inflight.ts`. */
-  | "session-busy"
-  | "unreadable-body"
-  | "diverged"
-  | "replay"
-  | "tool-result-without-header"
-  | "subagent-child"
-  | "session-gone"
-  | "no-rollback-point"
-
-/** What the SDK launch does with this turn. `deltaFrom` indexes the incoming messages. */
-export type SessionPlan =
-  | {
-      readonly kind: "resume"
-      readonly sdkSessionId: string
-      readonly lineage: LineageClass
-      readonly deltaFrom: number
-    }
-  | {
-      readonly kind: "fork"
-      readonly sdkSessionId: string
-      /** The SDK assistant message the fork rewinds to — `resumeSessionAt` verbatim. */
-      readonly resumeSessionAt: string
-      readonly deltaFrom: number
-    }
-  | { readonly kind: "fresh"; readonly reason: FreshReason }
-
-export interface ResolveLineageInput {
-  /** The stored binding for this Account, or null when the session has never run here. */
-  readonly session: { readonly sdkSessionId: string; readonly lineage: SessionLineageState } | null
-  readonly conversation: ConversationView | null
-  /** How the router named this session. A fingerprint is a guess; a header is the client's word. */
-  readonly keySource: "header" | "fingerprint"
-  /** The client marked this a fork or a subagent child. Never resumes the parent's session. */
-  readonly forkOrSubagent?: boolean
-  /** The SDK already told us this session is gone. Never resumed again. */
-  readonly sessionGone?: boolean
-  /**
-   * Another turn of this conversation is running right now, so this one is a concurrent arrival —
-   * a client's hidden title or summary one-shot, in the overwhelming majority of cases
-   * (`session/inflight.ts`). It may not resume a session that is in use, and the caller separately
-   * sees to it that it records nothing.
-   */
-  readonly sessionBusy?: boolean
-}
-
 /**
- * The **never resume** rules, then the classification (§4).
+ * The state stored beside the session id: one hash per message the SDK has now seen, and the SDK
+ * message uuids that name where to rewind to.
  *
- * The tool-result rule is the subtle one: a headerless client running its own tool loop opens every
- * concurrent loop with the same first message, so they share a fingerprint — and resuming would
- * splice two independent loops into one transcript. With a client-supplied header there is no
- * guess to get wrong, so the rule does not apply.
- *
- * `sessionBusy` is the same hazard arriving through the *other* door, and the header does not save
- * you from it: a client that sends a header sends the **same** header on the hidden one-shots it
- * fires beside the visible turn. Two turns of one conversation in flight at once cannot share an
- * SDK session — the CLI refuses outright — so the later arrival runs detached
- * (`session/inflight.ts`).
+ * The uuid for this turn is written **one past the end**, because that is the position the client
+ * will send the assistant's answer back at next turn — the index an undo has to be able to name.
  */
-export function resolveLineage(input: ResolveLineageInput): SessionPlan {
-  const { conversation, session } = input
-
-  // First, because it is the only rule about what is happening *now* rather than about what the
-  // conversation looks like: a session another turn is running cannot be resumed whatever the
-  // hashes say, and asking the CLI anyway is the refusal this rule exists to prevent.
-  if (input.sessionBusy === true) return { kind: "fresh", reason: "session-busy" }
-  if (input.sessionGone === true) return { kind: "fresh", reason: "session-gone" }
-  if (input.forkOrSubagent === true) return { kind: "fresh", reason: "subagent-child" }
-  if (conversation === null) return { kind: "fresh", reason: "unreadable-body" }
-  if (input.keySource === "fingerprint" && conversation.endsWithToolResult) {
-    return { kind: "fresh", reason: "tool-result-without-header" }
-  }
-  if (session === null) return { kind: "fresh", reason: "no-session" }
-
-  const overlap = classifyLineage(session.lineage.prefixHashes, hashMessages(conversation.messages))
-
-  switch (overlap.lineage) {
-    case "continuation":
-    case "modified-continuation":
-    case "compaction":
-      return {
-        kind: "resume",
-        sdkSessionId: session.sdkSessionId,
-        lineage: overlap.lineage,
-        deltaFrom: overlap.deltaFrom,
-      }
-    case "undo": {
-      const resumeSessionAt = rollbackPoint(session.lineage.assistantUuids, overlap.preserved)
-      // Without the SDK message uuid there is no way to name where to rewind to, and resuming
-      // without one would answer a question the user already took back.
-      if (resumeSessionAt === null) return { kind: "fresh", reason: "no-rollback-point" }
-      return {
-        kind: "fork",
-        sdkSessionId: session.sdkSessionId,
-        resumeSessionAt,
-        deltaFrom: overlap.deltaFrom,
-      }
-    }
-    case "replay":
-      return { kind: "fresh", reason: "replay" }
-    default:
-      return { kind: "fresh", reason: "diverged" }
-  }
-}
-
-/** The last known SDK assistant uuid at or before the last preserved message. */
-function rollbackPoint(uuids: readonly string[], preserved: number): string | null {
-  for (let at = Math.min(preserved, uuids.length) - 1; at >= 0; at--) {
-    const uuid = uuids[at]
-    if (uuid !== undefined && uuid !== "") return uuid
-  }
-  return null
+export function nextLineage(
+  hashes: readonly string[],
+  carried: readonly string[],
+  assistantUuid: string | undefined,
+): SessionLineageState {
+  const assistantUuids = carried.slice(0, hashes.length)
+  while (assistantUuids.length < hashes.length) assistantUuids.push("")
+  assistantUuids.push(assistantUuid ?? "")
+  return { prefixHashes: hashes, assistantUuids }
 }

@@ -66,7 +66,8 @@ test("appended user turns preserve one opening binding and resume without anothe
     kind: "resume",
     sdkSessionId: "offline_session",
     lineage: "continuation",
-    deltaFrom: 1,
+    // Past the echoed "hi": the session already holds its own answer.
+    deltaFrom: 2,
   })
   expect(h.repository.reads).toBe(1)
   expect(h.repository.writes.length).toBe(2)
