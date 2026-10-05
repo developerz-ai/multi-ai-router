@@ -1,0 +1,35 @@
+.root {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: var(--space-1) var(--space-3);
+  margin: 0;
+  font-size: var(--text-sm);
+
+  dt {
+    color: var(--text-muted);
+  }
+
+  dd {
+    margin: 0;
+  }
+}
+
+.instant {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  font-weight: var(--weight-normal);
+}
+
+.neutral {
+  color: var(--text);
+}
+
+.warn {
+  color: var(--warn);
+  font-weight: var(--weight-medium);
+}
+
+.danger {
+  color: var(--danger);
+  font-weight: var(--weight-medium);
+}

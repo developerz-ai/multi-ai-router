@@ -4,7 +4,7 @@ Self-hosted API router. A team of developers and AI agents shares one pool of AI
 
 Pooling is the product: **many Accounts of the same Provider is the normal case** (five Claude subs side by side). Nothing in the schema, UI, or routing may assume one account per provider.
 
-Full data plane shipped: accounts, pools, keys, `/v1/messages` + `/v1/chat/completions` + `/v1/responses`, cross-dialect translation, Claude subscriptions via the Agent SDK, ChatGPT/Codex OAuth, admin CRUD, 31 migrations (through 0030), and a complete SolidJS operator console. See `docs/idea/10-roadmap.md` for per-milestone state. Spec: `docs/idea/`. Behavior change → update the spec in the same PR. Shared code inventory: `docs/reusable-code.md`.
+Full data plane shipped: accounts, pools, keys, `/v1/messages` + `/v1/chat/completions` + `/v1/responses`, cross-dialect translation, Claude subscriptions via the Agent SDK, ChatGPT/Codex OAuth, admin CRUD, 32 migrations (through 0031), and a complete SolidJS operator console. See `docs/idea/10-roadmap.md` for per-milestone state. Spec: `docs/idea/`. Behavior change → update the spec in the same PR. Shared code inventory: `docs/reusable-code.md`.
 
 ## Response Rules
 
@@ -31,7 +31,7 @@ Full data plane shipped: accounts, pools, keys, `/v1/messages` + `/v1/chat/compl
 10. Same-dialect requests are byte-passthrough — headers swapped, body untouched, streaming forwarded byte-for-byte. Translate only across dialects.
 11. Every retention window is config, not a constant in code. Same for intervals and limits.
 12. Adding a provider touches exactly one file in `providers/`. Anything else changing means the interface is wrong.
-13. **Background work is in-process + Postgres advisory locks. No broker.** Jittered interval timers, `pg_try_advisory_lock` per task so exactly one replica runs a sweep, every task idempotent/resumable/bounded-batch, last run + outcome written to `ScheduledTaskRun` so a wedged task is visible. BullMQ/Dragonfly is deliberately deferred — don't reinstate it. **Credential refresh is expiry-driven and single-flighted per account, never a poll**; a failed refresh means `needs_reauth`, not a failed request. **Claude sub tokens are never touched by us** — the Agent SDK refreshes them inside the Account's `CLAUDE_CONFIG_DIR`; we only notice auth failure and mark `needs_reauth`. Rationale: `docs/idea/01-architecture.md`.
+13. **Background work is in-process + Postgres advisory locks. No broker.** Jittered interval timers, `pg_try_advisory_lock` per task so exactly one replica runs a sweep, every task idempotent/resumable/bounded-batch, last run + outcome written to `ScheduledTaskRun` so a wedged task is visible. BullMQ/Dragonfly is deliberately deferred — don't reinstate it. **Credential refresh is expiry-driven and single-flighted per account, never a poll**; a failed refresh means `needs_reauth`, not a failed request. **Claude sub tokens are never touched by us** — the Agent SDK refreshes them inside the Account's `CLAUDE_CONFIG_DIR`; we only notice auth failure and mark `needs_reauth`. The one sanctioned nudge is the **credential keepalive**: when an idle sub's access-token timestamp enters the CLI's own refresh lead, we spend one minimal real turn so the CLI refreshes it — we read timestamps only, never a token. Rationale: `docs/idea/01-architecture.md`.
 
 ## Stack
 
@@ -155,7 +155,7 @@ SolidJS SPA, `@solidjs/router`, TanStack Solid Query for server state. Vite buil
 - Conflate rate-limited with out-of-credits, or retry an `exhausted` account on a timer.
 - Retry a request onto another account after bytes are on the wire — fail honestly.
 - Hard-code a retention window, TTL, or interval.
-- Add Redis/Dragonfly, BullMQ, a worker container, or a cron entry for background work — see non-negotiable 13. Never schedule a refresh timer for a Claude subscription account.
+- Add Redis/Dragonfly, BullMQ, a worker container, or a cron entry for background work — see non-negotiable 13. Never schedule a refresh of our own for a Claude subscription account — the credential keepalive turn, which lets the CLI refresh, is the only exception.
 - Hit a real provider from a test.
 - Add multi-user, RBAC, billing, caching, or tool execution — see non-goals in `docs/idea/`.
 - Force-push `main`. `--no-verify` on commits — fix the hook.

@@ -34,6 +34,7 @@ import { AccountsFilters } from "./accounts/AccountsFilters"
 import { AccountsNotices } from "./accounts/AccountsNotices"
 import { AccountsTable } from "./accounts/AccountsTable"
 import { ProviderGroup } from "./accounts/ProviderGroup"
+import { ReconnectActions } from "./accounts/ReconnectActions"
 import { ReconnectSequence } from "./accounts/ReconnectSequence"
 import { SubscriptionBanner } from "./accounts/SubscriptionBanner"
 
@@ -143,13 +144,7 @@ export default function AccountsRoute() {
 
       <SubscriptionBanner
         accounts={accountList()}
-        action={(health) => (
-          <Show when={health.needsReconnect.length > 0}>
-            <Button onClick={() => startReconnectAll(health.needsReconnect)} tone="primary">
-              Reconnect all ({health.needsReconnect.length})
-            </Button>
-          </Show>
-        )}
+        action={(health) => <ReconnectActions health={health} onReconnect={startReconnectAll} />}
         nowMs={now()}
       />
 

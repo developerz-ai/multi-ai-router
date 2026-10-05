@@ -19,6 +19,7 @@ import type { AccountAuthProbe } from "../../services/health/claudeAuthProbe"
 import type { ScheduledTask } from "../types"
 import { type AdminSessionStoreForPurge, createAdminSessionPurgeTask } from "./admin-session-purge"
 import { createConfigDirReapTask } from "./config-dir-reap"
+import { type CredentialTaskDeps, createCredentialTasks } from "./credential-tasks"
 import { createIdleAccountProbeTask, type IdleAccountProbeDeps } from "./idle-account-probe"
 import { createJanitorTask } from "./janitor"
 import {
@@ -45,7 +46,8 @@ import { createUsageRollupTask } from "./usage-rollup"
  * testable without an environment.
  */
 
-export interface ScheduledTaskDeps {
+export interface ScheduledTaskDeps
+  extends Pick<CredentialTaskDeps, "credentialMetadata" | "lastLogins"> {
   readonly sessions: Pick<SessionRepository, "deleteIdleBefore">
   readonly usageRecords: Pick<UsageRecordRepository, "deleteRetainedBatch">
   readonly auditEvents: Pick<AuditRepository, "deleteOlderThan">
@@ -126,10 +128,7 @@ export interface ScheduledTaskDeps {
    */
   readonly refreshCatalog?: ModelCatalogRefreshDeps["refresh"]
   /** A full `Env` satisfies this, so the composition root passes `env` straight through. */
-  readonly env: Pick<
-    Env,
-    "retention" | "janitorIntervalMinutes" | "scheduler" | "claudeSdkCredentialKeepalive"
-  >
+  readonly env: Pick<Env, "retention" | "janitorIntervalMinutes"> & CredentialTaskDeps["env"]
 }
 
 const MINUTE_MS = 60_000
@@ -158,6 +157,8 @@ export function scheduledTaskIntervals(
     admin_session_purge: env.scheduler.adminSessionPurgeIntervalMinutes * MINUTE_MS,
     idle_account_probe: env.scheduler.idleAccountProbeIntervalMinutes * MINUTE_MS,
     model_catalog_refresh: env.scheduler.modelCatalogRefreshIntervalMinutes * MINUTE_MS,
+    credential_keepalive: env.claudeLogin.keepaliveIntervalSeconds * 1_000,
+    login_lifetime_watch: env.claudeLogin.watchIntervalMinutes * MINUTE_MS,
   }
 }
 
@@ -265,6 +266,8 @@ export function createScheduledTasks(deps: ScheduledTaskDeps): readonly Schedule
             batchSize: env.scheduler.modelCatalogRefreshBatchSize,
           }),
         ]),
+    // Access-token keepalive and the daily login-lifetime warn line — `credential-tasks.ts`.
+    ...createCredentialTasks(deps, intervals),
   ]
 }
 

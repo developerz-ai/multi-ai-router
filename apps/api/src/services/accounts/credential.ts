@@ -7,6 +7,8 @@ import type {
 } from "../../providers/claude-sdk/credential-metadata"
 import { AUDIT_KINDS, AUDIT_SUBJECTS, type AuditRecorder } from "../admin/audit"
 import type { AdminResult } from "../admin/result"
+import type { LastLoginLookup } from "./last-login"
+import { computeLoginLifetime, type LoginLifetimePolicy } from "./login-lifetime"
 import { describeProvider } from "./providers"
 import type { AccountsService } from "./service"
 import type { AccountCredentialView, AccountView } from "./view"
@@ -56,6 +58,15 @@ export interface CredentialMetadataDeps {
    */
   readonly park?: (observed: AccountRow, now: Date) => Promise<boolean>
   readonly logger?: Logger
+  /**
+   * Login lifetime: the last interactive login per account (one audit query per read) and the
+   * configured assumed lifetime + warn window. Timestamps only — `login-lifetime.ts`.
+   */
+  readonly lifetime: {
+    readonly lastLogins: LastLoginLookup
+    readonly policy: LoginLifetimePolicy
+    readonly warnDays: number
+  }
 }
 
 interface CacheEntry {
@@ -107,10 +118,24 @@ export function withCredentialMetadata(
     }
   }
 
+  // A failed audit read degrades the estimate to `unknown`; it never fails the account read.
+  const loginsFor = async (ids: readonly string[]): Promise<ReadonlyMap<string, Date>> => {
+    if (ids.length === 0) return new Map()
+    try {
+      return await deps.lifetime.lastLogins(ids)
+    } catch (error) {
+      deps.logger?.warn("last interactive login unreadable", {
+        reason: error instanceof Error ? error.message : String(error),
+      })
+      return new Map()
+    }
+  }
+
   const overlayOne = async (
     view: AccountView,
     observed: AccountRow | undefined,
     now: Date,
+    lastLoginAt: Date | null,
   ): Promise<AccountView> => {
     if (!describeProvider(view.provider).requiresConfigDir || observed === undefined) {
       return { ...view, credential: null }
@@ -129,7 +154,7 @@ export function withCredentialMetadata(
       return { ...view, credential: null }
     }
 
-    const credential = toCredentialView(metadata)
+    const credential = toCredentialView(metadata, lastLoginAt, now, deps.lifetime)
     if (credential.present || observed.status !== "active" || deps.park === undefined) {
       return { ...view, credential }
     }
@@ -150,7 +175,12 @@ export function withCredentialMetadata(
       .map((view) => view.id)
     const rows = ids.length === 0 ? [] : await deps.accounts.findByIds(ids)
     const captured = new Map(rows.map((row) => [row.id, row]))
-    return Promise.all(views.map((view) => overlayOne(view, captured.get(view.id), now)))
+    const logins = await loginsFor(ids)
+    return Promise.all(
+      views.map((view) =>
+        overlayOne(view, captured.get(view.id), now, logins.get(view.id) ?? null),
+      ),
+    )
   }
 
   return {
@@ -162,20 +192,37 @@ export function withCredentialMetadata(
     get: async (id) => {
       const result: AdminResult<AccountView> = await service.get(id)
       if (!result.ok) return result
-      const observed = describeProvider(result.value.provider).requiresConfigDir
-        ? await deps.accounts.findById(id)
-        : undefined
-      return { ok: true, value: await overlayOne(result.value, observed, deps.now()) }
+      const subscription = describeProvider(result.value.provider).requiresConfigDir
+      const observed = subscription ? await deps.accounts.findById(id) : undefined
+      const logins = await loginsFor(subscription ? [id] : [])
+      return {
+        ok: true,
+        value: await overlayOne(result.value, observed, deps.now(), logins.get(id) ?? null),
+      }
     },
   }
 }
 
-function toCredentialView(metadata: CredentialMetadata): AccountCredentialView {
+/** Copies instants and flags only — the metadata type has no field that could hold a token. */
+function toCredentialView(
+  metadata: CredentialMetadata,
+  lastLoginAt: Date | null,
+  now: Date,
+  lifetime: CredentialMetadataDeps["lifetime"],
+): AccountCredentialView {
+  const login = computeLoginLifetime({ metadata, lastLoginAt, now, policy: lifetime.policy })
   return {
     expiresAt: metadata.refreshTokenExpiresAt?.toISOString() ?? null,
     subscriptionType: metadata.subscriptionType,
     rateLimitTier: metadata.rateLimitTier,
     present: metadata.hasTokens,
+    accessTokenExpiresAt: login.accessTokenExpiresAt?.toISOString() ?? null,
+    lastLoginAt: login.lastLoginAt?.toISOString() ?? null,
+    renewsAt: login.renewsAt?.toISOString() ?? null,
+    renewsAtSource: login.source,
+    daysUntilRenewal: login.daysUntilRenewal,
+    renewalRequiredSoon: login.renewalRequiredSoon,
+    renewalWarnDays: lifetime.warnDays,
   }
 }
 

@@ -93,10 +93,14 @@ export function CredentialCell(props: CredentialCellProps) {
             {(expiresAt) => (
               <span
                 class={cx(styles.line, styles[login().tone])}
-                title="When the subscription's login (its ~30-day refresh token) dies and a browser login is due again. The router never reads the token — the CLI reports the instant."
+                title={
+                  login().source === "estimated"
+                    ? "Estimated: the CLI did not report when this login (its ~4-week refresh token) dies, so the router counts from the last interactive login. Reconnecting resets it. The router never reads the token."
+                    : "Reported by the claude CLI: when this login (its ~4-week refresh token) dies and a browser login is due again. The router never reads the token."
+                }
               >
-                {login().text} {formatAbsolute(expiresAt())}
-                <span class={styles.countdown}> · {login().countdown}</span>
+                {login().text}
+                <span class={styles.countdown}> · {formatAbsolute(expiresAt())}</span>
               </span>
             )}
           </Show>

@@ -43,6 +43,8 @@ import {
   withCredentialMetadata,
 } from "../services/accounts"
 import type { createBackgroundStartGuard } from "../services/accounts/background-admission"
+import { createLastLoginLookup } from "../services/accounts/last-login"
+import { loginLifetimePolicy } from "../services/accounts/login-lifetime"
 import { type CoherenceHooks, createAuditRecorder, keyMutationCommitted } from "../services/admin"
 import {
   adminAuthConfigFromEnv,
@@ -294,6 +296,11 @@ export function createAdminPlane(deps: AdminPlaneDeps): AdminPlane {
     now,
     park: createCredentialPark({ accounts, audit, refreshCatalog: deps.coherence.refreshCatalog }),
     logger,
+    lifetime: {
+      lastLogins: createLastLoginLookup(deps.auditEvents),
+      policy: loginLifetimePolicy(env.claudeLogin),
+      warnDays: env.claudeLogin.renewalWarnDays,
+    },
   })
 
   // "Discover models": one GET at the provider's own listing, written into `supportedModels`. No

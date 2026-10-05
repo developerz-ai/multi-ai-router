@@ -82,6 +82,8 @@ export const scheduledTask = pgEnum("scheduled_task", [
   "idle_account_probe",
   "model_catalog_refresh",
   "sdk_transcript_sweep",
+  "credential_keepalive",
+  "login_lifetime_watch",
 ])
 
 export const scheduledTaskOutcome = pgEnum("scheduled_task_outcome", [

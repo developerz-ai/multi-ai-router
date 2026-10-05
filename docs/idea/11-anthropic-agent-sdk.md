@@ -194,6 +194,7 @@ neither write body has a field for one; `CLAUDE_CONFIG_ROOT` is the only knob, a
 | Refresh | **Not ours.** The SDK / `claude` CLI refreshes inside the config directory. The router does **not** schedule, mint, or write subscription tokens — see the box below |
 | Refresh-token expiry | **A Claude subscription hard-expires ~30 days after login, however much it is used.** Verified in production (2026-09-05): every account's `refreshTokenExpiresAt` sat at exactly login + ~30 d — on accounts that had served traffic daily for weeks. Use refreshes the *access* token; nothing slides the refresh token, and when it expires the CLI blanks the tokens in `.credentials.json` (the file stays, `claude auth status` says `loggedIn: false`, a turn answers `Failed to authenticate: OAuth session expired and could not be refreshed`). No keepalive, probe, or traffic can prevent it — **only a re-login can**, so plan on reconnecting every subscription monthly. What the router does: the six-hourly `idle_account_probe` tick runs the free `claude auth status` check over **every** subscription account, idle or not, so an expired one flips to `needs_reauth` within a sweep (`scheduler/tasks/idle-account-probe.ts`); the request path classifies that sentence `auth` → `needs_reauth`, never a `502`; and every admin account read carries the expiry itself — see the row below |
 | Expiry visibility | The router reads **metadata, never the token**, out of `.credentials.json`: `refreshTokenExpiresAt`, `subscriptionType`, `rateLimitTier`, and whether the two token fields are non-empty (`providers/claude-sdk/credential-metadata.ts`). The Zod schema names exactly those fields, the tokens are consulted for presence only and dropped before the parsed value leaves the function, and nothing returned, thrown, or logged can carry one — non-negotiables 1 and 13 still hold: we do not touch, refresh, or use the tokens; we read when the login expires so the console can warn before it does. `withCredentialMetadata` (`services/accounts/credential.ts`) overlays it on every admin account read as `credential: { expiresAt, subscriptionType, rateLimitTier, present }` ([04-api-keys-and-access.md](04-api-keys-and-access.md#admin-api-route-groups)), cached per account for `ADMIN_CREDENTIAL_METADATA_TTL_SECONDS`, admin plane only. A read that finds blank tokens against an `active` row parks it `needs_reauth` through the same conditional write the auth probe uses; a read that *fails* reports `null` and parks nothing |
+| Login lifetime | Every subscription read also carries `accessTokenExpiresAt`, `lastLoginAt`, `renewsAt`, `renewsAtSource` (`reported` \| `estimated` \| `unknown`), `daysUntilRenewal`, `renewalRequiredSoon` and `renewalWarnDays` (`services/accounts/login-lifetime.ts`, pure). `renewsAt` is the CLI's own `refreshTokenExpiresAt` when the file carries it — CLI 2.1.289 persists it from the token endpoint's `refresh_token_expires_in`, and keeps the previous value across a refresh response that omits it — and otherwise the last **interactive** login plus `CLAUDE_LOGIN_ASSUMED_LIFETIME_DAYS` (default 28; measured lifetimes run ~27.5–29.5 d, the low end warns early). The last interactive login is the newest `account.connected` / `account.reauthorized` audit event that does **not** carry `detail.source` — the auth probe's own `account.reauthorized` (`source: "claude_auth_status"`) is an observation, not a login. One audit query per read; an audit read that fails degrades the estimate to `unknown` and never fails the read. A login older than `RETENTION_AUDIT_DAYS` has no estimate. `renewalRequiredSoon` is true inside `CLAUDE_LOGIN_RENEWAL_WARN_DAYS` (default 5) while tokens are present. The console prints "Login renews in N days (reported\|estimated)" in the accounts table and the account dialog, raises the subscription banner over the same window, and offers **Reconnect expiring (N)** — the same guided `ReconnectSequence` as "Reconnect all", over just those accounts. The `login_lifetime_watch` task writes one `warn` line per such account per day for alerting ([08-observability.md](08-observability.md#subscription-login-renewal)) |
 | Reconnect | Re-run login against the **same** directory: Account id, Pool membership, and usage history survive |
 | Delete | Remove the directory with the Account row |
 | Reap | A scheduled task (`scheduler/tasks/config-dir-reap.ts`) removes what a crash left on the volume: a directory named after an account id that no row claims, once it is older than `RETENTION_ORPHAN_CONFIG_DIR_HOURS`. It surveys the directories *before* it reads the accounts — a directory minted after the survey cannot be in it, while a row inserted after it is still read — and it never touches a name that is not an account id. Both rules exist because the failure it prevents (a stale credential nobody will rotate) is milder than the failure a careless sweep would cause (a working subscription logged out for good) |
@@ -266,6 +267,37 @@ turn declined or failed) is not read at all and is named in the log; its gauge a
 still until a client's turn refreshes it, which is strictly better than the alternative. With
 `CLAUDE_SDK_CREDENTIAL_KEEPALIVE=false` no probe ever spends a refresh token; the cost is
 staleness, never a login.
+
+**The keepalive, on the token's own cadence (`credential_keepalive`, 2026-10-04).** The six-hourly
+sweep above could only ever find an idle token *already expired*: the access token lives ~8 h, the
+CLI refreshes only in the last five minutes, and a six-hour tick lands in that window ~1 % of the
+time. Between ticks the hourly catalog sweep logged "access token inside the CLI's refresh window,
+left for a real turn" and the gauge stood still. The same keepalive (`keepAlive` → background
+admission → the admin plane's "Test now", sharing its per-account cooldown and audit kind) now also
+runs as its own task every `CLAUDE_SDK_CREDENTIAL_KEEPALIVE_INTERVAL_SECONDS` (default 180): it
+reads every `active` subscription's metadata — timestamps only, a page-cached ~500-byte read — and
+spends one small Haiku turn on exactly the accounts the CLI would refresh *now* (inside
+`CLI_REFRESH_LEAD_MS`, or already expired). Never earlier, because a turn outside the lead refreshes
+nothing; never for `needs_reauth`, `disabled`, cooling or exhausted rows (the background admission
+gate refuses those anyway, and a lapsed access token on them costs nothing — the first real turn
+after the window resets refreshes it, and the login clock is unaffected); never again for
+`CLAUDE_SDK_CREDENTIAL_KEEPALIVE_RETRY_MINUTES` (default 60) after a turn that did not move the
+expiry; at most `IDLE_ACCOUNT_PROBE_BATCH_SIZE` turns per tick, run concurrently so one tick cannot
+stretch the gap past the lead. The env boundary refuses an explicit cadence whose jittered gap
+(`interval × (1 + SCHEDULER_JITTER_FRACTION)`) could step over the 300 s lead, and shrinks the
+default under a wide jitter. Single-flighted per account by "Test now" itself, which records the
+turn before spawning, so this task and the six-hourly sweep cannot both spawn for one account. This
+is **not** a refresh timer of ours: it reads instants and hands the CLI a turn inside its own
+window, exactly as a client request would; it never touches, reads, or writes a token. After each
+turn it re-reads the metadata and logs `claude credential refreshed by keepalive` with
+`accessExpiresAtBefore/After` and `loginExpiresAtBefore/After` plus `loginExpiryMoved` — the open
+question whether a rotation ever extends `refreshTokenExpiresAt` (Meridian logs the same pair; the
+production evidence so far says it does not). A turn that did not refresh logs a `warn` and backs
+off. Field names avoid the word `token` because the log redactor masks any field so named.
+Residual gap, accepted: with the default single scheduler lock connection
+(`SCHEDULER_LOCK_POOL_MAX_CONNECTIONS=1`) a tick waits out a long-running sweep (the six-hourly
+probe), so on rare ticks a token can lapse for a minute or two — the next tick finds it expired,
+which is still *due*, and refreshes it.
 
 **What 2.11.0's gate still does.** `ensureFresh` serializes *real turns* across the refresh window
 (`CLAUDE_SDK_CREDENTIAL_REFRESH_SKEW_SECONDS`): the first caller is not delayed and refreshes as

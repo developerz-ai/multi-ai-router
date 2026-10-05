@@ -84,6 +84,71 @@ describe("describeLoginExpiry", () => {
   })
 })
 
+describe("login lifetime from the API", () => {
+  test("an estimated deadline is labelled estimated, with whole days", () => {
+    const renewsAt = new Date(NOW + 4 * 24 * HOUR + HOUR).toISOString()
+    const display = describeLoginExpiry(
+      sub({
+        credential: {
+          ...credential(null),
+          renewsAt,
+          renewsAtSource: "estimated",
+          renewalRequiredSoon: true,
+        },
+      }),
+      NOW,
+    )
+    expect(display.kind).toBe("valid")
+    expect(display.source).toBe("estimated")
+    expect(display.text).toBe("Login renews in 4 days (estimated)")
+    expect(display.tone).toBe("warn")
+  })
+
+  test("the server's renewalRequiredSoon decides warn, not the console's own week", () => {
+    const renewsAt = new Date(NOW + 6 * 24 * HOUR).toISOString()
+    const base = { ...credential(renewsAt), renewsAt, renewsAtSource: "reported" as const }
+    expect(
+      describeLoginExpiry(sub({ credential: { ...base, renewalRequiredSoon: false } }), NOW).tone,
+    ).toBe("neutral")
+    expect(
+      describeLoginExpiry(sub({ credential: { ...base, renewalRequiredSoon: true } }), NOW).tone,
+    ).toBe("warn")
+  })
+
+  test("an estimate that has run out while tokens remain is due now, not dead", () => {
+    const display = describeLoginExpiry(
+      sub({
+        credential: {
+          ...credential(null),
+          renewsAt: new Date(NOW - HOUR).toISOString(),
+          renewsAtSource: "estimated",
+        },
+      }),
+      NOW,
+    )
+    expect(display.kind).toBe("valid")
+    expect(display.tone).toBe("danger")
+    expect(display.text).toBe("Login renewal due now (estimated)")
+  })
+
+  test("under a day reads as such", () => {
+    const renewsAt = new Date(NOW + 5 * HOUR).toISOString()
+    expect(describeLoginExpiry(sub({ credential: credential(renewsAt) }), NOW).text).toBe(
+      "Login renews in under a day (reported)",
+    )
+  })
+
+  test("the banner title carries the server's warn window", () => {
+    const soon = new Date(NOW + 2 * 24 * HOUR).toISOString()
+    const health = summarizeSubscriptions(
+      [sub({ credential: { ...credential(soon), renewalWarnDays: 5 } })],
+      NOW,
+    )
+    expect(health.warnDays).toBe(5)
+    expect(subscriptionBannerTitle(health)).toBe("1 Claude subscription expires within 5 days")
+  })
+})
+
 describe("subscriptionBadge", () => {
   test("plan and multiplier, in the operator's spelling", () => {
     expect(subscriptionBadge(credential(null))).toBe("Max 20×")

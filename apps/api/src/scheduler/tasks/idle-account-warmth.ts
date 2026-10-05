@@ -147,7 +147,9 @@ export async function readUsage(
  * the account's state stays whatever real traffic and those readings last made it.
  */
 export async function keepAlive(
-  deps: Pick<IdleAccountProbeDeps, "test" | "accounts">,
+  deps: Pick<IdleAccountProbeDeps, "test"> & {
+    readonly accounts: Pick<IdleAccountProbeDeps["accounts"], "readEligibleBackgroundAccount">
+  },
   account: AccountRow,
   model: string,
   logger: Logger,

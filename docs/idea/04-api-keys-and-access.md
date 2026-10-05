@@ -367,7 +367,14 @@ Every account read (`GET /api/admin/accounts`, `GET /api/admin/accounts/:id`) ca
   "expiresAt": "2026-10-03T09:30:00.000Z",
   "subscriptionType": "max",
   "rateLimitTier": "default_claude_max_20x",
-  "present": true
+  "present": true,
+  "accessTokenExpiresAt": "2026-09-05T18:00:00.000Z",
+  "lastLoginAt": "2026-09-05T09:30:00.000Z",
+  "renewsAt": "2026-10-03T09:30:00.000Z",
+  "renewsAtSource": "reported",
+  "daysUntilRenewal": 27,
+  "renewalRequiredSoon": false,
+  "renewalWarnDays": 5
 }
 ```
 
@@ -382,7 +389,11 @@ dead or never happened, and a read that finds it against an `active` row parks t
 `null` when the file could not be read — *unknown* is not *dead*, so nothing is parked then. It is
 absent on a write. The reader picks exactly those fields and drops the tokens before anything else
 sees the parsed file; there is no field on the response that could hold one. Reads are cached per
-account for `ADMIN_CREDENTIAL_METADATA_TTL_SECONDS`.
+account for `ADMIN_CREDENTIAL_METADATA_TTL_SECONDS`. The login-lifetime fields — `renewsAt` and its
+`reported` / `estimated` / `unknown` source, `daysUntilRenewal`, `renewalRequiredSoon` against
+`CLAUDE_LOGIN_RENEWAL_WARN_DAYS`, the last interactive login from the audit log, and the access
+token's own expiry — are timestamps derived in `services/accounts/login-lifetime.ts`; see
+[11-anthropic-agent-sdk.md §3](11-anthropic-agent-sdk.md).
 
 **The same four calls serve both logins.** Which one an Account takes is read from the provider
 registry, not passed by the caller, so the console has no table of provider-to-endpoint: a Claude

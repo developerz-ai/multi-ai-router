@@ -218,6 +218,13 @@
       "when": 1791077096068,
       "tag": "0030_usage_history",
       "breakpoints": true
+    },
+    {
+      "idx": 31,
+      "version": "7",
+      "when": 1791159883300,
+      "tag": "0031_login_lifetime_tasks",
+      "breakpoints": true
     }
   ]
 }

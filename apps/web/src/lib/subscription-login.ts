@@ -13,18 +13,27 @@ import { formatDuration } from "./reset-countdown"
 
 const DAY_MS = 86_400_000
 
-/** Warn from a week out — long enough to plan six browser logins, short enough to be true. */
+/**
+ * Warn from a week out — the fallback when the API does not send its own verdict. A current router
+ * sends `renewalRequiredSoon` against `CLAUDE_LOGIN_RENEWAL_WARN_DAYS`, and that wins.
+ */
 export const LOGIN_WARN_MS = 7 * DAY_MS
+/** The banner's "within N days" when the API does not say. */
+export const DEFAULT_WARN_DAYS = 7
 /** Danger from two days out: the next quiet moment may be after the expiry. */
 export const LOGIN_DANGER_MS = 2 * DAY_MS
 
 export type LoginTone = "neutral" | "warn" | "danger"
+
+/** Where the deadline came from — the same reported / estimated / unknown labels resets use. */
+export type RenewalSource = "reported" | "estimated" | "unknown"
 
 export interface LoginExpiryDisplay {
   readonly kind: "valid" | "expired" | "unknown"
   readonly tone: LoginTone
   /** The sentence for the cell. Never carries a countdown once the login is gone. */
   readonly text: string
+  readonly source: RenewalSource
   /** Epoch ms, only for `valid` — the absolute half of the pair the cell prints. */
   readonly expiresAtMs: number | null
   /** `"12d 4h"`, only for `valid`. */
@@ -49,48 +58,64 @@ export function isSubscriptionLogin(account: AccountView): boolean {
  */
 export function describeLoginExpiry(account: AccountView, nowMs: number): LoginExpiryDisplay {
   const credential = credentialOf(account)
-  if (account.status === "needs_reauth" || credential?.present === false) {
-    return {
-      kind: "expired",
-      tone: "danger",
-      text: "Login expired — reconnect",
-      expiresAtMs: null,
-      countdown: null,
-    }
-  }
+  if (account.status === "needs_reauth" || credential?.present === false) return EXPIRED
 
-  const expiresAtMs =
-    credential?.expiresAt === null || credential === null
-      ? Number.NaN
-      : Date.parse(credential.expiresAt)
-  if (!Number.isFinite(expiresAtMs)) {
+  // A current API names the deadline and its source; an older one only the reported instant.
+  const deadline = credential?.renewsAt ?? credential?.expiresAt ?? null
+  const expiresAtMs = deadline === null ? Number.NaN : Date.parse(deadline)
+  if (credential === null || !Number.isFinite(expiresAtMs)) {
     return {
       kind: "unknown",
       tone: "neutral",
       text: "Login expiry unknown",
+      source: "unknown",
       expiresAtMs: null,
       countdown: null,
     }
   }
+  const source: RenewalSource =
+    credential.renewsAtSource ?? (credential.expiresAt === null ? "unknown" : "reported")
 
   const remaining = expiresAtMs - nowMs
   if (remaining <= 0) {
+    // A reported instant in the past is a dead login. An *estimate* in the past is only a guess
+    // that ran out while the tokens are still there: due now, not dead.
+    if (source !== "estimated") return EXPIRED
     return {
-      kind: "expired",
+      kind: "valid",
       tone: "danger",
-      text: "Login expired — reconnect",
-      expiresAtMs: null,
+      text: "Login renewal due now (estimated)",
+      source,
+      expiresAtMs,
       countdown: null,
     }
   }
 
+  const soon = credential.renewalRequiredSoon ?? remaining <= LOGIN_WARN_MS
   return {
     kind: "valid",
-    tone: remaining <= LOGIN_DANGER_MS ? "danger" : remaining <= LOGIN_WARN_MS ? "warn" : "neutral",
-    text: "Login valid until",
+    tone: remaining <= LOGIN_DANGER_MS ? "danger" : soon ? "warn" : "neutral",
+    text: `Login renews ${renewalPhrase(remaining)} (${source})`,
+    source,
     expiresAtMs,
     countdown: formatDuration(remaining),
   }
+}
+
+const EXPIRED: LoginExpiryDisplay = {
+  kind: "expired",
+  tone: "danger",
+  text: "Login expired — reconnect",
+  source: "unknown",
+  expiresAtMs: null,
+  countdown: null,
+}
+
+/** "in 4 days", "in 1 day", "in under a day" — whole days, floored, like the API's own count. */
+function renewalPhrase(remainingMs: number): string {
+  const days = Math.floor(remainingMs / DAY_MS)
+  if (days === 0) return "in under a day"
+  return `in ${days} day${days === 1 ? "" : "s"}`
 }
 
 /**
@@ -113,6 +138,8 @@ export interface SubscriptionHealth {
   readonly needsReconnect: readonly AccountView[]
   /** Still valid, but inside the warn threshold. Disjoint from `needsReconnect`. */
   readonly expiringSoon: readonly AccountView[]
+  /** The server's configured warn window, for the banner's sentence. Absent → seven. */
+  readonly warnDays?: number
 }
 
 /**
@@ -125,13 +152,17 @@ export function summarizeSubscriptions(
 ): SubscriptionHealth {
   const needsReconnect: AccountView[] = []
   const expiringSoon: AccountView[] = []
+  let warnDays: number | undefined
   for (const account of accounts) {
     if (!isSubscriptionLogin(account) || account.status === "disabled") continue
+    warnDays ??= credentialOf(account)?.renewalWarnDays
     const login = describeLoginExpiry(account, nowMs)
     if (login.kind === "expired") needsReconnect.push(account)
     else if (login.kind === "valid" && login.tone !== "neutral") expiringSoon.push(account)
   }
-  return { needsReconnect, expiringSoon }
+  return warnDays === undefined
+    ? { needsReconnect, expiringSoon }
+    : { needsReconnect, expiringSoon, warnDays }
 }
 
 /** How many labels a banner spells out before "and N more". Three reads; eleven is a wall. */
@@ -149,6 +180,8 @@ export function subscriptionBannerTitle(health: SubscriptionHealth): string | nu
   const parts: string[] = []
   const dead = health.needsReconnect.length
   const soon = health.expiringSoon.length
+  const days = health.warnDays ?? DEFAULT_WARN_DAYS
+  const horizon = `within ${days} day${days === 1 ? "" : "s"}`
   if (dead > 0)
     parts.push(
       `${dead} Claude subscription${dead === 1 ? "" : "s"} need${dead === 1 ? "s" : ""} a reconnect`,
@@ -156,8 +189,8 @@ export function subscriptionBannerTitle(health: SubscriptionHealth): string | nu
   if (soon > 0)
     parts.push(
       dead > 0
-        ? `${soon} more expire${soon === 1 ? "s" : ""} within 7 days`
-        : `${soon} Claude subscription${soon === 1 ? "" : "s"} expire${soon === 1 ? "s" : ""} within 7 days`,
+        ? `${soon} more expire${soon === 1 ? "s" : ""} ${horizon}`
+        : `${soon} Claude subscription${soon === 1 ? "" : "s"} expire${soon === 1 ? "s" : ""} ${horizon}`,
     )
   return parts.length === 0 ? null : parts.join(" · ")
 }

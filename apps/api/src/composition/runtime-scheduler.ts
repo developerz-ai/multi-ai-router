@@ -1,4 +1,5 @@
 import { IDLE_PROBE_MODELS, schedulerFromEnv } from "../scheduler"
+import { createLastLoginLookup } from "../services/accounts/last-login"
 import { describeProvider } from "../services/accounts/providers"
 import { refreshAccountCatalog } from "../services/models"
 import type { AdminServices } from "../types"
@@ -32,7 +33,7 @@ export function createRuntimeScheduler(
     schedulerLock,
   } = repositories
   const { health } = warm
-  const { configDirs, transcripts, credentialFreshness } = cli
+  const { configDirs, transcripts, credentialFreshness, credentialReader } = cli
   const { adminSessions, metrics } = telemetry
   const { usageGaugeProbe, backgroundStartGuard, catalogRefreshDeps } = request
   // Built AFTER the admin plane, not before: the keepalive sweep spends the admin plane's own
@@ -82,6 +83,10 @@ export function createRuntimeScheduler(
       describeProvider(account.provider).requiresConfigDir
         ? credentialFreshness.wouldRefresh(account.id)
         : false,
+    // The same ownership-guarded reader the freshness gate uses: timestamps and a presence flag,
+    // never a token. Feeds the access-token keepalive and the daily login-lifetime warn line.
+    credentialMetadata: (account) => credentialReader.read(configDirs.pathFor(account.id)),
+    lastLogins: createLastLoginLookup(auditEvents),
     modelCatalog,
     // Hourly, free, and pointed at `model_catalog` alone: a listing costs no tokens and spends no
     // quota window, and nothing in routing reads what it writes. `supported_models` — which does

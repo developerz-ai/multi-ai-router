@@ -1,4 +1,4 @@
-import { desc, eq } from "drizzle-orm"
+import { and, desc, eq, inArray, max, sql } from "drizzle-orm"
 import type { DatabaseExecutor } from "../client"
 import { type AuditDetail, type AuditEventRow, auditEvents } from "../schema/audit-events"
 import { deleteOldestBatch } from "./bounded-delete"
@@ -22,6 +22,13 @@ export interface AuditRepository {
   list(limit: number): Promise<AuditEventRow[]>
   listForSubject(subjectId: string, limit: number): Promise<AuditEventRow[]>
   /**
+   * The newest event of any of `kinds` per subject, for every subject in `subjectIds` that has one.
+   * `excludeDetailKey` drops events whose `detail` carries that key — how a caller tells an
+   * observer's event (`source: "claude_auth_status"`) from an operator's action of the same kind.
+   * One query, riding `audit_events_subject_idx`; admin plane and background only.
+   */
+  latestForSubjects(input: LatestForSubjectsInput): Promise<readonly SubjectEventInstant[]>
+  /**
    * Deletes events created before `cutoff` in one bounded batch, oldest first,
    * and returns how many went. Exactly `limit` means there is more to do and the
    * run should report `partial`.
@@ -39,6 +46,17 @@ export interface AppendAuditEventInput {
   readonly subjectType?: string | null
   readonly subjectId?: string | null
   readonly detail?: AuditDetail | null
+}
+
+export interface LatestForSubjectsInput {
+  readonly kinds: readonly string[]
+  readonly subjectIds: readonly string[]
+  readonly excludeDetailKey?: string
+}
+
+export interface SubjectEventInstant {
+  readonly subjectId: string
+  readonly createdAt: Date
 }
 
 export function createAuditRepository(db: DatabaseExecutor): AuditRepository {
@@ -70,6 +88,28 @@ export function createAuditRepository(db: DatabaseExecutor): AuditRepository {
         .where(eq(auditEvents.subjectId, subjectId))
         .orderBy(desc(auditEvents.createdAt))
         .limit(limit),
+
+    latestForSubjects: async ({ kinds, subjectIds, excludeDetailKey }) => {
+      if (kinds.length === 0 || subjectIds.length === 0) return []
+      const rows = await db
+        .select({ subjectId: auditEvents.subjectId, createdAt: max(auditEvents.createdAt) })
+        .from(auditEvents)
+        .where(
+          and(
+            inArray(auditEvents.subjectId, [...subjectIds]),
+            inArray(auditEvents.kind, [...kinds]),
+            excludeDetailKey === undefined
+              ? undefined
+              : sql`coalesce(jsonb_exists(${auditEvents.detail}, ${excludeDetailKey}), false) = false`,
+          ),
+        )
+        .groupBy(auditEvents.subjectId)
+      return rows.flatMap((row) =>
+        row.subjectId === null || row.createdAt === null
+          ? []
+          : [{ subjectId: row.subjectId, createdAt: row.createdAt }],
+      )
+    },
 
     // Rides `audit_events_created_at_idx`.
     deleteOlderThan: (cutoff, limit) =>

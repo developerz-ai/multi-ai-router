@@ -14,6 +14,7 @@ import { errorMessage } from "../../lib/api/errors"
 import type { AccountView, ProviderDescriptor } from "../../lib/api/types"
 import { BILLING_OPTIONS, billingConsequence } from "../../lib/billing"
 import styles from "./AccountEditDialog.module.scss"
+import { LoginLifetimeSummary } from "./LoginLifetimeSummary"
 import {
   type CeilingInputs,
   parseCeilings,
@@ -192,6 +193,7 @@ export function AccountEditDialog(props: AccountEditDialogProps) {
             This account is logged in, not pasted — use <strong>Connect</strong> on its row. The
             router holds no credential for it to rotate.
           </p>
+          <LoginLifetimeSummary account={props.account} nowMs={Date.now()} />
         </Show>
 
         <TextField
