@@ -148,7 +148,7 @@ export type FailoverDecision =
       readonly candidate: Candidate
       /** 1-based position in the failover chain. */
       readonly attempt: number
-      /** The Session -> Account mapping must be dropped: never carried, never migrated. */
+      /** The chain is leaving the bound account; the attempt carries the session or restarts it. */
       readonly invalidateBinding: boolean
       /**
        * Client-visible truth on the SDK path: a fresh upstream session starts and prior turns

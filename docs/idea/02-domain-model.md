@@ -42,8 +42,8 @@ layering.
 
 Cardinality summary: `Provider 1→many Account`, `Account many↔many Pool`,
 `ApiKey many↔many Pool`, `UsageRecord many→1 ApiKey / Account / Session`,
-`Session many→1 Account` (at most one at a time — a Session is never bound to two Accounts, and on
-the SDK path it is never moved between them).
+`Session many→1 Account` (at most one at a time — a Session is never bound to two Accounts; on the
+SDK path it moves between them only by carrying its transcript, see below).
 
 ## Provider
 
@@ -295,15 +295,19 @@ conversation continued.
 
 | Account becomes | Binding | Next request on that Session |
 |---|---|---|
-| `cooling_down` | **Kept.** The clock will fix it, and the conversation is still resumable when it does | Served by another Account only if the caller cannot wait — and that means invalidating the binding and starting fresh, not resuming elsewhere. Preferring the honest `429` keeps the conversation intact |
-| `exhausted` | **Invalidated.** No clock returns this Account | Rebinds to a new Account, new `sdkSessionId`, prior turns gone — surfaced, never silently truncated |
-| `needs_reauth` | **Invalidated** | Same as above. Mid-request too: when the bound Account's credential is rejected on an attempt, the chain parks it and continues to the next candidate before any byte has reached the client — the turn is answered from a fresh session elsewhere and stamped `x-router-session-restart: failover` |
-| `disabled` / removed from the pool | **Invalidated** | Same as above |
-| Out of the key's scope | **Invalidated for that key** | Scope always wins; a binding can never reach an Account the key may not use |
+| `cooling_down` | **Kept.** The clock will fix it, and the conversation is still resumable when it does | Waits for the clock (the honest `429`) unless the deployment runs `rebind`; then served by another Account, which **carries** the transcript over and resumes it |
+| `exhausted` | **Refused** — no clock returns this Account | Served by another Account, which carries the transcript over and resumes it |
+| `needs_reauth` | **Refused** | Same as above. Mid-request too: when the bound Account's credential is rejected or its window is spent on an attempt, the chain continues to the next candidate before any byte has reached the client, and that attempt carries the session |
+| `disabled` / removed from the pool | **Refused** | Same as above |
+| Out of the key's scope | **Refused for that key** | Scope always wins: the key's turn never runs on an Account it may not use. Its own conversation's transcript is still carried to one it may |
 
-Two rules hold in every row: the mapping is dropped rather than moved, and losing prior turns is
-**reported**, not hidden behind a silently truncated context or a flattened replay presented as
-real history.
+Two rules hold in every row. The row is **never re-pointed by hand**: a refused binding is kept,
+and only the turn that actually answered on the new Account moves it (`remember`). And a turn that
+could not carry the session — no transcript left, a carry refused, the session already gone —
+starts fresh and **reports** it (`x-router-session-restart`), never hiding the loss behind a
+silently truncated context. Carrying is the SDK-path equivalent of a local `claude` user's
+`/login` mid-session: the conversation file stays, the credential changes
+([11-anthropic-agent-sdk.md §4](11-anthropic-agent-sdk.md#carrying-a-session-to-another-account)).
 
 On the plain HTTP path none of this applies — every request carries its full history, so an
 unavailable Account costs a cold prompt cache and nothing else.
@@ -446,7 +450,7 @@ means a restarted conversation, not a relocated one. See the table under
 | **derived** | On the first request that has no live session |
 | **bound** | SDK path only: an Account and an `sdkSessionId` exist and are persisted. The conversation can be resumed — on that Account and nowhere else |
 | **live** | Holds the conversation on one account: per-account prompt caching keeps paying off, and on the SDK path the conversation stays resumable at all |
-| **invalidated** | The bound Account became unusable (table above). The mapping is dropped; the next request starts a fresh upstream session on a new Account, and the loss of prior turns is surfaced |
+| **carried** | The bound Account cannot serve (table above). The next SDK turn copies the transcript into the serving Account's config directory and resumes it there; its `remember` re-points the row. A carry that fails starts fresh, and the loss of prior turns is surfaced |
 | **idle** | 24 h since last use → swept by the janitor, together with its fingerprint entry. **DEFERRED** for the SDK-path binding specifically: upstream SDK sessions live for weeks, so a 24 h sweep may destroy a resumable conversation for no reason — the right bound for that table is an open question ([11-anthropic-agent-sdk.md](11-anthropic-agent-sdk.md) §11) |
 
 Session key derivation, in order:

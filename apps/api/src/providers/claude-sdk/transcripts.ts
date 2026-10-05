@@ -43,12 +43,12 @@ import { UpstreamAdmissionRefused } from "../upstream-admission"
  */
 
 /** Session ids and account ids are both uuids; the CLI names transcripts after the former. */
-const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
-const TRANSCRIPT_SUFFIX = ".jsonl"
+export const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+export const TRANSCRIPT_SUFFIX = ".jsonl"
 /** The CLI's own name for the directory. Provenance: `projectsDirectory` in `claude auth status`. */
-const PROJECTS_DIR = "projects"
+export const PROJECTS_DIR = "projects"
 /** A project slug is the cwd with separators replaced; the CLI never puts a separator in one. */
-const PROJECT_SLUG = /^[\w.@%+-]+$/
+export const PROJECT_SLUG = /^[\w.@%+-]+$/
 
 /** One SDK session's artifacts on the volume, as the survey found them. */
 export interface TranscriptEntry {
@@ -206,7 +206,7 @@ async function surveyProject(
   return out
 }
 
-const nodeTranscriptFs: TranscriptFs = {
+export const nodeTranscriptFs: TranscriptFs = {
   list: async (path) => {
     try {
       const entries = await readdir(path, { withFileTypes: true })
@@ -247,7 +247,7 @@ const nodeTranscriptFs: TranscriptFs = {
   removeDir: (path) => rm(path, { recursive: true, force: true }),
 }
 
-function isMissing(error: unknown): boolean {
+export function isMissing(error: unknown): boolean {
   return (
     typeof error === "object" &&
     error !== null &&

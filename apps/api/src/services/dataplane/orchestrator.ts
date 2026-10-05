@@ -19,7 +19,6 @@ import { requestTerminalObserver } from "./request-terminal"
 import { createRotationCounters } from "./rotation"
 import { createRuntime } from "./runtime"
 import { sessionBindings } from "./session-binding"
-import { withSessionRestart } from "./session-restart"
 import { buildSnapshot } from "./snapshot"
 import { createTranslatedRequestBody } from "./translate-body"
 import { SYSTEM_CLOCK } from "./types"
@@ -190,17 +189,13 @@ export function createDispatcher(deps: DispatcherDeps): Dispatcher {
       )
     }
 
-    // Dropped, never moved — and only now, with a servable replacement in hand. Selection said
-    // the binding cannot be honored (`rebind` on a cooling account, out of scope, exhausted, the
-    // account gone); acting on that verdict *before* knowing whether anything else could serve
-    // was the bug that turned a pool-wide cooldown under `rebind` into a lost conversation: the
-    // binding went, selection failed anyway, and the client's post-429 retry found a healthy
-    // account holding a cold session. A chain that fails from here still loses the binding — a
-    // narrow window, accepted — while an SDK success re-points it through its own `remember`.
+    // Kept, not dropped: the bound account cannot serve this turn, but its transcript can follow
+    // the turn to whichever subscription does (`claude-sdk/session-carry.ts`), and that turn's own
+    // `remember` re-points the row once it has answered. Dropping it here was what turned every
+    // quota-driven rebind into a full-history replay on a cold account.
     const decidedBinding = selection.decision.binding
     if (decidedBinding.state === "invalidated") {
-      bindings.invalidate(input.key.id, session.key)
-      deps.logger?.info("session binding invalidated", {
+      deps.logger?.info("session binding refused", {
         component: "dataplane",
         requestId: input.requestId,
         accountId: decidedBinding.accountId,
@@ -247,17 +242,16 @@ export function createDispatcher(deps: DispatcherDeps): Dispatcher {
         }),
       ),
       failover,
+      ...(decidedBinding.state === "invalidated" ? { bindingRefused: decidedBinding.reason } : {}),
       log,
       ...(options.log?.reasonMaxChars === undefined
         ? {}
         : { reasonMaxChars: options.log.reasonMaxChars }),
     })
 
-    // The other half of "surfaced, never silently truncated": this turn started a fresh upstream
-    // session where a bound one used to be, and the client is told so (`session-restart.ts`).
-    return decidedBinding.state === "invalidated"
-      ? withSessionRestart(response, decidedBinding.reason)
-      : response
+    // The restart, when there is one, is stamped by the chain: only the attempt knows whether the
+    // session was carried to the account that served it (`chain-success.ts`).
+    return response
   }
 
   return {

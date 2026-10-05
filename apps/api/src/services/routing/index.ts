@@ -11,7 +11,8 @@
  *
  * 1. {@link resolveScope} — key scope ∩ pool membership, per pool, never widened.
  * 2. {@link filterCandidates} — active, not cooling, not exhausted, has quota, supports the model.
- * 3. {@link decideBinding} — an existing binding is honored, blocked, or invalidated. Never moved.
+ * 3. {@link decideBinding} — an existing binding is honored, blocked, or invalidated (refused for
+ *    this turn; the SDK attempt elsewhere carries the transcript).
  * 4. {@link runPolicy} — one of six orderings, all of which respect the binding.
  * 5. {@link planNextAttempt} — bounded failover, and nothing at all once bytes are on the wire.
  * 6. {@link recordFailure} / {@link recordSuccess} — the breaker's state transitions.

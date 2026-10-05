@@ -3,6 +3,7 @@ import type { SessionRepository } from "@multi-ai-router/db"
 import type { Env } from "../../config/env"
 import type { Logger } from "../../logging/logger"
 import { createSessionStore, PROVIDER_REGISTRY, type SessionStore } from "../../providers"
+import type { SessionCarrier } from "../../providers/claude-sdk/session-carry"
 import type { SessionBinding } from "../routing"
 import type { RoutingCatalog } from "./types"
 
@@ -24,16 +25,10 @@ import type { RoutingCatalog } from "./types"
 export interface SessionBindings {
   /** The binding to hand selection, or undefined when this session has none. */
   read(apiKeyId: string, sessionKey: string): Promise<SessionBinding | undefined>
-  /**
-   * Selection refused it. The mapping is dropped, never moved: re-pointing it at the account
-   * selection chose instead would hand the next request a resume token that upstream never issued.
-   */
-  invalidate(apiKeyId: string, sessionKey: string): void
 }
 
 const NONE: SessionBindings = {
   read: () => Promise.resolve(undefined),
-  invalidate: () => {},
 }
 
 export function sessionBindings(
@@ -53,7 +48,6 @@ export function sessionBindings(
         if (started !== undefined) timing?.onWait(Math.max(0, timing.elapsed() - started))
       }
     },
-    invalidate: (apiKeyId, sessionKey) => store.invalidate(apiKeyId, sessionKey),
   }
 }
 
@@ -68,6 +62,8 @@ export interface SessionStoreEnvDeps {
   readonly repository: Pick<SessionRepository, "findByKey" | "upsert" | "clearAccount">
   readonly logger: Logger
   readonly now: () => Date
+  /** Wired only when `CLAUDE_SDK_SESSION_CARRY` is on; see `SessionStoreDeps.carrier`. */
+  readonly carrier?: SessionCarrier
 }
 
 /**
@@ -86,6 +82,25 @@ export function sessionStoreFromEnv(deps: SessionStoreEnvDeps): SessionStore {
       maxEntries: dataPlane.sessionCacheMax,
       ttlMs: dataPlane.sessionCacheTtlSeconds * 1_000,
       negativeTtlMs: dataPlane.sessionCacheNegativeTtlSeconds * 1_000,
+    },
+    ...(deps.carrier === undefined ? {} : { carrier: deps.carrier }),
+    onCarry: (outcome) => {
+      const fields = {
+        component: "dataplane",
+        fromAccountId: outcome.fromAccountId,
+        toAccountId: outcome.toAccountId,
+      }
+      if (outcome.carried) {
+        deps.logger.info("session carried to another account", { ...fields, bytes: outcome.bytes })
+        return
+      }
+      deps.logger.warn("session carry failed; the turn starts fresh", {
+        ...fields,
+        reason: outcome.reason,
+        ...(outcome.error === undefined
+          ? {}
+          : { detail: describeError(outcome.error, deps.env.logReasonMaxChars) }),
+      })
     },
     onError: (operation, error) => {
       // The full cause chain, innermost first: a repository failure here wraps the driver's

@@ -22,7 +22,7 @@ export { createSessionClaims } from "./inflight"
 export type { LineageClass, LineageOverlap } from "./lineage"
 export { classifyLineage, hashMessages } from "./lineage"
 export type { FreshReason, ResolveLineageInput, SessionPlan } from "./plan"
-export { resolveLineage } from "./plan"
+export { carriedPlan, resolveLineage } from "./plan"
 export type {
   ResolveTurnInput,
   SessionStore,

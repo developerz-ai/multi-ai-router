@@ -55,7 +55,13 @@ export function createRequestServices(
 
   // Postgres is the truth, the LRU pair in front of it is the cache. A binding says where a
   // conversation physically lives upstream, so no policy may overrule it and no hash recomputes it.
-  const sessionStore = sessionStoreFromEnv({ env, repository: sessions, logger, now })
+  const sessionStore = sessionStoreFromEnv({
+    env,
+    repository: sessions,
+    logger,
+    now,
+    ...(cli.sessionCarrier === undefined ? {} : { carrier: cli.sessionCarrier }),
+  })
   let backgroundAdmissionOpen = true
   const backgroundStartGuard = (
     expected: Parameters<typeof createWarmBackgroundStartGuard>[1],

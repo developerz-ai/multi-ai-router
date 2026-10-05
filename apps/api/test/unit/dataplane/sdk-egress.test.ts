@@ -7,6 +7,7 @@ import {
   type SessionPlan,
   type SessionStore,
 } from "../../../src/providers"
+import { unrecordedTurn } from "../../../src/providers/claude-sdk/session/turn"
 import {
   planCandidates,
   resolveEgress,
@@ -232,7 +233,7 @@ function sessionDouble(plan: SessionPlan): {
   const store: SessionStore = {
     binding: () => Promise.resolve(undefined),
     invalidate: (apiKeyId, sessionKey) => invalidated.push(`${apiKeyId}::${sessionKey}`),
-    resolve: () => ({ plan, remember: () => {}, release: () => {} }),
+    resolve: () => unrecordedTurn(plan, () => {}),
   }
   return {
     context: { store, apiKeyId: "key-1", sessionKey: "sess-1", keySource: "header" },
@@ -508,11 +509,7 @@ describe("what the lineage plan is told", () => {
         resolved.push({
           ...(input.sessionGone === undefined ? {} : { sessionGone: input.sessionGone }),
         })
-        return {
-          plan: { kind: "fresh", reason: "no-session" },
-          remember: () => {},
-          release: () => {},
-        }
+        return unrecordedTurn({ kind: "fresh", reason: "no-session" }, () => {})
       },
     }
     return {

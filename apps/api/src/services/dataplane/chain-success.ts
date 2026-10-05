@@ -11,7 +11,8 @@ export function finishSuccessfulAttempt(
   attempt: number,
   outcome: Extract<AttemptOutcome, { kind: "success" }>,
   at: SuccessClock,
-  sessionRestart: boolean,
+  /** Why this turn may have lost its bound session, or undefined when it never had one to lose. */
+  restart: string | undefined,
 ): Response {
   if (servable.kind !== "sdk")
     ctx.runtime.health.applyRateLimit(
@@ -21,10 +22,21 @@ export function finishSuccessfulAttempt(
       at.observation,
     )
   const relayed = relaySuccess(ctx, servable, attempt, outcome.response, at)
-  if (!sessionRestart) return relayed
+  if (restart === undefined) return relayed
+  // The transcript followed the turn to this account (`claude-sdk/session-carry.ts`): the upstream
+  // conversation is intact, so there is no restart to surface.
+  if (outcome.sessionCarried === true) {
+    ctx.log?.info("bound session carried to another account", {
+      accountId: servable.account.id,
+      attempt,
+      reason: restart,
+    })
+    return relayed
+  }
   ctx.log?.warn("bound session restarted on another account", {
     accountId: servable.account.id,
     attempt,
+    reason: restart,
   })
-  return withSessionRestart(relayed, "failover")
+  return withSessionRestart(relayed, restart)
 }

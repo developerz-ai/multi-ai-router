@@ -2,14 +2,15 @@
  * The Session -> Account binding decision.
  *
  * On the Agent-SDK path the binding is persisted, authoritative state: an SDK session id is
- * resumable **only** on the account that created it, so this is not a routing preference a policy
- * may overrule. Four outcomes, and none of them is "move it":
+ * resumable **only** where its transcript is, so this is not a routing preference a policy may
+ * overrule. Four outcomes, and none of them moves the row — a turn that runs elsewhere carries the
+ * transcript itself (`providers/claude-sdk/session-carry.ts`) and re-points the row once answered:
  *
  * | Outcome | Meaning |
  * |---|---|
  * | `honored` | The bound account is eligible. It is the choice, whatever the policy would prefer. |
  * | `blocked` | The account is out for a reason a clock recovers — cooling down, a spent quota window, or a probe already in flight. The binding is **kept** — a clock will fix it and the conversation stays resumable — and the request fails honestly with a `429` rather than resuming where it cannot be resumed. |
- * | `invalidated` | No clock returns this account. The mapping is dropped, a fresh upstream session starts elsewhere, and the loss of prior turns is surfaced, never silently truncated. |
+ * | `invalidated` | No clock returns this account (or `rebind` will not wait for it). The turn is placed elsewhere and carries the transcript there; a carry that cannot happen starts fresh and surfaces the loss, never silently truncated. |
  * | `none` | The session has no binding; the policy places it. |
  *
  * `boundAccountCoolingDown: "rebind"` converts `blocked` into `invalidated` for callers that

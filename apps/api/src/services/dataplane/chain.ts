@@ -70,6 +70,12 @@ export interface ChainContext {
   /** The converted upstream body, built lazily and only for a candidate that needs one. */
   readonly translated: TranslatedRequestBody
   readonly failover: FailoverOptions | undefined
+  /**
+   * Selection already refused this session's binding (`rebind` on a cooling account, out of scope,
+   * exhausted, gone) — the reason, for the restart header a turn that could not carry the session
+   * answers with (`session-restart.ts`).
+   */
+  readonly bindingRefused?: string
   readonly log: Logger | undefined
   /**
    * Ceiling on the upstream's own words quoted on a failed-attempt log line — `LOG_REASON_MAX_CHARS`,
@@ -253,7 +259,8 @@ export async function runChain(ctx: ChainContext): Promise<Response> {
               }),
           ...(recovery === undefined ? {} : { recovery }),
         },
-        decision.action === "attempt" && decision.sessionRestart,
+        ctx.bindingRefused ??
+          (decision.action === "attempt" && decision.sessionRestart ? "failover" : undefined),
       )
     }
 

@@ -109,6 +109,8 @@ export const ENV_FIELDS = {
   CLAUDE_SDK_USAGE_GAUGE: flag.optional(),
   CLAUDE_SDK_USAGE_GAUGE_TIMEOUT_MS: atLeastOne.optional(),
   CLAUDE_SDK_USAGE_GAUGE_MIN_INTERVAL_SECONDS: wholeNumber.optional(),
+  CLAUDE_SDK_SESSION_CARRY: flag.optional(),
+  CLAUDE_SDK_SESSION_CARRY_MAX_BYTES: atLeastOne.optional(),
   METRICS_TOKEN: nonEmpty.optional(),
   // Refused by name at boot when too short to resist guessing, or when it wears the router-key
   // prefix — the admin guard rejects that prefix outright, so such a token would authenticate

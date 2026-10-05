@@ -1,14 +1,20 @@
 /**
  * The client-visible surfacing of a restarted upstream session.
  *
+ * Only a turn that lost the session sets it: one that carried the transcript to the account that
+ * served (`claude-sdk/session-carry.ts`) kept every prior turn, and stamps nothing.
+ *
  * `binding.ts` and `result.ts` promise that a dropped Session -> Account binding is "surfaced,
  * never silently truncated" (docs/idea/05-routing-and-failover.md, "Say so, don't fake it").
  * This is the surface: one response header, set on the turn that started a fresh upstream
  * session where a bound one used to be. Both places that can happen route through here —
  *
- * - **preflight**: the binding was invalidated before selection ran (`rebind` on a cooling
- *   account, an out-of-scope or exhausted account, a removed one) — the orchestrator stamps it;
- * - **mid-chain**: failover left the bound account for another candidate — the chain stamps it.
+ * - **preflight**: selection refused the binding (`rebind` on a cooling account, an out-of-scope
+ *   or exhausted account, a removed one) — stamped with that reason;
+ * - **mid-chain**: failover left the bound account for another candidate — stamped `failover`.
+ *
+ * Both are stamped by the chain (`chain-success.ts`), the only place that knows whether the
+ * attempt that answered carried the session.
  *
  * A header rather than a body edit because the response body is the model's answer, relayed or
  * re-synthesized byte-exactly, and is not the router's to annotate. Clients that resend their

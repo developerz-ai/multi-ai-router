@@ -75,6 +75,11 @@ export type AttemptOutcome =
       readonly kind: "success"
       readonly response: Response
       readonly rateLimit: RateLimitSignal | null
+      /**
+       * The SDK turn resumed a session carried over from the account it was bound to, so no
+       * upstream context was lost and no session restart is surfaced (`session-restart.ts`).
+       */
+      readonly sessionCarried?: boolean
     }
   | {
       readonly kind: "failure"
