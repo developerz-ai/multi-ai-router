@@ -570,7 +570,9 @@ is one aggregate prefix hash, slow path is per-message hashes with prefix/suffix
 | Class | Condition | Action | Why it exists |
 |---|---|---|---|
 | **continuation** | prefix hash matches and the conversation grew | `resume`, send delta only | The common case. Without it every turn is a full replay |
-| **modified continuation** | partial prefix overlap **and** growth | `resume`, restate hashes | Clients mutate earlier messages harmlessly (`cache_control`). Without it these read as divergence |
+| **continuation** echo | the delta opens with an assistant message and something follows it | skip that one message | It is the session's own answer echoed back. Re-sending it framed it as an unresumable "prior conversation" every turn, and the model began claiming it had lost the context |
+| **modified continuation** | partial prefix overlap **and** growth, the last stored message still at its index | `resume`, restate hashes | Clients mutate earlier messages harmlessly (`cache_control`). Without it these read as divergence |
+| **rewrite** | ≥60 % prefix overlap, then the stored **tail is replaced** by new content | `forkSession` + `resumeSessionAt` at the last shared answer, delta from there; no uuid → fresh | Claude Code's hidden one-shots (prompt suggestion) run *after* the turn, so they resume and advance the session. The real next turn replaces that tail; the old modified-continuation math sent only what lay past the stored end — the bare `<total_tokens>` reminder — and dropped the user's message (prod, 2026-10-05) |
 | **compaction** | contiguous stored **suffix** found after position 0, minimum length | `resume` | The client summarized its own history. Without it a compaction abandons a warm session |
 | **undo** | prefix preserved, suffix gone, conversation **shrank** | `forkSession` + `resumeSessionAt: <uuid>` | User edited/retried a turn. Without it the model answers a question that no longer exists |
 | **diverged** | no meaningful overlap | drop mapping, start fresh | Correctness backstop |

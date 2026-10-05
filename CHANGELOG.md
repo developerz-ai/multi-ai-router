@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.21.1] — 2026-10-05
+
+### Fixed
+
+- **Claude subscriptions lost the user's message after a hidden one-shot.** Claude Code fires a prompt-suggestion request after each answer; it resumed and advanced the conversation's SDK session, so the real next turn arrived with the stored tail replaced. The lineage read that as a modified continuation and sent only what lay past the stored end — the bare `<total_tokens>` reminder — and the model answered "I don't have the earlier conversation". A replaced tail is now its own `rewrite` class: fork at the last shared answer and send the turn from there (fresh replay when no rewind point is known).
+- **Every resumed turn re-sent the session's own last answer** inside a "could not be resumed" `<prior_conversation>` frame. A resume delta now skips the echoed answer, so a normal turn reaches the model as itself.
+
 ## [2.21.0] — 2026-10-05
 
 Claude subscription logins: see when each one needs renewing, renew the expiring ones in one guided run, and keep idle accounts' access tokens fresh.

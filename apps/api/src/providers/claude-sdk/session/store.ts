@@ -9,7 +9,8 @@ import { readConversation } from "./conversation"
 import { createSessionDeletionFence } from "./deletion-fence"
 import { scopedKey, sessionFingerprint } from "./fingerprint"
 import { claimSessionTurn, createSessionClaims, type SessionClaims } from "./inflight"
-import { hashMessages, resolveLineage, type SessionPlan } from "./lineage"
+import { hashMessages, nextLineage } from "./lineage"
+import { resolveLineage, type SessionPlan } from "./plan"
 import { createSessionWrites } from "./writes"
 
 /**
@@ -218,7 +219,9 @@ export function createSessionStore(deps: SessionStoreDeps): SessionStore {
 
       const lease = fence.hold(input.accountId)
       const hashes = hashMessages(conversation.messages)
-      const carried = plan.kind === "fresh" ? [] : (session?.lineage.assistantUuids ?? [])
+      const uuids = plan.kind === "fresh" ? [] : (session?.lineage.assistantUuids ?? [])
+      // A fork's uuids past its rollback point name the abandoned branch.
+      const carried = plan.kind === "fork" ? uuids.slice(0, plan.deltaFrom) : uuids
 
       return {
         plan,
@@ -266,24 +269,6 @@ function boundSession(
   // binding it named. Answering with it would resume on an Account that never saw this session.
   if (entry === undefined || entry === null) return null
   return entry.accountId === accountId ? entry : null
-}
-
-/**
- * The state stored beside the session id: one hash per message the SDK has now seen, and the SDK
- * message uuids that name where to rewind to.
- *
- * The uuid for this turn is written **one past the end**, because that is the position the client
- * will send the assistant's answer back at next turn — the index an undo has to be able to name.
- */
-function nextLineage(
-  hashes: readonly string[],
-  carried: readonly string[],
-  assistantUuid: string | undefined,
-): SessionLineageState {
-  const assistantUuids = carried.slice(0, hashes.length)
-  while (assistantUuids.length < hashes.length) assistantUuids.push("")
-  assistantUuids.push(assistantUuid ?? "")
-  return { prefixHashes: hashes, assistantUuids }
 }
 
 /** A row binds only when it names both halves. Either alone resumes nowhere. */
