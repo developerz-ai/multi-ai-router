@@ -3,6 +3,7 @@ import { z } from "zod"
 import { adminApiTokenProblem } from "../services/admin-auth"
 import { ADMIN_BODY_ENV_FIELDS } from "./admin-bodies"
 import { BACKGROUND_ENV_FIELDS } from "./background"
+import { CLAUDE_LOGIN_ENV_FIELDS } from "./claude-login"
 import { CLI_OWNERSHIP_ENV_FIELDS } from "./cli-ownership"
 import { LOG_LEVELS } from "./env-defaults"
 import {
@@ -40,6 +41,7 @@ import { USAGE_READ_ENV_FIELDS } from "./usage-read"
 export const ENV_FIELDS = {
   ...ADMIN_BODY_ENV_FIELDS,
   ...USAGE_READ_ENV_FIELDS,
+  ...CLAUDE_LOGIN_ENV_FIELDS,
   ...BACKGROUND_ENV_FIELDS,
   ...RELAY_LIFETIME_ENV_FIELDS,
   ...METRIC_INVENTORY_ENV_FIELDS,

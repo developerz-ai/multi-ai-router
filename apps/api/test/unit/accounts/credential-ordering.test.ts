@@ -59,6 +59,11 @@ async function harness(reader: () => Promise<CredentialMetadata>, auditFails = f
     configDirs: createMemoryConfigDirs().dirs,
     ttlMs: 60_000,
     now: () => NOW,
+    lifetime: {
+      lastLogins: async () => new Map(),
+      policy: { assumedLifetimeMs: 28 * 86_400_000, warnWindowMs: 5 * 86_400_000 },
+      warnDays: 5,
+    },
     park: createCredentialPark({
       accounts: store.accounts,
       refreshCatalog: async () => {

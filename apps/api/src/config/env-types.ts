@@ -1,5 +1,6 @@
 import type { readAdminBodiesEnv } from "./admin-bodies"
 import type { readBackgroundEnv } from "./background"
+import type { ClaudeLoginConfig } from "./claude-login"
 import type { readCliOwnershipEnv } from "./cli-ownership"
 import type { AdminAuthConfig, AdminOidcConfig } from "./env-admin-types"
 import type { LogLevel } from "./env-defaults"
@@ -194,6 +195,11 @@ export interface Env {
   readonly usageRead: ReturnType<typeof readUsageReadEnv>["usageRead"]
   readonly background: ReturnType<typeof readBackgroundEnv>["background"]
   readonly scheduler: SchedulerConfig
+  /**
+   * A Claude subscription's login lifetime (warn window, assumed lifetime, daily watch) and the
+   * access-token keepalive cadence — `config/claude-login.ts`.
+   */
+  readonly claudeLogin: ClaudeLoginConfig
   readonly oauthRefresh: OAuthRefreshConfig
   readonly translation: TranslationConfig
 }

@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.21.0] — 2026-10-05
+
+Claude subscription logins: see when each one needs renewing, renew the expiring ones in one guided run, and keep idle accounts' access tokens fresh.
+
+### Upgrade notes
+
+- **Migration 0031** adds two scheduled-task names (`credential_keepalive`, `login_lifetime_watch`). Additive only.
+- **New optional settings, all defaulted:** `CLAUDE_LOGIN_ASSUMED_LIFETIME_DAYS` (28), `CLAUDE_LOGIN_RENEWAL_WARN_DAYS` (5), `LOGIN_LIFETIME_WATCH_INTERVAL_MINUTES` (1440), `CLAUDE_SDK_CREDENTIAL_KEEPALIVE_INTERVAL_SECONDS` (180), `CLAUDE_SDK_CREDENTIAL_KEEPALIVE_RETRY_MINUTES` (60).
+- **A small, bounded number of extra subscription turns.** The credential keepalive spends one minimal turn on an idle subscription only when its access token enters the CLI's own 5-minute refresh lead — roughly one turn per idle account per access-token lifetime. Never for `needs_reauth` or disabled accounts.
+
+### Added
+
+- **Login lifetime.** Each Claude subscription shows "Login renews in N days", `reported` when the CLI wrote `refreshTokenExpiresAt`, otherwise `estimated` from the last interactive login plus `CLAUDE_LOGIN_ASSUMED_LIFETIME_DAYS`. The admin account API carries `renewsAt`, `renewsAtSource`, `daysUntilRenewal`, `renewalRequiredSoon`, `lastLoginAt` and `accessTokenExpiresAt` (timestamps only).
+- **Reconnect expiring.** A console action runs the guided reconnect over only the subscriptions inside the warn window; the dashboard banner lists them.
+- **`claude subscription login renewal due`** — one warn log line per account per day inside the window, for alerting.
+
+### Fixed
+
+- **Idle subscriptions' access tokens lapsed for hours.** The idle probe ticked every 6 h and only warmed a token inside a 10-minute window, while the CLI refreshes only in its last 5 minutes, so idle tokens almost always expired first. The new keepalive checks timestamps every 180 s and turns only when the CLI would refresh, logging whether the refresh moved the login expiry.
+
 ## [2.20.0] — 2026-10-04
 
 ### Added

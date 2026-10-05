@@ -91,6 +91,21 @@ export interface SubscriptionCredentialView {
   /** `"default_claude_max_20x"` and friends. */
   readonly rateLimitTier: string | null
   readonly present: boolean
+  /*
+   * Login lifetime (`services/accounts/login-lifetime.ts`). Optional: an older API omits them, and
+   * the console then falls back to `expiresAt` and its own seven-day threshold.
+   */
+  /** When the CLI's ~8 h access token goes stale. */
+  readonly accessTokenExpiresAt?: string | null
+  /** The newest interactive login the router's audit log remembers. */
+  readonly lastLoginAt?: string | null
+  /** When a browser login is due — reported by the CLI, or estimated from `lastLoginAt`. */
+  readonly renewsAt?: string | null
+  readonly renewsAtSource?: "reported" | "estimated" | "unknown"
+  readonly daysUntilRenewal?: number | null
+  /** The server's verdict against its configured warn window. */
+  readonly renewalRequiredSoon?: boolean
+  readonly renewalWarnDays?: number
 }
 
 /**

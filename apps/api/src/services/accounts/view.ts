@@ -91,6 +91,23 @@ export interface AccountCredentialView {
   readonly rateLimitTier: string | null
   /** False when the tokens are blank or the file is missing — a login that is already dead or never happened. */
   readonly present: boolean
+  /** When the CLI's current ~8 h access token goes stale. Null when the file does not say. */
+  readonly accessTokenExpiresAt: string | null
+  /** The newest interactive login the audit log remembers. Null when none is retained. */
+  readonly lastLoginAt: string | null
+  /**
+   * When a browser login is due: `expiresAt` when the CLI reported it, else `lastLoginAt` plus
+   * `CLAUDE_LOGIN_ASSUMED_LIFETIME_DAYS`. Labelled by `renewsAtSource`, the same
+   * reported / estimated / unknown convention the console uses for quota resets.
+   */
+  readonly renewsAt: string | null
+  readonly renewsAtSource: "reported" | "estimated" | "unknown"
+  /** Whole days left, floored. Null when `renewsAt` is. */
+  readonly daysUntilRenewal: number | null
+  /** Inside `CLAUDE_LOGIN_RENEWAL_WARN_DAYS` (or past due) while the login still has tokens. */
+  readonly renewalRequiredSoon: boolean
+  /** The configured warn window, so the console's banner states the same number the server used. */
+  readonly renewalWarnDays: number
 }
 
 export function toAccountView(row: AccountRow): AccountView {

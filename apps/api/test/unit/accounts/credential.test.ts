@@ -21,10 +21,12 @@ const NOW = new Date("2026-09-05T12:00:00.000Z")
 const EXPIRES = new Date("2026-10-03T09:30:00.000Z")
 const SUB_ID = "11111111-1111-4111-8111-111111111111"
 const KEY_ID = "22222222-2222-4222-8222-222222222222"
+const DAY_MS = 86_400_000
 const FAKE_TOKEN = "sk-ant-oat01-FAKEFAKEFAKEFAKEFAKE-not-a-real-token"
 
 const LIVE: CredentialMetadata = {
   refreshTokenExpiresAt: EXPIRES,
+  accessTokenExpiresAt: null,
   subscriptionType: "max",
   rateLimitTier: "default_claude_max_20x",
   hasTokens: true,
@@ -106,7 +108,13 @@ interface Harness {
 function harness(
   views: readonly AccountView[],
   answer: () => CredentialMetadata | Promise<CredentialMetadata>,
-  options: { ttlMs?: number; park?: boolean; parkResult?: boolean } = {},
+  options: {
+    ttlMs?: number
+    park?: boolean
+    parkResult?: boolean
+    lastLogins?: ReadonlyMap<string, Date>
+    loginsFail?: boolean
+  } = {},
 ): Harness {
   let clock = NOW.getTime()
   const reads: string[] = []
@@ -132,6 +140,15 @@ function harness(
     configDirs: createMemoryConfigDirs().dirs,
     ttlMs: options.ttlMs ?? 60_000,
     now: () => new Date(clock),
+    lifetime: {
+      lastLogins: async (ids) => {
+        if (options.loginsFail === true) throw new Error("audit read failed")
+        const known = options.lastLogins ?? new Map<string, Date>()
+        return new Map([...known].filter(([id]) => ids.includes(id)))
+      },
+      policy: { assumedLifetimeMs: 28 * DAY_MS, warnWindowMs: 5 * DAY_MS },
+      warnDays: 5,
+    },
     ...(options.park === false
       ? {}
       : {
@@ -176,6 +193,13 @@ describe("the credential field on an account read", () => {
       subscriptionType: "max",
       rateLimitTier: "default_claude_max_20x",
       present: true,
+      accessTokenExpiresAt: null,
+      lastLoginAt: null,
+      renewsAt: EXPIRES.toISOString(),
+      renewsAtSource: "reported",
+      daysUntilRenewal: 27,
+      renewalRequiredSoon: false,
+      renewalWarnDays: 5,
     })
     expect(account?.status).toBe("active")
   })
@@ -263,6 +287,13 @@ describe("parking a dead login", () => {
       subscriptionType: "max",
       rateLimitTier: "default_claude_max_20x",
       present: false,
+      accessTokenExpiresAt: null,
+      lastLoginAt: null,
+      renewsAt: EXPIRES.toISOString(),
+      renewsAtSource: "reported",
+      daysUntilRenewal: 27,
+      renewalRequiredSoon: false,
+      renewalWarnDays: 5,
     })
     expect(logs).toEqual(["info claude credential expired, account parked"])
   })
@@ -347,7 +378,7 @@ describe("a reader that fails", () => {
 describe("what the view can never carry", () => {
   test("the serialized view holds no token-shaped string and no token key", async () => {
     // Even a reader that misbehaved and smuggled a token onto an extra field cannot reach the view:
-    // the credential object is rebuilt from four named fields.
+    // the credential object is rebuilt from named instants and flags.
     const leaky = { ...LIVE, accessToken: FAKE_TOKEN } as CredentialMetadata
     const [account] = await listed(harness([view()], () => leaky).service)
     const serialized = JSON.stringify(account)
@@ -357,9 +388,16 @@ describe("what the view can never carry", () => {
     expect(serialized).not.toContain('"accessToken"')
     expect(serialized).not.toContain('"refreshToken"')
     expect(Object.keys(account?.credential ?? {}).sort()).toEqual([
+      "accessTokenExpiresAt",
+      "daysUntilRenewal",
       "expiresAt",
+      "lastLoginAt",
       "present",
       "rateLimitTier",
+      "renewalRequiredSoon",
+      "renewalWarnDays",
+      "renewsAt",
+      "renewsAtSource",
       "subscriptionType",
     ])
   })
@@ -416,5 +454,67 @@ describe("createCredentialPark", () => {
 
     expect(await park(row("active"), NOW)).toBe(false)
     expect(events).toEqual([])
+  })
+})
+
+describe("login lifetime on an account read", () => {
+  const UNREPORTED: CredentialMetadata = {
+    ...LIVE,
+    refreshTokenExpiresAt: null,
+    accessTokenExpiresAt: new Date("2026-09-05T18:00:00.000Z"),
+  }
+
+  test("no reported expiry: renews at the last interactive login plus the assumed lifetime, estimated", async () => {
+    const loggedIn = new Date("2026-08-10T12:00:00.000Z")
+    const [account] = await listed(
+      harness([view()], () => UNREPORTED, { lastLogins: new Map([[SUB_ID, loggedIn]]) }).service,
+    )
+
+    expect(account?.credential).toMatchObject({
+      expiresAt: null,
+      accessTokenExpiresAt: "2026-09-05T18:00:00.000Z",
+      lastLoginAt: loggedIn.toISOString(),
+      renewsAt: "2026-09-07T12:00:00.000Z",
+      renewsAtSource: "estimated",
+      daysUntilRenewal: 2,
+      renewalRequiredSoon: true,
+      renewalWarnDays: 5,
+    })
+  })
+
+  test("a reported expiry wins over the estimate", async () => {
+    const [account] = await listed(
+      harness([view()], () => LIVE, {
+        lastLogins: new Map([[SUB_ID, new Date("2026-08-10T12:00:00.000Z")]]),
+      }).service,
+    )
+    expect(account?.credential?.renewsAtSource).toBe("reported")
+    expect(account?.credential?.renewsAt).toBe(EXPIRES.toISOString())
+  })
+
+  test("neither reported nor a remembered login: unknown, never a guess", async () => {
+    const [account] = await listed(harness([view()], () => UNREPORTED).service)
+    expect(account?.credential).toMatchObject({
+      renewsAt: null,
+      renewsAtSource: "unknown",
+      daysUntilRenewal: null,
+      renewalRequiredSoon: false,
+    })
+  })
+
+  test("a failed audit read degrades to unknown and never fails the account read", async () => {
+    const { service, logs } = harness([view()], () => UNREPORTED, { loginsFail: true })
+    const [account] = await listed(service)
+    expect(account?.credential?.renewsAtSource).toBe("unknown")
+    expect(account?.credential?.present).toBe(true)
+    expect(logs).toContain("warn last interactive login unreadable")
+  })
+
+  test("get carries the same lifetime as list", async () => {
+    const loggedIn = new Date("2026-08-10T12:00:00.000Z")
+    const result = await harness([view()], () => UNREPORTED, {
+      lastLogins: new Map([[SUB_ID, loggedIn]]),
+    }).service.get(SUB_ID)
+    expect(result.ok && result.value.credential?.renewsAtSource).toBe("estimated")
   })
 })

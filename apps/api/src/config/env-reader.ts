@@ -4,6 +4,7 @@ import { z } from "zod"
 import { CLI_REFRESH_LEAD_MS } from "../providers/claude-sdk/credential-freshness"
 import { readAdminBodiesEnv } from "./admin-bodies"
 import { readBackgroundEnv } from "./background"
+import { readClaudeLoginEnv } from "./claude-login"
 import { readCliOwnershipEnv } from "./cli-ownership"
 import { DEFAULT_LOG_QUIET_PATHS, DEFAULT_SERVER_IDLE_TIMEOUT_SECONDS } from "./env-defaults"
 import { readAdminOidcEnv } from "./env-oidc"
@@ -68,7 +69,11 @@ export function readParsedEnv(raw: ParsedEnv, ctx: z.RefinementCtx): Env {
     return z.NEVER
   }
 
+  const claudeLogin = readClaudeLoginEnv(raw, ctx)
+  if (claudeLogin === undefined) return z.NEVER
+
   return {
+    ...claudeLogin,
     ...readRecoveryEnv(raw),
     ...readUsageReadEnv(raw),
     ...readAdminBodiesEnv(raw),

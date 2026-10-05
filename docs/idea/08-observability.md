@@ -645,6 +645,32 @@ Three properties of the redactor are load-bearing enough to state:
   credential and leave its tail. `LOG_REASON_MAX_CHARS` bounds how much of a described chain a
   `reason` field quotes.
 
+### Subscription login renewal
+
+A Claude subscription's login (its refresh token) dies roughly four weeks after the last
+interactive login, and only a re-login moves it. `login_lifetime_watch` writes **one line per
+subscription per day** while it is inside `CLAUDE_LOGIN_RENEWAL_WARN_DAYS` — the scheduler resumes
+the daily interval from the last recorded run, so restarts and a second replica do not repeat it.
+Alert on this line; it is the operator's lead time to plan the browser logins.
+
+| Field | Meaning |
+|---|---|
+| `msg` | `claude subscription login renewal due` (`level: warn`, `component: scheduler`, `task: login_lifetime_watch`) |
+| `accountId`, `label` | Which subscription |
+| `renewsAt` | ISO instant a browser login is due |
+| `renewsAtSource` | `reported` (the CLI's own `refreshTokenExpiresAt`) or `estimated` (last interactive login + `CLAUDE_LOGIN_ASSUMED_LIFETIME_DAYS`) |
+| `daysUntilRenewal` | Whole days left, floored, `0` once due |
+| `lastLoginAt` | The interactive login the estimate counts from, or `null` |
+
+Not warned: `needs_reauth` and `disabled` rows (they have their own signals), blanked credentials,
+and subscriptions whose deadline is `unknown`.
+
+The access-token keepalive (`credential_keepalive`) writes, per turn it spends:
+`claude credential refreshed by keepalive` (`info`) or `claude keepalive turn did not refresh the
+access token` (`warn`, then backed off for `CLAUDE_SDK_CREDENTIAL_KEEPALIVE_RETRY_MINUTES`), each
+with `accessExpiresAtBefore/After`, `loginExpiresAtBefore/After` and `loginExpiryMoved` —
+timestamps only. The field names avoid `token`, which the redactor masks by name.
+
 One logger runs before this one exists: the boot-time migration logger in `packages/db` writes
 JSON to stderr directly, and it scrubs its own lines (connection-string userinfo, obvious key
 material — `scrubCredentials` in `packages/core`) because a connect failure at that moment echoes
@@ -747,6 +773,8 @@ interval reads `stale`, which is what a wedged task looks like from the outside.
 | Orphaned `CLAUDE_CONFIG_DIR` reap | every few hours; removes only unclaimed directories past `RETENTION_ORPHAN_CONFIG_DIR_HOURS` |
 | SDK transcript sweep (`projects/**/*.jsonl` per subscription account) | `SDK_TRANSCRIPT_SWEEP_INTERVAL_MINUTES`; removes only session transcripts idle past `RETENTION_SDK_TRANSCRIPT_HOURS`, never credentials or settings |
 | Idle account probe | daily; free logged-in check on every subscription account, one billed turn on accounts idle past `IDLE_ACCOUNT_AFTER_DAYS` |
+| Subscription credential keepalive (`credential_keepalive`) | `CLAUDE_SDK_CREDENTIAL_KEEPALIVE_INTERVAL_SECONDS` (3 min); one small turn per subscription whose access token the CLI would refresh now — see [11-anthropic-agent-sdk.md §3](11-anthropic-agent-sdk.md) |
+| Subscription login lifetime watch (`login_lifetime_watch`) | `LOGIN_LIFETIME_WATCH_INTERVAL_MINUTES` (daily); one `warn` per subscription inside the renewal window — see below |
 
 ### The catalog refresh is not a scheduled task
 

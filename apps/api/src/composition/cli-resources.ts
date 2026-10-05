@@ -83,6 +83,7 @@ export function createCliResources(deps: RuntimeDeps, now: () => Date) {
     ownership,
     configDirs,
     transcripts,
+    credentialReader,
     credentialFreshness,
   }
 }

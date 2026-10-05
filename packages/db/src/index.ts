@@ -64,7 +64,12 @@ export type { AdminSessionRepository } from "./repositories/admin-session-reposi
 export { createAdminSessionRepository } from "./repositories/admin-session-repository"
 export type { ApiKeyRepository } from "./repositories/api-key-repository"
 export { createApiKeyRepository } from "./repositories/api-key-repository"
-export type { AppendAuditEventInput, AuditRepository } from "./repositories/audit-repository"
+export type {
+  AppendAuditEventInput,
+  AuditRepository,
+  LatestForSubjectsInput,
+  SubjectEventInstant,
+} from "./repositories/audit-repository"
 export { createAuditRepository } from "./repositories/audit-repository"
 export type { BackgroundAccountSubject } from "./repositories/background-account-eligibility"
 export type {
