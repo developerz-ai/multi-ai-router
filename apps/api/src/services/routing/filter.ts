@@ -77,6 +77,39 @@ export function evaluateCandidate(
   const resolution = resolveModel(account, model)
   if (!resolution.supported) return drop({ reason: "model-unsupported" })
 
+  const threshold = options.quotaSpentThreshold ?? DEFAULT_QUOTA_SPENT_THRESHOLD
+  const spent = findSpentWindow(account, now, threshold)
+  const spentDrop =
+    spent !== null && !recoveryAllowsQuota(account, now, threshold)
+      ? drop({
+          reason: "quota-window-spent",
+          window: spent.window,
+          ...(spent.resetsAt !== undefined ? { resetsAt: spent.resetsAt } : {}),
+          resetSource: spent.resetSource,
+        })
+      : null
+  const coolingDrop = drop({
+    reason:
+      account.health.cooldownReason === "credential-rejected"
+        ? "credential-rejected"
+        : "cooling-down",
+    ...(account.health.cooldownUntil !== undefined
+      ? { resetsAt: account.health.cooldownUntil }
+      : {}),
+    ...(account.health.cooldownSource !== undefined
+      ? { resetSource: account.health.cooldownSource }
+      : {}),
+  })
+
+  // A clock the provider itself reported outranks the router's own holds. Neither the recovery
+  // gate nor the breaker's probe hold can bring this account back before that instant, so naming
+  // them instead reads as "<1s, estimated" on an account that is out for two days — a misleading
+  // `429`, a `cooldown-expired` recovery hint and so a wasted probe every gate cycle, and a bound
+  // session that waits on the hold instead of moving (prod, 2026-10-06). Only provider-reported
+  // clocks: an estimated or unknown one is exactly what a recovery probe exists to re-test.
+  if (providerReportedCooldown(member, now)) return coolingDrop
+  if (spentDrop !== null && spent?.resetSource === "provider-reported") return spentDrop
+
   const permit = hasRecoveryPermit(account)
   if (recoveryIsGated(account) && !permit) {
     return drop({
@@ -85,21 +118,8 @@ export function evaluateCandidate(
       resetSource: "estimated",
     })
   }
-  const cooling =
-    coolingDown(member, now) && (!permit || account.health.cooldownUntil !== undefined)
-  if (cooling) {
-    return drop({
-      reason:
-        account.health.cooldownReason === "credential-rejected"
-          ? "credential-rejected"
-          : "cooling-down",
-      ...(account.health.cooldownUntil !== undefined
-        ? { resetsAt: account.health.cooldownUntil }
-        : {}),
-      ...(account.health.cooldownSource !== undefined
-        ? { resetSource: account.health.cooldownSource }
-        : {}),
-    })
+  if (coolingDown(member, now) && (!permit || account.health.cooldownUntil !== undefined)) {
+    return coolingDrop
   }
 
   // The cooldown passed, so the breaker is half-open — but the one probe it earns is already out
@@ -116,22 +136,7 @@ export function evaluateCandidate(
     return drop({ reason: "probe-in-flight", resetsAt: heldUntil, resetSource: "estimated" })
   }
 
-  const spent = findSpentWindow(
-    account,
-    now,
-    options.quotaSpentThreshold ?? DEFAULT_QUOTA_SPENT_THRESHOLD,
-  )
-  if (
-    spent !== null &&
-    !recoveryAllowsQuota(account, now, options.quotaSpentThreshold ?? DEFAULT_QUOTA_SPENT_THRESHOLD)
-  ) {
-    return drop({
-      reason: "quota-window-spent",
-      window: spent.window,
-      ...(spent.resetsAt !== undefined ? { resetsAt: spent.resetsAt } : {}),
-      resetSource: spent.resetSource,
-    })
-  }
+  if (spentDrop !== null) return spentDrop
 
   return {
     ok: true,
@@ -150,6 +155,16 @@ export function evaluateCandidate(
  * no recorded instant stays out: there is nothing to say it came back, and inventing a number is
  * the one thing the reset rules forbid.
  */
+function providerReportedCooldown(member: ScopedAccount, now: Date): boolean {
+  const { health } = member.account
+  return (
+    health.cooldownSource === "provider-reported" &&
+    health.cooldownReason !== "credential-rejected" &&
+    health.cooldownUntil !== undefined &&
+    health.cooldownUntil.getTime() > now.getTime()
+  )
+}
+
 function coolingDown(member: ScopedAccount, now: Date): boolean {
   const { status, health } = member.account
   const until = health.cooldownUntil

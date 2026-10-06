@@ -8,7 +8,7 @@ import { reading, recoveryFixture, url } from "./account-recovery-fixture"
 const fixture = recoveryFixture()
 const now = new Date()
 describe.skipIf(!url)("account recovery intent commits durably with authorization", () => {
-  test("CLI confirmation publishes pending recovery with configured cooldown and untouched old quota", async () => {
+  test("CLI confirmation publishes a settled generation, never a probe gate, with configured cooldown and untouched old quota", async () => {
     const original = await fixture.seed("needs_reauth")
     const quota = await fixture.repositories().quota.upsertQuotaWindow(original.id, reading)
     const repo = createAccountRepository(fixture.db(), { recoveryCooldownMs: 12345 })
@@ -19,12 +19,15 @@ describe.skipIf(!url)("account recovery intent commits durably with authorizatio
     })
     const catalog = await createCatalogSnapshotRepository(fixture.db()).read()
     const recovery = catalog.recoveries.find((row) => row.accountId === original.id)
+    // A pending generation gated routing as probe-in-flight right after a verified login.
     expect(recovery).toMatchObject({
-      state: "pending",
+      state: "cancelled",
+      permitId: null,
       lifecycleVersion: confirmed?.lifecycleVersion,
       reason: "authentication-recovered",
       quotaRevisions: { five_hour: quota.revision },
     })
+    expect(recovery?.outcomeAt).toEqual(recovery?.requestedAt ?? null)
     expect((recovery?.nextAllowedAt.getTime() ?? 0) - (recovery?.requestedAt.getTime() ?? 0)).toBe(
       12345,
     )
@@ -38,7 +41,7 @@ describe.skipIf(!url)("account recovery intent commits durably with authorizatio
       ),
     ).toEqual(recovery)
   })
-  test("passive auth recovery, browser commit, credential replacement, and enable each publish once", async () => {
+  test("passive auth recovery, browser commit, credential replacement, and enable each publish one settled generation", async () => {
     for (const intent of ["probe", "browser", "credential", "enable"] as const) {
       const original = await fixture.seed(intent === "probe" ? "needs_reauth" : "active")
       const repo = createAccountRepository(fixture.db())
@@ -85,9 +88,44 @@ describe.skipIf(!url)("account recovery intent commits durably with authorizatio
         .select()
         .from(accountRecoveries)
         .where(eq(accountRecoveries.accountId, original.id))
-      expect(recovery).toMatchObject({ state: "pending", revision: 0, lifecycleVersion: 1 })
+      expect(recovery).toMatchObject({
+        state: "cancelled",
+        revision: 0,
+        lifecycleVersion: 1,
+        reason: intent === "enable" ? "operator-enable" : "authentication-recovered",
+      })
+      expect(recovery?.outcomeAt).toBeInstanceOf(Date)
       expect((await fixture.windows(original.id))[0]).toEqual(quota)
     }
+  })
+  test("reconnect closes an open probe generation instead of leaving the account gated", async () => {
+    const account = await fixture.seed()
+    const held = await fixture.issue(account)
+    const replaced = await fixture.repositories().accounts.updateOperatorAccount({
+      id: account.id,
+      patch: { authMaterial: "reconnected" },
+      now,
+    })
+    const [recovery] = await fixture
+      .db()
+      .select()
+      .from(accountRecoveries)
+      .where(eq(accountRecoveries.accountId, account.id))
+    expect(recovery?.generation).not.toBe(held.generation)
+    expect(recovery).toMatchObject({
+      state: "cancelled",
+      permitId: null,
+      lifecycleVersion: replaced?.lifecycleVersion,
+      reason: "authentication-recovered",
+    })
+    expect(
+      await fixture.repositories().recovery.outcome({
+        ...held,
+        state: "succeeded",
+        cooldownMs: 1000,
+        quotaSpentThreshold: 1,
+      }),
+    ).toBeUndefined()
   })
   test("successful authorization preserves restricted statuses and publishes cancelled eligibility", async () => {
     for (const status of ["disabled", "exhausted"] as const) {

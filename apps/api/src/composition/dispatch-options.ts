@@ -30,10 +30,15 @@ export function dispatchOptionsFromEnv(env: Env): DispatchOptions {
     failover: failover.maxAttempts === undefined ? {} : { maxAttempts: failover.maxAttempts },
     selection: {
       boundAccountCoolingDown: failover.boundAccountCoolingDown,
+      // Waiting on a bound account only protects a transcript the carry would move anyway.
+      carryBoundSessions: env.claudeSdkSessionCarry.enabled,
       ...(failover.unknownResetRetryAfterSeconds === undefined
         ? {}
         : { unknownResetRetryAfterSeconds: failover.unknownResetRetryAfterSeconds }),
     },
+    // A request held only by the router's own recovery bookkeeping waits for the permit instead of
+    // answering 429 (`dataplane/recovery-wait.ts`); polled on the coordinator's own tick.
+    recoveryWait: { budgetMs: env.recovery.requestWaitMs, intervalMs: env.recovery.intervalMs },
     upstreamTimeoutMs: failover.upstreamTimeoutMs,
     upstreamErrorMaxBytes: failover.upstreamErrorMaxBytes,
     responseObservationMaxBytes: failover.responseObservationMaxBytes,

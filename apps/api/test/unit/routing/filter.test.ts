@@ -4,7 +4,7 @@
  */
 
 import { describe, expect, test } from "bun:test"
-import type { AccountSnapshot, FilterReason } from "../../../src/services/routing"
+import type { AccountSnapshot, FilterReason, RecoverySnapshot } from "../../../src/services/routing"
 import { filterCandidates, resolveModel } from "../../../src/services/routing"
 import { account, at, continuous, health, NOW, scoped, window } from "./fixtures"
 
@@ -229,6 +229,78 @@ describe("a credential the provider rejected", () => {
 
   test("comes back as a half-open probe once its cooldown passes", () => {
     const result = run([rejectedKey(at(-1))])
+    expect(result.eligible.map((candidate) => candidate.halfOpen)).toEqual([true])
+  })
+})
+
+describe("a recovery gate never hides a provider-reported clock", () => {
+  const providerReset = at(2 * 24 * 60 * 60_000)
+  const gated = (overrides: Partial<RecoverySnapshot> = {}): RecoverySnapshot => ({
+    state: "issued",
+    localAvailable: false,
+    retryAt: at(30_000),
+    revision: 1,
+    generation: "g1",
+    lifecycleVersion: 1,
+    nextAllowedAt: at(30_000),
+    quotaRevisions: {},
+    ...overrides,
+  })
+  const spentWeek = window("seven_day", {
+    utilization: 1,
+    utilizationSource: "continuous",
+    resetsAt: providerReset,
+    resetSource: "provider-reported",
+    revision: 3,
+  })
+
+  test("a spent provider-reported window on a recovery-gated account reports the window, not the probe", () => {
+    const result = run([account("venom", { quotaWindows: [spentWeek], recovery: gated() })])
+
+    expect(result.eligible).toHaveLength(0)
+    expect(result.rejected[0]).toMatchObject({
+      reason: "quota-window-spent",
+      window: "seven_day",
+      resetsAt: providerReset,
+      resetSource: "provider-reported",
+    })
+  })
+
+  test("a spent provider-reported window outranks the breaker's probe hold too", () => {
+    const halfOpen = account("venom", {
+      status: "cooling_down",
+      quotaWindows: [spentWeek],
+      health: health({ cooldownUntil: at(-1), probeHeldUntil: at(30_000) }),
+    })
+    expect(run([halfOpen]).rejected[0]).toMatchObject({
+      reason: "quota-window-spent",
+      resetsAt: providerReset,
+    })
+  })
+
+  test("a provider-reported cooldown on a recovery-gated account reports the provider's instant", () => {
+    const limited = account("dev", {
+      status: "cooling_down",
+      health: health({ cooldownUntil: at(600_000), cooldownSource: "provider-reported" }),
+      recovery: gated(),
+    })
+    expect(run([limited]).rejected[0]).toMatchObject({
+      reason: "cooling-down",
+      resetsAt: at(600_000),
+      resetSource: "provider-reported",
+    })
+  })
+
+  test("a spent window with no known reset stays behind the gate — the probe is its only clock", () => {
+    const stale = window("seven_day", { utilization: 1, utilizationSource: "continuous" })
+    expect(
+      run([account("venom", { quotaWindows: [stale], recovery: gated() })]).rejected[0],
+    ).toMatchObject({ reason: "probe-in-flight", resetsAt: at(30_000), resetSource: "estimated" })
+  })
+
+  test("the permit holder still probes past the exact evidence it captured", () => {
+    const permit = gated({ localAvailable: true, quotaRevisions: { seven_day: 3 } })
+    const result = run([account("venom", { quotaWindows: [spentWeek], recovery: permit })])
     expect(result.eligible.map((candidate) => candidate.halfOpen)).toEqual([true])
   })
 })

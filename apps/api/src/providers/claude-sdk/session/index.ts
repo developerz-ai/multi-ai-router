@@ -25,10 +25,12 @@ export type { FreshReason, ResolveLineageInput, SessionPlan } from "./plan"
 export { carriedPlan, resolveLineage } from "./plan"
 export type {
   ResolveTurnInput,
+  SessionCarrySkip,
   SessionStore,
   SessionStoreDeps,
   SessionTurn,
   StoredBinding,
+  TurnOutcome,
 } from "./store"
 export {
   createSessionStore,

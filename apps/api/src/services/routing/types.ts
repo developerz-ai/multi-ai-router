@@ -203,6 +203,13 @@ export interface SelectionOptions {
    */
   readonly boundAccountCoolingDown?: BoundCooldownBehavior
   /**
+   * The bound session's transcript can follow the turn to another account
+   * (`CLAUDE_SDK_SESSION_CARRY`), so a binding `blocked` for any clock-recoverable reason —
+   * `probe-in-flight` included — moves when another candidate is eligible instead of answering
+   * `429`. With no alternative the binding is still kept and blocks (`binding.ts`).
+   */
+  readonly carryBoundSessions?: boolean
+  /**
    * The `Retry-After` a 429 carries when every candidate is out for a clock-recoverable reason
    * but no reset instant is known. A pause rather than a countdown — nothing is scheduled to
    * clear the condition, so a short value is a standing retry storm.

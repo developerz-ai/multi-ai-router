@@ -27,7 +27,7 @@ export {
   DEFAULT_MAX_BACKOFF_MS,
   JITTER_FRACTION,
 } from "./backoff"
-export { decideBinding } from "./binding"
+export { carryBlockedBinding, decideBinding } from "./binding"
 export {
   type BreakerOptions,
   type BreakerPhase,

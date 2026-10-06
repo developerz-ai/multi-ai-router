@@ -1,21 +1,17 @@
-import type { SessionLineageState, SessionRepository, SessionRow } from "@multi-ai-router/db"
+import type { SessionRepository, SessionRow } from "@multi-ai-router/db"
 import type { SessionCarrier, SessionCarryOutcome } from "../session-carry"
-import {
-  createSessionCache,
-  type SessionCache,
-  type SessionCacheOptions,
-  type SessionEntry,
-} from "./cache"
+import { boundSession, entryOf } from "./bound"
+import { createSessionCache, type SessionCache, type SessionCacheOptions } from "./cache"
 import { readConversation } from "./conversation"
 import { createSessionDeletionFence } from "./deletion-fence"
 import { scopedKey, sessionFingerprint } from "./fingerprint"
 import { claimSessionTurn, createSessionClaims, type SessionClaims } from "./inflight"
 import { hashMessages } from "./lineage"
-import { carriedPlan, resolveLineage, type SessionPlan } from "./plan"
+import { carriedPlan, type FreshReason, resolveLineage, type SessionPlan } from "./plan"
 import { heldTurn, type SessionTurn, unrecordedTurn } from "./turn"
 import { createSessionWrites } from "./writes"
 
-export type { SessionTurn } from "./turn"
+export type { SessionTurn, TurnOutcome } from "./turn"
 
 /**
  * Session lineage as the rest of the router uses it: one read before selection, one plan before an
@@ -59,6 +55,19 @@ export interface SessionStoreDeps {
   readonly onCarry?: (
     outcome: SessionCarryOutcome & { readonly fromAccountId: string; readonly toAccountId: string },
   ) => void
+  /**
+   * A turn bound on another Account that starts fresh **without** a carry attempt, and why. The
+   * other half of `onCarry`: between the two, every turn that leaves its binding's Account is
+   * accounted for in the log.
+   */
+  readonly onCarrySkipped?: (skip: SessionCarrySkip) => void
+}
+
+/** Why a turn off its bound Account never tried to carry: a lineage verdict, or carrying is off. */
+export interface SessionCarrySkip {
+  readonly reason: FreshReason | "carry-disabled"
+  readonly fromAccountId: string
+  readonly toAccountId: string
 }
 
 export const DEFAULT_SESSION_CACHE_MAX_ENTRIES = 4_096
@@ -186,7 +195,8 @@ export function createSessionStore(deps: SessionStoreDeps): SessionStore {
               firstUserText: conversation.firstUserText,
             })
 
-      const session = boundSession(cache, key, input.apiKeyId, input.accountId, fingerprint)
+      const direct = cache.get(key)
+      const session = boundSession(cache, direct, input.apiKeyId, input.accountId, fingerprint)
       const resolved = resolveLineage({
         session,
         conversation,
@@ -205,6 +215,14 @@ export function createSessionStore(deps: SessionStoreDeps): SessionStore {
         candidate.kind === "fresh" ? null : candidate.sdkSessionId,
       )
       const plan: SessionPlan = claim.held ? candidate : { kind: "fresh", reason: "session-busy" }
+      const carryFrom = session?.carryFrom
+      if (carryFrom !== undefined && plan.kind === "fresh") {
+        deps.onCarrySkipped?.({
+          reason: plan.reason,
+          fromAccountId: carryFrom,
+          toAccountId: input.accountId,
+        })
+      }
 
       // Nothing readable arrived, so there is nothing to hash and nothing worth remembering. The
       // plan already says so by name.
@@ -231,71 +249,20 @@ export function createSessionStore(deps: SessionStoreDeps): SessionStore {
           storedUuids: session?.lineage.assistantUuids ?? [],
           claim,
           lease: fence.hold(input.accountId),
-          ...(carrier === undefined
-            ? {}
-            : {
-                carry: async (fromAccountId, sdkSessionId) => {
-                  const toAccountId = input.accountId
-                  const outcome = await carrier.carry({ fromAccountId, toAccountId, sdkSessionId })
-                  deps.onCarry?.({ ...outcome, fromAccountId, toAccountId })
-                  return outcome.carried
-                },
-              }),
+          prior: direct ?? null,
+          carry: async (fromAccountId, sdkSessionId) => {
+            const toAccountId = input.accountId
+            if (carrier === undefined) {
+              deps.onCarrySkipped?.({ reason: "carry-disabled", fromAccountId, toAccountId })
+              return false
+            }
+            const outcome = await carrier.carry({ fromAccountId, toAccountId, sdkSessionId })
+            deps.onCarry?.({ ...outcome, fromAccountId, toAccountId })
+            return outcome.carried
+          },
         },
         plan,
       )
     },
-  }
-}
-
-/**
- * The binding this turn can rejoin: the session key first, then the fingerprint alias behind it.
- *
- * A direct binding on **another** Account is still this conversation — the request names it by
- * key — so it comes back with `carryFrom`, and the transcript follows the turn. An alias never
- * does: the fingerprint is Account-scoped, so an alias naming another Account's session is one that
- * outlived the binding it pointed at.
- */
-function boundSession(
-  cache: SessionCache,
-  key: string,
-  apiKeyId: string,
-  accountId: string,
-  fingerprint: string | null,
-): {
-  readonly sdkSessionId: string
-  readonly lineage: SessionLineageState
-  readonly carryFrom?: string
-} | null {
-  const direct = cache.get(key)
-  if (direct !== undefined && direct !== null) {
-    if (direct.accountId === accountId) return direct
-    return {
-      sdkSessionId: direct.sdkSessionId,
-      lineage: direct.lineage,
-      carryFrom: direct.accountId,
-    }
-  }
-
-  if (fingerprint === null) return null
-  const aliased = cache.aliased(fingerprint)
-  if (aliased === undefined || !aliased.startsWith(scopedKey(apiKeyId, ""))) return null
-
-  const entry = cache.get(aliased)
-  // The fingerprint is key- and Account-scoped, so a mismatch means the alias outlived the
-  // binding it named. Answering with it would resume on an Account that never saw this session.
-  if (entry === undefined || entry === null) return null
-  return entry.accountId === accountId ? entry : null
-}
-
-/** A row binds only when it names both halves. Either alone resumes nowhere. */
-function entryOf(row: SessionRow | undefined): SessionEntry | null {
-  const accountId = row?.accountId ?? null
-  const sdkSessionId = row?.sdkSessionId ?? null
-  if (accountId === null || sdkSessionId === null) return null
-  return {
-    accountId,
-    sdkSessionId,
-    lineage: row?.lineageState ?? { prefixHashes: [], assistantUuids: [] },
   }
 }

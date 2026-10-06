@@ -38,6 +38,19 @@ export interface DispatchOptions {
   readonly responseObservationMaxBytes?: number
   readonly translation?: TranslationOptions
   readonly log?: LogOptions
+  /**
+   * How long a request whose only obstacle is the router's own recovery hold waits for a permit
+   * instead of answering `429` (`recovery-wait.ts`). Absent is no wait: the composition root passes
+   * `RECOVERY_REQUEST_WAIT_MS`, and a dispatcher built without it (a test) keeps the immediate `429`.
+   */
+  readonly recoveryWait?: RecoveryWaitOptions
+}
+
+export interface RecoveryWaitOptions {
+  /** `RECOVERY_REQUEST_WAIT_MS`. Total per request, across every re-selection. `0` disables. */
+  readonly budgetMs: number
+  /** How often a waiting request re-reads the snapshot — the coordinator's own tick. */
+  readonly intervalMs: number
 }
 
 export interface LogOptions {
@@ -107,6 +120,8 @@ export interface DispatcherDeps {
   /** The operator's warm price overrides. Omitted, attempts price off the shipped table. */
   readonly prices?: RateLookup
   readonly clock?: DataPlaneClock
+  /** Injected so a test can drive a recovery wait on its own clock. Defaults to a real timer. */
+  readonly sleep?: (milliseconds: number, signal: AbortSignal) => Promise<void>
   readonly logger?: Logger
   /** Notified once per client request, after it ended. Feeds `router_requests_total`. */
   readonly onRequest?: RequestObserver

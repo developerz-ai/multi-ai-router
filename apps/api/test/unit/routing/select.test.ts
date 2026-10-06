@@ -312,6 +312,58 @@ describe("the binding outranks the policy, in the whole chain", () => {
     expect(result.error.message).not.toContain("cooling down")
   })
 
+  test("with session carry on, a cooling bound account moves the session to the healthy one", () => {
+    const cooling = snapshot(
+      [
+        subscription("a", {
+          status: "cooling_down",
+          health: health({ cooldownUntil: at(300_000) }),
+        }),
+        subscription("b"),
+      ],
+      [pool("team", ["a", "b"])],
+    )
+    const result = expectSuccess(
+      selectAccounts(cooling, ask({ binding: { accountId: "a" } }), { carryBoundSessions: true }),
+    )
+
+    expect(result.decision.binding).toEqual({
+      state: "invalidated",
+      accountId: "a",
+      reason: "cooling-down",
+    })
+    expect(result.candidates.map((candidate) => candidate.account.id)).toEqual(["b"])
+  })
+
+  test("with session carry on, a spent bound window moves the session — and alone, still 429s", () => {
+    const spent = (other: ReturnType<typeof subscription>) =>
+      snapshot(
+        [subscription("a", { quotaWindows: [continuous(1)] }), other],
+        [pool("team", ["a", "b"])],
+      )
+    const moved = expectSuccess(
+      selectAccounts(spent(subscription("b")), ask({ binding: { accountId: "a" } }), {
+        carryBoundSessions: true,
+      }),
+    )
+    expect(moved.decision.binding).toMatchObject({
+      state: "invalidated",
+      reason: "quota-window-spent",
+    })
+    expect(moved.candidates[0]?.account.id).toBe("b")
+
+    const alone = expectFailure(
+      selectAccounts(
+        spent(subscription("b", { status: "exhausted" })),
+        ask({ binding: { accountId: "a" } }),
+        { carryBoundSessions: true },
+      ),
+    )
+    expect(alone.error.status).toBe(429)
+    expect(alone.error.message).toContain("out of quota")
+    expect(alone.decision.binding.state).toBe("blocked")
+  })
+
   test("an exhausted bound account invalidates and the session lands elsewhere", () => {
     const dead = snapshot(
       [subscription("a", { status: "exhausted" }), subscription("b")],

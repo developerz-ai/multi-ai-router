@@ -1,6 +1,9 @@
 import { describe, expect, test } from "bun:test"
+import { parseEnv } from "../../../src/config/env"
+import { createLogger } from "../../../src/logging/logger"
 import type { SessionStore, SessionTurn } from "../../../src/providers"
-import { sessionBindings } from "../../../src/services/dataplane"
+import { sessionBindings, sessionStoreFromEnv } from "../../../src/services/dataplane"
+import { memorySessions, messagesBody } from "../claude-sdk/fixtures"
 import { account, catalog, subscriptionAccount } from "./fixtures"
 
 /**
@@ -59,5 +62,45 @@ describe("whether a request has a binding to read at all", () => {
 
     expect(await bindings.read("key-1", "conv-1")).toMatchObject({ accountId: "acct-1" })
     expect(store.reads).toEqual(["key-1/conv-1"])
+  })
+})
+
+describe("the production store's log lines", () => {
+  test("a bound session that starts fresh without carrying names why, by id and enum only", () => {
+    const lines: Record<string, unknown>[] = []
+    const env = parseEnv({
+      DATABASE_URL: "postgres://router:router@postgres:5432/router",
+      ADMIN_OIDC_ISSUER_URL: "https://sso.test",
+      ADMIN_OIDC_CLIENT_ID: "multi-ai-router-test",
+      ADMIN_OIDC_REDIRECT_URI: "https://router.test/api/admin/auth/oidc/callback",
+      ADMIN_OIDC_ADMIN_EMAIL: "admin@test",
+      ENCRYPTION_KEY: Buffer.alloc(32, 7).toString("base64"),
+    })
+    const store = sessionStoreFromEnv({
+      env,
+      repository: memorySessions(),
+      logger: createLogger({ level: "info", write: (line) => lines.push(JSON.parse(line)) }),
+      now: () => new Date("2026-01-01T00:00:00.000Z"),
+    })
+    const opening = messagesBody([{ role: "user", text: "a secret question" }])
+    const input = { apiKeyId: "key-1", sessionKey: "conv-1", keySource: "header" as const }
+    const first = store.resolve({ ...input, accountId: "acct-1", body: opening })
+    first.remember("sess_1", "uuid-1")
+    first.release()
+
+    store.resolve({ ...input, accountId: "acct-2", body: opening }).release()
+
+    expect(lines).toEqual([
+      expect.objectContaining({
+        level: "info",
+        msg: "bound session not carried; the turn starts fresh",
+        component: "dataplane",
+        fromAccountId: "acct-1",
+        toAccountId: "acct-2",
+        reason: "replay",
+      }),
+    ])
+    expect(JSON.stringify(lines)).not.toContain("secret question")
+    expect(JSON.stringify(lines)).not.toContain("sess_1")
   })
 })

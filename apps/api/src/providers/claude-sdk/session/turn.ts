@@ -1,7 +1,13 @@
 import type { SessionLineageState, SessionRepository } from "@multi-ai-router/db"
-import type { SessionCache } from "./cache"
+import type { SessionCache, SessionEntry } from "./cache"
 import { nextLineage } from "./lineage"
 import type { SessionPlan } from "./plan"
+
+/**
+ * How the attempt that ran this turn ended. `failed` means nothing reached the client — a spent
+ * window, a crash before output — so the turn never answered and is not part of the lineage.
+ */
+export type TurnOutcome = "answered" | "failed"
 
 export interface SessionTurn {
   readonly plan: SessionPlan
@@ -34,8 +40,14 @@ export interface SessionTurn {
    * again from the attempt's failure path, because those two cannot coordinate and a claim that
    * leaks parks a conversation on fresh sessions until the process restarts. A turn that holds no
    * claim releases nothing (`session/inflight.ts`).
+   *
+   * **A `failed` turn withdraws what it remembered.** The CLI names its session in `system`/`init`
+   * before it learns the window is spent, so a refused attempt still reports — and recording it
+   * would move the binding onto the account that refused and claim the user's unanswered message
+   * as seen, turning the retry into a fresh `replay` instead of a carry from where the
+   * conversation was last answered. The first release decides; later ones only release.
    */
-  release(): void
+  release(outcome?: TurnOutcome): void
 }
 
 /** A turn that records nothing: a detached one-shot, or a body with nothing to hash. */
@@ -65,6 +77,8 @@ export interface HeldTurnContext {
   readonly storedUuids: SessionLineageState["assistantUuids"]
   readonly claim: { own(sdkSessionId: string): boolean; release(): void }
   readonly lease: { valid(): boolean; release(): void }
+  /** The binding this session key held when the turn was resolved, to restore if it fails. */
+  readonly prior: SessionEntry | null
   /** Moves `sdkSessionId` from `fromAccountId` to this turn's Account. Absent, nothing carries. */
   readonly carry?: (fromAccountId: string, sdkSessionId: string) => Promise<boolean>
 }
@@ -76,7 +90,14 @@ export function heldTurn(ctx: HeldTurnContext, plan: SessionPlan): SessionTurn {
   // same file byte for byte (paths aside), so its uuids still name the same messages.
   const carried = plan.kind === "fork" ? uuids.slice(0, plan.deltaFrom) : uuids
 
-  const release = () => {
+  let remembered = false
+  let released = false
+  const release = (outcome: TurnOutcome = "answered") => {
+    if (!released) {
+      released = true
+      // Still under the claim, so no other turn of this conversation can have written since.
+      if (outcome === "failed" && remembered && ctx.lease.valid()) withdraw(ctx)
+    }
     ctx.claim.release()
     ctx.lease.release()
   }
@@ -93,6 +114,7 @@ export function heldTurn(ctx: HeldTurnContext, plan: SessionPlan): SessionTurn {
     remember(sdkSessionId, assistantUuid) {
       if (!ctx.lease.valid() || !ctx.claim.own(sdkSessionId)) return
       const lineage = nextLineage(ctx.hashes, carried, assistantUuid)
+      remembered = true
       ctx.cache.set(ctx.key, { accountId: ctx.accountId, sdkSessionId, lineage })
       if (ctx.fingerprint !== null) ctx.cache.alias(ctx.fingerprint, ctx.key)
       ctx.write(ctx.key, {
@@ -107,4 +129,18 @@ export function heldTurn(ctx: HeldTurnContext, plan: SessionPlan): SessionTurn {
     },
   }
   return turn
+}
+
+/** Puts the session key back the way the turn found it: the prior binding, or none. */
+function withdraw(ctx: HeldTurnContext): void {
+  const { prior } = ctx
+  ctx.cache.set(ctx.key, prior)
+  ctx.write(ctx.key, {
+    apiKeyId: ctx.apiKeyId,
+    key: ctx.sessionKey,
+    accountId: prior?.accountId ?? null,
+    sdkSessionId: prior?.sdkSessionId ?? null,
+    lineageState: prior?.lineage ?? null,
+    lastUsedAt: ctx.now(),
+  })
 }

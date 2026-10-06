@@ -840,3 +840,19 @@ for (const depth of ["1", "5000"]) {
     expect(error.message).toContain("must be between 2 and 4096")
   })
 }
+
+describe("RECOVERY_REQUEST_WAIT_MS", () => {
+  test("defaults to a 5 s in-request wait for the router's own recovery hold", () => {
+    expect(parseEnv(base).recovery.requestWaitMs).toBe(5_000)
+  })
+
+  test("0 disables the wait; a value past a timer is refused by name", () => {
+    expect(parseEnv({ ...base, RECOVERY_REQUEST_WAIT_MS: "0" }).recovery.requestWaitMs).toBe(0)
+    expect(expectEnvError({ ...base, RECOVERY_REQUEST_WAIT_MS: "2147483648" }).variables).toEqual([
+      "RECOVERY_REQUEST_WAIT_MS",
+    ])
+    expect(expectEnvError({ ...base, RECOVERY_REQUEST_WAIT_MS: "-1" }).variables).toEqual([
+      "RECOVERY_REQUEST_WAIT_MS",
+    ])
+  })
+})

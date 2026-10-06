@@ -139,6 +139,36 @@ describe("a bound subscription that ran out of quota", () => {
     })
   })
 
+  test("with session carry on, the binding moves instead of answering 429 — the transcript follows", () => {
+    const result = expectSuccess(selectAccounts(cooling, bound, { carryBoundSessions: true }))
+
+    expect(result.decision.binding).toEqual({
+      state: "invalidated",
+      accountId: "sub-2",
+      reason: "cooling-down",
+    })
+    const chain = result.candidates.map((candidate) => candidate.account.id)
+    expect(chain).not.toContain("sub-2")
+    expect(chain).toHaveLength(5)
+  })
+
+  test("with session carry on and every other subscription out, it still keeps the binding and 429s", () => {
+    const lonely = snapshot(
+      cooling.accounts.map((entry) =>
+        entry.id === "sub-2" ? entry : subscription(entry.id, { status: "exhausted" }),
+      ),
+      [pool("claude-subs", SUBS, { policy: "round-robin" })],
+    )
+    const result = expectFailure(selectAccounts(lonely, bound, { carryBoundSessions: true }))
+
+    expect(result.error.status).toBe(429)
+    expect(result.decision.binding).toMatchObject({
+      state: "blocked",
+      accountId: "sub-2",
+      resetsAt: at(1_800_000),
+    })
+  })
+
   test("`rebind` drops the binding and the rotation places the session on another subscription", () => {
     const result = expectSuccess(
       selectAccounts(cooling, bound, { boundAccountCoolingDown: "rebind" }),

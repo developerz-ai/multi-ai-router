@@ -106,3 +106,46 @@ test("client stream cancellation records uncertainty without striking the accoun
   expect(f.health.stateOf("a").breaker.status).toBe("active")
   expect(f.rows).toHaveLength(1)
 })
+
+function sse(frames: readonly string[]) {
+  const upstream = slowStream(frames)
+  const response = new Response(upstream.response.body, {
+    headers: { "content-type": "text/event-stream" },
+  })
+  return { upstream, response }
+}
+const MESSAGE_START =
+  'event: message_start\ndata: {"type":"message_start","message":{"usage":{"input_tokens":3,"output_tokens":0}}}\n\n'
+const THINKING_DELTA =
+  'event: content_block_delta\ndata: {"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"hm"}}\n\n'
+
+test("client cancel after model output settles recovery succeeded and keeps the account routable", async () => {
+  const { upstream, response } = sse([MESSAGE_START, THINKING_DELTA])
+  const f = fixture(response)
+  if (f.relayed.body === null) throw new Error("missing body")
+  const reader = f.relayed.body.getReader()
+  upstream.release(0)
+  await reader.read()
+  upstream.release(1)
+  await reader.read()
+  await reader.cancel()
+  expect(f.states).toEqual(["succeeded"])
+  expect(f.health.stateOf("a").breaker.status).toBe("active")
+  expect(f.health.stateOf("a").breaker.consecutiveFailures).toBe(0)
+  expect(f.rows).toHaveLength(1)
+  expect(f.rows[0]).toMatchObject({ outcome: "client_error", errorClass: "client_cancelled" })
+})
+
+test("client cancel after only envelope frames stays uncertain", async () => {
+  const { upstream, response } = sse([MESSAGE_START, 'event: ping\ndata: {"type":"ping"}\n\n'])
+  const f = fixture(response)
+  if (f.relayed.body === null) throw new Error("missing body")
+  const reader = f.relayed.body.getReader()
+  upstream.release(0)
+  await reader.read()
+  upstream.release(1)
+  await reader.read()
+  await reader.cancel()
+  expect(f.states).toEqual(["uncertain"])
+  expect(f.health.stateOf("a").breaker.status).toBe("active")
+})

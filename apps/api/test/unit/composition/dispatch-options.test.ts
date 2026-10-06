@@ -47,6 +47,14 @@ describe("dispatchOptionsFromEnv", () => {
     expect(options.selection?.boundAccountCoolingDown).toBe("rebind")
   })
 
+  test("session carry reaches selection: on by default, off with CLAUDE_SDK_SESSION_CARRY=false", () => {
+    expect(dispatchOptionsFromEnv(parseEnv(base)).selection?.carryBoundSessions).toBe(true)
+    expect(
+      dispatchOptionsFromEnv(parseEnv({ ...base, CLAUDE_SDK_SESSION_CARRY: "false" })).selection
+        ?.carryBoundSessions,
+    ).toBe(false)
+  })
+
   test("the operator's failover numbers reach the dispatcher", () => {
     const options = dispatchOptionsFromEnv(
       parseEnv({

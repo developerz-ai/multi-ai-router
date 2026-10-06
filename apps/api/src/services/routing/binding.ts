@@ -18,6 +18,13 @@
  * keeps the conversation intact. It applies to `cooling-down` and `quota-window-spent` only:
  * `probe-in-flight` is the router's own ~30-second hold, already settling inside another request,
  * and dropping a resumable conversation over it would trade seconds for the whole history.
+ *
+ * `carryBoundSessions` (on whenever the SDK session carry is) changes the arithmetic behind
+ * `blocked`: the wait existed to keep the transcript resumable, and a carry takes the transcript
+ * to whichever account serves the turn. So a `blocked` binding becomes `invalidated` — same
+ * reason, every recoverable one including `probe-in-flight` — whenever another candidate is
+ * eligible ({@link carryBlockedBinding}). With no alternative it stays `blocked`: the binding is
+ * kept and the `429` carries the bound account's own reset.
  */
 
 import { evaluateCandidate } from "./filter"
@@ -71,6 +78,21 @@ export function decideBinding(
   }
 
   return { state: "invalidated", accountId: boundAccountId, reason: invalidationFor(reason) }
+}
+
+/**
+ * Applied once filtering knows whether anything else can serve. A pure rewrite of the decision:
+ * the policies pin only an `honored` binding, so ordering is identical either way.
+ */
+export function carryBlockedBinding(
+  binding: BindingDecision,
+  hasAlternative: boolean,
+  options: SelectionOptions = {},
+): BindingDecision {
+  if (binding.state !== "blocked" || !hasAlternative || options.carryBoundSessions !== true) {
+    return binding
+  }
+  return { state: "invalidated", accountId: binding.accountId, reason: binding.reason }
 }
 
 function invalidationFor(reason: FilterReason): BindingInvalidationReason {

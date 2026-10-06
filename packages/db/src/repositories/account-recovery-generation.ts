@@ -21,27 +21,30 @@ export async function replaceGeneration(
     reason: RecoveryReason
     cooldownMs: number
     ineligible?: boolean
+    /** Born closed: no admission probe, only the generation bump that fences older observations. */
+    settled?: boolean
   },
   held: RecoveryRow | undefined,
   now: Date,
 ) {
+  const closed = input.ineligible === true || input.settled === true
   const values = {
     accountId: input.accountId,
     generation: input.generationCandidate,
     revision: (held?.revision ?? -1) + 1,
     lifecycleVersion: input.lifecycleVersion,
     credentialFingerprint: credentialFingerprint(input.authMaterial),
-    state: input.ineligible ? ("cancelled" as const) : ("pending" as const),
+    state: closed ? ("cancelled" as const) : ("pending" as const),
     reason: input.reason,
     ownerBootId: null,
     ownershipEpoch: 0,
     preparationLeaseUntil: null,
     permitId: null,
     issuedAt: null,
-    outcomeAt: input.ineligible ? now : null,
+    outcomeAt: closed ? now : null,
     requestedAt: now,
     nextAllowedAt: new Date(now.getTime() + input.cooldownMs),
-    quotaRevisions: await capturedQuota(tx, input.accountId),
+    quotaRevisions: await capturedQuota(tx, input.accountId, input.reason, now),
   }
   const [row] = await tx
     .insert(accountRecoveries)
@@ -55,7 +58,15 @@ export async function replaceGeneration(
   return row
 }
 
-/** Called after an account UPDATE holds its row lock, in the same transaction. */
+/**
+ * Called after an account UPDATE holds its row lock, in the same transaction. Login, passive
+ * authentication recovery, credential replacement and explicit enable each just proved (or an
+ * operator just asserted) the account usable, so the generation is published already settled: a
+ * pending one gated routing as `probe-in-flight` until a permit was issued on demand, refusing the
+ * first requests after a reconnect (prod, 2026-10-06). `cancelled` is the only closed state the
+ * permit check constraint admits without a permit. The cooldown still holds, so an operator check
+ * finalizing on this transition joins it rather than opening a probe of its own.
+ */
 export async function publishAccountRecovery(
   tx: DatabaseExecutor,
   account: AccountRow,
@@ -73,7 +84,7 @@ export async function publishAccountRecovery(
       authMaterial: account.authMaterial,
       cooldownMs,
       reason,
-      ineligible: account.status !== "active" && account.status !== "cooling_down",
+      settled: true,
     },
     held,
     now,

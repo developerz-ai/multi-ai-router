@@ -168,7 +168,7 @@ export async function runSdkAttempt(input: SdkAttemptInput): Promise<AttemptOutc
     // Released here as well as from `onTurnEnd`, and idempotently: a throw before the launch ever
     // existed reaches no `onEnd`, and the *next* attempt of this same request must be able to claim
     // the conversation immediately rather than fail over onto a detached, session-less turn.
-    turn.release()
+    turn.release("failed")
     rateLimit.close()
     if (error instanceof UpstreamAdmissionRefused) return { kind: "admission-refused" }
     return invocationFailure(error, input, turn, rateLimit.signal(), attemptSignal)
@@ -184,7 +184,7 @@ export async function runSdkAttempt(input: SdkAttemptInput): Promise<AttemptOutc
   // The same reason as the catch above: this attempt is over and the chain may try another
   // account, which resolves its own turn against this conversation.
   if (response.status >= 400) {
-    turn.release()
+    turn.release("failed")
     try {
       return await errorResponseFailure(response, rateLimit.signal())
     } finally {
