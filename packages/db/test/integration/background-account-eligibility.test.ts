@@ -89,7 +89,7 @@ describe.skipIf(!url)("durable background account eligibility", () => {
       expect(await repo.readEligibleBackgroundAccount(original.id, original)).toBeUndefined()
     }
   })
-  test("positive authentication recovery owns the next turn rather than a background warmer", async () => {
+  test("positive authentication recovery leaves no open probe, so only the stale observation is refused", async () => {
     const original = await fixture.seed("needs_reauth")
     const repo = fixture.repositories().accounts
     const confirmed = await repo.recoverObservedAuthentication({
@@ -99,7 +99,9 @@ describe.skipIf(!url)("durable background account eligibility", () => {
     })
     expect(confirmed?.status).toBe("active")
     if (confirmed === undefined) throw new Error("missing auth recovery")
-    expect(await repo.readEligibleBackgroundAccount(confirmed.id, confirmed)).toBeUndefined()
+    expect((await repo.readEligibleBackgroundAccount(confirmed.id, confirmed))?.id).toBe(
+      original.id,
+    )
     expect(await repo.readEligibleBackgroundAccount(original.id, original)).toBeUndefined()
   })
   test("NULL cipher identity is accepted without treating a replacement or different provider as equivalent", async () => {

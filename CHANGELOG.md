@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.23.0] — 2026-10-07
+
+When accounts go bad the router now finds a good one instead of answering `429` while a healthy subscription sits in scope. A request may take a few seconds longer; it lands. Prod, 2026-10-06: the four Claude subscriptions behind one key answered `429` for minutes after two of them were reconnected, while the other two kept being probed although their weekly windows were spent until 2026-10-08 (#167).
+
+### Upgrade notes
+
+- **New optional setting:** `RECOVERY_REQUEST_WAIT_MS` (default `5000`, `0` disables) — how long a request waits for the router's own recovery hold before answering `429`.
+- **A reconnect or enable is routable immediately.** Its recovery generation is published settled (`cancelled`) rather than `pending`; the console shows the generation as cancelled.
+
+### Fixed
+
+- **Reconnect no longer gates the account.** A just-verified login published a `pending` recovery and every request was refused as `probe-in-flight` until an on-demand permit arrived.
+- **Spent windows are not probed.** Recovery permits no longer capture a quota window whose reset the provider reported and has not arrived; the filter reports a provider-reported spent window or cooldown before the router's own holds, so the `429` names the real reset instead of "settling a recovery probe, <1 s".
+- **A blocked binding moves.** With session carry on, a session bound to an account that cannot serve now is placed on another eligible account and its transcript carried, for every clock-recoverable reason including a probe in flight. With no alternative the binding is kept and the `429` carries its reset.
+- **Router-own holds wait instead of `429`.** A request blocked only by a recovery awaiting its permit (or another request's probe) waits up to `RECOVERY_REQUEST_WAIT_MS` and re-selects; a chain that sent nothing and ended on a permit refusal re-plans the same way, and its give-up `429` carries the short refusal `Retry-After`, not another account's days-away reset.
+- **A client cancel after model output is a success.** It settled the recovery `uncertain` and re-gated an account that had just answered.
+- **A failed attempt no longer claims the conversation.** The CLI names its session before it learns the window is spent; that report is now withdrawn, so the binding stays where the conversation was answered and the retry carries from there.
+
+### Added
+
+- Info logs for every candidate the chain drops without an upstream attempt, and for every bound turn that starts fresh instead of carrying (with the reason).
+
 ## [2.22.0] — 2026-10-05
 
 A Claude subscription conversation now survives a switch to another subscription. When the bound account runs out of quota, cools down, or loses its login, the next subscription carries the conversation's SDK transcript into its own config directory and continues it — the router's equivalent of a local `/login` mid-session — instead of restarting it.

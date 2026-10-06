@@ -52,7 +52,13 @@ export function createRelayTerminal() {
         })
       }
     },
-    error(error: unknown) {
+    /**
+     * `modelOutput`: the upstream already streamed model content. A client that cancels after that
+     * has proof the account served, so recovery settles `succeeded` — holding a demonstrably healthy
+     * account behind another probe would be the router's fault, not the account's. A cancel before
+     * any model output proves nothing either way and stays `uncertain`.
+     */
+    error(error: unknown, modelOutput = false) {
       if (error instanceof TranslationStreamError) {
         capture({
           outcome: "router_error",
@@ -72,7 +78,7 @@ export function createRelayTerminal() {
           outcome: "client_error",
           errorClass: "client_cancelled",
           failure: null,
-          recovery: "uncertain",
+          recovery: modelOutput ? "succeeded" : "uncertain",
         })
       } else {
         const timedOut = error instanceof Error && error.name === "TimeoutError"

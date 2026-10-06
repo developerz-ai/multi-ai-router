@@ -21,6 +21,7 @@ import {
   cancelledBeforeRelay,
   isCancelledOutcome,
 } from "./chain-cancellation"
+import { logCandidateDropped, logPreparationThrew, logUnstartedDrop } from "./chain-drop-log"
 import { type ChainFailure, foldChainFailure, routerFailure } from "./chain-error"
 import { finishFailedAttempt } from "./chain-failed-attempt"
 import { finishChain } from "./chain-finish"
@@ -124,7 +125,7 @@ export async function runChain(ctx: ChainContext): Promise<Response> {
       refusals.record()
       runtime.recovery?.hint(accountId, "cooldown-expired")
       ordered = ordered.filter((candidate) => candidate.account.id !== accountId)
-      ctx.log?.debug("half-open probe already in flight", { accountId })
+      logCandidateDropped(ctx.log, accountId, decision.attempt, "half-open-probe-in-flight")
       continue
     }
 
@@ -199,6 +200,7 @@ export async function runChain(ctx: ChainContext): Promise<Response> {
       progress = priorProgress
       ordered = ordered.filter((candidate) => candidate.account.id !== accountId)
       refusals.recordPreparation()
+      logPreparationThrew(ctx.log, accountId, decision.attempt, error)
       continue
     }
     lifetime.assertRunning(outcome.kind === "success" ? outcome.response : undefined)
@@ -223,6 +225,7 @@ export async function runChain(ctx: ChainContext): Promise<Response> {
       ordered = ordered.filter((candidate) => candidate.account.id !== accountId)
       if (outcome.kind === "admission-refused") refusals.record()
       else refusals.recordPreparation()
+      logUnstartedDrop(ctx.log, accountId, decision.attempt, outcome)
       continue
     }
 

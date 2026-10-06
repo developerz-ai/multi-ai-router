@@ -13,7 +13,7 @@ import type {
   SelectionOptions,
   SelectionRequest,
 } from "../../../src/services/routing"
-import { decideBinding, resolveScope } from "../../../src/services/routing"
+import { carryBlockedBinding, decideBinding, resolveScope } from "../../../src/services/routing"
 import { account, at, continuous, health, pool, snapshot, subscription } from "./fixtures"
 
 const request: SelectionRequest = {
@@ -116,6 +116,58 @@ describe("kept, because a clock will fix it", () => {
       state: "invalidated",
       accountId: "bound",
       reason: "quota-window-spent",
+    })
+  })
+})
+
+describe("carried, because the transcript can follow the turn", () => {
+  const carry: SelectionOptions = { carryBoundSessions: true }
+  const probed = [
+    subscription("bound", {
+      status: "cooling_down",
+      health: health({ cooldownUntil: at(-1_000), probeHeldUntil: at(20_000) }),
+    }),
+    subscription("other"),
+  ]
+  const decideCarried = (hasAlternative: boolean, options: SelectionOptions = carry) =>
+    carryBlockedBinding(decide(probed, "bound", options), hasAlternative, options)
+
+  test("another request's probe on the bound account moves the session when anything else can serve", () => {
+    // The wait only protected a transcript the carry now moves anyway (prod, 2026-10-06: three
+    // `429`s naming a "<1s" probe while a healthy subscription sat idle).
+    expect(decideCarried(true)).toEqual({
+      state: "invalidated",
+      accountId: "bound",
+      reason: "probe-in-flight",
+    })
+  })
+
+  test("`rebind` and a probe in flight move too — carry, not the cooldown policy, decides", () => {
+    expect(decideCarried(true, { ...carry, boundAccountCoolingDown: "rebind" })).toEqual({
+      state: "invalidated",
+      accountId: "bound",
+      reason: "probe-in-flight",
+    })
+  })
+
+  test("with nowhere else to go the binding is kept and still blocks with the bound reset", () => {
+    expect(decideCarried(false)).toEqual({
+      state: "blocked",
+      accountId: "bound",
+      reason: "probe-in-flight",
+      resetsAt: at(20_000),
+      resetSource: "estimated",
+    })
+  })
+
+  test("off, nothing changes: the blocked binding stays blocked", () => {
+    expect(decideCarried(true, {})).toMatchObject({ state: "blocked", reason: "probe-in-flight" })
+  })
+
+  test("an honored binding is never touched", () => {
+    expect(carryBlockedBinding(decide(healthy, "bound", carry), true, carry)).toEqual({
+      state: "honored",
+      accountId: "bound",
     })
   })
 })

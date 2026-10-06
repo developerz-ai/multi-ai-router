@@ -102,6 +102,15 @@ export function sessionStoreFromEnv(deps: SessionStoreEnvDeps): SessionStore {
           : { detail: describeError(outcome.error, deps.env.logReasonMaxChars) }),
       })
     },
+    // Ids and an enum only: never a transcript, a message, or anything from a config directory.
+    onCarrySkipped: (skip) => {
+      deps.logger.info("bound session not carried; the turn starts fresh", {
+        component: "dataplane",
+        fromAccountId: skip.fromAccountId,
+        toAccountId: skip.toAccountId,
+        reason: skip.reason,
+      })
+    },
     onError: (operation, error) => {
       // The full cause chain, innermost first: a repository failure here wraps the driver's
       // complaint, and the wrapper alone names the statement, not the reason. The logger redacts.

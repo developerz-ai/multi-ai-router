@@ -1,4 +1,4 @@
-import { atLeastOne } from "./fields"
+import { atLeastOne, wholeNumber } from "./fields"
 
 const timerMs = atLeastOne.refine((value) => value <= 2_147_483_647, "must fit a timer")
 const capacity = atLeastOne.refine((value) => value <= 100_000, "must be at most 100000")
@@ -13,6 +13,10 @@ export const RECOVERY_ENV_FIELDS = {
   RECOVERY_COOLDOWN_MS: timerMs.optional(),
   RECOVERY_SHUTDOWN_DRAIN_MS: timerMs.optional(),
   RECOVERY_RETRY_AFTER_MS: timerMs.optional(),
+  // Zero is a setting here: no in-request wait, the router's own recovery hold answers 429 at once.
+  RECOVERY_REQUEST_WAIT_MS: wholeNumber
+    .refine((value) => value <= 2_147_483_647, "must fit a timer")
+    .optional(),
   // The production CLI status check allows 15s plus 1s pipe drain; reserve additional slack.
   RECOVERY_OPERATOR_CHECK_LEASE_MS: timerMs
     .refine((value) => value >= 17_000, "must be at least 17000 to cover the CLI status deadline")
@@ -34,6 +38,7 @@ export function readRecoveryEnv(raw: RecoveryEnv) {
       cooldownMs: raw.RECOVERY_COOLDOWN_MS ?? 30_000,
       shutdownDrainMs: raw.RECOVERY_SHUTDOWN_DRAIN_MS ?? 15_000,
       retryAfterMs: raw.RECOVERY_RETRY_AFTER_MS ?? 1_000,
+      requestWaitMs: raw.RECOVERY_REQUEST_WAIT_MS ?? 5_000,
       operatorCheckLeaseMs: raw.RECOVERY_OPERATOR_CHECK_LEASE_MS ?? 30_000,
       quotaStaleAfterMs: raw.ROUTING_QUOTA_STALE_AFTER_MS ?? 600_000,
     },

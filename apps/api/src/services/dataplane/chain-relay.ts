@@ -6,6 +6,7 @@ import { RouterShutdownError } from "./active-requests"
 import type { UpstreamError } from "./attempt"
 import { breakerOptionsFor } from "./health"
 import type { HealthObservation } from "./health-observation"
+import { observingModelOutput } from "./model-output"
 import { forcesUpstreamStream, type ServableCandidate } from "./plan"
 import { attemptRecord, failureOutcome } from "./records"
 import type { RecoveryAttempt } from "./recovery-access"
@@ -64,15 +65,16 @@ export function relaySuccess(
   at: SuccessClock,
 ): Response {
   const upstreamStreams = forcesUpstreamStream(servable)
+  let modelOutput = false
   const observation = createResponseObserver({
     dialect: servable.dialect,
     operation: ctx.runtime.operation,
     // Usage is read off the upstream's frames; a forced stream is SSE whether or not it said so.
     contentType: upstreamStreams ? "text/event-stream" : response.headers.get("content-type"),
     maximumObservationBytes: ctx.runtime.responseObservationMaxBytes ?? 65_536,
-    ...(servable.driver.responseObservation === undefined
-      ? {}
-      : { descriptor: servable.driver.responseObservation }),
+    descriptor: observingModelOutput(servable.dialect, servable.driver.responseObservation, () => {
+      modelOutput = true
+    }),
   })
   const terminal = createRelayTerminal()
   let firstByteAt: number | undefined
@@ -89,7 +91,7 @@ export function relaySuccess(
     if (settled) return
     settled = true
     at.onSettled?.()
-    if (error !== undefined) terminal.error(error)
+    if (error !== undefined) terminal.error(error, modelOutput)
     const facts = eof ? observation.finish() : observation.snapshot()
     const verdict = terminal.finish(facts)
     ctx.request?.signal.removeEventListener("abort", requestAborted)
@@ -109,7 +111,8 @@ export function relaySuccess(
           },
           at.observation,
         )
-      } else if (verdict.outcome === "success" && !rateLimited) {
+      } else if (verdict.recovery === "succeeded" && !rateLimited) {
+        // A clean finish, or a client cancel after the model already produced output.
         ctx.runtime.health.recordSuccess(servable.account.id, at.observation)
       }
       const upstreamMs = at.upstreamMs + (ctx.runtime.clock.elapsed() - at.upstreamStarted)

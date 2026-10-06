@@ -598,6 +598,8 @@ JSON lines to stdout, one object per event. The container logs; shipping them is
 | `component` | yes (`transport`, `routing`, `provider`, `translate`, `scheduler`, `admin`) |
 | `accountId`, `keyId`, `model`, `attempt`, `durationMs`, `status` | when in scope |
 
+Every candidate the request chain drops without an upstream attempt logs one `info` line, `candidate dropped without an upstream attempt`, with `accountId`, `attempt`, `reason` (`half-open-probe-in-flight` | `recovery-admission-refused` | `preparation-failed`) and, for a preparation failure, `errorClass` (the error class name or failure kind — never a message). Through v2.22.0 these drops were silent or debug-only, so a request that answered `429` while an account sat in scope could not be explained from the log.
+
 | Level | Used for |
 |---|---|
 | `error` | A request the router could not serve; a failed OAuth refresh; a decrypt failure; a scheduled task that threw |

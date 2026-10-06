@@ -12,7 +12,7 @@
  * what reason.
  */
 
-import { decideBinding } from "./binding"
+import { carryBlockedBinding, decideBinding } from "./binding"
 import { evaluateCandidate, filterCandidates } from "./filter"
 import { noCandidatesError } from "./no-candidates"
 import { runPolicy } from "./policies"
@@ -33,7 +33,7 @@ export function selectAccounts(
   options: SelectionOptions = {},
 ): SelectionResult {
   const { groups: scopeGroups, diagnostics } = resolveScope(snapshot, request, options)
-  const binding = decideBinding(
+  const decided = decideBinding(
     snapshot,
     scopeGroups,
     request.binding?.accountId,
@@ -66,7 +66,7 @@ export function selectAccounts(
               rotationCounter: group.rotationCounter,
               options,
             },
-            binding,
+            decided,
           )
 
     // Each attempt is a distinct account: an account sitting in two of the key's pools is one
@@ -86,6 +86,15 @@ export function selectAccounts(
     })
   }
 
+  // `runPolicy` already put natives first inside each pool; this carries the same rule across
+  // pools, so a native account in the key's second pool outranks an alias in its first. The policy
+  // runs per pool, so a binding honored inside the second pool still outranks the first pool's
+  // head: the binding is truth, the ordering is preference.
+  const preferred = nativeFirst(ordered).ordered
+  // A blocked bound account is never among `preferred` — the filter dropped it — so any entry at
+  // all is an alternative the carried transcript can move to.
+  const binding = carryBlockedBinding(decided, preferred.length > 0, options)
+
   const decision = {
     scope: diagnostics,
     groups,
@@ -94,11 +103,6 @@ export function selectAccounts(
     usedOverflow,
   }
 
-  // `runPolicy` already put natives first inside each pool; this carries the same rule across
-  // pools, so a native account in the key's second pool outranks an alias in its first. The policy
-  // runs per pool, so a binding honored inside the second pool still outranks the first pool's
-  // head: the binding is truth, the ordering is preference.
-  const preferred = nativeFirst(ordered).ordered
   const candidates = binding.state === "honored" ? hoist(preferred, binding.accountId) : preferred
 
   if (binding.state === "blocked" || candidates.length === 0) {

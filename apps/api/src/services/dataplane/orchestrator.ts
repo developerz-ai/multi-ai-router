@@ -13,6 +13,7 @@ import type { RequestProgress } from "./observe"
 import { planCandidates } from "./plan"
 import { attemptRecord, errorClassOf, outcomeOf } from "./records"
 import { hintRecoveryRejections } from "./recovery-hints"
+import { createRequestRecovery } from "./recovery-wait"
 import { createRequestAccounting, type RequestAccounting } from "./request-accounting"
 import { requestLifetime } from "./request-lifetime"
 import { requestTerminalObserver } from "./request-terminal"
@@ -30,16 +31,12 @@ import { unservableError } from "./unservable"
  *     read routing fields -> resolve session -> health snapshot -> select -> plan egress
  *                         -> attempt chain -> relay
  *
- * Preflight reads and validates the body once, resolves the scoped session binding, and selects
- * from a warm routing snapshot. A cold session binding uses the store's indexed database lookup.
- * Every authenticated refusal is accounted for, including those before a model is known.
- * Missing model/account/upstream facts stay null; no selected account is charged for preparation.
+ * Preflight reads the body once, resolves the session binding (indexed lookup when cold), and
+ * selects from a warm snapshot. Every authenticated refusal is accounted for; unknown facts stay
+ * null and no account is charged for preparation.
  */
 
-/**
- * How many dropped fields one log line spells out. Not an operator knob: it bounds one rendered
- * field the way the redactor bounds an `Error`; the count beside it is always complete.
- */
+/** Dropped fields one log line spells out; bounds one field, not an operator knob. */
 const MAX_REPORTED_DROPS = 20
 
 export function createDispatcher(deps: DispatcherDeps): Dispatcher {
@@ -89,8 +86,18 @@ export function createDispatcher(deps: DispatcherDeps): Dispatcher {
         : undefined
     input.request.signal.throwIfAborted()
 
+    const log = deps.logger?.child({ component: "transport", requestId: input.requestId })
+    // One wait budget and a lease held while a chain runs, so a waiting request stays active.
+    const recovery = createRequestRecovery({
+      options: options.recoveryWait,
+      clock,
+      sleep: deps.sleep,
+      signal: input.request.signal,
+      log,
+      lease: input.activeRequest,
+    })
     const runtime = createRuntime({
-      ...(input.activeRequest === undefined ? {} : { activeRequest: input.activeRequest }),
+      ...(recovery.lease === undefined ? {} : { activeRequest: recovery.lease }),
       health: deps.health,
       ...(options.selection?.unknownResetRetryAfterSeconds === undefined
         ? {}
@@ -146,61 +153,24 @@ export function createDispatcher(deps: DispatcherDeps): Dispatcher {
     }
 
     // Scope intersection, filtering, and policy — one pure call over an injected snapshot.
-    const selection = selectAccounts(
-      buildSnapshot(deps.recovery?.catalog ?? deps.catalog, deps.health, clock.now(), rotation),
-      {
-        sessionKey: session.key,
-        model,
-        keyScope: input.key.scope,
-        binding,
-        rotationCounter: rotation.current(null),
-      },
-      options.selection,
-    )
-    // The rotation moved only if the policy placed this session. A honored binding chose nothing —
-    // the bound account is the head whatever the counter says — and counting it would leave new
-    // sessions landing at whatever offset the bound traffic stopped on (`rotation.ts`).
-    if (selection.decision.binding.state !== "honored") {
-      for (const group of selection.decision.groups) rotation.advance(group.poolId)
-    }
-    // A `blocked` binding is deliberately kept: the account is coming back on a clock and the
-    // conversation stays resumable, so the request fails honestly instead. An `invalidated` one
-    // is *not* dropped here — see below: the store mutation waits for a replacement to exist,
-    // because dropping it and then failing anyway loses the conversation for nothing.
-    hintRecoveryRejections(selection.decision.rejected, deps.recovery, model, clock.now())
-    if (!selection.ok) return fail(selection.error)
-
-    const plan = planCandidates(selection.candidates, deps.catalog, input.ingress, operation)
-    if (plan.servable.length === 0) {
-      // Off the served path entirely, so the second catalog read this costs is free: it only
-      // happens once the chain is already known to be empty.
-      const accounts = new Map(deps.catalog.accounts().map((one) => [one.id, one]))
-      return fail(
-        unservableError({
-          plan,
-          decision: selection.decision,
-          capable: (accountId) => {
-            const account = accounts.get(accountId)
-            if (account === undefined) return false
-            return resolveEgress(input.ingress, account, operation).mode !== "rejected"
-          },
-          now: clock.now(),
-        }),
+    const select = () => {
+      const selection = selectAccounts(
+        buildSnapshot(deps.recovery?.catalog ?? deps.catalog, deps.health, clock.now(), rotation),
+        {
+          sessionKey: session.key,
+          model,
+          keyScope: input.key.scope,
+          binding,
+          rotationCounter: rotation.current(null),
+        },
+        options.selection,
       )
-    }
-
-    // Kept, not dropped: the bound account cannot serve this turn, but its transcript can follow
-    // the turn to whichever subscription does (`claude-sdk/session-carry.ts`), and that turn's own
-    // `remember` re-points the row once it has answered. Dropping it here was what turned every
-    // quota-driven rebind into a full-history replay on a cold account.
-    const decidedBinding = selection.decision.binding
-    if (decidedBinding.state === "invalidated") {
-      deps.logger?.info("session binding refused", {
-        component: "dataplane",
-        requestId: input.requestId,
-        accountId: decidedBinding.accountId,
-        reason: decidedBinding.reason,
-      })
+      // Advanced in the read's synchronous step, or concurrent requests share one counter.
+      if (selection.decision.binding.state !== "honored") {
+        for (const group of selection.decision.groups) rotation.advance(group.poolId)
+      }
+      hintRecoveryRejections(selection.decision.rejected, deps.recovery, model, clock.now())
+      return selection
     }
 
     // Injected clock: identical recorded bodies convert to identical bytes.
@@ -211,47 +181,84 @@ export function createDispatcher(deps: DispatcherDeps): Dispatcher {
       defaultMaxTokens: options.translation?.defaultMaxTokens,
       maximumPendingBytes: options.translation?.maximumPendingBytes,
     }
+    // `warn`: the caller was answered without something it sent (06-protocol-translation.md).
+    const translated = createTranslatedRequestBody(body.bytes, translation, (pair, drops) =>
+      log?.warn("translation dropped fields", {
+        component: "translate",
+        ingress: pair.ingress,
+        egress: pair.egress,
+        dropped: drops.length,
+        fields: drops.slice(0, MAX_REPORTED_DROPS).map((drop) => `${drop.field} ${drop.reason}`),
+      }),
+    )
 
-    // The bound account travels into the chain so a mid-chain hop off it is *known* to be one —
-    // without it, `leavingBound` could never be true and a restarted session went unsurfaced.
-    const failover: FailoverOptions = {
-      ...options.failover,
-      ...(decidedBinding.state === "honored" ? { boundAccountId: decidedBinding.accountId } : {}),
+    // Loops only while the router's own recovery hold is the obstacle (`recovery-wait.ts`).
+    for (;;) {
+      const selection = await recovery.select(select)
+      // A `blocked` binding is kept: its account returns on a clock (`invalidated`: see below).
+      if (!selection.ok) return fail(selection.error)
+
+      const plan = planCandidates(selection.candidates, deps.catalog, input.ingress, operation)
+      if (plan.servable.length === 0) {
+        // Off the served path: this second catalog read happens only once the chain is empty.
+        const accounts = new Map(deps.catalog.accounts().map((one) => [one.id, one]))
+        return fail(
+          unservableError({
+            plan,
+            decision: selection.decision,
+            capable: (accountId) => {
+              const account = accounts.get(accountId)
+              if (account === undefined) return false
+              return resolveEgress(input.ingress, account, operation).mode !== "rejected"
+            },
+            now: clock.now(),
+          }),
+        )
+      }
+
+      // Kept: the transcript follows the turn to whichever subscription serves it
+      // (`claude-sdk/session-carry.ts`), whose `remember` re-points the row once it has answered.
+      const decidedBinding = selection.decision.binding
+      if (decidedBinding.state === "invalidated") {
+        deps.logger?.info("session binding refused", {
+          component: "dataplane",
+          requestId: input.requestId,
+          accountId: decidedBinding.accountId,
+          reason: decidedBinding.reason,
+        })
+      }
+
+      // The bound account travels into the chain so a mid-chain hop off it is known (`leavingBound`).
+      const failover: FailoverOptions = {
+        ...options.failover,
+        ...(decidedBinding.state === "honored" ? { boundAccountId: decidedBinding.accountId } : {}),
+      }
+
+      // A restart is stamped by the chain, which alone knows if it carried (`chain-success.ts`).
+      const response = await recovery.chain(
+        () =>
+          runChain({
+            modelMetadata: deps.modelMetadata,
+            runtime,
+            plan: plan.servable,
+            request: input.request,
+            bodyBytes: body.bytes,
+            modelSpan: body.fields.modelSpan,
+            translation,
+            translated,
+            failover,
+            ...(decidedBinding.state === "invalidated"
+              ? { bindingRefused: decidedBinding.reason }
+              : {}),
+            log,
+            ...(options.log?.reasonMaxChars === undefined
+              ? {}
+              : { reasonMaxChars: options.log.reasonMaxChars }),
+          }),
+        fail,
+      )
+      if (response !== "retry") return response
     }
-
-    const log = deps.logger?.child({ component: "transport", requestId: input.requestId })
-
-    const response = await runChain({
-      modelMetadata: deps.modelMetadata,
-      runtime,
-      plan: plan.servable,
-      request: input.request,
-      bodyBytes: body.bytes,
-      modelSpan: body.fields.modelSpan,
-      translation,
-      translated: createTranslatedRequestBody(body.bytes, translation, (pair, drops) =>
-        // One line per conversion, naming every field the target could not carry. `warn`, because
-        // the caller was answered without something it sent — the surfacing rule in
-        // `06-protocol-translation.md#known-lossy-edges`.
-        log?.warn("translation dropped fields", {
-          component: "translate",
-          ingress: pair.ingress,
-          egress: pair.egress,
-          dropped: drops.length,
-          fields: drops.slice(0, MAX_REPORTED_DROPS).map((drop) => `${drop.field} ${drop.reason}`),
-        }),
-      ),
-      failover,
-      ...(decidedBinding.state === "invalidated" ? { bindingRefused: decidedBinding.reason } : {}),
-      log,
-      ...(options.log?.reasonMaxChars === undefined
-        ? {}
-        : { reasonMaxChars: options.log.reasonMaxChars }),
-    })
-
-    // The restart, when there is one, is stamped by the chain: only the attempt knows whether the
-    // session was carried to the account that served it (`chain-success.ts`).
-    return response
   }
 
   return {
