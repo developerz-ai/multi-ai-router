@@ -102,3 +102,40 @@ test("ordinary background admission rejects absent, spent and locally available 
     expect(await result).toBeInstanceOf(UpstreamAdmissionRefused)
   }
 })
+
+test("ordinary background admission passes a pending or settled-uncertain recovery", async () => {
+  const base = { revision: 1, generation: "g", lifecycleVersion: 0, quotaRevisions: {} }
+  for (const recovery of [
+    { ...base, state: "pending" as const, nextAllowedAt: new Date(NOW.getTime() + 60_000) },
+    { ...base, state: "uncertain" as const, nextAllowedAt: new Date(NOW.getTime() - 1) },
+  ]) {
+    const f = fixture()
+    const result = f.guard().then(
+      () => "admitted",
+      (error) => error,
+    )
+    await f.entered.promise
+    f.setLive({ ...f.current.snapshot, recovery })
+    f.pending.resolve(f.row)
+    expect(await result).toBe("admitted")
+  }
+})
+
+test("ordinary background admission holds an uncertain recovery inside its next allowed instant", async () => {
+  const f = fixture()
+  const result = f.guard().catch((error) => error)
+  await f.entered.promise
+  f.setLive({
+    ...f.current.snapshot,
+    recovery: {
+      state: "uncertain",
+      revision: 1,
+      generation: "g",
+      lifecycleVersion: 0,
+      quotaRevisions: {},
+      nextAllowedAt: new Date(NOW.getTime() + 60_000),
+    },
+  })
+  f.pending.resolve(f.row)
+  expect(await result).toBeInstanceOf(UpstreamAdmissionRefused)
+})

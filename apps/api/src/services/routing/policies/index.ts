@@ -6,8 +6,12 @@
  *    are only safe on a Claude subscription pool because they run through here: they choose
  *    solely for a session with no binding, or one whose binding was invalidated. There is no
  *    operation that carries a session from one account to another.
- * 2. **A half-open probe ranks behind a healthy account.** An account whose cooldown just expired
- *    is eligible, but it is a probe, not a preference.
+ * 2. **A half-open probe ranks behind a healthy account** — except the holder of a designated
+ *    recovery permit, which ranks ahead. An account whose cooldown just expired is eligible, but
+ *    it is a probe, not a preference. A permit is different: the coordinator reserved exactly one
+ *    attempt for it, nothing but a request settles it, and ranked last it expired unused every
+ *    cycle while the account sat out of rotation (prod, 2026-10-07: 38 permits, zero attempts).
+ *    A failed permit attempt fails over before any byte reaches the client.
  * 3. **An alias rename ranks behind the real thing.** When some candidates serve the requested
  *    name natively and others only reach it through their alias map (`claude-opus-5 -> glm-5.2`),
  *    the aliased ones are failover after every native one — healthy or probe. A key whose scope
@@ -44,12 +48,13 @@ export function runPolicy(
   const chosen = POLICIES[policy]
   const raw = chosen(input)
   const demoted = demoteHalfOpen(raw.ordered)
-  const deferred = deferAliased(demoted.ordered)
+  const promoted = promoteRecoveryPermit(demoted.ordered)
+  const deferred = deferAliased(promoted.ordered)
   const pinned = pinBinding(deferred.ordered, binding)
 
   return {
     ordered: pinned.ordered,
-    notes: [...raw.notes, ...demoted.notes, ...deferred.notes, ...pinned.notes],
+    notes: [...raw.notes, ...demoted.notes, ...promoted.notes, ...deferred.notes, ...pinned.notes],
   }
 }
 
@@ -67,6 +72,18 @@ function demoteHalfOpen(ordered: readonly Candidate[]): Adjustment {
   return {
     ordered: [...healthy, ...probes],
     notes: [{ kind: "half-open-demoted", accountIds: accountIds(probes) }],
+  }
+}
+
+/** Permit holders first, everyone else after, each keeping the order it already had. */
+function promoteRecoveryPermit(ordered: readonly Candidate[]): Adjustment {
+  const holders = ordered.filter((candidate) => candidate.recoveryPermit === true)
+  if (holders.length === 0) return { ordered, notes: [] }
+
+  const rest = ordered.filter((candidate) => candidate.recoveryPermit !== true)
+  return {
+    ordered: [...holders, ...rest],
+    notes: [{ kind: "recovery-promoted", accountIds: accountIds(holders) }],
   }
 }
 

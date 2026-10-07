@@ -173,6 +173,17 @@ ChatGPT account whose discovered list held `gpt-6.1-sol` was refused as `model-u
 A stripped name differs from the requested one, so it ranks like an alias (below): an account that
 reads the tag, and so honors the context hint, goes first.
 
+### A recovery permit ranks first
+
+A half-open breaker probe ranks behind every healthy account. The holder of this replica's
+designated **recovery permit** does the opposite and ranks ahead of them. The coordinator reserves
+exactly one attempt per recovery generation, and only a request can spend it. Ranked last, the
+permit expired unused while a healthy account took every request; it was marked `uncertain`,
+reissued, and expired again, and the account never came back into rotation (prod, 2026-10-07:
+38 permits on one subscription, zero attempts). A failed permit attempt fails over before any byte
+reaches the client, so the cost is at most one extra upstream attempt per generation. An honored
+binding still outranks it. Recorded as a `recovery-promoted` policy note.
+
 ### Native before alias
 
 An alias map renames a client's name onto a different model (`claude-opus-5 -> glm-5.2`). When the
@@ -594,7 +605,7 @@ limits it again before it has answered any of them.
 
 | Rule | Statement |
 |---|---|
-| **Taken at attempt time** | Not when the candidate is merely *ordered*. A probe ranks behind every healthy account and is usually never reached; holding it for a request that walks past would park a recovering account for nothing. |
+| **Taken at attempt time** | Not when the candidate is merely *ordered*. A breaker probe ranks behind every healthy account (a recovery-permit holder ranks ahead; see *A recovery permit ranks first*) and is usually never reached; holding it for a request that walks past would park a recovering account for nothing. |
 | **A refusal costs nothing** | The chain drops that candidate and walks on — no attempt spent, no `UsageRecord`, no upstream contacted. Nothing happened to that account. |
 | **The hold is a routing state** | It rides in the health snapshot, so every request selecting *after* it was taken is filtered out as `probe-in-flight` — a `429` carrying the hold's expiry, because a clock fixes this in milliseconds. Never a `500`, and never a queue. |
 | **Released on the verdict** | The moment the attempt is classified, not when its stream settles: the probe's question was "is this account back?", and it has been answered. `ROUTING_HALF_OPEN_HOLD_MS` is the backstop for a probe that never reports at all. |
@@ -936,6 +947,15 @@ Recheck commits its lifecycle/full-health recovery intent atomically, clears onl
 ### Durable quota observation ordering
 
 Quota writes compare provider-observation timestamps per account/window; older observations cannot replace newer evidence. Equal timestamps conservatively retain greater utilization and the later reset on a live reading rather than inventing headroom. A floor-retired window rejects observations with the same or an older timestamp; only a strictly newer provider observation clears its retirement tombstone. Each accepted mutation advances the durable window revision. The idle quota floor compares the exact observed revision and reset and requires expiry against both its scheduler cutoff and the database clock. The floor also checks current configured status in its guarded write, preserving an account concurrently parked as exhausted. It clears utilization/reset to unknown while retaining the original provider observation age and records retirement separately; a concurrent newer reading survives, and replay of retired evidence cannot resurrect it. This ordering does not grant a global recovery probe or bypass persisted spent-quota evidence during recheck.
+
+### Background work and open recoveries
+
+Background turns (credential keepalive, idle probe, model-catalog reads) stay off an account only
+while its recovery may still have a call on the wire: an `issued` permit, or a `failed`/`uncertain`
+attempt before its `next_allowed_at`. A `pending` generation has nothing in flight and advances only
+when a live request demands the account; gating background work on it left an account no key routes
+to un-kept-alive until its login went cold (prod, 2026-10-07). The durable predicate
+(`background-account-eligibility.ts`) and the warm one (`recoveryBlocksBackground`) agree.
 
 ### Durable recovery progress
 

@@ -8,7 +8,7 @@ import { isCold, keepAlive, readUsage, type Tally, warm } from "./idle-account-w
 
 /**
  * Free CLI auth checks may recover credentials. Paid maintenance is separately opt-in,
- * restricted to active authoritative subjects with no open recovery generation, and
+ * restricted to active authoritative subjects with no recovery attempt possibly in flight, and
  * revalidated at the final transport admission boundary after all queue waits.
  * A keepalive warms an access token; it never extends a subscription's login lifetime.
  */

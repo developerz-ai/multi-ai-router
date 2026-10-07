@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.23.1] — 2026-10-07
+
+Every Claude subscription request since 23:16 the night before landed on one account while five others sat behind recovery rows that never cleared (prod, 2026-10-07).
+
+### Fixed
+
+- **A recovery permit is spent, not wasted.** The account holding a designated recovery permit now ranks ahead of healthy accounts, so the next request settles it. Ranked last, the permit expired unused every cycle (38 times on one subscription) and the account never rejoined rotation.
+- **A pending recovery no longer starves the credential keepalive.** Background turns are held off only by an `issued` permit or a `failed`/`uncertain` attempt inside its `next_allowed_at`. A `pending` row has nothing in flight; gating on it skipped the keepalive of an unrouted subscription every tick until its login went cold.
+
+### Added
+
+- `recovery-promoted` policy note.
+
 ## [2.23.0] — 2026-10-07
 
 When accounts go bad the router now finds a good one instead of answering `429` while a healthy subscription sits in scope. A request may take a few seconds longer; it lands. Prod, 2026-10-06: the four Claude subscriptions behind one key answered `429` for minutes after two of them were reconnected, while the other two kept being probed although their weekly windows were spent until 2026-10-08 (#167).

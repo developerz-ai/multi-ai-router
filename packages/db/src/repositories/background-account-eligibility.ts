@@ -9,10 +9,17 @@ export interface BackgroundAccountSubject
   readonly provider: AccountRow["provider"]
   readonly configDir: string | null
 }
+/**
+ * Only a recovery that may still have a call on the wire holds background work off: an `issued`
+ * permit, or a `failed`/`uncertain` attempt inside its own `next_allowed_at`. A `pending` row has
+ * nothing in flight and only advances when a live request demands the account, so gating on it
+ * starved the credential keepalive of an account no key routes to until its login went cold
+ * (prod, 2026-10-07: `due:1 skipped:1` every tick for three days).
+ */
 function eligible() {
   return and(
     eq(accounts.status, "active"),
-    sql`not exists (select 1 from ${accountRecoveries} where ${accountRecoveries.accountId} = ${accounts.id} and ${accountRecoveries.state} in ('pending', 'issued', 'uncertain'))`,
+    sql`not exists (select 1 from ${accountRecoveries} where ${accountRecoveries.accountId} = ${accounts.id} and (${accountRecoveries.state} = 'issued' or (${accountRecoveries.state} in ('failed', 'uncertain') and ${accountRecoveries.nextAllowedAt} > now())))`,
   )
 }
 /** These reads are background-only; no transaction remains open through a provider call. */

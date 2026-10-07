@@ -236,6 +236,12 @@ export interface Candidate extends ScopedAccount {
   /** True when this is a breaker half-open probe rather than a healthy pick. */
   readonly halfOpen: boolean
   /**
+   * True when this replica holds the account's designated recovery permit. Ranked ahead of healthy
+   * accounts (`policies/index.ts`): a permit only settles when a request spends it, so ranking it
+   * last let it expire unused and the account never rejoined rotation. Absent reads as false.
+   */
+  readonly recoveryPermit?: boolean
+  /**
    * True when this account reaches the requested name only through its alias map — it serves a
    * different model under that name. Ranked behind accounts that serve the name natively
    * (`policies/index.ts`). Absent reads as native.
