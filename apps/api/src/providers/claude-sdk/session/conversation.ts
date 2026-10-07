@@ -99,8 +99,14 @@ export function readConversation(body: Uint8Array | null): ConversationView | nu
 
 type Content = z.infer<typeof messageSchema>["content"]
 
+/**
+ * String content hashes as the one text block it is shorthand for. Claude Code (2.1.292) sends a
+ * mid-conversation `system` message as `[{type:"text",text,cache_control}]` on the turn it is
+ * newest and re-sends it as a bare string afterwards; hashed apart, the next turn read as
+ * `diverged` and replayed the whole history fresh (prod 2026-10-07).
+ */
 function normalizeContent(content: Content): string {
-  if (typeof content === "string") return content
+  if (typeof content === "string") return canonical({ type: "text", text: content })
   return content.map((block) => canonical(strip(block))).join("")
 }
 
