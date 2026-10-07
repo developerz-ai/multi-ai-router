@@ -230,6 +230,8 @@ describe("a credential the provider rejected", () => {
   test("comes back as a half-open probe once its cooldown passes", () => {
     const result = run([rejectedKey(at(-1))])
     expect(result.eligible.map((candidate) => candidate.halfOpen)).toEqual([true])
+    // A breaker probe is not a permit: it keeps ranking behind healthy accounts.
+    expect(result.eligible.map((candidate) => candidate.recoveryPermit)).toEqual([undefined])
   })
 })
 
@@ -302,5 +304,6 @@ describe("a recovery gate never hides a provider-reported clock", () => {
     const permit = gated({ localAvailable: true, quotaRevisions: { seven_day: 3 } })
     const result = run([account("venom", { quotaWindows: [spentWeek], recovery: permit })])
     expect(result.eligible.map((candidate) => candidate.halfOpen)).toEqual([true])
+    expect(result.eligible.map((candidate) => candidate.recoveryPermit)).toEqual([true])
   })
 })

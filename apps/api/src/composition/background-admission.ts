@@ -5,7 +5,7 @@ import { createBackgroundStartGuard } from "../services/accounts/background-admi
 import type { RecoveryAccess } from "../services/dataplane/recovery-access"
 import type { RoutingCatalog } from "../services/dataplane/types"
 import { findSpentWindow } from "../services/routing"
-import { recoveryIsGated } from "../services/routing/recovery-filter"
+import { recoveryBlocksBackground } from "../services/routing/recovery-filter"
 
 /** Background turns use ordinary eligibility and never spend a designated recovery permit. */
 export function createWarmBackgroundStartGuard(
@@ -38,7 +38,7 @@ export function createWarmBackgroundStartGuard(
           account.driver.provider !== subject.provider ||
           account.configDir !== subject.configDir ||
           live.status !== "active" ||
-          recoveryIsGated(live) ||
+          recoveryBlocksBackground(live, deps.now()) ||
           findSpentWindow(live, deps.now(), deps.quotaSpentThreshold) !== null
         )
           throw new UpstreamAdmissionRefused("background account is not ordinarily eligible")

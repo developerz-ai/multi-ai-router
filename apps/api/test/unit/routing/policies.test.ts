@@ -373,6 +373,36 @@ describe("rules that hold for every policy", () => {
     },
   )
 
+  test.each(RoutingPolicy.options)(
+    "%s ranks a recovery permit holder ahead of a healthy account",
+    (policy) => {
+      const mixed = [
+        candidate(account("a"), 0),
+        candidate(account("b"), 1, { halfOpen: true, recoveryPermit: true }),
+        candidate(account("c"), 2, { halfOpen: true }),
+      ]
+      const result = runPolicy(policy, input({ candidates: mixed }))
+
+      expect(result.ordered[0]?.account.id).toBe("b")
+      expect(result.ordered[1]?.account.id).toBe("a")
+      expect(result.ordered[2]?.account.id).toBe("c")
+      const note = result.notes.find((entry) => entry.kind === "recovery-promoted")
+      expect(note?.kind === "recovery-promoted" && [...note.accountIds]).toEqual(["b"])
+    },
+  )
+
+  test("a binding still outranks a recovery permit holder", () => {
+    const mixed = [
+      candidate(account("a"), 0),
+      candidate(account("b"), 1, { halfOpen: true, recoveryPermit: true }),
+    ]
+    const result = runPolicy("sticky", input({ candidates: mixed }), {
+      state: "honored",
+      accountId: "a",
+    })
+    expect(ids(result.ordered)).toEqual(["a", "b"])
+  })
+
   test("a binding that is not among the candidates is left alone here", () => {
     const result = runPolicy("sticky", input(), { state: "honored", accountId: "gone" })
     expect(result.notes).toHaveLength(0)

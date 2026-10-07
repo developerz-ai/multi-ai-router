@@ -113,6 +113,17 @@ The bar: idiomatic, boring, readable TypeScript. A function reads top to bottom 
 - Comment the non-obvious *why*, never the *what*. Architecture decisions land in `docs/idea/`, not code comments.
 - Never claim something is implemented. Nothing is.
 
+## Working standard
+
+Changes are made the way a senior engineer on this codebase would make them.
+
+- **Evidence before code.** For a "why did prod do X", read the pod log, the `usage_records` rows and the DB state around the timestamp first. A theory the evidence doesn't support isn't a finding.
+- **Fix the mechanism, not the symptom.** Find the state machine that produced the bad outcome and fix it there. Don't add a special case where it surfaced.
+- **The router's job is to serve.** When accounts go bad, wait briefly and reroute to a good one; slower is fine. A router-made `429` while an eligible account is in scope is a bug, never "honest". Bookkeeping (recovery permits, probe holds, bindings) must never keep a healthy account out of rotation.
+- **Every gate needs an exit.** Any state that blocks routing or background work must name what clears it and when. A state that only a request can clear needs that request to actually arrive.
+- **Tests ship with the fix, failure case first,** asserting the prod fingerprint. Update a test that encoded the wrong rule; never delete it.
+- **Leave the trail straight.** The same PR updates `docs/idea/`, `CHANGELOG.md` and the version. Done means merged, tagged, and the image published.
+
 ## Testing
 
 - **Unit** — pure logic: routing selection, translation, quota math, cost estimation, env validation. No mocks, no clock, no network. Inject the snapshot.

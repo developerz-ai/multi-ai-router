@@ -144,6 +144,7 @@ export function evaluateCandidate(
       ...member,
       upstreamModel: resolution.upstreamModel,
       halfOpen: account.status === "cooling_down" || permit,
+      ...(permit ? { recoveryPermit: true } : {}),
       // An identity entry (`opus -> opus`) renames nothing, so it is not a reason to rank behind.
       aliased: resolution.upstreamModel !== model,
     },
