@@ -333,6 +333,20 @@ describe("a session the CLI is already running", () => {
     }
   })
 
+  test("the 2.1.289 wording is busy-session, not a subprocess crash", () => {
+    // Captured from the bundled CLI 2.1.289 resuming a session whose previous turn was still
+    // running. Prod 2026-10-07 answered it 502 `claude-sdk:subprocess-exit`.
+    const { classification } = classifySdkFailure(
+      Object.assign(new Error("Claude Code process exited with code 1"), {
+        stderr:
+          "Error: That session is running in the background. Run `claude agents` to find it and open it, or stop it there first to resume it here. Add --fork-session to branch off a copy instead.",
+      }),
+    )
+
+    expect(classification.kind).toBe("busy-session")
+    expect(classification.status).toBe(503)
+  })
+
   test("the newer wording is not read as a subprocess crash", () => {
     // What it was before: `exit 1` on stderr matched `claude-sdk:subprocess-exit` first, so the
     // in-place fork never ran, the attempt answered 502, and the chain failed the conversation

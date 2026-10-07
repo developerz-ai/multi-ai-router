@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.23.4] — 2026-10-07
+
+2.23.3 confirmed in prod: Claude Code turns resume, cache writes fell from 240 k to 48–983 tokens a turn. Two resumes still answered `502` (prod, 2026-10-07 05:15).
+
+### Fixed
+
+- **The CLI's 2.1.289 busy-session wording is recognised.** A resume that arrives while the previous turn's process is still exiting is refused with "That session is running in the background", on stderr behind `exit 1`. It fell to `claude-sdk:subprocess-exit` (`502`) instead of `busy-session`, so the in-place fork recovery never ran. Verified against the bundled CLI: the refusal now classifies busy and `--fork-session` answers.
+
 ## [2.23.3] — 2026-10-07
 
 2.23.2 lifted the tool-result rule, but Claude Code turns still started fresh in prod: turn 2 read as `diverged`, later turns as `no-rollback-point`.
