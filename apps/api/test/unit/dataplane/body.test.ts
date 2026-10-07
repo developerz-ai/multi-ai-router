@@ -171,6 +171,7 @@ describe("session key", () => {
     expect(resolveSessionKey(headers, "key-1", prefix)).toEqual({
       key: "conversation-7",
       source: "header",
+      clientToolLoop: false,
     })
   })
 
@@ -191,6 +192,22 @@ describe("session key", () => {
 
     expect(turnTwo).toBe(turnOne)
     expect(other).not.toBe(turnOne)
+  })
+
+  test("Claude Code's session id marks a client tool loop and separates the fingerprint", () => {
+    const cli = (id: string) => new Headers({ "x-claude-code-session-id": id })
+    const plain = resolveSessionKey(new Headers(), "key-1", prefix)
+    const first = resolveSessionKey(cli("cli-a"), "key-1", prefix)
+    const again = resolveSessionKey(cli("cli-a"), "key-1", prefix)
+    const other = resolveSessionKey(cli("cli-b"), "key-1", prefix)
+
+    // Still a fingerprint, never the header alone: the CLI reuses the id on its one-shots.
+    expect(first.source).toBe("fingerprint")
+    expect(first.clientToolLoop).toBe(true)
+    expect(plain.clientToolLoop).toBe(false)
+    expect(again.key).toBe(first.key)
+    expect(other.key).not.toBe(first.key)
+    expect(plain.key).not.toBe(first.key)
   })
 
   test("two keys never share a session, even on identical bytes", () => {

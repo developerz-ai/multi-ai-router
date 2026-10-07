@@ -48,6 +48,12 @@ export interface ResolveLineageInput {
   readonly conversation: ConversationView | null
   /** How the router named this session. A fingerprint is a guess; a header is the client's word. */
   readonly keySource: "header" | "fingerprint"
+  /**
+   * The client named its own agent session (Claude Code's `x-claude-code-session-id`). Lifts the
+   * tool-result rule: such a client runs one tool loop per named conversation, and its key mixes
+   * that name in, so two loops that merely share an opening no longer share a key.
+   */
+  readonly clientToolLoop?: boolean
   /** The client marked this a fork or a subagent child. Never resumes the parent's session. */
   readonly forkOrSubagent?: boolean
   /** The SDK already told us this session is gone. Never resumed again. */
@@ -67,7 +73,11 @@ export interface ResolveLineageInput {
  * The tool-result rule is the subtle one: a headerless client running its own tool loop opens every
  * concurrent loop with the same first message, so they share a fingerprint — and resuming would
  * splice two independent loops into one transcript. With a client-supplied header there is no
- * guess to get wrong, so the rule does not apply.
+ * guess to get wrong, so the rule does not apply. Nor for a client that names its own agent session:
+ * Claude Code ends **every** agentic step in a `tool_result`, and the rule sent each one fresh with
+ * the whole history replayed as text — prompt cache pinned at the tools+system floor, the full
+ * transcript re-written to cache every round (prod 2026-10-07: 240k cache-write tokens a turn on one
+ * conversation, burning the subscription window ~10x faster than a resume).
  *
  * `sessionBusy` is the same hazard arriving through the *other* door, and the header does not save
  * you from it: a client that sends a header sends the **same** header on the hidden one-shots it
@@ -85,7 +95,11 @@ export function resolveLineage(input: ResolveLineageInput): SessionPlan {
   if (input.sessionGone === true) return { kind: "fresh", reason: "session-gone" }
   if (input.forkOrSubagent === true) return { kind: "fresh", reason: "subagent-child" }
   if (conversation === null) return { kind: "fresh", reason: "unreadable-body" }
-  if (input.keySource === "fingerprint" && conversation.endsWithToolResult) {
+  if (
+    input.keySource === "fingerprint" &&
+    input.clientToolLoop !== true &&
+    conversation.endsWithToolResult
+  ) {
     return { kind: "fresh", reason: "tool-result-without-header" }
   }
   if (session === null) return { kind: "fresh", reason: "no-session" }

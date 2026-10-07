@@ -53,6 +53,8 @@ export interface RuntimeInput {
   readonly prices?: RateLookup
   /** How this request's session key was obtained. Decides whether the never-resume rules apply. */
   readonly sessionKeySource: SessionKeySource
+  /** The client named its own agent session, so its tool rounds may resume (`body/session.ts`). */
+  readonly clientToolLoop?: boolean
   readonly clock: DataPlaneClock
   readonly timeoutMs: number
   readonly bodyReadMs?: number
@@ -136,6 +138,7 @@ export function createRuntime(input: RuntimeInput): DispatchRuntime {
             apiKeyId: input.apiKeyId,
             sessionKey: input.sessionKey,
             keySource: input.sessionKeySource,
+            clientToolLoop: input.clientToolLoop === true,
           },
 
     attribution: (attempt, servable) => ({

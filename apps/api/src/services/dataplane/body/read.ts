@@ -187,10 +187,18 @@ function jsonEscape(value: string): string {
  * Stable when turns append without changing the captured raw opening bytes. The bounded prefix
  * can collide for identical openings, and JSON reformatting can change it. A remote working
  * directory is not inferred over HTTP; an explicit session header names conversation boundaries.
+ * A client's agent session id (`body/session.ts`), when sent, is mixed in so two CLI sessions with
+ * the same opening bytes stop sharing a key.
  */
-export function fingerprintSessionKey(apiKeyId: string, conversationPrefix: Uint8Array): string {
+export function fingerprintSessionKey(
+  apiKeyId: string,
+  conversationPrefix: Uint8Array,
+  agentSession: string | null = null,
+): string {
   const hash = createHash("sha256")
   hash.update(apiKeyId, "utf8")
+  // Length-prefixed so no agent id can be shifted into the prefix bytes to forge another's key.
+  if (agentSession !== null) hash.update(`\0${agentSession.length}:${agentSession}\0`, "utf8")
   hash.update(conversationPrefix)
   return `fp_${hash.digest("base64url").slice(0, 32)}`
 }

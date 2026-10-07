@@ -586,6 +586,16 @@ messages matching at unrelated positions (`lineage.ts:110-174`).
 (a client running its own tool loop — concurrent loops share a fingerprint and would resume each
 other); requests marked as a fork or subagent child; anything after the SDK reports the session gone.
 
+**Except a client that names its own agent session.** Claude Code sends `x-claude-code-session-id`
+and ends every agentic step in a `tool_result`; under the rule above each step ran fresh with the
+whole history replayed as text, so `cache_read` stayed pinned at the tools+system floor while the
+full transcript was re-written to cache every round (prod 2026-10-07: 240 k cache-write tokens a
+turn on one conversation; Meridian measured the same shape in their #820). The header lifts the
+rule and is mixed into the fingerprint ([05](05-routing-and-failover.md)) — it is never the key on
+its own, because the CLI reuses it on its one-shots and subagents. Lineage still guards the resume:
+a history that does not extend the stored one forks or starts fresh as before. Every SDK attempt
+logs `sdk session plan` with the plan kind and, for `fresh`, its reason.
+
 ### For us
 
 - `Session → (Account, sdkSessionId, lineage state)` is a new obligation on an entity

@@ -238,6 +238,12 @@ openings under one router key can collide, and reformatted openings can differ; 
 unique conversation boundaries or a remote working directory. Send an explicit session header
 when those boundaries matter. An explicit header remains authoritative even without a user opening.
 
+Claude Code's `x-claude-code-session-id` is not a session header in the table above — the CLI
+reuses it on auxiliary one-shots and subagents, so it cannot name one conversation by itself. When
+present it is mixed into the fingerprint (two CLI sessions with the same opening stop sharing a
+key) and marks the client as running its own tool loop, which lets its `tool_result` rounds resume
+the SDK session ([11 §4](11-anthropic-agent-sdk.md)).
+
 Sessions are ephemeral and expire on a TTL (see [09-deployment.md](09-deployment.md)); an expired
 session simply re-derives and re-hashes, landing on the same account as long as the candidate set
 is unchanged.

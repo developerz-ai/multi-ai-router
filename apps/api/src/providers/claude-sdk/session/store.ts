@@ -79,6 +79,8 @@ export interface ResolveTurnInput {
   /** The router's own session key: the client's header verbatim, else the byte fingerprint. */
   readonly sessionKey: string
   readonly keySource: "header" | "fingerprint"
+  /** The client named its own agent session, so a tool round is a turn, not a stranger's loop. */
+  readonly clientToolLoop?: boolean
   /** The Account this attempt runs against. Scopes the fingerprint and gates the stored binding. */
   readonly accountId: string
   /** Anthropic Messages bytes, already converted from the client's dialect if it differed. */
@@ -201,6 +203,7 @@ export function createSessionStore(deps: SessionStoreDeps): SessionStore {
         session,
         conversation,
         keySource: input.keySource,
+        ...(input.clientToolLoop === true ? { clientToolLoop: true } : {}),
         ...(input.forkOrSubagent === undefined ? {} : { forkOrSubagent: input.forkOrSubagent }),
         ...(input.sessionGone === undefined ? {} : { sessionGone: input.sessionGone }),
       })

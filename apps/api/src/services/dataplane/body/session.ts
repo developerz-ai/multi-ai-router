@@ -36,6 +36,20 @@ export const DEFAULT_SESSION_HEADERS: readonly string[] = [
   "x-conversation-id",
 ]
 
+/**
+ * The header Claude Code sends on every request: its CLI session UUID. Provenance: Meridian verified
+ * it against Claude Code 2.1.266 (pinned exactly by `--session-id`, distinct across sessions;
+ * `tmp/meridian/docs/configuration.md`, their #820). Blast radius if the CLI drops it: Claude Code
+ * falls back to plain fingerprint handling, and every tool round replays its whole history again.
+ *
+ * **It is a signal, not a session key.** The CLI reuses the id on the auxiliary one-shots it fires
+ * beside a conversation (titles, summaries) and on its subagents, so keying on it alone puts
+ * several unrelated histories under one key. It is mixed into the fingerprint instead — which only
+ * separates more, never merges — and it marks the client as one that runs its own tool loop under a
+ * named conversation, which is what lifts the headerless tool-result rule (`session/plan.ts`).
+ */
+export const CLAUDE_CODE_SESSION_HEADER = "x-claude-code-session-id"
+
 /** Bounded so a hostile header cannot become an unbounded map key or log field. */
 const MAX_SESSION_KEY_LENGTH = 200
 
@@ -44,6 +58,11 @@ export type SessionKeySource = "header" | "fingerprint" | "unbound"
 export interface ResolvedSessionKey {
   readonly key: string
   readonly source: SessionKeySource
+  /**
+   * The client named its own agent session ({@link CLAUDE_CODE_SESSION_HEADER}). Its tool rounds
+   * are turns of one conversation, not concurrent headerless loops that merely share an opening.
+   */
+  readonly clientToolLoop: boolean
 }
 
 export function resolveSessionKey(
@@ -52,12 +71,24 @@ export function resolveSessionKey(
   conversationPrefix: Uint8Array,
   sessionHeaders: readonly string[] = DEFAULT_SESSION_HEADERS,
 ): ResolvedSessionKey {
+  const agentSession = headers
+    .get(CLAUDE_CODE_SESSION_HEADER)
+    ?.trim()
+    .slice(0, MAX_SESSION_KEY_LENGTH)
+  const clientToolLoop = agentSession !== undefined && agentSession.length > 0
+
   for (const name of sessionHeaders) {
     const supplied = headers.get(name)?.trim()
     if (supplied !== undefined && supplied.length > 0) {
-      return { key: supplied.slice(0, MAX_SESSION_KEY_LENGTH), source: "header" }
+      return { key: supplied.slice(0, MAX_SESSION_KEY_LENGTH), source: "header", clientToolLoop }
     }
   }
-  if (conversationPrefix.length === 0) return { key: `unbound_${randomUUID()}`, source: "unbound" }
-  return { key: fingerprintSessionKey(apiKeyId, conversationPrefix), source: "fingerprint" }
+  if (conversationPrefix.length === 0) {
+    return { key: `unbound_${randomUUID()}`, source: "unbound", clientToolLoop }
+  }
+  return {
+    key: fingerprintSessionKey(apiKeyId, conversationPrefix, clientToolLoop ? agentSession : null),
+    source: "fingerprint",
+    clientToolLoop,
+  }
 }

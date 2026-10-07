@@ -102,6 +102,8 @@ export interface SdkSessionContext {
   /** The router's session key: the client's header verbatim, else the derived fingerprint. */
   readonly sessionKey: string
   readonly keySource: "header" | "fingerprint"
+  /** The client named its own agent session; its tool rounds are turns of one conversation. */
+  readonly clientToolLoop?: boolean
 }
 
 /** No store wired: every turn is a fresh SDK session, which is correct, just cold. */
@@ -126,6 +128,13 @@ export async function runSdkAttempt(input: SdkAttemptInput): Promise<AttemptOutc
   // Before the slot and the subprocess: a session bound on another account is carried here first,
   // or the plan turns fresh — the launch must never resume an id this account has never seen.
   const turn = await resolveTurn(input, plan.account.id).prepare()
+  // A fresh plan is invisible as an error — it still answers — and visible only as a cold prompt
+  // cache and a burnt window. This line is what tells a replay-every-turn loop from a resume.
+  input.log?.info("sdk session plan", {
+    accountId: plan.account.id,
+    plan: turn.plan.kind,
+    ...(turn.plan.kind === "fresh" ? { reason: turn.plan.reason } : {}),
+  })
   const rateLimit = rateLimitCapture(input, plan.account.id)
   const attemptSignal = attemptDeadline(input.timeoutMs, input.signal)
 
@@ -228,6 +237,7 @@ function resolveTurn(input: SdkAttemptInput, accountId: string): SessionTurn {
     apiKeyId: session.apiKeyId,
     sessionKey: session.sessionKey,
     keySource: session.keySource,
+    ...(session.clientToolLoop === true ? { clientToolLoop: true } : {}),
     accountId,
     body: input.body,
     ...(input.sessionGone === undefined ? {} : { sessionGone: input.sessionGone }),
