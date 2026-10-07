@@ -150,9 +150,14 @@ export const SDK_FAILURE_RULES: readonly SdkRule[] = [
     signal: "claude-sdk:session-busy",
     status: 503,
     clientMessage: "the Claude Agent SDK session this conversation resumed is still running",
+    // 2.1.289 reworded it a third time ("That session is running in the background. … Add
+    // --fork-session to branch off a copy instead."), again on stderr behind `exit 1`, and again
+    // it fell to `subprocess-exit`: prod 2026-10-07 answered 502 on a resume that arrived while
+    // the previous turn's process was still exiting.
     match: phrase(
       "is currently running as a background agent",
       "is running as a background session",
+      "session is running in the background",
     ),
   },
   {
