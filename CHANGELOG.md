@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.23.6] — 2026-10-07
+
+### Fixed
+
+- **Claude Code subagents get their own SDK session.** Claude Code sends the parent's `x-claude-code-session-id` and `metadata.session_id` on every subagent request, and opens each one with the same `<system-reminder>` blocks, which filled the whole 1,024-byte fingerprint window. The parent and all its subagents resolved to one session key: parallel subagents detached and replayed fresh, and sequential ones overwrote the parent's lineage so its next turn replayed too. The scanner now skips reminder blocks while it streams, so the window holds the task text. Verified against 51 requests captured from Claude Code 2.1.292 running three subagents on a stub upstream: one key before, four after (parent plus one per subagent). Claude Code conversations start fresh once after the upgrade; other clients' keys are unchanged.
+
 ## [2.23.5] — 2026-10-07
 
 2.23.4 matched only the untitled form of the 2.1.289 refusal. Two resumes still answered `502` (prod, 2026-10-07 13:28).

@@ -594,7 +594,7 @@ turn on one conversation; Meridian measured the same shape in their #820). The h
 rule and is mixed into the fingerprint ([05](05-routing-and-failover.md)) — it is never the key on
 its own, because the CLI reuses it on its one-shots and subagents. Lineage still guards the resume:
 a history that does not extend the stored one forks or starts fresh as before. Every SDK attempt
-logs `sdk session plan` with the plan kind and, for `fresh`, its reason.
+logs `sdk session plan` with the plan kind and, for `fresh`, its reason. Its subagents carry the same header and the same `metadata.user_id.session_id` as the parent, so what separates them is the opening task text: the fingerprint window skips the shared `<system-reminder>` blocks ([05](05-routing-and-failover.md)), giving the parent and each subagent its own key and lineage. Two subagents launched with byte-identical prompts still share one key; concurrent turns on it detach as below.
 
 Lineage hashes string content as the single text block it abbreviates. Claude Code sends its
 mid-conversation `system` message as a marked block array on the turn it is newest and as a bare

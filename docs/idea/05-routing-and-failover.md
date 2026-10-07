@@ -244,6 +244,14 @@ present it is mixed into the fingerprint (two CLI sessions with the same opening
 key) and marks the client as running its own tool loop, which lets its `tool_result` rounds resume
 the SDK session ([11 §4](11-anthropic-agent-sdk.md)).
 
+The fingerprint window skips content blocks whose `text` opens with `<system-reminder>`. Claude
+Code leads every opening — the parent conversation's and each subagent's — with reminder blocks
+that are identical across one CLI session and longer than the window, so before the skip a parent
+and its parallel subagents shared one key and overwrote one another's SDK lineage. The skip is done
+by the byte scanner while it streams (no parse): the window is the same bytes with those blocks cut
+out. An opening with no reminder block keeps its raw window, so every other client's key is
+unchanged; an opening made only of reminders falls back to the raw window.
+
 Sessions are ephemeral and expire on a TTL (see [09-deployment.md](09-deployment.md)); an expired
 session simply re-derives and re-hashes, landing on the same account as long as the candidate set
 is unchanged.

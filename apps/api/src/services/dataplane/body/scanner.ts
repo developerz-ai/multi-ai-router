@@ -79,6 +79,7 @@ export function createRoutingScanner(options: ScannerOptions = {}) {
     const item = p?.kind === "array" && p.conversation && !opening.done
     if (item && byte === 123) opening.begin(byte, stack.length + 1)
     if (opening.bytes !== null) opening.content(p?.key ?? null, stack.length, byte)
+    if (opening.bytes !== null) opening.value(p?.key ?? null, stack.length, byte)
     if (
       (conversation && p?.key === "input" && byte === 34) ||
       (item && p?.conversation && p.input && byte === 34)
@@ -166,7 +167,7 @@ export function createRoutingScanner(options: ScannerOptions = {}) {
           inString &&
           (!capture || overlong) &&
           !strings.pending &&
-          (opening.bytes === null || opening.length >= limit)
+          (opening.bytes === null || opening.saturated)
         ) {
           const end = strings.skipString(chunk, i)
           if (end > i) {
@@ -237,6 +238,7 @@ export function createRoutingScanner(options: ScannerOptions = {}) {
             invalid = true
             continue
           }
+          if (opening.bytes !== null && byte === 125) opening.closeObject(stack.length)
           opening.closeContainer(stack.length, p.empty)
           if (opening.bytes !== null && stack.length === opening.depth && byte === 125)
             opening.finish()
@@ -259,7 +261,10 @@ export function createRoutingScanner(options: ScannerOptions = {}) {
           stringStart = offset + 1
           stringBytes = []
           overlong = false
-          capture = stack.length === 1 || (opening.bytes !== null && stack.length === opening.depth)
+          capture =
+            stack.length === 1 ||
+            (opening.bytes !== null &&
+              (stack.length === opening.depth || opening.readsKeysAt(stack.length)))
           continue
         }
         beginValue(byte)
