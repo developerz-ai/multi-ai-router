@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.23.3] — 2026-10-07
+
+2.23.2 lifted the tool-result rule, but Claude Code turns still started fresh in prod: turn 2 read as `diverged`, later turns as `no-rollback-point`.
+
+### Fixed
+
+- **A message re-sent as a string hashes the same as its single text block.** Claude Code (2.1.292) sends its mid-conversation `system` message as a `cache_control`-marked block array on the turn it is newest and as a bare string afterwards. Lineage hashed the two apart, so the next turn never matched the stored history and replayed it all. Verified against bodies captured from the real CLI on a stub upstream: every turn now classifies as `continuation`. Existing session lineages hashed string content the old way and start fresh once after the upgrade.
+
 ## [2.23.2] — 2026-10-07
 
 Claude Code behind the router burned its Claude subscriptions roughly ten times faster than it should, then hit `429`s with every window spent (prod, 2026-10-07). Each agentic step ran as a fresh SDK session that replayed the whole conversation as text: `cache_read` sat at the tools+system floor (86 k) on every turn while `cache_write` grew with the transcript, to 240 k tokens a turn.

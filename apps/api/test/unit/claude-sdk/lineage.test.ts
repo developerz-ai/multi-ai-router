@@ -342,6 +342,31 @@ describe("reading a request into the lineage view", () => {
     expect(hashMessages(plain?.messages ?? [])).toEqual(hashMessages(marked?.messages ?? []))
   })
 
+  test("Claude Code's system note re-sent as a string continues the conversation", () => {
+    // Captured from Claude Code 2.1.292: the mid-conversation system message is a marked block
+    // array on the turn it is newest and a bare string afterwards. Prod read it as `diverged`.
+    const read = (messages: unknown[]) =>
+      view(new TextEncoder().encode(JSON.stringify({ messages })))
+    const opening = { role: "user", content: [{ type: "text", text: "run echo twice" }] }
+    const turnOne = read([
+      opening,
+      {
+        role: "system",
+        content: [{ type: "text", text: "# Environment", cache_control: { type: "ephemeral" } }],
+      },
+    ])
+    const turnTwo = read([
+      opening,
+      { role: "system", content: "# Environment" },
+      { role: "assistant", content: [{ type: "tool_use", id: "t1", name: "Bash", input: {} }] },
+      { role: "user", content: [{ type: "tool_result", tool_use_id: "t1", content: "ok" }] },
+    ])
+
+    expect(
+      classifyLineage(hashMessages(turnOne.messages), hashMessages(turnTwo.messages)).lineage,
+    ).toBe("continuation")
+  })
+
   test("reordered JSON keys hash the same, so a re-serializing client is not a divergence", () => {
     const one = readConversation(
       new TextEncoder().encode(

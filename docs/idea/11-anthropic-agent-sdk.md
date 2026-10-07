@@ -596,6 +596,10 @@ its own, because the CLI reuses it on its one-shots and subagents. Lineage still
 a history that does not extend the stored one forks or starts fresh as before. Every SDK attempt
 logs `sdk session plan` with the plan kind and, for `fresh`, its reason.
 
+Lineage hashes string content as the single text block it abbreviates. Claude Code sends its
+mid-conversation `system` message as a marked block array on the turn it is newest and as a bare
+string afterwards; hashed apart, every Claude Code conversation read `diverged` on its second turn.
+
 ### For us
 
 - `Session → (Account, sdkSessionId, lineage state)` is a new obligation on an entity
