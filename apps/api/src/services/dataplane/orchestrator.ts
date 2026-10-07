@@ -115,6 +115,7 @@ export function createDispatcher(deps: DispatcherDeps): Dispatcher {
       ...(deps.quota === undefined ? {} : { quota: deps.quota }),
       ...(deps.prices === undefined ? {} : { prices: deps.prices }),
       sessionKeySource: session.source,
+      clientToolLoop: session.clientToolLoop,
       clock,
       timeoutMs: options.upstreamTimeoutMs ?? DEFAULT_UPSTREAM_TIMEOUT_MS,
       ...(options.upstreamErrorMaxBytes === undefined

@@ -281,6 +281,23 @@ describe("resolving what the SDK launch does with the turn", () => {
     expect(plan.kind).toBe("resume")
   })
 
+  test("a Claude Code tool round resumes on a fingerprint key instead of replaying", () => {
+    // Prod 2026-10-07: every agentic step ends in a tool_result, and each went fresh with the
+    // whole history replayed as text — cache_read pinned at the tools+system floor, 240k
+    // cache-write tokens a turn. The client's own agent-session header lifts the rule.
+    const opening = view(messagesBody([{ role: "user", text: "run the tool" }]))
+    const conversation = view(toolResultBody([{ role: "user", text: "run the tool" }]))
+
+    const plan = resolveLineage({
+      session: stored(hashMessages(opening.messages)),
+      conversation,
+      keySource: "fingerprint",
+      clientToolLoop: true,
+    })
+
+    expect(plan.kind).toBe("resume")
+  })
+
   test("a fork or subagent child, and a session the SDK says is gone, never resume", () => {
     const conversation = view(messagesBody([{ role: "user", text: "hello" }]))
     const session = stored(hashMessages(conversation.messages))

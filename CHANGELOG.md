@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.23.2] — 2026-10-07
+
+Claude Code behind the router burned its Claude subscriptions roughly ten times faster than it should, then hit `429`s with every window spent (prod, 2026-10-07). Each agentic step ran as a fresh SDK session that replayed the whole conversation as text: `cache_read` sat at the tools+system floor (86 k) on every turn while `cache_write` grew with the transcript, to 240 k tokens a turn.
+
+### Fixed
+
+- **Claude Code tool rounds resume their SDK session.** A fingerprint-keyed turn ending in a `tool_result` always started fresh, to keep concurrent headerless loops apart — and Claude Code ends every step that way. Its `x-claude-code-session-id` header now lifts that rule and is mixed into the fingerprint, so its own conversations stay apart without keying on an id the CLI reuses for one-shots and subagents. Lineage still decides resume vs fork vs fresh.
+
+### Added
+
+- `sdk session plan` log line per Agent SDK attempt: plan kind, and the reason when it is `fresh`.
+
 ## [2.23.1] — 2026-10-07
 
 Every Claude subscription request since 23:16 the night before landed on one account while five others sat behind recovery rows that never cleared (prod, 2026-10-07).
