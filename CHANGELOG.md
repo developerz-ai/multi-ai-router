@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.23.5] — 2026-10-07
+
+2.23.4 matched only the untitled form of the 2.1.289 refusal. Two resumes still answered `502` (prod, 2026-10-07 13:28).
+
+### Fixed
+
+- **A titled session's busy refusal is recognised.** CLI 2.1.289 leads the refusal with the session's quoted title (`"<title>" is running in the background (<job>).`) and says "That session" only for an untitled one. Claude Code's sessions are titled, so they still fell to `claude-sdk:subprocess-exit`. The rule now matches the predicate, `is running in the background`, and the in-place fork recovery runs. Read from the bundled CLI's message builder.
+
 ## [2.23.4] — 2026-10-07
 
 2.23.3 confirmed in prod: Claude Code turns resume, cache writes fell from 240 k to 48–983 tokens a turn. Two resumes still answered `502` (prod, 2026-10-07 05:15).

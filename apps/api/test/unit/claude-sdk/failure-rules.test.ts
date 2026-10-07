@@ -347,6 +347,21 @@ describe("a session the CLI is already running", () => {
     expect(classification.status).toBe(503)
   })
 
+  test("the 2.1.289 wording names a titled session by its title", () => {
+    // The refusal leads with the session's quoted title when it has one; only an untitled session
+    // reads "That session". Claude Code's sessions are titled, and matching the untitled subject
+    // left these at 502 `claude-sdk:subprocess-exit` (prod 2026-10-07 13:28).
+    const { classification } = classifySdkFailure(
+      Object.assign(new Error("Claude Code process exited with code 1"), {
+        stderr:
+          'Error: "Fix the router cache" is running in the background (job_01abc). Run `claude attach job_01abc` to open it, or `claude stop job_01abc` first to resume it here. Add --fork-session to branch off a copy instead.',
+      }),
+    )
+
+    expect(classification.kind).toBe("busy-session")
+    expect(classification.status).toBe(503)
+  })
+
   test("the newer wording is not read as a subprocess crash", () => {
     // What it was before: `exit 1` on stderr matched `claude-sdk:subprocess-exit` first, so the
     // in-place fork never ran, the attempt answered 502, and the chain failed the conversation

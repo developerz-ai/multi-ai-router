@@ -150,14 +150,17 @@ export const SDK_FAILURE_RULES: readonly SdkRule[] = [
     signal: "claude-sdk:session-busy",
     status: 503,
     clientMessage: "the Claude Agent SDK session this conversation resumed is still running",
-    // 2.1.289 reworded it a third time ("That session is running in the background. … Add
-    // --fork-session to branch off a copy instead."), again on stderr behind `exit 1`, and again
-    // it fell to `subprocess-exit`: prod 2026-10-07 answered 502 on a resume that arrived while
-    // the previous turn's process was still exiting.
+    // 2.1.289 reworded it a third time, again on stderr behind `exit 1`: `${subject} is running
+    // in the background${job}. … Add --fork-session to branch off a copy instead.`, where the
+    // subject is the session's quoted **title** when it has one and "That session" only when it
+    // has none. Matching "session is running in the background" caught the untitled form alone;
+    // Claude Code's sessions are titled, so prod 2026-10-07 kept answering 502 on resumes that
+    // arrived while the previous turn's process was still exiting. Match the predicate, never
+    // the subject.
     match: phrase(
       "is currently running as a background agent",
       "is running as a background session",
-      "session is running in the background",
+      "is running in the background",
     ),
   },
   {
