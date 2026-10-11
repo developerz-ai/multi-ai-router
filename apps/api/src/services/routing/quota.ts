@@ -24,6 +24,10 @@ export const DEFAULT_QUOTA_SPENT_THRESHOLD = 1
  * A window is spent when its utilization reached the threshold *and* it has not refilled yet.
  * A reported reset that is already in the past means the window came back — the router does not
  * sit on a stale clock it computed for itself.
+ *
+ * An **advisory** window (`window.advisory === true`) never blocks the account: the reading is
+ * a display-only header reply, distinct from `retiredEvidence`/`blocksRouting` (which are
+ * durable retirement evidence set by recovery, not by the provider).
  */
 export function isWindowSpent(
   window: QuotaWindowState,
@@ -31,6 +35,7 @@ export function isWindowSpent(
   threshold = DEFAULT_QUOTA_SPENT_THRESHOLD,
 ): boolean {
   if (retiredEvidence(window)) return false
+  if (window.advisory === true) return false
   if (window.utilization === undefined) return false
   if (window.utilization < threshold) return false
   if (window.resetsAt !== undefined && window.resetsAt.getTime() <= now.getTime()) return false
@@ -89,10 +94,10 @@ export function earliestReset(windows: readonly (Date | undefined)[]): Date | un
  *   newer provider observation. Expiry clearing preserves the original provider age; it does
  *   not invent freshness. Routing already ignores a reported reset in the past.
  *
- * `undefined` is a provider saying nothing about named windows (every HTTP driver, every response)
- * and leaves the set untouched; `[]` would be the different claim that there are none. Order is the
- * incumbent's, so a console rendering four rows does not reshuffle them because a `seven_day` event
- * happened to arrive first.
+ * `undefined` is a provider saying nothing about named windows (every HTTP driver **except** the
+ * Codex one, every response) and leaves the set untouched; `[]` would be the different claim
+ * that there are none. Order is the incumbent's, so a console rendering four rows does not
+ * reshuffle them because a `seven_day` event happened to arrive first.
  */
 export function mergeQuotaWindows(
   held: readonly QuotaWindowState[],

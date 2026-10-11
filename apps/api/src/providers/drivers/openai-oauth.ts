@@ -11,12 +11,11 @@ import type {
   OAuthTokens,
   ProviderCredential,
   ProviderDriver,
-  RateLimitSignal,
   UpstreamErrorFacts,
-  UpstreamResponse,
 } from "../types"
 import { openAiDeviceFlow } from "./openai-oauth-device"
 import { CODEX_MODEL_FAMILY, codexModelListing } from "./openai-oauth-models"
+import { codexSignal } from "./openai-oauth-quota"
 
 // Pinned from the first-party Codex CLI (openai/codex `codex-rs/login`), cross-checked against
 // opencode's `plugin/openai/codex.ts` (2026-10-04). Blast radius for each: every ChatGPT account.
@@ -210,33 +209,6 @@ export function readCodexFacts(body: unknown): UpstreamErrorFacts {
   return typeof detail === "string" ? { message: detail } : detail
 }
 
-const ResetsIn = z.object({
-  error: z.object({ resets_in_seconds: z.number().nonnegative() }).optional(),
-  resets_in_seconds: z.number().nonnegative().optional(),
-})
-
-function resetsInSeconds(body: unknown): number | null {
-  const parsed = ResetsIn.safeParse(body)
-  if (!parsed.success) return null
-  return parsed.data.error?.resets_in_seconds ?? parsed.data.resets_in_seconds ?? null
-}
-
-const LIMITED_NO_WINDOWS: RateLimitSignal = { limited: true, resetSource: "unknown", windows: [] }
-
-function parseCodexRateLimit(response: UpstreamResponse): RateLimitSignal | null {
-  const fromHeaders = parseRateLimitHeaders(response)
-  const seconds = resetsInSeconds(response.body)
-  if (seconds === null) return fromHeaders
-
-  const signal = fromHeaders ?? LIMITED_NO_WINDOWS
-  return {
-    ...signal,
-    limited: true,
-    retryAfterSeconds: signal.retryAfterSeconds ?? seconds,
-    resetSource: "provider-reported",
-  }
-}
-
 const LIMIT_CODES = ["usage_limit_reached", "rate_limit_exceeded"]
 const DEACTIVATED_CODES = ["account_deactivated"]
 
@@ -256,7 +228,7 @@ const codex = createHttpDriver({
     },
   ],
   readFacts: readCodexFacts,
-  parseRateLimit: parseCodexRateLimit,
+  parseRateLimit: (response) => codexSignal(parseRateLimitHeaders(response), response),
   rules: [
     typeRule("rate-limited", "openai-oauth:usage_limit_reached", LIMIT_CODES),
     codeRule("rate-limited", "openai-oauth:usage_limit_reached", LIMIT_CODES),

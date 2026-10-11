@@ -58,6 +58,8 @@ export function toQuotaEvidence(row: {
   retiredAt: Date | null
   evidenceState: "current" | "expired" | "superseded_by_recovery"
   blocksRouting: boolean
+  /** Display-only window — set only when the persisted row carries the marker on. */
+  advisory?: boolean
 }): QuotaEvidence {
   return {
     window: row.window,
@@ -70,6 +72,9 @@ export function toQuotaEvidence(row: {
     ...(row.utilization === null ? {} : { utilization: row.utilization }),
     ...(row.resetsAt === null ? {} : { resetsAt: row.resetsAt }),
     ...(row.retiredAt === null ? {} : { retiredAt: row.retiredAt }),
+    // Conditional spread — an absent `advisory` keeps the field off the object so existing
+    // `toEqual` assertions and the production invariant (advisory means display-only) survive.
+    ...(row.advisory === true ? { advisory: true } : {}),
   }
 }
 /** Expired facts are unknown capacity, never a fabricated zero-utilization reading. */

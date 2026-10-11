@@ -19,6 +19,7 @@ import {
   openAiOAuthDriver,
   openAiOAuthRefresh,
   type ProviderCredential,
+  parseCodexQuotaHeaders,
   readOpenAiOAuthTokens,
 } from "../../../src/providers"
 import { account, response } from "./fixtures"
@@ -267,6 +268,235 @@ describe("Codex failure wording", () => {
       response(429, { body: { error: { resets_in_seconds: 45 } }, headers: {} }),
     )
     expect(signal?.retryAfterSeconds).toBe(45)
+  })
+})
+
+describe("parseCodexQuotaHeaders — x-codex-* usage gauge", () => {
+  const DATE = "Sat, 11 Oct 2026 12:00:00 GMT"
+  const dateHeaders = { date: DATE }
+  const futureReset = Math.floor(new Date("2026-10-11T17:00:00Z").getTime() / 1000)
+
+  function setQuotedHandler(headers: Record<string, string>) {
+    return response(200, { headers })
+  }
+
+  test("a 200 carrying both complete sets yields five_hour and seven_day windows, advisory", () => {
+    const parsed = parseCodexQuotaHeaders(
+      setQuotedHandler({
+        ...dateHeaders,
+        "x-codex-primary-used-percent": "12",
+        "x-codex-primary-window-minutes": "300",
+        "x-codex-primary-reset-at": String(futureReset),
+        "x-codex-secondary-used-percent": "60",
+        "x-codex-secondary-window-minutes": "10080",
+        "x-codex-secondary-reset-at": String(futureReset + 86_400),
+      }),
+    )
+    expect(parsed.quotaWindows).toHaveLength(2)
+    const fiveHour = parsed.quotaWindows.find((w) => w.window === "five_hour")
+    const sevenDay = parsed.quotaWindows.find((w) => w.window === "seven_day")
+    expect(fiveHour).toBeDefined()
+    expect(fiveHour?.utilization).toBeCloseTo(0.12)
+    expect(fiveHour?.utilizationSource).toBe("continuous")
+    expect(fiveHour?.resetSource).toBe("provider-reported")
+    expect(fiveHour?.resetsAt).toBeInstanceOf(Date)
+    expect(fiveHour?.advisory).toBe(true)
+    expect(sevenDay).toBeDefined()
+    expect(sevenDay?.utilization).toBeCloseTo(0.6)
+    expect(sevenDay?.advisory).toBe(true)
+  })
+
+  test("only the primary set yields a single five_hour window", () => {
+    const parsed = parseCodexQuotaHeaders(
+      setQuotedHandler({
+        ...dateHeaders,
+        "x-codex-primary-used-percent": "12",
+        "x-codex-primary-window-minutes": "300",
+        "x-codex-primary-reset-at": String(futureReset),
+      }),
+    )
+    expect(parsed.quotaWindows).toHaveLength(1)
+    expect(parsed.quotaWindows[0]?.window).toBe("five_hour")
+    expect(parsed.windows).toHaveLength(0)
+  })
+
+  test("neither set yields no windows", () => {
+    const parsed = parseCodexQuotaHeaders(setQuotedHandler({ ...dateHeaders }))
+    expect(parsed.quotaWindows).toHaveLength(0)
+    expect(parsed.windows).toHaveLength(0)
+  })
+
+  test("a non-numeric percent is dropped — no named window, no partial limiter entry", () => {
+    const parsed = parseCodexQuotaHeaders(
+      setQuotedHandler({
+        ...dateHeaders,
+        "x-codex-primary-used-percent": "abc",
+        "x-codex-primary-window-minutes": "300",
+        "x-codex-primary-reset-at": String(futureReset),
+      }),
+    )
+    // The set is incomplete: a malformed used-percent cannot claim a kind, and partial sets
+    // must not become numbers ranking would consume. No window is produced.
+    expect(parsed.quotaWindows).toHaveLength(0)
+    expect(parsed.windows).toHaveLength(0)
+  })
+
+  test("a reset-at earlier than the reply's Date still reports a window, and is not spent", () => {
+    const pastReset = Math.floor(new Date("2026-10-11T11:00:00Z").getTime() / 1000)
+    const parsed = parseCodexQuotaHeaders(
+      setQuotedHandler({
+        ...dateHeaders,
+        "x-codex-primary-used-percent": "50",
+        "x-codex-primary-window-minutes": "300",
+        "x-codex-primary-reset-at": String(pastReset),
+      }),
+    )
+    expect(parsed.quotaWindows).toHaveLength(1)
+    const window = parsed.quotaWindows[0]
+    expect(window?.window).toBe("five_hour")
+    expect(window?.resetsAt?.getTime()).toBe(pastReset * 1000)
+    // Advisory never blocks even when spent; that gate is `isWindowSpent`'s, not the parser's.
+    expect(window?.advisory).toBe(true)
+  })
+
+  test("a window length of 60 minutes is reported in `windows`, not in `quotaWindows`", () => {
+    const parsed = parseCodexQuotaHeaders(
+      setQuotedHandler({
+        ...dateHeaders,
+        "x-codex-primary-used-percent": "5",
+        "x-codex-primary-window-minutes": "60",
+        "x-codex-primary-reset-at": String(futureReset),
+      }),
+    )
+    expect(parsed.quotaWindows).toHaveLength(0)
+    expect(parsed.windows.some((w) => w.limiter === "primary-60m")).toBe(true)
+  })
+
+  test("no Date header yields no named windows", () => {
+    const parsed = parseCodexQuotaHeaders(
+      setQuotedHandler({
+        "x-codex-primary-used-percent": "12",
+        "x-codex-primary-window-minutes": "300",
+        "x-codex-primary-reset-at": String(futureReset),
+      }),
+    )
+    expect(parsed.quotaWindows).toHaveLength(0)
+    expect(parsed.windows).toHaveLength(0)
+  })
+
+  test("an out-of-range reset-at (epoch overflow) produces no window at all", () => {
+    // 99999999999999999 * 1000 overflows Date's range; the resulting `new Date(...)` is an Invalid
+    // Date. Any window that consumed it would throw a RangeError at .toISOString() time. The parser
+    // refuses the set entirely instead of poisoning downstream callers.
+    const parsed = parseCodexQuotaHeaders(
+      setQuotedHandler({
+        ...dateHeaders,
+        "x-codex-primary-used-percent": "12",
+        "x-codex-primary-window-minutes": "300",
+        "x-codex-primary-reset-at": "99999999999999999",
+      }),
+    )
+    expect(parsed.quotaWindows).toHaveLength(0)
+    expect(parsed.windows).toHaveLength(0)
+  })
+
+  test("a float used-percent (12.5) yields a five_hour window with utilization 0.125", () => {
+    // Upstream publishes used-percent as a float (`used_percent: f64` in codex-rs
+    // `rate_limits.rs`); its own fixture sends `12.5`. A safe-integer parser would drop the
+    // whole set, leaving the operator's view empty. The parser accepts any finite >= 0 and
+    // downstream `clamp01` caps out-of-range, so 12.5 → 0.125 survives unchanged.
+    const parsed = parseCodexQuotaHeaders(
+      setQuotedHandler({
+        ...dateHeaders,
+        "x-codex-primary-used-percent": "12.5",
+        "x-codex-primary-window-minutes": "300",
+        "x-codex-primary-reset-at": String(futureReset),
+      }),
+    )
+    expect(parsed.quotaWindows).toHaveLength(1)
+    const window = parsed.quotaWindows[0]
+    expect(window?.window).toBe("five_hour")
+    expect(window?.utilization).toBeCloseTo(0.125)
+  })
+
+  test("a reset-at whose milliseconds overflow Date's range produces no window at all", () => {
+    // 9000000000000 * 1000 = 9e15, above Date's 8.64e15 max. The value is a Number safe
+    // integer so the integer check alone would accept it, but the Date built from it is
+    // Invalid (`getTime()` returns NaN, which is not finite). The Date-range guard is what
+    // catches this — and what an out-of-range epoch would throw at `.toISOString()` time
+    // downstream if it did not.
+    const parsed = parseCodexQuotaHeaders(
+      setQuotedHandler({
+        ...dateHeaders,
+        "x-codex-primary-used-percent": "12",
+        "x-codex-primary-window-minutes": "300",
+        "x-codex-primary-reset-at": "9000000000000",
+      }),
+    )
+    expect(parsed.quotaWindows).toHaveLength(0)
+    expect(parsed.windows).toHaveLength(0)
+  })
+})
+
+describe("codex.parseRateLimit — the signal assembly", () => {
+  const DATE = "Sat, 11 Oct 2026 12:00:00 GMT"
+  const dateHeaders = { date: DATE }
+  const futureReset = Math.floor(new Date("2026-10-11T17:00:00Z").getTime() / 1000)
+
+  test("a 200 carrying both complete x-codex sets reports two quotaWindows and not limited", () => {
+    const signal = codex.parseRateLimit(
+      response(200, {
+        headers: {
+          ...dateHeaders,
+          "x-codex-primary-used-percent": "12",
+          "x-codex-primary-window-minutes": "300",
+          "x-codex-primary-reset-at": String(futureReset),
+          "x-codex-secondary-used-percent": "60",
+          "x-codex-secondary-window-minutes": "10080",
+          "x-codex-secondary-reset-at": String(futureReset + 86_400),
+        },
+      }),
+    )
+    expect(signal?.quotaWindows).toHaveLength(2)
+    expect(signal?.limited).toBe(false)
+  })
+
+  test("a 200 carrying no headers at all returns null — nothing to fold", () => {
+    // The change must not invent a signal where there was none: the prior parseRateLimitHeaders
+    // returned null, foldRateLimit short-circuits on null, and an idle account stays idle.
+    expect(codex.parseRateLimit(response(200, {}))).toBeNull()
+  })
+
+  test("a 200 carrying only a Date header returns null — the gauge is partial", () => {
+    // A complete set is all three headers for one slot; the Date alone is not a reading.
+    expect(codex.parseRateLimit(response(200, { headers: dateHeaders }))).toBeNull()
+  })
+
+  test("a 429 with the x-codex headers and `resets_in_seconds` is limited, provider-reported, and carries two quotaWindows", () => {
+    const signal = codex.parseRateLimit(
+      response(429, {
+        headers: {
+          ...dateHeaders,
+          "x-codex-primary-used-percent": "100",
+          "x-codex-primary-window-minutes": "300",
+          "x-codex-primary-reset-at": String(futureReset),
+          "x-codex-secondary-used-percent": "100",
+          "x-codex-secondary-window-minutes": "10080",
+          "x-codex-secondary-reset-at": String(futureReset + 86_400),
+        },
+        body: { resets_in_seconds: 120 },
+      }),
+    )
+    expect(signal?.limited).toBe(true)
+    expect(signal?.retryAfterSeconds).toBe(120)
+    expect(signal?.resetSource).toBe("provider-reported")
+    expect(signal?.quotaWindows).toHaveLength(2)
+    // Each window is still advisory: a 100% reading does not block, and the operator's
+    // display-only ruling survives the 429 path.
+    for (const window of signal?.quotaWindows ?? []) {
+      expect(window.advisory).toBe(true)
+      expect(window.utilization).toBe(1)
+    }
   })
 })
 

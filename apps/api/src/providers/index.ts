@@ -224,6 +224,7 @@ export {
   openAiOAuthRefresh,
   readOpenAiOAuthTokens,
 } from "./drivers/openai-oauth"
+export { parseCodexQuotaHeaders } from "./drivers/openai-oauth-quota"
 export type { ClassificationRule, ClassifyOptions } from "./failure/classify"
 export {
   classifyUpstreamFailure,

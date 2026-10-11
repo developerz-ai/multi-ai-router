@@ -45,6 +45,8 @@ export function memoryAccountQuota(
       retiredAt: null,
       evidenceState: "current",
       blocksRouting: true,
+      // Carry the marker through, like the SQL repo does — toQuotaEvidence spreads it back.
+      advisory: state.advisory ?? false,
     }
     windows.set(key, row)
     return row

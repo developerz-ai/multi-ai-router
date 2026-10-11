@@ -237,6 +237,7 @@ describe("quota window state", () => {
     0,
     "current",
     true,
+    false,
     null,
     0.42,
     "continuous",

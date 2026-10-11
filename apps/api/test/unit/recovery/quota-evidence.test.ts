@@ -89,3 +89,37 @@ test("catalog mapper preserves retirement and original provider observation age"
   })
   expect(mapped).toEqual(retired)
 })
+
+test("catalog mapper preserves the advisory marker when the row carries it", () => {
+  const mapped = toQuotaEvidence({
+    window: "five_hour",
+    utilization: 1,
+    utilizationSource: "continuous",
+    resetsAt: new Date(2_000),
+    resetSource: "provider-reported",
+    lastCheckedAt: new Date(1000),
+    revision: 0,
+    retiredAt: null,
+    evidenceState: "current",
+    blocksRouting: true,
+    advisory: true,
+  })
+  expect(mapped.advisory).toBe(true)
+})
+
+test("catalog mapper omits advisory when the row does not carry it", () => {
+  const mapped = toQuotaEvidence({
+    window: "five_hour",
+    utilization: 0.5,
+    utilizationSource: "continuous",
+    resetsAt: new Date(2_000),
+    resetSource: "provider-reported",
+    lastCheckedAt: new Date(1000),
+    revision: 0,
+    retiredAt: null,
+    evidenceState: "current",
+    blocksRouting: true,
+    advisory: false,
+  })
+  expect("advisory" in mapped).toBe(false)
+})

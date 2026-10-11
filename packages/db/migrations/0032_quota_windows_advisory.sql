@@ -1,0 +1,1 @@
+ALTER TABLE "quota_windows" ADD COLUMN "advisory" boolean DEFAULT false NOT NULL;

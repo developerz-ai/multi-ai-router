@@ -171,7 +171,7 @@ export function harness(options: HarnessOptions) {
   )
   app.route("/", metricsRoutes({ metrics, token: null }))
 
-  return { app, upstream, usage, health, clock: testClock, metrics }
+  return { app, upstream, usage, health, clock: testClock, metrics, catalog: store }
 }
 
 export const MESSAGE = JSON.stringify({
