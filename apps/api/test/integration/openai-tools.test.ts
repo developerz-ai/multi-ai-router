@@ -586,7 +586,9 @@ describe("openai-oauth: /v1/messages with a tool_result follow-up", () => {
     // The function_call item precedes the function_call_output in the upstream input — the order
     // mirrors the client's transcript (assistant tool_use, user tool_result).
     if (callItem === undefined || outputItem === undefined) {
-      throw new Error("expected both function_call and function_call_output items in upstream input")
+      throw new Error(
+        "expected both function_call and function_call_output items in upstream input",
+      )
     }
     expect(input.indexOf(callItem)).toBeLessThan(input.indexOf(outputItem))
 
