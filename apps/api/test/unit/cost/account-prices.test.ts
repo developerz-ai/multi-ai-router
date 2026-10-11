@@ -145,7 +145,12 @@ test("GPT-6 model coverage on openai-api and openai-oauth (#181)", () => {
     },
   ]
   expect(unpricedModels(unpricedAccounts, lookupRates)).toEqual([
-    { accountId: "codex-r", provider: "openai-oauth", model: "gpt-reserve", reason: "missing_rate" },
+    {
+      accountId: "codex-r",
+      provider: "openai-oauth",
+      model: "gpt-reserve",
+      reason: "missing_rate",
+    },
     {
       accountId: "codex-r",
       provider: "openai-oauth",
