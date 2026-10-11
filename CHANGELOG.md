@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.25.7] — 2026-10-11
+
+### Fixed
+
+- **Codex backend refuses tool-schema `pattern`s containing a regex lookaround.** A new `stripToolPatterns` flag on `ResponsesEgressRules` (`apps/api/src/services/translate/shared/responses-egress.ts`) is set to `true` on `CODEX_RESPONSES_EGRESS` (`apps/api/src/providers/drivers/openai-oauth.ts`); when a translated body reaches the Codex egress, every `pattern` in a known schema position — `properties.<key>`, `patternProperties` subschema values, `propertyNames`, `if`/`then`/`else`, `dependentSchemas`, `contains`, the array form of `items` — is checked for `(?=`, `(?!`, `(?<=`, `(?<!` and the value is removed. The drop is reported by tool name and schema path (never the pattern value); `default` / `enum` / `examples` / `const` data strings are not walked (a `default` carrying a lookaround is data, not a schema), and `patternProperties` regex keys are out of scope. The walk is non-mutating — `createTranslatedRequestBody` caches the parsed source and reuses it for later failover candidates (`apps/api/src/services/dataplane/translate-body.ts`), so the new flag is added to `egressKey` to keep the conversion-cache promise (two surfaces with different rules convert separately). Unit (`apps/api/test/unit/translate/responses-egress-rules.test.ts`): `CODEX_RESPONSES_EGRESS.stripToolPatterns` is `true`, `DEFAULT_RESPONSES_EGRESS.stripToolPatterns` is `false`; a Codex-routed lookaround is removed and reported by tool + path; a non-lookaround pattern survives; `default` data with a lookaround survives; the input body is not mutated (the same body fed to a default surface still has the pattern); a default surface keeps every `pattern`, including lookarounds. Integration (`apps/api/test/integration/codex-translate.test.ts`): `/v1/messages` and `/v1/chat/completions` carrying a tool whose `properties.login.pattern` is `(?=.*[A-Z]).{6,}` return `200` against the Codex mock; the upstream body has no `pattern` at `login`, keeps the email pattern, and never contains the lookaround string; a `UsageRecord` row records the call. Same-dialect `/v1/responses` is a byte relay and is unaffected (non-negotiable 10).
+
+### Documentation
+
+- **`docs/idea/06-protocol-translation.md` adds the new rule to the "Surface rules" table, the "JSON Schema parameters" row of "Tool and function calling", and a new "Known lossy edges" row** — listing the schema keywords walked and the rules for `default` / `enum` data and `patternProperties` keys. **`docs/idea/03-providers.md` updates both `openai-oauth` rows** (the summary row and "Translated bodies" in its detail table) to name the lookaround strip alongside the existing `temperature` / `top_p` / `max_output_tokens` drop and the structured-output refusal. Refs #187.
+
 ## [2.25.6] — 2026-10-11
 
 ### Fixed
@@ -1134,3 +1144,4 @@ your tooling config.
 [2.25.4]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.25.4
 [2.25.5]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.25.5
 [2.25.6]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.25.6
+[2.25.7]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.25.7

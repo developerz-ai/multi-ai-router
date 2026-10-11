@@ -188,4 +188,113 @@ describe("the rules come from the driver", () => {
     expect(codex.resolveResponsesEgress(at("openai-oauth"))).toBe(CODEX_RESPONSES_EGRESS)
     expect(openai.resolveResponsesEgress(at("openai-api"))).toBe(DEFAULT_RESPONSES_EGRESS)
   })
+
+  test("the Codex surface declares stripToolPatterns: true; the default surface does not", () => {
+    expect(CODEX_RESPONSES_EGRESS.stripToolPatterns).toBe(true)
+    expect(DEFAULT_RESPONSES_EGRESS.stripToolPatterns).toBe(false)
+  })
+})
+
+/**
+ * Production, 2026-10-11: the Codex backend compiles the JSON-Schema `pattern` field and refuses
+ * any value containing a regex lookaround (`(?=`, `(?!`, `(?<=`, `(?<!`) with `400`. The client still
+ * enforces the schema, so dropping the pattern degrades the request rather than corrupting it; the
+ * router reports the drop by tool name and schema path, never by pattern value.
+ */
+const TOOL_WITH_LOOKAROUND = {
+  model: "gpt-5.5",
+  max_tokens: 256,
+  messages: [{ role: "user", content: "log in" }],
+  tools: [
+    {
+      name: "auth",
+      description: "Auth helper",
+      input_schema: {
+        type: "object",
+        properties: {
+          login: {
+            type: "string",
+            // Lookaround — the backend refuses this; the field is reported and stripped.
+            pattern: "(?=.*[A-Z]).{6,}",
+          },
+          password: {
+            type: "string",
+            // Negative lookbehind — same fate.
+            pattern: "(?<!guest).+",
+          },
+          email: {
+            type: "string",
+            // No lookaround — kept verbatim.
+            pattern: "^[a-z0-9._%+-]+@[a-z0-9.-]+\\.[a-z]{2,}$",
+          },
+          // `default` holds a lookaround, but it's data, not a schema pattern — must stay.
+          fallback: {
+            type: "string",
+            default: "(?=.*[A-Z]).+",
+          },
+        },
+        required: ["login"],
+      },
+    },
+  ],
+}
+
+const LOOKAROUND_DROP =
+  "the Codex backend cannot compile regex lookarounds in tool schemas (tool `auth`)"
+
+describe("a tool schema carrying a regex lookaround", () => {
+  test("Codex egress strips the lookaround `pattern`s and reports the drops by tool + schema path", () => {
+    const { body, drops } = sent("anthropic", TOOL_WITH_LOOKAROUND)
+    const tools = body.tools as ReadonlyArray<{
+      name?: string
+      parameters?: {
+        properties?: Record<string, { pattern?: string | undefined; default?: string | undefined }>
+      }
+    }>
+    expect(tools).toHaveLength(1)
+    const params = tools[0]?.parameters?.properties
+    expect(params?.login?.pattern).toBeUndefined()
+    expect(params?.password?.pattern).toBeUndefined()
+    // The non-lookaround pattern survives.
+    expect(params?.email?.pattern).toBe("^[a-z0-9._%+-]+@[a-z0-9.-]+\\.[a-z]{2,}$")
+    // The `default` is data, not a schema pattern — left alone even when its content looks like one.
+    expect(params?.fallback?.default).toBe("(?=.*[A-Z]).+")
+
+    // The drop names the tool and the schema path; it never quotes the pattern value.
+    const drop = drops.find((d) => d.field === "tools[0].parameters.properties.login.pattern")
+    expect(drop).toBeDefined()
+    expect(drop?.reason).toBe(LOOKAROUND_DROP)
+    // Tool name surfaces in the reason (structural; never the pattern value).
+    expect(drop?.reason).toContain("auth")
+    expect(JSON.stringify(drops)).not.toContain("(?=.*[A-Z]")
+    expect(JSON.stringify(drops)).not.toContain("(?<!guest")
+  })
+
+  test("the input body is not mutated — a second conversion to a default surface still has the pattern", () => {
+    const input = JSON.parse(JSON.stringify(TOOL_WITH_LOOKAROUND)) as typeof TOOL_WITH_LOOKAROUND
+    const codex = sent("anthropic", input, CODEX_RESPONSES_EGRESS)
+    expect(
+      (codex.body.tools?.[0]?.parameters?.properties?.login as { pattern?: string } | undefined)
+        ?.pattern,
+    ).toBeUndefined()
+
+    // The same input, fed to a non-Codex surface: nothing changed upstream.
+    const defaults = sent("anthropic", input, DEFAULT_RESPONSES_EGRESS)
+    const params = (
+      defaults.body.tools as ReadonlyArray<{
+        parameters?: { properties?: Record<string, unknown> }
+      }>
+    )?.[0]?.parameters?.properties
+    expect((params?.login as { pattern?: string } | undefined)?.pattern).toBe("(?=.*[A-Z]).{6,}")
+    expect((params?.password as { pattern?: string } | undefined)?.pattern).toBe("(?<!guest).+")
+  })
+
+  test("an ordinary Responses surface keeps every `pattern`, including lookarounds", () => {
+    const { body, drops } = sent("anthropic", TOOL_WITH_LOOKAROUND, DEFAULT_RESPONSES_EGRESS)
+    expect(drops).toHaveLength(0)
+    const params = (
+      body.tools as ReadonlyArray<{ parameters?: { properties?: Record<string, unknown> } }>
+    )?.[0]?.parameters?.properties
+    expect((params?.login as { pattern?: string } | undefined)?.pattern).toBe("(?=.*[A-Z]).{6,}")
+  })
 })
