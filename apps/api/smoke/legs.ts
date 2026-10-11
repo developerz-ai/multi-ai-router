@@ -1,7 +1,7 @@
 /**
  * The eight legs `bin/smoke` drives and the request body each one sends. Pure data plus body
- * builders that match the leg's expectation kind and endpoint. `grade.ts` reads the legs;
- * nothing else does.
+ * builders that match the leg's expectation kind and endpoint. `run.ts` is the only reader:
+ * it drives each leg and hands the reply to the grader.
  *
  * The `required` flag gates the exit code: every Messages leg is required, and the two OpenAI
  * legs are informational (an account may legitimately refuse them). The flag lives on every leg

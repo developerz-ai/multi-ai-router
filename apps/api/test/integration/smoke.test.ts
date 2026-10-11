@@ -675,6 +675,57 @@ describe("bin/smoke — driveLeg backstop catches a grader throw", () => {
   })
 })
 
+describe("bin/smoke — a malformed informational reply never gates the run", () => {
+  // The six /v1/messages legs get well-formed replies; the two informational legs get bodies
+  // that threw in the OpenAI graders before 2.25.4. The run must resolve, report all eight
+  // legs, FAIL the two informational ones, and still exit 0: informational legs never gate.
+  test("chat_completions `choices: [null]` and responses `output: [null]` FAIL without changing the exit code", async () => {
+    const replies: (() => Response)[] = [
+      () => jsonResponse(200, TEXT),
+      () => jsonResponse(200, TOOL_USE),
+      () => jsonResponse(200, TOOL_USE),
+      () => jsonResponse(200, ROUND_TRIP),
+      () =>
+        new Response(STREAMED_TOOL_SSE, {
+          status: 200,
+          headers: { "content-type": "text/event-stream" },
+        }),
+      () => jsonResponse(200, REASONING_TOOL),
+      () => jsonResponse(200, { choices: [null] }),
+      () => jsonResponse(200, { output: [null] }),
+    ]
+    let call = 0
+    const fetchImpl = (() => {
+      const reply = replies[call]
+      call += 1
+      if (reply === undefined) throw new Error(`unexpected request #${call}`)
+      return Promise.resolve(reply())
+    }) as unknown as typeof fetch
+    const legs = buildLegs()
+    const results = await runLegs({
+      url: "http://127.0.0.1:1/",
+      model: "claude-opus-5",
+      key: KEY,
+      legs,
+      fetchImpl,
+    })
+    expect(results).toHaveLength(8)
+    expect(results.slice(0, 6).map((r) => r.outcome.verdict)).toEqual([
+      "PASS",
+      "PASS",
+      "PASS",
+      "PASS",
+      "PASS",
+      "PASS",
+    ])
+    expect(results.slice(6).map((r) => r.outcome)).toEqual([
+      { verdict: "FAIL", reason: "malformed-body" },
+      { verdict: "FAIL", reason: "malformed-body" },
+    ])
+    expect(decideExitCode(results)).toBe(0)
+  })
+})
+
 describe("bin/smoke — connection refused", () => {
   test("every required leg is INCONCLUSIVE with a non-key reason and the run exits 2", async () => {
     // Port 1 is reserved for tcpmux; a connect there refuses at once on every CI runner. The key
