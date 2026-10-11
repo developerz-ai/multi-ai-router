@@ -9,11 +9,9 @@
  *   where the runner itself decides (network failure, missing key, malformed SSE), so the grader
  *   never emits it; the runner is the only producer.
  *
- * Truncation (`stop_reason: "max_tokens"`) is graded as `FAIL` with reason `truncated`. That is the
- * spec-gate's pick — `PASS` would let a model that simply ran out of budget look like a healthy
- * router, and `INCONCLUSIVE` would leave the operator guessing — and the truncated-vs-tool-failure
- * distinction is the whole reason the grading case exists in the AC ("grades as truncated, not as a
- * tool failure": reason `truncated`, not `missing-tool-call`).
+ * Truncation (`stop_reason: "max_tokens"`) is graded as `FAIL` with reason `truncated`. `PASS`
+ * would let a model that simply ran out of budget look like a healthy router, and `INCONCLUSIVE`
+ * would leave the operator guessing.
  */
 
 export type Verdict = "PASS" | "FAIL" | "INCONCLUSIVE"
@@ -21,6 +19,8 @@ export type Verdict = "PASS" | "FAIL" | "INCONCLUSIVE"
 export interface LegOutcome {
   readonly verdict: Verdict
   readonly reason?: string
+  /** Reported on legs whose grader knows whether a `thinking` block came back. */
+  readonly thinkingPresent?: boolean
 }
 
 export type MessagesExpectation =
@@ -39,21 +39,15 @@ export type MessagesExpectation =
   /** A streamed forced-tool call. Events are pre-aggregated by the runner. */
   | { readonly kind: "streamed_forced_tool"; readonly name: string }
   /**
-   * `thinking: { type: "enabled", budget_tokens }` plus a forced-tool call. Expect at least one
-   * `thinking` block **and** a `tool_use` block in that order — thinking is the model's
-   * reasoning before it acts.
+   * Adaptive thinking plus an effort and a forced tool. Adaptive may emit a thinking block or
+   * skip straight to the tool call — the spec the Luna route returned on 2026-10-11, and the
+   * Responses-translated route always returns. The grader PASSes on the tool call and reports
+   * whether a thinking block came back as information.
    */
   | { readonly kind: "reasoning_forced_tool"; readonly name: string }
 
 export type OpenAiExpectation =
-  /**
-   * `/v1/chat/completions`: `tool_choice: "required"`, with a tool defined. Expect
-   * `choices[0].finish_reason: "tool_calls"` and a non-empty `tool_calls` array.
-   */
   | { readonly kind: "chat_completions_required_tool" }
-  /**
-   * `/v1/responses`: tools defined. Expect an `output` array containing a `function_call` item.
-   */
   | { readonly kind: "responses_function_call" }
 
 export interface MessagesLeg {
@@ -61,6 +55,8 @@ export interface MessagesLeg {
   readonly stream: boolean
   readonly name: string
   readonly expectation: MessagesExpectation
+  /** Required legs gate the exit code. */
+  readonly required: boolean
 }
 
 export interface OpenAiLeg {
@@ -74,10 +70,6 @@ export interface OpenAiLeg {
 
 export type LegSpec = MessagesLeg | OpenAiLeg
 
-/**
- * An SSE event aggregated from a streamed response. The runner emits one per chunk after parsing
- * the `event:` and `data:` lines; the grader is indifferent to how the runner got them.
- */
 export interface StreamEvent {
   readonly event: string
   readonly data: unknown
@@ -85,19 +77,14 @@ export interface StreamEvent {
 
 interface AnthropicMessageResponse {
   readonly stop_reason?: string
-  readonly content?: ReadonlyArray<{
-    readonly type: string
-    [key: string]: unknown
-  }>
+  readonly content?: ReadonlyArray<{ readonly type: string; [key: string]: unknown }>
   readonly error?: { readonly type?: string; readonly message?: string }
 }
 
 interface OpenAiChatResponse {
   readonly choices?: ReadonlyArray<{
     readonly finish_reason?: string
-    readonly message?: {
-      readonly tool_calls?: ReadonlyArray<unknown>
-    }
+    readonly message?: { readonly tool_calls?: ReadonlyArray<unknown> }
   }>
   readonly error?: { readonly message?: string }
 }
@@ -107,121 +94,15 @@ interface OpenAiResponsesResponse {
   readonly error?: { readonly message?: string }
 }
 
-/**
- * Grade a single leg. The runner hands it the status, the parsed body, and — for a stream — the
- * events it accumulated. The grader returns one verdict.
- */
 export function grade(
   leg: LegSpec,
   status: number,
   body: unknown,
   events: readonly StreamEvent[] = [],
 ): LegOutcome {
-  if (leg.endpoint === "/v1/messages") {
-    return gradeMessages(leg, status, body, events)
-  }
-  if (leg.endpoint === "/v1/chat/completions") {
-    return gradeChatCompletions(status, body)
-  }
+  if (leg.endpoint === "/v1/messages") return gradeMessages(leg, status, body, events)
+  if (leg.endpoint === "/v1/chat/completions") return gradeChatCompletions(status, body)
   return gradeResponses(status, body)
-}
-
-function gradeMessages(
-  leg: MessagesLeg,
-  status: number,
-  body: unknown,
-  events: readonly StreamEvent[],
-): LegOutcome {
-  if (status !== 200) {
-    return fail(`http-${status}`, messageErrorMessage(body))
-  }
-
-  // For a streamed leg the runner passes `events`; for a non-streamed one it passes `body`. Either
-  // path the function below accepts both shapes.
-  const resolved = leg.stream ? synthesizedFromStream(events) : body
-
-  const parsed = parseObject(resolved)
-  if (parsed === null) {
-    return fail("unparsable-body")
-  }
-
-  if (parsed.stop_reason === "max_tokens") {
-    return fail("truncated")
-  }
-
-  return gradeMessagesByExpectation(leg, parsed)
-}
-
-function gradeMessagesByExpectation(leg: MessagesLeg, parsed: ParsedMessage): LegOutcome {
-  switch (leg.expectation.kind) {
-    case "text":
-      return parsed.stop_reason === "end_turn" && hasText(parsed)
-        ? pass()
-        : fail(
-            parsed.stop_reason === undefined ? "missing-stop-reason" : `stop-${parsed.stop_reason}`,
-          )
-    case "forced_tool":
-    case "streamed_forced_tool":
-      return parsed.stop_reason === "tool_use" && hasToolUseNamed(parsed, leg.expectation.name)
-        ? pass()
-        : fail(missingToolUseReason(parsed, leg.expectation.name))
-    case "tool_choice_any":
-      return parsed.stop_reason === "tool_use" && hasAnyToolUse(parsed)
-        ? pass()
-        : fail(missingToolUseReason(parsed))
-    case "tool_round_trip":
-      // A round trip's success is "the router did not reject the tool_result". A non-empty
-      // content array is the cheapest signal that the model saw the round-trip conversation.
-      return parsed.content !== undefined && parsed.content.length > 0
-        ? pass()
-        : fail("empty-round-trip-response")
-    case "reasoning_forced_tool":
-      return parsed.stop_reason === "tool_use" &&
-        hasThinking(parsed) &&
-        hasToolUseNamed(parsed, leg.expectation.name)
-        ? pass()
-        : fail(missingToolUseReason(parsed, leg.expectation.name, "missing-thinking"))
-  }
-}
-
-function gradeChatCompletions(status: number, body: unknown): LegOutcome {
-  if (status !== 200) {
-    return fail(`http-${status}`, openAiErrorMessage(body))
-  }
-  const parsed = parseObject(body) as OpenAiChatResponse | null
-  if (parsed === null) {
-    return fail("unparsable-body")
-  }
-  const choice = parsed.choices?.[0]
-  if (choice === undefined) {
-    return fail("no-choice")
-  }
-  if (choice.finish_reason !== "tool_calls") {
-    return fail(`finish-${choice.finish_reason ?? "none"}`)
-  }
-  const toolCalls = choice.message?.tool_calls
-  if (toolCalls === undefined || toolCalls.length === 0) {
-    return fail("no-tool-calls")
-  }
-  return pass()
-}
-
-function gradeResponses(status: number, body: unknown): LegOutcome {
-  if (status !== 200) {
-    return fail(`http-${status}`, openAiErrorMessage(body))
-  }
-  const parsed = parseObject(body) as OpenAiResponsesResponse | null
-  if (parsed === null) {
-    return fail("unparsable-body")
-  }
-  const output = parsed.output
-  if (output === undefined || output.length === 0) {
-    return fail("no-output")
-  }
-  if (!output.some((item) => item.type === "function_call")) {
-    return fail("no-function-call")
-  }
-  return pass()
 }
 
 interface ParsedMessage {
@@ -234,42 +115,106 @@ function parseObject(value: unknown): ParsedMessage | null {
   return value as ParsedMessage
 }
 
-function hasText(parsed: ParsedMessage): boolean {
-  return parsed.content?.some((block) => block.type === "text") ?? false
+function asContent(parsed: ParsedMessage): ReadonlyArray<{ readonly type: string }> | undefined {
+  // A malformed `content` (string, null, `[null]`, missing) is FAIL `malformed-body`, not a
+  // throw that escapes the runner. We guard the array AND every element so `[null]` returns
+  // undefined — the grader then reports FAIL with reason `malformed-body`.
+  const raw = parsed.content
+  if (!Array.isArray(raw)) return undefined
+  const blocks: Array<{ readonly type: string }> = []
+  for (const block of raw) {
+    if (block === null || typeof block !== "object" || typeof block.type !== "string") {
+      return undefined
+    }
+    blocks.push(block as { readonly type: string })
+  }
+  return blocks
 }
 
-function hasToolUseNamed(parsed: ParsedMessage, name: string): boolean {
-  return (
-    parsed.content?.some(
-      (block) => block.type === "tool_use" && (block as { name?: unknown }).name === name,
-    ) ?? false
+function gradeMessages(
+  leg: MessagesLeg,
+  status: number,
+  body: unknown,
+  events: readonly StreamEvent[],
+): LegOutcome {
+  if (status !== 200) return fail(`http-${status}`, messageErrorMessage(body))
+
+  // For a streamed leg the runner passes `events`; for a non-streamed one it passes `body`. The
+  // synthesizer produces the same shape `asContent` reads.
+  const resolved = leg.stream ? synthesizedFromStream(events) : body
+  const parsed = parseObject(resolved)
+  if (parsed === null) return fail("unparsable-body")
+  const content = asContent(parsed)
+  if (content === undefined) return fail("malformed-body")
+  if (parsed.stop_reason === "max_tokens") return fail("truncated")
+
+  const view: MessageView = { stopReason: parsed.stop_reason, content }
+  return gradeMessagesByExpectation(leg, view)
+}
+
+interface MessageView {
+  readonly stopReason?: string
+  readonly content: ReadonlyArray<{ readonly type: string }>
+}
+
+function gradeMessagesByExpectation(leg: MessagesLeg, view: MessageView): LegOutcome {
+  switch (leg.expectation.kind) {
+    case "text":
+      return view.stopReason === "end_turn" && hasText(view)
+        ? pass()
+        : fail(view.stopReason === undefined ? "missing-stop-reason" : `stop-${view.stopReason}`)
+    case "forced_tool":
+    case "streamed_forced_tool":
+      return view.stopReason === "tool_use" && hasToolUseNamed(view, leg.expectation.name)
+        ? pass()
+        : fail(missingToolUseReason(view, leg.expectation.name))
+    case "tool_choice_any":
+      return view.stopReason === "tool_use" && hasAnyToolUse(view)
+        ? pass()
+        : fail(missingToolUseReason(view))
+    case "tool_round_trip":
+      return view.content.length > 0 ? pass() : fail("empty-round-trip-response")
+    case "reasoning_forced_tool":
+      return view.stopReason === "tool_use" && hasToolUseNamed(view, leg.expectation.name)
+        ? withThinking(pass(), view)
+        : fail(missingToolUseReason(view, leg.expectation.name, "missing-tool-use"))
+  }
+}
+
+function hasText(view: MessageView): boolean {
+  return view.content.some((block) => block.type === "text")
+}
+
+function hasToolUseNamed(view: MessageView, name: string): boolean {
+  return view.content.some(
+    (block) => block.type === "tool_use" && (block as { name?: unknown }).name === name,
   )
 }
 
-function hasAnyToolUse(parsed: ParsedMessage): boolean {
-  return parsed.content?.some((block) => block.type === "tool_use") ?? false
+function hasAnyToolUse(view: MessageView): boolean {
+  return view.content.some((block) => block.type === "tool_use")
 }
 
-function hasThinking(parsed: ParsedMessage): boolean {
-  return parsed.content?.some((block) => block.type === "thinking") ?? false
+function hasThinking(view: MessageView): boolean {
+  return view.content.some((block) => block.type === "thinking")
 }
 
-function missingToolUseReason(
-  parsed: ParsedMessage,
-  expectedName?: string,
-  extra?: string,
-): string {
+function missingToolUseReason(view: MessageView, expectedName?: string, extra?: string): string {
   const parts: string[] = []
-  if (parsed.stop_reason !== undefined && parsed.stop_reason !== "tool_use") {
-    parts.push(`stop-${parsed.stop_reason}`)
+  if (view.stopReason !== undefined && view.stopReason !== "tool_use") {
+    parts.push(`stop-${view.stopReason}`)
   }
-  if (!hasAnyToolUse(parsed)) {
+  if (!hasAnyToolUse(view)) {
     parts.push("missing-tool-use")
-  } else if (expectedName !== undefined && !hasToolUseNamed(parsed, expectedName)) {
-    parts.push(`wrong-tool`)
+  } else if (expectedName !== undefined && !hasToolUseNamed(view, expectedName)) {
+    parts.push("wrong-tool")
   }
   if (extra !== undefined) parts.push(extra)
   return parts.length === 0 ? "missing-tool-use" : parts.join(",")
+}
+
+function withThinking(outcome: LegOutcome, view: MessageView): LegOutcome {
+  return { ...outcome, thinkingPresent: hasThinking(view) }
 }
 
 function messageErrorMessage(body: unknown): string | undefined {
@@ -278,51 +223,63 @@ function messageErrorMessage(body: unknown): string | undefined {
   return message === undefined ? undefined : `error:${message}`
 }
 
-function openAiErrorMessage(body: unknown): string | undefined {
-  const parsed = parseObject(body) as OpenAiChatResponse | OpenAiResponsesResponse | null
-  const message = parsed?.error?.message
-  return message === undefined ? undefined : `error:${message}`
-}
-
-/**
- * Reconstructs the final Anthropic message body from a sequence of SSE events the runner collected.
- * The runner passes only the events it could parse as JSON; anything else is silently dropped.
- *
- * Merges `message_start`, every `content_block_start`/`content_block_delta` pair, and
- * `message_delta` (which carries `stop_reason`) into the same shape `parseObject` reads. The
- * returned value passes the same grader as a non-streamed body would.
- */
+/** Reconstructs the final Anthropic message body from SSE events: `message_delta.stop_reason`
+ * plus every `content_block_start`'s `content_block`. */
 function synthesizedFromStream(events: readonly StreamEvent[]): unknown {
   const out: {
     stop_reason?: string
     content: Array<{ type: string; [key: string]: unknown }>
   } = { content: [] }
-
   for (const evt of events) {
     if (evt.event === "message_delta") {
       const data = evt.data
       if (typeof data === "object" && data !== null) {
         const delta = data as { delta?: { stop_reason?: unknown } }
-        if (typeof delta.delta?.stop_reason === "string") {
-          out.stop_reason = delta.delta.stop_reason
-        }
+        if (typeof delta.delta?.stop_reason === "string") out.stop_reason = delta.delta.stop_reason
       }
     }
     if (evt.event === "content_block_start") {
       const data = evt.data
       if (typeof data === "object" && data !== null) {
         const block = data as { content_block?: { type?: unknown; [key: string]: unknown } }
-        if (
-          typeof block.content_block === "object" &&
-          block.content_block !== null &&
-          typeof block.content_block.type === "string"
-        ) {
-          out.content.push(block.content_block as { type: string; [key: string]: unknown })
+        const cb = block.content_block
+        if (typeof cb === "object" && cb !== null && typeof cb.type === "string") {
+          out.content.push(cb as { type: string; [key: string]: unknown })
         }
       }
     }
   }
   return out
+}
+
+function gradeChatCompletions(status: number, body: unknown): LegOutcome {
+  if (status !== 200) return fail(`http-${status}`, openAiErrorMessage(body))
+  const parsed = parseObject(body) as OpenAiChatResponse | null
+  if (parsed === null) return fail("unparsable-body")
+  const choice = parsed.choices?.[0]
+  if (choice === undefined) return fail("no-choice")
+  if (choice.finish_reason !== "tool_calls") {
+    return fail(`finish-${choice.finish_reason ?? "none"}`)
+  }
+  const toolCalls = choice.message?.tool_calls
+  if (toolCalls === undefined || toolCalls.length === 0) return fail("no-tool-calls")
+  return pass()
+}
+
+function gradeResponses(status: number, body: unknown): LegOutcome {
+  if (status !== 200) return fail(`http-${status}`, openAiErrorMessage(body))
+  const parsed = parseObject(body) as OpenAiResponsesResponse | null
+  if (parsed === null) return fail("unparsable-body")
+  const output = parsed.output
+  if (output === undefined || output.length === 0) return fail("no-output")
+  if (!output.some((item) => item.type === "function_call")) return fail("no-function-call")
+  return pass()
+}
+
+function openAiErrorMessage(body: unknown): string | undefined {
+  const parsed = parseObject(body) as OpenAiChatResponse | OpenAiResponsesResponse | null
+  const message = parsed?.error?.message
+  return message === undefined ? undefined : `error:${message}`
 }
 
 function pass(): LegOutcome {
