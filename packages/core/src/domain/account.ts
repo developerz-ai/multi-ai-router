@@ -151,6 +151,15 @@ export const QuotaWindowState = z.object({
   resetsAt: z.date().optional(),
   resetSource: ResetSource,
   lastCheckedAt: z.date(),
+  /**
+   * Display-only window — never takes the account out of rotation. Set by providers whose pool
+   * has a single account and the upstream may still serve past 100% (the ChatGPT `openai-luna`
+   * pool is the case in point: dropping a one-member pool on a header reading switches it off
+   * for up to seven days on the router's own say-so). Absent is `false`; every Claude-subscription
+   * window built today stays "blocks routing" because they were never marked. Distinct from
+   * `blocksRouting === false`, which is durable retirement evidence set by recovery.
+   */
+  advisory: z.boolean().optional(),
   /** Durable evidence metadata; providers never synthesize these fields. */
   revision: z.number().int().nonnegative().optional(),
   evidenceState: z.enum(["current", "expired", "superseded_by_recovery"]).optional(),

@@ -45,6 +45,7 @@ const TABLE_COLUMNS: ReadonlyArray<{ table: Table; columns: readonly string[] }>
       "id",
       "accountId",
       "window",
+      "advisory",
       "utilization",
       "utilizationSource",
       "resetsAt",

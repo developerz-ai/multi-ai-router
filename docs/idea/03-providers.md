@@ -327,10 +327,7 @@ tokens; a compatible vendor's Bearer key is just a key.
 | Required headers | `chatgpt-account-id: <account id>`, `originator: codex_cli_rs` |
 | Account-id claim | `https://api.openai.com/auth` → `chatgpt_account_id` (a top-level `chatgpt_account_id` is accepted as a fallback) |
 | Translated bodies | `stream: true` always, `instructions` always (`""` when there is no system prompt), `store: false`; `max_output_tokens`, `temperature`, `top_p` removed and reported as drops. Declared as `CODEX_RESPONSES_EGRESS` — see [06-protocol-translation.md](06-protocol-translation.md#surface-rules) |
-
-All of it lives in `providers/drivers/openai-oauth.ts`, including the two token requests as pure
-builders: the driver owns the *shapes*, the connect flow and the refresher own the fetch, the
-timers, and the single-flighting. A provider change touches that one file.
+| Usage gauge | Every reply carries the headers `x-codex-primary-used-percent` / `-window-minutes` / `-reset-at` and the same three with `secondary`. A complete set (all three present and parseable) maps to a `QuotaWindowState`: 300 minutes → `five_hour`, 10,080 minutes → `seven_day`; an unmatched minute count travels in `windows` as a `RateLimitWindow` under its own limiter name. The reading's time is the reply's own `Date` header, not an injected clock. Every named window is `advisory: true` so it never blocks routing — see [02-domain-model.md](02-domain-model.md#quota-window-state) and [05-routing-and-failover.md](05-routing-and-failover.md). Constants pinned in `providers/drivers/openai-oauth-quota.ts`; provenance openai/codex `codex-rs/codex-api/src/rate_limits.rs` lines 70..79 (2026-10-10). `reset-at` is epoch seconds |
 
 `offline_access` is what earns the refresh token; without it the account degrades to
 `needs_reauth` at first expiry. The refresh deliberately asks for less — it does not re-issue the

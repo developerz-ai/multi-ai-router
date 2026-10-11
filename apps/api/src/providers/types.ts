@@ -109,11 +109,13 @@ export interface RateLimitSignal {
    * `quota-window-spent`, `quota-aware`'s ranking, the console's per-window countdowns — reads what
    * lands there and nothing else.
    *
-   * Absent for every HTTP driver, and that absence is the design, not a gap: `requests` and
-   * `input-tokens` have no `QuotaWindowKind` equivalent, so naming one would record a fact the
-   * provider never stated. They travel as {@link windows}, keeping the provider's own word. Absent
-   * also differs from empty: absent says "nothing to report about named windows" and leaves what is
-   * already known standing, where `[]` would claim this account has none.
+   * Absent for every HTTP driver **except** the Codex one: `openai-oauth-quota.ts` parses the
+   * `x-codex-primary-*` / `-secondary-*` headers it already returns on every reply and maps them
+   * onto `five_hour` and `seven_day` (an unmatched minute count travels in {@link windows}).
+   * Each named window it builds is `advisory: true`, so it never blocks routing — see the field
+   * doc on `QuotaWindowState.advisory` and `services/routing/quota.ts`. Absent differs from
+   * empty: absent says "nothing to report about named windows" and leaves what is already known
+   * standing, where `[]` would claim this account has none.
    */
   readonly quotaWindows?: readonly QuotaWindowState[]
 }

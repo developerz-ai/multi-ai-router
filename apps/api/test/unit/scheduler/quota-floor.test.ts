@@ -40,6 +40,9 @@ function window(accountId: string, overrides: Partial<QuotaWindowRow> = {}): Quo
   return {
     revision: 0,
     retiredAt: null,
+    evidenceState: "current",
+    blocksRouting: true,
+    advisory: false,
     id: crypto.randomUUID(),
     accountId,
     window: "five_hour",

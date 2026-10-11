@@ -15,6 +15,9 @@ export function createQuotaWindowMutations(
         resetsAt: state.resetsAt ?? null,
         resetSource: state.resetSource,
         lastCheckedAt: state.lastCheckedAt,
+        // Marker survives persistence: provider passes it through, the catalog reload reads it back,
+        // the overlay hands it to the live routing snapshot. See `services/routing/quota.ts`.
+        advisory: state.advisory ?? false,
       }
       const incomingAt = sql`${state.lastCheckedAt.toISOString()}::timestamptz`
       const equalTime = sql`${quotaWindows.lastCheckedAt} = ${incomingAt}`

@@ -288,6 +288,10 @@ yet?"* — and both must be answerable without reading logs.
 SDK's own `rate_limit_event` stream events: `status`, `resetsAt`, `rateLimitType` (`five_hour`,
 `seven_day`, `seven_day_opus`, `seven_day_sonnet`), `utilization`, and overage fields. That is the
 **primary** source — we do not poll an HTTP usage endpoint to learn what the stream already told us.
+For ChatGPT/Codex OAuth accounts, the same vocabulary arrives in the response headers
+`x-codex-primary-used-percent` / `-window-minutes` / `-reset-at` (and `-secondary-*`); a complete
+set maps to `five_hour` / `seven_day`, and every such window is marked `advisory: true` (display
+only, never blocks routing — see [02-domain-model.md](02-domain-model.md#quota-window-state)).
 Other providers report through response headers, `Retry-After`, or a provider-specific balance field.
 
 Accepted readings retain their original account and recovery observation through persistence.

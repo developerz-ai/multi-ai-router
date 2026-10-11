@@ -17,6 +17,7 @@ import type {
 } from "../types"
 import { openAiDeviceFlow } from "./openai-oauth-device"
 import { CODEX_MODEL_FAMILY, codexModelListing } from "./openai-oauth-models"
+import { parseCodexQuotaHeaders } from "./openai-oauth-quota"
 
 // Pinned from the first-party Codex CLI (openai/codex `codex-rs/login`), cross-checked against
 // opencode's `plugin/openai/codex.ts` (2026-10-04). Blast radius for each: every ChatGPT account.
@@ -221,18 +222,24 @@ function resetsInSeconds(body: unknown): number | null {
   return parsed.data.error?.resets_in_seconds ?? parsed.data.resets_in_seconds ?? null
 }
 
-const LIMITED_NO_WINDOWS: RateLimitSignal = { limited: true, resetSource: "unknown", windows: [] }
-
 function parseCodexRateLimit(response: UpstreamResponse): RateLimitSignal | null {
   const fromHeaders = parseRateLimitHeaders(response)
   const seconds = resetsInSeconds(response.body)
-  if (seconds === null) return fromHeaders
+  const { quotaWindows, windows: extraWindows } = parseCodexQuotaHeaders(response)
+  // `extraWindows` are the unmatched-minute-count readings; they ride on `windows` whether or
+  // not the upstream also reported a 429. A successful reply still has them.
+  const baseSignal: RateLimitSignal =
+    fromHeaders === null
+      ? { limited: false, resetSource: "unknown", windows: extraWindows }
+      : { ...fromHeaders, windows: [...fromHeaders.windows, ...extraWindows] }
+  const signalWithQuota: RateLimitSignal =
+    quotaWindows.length === 0 ? baseSignal : { ...baseSignal, quotaWindows }
+  if (seconds === null) return signalWithQuota
 
-  const signal = fromHeaders ?? LIMITED_NO_WINDOWS
   return {
-    ...signal,
+    ...signalWithQuota,
     limited: true,
-    retryAfterSeconds: signal.retryAfterSeconds ?? seconds,
+    retryAfterSeconds: signalWithQuota.retryAfterSeconds ?? seconds,
     resetSource: "provider-reported",
   }
 }

@@ -647,7 +647,7 @@ stated.
 
 | Reading | Named by | Written by | Read by |
 |---|---|---|---|
-| **Quota window** — `five_hour`, `seven_day`, `seven_day_opus`, `seven_day_sonnet`, `overage` | The provider, in a vocabulary the router shares | `RateLimitSignal.quotaWindows`, folded by the health store. Today only the Claude subscription transport speaks it ([11-anthropic-agent-sdk.md](11-anthropic-agent-sdk.md) §5) | `quota-window-spent` in the filter, `quota-aware`, `router_quota_utilization`, the console's per-window gauges |
+| **Quota window** — `five_hour`, `seven_day`, `seven_day_opus`, `seven_day_sonnet`, `overage` | The provider, in a vocabulary the router shares | `RateLimitSignal.quotaWindows`, folded by the health store. The Claude subscription transport and the Codex OAuth transport speak it ([11-anthropic-agent-sdk.md](11-anthropic-agent-sdk.md) §5, [03-providers.md](03-providers.md#openai-oauth--chatgptcodex-subscription)) | `quota-window-spent` in the filter, `quota-aware`, `router_quota_utilization`, the console's per-window gauges. Advisory windows (`QuotaWindowState.advisory`) are *not* read by `quota-window-spent` — see [02-domain-model.md](02-domain-model.md#quota-window-state) for the display-only rule |
 | **Limiter reading** — `requests`, `input-tokens`, `tokens`, … | The provider, in its own words | `RateLimitSignal.windows`, parsed off every HTTP response | `quota-aware` only. It never filters an account: a limiter that hit zero has already cooled the breaker down |
 
 An HTTP limiter has no `QuotaWindowKind` equivalent, so it never becomes a quota window — but it is

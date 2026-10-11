@@ -130,6 +130,7 @@ test("atomic catalog hydrates private recovery and public-safe routing evidence"
     revision: 2,
     evidenceState: "expired",
     blocksRouting: false,
+    advisory: false,
     retiredAt: EPOCH,
     utilization: null,
     utilizationSource: "none",

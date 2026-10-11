@@ -49,6 +49,13 @@ export const quotaWindows = pgTable(
       .notNull()
       .default("current"),
     blocksRouting: boolean("blocks_routing").notNull().default(true),
+    /**
+     * Display-only marker. Distinct from `blocks_routing = false`, which is durable retirement
+     * evidence set by recovery; an advisory window still reads as `blocks_routing = true` here,
+     * and the routing layer (`services/routing/quota.ts`) drops it before `quota-window-spent`
+     * ever fires. Set by the Codex driver for headers it alone reads (`openai-oauth-quota.ts`).
+     */
+    advisory: boolean("advisory").notNull().default(false),
     retiredAt: timestamp("retired_at", { withTimezone: true, mode: "date" }),
 
     /** Fraction of the window consumed, 0..1. NULL is a valid, expected reading. */

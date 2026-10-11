@@ -19,6 +19,7 @@ import {
   openAiOAuthDriver,
   openAiOAuthRefresh,
   type ProviderCredential,
+  parseCodexQuotaHeaders,
   readOpenAiOAuthTokens,
 } from "../../../src/providers"
 import { account, response } from "./fixtures"
@@ -267,6 +268,136 @@ describe("Codex failure wording", () => {
       response(429, { body: { error: { resets_in_seconds: 45 } }, headers: {} }),
     )
     expect(signal?.retryAfterSeconds).toBe(45)
+  })
+})
+
+describe("parseCodexQuotaHeaders — x-codex-* usage gauge", () => {
+  const DATE = "Sat, 11 Oct 2026 12:00:00 GMT"
+  const dateHeaders = { date: DATE }
+  const futureReset = Math.floor(new Date("2026-10-11T17:00:00Z").getTime() / 1000)
+
+  function setQuotedHandler(headers: Record<string, string>) {
+    return response(200, { headers })
+  }
+
+  test("a 200 carrying both complete sets yields five_hour and seven_day windows, advisory", () => {
+    const parsed = parseCodexQuotaHeaders(
+      setQuotedHandler({
+        ...dateHeaders,
+        "x-codex-primary-used-percent": "12",
+        "x-codex-primary-window-minutes": "300",
+        "x-codex-primary-reset-at": String(futureReset),
+        "x-codex-secondary-used-percent": "60",
+        "x-codex-secondary-window-minutes": "10080",
+        "x-codex-secondary-reset-at": String(futureReset + 86_400),
+      }),
+    )
+    expect(parsed.quotaWindows).toHaveLength(2)
+    const fiveHour = parsed.quotaWindows.find((w) => w.window === "five_hour")
+    const sevenDay = parsed.quotaWindows.find((w) => w.window === "seven_day")
+    expect(fiveHour).toBeDefined()
+    expect(fiveHour?.utilization).toBeCloseTo(0.12)
+    expect(fiveHour?.utilizationSource).toBe("continuous")
+    expect(fiveHour?.resetSource).toBe("provider-reported")
+    expect(fiveHour?.resetsAt).toBeInstanceOf(Date)
+    expect(fiveHour?.advisory).toBe(true)
+    expect(sevenDay).toBeDefined()
+    expect(sevenDay?.utilization).toBeCloseTo(0.6)
+    expect(sevenDay?.advisory).toBe(true)
+  })
+
+  test("only the primary set yields a single five_hour window", () => {
+    const parsed = parseCodexQuotaHeaders(
+      setQuotedHandler({
+        ...dateHeaders,
+        "x-codex-primary-used-percent": "12",
+        "x-codex-primary-window-minutes": "300",
+        "x-codex-primary-reset-at": String(futureReset),
+      }),
+    )
+    expect(parsed.quotaWindows).toHaveLength(1)
+    expect(parsed.quotaWindows[0]?.window).toBe("five_hour")
+    expect(parsed.windows).toHaveLength(0)
+  })
+
+  test("neither set yields no windows", () => {
+    const parsed = parseCodexQuotaHeaders(setQuotedHandler({ ...dateHeaders }))
+    expect(parsed.quotaWindows).toHaveLength(0)
+    expect(parsed.windows).toHaveLength(0)
+  })
+
+  test("a non-numeric percent is dropped from the named window", () => {
+    const parsed = parseCodexQuotaHeaders(
+      setQuotedHandler({
+        ...dateHeaders,
+        "x-codex-primary-used-percent": "abc",
+        "x-codex-primary-window-minutes": "300",
+        "x-codex-primary-reset-at": String(futureReset),
+      }),
+    )
+    // The partial set cannot map onto a known kind, so it travels as a generic window.
+    expect(parsed.quotaWindows).toHaveLength(0)
+    expect(parsed.windows.some((w) => w.limiter === "primary")).toBe(true)
+  })
+
+  test("a reset-at earlier than the reply's Date still reports a window, and is not spent", () => {
+    const pastReset = Math.floor(new Date("2026-10-11T11:00:00Z").getTime() / 1000)
+    const parsed = parseCodexQuotaHeaders(
+      setQuotedHandler({
+        ...dateHeaders,
+        "x-codex-primary-used-percent": "50",
+        "x-codex-primary-window-minutes": "300",
+        "x-codex-primary-reset-at": String(pastReset),
+      }),
+    )
+    expect(parsed.quotaWindows).toHaveLength(1)
+    const window = parsed.quotaWindows[0]
+    expect(window?.window).toBe("five_hour")
+    expect(window?.resetsAt?.getTime()).toBe(pastReset * 1000)
+    // Advisory never blocks even when spent; that gate is `isWindowSpent`'s, not the parser's.
+    expect(window?.advisory).toBe(true)
+  })
+
+  test("a window length of 60 minutes is reported in `windows`, not in `quotaWindows`", () => {
+    const parsed = parseCodexQuotaHeaders(
+      setQuotedHandler({
+        ...dateHeaders,
+        "x-codex-primary-used-percent": "5",
+        "x-codex-primary-window-minutes": "60",
+        "x-codex-primary-reset-at": String(futureReset),
+      }),
+    )
+    expect(parsed.quotaWindows).toHaveLength(0)
+    expect(parsed.windows.some((w) => w.limiter === "primary-60m")).toBe(true)
+  })
+
+  test("no Date header yields no named windows", () => {
+    const parsed = parseCodexQuotaHeaders(
+      setQuotedHandler({
+        "x-codex-primary-used-percent": "12",
+        "x-codex-primary-window-minutes": "300",
+        "x-codex-primary-reset-at": String(futureReset),
+      }),
+    )
+    expect(parsed.quotaWindows).toHaveLength(0)
+    expect(parsed.windows).toHaveLength(0)
+  })
+
+  test("a 429 reply keeps the existing limited signal alongside any windows", () => {
+    const signal = codex.parseRateLimit(
+      setQuotedHandler({
+        ...dateHeaders,
+        "x-codex-primary-used-percent": "12",
+        "x-codex-primary-window-minutes": "300",
+        "x-codex-primary-reset-at": String(futureReset),
+        "x-codex-secondary-used-percent": "60",
+        "x-codex-secondary-window-minutes": "10080",
+        "x-codex-secondary-reset-at": String(futureReset + 86_400),
+      }),
+    )
+    // No 429 markers here; this is the 200 case asserting the signal carries the windows.
+    expect(signal?.quotaWindows).toHaveLength(2)
+    expect(signal?.limited).toBe(false)
   })
 })
 

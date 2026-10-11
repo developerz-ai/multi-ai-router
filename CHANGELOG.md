@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.25.0] — 2026-10-11
+
+### Added
+
+- **Codex usage gauge: `x-codex-primary-*` and `x-codex-secondary-*` headers on every ChatGPT reply are now parsed into the router's `QuotaWindowState` vocabulary.** A complete set (used-percent, window-minutes, reset-at) maps to `five_hour` (300 minutes) or `seven_day` (10,080 minutes); an unmatched minute count travels as a generic `RateLimitWindow`. Every named window carries `advisory: true`, a display-only marker that survives persistence: `isWindowSpent` returns `false` for it, so `quota-window-spent` never fires on a header reading. The rule exists because the `openai-luna` pool has one member — letting a 100% reading drop it would switch Luna off for up to seven days on the router's own say-so. The credits headers (`x-codex-credits-has-credits` / `-unlimited` / `-balance`) are deferred to #185. Schema: a new `advisory boolean NOT NULL DEFAULT false` column on `quota_windows` (migration `0032_quota_windows_advisory.sql`). Sibling file `apps/api/src/providers/drivers/openai-oauth-quota.ts` keeps `openai-oauth.ts` at its 300-line ceiling. Verified against the live upstream code (`openai/codex/codex-rs/codex-api/src/rate_limits.rs`, lines 70..79 on 2026-10-10). Docs: `docs/idea/02-domain-model.md` ("Quota window state"), `docs/idea/03-providers.md` ("`openai-oauth`"), `docs/idea/05-routing-and-failover.md` reading table, and `docs/idea/08-observability.md` ("Quota, resets, and manual re-check"). CLAUDE.md "33 migrations (through 0032)" reflects the new schema state. The unit suite (`apps/api/test/unit/providers/openai-oauth.test.ts`) pins every documented parse shape; the unit suite (`apps/api/test/unit/routing/quota-advisory.test.ts` and `apps/api/test/unit/recovery/quota-advisory-roundtrip.test.ts`) pins the marker on `isWindowSpent` and the in-memory round-trip through `toQuotaEvidence`.
+
 ## [2.24.0] — 2026-10-11
 
 ### Added
@@ -1058,3 +1064,4 @@ your tooling config.
 [2.12.2]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.12.2
 [1.0.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v1.0.0
 [2.24.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.24.0
+[2.25.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.25.0
