@@ -1,7 +1,8 @@
 /**
- * OpenAI-shape graders for `bin/smoke` (`/v1/chat/completions` and `/v1/responses`). They never
- * throw: a body whose `choices` / `output` shape is wrong is FAIL `malformed-body`. The elements of
- * `tool_calls` are not inspected. The runner's `driveLeg` wraps every call in a try/catch as a belt-and-braces backstop
+ * OpenAI-shape graders for `bin/smoke` (`/v1/chat/completions` and `/v1/responses`). A body whose
+ * `choices` / `output` shape is wrong is FAIL `malformed-body`; only `choices[0]` is graded and the
+ * elements of `tool_calls` are not inspected. A `finish_reason` or `error.message` that cannot be
+ * coerced to a string still throws; `driveLeg` catches it and reports FAIL `malformed-body:<error>`. The runner's `driveLeg` wraps every call in a try/catch as a belt-and-braces backstop
  * against anything the type guards below let through (a body whose `stop_reason` is a
  * non-coercible object, used in a template literal, still throws).
  */
