@@ -1,6 +1,7 @@
 /**
- * The eight legs `bin/smoke` drives and the request body each one sends. Pure data plus a function
- * that walks the leg's expectation kind. `grade.ts` reads these; nothing else does.
+ * The eight legs `bin/smoke` drives and the request body each one sends. Pure data plus body
+ * builders that match the leg's expectation kind and endpoint. `grade.ts` reads the legs;
+ * nothing else does.
  *
  * The `required` flag gates the exit code: every Messages leg is required, and the two OpenAI
  * legs are informational (an account may legitimately refuse them). The flag lives on every leg
@@ -163,31 +164,28 @@ function buildMessagesBody(expectation: MessagesExpectation, model: string): unk
   }
 }
 
-function buildChatCompletionsBody(expectation: OpenAiExpectation, model: string): unknown {
-  switch (expectation.kind) {
-    case "chat_completions_required_tool":
-      return {
-        model,
-        tools: [
-          {
-            type: "function",
-            function: {
-              name: TOOL_NAME,
-              description: "Return the current weather for a city.",
-              parameters: {
-                type: "object",
-                properties: { city: { type: "string" } },
-                required: ["city"],
-              },
-            },
+function buildChatCompletionsBody(
+  _expectation: Extract<OpenAiExpectation, { kind: "chat_completions_required_tool" }>,
+  model: string,
+): unknown {
+  return {
+    model,
+    tools: [
+      {
+        type: "function",
+        function: {
+          name: TOOL_NAME,
+          description: "Return the current weather for a city.",
+          parameters: {
+            type: "object",
+            properties: { city: { type: "string" } },
+            required: ["city"],
           },
-        ],
-        tool_choice: "required",
-        messages: [{ role: "user", content: "Weather in Paris?" }],
-      }
-    case "responses_function_call":
-      // The /v1/responses leg uses the OpenAI Responses shape. Falls through below.
-      return buildResponsesBody(expectation, model)
+        },
+      },
+    ],
+    tool_choice: "required",
+    messages: [{ role: "user", content: "Weather in Paris?" }],
   }
 }
 
