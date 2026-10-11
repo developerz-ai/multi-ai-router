@@ -7,12 +7,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [2.24.0] — 2026-10-11
-
-### Added
-
-- **`bin/smoke`, a one-command live check against a deployed router.** Sends the same six legs the router promises end to end (`/v1/messages`: plain text, forced tool call, `tool_choice: any`, the tool-result round trip, a streamed forced tool, and reasoning plus a forced tool) plus two informational legs on `/v1/chat/completions` and `/v1/responses` that an account may legitimately refuse and that never gate the exit code. The grader is a pure function in `apps/api/smoke/grade.ts`; no request or response body is logged in full, just the leg name, status and verdict reason. Reads the API key from the named environment variable only — the key is never accepted as an argument and never printed. Exit codes: `0` every required leg PASS, `1` any required FAIL, `2` no FAIL but at least one INCONCLUSIVE (key unset, DNS, timeout), `64` usage error. Docs: `docs/clients.md` ("Run the live check"); CLAUDE.md Commands table. The unit suite (`apps/api/test/unit/smoke/grade.test.ts`) pins the grader's verdicts for every documented shape; the integration suite (`apps/api/test/integration/smoke.test.ts`) drives the runner end to end against a mocked upstream so no real provider is ever reached.
-
 ## [2.23.6] — 2026-10-07
 
 ### Fixed
@@ -1057,4 +1051,3 @@ your tooling config.
 [2.13.1]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.13.1
 [2.12.2]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.12.2
 [1.0.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v1.0.0
-[2.24.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.24.0
