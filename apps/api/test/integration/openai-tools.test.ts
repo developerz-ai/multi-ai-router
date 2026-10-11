@@ -8,7 +8,7 @@ import { bearer, CRYPTOR, harness, post, settle } from "./harness"
  * The Codex / Responses integration tests in `codex-translate.test.ts` cover text-only traffic;
  * these tests pin what production must reach on the tool-calling path the GPT-6 models will use
  * (`/v1/messages` → `openai-oauth` account, plus `openai-api` accounts pinned to `openai-responses`).
- * No real provider is reached; the upstream is a script that returns canned Responses SSE bytes
+ * No real provider is reached; the upstream is a script that returns canned Responses bytes (SSE, and JSON for one chat case)
  * (the openai-oauth egress forces a stream; openai-api may return JSON or SSE) and the response
  * translator reads whichever shape arrives.
  *
@@ -332,6 +332,8 @@ describe("openai-oauth: /v1/messages with a forced tool call", () => {
       post(
         JSON.stringify({
           ...MESSAGES_BODY,
+          temperature: 0.2,
+          top_p: 0.9,
           tool_choice: { type: "tool", name: "get_weather" },
         }),
         bearer(),
@@ -359,8 +361,7 @@ describe("openai-oauth: /v1/messages with a forced tool call", () => {
     expect(sent.stream).toBe(true)
     expect(typeof sent.instructions).toBe("string")
     expect("max_output_tokens" in sent).toBe(false)
-    // sampling fields were never sent (the request body omits them), so they cannot be present
-    // upstream; the assertion is present to catch a regression that injects them.
+    // The client sent temperature and top_p; CODEX_RESPONSES_EGRESS strips both on the way out.
     expect("temperature" in sent).toBe(false)
     expect("top_p" in sent).toBe(false)
     expect("reasoning_effort" in sent).toBe(false)
@@ -381,7 +382,7 @@ describe("openai-oauth: /v1/messages with a forced tool call", () => {
   })
 
   test("stream — the client's Anthropic SSE carries content_block_start of type tool_use and message_delta with stop_reason tool_use", async () => {
-    const { app, usage } = harness({
+    const { app, upstream, usage } = harness({
       accounts: [codexAccount()],
       responses: [
         () =>
@@ -449,7 +450,15 @@ describe("openai-oauth: /v1/messages with a forced tool call", () => {
       }
     }
     expect(stopSeen).toBe(true)
-    expect(JSON.parse(inputDeltas.join("") || "{}")).toEqual({ city: "Paris" })
+    expect(inputDeltas.length).toBeGreaterThan(0)
+    expect(JSON.parse(inputDeltas.join(""))).toEqual({ city: "Paris" })
+
+    const sent = sentBody(upstream)
+    expect((sent.tools as ReadonlyArray<{ type: string; name?: string }>)[0]).toMatchObject({
+      type: "function",
+      name: "get_weather",
+    })
+    expect(sent.tool_choice).toEqual({ type: "function", name: "get_weather" })
 
     await settle()
     expect(usage.rows).toHaveLength(1)
@@ -517,12 +526,15 @@ describe("openai-oauth: /v1/messages with tool_choice any", () => {
     expect(res.headers.get("content-type")).toContain("text/event-stream")
     const text = await res.text()
     expect(text).toContain('"stop_reason":"tool_use"')
-    // Also assert the content_block_start tool_use on the stream leg.
-    expect(text).toMatch(/"type":"tool_use"/)
-    expect(text).toContain("event: content_block_start")
+    const toolUseStart = parseSseEvents(text)
+      .filter((e) => e.event === "content_block_start")
+      .map((e) => JSON.parse(e.data) as { content_block?: { type?: string; id?: string } })
+      .find((p) => p.content_block?.type === "tool_use")
+    expect(toolUseStart?.content_block?.id).toBe("call_1")
 
     const sent = sentBody(upstream)
     expect(sent.tool_choice).toBe("required")
+    expect((sent.tools as ReadonlyArray<{ name?: string }>)[0]?.name).toBe("get_weather")
 
     await settle()
     expect(usage.rows).toHaveLength(1)
@@ -796,6 +808,19 @@ describe("openai-oauth: /v1/messages reasoning shapes (per primary case)", () =>
         : body
     const res = await h.app.request("/v1/messages", post(JSON.stringify(reqBody), bearer()))
     await settle()
+    // Every shape must still serve the case: the client body is checked here, and the usage row
+    // keeps its outcome and cost basis under both reasoning shapes.
+    const client = (await res.clone().json()) as {
+      stop_reason: string
+      content: ReadonlyArray<{ type: string; id?: string; input?: unknown }>
+    }
+    const isFollowUp = body === FOLLOWUP_BODY
+    expect(client.stop_reason).toBe(isFollowUp ? "end_turn" : "tool_use")
+    if (!isFollowUp) {
+      const first = client.content.find((block) => block.type === "tool_use")
+      expect(first?.id).toBe("call_1")
+    }
+    expect(h.usage.rows[0]).toMatchObject({ outcome: "success", costBasis: "notional" })
     return { res, ...h, sent: sentBody(h.upstream) }
   }
 
@@ -1111,6 +1136,8 @@ describe("/v1/chat/completions with tools into a Responses-speaking account", ()
 
     const sent = sentBody(upstream)
     expect(sent.tool_choice).toBe("required")
+    // The JSON reply above is only realistic because openai-api does not force a stream.
+    expect(sent.stream).not.toBe(true)
 
     await settle()
     expect(usage.rows).toHaveLength(1)
@@ -1163,9 +1190,12 @@ describe("/v1/chat/completions with tools into a Responses-speaking account", ()
     expect(res.headers.get("content-type")).toContain("text/event-stream")
     const text = await res.text()
     expect(text).toContain('"finish_reason":"tool_calls"')
+    expect(text).toContain('"name":"get_weather"')
+    expect(text).toContain('"id":"call_1"')
 
     const sent = sentBody(upstream)
     expect(sent.tool_choice).toBe("required")
+    expect(sent.stream).toBe(true)
 
     await settle()
     expect(usage.rows).toHaveLength(1)

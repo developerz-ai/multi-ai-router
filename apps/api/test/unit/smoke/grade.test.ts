@@ -424,6 +424,14 @@ describe("grade — responses malformed body", () => {
     expect(outcome.reason).toBe("malformed-body")
   })
 
+  test("FAIL malformed-body when one output element is null beside a function_call", () => {
+    const outcome = grade(responsesLeg({ kind: "responses_function_call" }), 200, {
+      output: [null, { type: "function_call", call_id: "call_1", name: "get_weather" }],
+    })
+    expect(outcome.verdict).toBe("FAIL")
+    expect(outcome.reason).toBe("malformed-body")
+  })
+
   test("FAIL malformed-body when output is null", () => {
     const outcome = grade(responsesLeg({ kind: "responses_function_call" }), 200, {
       output: null,

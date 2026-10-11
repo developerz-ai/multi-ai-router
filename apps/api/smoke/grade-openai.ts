@@ -1,7 +1,8 @@
 /**
- * OpenAI-shape graders for `bin/smoke` (`/v1/chat/completions` and `/v1/responses`). Total: a body
- * that does not match the documented shape is FAIL `malformed-body`, not a throw that escapes the
- * runner. The runner's `driveLeg` wraps every call in a try/catch as a belt-and-braces backstop
+ * OpenAI-shape graders for `bin/smoke` (`/v1/chat/completions` and `/v1/responses`). A body whose
+ * `choices` / `output` shape is wrong is FAIL `malformed-body`; only `choices[0]` is graded and the
+ * elements of `tool_calls` are not inspected. A `finish_reason` or `error.message` that cannot be
+ * coerced to a string still throws; `driveLeg` catches it and reports FAIL `malformed-body:<error>`. The runner's `driveLeg` wraps every call in a try/catch as a belt-and-braces backstop
  * against anything the type guards below let through (a body whose `stop_reason` is a
  * non-coercible object, used in a template literal, still throws).
  */
@@ -48,18 +49,16 @@ export function gradeResponses(status: number, body: unknown): LegOutcome {
   if (parsed === null) return fail("unparsable-body")
   const rawOutput = parsed.output
   if (!Array.isArray(rawOutput)) return fail("malformed-body")
-  // Filter out null and non-object items: an array of nulls, an array of strings, or anything else
-  // that is not a `{type:string}` object is FAIL `malformed-body`. An empty array stays as
-  // `no-output` (the documented "the upstream gave us nothing" shape).
+  // Every element must be a `{type: string}` object; one bad element makes the whole body
+  // malformed, the same per-element rule the Messages grader applies to `content`. An empty array
+  // stays `no-output` (the documented "the upstream gave us nothing" shape).
   if (rawOutput.length === 0) return fail("no-output")
-  const items = rawOutput.filter(
-    (item): item is { type: string } =>
-      item !== null &&
-      typeof item === "object" &&
-      typeof (item as { type?: unknown }).type === "string",
-  )
-  if (items.length === 0) return fail("malformed-body")
-  if (!items.some((item) => item.type === "function_call")) return fail("no-function-call")
+  const wellFormed = (item: unknown): item is { type: string } =>
+    item !== null &&
+    typeof item === "object" &&
+    typeof (item as { type?: unknown }).type === "string"
+  if (!rawOutput.every(wellFormed)) return fail("malformed-body")
+  if (!rawOutput.some((item) => item.type === "function_call")) return fail("no-function-call")
   return pass()
 }
 
