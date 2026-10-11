@@ -33,19 +33,18 @@ describe("isWindowSpent — the advisory marker", () => {
     expect(isWindowSpent(windowAt({ advisory: true }), NOW)).toBe(false)
   })
 
-  test("the marker is sticky across an in-flight reading; a stale non-advisory reading cannot un-mark", () => {
-    // The held window was advisory and reported 100% — never blocked. A non-advisory reading
-    // that arrives with the same clock does not flip the held result: the overlay code path
-    // (`mergeQuotaEvidence`) is its own concern; this file pins the gating function only.
+  test("the marker is the only thing standing between an at-100% window and a block", () => {
+    // Two identical windows except for the marker — one blocks, one does not. Proves the marker
+    // is the gate, not anything else about the reading (utilization 1, future reset, continuous).
     const advisory = windowAt({ advisory: true, utilization: 1 })
     expect(isWindowSpent(advisory, NOW)).toBe(false)
-    // A non-advisory reading for the same window still blocks — proves the marker is the
-    // only thing standing between this case and a 100%-block.
     const nonAdvisory = windowAt({ advisory: false, utilization: 1 })
     expect(isWindowSpent(nonAdvisory, NOW)).toBe(true)
   })
 
   test("an advisory window whose reset has passed still reads as not spent", () => {
+    // Even a past reset does not flip an advisory window to blocking — the marker keeps it
+    // display-only for the lifetime of the row.
     const pastReset = new Date(NOW.getTime() - 60_000)
     expect(
       isWindowSpent(windowAt({ advisory: true, resetsAt: pastReset, utilization: 0.95 }), NOW),

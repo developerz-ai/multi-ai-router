@@ -309,6 +309,12 @@ is rendered next to every utilization figure** rather than hidden — a gauge wi
 independently, so each Account exposes a row per window — utilization, reset timestamp, and which
 window is currently the blocking one.
 
+**Advisory windows stay read-as-available even when at capacity.** A Codex window carries
+`advisory: true` because the `openai-luna` pool has a single account and a 100% header reading
+must not park the pool for up to seven days on the router's own say-so. The admin view's
+`spent` field therefore reads `false` for an advisory window regardless of utilization —
+it is the marker, not the number, that the display-only ruling is recorded against.
+
 **Every reset timestamp carries its source, labeled.** A guessed reset shown as fact is worse than no
 reset at all.
 

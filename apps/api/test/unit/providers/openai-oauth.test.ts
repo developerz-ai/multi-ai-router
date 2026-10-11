@@ -326,7 +326,7 @@ describe("parseCodexQuotaHeaders — x-codex-* usage gauge", () => {
     expect(parsed.windows).toHaveLength(0)
   })
 
-  test("a non-numeric percent is dropped from the named window", () => {
+  test("a non-numeric percent is dropped — no named window, no partial limiter entry", () => {
     const parsed = parseCodexQuotaHeaders(
       setQuotedHandler({
         ...dateHeaders,
@@ -335,9 +335,10 @@ describe("parseCodexQuotaHeaders — x-codex-* usage gauge", () => {
         "x-codex-primary-reset-at": String(futureReset),
       }),
     )
-    // The partial set cannot map onto a known kind, so it travels as a generic window.
+    // The set is incomplete: a malformed used-percent cannot claim a kind, and partial sets
+    // must not become numbers ranking would consume. No window is produced.
     expect(parsed.quotaWindows).toHaveLength(0)
-    expect(parsed.windows.some((w) => w.limiter === "primary")).toBe(true)
+    expect(parsed.windows).toHaveLength(0)
   })
 
   test("a reset-at earlier than the reply's Date still reports a window, and is not spent", () => {
@@ -383,21 +384,82 @@ describe("parseCodexQuotaHeaders — x-codex-* usage gauge", () => {
     expect(parsed.windows).toHaveLength(0)
   })
 
-  test("a 429 reply keeps the existing limited signal alongside any windows", () => {
-    const signal = codex.parseRateLimit(
+  test("an out-of-range reset-at (epoch overflow) produces no window at all", () => {
+    // 99999999999999999 * 1000 overflows Date's range; the resulting `new Date(...)` is an Invalid
+    // Date. Any window that consumed it would throw a RangeError at .toISOString() time. The parser
+    // refuses the set entirely instead of poisoning downstream callers.
+    const parsed = parseCodexQuotaHeaders(
       setQuotedHandler({
         ...dateHeaders,
         "x-codex-primary-used-percent": "12",
         "x-codex-primary-window-minutes": "300",
-        "x-codex-primary-reset-at": String(futureReset),
-        "x-codex-secondary-used-percent": "60",
-        "x-codex-secondary-window-minutes": "10080",
-        "x-codex-secondary-reset-at": String(futureReset + 86_400),
+        "x-codex-primary-reset-at": "99999999999999999",
       }),
     )
-    // No 429 markers here; this is the 200 case asserting the signal carries the windows.
+    expect(parsed.quotaWindows).toHaveLength(0)
+    expect(parsed.windows).toHaveLength(0)
+  })
+})
+
+describe("codex.parseRateLimit — the signal assembly", () => {
+  const DATE = "Sat, 11 Oct 2026 12:00:00 GMT"
+  const dateHeaders = { date: DATE }
+  const futureReset = Math.floor(new Date("2026-10-11T17:00:00Z").getTime() / 1000)
+
+  test("a 200 carrying both complete x-codex sets reports two quotaWindows and not limited", () => {
+    const signal = codex.parseRateLimit(
+      response(200, {
+        headers: {
+          ...dateHeaders,
+          "x-codex-primary-used-percent": "12",
+          "x-codex-primary-window-minutes": "300",
+          "x-codex-primary-reset-at": String(futureReset),
+          "x-codex-secondary-used-percent": "60",
+          "x-codex-secondary-window-minutes": "10080",
+          "x-codex-secondary-reset-at": String(futureReset + 86_400),
+        },
+      }),
+    )
     expect(signal?.quotaWindows).toHaveLength(2)
     expect(signal?.limited).toBe(false)
+  })
+
+  test("a 200 carrying no headers at all returns null — nothing to fold", () => {
+    // The change must not invent a signal where there was none: the prior parseRateLimitHeaders
+    // returned null, foldRateLimit short-circuits on null, and an idle account stays idle.
+    expect(codex.parseRateLimit(response(200, {}))).toBeNull()
+  })
+
+  test("a 200 carrying only a Date header returns null — the gauge is partial", () => {
+    // A complete set is all three headers for one slot; the Date alone is not a reading.
+    expect(codex.parseRateLimit(response(200, { headers: dateHeaders }))).toBeNull()
+  })
+
+  test("a 429 with the x-codex headers and `resets_in_seconds` is limited, provider-reported, and carries two quotaWindows", () => {
+    const signal = codex.parseRateLimit(
+      response(429, {
+        headers: {
+          ...dateHeaders,
+          "x-codex-primary-used-percent": "100",
+          "x-codex-primary-window-minutes": "300",
+          "x-codex-primary-reset-at": String(futureReset),
+          "x-codex-secondary-used-percent": "100",
+          "x-codex-secondary-window-minutes": "10080",
+          "x-codex-secondary-reset-at": String(futureReset + 86_400),
+        },
+        body: { resets_in_seconds: 120 },
+      }),
+    )
+    expect(signal?.limited).toBe(true)
+    expect(signal?.retryAfterSeconds).toBe(120)
+    expect(signal?.resetSource).toBe("provider-reported")
+    expect(signal?.quotaWindows).toHaveLength(2)
+    // Each window is still advisory: a 100% reading does not block, and the operator's
+    // display-only ruling survives the 429 path.
+    for (const window of signal?.quotaWindows ?? []) {
+      expect(window.advisory).toBe(true)
+      expect(window.utilization).toBe(1)
+    }
   })
 })
 
