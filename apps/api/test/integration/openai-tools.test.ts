@@ -287,7 +287,8 @@ describe("openai-oauth: /v1/messages with a forced tool call", () => {
     }
     expect(body.stop_reason).toBe("tool_use")
     expect(body.content).toHaveLength(1)
-    const toolUse = body.content[0]!
+    const toolUse = body.content[0]
+    if (toolUse === undefined) throw new Error("expected one tool_use block")
     expect(toolUse.type).toBe("tool_use")
     expect(toolUse.name).toBe("get_weather")
 
@@ -455,7 +456,7 @@ describe("openai-oauth: /v1/messages with a tool_result follow-up", () => {
 
 describe("openai-oauth: /v1/messages with parallel tool calls", () => {
   test("non-stream — upstream returns two function_calls; client receives two tool_use blocks", async () => {
-    const { app, upstream, usage } = harness({
+    const { app, usage } = harness({
       accounts: [codexAccount()],
       responses: [
         () =>
