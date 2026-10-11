@@ -228,10 +228,12 @@ describe("grade — reasoning + forced tool", () => {
         ],
       },
     )
-    expect(outcome).toEqual({ verdict: "PASS" })
+    expect(outcome).toEqual({ verdict: "PASS", thinkingPresent: true })
   })
 
-  test("FAIL when the thinking block is missing", () => {
+  test("PASS on a tool_use block with no thinking block — adaptive thinking is optional", () => {
+    // Per the Luna spec: adaptive thinking makes the thinking block optional. The grader
+    // grades on the tool call alone and reports thinking presence as information.
     const outcome = grade(
       messagesLeg({ kind: "reasoning_forced_tool", name: "get_weather" }),
       200,
@@ -240,8 +242,59 @@ describe("grade — reasoning + forced tool", () => {
         content: [{ type: "tool_use", name: "get_weather", input: { city: "Paris" } }],
       },
     )
+    expect(outcome).toEqual({ verdict: "PASS", thinkingPresent: false })
+  })
+
+  test("FAIL when stop_reason is wrong and there is no tool_use", () => {
+    const outcome = grade(
+      messagesLeg({ kind: "reasoning_forced_tool", name: "get_weather" }),
+      200,
+      {
+        stop_reason: "end_turn",
+        content: [{ type: "thinking", thinking: "the user asked about weather" }],
+      },
+    )
     expect(outcome.verdict).toBe("FAIL")
-    expect(outcome.reason).toContain("missing-thinking")
+    expect(outcome.reason).toContain("stop-end_turn")
+    expect(outcome.reason).toContain("missing-tool-use")
+  })
+})
+
+describe("grade — malformed body", () => {
+  test("FAIL with reason malformed-body when content is a string", () => {
+    const outcome = grade(messagesLeg({ kind: "text" }), 200, {
+      stop_reason: "end_turn",
+      content: "not-an-array",
+    })
+    expect(outcome.verdict).toBe("FAIL")
+    expect(outcome.reason).toBe("malformed-body")
+  })
+
+  test("FAIL with reason malformed-body when content is an array containing null", () => {
+    const outcome = grade(messagesLeg({ kind: "text" }), 200, {
+      stop_reason: "end_turn",
+      content: [null],
+    })
+    expect(outcome.verdict).toBe("FAIL")
+    expect(outcome.reason).toBe("malformed-body")
+  })
+
+  test("FAIL with reason malformed-body when content is null", () => {
+    const outcome = grade(messagesLeg({ kind: "text" }), 200, {
+      stop_reason: "end_turn",
+      content: null,
+    })
+    expect(outcome.verdict).toBe("FAIL")
+    expect(outcome.reason).toBe("malformed-body")
+  })
+
+  test("FAIL with reason malformed-body when a content block has no string type", () => {
+    const outcome = grade(messagesLeg({ kind: "text" }), 200, {
+      stop_reason: "end_turn",
+      content: [{ type: 42 }],
+    })
+    expect(outcome.verdict).toBe("FAIL")
+    expect(outcome.reason).toBe("malformed-body")
   })
 })
 

@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.25.1] — 2026-10-11
+
+### Fixed
+
+- **`bin/smoke` follow-ups from the #186 review.** The redaction test now drives the real runner with a real env var and asserts the key never reaches plain stdout, plain stderr, or the JSON `keyEnv` field — the earlier test pinned a value (`sk-test`) that never entered the runner and passed regardless of what the runner printed. A new subprocess test (`bun spawn` of `apps/api/smoke/run.ts`) covers what `main()` itself writes. The reasoning leg sends `thinking: {type: "adaptive"}` plus `output_config: {effort: "low"}` (the spec the Luna route returned on 2026-10-11) and grades PASS on a `tool_use` block alone — adaptive makes the block optional, and the Responses-translated route never returns one when the upstream gives no summary text. The grader reports thinking presence as `thinking=yes` / `thinking=no` on the report line. The runner now sits outside the fetch `try`, so a malformed body grades FAIL `malformed-body` and exits 1 — every `content` shape the runner reads (`"x"`, `[null]`, missing type) is guarded, and the old `as` cast on `parseObject` is gone. `parseArgs` refuses `--key-env` values that are not identifiers or that start with `ROUTER_KEY_PREFIX` (`mar_live_`), and reports "unknown option at position N" without echoing the typed value, so `--key=abc` and `--key-env "$KEY"` are usage errors that never print the value. The runner file split (`args.ts`, `legs.ts`, `sse.ts`, `report.ts`, `grade.ts`, `run.ts`) keeps every file under the 300-line ceiling in `CLAUDE.md`; `run.ts` is now the composition root. `2.24.0` was not released. Docs: `docs/clients.md` ("Run the live check"). The unit suite (`apps/api/test/unit/smoke/grade.test.ts`) pins the grader's verdict for every documented shape, including the malformed-body and thinking-optional cases; the integration suite (`apps/api/test/integration/smoke.test.ts`) drives the runner end to end, asserts `harness().upstream.calls` carries `tools`, the mapped `tool_choice` and the reasoning effort upstream, and spawns `bin/smoke` as a subprocess for the redaction check. Refs #183, #186.
+
 ## [2.25.0] — 2026-10-11
 
 ### Added
@@ -17,7 +23,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 A pin-back to `2.24.x` or `2.23.6` keeps the new `quota_windows.advisory` column but the older `toQuotaEvidence` drops the marker on read. Any `openai-oauth` window persisted at `advisory = true` while on 2.25.0 falls back to the old path: a 100% reading with a future reset will block the one-member `openai-luna` pool as `quota-window-spent` until either reset-at (up to seven days for `seven_day`) or a manual **Re-check** on the account retires the window through the recovery path. Before a pin-back: either retire the affected windows first (operator `Re-check` after the utilization comes back under the threshold) or accept the temporary single-account outage. Cross-reference #185.
 
-## [2.24.0] — 2026-10-11
+## [2.24.0] — 2026-10-11 (not released; superseded by 2.25.1)
 
 ### Added
 
