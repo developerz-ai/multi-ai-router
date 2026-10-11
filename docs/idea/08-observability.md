@@ -124,8 +124,8 @@ rows in `services/cost/tables/openai.ts`, one per model, with the same long-cont
 (272k input tokens) the GPT-5.6 rows use. Provenance: the model pages under
 `https://developers.openai.com/api/docs/models/`, read 2026-10-10. The page-published long-context
 rule is 2× input and cache, 1.5× output, for the whole request; the code applies the long card
-when `tokensIn >= 272,000`, the same threshold the GPT-5.6 rows already use. `gpt-reserve` and
-`codex-auto-review` stay unpriced — neither page publishes a number.
+once the prompt (`tokensIn + cacheReadTokens + cacheWriteTokens`) reaches 272,000, the same threshold the GPT-5.6 rows already use. `gpt-reserve` and
+`codex-auto-review` stay unpriced — no published price was found for either.
 
 ### The four providers that ship no price
 

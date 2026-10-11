@@ -1,7 +1,7 @@
 /**
- * OpenAI-shape graders for `bin/smoke` (`/v1/chat/completions` and `/v1/responses`). Total: a body
- * that does not match the documented shape is FAIL `malformed-body`, not a throw that escapes the
- * runner. The runner's `driveLeg` wraps every call in a try/catch as a belt-and-braces backstop
+ * OpenAI-shape graders for `bin/smoke` (`/v1/chat/completions` and `/v1/responses`). They never
+ * throw: a body whose `choices` / `output` shape is wrong is FAIL `malformed-body`. The elements of
+ * `tool_calls` are not inspected. The runner's `driveLeg` wraps every call in a try/catch as a belt-and-braces backstop
  * against anything the type guards below let through (a body whose `stop_reason` is a
  * non-coercible object, used in a template literal, still throws).
  */
@@ -57,8 +57,7 @@ export function gradeResponses(status: number, body: unknown): LegOutcome {
     typeof item === "object" &&
     typeof (item as { type?: unknown }).type === "string"
   if (!rawOutput.every(wellFormed)) return fail("malformed-body")
-  const items = rawOutput
-  if (!items.some((item) => item.type === "function_call")) return fail("no-function-call")
+  if (!rawOutput.some((item) => item.type === "function_call")) return fail("no-function-call")
   return pass()
 }
 
