@@ -127,8 +127,10 @@ export function parseCodexQuotaHeaders(response: UpstreamResponse): {
       resetsAt: new Date(resetAtEpochSeconds * 1000),
       resetSource: "provider-reported",
       lastCheckedAt,
-      // Display-only: see file docstring. Routing still has the eligible-window-spent gate on the
-      // upstream's own 429, so a stale 100% reading cannot masquerade as a healthy router.
+      // Display-only: see file docstring. The `advisory` flag makes `isWindowSpent` return
+      // false for this reading, so a 100% utilization cannot drop the account out of rotation.
+      // A 429 still cools the account through the breaker — that path is unchanged and triggers
+      // on the upstream's own rate-limit response, not on this header reading.
       advisory: true,
     })
   }
@@ -148,9 +150,11 @@ function parsePercent(value: string | null): number | null {
   const parsed = NumberString.safeParse(value)
   if (!parsed.success) return null
   const n = parsed.data
-  // A safe integer in `[0, ∞)` keeps downstream clamp01 honest. Out-of-range or non-finite
-  // would either poison the gauge or trip an Invalid Date elsewhere; the parser refuses instead.
-  if (!Number.isSafeInteger(n) || n < 0) return null
+  // Used-percent is a float: openai/codex `codex-rs/codex-api/src/rate_limits.rs` declares
+  // `used_percent: f64` and its own fixture sends `12.5`. Downstream `clamp01(usedPercent/100)`
+  // caps any value above 100 at 1, so out-of-range isn't a parse concern; negative and
+  // non-finite are, because either would poison the gauge or trip an Invalid Date elsewhere.
+  if (!Number.isFinite(n) || n < 0) return null
   return n
 }
 

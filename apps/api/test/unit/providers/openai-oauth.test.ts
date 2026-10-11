@@ -399,6 +399,43 @@ describe("parseCodexQuotaHeaders — x-codex-* usage gauge", () => {
     expect(parsed.quotaWindows).toHaveLength(0)
     expect(parsed.windows).toHaveLength(0)
   })
+
+  test("a float used-percent (12.5) yields a five_hour window with utilization 0.125", () => {
+    // Upstream publishes used-percent as a float (`used_percent: f64` in codex-rs
+    // `rate_limits.rs`); its own fixture sends `12.5`. A safe-integer parser would drop the
+    // whole set, leaving the operator's view empty. The parser accepts any finite >= 0 and
+    // downstream `clamp01` caps out-of-range, so 12.5 → 0.125 survives unchanged.
+    const parsed = parseCodexQuotaHeaders(
+      setQuotedHandler({
+        ...dateHeaders,
+        "x-codex-primary-used-percent": "12.5",
+        "x-codex-primary-window-minutes": "300",
+        "x-codex-primary-reset-at": String(futureReset),
+      }),
+    )
+    expect(parsed.quotaWindows).toHaveLength(1)
+    const window = parsed.quotaWindows[0]
+    expect(window?.window).toBe("five_hour")
+    expect(window?.utilization).toBeCloseTo(0.125)
+  })
+
+  test("a reset-at whose milliseconds overflow Date's range produces no window at all", () => {
+    // 9000000000000 * 1000 = 9e15, above Date's 8.64e15 max. The value is a Number safe
+    // integer so the integer check alone would accept it, but the Date built from it is
+    // Invalid (`getTime()` returns NaN, which is not finite). The Date-range guard is what
+    // catches this — and what an out-of-range epoch would throw at `.toISOString()` time
+    // downstream if it did not.
+    const parsed = parseCodexQuotaHeaders(
+      setQuotedHandler({
+        ...dateHeaders,
+        "x-codex-primary-used-percent": "12",
+        "x-codex-primary-window-minutes": "300",
+        "x-codex-primary-reset-at": "9000000000000",
+      }),
+    )
+    expect(parsed.quotaWindows).toHaveLength(0)
+    expect(parsed.windows).toHaveLength(0)
+  })
 })
 
 describe("codex.parseRateLimit — the signal assembly", () => {

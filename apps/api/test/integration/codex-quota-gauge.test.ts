@@ -6,7 +6,17 @@ import {
   defaultMigrationsFolder,
   runMigrations,
 } from "@multi-ai-router/db"
+import { Hono, type MiddlewareHandler } from "hono"
+import type { AdminAuthEnv } from "../../src/middleware/adminAuth"
 import { OPENAI_AUTH_CLAIM } from "../../src/providers"
+import {
+  type AccountView,
+  createAccountsService,
+  withAvailability,
+} from "../../src/services/accounts"
+import { createAuditRecorder } from "../../src/services/admin"
+import type { HealthStore, RoutingCatalog } from "../../src/services/dataplane"
+import { createMemoryConfigDirs } from "../support/config-dirs"
 import { account, jsonResponse } from "../unit/dataplane/fixtures"
 import { bearer, CRYPTOR, harness } from "./harness"
 
@@ -114,6 +124,58 @@ function codexRequestBody() {
   })
 }
 
+/** A no-op audit sink: GET /api/admin/accounts is a read; the admin plane never audits a read.
+ *  The recorder is wired so the service signature is satisfied, nothing more. */
+const noopAudit = createAuditRecorder({ append: async () => undefined })
+
+/** A `Pick`-style stub for the keys repository: only `listKeysScopedToAccount` is read here. */
+const noopKeys = {
+  listKeysScopedToAccount: async () => [] as never[],
+}
+
+/** A stub session middleware so the admin guard lets the GET request through. */
+function stubSession(): MiddlewareHandler<AdminAuthEnv> {
+  return async (c, next) => {
+    c.set("adminSession", {
+      id: "session-1",
+      username: "admin",
+      csrfToken: "csrf",
+      createdAtMs: Date.now(),
+      lastSeenAtMs: Date.now(),
+    })
+    await next()
+  }
+}
+
+/** A minimal admin app exposing `GET /api/admin/accounts`, built off the same DB / cipher /
+ *  catalog / clock the data plane harness uses. The only path under test is the list endpoint —
+ *  this exists so the assertion can hit the real route, not the service directly. */
+async function adminAppFor(catalog: RoutingCatalog, health: HealthStore) {
+  if (!db) throw new Error("DATABASE_URL is required for this integration suite")
+  const configDirs = createMemoryConfigDirs()
+  const accountsRepo = createAccountRepository(db.db)
+  const accountsService = createAccountsService({
+    accounts: accountsRepo,
+    keys: noopKeys,
+    cipher: CRYPTOR,
+    configDirs: configDirs.dirs,
+    revokeDeletedAccount: async () => undefined,
+    deletionCommitted: async () => undefined,
+    cleanupDeletedAccount: async () => "not_applicable" as const,
+    audit: noopAudit,
+    now: () => new Date(),
+  })
+  const decorated = withAvailability(accountsService, { catalog, health, now: () => new Date() })
+  const app = new Hono<AdminAuthEnv>()
+  app.use("*", stubSession())
+  app.get("/api/admin/accounts", async (c) => {
+    const result = await decorated.list({})
+    if (!result.ok) return c.json({ error: "list failed" }, 500)
+    return c.json(result.value satisfies readonly AccountView[])
+  })
+  return app
+}
+
 describe.skipIf(!process.env.DATABASE_URL)("Codex usage gauge — end to end", () => {
   test("two quotaWindows appear on the account after one mocked Codex reply", async () => {
     const acc = await newCodexAccount()
@@ -155,12 +217,20 @@ describe.skipIf(!process.env.DATABASE_URL)("Codex usage gauge — end to end", (
       accounts: [acc],
       responses: [
         () =>
-          jsonResponse(200, {
-            id: "msg_1",
-            object: "chat.completion",
-            model: "codex-1",
-            choices: [],
-          }),
+          // A `date` header is required so the test exercises the absent-x-codex-headers path,
+          // not the no-Date path. `parseCodexQuotaHeaders` short-circuits on a missing Date
+          // before it ever looks at the x-codex-* headers — without `date`, this test would
+          // pass against a parser that was broken on every path, not just the one being guarded.
+          jsonResponse(
+            200,
+            {
+              id: "msg_1",
+              object: "chat.completion",
+              model: "codex-1",
+              choices: [],
+            },
+            { date: DATE },
+          ),
       ],
     })
     const res = await app.request("/v1/chat/completions", {
@@ -212,7 +282,7 @@ describe.skipIf(!process.env.DATABASE_URL)("Codex usage gauge — end to end", (
 
   test("both windows at 100% with a future reset: the next request still routes and answers 200", async () => {
     const acc = await newCodexAccount()
-    const { app, health } = harness({
+    const { app, health, catalog } = harness({
       accounts: [acc],
       responses: [
         () =>
@@ -252,6 +322,23 @@ describe.skipIf(!process.env.DATABASE_URL)("Codex usage gauge — end to end", (
       // `spent` flag is `false` regardless.
       expect(window.utilization).toBe(1)
       expect(window.advisory).toBe(true)
+    }
+
+    // The admin endpoint is what an operator actually reads — verify it carries the same
+    // shape. Two `quotaWindows` with utilization 1 (the at-capacity reading) and `spent: false`
+    // (the `advisory` flag's whole purpose: a 100% reading cannot take a single-member pool
+    // out of rotation on the router's own say-so).
+    const adminApp = await adminAppFor(catalog, health)
+    const listed = await adminApp.request("/api/admin/accounts")
+    expect(listed.status).toBe(200)
+    const accounts = (await listed.json()) as readonly AccountView[]
+    const accountView = accounts.find((entry) => entry.id === acc.id)
+    expect(accountView).toBeDefined()
+    const windows = accountView?.availability?.quotaWindows ?? []
+    expect(windows).toHaveLength(2)
+    for (const window of windows) {
+      expect(window.utilization).toBe(1)
+      expect(window.spent).toBe(false)
     }
   })
 })
