@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.25.2] — 2026-10-11
+
+### Added
+
+- **Tool-call integration tests through the OpenAI drivers.** New `apps/api/test/integration/openai-tools.test.ts` covers the four tool-call shapes that GPT-6 model traffic actually produces — a forced tool call (`tool_choice: {type: "tool", name}`), `tool_choice: {type: "any"}`, the tool-result follow-up turn, and parallel function calls — on both `/v1/messages` into an `openai-oauth` account (Codex subscription, dialect `openai-responses`) and `/v1/messages` into an `openai-api` account pinned to dialect `openai-responses`. Each case is exercised in both a non-stream and a stream variant, so a translator that silently drops stream data is the only way a case fails. Reasoning shape is exercised twice — once with no reasoning field, once with `thinking: {type: "adaptive"}` and `output_config: {effort: "low"}` — so the `reasoning` key the Responses API requires is asserted on both sides. A `UsageRecord` row per request, with `cost_basis: "notional"` for `openai-oauth` and `cost_basis: "metered"` for `openai-api`, pins the billing model the operator saw. `/v1/chat/completions` into a Responses-speaking account is exercised too — the upstream `tool_choice: "required"` reaches the Responses egress unchanged. The route production uses for GPT-6 models (`/v1/messages` → `openai-oauth`) had no tool coverage before; now every documented shape has a regression test.
+
+### Documentation
+
+- **`docs/idea/06-protocol-translation.md` records two known edges and one rule.** The GPT-6 rule: Chat Completions accepts tool calls only when the client sent `reasoning_effort: "none"`; the router never adds that (`openAiEffortFromAnthropic` produces no level for `adaptive` or `disabled`), so an OpenAI account that must serve tools speaks Responses. First edge: `anthropicToOpenAiResponsesRequest` forwards `temperature` / `top_p` verbatim, and the Responses API rejects them when reasoning is on — the Codex subscription path drops them at the egress (`CODEX_RESPONSES_EGRESS`); `openai-api`'s Responses surface does not. Second edge: `response_format: json_schema` is refused across dialects, so a structured call must arrive as a forced tool call. `docs/idea/03-providers.md` carries the GPT-6 rule on the `openai-api` row.
+
 ## [2.25.1] — 2026-10-11
 
 ### Fixed
