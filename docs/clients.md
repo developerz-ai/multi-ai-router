@@ -179,6 +179,31 @@ naming the reason rather than being converted approximately.
 
 ---
 
+## Run the live check
+
+After wiring a client in, run the same six legs the router promises to answer end to end against
+the deployed URL — a plain text turn, a forced tool call, `tool_choice: any`, the tool-result round
+trip, a streamed forced tool, and reasoning plus a forced tool — plus two informational legs on
+`/v1/chat/completions` and `/v1/responses` that an account may legitimately refuse and that never
+gate the exit code. The script reads the API key from the named environment variable only; the key
+is never accepted as an argument and never printed:
+
+```bash
+export MAR_KEY=mar_live_…
+bin/smoke --url https://router.example.com --model claude-opus-5 --key-env MAR_KEY
+```
+
+The runner exits `0` when every required leg passes, `1` on any required-leg failure, and `2` when
+nothing failed but the key was unset, the DNS lookup failed, the request timed out, or every leg
+came back inconclusive for one of those reasons. `--json` emits the report as JSON. See
+`bin/smoke --help` for every flag.
+
+This is what the rolling live prove (`#178`) drove by hand, and what every new provider add
+should run before shipping — `apps/api/test/unit/smoke/grade.test.ts` is the grader's contract;
+`apps/api/test/integration/smoke.test.ts` drives the runner end to end against a mocked upstream.
+
+---
+
 ## Read next
 
 | Doc | Covers |
