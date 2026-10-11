@@ -123,8 +123,20 @@ async function driveLeg(
   }
   clearTimeout(timer)
   // Grade sits outside the fetch try: a malformed body is FAIL `malformed-body`, not INCONCLUSIVE
-  // `network`. The grader is a pure function; it has no I/O to fail open.
-  return { leg, outcome: grade(leg, status, parsed, events), status }
+  // `network`. The grader is a pure function; it has no I/O to fail open. The try/catch below is
+  // the backstop against a body that defeats the type guards and throws on template-literal
+  // coercion — e.g. `{stop_reason: {toString: 1}}` — so the runner reports FAIL rather than
+  // rejecting and aborting the rest of the legs.
+  try {
+    return { leg, outcome: grade(leg, status, parsed, events), status }
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error)
+    return {
+      leg,
+      outcome: { verdict: "FAIL", reason: `malformed-body:${detail}` },
+      status,
+    }
+  }
 }
 
 interface ReadResponse {

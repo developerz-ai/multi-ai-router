@@ -374,6 +374,7 @@ describe("bin/smoke — the runner actually sends tools, tool_choice and reasoni
       // Leg 5 (reasoning_forced_tool): adaptive thinking + output_config.effort reach the wire.
       {
         const body = bodyAt(5)
+        expect(Array.isArray(body.tools)).toBe(true)
         expect(body.thinking).toEqual({ type: "adaptive" })
         expect(body.output_config).toEqual({ effort: "low" })
         expect(body.tool_choice).toEqual({ type: "tool", name: "get_weather" })
@@ -383,6 +384,16 @@ describe("bin/smoke — the runner actually sends tools, tool_choice and reasoni
       const reasoning = resultAt(5)
       expect(reasoning.outcome.verdict).toBe("PASS")
       expect(reasoning.outcome.thinkingPresent).toBe(false)
+
+      // The rendered report names the missing thinking block (`thinking=no`) for a leg that came
+      // back without one. The reasoning leg's upstream script returns TOOL_USE_NO_THINK, so the
+      // report line for leg 5 carries `thinking=no` rather than `thinking=yes`.
+      const report = buildReport(
+        { url, model: "claude-opus-5", keyEnv: "MAR_KEY", json: false, help: false },
+        results,
+      )
+      const text = renderReport(report)
+      expect(text).toContain("thinking=no")
     } finally {
       upstreamServer.stop()
     }
@@ -577,5 +588,166 @@ describe("bin/smoke — malformed-body handling", () => {
     } finally {
       server.stop()
     }
+  })
+
+  test("a 200 with `choices: [null]` grades FAIL malformed-body and the run exits 1", async () => {
+    const { app } = harness({ responses: [() => jsonResponse(200, { choices: [null] })] })
+    const server = Bun.serve({ port: 0, hostname: "127.0.0.1", fetch: app.fetch })
+    try {
+      const url = `http://127.0.0.1:${server.port}`
+      const legs = buildLegs()
+      const results = await runLegs({ url, model: "claude-opus-5", key: KEY, legs })
+      const first = results[0]
+      if (first === undefined) throw new Error("expected at least one result")
+      expect(first.outcome).toEqual({ verdict: "FAIL", reason: "malformed-body" })
+      expect(decideExitCode(results)).toBe(1)
+    } finally {
+      server.stop()
+    }
+  })
+
+  test('a 200 with `output: "x"` grades FAIL malformed-body and the run exits 1', async () => {
+    const { app } = harness({ responses: [() => jsonResponse(200, { output: "x" })] })
+    const server = Bun.serve({ port: 0, hostname: "127.0.0.1", fetch: app.fetch })
+    try {
+      const url = `http://127.0.0.1:${server.port}`
+      const legs = buildLegs()
+      const results = await runLegs({ url, model: "claude-opus-5", key: KEY, legs })
+      const first = results[0]
+      if (first === undefined) throw new Error("expected at least one result")
+      expect(first.outcome).toEqual({ verdict: "FAIL", reason: "malformed-body" })
+      expect(decideExitCode(results)).toBe(1)
+    } finally {
+      server.stop()
+    }
+  })
+
+  test("a 200 with `output: [null]` grades FAIL malformed-body and the run exits 1", async () => {
+    const { app } = harness({ responses: [() => jsonResponse(200, { output: [null] })] })
+    const server = Bun.serve({ port: 0, hostname: "127.0.0.1", fetch: app.fetch })
+    try {
+      const url = `http://127.0.0.1:${server.port}`
+      const legs = buildLegs()
+      const results = await runLegs({ url, model: "claude-opus-5", key: KEY, legs })
+      const first = results[0]
+      if (first === undefined) throw new Error("expected at least one result")
+      expect(first.outcome).toEqual({ verdict: "FAIL", reason: "malformed-body" })
+      expect(decideExitCode(results)).toBe(1)
+    } finally {
+      server.stop()
+    }
+  })
+})
+
+describe("bin/smoke — driveLeg backstop catches a grader throw", () => {
+  // Once the OpenAI graders are total, the five malformed bodies the spec lists no longer throw
+  // — they produce FAIL `malformed-body` directly. The only body shape that still throws is one
+  // whose `stop_reason` cannot be coerced to a string in a template literal (a `{toString: 1}`
+  // object). This test exercises that path: the runner catches the throw, reports FAIL
+  // `malformed-body:<error>`, and `runLegs` resolves so the rest of the legs still run.
+  test("a grader throw is caught by driveLeg and reported as FAIL malformed-body", async () => {
+    const malformed: { stop_reason: { toString: number }; content: [] } = {
+      stop_reason: { toString: 1 },
+      content: [],
+    }
+    const fetchImpl = ((_url: string) =>
+      Promise.resolve(jsonResponse(200, malformed))) as typeof fetch
+    const legs = buildLegs()
+    const results = await runLegs({
+      url: "http://127.0.0.1:1/",
+      model: "claude-opus-5",
+      key: KEY,
+      legs,
+      fetchImpl,
+    })
+    // Every leg got a verdict — the runner did not reject and abort.
+    expect(results).toHaveLength(legs.length)
+    for (const result of results) {
+      expect(result.outcome.verdict).toBeDefined()
+    }
+    const first = results[0]
+    if (first === undefined) throw new Error("expected at least one result")
+    expect(first.outcome.verdict).toBe("FAIL")
+    expect(first.outcome.reason).toMatch(/^malformed-body:/)
+    // decideExitCode is gated by the leg verdict alone, so a backstop FAIL on a required leg
+    // exits 1; the backstop does not change the exit-code rule.
+    expect(decideExitCode(results)).toBe(1)
+  })
+})
+
+describe("bin/smoke — connection refused", () => {
+  test("every required leg is INCONCLUSIVE with a non-key reason and the run exits 2", async () => {
+    // Port 1 is reserved for tcpmux; a connect there refuses at once on every CI runner. The key
+    // is set, so every leg walks the fetch path; the connection error is INCONCLUSIVE with reason
+    // `network` (the TypeError the runner maps to `network`), not the `key-unset` path.
+    const legs = buildLegs()
+    const results = await runLegs({
+      url: "http://127.0.0.1:1",
+      model: "claude-opus-5",
+      key: KEY,
+      legs,
+    })
+    expect(results).toHaveLength(legs.length)
+    const required = results.filter((result) => result.leg.required)
+    expect(required.length).toBeGreaterThan(0)
+    for (const result of required) {
+      expect(result.outcome.verdict).toBe("INCONCLUSIVE")
+      expect(result.outcome.reason).not.toBe("key-unset")
+    }
+    expect(decideExitCode(results)).toBe(2)
+  })
+})
+
+describe("bin/smoke — process-level usage error (exit 64)", () => {
+  // Two cases cover the two ways a typed key can reach the runner:
+  //   - `--key=abc` is an unknown option the parser rejects without echoing the value.
+  //   - `--key-env mar_live_x` carries the router key prefix, refused at the parse step.
+  // Both exit 64, neither prints the value, and stderr carries the USAGE block. A regression
+  // that accepted `--key=abc` would echo `abc`; one that accepted `mar_live_x` would print it
+  // on the report line as `keyEnv=mar_live_x`. The USAGE-message check also tells a usage error
+  // apart from a crash (which exits 64 with a different stderr).
+  async function spawnSmoke(argv: readonly string[]): Promise<{
+    readonly exitCode: number
+    readonly stdout: string
+    readonly stderr: string
+  }> {
+    // `bun test` runs from the repo root, so `process.cwd()` is the directory `bin/smoke` lives
+    // in. We spawn the sh wrapper with that cwd so its `cd "$(dirname "$0")/.."` resolves to the
+    // same place and the `bun apps/api/smoke/run.ts` exec reaches the runner.
+    const proc = Bun.spawn(["sh", "bin/smoke", ...argv], {
+      cwd: process.cwd(),
+      env: process.env,
+      stdout: "pipe",
+      stderr: "pipe",
+    })
+    const [stdout, stderr, exitCode] = await Promise.all([
+      proc.stdout.text(),
+      proc.stderr.text(),
+      proc.exited,
+    ])
+    return { exitCode, stdout, stderr }
+  }
+
+  test("--key=abc exits 64 and prints neither stdout nor stderr with the value", async () => {
+    const { exitCode, stdout, stderr } = await spawnSmoke(["--key=abc"])
+    expect(exitCode).toBe(64)
+    expect(stdout).not.toContain("abc")
+    expect(stderr).not.toContain("abc")
+    expect(stderr).toContain("Usage: bin/smoke")
+  })
+
+  test("--url http://127.0.0.1:1 --model m --key-env mar_live_x exits 64 and prints neither", async () => {
+    const { exitCode, stdout, stderr } = await spawnSmoke([
+      "--url",
+      "http://127.0.0.1:1",
+      "--model",
+      "m",
+      "--key-env",
+      "mar_live_x",
+    ])
+    expect(exitCode).toBe(64)
+    expect(stdout).not.toContain("mar_live_x")
+    expect(stderr).not.toContain("mar_live_x")
+    expect(stderr).toContain("Usage: bin/smoke")
   })
 })

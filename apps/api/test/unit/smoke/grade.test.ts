@@ -14,7 +14,7 @@ import {
  */
 
 function messagesLeg(expectation: MessagesLeg["expectation"], stream = false): MessagesLeg {
-  return { endpoint: "/v1/messages", stream, name: "test", expectation }
+  return { endpoint: "/v1/messages", stream, name: "test", expectation, required: true }
 }
 
 function chatLeg(expectation: OpenAiLeg["expectation"]): OpenAiLeg {
@@ -255,8 +255,22 @@ describe("grade — reasoning + forced tool", () => {
       },
     )
     expect(outcome.verdict).toBe("FAIL")
-    expect(outcome.reason).toContain("stop-end_turn")
-    expect(outcome.reason).toContain("missing-tool-use")
+    expect(outcome.reason).toBe("stop-end_turn,missing-tool-use")
+  })
+
+  test("FAIL with reason stop-end_turn when the named tool_use block is present but stop_reason is wrong", () => {
+    // Distinct from the case above: a tool_use with the expected name is on the wire, so the
+    // failure reason is the wrong stop_reason alone, not the missing-tool-use part.
+    const outcome = grade(
+      messagesLeg({ kind: "reasoning_forced_tool", name: "get_weather" }),
+      200,
+      {
+        stop_reason: "end_turn",
+        content: [{ type: "tool_use", id: "t1", name: "get_weather", input: { city: "Paris" } }],
+      },
+    )
+    expect(outcome.verdict).toBe("FAIL")
+    expect(outcome.reason).toBe("stop-end_turn")
   })
 })
 
@@ -333,6 +347,29 @@ describe("grade — chat completions required tool", () => {
   })
 })
 
+describe("grade — chat completions malformed body", () => {
+  test("FAIL malformed-body when choices is an array containing null", () => {
+    const outcome = grade(chatLeg({ kind: "chat_completions_required_tool" }), 200, {
+      choices: [null],
+    })
+    expect(outcome.verdict).toBe("FAIL")
+    expect(outcome.reason).toBe("malformed-body")
+  })
+
+  test("FAIL malformed-body when tool_calls is null", () => {
+    const outcome = grade(chatLeg({ kind: "chat_completions_required_tool" }), 200, {
+      choices: [
+        {
+          finish_reason: "tool_calls",
+          message: { role: "assistant", tool_calls: null },
+        },
+      ],
+    })
+    expect(outcome.verdict).toBe("FAIL")
+    expect(outcome.reason).toBe("malformed-body")
+  })
+})
+
 describe("grade — /v1/responses function call", () => {
   test("PASS on an output array with a function_call item", () => {
     const outcome = grade(responsesLeg({ kind: "responses_function_call" }), 200, {
@@ -359,6 +396,40 @@ describe("grade — /v1/responses function call", () => {
     const outcome = grade(responsesLeg({ kind: "responses_function_call" }), 200, { output: [] })
     expect(outcome.verdict).toBe("FAIL")
     expect(outcome.reason).toBe("no-output")
+  })
+})
+
+describe("grade — responses malformed body", () => {
+  test("FAIL malformed-body when output is a string", () => {
+    const outcome = grade(responsesLeg({ kind: "responses_function_call" }), 200, {
+      output: "x",
+    })
+    expect(outcome.verdict).toBe("FAIL")
+    expect(outcome.reason).toBe("malformed-body")
+  })
+
+  test("FAIL malformed-body when output is an object", () => {
+    const outcome = grade(responsesLeg({ kind: "responses_function_call" }), 200, {
+      output: {},
+    })
+    expect(outcome.verdict).toBe("FAIL")
+    expect(outcome.reason).toBe("malformed-body")
+  })
+
+  test("FAIL malformed-body when output is an array containing null", () => {
+    const outcome = grade(responsesLeg({ kind: "responses_function_call" }), 200, {
+      output: [null],
+    })
+    expect(outcome.verdict).toBe("FAIL")
+    expect(outcome.reason).toBe("malformed-body")
+  })
+
+  test("FAIL malformed-body when output is null", () => {
+    const outcome = grade(responsesLeg({ kind: "responses_function_call" }), 200, {
+      output: null,
+    })
+    expect(outcome.verdict).toBe("FAIL")
+    expect(outcome.reason).toBe("malformed-body")
   })
 })
 
