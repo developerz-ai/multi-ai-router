@@ -112,3 +112,50 @@ test("displayed inherited snapshot is derived from the oldest source snapshot", 
   expect(PRICE_SOURCES.some((source) => source.snapshotAsOf === PRICE_TABLE_AS_OF)).toBe(true)
   for (const source of PRICE_SOURCES) expect(PRICE_TABLE_AS_OF <= source.snapshotAsOf).toBe(true)
 })
+
+test("GPT-6 model coverage on openai-api and openai-oauth (#181)", () => {
+  // The four ids were priced in #181; coverage must now report them as priced on both surfaces, and
+  // must continue to report gpt-reserve / codex-auto-review as missing.
+  const ids = ["gpt-6-luna", "gpt-6-sol", "gpt-6.1-sol", "gpt-6-astra"]
+  const apiAccounts = ids.map((model, index) => ({
+    id: `api-${index}`,
+    label: `api-${model}`,
+    provider: "openai-api" as const,
+    billing: "metered" as const,
+    models: [model],
+  }))
+  expect(unpricedModels(apiAccounts, lookupRates)).toEqual([])
+  const codexAccounts = ids.map((model, index) => ({
+    id: `codex-${index}`,
+    label: `codex-${model}`,
+    provider: "openai-oauth" as const,
+    billing: "subscription" as const,
+    models: [model],
+  }))
+  expect(unpricedModels(codexAccounts, lookupRates)).toEqual([])
+
+  // gpt-reserve and codex-auto-review still have no published price, so coverage flags them.
+  const unpricedAccounts = [
+    {
+      id: "codex-r",
+      label: "Codex reserve",
+      provider: "openai-oauth" as const,
+      billing: "subscription" as const,
+      models: ["gpt-reserve", "codex-auto-review"],
+    },
+  ]
+  expect(unpricedModels(unpricedAccounts, lookupRates)).toEqual([
+    {
+      accountId: "codex-r",
+      provider: "openai-oauth",
+      model: "gpt-reserve",
+      reason: "missing_rate",
+    },
+    {
+      accountId: "codex-r",
+      provider: "openai-oauth",
+      model: "codex-auto-review",
+      reason: "missing_rate",
+    },
+  ])
+})
