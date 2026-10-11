@@ -53,6 +53,34 @@ export const OPENAI_MODELS: ModelTable = {
     rates(2, 9, { read: 0.2, write: 2.5 }),
   ),
 
+  /**
+   * GPT-6 family — read 2026-10-10 from
+   * https://developers.openai.com/api/docs/models/gpt-6-{luna,sol,astra}, .1-sol.
+   * Each page states: input / cached input / cache write / output USD per 1M tokens, and a
+   * long-context rule of 2x input and cache, 1.5x output, for the whole request above 272k input
+   * tokens. The same LONG_CONTEXT_FROM constant the GPT-5.6 rows use.
+   */
+  "gpt-6-luna": tiered(
+    rates(0.1, 0.5, { read: 0.01, write: 0.125 }),
+    LONG_CONTEXT_FROM,
+    rates(0.2, 0.75, { read: 0.02, write: 0.25 }),
+  ),
+  "gpt-6-sol": tiered(
+    rates(2, 10, { read: 0.2, write: 2.5 }),
+    LONG_CONTEXT_FROM,
+    rates(4, 15, { read: 0.4, write: 5 }),
+  ),
+  "gpt-6.1-sol": tiered(
+    rates(2, 10, { read: 0.1, write: 2.5 }),
+    LONG_CONTEXT_FROM,
+    rates(4, 15, { read: 0.2, write: 5 }),
+  ),
+  "gpt-6-astra": tiered(
+    rates(10, 50, { read: 1, write: 12.5 }),
+    LONG_CONTEXT_FROM,
+    rates(20, 75, { read: 2, write: 25 }),
+  ),
+
   "gpt-5.5": tiered(rates(5, 30, { read: 0.5 }), LONG_CONTEXT_FROM, rates(10, 45, { read: 1 })),
   "gpt-5.5-pro": GPT_5_PRO_TIER,
   "gpt-5.4": tiered(

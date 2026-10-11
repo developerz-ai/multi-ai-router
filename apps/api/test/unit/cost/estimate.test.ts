@@ -291,6 +291,58 @@ describe("a long-context tier replaces the standard card, it does not top it up"
   })
 })
 
+describe("pricing the GPT-6 family (#181)", () => {
+  test("gpt-6.1-sol on a Codex subscription reports notional with a real cost", () => {
+    // Per the AC: red at f3e4e01 (lookupRates returned null), green here.
+    const cost = estimateCost({
+      provider: "openai-oauth",
+      model: "gpt-6.1-sol",
+      tokens: tokens({ tokensIn: 200_000, tokensOut: 50_000 }),
+      billing: "subscription",
+    })
+    expect(cost.costBasis).toBe("notional")
+    expect(cost.costEstimate).not.toBeNull()
+    expect(Number(cost.costEstimate)).toBeGreaterThan(0)
+  })
+
+  test("gpt-6-luna: 200k in + 200k out prices 0.120000 USD on both openai-api (metered) and openai-oauth (notional)", () => {
+    // Standard card: 0.10 input, 0.50 output. 200_000 * (0.10 + 0.50) / 1_000_000 = 0.120000.
+    const counts = tokens({ tokensIn: 200_000, tokensOut: 200_000 })
+    const metered = estimateCost({ provider: "openai-api", model: "gpt-6-luna", tokens: counts })
+    const notional = estimateCost({
+      provider: "openai-oauth",
+      model: "gpt-6-luna",
+      tokens: counts,
+      billing: "subscription",
+    })
+    expect(metered.costEstimate).toBe("0.120000")
+    expect(notional.costEstimate).toBe("0.120000")
+    expect(metered.costBasis).toBe("metered")
+    expect(notional.costBasis).toBe("notional")
+  })
+
+  test("gpt-6-luna: 1M in + 1M out prices 0.950000 USD (the long-context card)", () => {
+    // Long card: 0.20 input, 0.75 output, for the whole request. 1_000_000 * (0.20 + 0.75) / 1_000_000
+    // = 0.950000.
+    const cost = estimateCost({
+      provider: "openai-api",
+      model: "gpt-6-luna",
+      tokens: tokens({ tokensIn: 1_000_000, tokensOut: 1_000_000 }),
+    })
+    expect(cost.costEstimate).toBe("0.950000")
+  })
+
+  test("gpt-6-luna: 300k in and no output prices 0.060000 USD (long-context card, output-only token is zero)", () => {
+    // 300_000 input at 0.20 USD/Mtok = 0.060000.
+    const cost = estimateCost({
+      provider: "openai-api",
+      model: "gpt-6-luna",
+      tokens: tokens({ tokensIn: 300_000, tokensOut: 0 }),
+    })
+    expect(cost.costEstimate).toBe("0.060000")
+  })
+})
+
 describe("what the table does not know", () => {
   test("an unpriced model is null and unknown, never zero", () => {
     expect(

@@ -119,6 +119,14 @@ Extra Usage charges. K2.8 Preview, guessed date prefixes, metered coding identit
 writes without a known TTL remain unpriced unless the operator supplies an override. Pricing never
 changes the client model or the model sent upstream.
 
+The GPT-6 family (`gpt-6-luna`, `gpt-6-sol`, `gpt-6.1-sol`, `gpt-6-astra`) ships its own four-card
+rows in `services/cost/tables/openai.ts`, one per model, with the same long-context tier
+(272k input tokens) the GPT-5.6 rows use. Provenance: the model pages under
+`https://developers.openai.com/api/docs/models/`, read 2026-10-10. The page-published long-context
+rule is 2× input and cache, 1.5× output, for the whole request; the code applies the long card
+when `tokensIn >= 272,000`, the same threshold the GPT-5.6 rows already use. `gpt-reserve` and
+`codex-auto-review` stay unpriced — neither page publishes a number.
+
 ### The four providers that ship no price
 
 Absent from the table and staying absent, because for each of them a shipped number would be a

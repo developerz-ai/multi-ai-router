@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.25.3] — 2026-10-11
+
+### Added
+
+- **GPT-6 price rows.** Four new entries in `apps/api/src/services/cost/tables/openai.ts` — `gpt-6-luna`, `gpt-6-sol`, `gpt-6.1-sol` and `gpt-6-astra` — in the same `tiered(...) at LONG_CONTEXT_FROM` shape the GPT-5.6 rows use. Standard card: input / cached input / cache write / output USD per 1M tokens, read 2026-10-10 from the model pages under `https://developers.openai.com/api/docs/models/`. Long card: 2× input and cache, 1.5× output, for the whole request once `tokensIn >= 272,000` (the same threshold the GPT-5.6 rows already use). Both `openai-api` and `openai-oauth` read the one table, so the new rows cover metered API traffic and the connected ChatGPT subscription. The unit suite (`apps/api/test/unit/cost/estimate.test.ts`) pins the three documented arithmetic cases on `gpt-6-luna` (200k + 200k = 0.120000, 1M + 1M = 0.950000 on the long card, 300k in and no output = 0.060000) and pins `gpt-6.1-sol` on an `openai-oauth` subscription as `notional` with a non-null cost. The unit suite (`apps/api/test/unit/cost/account-prices.test.ts`) pins `unpricedModels` reporting none of them as `missing_rate` on either surface, and still flags `gpt-reserve` and `codex-auto-review` as unpriced. `PRICE_SOURCES` is unchanged (`openai` keeps `verifiedAt: null` and `inherited(...)`), and the diff touches no file under `apps/api/src/services/models/windows/` and not `apps/api/src/services/cost/provenance.ts`. Docs: `docs/idea/08-observability.md` "Cost estimation" gains a paragraph that names the four models, their provenance page and date read, and the long-context rule.
+
 ## [2.25.2] — 2026-10-11
 
 ### Added
