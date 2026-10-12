@@ -129,18 +129,63 @@ describe("inspectCodexStreamFrame", () => {
     })
   })
 
-  test("the flat event `type` is never read — it is the event name `error`, not a code", () => {
-    // Even when `type` would be a valid `codex:stream-error` value, the flat-event type is the
-    // event name and is ignored. The missing `code` lands the verdict on `other`.
-    const verdict = inspectCodexStreamFrame({ type: "invalid_request_error" }, "error")
+  test("the flat event `type` is never read as a code — it is the event name `error`", () => {
+    // A flat error event whose only error words are its own `type` has no code to classify.
+    const verdict = inspectCodexStreamFrame({ type: "error" }, "error")
     expect(verdict).toEqual({
       kind: "server-error",
       status: 200,
       retryable: true,
       signal: "codex:stream-error:other",
       rateLimit: null,
-      message: undefined,
     })
+  })
+
+  test("the frame type is `payload.type ?? event`, as the protocol reader reads it", () => {
+    // An `event: error` line around a payload of another type is that other frame: no failure,
+    // exactly as `readResponseTerminal` sees it, so the hook must not strike where it does not.
+    expect(inspectCodexStreamFrame({ type: "invalid_request_error" }, "error")).toBeNull()
+    expect(inspectCodexStreamFrame({ type: "response.output_text.delta" }, "error")).toBeNull()
+    expect(inspectCodexStreamFrame({ code: "invalid_prompt" }, "error")?.signal).toBe(
+      "codex:stream-error:invalid_prompt",
+    )
+  })
+
+  test.each([
+    [
+      "error.type on an error event",
+      { type: "error", error: { type: "usage_limit_reached" } },
+      "usage_limit_reached",
+      "rate-limited",
+    ],
+    [
+      "error.type when error.code is null",
+      { type: "error", error: { type: "invalid_request_error", code: null, message: "bad" } },
+      "invalid_request_error",
+      "invalid-request",
+    ],
+    [
+      "response.error.type on response.failed",
+      { type: "response.failed", response: { error: { type: "invalid_request_error" } } },
+      "invalid_request_error",
+      "invalid-request",
+    ],
+    [
+      "response.error.type account_deactivated",
+      { type: "response.failed", response: { error: { type: "account_deactivated" } } },
+      "account_deactivated",
+      "credits-exhausted",
+    ],
+    [
+      "an unlisted code falls through to a listed nested type",
+      { type: "error", error: { code: "something_new", type: "invalid_request_error" } },
+      "invalid_request_error",
+      "invalid-request",
+    ],
+  ])("the nested error type is read after the code: %s", (_label, frame, code, kind) => {
+    const verdict = inspectCodexStreamFrame(frame, undefined)
+    expect(verdict?.kind).toBe(kind)
+    expect(verdict?.signal).toBe(`codex:stream-error:${code}`)
   })
 
   test("the model-unsupported HTTP rule does not run in-stream", () => {
