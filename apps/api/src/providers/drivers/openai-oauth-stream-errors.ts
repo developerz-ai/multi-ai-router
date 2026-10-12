@@ -1,3 +1,4 @@
+import { isRetryableFailureKind } from "../failure/classify"
 import type { FailureClassification, UpstreamFailureKind } from "../types"
 
 /**
@@ -12,8 +13,9 @@ import type { FailureClassification, UpstreamFailureKind } from "../types"
  *     under `error` on an `error` event;
  *   - a flat `{type:"error", code, message}`, the code at the top level.
  *
- * The code is matched first, then the nested error object's `type`. The flat event's own `type` is
- * never read: it is the event name `error`, not a code.
+ * The code decides when there is one. Only when there is no code is the nested error object's
+ * `type` read, and only for the limit and deactivated kinds, as the HTTP rules read it. The flat
+ * event's own `type` is never read: it is the event name `error`, not a code.
  *
  * The mapping is a closed, stream-only list — the driver's HTTP `rules` are untouched:
  *   - request-shaped codes → `invalid-request` (failover reads `client-error`; no breaker strike);
@@ -59,12 +61,22 @@ function text(value: unknown): string | undefined {
   return typeof value === "string" && value.length > 0 ? value : undefined
 }
 
-/** The first listed code among the candidates, in the order given. */
-function listedCode(candidates: readonly unknown[]): string | undefined {
-  for (const candidate of candidates) {
-    if (typeof candidate === "string" && KIND_BY_CODE.has(candidate)) return candidate
-  }
-  return undefined
+/**
+ * Account-level kinds a nested error `type` may name, as the driver's HTTP rules read it. The
+ * request-shaped list is never matched against `type`: `invalid_request_error` is OpenAI's catch-all
+ * type, carried by account-level refusals such as `invalid_api_key` too.
+ */
+const TYPE_CODES: ReadonlySet<string> = new Set([...CODEX_LIMIT_CODES, ...CODEX_DEACTIVATED_CODES])
+
+/** The code when there is one; a nested `type` only when there is no code at all. */
+function listedCode(
+  root: Record<string, unknown> | undefined,
+  nested: Record<string, unknown> | undefined,
+) {
+  const code = text(root?.code) ?? text(nested?.code)
+  if (code !== undefined) return KIND_BY_CODE.has(code) ? code : undefined
+  const type = text(nested?.type)
+  return type !== undefined && TYPE_CODES.has(type) ? type : undefined
 }
 
 /**
@@ -77,17 +89,19 @@ export function inspectCodexStreamFrame(
   event: string | undefined,
 ): FailureClassification | null {
   const root = record(payload)
-  const type = typeof root?.type === "string" ? root.type : event
+  // A payload that is not an object is no error frame to the protocol reader either.
+  if (root === undefined) return null
+  const type = typeof root.type === "string" ? root.type : event
   if (type !== "response.failed" && type !== "error") return null
 
-  const nested = record(root?.error) ?? record(record(root?.response)?.error)
-  const code = listedCode([root?.code, nested?.code, nested?.type])
+  const nested = record(root.error) ?? record(record(root.response)?.error)
+  const code = listedCode(root, nested)
   const kind = code === undefined ? "server-error" : (KIND_BY_CODE.get(code) ?? "server-error")
-  const message = text(root?.message) ?? text(nested?.message) ?? text(root?.error)
+  const message = text(root.message) ?? text(nested?.message) ?? text(root.error)
   return {
     kind,
     status: 200,
-    retryable: kind !== "invalid-request",
+    retryable: isRetryableFailureKind(kind),
     signal: `${SIGNAL_PREFIX}${code ?? "other"}`,
     rateLimit: null,
     ...(message === undefined ? {} : { message }),

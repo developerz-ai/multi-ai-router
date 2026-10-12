@@ -31,6 +31,9 @@ export function logAttemptFailure(
   })
 }
 
+/** Characters past the cut still scrubbed, so a credential straddling it is matched whole. */
+const REDACT_WINDOW_MARGIN = 512
+
 /**
  * The one line an operator reads when a relayed stream ends in an upstream error (an in-stream
  * Codex refusal, a MiniMax in-body failure, a protocol error). `errorClass` is the closed signal
@@ -49,7 +52,10 @@ export function logStreamFailure(
     accountId,
     errorClass,
     upstreamMessage: bounded(
-      message === undefined ? undefined : redactValue(message),
+      // Only the part that can be kept is scrubbed, with room for a credential straddling the cut.
+      message === undefined
+        ? undefined
+        : redactValue(message.slice(0, reasonMaxChars + REDACT_WINDOW_MARGIN)),
       reasonMaxChars,
     ),
   })

@@ -87,7 +87,12 @@ const SECRET_VALUE_PATTERNS: readonly ValuePattern[] = [
   // JWTs, so without this they travel unscrubbed under any field name the `token` marker misses.
   { pattern: /\beyJ[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]*/g, replacement: REDACTED },
   // URL userinfo — `postgres://user:pass@host/db` is how `DATABASE_URL` reaches a boot error.
-  { pattern: /\b([a-z][a-z0-9+.-]*:)\/\/[^\s/:@]+:[^\s/@]+@/gi, replacement: `$1//${REDACTED}@` },
+  // The scheme is bounded (real ones are a few characters): unbounded, a long `a-a-a-…` run made
+  // the scan quadratic, and an upstream message is long enough for that to stall the event loop.
+  {
+    pattern: /\b([a-z][a-z0-9+.-]{0,31}:)\/\/[^\s/:@]+:[^\s/@]+@/gi,
+    replacement: `$1//${REDACTED}@`,
+  },
   // A credential passed in a query string, keeping the endpoint and the parameter that carried it.
   // `code`/`code_verifier`/`state` are here because a whole OAuth callback URL logged as one string
   // is not covered by the field-name list — nothing in this router reads a query parameter by those

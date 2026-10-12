@@ -21,10 +21,10 @@ const success: RelayVerdict = {
 }
 
 /**
- * A driver hook's signal in the closed shape every hook uses (`<driver>:<rule>-<listed value>`).
- * `errorClass` is the `error_class` metric label, so a signal outside this shape — a hook that
- * ever interpolated an upstream value — falls back to the protocol default instead of becoming
- * an unbounded label.
+ * The shape every hook signal has (`<driver>:<rule>-<listed value>`). `errorClass` is the
+ * `error_class` metric label; this bounds its charset and length and turns an upstream sentence into
+ * the protocol default. It is not an allowlist: label cardinality rests on each hook building its
+ * signal from a closed list, as both current hooks do.
  */
 const HOOK_SIGNAL = /^[a-z0-9-]+:[a-z0-9_:-]{1,64}$/
 

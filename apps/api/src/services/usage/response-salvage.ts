@@ -80,14 +80,27 @@ export function createResponseSalvage(maximumBytes: number): ResponseSalvage {
     return null
   }
   const optionalMaxBytes = Math.floor(maximumBytes / 4)
+  // Release every completed optional capture: room for a required member, never a failed salvage.
+  const evictOptional = () => {
+    for (const path of OPTIONAL) {
+      const bytes = captured.get(path)
+      if (bytes === undefined) continue
+      retained -= bytes.length
+      captured.delete(path)
+    }
+  }
   const keep = (byte: number) => {
     if (capture === null || capture.dropped) return
-    if (OPTIONAL.has(capture.path) && capture.bytes.length >= optionalMaxBytes) {
+    if (
+      OPTIONAL.has(capture.path) &&
+      (capture.bytes.length >= optionalMaxBytes || retained >= maximumBytes)
+    ) {
       retained -= capture.bytes.length
       capture.bytes = []
       capture.dropped = true
       return
     }
+    if (retained >= maximumBytes) evictOptional()
     if (retained >= maximumBytes) {
       failed = true
       capture = null

@@ -193,3 +193,31 @@ test("an oversized non-JSON SSE frame stays unavailable and later frames recover
   expect(facts.counts.tokensIn).toBe(8)
   expect(facts.evidenceUnavailable).toBe(true)
 })
+
+test("error evidence is optional: kept when small, dropped before it can fail the salvage (#188)", () => {
+  const run = (text: string, cap = 64) => {
+    const scanner = createResponseSalvage(cap)
+    for (const byte of encoder.encode(text)) scanner.push(byte)
+    expect(scanner.retainedBytes).toBeLessThanOrEqual(cap)
+    return scanner.finish()
+  }
+  // A small Codex error is kept, code and all.
+  expect(run('{"type":"response.failed","response":{"error":{"code":"x"}}}', 256)).toEqual({
+    type: "response.failed",
+    response: { error: { code: "x" } },
+  })
+  // Usage first, then an error that would cross the cap: the error goes, the frame stays.
+  expect(
+    run(
+      `{"type":"response.failed","response":{"usage":{"t":"${"u".repeat(30)}"},"error":{"m":"${"e".repeat(12)}"}}}`,
+      64,
+    ),
+  ).toEqual({ type: "response.failed", response: { usage: { t: "u".repeat(30) } } })
+  // An error first, then a required member that needs its room: the kept error is evicted.
+  expect(
+    run(
+      `{"type":"response.failed","response":{"error":{"c":"${"e".repeat(6)}"},"usage":{"t":"${"u".repeat(28)}"}}}`,
+      64,
+    ),
+  ).toEqual({ type: "response.failed", response: { usage: { t: "u".repeat(28) } } })
+})
