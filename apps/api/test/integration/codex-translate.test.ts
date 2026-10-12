@@ -363,3 +363,39 @@ describe("a tool schema carrying a regex lookaround", () => {
     expect(usage.rows).toHaveLength(1)
   })
 })
+
+describe("a same-dialect /v1/responses request carrying a lookaround tool schema", () => {
+  test("is relayed byte-identical: the strip applies only to bodies the router translates", async () => {
+    const { app, upstream, usage } = harness({
+      accounts: [codexAccount()],
+      responses: [codexStream],
+    })
+    const sentText = JSON.stringify({
+      model: "gpt-5.5",
+      stream: true,
+      store: false,
+      instructions: "",
+      input: [{ role: "user", content: [{ type: "input_text", text: "log in" }] }],
+      tools: [
+        {
+          type: "function",
+          name: "auth",
+          parameters: {
+            type: "object",
+            properties: { login: { type: "string", pattern: "^(?!-)[a-z]+$" } },
+          },
+        },
+      ],
+    })
+    const res = await app.request("/v1/responses", post(sentText, bearer()))
+    expect(res.status).toBe(200)
+    // A same-dialect stream is relayed as it arrives; read it to completion before inspecting.
+    expect(await res.text()).toContain("response.completed")
+    expect(upstream.calls).toHaveLength(1)
+    expect(upstream.calls[0]?.body).toBe(sentText)
+
+    await settle()
+    expect(usage.rows).toHaveLength(1)
+    expect(usage.rows[0]).toMatchObject({ egressMode: "passthrough" })
+  })
+})

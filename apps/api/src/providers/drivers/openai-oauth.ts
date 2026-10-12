@@ -57,7 +57,7 @@ export const CODEX_RESPONSES_EGRESS: ResponsesEgressRules = {
   requireStream: true,
   requireInstructions: true,
   unsupportedFields: ["max_output_tokens", "temperature", "top_p"],
-  stripToolPatterns: true,
+  stripLookaroundPatterns: true,
 }
 
 export function openAiOAuthAuthorizeUrl(input: {

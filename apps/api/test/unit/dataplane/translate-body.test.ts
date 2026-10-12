@@ -72,6 +72,30 @@ describe("createTranslatedRequestBody", () => {
     expect(second.ceiling).toBe("max_tokens")
   })
 
+  test("two Responses surfaces that differ only in stripLookaroundPatterns convert separately", () => {
+    const { pair, calls } = recordingPair("openai-responses")
+    const translated = createTranslatedRequestBody(SOURCE, CONTEXT)
+    const base = {
+      requireStream: true,
+      requireInstructions: true,
+      unsupportedFields: ["temperature"],
+    }
+
+    translated.bodyFor(pair, "gpt-6-luna", undefined, undefined, {
+      ...base,
+      stripLookaroundPatterns: true,
+    })
+    translated.bodyFor(pair, "gpt-6-luna", undefined, undefined, {
+      ...base,
+      stripLookaroundPatterns: false,
+    })
+
+    expect(calls.map((call) => call.responsesEgress?.stripLookaroundPatterns)).toEqual([
+      true,
+      false,
+    ])
+  })
+
   test("and back again off the cache: the first shape is not evicted by the second", () => {
     const { pair, calls } = recordingPair()
     const translated = createTranslatedRequestBody(SOURCE, CONTEXT)

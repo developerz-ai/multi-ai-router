@@ -136,6 +136,6 @@ function egressKey(rules: ResponsesEgressRules | undefined): string {
     rules.requireStream,
     rules.requireInstructions,
     rules.unsupportedFields.join(","),
-    rules.stripToolPatterns,
+    rules.stripLookaroundPatterns,
   ].join("|")
 }

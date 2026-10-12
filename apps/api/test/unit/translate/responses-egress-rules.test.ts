@@ -189,9 +189,9 @@ describe("the rules come from the driver", () => {
     expect(openai.resolveResponsesEgress(at("openai-api"))).toBe(DEFAULT_RESPONSES_EGRESS)
   })
 
-  test("the Codex surface declares stripToolPatterns: true; the default surface does not", () => {
-    expect(CODEX_RESPONSES_EGRESS.stripToolPatterns).toBe(true)
-    expect(DEFAULT_RESPONSES_EGRESS.stripToolPatterns).toBe(false)
+  test("the Codex surface declares stripLookaroundPatterns: true; the default surface does not", () => {
+    expect(CODEX_RESPONSES_EGRESS.stripLookaroundPatterns).toBe(true)
+    expect(DEFAULT_RESPONSES_EGRESS.stripLookaroundPatterns).toBe(false)
   })
 })
 
@@ -240,7 +240,7 @@ const TOOL_WITH_LOOKAROUND = {
 }
 
 const LOOKAROUND_DROP =
-  "the Codex backend cannot compile regex lookarounds in tool schemas (tool `auth`)"
+  "the target account's Responses surface cannot compile regex lookarounds in tool schemas (tool `auth`)"
 
 describe("a tool schema carrying a regex lookaround", () => {
   test("Codex egress strips the lookaround `pattern`s and reports the drops by tool + schema path", () => {
