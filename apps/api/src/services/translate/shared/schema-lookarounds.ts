@@ -19,41 +19,45 @@ import { rejectField } from "./reject"
 const LOOKAROUND = /\(\?(?:[=!]|<[=!])/
 
 /**
- * Nesting past this depth is refused with a `400` rather than walked. A structural guard, not a
- * tuning knob: real tool schemas stay within a handful of levels, and recursing without a bound
- * would let a hostile body turn a translation into a stack overflow and a generic `500`.
+ * Structural guards, not tuning knobs: real tool schemas stay within a handful of levels and a few
+ * hundred nodes. They bound this walk's own recursion and CPU, so a hostile schema becomes a `400`
+ * rather than a stack overflow or a stalled event loop. (A body nested deeper than the request
+ * scanner's `MAX_REQUEST_JSON_DEPTH` is refused before translation ever runs.)
  */
 export const MAX_SCHEMA_DEPTH = 64
+export const MAX_SCHEMA_NODES = 10_000
 
-/** Keywords whose value is one subschema. `items` is listed here and in ARRAY: its two forms. */
-const SINGLE = [
-  "items",
-  "additionalItems",
-  "unevaluatedItems",
-  "not",
-  "additionalProperties",
-  "unevaluatedProperties",
-  "propertyNames",
-  "contains",
-  "contentSchema",
-  "if",
-  "then",
-  "else",
-]
-/** Keywords whose value is an array of subschemas. */
-const ARRAY = ["items", "prefixItems", "anyOf", "oneOf", "allOf"]
+type Shape = "single" | "array" | "map"
+
 /**
- * Keywords whose value maps names to subschemas. Draft-7 `dependencies` mixes subschema values with
- * property-name arrays; only the object values are walked.
+ * The keywords that hold subschemas, by the shape of their value. `items` takes both the object and
+ * the array form. Draft-7 `dependencies` mixes subschema values with property-name arrays; only the
+ * object values are walked.
  */
-const MAP = [
-  "properties",
-  "patternProperties",
-  "$defs",
-  "definitions",
-  "dependentSchemas",
-  "dependencies",
-]
+const SUBSCHEMA_KEYWORDS: ReadonlyMap<string, readonly Shape[]> = new Map([
+  ["items", ["single", "array"]],
+  ["additionalItems", ["single"]],
+  ["unevaluatedItems", ["single"]],
+  ["not", ["single"]],
+  ["additionalProperties", ["single"]],
+  ["unevaluatedProperties", ["single"]],
+  ["propertyNames", ["single"]],
+  ["contains", ["single"]],
+  ["contentSchema", ["single"]],
+  ["if", ["single"]],
+  ["then", ["single"]],
+  ["else", ["single"]],
+  ["prefixItems", ["array"]],
+  ["anyOf", ["array"]],
+  ["oneOf", ["array"]],
+  ["allOf", ["array"]],
+  ["properties", ["map"]],
+  ["patternProperties", ["map"]],
+  ["$defs", ["map"]],
+  ["definitions", ["map"]],
+  ["dependentSchemas", ["map"]],
+  ["dependencies", ["map"]],
+])
 
 const IDENTIFIER = /^[A-Za-z_$][\w$]*$/
 
@@ -84,6 +88,45 @@ function mapSegment(keyword: string, key: string, index: number): string {
 interface WalkContext {
   readonly reason: string
   readonly onDrop: DropSink
+  nodes: number
+}
+
+/** The walked value for one keyword, or the same reference when nothing under it changed. */
+function walkKeyword(
+  keyword: string,
+  value: unknown,
+  path: string,
+  depth: number,
+  ctx: WalkContext,
+): unknown {
+  const shapes = SUBSCHEMA_KEYWORDS.get(keyword)
+  if (shapes === undefined) return value
+  if (shapes.includes("single") && isPlainObject(value)) {
+    return walk(value, `${path}.${keyword}`, depth + 1, ctx)
+  }
+  if (shapes.includes("array") && Array.isArray(value)) {
+    let changed: unknown[] | undefined
+    for (const [index, sub] of value.entries()) {
+      if (!isPlainObject(sub)) continue
+      const walked = walk(sub, `${path}.${keyword}[${index}]`, depth + 1, ctx)
+      if (walked === sub) continue
+      changed ??= value.slice()
+      changed[index] = walked
+    }
+    return changed ?? value
+  }
+  if (shapes.includes("map") && isPlainObject(value)) {
+    let changed: Record<string, unknown> | undefined
+    for (const [index, [key, sub]] of Object.entries(value).entries()) {
+      if (!isPlainObject(sub)) continue
+      const walked = walk(sub, `${path}.${mapSegment(keyword, key, index)}`, depth + 1, ctx)
+      if (walked === sub) continue
+      changed ??= copyOf(value)
+      defineOn(changed, key, walked)
+    }
+    return changed ?? value
+  }
+  return value
 }
 
 function walk(
@@ -95,11 +138,11 @@ function walk(
   if (depth > MAX_SCHEMA_DEPTH) {
     rejectField(path, `nests deeper than ${MAX_SCHEMA_DEPTH} schema levels`)
   }
-  let next: Record<string, unknown> | undefined
-  const replace = (key: string, value: unknown) => {
-    next ??= copyOf(schema)
-    defineOn(next, key, value)
+  ctx.nodes += 1
+  if (ctx.nodes > MAX_SCHEMA_NODES) {
+    rejectField(path, `holds more than ${MAX_SCHEMA_NODES} subschemas`)
   }
+  let next: Record<string, unknown> | undefined
 
   if (typeof schema.pattern === "string" && LOOKAROUND.test(schema.pattern)) {
     next = copyOf(schema)
@@ -107,38 +150,13 @@ function walk(
     ctx.onDrop({ field: `${path}.pattern`, reason: ctx.reason })
   }
 
-  for (const keyword of SINGLE) {
-    const sub = schema[keyword]
-    if (!isPlainObject(sub)) continue
-    const walked = walk(sub, `${path}.${keyword}`, depth + 1, ctx)
-    if (walked !== sub) replace(keyword, walked)
-  }
-
-  for (const keyword of ARRAY) {
-    const list = schema[keyword]
-    if (!Array.isArray(list)) continue
-    let changed: unknown[] | undefined
-    for (const [index, sub] of list.entries()) {
-      if (!isPlainObject(sub)) continue
-      const walked = walk(sub, `${path}.${keyword}[${index}]`, depth + 1, ctx)
-      if (walked === sub) continue
-      changed ??= list.slice()
-      changed[index] = walked
-    }
-    if (changed !== undefined) replace(keyword, changed)
-  }
-
-  for (const keyword of MAP) {
-    const map = schema[keyword]
-    if (!isPlainObject(map)) continue
-    let changed = false
-    const entries = Object.entries(map).map(([key, sub], index): [string, unknown] => {
-      if (!isPlainObject(sub)) return [key, sub]
-      const walked = walk(sub, `${path}.${mapSegment(keyword, key, index)}`, depth + 1, ctx)
-      if (walked !== sub) changed = true
-      return [key, walked]
-    })
-    if (changed) replace(keyword, Object.fromEntries(entries))
+  // Dispatch on the node's own keys: a node pays for the keywords it has, not for the whole table.
+  for (const key of Object.keys(schema)) {
+    const value = schema[key]
+    const walked = walkKeyword(key, value, path, depth, ctx)
+    if (walked === value) continue
+    next ??= copyOf(schema)
+    defineOn(next, key, walked)
   }
 
   return next ?? schema
@@ -149,7 +167,8 @@ function walk(
  * and a tool are rebuilt only when something under them changed; otherwise the input is returned.
  * A schema whose serialized text holds no lookaround anywhere is not walked at all.
  *
- * @throws TranslationError when a walked schema nests deeper than {@link MAX_SCHEMA_DEPTH}.
+ * @throws TranslationError when a walked schema nests deeper than {@link MAX_SCHEMA_DEPTH} or holds
+ *   more than {@link MAX_SCHEMA_NODES} subschemas.
  */
 export function stripLookaroundPatternsFromTools(
   body: Record<string, unknown>,
@@ -165,7 +184,7 @@ export function stripLookaroundPatternsFromTools(
     const parameters = tool.parameters
     // Most tools carry no lookaround anywhere: one serialization skips the walk and its copies.
     if (!LOOKAROUND.test(JSON.stringify(parameters))) continue
-    const walked = walk(parameters, `tools[${index}].parameters`, 0, { reason, onDrop })
+    const walked = walk(parameters, `tools[${index}].parameters`, 0, { reason, onDrop, nodes: 0 })
     if (walked === parameters) continue
     nextTools ??= tools.slice()
     const nextTool = copyOf(tool)

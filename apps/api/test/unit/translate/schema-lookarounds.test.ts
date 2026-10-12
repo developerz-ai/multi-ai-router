@@ -3,6 +3,7 @@ import { TranslationError } from "@multi-ai-router/core"
 import type { TranslationDrop } from "../../../src/services/translate"
 import {
   MAX_SCHEMA_DEPTH,
+  MAX_SCHEMA_NODES,
   stripLookaroundPatternsFromTools,
 } from "../../../src/services/translate/shared/schema-lookarounds"
 
@@ -15,12 +16,45 @@ import {
 const LOOK = "^(?!-)[a-z]+$"
 const PLAIN = "^[a-z]+$"
 
+const SEGMENT = /\.([A-Za-z_$][\w$]*)|\[(\d+)\]|\[("(?:[^"\\]|\\.)*")\]/g
+
+/**
+ * Delete the value at a reported drop path. A numeric segment on an object (a `patternProperties`
+ * entry) selects that entry by its position, as the report does.
+ */
+function deleteAt(root: Record<string, unknown>, path: string): void {
+  const keys: Array<string | number> = []
+  for (const [, name, index, quoted] of path.matchAll(SEGMENT)) {
+    if (name !== undefined) keys.push(name)
+    else if (index !== undefined) keys.push(Number(index))
+    else if (quoted !== undefined) keys.push(JSON.parse(quoted) as string)
+  }
+  const first = path.match(/^[A-Za-z_$][\w$]*/)?.[0]
+  if (first !== undefined) keys.unshift(first)
+  let node: unknown = root
+  for (const [i, key] of keys.entries()) {
+    const holder = node as Record<string, unknown> & unknown[]
+    const name =
+      typeof key === "number" && !Array.isArray(holder) ? (Object.keys(holder)[key] ?? "") : key
+    if (i === keys.length - 1) {
+      delete holder[name as string]
+      return
+    }
+    node = holder[name as string]
+  }
+}
+
 function run(parameters: Record<string, unknown>, name = "auth") {
-  const body = { model: "gpt-6-luna", tools: [{ type: "function", name, parameters }] }
+  const tool = { type: "function", name, description: "kept", strict: false, parameters }
+  const body = { model: "gpt-6-luna", tools: [tool] }
   const before = structuredClone(body)
   const drops: TranslationDrop[] = []
   const out = stripLookaroundPatternsFromTools(body, (drop) => drops.push(drop))
   expect(body).toEqual(before)
+  // The output is the input with exactly the reported patterns removed: nothing else is lost.
+  const expected = structuredClone(before)
+  for (const drop of drops) deleteAt(expected, drop.field)
+  expect(out).toEqual(expected)
   const tools = out.tools as ReadonlyArray<{ parameters: Record<string, unknown> }>
   return { out, body, params: tools[0]?.parameters, drops, paths: drops.map((d) => d.field).sort() }
 }
@@ -189,7 +223,7 @@ describe("what a drop report carries", () => {
   })
 })
 
-describe("depth bound", () => {
+describe("depth and size bounds", () => {
   function nest(levels: number): Record<string, unknown> {
     let schema: Record<string, unknown> = { type: "string", pattern: LOOK }
     for (let i = 0; i < levels; i += 1) schema = { type: "array", items: schema }
@@ -207,6 +241,25 @@ describe("depth bound", () => {
     const { out, body, drops } = run(parameters)
     expect(drops).toHaveLength(0)
     expect(out).toBe(body)
+  })
+
+  test(`more than ${MAX_SCHEMA_NODES} subschemas in a walked schema is refused, not walked to the end`, () => {
+    const parameters = {
+      description: "(?=x)",
+      anyOf: Array.from({ length: MAX_SCHEMA_NODES }, () => ({})),
+    }
+    const body = { tools: [{ type: "function", name: "wide", parameters }] }
+    expect(() => stripLookaroundPatternsFromTools(body, () => undefined)).toThrow(TranslationError)
+  })
+
+  test(`exactly ${MAX_SCHEMA_NODES} subschemas, the root included, is walked`, () => {
+    const anyOf: Array<Record<string, unknown>> = Array.from(
+      { length: MAX_SCHEMA_NODES - 2 },
+      () => ({}),
+    )
+    anyOf.push({ type: "string", pattern: LOOK })
+    const { paths } = run({ anyOf })
+    expect(paths).toEqual([`tools[0].parameters.anyOf[${MAX_SCHEMA_NODES - 2}].pattern`])
   })
 
   test("one level deeper is refused with a TranslationError (a 400), not a stack overflow", () => {
