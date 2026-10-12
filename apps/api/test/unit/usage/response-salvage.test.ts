@@ -226,5 +226,8 @@ test("a repeated optional key releases the earlier capture's bytes (#188)", () =
   const scanner = createResponseSalvage(64)
   const text = `{"code":"${"c".repeat(10)}","code":"${"d".repeat(10)}","usage":{"t":"${"u".repeat(20)}"}}`
   for (const byte of encoder.encode(text)) scanner.push(byte)
+  // The kept bytes are the last `code` (12) and `usage` (28) only; unreleased, the first `code`
+  // would still count, 52.
+  expect(scanner.retainedBytes).toBe(40)
   expect(scanner.finish()).toEqual({ code: "d".repeat(10), usage: { t: "u".repeat(20) } })
 })

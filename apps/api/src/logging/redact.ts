@@ -85,11 +85,13 @@ const SECRET_VALUE_PATTERNS: readonly ValuePattern[] = [
   { pattern: /\b(?:Bearer|Basic)\s+[A-Za-z0-9._~+/-]{8,}=*/gi, replacement: REDACTED },
   // Any JWT — three base64url segments whose header starts `{"`. ChatGPT/Codex access tokens are
   // JWTs, so without this they travel unscrubbed under any field name the `token` marker misses.
-  // The header segment is bounded (a real one is under a hundred characters): unbounded, a long
-  // `eyJaaaaa-…` run with no dot backtracked quadratically.
+  // The header segment is bounded to 512 characters (a typical header is well under that): unbounded,
+  // a long `eyJaaaaa-…` run with no dot backtracked quadratically.
   { pattern: /\beyJ[A-Za-z0-9_-]{5,512}\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]*/g, replacement: REDACTED },
   // A header over that bound (a DPoP proof's embedded key, an x5c chain). Anchored on a non-token
-  // character instead of `\b`, so a run can start a scan only once and the cost stays linear.
+  // character instead of `\b`, so a run can start a scan only once and the cost stays linear. The
+  // price: a long-header JWT glued straight after `-`, `_` or a letter is not matched; allowing
+  // those before it makes an `eyJ-eyJ-…` run quadratic again.
   {
     pattern: /(?<![A-Za-z0-9_-])eyJ[A-Za-z0-9_-]{513,}\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]*/g,
     replacement: REDACTED,
