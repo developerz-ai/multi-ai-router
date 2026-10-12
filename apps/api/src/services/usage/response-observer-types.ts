@@ -16,6 +16,13 @@ export interface ResponseObservationFacts {
   readonly terminal: "none" | "completed" | "explicit_error" | "explicit_incomplete"
   readonly failure: FailureClassification | null
   readonly incompleteReason: "max_output_tokens" | "content_filter" | "unknown" | null
+  /**
+   * The driver-supplied classification, when its `inspectPayload` answered non-null on a parsed
+   * frame. When set, `relay-terminal` reads this row's `signal` as the verdict's `errorClass`;
+   * when null, the verdict keeps the protocol-default `upstream_protocol_error`. The classification
+   * itself is the one passed to `health.recordFailure`, not a separate value.
+   */
+  readonly provider: FailureClassification | null
 }
 export interface ResponseObserver {
   observe(chunk: Uint8Array): void

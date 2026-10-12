@@ -4,6 +4,8 @@ import type { TranslationContext } from "../translate/registry"
 import { createResponseObserver, type UsageRecord } from "../usage"
 import { RouterShutdownError } from "./active-requests"
 import type { UpstreamError } from "./attempt"
+import { bounded } from "./attempt-log"
+import { DEFAULT_LOG_REASON_MAX_CHARS } from "./dispatcher-config"
 import { breakerOptionsFor } from "./health"
 import type { HealthObservation } from "./health-observation"
 import { observingModelOutput } from "./model-output"
@@ -54,6 +56,12 @@ export interface AttemptRelay {
     "includeUsage" | "clientStreams"
   >
   readonly log: Logger | undefined
+  /**
+   * The bound for `upstreamMessage` on a settle-path warn line — the operator's
+   * `LOG_REASON_MAX_CHARS`. Absent falls back to {@link DEFAULT_LOG_REASON_MAX_CHARS}, the
+   * value every other quoted reason in the process uses.
+   */
+  readonly reasonMaxChars?: number
   readonly request?: Request
 }
 
@@ -101,6 +109,18 @@ export function relaySuccess(
       const rateLimited = at.isRateLimited?.() ?? at.rateLimited ?? false
       at.recovery?.finish(rateLimited ? "failed" : verdict.recovery)
       if (verdict.failure !== null) {
+        // One warn line per failed attempt. The hook's own message is what the operator reads
+        // first when an in-stream refusal repeats (was: nothing). The logger's redactor scrubs
+        // any credential-looking substring before serialization, so the value here can be the raw
+        // upstream message — `bounded()` only chops length, never content.
+        ctx.log?.warn("upstream stream failure", {
+          accountId: servable.account.id,
+          errorClass: verdict.errorClass,
+          upstreamMessage: bounded(
+            facts.provider?.message,
+            ctx.reasonMaxChars ?? DEFAULT_LOG_REASON_MAX_CHARS,
+          ),
+        })
         ctx.runtime.health.recordFailure(
           servable.account.id,
           { ...verdict.failure, message: "upstream response stream failed" },

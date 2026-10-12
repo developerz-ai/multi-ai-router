@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.25.7] — 2026-10-12
+
+### Fixed
+
+- **Codex in-stream `response.failed` and bare `error` events on HTTP 200 are now classified by a driver hook, not the protocol default.** A new sibling file `apps/api/src/providers/drivers/openai-oauth-stream-errors.ts` (pure, no clock/store/logger/network) is wired from `openai-oauth.ts` as `responseObservation.inspectPayload`. The hook returns `null` for any frame whose type is not `response.failed` or `error` (O(1) read of `frame.type` only). For those two shapes it matches the `error.code` (then the nested `response.error.type`; never the flat event's top-level `type`, which is the event name `error`): request-shaped codes (`invalid_prompt`, `invalid_request_error`, `context_length_exceeded`, `unsupported_parameter`, `unsupported_value`, `invalid_json_schema`) → `invalid-request` (the breaker is not struck); `usage_limit_reached` / `rate_limit_exceeded` → `rate-limited`; `account_deactivated` → `credits-exhausted`; any other code or no code → `server-error` (fail-closed, three in a row cool the account). The verdict's `signal` is the closed `codex:stream-error:<code>` (or `codex:stream-error:other`) and is what `relay-terminal` writes into the usage row's `errorClass` when the hook answered; a hookless driver still records `upstream_protocol_error` unchanged (pinned by `causal-relay.test.ts`). The model-unsupported HTTP rule does not run in-stream. The hook is NOT the driver's HTTP `rules` array, so the existing 4xx/5xx classification is unchanged. The closed signal vocabulary is what keeps `error_class` cardinality bounded; the MiniMax in-body path (also driven by `inspectPayload`) moves from `upstream_protocol_error` to the closed `minimax:base_resp-<code|unknown>` signal — same generic rule, no `MiniMax` branch.
+
+- **A request-shaped in-stream refusal no longer cools the account.** Three `invalid_prompt` in a row leave `consecutiveFailures` 0 and the account `active`. Three `codex:stream-error:other` (server-error) in a row still cool the account, as before. The new in-stream rate-limited verdict trips the breaker on the first hit (a stream-only rate limit is a fact about the account, not about the request), and `account_deactivated` moves the account to `exhausted` on the first hit. Pinned by `apps/api/test/unit/providers/openai-oauth-stream-errors.test.ts` (the closed code list) and `apps/api/test/unit/services/usage/response-observer-codex.test.ts` (the observer integration). The existing `response-terminal.test.ts` "never expose raw messages" and MiniMax `not.toContain("do not persist this")` cases stay green unedited — the hook's `message` is sourced from the hook's own `FailureClassification.message` and is consumed only by the new warn line.
+
+- **A new `warn` line on the relay settle path names the upstream message.** `chain-relay.ts` emits one `upstream stream failure` line per failed attempt with `accountId`, `errorClass` (the closed allowlisted signal), and `upstreamMessage` (the hook's own message, bounded to `LOG_REASON_MAX_CHARS` via `bounded()` after the existing `logging/redact.ts` redaction — JWT, `sk-`, `Bearer`, and other patterns are covered). The line fires on any relay failure verdict, including mid-stream transport failures; mid-stream transports carry no upstream message, so the bounded value is `undefined` and the line still names the account and the `errorClass`. The usage row never receives the message — it carries only the allowlisted signal. No other log line carries the raw upstream message; the translated client error body keeps the scrubbed message per `docs/idea/06-protocol-translation.md`. Pinned by `apps/api/test/unit/dataplane/codex-stream-warn.test.ts`.
+
+### Documentation
+
+- **`docs/idea/05-routing-and-failover.md`** gains a row for in-stream upstream errors. Request-shaped codes do not strike the breaker (HTTP 4xx parity, `breaker.ts` `client-error` branch); in-stream rate limit trips the breaker on first occurrence with the observer forcing `rateLimit: null`; in-stream `account_deactivated` marks the account `exhausted`; unknown or absent codes fail closed to `server-error`.
+- **`docs/idea/08-observability.md`** updates the `errorClass` column definition from "the thrown class's name" to "a closed allowlisted signal — never a message, never a body" and adds the new settle-path `upstream stream failure` line to the log-line catalogue.
+
+Refs #188.
+
 ## [2.25.6] — 2026-10-11
 
 ### Fixed
@@ -1134,3 +1151,4 @@ your tooling config.
 [2.25.4]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.25.4
 [2.25.5]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.25.5
 [2.25.6]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.25.6
+[2.25.7]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.25.7

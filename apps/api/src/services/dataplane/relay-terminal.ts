@@ -33,13 +33,21 @@ export function createRelayTerminal() {
         facts.terminal === "explicit_error" ||
         facts.terminal === "explicit_incomplete"
       ) {
+        // `errorClass` is a closed allowlisted signal — the `error_class` metric label
+        // (`observability/series.ts`). When the driver hook answered, its `signal` is the
+        // bounded vocabulary; otherwise the protocol-default is `upstream_protocol_error`.
+        const errorClass =
+          facts.terminal === "explicit_error"
+            ? facts.provider !== null
+              ? facts.provider.signal
+              : "upstream_protocol_error"
+            : "upstream_incomplete"
         capture({
           outcome:
             facts.failure === null
               ? "upstream_error"
               : failureOutcome(failoverKind(facts.failure.kind, facts.failure.status)),
-          errorClass:
-            facts.terminal === "explicit_error" ? "upstream_protocol_error" : "upstream_incomplete",
+          errorClass,
           failure:
             facts.failure === null
               ? null
