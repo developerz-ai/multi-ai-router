@@ -153,39 +153,54 @@ describe("inspectCodexStreamFrame", () => {
 
   test.each([
     [
-      "error.type on an error event",
+      "error.type usage_limit_reached, no code",
       { type: "error", error: { type: "usage_limit_reached" } },
-      "usage_limit_reached",
+      "codex:stream-error:usage_limit_reached",
       "rate-limited",
     ],
     [
-      "error.type when error.code is null",
-      { type: "error", error: { type: "invalid_request_error", code: null, message: "bad" } },
-      "invalid_request_error",
-      "invalid-request",
-    ],
-    [
-      "response.error.type on response.failed",
-      { type: "response.failed", response: { error: { type: "invalid_request_error" } } },
-      "invalid_request_error",
-      "invalid-request",
-    ],
-    [
-      "response.error.type account_deactivated",
+      "response.error.type account_deactivated, no code",
       { type: "response.failed", response: { error: { type: "account_deactivated" } } },
-      "account_deactivated",
+      "codex:stream-error:account_deactivated",
       "credits-exhausted",
     ],
     [
-      "an unlisted code falls through to a listed nested type",
-      { type: "error", error: { code: "something_new", type: "invalid_request_error" } },
-      "invalid_request_error",
-      "invalid-request",
+      "error.type invalid_request_error, no code (OpenAI's catch-all type)",
+      { type: "error", error: { type: "invalid_request_error", code: null, message: "bad" } },
+      "codex:stream-error:other",
+      "server-error",
     ],
-  ])("the nested error type is read after the code: %s", (_label, frame, code, kind) => {
-    const verdict = inspectCodexStreamFrame(frame, undefined)
-    expect(verdict?.kind).toBe(kind)
-    expect(verdict?.signal).toBe(`codex:stream-error:${code}`)
+    [
+      "response.error.type invalid_request_error, no code",
+      { type: "response.failed", response: { error: { type: "invalid_request_error" } } },
+      "codex:stream-error:other",
+      "server-error",
+    ],
+    [
+      "an unlisted code is not overridden by a listed type (invalid_api_key)",
+      { type: "error", error: { code: "invalid_api_key", type: "invalid_request_error" } },
+      "codex:stream-error:other",
+      "server-error",
+    ],
+    [
+      "an unlisted code is not overridden by an account-level type either",
+      { type: "error", error: { code: "something_new", type: "usage_limit_reached" } },
+      "codex:stream-error:other",
+      "server-error",
+    ],
+  ])(
+    "the code decides; a nested type counts only without one, account-level only: %s",
+    (_label, frame, signal, kind) => {
+      const verdict = inspectCodexStreamFrame(frame, undefined)
+      expect(verdict?.kind).toBe(kind)
+      expect(verdict?.signal).toBe(signal)
+    },
+  )
+
+  test("a payload that is not an object is no error frame, whatever the SSE event says", () => {
+    for (const payload of [null, "oops", 42, ["error"]]) {
+      expect(inspectCodexStreamFrame(payload, "error")).toBeNull()
+    }
   })
 
   test("the model-unsupported HTTP rule does not run in-stream", () => {
