@@ -132,5 +132,10 @@ export function createTranslatedRequestBody(
 /** Part of the conversion cache key: two accounts with different surface rules convert separately. */
 function egressKey(rules: ResponsesEgressRules | undefined): string {
   if (rules === undefined) return "default"
-  return `${rules.requireStream}|${rules.requireInstructions}|${rules.unsupportedFields.join(",")}`
+  return [
+    rules.requireStream,
+    rules.requireInstructions,
+    rules.unsupportedFields.join(","),
+    rules.stripLookaroundPatterns,
+  ].join("|")
 }

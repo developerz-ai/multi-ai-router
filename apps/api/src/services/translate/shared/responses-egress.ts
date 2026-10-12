@@ -1,4 +1,5 @@
-import type { DropSink } from "./drops"
+import { type DropSink, IGNORE_DROPS } from "./drops"
+import { stripLookaroundPatternsFromTools } from "./schema-lookarounds"
 
 /**
  * What a particular OpenAI Responses *surface* demands of a body the router writes for it.
@@ -20,12 +21,20 @@ export interface ResponsesEgressRules {
   readonly requireInstructions: boolean
   /** Top-level Responses fields the upstream refuses. Removed, and reported by name. */
   readonly unsupportedFields: readonly string[]
+  /**
+   * The upstream compiles each tool schema's JSON-Schema `pattern`s and refuses a regex lookaround
+   * (`(?=`, `(?!`, `(?<=`, `(?<!`) with a `400`. When true, a `pattern` containing one is removed
+   * from translated tool schemas and reported by tool name and schema path, never by value. Which
+   * keywords are walked, and what is out of scope, is documented in `schema-lookarounds.ts`.
+   */
+  readonly stripLookaroundPatterns: boolean
 }
 
 export const DEFAULT_RESPONSES_EGRESS: ResponsesEgressRules = {
   requireStream: false,
   requireInstructions: false,
   unsupportedFields: [],
+  stripLookaroundPatterns: false,
 }
 
 const REFUSED_BY_SURFACE = "the target account's Responses surface refuses this field"
@@ -38,7 +47,7 @@ export function applyResponsesEgressRules(
   if (rules === undefined || typeof body !== "object" || body === null || Array.isArray(body)) {
     return body
   }
-  const out: Record<string, unknown> = { ...body }
+  let out: Record<string, unknown> = { ...body }
   for (const field of rules.unsupportedFields) {
     if (out[field] === undefined) continue
     delete out[field]
@@ -46,5 +55,8 @@ export function applyResponsesEgressRules(
   }
   if (rules.requireStream) out.stream = true
   if (rules.requireInstructions && typeof out.instructions !== "string") out.instructions = ""
+  if (rules.stripLookaroundPatterns) {
+    out = stripLookaroundPatternsFromTools(out, onDrop ?? IGNORE_DROPS)
+  }
   return out
 }

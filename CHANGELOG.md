@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.25.7] — 2026-10-11
+
+### Fixed
+
+- **Codex backend refuses tool-schema `pattern`s containing a regex lookaround.** A new `stripLookaroundPatterns` flag on `ResponsesEgressRules` (`apps/api/src/services/translate/shared/responses-egress.ts`) is `true` on `CODEX_RESPONSES_EGRESS` (`apps/api/src/providers/drivers/openai-oauth.ts`). On a translated request to that surface, `apps/api/src/services/translate/shared/schema-lookarounds.ts` removes every `pattern` containing a lookaround (`(?=`, `(?!`, `(?<=`, `(?<!`; a named group `(?<name>…)` is not one and is kept) from each tool's `parameters`, walking `items` (object and array form), `additionalItems`, `unevaluatedItems`, `prefixItems`, `additionalProperties`, `unevaluatedProperties`, `propertyNames`, `contains`, `contentSchema`, `not`, `if` / `then` / `else`, `anyOf` / `oneOf` / `allOf`, and the subschema values of `properties`, `patternProperties`, `$defs`, `definitions`, `dependentSchemas` and `dependencies` (its property-list arrays are kept as they are). Data keywords (`default`, `enum`, `examples`, `const`) are never entered; `patternProperties` regex keys are out of scope. Each removal is reported by tool name and schema path (a `patternProperties` entry by index), never by value, through the existing "translation dropped fields" warning. The walk never mutates its input (the parsed source is reused for later failover candidates), keeps a property named `__proto__`, returns the original object when nothing changed, skips the walk for a tool whose serialized schema holds no lookaround anywhere, and refuses a walked schema nested deeper than 64 levels, or walked schemas holding more than 10,000 subschemas across the whole request, with a `400`, so the walk's CPU per request is bounded. The flag is part of the conversion-cache key (`egressKey`, `apps/api/src/services/dataplane/translate-body.ts`). Same-dialect `/v1/responses` is relayed untouched (non-negotiable 10). Tests: `apps/api/test/unit/translate/schema-lookarounds.test.ts` (each lookaround form, named groups kept, every walked keyword with its reported path, data keywords kept, `__proto__`, the depth bound, the request-wide node bound, exact output with only the reported patterns removed, no mutation, report contents), `apps/api/test/unit/translate/responses-egress-rules.test.ts` (surface flags; the strip through the translators), `apps/api/test/unit/dataplane/translate-body.test.ts` (cache key), and `apps/api/test/integration/codex-translate.test.ts` (`/v1/messages` and `/v1/chat/completions` to a mocked Codex account send no lookaround upstream; a same-dialect `/v1/responses` body reaches the upstream byte-identical).
+
+### Documentation
+
+- **`docs/idea/06-protocol-translation.md`**: the "Surface rules" table gains `stripLookaroundPatterns`; the "Known lossy edges" table gains a row listing the walked keywords and what is out of scope; the "Tool and function calling" table names the strip under "Dropped and reported". **`docs/idea/03-providers.md`**: both `openai-oauth` rows (the summary row and "Translated bodies") name the strip. Refs #187.
+
 ## [2.25.6] — 2026-10-11
 
 ### Fixed
@@ -1134,3 +1144,4 @@ your tooling config.
 [2.25.4]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.25.4
 [2.25.5]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.25.5
 [2.25.6]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.25.6
+[2.25.7]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.25.7
