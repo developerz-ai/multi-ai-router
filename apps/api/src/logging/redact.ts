@@ -88,10 +88,17 @@ const SECRET_VALUE_PATTERNS: readonly ValuePattern[] = [
   // The header segment is bounded (a real one is under a hundred characters): unbounded, a long
   // `eyJaaaaa-…` run with no dot backtracked quadratically.
   { pattern: /\beyJ[A-Za-z0-9_-]{5,512}\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]*/g, replacement: REDACTED },
+  // A header over that bound (a DPoP proof's embedded key, an x5c chain). Anchored on a non-token
+  // character instead of `\b`, so a run can start a scan only once and the cost stays linear.
+  {
+    pattern: /(?<![A-Za-z0-9_-])eyJ[A-Za-z0-9_-]{513,}\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]*/g,
+    replacement: REDACTED,
+  },
   // URL userinfo — `postgres://user:pass@host/db` is how `DATABASE_URL` reaches a boot error.
   // The scheme is left out of the match (it stays in the text untouched): matching it made a long
   // `a-a-a-…` run backtrack quadratically, and bounding it let a scheme over the bound through.
-  { pattern: /:\/\/[^\s/:@]+:[^\s/@]+@/g, replacement: `://${REDACTED}@` },
+  // The username may be empty: `redis://:password@cache` carries only a password.
+  { pattern: /:\/\/[^\s/:@]*:[^\s/@]+@/g, replacement: `://${REDACTED}@` },
   // A credential passed in a query string, keeping the endpoint and the parameter that carried it.
   // `code`/`code_verifier`/`state` are here because a whole OAuth callback URL logged as one string
   // is not covered by the field-name list — nothing in this router reads a query parameter by those
