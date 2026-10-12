@@ -31,8 +31,11 @@ export function logAttemptFailure(
   })
 }
 
-/** Characters past the cut still scrubbed, so a credential straddling it is matched whole. */
-const REDACT_WINDOW_MARGIN = 512
+/**
+ * Characters past the cut still scrubbed, so a credential straddling it is matched whole: room for a
+ * ChatGPT access token (a JWT of under 2 KB) that begins just before the cut.
+ */
+const REDACT_WINDOW_MARGIN = 4096
 
 /**
  * The one line an operator reads when a relayed stream ends in an upstream error (an in-stream

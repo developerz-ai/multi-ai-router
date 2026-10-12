@@ -14,7 +14,8 @@ import type { FailureClassification, UpstreamFailureKind } from "../types"
  *   - a flat `{type:"error", code, message}`, the code at the top level.
  *
  * The code decides when there is one. Only when there is no code is the nested error object's
- * `type` read, and only for the limit and deactivated kinds, as the HTTP rules read it. The flat
+ * `type` read, and only for the limit and deactivated kinds (the HTTP rules' lists; unlike them, a
+ * code present always decides). The flat
  * event's own `type` is never read: it is the event name `error`, not a code.
  *
  * The mapping is a closed, stream-only list — the driver's HTTP `rules` are untouched:

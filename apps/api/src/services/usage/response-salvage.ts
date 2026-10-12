@@ -111,7 +111,10 @@ export function createResponseSalvage(maximumBytes: number): ResponseSalvage {
   }
   const endCapture = () => {
     if (capture === null) return
+    // A repeated key replaces the earlier capture, so release the earlier capture's bytes.
+    retained -= captured.get(capture.path)?.length ?? 0
     if (!capture.dropped) captured.set(capture.path, capture.bytes)
+    else captured.delete(capture.path)
     capture = null
   }
   const beginValue = (byte: number) => {
