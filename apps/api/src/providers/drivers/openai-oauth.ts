@@ -52,10 +52,13 @@ export const CODEX_ORIGINATOR_HEADER = "originator"
 // same-dialect body is relayed untouched). codex-rs `ResponsesApiRequest` always sends `stream: true`
 // and `instructions`, and never a ceiling or sampling field; opencode clears `maxOutputTokens` to
 // "match codex cli". The backend 400s on each deviation, so a translated request breaks outright.
+// It also compiles the JSON-Schema `pattern` and refuses a regex lookaround (`(?=`, `(?!`, `(?<=`,
+// `(?<!`) with `400` — stripped at the egress, reported by tool name + schema path.
 export const CODEX_RESPONSES_EGRESS: ResponsesEgressRules = {
   requireStream: true,
   requireInstructions: true,
   unsupportedFields: ["max_output_tokens", "temperature", "top_p"],
+  stripLookaroundPatterns: true,
 }
 
 export function openAiOAuthAuthorizeUrl(input: {

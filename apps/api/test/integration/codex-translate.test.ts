@@ -252,3 +252,150 @@ describe("chat completions ingress against a Codex account", () => {
     expect(usage.rows[0]).toMatchObject({ outcome: "success", tokensIn: 11, tokensOut: 7 })
   })
 })
+
+/**
+ * Production, 2026-10-11: the Codex backend compiles the JSON-Schema `pattern` and refuses a
+ * lookaround (`(?=`, `(?!`, `(?<=`, `(?<!`) with `400`. The router strips it on the translated
+ * egress path, so a client carrying a pattern it cannot compile still reaches a `200`.
+ */
+const TOOL_WITH_LOOKAROUND = {
+  name: "auth",
+  description: "Auth helper",
+  input_schema: {
+    type: "object",
+    properties: {
+      login: {
+        type: "string",
+        // Lookaround — the backend refuses this; the field is reported and stripped.
+        pattern: "(?=.*[A-Z]).{6,}",
+      },
+      email: {
+        type: "string",
+        // No lookaround — kept verbatim.
+        pattern: "^[a-z0-9._%+-]+@[a-z0-9.-]+\\.[a-z]{2,}$",
+      },
+    },
+    required: ["login"],
+  },
+}
+
+/** Same tool in openai-chat shape (`type: "function"` wrapper). */
+const TOOL_WITH_LOOKAROUND_CHAT = {
+  type: "function" as const,
+  function: {
+    name: "auth",
+    description: "Auth helper",
+    parameters: TOOL_WITH_LOOKAROUND.input_schema,
+  },
+}
+
+describe("a tool schema carrying a regex lookaround", () => {
+  test("anthropic ingress: the lookaround is stripped before the body reaches Codex; the call returns 200", async () => {
+    const { app, upstream, usage } = harness({
+      accounts: [codexAccount()],
+      responses: [codexStream],
+    })
+    const res = await app.request(
+      "/v1/messages",
+      post(
+        JSON.stringify({
+          model: "gpt-5.5",
+          max_tokens: 256,
+          messages: [{ role: "user", content: "log in" }],
+          tools: [TOOL_WITH_LOOKAROUND],
+        }),
+        bearer(),
+      ),
+    )
+    expect(res.status).toBe(200)
+
+    expect(upstream.calls).toHaveLength(1)
+    const sent = sentBody(upstream)
+    const tools = sent.tools as ReadonlyArray<{
+      parameters?: { properties?: Record<string, { pattern?: string }> }
+    }>
+    expect(tools).toHaveLength(1)
+    // Lookaround stripped.
+    expect(tools[0]?.parameters?.properties?.login?.pattern).toBeUndefined()
+    // Non-lookaround pattern kept.
+    expect(tools[0]?.parameters?.properties?.email?.pattern).toBe(
+      "^[a-z0-9._%+-]+@[a-z0-9.-]+\\.[a-z]{2,}$",
+    )
+    // The pattern value never reaches upstream — it is dropped, not forwarded.
+    expect(JSON.stringify(sent)).not.toContain("(?=.*[A-Z]")
+
+    await settle()
+    expect(usage.rows).toHaveLength(1)
+    expect(usage.rows[0]).toMatchObject({ outcome: "success", egressMode: "translate" })
+  })
+
+  test("chat ingress: the lookaround is stripped before the body reaches Codex; the call returns 200", async () => {
+    const { app, upstream, usage } = harness({
+      accounts: [codexAccount()],
+      responses: [codexStream],
+    })
+    const res = await app.request(
+      "/v1/chat/completions",
+      post(
+        JSON.stringify({
+          model: "gpt-5.5",
+          max_completion_tokens: 128,
+          messages: [{ role: "user", content: "log in" }],
+          tools: [TOOL_WITH_LOOKAROUND_CHAT],
+        }),
+        bearer(),
+      ),
+    )
+    expect(res.status).toBe(200)
+
+    expect(upstream.calls).toHaveLength(1)
+    const sent = sentBody(upstream)
+    const tools = sent.tools as ReadonlyArray<{
+      parameters?: { properties?: Record<string, { pattern?: string }> }
+    }>
+    expect(tools[0]?.parameters?.properties?.login?.pattern).toBeUndefined()
+    expect(tools[0]?.parameters?.properties?.email?.pattern).toBe(
+      "^[a-z0-9._%+-]+@[a-z0-9.-]+\\.[a-z]{2,}$",
+    )
+    expect(JSON.stringify(sent)).not.toContain("(?=.*[A-Z]")
+
+    await settle()
+    expect(usage.rows).toHaveLength(1)
+  })
+})
+
+describe("a same-dialect /v1/responses request carrying a lookaround tool schema", () => {
+  test("is relayed byte-identical: the strip applies only to bodies the router translates", async () => {
+    const { app, upstream, usage } = harness({
+      accounts: [codexAccount()],
+      responses: [codexStream],
+    })
+    const sentText = JSON.stringify({
+      model: "gpt-5.5",
+      stream: true,
+      store: false,
+      instructions: "",
+      input: [{ role: "user", content: [{ type: "input_text", text: "log in" }] }],
+      tools: [
+        {
+          type: "function",
+          name: "auth",
+          parameters: {
+            type: "object",
+            properties: { login: { type: "string", pattern: "^(?!-)[a-z]+$" } },
+          },
+        },
+      ],
+    })
+    const res = await app.request("/v1/responses", post(sentText, bearer()))
+    expect(res.status).toBe(200)
+    // A same-dialect stream is relayed as it arrives; read it to completion before inspecting.
+    expect(await res.text()).toContain("response.completed")
+    expect(upstream.calls).toHaveLength(1)
+    expect(upstream.calls[0]?.body).toBe(sentText)
+
+    await settle()
+    expect(usage.rows).toHaveLength(1)
+    expect(usage.rows[0]).toMatchObject({ egressMode: "passthrough" })
+  })
+})
