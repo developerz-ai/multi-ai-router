@@ -481,6 +481,17 @@ describe("redactValue cost", () => {
     expect(redactValue("see https://example.com/a:b@c")).toBe("see https://example.com/a:b@c")
   })
 
+  test("a JWT whose header is over 512 characters is still scrubbed whole", () => {
+    const segment = (bytes: number) => Buffer.from("k".repeat(bytes)).toString("base64url")
+    const jwt = `eyJ${segment(420)}.${segment(200)}.${segment(256)}`
+    expect(jwt.indexOf(".")).toBeGreaterThan(512)
+    expect(redactValue(`proof ${jwt} end`)).toBe(`proof ${REDACTED} end`)
+  })
+
+  test("a userinfo URL with an empty username is scrubbed", () => {
+    expect(redactValue("redis://:onlypassword@cache:6379")).toBe(`redis://${REDACTED}@cache:6379`)
+  })
+
   test("a userinfo URL with a long but real scheme is still scrubbed", () => {
     expect(redactValue("x postgresql+asyncpg://router:s3cr3t-pw@db.internal/app")).toBe(
       `x postgresql+asyncpg://${REDACTED}@db.internal/app`,
