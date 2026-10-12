@@ -262,6 +262,17 @@ describe("depth and size bounds", () => {
     expect(paths).toEqual([`tools[0].parameters.anyOf[${MAX_SCHEMA_NODES - 2}].pattern`])
   })
 
+  test("the node budget is shared across tools: splitting a wide schema does not escape it", () => {
+    const wide = () => ({
+      description: "(?=x)",
+      anyOf: Array.from({ length: 4_000 }, () => ({})),
+    })
+    const body = {
+      tools: ["a", "b", "c"].map((name) => ({ type: "function", name, parameters: wide() })),
+    }
+    expect(() => stripLookaroundPatternsFromTools(body, () => undefined)).toThrow(TranslationError)
+  })
+
   test("one level deeper is refused with a TranslationError (a 400), not a stack overflow", () => {
     const body = {
       tools: [{ type: "function", name: "deep", parameters: nest(MAX_SCHEMA_DEPTH + 1) }],

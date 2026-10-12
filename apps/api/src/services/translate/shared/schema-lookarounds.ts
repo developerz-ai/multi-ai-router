@@ -20,9 +20,11 @@ const LOOKAROUND = /\(\?(?:[=!]|<[=!])/
 
 /**
  * Structural guards, not tuning knobs: real tool schemas stay within a handful of levels and a few
- * hundred nodes. They bound this walk's own recursion and CPU, so a hostile schema becomes a `400`
- * rather than a stack overflow or a stalled event loop. (A body nested deeper than the request
- * scanner's `MAX_REQUEST_JSON_DEPTH` is refused before translation ever runs.)
+ * hundred nodes. They bound this walk's own recursion and CPU — the depth per schema, the node count
+ * across every walked tool in the request — so a hostile body becomes a `400` rather than a stack
+ * overflow or a long walk. The lookaround precheck's one serialization per tool is bounded by the
+ * request size cap, not by these; a body nested deeper than the request scanner's
+ * `MAX_REQUEST_JSON_DEPTH` is refused before translation ever runs.
  */
 export const MAX_SCHEMA_DEPTH = 64
 export const MAX_SCHEMA_NODES = 10_000
@@ -88,7 +90,8 @@ function mapSegment(keyword: string, key: string, index: number): string {
 interface WalkContext {
   readonly reason: string
   readonly onDrop: DropSink
-  nodes: number
+  /** Shared by every tool in the body: the bound is per request, so splitting a schema gains nothing. */
+  readonly budget: { nodes: number }
 }
 
 /** The walked value for one keyword, or the same reference when nothing under it changed. */
@@ -138,9 +141,9 @@ function walk(
   if (depth > MAX_SCHEMA_DEPTH) {
     rejectField(path, `nests deeper than ${MAX_SCHEMA_DEPTH} schema levels`)
   }
-  ctx.nodes += 1
-  if (ctx.nodes > MAX_SCHEMA_NODES) {
-    rejectField(path, `holds more than ${MAX_SCHEMA_NODES} subschemas`)
+  ctx.budget.nodes += 1
+  if (ctx.budget.nodes > MAX_SCHEMA_NODES) {
+    rejectField(path, `takes the request's tool schemas past ${MAX_SCHEMA_NODES} walked subschemas`)
   }
   let next: Record<string, unknown> | undefined
 
@@ -167,8 +170,8 @@ function walk(
  * and a tool are rebuilt only when something under them changed; otherwise the input is returned.
  * A schema whose serialized text holds no lookaround anywhere is not walked at all.
  *
- * @throws TranslationError when a walked schema nests deeper than {@link MAX_SCHEMA_DEPTH} or holds
- *   more than {@link MAX_SCHEMA_NODES} subschemas.
+ * @throws TranslationError when a walked schema nests deeper than {@link MAX_SCHEMA_DEPTH}, or the
+ *   walked schemas together hold more than {@link MAX_SCHEMA_NODES} subschemas.
  */
 export function stripLookaroundPatternsFromTools(
   body: Record<string, unknown>,
@@ -177,6 +180,7 @@ export function stripLookaroundPatternsFromTools(
   const tools = body.tools
   if (!Array.isArray(tools)) return body
   let nextTools: unknown[] | undefined
+  const budget = { nodes: 0 }
   for (const [index, tool] of tools.entries()) {
     if (!isPlainObject(tool) || !isPlainObject(tool.parameters)) continue
     const name = typeof tool.name === "string" ? tool.name : `tools[${index}]`
@@ -184,7 +188,7 @@ export function stripLookaroundPatternsFromTools(
     const parameters = tool.parameters
     // Most tools carry no lookaround anywhere: one serialization skips the walk and its copies.
     if (!LOOKAROUND.test(JSON.stringify(parameters))) continue
-    const walked = walk(parameters, `tools[${index}].parameters`, 0, { reason, onDrop, nodes: 0 })
+    const walked = walk(parameters, `tools[${index}].parameters`, 0, { reason, onDrop, budget })
     if (walked === parameters) continue
     nextTools ??= tools.slice()
     const nextTool = copyOf(tool)
