@@ -65,10 +65,14 @@ describe("every subschema keyword is walked", () => {
   test.each<[string, Record<string, unknown>, string]>([
     ["items (object)", { items: nested }, "items.pattern"],
     ["items (array)", { items: [{ type: "string" }, nested] }, "items[1].pattern"],
+    ["additionalItems", { additionalItems: nested }, "additionalItems.pattern"],
+    ["unevaluatedItems", { unevaluatedItems: nested }, "unevaluatedItems.pattern"],
     ["prefixItems", { prefixItems: [nested] }, "prefixItems[0].pattern"],
     ["additionalProperties", { additionalProperties: nested }, "additionalProperties.pattern"],
+    ["unevaluatedProperties", { unevaluatedProperties: nested }, "unevaluatedProperties.pattern"],
     ["propertyNames", { propertyNames: nested }, "propertyNames.pattern"],
     ["contains", { contains: nested }, "contains.pattern"],
+    ["contentSchema", { contentSchema: nested }, "contentSchema.pattern"],
     ["not", { not: nested }, "not.pattern"],
     ["if", { if: nested }, "if.pattern"],
     // biome-ignore lint/suspicious/noThenProperty: `then` is a JSON Schema keyword here, never awaited
@@ -82,13 +86,31 @@ describe("every subschema keyword is walked", () => {
     ["$defs", { $defs: { handle: nested } }, "$defs.handle.pattern"],
     ["definitions", { definitions: { handle: nested } }, "definitions.handle.pattern"],
     ["dependentSchemas", { dependentSchemas: { login: nested } }, "dependentSchemas.login.pattern"],
+    [
+      "dependencies (schema form)",
+      { dependencies: { login: nested, email: ["login"] } },
+      "dependencies.login.pattern",
+    ],
   ])("%s", (_keyword, schema, path) => {
-    const { paths } = run({ type: "object", ...schema })
+    const { out, body, paths } = run({ type: "object", ...schema })
     expect(paths).toEqual([`tools[0].parameters.${path}`])
+    expect(out).not.toBe(body)
+    expect(JSON.stringify(out)).not.toContain(LOOK)
+  })
+
+  test("dependencies in property-list form is kept as it was", () => {
+    const { out, body, params, drops } = run({
+      type: "object",
+      dependencies: { email: ["login"] },
+      properties: { login: { type: "string", pattern: LOOK } },
+    })
+    expect(drops).toHaveLength(1)
+    expect(out).not.toBe(body)
+    expect(params?.dependencies).toEqual({ email: ["login"] })
   })
 
   test("a deep mix reports every removal, and only those", () => {
-    const { paths } = run({
+    const { out, params, paths } = run({
       type: "object",
       properties: {
         tags: { type: "array", items: { type: "string", pattern: LOOK } },
@@ -101,6 +123,11 @@ describe("every subschema keyword is walked", () => {
       "tools[0].parameters.$defs.handle.pattern",
       "tools[0].parameters.properties.tags.items.pattern",
     ])
+    const text = JSON.stringify(out)
+    expect(text).not.toContain(LOOK)
+    expect(text).not.toContain("(?<!@)")
+    const props = params?.properties as Record<string, { pattern?: string }>
+    expect(props.keep?.pattern).toBe(PLAIN)
   })
 })
 
@@ -172,6 +199,14 @@ describe("depth bound", () => {
   test(`a schema ${MAX_SCHEMA_DEPTH} levels deep is walked`, () => {
     const { paths } = run(nest(MAX_SCHEMA_DEPTH))
     expect(paths).toHaveLength(1)
+  })
+
+  test("a schema deeper than the bound with no lookaround anywhere is not walked, so not refused", () => {
+    let parameters: Record<string, unknown> = { type: "string", pattern: PLAIN }
+    for (let i = 0; i <= MAX_SCHEMA_DEPTH; i += 1) parameters = { type: "array", items: parameters }
+    const { out, body, drops } = run(parameters)
+    expect(drops).toHaveLength(0)
+    expect(out).toBe(body)
   })
 
   test("one level deeper is refused with a TranslationError (a 400), not a stack overflow", () => {

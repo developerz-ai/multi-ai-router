@@ -28,18 +28,32 @@ export const MAX_SCHEMA_DEPTH = 64
 /** Keywords whose value is one subschema. `items` is listed here and in ARRAY: its two forms. */
 const SINGLE = [
   "items",
+  "additionalItems",
+  "unevaluatedItems",
   "not",
   "additionalProperties",
+  "unevaluatedProperties",
   "propertyNames",
   "contains",
+  "contentSchema",
   "if",
   "then",
   "else",
 ]
 /** Keywords whose value is an array of subschemas. */
 const ARRAY = ["items", "prefixItems", "anyOf", "oneOf", "allOf"]
-/** Keywords whose value maps names to subschemas. */
-const MAP = ["properties", "patternProperties", "$defs", "definitions", "dependentSchemas"]
+/**
+ * Keywords whose value maps names to subschemas. Draft-7 `dependencies` mixes subschema values with
+ * property-name arrays; only the object values are walked.
+ */
+const MAP = [
+  "properties",
+  "patternProperties",
+  "$defs",
+  "definitions",
+  "dependentSchemas",
+  "dependencies",
+]
 
 const IDENTIFIER = /^[A-Za-z_$][\w$]*$/
 
@@ -133,8 +147,9 @@ function walk(
 /**
  * Strip lookaround `pattern`s from every `tools[i].parameters` schema of a Responses body. The body
  * and a tool are rebuilt only when something under them changed; otherwise the input is returned.
+ * A schema whose serialized text holds no lookaround anywhere is not walked at all.
  *
- * @throws TranslationError when a schema nests deeper than {@link MAX_SCHEMA_DEPTH}.
+ * @throws TranslationError when a walked schema nests deeper than {@link MAX_SCHEMA_DEPTH}.
  */
 export function stripLookaroundPatternsFromTools(
   body: Record<string, unknown>,
@@ -148,6 +163,8 @@ export function stripLookaroundPatternsFromTools(
     const name = typeof tool.name === "string" ? tool.name : `tools[${index}]`
     const reason = `the target account's Responses surface cannot compile regex lookarounds in tool schemas (tool \`${name}\`)`
     const parameters = tool.parameters
+    // Most tools carry no lookaround anywhere: one serialization skips the walk and its copies.
+    if (!LOOKAROUND.test(JSON.stringify(parameters))) continue
     const walked = walk(parameters, `tools[${index}].parameters`, 0, { reason, onDrop })
     if (walked === parameters) continue
     nextTools ??= tools.slice()
