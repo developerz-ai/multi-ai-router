@@ -17,6 +17,8 @@ export function createResponseObserver(spec: ResponseObservationSpec): ResponseO
   let terminal: ResponseObservationFacts["terminal"] = "none"
   let failure: ResponseObservationFacts["failure"] = null
   let incompleteReason: ResponseObservationFacts["incompleteReason"] = null
+  /** The first driver-supplied classification, kept separately so `relay-terminal` can read its signal. */
+  let provider: ResponseObservationFacts["provider"] = null
   let finished = false
   const snapshot = (): ResponseObservationFacts =>
     Object.freeze({
@@ -26,6 +28,7 @@ export function createResponseObserver(spec: ResponseObservationSpec): ResponseO
       terminal,
       failure: failure === null ? null : Object.freeze({ ...failure }),
       incompleteReason,
+      provider: provider === null ? null : Object.freeze({ ...provider }),
     })
   const framing = createResponseFraming({
     contentType: spec.contentType,
@@ -43,10 +46,10 @@ export function createResponseObserver(spec: ResponseObservationSpec): ResponseO
         usageInvalid ||= reading.invalid
       }
       const observed = readResponseTerminal(spec.dialect, body, event)
-      const provider = spec.descriptor?.inspectPayload?.(body, event) ?? null
+      const providerClassification = spec.descriptor?.inspectPayload?.(body, event) ?? null
       if (terminal === "explicit_error") return
-      if (provider !== null || observed.failure !== null) {
-        const detected = provider ?? observed.failure
+      if (providerClassification !== null || observed.failure !== null) {
+        const detected = providerClassification ?? observed.failure
         terminal = "explicit_error"
         // Persist only fixed bounded classification vocabulary, never provider messages.
         failure =
@@ -59,6 +62,13 @@ export function createResponseObserver(spec: ResponseObservationSpec): ResponseO
                 signal: detected.signal,
                 rateLimit: null,
               }
+        // Retain the hook's verdict separately so `relay-terminal` can carry the bounded
+        // `codex:stream-error:<code>` signal into the usage row's `errorClass`. Without this,
+        // an in-stream Codex refusal would land on the protocol-default `upstream_protocol_error`
+        // and a `codex:stream-error:invalid_prompt` would be lost.
+        if (providerClassification !== null) {
+          provider = { ...providerClassification }
+        }
         incompleteReason = null
       } else if (observed.terminal === "explicit_incomplete") {
         terminal = "explicit_incomplete"

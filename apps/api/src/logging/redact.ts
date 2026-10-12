@@ -85,9 +85,22 @@ const SECRET_VALUE_PATTERNS: readonly ValuePattern[] = [
   { pattern: /\b(?:Bearer|Basic)\s+[A-Za-z0-9._~+/-]{8,}=*/gi, replacement: REDACTED },
   // Any JWT — three base64url segments whose header starts `{"`. ChatGPT/Codex access tokens are
   // JWTs, so without this they travel unscrubbed under any field name the `token` marker misses.
-  { pattern: /\beyJ[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]*/g, replacement: REDACTED },
+  // The header segment is bounded to 512 characters (a typical header is well under that): unbounded,
+  // a long `eyJaaaaa-…` run with no dot backtracked quadratically.
+  { pattern: /\beyJ[A-Za-z0-9_-]{5,512}\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]*/g, replacement: REDACTED },
+  // A header over that bound (a DPoP proof's embedded key, an x5c chain). Anchored on a non-token
+  // character instead of `\b`, so a run can start a scan only once and the cost stays linear. The
+  // price: a long-header JWT glued straight after `-`, `_` or a letter is not matched; allowing
+  // those before it makes an `eyJ-eyJ-…` run quadratic again.
+  {
+    pattern: /(?<![A-Za-z0-9_-])eyJ[A-Za-z0-9_-]{513,}\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]*/g,
+    replacement: REDACTED,
+  },
   // URL userinfo — `postgres://user:pass@host/db` is how `DATABASE_URL` reaches a boot error.
-  { pattern: /\b([a-z][a-z0-9+.-]*:)\/\/[^\s/:@]+:[^\s/@]+@/gi, replacement: `$1//${REDACTED}@` },
+  // The scheme is left out of the match (it stays in the text untouched): matching it made a long
+  // `a-a-a-…` run backtrack quadratically, and bounding it let a scheme over the bound through.
+  // The username may be empty: `redis://:password@cache` carries only a password.
+  { pattern: /:\/\/[^\s/:@]*:[^\s/@]+@/g, replacement: `://${REDACTED}@` },
   // A credential passed in a query string, keeping the endpoint and the parameter that carried it.
   // `code`/`code_verifier`/`state` are here because a whole OAuth callback URL logged as one string
   // is not covered by the field-name list — nothing in this router reads a query parameter by those

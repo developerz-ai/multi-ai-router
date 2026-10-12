@@ -4,6 +4,8 @@ import type { TranslationContext } from "../translate/registry"
 import { createResponseObserver, type UsageRecord } from "../usage"
 import { RouterShutdownError } from "./active-requests"
 import type { UpstreamError } from "./attempt"
+import { logStreamFailure } from "./attempt-log"
+import { DEFAULT_LOG_REASON_MAX_CHARS } from "./dispatcher-config"
 import { breakerOptionsFor } from "./health"
 import type { HealthObservation } from "./health-observation"
 import { observingModelOutput } from "./model-output"
@@ -54,6 +56,12 @@ export interface AttemptRelay {
     "includeUsage" | "clientStreams"
   >
   readonly log: Logger | undefined
+  /**
+   * The bound for `upstreamMessage` on a settle-path warn line — the operator's
+   * `LOG_REASON_MAX_CHARS`. Absent falls back to {@link DEFAULT_LOG_REASON_MAX_CHARS}, the
+   * value every other quoted reason in the process uses.
+   */
+  readonly reasonMaxChars?: number
   readonly request?: Request
 }
 
@@ -129,6 +137,16 @@ export function relaySuccess(
           errorClass: verdict.errorClass,
         }),
       )
+      // Last, so a logging fault cannot cost the breaker update or the usage row above.
+      if (verdict.failure !== null) {
+        logStreamFailure(
+          ctx.log,
+          servable.account.id,
+          verdict.errorClass,
+          facts.provider?.message,
+          ctx.reasonMaxChars ?? DEFAULT_LOG_REASON_MAX_CHARS,
+        )
+      }
     } finally {
       try {
         at.releaseProbe?.()

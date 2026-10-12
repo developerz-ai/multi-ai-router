@@ -20,6 +20,20 @@ const success: RelayVerdict = {
   recovery: "succeeded",
 }
 
+/**
+ * The shape every hook signal has (`<driver>:<rule>-<listed value>`). `errorClass` is the
+ * `error_class` metric label; this bounds its charset and length and turns an upstream sentence into
+ * the protocol default. It is not an allowlist: label cardinality rests on each hook building its
+ * signal from a closed list, as both current hooks do.
+ */
+const HOOK_SIGNAL = /^[a-z0-9-]+:[a-z0-9_:-]{1,64}$/
+
+/** The hook's closed signal when a driver hook answered, else the protocol default. */
+function explicitErrorClass(facts: ResponseObservationFacts): string {
+  const signal = facts.provider?.signal
+  return signal !== undefined && HOOK_SIGNAL.test(signal) ? signal : "upstream_protocol_error"
+}
+
 /** First observed causal evidence wins; mutable abort state never rewrites a verdict. */
 export function createRelayTerminal() {
   let first: RelayVerdict | undefined
@@ -33,13 +47,14 @@ export function createRelayTerminal() {
         facts.terminal === "explicit_error" ||
         facts.terminal === "explicit_incomplete"
       ) {
+        const errorClass =
+          facts.terminal === "explicit_error" ? explicitErrorClass(facts) : "upstream_incomplete"
         capture({
           outcome:
             facts.failure === null
               ? "upstream_error"
               : failureOutcome(failoverKind(facts.failure.kind, facts.failure.status)),
-          errorClass:
-            facts.terminal === "explicit_error" ? "upstream_protocol_error" : "upstream_incomplete",
+          errorClass,
           failure:
             facts.failure === null
               ? null

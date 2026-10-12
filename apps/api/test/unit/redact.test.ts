@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import { generateRouterKey } from "@multi-ai-router/core"
 import { createLogger } from "../../src/logging/logger"
-import { REDACTED, redact } from "../../src/logging/redact"
+import { REDACTED, redact, redactValue } from "../../src/logging/redact"
 
 describe("redact", () => {
   test("scrubs credential-bearing field names whatever the value is", () => {
@@ -455,5 +455,46 @@ describe("createLogger", () => {
     log.error("real")
 
     expect(lines).toHaveLength(1)
+  })
+})
+
+describe("redactValue cost", () => {
+  test("a long run of scheme-like characters is scanned in linear time (#188)", () => {
+    // Unbounded, the URL-userinfo scheme quantifier made this quadratic: 16 KB took seconds, and an
+    // upstream message reaching the logger can be 64 KB. The bound is loose, the regression is not.
+    for (const message of [
+      "a-".repeat(32 * 1024),
+      "eyJaaaaa-".repeat(8 * 1024),
+      "eyJ-".repeat(16 * 1024),
+      "a://b:".repeat(10 * 1024),
+    ]) {
+      const started = performance.now()
+      redactValue(message)
+      expect(performance.now() - started).toBeLessThan(500)
+    }
+  })
+
+  test("a userinfo URL behind any scheme, however long, is scrubbed", () => {
+    expect(redactValue(`${"a".repeat(40)}://router:s3cr3t-pw@db.internal`)).toBe(
+      `${"a".repeat(40)}://${REDACTED}@db.internal`,
+    )
+    expect(redactValue("see https://example.com/a:b@c")).toBe("see https://example.com/a:b@c")
+  })
+
+  test("a JWT whose header is over 512 characters is still scrubbed whole", () => {
+    const segment = (bytes: number) => Buffer.from("k".repeat(bytes)).toString("base64url")
+    const jwt = `eyJ${segment(420)}.${segment(200)}.${segment(256)}`
+    expect(jwt.indexOf(".")).toBeGreaterThan(512)
+    expect(redactValue(`proof ${jwt} end`)).toBe(`proof ${REDACTED} end`)
+  })
+
+  test("a userinfo URL with an empty username is scrubbed", () => {
+    expect(redactValue("redis://:onlypassword@cache:6379")).toBe(`redis://${REDACTED}@cache:6379`)
+  })
+
+  test("a userinfo URL with a long but real scheme is still scrubbed", () => {
+    expect(redactValue("x postgresql+asyncpg://router:s3cr3t-pw@db.internal/app")).toBe(
+      `x postgresql+asyncpg://${REDACTED}@db.internal/app`,
+    )
   })
 })

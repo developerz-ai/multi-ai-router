@@ -22,8 +22,9 @@ import { request } from "./client"
 //   - **A label may be null**, with a `note` saying why, exactly as a breakdown
 //     row does: `deleted` when the subject is gone (usage rows outlive what they
 //     name), `none` when the dimension did not apply.
-//   - **Nothing here can carry a credential.** `errorClass` is a class name, not
-//     a message, and no request or response body is stored anywhere to leak.
+//   - **Nothing here can carry a credential.** `errorClass` is a closed signal or
+//     class name, never a message, and no request or response body is stored
+//     anywhere to leak.
 //
 // Everything imported from `@multi-ai-router/core` is imported **as a type**, and
 // the outcome list below is restated rather than read off `UsageOutcome.options`.
