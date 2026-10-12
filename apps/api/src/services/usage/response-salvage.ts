@@ -11,10 +11,17 @@ import { responseObject } from "./response-usage"
 
 // Shallow members kept verbatim, by parent key (root = ""). Everything else is skipped unread.
 const SLOTS: Readonly<Record<string, readonly string[]>> = {
-  "": ["type", "usage", "status", "incomplete_details"],
+  "": ["type", "usage", "status", "incomplete_details", "error", "code"],
   message: ["usage"],
-  response: ["usage", "status", "incomplete_details"],
+  response: ["usage", "status", "incomplete_details", "error"],
 }
+/**
+ * Error evidence a driver hook classifies from (`code`, the nested `error`; a root `message` is
+ * Anthropic's message object, so it is not a slot). Kept when it is small,
+ * and dropped — never failing the salvage — when it is not: a lost code reads as an unclassified
+ * failure, while a failed salvage would lose the failure itself.
+ */
+const OPTIONAL = new Set(["error", "code", "response.error"])
 const KEY_MAX_BYTES = 32
 const QUOTE = 34
 const BACKSLASH = 92
@@ -30,6 +37,8 @@ interface Capture {
   readonly depth: number
   readonly kind: "string" | "container" | "primitive"
   bytes: number[]
+  /** An optional slot that outgrew its share: its bytes are released and nothing is kept. */
+  dropped: boolean
 }
 
 export interface ResponseSalvage {
@@ -70,8 +79,15 @@ export function createResponseSalvage(maximumBytes: number): ResponseSalvage {
     }
     return null
   }
+  const optionalMaxBytes = Math.floor(maximumBytes / 4)
   const keep = (byte: number) => {
-    if (capture === null) return
+    if (capture === null || capture.dropped) return
+    if (OPTIONAL.has(capture.path) && capture.bytes.length >= optionalMaxBytes) {
+      retained -= capture.bytes.length
+      capture.bytes = []
+      capture.dropped = true
+      return
+    }
     if (retained >= maximumBytes) {
       failed = true
       capture = null
@@ -82,7 +98,7 @@ export function createResponseSalvage(maximumBytes: number): ResponseSalvage {
   }
   const endCapture = () => {
     if (capture === null) return
-    captured.set(capture.path, capture.bytes)
+    if (!capture.dropped) captured.set(capture.path, capture.bytes)
     capture = null
   }
   const beginValue = (byte: number) => {
@@ -101,6 +117,7 @@ export function createResponseSalvage(maximumBytes: number): ResponseSalvage {
             ? "container"
             : "primitive",
       bytes: [],
+      dropped: false,
     }
   }
   const whitespace = (byte: number) => byte === 32 || byte === 9 || byte === 10 || byte === 13
@@ -211,7 +228,7 @@ export function createResponseSalvage(maximumBytes: number): ResponseSalvage {
       } catch {
         return null
       }
-      if (errorObject) parts.error = {}
+      if (errorObject && responseObject(parts.error) === undefined) parts.error = {}
       return parts
     },
     get retainedBytes() {

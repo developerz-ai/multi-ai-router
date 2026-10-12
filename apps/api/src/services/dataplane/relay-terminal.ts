@@ -20,6 +20,20 @@ const success: RelayVerdict = {
   recovery: "succeeded",
 }
 
+/**
+ * A driver hook's signal in the closed shape every hook uses (`<driver>:<rule>-<listed value>`).
+ * `errorClass` is the `error_class` metric label, so a signal outside this shape — a hook that
+ * ever interpolated an upstream value — falls back to the protocol default instead of becoming
+ * an unbounded label.
+ */
+const HOOK_SIGNAL = /^[a-z0-9-]+:[a-z0-9_:-]{1,64}$/
+
+/** The hook's closed signal when a driver hook answered, else the protocol default. */
+function explicitErrorClass(facts: ResponseObservationFacts): string {
+  const signal = facts.provider?.signal
+  return signal !== undefined && HOOK_SIGNAL.test(signal) ? signal : "upstream_protocol_error"
+}
+
 /** First observed causal evidence wins; mutable abort state never rewrites a verdict. */
 export function createRelayTerminal() {
   let first: RelayVerdict | undefined
@@ -33,15 +47,8 @@ export function createRelayTerminal() {
         facts.terminal === "explicit_error" ||
         facts.terminal === "explicit_incomplete"
       ) {
-        // `errorClass` is a closed allowlisted signal — the `error_class` metric label
-        // (`observability/series.ts`). When the driver hook answered, its `signal` is the
-        // bounded vocabulary; otherwise the protocol-default is `upstream_protocol_error`.
         const errorClass =
-          facts.terminal === "explicit_error"
-            ? facts.provider !== null
-              ? facts.provider.signal
-              : "upstream_protocol_error"
-            : "upstream_incomplete"
+          facts.terminal === "explicit_error" ? explicitErrorClass(facts) : "upstream_incomplete"
         capture({
           outcome:
             facts.failure === null

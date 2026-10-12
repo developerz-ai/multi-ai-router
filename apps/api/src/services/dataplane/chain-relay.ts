@@ -4,7 +4,7 @@ import type { TranslationContext } from "../translate/registry"
 import { createResponseObserver, type UsageRecord } from "../usage"
 import { RouterShutdownError } from "./active-requests"
 import type { UpstreamError } from "./attempt"
-import { bounded } from "./attempt-log"
+import { logStreamFailure } from "./attempt-log"
 import { DEFAULT_LOG_REASON_MAX_CHARS } from "./dispatcher-config"
 import { breakerOptionsFor } from "./health"
 import type { HealthObservation } from "./health-observation"
@@ -109,18 +109,6 @@ export function relaySuccess(
       const rateLimited = at.isRateLimited?.() ?? at.rateLimited ?? false
       at.recovery?.finish(rateLimited ? "failed" : verdict.recovery)
       if (verdict.failure !== null) {
-        // One warn line per failed attempt. The hook's own message is what the operator reads
-        // first when an in-stream refusal repeats (was: nothing). The logger's redactor scrubs
-        // any credential-looking substring before serialization, so the value here can be the raw
-        // upstream message — `bounded()` only chops length, never content.
-        ctx.log?.warn("upstream stream failure", {
-          accountId: servable.account.id,
-          errorClass: verdict.errorClass,
-          upstreamMessage: bounded(
-            facts.provider?.message,
-            ctx.reasonMaxChars ?? DEFAULT_LOG_REASON_MAX_CHARS,
-          ),
-        })
         ctx.runtime.health.recordFailure(
           servable.account.id,
           { ...verdict.failure, message: "upstream response stream failed" },
@@ -149,6 +137,16 @@ export function relaySuccess(
           errorClass: verdict.errorClass,
         }),
       )
+      // Last, so a logging fault cannot cost the breaker update or the usage row above.
+      if (verdict.failure !== null) {
+        logStreamFailure(
+          ctx.log,
+          servable.account.id,
+          verdict.errorClass,
+          facts.provider?.message,
+          ctx.reasonMaxChars ?? DEFAULT_LOG_REASON_MAX_CHARS,
+        )
+      }
     } finally {
       try {
         at.releaseProbe?.()

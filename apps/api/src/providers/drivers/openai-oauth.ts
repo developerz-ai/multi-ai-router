@@ -16,7 +16,11 @@ import type {
 import { openAiDeviceFlow } from "./openai-oauth-device"
 import { CODEX_MODEL_FAMILY, codexModelListing } from "./openai-oauth-models"
 import { codexSignal } from "./openai-oauth-quota"
-import { inspectCodexStreamFrame } from "./openai-oauth-stream-errors"
+import {
+  CODEX_DEACTIVATED_CODES,
+  CODEX_LIMIT_CODES,
+  inspectCodexStreamFrame,
+} from "./openai-oauth-stream-errors"
 
 // Pinned from the first-party Codex CLI (openai/codex `codex-rs/login`), cross-checked against
 // opencode's `plugin/openai/codex.ts` (2026-10-04). Blast radius for each: every ChatGPT account.
@@ -213,8 +217,8 @@ export function readCodexFacts(body: unknown): UpstreamErrorFacts {
   return typeof detail === "string" ? { message: detail } : detail
 }
 
-const LIMIT_CODES = ["usage_limit_reached", "rate_limit_exceeded"]
-const DEACTIVATED_CODES = ["account_deactivated"]
+const LIMIT_CODES = CODEX_LIMIT_CODES
+const DEACTIVATED_CODES = CODEX_DEACTIVATED_CODES
 
 const CODEX_MODEL_REFUSED = /model is not supported when using codex/i
 

@@ -1,4 +1,5 @@
 import type { Logger } from "../../logging/logger"
+import { redactValue } from "../../logging/redact"
 import type { AttemptOutcome } from "./attempt"
 
 /**
@@ -27,6 +28,30 @@ export function logAttemptFailure(
     signal: outcome.classification?.signal,
     reason: outcome.failure.message,
     upstreamMessage: bounded(outcome.classification?.message, reasonMaxChars),
+  })
+}
+
+/**
+ * The one line an operator reads when a relayed stream ends in an upstream error (an in-stream
+ * Codex refusal, a MiniMax in-body failure, a protocol error). `errorClass` is the closed signal
+ * the usage row carries; `upstreamMessage` is the driver hook's reading of the upstream's words,
+ * which never reaches a usage row. Redacted before it is cut, so truncation cannot split a
+ * credential below the length its pattern needs and leave a fragment for the logger to miss.
+ */
+export function logStreamFailure(
+  log: Logger | undefined,
+  accountId: string,
+  errorClass: string | null,
+  message: string | undefined,
+  reasonMaxChars: number,
+): void {
+  log?.warn("upstream stream failure", {
+    accountId,
+    errorClass,
+    upstreamMessage: bounded(
+      message === undefined ? undefined : redactValue(message),
+      reasonMaxChars,
+    ),
   })
 }
 

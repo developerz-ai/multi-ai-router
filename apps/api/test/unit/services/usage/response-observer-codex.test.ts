@@ -181,3 +181,48 @@ describe("minimax closed base_resp signal stays bounded under the generic rule",
     expect(facts.failure?.signal).toBe("minimax:base_resp-1008")
   })
 })
+
+describe("errorClass from a driver hook, through relay-terminal", () => {
+  test("a MiniMax in-body failure records its closed base_resp signal as errorClass", () => {
+    const observer = createResponseObserver({
+      dialect: "anthropic",
+      operation: "messages",
+      contentType: "application/json",
+      maximumObservationBytes: 1024,
+      descriptor: miniMaxDriver.responseObservation,
+    })
+    observer.observe(
+      encoder.encode(JSON.stringify({ base_resp: { status_code: 1008, status_msg: "x" } })),
+    )
+    const terminal = createRelayTerminal()
+    terminal.observe(observer.finish())
+    expect(terminal.finish(observer.finish()).errorClass).toBe("minimax:base_resp-1008")
+  })
+
+  test.each([
+    ["an upstream sentence", "codex:stream-error:Invalid prompt: we refused it"],
+    ["no driver prefix", "invalid_prompt"],
+    ["an unbounded value", `codex:${"x".repeat(100)}`],
+  ])(
+    "a hook signal outside the closed shape (%s) falls back to upstream_protocol_error",
+    (_label, signal) => {
+      const observer = createResponseObserver({
+        dialect: "openai-responses",
+        operation: "messages",
+        contentType: "text/event-stream",
+        maximumObservationBytes: 1024,
+        descriptor: {
+          terminalPolicy: "evidence-only",
+          inspectPayload: (payload) =>
+            (payload as { type?: string }).type === "response.failed"
+              ? { kind: "server-error", status: 200, retryable: true, signal, rateLimit: null }
+              : null,
+        },
+      })
+      observer.observe(encoder.encode(frame({ type: "response.failed", response: {} })))
+      const terminal = createRelayTerminal()
+      terminal.observe(observer.finish())
+      expect(terminal.finish(observer.finish()).errorClass).toBe("upstream_protocol_error")
+    },
+  )
+})
