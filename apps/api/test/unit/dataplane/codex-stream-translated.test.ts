@@ -161,3 +161,17 @@ describe("in-stream Codex refusal on a translated, non-streamed /v1/messages", (
     expect(JSON.stringify(lines)).not.toContain("sk-LIVE")
   })
 })
+
+describe("a long access token straddling the cut", () => {
+  test("a ~1.8 KB JWT that begins just before the cut is redacted whole", async () => {
+    const segment = (bytes: number) => Buffer.from("x".repeat(bytes)).toString("base64url")
+    const jwt = `eyJhbGciOiJSUzI1NiJ9.${segment(1300)}.${segment(256)}`
+    expect(jwt.length).toBeGreaterThan(1700)
+    const { lines } = await translated(
+      failed({ code: "invalid_prompt", message: `token rejected: ${jwt}` }),
+    )
+    const text = JSON.stringify(lines)
+    expect(text).not.toContain("eyJhbGciOiJSUzI1NiJ9")
+    expect(text).not.toContain(segment(1300).slice(0, 20))
+  })
+})

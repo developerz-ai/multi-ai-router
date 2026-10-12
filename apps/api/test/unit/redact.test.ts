@@ -462,10 +462,23 @@ describe("redactValue cost", () => {
   test("a long run of scheme-like characters is scanned in linear time (#188)", () => {
     // Unbounded, the URL-userinfo scheme quantifier made this quadratic: 16 KB took seconds, and an
     // upstream message reaching the logger can be 64 KB. The bound is loose, the regression is not.
-    const message = "a-".repeat(32 * 1024)
-    const started = performance.now()
-    redactValue(message)
-    expect(performance.now() - started).toBeLessThan(500)
+    for (const message of [
+      "a-".repeat(32 * 1024),
+      "eyJaaaaa-".repeat(8 * 1024),
+      "eyJ-".repeat(16 * 1024),
+      "a://b:".repeat(10 * 1024),
+    ]) {
+      const started = performance.now()
+      redactValue(message)
+      expect(performance.now() - started).toBeLessThan(500)
+    }
+  })
+
+  test("a userinfo URL behind any scheme, however long, is scrubbed", () => {
+    expect(redactValue(`${"a".repeat(40)}://router:s3cr3t-pw@db.internal`)).toBe(
+      `${"a".repeat(40)}://${REDACTED}@db.internal`,
+    )
+    expect(redactValue("see https://example.com/a:b@c")).toBe("see https://example.com/a:b@c")
   })
 
   test("a userinfo URL with a long but real scheme is still scrubbed", () => {
