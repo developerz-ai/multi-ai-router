@@ -35,6 +35,10 @@ const OPTIONAL = new Set(["error", "code", "response.error"])
  * code is a small integer; anything longer cannot classify anyway.
  */
 const SLOT_MAX_BYTES: ReadonlyMap<string, number> = new Map([["base_resp.status_code", 32]])
+/** Each ceiling slot by the root key that parents it, so a repeated parent releases its children. */
+const CEILING_CHILDREN: ReadonlyMap<string, readonly string[]> = new Map([
+  ["base_resp", ["base_resp.status_code"]],
+])
 const KEY_MAX_BYTES = 32
 const QUOTE = 34
 const BACKSLASH = 92
@@ -176,9 +180,14 @@ export function createResponseSalvage(maximumBytes: number): ResponseSalvage {
     if (depth === 1 && objects[1] && !expectKey[1] && keys[1] === "error" && byte === OPEN_OBJECT)
       errorObject = true
     if (capture !== null) return
+    // Last wins, as in JSON.parse: a new value under a parent key replaces whatever its children
+    // held, whether or not the new value carries them again.
+    if (depth === 1 && objects[1] && !expectKey[1] && keys[1] != null) {
+      release(CEILING_CHILDREN.get(keys[1]) ?? [])
+    }
     const path = slotAt()
     if (path === null) return
-    // Last wins, as in JSON.parse: a repeated ceiling slot's earlier copy is dead either way.
+    // The same for a repeated ceiling slot inside one parent.
     if (SLOT_MAX_BYTES.has(path)) release([path])
     capture = {
       path,

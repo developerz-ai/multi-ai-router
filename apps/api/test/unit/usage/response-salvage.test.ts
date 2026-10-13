@@ -306,7 +306,7 @@ test("lent room stays with a kept capture and is not double-counted later (#207 
   expect(rebuilt).not.toHaveProperty("base_resp")
 })
 
-test("a repeated base_resp keeps the last status code, as JSON.parse does (#207 round 7)", () => {
+test("a repeated status_code keeps the last one, as JSON.parse does (#207 round 7)", () => {
   const scanner = createResponseSalvage(64)
   const text = `{"base_resp":{"status_code":1008},"usage":{"p":"${"x".repeat(52)}"},"code":"${"c".repeat(40)}","base_resp":{"status_code":1002}}`
   for (const byte of encoder.encode(text)) {
@@ -315,3 +315,14 @@ test("a repeated base_resp keeps the last status code, as JSON.parse does (#207 
   }
   expect(scanner.finish()).toMatchObject({ base_resp: { status_code: 1002 } })
 })
+
+test.each(['{"status_msg":"x"}', "{}", "null", "5"])(
+  "a later base_resp of %s replaces the earlier code, as JSON.parse does (#207 round 8)",
+  (later) => {
+    const scanner = createResponseSalvage(64)
+    const text = `{"base_resp":{"status_code":1008},"base_resp":${later},"pad":"${"x".repeat(200)}"}`
+    for (const byte of encoder.encode(text)) scanner.push(byte)
+    const rebuilt = scanner.finish()
+    expect(rebuilt?.base_resp).toBeUndefined()
+  },
+)
