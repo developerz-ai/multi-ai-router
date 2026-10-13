@@ -11,17 +11,18 @@ import { responseObject } from "./response-usage"
 
 // Shallow members kept verbatim, by parent key (root = ""). Everything else is skipped unread.
 const SLOTS: Readonly<Record<string, readonly string[]>> = {
-  "": ["type", "usage", "status", "incomplete_details", "error", "code"],
+  "": ["type", "usage", "status", "incomplete_details", "error", "code", "base_resp"],
   message: ["usage"],
   response: ["usage", "status", "incomplete_details", "error"],
 }
 /**
- * Error evidence a driver hook classifies from (`code`, the nested `error`; a root `message` is
- * Anthropic's message object, so it is not a slot). Kept when it is small,
+ * Error evidence a driver hook classifies from (`code`, the nested `error`, MiniMax's `base_resp`,
+ * which carries its failures on a 200; a root `message` is Anthropic's message object, so it is not
+ * a slot). Kept when it is small,
  * and dropped — never failing the salvage — when it is not: a lost code reads as an unclassified
  * failure, while a failed salvage would lose the failure itself.
  */
-const OPTIONAL = new Set(["error", "code", "response.error"])
+const OPTIONAL = new Set(["error", "code", "base_resp", "response.error"])
 const KEY_MAX_BYTES = 32
 const QUOTE = 34
 const BACKSLASH = 92
