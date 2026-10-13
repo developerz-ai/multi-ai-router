@@ -178,6 +178,8 @@ export function createResponseSalvage(maximumBytes: number): ResponseSalvage {
     if (capture !== null) return
     const path = slotAt()
     if (path === null) return
+    // Last wins, as in JSON.parse: a repeated ceiling slot's earlier copy is dead either way.
+    if (SLOT_MAX_BYTES.has(path)) release([path])
     capture = {
       path,
       depth,

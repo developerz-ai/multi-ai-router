@@ -21,7 +21,9 @@ import type { FailureClassification, UpstreamFailureKind } from "../types"
  * own JSON `type` is `response.failed`: the only place the Codex CLI's stream parser reads one
  * (every other shape is retried or skipped there), so no other shape may park the account here.
  * One deliberate widening: the CLI's typed parse also rejects such a frame when a sibling field of
- * `response.error` has the wrong type (`plan_type: 42`) and retries it; the code alone decides here.
+ * `response.error` has the wrong type (`plan_type: 42`) and retries it, and skips the whole frame
+ * when a root field it parses has the wrong type (`delta: 42`) or a known root key repeats; the code
+ * alone decides here.
  * The flat event's own `type` is never read: it is the event name `error`, not a code.
  *
  * The mapping is a closed list. The driver's HTTP `rules` share the limit, deactivated and quota
