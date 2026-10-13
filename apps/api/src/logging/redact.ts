@@ -100,7 +100,14 @@ const SECRET_VALUE_PATTERNS: readonly ValuePattern[] = [
   // The scheme is left out of the match (it stays in the text untouched): matching it made a long
   // `a-a-a-…` run backtrack quadratically, and bounding it let a scheme over the bound through.
   // The username may be empty: `redis://:password@cache` carries only a password.
-  { pattern: /:\/\/[^\s/:@]*:[^\s/@]+@/g, replacement: `://${REDACTED}@` },
+  // A password may hold an unencoded `/` (`postgres://u:p/ss@h`): the first branch allows it but is
+  // bounded to 256 characters, so a scan from each `://` stays bounded and the cost linear; it also
+  // stops at `"`, so it cannot run across a JSON field into an unrelated `@`. The second branch is
+  // the unbounded original, which stops at `/`. Price: `https://host:8080/a@b` loses its host.
+  {
+    pattern: /:\/\/[^\s/:@]*:(?:[^\s@"]{1,256}|[^\s/@]+)@/g,
+    replacement: `://${REDACTED}@`,
+  },
   // A credential passed in a query string, keeping the endpoint and the parameter that carried it.
   // `code`/`code_verifier`/`state` are here because a whole OAuth callback URL logged as one string
   // is not covered by the field-name list — nothing in this router reads a query parameter by those

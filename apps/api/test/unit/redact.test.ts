@@ -467,6 +467,8 @@ describe("redactValue cost", () => {
       "eyJaaaaa-".repeat(8 * 1024),
       "eyJ-".repeat(16 * 1024),
       "a://b:".repeat(10 * 1024),
+      "://u:p/".repeat(10 * 1024),
+      `://u:${"p/".repeat(32 * 1024)}`,
     ]) {
       const started = performance.now()
       redactValue(message)
@@ -490,6 +492,13 @@ describe("redactValue cost", () => {
 
   test("a userinfo URL with an empty username is scrubbed", () => {
     expect(redactValue("redis://:onlypassword@cache:6379")).toBe(`redis://${REDACTED}@cache:6379`)
+  })
+
+  test("a userinfo password with an unencoded `/` is scrubbed whole (#206)", () => {
+    expect(redactValue("connect failed: postgres://u:p/ss@h:5432/app")).toBe(
+      `connect failed: postgres://${REDACTED}@h:5432/app`,
+    )
+    expect(redactValue("redis://:a/b/c@cache")).toBe(`redis://${REDACTED}@cache`)
   })
 
   test("a userinfo URL with a long but real scheme is still scrubbed", () => {
