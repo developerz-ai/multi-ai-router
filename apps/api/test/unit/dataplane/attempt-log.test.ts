@@ -73,6 +73,36 @@ describe("logAttemptFailure (#206)", () => {
     expect(quoted.length).toBe(200)
   })
 
+  test("a token far longer than the window still leaves the words before it (#207 round 3)", () => {
+    for (const message of [
+      `Failed: Bearer ${"t".repeat(30_000)} ${"x".repeat(5_000)}`,
+      Array.from(
+        { length: 400 },
+        (_, i) => `sk-${String(i).padStart(12, "k")}abcdefghijklmnop`,
+      ).join(","),
+    ]) {
+      const { log, lines } = captured()
+      logAttemptFailure(log, "a", 1, failure(message), 200)
+      const quoted = lines[0]?.upstreamMessage
+      if (typeof quoted !== "string") throw new Error("the line carries no upstreamMessage")
+      expect(quoted.length).toBeGreaterThan(10)
+      expect(quoted.length).toBeLessThanOrEqual(200)
+      expect(quoted).not.toContain("abcdefghijklmnop")
+    }
+  })
+
+  test("a cut never splits a [REDACTED] marker, so the logged line stays within the bound", () => {
+    for (let pad = 0; pad < 20; pad++) {
+      const { log, lines } = captured()
+      // The logger's own pass re-expands a cut `?token=[RE…` to `?token=[REDACTED]`.
+      const message = `${"p".repeat(pad + 10)} https://h/cb?token=abcdefgh ${"x".repeat(6_000)}`
+      logAttemptFailure(log, "a", 1, failure(message), 40)
+      const quoted = lines[0]?.upstreamMessage
+      if (typeof quoted !== "string") throw new Error("the line carries no upstreamMessage")
+      expect(quoted.length).toBeLessThanOrEqual(40)
+    }
+  })
+
   test("a long message with nothing to redact still keeps the full bound", () => {
     const { log, lines } = captured()
     logAttemptFailure(log, "a", 1, failure("m".repeat(10_000)), REASON_MAX_CHARS)

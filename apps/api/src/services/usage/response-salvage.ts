@@ -27,8 +27,9 @@ const SLOTS: Readonly<Record<string, readonly string[]>> = {
  */
 const OPTIONAL = new Set(["error", "code", "response.error"])
 /**
- * Required slots with their own ceiling: dropped past it rather than failing the salvage, and never
- * evicted (like any required slot, one can still fail a salvage whose budget is already full). A MiniMax status code is a small integer; anything longer cannot classify anyway.
+ * Slots with their own ceiling: dropped past it, or when the budget is full, and evicted like an
+ * optional slot before a required member would fail the salvage. Losing one reads as main did before
+ * the slot existed; it never fails the salvage. A MiniMax status code is a small integer; anything longer cannot classify anyway.
  */
 const SLOT_MAX_BYTES: ReadonlyMap<string, number> = new Map([["base_resp.status_code", 32]])
 const KEY_MAX_BYTES = 32
@@ -96,7 +97,7 @@ export function createResponseSalvage(maximumBytes: number): ResponseSalvage {
   const optionalMaxBytes = Math.floor(maximumBytes / 4)
   // Release every completed optional capture: room for a required member, never a failed salvage.
   const evictOptional = () => {
-    for (const path of OPTIONAL) {
+    for (const path of [...OPTIONAL, ...SLOT_MAX_BYTES.keys()]) {
       const bytes = captured.get(path)
       if (bytes === undefined) continue
       retained -= bytes.length
@@ -117,6 +118,12 @@ export function createResponseSalvage(maximumBytes: number): ResponseSalvage {
       return
     }
     if (retained >= maximumBytes) evictOptional()
+    if (retained >= maximumBytes && ceiling !== undefined) {
+      retained -= capture.bytes.length
+      capture.bytes = []
+      capture.dropped = true
+      return
+    }
     if (retained >= maximumBytes) {
       failed = true
       capture = null

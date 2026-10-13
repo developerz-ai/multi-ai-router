@@ -1,5 +1,5 @@
 import type { Logger } from "../../logging/logger"
-import { redactValue } from "../../logging/redact"
+import { REDACTED, redactValue } from "../../logging/redact"
 import type { AttemptOutcome } from "./attempt"
 
 /**
@@ -63,27 +63,47 @@ export function logStreamFailure(
  * the part that can be kept is scrubbed, with room for a credential straddling the cut. When the
  * window itself cut the text, its last `REDACT_WINDOW_MARGIN` characters are never kept: a long
  * credential collapsing to `[REDACTED]` earlier would otherwise pull a fragment cut at the window's
- * end into the kept range.
+ * end into the kept range. The window doubles, up to `MAX_QUOTE_SCAN_CHARS`, while redaction has
+ * shrunk it below a full window, so the words before a long token are still logged.
  */
 function scrubbedQuote(text: string | undefined, maxChars: number): string | undefined {
   if (text === undefined) return undefined
   const window = maxChars + REDACT_WINDOW_MARGIN
-  // Grow the slice by what redaction shrank it, so a token collapsing early still leaves the full
-  // bound before the margin. Bounded rounds keep the cost a small multiple of the window.
   let end = window
   let scrubbed = redactValue(text.slice(0, end))
-  for (let round = 0; round < MAX_WINDOW_ROUNDS; round++) {
-    if (end >= text.length || scrubbed.length >= window) break
-    end += window - scrubbed.length
+  while (end < text.length && scrubbed.length < window && end < MAX_QUOTE_SCAN_CHARS) {
+    end = Math.min(end * 2, MAX_QUOTE_SCAN_CHARS)
     scrubbed = redactValue(text.slice(0, end))
   }
-  if (end >= text.length) return bounded(scrubbed, maxChars)
-  const keep = Math.max(0, Math.min(maxChars - 1, scrubbed.length - REDACT_WINDOW_MARGIN))
-  return `${scrubbed.slice(0, keep)}…`
+  if (end >= text.length && scrubbed.length <= maxChars) return scrubbed
+  const keep =
+    end >= text.length
+      ? maxChars - 1
+      : Math.min(maxChars - 1, scrubbed.length - REDACT_WINDOW_MARGIN)
+  return fitted(scrubbed, keep, maxChars)
 }
 
-/** How many times the redaction window may grow to make up for what redaction removed. */
-const MAX_WINDOW_ROUNDS = 4
+/**
+ * The first `keep` characters plus `…`, held within `maxChars` after the logger's own redaction pass.
+ * A cut never splits a `[REDACTED]` marker, and a cut that leaves a pattern to re-expand (a
+ * `?token=` whose value the cut shortened) is moved back until the re-redacted text fits.
+ */
+function fitted(scrubbed: string, keep: number, maxChars: number): string {
+  let at = keep
+  for (let round = 0; round < FIT_ROUNDS && at > 0; round++) {
+    const marker = scrubbed.lastIndexOf(REDACTED, at - 1)
+    if (marker >= 0 && marker + REDACTED.length > at) at = marker
+    const quoted = redactValue(`${scrubbed.slice(0, Math.max(0, at))}…`)
+    if (quoted.length <= maxChars) return quoted
+    at -= quoted.length - maxChars
+  }
+  return "…"
+}
+
+/** How far the redaction window may grow to make up for what redaction removed. */
+const MAX_QUOTE_SCAN_CHARS = 65_536
+/** Attempts to pull a cut back until the re-redacted quote fits the bound. */
+const FIT_ROUNDS = 4
 
 /** An upstream's own words, cut to the configured length for a log line. */
 export function bounded(text: string | undefined, maxChars: number): string | undefined {

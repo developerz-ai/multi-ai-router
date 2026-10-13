@@ -247,3 +247,13 @@ test("an oversized base_resp.status_code is dropped, never fails the salvage (#2
   expect(scanner.retainedBytes).toBeLessThanOrEqual(1024)
   expect(scanner.finish()).toEqual({ type: "response.completed", usage: { input_tokens: 5 } })
 })
+
+test("at a tiny cap, base_resp.status_code gives way rather than failing the salvage (#207 round 3)", () => {
+  for (let cap = 36; cap <= 60; cap++) {
+    const scanner = createResponseSalvage(cap)
+    const text = `{"usage":{"input_tokens":5,"output_tokens":3},"pad":"${"x".repeat(200)}","base_resp":{"status_code":1008}}`
+    for (const byte of encoder.encode(text)) scanner.push(byte)
+    const usage = '{"input_tokens":5,"output_tokens":3}'.length
+    if (usage <= cap) expect(scanner.finish()).toMatchObject({ usage: { input_tokens: 5 } })
+  }
+})
