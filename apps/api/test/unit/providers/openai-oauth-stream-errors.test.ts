@@ -127,13 +127,15 @@ describe("inspectCodexStreamFrame", () => {
     },
   )
 
-  test("a nested error type insufficient_quota with no code classifies credits-exhausted", () => {
+  test("a quota type with no code is not a spent balance in-stream: the CLI reads only the code", () => {
+    // openai/codex responses_error.rs reads `code` alone; a type-only frame is retried there, so it
+    // must not park the account here.
     const verdict = inspectCodexStreamFrame(
       { type: "error", error: { type: "insufficient_quota" } },
       "error",
     )
-    expect(verdict?.kind).toBe("credits-exhausted")
-    expect(verdict?.signal).toBe("codex:stream-error:insufficient_quota")
+    expect(verdict?.kind).toBe("server-error")
+    expect(verdict?.signal).toBe("codex:stream-error:other")
   })
 
   test("an unknown code is fail-closed server-error with the closed `other` signal", () => {

@@ -14,8 +14,9 @@ import type { FailureClassification, UpstreamFailureKind } from "../types"
  *   - a flat `{type:"error", code, message}`, the code at the top level.
  *
  * The code decides when there is one. Only when there is no code is the nested error object's
- * `type` read, and only for the limit, deactivated and quota kinds (the HTTP rules' lists; unlike
- * them, a code present always decides). The flat
+ * `type` read, and only for the limit and deactivated kinds (the HTTP rules' lists; unlike them, a
+ * code present always decides). A quota kind needs its code, as the Codex CLI's stream parser reads
+ * it: a type-only quota frame is retried there, so it must not park the account here. The flat
  * event's own `type` is never read: it is the event name `error`, not a code.
  *
  * The mapping is a closed list. The driver's HTTP `rules` share the limit, deactivated and quota
@@ -83,11 +84,7 @@ function text(value: unknown): string | undefined {
  * request-shaped list is never matched against `type`: `invalid_request_error` is OpenAI's catch-all
  * type, carried by account-level refusals such as `invalid_api_key` too.
  */
-const TYPE_CODES: ReadonlySet<string> = new Set([
-  ...CODEX_LIMIT_CODES,
-  ...CODEX_DEACTIVATED_CODES,
-  ...CODEX_QUOTA_CODES,
-])
+const TYPE_CODES: ReadonlySet<string> = new Set([...CODEX_LIMIT_CODES, ...CODEX_DEACTIVATED_CODES])
 
 /** The code when there is one; a nested `type` only when there is no code at all. */
 function listedCode(
