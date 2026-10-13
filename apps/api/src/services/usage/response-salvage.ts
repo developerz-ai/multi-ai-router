@@ -26,6 +26,11 @@ const SLOTS: Readonly<Record<string, readonly string[]>> = {
  * failure, while a failed salvage would lose the failure itself.
  */
 const OPTIONAL = new Set(["error", "code", "response.error"])
+/**
+ * Required slots with their own ceiling: dropped past it, never failing the salvage and never
+ * evicted. A MiniMax status code is a small integer; anything longer cannot classify anyway.
+ */
+const SLOT_MAX_BYTES: ReadonlyMap<string, number> = new Map([["base_resp.status_code", 32]])
 const KEY_MAX_BYTES = 32
 const QUOTE = 34
 const BACKSLASH = 92
@@ -52,6 +57,11 @@ export interface ResponseSalvage {
   readonly retainedBytes: number
 }
 
+/** A parent key's slot list; own keys only, so a key named `constructor` is no slot at all. */
+function slotKeys(parent: string): readonly string[] {
+  return Object.hasOwn(SLOTS, parent) ? (SLOTS[parent] ?? []) : []
+}
+
 export function createResponseSalvage(maximumBytes: number): ResponseSalvage {
   const decoder = new TextDecoder("utf-8", { fatal: true })
   const captured = new Map<string, number[]>()
@@ -73,13 +83,13 @@ export function createResponseSalvage(maximumBytes: number): ResponseSalvage {
   const slotAt = (): string | null => {
     if (depth === 1 && objects[1] && !expectKey[1]) {
       const key = keys[1]
-      return key != null && SLOTS[""]?.includes(key) ? key : null
+      return key != null && slotKeys("").includes(key) ? key : null
     }
     if (depth === 2 && objects[2] && !expectKey[2]) {
       const parent = keys[1]
       const key = keys[2]
       if (parent == null || key == null) return null
-      return SLOTS[parent]?.includes(key) ? `${parent}.${key}` : null
+      return slotKeys(parent).includes(key) ? `${parent}.${key}` : null
     }
     return null
   }
@@ -95,9 +105,11 @@ export function createResponseSalvage(maximumBytes: number): ResponseSalvage {
   }
   const keep = (byte: number) => {
     if (capture === null || capture.dropped) return
+    const ceiling = SLOT_MAX_BYTES.get(capture.path)
     if (
-      OPTIONAL.has(capture.path) &&
-      (capture.bytes.length >= optionalMaxBytes || retained >= maximumBytes)
+      (ceiling !== undefined && capture.bytes.length >= ceiling) ||
+      (OPTIONAL.has(capture.path) &&
+        (capture.bytes.length >= optionalMaxBytes || retained >= maximumBytes))
     ) {
       retained -= capture.bytes.length
       capture.bytes = []

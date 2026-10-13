@@ -104,11 +104,12 @@ const SECRET_VALUE_PATTERNS: readonly ValuePattern[] = [
   // to 256 characters and stopping at `:` so a scan from each `://` stays short and the cost linear.
   // Neither its username nor its password crosses `?`, `#`, `&`, `=` or `"`: it can never cover a
   // `key=` of a query string (whose secret the query-string pattern below must still see) or run
-  // across a JSON field into an unrelated `@`. So it misses a slash password holding one of those.
+  // across a JSON field into an unrelated `@`. So it misses a slash password holding one of those,
+  // except base64 `=` padding just before the `@` (`Zk3/q+Vb9xQ==@`).
   // The second branch is the original pattern unchanged, so this one only ever adds matches.
   // Price: `https://host:8080/a@b` loses its host.
   {
-    pattern: /:\/\/(?:[^\s/:@?#&="]*:[^\s@"?#:&=]{1,256}|[^\s/:@]*:[^\s/@]+)@/g,
+    pattern: /:\/\/(?:[^\s/:@?#&="]*:[^\s@"?#:&=]{1,256}={0,2}|[^\s/:@]*:[^\s/@]+)@/g,
     replacement: `://${REDACTED}@`,
   },
   // A credential passed in a query string, keeping the endpoint and the parameter that carried it.

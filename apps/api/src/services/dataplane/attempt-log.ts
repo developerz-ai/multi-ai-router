@@ -68,11 +68,22 @@ export function logStreamFailure(
 function scrubbedQuote(text: string | undefined, maxChars: number): string | undefined {
   if (text === undefined) return undefined
   const window = maxChars + REDACT_WINDOW_MARGIN
-  const scrubbed = redactValue(text.slice(0, window))
-  if (text.length <= window) return bounded(scrubbed, maxChars)
+  // Grow the slice by what redaction shrank it, so a token collapsing early still leaves the full
+  // bound before the margin. Bounded rounds keep the cost a small multiple of the window.
+  let end = window
+  let scrubbed = redactValue(text.slice(0, end))
+  for (let round = 0; round < MAX_WINDOW_ROUNDS; round++) {
+    if (end >= text.length || scrubbed.length >= window) break
+    end += window - scrubbed.length
+    scrubbed = redactValue(text.slice(0, end))
+  }
+  if (end >= text.length) return bounded(scrubbed, maxChars)
   const keep = Math.max(0, Math.min(maxChars - 1, scrubbed.length - REDACT_WINDOW_MARGIN))
   return `${scrubbed.slice(0, keep)}…`
 }
+
+/** How many times the redaction window may grow to make up for what redaction removed. */
+const MAX_WINDOW_ROUNDS = 4
 
 /** An upstream's own words, cut to the configured length for a log line. */
 export function bounded(text: string | undefined, maxChars: number): string | undefined {

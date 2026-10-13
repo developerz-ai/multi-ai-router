@@ -19,10 +19,10 @@ const PATTERNS: readonly ScrubPattern[] = [
   // (`postgres://u:p/ss@h`), bounded to 256 characters and stopping at `:` so the scan stays short.
   // Neither its username nor its password crosses `?`, `#`, `&`, `=` or `"`, so it can never cover
   // a `key=` whose secret the key=value pattern below must still see, and it misses a slash
-  // password holding one of those. The second is the original pattern unchanged (username-only
+  // password holding one of those (base64 `=` padding just before the `@` excepted). The second is the original pattern unchanged (username-only
   // userinfo, or a password without `/`), so the first only ever adds matches.
   {
-    pattern: /:\/\/(?:[^\s/:@?#&="]*:[^\s@"?#:&=]{1,256}|[^\s/@]+)@/g,
+    pattern: /:\/\/(?:[^\s/:@?#&="]*:[^\s@"?#:&=]{1,256}={0,2}|[^\s/@]+)@/g,
     replacement: `://${SCRUBBED}@`,
   },
   // Key=value form — DSNs (`password=…`) and env echoes (`ENCRYPTION_KEY=…`) alike.

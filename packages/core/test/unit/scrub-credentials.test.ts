@@ -48,6 +48,12 @@ describe("scrubCredentials", () => {
     )
   })
 
+  test("a base64 slash password with `=` padding is scrubbed (#207 review)", () => {
+    expect(scrubCredentials("connect failed: postgres://router:Zk3/q+Vb9xQ==@db:5432/app")).toBe(
+      "connect failed: postgres://[REDACTED]@db:5432/app",
+    )
+  })
+
   test("a query-string secret holding an `@` behind a host:port stays scrubbed (#207 review)", () => {
     for (const [input, secret] of [
       ["postgresql://db.internal:5432/app?user=app&password=p@ssw0rd", "ssw0rd"],

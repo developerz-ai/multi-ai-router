@@ -231,3 +231,19 @@ test("a repeated optional key releases the earlier capture's bytes (#188)", () =
   expect(scanner.retainedBytes).toBe(40)
   expect(scanner.finish()).toEqual({ code: "d".repeat(10), usage: { t: "u".repeat(20) } })
 })
+
+test("a root key named like an Object built-in never throws (#207 review)", () => {
+  const scanner = createResponseSalvage(1024)
+  const text =
+    '{"constructor":{"a":1},"__proto__":{"b":2},"toString":{"c":3},"usage":{"input_tokens":5}}'
+  for (const byte of encoder.encode(text)) scanner.push(byte)
+  expect(scanner.finish()).toEqual({ usage: { input_tokens: 5 } })
+})
+
+test("an oversized base_resp.status_code is dropped, never fails the salvage (#207 review)", () => {
+  const scanner = createResponseSalvage(1024)
+  const text = `{"type":"response.completed","usage":{"input_tokens":5},"base_resp":{"status_code":"${"9".repeat(2048)}"}}`
+  for (const byte of encoder.encode(text)) scanner.push(byte)
+  expect(scanner.retainedBytes).toBeLessThanOrEqual(1024)
+  expect(scanner.finish()).toEqual({ type: "response.completed", usage: { input_tokens: 5 } })
+})

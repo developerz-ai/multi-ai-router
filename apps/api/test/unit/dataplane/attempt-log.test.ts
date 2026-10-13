@@ -63,6 +63,16 @@ describe("logAttemptFailure (#206)", () => {
     expect(quoted.length).toBeLessThanOrEqual(maxChars)
   })
 
+  test("the words before a collapsed token are still logged (#207 review)", () => {
+    const { log, lines } = captured()
+    const message = `Failed to authenticate: upstream said Bearer ${"t".repeat(400)} ${"x".repeat(5000)}`
+    logAttemptFailure(log, "a", 1, failure(message), 200)
+    const quoted = lines[0]?.upstreamMessage
+    if (typeof quoted !== "string") throw new Error("the line carries no upstreamMessage")
+    expect(quoted.startsWith("Failed to authenticate: upstream said [REDACTED]")).toBe(true)
+    expect(quoted.length).toBe(200)
+  })
+
   test("a long message with nothing to redact still keeps the full bound", () => {
     const { log, lines } = captured()
     logAttemptFailure(log, "a", 1, failure("m".repeat(10_000)), REASON_MAX_CHARS)
