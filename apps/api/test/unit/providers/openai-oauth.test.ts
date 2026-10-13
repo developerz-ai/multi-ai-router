@@ -22,6 +22,7 @@ import {
   parseCodexQuotaHeaders,
   readOpenAiOAuthTokens,
 } from "../../../src/providers"
+import { CODEX_QUOTA_CODES } from "../../../src/providers/drivers/openai-oauth-stream-errors"
 import { account, response } from "./fixtures"
 
 function jwt(payload: Record<string, unknown>): string {
@@ -239,9 +240,9 @@ describe("Codex failure wording", () => {
     expect(result?.retryable).toBe(true)
     expect(result?.signal).toBe("openai-oauth:account_deactivated")
   })
-  test("a 429 insufficient_quota is a spent balance, not a cooldown (#206)", () => {
+  test("a 429 carrying a quota code is a spent balance, not a cooldown (#206)", () => {
     for (const body of [
-      { detail: { code: "insufficient_quota", message: "quota" } },
+      ...CODEX_QUOTA_CODES.map((code) => ({ detail: { code, message: "quota" } })),
       { error: { type: "insufficient_quota", message: "quota" } },
     ]) {
       const result = codex.classifyFailure(response(429, { body }))

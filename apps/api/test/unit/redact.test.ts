@@ -503,6 +503,12 @@ describe("redactValue cost", () => {
     expect(redactValue("redis://:a/b/c@cache")).toBe(`redis://${REDACTED}@cache`)
   })
 
+  test("the slash branch stops at a quote, and a port-plus-`@` URL pays its documented price", () => {
+    const json = '{"url":"https://h:8080/a","owner":"x@y"}'
+    expect(redactValue(json)).toBe(json)
+    expect(redactValue("https://host:8080/a@b")).toBe(`https://${REDACTED}@b`)
+  })
+
   test("a query-string secret holding an `@` behind a host:port stays redacted (#207 review)", () => {
     for (const [input, secret] of [
       ["postgresql://db.internal:5432/app?user=app&password=p@ssw0rd", "ssw0rd"],

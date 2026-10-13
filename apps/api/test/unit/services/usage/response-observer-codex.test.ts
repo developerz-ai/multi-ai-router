@@ -192,6 +192,13 @@ describe("a MiniMax in-body failure past the observation cap (#206)", () => {
       "after the padding",
       (pad: string) => ({ content: pad, base_resp: { status_code: 1008, status_msg: "x" } }),
     ],
+    [
+      "with a status_msg too large to keep (#207 review)",
+      (pad: string) => ({
+        content: pad,
+        base_resp: { status_code: 1008, status_msg: "m".repeat(400) },
+      }),
+    ],
   ])("base_resp %s keeps its code through salvage", (_label, body) => {
     const observer = createResponseObserver({
       dialect: "anthropic",
