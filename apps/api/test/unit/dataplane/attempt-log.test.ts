@@ -110,6 +110,19 @@ describe("logAttemptFailure (#206)", () => {
     expect(JSON.stringify(lines)).not.toContain("PPPP")
   })
 
+  test.each([
+    ["a JWT payload", `eyJ${"Q".repeat(20)}.${"Q".repeat(13_000)}.${"Q".repeat(40)}`],
+    ["a userinfo password", `postgres://u:${"Q".repeat(13_000)}@h`],
+    ["a long JWT header", `eyJ${"Q".repeat(13_000)}.${"Q".repeat(40)}.${"Q".repeat(40)}`],
+  ])(
+    "%s over 4 KB behind a collapsed token leaves nothing (#207 round 4)",
+    (_label, credential) => {
+      const { log, lines } = captured()
+      logAttemptFailure(log, "a", 1, failure(`Bearer ${"t".repeat(5_000)} ${credential} tail`), 200)
+      expect(JSON.stringify(lines)).not.toContain("QQQQ")
+    },
+  )
+
   test("a long message with nothing to redact still keeps the full bound", () => {
     const { log, lines } = captured()
     logAttemptFailure(log, "a", 1, failure("m".repeat(10_000)), REASON_MAX_CHARS)

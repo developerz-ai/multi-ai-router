@@ -96,14 +96,19 @@ export function createResponseSalvage(maximumBytes: number): ResponseSalvage {
     return null
   }
   const optionalMaxBytes = Math.floor(maximumBytes / 4)
-  // Release every completed optional capture: room for a required member, never a failed salvage.
-  const evictOptional = () => {
-    for (const path of [...OPTIONAL, ...SLOT_MAX_BYTES.keys()]) {
+  // Release completed captures for room, never a failed salvage: the ceiling slots first, and the
+  // optional error evidence only if that was not enough.
+  const release = (paths: Iterable<string>) => {
+    for (const path of paths) {
       const bytes = captured.get(path)
       if (bytes === undefined) continue
       retained -= bytes.length
       captured.delete(path)
     }
+  }
+  const evictOptional = () => {
+    release(SLOT_MAX_BYTES.keys())
+    if (retained >= maximumBytes) release(OPTIONAL)
   }
   const keep = (byte: number) => {
     if (capture === null || capture.dropped) return

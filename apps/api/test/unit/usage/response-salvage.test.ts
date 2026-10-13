@@ -264,3 +264,13 @@ test("a full budget drops base_resp.status_code first, never the error evidence 
   for (const byte of encoder.encode(text)) scanner.push(byte)
   expect(scanner.finish()).toEqual({ error: { code: "insufficient_quota" }, type: "t".repeat(94) })
 })
+
+test("a full 64 KiB budget evicts base_resp.status_code before the code main kept (#207 round 4)", () => {
+  const cap = 65_536
+  const head = '{"code":"insufficient_quota","base_resp":{"status_code":1008},"usage":{"pad":"'
+  // code (20 bytes) and usage fit the cap together; with the 4-byte status code they do not.
+  const fill = "u".repeat(cap - 32)
+  const scanner = createResponseSalvage(cap)
+  for (const byte of encoder.encode(`${head}${fill}"}}`)) scanner.push(byte)
+  expect(scanner.finish()).toMatchObject({ code: "insufficient_quota", usage: { pad: fill } })
+})

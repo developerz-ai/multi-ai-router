@@ -242,6 +242,9 @@ describe("Codex failure wording", () => {
   })
   test("a 429 carrying a quota code is a spent balance, not a cooldown (#206)", () => {
     for (const body of [
+      // The `error` envelope is the one the Codex CLI reads; `detail` is the one this driver reads
+      // every Codex code from, so both classify.
+      ...CODEX_QUOTA_CODES.map((code) => ({ error: { code, message: "quota" } })),
       ...CODEX_QUOTA_CODES.map((code) => ({ detail: { code, message: "quota" } })),
       { error: { type: "insufficient_quota", message: "quota" } },
     ]) {
