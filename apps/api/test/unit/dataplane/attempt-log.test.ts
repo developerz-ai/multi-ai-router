@@ -18,7 +18,7 @@ function captured() {
 }
 
 /** A classified failure whose message no earlier stage scrubbed, as the Agent-SDK path delivers. */
-function failure(message: string): Extract<AttemptOutcome, { kind: "failure" }> {
+function failure(message: string | undefined): Extract<AttemptOutcome, { kind: "failure" }> {
   return {
     kind: "failure",
     failure: { kind: "auth", status: 401, message: "the upstream rejected the credential" },
@@ -158,6 +158,9 @@ describe("logAttemptFailure (#206)", () => {
     const { log, lines } = captured()
     logAttemptFailure(log, "a", 1, failure("was rejected"), REASON_MAX_CHARS)
     expect(lines[0]?.upstreamMessage).toBe("was rejected")
+    logAttemptFailure(log, "a", 1, failure(undefined), REASON_MAX_CHARS)
+    expect(lines[1]).toBeDefined()
+    expect(lines[1]).not.toHaveProperty("upstreamMessage")
   })
 })
 

@@ -181,8 +181,9 @@ export function createResponseSalvage(maximumBytes: number): ResponseSalvage {
     if (depth === 1 && objects[1] && !expectKey[1] && keys[1] === "error" && byte === OPEN_OBJECT)
       errorObject = true
     if (capture !== null) return
-    // Last wins, as in JSON.parse: a new value under a parent key replaces whatever its children
-    // held, whether or not the new value carries them again.
+    // Last wins, as in JSON.parse: a new value under a ceiling slot's parent key replaces whatever
+    // that slot held, whether or not the new value carries it again. Keys are compared as raw,
+    // unescaped bytes, as for every slot (#209).
     if (depth === 1 && objects[1] && !expectKey[1] && keys[1] != null) {
       release(CEILING_CHILDREN.get(keys[1]) ?? [])
     }
