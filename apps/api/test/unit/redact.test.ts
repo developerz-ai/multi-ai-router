@@ -469,6 +469,8 @@ describe("redactValue cost", () => {
       "a://b:".repeat(10 * 1024),
       "://u:p/".repeat(10 * 1024),
       `://u:${"p/".repeat(32 * 1024)}`,
+      "://".repeat(64 * 1024),
+      "://:".repeat(48 * 1024),
     ]) {
       const started = performance.now()
       redactValue(message)
@@ -499,6 +501,16 @@ describe("redactValue cost", () => {
       `connect failed: postgres://${REDACTED}@h:5432/app`,
     )
     expect(redactValue("redis://:a/b/c@cache")).toBe(`redis://${REDACTED}@cache`)
+  })
+
+  test("a query-string secret holding an `@` behind a host:port stays redacted (#207 review)", () => {
+    for (const [input, secret] of [
+      ["postgresql://db.internal:5432/app?user=app&password=p@ssw0rd", "ssw0rd"],
+      ["redis://cache:6379/0?password=hunter@2secret", "2secret"],
+      ["connect https://h:8443/cb?token=tok@en_SECRET_TAIL failed", "SECRET_TAIL"],
+    ] as const) {
+      expect(redactValue(input)).not.toContain(secret)
+    }
   })
 
   test("a userinfo URL with a long but real scheme is still scrubbed", () => {

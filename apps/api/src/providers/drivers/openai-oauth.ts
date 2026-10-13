@@ -250,9 +250,12 @@ const codex = createHttpDriver({
     typeRule("credits-exhausted", "openai-oauth:account_deactivated", DEACTIVATED_CODES),
     codeRule("credits-exhausted", "openai-oauth:account_deactivated", DEACTIVATED_CODES),
     // A spent balance arrives as a 429, like OpenAI's API: on status alone it would cool down and
-    // be retried on a timer forever (non-negotiable 7).
-    typeRule("credits-exhausted", "openai-oauth:insufficient_quota", QUOTA_CODES),
-    codeRule("credits-exhausted", "openai-oauth:insufficient_quota", QUOTA_CODES),
+    // be retried on a timer forever (non-negotiable 7). Only on a 429, as the Codex CLI reads it
+    // (`codex-rs/codex-api/src/api_bridge.rs`), so a stray code on another status cannot park an
+    // account. The CLI's fifth HTTP code there, `organization_usage_limit_exceeded`, is left out:
+    // its name says a usage window, which a 429 already classifies as `rate-limited`.
+    onStatus([429], typeRule("credits-exhausted", "openai-oauth:insufficient_quota", QUOTA_CODES)),
+    onStatus([429], codeRule("credits-exhausted", "openai-oauth:insufficient_quota", QUOTA_CODES)),
     // "The '<model>' model is not supported when using Codex with a ChatGPT account." (prod
     // 2026-10-04): the model is wrong, not the request, so fail over instead of `invalid-request`.
     onStatus(

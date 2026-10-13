@@ -60,11 +60,18 @@ export function logStreamFailure(
 /**
  * An upstream's own words for a log line: redacted before it is cut, so truncation cannot split a
  * credential below the length its pattern needs and leave a fragment for the logger to miss. Only
- * the part that can be kept is scrubbed, with room for a credential straddling the cut.
+ * the part that can be kept is scrubbed, with room for a credential straddling the cut. When the
+ * window itself cut the text, its last `REDACT_WINDOW_MARGIN` characters are never kept: a long
+ * credential collapsing to `[REDACTED]` earlier would otherwise pull a fragment cut at the window's
+ * end into the kept range.
  */
 function scrubbedQuote(text: string | undefined, maxChars: number): string | undefined {
   if (text === undefined) return undefined
-  return bounded(redactValue(text.slice(0, maxChars + REDACT_WINDOW_MARGIN)), maxChars)
+  const window = maxChars + REDACT_WINDOW_MARGIN
+  const scrubbed = redactValue(text.slice(0, window))
+  if (text.length <= window) return bounded(scrubbed, maxChars)
+  const keep = Math.max(0, Math.min(maxChars - 1, scrubbed.length - REDACT_WINDOW_MARGIN))
+  return `${scrubbed.slice(0, keep)}…`
 }
 
 /** An upstream's own words, cut to the configured length for a log line. */

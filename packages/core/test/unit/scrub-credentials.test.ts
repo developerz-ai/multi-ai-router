@@ -48,6 +48,16 @@ describe("scrubCredentials", () => {
     )
   })
 
+  test("a query-string secret holding an `@` behind a host:port stays scrubbed (#207 review)", () => {
+    for (const [input, secret] of [
+      ["postgresql://db.internal:5432/app?user=app&password=p@ssw0rd", "ssw0rd"],
+      ["redis://cache:6379/0?password=hunter@2secret", "2secret"],
+      ["connect https://h:8443/cb?token=tok@en_SECRET_TAIL failed", "SECRET_TAIL"],
+    ] as const) {
+      expect(scrubCredentials(input)).not.toContain(secret)
+    }
+  })
+
   test("a JWT whose header is over 512 characters is still scrubbed whole", () => {
     const segment = (bytes: number) => Buffer.from("k".repeat(bytes)).toString("base64url")
     const jwt = `eyJ${segment(420)}.${segment(200)}.${segment(256)}`
@@ -66,6 +76,8 @@ describe("scrubCredentials cost (#206)", () => {
       "eyJ-".repeat(16 * 1024),
       "a://b:".repeat(10 * 1024),
       "://u:p/".repeat(10 * 1024),
+      "://".repeat(64 * 1024),
+      "://:".repeat(48 * 1024),
     ]) {
       const started = performance.now()
       scrubCredentials(text)

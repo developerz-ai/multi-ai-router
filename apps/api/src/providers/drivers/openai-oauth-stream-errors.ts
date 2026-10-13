@@ -31,8 +31,12 @@ export const CODEX_LIMIT_CODES: readonly string[] = ["usage_limit_reached", "rat
 export const CODEX_DEACTIVATED_CODES: readonly string[] = ["account_deactivated"]
 /**
  * A spent balance or spend cap. Provenance: openai/codex `codex-rs/codex-api/src/sse/responses_error.rs`
- * (f82e3659, 2026-10-13) maps these four codes to `QuotaExceeded`, which the CLI treats as fatal,
- * never retried. Blast radius: an account reporting one goes `exhausted` until a human acts.
+ * (f82e3659, 2026-10-13) maps these four codes to `QuotaExceeded`, which the CLI never retries. That
+ * alone does not separate permanent from clock-recoverable (the CLI does not retry a usage limit
+ * either); the codes' own meaning does: a balance or a spend cap, as `insufficient_quota` means on
+ * OpenAI's API (`openai-api.ts`). A ChatGPT plan's spent window arrives as `usage_limit_reached`
+ * instead. No production frame carrying one has been captured. Blast radius: an account reporting
+ * one goes `exhausted` until a human acts.
  */
 export const CODEX_QUOTA_CODES: readonly string[] = [
   "insufficient_quota",

@@ -249,6 +249,12 @@ describe("Codex failure wording", () => {
       expect(result?.signal).toBe("openai-oauth:insufficient_quota")
     }
   })
+  test("a quota code on another status does not park the account (#207 review)", () => {
+    const result = codex.classifyFailure(
+      response(400, { body: { detail: { code: "insufficient_quota", message: "quota" } } }),
+    )
+    expect(result?.kind).not.toBe("credits-exhausted")
+  })
   test("a bare string detail still yields a message, and falls back to the status", () => {
     const result = codex.classifyFailure(response(401, { body: { detail: "invalid token" } }))
     expect(result?.kind).toBe("auth")

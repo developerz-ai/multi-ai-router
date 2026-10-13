@@ -47,6 +47,28 @@ describe("logAttemptFailure (#206)", () => {
     expect(quoted.length).toBeLessThanOrEqual(REASON_MAX_CHARS)
   })
 
+  test("a credential shrunk away early cannot pull a cut fragment into the kept text (#207 review)", () => {
+    const { log, lines } = captured()
+    const maxChars = 200
+    // The window is maxChars + 4096. A 4,100-character bearer value collapses to `[REDACTED]`, and
+    // the window ends four characters before the `@` of a userinfo URL whose password is then cut
+    // below anything a pattern can match.
+    const head = `Bearer ${"b".repeat(4100)} `
+    const url = "postgres://router:SuperSecretPassw0rdXYZ@db"
+    const filler = "f".repeat(maxChars + 4096 - head.length - (url.indexOf("@") - 4))
+    logAttemptFailure(log, "a", 1, failure(`${head}${filler}${url}`), maxChars)
+    expect(JSON.stringify(lines)).not.toContain("SuperSecret")
+    const quoted = lines[0]?.upstreamMessage
+    if (typeof quoted !== "string") throw new Error("the line carries no upstreamMessage")
+    expect(quoted.length).toBeLessThanOrEqual(maxChars)
+  })
+
+  test("a long message with nothing to redact still keeps the full bound", () => {
+    const { log, lines } = captured()
+    logAttemptFailure(log, "a", 1, failure("m".repeat(10_000)), REASON_MAX_CHARS)
+    expect(lines[0]?.upstreamMessage).toBe(`${"m".repeat(REASON_MAX_CHARS - 1)}…`)
+  })
+
   test("a short message passes through whole, and an absent one stays absent", () => {
     const { log, lines } = captured()
     logAttemptFailure(log, "a", 1, failure("was rejected"), REASON_MAX_CHARS)

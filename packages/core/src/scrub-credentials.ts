@@ -16,10 +16,12 @@ const PATTERNS: readonly ScrubPattern[] = [
   // The scheme and host survive: *what* refused the connection is the diagnostic half. The scheme
   // is left out of the match (it stays in the text untouched): matching it made a long `a-a-a-…`
   // run backtrack quadratically. The first branch takes a password holding an unencoded `/`
-  // (`postgres://u:p/ss@h`), bounded to 256 characters so the scan stays linear and stopping at `"`;
-  // the second is username-only userinfo, or a password without `/`, unbounded but stopping at `/`.
+  // (`postgres://u:p/ss@h`), bounded to 256 characters and stopping at `:` so the scan stays short,
+  // at `"`, and at `?` and `#` so an `@` inside a query-string secret is left for the key=value
+  // pattern below. The second is username-only userinfo, or a password without `/`, unbounded but
+  // stopping at `/`.
   {
-    pattern: /:\/\/(?:[^\s/:@]*:[^\s@"]{1,256}|[^\s/@]+)@/g,
+    pattern: /:\/\/(?:[^\s/:@]*:[^\s@"?#:]{1,256}|[^\s/@]+)@/g,
     replacement: `://${SCRUBBED}@`,
   },
   // Key=value form — DSNs (`password=…`) and env echoes (`ENCRYPTION_KEY=…`) alike.

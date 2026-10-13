@@ -101,11 +101,13 @@ const SECRET_VALUE_PATTERNS: readonly ValuePattern[] = [
   // `a-a-a-…` run backtrack quadratically, and bounding it let a scheme over the bound through.
   // The username may be empty: `redis://:password@cache` carries only a password.
   // A password may hold an unencoded `/` (`postgres://u:p/ss@h`): the first branch allows it but is
-  // bounded to 256 characters, so a scan from each `://` stays bounded and the cost linear; it also
-  // stops at `"`, so it cannot run across a JSON field into an unrelated `@`. The second branch is
-  // the unbounded original, which stops at `/`. Price: `https://host:8080/a@b` loses its host.
+  // bounded to 256 characters and stops at `:`, so a scan from each `://` stays short and the cost
+  // linear. It also stops at `"` (no running across a JSON field into an unrelated `@`) and at `?`
+  // and `#`: an `@` inside a query-string secret must stay for the query-string pattern below,
+  // which a match ending there would have robbed of its `password=` key. The second branch is the
+  // unbounded original, which stops at `/`. Price: `https://host:8080/a@b` loses its host.
   {
-    pattern: /:\/\/[^\s/:@]*:(?:[^\s@"]{1,256}|[^\s/@]+)@/g,
+    pattern: /:\/\/[^\s/:@]*:(?:[^\s@"?#:]{1,256}|[^\s/@]+)@/g,
     replacement: `://${REDACTED}@`,
   },
   // A credential passed in a query string, keeping the endpoint and the parameter that carried it.
