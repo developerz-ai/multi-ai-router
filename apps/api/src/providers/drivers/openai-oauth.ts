@@ -19,6 +19,7 @@ import { codexSignal } from "./openai-oauth-quota"
 import {
   CODEX_DEACTIVATED_CODES,
   CODEX_LIMIT_CODES,
+  CODEX_QUOTA_CODES,
   inspectCodexStreamFrame,
 } from "./openai-oauth-stream-errors"
 
@@ -219,6 +220,7 @@ export function readCodexFacts(body: unknown): UpstreamErrorFacts {
 
 const LIMIT_CODES = CODEX_LIMIT_CODES
 const DEACTIVATED_CODES = CODEX_DEACTIVATED_CODES
+const QUOTA_CODES = CODEX_QUOTA_CODES
 
 const CODEX_MODEL_REFUSED = /model is not supported when using codex/i
 
@@ -247,6 +249,10 @@ const codex = createHttpDriver({
     codeRule("rate-limited", "openai-oauth:usage_limit_reached", LIMIT_CODES),
     typeRule("credits-exhausted", "openai-oauth:account_deactivated", DEACTIVATED_CODES),
     codeRule("credits-exhausted", "openai-oauth:account_deactivated", DEACTIVATED_CODES),
+    // A spent balance arrives as a 429, like OpenAI's API: on status alone it would cool down and
+    // be retried on a timer forever (non-negotiable 7).
+    typeRule("credits-exhausted", "openai-oauth:insufficient_quota", QUOTA_CODES),
+    codeRule("credits-exhausted", "openai-oauth:insufficient_quota", QUOTA_CODES),
     // "The '<model>' model is not supported when using Codex with a ChatGPT account." (prod
     // 2026-10-04): the model is wrong, not the request, so fail over instead of `invalid-request`.
     onStatus(

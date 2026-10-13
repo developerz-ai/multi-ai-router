@@ -20,7 +20,8 @@ import type { FailureClassification, UpstreamFailureKind } from "../types"
  *
  * The mapping is a closed, stream-only list — the driver's HTTP `rules` are untouched:
  *   - request-shaped codes → `invalid-request` (failover reads `client-error`; no breaker strike);
- *   - the driver's limit codes → `rate-limited`; its deactivated code → `credits-exhausted`;
+ *   - the driver's limit codes → `rate-limited`; its deactivated and quota codes →
+ *     `credits-exhausted`;
  *   - anything else, or nothing → `server-error`, the behaviour before this hook existed.
  * `signal` is `codex:stream-error:<listed code>` or `codex:stream-error:other`, never an upstream
  * string: it becomes the usage row's `errorClass` and the `error_class` metric label.
@@ -28,6 +29,17 @@ import type { FailureClassification, UpstreamFailureKind } from "../types"
 
 export const CODEX_LIMIT_CODES: readonly string[] = ["usage_limit_reached", "rate_limit_exceeded"]
 export const CODEX_DEACTIVATED_CODES: readonly string[] = ["account_deactivated"]
+/**
+ * A spent balance or spend cap. Provenance: openai/codex `codex-rs/codex-api/src/sse/responses_error.rs`
+ * (f82e3659, 2026-10-13) maps these four codes to `QuotaExceeded`, which the CLI treats as fatal,
+ * never retried. Blast radius: an account reporting one goes `exhausted` until a human acts.
+ */
+export const CODEX_QUOTA_CODES: readonly string[] = [
+  "insufficient_quota",
+  "credit_balance_exhausted",
+  "organization_spend_limit_exceeded",
+  "project_spend_limit_exceeded",
+]
 
 export const CODEX_STREAM_ERROR_REQUEST_CODES: readonly string[] = [
   "invalid_prompt",
@@ -44,10 +56,9 @@ const KIND_BY_CODE: ReadonlyMap<string, UpstreamFailureKind> = new Map([
     "invalid-request",
   ]),
   ...CODEX_LIMIT_CODES.map((code): [string, UpstreamFailureKind] => [code, "rate-limited"]),
-  ...CODEX_DEACTIVATED_CODES.map((code): [string, UpstreamFailureKind] => [
-    code,
-    "credits-exhausted",
-  ]),
+  ...[...CODEX_DEACTIVATED_CODES, ...CODEX_QUOTA_CODES].map(
+    (code): [string, UpstreamFailureKind] => [code, "credits-exhausted"],
+  ),
 ])
 
 const SIGNAL_PREFIX = "codex:stream-error:"
@@ -67,7 +78,11 @@ function text(value: unknown): string | undefined {
  * request-shaped list is never matched against `type`: `invalid_request_error` is OpenAI's catch-all
  * type, carried by account-level refusals such as `invalid_api_key` too.
  */
-const TYPE_CODES: ReadonlySet<string> = new Set([...CODEX_LIMIT_CODES, ...CODEX_DEACTIVATED_CODES])
+const TYPE_CODES: ReadonlySet<string> = new Set([
+  ...CODEX_LIMIT_CODES,
+  ...CODEX_DEACTIVATED_CODES,
+  ...CODEX_QUOTA_CODES,
+])
 
 /** The code when there is one; a nested `type` only when there is no code at all. */
 function listedCode(

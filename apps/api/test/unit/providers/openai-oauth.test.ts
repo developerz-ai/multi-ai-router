@@ -239,6 +239,16 @@ describe("Codex failure wording", () => {
     expect(result?.retryable).toBe(true)
     expect(result?.signal).toBe("openai-oauth:account_deactivated")
   })
+  test("a 429 insufficient_quota is a spent balance, not a cooldown (#206)", () => {
+    for (const body of [
+      { detail: { code: "insufficient_quota", message: "quota" } },
+      { error: { type: "insufficient_quota", message: "quota" } },
+    ]) {
+      const result = codex.classifyFailure(response(429, { body }))
+      expect(result?.kind).toBe("credits-exhausted")
+      expect(result?.signal).toBe("openai-oauth:insufficient_quota")
+    }
+  })
   test("a bare string detail still yields a message, and falls back to the status", () => {
     const result = codex.classifyFailure(response(401, { body: { detail: "invalid token" } }))
     expect(result?.kind).toBe("auth")

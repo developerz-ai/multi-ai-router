@@ -102,6 +102,40 @@ describe("inspectCodexStreamFrame", () => {
     })
   })
 
+  test.each([
+    "insufficient_quota",
+    "credit_balance_exhausted",
+    "organization_spend_limit_exceeded",
+    "project_spend_limit_exceeded",
+  ])(
+    "in-stream %s classifies credits-exhausted, as the Codex CLI's QuotaExceeded (#206)",
+    (code) => {
+      // The shape the Codex CLI's own test feeds its stream parser (openai/codex
+      // codex-rs/codex-api/src/sse/responses.rs, `quota_exceeded_error_is_fatal`).
+      const verdict = inspectCodexStreamFrame(
+        {
+          type: "response.failed",
+          response: {
+            status: "failed",
+            error: { code, message: "You exceeded your current quota" },
+          },
+        },
+        "response.failed",
+      )
+      expect(verdict?.kind).toBe("credits-exhausted")
+      expect(verdict?.signal).toBe(`codex:stream-error:${code}`)
+    },
+  )
+
+  test("a nested error type insufficient_quota with no code classifies credits-exhausted", () => {
+    const verdict = inspectCodexStreamFrame(
+      { type: "error", error: { type: "insufficient_quota" } },
+      "error",
+    )
+    expect(verdict?.kind).toBe("credits-exhausted")
+    expect(verdict?.signal).toBe("codex:stream-error:insufficient_quota")
+  })
+
   test("an unknown code is fail-closed server-error with the closed `other` signal", () => {
     const verdict = inspectCodexStreamFrame(
       { type: "error", code: "some_made_up_code", message: "fixture failure" },
