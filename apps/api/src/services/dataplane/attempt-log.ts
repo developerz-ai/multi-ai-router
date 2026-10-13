@@ -9,9 +9,9 @@ import type { AttemptOutcome } from "./attempt"
  * pool failed every request: the SDK's own "Failed to authenticate" and the classifier's
  * `claude-sdk:unclassified` never reached the log. So the line carries three more things —
  * `signal`, which rule classified the failure; `reason`, the router-authored sentence the client is
- * owed; and `upstreamMessage`, the provider's (or the SDK's) own complaint, bounded here and
- * scrubbed by the logger (`logging/redact.ts`), which is the only thing between an upstream's echo
- * and the line.
+ * owed; and `upstreamMessage`, the provider's (or the SDK's) own complaint, scrubbed and then
+ * bounded here (`scrubbedQuote`). The HTTP path redacts the message once already; the Agent-SDK
+ * path does not, so this line cannot rely on it.
  */
 export function logAttemptFailure(
   log: Logger | undefined,
@@ -27,7 +27,7 @@ export function logAttemptFailure(
     failureKind: outcome.failure.kind,
     signal: outcome.classification?.signal,
     reason: outcome.failure.message,
-    upstreamMessage: bounded(outcome.classification?.message, reasonMaxChars),
+    upstreamMessage: scrubbedQuote(outcome.classification?.message, reasonMaxChars),
   })
 }
 
@@ -41,8 +41,7 @@ const REDACT_WINDOW_MARGIN = 4096
  * The one line an operator reads when a relayed stream ends in an upstream error (an in-stream
  * Codex refusal, a MiniMax in-body failure, a protocol error). `errorClass` is the closed signal
  * the usage row carries; `upstreamMessage` is the driver hook's reading of the upstream's words,
- * which never reaches a usage row. Redacted before it is cut, so truncation cannot split a
- * credential below the length its pattern needs and leave a fragment for the logger to miss.
+ * which never reaches a usage row.
  */
 export function logStreamFailure(
   log: Logger | undefined,
@@ -54,14 +53,18 @@ export function logStreamFailure(
   log?.warn("upstream stream failure", {
     accountId,
     errorClass,
-    upstreamMessage: bounded(
-      // Only the part that can be kept is scrubbed, with room for a credential straddling the cut.
-      message === undefined
-        ? undefined
-        : redactValue(message.slice(0, reasonMaxChars + REDACT_WINDOW_MARGIN)),
-      reasonMaxChars,
-    ),
+    upstreamMessage: scrubbedQuote(message, reasonMaxChars),
   })
+}
+
+/**
+ * An upstream's own words for a log line: redacted before it is cut, so truncation cannot split a
+ * credential below the length its pattern needs and leave a fragment for the logger to miss. Only
+ * the part that can be kept is scrubbed, with room for a credential straddling the cut.
+ */
+function scrubbedQuote(text: string | undefined, maxChars: number): string | undefined {
+  if (text === undefined) return undefined
+  return bounded(redactValue(text.slice(0, maxChars + REDACT_WINDOW_MARGIN)), maxChars)
 }
 
 /** An upstream's own words, cut to the configured length for a log line. */
