@@ -127,6 +127,19 @@ describe("inspectCodexStreamFrame", () => {
     },
   )
 
+  test("a quota code on a bare error event is not a spent balance: the CLI ignores that event", () => {
+    // openai/codex reads a quota code only from `response.failed` at `response.error.code`; a bare
+    // `error` event other than flex_unavailable is ignored there, so it must not park the account.
+    for (const frame of [
+      { type: "error", code: "insufficient_quota" },
+      { type: "error", error: { code: "credit_balance_exhausted" } },
+    ]) {
+      const verdict = inspectCodexStreamFrame(frame, "error")
+      expect(verdict?.kind).toBe("server-error")
+      expect(verdict?.signal).toBe("codex:stream-error:other")
+    }
+  })
+
   test("a quota type with no code is not a spent balance in-stream: the CLI reads only the code", () => {
     // openai/codex responses_error.rs reads `code` alone; a type-only frame is retried there, so it
     // must not park the account here.

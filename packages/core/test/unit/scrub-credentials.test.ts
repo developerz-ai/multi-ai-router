@@ -54,6 +54,26 @@ describe("scrubCredentials", () => {
     )
   })
 
+  test("userinfo needs a real scheme in front, as before the scheme left the match (#207 round 3)", () => {
+    for (const [input, secret] of [
+      ["x_y://a:password=@SECRET1", "SECRET1"],
+      ["1db://pwd=@SECRET2", "SECRET2"],
+      ["://token=@SECRET3", "SECRET3"],
+    ] as const) {
+      expect(scrubCredentials(input)).not.toContain(secret)
+    }
+  })
+
+  test("padding never swallows a key=value key before an `@` (#207 round 3)", () => {
+    for (const [input, secret] of [
+      ["jdbc:postgresql://host:5432/db;password=@Hunter2Secret", "Hunter2Secret"],
+      ["pg://a:/password=@xSECRET", "xSECRET"],
+      ["redis://cache:6379/0,token=@SSECRET", "SSECRET"],
+    ] as const) {
+      expect(scrubCredentials(input)).not.toContain(secret)
+    }
+  })
+
   test("a query-string secret holding an `@` behind a host:port stays scrubbed (#207 review)", () => {
     for (const [input, secret] of [
       ["postgresql://db.internal:5432/app?user=app&password=p@ssw0rd", "ssw0rd"],
@@ -86,6 +106,7 @@ describe("scrubCredentials cost (#206)", () => {
       "://u:p/".repeat(10 * 1024),
       "://".repeat(64 * 1024),
       "://:".repeat(48 * 1024),
+      `${"ab-".repeat(2000)}://`.repeat(40),
     ]) {
       const started = performance.now()
       scrubCredentials(text)

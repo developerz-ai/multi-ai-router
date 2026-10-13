@@ -15,14 +15,20 @@ const PATTERNS: readonly ScrubPattern[] = [
   // URL userinfo — `postgres://user:pass@host/db` is how DATABASE_URL reaches a boot error.
   // The scheme and host survive: *what* refused the connection is the diagnostic half. The scheme
   // is left out of the match (it stays in the text untouched): matching it made a long `a-a-a-…`
-  // run backtrack quadratically. The first branch takes a password holding an unencoded `/`
+  // run backtrack quadratically. A lookbehind still requires the scheme main's pattern required
+  // (a letter at a word boundary, then scheme characters), so text with no real scheme before `://`
+  // is left to the key=value pattern; it scans back only to the previous non-scheme character, so
+  // it stays linear. The first branch takes a password holding an unencoded `/`
   // (`postgres://u:p/ss@h`), bounded to 256 characters and stopping at `:` so the scan stays short.
-  // Neither its username nor its password crosses `?`, `#`, `&`, `=` or `"`, so it can never cover
-  // a `key=` whose secret the key=value pattern below must still see, and it misses a slash
-  // password holding one of those (base64 `=` padding just before the `@` excepted). The second is the original pattern unchanged (username-only
-  // userinfo, or a password without `/`), so the first only ever adds matches.
+  // Neither its username nor its password crosses `?`, `#`, `&`, `=` or `"`, so it misses a slash
+  // password holding one of those. One exception: up to two `=` of base64 padding just before the
+  // `@`, allowed only when no key name of the key=value pattern sits right before them, so it never
+  // covers a `key=` whose secret that pattern (anchored on `\b`, not `?` or `&`) must still see:
+  // `;password=@x` stays that pattern's. The second branch is the original pattern unchanged
+  // (username-only userinfo, or a password without `/`), so the first only ever adds matches.
   {
-    pattern: /:\/\/(?:[^\s/:@?#&="]*:[^\s@"?#:&=]{1,256}={0,2}|[^\s/@]+)@/g,
+    pattern:
+      /(?<=\b[a-z][a-z0-9+.-]*):\/\/(?:[^\s/:@?#&="]*:[^\s@"?#:&=]{1,256}(?:(?<!\b(?:password|passwd|pwd|secret|token|api[-_]?key|encryption[-_]?key))={1,2})?|[^\s/@]+)@/gi,
     replacement: `://${SCRUBBED}@`,
   },
   // Key=value form — DSNs (`password=…`) and env echoes (`ENCRYPTION_KEY=…`) alike.

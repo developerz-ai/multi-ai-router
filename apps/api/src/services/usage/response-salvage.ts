@@ -27,8 +27,8 @@ const SLOTS: Readonly<Record<string, readonly string[]>> = {
  */
 const OPTIONAL = new Set(["error", "code", "response.error"])
 /**
- * Required slots with their own ceiling: dropped past it, never failing the salvage and never
- * evicted. A MiniMax status code is a small integer; anything longer cannot classify anyway.
+ * Required slots with their own ceiling: dropped past it rather than failing the salvage, and never
+ * evicted (like any required slot, one can still fail a salvage whose budget is already full). A MiniMax status code is a small integer; anything longer cannot classify anyway.
  */
 const SLOT_MAX_BYTES: ReadonlyMap<string, number> = new Map([["base_resp.status_code", 32]])
 const KEY_MAX_BYTES = 32

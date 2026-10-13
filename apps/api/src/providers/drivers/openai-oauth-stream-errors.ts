@@ -15,8 +15,9 @@ import type { FailureClassification, UpstreamFailureKind } from "../types"
  *
  * The code decides when there is one. Only when there is no code is the nested error object's
  * `type` read, and only for the limit and deactivated kinds (the HTTP rules' lists; unlike them, a
- * code present always decides). A quota kind needs its code, as the Codex CLI's stream parser reads
- * it: a type-only quota frame is retried there, so it must not park the account here. The flat
+ * code present always decides). A quota kind needs its code, on a `response.failed` frame: that is
+ * the only place the Codex CLI's stream parser reads one (a type-only frame is retried there, a bare
+ * `error` event ignored), so neither may park the account here. The flat
  * event's own `type` is never read: it is the event name `error`, not a code.
  *
  * The mapping is a closed list. The driver's HTTP `rules` share the limit, deactivated and quota
@@ -68,6 +69,7 @@ const KIND_BY_CODE: ReadonlyMap<string, UpstreamFailureKind> = new Map([
 ])
 
 const SIGNAL_PREFIX = "codex:stream-error:"
+const QUOTA_CODES: ReadonlySet<string> = new Set(CODEX_QUOTA_CODES)
 
 function record(value: unknown): Record<string, unknown> | undefined {
   return value !== null && typeof value === "object" && !Array.isArray(value)
@@ -113,7 +115,13 @@ export function inspectCodexStreamFrame(
   if (type !== "response.failed" && type !== "error") return null
 
   const nested = record(root.error) ?? record(record(root.response)?.error)
-  const code = listedCode(root, nested)
+  const listed = listedCode(root, nested)
+  // A quota code counts only on `response.failed`, the one frame the Codex CLI reads it from; a
+  // bare `error` event carrying one is ignored there, so here it must not park the account.
+  const code =
+    listed !== undefined && QUOTA_CODES.has(listed) && type !== "response.failed"
+      ? undefined
+      : listed
   const kind = code === undefined ? "server-error" : (KIND_BY_CODE.get(code) ?? "server-error")
   const message = text(root.message) ?? text(nested?.message) ?? text(root.error)
   return {
