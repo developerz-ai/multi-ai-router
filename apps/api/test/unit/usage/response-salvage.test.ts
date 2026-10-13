@@ -316,7 +316,7 @@ test("a repeated base_resp parent, each copy with a code, keeps the last one (#2
   expect(scanner.finish()).toMatchObject({ base_resp: { status_code: 1002 } })
 })
 
-test.each(['{"status_msg":"x"}', "{}", "null", "5"])(
+test.each(['{"status_msg":"x"}', "{}", "null", "5", '"s"', "[1]"])(
   "a later base_resp of %s replaces the earlier code, as JSON.parse does (#207 round 8)",
   (later) => {
     const scanner = createResponseSalvage(64)
@@ -345,4 +345,22 @@ test("a status_code repeated inside one base_resp keeps the last one, as JSON.pa
     expect(scanner.retainedBytes).toBeLessThanOrEqual(64)
   }
   expect(scanner.finish()).toMatchObject({ base_resp: { status_code: 1002 } })
+})
+
+test.each(["01008", "+1008", "NaN", '"a\tb"', "10 08"])(
+  "a malformed status_code %s is dropped, never failing the salvage (#207 round 9)",
+  (code) => {
+    const scanner = createResponseSalvage(1024)
+    const text = `{"usage":{"input_tokens":11,"output_tokens":22},"base_resp":{"status_code":${code}},"pad":"${"x".repeat(2048)}"}`
+    for (const byte of encoder.encode(text)) scanner.push(byte)
+    expect(scanner.finish()).toEqual({ usage: { input_tokens: 11, output_tokens: 22 } })
+  },
+)
+
+test("an invalid UTF-8 status_code is dropped, never failing the salvage (#207 round 9)", () => {
+  const scanner = createResponseSalvage(1024)
+  const head = encoder.encode('{"usage":{"input_tokens":11},"base_resp":{"status_code":"')
+  const tail = encoder.encode(`"},"pad":"${"x".repeat(2048)}"}`)
+  for (const byte of [...head, 0xff, ...tail]) scanner.push(byte)
+  expect(scanner.finish()).toEqual({ usage: { input_tokens: 11 } })
 })

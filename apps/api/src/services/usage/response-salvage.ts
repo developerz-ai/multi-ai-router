@@ -299,7 +299,14 @@ export function createResponseSalvage(maximumBytes: number): ResponseSalvage {
       const parts: Record<string, unknown> = {}
       try {
         for (const [path, bytes] of captured) {
-          const value: unknown = JSON.parse(decoder.decode(Uint8Array.from(bytes)))
+          let value: unknown
+          try {
+            value = JSON.parse(decoder.decode(Uint8Array.from(bytes)))
+          } catch (error) {
+            // A malformed ceiling slot is lost as if it never existed; anything else fails as before.
+            if (SLOT_MAX_BYTES.has(path)) continue
+            throw error
+          }
           const [first, second] = path.split(".")
           if (first === undefined) continue
           if (second === undefined) parts[first] = value
