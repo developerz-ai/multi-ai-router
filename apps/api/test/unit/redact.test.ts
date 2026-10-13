@@ -514,6 +514,8 @@ describe("redactValue cost", () => {
       ["postgresql://db.internal:5432/app?user=app&password=p@ssw0rd", "ssw0rd"],
       ["redis://cache:6379/0?password=hunter@2secret", "2secret"],
       ["connect https://h:8443/cb?token=tok@en_SECRET_TAIL failed", "SECRET_TAIL"],
+      ["postgres://db?sslmode=require&password=Ab:c/d@ef9", "ef9"],
+      ["GET https://host:8080/v1&api_key=ab@cdSECRET", "cdSECRET"],
     ] as const) {
       expect(redactValue(input)).not.toContain(secret)
     }
