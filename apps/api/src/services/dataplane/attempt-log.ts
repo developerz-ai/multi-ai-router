@@ -56,8 +56,8 @@ export function logStreamFailure(
  * credential below the length its pattern needs and leave a fragment for the logger to miss. Up to
  * `MAX_QUOTE_SCAN_CHARS` the whole text is redacted, so every credential is matched with its own
  * terminator and the words before a collapsed token survive. Past it, the scan ends at the last
- * whitespace before that mark: no credential pattern spans whitespace, so none can straddle the
- * scan's end. A message with no whitespace at all in its first `MAX_QUOTE_SCAN_CHARS` is one token
+ * whitespace before that mark: no credential's secret part spans whitespace (a Bearer/Basic gap
+ * comes before its token, so a cut there drops the token whole), so none can straddle the scan's end. A message with no whitespace at all in its first `MAX_QUOTE_SCAN_CHARS` is one token
  * nothing can safely be cut from, so only `…` is logged.
  */
 function scrubbedQuote(text: string | undefined, maxChars: number): string | undefined {

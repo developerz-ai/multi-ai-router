@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import { createLogger } from "../../../src/logging/logger"
 import type { AttemptOutcome } from "../../../src/services/dataplane/attempt"
-import { logAttemptFailure } from "../../../src/services/dataplane/attempt-log"
+import { logAttemptFailure, logStreamFailure } from "../../../src/services/dataplane/attempt-log"
 
 const REASON_MAX_CHARS = 40
 const FAKE_KEY = "sk-LIVEFAKEKEY-do-not-leak-1234567890abcdef"
@@ -140,11 +140,12 @@ describe("logAttemptFailure (#206)", () => {
     expect(JSON.stringify(lines)).not.toContain("LIVEFAKEKEY")
   })
 
-  test("a whitespace-free message over 64 KiB keeps the margin: no straddling head leaks", () => {
+  test("a whitespace-free message over 64 KiB logs only an ellipsis: no straddling head leaks", () => {
     const message = `sk-${"k".repeat(60_000)},postgres://u:${"P".repeat(9_000)}@db.internal/app`
     const { log, lines } = captured()
     logAttemptFailure(log, "a", 1, failure(message), 200)
     expect(JSON.stringify(lines)).not.toContain("PPPP")
+    expect(lines[0]?.upstreamMessage).toBe("…")
   })
 
   test("a long message with nothing to redact still keeps the full bound", () => {
@@ -157,5 +158,77 @@ describe("logAttemptFailure (#206)", () => {
     const { log, lines } = captured()
     logAttemptFailure(log, "a", 1, failure("was rejected"), REASON_MAX_CHARS)
     expect(lines[0]?.upstreamMessage).toBe("was rejected")
+  })
+})
+
+describe("the 64 KiB scan boundary, exactly (#207 round 6)", () => {
+  const quoted = (message: string) => {
+    const { log, lines } = captured()
+    logAttemptFailure(log, "a", 1, failure(message), 200)
+    return String(lines[0]?.upstreamMessage)
+  }
+  const dsn = `postgres://u:${"P".repeat(9_000)}@h`
+
+  test("65,536 characters with no whitespace are redacted whole and keep their head", () => {
+    expect(quoted("z".repeat(65_536))).toStartWith("zzzz")
+  })
+  test("65,537 characters with no whitespace log only an ellipsis", () => {
+    expect(quoted("z".repeat(65_537))).toBe("…")
+  })
+  test("whitespace exactly at 65,536 ends the scan there and keeps the long head", () => {
+    const message = `Failed ${"f".repeat(65_536 - 7)} ${dsn}`
+    expect(message.charAt(65_536)).toBe(" ")
+    const line = quoted(message)
+    expect(line).toStartWith("Failed ffff")
+    expect(line).not.toContain("PPPP")
+  })
+  test("whitespace only at 65,537 falls back to the last earlier whitespace", () => {
+    const message = `Failed ${"f".repeat(65_537 - 7)} ${dsn}`
+    expect(message.charAt(65_537)).toBe(" ")
+    expect(quoted(message)).toBe("Failed…")
+  })
+  test("a cut inside a standalone marker pulls back to before it", () => {
+    const message = `abc ${FAKE_KEY} tail ${"x".repeat(300)}`
+    for (let max = 6; max <= 16; max++) {
+      const { log, lines } = captured()
+      logAttemptFailure(log, "a", 1, failure(message), max)
+      const line = String(lines[0]?.upstreamMessage)
+      expect(line).not.toMatch(/\[R[A-Z]*…/)
+      expect(line.length).toBeLessThanOrEqual(max)
+    }
+  })
+})
+
+describe("both log lines scrub the whole message before cutting (#207 round 6)", () => {
+  type Line = (message: string, maxChars: number) => Record<string, unknown>[]
+  const attempt: Line = (message, maxChars) => {
+    const { log, lines } = captured()
+    logAttemptFailure(log, "a", 1, failure(message), maxChars)
+    return lines
+  }
+  const stream: Line = (message, maxChars) => {
+    const { log, lines } = captured()
+    logStreamFailure(log, "a", "codex:stream-error:other", message, maxChars)
+    return lines
+  }
+
+  test.each([
+    ["upstream attempt failed", attempt],
+    ["upstream stream failure", stream],
+  ] as const)("%s: no credential head leaks", (_name, line) => {
+    const messages = [
+      // 2.25.8's stream line logged 175 password characters for this one.
+      `Bearer ${"t".repeat(4_000)} postgres://u:${"P".repeat(500)}@h tail`,
+      `Bearer ${"t".repeat(5_000)} eyJ${"P".repeat(20)}.${"P".repeat(13_000)}.${"P".repeat(40)} tail`,
+      `Bearer ${"t".repeat(5_000)} postgres://u:${"P".repeat(13_000)}@h tail`,
+      `Failed: Bearer ${"b".repeat(60_000)} postgres://u:${"P".repeat(8_000)}@h tail`,
+    ]
+    for (const message of messages) {
+      for (const maxChars of [200, 2000]) {
+        const lines = line(message, maxChars)
+        expect(JSON.stringify(lines)).not.toContain("PPPP")
+        expect(String(lines[0]?.upstreamMessage).length).toBeLessThanOrEqual(maxChars)
+      }
+    }
   })
 })
