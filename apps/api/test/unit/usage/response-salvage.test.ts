@@ -364,3 +364,15 @@ test("an invalid UTF-8 status_code is dropped, never failing the salvage (#207 r
   for (const byte of [...head, 0xff, ...tail]) scanner.push(byte)
   expect(scanner.finish()).toEqual({ usage: { input_tokens: 11 } })
 })
+
+test.each([
+  '"usage":{"input_tokens":01}',
+  '"type":tru',
+  '"response":{"status":+1}',
+  '"type":"a\tb"',
+])("a malformed non-ceiling member %s still fails the salvage (#207 round 10)", (member) => {
+  const scanner = createResponseSalvage(1024)
+  const text = `{${member},"base_resp":{"status_code":1008},"pad":"${"x".repeat(2048)}"}`
+  for (const byte of encoder.encode(text)) scanner.push(byte)
+  expect(scanner.finish()).toBeNull()
+})

@@ -21,7 +21,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Documentation
 
-- `docs/idea/03-providers.md`: an `openai-oauth` row in the credits-exhausted signal table. `docs/idea/05-routing-and-failover.md`: the quota codes and the `base_resp` salvage slot in the in-stream row. `docs/idea/07-security.md`: slash passwords in the value-shape list. `docs/idea/08-observability.md`: `upstream attempt failed` scrubs before it cuts.
+- `docs/idea/03-providers.md`: an `openai-oauth` row in the credits-exhausted signal table. `docs/idea/05-routing-and-failover.md`: the quota codes and the `base_resp` salvage slot in the in-stream row. `docs/idea/07-security.md`: slash passwords in the value-shape list. `docs/idea/08-observability.md`: `upstream attempt failed` scrubs before it cuts. `docs/idea/09-deployment.md`: the salvage members and the lent 32 bytes in `UPSTREAM_RESPONSE_OBSERVATION_MAX_BYTES`.
 
 ## [2.25.8] — 2026-10-12
 
@@ -1177,5 +1177,5 @@ your tooling config.
 [2.25.5]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.25.5
 [2.25.6]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.25.6
 [2.25.7]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.25.7
-[2.25.9]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.25.9
 [2.25.8]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.25.8
+[2.25.9]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.25.9
