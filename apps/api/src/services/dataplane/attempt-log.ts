@@ -32,12 +32,6 @@ export function logAttemptFailure(
 }
 
 /**
- * Characters at the end of a whitespace-free partial scan never kept, so a credential straddling the
- * scan's end is dropped whole: room for a ChatGPT access token (a JWT of under 2 KB).
- */
-const REDACT_WINDOW_MARGIN = 4096
-
-/**
  * The one line an operator reads when a relayed stream ends in an upstream error (an in-stream
  * Codex refusal, a MiniMax in-body failure, a protocol error). `errorClass` is the closed signal
  * the usage row carries; `upstreamMessage` is the driver hook's reading of the upstream's words,
@@ -63,8 +57,8 @@ export function logStreamFailure(
  * `MAX_QUOTE_SCAN_CHARS` the whole text is redacted, so every credential is matched with its own
  * terminator and the words before a collapsed token survive. Past it, the scan ends at the last
  * whitespace before that mark: no credential pattern spans whitespace, so none can straddle the
- * scan's end. Only a message with no whitespace in its first `MAX_QUOTE_SCAN_CHARS` falls back to
- * dropping the scan's last `REDACT_WINDOW_MARGIN` characters.
+ * scan's end. A message with no whitespace at all in its first `MAX_QUOTE_SCAN_CHARS` is one token
+ * nothing can safely be cut from, so only `…` is logged.
  */
 function scrubbedQuote(text: string | undefined, maxChars: number): string | undefined {
   if (text === undefined) return undefined
@@ -73,9 +67,7 @@ function scrubbedQuote(text: string | undefined, maxChars: number): string | und
     return scrubbed.length <= maxChars ? scrubbed : fitted(scrubbed, maxChars - 1, maxChars)
   }
   const end = lastWhitespaceBefore(text, MAX_QUOTE_SCAN_CHARS)
-  if (end > 0) return fitted(redactValue(text.slice(0, end)), maxChars - 1, maxChars)
-  const scrubbed = redactValue(text.slice(0, MAX_QUOTE_SCAN_CHARS))
-  return fitted(scrubbed, Math.min(maxChars - 1, scrubbed.length - REDACT_WINDOW_MARGIN), maxChars)
+  return end > 0 ? fitted(redactValue(text.slice(0, end)), maxChars - 1, maxChars) : "…"
 }
 
 /** The index of the last whitespace character at or before `at`, or -1. A loop, not a regex. */

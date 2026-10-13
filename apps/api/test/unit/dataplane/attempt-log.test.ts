@@ -133,6 +133,20 @@ describe("logAttemptFailure (#206)", () => {
     }
   })
 
+  test.each([65_536, 65_537])("a key ending a %i-character message is redacted", (length) => {
+    const key = " sk-LIVEFAKEKEY-do-not-leak-1234567890abcdef"
+    const { log, lines } = captured()
+    logAttemptFailure(log, "a", 1, failure(`${"f".repeat(length - key.length)}${key}`), 70_000)
+    expect(JSON.stringify(lines)).not.toContain("LIVEFAKEKEY")
+  })
+
+  test("a whitespace-free message over 64 KiB keeps the margin: no straddling head leaks", () => {
+    const message = `sk-${"k".repeat(60_000)},postgres://u:${"P".repeat(9_000)}@db.internal/app`
+    const { log, lines } = captured()
+    logAttemptFailure(log, "a", 1, failure(message), 200)
+    expect(JSON.stringify(lines)).not.toContain("PPPP")
+  })
+
   test("a long message with nothing to redact still keeps the full bound", () => {
     const { log, lines } = captured()
     logAttemptFailure(log, "a", 1, failure("m".repeat(10_000)), REASON_MAX_CHARS)

@@ -258,7 +258,7 @@ test("at a tiny cap, base_resp.status_code gives way rather than failing the sal
   }
 })
 
-test("a full budget drops base_resp.status_code first, never the error evidence main kept (#207 round 4)", () => {
+test("a full budget drops base_resp.status_code itself rather than evicting earlier error evidence (#207 round 4)", () => {
   const scanner = createResponseSalvage(128)
   const text = `{"error":{"code":"insufficient_quota"},"type":"${"t".repeat(94)}","base_resp":{"status_code":1008},"z":"${"q".repeat(128)}"}`
   for (const byte of encoder.encode(text)) scanner.push(byte)
