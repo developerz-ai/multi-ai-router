@@ -281,3 +281,11 @@ test("an error seen after base_resp at a full budget evicts base_resp, not itsel
   for (const byte of encoder.encode(text)) scanner.push(byte)
   expect(scanner.finish()).toMatchObject({ code: "q", status: "s" })
 })
+
+test("an error capture that drops anyway does not take base_resp with it (#207 round 6)", () => {
+  const scanner = createResponseSalvage(64)
+  const text = `{"usage":{"p":"${"u".repeat(50)}"},"base_resp":{"status_code":1008},"code":"insufficient_quota"}`
+  for (const byte of encoder.encode(text)) scanner.push(byte)
+  expect(scanner.retainedBytes).toBeLessThanOrEqual(64)
+  expect(scanner.finish()).toMatchObject({ base_resp: { status_code: 1008 } })
+})

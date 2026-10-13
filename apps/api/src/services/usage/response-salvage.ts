@@ -28,8 +28,9 @@ const SLOTS: Readonly<Record<string, readonly string[]>> = {
 const OPTIONAL = new Set(["error", "code", "response.error"])
 /**
  * Slots with their own ceiling: dropped past it, or when the budget is full (without evicting
- * anything else), and evicted like an optional slot before a required member would fail the
- * salvage. Losing one reads as before the slot existed; it never fails the salvage. A MiniMax status
+ * anything else), released before a required member would fail the salvage, and lent to error
+ * evidence that needs the room (given back if that evidence drops anyway). Losing one reads as
+ * before the slot existed; it never fails the salvage. A MiniMax status
  * code is a small integer; anything longer cannot classify anyway.
  */
 const SLOT_MAX_BYTES: ReadonlyMap<string, number> = new Map([["base_resp.status_code", 32]])
@@ -106,6 +107,25 @@ export function createResponseSalvage(maximumBytes: number): ResponseSalvage {
       captured.delete(path)
     }
   }
+  // Ceiling-slot captures lent to the error capture in progress: given back if it drops anyway,
+  // forgotten once it is kept. A dropping capture frees at least what it borrowed, so they fit.
+  let lent: [string, number[]][] = []
+  const lend = () => {
+    for (const path of SLOT_MAX_BYTES.keys()) {
+      const bytes = captured.get(path)
+      if (bytes === undefined) continue
+      lent.push([path, bytes])
+      retained -= bytes.length
+      captured.delete(path)
+    }
+  }
+  const giveBack = () => {
+    for (const [path, bytes] of lent) {
+      captured.set(path, bytes)
+      retained += bytes.length
+    }
+    lent = []
+  }
   const evictOptional = () => {
     release(SLOT_MAX_BYTES.keys())
     if (retained >= maximumBytes) release(OPTIONAL)
@@ -113,8 +133,8 @@ export function createResponseSalvage(maximumBytes: number): ResponseSalvage {
   const keep = (byte: number) => {
     if (capture === null || capture.dropped) return
     const ceiling = SLOT_MAX_BYTES.get(capture.path)
-    // Error evidence outranks a ceiling slot: make room by releasing those before giving way.
-    if (OPTIONAL.has(capture.path) && retained >= maximumBytes) release(SLOT_MAX_BYTES.keys())
+    // Error evidence outranks a ceiling slot: borrow its room before giving way.
+    if (OPTIONAL.has(capture.path) && retained >= maximumBytes && lent.length === 0) lend()
     if (
       (ceiling !== undefined && capture.bytes.length >= ceiling) ||
       (OPTIONAL.has(capture.path) &&
@@ -123,6 +143,7 @@ export function createResponseSalvage(maximumBytes: number): ResponseSalvage {
       retained -= capture.bytes.length
       capture.bytes = []
       capture.dropped = true
+      giveBack()
       return
     }
     // A ceiling slot gives way itself at a full budget; it never evicts the evidence others hold.
@@ -147,6 +168,7 @@ export function createResponseSalvage(maximumBytes: number): ResponseSalvage {
     retained -= captured.get(capture.path)?.length ?? 0
     if (!capture.dropped) captured.set(capture.path, capture.bytes)
     else captured.delete(capture.path)
+    if (!capture.dropped) lent = []
     capture = null
   }
   const beginValue = (byte: number) => {

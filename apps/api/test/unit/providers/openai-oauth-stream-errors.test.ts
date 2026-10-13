@@ -167,6 +167,19 @@ describe("inspectCodexStreamFrame", () => {
     },
   )
 
+  test("a root field does not hide a quota code at response.error.code (#207 round 6)", () => {
+    const verdict = inspectCodexStreamFrame(
+      {
+        type: "response.failed",
+        error: { message: "" },
+        response: { error: { code: "organization_spend_limit_exceeded" } },
+      },
+      "response.failed",
+    )
+    expect(verdict?.kind).toBe("credits-exhausted")
+    expect(verdict?.signal).toBe("codex:stream-error:organization_spend_limit_exceeded")
+  })
+
   test("a quota type with no code is not a spent balance in-stream: the CLI reads only the code", () => {
     // openai/codex responses_error.rs reads `code` alone; a type-only frame is retried there, so it
     // must not park the account here.

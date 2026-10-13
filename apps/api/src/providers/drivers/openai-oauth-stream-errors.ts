@@ -124,8 +124,13 @@ export function inspectCodexStreamFrame(
   // must not park the account.
   const quotaCode =
     root.type === "response.failed" ? text(record(record(root.response)?.error)?.code) : undefined
+  // That location decides a quota code even when a root `code` or `error` would otherwise win.
   const code =
-    listed !== undefined && QUOTA_CODES.has(listed) && listed !== quotaCode ? undefined : listed
+    quotaCode !== undefined && QUOTA_CODES.has(quotaCode)
+      ? quotaCode
+      : listed !== undefined && QUOTA_CODES.has(listed)
+        ? undefined
+        : listed
   const kind = code === undefined ? "server-error" : (KIND_BY_CODE.get(code) ?? "server-error")
   const message = text(root.message) ?? text(nested?.message) ?? text(root.error)
   return {
