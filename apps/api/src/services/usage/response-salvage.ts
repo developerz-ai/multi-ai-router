@@ -113,6 +113,8 @@ export function createResponseSalvage(maximumBytes: number): ResponseSalvage {
   const keep = (byte: number) => {
     if (capture === null || capture.dropped) return
     const ceiling = SLOT_MAX_BYTES.get(capture.path)
+    // Error evidence outranks a ceiling slot: make room by releasing those before giving way.
+    if (OPTIONAL.has(capture.path) && retained >= maximumBytes) release(SLOT_MAX_BYTES.keys())
     if (
       (ceiling !== undefined && capture.bytes.length >= ceiling) ||
       (OPTIONAL.has(capture.path) &&

@@ -32,8 +32,8 @@ export function logAttemptFailure(
 }
 
 /**
- * Characters at the end of a partial scan never kept, so a credential straddling the scan's end is
- * dropped whole: room for a ChatGPT access token (a JWT of under 2 KB).
+ * Characters at the end of a whitespace-free partial scan never kept, so a credential straddling the
+ * scan's end is dropped whole: room for a ChatGPT access token (a JWT of under 2 KB).
  */
 const REDACT_WINDOW_MARGIN = 4096
 
@@ -61,18 +61,32 @@ export function logStreamFailure(
  * An upstream's own words for a log line: redacted before it is cut, so truncation cannot split a
  * credential below the length its pattern needs and leave a fragment for the logger to miss. Up to
  * `MAX_QUOTE_SCAN_CHARS` the whole text is redacted, so every credential is matched with its own
- * terminator and the words before a collapsed token survive. Past it, only that much is scrubbed,
- * and its last `REDACT_WINDOW_MARGIN` characters are never kept: a credential straddling the scan's
- * end cannot leave a fragment, unless it is longer than the margin.
+ * terminator and the words before a collapsed token survive. Past it, the scan ends at the last
+ * whitespace before that mark: no credential pattern spans whitespace, so none can straddle the
+ * scan's end. Only a message with no whitespace in its first `MAX_QUOTE_SCAN_CHARS` falls back to
+ * dropping the scan's last `REDACT_WINDOW_MARGIN` characters.
  */
 function scrubbedQuote(text: string | undefined, maxChars: number): string | undefined {
   if (text === undefined) return undefined
-  const whole = text.length <= MAX_QUOTE_SCAN_CHARS
-  const scrubbed = redactValue(whole ? text : text.slice(0, MAX_QUOTE_SCAN_CHARS))
-  if (whole && scrubbed.length <= maxChars) return scrubbed
-  const keep = whole ? maxChars - 1 : Math.min(maxChars - 1, scrubbed.length - REDACT_WINDOW_MARGIN)
-  return fitted(scrubbed, keep, maxChars)
+  if (text.length <= MAX_QUOTE_SCAN_CHARS) {
+    const scrubbed = redactValue(text)
+    return scrubbed.length <= maxChars ? scrubbed : fitted(scrubbed, maxChars - 1, maxChars)
+  }
+  const end = lastWhitespaceBefore(text, MAX_QUOTE_SCAN_CHARS)
+  if (end > 0) return fitted(redactValue(text.slice(0, end)), maxChars - 1, maxChars)
+  const scrubbed = redactValue(text.slice(0, MAX_QUOTE_SCAN_CHARS))
+  return fitted(scrubbed, Math.min(maxChars - 1, scrubbed.length - REDACT_WINDOW_MARGIN), maxChars)
 }
+
+/** The index of the last whitespace character at or before `at`, or -1. A loop, not a regex. */
+function lastWhitespaceBefore(text: string, at: number): number {
+  for (let index = Math.min(at, text.length - 1); index > 0; index--) {
+    if (WHITESPACE.test(text.charAt(index))) return index
+  }
+  return -1
+}
+
+const WHITESPACE = /\s/
 
 /**
  * The first `keep` characters plus `…`, held within `maxChars` after the logger's own redaction pass.
@@ -91,7 +105,11 @@ function fitted(scrubbed: string, keep: number, maxChars: number): string {
   return "…"
 }
 
-/** How much of an upstream message is redacted for its log line: the upstream error-body cap. */
+/**
+ * How much of an upstream message is redacted for its log line. Sized like the default upstream
+ * error-body and observation caps (64 KiB), which bound most messages; an Agent-SDK message is not
+ * bounded by either, which is what the whitespace cut above is for.
+ */
 const MAX_QUOTE_SCAN_CHARS = 65_536
 /** Attempts to pull a cut back until the re-redacted quote fits the bound. */
 const FIT_ROUNDS = 4

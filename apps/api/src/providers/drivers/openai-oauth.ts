@@ -253,8 +253,9 @@ const codex = createHttpDriver({
     // be retried on a timer forever (non-negotiable 7). Only on a 429, as the Codex CLI reads it
     // (`codex-rs/codex-api/src/api_bridge.rs`), so a stray code on another status cannot park an
     // account. The CLI reads the `error` envelope only; this driver also reads the `detail` envelope
-    // it reads every other Codex code from (`readCodexFacts`), a deliberate widening. The CLI's fifth HTTP code there, `organization_usage_limit_exceeded`, is left out:
-    // its name says a usage window, which a 429 already classifies as `rate-limited`.
+    // it reads every other Codex code from (`readCodexFacts`), a deliberate widening. The CLI's
+    // fifth HTTP code there, `organization_usage_limit_exceeded`, is left out: its name says a usage
+    // window, which a 429 already classifies as `rate-limited`.
     // As a `type`, only `insufficient_quota`, as the CLI reads it; the other three are codes only.
     onStatus(
       [429],

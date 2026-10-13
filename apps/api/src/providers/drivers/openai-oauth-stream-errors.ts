@@ -15,10 +15,12 @@ import type { FailureClassification, UpstreamFailureKind } from "../types"
  *
  * The code decides when there is one. Only when there is no code is the nested error object's
  * `type` read, and only for the limit and deactivated kinds (the HTTP rules' lists; unlike them, a
- * code present always decides). A quota kind needs its code, on a `response.failed` frame: that is
- * the only place the Codex CLI's stream parser reads one (a type-only frame is retried there, a bare
- * `error` event ignored), so neither may park the account here. The flat
- * event's own `type` is never read: it is the event name `error`, not a code.
+ * code present always decides). A quota kind counts only from `response.error.code` of a frame whose
+ * own JSON `type` is `response.failed`: the only place the Codex CLI's stream parser reads one
+ * (every other shape is retried or skipped there), so no other shape may park the account here.
+ * One deliberate widening: the CLI's typed parse also rejects such a frame when a sibling field of
+ * `response.error` has the wrong type (`plan_type: 42`) and retries it; the code alone decides here.
+ * The flat event's own `type` is never read: it is the event name `error`, not a code.
  *
  * The mapping is a closed list. The driver's HTTP `rules` share the limit, deactivated and quota
  * lists but not the request-shaped one:

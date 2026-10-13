@@ -274,3 +274,10 @@ test("a full 64 KiB budget evicts base_resp.status_code before the code main kep
   for (const byte of encoder.encode(`${head}${fill}"}}`)) scanner.push(byte)
   expect(scanner.finish()).toMatchObject({ code: "insufficient_quota", usage: { pad: fill } })
 })
+
+test("an error seen after base_resp at a full budget evicts base_resp, not itself (#207 round 5)", () => {
+  const scanner = createResponseSalvage(64)
+  const text = `{"usage":{"p":"${"u".repeat(50)}"},"base_resp":{"status_code":1008},"code":"q","status":"s"}`
+  for (const byte of encoder.encode(text)) scanner.push(byte)
+  expect(scanner.finish()).toMatchObject({ code: "q", status: "s" })
+})

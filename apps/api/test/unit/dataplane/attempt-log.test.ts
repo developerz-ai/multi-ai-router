@@ -123,6 +123,16 @@ describe("logAttemptFailure (#206)", () => {
     },
   )
 
+  test("past 64 KiB, a credential straddling the scan's end leaves nothing (#207 round 5)", () => {
+    for (const maxChars of [200, 2000]) {
+      const { log, lines } = captured()
+      const message = `Failed: Bearer ${"b".repeat(60_000)} postgres://u:${"P".repeat(8_000)}@h tail`
+      logAttemptFailure(log, "a", 1, failure(message), maxChars)
+      expect(JSON.stringify(lines)).not.toContain("PPPP")
+      expect(String(lines[0]?.upstreamMessage)).toStartWith("Failed: [REDACTED]")
+    }
+  })
+
   test("a long message with nothing to redact still keeps the full bound", () => {
     const { log, lines } = captured()
     logAttemptFailure(log, "a", 1, failure("m".repeat(10_000)), REASON_MAX_CHARS)
