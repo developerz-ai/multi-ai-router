@@ -199,7 +199,7 @@ key into the admin plane. Conversely, an admin session is not accepted on `/v1/*
 |---|---|
 | Default-on | The redactor runs on every log record, not at call sites. Forgetting to redact is not a possible mistake |
 | Catches by field name | `Authorization` / `Proxy-Authorization` / `Cookie` / `Set-Cookie` / `x-api-key` / `x-goog-api-key` / `x-goog-user-project`, anything containing `password`, `secret`, `token`, `credential`, `verifier`, OAuth `code`, `state`, `code_verifier` |
-| Catches by value shape | `mar_live_…`, `sk-…`, `Bearer …`, any JWT (`eyJ….….…` — a ChatGPT/Codex access token is one), URL userinfo (`postgres://user:pass@host`), a credential in a query string (`?…key=` / `?…token=` / `?…secret=` / `?code=` / `?code_verifier=` / `?state=` — a whole OAuth callback URL logged as one value), `AIza…`, `gh[pousr]_…` / `github_pat_…`, `xai-…`, `gsk_…` |
+| Catches by value shape | `mar_live_…`, `sk-…`, `Bearer …`, any JWT (`eyJ….….…` — a ChatGPT/Codex access token is one), URL userinfo (`postgres://user:pass@host`, a password holding an unencoded `/` included, up to 256 characters), a credential in a query string (`?…key=` / `?…token=` / `?…secret=` / `?code=` / `?code_verifier=` / `?state=` — a whole OAuth callback URL logged as one value), `AIza…`, `gh[pousr]_…` / `github_pat_…`, `xai-…`, `gsk_…` |
 | Keeps the diagnostic | A connection string keeps its host and a URL keeps its path — only the credential inside is replaced. Everything else is replaced whole |
 | Tested unit | Pure function, its own test file, with one assertion per secret shape and a nested case three levels deep. A new provider credential shape means a new fixture |
 | Bodies | Request and response bodies are never logged, at any level. Prompts are user data |

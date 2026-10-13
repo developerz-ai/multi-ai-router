@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.25.9] — 2026-10-13
+
+### Fixed
+
+- **A Codex spent balance is `credits-exhausted`, in a stream and over HTTP.** `insufficient_quota`, `credit_balance_exhausted`, `organization_spend_limit_exceeded` and `project_spend_limit_exceeded` (the four codes the Codex CLI maps to a fatal `QuotaExceeded`, openai/codex `codex-rs/codex-api/src/sse/responses_error.rs` at `f82e3659`) classified `codex:stream-error:other` in a stream and `rate-limited` on a `429`, so a spent account cooled down and was retried on a timer. A new `CODEX_QUOTA_CODES` list (`apps/api/src/providers/drivers/openai-oauth-stream-errors.ts`) feeds the stream hook (code, or a nested `type` with no code) and two new HTTP rules in `openai-oauth.ts` (signal `openai-oauth:insufficient_quota`). The account goes `exhausted`. No production frame was captured; the test frame is the shape the CLI's own test uses.
+- **An oversized MiniMax in-body failure is no longer read as success.** A MiniMax body over the observation cap went through the salvage scanner, which kept no `base_resp`, so the driver hook saw no envelope and a `1008` (spent balance) on a 200 settled as a success. `base_resp` is now an optional root salvage slot (`apps/api/src/services/usage/response-salvage.ts`).
+- **The attempt-failure log line redacts before it cuts.** `upstream attempt failed` cut the upstream message to `LOG_REASON_MAX_CHARS` and left redaction to the logger, so a credential across the cut could survive as a fragment. The HTTP path redacts earlier; the Agent-SDK path does not. Both log lines now share one redact-then-cut helper (`apps/api/src/services/dataplane/attempt-log.ts`).
+- **A userinfo password holding an unencoded `/` is scrubbed** (`postgres://u:p/ss@h`), in the server redactor (`apps/api/src/logging/redact.ts`) and the boot-path scrub (`packages/core/src/scrub-credentials.ts`). The new branch is bounded to 256 characters, so redaction stays linear, and stops at `"`, so it does not run across a JSON field. Price: `https://host:8080/a@b` loses its host.
+- **The boot-path credential scrub is linear.** `scrubCredentials` carried the two quadratic shapes 2.25.8 removed from the server redactor; 32 KB of `a-` and the JWT-like runs took about 12.7 s together. The scheme now stays outside the userinfo match, and the JWT header is bounded with a lookbehind-anchored long-header pattern beside it. Timing cases in `packages/core/test/unit/scrub-credentials.test.ts`.
+- Not changed: the original userinfo branch can still match across a JSON field boundary (`"url":"http://h:1","note":"x@y"`). That only mangles log text and leaks nothing; excluding `"` from it would let a password containing `"` through, and a scrubbed line costs less than a leaked one.
+- Tests: `test/unit/dataplane/attempt-log.test.ts` (new), `test/unit/redact.test.ts`, `packages/core/test/unit/scrub-credentials.test.ts`, `test/unit/providers/openai-oauth-stream-errors.test.ts`, `test/unit/providers/openai-oauth.test.ts`, `test/unit/services/usage/response-observer-codex.test.ts`. Refs #206.
+
+### Documentation
+
+- `docs/idea/03-providers.md`: an `openai-oauth` row in the credits-exhausted signal table. `docs/idea/05-routing-and-failover.md`: the quota codes and the `base_resp` salvage slot in the in-stream row. `docs/idea/07-security.md`: slash passwords in the value-shape list. `docs/idea/08-observability.md`: `upstream attempt failed` scrubs before it cuts.
+
 ## [2.25.8] — 2026-10-12
 
 ### Fixed

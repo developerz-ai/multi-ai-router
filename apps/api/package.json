@@ -1,6 +1,6 @@
 {
   "name": "@multi-ai-router/api",
-  "version": "2.25.8",
+  "version": "2.25.9",
   "private": true,
   "type": "module",
   "main": "src/main.ts",
