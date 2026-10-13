@@ -36,9 +36,10 @@ const OPTIONAL = new Set(["error", "code", "response.error"])
  */
 const SLOT_MAX_BYTES: ReadonlyMap<string, number> = new Map([["base_resp.status_code", 32]])
 /** Each ceiling slot by the root key that parents it, so a repeated parent releases its children. */
-const CEILING_CHILDREN: ReadonlyMap<string, readonly string[]> = new Map([
-  ["base_resp", ["base_resp.status_code"]],
-])
+const CEILING_CHILDREN: ReadonlyMap<string, readonly string[]> = Map.groupBy(
+  SLOT_MAX_BYTES.keys(),
+  (path) => path.split(".")[0] ?? "",
+)
 const KEY_MAX_BYTES = 32
 const QUOTE = 34
 const BACKSLASH = 92

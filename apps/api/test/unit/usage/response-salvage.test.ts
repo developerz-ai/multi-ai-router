@@ -326,3 +326,13 @@ test.each(['{"status_msg":"x"}', "{}", "null", "5"])(
     expect(rebuilt?.base_resp).toBeUndefined()
   },
 )
+
+test("a parent repeat after a lend, a drop and a give-back still clears the code (#207 round 8)", () => {
+  const scanner = createResponseSalvage(64)
+  const text = `{"usage":{"p":"${"u".repeat(50)}"},"base_resp":{"status_code":1008},"code":"${"c".repeat(40)}","base_resp":{}}`
+  for (const byte of encoder.encode(text)) {
+    scanner.push(byte)
+    expect(scanner.retainedBytes).toBeLessThanOrEqual(64)
+  }
+  expect(scanner.finish()?.base_resp).toBeUndefined()
+})
