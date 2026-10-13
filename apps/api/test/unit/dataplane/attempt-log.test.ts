@@ -103,6 +103,13 @@ describe("logAttemptFailure (#206)", () => {
     }
   })
 
+  test("a credential over 4 KB across the window's end leaves no head (#207 round 4)", () => {
+    const message = `sk-${"k".repeat(4300)} x://svc:${"P".repeat(5000)}@db.internal/app`
+    const { log, lines } = captured()
+    logAttemptFailure(log, "a", 1, failure(message), 200)
+    expect(JSON.stringify(lines)).not.toContain("PPPP")
+  })
+
   test("a long message with nothing to redact still keeps the full bound", () => {
     const { log, lines } = captured()
     logAttemptFailure(log, "a", 1, failure("m".repeat(10_000)), REASON_MAX_CHARS)

@@ -32,8 +32,8 @@ export function logAttemptFailure(
 }
 
 /**
- * Characters past the cut still scrubbed, so a credential straddling it is matched whole: room for a
- * ChatGPT access token (a JWT of under 2 KB) that begins just before the cut.
+ * Characters at the end of a partial scan never kept, so a credential straddling the scan's end is
+ * dropped whole: room for a ChatGPT access token (a JWT of under 2 KB).
  */
 const REDACT_WINDOW_MARGIN = 4096
 
@@ -59,27 +59,18 @@ export function logStreamFailure(
 
 /**
  * An upstream's own words for a log line: redacted before it is cut, so truncation cannot split a
- * credential below the length its pattern needs and leave a fragment for the logger to miss. Only
- * the part that can be kept is scrubbed, with room for a credential straddling the cut. When the
- * window itself cut the text, its last `REDACT_WINDOW_MARGIN` characters are never kept: a long
- * credential collapsing to `[REDACTED]` earlier would otherwise pull a fragment cut at the window's
- * end into the kept range. The window doubles, up to `MAX_QUOTE_SCAN_CHARS`, while redaction has
- * shrunk it below a full window, so the words before a long token are still logged.
+ * credential below the length its pattern needs and leave a fragment for the logger to miss. Up to
+ * `MAX_QUOTE_SCAN_CHARS` the whole text is redacted, so every credential is matched with its own
+ * terminator and the words before a collapsed token survive. Past it, only that much is scrubbed,
+ * and its last `REDACT_WINDOW_MARGIN` characters are never kept: a credential straddling the scan's
+ * end cannot leave a fragment, unless it is longer than the margin.
  */
 function scrubbedQuote(text: string | undefined, maxChars: number): string | undefined {
   if (text === undefined) return undefined
-  const window = maxChars + REDACT_WINDOW_MARGIN
-  let end = window
-  let scrubbed = redactValue(text.slice(0, end))
-  while (end < text.length && scrubbed.length < window && end < MAX_QUOTE_SCAN_CHARS) {
-    end = Math.min(end * 2, MAX_QUOTE_SCAN_CHARS)
-    scrubbed = redactValue(text.slice(0, end))
-  }
-  if (end >= text.length && scrubbed.length <= maxChars) return scrubbed
-  const keep =
-    end >= text.length
-      ? maxChars - 1
-      : Math.min(maxChars - 1, scrubbed.length - REDACT_WINDOW_MARGIN)
+  const whole = text.length <= MAX_QUOTE_SCAN_CHARS
+  const scrubbed = redactValue(whole ? text : text.slice(0, MAX_QUOTE_SCAN_CHARS))
+  if (whole && scrubbed.length <= maxChars) return scrubbed
+  const keep = whole ? maxChars - 1 : Math.min(maxChars - 1, scrubbed.length - REDACT_WINDOW_MARGIN)
   return fitted(scrubbed, keep, maxChars)
 }
 
@@ -100,7 +91,7 @@ function fitted(scrubbed: string, keep: number, maxChars: number): string {
   return "…"
 }
 
-/** How far the redaction window may grow to make up for what redaction removed. */
+/** How much of an upstream message is redacted for its log line: the upstream error-body cap. */
 const MAX_QUOTE_SCAN_CHARS = 65_536
 /** Attempts to pull a cut back until the re-redacted quote fits the bound. */
 const FIT_ROUNDS = 4

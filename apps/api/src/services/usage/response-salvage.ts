@@ -13,8 +13,8 @@ import { responseObject } from "./response-usage"
 const SLOTS: Readonly<Record<string, readonly string[]>> = {
   "": ["type", "usage", "status", "incomplete_details", "error", "code"],
   // MiniMax carries its failures on a 200 in `base_resp`; only the number classifies, so the
-  // free-text `status_msg` beside it is never kept. Required, never evicted: a lost code would
-  // settle a spent balance as a success, since nothing else in the payload names a failure.
+  // free-text `status_msg` beside it is never kept. Kept unless it is over its ceiling or the budget
+  // is full (`SLOT_MAX_BYTES`); losing it reads as before the slot existed.
   base_resp: ["status_code"],
   message: ["usage"],
   response: ["usage", "status", "incomplete_details", "error"],
@@ -27,9 +27,10 @@ const SLOTS: Readonly<Record<string, readonly string[]>> = {
  */
 const OPTIONAL = new Set(["error", "code", "response.error"])
 /**
- * Slots with their own ceiling: dropped past it, or when the budget is full, and evicted like an
- * optional slot before a required member would fail the salvage. Losing one reads as main did before
- * the slot existed; it never fails the salvage. A MiniMax status code is a small integer; anything longer cannot classify anyway.
+ * Slots with their own ceiling: dropped past it, or when the budget is full (without evicting
+ * anything else), and evicted like an optional slot before a required member would fail the
+ * salvage. Losing one reads as before the slot existed; it never fails the salvage. A MiniMax status
+ * code is a small integer; anything longer cannot classify anyway.
  */
 const SLOT_MAX_BYTES: ReadonlyMap<string, number> = new Map([["base_resp.status_code", 32]])
 const KEY_MAX_BYTES = 32
@@ -117,13 +118,14 @@ export function createResponseSalvage(maximumBytes: number): ResponseSalvage {
       capture.dropped = true
       return
     }
-    if (retained >= maximumBytes) evictOptional()
+    // A ceiling slot gives way itself at a full budget; it never evicts the evidence others hold.
     if (retained >= maximumBytes && ceiling !== undefined) {
       retained -= capture.bytes.length
       capture.bytes = []
       capture.dropped = true
       return
     }
+    if (retained >= maximumBytes) evictOptional()
     if (retained >= maximumBytes) {
       failed = true
       capture = null

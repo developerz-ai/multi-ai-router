@@ -116,12 +116,14 @@ export function inspectCodexStreamFrame(
 
   const nested = record(root.error) ?? record(record(root.response)?.error)
   const listed = listedCode(root, nested)
-  // A quota code counts only on `response.failed`, the one frame the Codex CLI reads it from; a
-  // bare `error` event carrying one is ignored there, so here it must not park the account.
+  // A quota code counts only where the Codex CLI reads it: `response.error.code` of a frame whose
+  // own JSON `type` is `response.failed`. Every other shape (a bare `error` event, a root `code` or
+  // `error`, a frame typed only by its SSE event name) is retried or skipped there, so here it
+  // must not park the account.
+  const quotaCode =
+    root.type === "response.failed" ? text(record(record(root.response)?.error)?.code) : undefined
   const code =
-    listed !== undefined && QUOTA_CODES.has(listed) && type !== "response.failed"
-      ? undefined
-      : listed
+    listed !== undefined && QUOTA_CODES.has(listed) && listed !== quotaCode ? undefined : listed
   const kind = code === undefined ? "server-error" : (KIND_BY_CODE.get(code) ?? "server-error")
   const message = text(root.message) ?? text(nested?.message) ?? text(root.error)
   return {

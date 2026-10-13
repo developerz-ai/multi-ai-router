@@ -140,6 +140,33 @@ describe("inspectCodexStreamFrame", () => {
     }
   })
 
+  test.each([
+    [
+      "a top-level code on response.failed",
+      { type: "response.failed", code: "insufficient_quota" },
+      "response.failed",
+    ],
+    [
+      "a root error on response.failed",
+      { type: "response.failed", error: { code: "insufficient_quota" } },
+      "response.failed",
+    ],
+    [
+      "no JSON type, only the SSE event name",
+      { response: { error: { code: "insufficient_quota" } } },
+      "response.failed",
+    ],
+  ])(
+    "a quota code the CLI would not read (%s) does not park the account (#207 round 4)",
+    (_label, frame, event) => {
+      // openai/codex reads a quota code only from `response.error.code` of a frame whose own JSON
+      // `type` is `response.failed`; every other shape is retried or skipped there.
+      const verdict = inspectCodexStreamFrame(frame, event)
+      expect(verdict?.kind).toBe("server-error")
+      expect(verdict?.signal).toBe("codex:stream-error:other")
+    },
+  )
+
   test("a quota type with no code is not a spent balance in-stream: the CLI reads only the code", () => {
     // openai/codex responses_error.rs reads `code` alone; a type-only frame is retried there, so it
     // must not park the account here.
