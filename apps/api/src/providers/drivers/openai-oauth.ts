@@ -257,8 +257,9 @@ const codex = createHttpDriver({
     // fifth HTTP code there, `organization_usage_limit_exceeded`, is left out: its name says a usage
     // window, which a 429 already classifies as `rate-limited`.
     // As a `type`, only `insufficient_quota`, as the CLI reads it; the other three are codes only.
-    // One more difference: these run after the limit rules, so a body mixing a limit signal with a
-    // quota signal reads `rate-limited` here where the CLI reads it as quota. That errs to cooldown.
+    // One more difference: these run after the limit rules, so a limit code or a
+    // `rate_limit_exceeded` type beside a quota signal reads `rate-limited` here where the CLI reads
+    // quota. That errs to cooldown; the stream hook follows the CLI instead (quota wins there).
     onStatus(
       [429],
       typeRule("credits-exhausted", "openai-oauth:insufficient_quota", ["insufficient_quota"]),

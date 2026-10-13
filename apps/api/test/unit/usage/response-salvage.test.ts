@@ -286,6 +286,22 @@ test("an error capture that drops anyway does not take base_resp with it (#207 r
   const scanner = createResponseSalvage(64)
   const text = `{"usage":{"p":"${"u".repeat(50)}"},"base_resp":{"status_code":1008},"code":"insufficient_quota"}`
   for (const byte of encoder.encode(text)) scanner.push(byte)
-  expect(scanner.retainedBytes).toBeLessThanOrEqual(64)
+  expect(scanner.retainedBytes).toBe(62)
   expect(scanner.finish()).toMatchObject({ base_resp: { status_code: 1008 } })
+})
+
+test("lent room stays with a kept capture and is not double-counted later (#207 round 7)", () => {
+  const prefix = `{"usage":{"p":"${"u".repeat(50)}"},"base_resp":{"status_code":1008}`
+  const kept = createResponseSalvage(64)
+  for (const byte of encoder.encode(`${prefix},"code":"ab","error":"xyz"}`)) kept.push(byte)
+  expect(kept.retainedBytes).toBe(62)
+  expect(kept.finish()).not.toHaveProperty("base_resp")
+
+  const dropped = createResponseSalvage(64)
+  const text = `${prefix},"code":"insufficient_quota","error":"xyz"}`
+  for (const byte of encoder.encode(text)) dropped.push(byte)
+  expect(dropped.retainedBytes).toBe(63)
+  const rebuilt = dropped.finish()
+  expect(rebuilt).toMatchObject({ error: "xyz" })
+  expect(rebuilt).not.toHaveProperty("base_resp")
 })

@@ -5,8 +5,9 @@ import { responseObject } from "./response-usage"
  * terminal frame (Codex `response.completed` carries instructions, tools and output), pushing it
  * past the observation cap while the usage that settles the attempt sits inside. This scanner
  * walks the oversized bytes once, retains only the few shallow members usage and terminal
- * evidence are read from, and rebuilds a small payload from them. It never retains more than
- * `maximumBytes` in total; anything it cannot account for honestly yields `null`.
+ * evidence are read from, and rebuilds a small payload from them. It never counts more than
+ * `maximumBytes`, plus at most one ceiling slot's bytes held aside while lent to an error capture in
+ * progress; anything it cannot account for honestly yields `null`.
  */
 
 // Shallow members kept verbatim, by parent key (root = ""). Everything else is skipped unread.

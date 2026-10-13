@@ -13,7 +13,9 @@ import type { FailureClassification, UpstreamFailureKind } from "../types"
  *     under `error` on an `error` event;
  *   - a flat `{type:"error", code, message}`, the code at the top level.
  *
- * The code decides when there is one. Only when there is no code is the nested error object's
+ * The code decides when there is one, with one exception below: a quota code at
+ * `response.error.code` of a JSON-typed `response.failed` frame decides even beside a root `code`
+ * or `error`, as the Codex CLI reads it. Only when there is no code is the nested error object's
  * `type` read, and only for the limit and deactivated kinds (the HTTP rules' lists; unlike them, a
  * code present always decides). A quota kind counts only from `response.error.code` of a frame whose
  * own JSON `type` is `response.failed`: the only place the Codex CLI's stream parser reads one

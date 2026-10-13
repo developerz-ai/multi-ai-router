@@ -193,7 +193,7 @@ describe("the 64 KiB scan boundary, exactly (#207 round 6)", () => {
       const { log, lines } = captured()
       logAttemptFailure(log, "a", 1, failure(message), max)
       const line = String(lines[0]?.upstreamMessage)
-      expect(line).not.toMatch(/\[R[A-Z]*…/)
+      expect(line).not.toMatch(/\[[A-Z]*…/)
       expect(line.length).toBeLessThanOrEqual(max)
     }
   })
