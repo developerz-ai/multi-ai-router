@@ -376,3 +376,17 @@ test.each([
   for (const byte of encoder.encode(text)) scanner.push(byte)
   expect(scanner.finish()).toBeNull()
 })
+
+test("a malformed optional code beside a malformed status_code still fails the salvage (#207 round 10)", () => {
+  const scanner = createResponseSalvage(1024)
+  const text = `{"usage":{"input_tokens":1},"base_resp":{"status_code":NaN},"code":+1,"pad":"${"x".repeat(2048)}"}`
+  for (const byte of encoder.encode(text)) scanner.push(byte)
+  expect(scanner.finish()).toBeNull()
+})
+
+test("a malformed status_code before usage drops only itself (#207 round 10)", () => {
+  const scanner = createResponseSalvage(1024)
+  const text = `{"base_resp":{"status_code":01008},"usage":{"input_tokens":11,"output_tokens":22},"pad":"${"x".repeat(2048)}"}`
+  for (const byte of encoder.encode(text)) scanner.push(byte)
+  expect(scanner.finish()).toEqual({ usage: { input_tokens: 11, output_tokens: 22 } })
+})
