@@ -13,8 +13,15 @@ type ScrubPattern = { readonly pattern: RegExp; readonly replacement: string }
 
 const PATTERNS: readonly ScrubPattern[] = [
   // URL userinfo — `postgres://user:pass@host/db` is how DATABASE_URL reaches a boot error.
-  // The scheme and host survive: *what* refused the connection is the diagnostic half.
-  { pattern: /\b([a-z][a-z0-9+.-]*):\/\/[^\s/@]+@/gi, replacement: `$1://${SCRUBBED}@` },
+  // The scheme and host survive: *what* refused the connection is the diagnostic half. The scheme
+  // is left out of the match (it stays in the text untouched): matching it made a long `a-a-a-…`
+  // run backtrack quadratically. The first branch takes a password holding an unencoded `/`
+  // (`postgres://u:p/ss@h`), bounded to 256 characters so the scan stays linear and stopping at `"`;
+  // the second is username-only userinfo, or a password without `/`, unbounded but stopping at `/`.
+  {
+    pattern: /:\/\/(?:[^\s/:@]*:[^\s@"]{1,256}|[^\s/@]+)@/g,
+    replacement: `://${SCRUBBED}@`,
+  },
   // Key=value form — DSNs (`password=…`) and env echoes (`ENCRYPTION_KEY=…`) alike.
   {
     pattern:
@@ -23,8 +30,16 @@ const PATTERNS: readonly ScrubPattern[] = [
   },
   // OpenAI/Anthropic-style API keys (`sk-…`, `sk-ant-…`).
   { pattern: /\bsk-[A-Za-z0-9_-]{8,}/g, replacement: SCRUBBED },
-  // Any JWT — three base64url segments whose header starts `{"`.
-  { pattern: /\beyJ[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]*/g, replacement: SCRUBBED },
+  // Any JWT — three base64url segments whose header starts `{"`. The header is bounded to 512
+  // characters: unbounded, a long `eyJaaaaa-…` run with no dot backtracked quadratically.
+  { pattern: /\beyJ[A-Za-z0-9_-]{5,512}\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]*/g, replacement: SCRUBBED },
+  // A header over that bound. Anchored on a non-token character instead of `\b`, so a run starts a
+  // scan only once and the cost stays linear; a long-header JWT glued straight after `-`, `_` or a
+  // letter is not matched (allowing those makes an `eyJ-eyJ-…` run quadratic again).
+  {
+    pattern: /(?<![A-Za-z0-9_-])eyJ[A-Za-z0-9_-]{513,}\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]*/g,
+    replacement: SCRUBBED,
+  },
   // HTTP auth header values quoted into an error.
   { pattern: /\b(?:Bearer|Basic)\s+[A-Za-z0-9._~+/-]{8,}=*/gi, replacement: SCRUBBED },
 ]

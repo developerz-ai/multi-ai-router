@@ -41,4 +41,35 @@ describe("scrubCredentials", () => {
     const line = 'migration failed: relation "accounts" already exists (migrations/0007.sql)'
     expect(scrubCredentials(line)).toBe(line)
   })
+
+  test("a password holding an unencoded slash is scrubbed whole (#206)", () => {
+    expect(scrubCredentials("connect failed: postgres://u:p/ss@db:5432/x")).toBe(
+      "connect failed: postgres://[REDACTED]@db:5432/x",
+    )
+  })
+
+  test("a JWT whose header is over 512 characters is still scrubbed whole", () => {
+    const segment = (bytes: number) => Buffer.from("k".repeat(bytes)).toString("base64url")
+    const jwt = `eyJ${segment(420)}.${segment(200)}.${segment(256)}`
+    expect(jwt.indexOf(".")).toBeGreaterThan(512)
+    expect(scrubCredentials(`proof ${jwt} end`)).toBe("proof [REDACTED] end")
+  })
+})
+
+describe("scrubCredentials cost (#206)", () => {
+  test("long scheme-like and JWT-like runs are scanned in linear time", () => {
+    // The scheme quantifier and the unbounded JWT header made these quadratic: 16 KB of `a-` took
+    // about 4 s. The bound is loose, the regression is not.
+    for (const text of [
+      "a-".repeat(32 * 1024),
+      "eyJaaaaa-".repeat(8 * 1024),
+      "eyJ-".repeat(16 * 1024),
+      "a://b:".repeat(10 * 1024),
+      "://u:p/".repeat(10 * 1024),
+    ]) {
+      const started = performance.now()
+      scrubCredentials(text)
+      expect(performance.now() - started).toBeLessThan(500)
+    }
+  })
 })
