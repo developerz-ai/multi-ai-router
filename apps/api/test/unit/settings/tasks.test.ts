@@ -150,11 +150,11 @@ describe("the tasks read", () => {
     expect(neverRan?.lastSuccessAt).toBeNull()
   })
 
-  test("a run row whose task name no longer exists neither breaks the read nor surfaces", async () => {
-    // Rollback guard: a task removed from the enum leaves rows behind in
-    // scheduled_task_runs. The view is driven off the enum, not off the rows, so
-    // the read must still answer with exactly the current tasks — no throw, no
-    // unknown name rendered, no interval lookup against a task that has none.
+  test("the view is driven off the task enum; an extra run entry is never read (a pin, not the rollback guard)", async () => {
+    // A pin, NOT the rollback guard: the service iterates the enum's values and the
+    // memory fixture never returns a foreign row, so this cannot fail on a real
+    // leftover row. The scheduler boot reads only current task names; the real
+    // guard against rows left behind by a removed task is `orphan-runs.test.ts`.
     const removed = { ...run({ startedAt: at(5), finishedAt: at(4) }) }
     removed.task = "removed_task_name" as typeof removed.task
     const { service } = harness({

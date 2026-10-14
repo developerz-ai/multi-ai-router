@@ -329,7 +329,9 @@ describe("KeyFormDialog attribution", () => {
         onSubmit: (values) => (submitted = values),
       }),
       () => {
-        typeInto(fieldByLabel("Owner"), " marta ")
+        // Owner carries an HTML `pattern`, so a browser blocks padded input before
+        // submit; the free-text purpose is what actually reaches the trim.
+        typeInto(fieldByLabel("Owner"), "marta")
         typeInto(fieldByLabel("Purpose"), "   ")
         submitForm()
         expect(submitted?.owner).toBe("marta")

@@ -24,7 +24,7 @@ import { useSettings } from "../lib/queries/settings"
 import { useTableUsage } from "../lib/queries/table-usage"
 import { isSubscriptionLogin } from "../lib/subscription-login"
 import styles from "./KeysRoute.module.scss"
-import { filterKeys } from "./keys/filter-keys"
+import { distinctOwners, distinctTools, filterKeys, liveSelection } from "./keys/filter-keys"
 import { KeyDangerDialogs } from "./keys/KeyDangerDialogs"
 import { KeyFilters } from "./keys/KeyFilters"
 import { KeyFormDialog } from "./keys/KeyFormDialog"
@@ -97,6 +97,11 @@ export default function KeysRoute() {
   const [pendingDelete, setPendingDelete] = createSignal<ApiKeyView | null>(null)
   const [ownerFilter, setOwnerFilter] = createSignal<string | null>(null)
   const [toolFilter, setToolFilter] = createSignal<string | null>(null)
+
+  const clearFilters = () => {
+    setOwnerFilter(null)
+    setToolFilter(null)
+  }
 
   const openForm = (key: ApiKeyView | null) => {
     create.reset()
@@ -184,60 +189,67 @@ export default function KeysRoute() {
         loading={<TableSkeleton label="Loading keys" rows={4} />}
         query={keys}
       >
-        {(rows) => (
-          <Show
-            fallback={
-              <EmptyState
-                action={mintButton()}
-                description="A router key is what a client presents instead of an upstream credential. Mint one per client — per developer, per CI job — so usage is attributable and revoking one breaks exactly one thing."
-                icon="keys"
-                title="No keys yet"
-              />
-            }
-            when={rows.length > 0}
-          >
-            <KeyFilters
-              keys={rows}
-              onOwnerChange={setOwnerFilter}
-              onToolChange={setToolFilter}
-              owner={ownerFilter()}
-              tool={toolFilter()}
-            />
+        {(rows) => {
+          // A chip whose value has left the list stops filtering (see `liveSelection`).
+          const owner = () => liveSelection(ownerFilter(), distinctOwners(rows))
+          const tool = () => liveSelection(toolFilter(), distinctTools(rows))
+          const visible = () => filterKeys(rows, owner(), tool())
+          return (
             <Show
               fallback={
-                // Reaching zero rows through the chips is not "no keys yet" —
-                // the fleet is right there behind the filter, and the operator
-                // needs the toggle, not an empty state, to get back to it.
-                <p class={styles.filterEmpty} role="status">
-                  No keys carry the selected owner and tool. Press the chip again to clear it.
-                </p>
+                <EmptyState
+                  action={mintButton()}
+                  description="A router key is what a client presents instead of an upstream credential. Mint one per client — per developer, per CI job — so usage is attributable and revoking one breaks exactly one thing."
+                  icon="keys"
+                  title="No keys yet"
+                />
               }
-              when={filterKeys(rows, ownerFilter(), toolFilter()).length > 0}
+              when={rows.length > 0}
             >
-              <KeysTable
-                keys={filterKeys(rows, ownerFilter(), toolFilter())}
-                nowMs={now()}
-                onDelete={setPendingDelete}
-                onEdit={(key) => openForm(key)}
-                onMintSuccessor={openSuccessorForm}
-                onReveal={(key) =>
-                  reveal.mutate(key.id, {
-                    onSuccess: (revealed) =>
-                      setShown({
-                        name: revealed.name,
-                        value: revealed.value,
-                        minted: false,
-                        scope: key.scope,
-                      }),
-                  })
-                }
-                onRevoke={setPendingRevoke}
-                revealingId={reveal.isPending ? (reveal.variables ?? null) : null}
-                {...usage()}
+              <KeyFilters
+                keys={rows}
+                onOwnerChange={setOwnerFilter}
+                onToolChange={setToolFilter}
+                owner={owner()}
+                tool={tool()}
               />
+              <Show
+                fallback={
+                  // Reaching zero rows through the chips is not "no keys yet" —
+                  // the fleet is right there behind the filter, and the operator
+                  // needs the toggle, not an empty state, to get back to it.
+                  <div class={styles.filterEmpty} role="status">
+                    <p>No keys carry the selected owner and tool together.</p>
+                    <Button onClick={clearFilters}>Clear filters</Button>
+                  </div>
+                }
+                when={visible().length > 0}
+              >
+                <KeysTable
+                  keys={visible()}
+                  nowMs={now()}
+                  onDelete={setPendingDelete}
+                  onEdit={(key) => openForm(key)}
+                  onMintSuccessor={openSuccessorForm}
+                  onReveal={(key) =>
+                    reveal.mutate(key.id, {
+                      onSuccess: (revealed) =>
+                        setShown({
+                          name: revealed.name,
+                          value: revealed.value,
+                          minted: false,
+                          scope: key.scope,
+                        }),
+                    })
+                  }
+                  onRevoke={setPendingRevoke}
+                  revealingId={reveal.isPending ? (reveal.variables ?? null) : null}
+                  {...usage()}
+                />
+              </Show>
             </Show>
-          </Show>
-        )}
+          )
+        }}
       </QueryBoundary>
 
       <KeyFormDialog

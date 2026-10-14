@@ -16,6 +16,18 @@ export function filterKeys(
   )
 }
 
+/**
+ * A selected chip whose value no key carries any more (its last key was deleted
+ * or relabelled) is no filter at all: keeping it would hide every row behind a
+ * chip that no longer exists, with nothing to press to get back.
+ */
+export function liveSelection(
+  selected: string | null,
+  available: readonly string[],
+): string | null {
+  return selected !== null && available.includes(selected) ? selected : null
+}
+
 /** The distinct owners present, sorted — the chips are the fleet's own vocabulary. */
 export function distinctOwners(keys: readonly ApiKeyView[]): readonly string[] {
   return distinct(keys.map((key) => key.owner))

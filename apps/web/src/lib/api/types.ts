@@ -3,6 +3,7 @@ import type {
   AccountStatus,
   AuthKind,
   Dialect,
+  KeyOwnerKind,
   KeyScope,
   ProviderId,
   QuotaWindowKind,
@@ -204,8 +205,7 @@ export interface KeyScopeView {
   readonly accountIds: readonly string[]
 }
 
-/** `packages/core` — `KeyOwnerKind`, restated (same-release enum; must not drift). */
-export type KeyOwnerKind = "person" | "service"
+export type { KeyOwnerKind }
 
 export interface ApiKeyView {
   readonly id: string

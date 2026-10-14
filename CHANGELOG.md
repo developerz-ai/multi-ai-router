@@ -10,7 +10,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [2.26.0] — 2026-10-14
 
 ### Added
-- Router keys carry four optional attribution labels: `owner`, `ownerKind` (`person` | `service`), `tool` and `purpose` (#219). They are set on create, cleared with `null` on PATCH, and filterable with `GET /api/admin/keys?owner=&tool=`. The console form edits them, the Keys table shows `owner / tool` with filter chips, and a **Mint successor** action prefills a rotation (never the key value). An owner is a label for usage attribution, not a router user. Request authentication is unchanged. Migration `0033_key_attribution` adds nullable columns only, so existing keys keep working.
+
+- Router keys carry four optional attribution labels: `owner`, `ownerKind` (`person` | `service`), `tool` and `purpose` (#219). They are set on create, cleared with `null` on PATCH, and filterable with `GET /api/admin/keys?owner=<slug>&tool=<slug>`; unknown query parameters on `GET /api/admin/keys` now answer `400`. The console form edits them, the Keys table shows `owner / tool` with filter chips, and a **Mint successor** action prefills a rotation (never the key value). An owner is a label for usage attribution, not a router user. Request authentication is unchanged. Migration `0033_key_attribution` adds nullable columns only, so existing keys keep working.
 
 ## [2.25.8] — 2026-10-12
 

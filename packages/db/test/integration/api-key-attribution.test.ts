@@ -7,7 +7,7 @@ import { createApiKeyRepository } from "../../src/repositories/api-key-repositor
 /**
  * Attribution columns against a real PostgreSQL 16+: what migration 0033 leaves
  * behind on pre-existing rows, and that the repository's owner/tool filters are
- * exact-match predicates the planner can use. Own database, dropped afterwards —
+ * exact-match predicates (no index backs them; the fleet is small). Own database, dropped afterwards —
  * a shared development database must look untouched.
  */
 // `DATABASE_URL` and nothing else: `bin/check` refuses to run without one and
@@ -90,6 +90,26 @@ describe.skipIf(!runnable)("api key attribution against a live database", () => 
     // Absent keys stay absent — only an explicit null clears.
     const renamed = await repository.update(created.id, { name: "ci-agent-4" }, new Date())
     expect(renamed?.ownerKind).toBe("service")
+
+    // Every label moves to a new value, then every label is nulled: this reaches the
+    // `.set` for ownerKind and purpose, not just owner/tool.
+    const moved = await repository.update(
+      created.id,
+      { owner: "ops", ownerKind: "person", tool: "cc", purpose: "interactive" },
+      new Date(),
+    )
+    expect(moved).toMatchObject({
+      owner: "ops",
+      ownerKind: "person",
+      tool: "cc",
+      purpose: "interactive",
+    })
+    const nulled = await repository.update(
+      created.id,
+      { owner: null, ownerKind: null, tool: null, purpose: null },
+      new Date(),
+    )
+    expect(nulled).toMatchObject({ owner: null, ownerKind: null, tool: null, purpose: null })
   })
 
   test("the owner and tool filters are exact matches and combine", async () => {

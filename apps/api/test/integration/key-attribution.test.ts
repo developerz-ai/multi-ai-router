@@ -4,14 +4,14 @@ import { bearer, harness, KEY, MESSAGE, post } from "./harness"
 
 /**
  * Attribution columns (`owner`, `owner_kind`, `tool`, `purpose`) are admin-plane
- * labels only. Migration 0033 adds them nullable with no default, so every key
- * minted before it crosses the migration as a row whose four new columns are
- * NULL — the fixture row this harness verifies with is exactly that image. The
- * data plane must keep serving such a key unchanged: authentication reads
- * prefix, value, scope, expiry and the revoked flag, never a label.
+ * labels only. The fixture row this harness verifies with simply omits the four
+ * attribution keys, so authentication is exercised on a row that carries no
+ * labels. That proves the data plane never reads a label; it does NOT prove the
+ * NULL-column path — that is covered against a real Postgres by
+ * `packages/db/test/integration/api-key-attribution.test.ts`.
  */
 describe("key attribution is inert on the data plane", () => {
-  test("a pre-migration key — attribution columns all NULL — still authenticates and serves", async () => {
+  test("a key row carrying no attribution labels still authenticates and serves", async () => {
     const { app, upstream } = harness({ responses: [() => jsonResponse(200, { ok: true })] })
 
     const res = await app.request("/v1/messages", post(MESSAGE, bearer()))

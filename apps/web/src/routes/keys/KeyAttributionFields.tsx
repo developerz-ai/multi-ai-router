@@ -1,3 +1,4 @@
+import { KEY_LABEL_SLUG_HTML_PATTERN } from "@multi-ai-router/core"
 import { SelectField, type SelectOption, TextField } from "../../components/Field"
 import type { KeyOwnerKind } from "../../lib/api/types"
 import styles from "./KeyAttributionFields.module.scss"
@@ -15,7 +16,7 @@ const OWNER_KINDS: readonly SelectOption[] = [
 ]
 
 /** Same rule the API enforces, stated up front so the operator is not surprised by the 400. */
-const SLUG_PATTERN = "[a-z0-9][a-z0-9._-]{0,63}"
+const SLUG_PATTERN = KEY_LABEL_SLUG_HTML_PATTERN
 const SLUG_RULE =
   "Lowercase slug — letters, digits, dots, underscores, hyphens; starts with a letter or digit."
 

@@ -2,7 +2,12 @@ import { describe, expect, test } from "bun:test"
 import { createSignal } from "solid-js"
 import { render } from "solid-js/web"
 import type { ApiKeyView } from "../../src/lib/api/types"
-import { distinctOwners, distinctTools, filterKeys } from "../../src/routes/keys/filter-keys"
+import {
+  distinctOwners,
+  distinctTools,
+  filterKeys,
+  liveSelection,
+} from "../../src/routes/keys/filter-keys"
 import { KeyFilters } from "../../src/routes/keys/KeyFilters"
 
 /**
@@ -75,6 +80,14 @@ describe("filterKeys", () => {
 
   test("an owner no row carries matches nothing — honestly, not everything", () => {
     expect(filterKeys(ROWS, "nobody", null)).toHaveLength(0)
+  })
+})
+
+describe("liveSelection", () => {
+  test("keeps a selection that is still on offer, drops one that left the list", () => {
+    expect(liveSelection("marta", ["ci-team", "marta"])).toBe("marta")
+    expect(liveSelection("marta", ["ci-team"])).toBeNull()
+    expect(liveSelection(null, ["marta"])).toBeNull()
   })
 })
 

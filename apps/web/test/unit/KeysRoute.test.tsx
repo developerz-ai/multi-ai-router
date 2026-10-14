@@ -23,8 +23,12 @@ const KEY_ID = "44444444-4444-4444-8444-444444444444"
 
 const originalFetch = globalThis.fetch
 
+/** When set, the keys list answers with these rows instead of the two defaults. */
+let listOverride: unknown[] | null = null
+
 afterEach(() => {
   globalThis.fetch = originalFetch
+  listOverride = null
 })
 
 interface Mounted {
@@ -65,7 +69,7 @@ function responseFor(method: string, url: string): unknown {
   if (url.endsWith("/keys"))
     return method === "POST"
       ? { ...attributedRow(), value: PLAINTEXT }
-      : [keyRow(), attributedRow()]
+      : (listOverride ?? [keyRow(), attributedRow()])
   if (url.includes("/settings")) return { publicUrl: "https://router.example.com" }
   if (url.includes("/usage")) return usageSummary()
   return []
@@ -211,6 +215,55 @@ describe("KeysRoute", () => {
       // Narrowing is local to the loaded list: the chips need every owner and
       // tool in hand, so a filtered refetch would starve its own vocabulary.
       expect(calls.filter((call) => call === "GET /api/admin/keys")).toHaveLength(1)
+    } finally {
+      dispose()
+      container.remove()
+    }
+  })
+
+  test("a selected owner whose last key is relabelled stops filtering — rows come back", async () => {
+    const calls: string[] = []
+    stubFetch(calls)
+    const { client, dispose, container } = mount()
+    try {
+      await settle()
+      buttonLabelled("ci-team").click()
+      await settle()
+      expect(container.textContent).not.toContain("ci-runner")
+
+      // The only ci-team key is relabelled away; the chip leaves with it.
+      listOverride = [keyRow(), { ...attributedRow(), owner: "someone-else" }]
+      await client.invalidateQueries()
+      await settle()
+
+      expect(container.textContent).toContain("ci-runner")
+      expect(container.textContent).toContain("nightly-runner")
+    } finally {
+      dispose()
+      container.remove()
+    }
+  })
+
+  test("a combination that matches nothing offers Clear filters", async () => {
+    const calls: string[] = []
+    stubFetch(calls)
+    listOverride = [
+      { ...attributedRow(), id: "a", name: "k-a", owner: "ci-team", tool: "aider" },
+      { ...attributedRow(), id: "b", name: "k-b", owner: "marta", tool: "claude-code" },
+    ]
+    const { dispose, container } = mount()
+    try {
+      await settle()
+      buttonLabelled("ci-team").click()
+      buttonLabelled("claude-code").click()
+      await settle()
+      expect(container.textContent).not.toContain("k-a")
+      expect(container.textContent).toContain("Clear filters")
+
+      buttonLabelled("Clear filters").click()
+      await settle()
+      expect(container.textContent).toContain("k-a")
+      expect(container.textContent).toContain("k-b")
     } finally {
       dispose()
       container.remove()

@@ -1,4 +1,4 @@
-import { KeyOwnerKind, KeyScope } from "@multi-ai-router/core"
+import { KEY_LABEL_SLUG, KeyOwnerKind, KeyScope } from "@multi-ai-router/core"
 import { z } from "zod"
 
 /**
@@ -14,7 +14,15 @@ import { z } from "zod"
  * drift apart.
  */
 
-const KEY_NAME = z.string().trim().min(1).max(120)
+/**
+ * Postgres `text` cannot hold U+0000: the insert fails and the client sees a 500
+ * for what is plain bad input. Reject it at the edge, once, for every free-text
+ * label (name, purpose).
+ */
+const noNul = (value: string): boolean => !value.includes("\u0000")
+const NO_NUL = { message: "must not contain a NUL character" }
+
+const KEY_NAME = z.string().trim().min(1).max(120).refine(noNul, NO_NUL)
 
 /** Bounded: a scope naming thousands of targets is a mistake, not a configuration. */
 const TARGET_IDS = z.array(z.uuid()).min(1).max(100)
@@ -50,13 +58,14 @@ const TIMESTAMP = z.iso.datetime({ offset: true }).transform((value) => new Date
  */
 const ATTRIBUTION_SLUG = z
   .string()
-  .regex(/^[a-z0-9][a-z0-9._-]{0,63}$/, "must be a lowercase slug: a-z, 0-9, ., _, -")
+  .regex(KEY_LABEL_SLUG, "must be a lowercase slug: a-z, 0-9, ., _, -")
 
 /** Free text, but bounded and trimmed; blank means "no purpose" and stores as null. */
 const PURPOSE = z
   .string()
   .trim()
   .max(500)
+  .refine(noNul, NO_NUL)
   .transform((value) => (value === "" ? null : value))
 
 export const createKeyBody = z

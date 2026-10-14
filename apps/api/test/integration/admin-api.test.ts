@@ -795,6 +795,52 @@ describe("key attribution", () => {
     expect(cleared.body).toMatchObject({ owner: null, tool: null, ownerKind: "service" })
   })
 
+  test("one PATCH sets all four labels; one PATCH nulls all four", async () => {
+    const { app } = harness()
+    const created = await call(app, "POST", ADMIN_KEYS_BASE_PATH, { name: "bare" })
+    const id = (created.body as { id: string }).id
+
+    const set = await call(app, "PATCH", `${ADMIN_KEYS_BASE_PATH}/${id}`, {
+      owner: "marta",
+      ownerKind: "person",
+      tool: "claude-code",
+      purpose: "  daytime  ",
+    })
+    expect(set.status).toBe(200)
+    expect(set.body).toMatchObject({
+      owner: "marta",
+      ownerKind: "person",
+      tool: "claude-code",
+      purpose: "daytime",
+    })
+
+    const nulled = await call(app, "PATCH", `${ADMIN_KEYS_BASE_PATH}/${id}`, {
+      owner: null,
+      ownerKind: null,
+      tool: null,
+      purpose: null,
+    })
+    expect(nulled.status).toBe(200)
+    expect(nulled.body).toMatchObject({ owner: null, ownerKind: null, tool: null, purpose: null })
+  })
+
+  test("a NUL in the name or purpose is a 400 on create and PATCH, not a Postgres 500", async () => {
+    const { app, store } = harness()
+    for (const body of [
+      { name: "k\u0000", purpose: "p" },
+      { name: "k", purpose: "a\u0000b" },
+    ]) {
+      expect((await call(app, "POST", ADMIN_KEYS_BASE_PATH, body)).status).toBe(400)
+    }
+    expect(store.rows.keys).toHaveLength(0)
+
+    const created = await call(app, "POST", ADMIN_KEYS_BASE_PATH, { name: "ok" })
+    const id = (created.body as { id: string }).id
+    for (const patch of [{ purpose: "a\u0000b" }, { name: "n\u0000" }]) {
+      expect((await call(app, "PATCH", `${ADMIN_KEYS_BASE_PATH}/${id}`, patch)).status).toBe(400)
+    }
+  })
+
   test("an invalid label is a 400, on create and on the list filter alike", async () => {
     const { app, store } = harness()
     for (const body of [
