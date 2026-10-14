@@ -58,9 +58,9 @@ export function createResponseSalvage(maximumBytes: number): ResponseSalvage {
   let capture: Capture | null = null
   let retained = 0
   let errorObject = false
-  // Depths 1-2: a second value under one key, or a value where a key or colon belongs, is invalid
-  // JSON, so the frame keeps no ceiling slot, even one kept earlier. Not a validator: other malformed
-  // frames can still yield a code (#209). `primitiveRun` marks a primitive's continuation bytes.
+  // Depths 1-2: a second value under a key, or a non-string value where a key or colon belongs, is
+  // invalid JSON, so the frame keeps no ceiling slot, even one kept earlier. Not a validator: other
+  // malformed frames can still yield a code (#209). `primitiveRun` marks continuation bytes.
   const valueStarted: boolean[] = [false, false, false]
   let primitiveRun = false
   let ceilingBlocked = false

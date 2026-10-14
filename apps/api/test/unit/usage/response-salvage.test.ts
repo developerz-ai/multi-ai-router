@@ -388,6 +388,8 @@ test.each([
   '"error":{"a":01}',
   '"response":{"error":{"a":01}}',
   '"response":{"incomplete_details":{"a":01}}',
+  '"usage":{"input_tokens":1 2}',
+  '"error":{"a":1 2}',
 ])("a malformed non-ceiling member %s still fails the salvage (#207 round 10)", (member) => {
   const scanner = createResponseSalvage(1024)
   const text = `{${member},"base_resp":{"status_code":1008},"pad":"${"x".repeat(2048)}"}`
