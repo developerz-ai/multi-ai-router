@@ -48,10 +48,14 @@ interface Minted {
  * unmount itself out from under the operator before they could copy anything. Mounting this
  * unconditionally and hiding its own content is what lets `minted` survive that.
  *
- * The three creation dialogs are the exact ones `AccountsRoute`/`PoolsRoute`/`KeysRoute` use — the
- * same gesture, not a shortcut form, so a provider that needs a login still gets `AccountConnect`
- * afterward. The mint's payoff is `KeyValueDialog` for the same reason: a newcomer must not be
- * handed a bare URL and left to guess which clients want the `/v1` suffix.
+ * The three creation dialogs are the exact ones `AccountsRoute`/`PoolsRoute`/`KeysRoute` use —
+ * this is the same gesture, not a shortcut form, so a provider that needs a login still gets
+ * `AccountConnect` afterward rather than being left an unauthorised, unusable row. The mint's
+ * payoff is `KeyValueDialog` for the same reason: the fourth step of the walk is *pointing a tool
+ * at the thing*, and an operator who arrives here — the one who has never seen this router before —
+ * is precisely the one who must not be handed a bare URL and left to guess which clients want the
+ * `/v1` suffix. Rebuilding a lesser version of that block here would put the newcomer on the worse
+ * surface and the operator who already knows the answer on the better one.
  */
 export function OnboardingPanel(props: OnboardingPanelProps) {
   const now = createNow()
@@ -113,7 +117,8 @@ export function OnboardingPanel(props: OnboardingPanelProps) {
 
   /**
    * Same discipline as `KeysRoute`: the plaintext lives exactly as long as the dialog showing it.
-   * Dropping the signal is only half — the mint result also sits in TanStack's mutation cache.
+   * Dropping the signal is only half — the mint result sits in TanStack's mutation cache until the
+   * mutation is reset, and a mounted screen never detaches an observer on its own.
    */
   const dismissMinted = () => {
     setMinted(null)

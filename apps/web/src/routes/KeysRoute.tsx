@@ -1,4 +1,4 @@
-import { createSignal, Show } from "solid-js"
+import { createEffect, createSignal, Show } from "solid-js"
 import { Button } from "../components/Button"
 import { EmptyState } from "../components/EmptyState"
 import { PageHeader } from "../components/PageHeader"
@@ -25,6 +25,7 @@ import { useTableUsage } from "../lib/queries/table-usage"
 import { isSubscriptionLogin } from "../lib/subscription-login"
 import styles from "./KeysRoute.module.scss"
 import { FilteredKeys } from "./keys/FilteredKeys"
+import { distinctOwners, distinctTools } from "./keys/filter-keys"
 import { KeyDangerDialogs } from "./keys/KeyDangerDialogs"
 import { KeyFormDialog } from "./keys/KeyFormDialog"
 import { KeyValueDialog } from "./keys/KeyValueDialog"
@@ -95,6 +96,16 @@ export default function KeysRoute() {
   const [pendingDelete, setPendingDelete] = createSignal<ApiKeyView | null>(null)
   const [ownerFilter, setOwnerFilter] = createSignal<string | null>(null)
   const [toolFilter, setToolFilter] = createSignal<string | null>(null)
+  // Drop a selection no key carries any more. Here, not in FilteredKeys: that is unmounted
+  // while the list is empty, and a selection kept through it would re-apply on its own.
+  createEffect(() => {
+    const rows = keys.data
+    if (rows === undefined) return
+    const owner = ownerFilter()
+    if (owner !== null && !distinctOwners(rows).includes(owner)) setOwnerFilter(null)
+    const tool = toolFilter()
+    if (tool !== null && !distinctTools(rows).includes(tool)) setToolFilter(null)
+  })
 
   const openForm = (key: ApiKeyView | null) => {
     create.reset()

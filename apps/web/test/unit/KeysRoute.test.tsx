@@ -271,6 +271,32 @@ describe("KeysRoute", () => {
     }
   })
 
+  test("a selection survives no emptied list: the owner's return does not re-apply it", async () => {
+    const calls: string[] = []
+    stubFetch(calls)
+    const { client, dispose, container } = mount()
+    try {
+      await settle()
+      buttonLabelled("ci-team").click()
+      await settle()
+
+      listOverride = []
+      await client.invalidateQueries()
+      await settle()
+
+      listOverride = [keyRow(), attributedRow()]
+      await client.invalidateQueries()
+      await settle()
+
+      expect(container.textContent).toContain("ci-runner")
+      expect(container.textContent).toContain("nightly-runner")
+      expect(buttonLabelled("ci-team").getAttribute("aria-pressed")).toBe("false")
+    } finally {
+      dispose()
+      container.remove()
+    }
+  })
+
   test("a combination that matches nothing offers Clear filters", async () => {
     const calls: string[] = []
     stubFetch(calls)

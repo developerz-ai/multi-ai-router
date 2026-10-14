@@ -1,7 +1,7 @@
-import { createEffect, Show, splitProps } from "solid-js"
+import { Show, splitProps } from "solid-js"
 import { Button } from "../../components/Button"
 import type { ApiKeyView } from "../../lib/api/types"
-import styles from "../KeysRoute.module.scss"
+import styles from "./FilteredKeys.module.scss"
 import { distinctOwners, distinctTools, filterKeys, liveSelection } from "./filter-keys"
 import { KeyFilters } from "./KeyFilters"
 import { KeysTable, type KeysTableProps } from "./KeysTable"
@@ -35,13 +35,6 @@ export function FilteredKeys(props: FilteredKeysProps) {
   const owner = () => liveSelection(own.ownerFilter, distinctOwners(own.rows))
   const tool = () => liveSelection(own.toolFilter, distinctTools(own.rows))
   const visible = () => filterKeys(own.rows, owner(), tool())
-
-  createEffect(() => {
-    if (own.ownerFilter !== null && owner() === null) own.onOwnerFilterChange(null)
-  })
-  createEffect(() => {
-    if (own.toolFilter !== null && tool() === null) own.onToolFilterChange(null)
-  })
 
   const clearFilters = () => {
     own.onOwnerFilterChange(null)

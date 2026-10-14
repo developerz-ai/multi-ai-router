@@ -24,8 +24,10 @@ import {
  * `scheduled_task_runs` rows under a task name this build's enum no longer has.
  * Rolling back must not throw on the settings read, on the scheduler's
  * last-run lookup, or in the orphan sweep, and the sweep must still close the
- * unfinished row. Own database, dropped afterwards, because the enum value
- * added here can never be removed again.
+ * unfinished row. Only the sweep can actually read the foreign row: the settings
+ * read and the last-run lookup query by current task names, so those two legs
+ * pin that read shape rather than guard it. Own database, dropped afterwards,
+ * because the enum value added here can never be removed again.
  */
 const url = process.env.DATABASE_URL ?? ""
 const runnable = url !== ""
