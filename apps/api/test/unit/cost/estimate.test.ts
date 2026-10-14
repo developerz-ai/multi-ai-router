@@ -343,6 +343,29 @@ describe("pricing the GPT-6 family (#181)", () => {
   })
 })
 
+describe("pricing glm-5.3-flash (OpenRouter list, 2026-10-14)", () => {
+  test("1M in + 1M out + 1M cached read prices 0.680000 USD on a metered zai account", () => {
+    // Red before 2.28.0: the zai table had no row, so this priced null / unknown.
+    // 0.15 input + 0.50 output + 0.03 cached read = 0.68 USD.
+    const cost = estimateCost({
+      provider: "zai",
+      model: "glm-5.3-flash",
+      tokens: tokens({ tokensIn: 1_000_000, tokensOut: 1_000_000, cacheReadTokens: 1_000_000 }),
+    })
+    expect(cost).toEqual({ costEstimate: "0.680000", costBasis: "metered" })
+  })
+
+  test("a coding-plan account reports the same number as notional", () => {
+    const cost = estimateCost({
+      provider: "zai",
+      model: "glm-5.3-flash",
+      tokens: tokens({ tokensIn: 1_000_000, tokensOut: 1_000_000 }),
+      billing: "subscription",
+    })
+    expect(cost).toEqual({ costEstimate: "0.650000", costBasis: "notional" })
+  })
+})
+
 describe("what the table does not know", () => {
   test("an unpriced model is null and unknown, never zero", () => {
     expect(

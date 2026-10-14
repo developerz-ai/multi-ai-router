@@ -715,18 +715,22 @@ describe("openai-chat -> openai-responses request", () => {
   })
 
   /**
-   * openai-responses *does* state this feature, as `text.format`. It is refused anyway, so the rule
-   * reads the same whichever way a request happens to point: the reverse pair already refuses
-   * `text.format`, and honoring the constraint here alone would make "servable" a direction.
+   * openai-responses states this feature as `text.format`, so it is carried rather than refused
+   * (2.28.0; before it, this test asserted the refusal production hit on a ChatGPT account). The
+   * full mapping table lives in `structured-output.test.ts`.
    */
-  test("response_format is refused even though this target has the feature under another name", () => {
-    expect(() =>
-      openAiChatToOpenAiResponsesRequest(
-        openAiChatRequest({
-          response_format: { type: "json_schema", json_schema: { name: "person" } },
-        }),
-      ),
-    ).toThrow(/response_format\.type/)
+  test("response_format is carried as text.format, the name this target gives the feature", () => {
+    const out = openAiChatToOpenAiResponsesRequest(
+      openAiChatRequest({
+        response_format: {
+          type: "json_schema",
+          json_schema: { name: "person", schema: { type: "object" } },
+        },
+      }),
+    )
+    expect(out.text).toEqual({
+      format: { type: "json_schema", name: "person", schema: { type: "object" } },
+    })
   })
 
   test("response_format: text passes: it constrains nothing", () => {

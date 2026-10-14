@@ -72,9 +72,16 @@ export const responsesEventSchema = z.looseObject({
 export type ParsedResponsesEvent = z.infer<typeof responsesEventSchema>
 export type ParsedResponsesItem = z.infer<typeof itemSchema>
 
+/**
+ * A `message` item. `text` is every part in order, refusals included — the reading for a target
+ * with no refusal field (Anthropic). `content` and `refusal` are the same parts split by kind, for a
+ * target that states them apart (openai-chat's `message.content` / `message.refusal`).
+ */
 export interface ReadTextItem {
   readonly kind: "text"
   readonly text: string
+  readonly content: string
+  readonly refusal: string
 }
 
 export interface ReadCallItem {
@@ -126,8 +133,9 @@ export function readResponsesBody(body: unknown): ReadResponsesBody {
 /**
  * One output item, flattened.
  *
- * A `refusal` part is carried as text: the model declined out loud, and dropping the sentence it
- * declined with would answer as though it had said nothing. An item type this build does not know
+ * A `refusal` part is never dropped: the model declined out loud, and dropping the sentence it
+ * declined with would answer as though it had said nothing. It is kept apart from the answer text
+ * as well as inside `text`, so a target with a refusal field can put it there. An item type this build does not know
  * yields null — a built-in tool call served inside Responses has no counterpart anywhere else, and
  * inventing text for it would put the router's words in the model's mouth.
  */
@@ -135,7 +143,14 @@ export function readResponsesItem(item: ParsedResponsesItem): ReadResponsesItem 
   const type = item.type ?? "message"
   if (type === "message") {
     const text = partsText(item.content)
-    return text.length === 0 ? null : { kind: "text", text }
+    if (text.length === 0) return null
+    const parts = item.content ?? []
+    return {
+      kind: "text",
+      text,
+      content: partsText(parts.filter((part) => !isRefusalPart(part))),
+      refusal: partsText(parts.filter(isRefusalPart)),
+    }
   }
   if (type === "function_call") {
     return {
@@ -150,6 +165,11 @@ export function readResponsesItem(item: ParsedResponsesItem): ReadResponsesItem 
     return summary.length === 0 ? null : { kind: "reasoning", summary }
   }
   return null
+}
+
+/** The part `partsText` reads through its `refusal` fallback: a refusal, by what it carries. */
+function isRefusalPart(part: z.infer<typeof partSchema>): boolean {
+  return (part.text ?? null) === null && (part.refusal ?? null) !== null
 }
 
 function partsText(parts: readonly z.infer<typeof partSchema>[] | null | undefined): string {

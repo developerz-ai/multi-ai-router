@@ -21,6 +21,13 @@ export const ZAI_MODELS: ModelTable = {
   "glm-5.1": rates(1.4, 4.4, { read: 0.26 }),
   "glm-5": rates(1, 3.2, { read: 0.2 }),
   "glm-5-turbo": rates(1.2, 4, { read: 0.24 }),
+  /**
+   * Not from docs.z.ai: OpenRouter's list price for `z-ai/glm-5.3-flash`, read 2026-10-14
+   * (openrouter.ai/z-ai/glm-5.3-flash) — input 0.15, output 0.50, cached read 0.03 USD per Mtok.
+   * Replace with z.ai's own figure once its pricing page lists the model; until then a metered
+   * account on it prices at the reseller list, not the vendor list.
+   */
+  "glm-5.3-flash": rates(0.15, 0.5, { read: 0.03 }),
   "glm-4.7": rates(0.6, 2.2, { read: 0.11 }),
   "glm-4.7-flashx": rates(0.07, 0.4, { read: 0.01 }),
   "glm-4.6": rates(0.6, 2.2, { read: 0.11 }),
