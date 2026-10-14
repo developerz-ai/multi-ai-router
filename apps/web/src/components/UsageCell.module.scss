@@ -8,7 +8,7 @@
   display: flex;
   gap: var(--space-3);
   align-items: center;
-  width: max-content;
+  min-width: 0; // MUTATION PROOF (#223): historical Keys #62 layout; must fail ui-geometry. Reverted next commit.
 }
 
 .figures {
