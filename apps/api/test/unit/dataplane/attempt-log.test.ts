@@ -230,6 +230,14 @@ describe("both log lines scrub the whole message before cutting (#207 round 6)",
   test.each([
     ["upstream attempt failed", attempt],
     ["upstream stream failure", stream],
+  ] as const)("%s: a key cut by the length bound is redacted first", (_name, line) => {
+    const lines = line(`${"r".repeat(31)} ${FAKE_KEY}`, REASON_MAX_CHARS)
+    expect(JSON.stringify(lines)).not.toContain("sk-LIVE")
+  })
+
+  test.each([
+    ["upstream attempt failed", attempt],
+    ["upstream stream failure", stream],
   ] as const)("%s: no credential head leaks", (_name, line) => {
     const messages = [
       // 2.25.8's stream line logged 175 password characters for this one.
