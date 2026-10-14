@@ -21,8 +21,8 @@ import {
  * past the observation cap while the usage that settles the attempt sits inside. This scanner
  * walks the oversized bytes once, retains only the few shallow members usage and terminal
  * evidence are read from, and rebuilds a small payload from them. It never counts more than
- * `maximumBytes`, plus at most one ceiling slot's bytes held aside while lent to an error capture in
- * progress; anything it cannot account for honestly yields `null`.
+ * `maximumBytes` (plus one ceiling slot lent to an error capture); anything it cannot account for
+ * honestly yields `null`.
  */
 
 interface Capture {
@@ -58,10 +58,9 @@ export function createResponseSalvage(maximumBytes: number): ResponseSalvage {
   let capture: Capture | null = null
   let retained = 0
   let errorObject = false
-  // Structural checks at depths 1 and 2, the levels a ceiling slot hangs from. A second value under
-  // one key, or a value where a key or its colon belongs, is invalid JSON: JSON.parse rejects the
-  // whole frame, so from then on no ceiling slot is kept (`blockCeiling`). Valid JSON never trips it.
-  // `primitiveRun` tells a primitive's first byte (a value start) from the ones after it.
+  // Depths 1-2: a second value under one key, or a value where a key or colon belongs, is invalid
+  // JSON, so the frame keeps no ceiling slot, even one kept earlier. Not a validator: other malformed
+  // frames can still yield a code (#209). `primitiveRun` marks a primitive's continuation bytes.
   const valueStarted: boolean[] = [false, false, false]
   let primitiveRun = false
   let ceilingBlocked = false
@@ -80,8 +79,7 @@ export function createResponseSalvage(maximumBytes: number): ResponseSalvage {
     return null
   }
   const optionalMaxBytes = Math.floor(maximumBytes / 4)
-  // Release completed captures for room, never a failed salvage: the ceiling slots first, and the
-  // optional error evidence only if that was not enough.
+  // Release completed captures for room: ceiling slots first, optional evidence only if still full.
   const release = (paths: Iterable<string>) => {
     for (const path of paths) {
       const bytes = captured.get(path)
@@ -90,8 +88,8 @@ export function createResponseSalvage(maximumBytes: number): ResponseSalvage {
       captured.delete(path)
     }
   }
-  // Ceiling-slot captures lent to the error capture in progress: given back if it drops anyway,
-  // forgotten once it is kept. A dropping capture frees at least what it borrowed, so they fit.
+  // Ceiling slots lent to the error capture in progress: given back if it drops (it frees at least
+  // what it borrowed, so they fit), forgotten once it is kept.
   let lent: [string, number[]][] = []
   const lend = () => {
     for (const path of SLOT_MAX_BYTES.keys()) {
@@ -113,6 +111,10 @@ export function createResponseSalvage(maximumBytes: number): ResponseSalvage {
     ceilingBlocked = true
     release(SLOT_MAX_BYTES.keys())
     lent = []
+    if (capture === null || !SLOT_MAX_BYTES.has(capture.path) || capture.dropped) return
+    retained -= capture.bytes.length
+    capture.bytes = []
+    capture.dropped = true
   }
   const evictOptional = () => {
     release(SLOT_MAX_BYTES.keys())
@@ -167,15 +169,13 @@ export function createResponseSalvage(maximumBytes: number): ResponseSalvage {
       valueStarted[depth] = true
     }
     if (capture !== null) return
-    // Last wins, as in JSON.parse: a new value under a ceiling slot's parent key replaces whatever
-    // that slot held, whether or not the new value carries it again. Keys are compared as raw
-    // bytes, escape sequences not decoded, as for every slot (#209).
+    // Last wins, as in JSON.parse: a new parent value, or a repeated slot in one parent, replaces
+    // what the slot held. Keys are compared as raw bytes, escapes not decoded, like every slot (#209).
     if (depth === 1 && objects[1] && !expectKey[1] && keys[1] != null) {
       release(CEILING_CHILDREN.get(keys[1]) ?? [])
     }
     const path = slotAt()
     if (path === null) return
-    // The same for a repeated ceiling slot inside one parent.
     if (SLOT_MAX_BYTES.has(path)) {
       release([path])
       if (ceilingBlocked) return

@@ -385,6 +385,9 @@ test.each([
   '"incomplete_details":{"a":01}',
   '"response":{"usage":{"x":01}}',
   '"message":{"usage":+1}',
+  '"error":{"a":01}',
+  '"response":{"error":{"a":01}}',
+  '"response":{"incomplete_details":{"a":01}}',
 ])("a malformed non-ceiling member %s still fails the salvage (#207 round 10)", (member) => {
   const scanner = createResponseSalvage(1024)
   const text = `{${member},"base_resp":{"status_code":1008},"pad":"${"x".repeat(2048)}"}`
@@ -425,7 +428,7 @@ test.each([
   '"base_resp":0 {"status_code":1008}',
   '"base_resp":{"status_code":0},{"status_code":1008}',
   '"base_resp" {"status_code":1008}',
-  '"a":1 "base_resp":{"status_code":1008}',
+  '"a":1 2,"base_resp":{"status_code":1008}',
 ])("invalid JSON around base_resp never yields a code (#207 round 12): %s", (members) => {
   const scanner = createResponseSalvage(1024)
   const text = `{"usage":{"input_tokens":1},${members},"pad":"${"x".repeat(2048)}"}`
@@ -454,4 +457,32 @@ test("a violation inside an error capture that borrowed base_resp never gives th
     expect(scanner.retainedBytes).toBeLessThanOrEqual(64)
   }
   expect(scanner.finish()?.base_resp).toBeUndefined()
+})
+
+test.each([
+  // A violation after the code releases it; one under a later root key keeps the block in force.
+  ['"base_resp":{"status_code":1008},"a":1 2', { usage: { input_tokens: 1 } }],
+  ['"base_resp":{"status_code":1008},"q":{"r":1 2}', { usage: { input_tokens: 1 } }],
+  ['"q":{"r":1 2},"base_resp":{"status_code":1008}', { usage: { input_tokens: 1 } }],
+  // The block drops only the ceiling slot: other evidence stays.
+  [
+    '"code":"quota","base_resp":{"status_code":0 1008}',
+    { usage: { input_tokens: 1 }, code: "quota" },
+  ],
+])(
+  "a structural violation blocks only the code, before or after it (#207 round 13): %s",
+  (members, expected) => {
+    const scanner = createResponseSalvage(1024)
+    const text = `{"usage":{"input_tokens":1},${members},"pad":"${"x".repeat(2048)}"}`
+    for (const byte of encoder.encode(text)) scanner.push(byte)
+    expect(scanner.finish()).toEqual(expected)
+  },
+)
+
+test("a block drops a code still being captured, so its bytes stop counting (#207 round 13)", () => {
+  const scanner = createResponseSalvage(1024)
+  const text = `{"usage":{"input_tokens":1},"base_resp":{"status_code":1008"x"},"pad":"${"x".repeat(2048)}"}`
+  for (const byte of encoder.encode(text)) scanner.push(byte)
+  expect(scanner.retainedBytes).toBe('{"input_tokens":1}'.length)
+  expect(scanner.finish()).toEqual({ usage: { input_tokens: 1 } })
 })

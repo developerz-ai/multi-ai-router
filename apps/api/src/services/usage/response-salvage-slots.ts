@@ -9,8 +9,9 @@ import { responseObject } from "./response-usage"
 const SLOTS: Readonly<Record<string, readonly string[]>> = {
   "": ["type", "usage", "status", "incomplete_details", "error", "code"],
   // MiniMax carries its failures on a 200 in `base_resp`; only the number classifies, so the
-  // free-text `status_msg` beside it is never kept. Kept unless it is over its ceiling or the budget
-  // is full (`SLOT_MAX_BYTES`); losing it reads as before the slot existed.
+  // free-text `status_msg` beside it is never kept. Kept unless it is over its ceiling, the budget is
+  // full (`SLOT_MAX_BYTES`), it is malformed, or the frame trips the structural check; losing it reads
+  // as before the slot existed.
   base_resp: ["status_code"],
   message: ["usage"],
   response: ["usage", "status", "incomplete_details", "error"],
