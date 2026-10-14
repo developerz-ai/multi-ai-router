@@ -21,8 +21,8 @@ import {
  * past the observation cap while the usage that settles the attempt sits inside. This scanner
  * walks the oversized bytes once, retains only the few shallow members usage and terminal
  * evidence are read from, and rebuilds a small payload from them. It never counts more than
- * `maximumBytes` (plus one ceiling slot lent to an error capture); anything it cannot account for
- * honestly yields `null`.
+ * `maximumBytes`; one lent ceiling slot (32 bytes at most) is held aside beyond it. Anything it
+ * cannot account for honestly yields `null`.
  */
 
 interface Capture {

@@ -1,8 +1,8 @@
 import { responseObject } from "./response-usage"
 
 /**
- * The salvage scanner's slot tables and its final rebuild step, kept apart from the byte-level
- * state machine in `response-salvage.ts`.
+ * The salvage scanner's slot tables, the byte constants its lexer reads, and its final rebuild step,
+ * kept apart from the byte-level state machine in `response-salvage.ts`.
  */
 
 // Shallow members kept verbatim, by parent key (root = ""). Everything else is skipped unread.
@@ -22,7 +22,7 @@ const SLOTS: Readonly<Record<string, readonly string[]>> = {
  * and dropped — never failing the salvage — when it is not: a lost code reads as an unclassified
  * failure, while a failed salvage would lose the failure itself.
  */
-export const OPTIONAL = new Set(["error", "code", "response.error"])
+export const OPTIONAL: ReadonlySet<string> = new Set(["error", "code", "response.error"])
 /**
  * Slots with their own ceiling: dropped past it, or when the budget is full (without evicting
  * anything else), released before a required member would fail the salvage, and lent to error

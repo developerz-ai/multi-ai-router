@@ -462,7 +462,7 @@ test("a violation inside an error capture that borrowed base_resp never gives th
 })
 
 test.each([
-  // A violation after the code releases it; one under a later root key keeps the block in force.
+  // A violation after the code releases it; one under an earlier root key keeps the block in force.
   ['"base_resp":{"status_code":1008},"a":1 2', { usage: { input_tokens: 1 } }],
   ['"base_resp":{"status_code":1008},"q":{"r":1 2}', { usage: { input_tokens: 1 } }],
   ['"q":{"r":1 2},"base_resp":{"status_code":1008}', { usage: { input_tokens: 1 } }],
