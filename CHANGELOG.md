@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.27.0] — 2026-10-14
+
+### Added
+
+- `ADMIN_OIDC_REQUIRED_CLAIMS`: claim-based admin OIDC admission, IdP-agnostic. Comma-separated `name=value` pairs (e.g. `kind=dev_user`), every one of which the **verified** ID token must satisfy: a string claim exactly equal to the value, or an array claim containing it (case-sensitive). A missing claim, or one of any other shape, is rejected. The OIDC block now needs `ADMIN_OIDC_ADMIN_EMAIL`, `ADMIN_OIDC_REQUIRED_CLAIMS`, or both; neither is a boot error naming both, and a malformed pair (`kind`, `=x`, `kind=`) fails boot. With both set, both must pass, so adding claims to an email-allowlist deployment only narrows it. Email-only configurations behave exactly as before. `email_verified: true` is still required, a claim rejection is a `principal` failure with the same log line and `admin.login_failed` audit row as an email mismatch (naming the claim, never the token's value), and it is still one admin principal. Setting it alone trusts the IdP's own user gating; see `docs/idea/13-admin-oidc.md`.
+
+### Changed
+
+- ID-token claims beyond the standard ones are now kept on the verified payload instead of being stripped at parse time, so the claim gate reads the signed token, not a second decode.
+
 ## [2.26.1] — 2026-10-14
 
 ### Fixed
@@ -1178,3 +1188,4 @@ your tooling config.
 [2.25.6]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.25.6
 [2.25.7]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.25.7
 [2.25.8]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.25.8
+[2.27.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.27.0

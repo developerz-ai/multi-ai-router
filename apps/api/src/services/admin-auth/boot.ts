@@ -22,7 +22,7 @@
 export const ADMIN_AUTH_DOC = "docs/idea/13-admin-oidc.md"
 
 export interface AdminAuthBootInput {
-  /** `env.adminOidc !== null` — all four required OIDC variables parsed. */
+  /** `env.adminOidc !== null` — the OIDC block parsed complete (`config/env-oidc.ts`). */
   readonly oidcConfigured: boolean
   /** A hash row exists in `admin_credentials`. */
   readonly localCredentialConfigured: boolean

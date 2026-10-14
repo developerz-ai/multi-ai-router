@@ -259,6 +259,7 @@ describe("parseEnv", () => {
         clientSecret: "shh",
         redirectUri: "https://router.test/api/admin/auth/oidc/callback",
         adminEmails: ["admin@test"],
+        requiredClaims: [],
         adminSubject: "subject-123",
         scopes: ["openid", "email"],
         clockSkewSeconds: 30,
@@ -318,6 +319,84 @@ describe("parseEnv", () => {
 
       expect(error.variables).toContain("ADMIN_OIDC_ADMIN_EMAIL")
       expect(error.message).toContain("docs/idea/13-admin-oidc.md")
+    })
+
+    describe("ADMIN_OIDC_REQUIRED_CLAIMS", () => {
+      const core = {
+        DATABASE_URL: base.DATABASE_URL,
+        ENCRYPTION_KEY,
+        ADMIN_OIDC_ISSUER_URL: base.ADMIN_OIDC_ISSUER_URL,
+        ADMIN_OIDC_CLIENT_ID: base.ADMIN_OIDC_CLIENT_ID,
+        ADMIN_OIDC_REDIRECT_URI: base.ADMIN_OIDC_REDIRECT_URI,
+      }
+
+      test("neither an email allowlist nor required claims: boot error naming both", () => {
+        const error = expectEnvError(core)
+
+        expect(error.variables).toContain("ADMIN_OIDC_ADMIN_EMAIL")
+        expect(error.variables).toContain("ADMIN_OIDC_REQUIRED_CLAIMS")
+        expect(error.message).toContain("ADMIN_OIDC_ADMIN_EMAIL or ADMIN_OIDC_REQUIRED_CLAIMS")
+        expect(error.message).toContain("docs/idea/13-admin-oidc.md")
+      })
+
+      for (const spec of ["kind", "=x", "kind=", "kind=dev_user,team", " , ", "kind = "]) {
+        test(`a malformed spec ${JSON.stringify(spec)} is a boot error`, () => {
+          const error = expectEnvError({ ...core, ADMIN_OIDC_REQUIRED_CLAIMS: spec })
+
+          expect(error.variables).toEqual(["ADMIN_OIDC_REQUIRED_CLAIMS"])
+          expect(error.message).toContain("docs/idea/13-admin-oidc.md")
+        })
+      }
+
+      test("claims alone configure OIDC with no email gate", () => {
+        const env = parseEnv({ ...core, ADMIN_OIDC_REQUIRED_CLAIMS: "kind=dev_user" })
+
+        expect(env.adminOidc?.adminEmails).toBeNull()
+        expect(env.adminOidc?.requiredClaims).toEqual([{ name: "kind", value: "dev_user" }])
+      })
+
+      test("pairs are trimmed, split on the first =, deduplicated, and case is kept", () => {
+        const env = parseEnv({
+          ...core,
+          ADMIN_OIDC_REQUIRED_CLAIMS: " kind = dev_user ,Team=a=b, kind=dev_user, ",
+        })
+
+        expect(env.adminOidc?.requiredClaims).toEqual([
+          { name: "kind", value: "dev_user" },
+          { name: "Team", value: "a=b" },
+        ])
+      })
+
+      test("both set: both gates are carried", () => {
+        const env = parseEnv({ ...base, ADMIN_OIDC_REQUIRED_CLAIMS: "kind=dev_user" })
+
+        expect(env.adminOidc?.adminEmails).toEqual(["admin@test"])
+        expect(env.adminOidc?.requiredClaims).toEqual([{ name: "kind", value: "dev_user" }])
+      })
+
+      test("an email-only config is unchanged: allowlist set, no claim gate (regression)", () => {
+        const env = parseEnv(base)
+
+        expect(env.adminOidc?.adminEmails).toEqual(["admin@test"])
+        expect(env.adminOidc?.requiredClaims).toEqual([])
+      })
+
+      test("required claims alone still make a block: the core fields are then required", () => {
+        const error = expectEnvError({
+          DATABASE_URL: base.DATABASE_URL,
+          ENCRYPTION_KEY,
+          ADMIN_OIDC_REQUIRED_CLAIMS: "kind=dev_user",
+        })
+
+        for (const name of [
+          "ADMIN_OIDC_ISSUER_URL",
+          "ADMIN_OIDC_CLIENT_ID",
+          "ADMIN_OIDC_REDIRECT_URI",
+        ]) {
+          expect(error.variables).toContain(name)
+        }
+        expect(error.variables).not.toContain("ADMIN_OIDC_ADMIN_EMAIL")
+      })
     })
 
     test("ADMIN_LOCAL_LOGIN_ALLOW_PUBLIC is a flag, off by default", () => {

@@ -59,8 +59,10 @@ export const ENV_FIELDS = {
   DB_POOL_CLOSE_TIMEOUT_SECONDS: wholeNumber.optional(),
   // === Admin OIDC ===
   // One of two ways to obtain an admin session — the other is the local admin
-  // password (`bin/admin set-password`, an argon2id hash in Postgres). The four
-  // fields below are all-or-nothing: all absent means "OIDC off, local login
+  // password (`bin/admin set-password`, an argon2id hash in Postgres). The
+  // block is all-or-nothing — issuer, client id and redirect URI, plus at least
+  // one principal gate (`ADMIN_OIDC_ADMIN_EMAIL` and/or
+  // `ADMIN_OIDC_REQUIRED_CLAIMS`): all absent means "OIDC off, local login
   // only" and is legal here, because "OIDC or local" needs the database and is
   // therefore checked after migrations (`services/admin-auth/boot.ts`). A
   // *partial* block is an operator mistake and fails fast, with a message
@@ -79,6 +81,8 @@ export const ENV_FIELDS = {
   ADMIN_OIDC_CLIENT_SECRET: z.string().optional(),
   ADMIN_OIDC_REDIRECT_URI: oidcUrl.optional(),
   ADMIN_OIDC_ADMIN_EMAIL: z.string().optional(),
+  // `name=value[,name=value…]`; parsed (and refused when malformed) in `env-oidc.ts`.
+  ADMIN_OIDC_REQUIRED_CLAIMS: z.string().optional(),
   ADMIN_OIDC_ADMIN_SUBJECT: z.string().optional(),
   ADMIN_OIDC_SCOPES: oidcScopes.optional(),
   ADMIN_OIDC_CLOCK_SKEW_SECONDS: atLeastOne.optional(),
