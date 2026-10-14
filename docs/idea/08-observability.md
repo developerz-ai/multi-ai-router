@@ -163,6 +163,20 @@ table for Claude subs, the OpenAI one for ChatGPT/Codex. Metered and notional sp
 **separate totals**, never summed; notional figures are marked with a one-line explanation, and
 "most expensive key" rankings default to metered.
 
+**Unknown is counted, never shown as $0.** An attempt whose basis is `unknown` adds nothing to
+either cost column, so the usage summary carries a separate measure for it instead:
+`unpriced.attempts` on totals and on every breakdown row, counted by the daily rollup
+(`usage_attempt_daily_v2.unpriced_attempts`) as **1 per unknown-basis attempt that used tokens**
+(`tokensIn + tokensOut > 0`) — a token-less failure never reached pricing and must not read as
+unpriced traffic. This is deliberately narrower than the `router_cost_basis_total` counter, which
+counts *every* unknown attempt, failures included, because it answers coverage ("how much of this
+deployment's traffic can the price table see") while the rollup answers spend ("how much traffic
+reads as free because nobody priced it"). Measurement starts on `usage_history_state.unpriced_since`
+— the day after the measure's migration ran, the first fully measured day. Days before it were
+written without the measure and are never back-filled: `attempts` is `null`, not `0`, for a window
+that lies wholly before `since`, and a breakdown group with only pre-`since` traffic reads `0`
+inside a window that reaches past it.
+
 ## Usage reporting
 
 **Usage is a headline feature, not a footnote.** The operator's recurring question is *"who burned

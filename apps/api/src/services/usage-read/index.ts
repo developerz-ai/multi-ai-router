@@ -23,7 +23,7 @@ export {
   toRecentAttemptView,
 } from "./recent"
 export type { WindowSplit } from "./rollup"
-export { addDecimal, mergeGroupRows, splitWindow, sumTotals } from "./rollup"
+export { addDecimal, EMPTY_TOTALS, mergeGroupRows, splitWindow, sumTotals } from "./rollup"
 export type {
   UsageBreakdownRow,
   UsageCoverage,

@@ -25,6 +25,10 @@ interface WireTotals {
   readonly cacheWriteTokens: number
   readonly costMetered: string
   readonly costNotional: string
+  readonly unpriced: {
+    readonly attempts: number | null
+    readonly since: string
+  }
 }
 
 interface WireRow {
@@ -138,6 +142,7 @@ function parseTotals(
     cacheWriteTokens: totals.cacheWriteTokens,
     costMetered: Number(totals.costMetered),
     costNotional: Number(totals.costNotional),
+    unpriced: totals.unpriced,
   }
 }
 

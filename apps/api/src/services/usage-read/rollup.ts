@@ -101,6 +101,23 @@ export const EMPTY_TOTALS: UsageTotals = {
   cacheWriteTokens: 0,
   costMetered: "0",
   costNotional: "0",
+  unpriced: { attempts: null, since: "infinity" },
+}
+
+/**
+ * Adds the unpriced measure across disjoint slices of one window. Null means "not measured", so it
+ * survives only while every slice is unmeasured; one measured slice makes the sum a number. The
+ * `since` of the last part wins — the slices share a window, so they share a `since`.
+ */
+function addUnpriced(
+  a: UsageTotals["unpriced"],
+  b: UsageTotals["unpriced"],
+): UsageTotals["unpriced"] {
+  return {
+    attempts:
+      a.attempts === null && b.attempts === null ? null : (a.attempts ?? 0) + (b.attempts ?? 0),
+    since: b.since,
+  }
 }
 
 /** Adds disjoint slices of one window. Counts add; the two spend columns stay apart, as always. */
@@ -116,6 +133,7 @@ export function sumTotals(parts: readonly UsageTotals[]): UsageTotals {
       cacheWriteTokens: a.cacheWriteTokens + b.cacheWriteTokens,
       costMetered: addDecimal(a.costMetered, b.costMetered),
       costNotional: addDecimal(a.costNotional, b.costNotional),
+      unpriced: addUnpriced(a.unpriced, b.unpriced),
     }),
     EMPTY_TOTALS,
   )

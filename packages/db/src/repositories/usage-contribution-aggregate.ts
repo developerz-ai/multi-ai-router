@@ -15,7 +15,19 @@ const columns = [
   "cost_metered",
   "cost_notional",
 ]
-/** Input is ONLY newly admitted receipts. A retry never enters this additive statement. */
+const payloadMeasures = [
+  "requests",
+  "attempts",
+  "errors",
+  "tokensIn",
+  "tokensOut",
+  "cacheReadTokens",
+  "cacheWriteTokens",
+  "costMetered",
+  "costNotional",
+]
+/** Only the attempt table carries the unpriced measure; request-level rows carry no cost. */
+const attemptColumns = [...columns, "unpriced_attempts"]
 export async function applyUsageContributions(
   tx: DatabaseExecutor,
   rows: readonly ContributionRow[],
@@ -42,16 +54,24 @@ export async function applyUsageContributions(
         : sql`select payload || jsonb_build_object('day', day, 'basis', case when source = 'live' then 'live' else 'legacy' end) as p
         from ${usageContributions} where day = ${repairDay}::date and kind = ${kind} and source in ('live','legacy_unbanked','legacy_overlap')`
     const sum = (field: string) => sql.raw(`sum((p->>'${field}')::numeric)`)
-    await tx.execute(sql`insert into ${table} (day, api_key_id, account_id, pool_id, model, basis, ${sql.raw(columns.join(","))})
+    // A payload without the measure sums to NULL here, so a pre-measure day repairs to NULL rather
+    // than to 0 — and on conflict the existing side is coalesced, never the incoming one, so an
+    // unmeasured batch still wipes through as not measured.
+    const unpriced = sql`sum((p->>'unpricedAttempts')::numeric)`
+    const measures =
+      kind === "attempt" ? [...payloadMeasures.map(sum), unpriced] : payloadMeasures.map(sum)
+    const names = kind === "attempt" ? attemptColumns : columns
+    await tx.execute(sql`insert into ${table} (day, api_key_id, account_id, pool_id, model, basis, ${sql.raw(names.join(","))})
       select (p->>'day')::date, (p->>'apiKeyId')::uuid, (p->>'accountId')::uuid, (p->>'poolId')::uuid, p->>'model', p->>'basis',
-        ${sum("requests")}, ${sum("attempts")}, ${sum("errors")}, ${sum("tokensIn")}, ${sum("tokensOut")}, ${sum("cacheReadTokens")}, ${sum("cacheWriteTokens")}, ${sum("costMetered")}, ${sum("costNotional")}
+        ${sql.join(measures, sql`, `)}
       from (${source}) inputs
       group by 1,2,3,4,5,6
       on conflict (day, api_key_id, account_id, pool_id, model, basis) do update set
         ${sql.join(
-          columns.map(
-            (column) =>
-              sql`${sql.identifier(column)} = ${table}.${sql.identifier(column)} + excluded.${sql.identifier(column)}`,
+          names.map((column) =>
+            column === "unpriced_attempts"
+              ? sql`${sql.identifier(column)} = coalesce(${table}.${sql.identifier(column)}, 0) + excluded.${sql.identifier(column)}`
+              : sql`${sql.identifier(column)} = ${table}.${sql.identifier(column)} + excluded.${sql.identifier(column)}`,
           ),
           sql`, `,
         )}, updated_at = clock_timestamp()`)

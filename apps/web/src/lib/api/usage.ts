@@ -94,6 +94,11 @@ export interface UsageTotals {
    *  overhead figure above cannot, because overhead is measured off the critical path and this is
    *  measured on it. */
   readonly ttfbP95Ms: number | null
+  /** Traffic the price table cannot see. Null attempts = window predates measurement, not zero. */
+  readonly unpriced: {
+    readonly attempts: number | null
+    readonly since: string
+  }
 }
 
 /** One row of a leaderboard: a dimension member and its totals. */
@@ -219,6 +224,7 @@ export const EMPTY_TOTALS: UsageTotals = {
   latencyP95Ms: null,
   routerOverheadP95Ms: null,
   ttfbP95Ms: null,
+  unpriced: { attempts: null, since: "infinity" },
 }
 
 /**
@@ -241,6 +247,15 @@ function addTotals(a: UsageTotals, b: UsageTotals): UsageTotals {
     latencyP95Ms: maxReading(a.latencyP95Ms, b.latencyP95Ms),
     routerOverheadP95Ms: maxReading(a.routerOverheadP95Ms, b.routerOverheadP95Ms),
     ttfbP95Ms: maxReading(a.ttfbP95Ms, b.ttfbP95Ms),
+    // Rows in one summary share a window and a `since`; null survives only while every row is
+    // unmeasured, the same rule the server applies across the window's slices.
+    unpriced: {
+      attempts:
+        a.unpriced.attempts === null && b.unpriced.attempts === null
+          ? null
+          : (a.unpriced.attempts ?? 0) + (b.unpriced.attempts ?? 0),
+      since: b.unpriced.since,
+    },
   }
 }
 

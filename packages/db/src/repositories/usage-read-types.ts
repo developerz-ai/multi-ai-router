@@ -34,6 +34,33 @@ export interface UsageTotals {
   readonly costMetered: string
   /** What the same traffic would have cost at list price on a subscription account. */
   readonly costNotional: string
+  /** Traffic the price table cannot see, so it never reads as free. */
+  readonly unpriced: UsageUnpriced
+}
+
+export interface UsageUnpriced {
+  /**
+   * Unknown-basis attempts that used tokens, counted only on days on or after `since`. Null when
+   * the window predates the measure entirely — not measured, never a zero that would read as
+   * "nothing unpriced happened".
+   */
+  readonly attempts: number | null
+  /** First fully measured day, `YYYY-MM-DD` UTC. */
+  readonly since: string
+}
+
+/** The flat pair the measure queries return, before it is nested onto a totals row. */
+export interface UnpricedRow {
+  readonly unpricedAttempts: number | null
+  readonly unpricedSince: string
+}
+
+/** Nests the flat query pair into the `unpriced` field every totals shape carries. */
+export function nestUnpriced<T extends UnpricedRow>(
+  row: T,
+): Omit<T, "unpricedAttempts" | "unpricedSince"> & Pick<UsageTotals, "unpriced"> {
+  const { unpricedAttempts, unpricedSince, ...rest } = row
+  return { ...rest, unpriced: { attempts: unpricedAttempts, since: unpricedSince } }
 }
 
 /**

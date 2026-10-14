@@ -17,6 +17,12 @@ export interface UsageContribution {
   cacheWriteTokens: number
   costMetered: string
   costNotional: string
+  /**
+   * 1 for an unknown-basis attempt that used tokens, 0 for any other attempt. Absent on terminal
+   * payloads (request-level rows carry no cost) and on payloads written before the measure
+   * existed — absent always reads back as not measured, never as an error or a zero.
+   */
+  unpricedAttempts?: number | null
 }
 export const usageContributions = pgTable(
   "usage_contributions",
