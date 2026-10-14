@@ -46,6 +46,18 @@ export const CODEX_DEACTIVATED_CODES: readonly string[] = ["account_deactivated"
  * OpenAI's API (`openai-api.ts`). A ChatGPT plan's spent window arrives as `usage_limit_reached`
  * instead. No production frame carrying one has been captured. Blast radius: an account reporting
  * one goes `exhausted` until a human acts.
+ *
+ * Over HTTP (`openai-oauth.ts` rules): A spent balance arrives as a 429, like OpenAI's API: on
+ * status alone it would cool down and be retried on a timer forever (non-negotiable 7). Only on a
+ * 429, as the Codex CLI reads it (`codex-rs/codex-api/src/api_bridge.rs`), so a stray code on
+ * another status cannot park an account. The CLI reads the `error` envelope only; this driver also
+ * reads the `detail` envelope it reads every other Codex code from (`readCodexFacts`), a deliberate
+ * widening. The CLI's fifth HTTP code there, `organization_usage_limit_exceeded`, is left out: its
+ * name says a usage window, which a 429 already classifies as `rate-limited`. As a `type`, only
+ * `insufficient_quota`, as the CLI reads it; the other three are codes only. One more difference:
+ * these run after the limit rules, so a limit code or a `rate_limit_exceeded` type beside a quota
+ * signal reads `rate-limited` here where the CLI reads quota. That errs to cooldown; the stream
+ * hook follows the CLI instead (quota wins there).
  */
 export const CODEX_QUOTA_CODES: readonly string[] = [
   "insufficient_quota",
