@@ -253,6 +253,21 @@ describe("Codex failure wording", () => {
       expect(result?.signal).toBe("openai-oauth:insufficient_quota")
     }
   })
+  test.each([
+    [400, { detail: { code: "insufficient_quota" } }],
+    [400, { error: { type: "insufficient_quota" } }],
+    [403, { error: { type: "insufficient_quota" } }],
+    [500, { error: { type: "insufficient_quota" } }],
+    [400, { detail: { type: "insufficient_quota" } }],
+  ])("a quota signal on status %i does not park the account (#207 round 11)", (status, body) => {
+    expect(codex.classifyFailure(response(status, { body }))?.kind).not.toBe("credits-exhausted")
+  })
+  test.each([
+    { error: { type: "credit_balance_exhausted" } },
+    { error: { code: "usage_limit_reached", type: "insufficient_quota" } },
+  ])("a 429 the driver reads as a limit, not quota (#207 round 11): %o", (body) => {
+    expect(codex.classifyFailure(response(429, { body }))?.kind).toBe("rate-limited")
+  })
   test("a quota code on another status does not park the account (#207 review)", () => {
     const result = codex.classifyFailure(
       response(400, { body: { detail: { code: "insufficient_quota", message: "quota" } } }),

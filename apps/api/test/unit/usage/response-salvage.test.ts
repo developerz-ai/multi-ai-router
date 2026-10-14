@@ -347,7 +347,7 @@ test("a status_code repeated inside one base_resp keeps the last one, as JSON.pa
   expect(scanner.finish()).toMatchObject({ base_resp: { status_code: 1002 } })
 })
 
-test.each(["01008", "+1008", "NaN", '"a\tb"', "10 08"])(
+test.each(["01008", "+1008", "NaN", '"a\tb"', "10 08", "0 1008", '"x"1008', "{}1008", "null 1008"])(
   "a malformed status_code %s is dropped, never failing the salvage (#207 round 9)",
   (code) => {
     const scanner = createResponseSalvage(1024)
@@ -389,4 +389,17 @@ test("a malformed status_code before usage drops only itself (#207 round 10)", (
   const text = `{"base_resp":{"status_code":01008},"usage":{"input_tokens":11,"output_tokens":22},"pad":"${"x".repeat(2048)}"}`
   for (const byte of encoder.encode(text)) scanner.push(byte)
   expect(scanner.finish()).toEqual({ usage: { input_tokens: 11, output_tokens: 22 } })
+})
+
+test.each([
+  [32, true],
+  [33, false],
+])("a %i-byte status_code is kept: %s (the 32-byte ceiling, #207 round 11)", (length, kept) => {
+  const scanner = createResponseSalvage(1024)
+  const code = `1${"0".repeat(length - 1)}`
+  const text = `{"usage":{"input_tokens":1},"base_resp":{"status_code":${code}},"pad":"${"x".repeat(2048)}"}`
+  for (const byte of encoder.encode(text)) scanner.push(byte)
+  const rebuilt = scanner.finish()
+  if (kept) expect(rebuilt).toMatchObject({ base_resp: { status_code: Number(code) } })
+  else expect(rebuilt).toEqual({ usage: { input_tokens: 1 } })
 })

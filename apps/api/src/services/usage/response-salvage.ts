@@ -88,6 +88,9 @@ export function createResponseSalvage(maximumBytes: number): ResponseSalvage {
   let capture: Capture | null = null
   let retained = 0
   let errorObject = false
+  // Whether a value has started under the current key at depth 2. A second value with no key between
+  // (`"status_code":0 1008`) is invalid JSON; a ceiling slot then counts as malformed and is dropped.
+  let valueUnderKey = false
 
   const slotAt = (): string | null => {
     if (depth === 1 && objects[1] && !expectKey[1]) {
@@ -190,7 +193,11 @@ export function createResponseSalvage(maximumBytes: number): ResponseSalvage {
     const path = slotAt()
     if (path === null) return
     // The same for a repeated ceiling slot inside one parent.
-    if (SLOT_MAX_BYTES.has(path)) release([path])
+    if (SLOT_MAX_BYTES.has(path)) {
+      release([path])
+      if (valueUnderKey) return
+      valueUnderKey = true
+    }
     capture = {
       path,
       depth,
@@ -249,6 +256,7 @@ export function createResponseSalvage(maximumBytes: number): ResponseSalvage {
           if (depth >= 1 && depth <= 2 && objects[depth] && expectKey[depth]) {
             keyBytes = []
             keys[depth] = null
+            if (depth === 2) valueUnderKey = false
             keep(byte)
             return
           }

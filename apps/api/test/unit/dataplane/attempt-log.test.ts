@@ -100,7 +100,16 @@ describe("logAttemptFailure (#206)", () => {
       const quoted = lines[0]?.upstreamMessage
       if (typeof quoted !== "string") throw new Error("the line carries no upstreamMessage")
       expect(quoted.length).toBeLessThanOrEqual(40)
+      // The pull-back keeps what fits: the p-run and, while there is room, the endpoint.
+      const prefix = `${"p".repeat(pad + 10)} https://h/`
+      expect(quoted).toStartWith(prefix.length < 40 ? prefix : "p".repeat(pad + 10))
     }
+  })
+
+  test("a bound that ends inside a marker keeps the words before it and the whole marker", () => {
+    const { log, lines } = captured()
+    logAttemptFailure(log, "a", 1, failure(`abc ${FAKE_KEY} ${"x".repeat(300)}`), 15)
+    expect(lines[0]?.upstreamMessage).toBe("abc [REDACTED]…")
   })
 
   test("a credential over 4 KB across the window's end leaves no head (#207 round 4)", () => {
@@ -225,6 +234,10 @@ describe("both log lines scrub the whole message before cutting (#207 round 6)",
       `Bearer ${"t".repeat(5_000)} eyJ${"P".repeat(20)}.${"P".repeat(13_000)}.${"P".repeat(40)} tail`,
       `Bearer ${"t".repeat(5_000)} postgres://u:${"P".repeat(13_000)}@h tail`,
       `Failed: Bearer ${"b".repeat(60_000)} postgres://u:${"P".repeat(8_000)}@h tail`,
+      // The last '@' or '.' before the 64 KiB mark sits inside a credential that ends after it, so
+      // only a whitespace-only cut set keeps these clean.
+      `Failed: Bearer ${"b".repeat(60_000)} postgres://u:${"P".repeat(100)}@h${"z".repeat(10_000)}`,
+      `Failed: Bearer ${"b".repeat(60_000)} eyJ${"h".repeat(20)}.${"P".repeat(200)}.${"s".repeat(10_000)}`,
     ]
     for (const message of messages) {
       for (const maxChars of [200, 2000]) {
