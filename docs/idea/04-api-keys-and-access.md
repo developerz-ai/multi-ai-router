@@ -316,7 +316,7 @@ version of another.
 | Scope | Meaning | Typical use |
 |---|---|---|
 | `all` | Every `active` Account is a candidate. **Full scope.** | The operator's own laptop key — the trusted teammate. |
-| *pools* | Bound to one or more Pools. Candidates are the union, in the listed order, and each pool's own routing policy applies within that pool. | **The normal case.** One agent, one budget; or a primary pool with an overflow pool behind it. |
+| *pools* | Bound to one or more Pools. Candidates are the union, in the listed order — the order is persisted (`api_key_pools.position`, written from the request's array index) and every read returns it, so the list survives the scope edit that rewrites it. Across pools a natively-serving account still outranks an aliased one, and an honored binding still outranks both ([05-routing-and-failover.md](05-routing-and-failover.md#native-before-alias)); within a pool, that pool's own routing policy applies. | **The normal case.** One agent, one budget; or a primary pool with an overflow pool behind it. |
 | *accounts* | Pinned to an explicit list of Accounts, **ignoring pool membership entirely**. | "This CI agent may only ever burn the cheap OpenRouter key." "This contractor's key touches exactly one sub." |
 
 ### How scope is enforced

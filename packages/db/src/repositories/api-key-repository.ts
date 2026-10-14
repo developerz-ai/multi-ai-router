@@ -1,5 +1,5 @@
 import type { KeyOwnerKind, KeyScope } from "@multi-ai-router/core"
-import { and, asc, eq, gt, inArray, isNull, or } from "drizzle-orm"
+import { and, asc, eq, gt, inArray, isNull, or, type SQL } from "drizzle-orm"
 import type { DatabaseExecutor } from "../client"
 import {
   type ApiKeyAccountRow,
@@ -122,6 +122,13 @@ export interface ScopeTargetRows {
 }
 
 export function createApiKeyRepository(db: DatabaseExecutor): ApiKeyRepository {
+  const poolTargetsWhere = (where: SQL) =>
+    db
+      .select()
+      .from(apiKeyPools)
+      .where(where)
+      .orderBy(asc(apiKeyPools.position), asc(apiKeyPools.id))
+
   return {
     findUsableByPrefix: (prefix, now) =>
       db
@@ -178,13 +185,10 @@ export function createApiKeyRepository(db: DatabaseExecutor): ApiKeyRepository {
         ...(filter?.owner === undefined ? [] : [eq(apiKeys.owner, filter.owner)]),
         ...(filter?.tool === undefined ? [] : [eq(apiKeys.tool, filter.tool)]),
       ]
+      const query = db.select().from(apiKeys)
       return conditions.length === 0
-        ? db.select().from(apiKeys).orderBy(asc(apiKeys.createdAt))
-        : db
-            .select()
-            .from(apiKeys)
-            .where(and(...conditions))
-            .orderBy(asc(apiKeys.createdAt))
+        ? query.orderBy(asc(apiKeys.createdAt))
+        : query.where(and(...conditions)).orderBy(asc(apiKeys.createdAt))
     },
 
     findByName: async (name) => {
@@ -238,8 +242,7 @@ export function createApiKeyRepository(db: DatabaseExecutor): ApiKeyRepository {
         narrowedBy: eq(apiKeys.revoked, true),
       }),
 
-    listPoolTargets: (apiKeyId) =>
-      db.select().from(apiKeyPools).where(eq(apiKeyPools.apiKeyId, apiKeyId)),
+    listPoolTargets: (apiKeyId) => poolTargetsWhere(eq(apiKeyPools.apiKeyId, apiKeyId)),
 
     listAccountTargets: (apiKeyId) =>
       db.select().from(apiKeyAccounts).where(eq(apiKeyAccounts.apiKeyId, apiKeyId)),
@@ -248,7 +251,7 @@ export function createApiKeyRepository(db: DatabaseExecutor): ApiKeyRepository {
       if (apiKeyIds.length === 0) return { pools: [], accounts: [] }
       const ids = [...apiKeyIds]
       const [poolRows, accountRows] = await Promise.all([
-        db.select().from(apiKeyPools).where(inArray(apiKeyPools.apiKeyId, ids)),
+        poolTargetsWhere(inArray(apiKeyPools.apiKeyId, ids)),
         db.select().from(apiKeyAccounts).where(inArray(apiKeyAccounts.apiKeyId, ids)),
       ])
       return { pools: poolRows, accounts: accountRows }
@@ -279,7 +282,10 @@ export function createApiKeyRepository(db: DatabaseExecutor): ApiKeyRepository {
 
         const poolIds = targets.poolIds ?? []
         if (poolIds.length > 0) {
-          await tx.insert(apiKeyPools).values(poolIds.map((poolId) => ({ apiKeyId, poolId })))
+          // The array index is the listed order — the delete-and-reinsert is where it is lost.
+          await tx
+            .insert(apiKeyPools)
+            .values(poolIds.map((poolId, index) => ({ apiKeyId, poolId, position: index })))
         }
 
         const accountIds = targets.accountIds ?? []

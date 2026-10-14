@@ -84,7 +84,7 @@ const TABLE_COLUMNS: ReadonlyArray<{ table: Table; columns: readonly string[] }>
       "updatedAt",
     ],
   },
-  { table: schema.apiKeyPools, columns: ["id", "apiKeyId", "poolId", "createdAt"] },
+  { table: schema.apiKeyPools, columns: ["id", "apiKeyId", "poolId", "position", "createdAt"] },
   { table: schema.apiKeyAccounts, columns: ["id", "apiKeyId", "accountId", "createdAt"] },
   {
     table: schema.sessions,

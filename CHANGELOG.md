@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.26.1] — 2026-10-14
+
+### Fixed
+
+- A pool-scoped key's pools are tried in the order they were listed, as the spec promises (#221). The order was never stored: the scope table had no position and its reads had no `ORDER BY`, so an index scan could return pools by id and silently swap a primary pool with its fallback. Migration `0034_pool_scope_position` adds `position` (default 0, so a previous release's insert still works) and backfills the order a sequential read returns today (on a large table read through the `(api_key_id, pool_id)` index, keys switch from pool-id order to the backfilled physical order). A key whose scope the previous release edited after the upgrade ties at position 0 and should be re-saved.
+
 ## [2.26.0] — 2026-10-14
 
 ### Added
