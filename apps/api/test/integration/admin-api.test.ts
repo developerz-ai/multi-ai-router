@@ -852,6 +852,7 @@ describe("key attribution", () => {
       expect((await call(app, "POST", ADMIN_KEYS_BASE_PATH, body)).status).toBe(400)
     }
     expect((await app.request(`${ADMIN_KEYS_BASE_PATH}?owner=Sebastian`)).status).toBe(400)
+    expect((await app.request(`${ADMIN_KEYS_BASE_PATH}?bogus=1`)).status).toBe(400)
     expect(store.rows.keys).toHaveLength(0)
   })
 

@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test"
+import { KEY_LABEL_SLUG_HTML_PATTERN } from "@multi-ai-router/core"
 import { createSignal } from "solid-js"
 import { render } from "solid-js/web"
 import type { AccountView, ApiKeyView, PoolView } from "../../src/lib/api/types"
@@ -305,6 +306,13 @@ describe("KeyFormDialog attribution", () => {
         expect(fieldByLabel("Purpose").value).toBe("nightly builds")
       },
     )
+  })
+
+  test("the Owner and Tool inputs carry the core slug rule as their HTML pattern", () => {
+    withMount(base({ apiKey: key() }), () => {
+      expect(fieldByLabel("Owner").getAttribute("pattern")).toBe(KEY_LABEL_SLUG_HTML_PATTERN)
+      expect(fieldByLabel("Tool").getAttribute("pattern")).toBe(KEY_LABEL_SLUG_HTML_PATTERN)
+    })
   })
 
   test("an unattributed key opens with every label empty and none selected", () => {

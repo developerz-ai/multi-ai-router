@@ -24,11 +24,9 @@ import { useSettings } from "../lib/queries/settings"
 import { useTableUsage } from "../lib/queries/table-usage"
 import { isSubscriptionLogin } from "../lib/subscription-login"
 import styles from "./KeysRoute.module.scss"
-import { distinctOwners, distinctTools, filterKeys, liveSelection } from "./keys/filter-keys"
+import { FilteredKeys } from "./keys/FilteredKeys"
 import { KeyDangerDialogs } from "./keys/KeyDangerDialogs"
-import { KeyFilters } from "./keys/KeyFilters"
 import { KeyFormDialog } from "./keys/KeyFormDialog"
-import { KeysTable } from "./keys/KeysTable"
 import { KeyValueDialog } from "./keys/KeyValueDialog"
 import { type KeyFormValues, toCreateKeyInput } from "./keys/key-form-values"
 
@@ -97,11 +95,6 @@ export default function KeysRoute() {
   const [pendingDelete, setPendingDelete] = createSignal<ApiKeyView | null>(null)
   const [ownerFilter, setOwnerFilter] = createSignal<string | null>(null)
   const [toolFilter, setToolFilter] = createSignal<string | null>(null)
-
-  const clearFilters = () => {
-    setOwnerFilter(null)
-    setToolFilter(null)
-  }
 
   const openForm = (key: ApiKeyView | null) => {
     create.reset()
@@ -190,10 +183,6 @@ export default function KeysRoute() {
         query={keys}
       >
         {(rows) => {
-          // A chip whose value has left the list stops filtering (see `liveSelection`).
-          const owner = () => liveSelection(ownerFilter(), distinctOwners(rows))
-          const tool = () => liveSelection(toolFilter(), distinctTools(rows))
-          const visible = () => filterKeys(rows, owner(), tool())
           return (
             <Show
               fallback={
@@ -206,47 +195,31 @@ export default function KeysRoute() {
               }
               when={rows.length > 0}
             >
-              <KeyFilters
-                keys={rows}
-                onOwnerChange={setOwnerFilter}
-                onToolChange={setToolFilter}
-                owner={owner()}
-                tool={tool()}
-              />
-              <Show
-                fallback={
-                  // Reaching zero rows through the chips is not "no keys yet" —
-                  // the fleet is right there behind the filter, and the operator
-                  // needs the toggle, not an empty state, to get back to it.
-                  <div class={styles.filterEmpty} role="status">
-                    <p>No keys carry the selected owner and tool together.</p>
-                    <Button onClick={clearFilters}>Clear filters</Button>
-                  </div>
+              <FilteredKeys
+                nowMs={now()}
+                onDelete={setPendingDelete}
+                onEdit={(key) => openForm(key)}
+                onMintSuccessor={openSuccessorForm}
+                onOwnerFilterChange={setOwnerFilter}
+                onReveal={(key) =>
+                  reveal.mutate(key.id, {
+                    onSuccess: (revealed) =>
+                      setShown({
+                        name: revealed.name,
+                        value: revealed.value,
+                        minted: false,
+                        scope: key.scope,
+                      }),
+                  })
                 }
-                when={visible().length > 0}
-              >
-                <KeysTable
-                  keys={visible()}
-                  nowMs={now()}
-                  onDelete={setPendingDelete}
-                  onEdit={(key) => openForm(key)}
-                  onMintSuccessor={openSuccessorForm}
-                  onReveal={(key) =>
-                    reveal.mutate(key.id, {
-                      onSuccess: (revealed) =>
-                        setShown({
-                          name: revealed.name,
-                          value: revealed.value,
-                          minted: false,
-                          scope: key.scope,
-                        }),
-                    })
-                  }
-                  onRevoke={setPendingRevoke}
-                  revealingId={reveal.isPending ? (reveal.variables ?? null) : null}
-                  {...usage()}
-                />
-              </Show>
+                onRevoke={setPendingRevoke}
+                onToolFilterChange={setToolFilter}
+                ownerFilter={ownerFilter()}
+                revealingId={reveal.isPending ? (reveal.variables ?? null) : null}
+                rows={rows}
+                toolFilter={toolFilter()}
+                {...usage()}
+              />
             </Show>
           )
         }}

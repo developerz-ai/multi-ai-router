@@ -244,6 +244,33 @@ describe("KeysRoute", () => {
     }
   })
 
+  test("a dead owner selection is cleared, so it cannot resurrect when the owner returns", async () => {
+    const calls: string[] = []
+    stubFetch(calls)
+    const { client, dispose, container } = mount()
+    try {
+      await settle()
+      buttonLabelled("ci-team").click()
+      await settle()
+      expect(container.textContent).not.toContain("ci-runner")
+
+      listOverride = [keyRow(), { ...attributedRow(), owner: "someone-else" }]
+      await client.invalidateQueries()
+      await settle()
+
+      listOverride = [keyRow(), attributedRow()]
+      await client.invalidateQueries()
+      await settle()
+
+      expect(container.textContent).toContain("ci-runner")
+      expect(container.textContent).toContain("nightly-runner")
+      expect(buttonLabelled("ci-team").getAttribute("aria-pressed")).toBe("false")
+    } finally {
+      dispose()
+      container.remove()
+    }
+  })
+
   test("a combination that matches nothing offers Clear filters", async () => {
     const calls: string[] = []
     stubFetch(calls)

@@ -14,11 +14,6 @@ export const KeyScope = z.enum(["all", "pools", "accounts"])
 export type KeyScope = z.infer<typeof KeyScope>
 
 /**
- * What kind of entity a key's `owner` label names. Attribution only — it exists
- * so usage views can group person-issued keys apart from service-issued ones;
- * it is not a login, a role, or any kind of principal the router authenticates.
- */
-/**
  * The attribution slug rule (`owner`, `tool`), stated once for both edges.
  * `KEY_LABEL_SLUG_HTML_PATTERN` is the same rule as an HTML `pattern` value: the
  * browser anchors it itself and compiles it with the `v` flag, where a bare `-`
@@ -27,5 +22,10 @@ export type KeyScope = z.infer<typeof KeyScope>
 export const KEY_LABEL_SLUG_HTML_PATTERN = "[a-z0-9][a-z0-9._\\-]{0,63}"
 export const KEY_LABEL_SLUG = new RegExp(`^${KEY_LABEL_SLUG_HTML_PATTERN}$`)
 
+/**
+ * What kind of entity a key's `owner` label names. Attribution only — it exists
+ * so usage views can group person-issued keys apart from service-issued ones;
+ * it is not a login, a role, or any kind of principal the router authenticates.
+ */
 export const KeyOwnerKind = z.enum(["person", "service"])
 export type KeyOwnerKind = z.infer<typeof KeyOwnerKind>

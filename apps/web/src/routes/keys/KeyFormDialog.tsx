@@ -28,9 +28,9 @@ export interface KeyFormDialogProps {
   /**
    * Mints a **successor** to this key: its attribution, scope and ceiling seed
    * the form, the name starts empty, and the expiry is never inherited — a
-   * lifetime is per key. Null for a plain mint or an edit.
+   * lifetime is per key. Null or absent for a plain mint or an edit.
    */
-  readonly successorOf: ApiKeyView | null
+  readonly successorOf?: ApiKeyView | null
   readonly pools: readonly PoolView[]
   readonly accounts: readonly AccountView[]
   readonly busy: boolean
@@ -73,7 +73,7 @@ export function KeyFormDialog(props: KeyFormDialogProps) {
   // everything except the name and the expiry, which belong to the new key alone.
   createEffect(
     on(
-      () => (props.open ? { edit: props.apiKey, seed: props.successorOf } : null),
+      () => (props.open ? { edit: props.apiKey, seed: props.successorOf ?? null } : null),
       (opened) => {
         // `on` fires with null while the dialog is closed — seeding nothing is
         // the point: a closed form holds no state worth keeping.
