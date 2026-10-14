@@ -88,9 +88,13 @@ export function createResponseSalvage(maximumBytes: number): ResponseSalvage {
   let capture: Capture | null = null
   let retained = 0
   let errorObject = false
-  // Whether a value has started under the current key at depth 2. A second value with no key between
-  // (`"status_code":0 1008`) is invalid JSON; a ceiling slot then counts as malformed and is dropped.
-  let valueUnderKey = false
+  // Structural checks at depths 1 and 2, the levels a ceiling slot hangs from. A second value under
+  // one key, or a value where a key or its colon belongs, is invalid JSON: JSON.parse rejects the
+  // whole frame, so from then on no ceiling slot is kept (`blockCeiling`). Valid JSON never trips it.
+  // `primitiveRun` tells a primitive's first byte (a value start) from the ones after it.
+  const valueStarted: boolean[] = [false, false, false]
+  let primitiveRun = false
+  let ceilingBlocked = false
 
   const slotAt = (): string | null => {
     if (depth === 1 && objects[1] && !expectKey[1]) {
@@ -133,6 +137,11 @@ export function createResponseSalvage(maximumBytes: number): ResponseSalvage {
       captured.set(path, bytes)
       retained += bytes.length
     }
+    lent = []
+  }
+  const blockCeiling = () => {
+    ceilingBlocked = true
+    release(SLOT_MAX_BYTES.keys())
     lent = []
   }
   const evictOptional = () => {
@@ -180,9 +189,13 @@ export function createResponseSalvage(maximumBytes: number): ResponseSalvage {
     if (!capture.dropped) lent = []
     capture = null
   }
-  const beginValue = (byte: number) => {
+  const beginValue = (byte: number, fresh: boolean) => {
     if (depth === 1 && objects[1] && !expectKey[1] && keys[1] === "error" && byte === OPEN_OBJECT)
       errorObject = true
+    if (fresh && depth <= 2 && objects[depth]) {
+      if (expectKey[depth] || valueStarted[depth]) blockCeiling()
+      valueStarted[depth] = true
+    }
     if (capture !== null) return
     // Last wins, as in JSON.parse: a new value under a ceiling slot's parent key replaces whatever
     // that slot held, whether or not the new value carries it again. Keys are compared as raw
@@ -195,8 +208,7 @@ export function createResponseSalvage(maximumBytes: number): ResponseSalvage {
     // The same for a repeated ceiling slot inside one parent.
     if (SLOT_MAX_BYTES.has(path)) {
       release([path])
-      if (valueUnderKey) return
-      valueUnderKey = true
+      if (ceilingBlocked) return
     }
     capture = {
       path,
@@ -232,6 +244,7 @@ export function createResponseSalvage(maximumBytes: number): ResponseSalvage {
         return
       }
       if (whitespace(byte)) {
+        primitiveRun = false
         if (capture?.kind === "primitive" && capture.depth === depth) endCapture()
         else keep(byte)
         return
@@ -250,28 +263,31 @@ export function createResponseSalvage(maximumBytes: number): ResponseSalvage {
         }
         started = true
       }
+      const continuesPrimitive = primitiveRun
+      primitiveRun = false
       switch (byte) {
         case QUOTE:
           inString = true
           if (depth >= 1 && depth <= 2 && objects[depth] && expectKey[depth]) {
             keyBytes = []
             keys[depth] = null
-            if (depth === 2) valueUnderKey = false
+            valueStarted[depth] = false
             keep(byte)
             return
           }
-          beginValue(byte)
+          beginValue(byte, true)
           keep(byte)
           return
         case OPEN_OBJECT:
         case OPEN_ARRAY:
-          if (depth > 0) beginValue(byte)
+          if (depth > 0) beginValue(byte, true)
           keep(byte)
           depth++
           if (depth <= 2) {
             objects[depth] = byte === OPEN_OBJECT
             expectKey[depth] = byte === OPEN_OBJECT
             keys[depth] = null
+            valueStarted[depth] = false
           }
           return
         case CLOSE_OBJECT:
@@ -298,7 +314,8 @@ export function createResponseSalvage(maximumBytes: number): ResponseSalvage {
             failed = true
             return
           }
-          if (capture === null) beginValue(byte)
+          primitiveRun = true
+          if (capture === null || !continuesPrimitive) beginValue(byte, !continuesPrimitive)
           keep(byte)
       }
     },

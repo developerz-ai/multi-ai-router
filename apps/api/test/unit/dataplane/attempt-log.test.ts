@@ -184,6 +184,9 @@ describe("the 64 KiB scan boundary, exactly (#207 round 6)", () => {
   test("65,536 characters with no whitespace are redacted whole and keep their head", () => {
     expect(quoted("z".repeat(65_536))).toStartWith("zzzz")
   })
+  test("a newline counts as whitespace for the cut", () => {
+    expect(quoted(`Failed\n${"f".repeat(70_000)}\nmore`)).toBe("Failed…")
+  })
   test("65,537 characters with no whitespace log only an ellipsis", () => {
     expect(quoted("z".repeat(65_537))).toBe("…")
   })
@@ -238,6 +241,10 @@ describe("both log lines scrub the whole message before cutting (#207 round 6)",
       // only a whitespace-only cut set keeps these clean.
       `Failed: Bearer ${"b".repeat(60_000)} postgres://u:${"P".repeat(100)}@h${"z".repeat(10_000)}`,
       `Failed: Bearer ${"b".repeat(60_000)} eyJ${"h".repeat(20)}.${"P".repeat(200)}.${"s".repeat(10_000)}`,
+      `Failed: Bearer ${"b".repeat(60_000)} sk-PPPP_${"z".repeat(10_000)}`,
+      `Failed: Bearer ${"b".repeat(60_000)} postgres://u:${"P".repeat(100)}=${"z".repeat(10_000)}@h`,
+      `Failed: Bearer ${"b".repeat(60_000)} postgres://u:${"P".repeat(100)}&${"z".repeat(10_000)}@h`,
+      `Failed: Bearer ${"b".repeat(60_000)} postgres://u:${"P".repeat(100)}?${"z".repeat(10_000)}@h`,
     ]
     for (const message of messages) {
       for (const maxChars of [200, 2000]) {

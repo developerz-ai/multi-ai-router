@@ -370,6 +370,10 @@ test.each([
   '"type":tru',
   '"response":{"status":+1}',
   '"type":"a\tb"',
+  '"status":tru',
+  '"incomplete_details":{"a":01}',
+  '"response":{"usage":{"x":01}}',
+  '"message":{"usage":+1}',
 ])("a malformed non-ceiling member %s still fails the salvage (#207 round 10)", (member) => {
   const scanner = createResponseSalvage(1024)
   const text = `{${member},"base_resp":{"status_code":1008},"pad":"${"x".repeat(2048)}"}`
@@ -402,4 +406,41 @@ test.each([
   const rebuilt = scanner.finish()
   if (kept) expect(rebuilt).toMatchObject({ base_resp: { status_code: Number(code) } })
   else expect(rebuilt).toEqual({ usage: { input_tokens: 1 } })
+})
+
+test.each([
+  '"base_resp":{"status_code":0} {"status_code":1008}',
+  '"base_resp":{"status_code":0}{"status_code":1008}',
+  '"base_resp":0 {"status_code":1008}',
+  '"base_resp":{"status_code":0},{"status_code":1008}',
+  '"base_resp" {"status_code":1008}',
+  '"a":1 "base_resp":{"status_code":1008}',
+])("invalid JSON around base_resp never yields a code (#207 round 12): %s", (members) => {
+  const scanner = createResponseSalvage(1024)
+  const text = `{"usage":{"input_tokens":1},${members},"pad":"${"x".repeat(2048)}"}`
+  for (const byte of encoder.encode(text)) scanner.push(byte)
+  expect(scanner.finish()?.base_resp).toBeUndefined()
+})
+
+test.each([
+  '"base_resp":10,"base_resp":{"status_code":1008}',
+  '"usage":{"input_tokens":1,"output_tokens":2},"base_resp":{"status_msg":"x","status_code":1008}',
+  '"list":[1,2,{"a":3}],"base_resp":{"status_code":1008}',
+])("valid JSON keeps its code (#207 round 12): %s", (members) => {
+  const scanner = createResponseSalvage(1024)
+  const text = `{${members},"pad":"${"x".repeat(2048)}"}`
+  expect(JSON.parse(text).base_resp.status_code).toBe(1008)
+  for (const byte of encoder.encode(text)) scanner.push(byte)
+  expect(scanner.finish()).toMatchObject({ base_resp: { status_code: 1008 } })
+})
+
+test("a violation inside an error capture that borrowed base_resp never gives the code back (#207 round 12)", () => {
+  const scanner = createResponseSalvage(64)
+  // A 20-digit code stays lent long enough for the violation (`1 2`) to arrive before the drop.
+  const text = `{"usage":{"p":"${"u".repeat(34)}"},"base_resp":{"status_code":10080000000000000000},"code":{"a":1 2,"b":"${"z".repeat(40)}"},"pad":"${"x".repeat(200)}"}`
+  for (const byte of encoder.encode(text)) {
+    scanner.push(byte)
+    expect(scanner.retainedBytes).toBeLessThanOrEqual(64)
+  }
+  expect(scanner.finish()?.base_resp).toBeUndefined()
 })
