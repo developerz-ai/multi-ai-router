@@ -12,7 +12,7 @@
   // degradation. No `z-index` — in the tables the pill's cell follows the usage
   // cell in DOM order and already paints above. Rows hover to `--surface-sunken`
   // while the pill keeps `--surface-raised`; the subtle rectangle is accepted.
-  background: var(--surface-raised);
+  // MUTATION PROOF (#223): badge background dropped; must fail ui-geometry. Reverted next commit.
   border: 1px solid currentcolor;
   border-radius: var(--radius-full);
   line-height: 1.5;
