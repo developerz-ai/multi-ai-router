@@ -43,8 +43,3 @@
   font-size: var(--text-xs);
   white-space: nowrap;
 }
-
-// MUTATION PROOF (#223): figures narrowed so nowrap cost text overflows into the badge; must fail ui-geometry. Reverted next commit.
-.figures {
-  width: 3rem;
-}
