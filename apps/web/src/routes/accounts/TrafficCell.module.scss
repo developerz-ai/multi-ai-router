@@ -43,8 +43,3 @@
   font-size: var(--text-xs);
   white-space: nowrap;
 }
-
-// MUTATION PROOF (#223): pushes the cost figures out of their cell; must fail ui-geometry. Reverted next commit.
-.figures {
-  margin-right: -60px;
-}
