@@ -1,4 +1,4 @@
-import { index, pgTable, timestamp, uniqueIndex, uuid } from "drizzle-orm/pg-core"
+import { index, integer, pgTable, timestamp, uniqueIndex, uuid } from "drizzle-orm/pg-core"
 import { accounts } from "./accounts"
 import { apiKeys } from "./api-keys"
 import { pools } from "./pools"
@@ -22,6 +22,16 @@ export const apiKeyPools = pgTable(
     poolId: uuid("pool_id")
       .notNull()
       .references(() => pools.id, { onDelete: "cascade" }),
+    /**
+     * The pool's place in the scope's listed order, written from the request's
+     * array index. Selection honors the order it is given, so without a stored
+     * position the unique `(api_key_id, pool_id)` index decides it — pool-id
+     * order, silently turning a key's primary pool into its fallback.
+     *
+     * `DEFAULT 0` rather than no default: an image rolled back past the
+     * migration keeps issuing INSERTs that omit the column, and they must land.
+     */
+    position: integer("position").notNull().default(0),
     createdAt: timestamp("created_at", { withTimezone: true, mode: "date" }).notNull().defaultNow(),
   },
   (table) => [
@@ -40,6 +50,8 @@ export const apiKeyAccounts = pgTable(
     accountId: uuid("account_id")
       .notNull()
       .references(() => accounts.id, { onDelete: "cascade" }),
+    // No `position` here, deliberately: an account scope's list *is* the candidate
+    // set, and its order is not a routing preference the way a pool order is.
     createdAt: timestamp("created_at", { withTimezone: true, mode: "date" }).notNull().defaultNow(),
   },
   (table) => [
