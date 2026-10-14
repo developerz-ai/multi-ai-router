@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.27.0] — 2026-10-14
+
+### Added
+
+- `bin/ui-geometry`: a layout gate that drives pinned headless Chromium (Playwright, DejaVu fonts, deviceScaleFactor 1) against the built SPA, with the admin API answered by in-process route mocks (no router, database or provider involved), and fails the build when cost text or a cost block paints outside its cell or through a credential badge on `/accounts` and `/keys` at 1024, 1280 and 1440px (#223). It measures painted ink (a Range over the contents), not element boxes, so text overflowing a too-narrow flex item is caught; it also holds the badge background opaque and fails on any empty selector scope, the gap that let #94 undo the #62 fix with CI green. It runs as a CI job and has pure rule tests in `apps/web/test/unit/ui-geometry-rules.test.ts`.
+
+### Documentation
+
+- Corrected stale cost-column passages: the accounts table folds metered and notional spend into the usage cell (TrafficCell), and only the keys table has a Cost column of its own.
+
 ## [2.26.0] — 2026-10-14
 
 ### Added

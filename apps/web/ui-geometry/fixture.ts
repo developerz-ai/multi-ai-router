@@ -27,7 +27,8 @@ if (LONG_LABEL.length !== 118) {
   throw new Error(`fixture label must be 118 chars, got ${LONG_LABEL.length}`)
 }
 
-const NOW = Date.parse("2026-10-14T12:00:00Z")
+/** The instant the browser clock is pinned to — relative dates render from it. */
+export const NOW = Date.parse("2026-10-14T12:00:00Z")
 const iso = (offsetMs: number): string => new Date(NOW + offsetMs).toISOString()
 
 /** Seven daily buckets ending "now", oldest first — the shape `axis` promises. */
@@ -121,7 +122,7 @@ export const providers = {
 }
 
 const account = (
-  over: Partial<FixtureAccount> & Pick<FixtureAccount, "id" | "label">,
+  over: Partial<FixtureAccount> & Pick<FixtureAccount, "id" | "label" | "provider">,
 ): FixtureAccount => ({
   status: "active",
   hasCredential: false,

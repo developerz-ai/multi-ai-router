@@ -7,9 +7,13 @@
 // deviceScaleFactor 1, pinned locale/timezone/color scheme, reduced motion, and
 // a fixture whose data never changes. Anything env-dependent is either pinned
 // here or fails the run.
+import { mkdtemp, rm } from "node:fs/promises"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
 import { type Browser, chromium } from "playwright"
 import { installAdminMock } from "./admin-mock"
-import { Checker, measure } from "./geometry"
+import { NOW } from "./fixture"
+import { Checker, measure, pinnedFontsInstalled } from "./geometry"
 import { assertAccounts, assertKeys, reportLine } from "./rules"
 import { startStaticServer } from "./server"
 
@@ -57,17 +61,21 @@ const SURFACES: readonly Surface[] = [
 async function main(): Promise<number> {
   // This file is apps/web/ui-geometry/run.ts — the package root is one level up.
   const webDir = new URL("../", import.meta.url).pathname
-  const build = Bun.spawnSync(["bun", "run", "build"], {
+  // Built into a throwaway dir so a gate run never overwrites the apps/web/dist
+  // an operator (or bin/dev) may be serving.
+  const outDir = await mkdtemp(join(tmpdir(), "ui-geometry-dist-"))
+  const build = Bun.spawnSync(["bun", "run", "build", "--outDir", outDir, "--emptyOutDir"], {
     cwd: webDir,
     stdout: "inherit",
     stderr: "inherit",
   })
   if (build.exitCode !== 0) {
     console.error("ui-geometry: the SPA build failed — the gate never runs against a stale dist")
+    await rm(outDir, { recursive: true, force: true })
     return 1
   }
 
-  const server = await startStaticServer(`${webDir}dist`)
+  const server = await startStaticServer(outDir)
   const checker = new Checker()
   const lines: string[] = []
 
@@ -79,6 +87,7 @@ async function main(): Promise<number> {
       `ui-geometry: headless Chromium unavailable (${String(error)}). Run: bunx playwright install chromium`,
     )
     server.stop()
+    await rm(outDir, { recursive: true, force: true })
     return 1
   }
 
@@ -92,7 +101,10 @@ async function main(): Promise<number> {
         locale: "en-US",
         timezoneId: "UTC",
       })
-      const mock = installAdminMock(context, server.origin)
+      // The SPA reads Date.now via lib/clock.ts; unpinned, renewal and relative
+      // dates drift from the fixture and the layout with them.
+      await context.clock.setFixedTime(NOW)
+      const mock = await installAdminMock(context, server.origin)
       const page = await context.newPage()
 
       for (const surface of SURFACES) {
@@ -102,13 +114,10 @@ async function main(): Promise<number> {
         await page.evaluate(async () => {
           await document.fonts.ready
         })
-        const fontsOk = await page.evaluate(
-          () =>
-            document.fonts.check('16px "DejaVu Sans"') &&
-            document.fonts.check('16px "DejaVu Sans Mono"'),
-        )
+        // document.fonts.check() answers true for a family that does not exist,
+        // so the pin is proven by rendered width instead (see geometry.ts).
         checker.check(
-          fontsOk,
+          await pinnedFontsInstalled(page),
           `${surface.name} @${width}: pinned fonts unavailable — install fonts-dejavu-core`,
         )
         // The ready selector only orders the measurement behind the usage query;
@@ -133,6 +142,7 @@ async function main(): Promise<number> {
   } finally {
     await browser.close()
     server.stop()
+    await rm(outDir, { recursive: true, force: true })
   }
 
   console.log("ui-geometry: measured numbers (for the PR body)")

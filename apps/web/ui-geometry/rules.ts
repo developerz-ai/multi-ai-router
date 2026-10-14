@@ -78,12 +78,27 @@ export function assertAccounts(c: Checker, meas: PageMeas): PageReport {
     )
     badges += rowBadges.length
     for (const badge of rowBadges) alphas.add(backgroundAlpha(badge.background))
-    alphaRule(c, rowBadges, page)
+    alphaRule(c, table.badges, page)
 
     const blocks = table.rows.filter((row) => row.costBlock !== null)
     c.check(
       blocks.length > 0,
       `${page}: table #${i + 1} matched zero cost blocks — selector scope empty`,
+    )
+    const texts = table.rows.filter((row) => row.costText !== null)
+    c.check(
+      texts.length > 0,
+      `${page}: table #${i + 1} matched zero cost-text spans — selector scope empty`,
+    )
+    // The fixture is fixed, so every row has traffic: fewer matches than rows
+    // means a row silently fell back to "no traffic" or lost a selector.
+    c.check(
+      blocks.length === table.rows.length,
+      `${page}: table #${i + 1} only ${blocks.length} of ${table.rows.length} rows have a cost block`,
+    )
+    c.check(
+      texts.length === table.rows.length,
+      `${page}: table #${i + 1} only ${texts.length} of ${table.rows.length} rows have a cost-text span`,
     )
     costBlocks += blocks.length
     rows += table.rows.length
@@ -93,7 +108,7 @@ export function assertAccounts(c: Checker, meas: PageMeas): PageReport {
       if (block !== null) {
         c.check(
           contained(block, row.costCell),
-          `${page}: table #${i + 1} row ${r + 1} cost block escapes its cell by ${clearance(block, row.costCell).toFixed(1)}px (box ${JSON.stringify(block)} vs cell ${JSON.stringify(row.costCell)})`,
+          `${page}: table #${i + 1} row ${r + 1} cost block ink escapes its cell by ${(-clearance(block, row.costCell)).toFixed(1)}px (box ${JSON.stringify(block)} vs cell ${JSON.stringify(row.costCell)})`,
         )
         minCellClearance = Math.min(minCellClearance, clearance(block, row.costCell))
       }
@@ -152,6 +167,10 @@ export function assertKeys(c: Checker, meas: PageMeas): PageReport {
       blocks.length > 0,
       `${page}: table #${i + 1} matched zero SpendCell blocks — selector scope empty`,
     )
+    c.check(
+      blocks.length === table.rows.length,
+      `${page}: table #${i + 1} only ${blocks.length} of ${table.rows.length} rows have a SpendCell`,
+    )
     costBlocks += blocks.length
     rows += table.rows.length
 
@@ -160,15 +179,21 @@ export function assertKeys(c: Checker, meas: PageMeas): PageReport {
       if (block === null) return
       c.check(
         contained(block, row.costCell),
-        `${page}: table #${i + 1} row ${r + 1} SpendCell escapes its cell by ${clearance(block, row.costCell).toFixed(1)}px`,
+        `${page}: table #${i + 1} row ${r + 1} SpendCell ink escapes its cell by ${(-clearance(block, row.costCell)).toFixed(1)}px`,
       )
       minCellClearance = Math.min(minCellClearance, clearance(block, row.costCell))
-      for (const other of row.otherCells) {
+      for (const other of row.others) {
         c.check(
-          !intersects(block, other),
-          `${page}: table #${i + 1} row ${r + 1} SpendCell intersects a neighbouring cell (gap ${gap(block, other).toFixed(1)}px)`,
+          !intersects(block, other.ink),
+          `${page}: table #${i + 1} row ${r + 1} SpendCell intersects a neighbouring cell's content (gap ${gap(block, other.ink).toFixed(1)}px)`,
         )
-        minGap = Math.min(minGap, gap(block, other))
+        // A neighbour whose content paints past its own cell is the collapse that
+        // broke #62 even when it has not yet reached the SpendCell's ink.
+        c.check(
+          contained(other.ink, other.cell),
+          `${page}: table #${i + 1} row ${r + 1} a neighbouring cell's content escapes its cell by ${(-clearance(other.ink, other.cell)).toFixed(1)}px`,
+        )
+        minGap = Math.min(minGap, gap(block, other.ink))
       }
     })
   })

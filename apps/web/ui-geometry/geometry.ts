@@ -30,12 +30,20 @@ export interface BadgeMeas {
   readonly background: string
 }
 
+/**
+ * Every Box on a row except `costCell` and badge boxes is INK: the union of what
+ * the element's contents paint, via a Range, so text overflowing a too-narrow
+ * flex item still counts. An element box says where layout put the item; only
+ * the ink says where the pixels landed, and #62 was pixels painting through the
+ * credential pill while every box stayed put.
+ */
 export interface RowMeas {
   readonly costCell: Box
   readonly costBlock: Box | null
   readonly costText: Box | null
   readonly badges: readonly BadgeMeas[]
-  readonly otherCells: readonly Box[]
+  /** Every other cell in the row that paints anything: its box and its content ink. */
+  readonly others: readonly { readonly cell: Box; readonly ink: Box }[]
 }
 
 export interface TableMeas {
@@ -59,6 +67,23 @@ function measureTables(args: MeasureArgs): PageMeas {
     const r = el.getBoundingClientRect()
     return { x: r.x, y: r.y, width: r.width, height: r.height }
   }
+  // Painted extent of an element's contents (text overflow included). An element
+  // that paints nothing has a 0x0 range; fall back to its box so a collapsed
+  // match still reads as a measurement rather than a phantom corner at 0,0.
+  const ink = (el: Element): Box => {
+    const range = document.createRange()
+    range.selectNodeContents(el)
+    const r = range.getBoundingClientRect()
+    return r.width === 0 && r.height === 0
+      ? box(el)
+      : { x: r.x, y: r.y, width: r.width, height: r.height }
+  }
+  const hasInk = (el: Element): boolean => {
+    const range = document.createRange()
+    range.selectNodeContents(el)
+    const r = range.getBoundingClientRect()
+    return r.width > 0 || r.height > 0
+  }
   const badgeEls = (root: ParentNode): Element[] => [...root.querySelectorAll('[class*="_badge_"]')]
   const badge = (el: Element): BadgeMeas => ({
     text: (el.textContent ?? "").trim(),
@@ -81,11 +106,15 @@ function measureTables(args: MeasureArgs): PageMeas {
         const textEl = costTd?.querySelector('[class*="_spend_"]') ?? null
         return {
           costCell: costTd === null ? { x: 0, y: 0, width: 0, height: 0 } : box(costTd),
-          costBlock: blockEl === null ? null : box(blockEl),
-          costText: textEl === null ? null : box(textEl),
+          costBlock: blockEl === null ? null : ink(blockEl),
+          costText: textEl === null ? null : ink(textEl),
           badges: credTd === null ? [] : badgeEls(credTd).map(badge),
-          otherCells:
-            costIdx === -1 ? [] : tds.filter((_, i) => i !== costIdx).map((td) => box(td)),
+          others:
+            costIdx === -1
+              ? []
+              : tds
+                  .filter((td, i) => i !== costIdx && hasInk(td))
+                  .map((td) => ({ cell: box(td), ink: ink(td) })),
         }
       })
       return { headers, rows, badges: badgeEls(table).map(badge) }
@@ -96,6 +125,31 @@ function measureTables(args: MeasureArgs): PageMeas {
 /** Measure one rendered page. `costHeaderPrefix` picks the column the cost block lives in. */
 export async function measure(page: Page, args: MeasureArgs): Promise<PageMeas> {
   return (await page.evaluate(measureTables, args)) as PageMeas
+}
+
+/**
+ * Prove the pinned DejaVu families are really installed. `document.fonts.check`
+ * answers true for a family that does not exist, so it proves nothing; instead a
+ * probe string is set in the family with two different generic fallbacks. If the
+ * family resolved, both render in it and the widths match; if it did not, they
+ * fall to different faces (serif vs sans-serif / monospace) and the widths split.
+ */
+export async function pinnedFontsInstalled(page: Page): Promise<boolean> {
+  return page.evaluate(() => {
+    const width = (family: string, generic: string): number => {
+      const span = document.createElement("span")
+      span.textContent = "mmmmmmmmmmlliWWW0123456789 $1,234.56"
+      span.style.cssText = `position:absolute;visibility:hidden;white-space:nowrap;font-size:32px;font-family:"${family}",${generic}`
+      document.body.appendChild(span)
+      const w = span.getBoundingClientRect().width
+      span.remove()
+      return w
+    }
+    return (
+      width("DejaVu Sans", "serif") === width("DejaVu Sans", "monospace") &&
+      width("DejaVu Sans Mono", "serif") === width("DejaVu Sans Mono", "sans-serif")
+    )
+  })
 }
 
 // ------------------------------------------------------------------ assertions

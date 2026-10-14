@@ -1,7 +1,7 @@
 // The static file server a geometry run serves the built SPA from — the browser
 // half of the "no router process exists" guarantee. It owns exactly one origin,
 // 127.0.0.1 on an ephemeral port, and never proxies anywhere: the only things it
-// can hand out are files under apps/web/dist.
+// can hand out are files under the built dist directory it is handed.
 import { serve } from "bun"
 
 const CONTENT_TYPES: Readonly<Record<string, string>> = {

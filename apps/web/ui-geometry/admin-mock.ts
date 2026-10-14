@@ -34,13 +34,16 @@ export interface MockStack {
 }
 
 /** Install the mock API and the structural egress fence on one browser context. */
-export function installAdminMock(context: BrowserContext, origin: string): MockStack {
+export async function installAdminMock(
+  context: BrowserContext,
+  origin: string,
+): Promise<MockStack> {
   const blocked: string[] = []
   const unmapped: string[] = []
 
   // Registered first so the admin handler (registered second) takes precedence:
   // Playwright consults routes in reverse registration order.
-  void context.route("**/*", (route) => {
+  await context.route("**/*", (route) => {
     const url = new URL(route.request().url())
     if (url.origin === origin) {
       void route.continue()
@@ -50,7 +53,7 @@ export function installAdminMock(context: BrowserContext, origin: string): MockS
     void route.abort()
   })
 
-  void context.route("**/api/admin/**", (route) => {
+  await context.route("**/api/admin/**", (route) => {
     const url = new URL(route.request().url())
     if (route.request().method() !== "GET") {
       // A geometry run reads; the SPA mutates only from operator actions, and
