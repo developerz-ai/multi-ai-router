@@ -225,7 +225,7 @@ Every key carries a **scope** — the set of Accounts it may reach — in one of
 | Expiry | timestamp, optional | a key past expiry is rejected exactly like a revoked one |
 | Revoked | flag | one-way |
 
-All four attribution fields are nullable (a key minted before they existed is unlabelled) and `PATCH null` clears each. `GET /api/admin/keys` takes exact-match `?owner=` and `?tool=` filters, which combine; a value that is not a valid slug answers `400`. The convention is to name keys `<owner>/<tool>`; it is documentation, not validation, and `name` stays free text.
+All four attribution fields are nullable (a key minted before they existed is unlabelled) and `PATCH null` clears each. `GET /api/admin/keys` takes exact-match `?owner=` and `?tool=` filters, which combine; a value that is not a valid slug answers `400`, and so does any other query parameter. The convention is to name keys `<owner>/<tool>`; it is documentation, not validation, and `name` stays free text.
 
 Per-key **spend budgets** are **DEFERRED**.
 

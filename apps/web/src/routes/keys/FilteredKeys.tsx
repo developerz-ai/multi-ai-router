@@ -19,9 +19,9 @@ export interface FilteredKeysProps extends Omit<KeysTableProps, "keys"> {
 /**
  * The owner/tool chips and the table they narrow.
  *
- * A chip whose value has left the list stops filtering (see `liveSelection`), and
- * the underlying selection is cleared too: leaving it set would let the filter
- * silently come back the moment a key carrying that value reappeared.
+ * A chip whose value has left the list stops filtering here (see `liveSelection`);
+ * the caller (KeysRoute) clears the stored selection, so the filter cannot come
+ * back on its own when a key carrying that value reappears.
  */
 export function FilteredKeys(props: FilteredKeysProps) {
   const [own, table] = splitProps(props, [
