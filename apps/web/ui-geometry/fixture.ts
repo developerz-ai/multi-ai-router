@@ -1,3 +1,5 @@
+import type { SettingsView } from "../src/lib/api/settings"
+import type { PoolView, ProviderListResponse, SessionView } from "../src/lib/api/types"
 import type { FixtureAccount, FixtureKey, WireTotals } from "./fixture-types"
 
 // The admin-API fixture `bin/ui-geometry` serves to the built SPA from Playwright
@@ -58,7 +60,7 @@ const row = (id: string, label: string, t: WireTotals, series: readonly number[]
 })
 
 /** `GET /auth/session` — a live session, so the shell never redirects to /login. */
-export const session = {
+export const session: SessionView = {
   username: "geometry-fixture",
   csrfToken: "fixture-csrf-token",
   issuedAt: iso(-3_600_000),
@@ -66,7 +68,7 @@ export const session = {
 }
 
 /** `GET /settings` — only the footer's version line and the keys page read it. */
-export const settings = {
+export const settings: SettingsView = {
   version: "9.9.9-geometry-fixture",
   retention: {
     usageDays: 30,
@@ -86,7 +88,7 @@ export const settings = {
  * declared agent-SDK with `requiresConfigDir`, and the account below carries `configDir: null`:
  * in a real deployment that is exactly the row the CLI can never be spawned for.
  */
-export const providers = {
+export const providers: ProviderListResponse = {
   providers: [
     {
       id: "anthropic-oauth",
@@ -233,7 +235,7 @@ export const keys: readonly FixtureKey[] = [
 ]
 
 /** `GET /pools` — empty; nothing on either table needs a member to render. */
-export const pools: readonly unknown[] = []
+export const pools: readonly PoolView[] = []
 
 /** `GET /usage?window=7d` — totals plus the two breakdowns the tables join on. */
 export const usage = {

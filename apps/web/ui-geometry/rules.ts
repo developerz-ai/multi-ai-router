@@ -125,6 +125,16 @@ export function assertAccounts(c: Checker, meas: PageMeas): PageReport {
     })
   })
 
+  // The fixture's STORED row is the one #62 painted through; losing it would
+  // leave the gate green over a table that no longer holds the failing shape.
+  // Page-wide: the page renders more than one table and only one holds it.
+  c.check(
+    meas.tables.some((t) =>
+      t.rows.some((r) => r.badges.some((b) => b.text.toLowerCase() === "stored")),
+    ),
+    `${page}: no credential badge reading "stored" on the page — the fixture's STORED row is gone`,
+  )
+
   return {
     tables: meas.tables.length,
     rows,

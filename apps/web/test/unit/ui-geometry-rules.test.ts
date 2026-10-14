@@ -103,6 +103,12 @@ describe("assertAccounts", () => {
     expect(c.failures.some((f) => f.includes("1 of 2 rows have a cost-text span"))).toBe(true)
   })
 
+  test("a table with no stored credential badge fails by name", () => {
+    const c = new Checker()
+    assertAccounts(c, page([row({ badges: [{ ...badge("rgb(18, 22, 31)"), text: "oauth" }] })]))
+    expect(c.failures.some((f) => f.includes('no credential badge reading "stored"'))).toBe(true)
+  })
+
   test("a clean measurement passes", () => {
     const c = new Checker()
     assertAccounts(c, page([row({})]))

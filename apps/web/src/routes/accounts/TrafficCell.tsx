@@ -15,7 +15,7 @@ export interface TrafficCellProps {
 
 /**
  * One row's traffic and spend in a single compact column — the accounts table's answer to
- * "is this account carrying anything", where twelve columns already compete for the width.
+ * "is this account carrying anything", where eleven columns already compete for the width.
  *
  * Three states, each honest: **pending** is a dash (zero is a measurement, not a placeholder);
  * **no traffic** is the words, not a sparkline of nothing beside two `$0.00`s; and a served row

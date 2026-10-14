@@ -5,8 +5,9 @@
 //
 // Selectors: Vite compiles SCSS-module locals to `_figures_<hash>_<n>` — the
 // local name survives verbatim inside the generated class, so
-// `[class*="_figures_"]` pins TrafficCell's cost block, `[class*="_spend_"]`
-// SpendCell's dl (and TrafficCell's inline spend span — the cost *text*), and
+// `[class*="_figures_"]` pins TrafficCell's cost block (Accounts), the nested
+// `[class*="_spend_"]` its cost *text*, and on Keys `[class*="_spend_"]` is
+// SpendCell's own block — each surface passes its own selectors, never a union; and
 // `[class*="_badge_"]` the Badge pill (singular; CredentialCell's plural
 // `_badges_` container does not contain `_badge_`). If a component renames its
 // locals, the zero-match rule below turns the drift into a failed run instead of
@@ -59,6 +60,10 @@ export interface PageMeas {
 interface MeasureArgs {
   readonly costHeaderPrefix: string
   readonly credentialHeader: string | null
+  /** The cost block this surface owns — one selector per surface, never a union. */
+  readonly blockSelector: string
+  /** The cost text, searched inside the block; null when the block is the text. */
+  readonly textSelector: string | null
 }
 
 /** Serialized into the page by Playwright — no closures over gate-process state. */
@@ -102,8 +107,11 @@ function measureTables(args: MeasureArgs): PageMeas {
         const tds = [...tr.children]
         const costTd = costIdx === -1 ? null : (tds[costIdx] ?? null)
         const credTd = credIdx === -1 ? null : (tds[credIdx] ?? null)
-        const blockEl = costTd?.querySelector('[class*="_figures_"], [class*="_spend_"]') ?? null
-        const textEl = costTd?.querySelector('[class*="_spend_"]') ?? null
+        const blockEl = costTd?.querySelector(args.blockSelector) ?? null
+        const textEl =
+          blockEl === null || args.textSelector === null
+            ? null
+            : blockEl.querySelector(args.textSelector)
         return {
           costCell: costTd === null ? { x: 0, y: 0, width: 0, height: 0 } : box(costTd),
           costBlock: blockEl === null ? null : ink(blockEl),

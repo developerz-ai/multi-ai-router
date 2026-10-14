@@ -36,6 +36,8 @@ interface Surface {
   readonly costHeaderPrefix: string
   readonly credentialHeader: string | null
   readonly ready: string
+  readonly blockSelector: string
+  readonly textSelector: string | null
   readonly assert: typeof assertAccounts | typeof assertKeys
 }
 
@@ -46,6 +48,8 @@ const SURFACES: readonly Surface[] = [
     costHeaderPrefix: "Usage ·",
     credentialHeader: "Credential / login",
     ready: '[class*="_figures_"]',
+    blockSelector: '[class*="_figures_"]',
+    textSelector: '[class*="_spend_"]',
     assert: assertAccounts,
   },
   {
@@ -54,6 +58,8 @@ const SURFACES: readonly Surface[] = [
     costHeaderPrefix: "Cost ·",
     credentialHeader: null,
     ready: '[class*="_spend_"]',
+    blockSelector: '[class*="_spend_"]',
+    textSelector: null,
     assert: assertKeys,
   },
 ]
@@ -120,15 +126,21 @@ async function main(): Promise<number> {
           await pinnedFontsInstalled(page),
           `${surface.name} @${width}: pinned fonts unavailable — install fonts-dejavu-core`,
         )
-        // The ready selector only orders the measurement behind the usage query;
-        // a timeout is not itself the failure; it is the zero-match rules in
-        // rules.ts that must name the empty scope. Swallowing the timeout here
-        // turns "selector matched nothing" into that named failure instead of an
-        // opaque 30s stack.
-        await page.waitForSelector(surface.ready, { timeout: 10_000 }).catch(() => undefined)
+        // The ready selector orders the measurement behind the usage query. A
+        // miss is a NAMED failure (the selector drifted or the query never
+        // resolved), not a swallowed timeout; measurement still runs so the
+        // zero-match rules in rules.ts add their own sentences.
+        await page.waitForSelector(surface.ready, { timeout: 10_000 }).catch(() => {
+          checker.check(
+            false,
+            `${surface.name} @${width}: ready selector ${surface.ready} never matched in 10s — a cost-block class was renamed or the usage query never resolved`,
+          )
+        })
         const meas = await measure(page, {
           costHeaderPrefix: surface.costHeaderPrefix,
           credentialHeader: surface.credentialHeader,
+          blockSelector: surface.blockSelector,
+          textSelector: surface.textSelector,
         })
         const report = surface.assert(checker, meas)
         lines.push(reportLine(surface.name, width, report))
