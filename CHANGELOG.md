@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.28.0] — 2026-10-14
+
+### Added
+
+- **Structured output is carried from openai-chat onto openai-responses.** `/v1/chat/completions` with `response_format` against a Responses account (ChatGPT/Codex `openai-oauth`, or `openai-api` on Responses) was refused `400 translation_failed` ("this build translates no structured-output constraint onto another dialect"; production, 2026-10-14, `gpt-6-luna`), although the Codex backend honours `text.format`. It is now translated (`shared/structured-output.ts`): `{type: "text"}` / absent → no constraint; `{type: "json_object"}` → `text.format: {type: "json_object"}`; `{type: "json_schema", json_schema: {name, schema, strict?, description?}}` → `text.format: {type: "json_schema", name, schema, strict?, description?}`, every value verbatim. `name` is validated as OpenAI does (`^[a-zA-Z0-9_-]{1,64}$`) and defaults to `"response"` when omitted, since Responses requires one. A malformed `response_format` (no `json_schema` object, a bad name, no `schema`, a non-boolean `strict`, a non-string `description`, an unknown `type`) is still a `400` naming the field, never the value. Every other crossing (openai-chat → anthropic, openai-responses → openai-chat / anthropic) still refuses structured output, and `stop` is still refused toward Responses, which has no stop parameter.
+- `glm-5.3-flash` is priced in the `zai` table at OpenRouter's list (read 2026-10-14): input 0.15, output 0.50, cached read 0.03 USD per Mtok. Before this it priced as unknown. `gpt-6-luna` already had a row (OpenAI card, 0.10 / 0.50 / 0.01), so that row is unchanged.
+
+### Changed
+
+- A Responses `refusal` part reaches an openai-chat client in Chat's own refusal field: `message.refusal` collected, `delta.refusal` streamed. Before this it was joined onto `content`, which a structured-output caller would then fail to `JSON.parse`. A refusal-only answer is `content: null` plus `refusal`, with `finish_reason: "stop"`. Anthropic clients still get the refusal as text.
+
 ## [2.27.0] — 2026-10-14
 
 ### Added
@@ -1188,4 +1199,5 @@ your tooling config.
 [2.25.6]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.25.6
 [2.25.7]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.25.7
 [2.25.8]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.25.8
+[2.28.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.28.0
 [2.27.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.27.0
