@@ -4,10 +4,16 @@ import { Button } from "../../components/Button"
 import { SelectField, TextField } from "../../components/Field"
 import { Modal } from "../../components/Modal"
 import { errorMessage } from "../../lib/api/errors"
-import type { CreateKeyInput, KeyScopeInput, RateLimitInput } from "../../lib/api/router-keys"
-import type { AccountView, ApiKeyView, PoolView } from "../../lib/api/types"
+import type { KeyScopeInput, RateLimitInput } from "../../lib/api/router-keys"
+import type { AccountView, ApiKeyView, KeyOwnerKind, PoolView } from "../../lib/api/types"
 import { fromDateTimeInput, toDateTimeInput } from "../../lib/datetime-input"
+import { KeyAttributionFields } from "./KeyAttributionFields"
 import styles from "./KeyFormDialog.module.scss"
+import { type KeyFormValues, labelOrNull } from "./key-form-values"
+
+// Re-exported because the dialog's other caller — the onboarding panel — mints
+// through the same contract. `key-form-values.ts` is the home, not this file.
+export { type KeyFormValues, toCreateKeyInput } from "./key-form-values"
 
 const SCOPES: readonly (readonly [KeyScope, string])[] = [
   ["all", "all — every active account, skipping pools"],
@@ -15,27 +21,16 @@ const SCOPES: readonly (readonly [KeyScope, string])[] = [
   ["accounts", "accounts — an explicit account list, ignoring pools"],
 ]
 
-/**
- * The form's whole answer, with every optional field **stated** rather than
- * omitted.
- *
- * On a mint an absent ceiling and an absent expiry are the same thing as `null`,
- * so the route drops them. On an edit they are not: `null` is what *clears* a
- * ceiling or makes a key non-expiring, and a form that omitted them could only
- * ever add one. Saying both explicitly here is what makes the edit path able to
- * express a removal at all.
- */
-export interface KeyFormValues {
-  readonly name: string
-  readonly scope: KeyScopeInput
-  readonly rateLimit: RateLimitInput | null
-  readonly expiresAt: string | null
-}
-
 export interface KeyFormDialogProps {
   readonly open: boolean
   /** `null` mints a new key; a key edits that one. The value is never touched either way. */
   readonly apiKey: ApiKeyView | null
+  /**
+   * Mints a **successor** to this key: its attribution, scope and ceiling seed
+   * the form, the name starts empty, and the expiry is never inherited — a
+   * lifetime is per key. Null for a plain mint or an edit.
+   */
+  readonly successorOf: ApiKeyView | null
   readonly pools: readonly PoolView[]
   readonly accounts: readonly AccountView[]
   readonly busy: boolean
@@ -61,6 +56,10 @@ export interface KeyFormDialogProps {
  */
 export function KeyFormDialog(props: KeyFormDialogProps) {
   const [name, setName] = createSignal("")
+  const [owner, setOwner] = createSignal("")
+  const [ownerKind, setOwnerKind] = createSignal<KeyOwnerKind | null>(null)
+  const [tool, setTool] = createSignal("")
+  const [purpose, setPurpose] = createSignal("")
   const [scope, setScope] = createSignal<KeyScope>("all")
   const [targets, setTargets] = createSignal<readonly string[]>([])
   const [requests, setRequests] = createSignal("")
@@ -70,17 +69,27 @@ export function KeyFormDialog(props: KeyFormDialogProps) {
   // Re-seeded whenever the dialog opens, on the key it opened on — `on` with the
   // key as its source keeps this a sync-from-props effect rather than a place
   // where state is derived. Opening the mint form (`apiKey: null`) clears it,
-  // so a mint never inherits the last edited key's scope.
+  // so a mint never inherits the last edited key's scope. A successor seed fills
+  // everything except the name and the expiry, which belong to the new key alone.
   createEffect(
     on(
-      () => (props.open ? props.apiKey : null),
-      (key) => {
-        setName(key?.name ?? "")
-        setScope(key?.scope.kind ?? "all")
-        setTargets(scopeTargets(key))
-        setRequests(key?.rateLimit ? String(key.rateLimit.requests) : "")
-        setWindowSeconds(key?.rateLimit ? String(key.rateLimit.windowSeconds) : "")
-        setExpiresAt(toDateTimeInput(key?.expiresAt ?? null))
+      () => (props.open ? { edit: props.apiKey, seed: props.successorOf } : null),
+      (opened) => {
+        // `on` fires with null while the dialog is closed — seeding nothing is
+        // the point: a closed form holds no state worth keeping.
+        const edit = opened?.edit ?? null
+        const seed = opened?.seed ?? null
+        const from = edit ?? seed
+        setName(edit?.name ?? "")
+        setOwner(from?.owner ?? "")
+        setOwnerKind(from?.ownerKind ?? null)
+        setTool(from?.tool ?? "")
+        setPurpose(from?.purpose ?? "")
+        setScope(from?.scope.kind ?? "all")
+        setTargets(from === null ? [] : scopeTargets(from))
+        setRequests(from?.rateLimit ? String(from.rateLimit.requests) : "")
+        setWindowSeconds(from?.rateLimit ? String(from.rateLimit.windowSeconds) : "")
+        setExpiresAt(toDateTimeInput(edit?.expiresAt ?? null))
       },
     ),
   )
@@ -132,6 +141,10 @@ export function KeyFormDialog(props: KeyFormDialogProps) {
 
     props.onSubmit({
       name: name().trim(),
+      owner: labelOrNull(owner()),
+      ownerKind: ownerKind(),
+      tool: labelOrNull(tool()),
+      purpose: labelOrNull(purpose()),
       scope: resolved,
       rateLimit: rateLimit(),
       expiresAt: fromDateTimeInput(expiresAt()),
@@ -163,6 +176,17 @@ export function KeyFormDialog(props: KeyFormDialogProps) {
           onInput={(event) => setName(event.currentTarget.value)}
           required
           value={name()}
+        />
+
+        <KeyAttributionFields
+          onOwnerChange={setOwner}
+          onOwnerKindChange={setOwnerKind}
+          onPurposeChange={setPurpose}
+          onToolChange={setTool}
+          owner={owner()}
+          ownerKind={ownerKind()}
+          purpose={purpose()}
+          tool={tool()}
         />
 
         <SelectField
@@ -253,22 +277,6 @@ export function KeyFormDialog(props: KeyFormDialogProps) {
       </form>
     </Modal>
   )
-}
-
-/**
- * The mint's body: the same values with the `null`s dropped.
- *
- * `createKeyBody` is `.strict()` and its optional fields are not nullable, so an
- * explicit `rateLimit: null` is a `400` rather than "no ceiling". On the mint,
- * absent *is* the way to say it — the removal spelling only exists on `PATCH`.
- */
-export function toCreateKeyInput(values: KeyFormValues): CreateKeyInput {
-  return {
-    name: values.name,
-    scope: values.scope,
-    ...(values.rateLimit === null ? {} : { rateLimit: values.rateLimit }),
-    ...(values.expiresAt === null ? {} : { expiresAt: values.expiresAt }),
-  }
 }
 
 /** The ids a stored scope already names, so an edit opens on the key's own selection. */

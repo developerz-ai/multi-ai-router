@@ -12,6 +12,7 @@ import type {
 } from "@multi-ai-router/db"
 import { memoryAccountLifecycle } from "./memory-account-lifecycle"
 import { memoryAccountQuota } from "./memory-account-quota"
+import { memoryKeys } from "./memory-keys"
 import { createMemoryMutations } from "./memory-mutations"
 import { drop, remove, replace } from "./memory-row-operations"
 import type { MemoryStore } from "./memory-store-types"
@@ -137,60 +138,7 @@ export function createMemoryStore(): MemoryStore {
       },
     },
 
-    keys: {
-      create: async (input) => {
-        const row: ApiKeyRow = {
-          id: crypto.randomUUID(),
-          name: input.name,
-          value: input.value,
-          prefix: input.prefix,
-          scope: input.scope ?? "all",
-          rateLimitRequests: input.rateLimitRequests ?? null,
-          rateLimitWindowSeconds: input.rateLimitWindowSeconds ?? null,
-          expiresAt: input.expiresAt ?? null,
-          revoked: false,
-          revokedAt: null,
-          lastUsedAt: null,
-          createdAt: EPOCH,
-          updatedAt: EPOCH,
-        }
-        keys.push(row)
-        return row
-      },
-      list: async () => [...keys],
-      findById: async (id) => keys.find((row) => row.id === id),
-      findByName: async (name) => keys.find((row) => row.name === name),
-      update: async (id, patch, now) => replace(keys, id, patch, now),
-      delete: async (id) => remove(keys, id),
-      markRevoked: async (id, now) => {
-        replace(keys, id, { revoked: true, revokedAt: now }, now)
-      },
-      listPoolTargets: async (apiKeyId) => keyPools.filter((row) => row.apiKeyId === apiKeyId),
-      listAccountTargets: async (apiKeyId) =>
-        keyAccounts.filter((row) => row.apiKeyId === apiKeyId),
-      listTargetsForKeys: async (ids) => ({
-        pools: keyPools.filter((row) => ids.includes(row.apiKeyId)),
-        accounts: keyAccounts.filter((row) => ids.includes(row.apiKeyId)),
-      }),
-      listKeysScopedToPool: async (poolId) =>
-        keyPools
-          .filter((row) => row.poolId === poolId)
-          .flatMap((row) => keys.filter((key) => key.id === row.apiKeyId)),
-      listKeysScopedToAccount: async (accountId) =>
-        keyAccounts
-          .filter((row) => row.accountId === accountId)
-          .flatMap((row) => keys.filter((key) => key.id === row.apiKeyId)),
-      replaceScopeTargets: async (apiKeyId, targets) => {
-        drop(keyPools, (row) => row.apiKeyId === apiKeyId)
-        drop(keyAccounts, (row) => row.apiKeyId === apiKeyId)
-        for (const poolId of targets.poolIds ?? []) {
-          keyPools.push({ id: crypto.randomUUID(), apiKeyId, poolId, createdAt: EPOCH })
-        }
-        for (const accountId of targets.accountIds ?? []) {
-          keyAccounts.push({ id: crypto.randomUUID(), apiKeyId, accountId, createdAt: EPOCH })
-        }
-      },
-    },
+    keys: memoryKeys(keys, keyPools, keyAccounts, EPOCH),
 
     pools: {
       create: async (input) => {

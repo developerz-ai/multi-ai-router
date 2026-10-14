@@ -1,0 +1,33 @@
+@use "../../styles/breakpoints" as bp;
+@use "../../styles/mixins" as *;
+
+.attribution {
+  display: grid;
+  gap: var(--space-4);
+  padding: var(--space-4);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-1);
+  background: var(--surface-sunken);
+}
+
+.legend {
+  @include eyebrow;
+
+  padding: 0;
+  color: var(--text-muted);
+}
+
+.pair {
+  display: grid;
+  gap: var(--space-4);
+
+  @include bp.respond-to("sidebar") {
+    grid-template-columns: 1fr 1fr;
+  }
+}
+
+// Same reason as the form's own pairs: a grid row stretches to its tallest
+// sibling, so the shorter input must not slide down the cell.
+.pair > * {
+  align-content: start;
+}

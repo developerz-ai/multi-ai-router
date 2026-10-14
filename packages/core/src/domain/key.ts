@@ -12,3 +12,11 @@ import { z } from "zod"
  */
 export const KeyScope = z.enum(["all", "pools", "accounts"])
 export type KeyScope = z.infer<typeof KeyScope>
+
+/**
+ * What kind of entity a key's `owner` label names. Attribution only — it exists
+ * so usage views can group person-issued keys apart from service-issued ones;
+ * it is not a login, a role, or any kind of principal the router authenticates.
+ */
+export const KeyOwnerKind = z.enum(["person", "service"])
+export type KeyOwnerKind = z.infer<typeof KeyOwnerKind>

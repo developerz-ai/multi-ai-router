@@ -149,4 +149,26 @@ describe("the tasks read", () => {
     expect(neverRan?.lastRun).toBeNull()
     expect(neverRan?.lastSuccessAt).toBeNull()
   })
+
+  test("a run row whose task name no longer exists neither breaks the read nor surfaces", async () => {
+    // Rollback guard: a task removed from the enum leaves rows behind in
+    // scheduled_task_runs. The view is driven off the enum, not off the rows, so
+    // the read must still answer with exactly the current tasks — no throw, no
+    // unknown name rendered, no interval lookup against a task that has none.
+    const removed = { ...run({ startedAt: at(5), finishedAt: at(4) }) }
+    removed.task = "removed_task_name" as typeof removed.task
+    const { service } = harness({
+      runs: {
+        janitor_sweep: [run({ startedAt: at(5), finishedAt: at(4), outcome: "success" })],
+        // The survived row, keyed where no current task will ever read it.
+        removed_task_name: [removed],
+      } as Parameters<typeof harness>[0]["runs"],
+    })
+
+    const result = await service.tasks()
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.value.tasks.map((task) => task.task)).not.toContain("removed_task_name")
+    expect(result.value.tasks[0]?.health).toBe("ok")
+  })
 })

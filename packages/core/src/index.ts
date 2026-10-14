@@ -32,7 +32,7 @@ export {
   EgressMode,
   OpenAiChatCeiling,
 } from "./domain/dialect"
-export { KeyScope } from "./domain/key"
+export { KeyOwnerKind, KeyScope } from "./domain/key"
 export { AuthKind, ProviderId } from "./domain/provider"
 export {
   DEFAULT_ACCOUNT_PRIORITY,

@@ -739,6 +739,106 @@ describe("keys", () => {
   })
 })
 
+describe("key attribution", () => {
+  test("owner, owner kind, tool and purpose round-trip through create and every read", async () => {
+    const { app } = harness()
+
+    const created = await call(app, "POST", ADMIN_KEYS_BASE_PATH, {
+      name: "sebastian-laptop",
+      owner: "sebastian",
+      ownerKind: "person",
+      tool: "claude-code",
+      purpose: "  daytime coding  ",
+    })
+    expect(created.status).toBe(201)
+    expect(created.body).toMatchObject({
+      owner: "sebastian",
+      ownerKind: "person",
+      tool: "claude-code",
+      purpose: "daytime coding",
+    })
+    const id = (created.body as { id: string }).id
+
+    expect(await call(app, "GET", ADMIN_KEYS_BASE_PATH)).toMatchObject({
+      body: [{ owner: "sebastian", ownerKind: "person", tool: "claude-code" }],
+    })
+    expect(await call(app, "GET", `${ADMIN_KEYS_BASE_PATH}/${id}`)).toMatchObject({
+      body: { owner: "sebastian", tool: "claude-code" },
+    })
+  })
+
+  test("a key minted without labels carries null, never undefined", async () => {
+    const { app } = harness()
+    const created = await call(app, "POST", ADMIN_KEYS_BASE_PATH, { name: "bare" })
+    expect(created.status).toBe(201)
+    for (const field of ["owner", "ownerKind", "tool", "purpose"]) {
+      expect((created.body as Record<string, unknown>)[field]).toBeNull()
+    }
+    expect(created.text).not.toContain("undefined")
+  })
+
+  test("PATCH null clears a label; an absent field leaves it alone", async () => {
+    const { app } = harness()
+    const created = await call(app, "POST", ADMIN_KEYS_BASE_PATH, {
+      name: "ci-agent-3",
+      owner: "ci",
+      ownerKind: "service",
+      tool: "aider",
+    })
+    const id = (created.body as { id: string }).id
+
+    const cleared = await call(app, "PATCH", `${ADMIN_KEYS_BASE_PATH}/${id}`, {
+      owner: null,
+      tool: null,
+    })
+    expect(cleared.status).toBe(200)
+    expect(cleared.body).toMatchObject({ owner: null, tool: null, ownerKind: "service" })
+  })
+
+  test("an invalid label is a 400, on create and on the list filter alike", async () => {
+    const { app, store } = harness()
+    for (const body of [
+      { name: "k", owner: "Sebastian" },
+      { name: "k", tool: "-lead" },
+      { name: "k", ownerKind: "team" },
+      { name: "k", purpose: "p".repeat(501) },
+    ]) {
+      expect((await call(app, "POST", ADMIN_KEYS_BASE_PATH, body)).status).toBe(400)
+    }
+    expect((await app.request(`${ADMIN_KEYS_BASE_PATH}?owner=Sebastian`)).status).toBe(400)
+    expect(store.rows.keys).toHaveLength(0)
+  })
+
+  test("the list filters by owner and by tool, and the two combine", async () => {
+    const { app } = harness()
+    for (const body of [
+      { name: "a", owner: "sebastian", tool: "claude-code" },
+      { name: "b", owner: "sebastian", tool: "aider" },
+      { name: "c", owner: "ci", tool: "aider" },
+      { name: "d" },
+    ]) {
+      expect((await call(app, "POST", ADMIN_KEYS_BASE_PATH, body)).status).toBe(201)
+    }
+
+    const names = (res: { body: unknown }) =>
+      (res.body as { name: string }[]).map((key) => key.name)
+
+    const byOwner = await call(app, "GET", `${ADMIN_KEYS_BASE_PATH}?owner=sebastian`)
+    expect(names(byOwner)).toEqual(["a", "b"])
+
+    const byTool = await call(app, "GET", `${ADMIN_KEYS_BASE_PATH}?tool=aider`)
+    expect(names(byTool)).toEqual(["b", "c"])
+
+    const both = await call(app, "GET", `${ADMIN_KEYS_BASE_PATH}?owner=sebastian&tool=aider`)
+    expect(names(both)).toEqual(["b"])
+
+    // A filter matching nothing is an empty list, not an error.
+    const none = await call(app, "GET", `${ADMIN_KEYS_BASE_PATH}?owner=nobody`)
+    expect(none.status).toBe(200)
+    expect(names(none)).toEqual([])
+  })
+})
+
 describe("the OAuth callback route", () => {
   function tokenResponse(body: unknown, status = 200): Response {
     return new Response(JSON.stringify(body), {

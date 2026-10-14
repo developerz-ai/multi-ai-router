@@ -237,6 +237,7 @@ export function OnboardingPanel(props: OnboardingPanelProps) {
         }
         open={keyOpen()}
         pools={props.pools}
+        successorOf={null}
       />
 
       {/* The walk's fourth step, and the reason the panel holds itself open past `complete()`. */}

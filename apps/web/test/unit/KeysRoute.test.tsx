@@ -63,7 +63,9 @@ function stubFetch(calls: string[]): void {
 function responseFor(method: string, url: string): unknown {
   if (url.endsWith("/reveal")) return { ...keyRow(), value: PLAINTEXT }
   if (url.endsWith("/keys"))
-    return method === "POST" ? { ...keyRow(), value: PLAINTEXT } : [keyRow()]
+    return method === "POST"
+      ? { ...attributedRow(), value: PLAINTEXT }
+      : [keyRow(), attributedRow()]
   if (url.includes("/settings")) return { publicUrl: "https://router.example.com" }
   if (url.includes("/usage")) return usageSummary()
   return []
@@ -191,6 +193,62 @@ describe("KeysRoute", () => {
       container.remove()
     }
   })
+
+  test("owner and tool chips narrow the table without another fetch", async () => {
+    const calls: string[] = []
+    stubFetch(calls)
+    const { dispose, container } = mount()
+    try {
+      await settle()
+      expect(container.textContent).toContain("ci-runner")
+      expect(container.textContent).toContain("nightly-runner")
+
+      buttonLabelled("ci-team").click()
+      await settle()
+
+      expect(container.textContent).not.toContain("ci-runner")
+      expect(container.textContent).toContain("nightly-runner")
+      // Narrowing is local to the loaded list: the chips need every owner and
+      // tool in hand, so a filtered refetch would starve its own vocabulary.
+      expect(calls.filter((call) => call === "GET /api/admin/keys")).toHaveLength(1)
+    } finally {
+      dispose()
+      container.remove()
+    }
+  })
+
+  test("mints a successor from a row: prefilled, unnamed, a POST — never a PATCH", async () => {
+    const calls: string[] = []
+    stubFetch(calls)
+    const { dispose, container } = mount()
+    try {
+      await settle()
+
+      const successors = Array.from(document.body.querySelectorAll("button")).filter(
+        (button) => button.textContent?.trim() === "Mint successor",
+      )
+      expect(successors.length).toBe(2)
+      const attributed = successors[1]
+      if (!(attributed instanceof HTMLButtonElement)) throw new Error("no successor button")
+      attributed.click()
+      await settle()
+
+      const form = document.body.querySelector("form")
+      if (form === null) throw new Error("mint form not rendered")
+      expect(fieldLabelled("Name").value).toBe("")
+      expect(fieldLabelled("Owner").value).toBe("ci-team")
+      expect(fieldLabelled("Requests").value).toBe("120")
+
+      fire(form, "submit")
+      await settle()
+
+      expect(calls).toContain("POST /api/admin/keys")
+      expect(calls.filter((call) => call.startsWith("PATCH"))).toHaveLength(0)
+    } finally {
+      dispose()
+      container.remove()
+    }
+  })
 })
 
 function keyRow() {
@@ -198,6 +256,10 @@ function keyRow() {
     id: KEY_ID,
     name: "ci-runner",
     prefix: "mar_live_9f2c",
+    owner: null,
+    ownerKind: null,
+    tool: null,
+    purpose: null,
     scope: { kind: "all", poolIds: [], accountIds: [] },
     rateLimit: null,
     expiresAt: null,
@@ -206,6 +268,21 @@ function keyRow() {
     lastUsedAt: null,
     createdAt: "2026-07-24T12:00:00.000Z",
     updatedAt: "2026-07-24T12:00:00.000Z",
+  }
+}
+
+/** The second row carries attribution, so the chips and the successor action have something to read. */
+function attributedRow() {
+  return {
+    ...keyRow(),
+    id: "55555555-5555-4555-8555-555555555555",
+    name: "nightly-runner",
+    prefix: "mar_live_5555",
+    owner: "ci-team",
+    ownerKind: "service",
+    tool: "claude-code",
+    purpose: "nightly builds",
+    rateLimit: { requests: 120, windowSeconds: 300 },
   }
 }
 

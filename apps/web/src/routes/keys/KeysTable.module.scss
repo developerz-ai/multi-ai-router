@@ -21,6 +21,14 @@
   font-weight: var(--weight-normal);
 }
 
+// The key's attribution — "owner / tool" — when it carries one. Muted like the
+// prefix: identity chrome, not data the operator acts on here.
+.attribution {
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+  overflow-wrap: anywhere;
+}
+
 .scope {
   white-space: nowrap;
 }

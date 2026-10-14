@@ -1,4 +1,4 @@
-import { KeyScope } from "@multi-ai-router/core"
+import { KeyOwnerKind, KeyScope } from "@multi-ai-router/core"
 import { z } from "zod"
 
 /**
@@ -43,11 +43,31 @@ export type RateLimitInput = z.infer<typeof rateLimitInput>
 /** ISO-8601 with an offset accepted, so a console in any timezone round-trips. */
 const TIMESTAMP = z.iso.datetime({ offset: true }).transform((value) => new Date(value))
 
+/**
+ * Attribution labels (issue #219): who a key was issued to and what it is for.
+ * Usage reporting only — no login, no role, no effect on authentication. The
+ * key-name convention `<owner>/<tool>` is documentation; `name` stays free text.
+ */
+const ATTRIBUTION_SLUG = z
+  .string()
+  .regex(/^[a-z0-9][a-z0-9._-]{0,63}$/, "must be a lowercase slug: a-z, 0-9, ., _, -")
+
+/** Free text, but bounded and trimmed; blank means "no purpose" and stores as null. */
+const PURPOSE = z
+  .string()
+  .trim()
+  .max(500)
+  .transform((value) => (value === "" ? null : value))
+
 export const createKeyBody = z
   .object({
     name: KEY_NAME,
     /** Absent means `all` — full scope, stated explicitly rather than implied by omission. */
     scope: keyScopeInput.optional(),
+    owner: ATTRIBUTION_SLUG.optional(),
+    ownerKind: KeyOwnerKind.optional(),
+    tool: ATTRIBUTION_SLUG.optional(),
+    purpose: PURPOSE.optional(),
     rateLimit: rateLimitInput.optional(),
     expiresAt: TIMESTAMP.optional(),
   })
@@ -64,6 +84,11 @@ export const updateKeyBody = z
   .object({
     name: KEY_NAME.optional(),
     scope: keyScopeInput.optional(),
+    /** `null` clears each attribution label. */
+    owner: ATTRIBUTION_SLUG.nullable().optional(),
+    ownerKind: KeyOwnerKind.nullable().optional(),
+    tool: ATTRIBUTION_SLUG.nullable().optional(),
+    purpose: PURPOSE.nullable().optional(),
     /** `null` removes the per-key ceiling. */
     rateLimit: rateLimitInput.nullable().optional(),
     /** `null` makes the key non-expiring. */
@@ -73,3 +98,17 @@ export const updateKeyBody = z
   .refine((patch) => Object.keys(patch).length > 0, { message: "no fields to update" })
 
 export type UpdateKeyBody = z.infer<typeof updateKeyBody>
+
+/**
+ * The list's attribution filters, validated with the same slug rule the write
+ * path enforces: a filter value that could never name a label is a client
+ * mistake the router should name, not an always-empty result.
+ */
+export const keyListQuery = z
+  .object({
+    owner: ATTRIBUTION_SLUG.optional(),
+    tool: ATTRIBUTION_SLUG.optional(),
+  })
+  .strict()
+
+export type KeyListQuery = z.infer<typeof keyListQuery>
