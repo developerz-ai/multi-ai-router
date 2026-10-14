@@ -21,6 +21,7 @@ const databaseName = `key_scope_pos_${crypto.randomUUID().replaceAll("-", "")}`
 /** id order is the reverse of the listed order — that inversion is the bug being fixed. */
 const POOL_A = "00000000-0000-4000-8000-00000000000a"
 const POOL_B = "00000000-0000-4000-8000-00000000000b"
+const POOL_D = "00000000-0000-4000-8000-00000000000d"
 const KEY_ID = "10000000-0000-4000-8000-000000000001"
 const SECOND_KEY_ID = "10000000-0000-4000-8000-000000000002"
 const THIRD_POOL_ID = "00000000-0000-4000-8000-00000000000c"
@@ -58,20 +59,20 @@ describe.skipIf(!runnable)("api_key_pools position migration against a live data
       `insert into api_keys (id, name, value, prefix)
        values ('${KEY_ID}', 'scope-order', 'envelope', 'mar_live_scopeorder0key')`,
     )
-    // One multi-row insert, B then A: pool_id order (A < B) and created_at order
-    // (A's is set earlier) both disagree with the insert order, so only ctid —
-    // today's physical order and what a seqscan returns now — yields [B, A].
-    // That is the whole reason the backfill reads it.
+    // One multi-row insert, B then D then A, with ids A < B < D and created_at
+    // D < B < A. The insert order is non-monotonic against both columns in both
+    // directions, so only ctid — today's physical order and what a seqscan returns
+    // now — yields [B, D, A]. That is the whole reason the backfill reads it.
     await live.sql.unsafe(
-      `insert into pools (id, name) values ('${POOL_A}', 'pos-a'), ('${POOL_B}', 'pos-b')`,
+      `insert into pools (id, name) values ('${POOL_A}', 'pos-a'), ('${POOL_B}', 'pos-b'), ('${POOL_D}', 'pos-d')`,
     )
     await live.sql.unsafe(
-      `insert into api_key_pools (api_key_id, pool_id, created_at) values ('${KEY_ID}', '${POOL_B}', '2026-01-02T00:00:00Z'), ('${KEY_ID}', '${POOL_A}', '2026-01-01T00:00:00Z')`,
+      `insert into api_key_pools (api_key_id, pool_id, created_at) values ('${KEY_ID}', '${POOL_B}', '2026-01-02T00:00:00Z'), ('${KEY_ID}', '${POOL_D}', '2026-01-01T00:00:00Z'), ('${KEY_ID}', '${POOL_A}', '2026-01-03T00:00:00Z')`,
     )
 
     const before =
       await live.sql`select ctid::text from api_key_pools where api_key_id = ${KEY_ID}::uuid order by ctid`
-    expect(before).toHaveLength(2)
+    expect(before).toHaveLength(3)
 
     const file = await backfillFile()
     await live.sql.unsafe(file)
@@ -82,7 +83,8 @@ describe.skipIf(!runnable)("api_key_pools position migration against a live data
     `
     expect(ordered).toEqual([
       { pool_id: POOL_B, position: 0 },
-      { pool_id: POOL_A, position: 1 },
+      { pool_id: POOL_D, position: 1 },
+      { pool_id: POOL_A, position: 2 },
     ])
 
     // Re-running immediately after itself is a no-op on this layout. (The migrator

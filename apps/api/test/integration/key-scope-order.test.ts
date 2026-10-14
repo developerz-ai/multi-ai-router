@@ -129,6 +129,12 @@ describe.skipIf(!runnable)("a pool-scoped key's listed order", () => {
     await live.sql.unsafe("set enable_seqscan = off")
     await live.sql.unsafe("set enable_bitmapscan = off")
 
+    // The bulk read behind the admin key list (listTargetsForKeys) keeps the order too.
+    const listed = await db.keyService.list()
+    if (!listed.ok) throw new Error(`list failed: ${listed.failure.message}`)
+    const listedKey = listed.value.find((key) => key.id === created.value.id)
+    expect(listedKey?.scope).toMatchObject({ kind: "pools", poolIds: [POOL_B, POOL_A] })
+
     const cryptor = createCredentialCipher({ key: new Uint8Array(32).fill(3) })
     const accounts = [
       account(ACCOUNT_IN_B, {
