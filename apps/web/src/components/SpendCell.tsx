@@ -10,9 +10,11 @@ export interface SpendCellProps {
 }
 
 /**
- * One row's spend, in a table cell of its own. Cost is always its own column, never
- * part of the usage cell: crammed in beside the sparkline it overflowed the column and
- * painted through the neighbouring credential pill (issue #62).
+ * One row's spend. Its only consumer is the keys table, where cost has a column
+ * of its own; the accounts table prints its spend inside TrafficCell instead
+ * (#94), so this cell is not used there. The box of its own is the lesson of
+ * #62: crammed in beside a sparkline, the figures overflowed the column and
+ * painted through the neighbouring credential pill.
  *
  * **Metered and notional are printed apart and never added.** Metered is real money from a priced
  * model; notional is attributed spend on a flat-fee subscription account, where the invoice does
