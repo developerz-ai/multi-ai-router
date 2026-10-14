@@ -1,5 +1,5 @@
 import { request } from "./client"
-import type { ApiKeyView, DeletedView, MintedKey, RevealedKey } from "./types"
+import type { ApiKeyView, DeletedView, KeyOwnerKind, MintedKey, RevealedKey } from "./types"
 
 // `/api/admin/keys`. Request shapes mirror `services/keys/schemas.ts`.
 //
@@ -24,6 +24,12 @@ export interface RateLimitInput {
 
 export interface CreateKeyInput {
   readonly name: string
+  /** Attribution labels. Lowercase slugs, enforced upstream; omitted is null. */
+  readonly owner?: string
+  readonly ownerKind?: KeyOwnerKind
+  readonly tool?: string
+  /** Free text, trimmed upstream; an empty trim is stored as null. */
+  readonly purpose?: string
   readonly scope?: KeyScopeInput
   readonly rateLimit?: RateLimitInput
   /** ISO-8601 with an offset. Must be in the future or the mint is refused. */
@@ -32,6 +38,11 @@ export interface CreateKeyInput {
 
 export interface UpdateKeyInput {
   readonly name?: string
+  /** `null` clears the label — on PATCH only; the mint body is not nullable. */
+  readonly owner?: string | null
+  readonly ownerKind?: KeyOwnerKind | null
+  readonly tool?: string | null
+  readonly purpose?: string | null
   readonly scope?: KeyScopeInput
   /** `null` removes the per-key ceiling. */
   readonly rateLimit?: RateLimitInput | null

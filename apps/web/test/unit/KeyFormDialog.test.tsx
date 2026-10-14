@@ -1,12 +1,10 @@
 import { describe, expect, test } from "bun:test"
+import { KEY_LABEL_SLUG_HTML_PATTERN } from "@multi-ai-router/core"
 import { createSignal } from "solid-js"
 import { render } from "solid-js/web"
 import type { AccountView, ApiKeyView, PoolView } from "../../src/lib/api/types"
-import {
-  KeyFormDialog,
-  type KeyFormValues,
-  toCreateKeyInput,
-} from "../../src/routes/keys/KeyFormDialog"
+import { KeyFormDialog } from "../../src/routes/keys/KeyFormDialog"
+import { type KeyFormValues, toCreateKeyInput } from "../../src/routes/keys/key-form-values"
 import { fire, selectOption, typeInto } from "../support/dom"
 
 /**
@@ -68,6 +66,10 @@ function key(overrides: Partial<ApiKeyView> = {}): ApiKeyView {
     id: "44444444-4444-4444-8444-444444444444",
     name: "ci-agent-3",
     prefix: "mar_live_abcd",
+    owner: null,
+    ownerKind: null,
+    tool: null,
+    purpose: null,
     scope: { kind: "pools", poolIds: [POOL.id], accountIds: [] },
     rateLimit: { requests: 60, windowSeconds: 60 },
     expiresAt: null,
@@ -84,6 +86,7 @@ function base(overrides: Partial<Parameters<typeof KeyFormDialog>[0]> = {}) {
   return {
     open: true,
     apiKey: null,
+    successorOf: null,
     pools: [POOL, OTHER_POOL],
     accounts: [ACCOUNT],
     busy: false,
@@ -103,11 +106,16 @@ const fieldByLabel = (text: string): HTMLInputElement => {
   return input
 }
 
-const scopeSelect = (): HTMLSelectElement => {
-  const select = document.body.querySelector("select")
-  if (!(select instanceof HTMLSelectElement)) throw new Error("no scope select")
+const selectByLabel = (text: string): HTMLSelectElement => {
+  const label = Array.from(document.body.querySelectorAll("label")).find(
+    (element) => element.textContent?.trim().startsWith(text) === true,
+  )
+  const select = label === undefined ? null : document.getElementById(label.htmlFor)
+  if (!(select instanceof HTMLSelectElement)) throw new Error(`no select labelled "${text}"`)
   return select
 }
+
+const scopeSelect = (): HTMLSelectElement => selectByLabel("Scope")
 
 const targetCheckbox = (name: string): HTMLInputElement => {
   const found = Array.from(document.body.querySelectorAll<HTMLLabelElement>("label")).find(
@@ -280,11 +288,154 @@ describe("KeyFormDialog editing", () => {
   })
 })
 
+describe("KeyFormDialog attribution", () => {
+  test("opens on the key's own owner, owner kind, tool and purpose", () => {
+    withMount(
+      base({
+        apiKey: key({
+          owner: "ci-team",
+          ownerKind: "service",
+          tool: "claude-code",
+          purpose: "nightly builds",
+        }),
+      }),
+      () => {
+        expect(fieldByLabel("Owner").value).toBe("ci-team")
+        expect(selectByLabel("Owner kind").value).toBe("service")
+        expect(fieldByLabel("Tool").value).toBe("claude-code")
+        expect(fieldByLabel("Purpose").value).toBe("nightly builds")
+      },
+    )
+  })
+
+  test("the Owner and Tool inputs carry the core slug rule as their HTML pattern", () => {
+    withMount(base({ apiKey: key() }), () => {
+      expect(fieldByLabel("Owner").getAttribute("pattern")).toBe(KEY_LABEL_SLUG_HTML_PATTERN)
+      expect(fieldByLabel("Tool").getAttribute("pattern")).toBe(KEY_LABEL_SLUG_HTML_PATTERN)
+    })
+  })
+
+  test("an unattributed key opens with every label empty and none selected", () => {
+    withMount(base({ apiKey: key() }), () => {
+      expect(fieldByLabel("Owner").value).toBe("")
+      expect(selectByLabel("Owner kind").value).toBe("none")
+      expect(fieldByLabel("Tool").value).toBe("")
+      expect(fieldByLabel("Purpose").value).toBe("")
+    })
+  })
+
+  test("submits trimmed labels, and null for the emptied ones — the PATCH spelling that clears", () => {
+    let submitted: KeyFormValues | undefined
+    withMount(
+      base({
+        apiKey: key({
+          owner: "ci-team",
+          ownerKind: "person",
+          tool: "claude-code",
+          purpose: "nightly builds",
+        }),
+        onSubmit: (values) => (submitted = values),
+      }),
+      () => {
+        // Owner carries an HTML `pattern`, so a browser blocks padded input before
+        // submit; the free-text purpose is what actually reaches the trim.
+        typeInto(fieldByLabel("Owner"), "marta")
+        typeInto(fieldByLabel("Purpose"), "   ")
+        submitForm()
+        expect(submitted?.owner).toBe("marta")
+        expect(submitted?.purpose).toBeNull()
+        // Untouched labels pass through as the key stores them.
+        expect(submitted?.ownerKind).toBe("person")
+        expect(submitted?.tool).toBe("claude-code")
+
+        typeInto(fieldByLabel("Tool"), "")
+        selectOption(selectByLabel("Owner kind"), "none")
+        submitForm()
+        expect(submitted?.tool).toBeNull()
+        expect(submitted?.ownerKind).toBeNull()
+      },
+    )
+  })
+})
+
+describe("KeyFormDialog minting a successor", () => {
+  const SOURCE = key({
+    owner: "ci-team",
+    ownerKind: "service",
+    tool: "claude-code",
+    purpose: "nightly builds",
+    rateLimit: { requests: 120, windowSeconds: 300 },
+    expiresAt: "2026-12-01T09:30:00.000Z",
+  })
+
+  test("prefills attribution, scope and ceiling from the source key, name empty, no expiry", () => {
+    let submitted: KeyFormValues | undefined
+    withMount(base({ successorOf: SOURCE, onSubmit: (values) => (submitted = values) }), () => {
+      expect(document.body.textContent).toContain("Mint key")
+      expect(fieldByLabel("Name").value).toBe("")
+      expect(fieldByLabel("Owner").value).toBe("ci-team")
+      expect(selectByLabel("Owner kind").value).toBe("service")
+      expect(fieldByLabel("Tool").value).toBe("claude-code")
+      expect(fieldByLabel("Purpose").value).toBe("nightly builds")
+      expect(scopeSelect().value).toBe("pools")
+      expect(targetCheckbox("team").checked).toBe(true)
+      expect(fieldByLabel("Requests").value).toBe("120")
+      expect(fieldByLabel("Per (seconds)").value).toBe("300")
+      // A lifetime is per key — the successor starts unexpired.
+      expect(fieldByLabel("Expires at").value).toBe("")
+
+      submitForm()
+      if (submitted === undefined) throw new Error("form did not submit")
+      expect(toCreateKeyInput(submitted)).toEqual({
+        name: "",
+        scope: { kind: "pools", poolIds: [POOL.id] },
+        rateLimit: { requests: 120, windowSeconds: 300 },
+        owner: "ci-team",
+        ownerKind: "service",
+        tool: "claude-code",
+        purpose: "nightly builds",
+      })
+    })
+  })
+
+  test("never shows the source key's value — a successor is a fresh one", () => {
+    withMount(base({ successorOf: SOURCE }), () => {
+      expect(document.body.textContent).not.toContain(SOURCE.prefix)
+      expect(document.body.querySelector("input[type=password]")).toBeNull()
+    })
+  })
+
+  test("a plain mint still starts empty — the successor is not sticky either", () => {
+    const [successorOf, setSuccessorOf] = createSignal<ApiKeyView | null>(SOURCE)
+    const container = document.createElement("div")
+    document.body.appendChild(container)
+    const dispose = render(
+      () => <KeyFormDialog {...base({ successorOf: successorOf() })} />,
+      container,
+    )
+
+    try {
+      expect(fieldByLabel("Owner").value).toBe("ci-team")
+      setSuccessorOf(null)
+      expect(fieldByLabel("Owner").value).toBe("")
+      expect(fieldByLabel("Name").value).toBe("")
+      expect(scopeSelect().value).toBe("all")
+    } finally {
+      dispose()
+      container.remove()
+    }
+  })
+})
+
 describe("toCreateKeyInput", () => {
   test("drops the nulls, because the mint body is strict and not nullable", () => {
     expect(
       toCreateKeyInput({
         name: "ci",
+        owner: null,
+        ownerKind: null,
+        tool: null,
+        purpose: null,
         scope: { kind: "all" },
         rateLimit: null,
         expiresAt: null,
@@ -296,6 +447,10 @@ describe("toCreateKeyInput", () => {
     expect(
       toCreateKeyInput({
         name: "ci",
+        owner: null,
+        ownerKind: null,
+        tool: null,
+        purpose: null,
         scope: { kind: "pools", poolIds: [POOL.id] },
         rateLimit: { requests: 60, windowSeconds: 60 },
         expiresAt: "2026-12-01T09:30:00.000Z",
@@ -305,6 +460,27 @@ describe("toCreateKeyInput", () => {
       scope: { kind: "pools", poolIds: [POOL.id] },
       rateLimit: { requests: 60, windowSeconds: 60 },
       expiresAt: "2026-12-01T09:30:00.000Z",
+    })
+  })
+
+  test("carries stated attribution through, and drops the absent half", () => {
+    expect(
+      toCreateKeyInput({
+        name: "ci",
+        owner: "marta",
+        ownerKind: "person",
+        tool: null,
+        purpose: "laptop coding",
+        scope: { kind: "all" },
+        rateLimit: null,
+        expiresAt: null,
+      }),
+    ).toEqual({
+      name: "ci",
+      owner: "marta",
+      ownerKind: "person",
+      purpose: "laptop coding",
+      scope: { kind: "all" },
     })
   })
 })

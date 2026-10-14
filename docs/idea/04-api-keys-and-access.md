@@ -216,11 +216,16 @@ Every key carries a **scope** — the set of Accounts it may reach — in one of
 
 | Control | Type | Notes |
 |---|---|---|
-| `name` | string, required | human-chosen; unique per deployment |
+| `name` | string, required | human-chosen; unique per deployment; must not contain U+0000 (`400`) |
 | Scope | `all` / pools / accounts | see above |
+| Owner, owner kind | slug + `person` / `service`, optional | Who the key was issued to. A **label for usage attribution**, never a principal: no login, no role, nothing on the request path reads it. Slug rule `^[a-z0-9][a-z0-9._-]{0,63}$` |
+| Tool | slug, optional | What the key is used from (`claude-code`, `ci`). Same slug rule |
+| Purpose | free text, optional | Trimmed, at most 500 characters; blank stores as unset; must not contain U+0000 (`400`) |
 | Rate limit | requests per window | Enforced as an **exact sliding window** over accepted requests, in memory, before the request body is read — a refusal must cost less than the request it refuses. Over the ceiling → `429` `key_rate_limited` + `Retry-After`, and never `quota_exhausted`: one key spending its allowance is not the pool running out. **Per replica**, deliberately: a shared counter would put a round trip on the request path, so two replicas admit up to twice the ceiling |
 | Expiry | timestamp, optional | a key past expiry is rejected exactly like a revoked one |
 | Revoked | flag | one-way |
+
+All four attribution fields are nullable (a key minted before they existed is unlabelled) and `PATCH null` clears each. `GET /api/admin/keys` takes exact-match `?owner=` and `?tool=` filters, which combine; a value that is not a valid slug answers `400`, and so does any other query parameter. The convention is to name keys `<owner>/<tool>`; it is documentation, not validation, and `name` stays free text.
 
 Per-key **spend budgets** are **DEFERRED**.
 
@@ -235,7 +240,7 @@ created (named)  ──▶  active  ──▶  revoked  ──▶  purged
 | Transition | Semantics |
 |---|---|
 | created → active | Immediate. The key works on the next request. |
-| active | The value can be decrypted and re-copied from the admin UI whenever the operator needs it. Editing name, limits, or scope never changes the value — **Edit** on any key row is the console's door to `PATCH /api/admin/keys/:id`, so a wrong scope or a missing ceiling is fixed in place rather than by minting a replacement and re-issuing a value to every client holding the old one. A rate limit is not a mint-time decision: both halves are set, changed, and removed (`rateLimit: null`) from that same form. |
+| active | The value can be decrypted and re-copied from the admin UI whenever the operator needs it. Editing name, limits, or scope never changes the value — **Edit** on any key row is the console's door to `PATCH /api/admin/keys/:id`, so a wrong scope or a missing ceiling is fixed in place rather than by minting a replacement and re-issuing a value to every client holding the old one. A rate limit is not a mint-time decision: both halves are set, changed, and removed (`rateLimit: null`) from that same form. **Mint successor** on a row opens the mint form prefilled for rotation (attribution, scope, ceiling); the value is never copied and the expiry is not inherited. |
 | active → revoked | **Immediate** for new requests — the next one gets `401`. **In-flight requests finish**: the router does not tear down a stream mid-response, because a half-written response is worse than one extra completed call. Revocation is one-way; a revoked key is never reactivated. |
 | revoked → purged | 30 days after revocation (configurable), so historical usage stays joinable for a while. See [09-deployment.md](09-deployment.md). |
 

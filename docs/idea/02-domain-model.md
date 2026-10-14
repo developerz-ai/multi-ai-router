@@ -248,6 +248,10 @@ Verification path: indexed lookup by display prefix → decrypt → constant-tim
 | `prefix` | string | Short display prefix, indexed — makes verification a lookup, not a table scan |
 | `scope` | enum | `all` \| `pools` \| `accounts` — full vs. limited, see below |
 | `scopeTargets` | Pool[] \| Account[] | The Pools or the explicit Accounts the scope names. Empty when the scope is `all` |
+| `owner` | slug, optional | Attribution label: who the key was issued to. Not a router user; no login, no role |
+| `ownerKind` | enum, optional | `person` \| `service`. Groups usage views only |
+| `tool` | slug, optional | Attribution label: the tool the key is used from |
+| `purpose` | string, optional | Free text, trimmed, at most 500 characters |
 | `rateLimit` | config | Per-key request/token ceiling |
 | `expiresAt` | timestamp, optional | |
 | `revoked` | bool | Excluded from verification immediately |

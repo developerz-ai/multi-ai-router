@@ -1,4 +1,4 @@
-import type { KeyScope } from "@multi-ai-router/core"
+import type { KeyOwnerKind, KeyScope } from "@multi-ai-router/core"
 import type { ApiKeyRow } from "@multi-ai-router/db"
 
 /**
@@ -30,6 +30,11 @@ export interface ApiKeyView {
   /** The clear, indexed display prefix. Never the full value. */
   readonly prefix: string
   readonly scope: KeyScopeView
+  /** Attribution labels — usage reporting only, absent on pre-existing keys. */
+  readonly owner: string | null
+  readonly ownerKind: KeyOwnerKind | null
+  readonly tool: string | null
+  readonly purpose: string | null
   readonly rateLimit: KeyRateLimitView | null
   readonly expiresAt: string | null
   readonly revoked: boolean
@@ -61,6 +66,10 @@ export function toKeyView(row: ApiKeyRow, targets: KeyScopeTargets): ApiKeyView 
       poolIds: targets.poolIds,
       accountIds: targets.accountIds,
     },
+    owner: row.owner,
+    ownerKind: row.ownerKind,
+    tool: row.tool,
+    purpose: row.purpose,
     rateLimit: toRateLimit(row),
     expiresAt: row.expiresAt?.toISOString() ?? null,
     revoked: row.revoked,

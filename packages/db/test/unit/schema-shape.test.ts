@@ -70,6 +70,10 @@ const TABLE_COLUMNS: ReadonlyArray<{ table: Table; columns: readonly string[] }>
       "value",
       "prefix",
       "scope",
+      "owner",
+      "ownerKind",
+      "tool",
+      "purpose",
       "rateLimitRequests",
       "rateLimitWindowSeconds",
       "expiresAt",
@@ -359,5 +363,17 @@ describe("api keys are retrievable, not hashed", () => {
   test("revocation is a flag, so historical usage stays joinable", () => {
     expect(schema.apiKeys.revoked.notNull).toBe(true)
     expect(schema.apiKeys.revoked.hasDefault).toBe(true)
+  })
+
+  test("attribution labels are optional on every row — they label usage, they gate nothing", () => {
+    // Migration 0033 adds these nullable with no default, so every pre-existing key crosses
+    // with NULL labels and stays fully usable; a label is never required to serve.
+    for (const column of [schema.apiKeys.owner, schema.apiKeys.tool, schema.apiKeys.purpose]) {
+      expect(column.notNull).toBe(false)
+      expect(column.hasDefault).toBe(false)
+      expect(column.getSQLType()).toBe("text")
+    }
+    expect(schema.apiKeys.ownerKind.notNull).toBe(false)
+    expect(schema.apiKeys.ownerKind.getSQLType()).toBe("key_owner_kind")
   })
 })

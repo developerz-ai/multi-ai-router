@@ -85,7 +85,7 @@ These define the product as much as the features do.
 |---|---|
 | **A model picker / semantic router** | No "cheapest model for this prompt" logic. The client sends a model name; we honor it. |
 | **A prompt / agent framework** | No tool execution, no memory, no RAG. Bytes in, bytes out. |
-| **Multi-tenant SaaS** | One admin principal, one org, self-hosted. OIDC authenticates that configured principal; it does not create router user accounts, billing, or an org hierarchy. See [13-admin-oidc.md](13-admin-oidc.md). |
+| **Multi-tenant SaaS** | One admin principal, one org, self-hosted. OIDC authenticates that configured principal; it does not create router user accounts, billing, or an org hierarchy. A key's `owner` is a usage-attribution label, not a router user. See [13-admin-oidc.md](13-admin-oidc.md). |
 | **A caching layer** | Prompt caching stays the upstream's job — and it is per-account, which is why routing is sticky by default. |
 | **A credential exfiltration tool** | Upstream credentials never leave the router. No endpoint returns them. See [07-security.md](07-security.md). |
 

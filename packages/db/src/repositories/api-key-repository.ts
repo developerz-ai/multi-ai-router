@@ -1,4 +1,4 @@
-import type { KeyScope } from "@multi-ai-router/core"
+import type { KeyOwnerKind, KeyScope } from "@multi-ai-router/core"
 import { and, asc, eq, gt, inArray, isNull, or } from "drizzle-orm"
 import type { DatabaseExecutor } from "../client"
 import {
@@ -37,8 +37,8 @@ export interface ApiKeyRepository {
 
   // --- admin plane ----------------------------------------------------------
   create(input: CreateApiKeyInput): Promise<ApiKeyRow>
-  /** Oldest first, so the admin list is stable across calls. */
-  list(): Promise<ApiKeyRow[]>
+  /** Oldest first, so the admin list is stable across calls. Filters are exact matches, ANDed. */
+  list(filter?: ApiKeyListFilter): Promise<ApiKeyRow[]>
   findByName(name: string): Promise<ApiKeyRow | undefined>
   /** Never touches `value` or `prefix`: editing a key does not rotate it. */
   update(id: string, patch: UpdateApiKeyInput, now: Date): Promise<ApiKeyRow | undefined>
@@ -82,6 +82,11 @@ export interface CreateApiKeyInput {
   /** The clear, indexed display prefix — `routerKeyDisplayPrefix` in core. */
   readonly prefix: string
   readonly scope?: KeyScope
+  /** Attribution labels — usage reporting only, never read on the request path. */
+  readonly owner?: string | null
+  readonly ownerKind?: KeyOwnerKind | null
+  readonly tool?: string | null
+  readonly purpose?: string | null
   readonly rateLimitRequests?: number | null
   readonly rateLimitWindowSeconds?: number | null
   readonly expiresAt?: Date | null
@@ -90,9 +95,19 @@ export interface CreateApiKeyInput {
 export interface UpdateApiKeyInput {
   readonly name?: string
   readonly scope?: KeyScope
+  readonly owner?: string | null
+  readonly ownerKind?: KeyOwnerKind | null
+  readonly tool?: string | null
+  readonly purpose?: string | null
   readonly rateLimitRequests?: number | null
   readonly rateLimitWindowSeconds?: number | null
   readonly expiresAt?: Date | null
+}
+
+/** Attribution filters for the admin list. Exact match; both may combine. */
+export interface ApiKeyListFilter {
+  readonly owner?: string
+  readonly tool?: string
 }
 
 /** Empty on both sides when the scope is `all`. */
@@ -144,6 +159,10 @@ export function createApiKeyRepository(db: DatabaseExecutor): ApiKeyRepository {
           value: input.value,
           prefix: input.prefix,
           ...(input.scope === undefined ? {} : { scope: input.scope }),
+          owner: input.owner ?? null,
+          ownerKind: input.ownerKind ?? null,
+          tool: input.tool ?? null,
+          purpose: input.purpose ?? null,
           rateLimitRequests: input.rateLimitRequests ?? null,
           rateLimitWindowSeconds: input.rateLimitWindowSeconds ?? null,
           expiresAt: input.expiresAt ?? null,
@@ -154,7 +173,19 @@ export function createApiKeyRepository(db: DatabaseExecutor): ApiKeyRepository {
       return row
     },
 
-    list: () => db.select().from(apiKeys).orderBy(asc(apiKeys.createdAt)),
+    list: async (filter) => {
+      const conditions = [
+        ...(filter?.owner === undefined ? [] : [eq(apiKeys.owner, filter.owner)]),
+        ...(filter?.tool === undefined ? [] : [eq(apiKeys.tool, filter.tool)]),
+      ]
+      return conditions.length === 0
+        ? db.select().from(apiKeys).orderBy(asc(apiKeys.createdAt))
+        : db
+            .select()
+            .from(apiKeys)
+            .where(and(...conditions))
+            .orderBy(asc(apiKeys.createdAt))
+    },
 
     findByName: async (name) => {
       const rows = await db.select().from(apiKeys).where(eq(apiKeys.name, name)).limit(1)
@@ -169,6 +200,10 @@ export function createApiKeyRepository(db: DatabaseExecutor): ApiKeyRepository {
         .set({
           ...(patch.name === undefined ? {} : { name: patch.name }),
           ...(patch.scope === undefined ? {} : { scope: patch.scope }),
+          ...(patch.owner === undefined ? {} : { owner: patch.owner }),
+          ...(patch.ownerKind === undefined ? {} : { ownerKind: patch.ownerKind }),
+          ...(patch.tool === undefined ? {} : { tool: patch.tool }),
+          ...(patch.purpose === undefined ? {} : { purpose: patch.purpose }),
           ...(patch.rateLimitRequests === undefined
             ? {}
             : { rateLimitRequests: patch.rateLimitRequests }),
