@@ -172,6 +172,10 @@ SolidJS SPA, `@solidjs/router`, TanStack Solid Query for server state. Vite buil
 - Add multi-user, RBAC, billing, caching, or tool execution — see non-goals in `docs/idea/`.
 - Force-push `main`. `--no-verify` on commits — fix the hook.
 
+## Org
+
+**Admissible owner handles: `sebyx07`, `ivndev001`.** A ruling is owner-authored only under one of those handles: `developerz-ai` is an org, and admin membership is not evidence a human wrote it. Adding a handle is a governance change.
+
 ## Note
 
 Do not use git worktrees — work directly in this checkout. If a task needs subagents, run them as a team here: split the work into disjoint pieces so no two agents touch the same files.
