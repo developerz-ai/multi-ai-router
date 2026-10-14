@@ -30,6 +30,8 @@ export const apiKeyPools = pgTable(
      *
      * `DEFAULT 0` rather than no default: an image rolled back past the
      * migration keeps issuing INSERTs that omit the column, and they must land.
+     * Such rows tie at 0 and sort by their random row id, so a key whose scope
+     * an old image edited should be re-saved after upgrading.
      */
     position: integer("position").notNull().default(0),
     createdAt: timestamp("created_at", { withTimezone: true, mode: "date" }).notNull().defaultNow(),

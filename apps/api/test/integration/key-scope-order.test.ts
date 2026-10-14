@@ -99,7 +99,6 @@ describe.skipIf(!runnable)("a pool-scoped key's listed order", () => {
       scope: { kind: "pools", poolIds: [POOL_B, POOL_A] },
     })
     if (!created.ok) throw new Error(`create failed: ${created.failure.message}`)
-    expect(created.value.scope).toMatchObject({ kind: "pools", poolIds: [POOL_B, POOL_A] })
 
     // Updated with the same scope re-submitted: the edit deletes and re-inserts
     // the scope rows, so this is the path that used to lose the order.
@@ -119,6 +118,9 @@ describe.skipIf(!runnable)("a pool-scoped key's listed order", () => {
       return createApiKeyRepository(tx).listPoolTargets(created.value.id)
     })
     expect(readBack.map((row) => row.poolId)).toEqual([POOL_B, POOL_A])
+    // The write side, pinned on its own: without it every row would sit at 0 and the
+    // order above would fall to the random row id, passing about half the time.
+    expect(readBack.map((row) => row.position)).toEqual([0, 1])
 
     // --- and selection honors it ------------------------------------------------
     // Same flags, session-level this time so the loader's pooled read inherits

@@ -58,15 +58,15 @@ describe.skipIf(!runnable)("api_key_pools position migration against a live data
       `insert into api_keys (id, name, value, prefix)
        values ('${KEY_ID}', 'scope-order', 'envelope', 'mar_live_scopeorder0key')`,
     )
-    // One multi-row insert with pool ids in reverse id order: created_at ties the
-    // rows (same statement, same clock), and pool_id order disagrees with the
-    // insert order — only ctid, today's physical order and what a seqscan
-    // returns now, separates them. That is the whole reason the backfill reads it.
+    // One multi-row insert, B then A: pool_id order (A < B) and created_at order
+    // (A's is set earlier) both disagree with the insert order, so only ctid —
+    // today's physical order and what a seqscan returns now — yields [B, A].
+    // That is the whole reason the backfill reads it.
     await live.sql.unsafe(
       `insert into pools (id, name) values ('${POOL_A}', 'pos-a'), ('${POOL_B}', 'pos-b')`,
     )
     await live.sql.unsafe(
-      `insert into api_key_pools (api_key_id, pool_id) values ('${KEY_ID}', '${POOL_B}'), ('${KEY_ID}', '${POOL_A}')`,
+      `insert into api_key_pools (api_key_id, pool_id, created_at) values ('${KEY_ID}', '${POOL_B}', '2026-01-02T00:00:00Z'), ('${KEY_ID}', '${POOL_A}', '2026-01-01T00:00:00Z')`,
     )
 
     const before =
@@ -81,11 +81,13 @@ describe.skipIf(!runnable)("api_key_pools position migration against a live data
       where api_key_id = ${KEY_ID}::uuid order by "position"
     `
     expect(ordered).toEqual([
-      { pool_id: POOL_B, position: 1 },
-      { pool_id: POOL_A, position: 2 },
+      { pool_id: POOL_B, position: 0 },
+      { pool_id: POOL_A, position: 1 },
     ])
 
-    // Idempotent: a second replica, a restart mid-upgrade, or a re-run must converge.
+    // Re-running immediately after itself is a no-op on this layout. (The migrator
+    // runs once, in one transaction under an advisory lock; this is a guard, not a
+    // claim that a later re-run preserves order at scale.)
     await live.sql.unsafe(file)
     const rerun = await live.sql`
       select pool_id::text, "position" from api_key_pools

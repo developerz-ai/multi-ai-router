@@ -91,8 +91,8 @@ export function memoryKeys(
     replaceScopeTargets: async (apiKeyId, targets) => {
       drop(keyPools, (row) => row.apiKeyId === apiKeyId)
       drop(keyAccounts, (row) => row.apiKeyId === apiKeyId)
-      for (const poolId of targets.poolIds ?? []) {
-        keyPools.push({ id: crypto.randomUUID(), apiKeyId, poolId, createdAt: epoch })
+      for (const [position, poolId] of (targets.poolIds ?? []).entries()) {
+        keyPools.push({ id: crypto.randomUUID(), apiKeyId, poolId, position, createdAt: epoch })
       }
       for (const accountId of targets.accountIds ?? []) {
         keyAccounts.push({ id: crypto.randomUUID(), apiKeyId, accountId, createdAt: epoch })

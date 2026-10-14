@@ -7,17 +7,19 @@
 --
 -- `DEFAULT 0`, not no default: the previous release image's INSERT omits the
 -- column, and it must keep landing — an upgrade followed by a rollback must
--- not turn every scope write into a failure. Such rows all tie at 0 and fall
--- back to id order, which degrades ordering without breaking anything.
+-- not turn every scope write into a failure. Such rows all tie at 0 and sort
+-- by their random row id: nothing breaks, but a key whose scope the previous
+-- image edited should be re-saved after upgrading to restore its order.
 --
 -- The backfill numbers each key's rows in their *physical* order, because
 -- that is what reads return today: rows from one multi-row INSERT share
 -- `created_at`, so only `ctid` recovers the order the scope was listed in.
+-- Numbered from 0, as writes number them from the request's array index.
 ALTER TABLE "api_key_pools" ADD COLUMN IF NOT EXISTS "position" integer NOT NULL DEFAULT 0;--> statement-breakpoint
 UPDATE "api_key_pools" AS akp
 SET "position" = numbered."position"
 FROM (
-  SELECT "id", row_number() OVER (PARTITION BY "api_key_id" ORDER BY "ctid") AS "position"
+  SELECT "id", row_number() OVER (PARTITION BY "api_key_id" ORDER BY "ctid") - 1 AS "position"
   FROM "api_key_pools"
 ) AS numbered
 WHERE akp."id" = numbered."id";
