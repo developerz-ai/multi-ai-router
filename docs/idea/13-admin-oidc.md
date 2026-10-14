@@ -7,7 +7,7 @@ Status: **implemented**. The admin console has two sign-in paths, either of whic
 
 `ADMIN_API_TOKEN` remains the separate break-glass credential for scripts and recovery.
 
-Boot requires **at least one** of the two. A fresh database with no `ADMIN_OIDC_*` variables and no password row refuses to start, naming both remedies. A *partial* OIDC block (some of the four required variables set, not all) fails the same fast env validation it always did, pointing here.
+Boot requires **at least one** of the two. A fresh database with no `ADMIN_OIDC_*` variables and no password row refuses to start, naming both remedies. A *partial* OIDC block fails the same fast env validation it always did, pointing here: once any of them is set, `ADMIN_OIDC_ISSUER_URL`, `ADMIN_OIDC_CLIENT_ID` and `ADMIN_OIDC_REDIRECT_URI` are required, plus at least one principal gate — `ADMIN_OIDC_ADMIN_EMAIL`, `ADMIN_OIDC_REQUIRED_CLAIMS`, or both. Neither gate set is refused naming both.
 
 The router is an OIDC relying party, not an identity provider. Any standards-compliant provider that exposes discovery metadata and signs ID tokens with RS256 can be used without code changes. Zitadel is the production-tested provider; Keycloak, Authentik, and Auth0 use the same configuration contract.
 
@@ -24,8 +24,41 @@ A successful OIDC callback must satisfy every check:
 3. The ID token signature verifies against the issuer's JWKS.
 4. `iss`, `aud`, `exp`, `iat`, and `nonce` match the current flow.
 5. The token contains `email` and `email_verified: true`.
-6. The asserted email matches one entry of `ADMIN_OIDC_ADMIN_EMAIL` case-insensitively.
-7. When `ADMIN_OIDC_ADMIN_SUBJECT` is set, `sub` matches it exactly.
+6. When `ADMIN_OIDC_ADMIN_EMAIL` is set, the asserted email matches one entry case-insensitively.
+7. When `ADMIN_OIDC_REQUIRED_CLAIMS` is set, every `name=value` pair matches a claim of the verified ID token (below).
+8. When `ADMIN_OIDC_ADMIN_SUBJECT` is set, `sub` matches it exactly.
+
+Checks 6 and 7 are both gates, not alternatives: with both variables set, a sign-in must pass both. Adding required claims to an email-allowlist deployment can only narrow who gets in, never widen it.
+
+### Claim-based admission
+
+`ADMIN_OIDC_REQUIRED_CLAIMS` admits by what the IdP says a user *is* rather than by who they are — for an IdP that issues a claim such as `kind: "dev_user"` to staff, `ADMIN_OIDC_REQUIRED_CLAIMS=kind=dev_user` admits any staff user without an email list to maintain. It is IdP-agnostic: any claim the provider signs into the ID token can be named (`groups=router-admins` for a provider that emits groups).
+
+| Rule | Behavior |
+|---|---|
+| Syntax | Comma-separated `name=value` pairs; names and values trimmed; the value is everything after the first `=` (it may contain `=`, never a comma). Empty entries are dropped, exact duplicates collapse. |
+| Malformed | `kind` (no `=`), `=x` (no name), `kind=` (no value), or a value naming no pair (`","`) fails boot. |
+| Every pair | All pairs must match. Two pairs with the same name both apply (only satisfiable by an array claim). |
+| String claim | Matches when exactly equal to the value — case-sensitive. |
+| Array claim | Matches when some element is exactly equal to the value. |
+| Missing claim | Rejected. |
+| Any other shape | Number, boolean, object or `null`: rejected; the router never coerces. |
+| Source | The **verified** ID token only — signature, `iss`, `aud`, `exp`, `iat` and `nonce` already checked. Never userinfo, never an unverified decode. |
+| `email_verified` | Still required. The admitted email is still the session's and the audit row's identity. |
+
+A claim rejection is a `principal` failure exactly like an email mismatch: the same browser sentence, the same `warn` line and `admin.login_failed` row. Its reason names the claim and the configured value, never the token's own value.
+
+It is still one admin principal. A claim admits a human to the same single session model; it does not create users, roles, or per-claim permissions.
+
+### Trusting the IdP's user gating
+
+`ADMIN_OIDC_REQUIRED_CLAIMS` on its own delegates the admission decision to the identity provider: anyone the IdP will sign an ID token for, carrying that claim, for this client, becomes the router's admin. That is only as safe as the IdP's own gating. Use it alone only when:
+
+- the IdP client registered for the router itself restricts who can authenticate (for example, a client only staff accounts can sign in to), so a non-staff account is refused at the IdP and never reaches the callback;
+- the claim is one the IdP sets from its own records, never something a user can edit about themselves (a self-service profile field is not a gate);
+- the claim's meaning is stable — if the IdP later issues the same value to a broader population, the router's admin set widens with it, silently.
+
+When any of those is in doubt, set `ADMIN_OIDC_ADMIN_EMAIL` as well: both gates then apply, and the claim narrows the allowlist rather than replacing it.
 
 Every rejection — from either path — returns the same operator-facing sentence. Detailed claim failures are server-side diagnostics, never a browser-visible oracle.
 
@@ -86,6 +119,8 @@ ADMIN_OIDC_CLIENT_SECRET=replace-with-client-secret
 ADMIN_OIDC_REDIRECT_URI=https://router.example.com/api/admin/auth/oidc/callback
 # Comma-separated: one entry per operator, all mapping onto the single admin principal.
 ADMIN_OIDC_ADMIN_EMAIL=admin@example.com,second.operator@example.com
+# And/or claim-based admission; with both set, both must pass.
+# ADMIN_OIDC_REQUIRED_CLAIMS=kind=dev_user
 # ADMIN_OIDC_ADMIN_SUBJECT=provider-subject-id
 # ADMIN_OIDC_SCOPES=openid profile email
 # ADMIN_OIDC_CLOCK_SKEW_SECONDS=60
@@ -97,13 +132,14 @@ ADMIN_OIDC_ADMIN_EMAIL=admin@example.com,second.operator@example.com
 | `ADMIN_OIDC_CLIENT_ID` | for OIDC | Client identifier and expected ID-token audience. |
 | `ADMIN_OIDC_CLIENT_SECRET` | no | Confidential-client secret. Omit only for a public client; PKCE remains mandatory either way. |
 | `ADMIN_OIDC_REDIRECT_URI` | for OIDC | Exact callback URI registered with the provider. |
-| `ADMIN_OIDC_ADMIN_EMAIL` | for OIDC | Comma-separated emails allowed to receive an admin session. Compared case-insensitively; entries are trimmed, lowercased, and deduplicated at boot. A value naming no email at all (`","`) is refused at boot rather than left to fail every login. |
+| `ADMIN_OIDC_ADMIN_EMAIL` | for OIDC: this, `ADMIN_OIDC_REQUIRED_CLAIMS`, or both | Comma-separated emails allowed to receive an admin session. Compared case-insensitively; entries are trimmed, lowercased, and deduplicated at boot. A value naming no email at all (`","`) is refused at boot rather than left to fail every login. |
+| `ADMIN_OIDC_REQUIRED_CLAIMS` | for OIDC: this, `ADMIN_OIDC_ADMIN_EMAIL`, or both | Comma-separated `name=value` pairs the verified ID token must all satisfy — see [Claim-based admission](#claim-based-admission). Safe alone only under [the IdP's user gating](#trusting-the-idps-user-gating). Malformed pairs fail boot. |
 | `ADMIN_OIDC_ADMIN_SUBJECT` | no | Additional exact match against `sub`. Recommended once known. |
 | `ADMIN_OIDC_SCOPES` | no | Space-separated scopes. Default `openid profile email`; `openid` is mandatory. |
 | `ADMIN_OIDC_CLOCK_SKEW_SECONDS` | no | Accepted clock skew for token timestamps. Default `60`; zero is refused. |
 | `ADMIN_LOCAL_LOGIN_ALLOW_PUBLIC` | no | `true` opts out of the fail-closed loopback rule for the local password. Default `false`; boot warns every time it is on. |
 
-The four OIDC fields are all-or-nothing: all absent means "OIDC off, local password only"; a partial block fails env validation naming what is missing. Whether *some* sign-in method exists is decided after migrations, because the local credential's existence is a database row — the refusal names both remedies and points here.
+The OIDC block is all-or-nothing: all absent means "OIDC off, local password only"; a partial block — including one with neither `ADMIN_OIDC_ADMIN_EMAIL` nor `ADMIN_OIDC_REQUIRED_CLAIMS` — fails env validation naming what is missing. Whether *some* sign-in method exists is decided after migrations, because the local credential's existence is a database row — the refusal names both remedies and points here.
 
 ## Session and callback behavior
 
@@ -157,11 +193,11 @@ Match the `reason` prefix against this table:
 | `idtoken:wrong_nonce` | A fresh browser flow; state and nonce cannot be replayed. |
 | `idtoken:missing_email` | Request `email` scope and configure the provider to embed userinfo claims in the ID token. |
 | `idtoken:email_unverified` | Mark the administrator's email verified at the provider. |
-| `principal` | The asserted email is in no `ADMIN_OIDC_ADMIN_EMAIL` entry, or `ADMIN_OIDC_ADMIN_SUBJECT` is set and `sub` does not equal it. The line names the rejected address; add it to the allowlist, or correct the typo. |
+| `principal` | The asserted email is in no `ADMIN_OIDC_ADMIN_EMAIL` entry, an `ADMIN_OIDC_REQUIRED_CLAIMS` pair is unmet (claim missing, of the wrong shape, or a different value — the line names the claim), or `ADMIN_OIDC_ADMIN_SUBJECT` is set and `sub` does not equal it. The line names the rejected address; add it to the allowlist, or correct the typo. For a claim, confirm the IdP signs that claim into the ID token for this client and that its value's case matches. |
 | `token_exchange:*` | The token endpoint refused the code exchange, or returned no `id_token`. Check the client secret and that the redirect URI byte-matches the registered one. Only the HTTP status is logged — a token-endpoint error body quotes the authorization code back. |
 | `state` | Restart the flow; state is one-shot and expires after the configured OAuth-state retention window. |
 | `admin.login_failed` audit rows with `method: "local"` | Password attempts are failing — `reason: "throttled"` means the per-IP lockout is doing its job. |
-| Boot refuses, naming `bin/admin set-password` | No sign-in method exists: set the four OIDC variables, or set a local password. |
+| Boot refuses, naming `bin/admin set-password` | No sign-in method exists: set the OIDC block, or set a local password. |
 | Boot refuses, naming `ADMIN_LOCAL_LOGIN_ALLOW_PUBLIC` | A local password exists and `PUBLIC_URL` is not loopback. Remove the password, unset `PUBLIC_URL`, or accept the risk explicitly. |
 
 Never paste an ID token, authorization code, client secret, password, or callback URL containing `code`/`state` into an issue or log.
