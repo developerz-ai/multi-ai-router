@@ -25,10 +25,17 @@ export interface UsageSummary {
   readonly axis: readonly string[]
   /** One entry per axis point, always. A bucket with no traffic is zeros, never a missing entry. */
   readonly series: readonly UsageSeriesEntry[]
-  readonly byKey: readonly UsageBreakdownRow[]
+  readonly byKey: readonly UsageKeyRow[]
   readonly byAccount: readonly UsageBreakdownRow[]
   readonly byPool: readonly UsageBreakdownRow[]
   readonly byModel: readonly UsageBreakdownRow[]
+  /**
+   * Folded on (owner kind, owner) in SQL before the row cap. Attribution follows each key's
+   * CURRENT label, so relabelling a key moves its whole history between rows.
+   */
+  readonly byOwner: readonly UsageOwnerRow[]
+  /** Folded on the tool slug, with the same non-owner buckets and the same current-label rule. */
+  readonly byTool: readonly UsageBreakdownRow[]
 }
 
 export interface UsageSeriesEntry {
@@ -42,8 +49,11 @@ export interface UsageBreakdownRow {
   readonly id: string | null
   /** Human name. `null` when the subject is gone (no live row and, for a key, no tombstone) or the dimension did not apply. */
   readonly label: string | null
-  /** Why the label is absent, so the console never has to guess. */
-  readonly note: "deleted" | "none" | null
+  /**
+   * Why the label is absent, so the console never has to guess. `unassigned` exists only on the
+   * owner and tool breakdowns: a key that is there but names no owner (or tool).
+   */
+  readonly note: "deleted" | "none" | "unassigned" | null
   readonly totals: UsageTotals
   /** This group's percentiles. A global p95 cannot answer "which account is slow". */
   readonly latencyP50Ms: number | null
@@ -51,6 +61,20 @@ export interface UsageBreakdownRow {
   readonly routerOverheadP95Ms: number | null
   /** Requests per bucket, aligned to `axis`, so two rows are comparable at a glance. */
   readonly series: readonly number[]
+}
+
+export interface UsageKeyRow extends UsageBreakdownRow {
+  /**
+   * True only when the key survives solely as a tombstone: its row was purged or deleted, its name
+   * and attribution remain. False for a live key and for the `deleted` and `none` rows, so `note`
+   * keeps meaning "why the label is absent" and nothing else.
+   */
+  readonly retired: boolean
+}
+
+export interface UsageOwnerRow extends UsageBreakdownRow {
+  /** Null on the non-owner buckets and on an owner whose key carries no kind. */
+  readonly ownerKind: KeyOwnerKind | null
 }
 
 /**
@@ -62,6 +86,8 @@ export interface KeyLabel {
   readonly owner: string | null
   readonly ownerKind: KeyOwnerKind | null
   readonly tool: string | null
+  /** True when only the tombstone remains (the live row is gone). */
+  readonly retired: boolean
 }
 
 /** `UsageLabelSets` projected to the names the wire carries; built once per request. */

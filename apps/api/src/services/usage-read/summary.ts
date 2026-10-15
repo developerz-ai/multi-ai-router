@@ -5,12 +5,20 @@ import type {
   UsageReadRepository,
 } from "@multi-ai-router/db"
 import { axisBucketWidth, buildAxis } from "./axis"
+import { attributionOf, ownerRows, toolRows } from "./buckets"
 import { foldFailures } from "./failures"
 import { alignSeries, breakdownRow, keyNames, label } from "./summary-view"
 import type { UsageLabelSets, UsageSummary } from "./types"
 import { resolveWindow, type UsageWindowQuery } from "./window"
 
-const dimensions: readonly UsageDimension[] = ["apiKeyId", "accountId", "poolId", "model"]
+const dimensions: readonly UsageDimension[] = [
+  "apiKeyId",
+  "accountId",
+  "poolId",
+  "model",
+  "owner",
+  "tool",
+]
 
 export async function readSummary(
   deps: {
@@ -42,12 +50,16 @@ export async function readSummary(
   const maxChartPoints = deps.maxChartPoints ?? 400
   const maxRows = deps.breakdownMaxRows ?? 100
   const width = axisBucketWidth(window, maxChartPoints)
+  // One mapping for every owner/tool query below, so their group keys cannot disagree.
+  const attribution = attributionOf(deps.labels.keys)
   const [totals, latency, series, outcomes, rows] = await Promise.all([
     deps.history.totals(window, filter),
     deps.raw.latency(window, filter),
     deps.history.series(window, window.bucket, width, filter),
     deps.raw.outcomes(window, filter),
-    Promise.all(dimensions.map((d) => deps.history.breakdown(window, d, maxRows + 1, filter))),
+    Promise.all(
+      dimensions.map((d) => deps.history.breakdown(window, d, maxRows + 1, filter, attribution)),
+    ),
   ])
   const axis = buildAxis(window, width)
   const retainedAttempts = outcomes.reduce((sum, row) => sum + row.attempts, 0)
@@ -62,6 +74,7 @@ export async function readSummary(
         (selected[index] ?? []).map((row) => row.id),
         maxRows,
         filter,
+        attribution,
       ),
     ),
   )
@@ -83,11 +96,12 @@ export async function readSummary(
         width,
         (limited[index] ?? []).map((row) => row.id),
         filter,
+        attribution,
       ),
     ),
   )
-  const [keys, accounts, pools, models] = limited
-  const [keySeries, accountSeries, poolSeries, modelSeries] = groupSeries
+  const [keys, accounts, pools, models, owners, tools] = limited
+  const [keySeries, accountSeries, poolSeries, modelSeries, ownerSeries, toolSeries] = groupSeries
   return {
     window: window.label,
     bucket: window.bucket,
@@ -118,7 +132,10 @@ export async function readSummary(
     },
     axis,
     series: alignSeries(axis, series),
-    byKey: label(keys ?? [], keyNames(deps.labels.keys), axis, keySeries ?? []),
+    byKey: label(keys ?? [], keyNames(deps.labels.keys), axis, keySeries ?? []).map((row) => ({
+      ...row,
+      retired: row.id !== null && deps.labels.keys.get(row.id)?.retired === true,
+    })),
     byAccount: label(accounts ?? [], deps.labels.accounts, axis, accountSeries ?? []),
     byPool: label(pools ?? [], deps.labels.pools, axis, poolSeries ?? []),
     byModel: (models ?? []).map((row) => ({
@@ -126,5 +143,7 @@ export async function readSummary(
       label: row.id,
       note: row.id === null ? "none" : null,
     })),
+    byOwner: ownerRows(owners ?? [], axis, ownerSeries ?? []),
+    byTool: toolRows(tools ?? [], axis, toolSeries ?? []),
   }
 }

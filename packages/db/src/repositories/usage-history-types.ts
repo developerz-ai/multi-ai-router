@@ -3,6 +3,7 @@ import type {
   UsageFilter,
   UsageGroupRow,
   UsageGroupSeriesPoint,
+  UsageKeyAttribution,
   UsageReadRepository,
   UsageSeriesPoint,
   UsageTotals,
@@ -28,6 +29,7 @@ export interface UsageHistoryRepository {
     dimension: UsageDimension,
     limit: number | undefined,
     filter: UsageFilter,
+    attribution?: UsageKeyAttribution,
   ): Promise<UsageGroupRow[]>
   series(
     window: UsageWindow,
@@ -42,6 +44,7 @@ export interface UsageHistoryRepository {
     bucketWidth: number | undefined,
     ids: readonly (string | null)[] | undefined,
     filter: UsageFilter,
+    attribution?: UsageKeyAttribution,
   ): Promise<UsageGroupSeriesPoint[]>
   /** All history and retained detail reads use one repeatable-read snapshot. */
   withSnapshot<T>(

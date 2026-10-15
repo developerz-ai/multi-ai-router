@@ -12,7 +12,9 @@ export type {
   KeyLabel,
   UsageBreakdownRow,
   UsageCoverage,
+  UsageKeyRow,
   UsageLabelSets,
+  UsageOwnerRow,
   UsageSeriesEntry,
   UsageSummary,
 } from "./types"

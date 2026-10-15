@@ -32,13 +32,19 @@ export function catalogLabels(deps: {
     const stones = await deps.tombstones.listAll()
     const keys = new Map<string, KeyLabel>()
     // Tombstones first, so a live row wins if the two ever coexist (a delete racing a read).
-    for (const row of [...stones, ...live]) {
-      keys.set(row.id, {
-        name: row.name,
-        owner: row.owner,
-        ownerKind: row.ownerKind,
-        tool: row.tool,
-      })
+    for (const [rows, retired] of [
+      [stones, true],
+      [live, false],
+    ] as const) {
+      for (const row of rows) {
+        keys.set(row.id, {
+          name: row.name,
+          owner: row.owner,
+          ownerKind: row.ownerKind,
+          tool: row.tool,
+          retired,
+        })
+      }
     }
     return {
       keys,

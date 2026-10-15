@@ -146,6 +146,7 @@ export type {
   UsageFilter,
   UsageGroupRow,
   UsageGroupSeriesPoint,
+  UsageKeyAttribution,
   UsageLatency,
   UsageOutcomeCount,
   UsageRawGroupRow,

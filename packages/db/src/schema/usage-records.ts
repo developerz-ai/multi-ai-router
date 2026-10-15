@@ -60,8 +60,9 @@ export const usageRecords = pgTable(
     /**
      * The pool the account was selected *from*. Not derivable by joining: an
      * account belongs to many pools, and which one was in play is a property of
-     * the presenting key's scope at request time. NULL when the key's scope was
-     * `all` or an explicit account list, so no pool was involved.
+     * the presenting key's scope at request time. NULL when no pool was in play for
+     * the attempt: the key's scope was `all` or an explicit account list, or no account was selected
+     * at all (an attempt that failed before selection is null even for a pool-scoped key).
      */
     poolId: uuid("pool_id"),
     /** Denormalized so the row survives the account it names. */

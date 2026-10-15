@@ -20,7 +20,7 @@ client request that hits a rate-limited account, fails over, and succeeds on the
 | `correlationId` | uuid | Shared by every attempt of one client request. **Router-owned**, freshly minted for every ingress even when a caller supplies a UUID |
 | `clientRequestId` | string? | The caller's `x-request-id`, verbatim, when it sent one. A **trace** field, never a join key — it is caller-controlled, so two clients both sending `req-1` must not have their chains merged |
 | `attempt` | int | 1-based position in the failover chain |
-| `apiKeyId` / `accountId` / `poolId` / `sessionKey` | refs | Attribution: which key presented, which Account served or failed, which Pool it was selected from, which conversation it belonged to. `poolId` is null when the key's scope was `all` or an explicit account list — no pool was in play |
+| `apiKeyId` / `accountId` / `poolId` / `sessionKey` | refs | Attribution: which key presented, which Account served or failed, which Pool it was selected from, which conversation it belonged to. `poolId` is null when no pool was in play: the key's scope was `all` or an explicit account list, or no account was selected (a pre-selection failure is null even for a pool-scoped key) |
 | `provider` | enum? | Denormalized so the row survives the Account it names |
 | `model` | string? | Exactly what the client sent; null when authenticated refusal occurs before a model is identified. No fabricated model sentinel |
 | `upstreamModel` | string? | The name actually put on the wire, after the Account's alias map. A separate **fact**, not a derivation: the alias map is mutable, so re-deriving it later answers "what would we send now", never "what did we send then" |
@@ -269,7 +269,28 @@ every other measure.
 - `GET /api/admin/usage/recent` ignores the filters.
 - A `poolId` filter cannot select the pool-less rows that `byPool` shows with note "none": a NULL
   pool never matches an id list.
-- No `byOwner` / `byTool` breakdowns, `unassigned` buckets or retired-key marker (#246).
+
+### Owner and tool breakdowns
+
+`byOwner` and `byTool` sit beside `byKey` in the usage summary. They are folded **in SQL, before
+the row cap**, from the key-to-label map the service already loaded (live keys plus tombstones),
+passed to every query as one `unnest(uuid[], text[], text[], text[])` relation (a single bind per
+array, never a VALUES list). The history rows, the raw latency rows and the per-row series use the
+same bucket expression, so their group keys match. Owner and tool attribution follows each key's
+**current** label: relabelling a key moves its whole history between rows.
+
+- `byOwner` ids are `<ownerKind>/<owner>`, label the owner slug, with an `ownerKind` field. A
+  person and a service sharing a slug are two rows. An owner with no kind uses the id segment
+  `unknown` and `ownerKind: null`.
+- `byTool` ids are the tool slug.
+- Three non-owner buckets appear as their own rows, each with its own totals, latency and series:
+  `{ id: null, label: null, note: "unassigned" }` (the key exists but names no owner or tool),
+  `"deleted"` (a key id with neither a live row nor a tombstone) and `"none"` (no key on the
+  attempt). They are told apart by SQL sentinels outside the slug grammar until the wire step. A
+  real owner or tool literally named `unassigned` is a separate, ordinary row.
+- `byKey` rows carry a boolean `retired`: true only for a key that survives solely as a tombstone.
+  It is false for live keys and for the `deleted` and `none` rows; `note` keeps its meaning.
+- `coverage.breakdown.truncated` lists `owner` / `tool` when capped. `/recent` is unchanged.
 
 ### Where the numbers appear
 
