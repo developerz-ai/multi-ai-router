@@ -7,6 +7,7 @@ import type {
 import { axisBucketWidth, buildAxis } from "./axis"
 import { attributionOf, ownerRows, toolRows } from "./buckets"
 import { foldFailures } from "./failures"
+import { historyBreakdown, historySeriesBy, rawBreakdown } from "./group-reads"
 import { alignSeries, breakdownRow, keyNames, label } from "./summary-view"
 import type { UsageLabelSets, UsageSummary } from "./types"
 import { resolveWindow, type UsageWindowQuery } from "./window"
@@ -58,7 +59,9 @@ export async function readSummary(
     deps.history.series(window, window.bucket, width, filter),
     deps.raw.outcomes(window, filter),
     Promise.all(
-      dimensions.map((d) => deps.history.breakdown(window, d, maxRows + 1, filter, attribution)),
+      dimensions.map((d) =>
+        historyBreakdown(deps.history, window, d, maxRows + 1, filter, attribution),
+      ),
     ),
   ])
   const axis = buildAxis(window, width)
@@ -68,7 +71,8 @@ export async function readSummary(
   const selected = rows.map((group) => group.slice(0, maxRows))
   const diagnostics = await Promise.all(
     dimensions.map((dimension, index) =>
-      deps.raw.breakdown(
+      rawBreakdown(
+        deps.raw,
         window,
         dimension,
         (selected[index] ?? []).map((row) => row.id),
@@ -89,7 +93,8 @@ export async function readSummary(
   })
   const groupSeries = await Promise.all(
     dimensions.map((dimension, index) =>
-      deps.history.seriesByDimension(
+      historySeriesBy(
+        deps.history,
         window,
         window.bucket,
         dimension,

@@ -133,25 +133,39 @@ export function createUsageHistoryRepository(
           ? sql``
           : ids.length === 0
             ? sql`where false`
-            : sql`where ${sql.join(
-                ids.map(
-                  (id) =>
-                    sql`${sql.identifier(historyDimensions[dimension])}::text is not distinct from ${id}`,
-                ),
-                sql` or `,
-              )}`
+            : isAttributionDimension(dimension)
+              ? // Bucket ids are never null, so one array match replaces the OR-chain.
+                sql`where grp = any(${sql.param(ids.filter((id): id is string => id !== null))}::text[])`
+              : sql`where ${sql.join(
+                  ids.map(
+                    (id) =>
+                      sql`${sql.identifier(historyDimensions[dimension])}::text is not distinct from ${id}`,
+                  ),
+                  sql` or `,
+                )}`
       } group by 1 ${dimension === undefined ? sql`` : sql`, 2`} order by 1`
   }
+  // Declared apart from `repo` so the implementation signature (attribution optional) is checked
+  // against both overloads of the interface instead of being contextually typed from them.
+  const seriesByDimension = async (
+    window: UsageWindow,
+    bucket: "hour" | "day",
+    dimension: UsageDimension,
+    width: number | undefined,
+    ids: readonly (string | null)[] | undefined,
+    filter: UsageFilter,
+    attribution?: UsageKeyAttribution,
+  ) =>
+    read<UsageGroupSeriesPoint>(
+      seriesQuery(window, bucket, dimension, width, ids, filter, attribution),
+    )
   const repo: UsageHistoryRepository = {
     coverage,
     totals,
     breakdown,
     series: (window, bucket, width, filter) =>
       read<UsageSeriesPoint>(seriesQuery(window, bucket, undefined, width, undefined, filter)),
-    seriesByDimension: (window, bucket, dimension, width, ids, filter, attribution) =>
-      read<UsageGroupSeriesPoint>(
-        seriesQuery(window, bucket, dimension, width, ids, filter, attribution),
-      ),
+    seriesByDimension,
     withSnapshot: (callback) =>
       inSnapshot
         ? callback(repo, createUsageReadRepository(db))

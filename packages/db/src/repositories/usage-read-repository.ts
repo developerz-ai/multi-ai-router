@@ -1,4 +1,4 @@
-import { type AnyColumn, and, countDistinct, gte, lt, sql } from "drizzle-orm"
+import { type AnyColumn, and, countDistinct, gte, lt, type SQL, sql } from "drizzle-orm"
 import type { Database } from "../client"
 import { USAGE_OUTCOME_SUCCESS } from "../schema/enums"
 import { usageRecords } from "../schema/usage-records"
@@ -111,6 +111,57 @@ export function createUsageReadRepository(db: Database): UsageReadRepository {
           where: inWindow(window, filter),
         }
 
+  // Named apart from the returned object so the implementation signatures (attribution optional)
+  // are checked against both interface overloads rather than contextually typed from them.
+  const breakdown = async (
+    window: UsageWindow,
+    dimension: UsageDimension,
+    ids: readonly (string | null)[] | undefined,
+    requestedLimit: number | undefined,
+    filter: UsageFilter,
+    attribution?: UsageKeyAttribution,
+  ) => {
+    const limit = requestedLimit ?? 1000
+    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 1001 || (ids?.length ?? 0) > 1000)
+      throw new Error("usage breakdown outside bounds")
+    const { from, group, where } = target(window, dimension, filter, attribution)
+    return db
+      .select({
+        id: sql<string | null>`${group}::text`,
+        ...aggregates,
+        ...latencyAggregates,
+      })
+      .from(from)
+      .where(and(where, idsMatch(group, dimension, ids)))
+      .groupBy(group)
+      .orderBy(sql`count(*) desc`)
+      .limit(limit)
+  }
+
+  const seriesByDimension = async (
+    window: UsageWindow,
+    bucket: "hour" | "day",
+    dimension: UsageDimension,
+    filter: UsageFilter,
+    attribution?: UsageKeyAttribution,
+  ) => {
+    const { from, group, where } = target(window, dimension, filter, attribution)
+    return (
+      db
+        .select({
+          id: sql<string | null>`${group}::text`,
+          at: bucketExpr(bucket),
+          requests: countDistinct(usageRecords.correlationId),
+        })
+        .from(from)
+        .where(where)
+        // By ordinal, not by repeating the expression: a second `bucketExpr(bucket)` binds its own
+        // parameter placeholder, so Postgres sees `date_trunc($1, …)` and `date_trunc($4, …)` as
+        // two different expressions and rejects the select as not grouped.
+        .groupBy(sql`1, 2`)
+    )
+  }
+
   return {
     tokensSince: createTokensSince(db),
 
@@ -119,36 +170,7 @@ export function createUsageReadRepository(db: Database): UsageReadRepository {
       return row === undefined ? EMPTY_TOTALS : row
     },
 
-    breakdown: async (window, dimension, ids, requestedLimit, filter, attribution) => {
-      const limit = requestedLimit ?? 1000
-      if (!Number.isSafeInteger(limit) || limit < 1 || limit > 1001 || (ids?.length ?? 0) > 1000)
-        throw new Error("usage breakdown outside bounds")
-      const { from, group, where } = target(window, dimension, filter, attribution)
-      const rows = await db
-        .select({
-          id: sql<string | null>`${group}::text`,
-          ...aggregates,
-          ...latencyAggregates,
-        })
-        .from(from)
-        .where(
-          and(
-            where,
-            ids === undefined
-              ? undefined
-              : ids.length === 0
-                ? sql`false`
-                : sql`(${sql.join(
-                    ids.map((id) => sql`${group}::text is not distinct from ${id}`),
-                    sql` or `,
-                  )})`,
-          ),
-        )
-        .groupBy(group)
-        .orderBy(sql`count(*) desc`)
-        .limit(limit)
-      return rows
-    },
+    breakdown,
 
     outcomes: async (window, filter) =>
       db
@@ -170,23 +192,7 @@ export function createUsageReadRepository(db: Database): UsageReadRepository {
         .groupBy(sql`1`)
         .orderBy(sql`1`),
 
-    seriesByDimension: async (window, bucket, dimension, filter, attribution) => {
-      const { from, group, where } = target(window, dimension, filter, attribution)
-      return (
-        db
-          .select({
-            id: sql<string | null>`${group}::text`,
-            at: bucketExpr(bucket),
-            requests: countDistinct(usageRecords.correlationId),
-          })
-          .from(from)
-          .where(where)
-          // By ordinal, not by repeating the expression: a second `bucketExpr(bucket)` binds its own
-          // parameter placeholder, so Postgres sees `date_trunc($1, …)` and `date_trunc($4, …)` as
-          // two different expressions and rejects the select as not grouped.
-          .groupBy(sql`1, 2`)
-      )
-    },
+    seriesByDimension,
 
     latency: async (window, filter) => {
       const [row] = await db
@@ -214,6 +220,25 @@ export function createUsageReadRepository(db: Database): UsageReadRepository {
       return row ?? { p50Ms: null, p95Ms: null, routerOverheadP95Ms: null, ttfbP95Ms: null }
     },
   }
+}
+
+/**
+ * Narrows a grouped read to the selected group ids. Owner and tool ids are never null, so one array
+ * match replaces the per-id OR-chain; the column dimensions can be null and keep `is not distinct`.
+ */
+function idsMatch(
+  group: SQL,
+  dimension: UsageDimension,
+  ids: readonly (string | null)[] | undefined,
+): SQL | undefined {
+  if (ids === undefined) return undefined
+  if (ids.length === 0) return sql`false`
+  if (isAttributionDimension(dimension))
+    return sql`${group}::text = any(${sql.param(ids.filter((id): id is string => id !== null))}::text[])`
+  return sql`(${sql.join(
+    ids.map((id) => sql`${group}::text is not distinct from ${id}`),
+    sql` or `,
+  )})`
 }
 
 const EMPTY_TOTALS: UsageRawTotals = {

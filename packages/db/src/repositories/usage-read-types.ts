@@ -122,10 +122,14 @@ export interface UsageRawGroupRow extends UsageRawTotals, UsageGroupLatency {}
 export interface UsageGroupRow extends UsageTotals, UsageGroupLatency {}
 
 /**
- * `owner` and `tool` group by a key's current label, not by a column: they need a
- * `UsageKeyAttribution` to say what each key id maps to (without one every key reads as gone).
+ * `owner` and `tool` group by a key's current label, not by a column: the repository signatures
+ * are overloaded so they cannot be requested without a `UsageKeyAttribution` saying what each key
+ * id maps to (without one every key would read as gone).
  */
-export type UsageDimension = "apiKeyId" | "accountId" | "poolId" | "model" | "owner" | "tool"
+export type UsageColumnDimension = "apiKeyId" | "accountId" | "poolId" | "model"
+/** The dimensions folded from a key's label; every read of one requires a `UsageKeyAttribution`. */
+export type UsageAttributedDimension = "owner" | "tool"
+export type UsageDimension = UsageColumnDimension | UsageAttributedDimension
 
 /**
  * The key-to-label map behind the owner and tool dimensions, as four parallel arrays (one bind
@@ -160,11 +164,18 @@ export interface UsageReadRepository {
   /** Totals grouped by one dimension, biggest first. */
   breakdown(
     window: UsageWindow,
-    dimension: UsageDimension,
+    dimension: UsageColumnDimension,
     ids: readonly (string | null)[] | undefined,
     limit: number | undefined,
     filter: UsageFilter,
-    attribution?: UsageKeyAttribution,
+  ): Promise<UsageRawGroupRow[]>
+  breakdown(
+    window: UsageWindow,
+    dimension: UsageAttributedDimension,
+    ids: readonly (string | null)[] | undefined,
+    limit: number | undefined,
+    filter: UsageFilter,
+    attribution: UsageKeyAttribution,
   ): Promise<UsageRawGroupRow[]>
   /**
    * Attempts per outcome over the window — the split behind "3% failed, of which what?".
@@ -189,9 +200,15 @@ export interface UsageReadRepository {
   seriesByDimension(
     window: UsageWindow,
     bucket: "hour" | "day",
-    dimension: UsageDimension,
+    dimension: UsageColumnDimension,
     filter: UsageFilter,
-    attribution?: UsageKeyAttribution,
+  ): Promise<UsageGroupSeriesPoint[]>
+  seriesByDimension(
+    window: UsageWindow,
+    bucket: "hour" | "day",
+    dimension: UsageAttributedDimension,
+    filter: UsageFilter,
+    attribution: UsageKeyAttribution,
   ): Promise<UsageGroupSeriesPoint[]>
   /**
    * p50/p95 latency and router overhead over the window. Null when nothing was recorded.

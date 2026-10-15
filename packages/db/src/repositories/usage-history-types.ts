@@ -1,5 +1,6 @@
 import type {
-  UsageDimension,
+  UsageAttributedDimension,
+  UsageColumnDimension,
   UsageFilter,
   UsageGroupRow,
   UsageGroupSeriesPoint,
@@ -26,10 +27,16 @@ export interface UsageHistoryRepository {
   totals(window: UsageWindow, filter: UsageFilter): Promise<UsageTotals>
   breakdown(
     window: UsageWindow,
-    dimension: UsageDimension,
+    dimension: UsageColumnDimension,
     limit: number | undefined,
     filter: UsageFilter,
-    attribution?: UsageKeyAttribution,
+  ): Promise<UsageGroupRow[]>
+  breakdown(
+    window: UsageWindow,
+    dimension: UsageAttributedDimension,
+    limit: number | undefined,
+    filter: UsageFilter,
+    attribution: UsageKeyAttribution,
   ): Promise<UsageGroupRow[]>
   series(
     window: UsageWindow,
@@ -40,11 +47,19 @@ export interface UsageHistoryRepository {
   seriesByDimension(
     window: UsageWindow,
     bucket: "hour" | "day",
-    dimension: UsageDimension,
+    dimension: UsageColumnDimension,
     bucketWidth: number | undefined,
     ids: readonly (string | null)[] | undefined,
     filter: UsageFilter,
-    attribution?: UsageKeyAttribution,
+  ): Promise<UsageGroupSeriesPoint[]>
+  seriesByDimension(
+    window: UsageWindow,
+    bucket: "hour" | "day",
+    dimension: UsageAttributedDimension,
+    bucketWidth: number | undefined,
+    ids: readonly (string | null)[] | undefined,
+    filter: UsageFilter,
+    attribution: UsageKeyAttribution,
   ): Promise<UsageGroupSeriesPoint[]>
   /** All history and retained detail reads use one repeatable-read snapshot. */
   withSnapshot<T>(

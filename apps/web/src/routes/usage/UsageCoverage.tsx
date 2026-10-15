@@ -56,6 +56,10 @@ function dimensionLabel(dimension: string): string {
       return usageDimensionLabel("pool")
     case "model":
       return usageDimensionLabel("model")
+    case "owner":
+      return "Owner"
+    case "tool":
+      return "Tool"
     default:
       return "Other groups"
   }

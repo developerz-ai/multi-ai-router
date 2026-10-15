@@ -1,6 +1,6 @@
 import type { Database } from "../client"
 import { createUsageHistoryRepository } from "./usage-history-repository"
-import type { UsageDimension, UsageTotals } from "./usage-read-repository"
+import type { UsageColumnDimension, UsageTotals } from "./usage-read-repository"
 
 export interface UsageDayRange {
   readonly fromDay: string
@@ -14,7 +14,7 @@ export interface UsageDailyRepository {
   /** History horizon retention: purges banked baseline, V2 aggregates and receipts, never raw detail. */
   deleteOlderThan(cutoff: Date, limit: number): Promise<number>
   totals(range: UsageDayRange): Promise<UsageTotals>
-  breakdown(range: UsageDayRange, dimension: UsageDimension): Promise<UsageDailyGroupRow[]>
+  breakdown(range: UsageDayRange, dimension: UsageColumnDimension): Promise<UsageDailyGroupRow[]>
 }
 export function toUtcDay(at: Date): string {
   return at.toISOString().slice(0, 10)

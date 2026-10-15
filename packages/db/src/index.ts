@@ -142,6 +142,8 @@ export type {
 export type {
   TokenSpanShape,
   TokenSpanUsage,
+  UsageAttributedDimension,
+  UsageColumnDimension,
   UsageDimension,
   UsageFilter,
   UsageGroupRow,
