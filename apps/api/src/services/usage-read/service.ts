@@ -40,7 +40,7 @@ export function createUsageService(deps: UsageServiceDeps): UsageService {
       const labels = await deps.labels()
       // Resolved from the label read above, which sits outside the snapshot below: the owner/tool
       // to key-id set is current labels, not the labels as of the facts' snapshot.
-      const resolved = filter === undefined ? undefined : resolveUsageFilter(filter, labels.keys)
+      const resolved = resolveUsageFilter(filter ?? {}, labels.keys)
       return ok(
         await deps.history.withSnapshot((history, raw) =>
           readSummary({ ...deps, history, raw, labels }, query, resolved),

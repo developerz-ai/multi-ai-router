@@ -121,7 +121,7 @@ export interface UsageGroupRow extends UsageTotals, UsageGroupLatency {}
 export type UsageDimension = "apiKeyId" | "accountId" | "poolId" | "model"
 
 export interface UsageReadRepository {
-  totals(window: UsageWindow, filter?: UsageFilter): Promise<UsageRawTotals>
+  totals(window: UsageWindow, filter: UsageFilter): Promise<UsageRawTotals>
   /**
    * Tokens this account consumed **inside one quota window's own span**, per (account, window).
    *
@@ -143,9 +143,9 @@ export interface UsageReadRepository {
   breakdown(
     window: UsageWindow,
     dimension: UsageDimension,
-    ids?: readonly (string | null)[],
-    limit?: number,
-    filter?: UsageFilter,
+    ids: readonly (string | null)[] | undefined,
+    limit: number | undefined,
+    filter: UsageFilter,
   ): Promise<UsageRawGroupRow[]>
   /**
    * Attempts per outcome over the window — the split behind "3% failed, of which what?".
@@ -154,12 +154,12 @@ export interface UsageReadRepository {
    * an operator should read first is a display decision that belongs in a pure function a test can
    * reach without a database (`usage-read/failures.ts`), not in an `ORDER BY` nobody can assert.
    */
-  outcomes(window: UsageWindow, filter?: UsageFilter): Promise<UsageOutcomeCount[]>
+  outcomes(window: UsageWindow, filter: UsageFilter): Promise<UsageOutcomeCount[]>
   /** Request counts per time bucket, for the sparkline. Gaps are absent, not zero-filled. */
   series(
     window: UsageWindow,
     bucket: "hour" | "day",
-    filter?: UsageFilter,
+    filter: UsageFilter,
   ): Promise<UsageSeriesPoint[]>
   /**
    * Request counts per (group, bucket), for the inline sparkline on every breakdown row.
@@ -171,7 +171,7 @@ export interface UsageReadRepository {
     window: UsageWindow,
     bucket: "hour" | "day",
     dimension: UsageDimension,
-    filter?: UsageFilter,
+    filter: UsageFilter,
   ): Promise<UsageGroupSeriesPoint[]>
   /**
    * p50/p95 latency and router overhead over the window. Null when nothing was recorded.
@@ -179,7 +179,7 @@ export interface UsageReadRepository {
    * Cast to `int` explicitly: `percentile_disc` is exact-valued, and without the cast the driver
    * can hand back a numeric as a string.
    */
-  latency(window: UsageWindow, filter?: UsageFilter): Promise<UsageLatency>
+  latency(window: UsageWindow, filter: UsageFilter): Promise<UsageLatency>
 }
 
 export interface UsageSeriesPoint {

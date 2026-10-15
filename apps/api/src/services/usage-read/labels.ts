@@ -14,11 +14,12 @@ import type { KeyLabel, UsageLabelSets } from "./service"
  * rollups outlive the row). Tombstones are read through their own method and merged here, never
  * unioned into `keys.list()`: that list is the admin keys list, which must not show a purged key.
  *
- * The two reads are not one snapshot. A delete committing between them removes the row after
- * `keys.list()` saw it, so for that one load the key is still named from the live read; a delete
- * committing the other way round (row read as gone, tombstone read before the commit lands) shows
- * a transient "deleted" for that key until the next load. Neither is worse than the label being
- * decoration, so it is not worth a transaction.
+ * The two reads are not one snapshot, so they run in a fixed order: live keys first, tombstones
+ * second. A delete or purge commits its tombstone in the same transaction that removes the row, so
+ * a key whose row `keys.list()` no longer saw is always visible to the later `listAll()`; a key
+ * deleted between the reads is still named from the live read. No key can fall out of both. The
+ * labels feed the usage filter's owner/tool resolution as well as the names, so a key missing
+ * from both would silently drop out of a filtered total.
  */
 export function catalogLabels(deps: {
   readonly keys: Pick<ApiKeyRepository, "list">
@@ -26,7 +27,9 @@ export function catalogLabels(deps: {
   readonly catalog: Pick<RoutingCatalogStore, "accounts" | "pools">
 }): () => Promise<UsageLabelSets> {
   return async () => {
-    const [live, stones] = await Promise.all([deps.keys.list(), deps.tombstones.listAll()])
+    // Sequential on purpose: see the ordering note above.
+    const live = await deps.keys.list()
+    const stones = await deps.tombstones.listAll()
     const keys = new Map<string, KeyLabel>()
     // Tombstones first, so a live row wins if the two ever coexist (a delete racing a read).
     for (const row of [...stones, ...live]) {

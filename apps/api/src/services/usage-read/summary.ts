@@ -22,7 +22,7 @@ export async function readSummary(
     breakdownMaxRows?: number
   },
   query: UsageWindowQuery,
-  filter?: UsageFilter,
+  filter: UsageFilter,
 ): Promise<UsageSummary> {
   const initial = await deps.history.coverage()
   const requested = resolveWindow(query, initial.dbNow)

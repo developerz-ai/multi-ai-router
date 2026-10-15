@@ -7,25 +7,31 @@ import type { KeyLabel } from "./types"
  * each a list. Composed apart from `usageWindowQuery`, whose refinements make zod 4 refuse
  * `.pick`, `.omit` and key-overwriting `.extend` on it.
  *
- * Ids are validated as uuids here so a malformed one is a 400 at the boundary, never a Postgres
+ * Ids are validated as uuids (and lowercased) here so a malformed one is a 400 at the boundary, never a Postgres
  * cast error. `owner` and `tool` are matched exactly against the stored lowercase slug (no
  * trimming, no case folding, no wildcard); `model` is matched exactly against the recorded
  * client-facing model name. Lists are capped so one request cannot ship an unbounded array.
  */
 const LIST_MAX = 500
-const text = z.string().min(1).max(256)
+const text = z
+  .string()
+  .min(1)
+  .max(256)
+  .refine((value) => !value.includes("\u0000"), "must not contain a NUL character")
+// Postgres renders uuids lowercase, so a pasted uppercase id is folded here rather than missed.
+const id = z.uuid().transform((value) => value.toLowerCase())
 const list = <T extends z.ZodType>(item: T) => z.array(item).min(1).max(LIST_MAX).optional()
 
 export const usageFilterQuery = z.object({
   owner: list(text),
   tool: list(text),
   model: list(text),
-  keyId: list(z.uuid()),
-  poolId: list(z.uuid()),
-  accountId: list(z.uuid()),
+  keyId: list(id),
+  poolId: list(id),
+  accountId: list(id),
 })
 
-export type UsageFilterQuery = z.infer<typeof usageFilterQuery>
+export type UsageFilterQuery = z.output<typeof usageFilterQuery>
 
 /** The six filter parameter names, in one place for the route to read as repeated params. */
 export const USAGE_FILTER_PARAMS = Object.keys(usageFilterQuery.shape) as readonly string[]
