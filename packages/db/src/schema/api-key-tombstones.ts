@@ -6,9 +6,9 @@ import { keyOwnerKind } from "./enums"
  *
  * `usage_records` and the rollups keep a key's id long after the `api_keys` row is gone (no FK
  * since 0030), so a name source that outlives the row is what lets a report still say whose spend
- * a month-old rotation was. Written in the same statement as the delete (janitor purge) or the same
- * transaction (operator delete) and swept on `RETENTION_USAGE_DAILY_DAYS`, the horizon of the
- * rollups it labels.
+ * a month-old rotation was. Written in the same statement as the delete (janitor purge and operator
+ * delete) and swept at `RETENTION_USAGE_DAILY_DAYS` plus one day: rollups age by whole UTC day, and
+ * the tombstone must outlive the rollups it labels.
  *
  * Deliberately has no `value`/ciphertext column, and nothing on the request path reads this table:
  * verification, reveal and the admin key list all stay on `api_keys`. The display prefix is
