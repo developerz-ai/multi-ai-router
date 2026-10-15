@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.37.3] — 2026-10-15
+
+### Fixed
+
+- A forced `tool_choice` (`any` or `tool`) on an anthropic request relayed to a vendor that thinks by default (MiniMax, Z.ai, Kimi, `anthropic-compatible`) now states `thinking: {type: "disabled"}` when the client stated no `thinking`. MiniMax ignores the force while thinking, so `@ai-sdk/anthropic` `generateObject` (developerz.ai's structured-output probe: tool `json`, `tool_choice {type: "any", disable_parallel_tool_use: true}`, no `thinking`) got `end_turn` prose and failed with "no content parts". An explicit `thinking` of `enabled` or `adaptive` beside a forced tool is refused 400 in Anthropic's error shape (`invalid_request_error`, "thinking may not be enabled when tool_choice forces tool use"), as Anthropic itself does, instead of being sent to a vendor that would ignore the force. Real Anthropic accounts are untouched and still relayed byte for byte, as is any body without a forced choice. This is the second passthrough body edit after the model name; it parses a body only when it contains `tool_choice` and the account's driver declares `thinkingOnByDefault`.
+- An anthropic completion that carries a tool call now reads `finish_reason: "tool_calls"` on openai-chat (non-streaming and streaming) when the vendor wrote `end_turn` beside the call, as MiniMax does under a forced tool. It read `stop`, which an OpenAI client takes as the end of a plain answer.
+
 ## [2.37.2] — 2026-10-15
 
 ### Fixed

@@ -140,7 +140,14 @@ const LONG_WINDOW_RETEST_SECONDS = 60 * 60
 
 export const kimiDriver = createHttpDriver({
   id: "kimi",
-  surfaces: [{ dialect: "anthropic", baseUrl: BASE_URL, anthropicAuth: "vendor-bearer" }],
+  surfaces: [
+    {
+      dialect: "anthropic",
+      baseUrl: BASE_URL,
+      anthropicAuth: "vendor-bearer",
+      thinkingOnByDefault: true,
+    },
+  ],
   rules: [
     typeRule("credits-exhausted", "kimi:exceeded_current_quota_error", QUOTA_TYPES),
     messageRule("credits-exhausted", "kimi:insufficient-balance", INSUFFICIENT_BALANCE),

@@ -1,3 +1,4 @@
+import { disableThinkingForForcedTool } from "./body/forced-tool-thinking"
 import { rewriteModel } from "./body/read"
 import type { ChainContext } from "./chain"
 import { modelOutputCeiling } from "./model-output-ceiling"
@@ -6,7 +7,8 @@ import type { ServableCandidate } from "./plan"
 /**
  * The body this account gets. Passthrough: identical bytes, unless routing renamed the model — the
  * account's alias map, or a stripped context tag (`routing/context-tag.ts`) — the one edit a
- * passthrough body ever receives. Translate: rebuilt field by field,
+ * passthrough body ever receives, plus `thinking: disabled` beside a forced tool choice for a vendor
+ * that thinks by default. Translate: rebuilt field by field,
  * which a Claude subscription also takes since the SDK's prompt is built from Anthropic-shaped
  * bytes either way.
  *
@@ -30,6 +32,14 @@ export function bodyFor(ctx: ChainContext, servable: ServableCandidate): Uint8Ar
     )
   }
   if (ctx.bodyBytes.length === 0) return null
-  if (ctx.modelSpan === null || servable.upstreamModel === ctx.runtime.model) return ctx.bodyBytes
-  return rewriteModel(ctx.bodyBytes, ctx.modelSpan, servable.upstreamModel)
+  const named =
+    ctx.modelSpan === null || servable.upstreamModel === ctx.runtime.model
+      ? ctx.bodyBytes
+      : rewriteModel(ctx.bodyBytes, ctx.modelSpan, servable.upstreamModel)
+  // The second passthrough edit: a vendor that thinks by default ignores a forced tool unless the
+  // body states thinking off (`body/forced-tool-thinking.ts`). Real Anthropic is never asked.
+  if (servable.kind === "http" && servable.driver.thinkingOnByDefault?.(servable.account.driver)) {
+    return disableThinkingForForcedTool(named)
+  }
+  return named
 }

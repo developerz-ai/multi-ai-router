@@ -82,7 +82,15 @@ export function anthropicToOpenAiChatResponse(
   }
 
   const stop = toOpenAiFinishReason(message?.stop_reason)
-  const finish = structured !== null && message?.stop_reason === "tool_use" ? "stop" : stop.value
+  // A completion carrying a call is a `tool_calls` finish whatever the vendor wrote beside it: MiniMax
+  // answers a forced tool with `end_turn` and the block present, and a client keyed on
+  // `finish_reason` would read the call as the end of a plain answer.
+  const finish =
+    structured !== null && message?.stop_reason === "tool_use"
+      ? "stop"
+      : toolCalls.length > 0 && (stop.value === null || stop.value === "stop")
+        ? "tool_calls"
+        : stop.value
   const usage = parseAnthropicUsage(message?.usage)
 
   return {

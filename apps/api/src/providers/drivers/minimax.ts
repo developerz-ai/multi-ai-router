@@ -76,7 +76,14 @@ export function inspectMiniMaxSuccess(body: unknown) {
 export const miniMaxDriver = createHttpDriver({
   responseObservation: { terminalPolicy: "evidence-only", inspectPayload: inspectMiniMaxSuccess },
   id: "minimax",
-  surfaces: [{ dialect: "anthropic", baseUrl: BASE_URL, anthropicAuth: "vendor-bearer" }],
+  surfaces: [
+    {
+      dialect: "anthropic",
+      baseUrl: BASE_URL,
+      anthropicAuth: "vendor-bearer",
+      thinkingOnByDefault: true,
+    },
+  ],
   readFacts: readMiniMaxFacts,
   rules: [
     codeRule("credits-exhausted", "minimax:base_resp-1008", BALANCE_CODES),

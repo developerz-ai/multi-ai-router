@@ -292,3 +292,43 @@ describe("the forced tool streams as content deltas", () => {
     expect(chunks.at(-1)?.choices[0]?.finish_reason).toBe("tool_calls")
   })
 })
+
+describe("a completion carrying a tool call finishes tool_calls whatever the vendor wrote", () => {
+  const toolUse = { type: "tool_use", id: "t", name: "get_weather", input: { city: "x" } }
+
+  test("end_turn beside a tool_use (MiniMax under a forced tool) reads tool_calls", () => {
+    const out = anthropicToOpenAiChatResponse(
+      { id: "m", model: "m", content: [toolUse], stop_reason: "end_turn", usage: {} },
+      { created: 1 },
+    ).body as { choices: { finish_reason: string }[] }
+    expect(out.choices[0]?.finish_reason).toBe("tool_calls")
+  })
+
+  test("the streaming half agrees", () => {
+    const stream = anthropicToOpenAiChatStream({ created: 1, id: "x", model: "m" })
+    const events: SseEvent[] = []
+    for (const frame of [
+      anthropicFrame("message_start", { message: { id: "msg_1", model: "m", usage: {} } }),
+      anthropicFrame("content_block_start", { index: 0, content_block: toolUse }),
+      anthropicFrame("content_block_delta", {
+        index: 0,
+        delta: { type: "input_json_delta", partial_json: "{}" },
+      }),
+      anthropicFrame("content_block_stop", { index: 0 }),
+      anthropicFrame("message_delta", { delta: { stop_reason: "end_turn" }, usage: {} }),
+      anthropicFrame("message_stop"),
+    ]) {
+      events.push(...stream.push(frame))
+    }
+    const chunks = payloads(events) as { choices: { finish_reason: string | null }[] }[]
+    expect(chunks.at(-1)?.choices[0]?.finish_reason).toBe("tool_calls")
+  })
+
+  test("a plain end_turn with no call still reads stop", () => {
+    const out = anthropicToOpenAiChatResponse(
+      { id: "m", model: "m", content: [{ type: "text", text: "hi" }], stop_reason: "end_turn" },
+      { created: 1 },
+    ).body as { choices: { finish_reason: string }[] }
+    expect(out.choices[0]?.finish_reason).toBe("stop")
+  })
+})
