@@ -64,7 +64,7 @@ describe.skipIf(!historyUrl)("the usage_reports repository", () => {
     expect((await repo.list(2)).map((r) => r.periodStart)).toEqual(["2026-09-14", "2026-09-07"])
   })
 
-  test("delivery_status is stored as text and accepts only what the core union names", async () => {
+  test("delivery_status is a text column", async () => {
     const [column] = await fixture
       .db()
       .execute<{ data_type: string }>(

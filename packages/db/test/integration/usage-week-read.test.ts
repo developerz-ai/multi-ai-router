@@ -52,7 +52,7 @@ describe.skipIf(!historyUrl)("the week read", () => {
   })
 
   test("folds days into one row per key, account, pool and model, and clips to the week", async () => {
-    const { rows } = await fixture.history().weekRows(WEEK)
+    const { rows } = await fixture.history().weekRows(WEEK, 1000)
     expect(rows).toHaveLength(2)
     const a = rows.find((r) => r.accountId === ACCOUNT_A)
     const b = rows.find((r) => r.accountId === ACCOUNT_B)
@@ -78,22 +78,41 @@ describe.skipIf(!historyUrl)("the week read", () => {
   })
 
   test("a measured week reads 0 for a group with nothing unpriced, never null", async () => {
-    const { rows, unpricedSince } = await fixture.history().weekRows(WEEK)
+    const { rows, unpricedSince } = await fixture.history().weekRows(WEEK, 1000)
     expect(unpricedSince).toBe("2026-10-01")
     expect(rows.every((r) => typeof r.unpricedAttempts === "number")).toBe(true)
   })
 
   test("a week wholly before the measure started reads unmeasured (null), carrying since", async () => {
     await fixture.setUnpricedSince("2026-10-20")
-    const { rows, unpricedSince } = await fixture.history().weekRows(WEEK)
+    const { rows, unpricedSince } = await fixture.history().weekRows(WEEK, 1000)
     expect(unpricedSince).toBe("2026-10-20")
     expect(rows.every((r) => r.unpricedAttempts === null)).toBe(true)
+  })
+
+  test("counts attempts on measured days separately from all attempts", async () => {
+    await fixture.setUnpricedSince("2026-10-07")
+    const { rows } = await fixture.history().weekRows(WEEK, 1000)
+    const a = rows.find((r) => r.accountId === ACCOUNT_A)
+    // Mon 10-05 is before the measure; Wed 10-07 is on its first day.
+    expect(a).toMatchObject({ attempts: 2, measuredAttempts: 1 })
+    const b = rows.find((r) => r.accountId === ACCOUNT_B)
+    expect(b).toMatchObject({ attempts: 1, measuredAttempts: 1 })
+  })
+
+  test("carries cache token sums", async () => {
+    const { rows } = await fixture.history().weekRows(WEEK, 1000)
+    expect(rows.every((r) => typeof r.cacheReadTokens === "number")).toBe(true)
+  })
+
+  test("a week with more rows than the ceiling throws naming the ceiling, never truncates", async () => {
+    await expect(fixture.history().weekRows(WEEK, 1)).rejects.toThrow(/ceiling of 1 rows/)
   })
 
   test("sums equal the summary totals for the same window", async () => {
     const history = fixture.history()
     const totals = await history.totals(WEEK, {})
-    const { rows } = await history.weekRows(WEEK)
+    const { rows } = await history.weekRows(WEEK, 1000)
     expect(rows.reduce((n, r) => n + r.requests, 0)).toBe(totals.requests)
     expect(rows.reduce((n, r) => n + r.attempts, 0)).toBe(totals.attempts)
     expect(rows.reduce((n, r) => n + r.tokensIn, 0)).toBe(totals.tokensIn)

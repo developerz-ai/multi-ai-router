@@ -133,7 +133,7 @@ describe.skipIf(!historyUrl)("weekly usage reports over HTTP and Postgres", () =
         { id: P1, name: "main", overflowAccountId: O, overflowProvider: "openai-oauth" },
         { id: P2, name: "side", overflowAccountId: null, overflowProvider: null },
       ],
-      settleMinutes: 30,
+      maxRows: 1000,
       upstreamTimeoutMs: 600_000,
       listLimit: 110,
       now: () => NOW,
@@ -253,5 +253,26 @@ describe.skipIf(!historyUrl)("weekly usage reports over HTTP and Postgres", () =
     for (const bad of ["2026-10-06", "2026-1-5", "nope", "2026-02-30"])
       expect((await get(`/reports/${bad}`)).status).toBe(400)
     expect((await get("/reports/2026-09-28")).status).toBe(404)
+  })
+
+  test("a week over the row ceiling fails loudly naming the cap, never a truncated report", async () => {
+    const tight = createUsageReportService({
+      reports,
+      history: fixture.history(),
+      labels: async () => ({ keys: new Map() }),
+      pools: async () => [],
+      upstreamTimeoutMs: 600_000,
+      listLimit: 10,
+      maxRows: 1,
+      now: () => NOW,
+    })
+    const preview = await tight.preview()
+    expect(preview.ok).toBe(false)
+    if (!preview.ok) {
+      expect(preview.failure.status).toBe(400)
+      expect(preview.failure.message).toContain("USAGE_REPORT_MAX_ROWS")
+    }
+    const week = { start: new Date("2026-10-05T00:00:00Z"), end: new Date("2026-10-12T00:00:00Z") }
+    await expect(tight.generate(week, NOW)).rejects.toThrow("USAGE_REPORT_MAX_ROWS")
   })
 })
