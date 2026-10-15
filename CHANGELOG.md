@@ -16,6 +16,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Documentation
 
 - The `usage_records.pool_id` gloss now says it is null whenever no pool was in play, including an attempt that failed before an account was selected on a pool-scoped key, in the schema comment, the observability spec, the recent-feed and web wire-type comments and the repository types.
+
+### Changed
+
+- The Usage page's truncated-breakdown notice names Owner and Tool instead of "Other groups".
+
 ## [2.33.0] — 2026-10-15
 
 ### Added
