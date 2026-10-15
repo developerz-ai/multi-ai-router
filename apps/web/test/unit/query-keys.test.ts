@@ -29,6 +29,23 @@ describe("queryKeys", () => {
     expect(startsWith(queryKeys.usage.summary("7d"), queryKeys.usage.root())).toBe(true)
   })
 
+  test("an unfiltered usage summary keeps its own key, so the tables' 7d read stays a cache hit", () => {
+    expect(queryKeys.usage.summary("7d")).toEqual(["usage", "summary", "7d"])
+    const empty = { owner: [], tool: [], model: [] }
+    expect(queryKeys.usage.summary("7d", empty)).toEqual(["usage", "summary", "7d"])
+  })
+
+  test("filters join the usage summary key, order-insensitively, under the usage root", () => {
+    const a = queryKeys.usage.summary("7d", { owner: ["alice", "bob"], tool: [], model: [] })
+    const b = queryKeys.usage.summary("7d", { owner: ["bob", "alice"], tool: [], model: [] })
+    const c = queryKeys.usage.summary("7d", { owner: ["alice"], tool: [], model: [] })
+    expect(a).toEqual(b)
+    expect(a).not.toEqual(c)
+    expect(a).not.toEqual(queryKeys.usage.summary("7d"))
+    expect(startsWith(a, queryKeys.usage.root())).toBe(true)
+    expect(startsWith(queryKeys.usage.reports(), queryKeys.usage.root())).toBe(true)
+  })
+
   test("every settings, tasks and audit key is prefixed by its root", () => {
     // The price mutation invalidates the settings root; a detail key that did not share the
     // prefix would leave the table showing the rates it had before the save.
