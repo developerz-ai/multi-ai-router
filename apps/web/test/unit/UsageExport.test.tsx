@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test"
-import { Router } from "@solidjs/router"
+import { Route, Router } from "@solidjs/router"
 import { QueryClient, QueryClientProvider } from "@tanstack/solid-query"
 import { render } from "solid-js/web"
 import { usageExportHref, usageQueryParams } from "../../src/lib/api/usage-params"
@@ -115,12 +115,13 @@ describe("UsageRoute export control", () => {
 
 describe("UsageExport inside the router", () => {
   test("a primary click is left to the browser: the SPA router must not intercept the download", () => {
+    window.happyDOM?.setURL("http://router.test/usage")
     const container = document.createElement("div")
     document.body.appendChild(container)
     const dispose = render(
       () => (
-        <Router>
-          <UsageExport filters={{}} range="7d" />
+        <Router root={() => <UsageExport filters={{}} range="7d" />}>
+          <Route path="*" component={() => null} />
         </Router>
       ),
       container,

@@ -109,6 +109,8 @@ describe.skipIf(!historyUrl)("usage CSV export refusals", () => {
     await sql.unsafe("alter table usage_daily disable trigger usage_history_baseline_seal")
     await fixture.db().insert(usageDaily).values({
       day: "1984-03-01",
+      apiKeyId: crypto.randomUUID(),
+      accountId: crypto.randomUUID(),
       model: "legacy",
       requests: 6,
       attempts: 6,
