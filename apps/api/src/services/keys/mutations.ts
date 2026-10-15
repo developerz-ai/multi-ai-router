@@ -157,6 +157,8 @@ export function createKeyMutations(deps: KeysServiceDeps): Pick<KeysService, Key
           const current = await tx.keys.findById(id)
           if (current === undefined) return notFound(`no key with id "${id}"`)
           if (!(await tx.keys.delete(id))) return notFound(`no key with id "${id}"`)
+          // Same transaction as the delete: the key's name outlives its row for the rollups.
+          await tx.tombstones.record(current, deps.now())
           await createAuditRecorder(tx.audit).record({
             kind: AUDIT_KINDS.keyDeleted,
             subjectType: AUDIT_SUBJECTS.key,

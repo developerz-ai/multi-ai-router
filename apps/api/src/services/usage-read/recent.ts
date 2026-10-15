@@ -3,6 +3,7 @@ import { isSuccessOutcome, UsageOutcome, usageOutcomeFault } from "@multi-ai-rou
 import type { RecentAttemptRow } from "@multi-ai-router/db"
 import { z } from "zod"
 import type { UsageLabelSets } from "./service"
+import { keyNames } from "./summary-view"
 
 /**
  * The live request feed's contract: what the console may ask for, and what one
@@ -157,7 +158,7 @@ export function toRecentAttemptView(
     correlationId: row.correlationId,
     clientRequestId: row.clientRequestId,
     attempt: row.attempt,
-    key: subject(row.apiKeyId, labels.keys),
+    key: subject(row.apiKeyId, keyNames(labels.keys)),
     account: subject(row.accountId, labels.accounts),
     pool: subject(row.poolId, labels.pools),
     provider: row.provider,

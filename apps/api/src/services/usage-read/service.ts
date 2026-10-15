@@ -7,6 +7,7 @@ import type { UsageWindowQuery } from "./window"
 /** Summary facts share one database snapshot; labels are current best-effort decoration. */
 
 export type {
+  KeyLabel,
   UsageBreakdownRow,
   UsageCoverage,
   UsageLabelSets,

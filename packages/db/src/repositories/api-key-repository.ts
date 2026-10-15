@@ -50,8 +50,12 @@ export interface ApiKeyRepository {
    * and the run should report `partial`.
    *
    * Revocation already excluded these keys from verification; this only reclaims
-   * the rows a configured window later. Usage history survives —
-   * `usage_records.api_key_id` is ON DELETE SET NULL — and scope rows cascade.
+   * the rows a configured window later. Usage history survives — `usage_records.api_key_id` has
+   * had no FK since 0030, so the id stays on every usage row — and scope rows cascade.
+   *
+   * **Does not write a tombstone.** The janitor purges through
+   * `ApiKeyTombstoneRepository.purgeRevoked`, which does it in the same statement; this method
+   * would lose the key's name.
    *
    * A revoked row whose `revoked_at` is NULL has no measurable age and is never
    * swept, which is the safe reading: unpurged is recoverable, purged is not.

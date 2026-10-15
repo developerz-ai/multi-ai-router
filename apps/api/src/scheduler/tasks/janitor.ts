@@ -1,5 +1,5 @@
 import type {
-  ApiKeyRepository,
+  ApiKeyTombstoneRepository,
   AuditRepository,
   ScheduledTaskRepository,
   SessionRepository,
@@ -11,7 +11,7 @@ import type { ScheduledTask } from "../types"
 import { runSweeps } from "./sweep"
 
 /**
- * The janitor: the retention sweep for the six tables that grow without bound.
+ * The janitor: the retention sweep for the seven tables that grow without bound.
  *
  * One task rather than six, because they share a schedule and an operator reads
  * them as one answer — "the janitor ran 4 min ago and deleted 812 rows"
@@ -21,10 +21,11 @@ import { runSweeps } from "./sweep"
  * **Every window is `env.retention`, never a number in this file** (CLAUDE.md
  * non-negotiable 11). What is decided here is only the *order*, and it is
  * deliberate: revoked keys go last, because deleting one cascades to its
- * sessions and nulls the key on its usage rows, and doing that first would make
- * the sweeps in front of it race their own cascade for no reason.
+ * sessions and scope rows (its usage rows keep the id, and a tombstone written in the same
+ * statement keeps the name), and doing that first would make the sweeps in front of it race their
+ * own cascade for no reason.
  *
- * Two of the six grow slowly enough to have been overlooked rather than
+ * Two of the seven grow slowly enough to have been overlooked rather than
  * excluded, and both are here for the same reason the other four are: `usage_daily`
  * banks one row per distinct `(day, key, account, pool, model)` and outlives the
  * raw rows by design, which is not the same as outliving them forever; and
@@ -48,7 +49,7 @@ export interface JanitorDeps {
   readonly history: Pick<UsageHistoryRepository, "deleteRetainedHistory">
   readonly auditEvents: Pick<AuditRepository, "deleteOlderThan">
   readonly taskRuns: Pick<ScheduledTaskRepository, "deleteOlderThan">
-  readonly apiKeys: Pick<ApiKeyRepository, "deleteRevokedOlderThan">
+  readonly keyTombstones: Pick<ApiKeyTombstoneRepository, "purgeRevoked" | "deleteOlderThan">
   /** Every retention window, straight from `env.retention`. */
   readonly retention: RetentionConfig
   /** `JANITOR_INTERVAL_MINUTES`, in milliseconds. The runner jitters it. */
@@ -75,6 +76,8 @@ export function createJanitorTask(deps: JanitorDeps): ScheduledTask {
       const staleAudit = before(now, retention.auditDays * DAY_MS)
       const staleTaskRuns = before(now, retention.taskRunsDays * DAY_MS)
       const purgeableKeys = before(now, retention.revokedKeysDays * DAY_MS)
+      // A tombstone labels rollups, so it lives as long as they do.
+      const staleTombstones = before(now, retention.usageDailyDays * DAY_MS)
 
       const report = await runSweeps(
         [
@@ -109,7 +112,12 @@ export function createJanitorTask(deps: JanitorDeps): ScheduledTask {
           },
           {
             category: "revokedKeys",
-            deleteBatch: (limit) => deps.apiKeys.deleteRevokedOlderThan(purgeableKeys, limit),
+            // Delete and tombstone are one statement; `purged_at` is this tick's clock.
+            deleteBatch: (limit) => deps.keyTombstones.purgeRevoked(purgeableKeys, now, limit),
+          },
+          {
+            category: "keyTombstones",
+            deleteBatch: (limit) => deps.keyTombstones.deleteOlderThan(staleTombstones, limit),
           },
         ],
         { batchSize: deps.batchSize, signal },

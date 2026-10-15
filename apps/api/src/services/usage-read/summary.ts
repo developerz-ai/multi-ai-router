@@ -5,7 +5,7 @@ import type {
 } from "@multi-ai-router/db"
 import { axisBucketWidth, buildAxis } from "./axis"
 import { foldFailures } from "./failures"
-import { alignSeries, breakdownRow, label } from "./summary-view"
+import { alignSeries, breakdownRow, keyNames, label } from "./summary-view"
 import type { UsageLabelSets, UsageSummary } from "./types"
 import { resolveWindow, type UsageWindowQuery } from "./window"
 
@@ -112,7 +112,7 @@ export async function readSummary(
     },
     axis,
     series: alignSeries(axis, series),
-    byKey: label(keys ?? [], deps.labels.keys, axis, keySeries ?? []),
+    byKey: label(keys ?? [], keyNames(deps.labels.keys), axis, keySeries ?? []),
     byAccount: label(accounts ?? [], deps.labels.accounts, axis, accountSeries ?? []),
     byPool: label(pools ?? [], deps.labels.pools, axis, poolSeries ?? []),
     byModel: (models ?? []).map((row) => ({

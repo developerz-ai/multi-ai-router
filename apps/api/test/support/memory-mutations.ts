@@ -27,6 +27,8 @@ export function createMemoryMutations(store: MemoryStore): AdminMutationReposito
       })
       const scope: AdminMutationScope = {
         keys: store.keys,
+        // The in-memory store keeps no tombstones; the live path is covered against Postgres.
+        tombstones: { record: async () => {} },
         pools: store.pools,
         accounts: store.accounts,
         audit: store.audit,

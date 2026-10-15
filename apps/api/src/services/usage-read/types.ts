@@ -1,3 +1,4 @@
+import type { KeyOwnerKind } from "@multi-ai-router/core"
 import type { UsageTotals } from "@multi-ai-router/db"
 import type { UsageFailures } from "./failures"
 
@@ -53,13 +54,24 @@ export interface UsageBreakdownRow {
 }
 
 /**
+ * What the loader knows about a key: read from the live row, else its tombstone. Only `name`
+ * reaches the wire in this slice; owner, kind and tool ride along for the consumers that follow.
+ */
+export interface KeyLabel {
+  readonly name: string
+  readonly owner: string | null
+  readonly ownerKind: KeyOwnerKind | null
+  readonly tool: string | null
+}
+
+/**
  * Display names for every id a breakdown can carry, read once per summary.
  *
  * Maps rather than per-id lookups: a breakdown can be hundreds of rows, and resolving each one
  * separately is how an admin screen quietly becomes N queries.
  */
 export interface UsageLabelSets {
-  readonly keys: ReadonlyMap<string, string>
+  readonly keys: ReadonlyMap<string, KeyLabel>
   readonly accounts: ReadonlyMap<string, string>
   readonly pools: ReadonlyMap<string, string>
 }

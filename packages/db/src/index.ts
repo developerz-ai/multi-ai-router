@@ -65,6 +65,11 @@ export { createAdminSessionRepository } from "./repositories/admin-session-repos
 export type { ApiKeyRepository } from "./repositories/api-key-repository"
 export { createApiKeyRepository } from "./repositories/api-key-repository"
 export type {
+  ApiKeyTombstoneRepository,
+  TombstoneSource,
+} from "./repositories/api-key-tombstone-repository"
+export { createApiKeyTombstoneRepository } from "./repositories/api-key-tombstone-repository"
+export type {
   AppendAuditEventInput,
   AuditRepository,
   LatestForSubjectsInput,
@@ -190,6 +195,8 @@ export type {
   NewApiKeyPoolRow,
 } from "./schema/api-key-scope"
 export { apiKeyAccounts, apiKeyPools } from "./schema/api-key-scope"
+export type { ApiKeyTombstoneRow } from "./schema/api-key-tombstones"
+export { apiKeyTombstones } from "./schema/api-key-tombstones"
 export type { ApiKeyRow, NewApiKeyRow } from "./schema/api-keys"
 export { apiKeys } from "./schema/api-keys"
 export type { AuditDetail, AuditEventRow, NewAuditEventRow } from "./schema/audit-events"

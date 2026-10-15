@@ -5,9 +5,9 @@ import { createJanitorTask } from "../../../src/scheduler"
 import { ageBucket, NOW, silentLogger } from "./fixtures"
 
 /**
- * `createJanitorTask` is `runSweeps` (`sweep.ts`) plumbed to six categories.
+ * `createJanitorTask` is `runSweeps` (`sweep.ts`) plumbed to seven categories.
  * These tests exercise it end to end with in-memory `AgeBucket`s standing in
- * for the six repositories, rather than re-testing `runSweeps` in isolation —
+ * for the seven repositories, rather than re-testing `runSweeps` in isolation —
  * the contract that matters is the whole task's, not the loop's.
  */
 
@@ -25,6 +25,15 @@ const RETENTION: RetentionConfig = {
 /** Older than every cutoff `RETENTION` computes off `NOW`. */
 const OLD = new Date(NOW.getTime() - 2 * 24 * 60 * 60 * 1000)
 
+/** `purgeRevoked` and `deleteOlderThan` stand in as two age buckets: revoked keys, then tombstones. */
+function tombstones(revoked: ReturnType<typeof ageBucket>, stones: ReturnType<typeof ageBucket>) {
+  return {
+    purgeRevoked: (cutoff: Date, _purgedAt: Date, limit: number) =>
+      revoked.deleteBatch(cutoff, limit),
+    deleteOlderThan: stones.deleteBatch,
+  }
+}
+
 type Report = TaskOutcome & { readonly counts: Record<string, number> }
 
 describe("the janitor sweep", () => {
@@ -35,6 +44,7 @@ describe("the janitor sweep", () => {
     const auditEvents = ageBucket([OLD])
     const taskRuns = ageBucket([OLD, OLD, OLD])
     const apiKeys = ageBucket([])
+    const keyTombstones = ageBucket([])
 
     const task = createJanitorTask({
       sessions: { deleteIdleBefore: sessions.deleteBatch },
@@ -48,7 +58,7 @@ describe("the janitor sweep", () => {
       },
       auditEvents: { deleteOlderThan: auditEvents.deleteBatch },
       taskRuns: { deleteOlderThan: taskRuns.deleteBatch },
-      apiKeys: { deleteRevokedOlderThan: apiKeys.deleteBatch },
+      keyTombstones: tombstones(apiKeys, keyTombstones),
       retention: RETENTION,
       intervalMs: 60_000,
       batchSize: 2,
@@ -61,7 +71,7 @@ describe("the janitor sweep", () => {
     })
     expect(first.outcome).toBe("success")
     expect(first.itemsProcessed).toBe(13)
-    // Every one of the six tables that grows without bound is named, including
+    // Every one of the seven tables that grows without bound is named, including
     // the two that are only aggregates and bookkeeping — nothing is left off.
     expect((first as Report).counts).toEqual({
       sessions: 3,
@@ -70,6 +80,7 @@ describe("the janitor sweep", () => {
       auditEvents: 1,
       taskRuns: 3,
       revokedKeys: 0,
+      keyTombstones: 0,
     })
 
     const second = await task.run({
@@ -86,6 +97,7 @@ describe("the janitor sweep", () => {
       auditEvents: 0,
       taskRuns: 0,
       revokedKeys: 0,
+      keyTombstones: 0,
     })
   })
 
@@ -113,7 +125,10 @@ describe("the janitor sweep", () => {
       },
       auditEvents: { deleteOlderThan: record("auditEvents") },
       taskRuns: { deleteOlderThan: record("taskRuns") },
-      apiKeys: { deleteRevokedOlderThan: record("revokedKeys") },
+      keyTombstones: {
+        purgeRevoked: async (cutoff, _at, limit) => record("revokedKeys")(cutoff, limit),
+        deleteOlderThan: record("keyTombstones"),
+      },
       retention: { ...RETENTION, usageDays: 90, usageDailyDays: 730, taskRunsDays: 30 },
       intervalMs: 60_000,
       batchSize: 2,
@@ -155,7 +170,7 @@ describe("the janitor sweep", () => {
       },
       auditEvents: { deleteOlderThan: empty.deleteBatch },
       taskRuns: { deleteOlderThan: empty.deleteBatch },
-      apiKeys: { deleteRevokedOlderThan: empty.deleteBatch },
+      keyTombstones: tombstones(empty, empty),
       retention: RETENTION,
       intervalMs: 60_000,
       batchSize: 2,

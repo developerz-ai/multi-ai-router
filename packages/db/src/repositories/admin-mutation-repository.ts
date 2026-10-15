@@ -6,6 +6,10 @@ import { pools } from "../schema/pools"
 import { type AccountRepository, createAccountRepository } from "./account-repository"
 import { withAdminMutationRetry } from "./admin-mutation-conflict"
 import { type ApiKeyRepository, createApiKeyRepository } from "./api-key-repository"
+import {
+  type ApiKeyTombstoneRepository,
+  createApiKeyTombstoneRepository,
+} from "./api-key-tombstone-repository"
 import { type AuditRepository, createAuditRepository } from "./audit-repository"
 import { createPoolRepository, type PoolRepository } from "./pool-repository"
 
@@ -30,6 +34,7 @@ export interface AdminMutationScope {
     | "listKeysScopedToPool"
     | "replaceScopeTargets"
   >
+  readonly tombstones: Pick<ApiKeyTombstoneRepository, "record">
   readonly pools: PoolRepository
   readonly accounts: Pick<AccountRepository, "list" | "findByIds">
   readonly audit: Pick<AuditRepository, "append">
@@ -74,6 +79,7 @@ export function createAdminMutationRepository(db: Database): AdminMutationReposi
           }
           return work({
             keys: createApiKeyRepository(tx),
+            tombstones: createApiKeyTombstoneRepository(tx),
             pools: createPoolRepository(tx),
             accounts: createAccountRepository(tx),
             audit: createAuditRepository(tx),
