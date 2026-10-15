@@ -147,6 +147,7 @@ describe.skipIf(!historyUrl)("a purged key keeps its attribution", () => {
       owner: "alice",
       ownerKind: "person",
       tool: "editor",
+      retired: true,
     })
     // One clock: purged_at is the janitor tick's date, not the database's now().
     expect((await tombstones.listAll()).find((row) => row.id === id)?.purgedAt).toEqual(tickAt)
@@ -182,6 +183,7 @@ describe.skipIf(!historyUrl)("a purged key keeps its attribution", () => {
       owner: "ci",
       ownerKind: "service",
       tool: "agent",
+      retired: true,
     })
     // One clock on the operator path too: purged_at is the service's injected now.
     expect((await tombstones.listAll()).find((row) => row.id === id)?.purgedAt).toEqual(deletedAt)
