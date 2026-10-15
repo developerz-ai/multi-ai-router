@@ -1,5 +1,5 @@
-import type { KeyScope } from "@multi-ai-router/core"
-import { and, asc, eq, gt, inArray, isNull, or } from "drizzle-orm"
+import type { KeyOwnerKind, KeyScope } from "@multi-ai-router/core"
+import { and, asc, eq, gt, inArray, isNull, or, type SQL } from "drizzle-orm"
 import type { DatabaseExecutor } from "../client"
 import {
   type ApiKeyAccountRow,
@@ -37,8 +37,8 @@ export interface ApiKeyRepository {
 
   // --- admin plane ----------------------------------------------------------
   create(input: CreateApiKeyInput): Promise<ApiKeyRow>
-  /** Oldest first, so the admin list is stable across calls. */
-  list(): Promise<ApiKeyRow[]>
+  /** Oldest first, so the admin list is stable across calls. Filters are exact matches, ANDed. */
+  list(filter?: ApiKeyListFilter): Promise<ApiKeyRow[]>
   findByName(name: string): Promise<ApiKeyRow | undefined>
   /** Never touches `value` or `prefix`: editing a key does not rotate it. */
   update(id: string, patch: UpdateApiKeyInput, now: Date): Promise<ApiKeyRow | undefined>
@@ -82,6 +82,11 @@ export interface CreateApiKeyInput {
   /** The clear, indexed display prefix — `routerKeyDisplayPrefix` in core. */
   readonly prefix: string
   readonly scope?: KeyScope
+  /** Attribution labels — usage reporting only, never read on the request path. */
+  readonly owner?: string | null
+  readonly ownerKind?: KeyOwnerKind | null
+  readonly tool?: string | null
+  readonly purpose?: string | null
   readonly rateLimitRequests?: number | null
   readonly rateLimitWindowSeconds?: number | null
   readonly expiresAt?: Date | null
@@ -90,9 +95,19 @@ export interface CreateApiKeyInput {
 export interface UpdateApiKeyInput {
   readonly name?: string
   readonly scope?: KeyScope
+  readonly owner?: string | null
+  readonly ownerKind?: KeyOwnerKind | null
+  readonly tool?: string | null
+  readonly purpose?: string | null
   readonly rateLimitRequests?: number | null
   readonly rateLimitWindowSeconds?: number | null
   readonly expiresAt?: Date | null
+}
+
+/** Attribution filters for the admin list. Exact match; both may combine. */
+export interface ApiKeyListFilter {
+  readonly owner?: string
+  readonly tool?: string
 }
 
 /** Empty on both sides when the scope is `all`. */
@@ -107,6 +122,13 @@ export interface ScopeTargetRows {
 }
 
 export function createApiKeyRepository(db: DatabaseExecutor): ApiKeyRepository {
+  const poolTargetsWhere = (where: SQL) =>
+    db
+      .select()
+      .from(apiKeyPools)
+      .where(where)
+      .orderBy(asc(apiKeyPools.position), asc(apiKeyPools.id))
+
   return {
     findUsableByPrefix: (prefix, now) =>
       db
@@ -144,6 +166,10 @@ export function createApiKeyRepository(db: DatabaseExecutor): ApiKeyRepository {
           value: input.value,
           prefix: input.prefix,
           ...(input.scope === undefined ? {} : { scope: input.scope }),
+          owner: input.owner ?? null,
+          ownerKind: input.ownerKind ?? null,
+          tool: input.tool ?? null,
+          purpose: input.purpose ?? null,
           rateLimitRequests: input.rateLimitRequests ?? null,
           rateLimitWindowSeconds: input.rateLimitWindowSeconds ?? null,
           expiresAt: input.expiresAt ?? null,
@@ -154,7 +180,16 @@ export function createApiKeyRepository(db: DatabaseExecutor): ApiKeyRepository {
       return row
     },
 
-    list: () => db.select().from(apiKeys).orderBy(asc(apiKeys.createdAt)),
+    list: async (filter) => {
+      const conditions = [
+        ...(filter?.owner === undefined ? [] : [eq(apiKeys.owner, filter.owner)]),
+        ...(filter?.tool === undefined ? [] : [eq(apiKeys.tool, filter.tool)]),
+      ]
+      const query = db.select().from(apiKeys)
+      return conditions.length === 0
+        ? query.orderBy(asc(apiKeys.createdAt))
+        : query.where(and(...conditions)).orderBy(asc(apiKeys.createdAt))
+    },
 
     findByName: async (name) => {
       const rows = await db.select().from(apiKeys).where(eq(apiKeys.name, name)).limit(1)
@@ -169,6 +204,10 @@ export function createApiKeyRepository(db: DatabaseExecutor): ApiKeyRepository {
         .set({
           ...(patch.name === undefined ? {} : { name: patch.name }),
           ...(patch.scope === undefined ? {} : { scope: patch.scope }),
+          ...(patch.owner === undefined ? {} : { owner: patch.owner }),
+          ...(patch.ownerKind === undefined ? {} : { ownerKind: patch.ownerKind }),
+          ...(patch.tool === undefined ? {} : { tool: patch.tool }),
+          ...(patch.purpose === undefined ? {} : { purpose: patch.purpose }),
           ...(patch.rateLimitRequests === undefined
             ? {}
             : { rateLimitRequests: patch.rateLimitRequests }),
@@ -203,8 +242,7 @@ export function createApiKeyRepository(db: DatabaseExecutor): ApiKeyRepository {
         narrowedBy: eq(apiKeys.revoked, true),
       }),
 
-    listPoolTargets: (apiKeyId) =>
-      db.select().from(apiKeyPools).where(eq(apiKeyPools.apiKeyId, apiKeyId)),
+    listPoolTargets: (apiKeyId) => poolTargetsWhere(eq(apiKeyPools.apiKeyId, apiKeyId)),
 
     listAccountTargets: (apiKeyId) =>
       db.select().from(apiKeyAccounts).where(eq(apiKeyAccounts.apiKeyId, apiKeyId)),
@@ -213,7 +251,7 @@ export function createApiKeyRepository(db: DatabaseExecutor): ApiKeyRepository {
       if (apiKeyIds.length === 0) return { pools: [], accounts: [] }
       const ids = [...apiKeyIds]
       const [poolRows, accountRows] = await Promise.all([
-        db.select().from(apiKeyPools).where(inArray(apiKeyPools.apiKeyId, ids)),
+        poolTargetsWhere(inArray(apiKeyPools.apiKeyId, ids)),
         db.select().from(apiKeyAccounts).where(inArray(apiKeyAccounts.apiKeyId, ids)),
       ])
       return { pools: poolRows, accounts: accountRows }
@@ -244,7 +282,10 @@ export function createApiKeyRepository(db: DatabaseExecutor): ApiKeyRepository {
 
         const poolIds = targets.poolIds ?? []
         if (poolIds.length > 0) {
-          await tx.insert(apiKeyPools).values(poolIds.map((poolId) => ({ apiKeyId, poolId })))
+          // The array index is the listed order — the delete-and-reinsert is where it is lost.
+          await tx
+            .insert(apiKeyPools)
+            .values(poolIds.map((poolId, index) => ({ apiKeyId, poolId, position: index })))
         }
 
         const accountIds = targets.accountIds ?? []

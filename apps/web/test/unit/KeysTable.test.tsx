@@ -27,6 +27,7 @@ function withMount(
         nowMs={Date.parse("2026-07-26T00:00:00.000Z")}
         onDelete={() => {}}
         onEdit={() => {}}
+        onMintSuccessor={() => {}}
         onReveal={() => {}}
         onRevoke={() => {}}
         revealingId={null}
@@ -52,6 +53,10 @@ function key(overrides: Partial<ApiKeyView> = {}): ApiKeyView {
     id: "key-1",
     name: "ci-agent-3",
     prefix: "mar_live_abcd",
+    owner: null,
+    ownerKind: null,
+    tool: null,
+    purpose: null,
     scope: { kind: "all", poolIds: [], accountIds: [] },
     rateLimit: null,
     expiresAt: null,
@@ -62,6 +67,13 @@ function key(overrides: Partial<ApiKeyView> = {}): ApiKeyView {
     updatedAt: "2026-07-24T12:00:00.000Z",
     ...overrides,
   }
+}
+
+/** The spans of the identity cell, as strings — the name, the attribution, the prefix. */
+function identitySpans(container: HTMLElement): readonly string[] {
+  const cell = container.querySelector("tbody td")
+  if (cell === null) throw new Error("no identity cell")
+  return Array.from(cell.querySelectorAll("span")).map((span) => span.textContent ?? "")
 }
 
 describe("KeysTable", () => {
@@ -106,6 +118,45 @@ describe("KeysTable", () => {
   test("shows the display prefix and never a whole key value", () => {
     withMount([key()], {}, (container) => {
       expect(container.textContent).toContain("mar_live_abcd…")
+    })
+  })
+
+  test("every row can mint a successor, and hands back the key it belongs to", () => {
+    let source: ApiKeyView | undefined
+    withMount(
+      [key({ id: "a" }), key({ id: "b" })],
+      { onMintSuccessor: (target) => (source = target) },
+      (container) => {
+        const buttons = Array.from(container.querySelectorAll("tbody button")).filter(
+          (button) => button.textContent?.trim() === "Mint successor",
+        )
+        expect(buttons.length).toBe(2)
+
+        const first = buttons[0]
+        if (!(first instanceof HTMLButtonElement)) throw new Error("no successor button")
+        first.click()
+        expect(source?.id).toBe("a")
+      },
+    )
+  })
+
+  test("prints owner and tool under the name when the key carries them", () => {
+    withMount([key({ owner: "ci-team", tool: "claude-code" })], {}, (container) => {
+      expect(identitySpans(container)).toContain("ci-team / claude-code")
+    })
+  })
+
+  test("one half alone prints without a dangling separator", () => {
+    withMount([key({ tool: "aider" })], {}, (container) => {
+      expect(identitySpans(container)).toContain("aider")
+      expect(identitySpans(container).join("\n")).not.toContain(" / ")
+    })
+  })
+
+  test("prints nothing at all when neither owner nor tool is set", () => {
+    withMount([key()], {}, (container) => {
+      // Name and prefix only — no empty attribution line riding between them.
+      expect(identitySpans(container).length).toBe(2)
     })
   })
 })

@@ -2,7 +2,7 @@ import type { AdminMutationRepository, ApiKeyRepository, ApiKeyRow } from "@mult
 import { AUDIT_KINDS, AUDIT_SUBJECTS, type AuditRecorder } from "../admin/audit"
 import { type AdminResult, notFound, ok } from "../admin/result"
 import { createKeyMutations, type KeyMutationKind } from "./mutations"
-import type { CreateKeyBody, UpdateKeyBody } from "./schemas"
+import type { CreateKeyBody, KeyListQuery, UpdateKeyBody } from "./schemas"
 import { readKeyTargets } from "./snapshot"
 import { type ApiKeyView, type RevealedKey, toKeyView } from "./view"
 
@@ -19,7 +19,8 @@ import { type ApiKeyView, type RevealedKey, toKeyView } from "./view"
  */
 
 export interface KeysService {
-  list(): Promise<AdminResult<readonly ApiKeyView[]>>
+  /** Attribution filters are exact matches and may combine; no filter lists everything. */
+  list(query?: KeyListQuery): Promise<AdminResult<readonly ApiKeyView[]>>
   get(id: string): Promise<AdminResult<ApiKeyView>>
   /** The one response that carries the value alongside the view. */
   create(body: CreateKeyBody): Promise<AdminResult<ApiKeyView & { readonly value: string }>>
@@ -52,8 +53,8 @@ export function createKeysService(deps: KeysServiceDeps): KeysService {
   }
 
   return {
-    list: async () => {
-      const rows = await deps.keys.list()
+    list: async (query) => {
+      const rows = await deps.keys.list(query)
       const targets = await deps.keys.listTargetsForKeys(rows.map((row) => row.id))
       return ok(
         rows.map((row) =>

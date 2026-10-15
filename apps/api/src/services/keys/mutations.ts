@@ -32,6 +32,10 @@ export function createKeyMutations(deps: KeysServiceDeps): Pick<KeysService, Key
             value: deps.cipher.encrypt(value),
             prefix,
             scope: scope.value.kind,
+            owner: body.owner ?? null,
+            ownerKind: body.ownerKind ?? null,
+            tool: body.tool ?? null,
+            purpose: body.purpose ?? null,
             rateLimitRequests: body.rateLimit?.requests ?? null,
             rateLimitWindowSeconds: body.rateLimit?.windowSeconds ?? null,
             expiresAt: body.expiresAt ?? null,
@@ -44,6 +48,10 @@ export function createKeyMutations(deps: KeysServiceDeps): Pick<KeysService, Key
             detail: {
               name: row.name,
               scope: row.scope,
+              owner: row.owner,
+              ownerKind: row.ownerKind,
+              tool: row.tool,
+              purpose: row.purpose,
               poolCount: scope.value.poolIds.length,
               accountCount: scope.value.accountIds.length,
               expires: row.expiresAt !== null,
@@ -80,6 +88,10 @@ export function createKeyMutations(deps: KeysServiceDeps): Pick<KeysService, Key
               {
                 ...(body.name === undefined ? {} : { name: body.name }),
                 ...(scope === null ? {} : { scope: scope.kind }),
+                ...(body.owner === undefined ? {} : { owner: body.owner }),
+                ...(body.ownerKind === undefined ? {} : { ownerKind: body.ownerKind }),
+                ...(body.tool === undefined ? {} : { tool: body.tool }),
+                ...(body.purpose === undefined ? {} : { purpose: body.purpose }),
                 ...(body.rateLimit === undefined
                   ? {}
                   : {
@@ -96,7 +108,15 @@ export function createKeyMutations(deps: KeysServiceDeps): Pick<KeysService, Key
               kind: AUDIT_KINDS.keyUpdated,
               subjectType: AUDIT_SUBJECTS.key,
               subjectId: row.id,
-              detail: { name: row.name, fields: Object.keys(body).sort(), scope: row.scope },
+              detail: {
+                name: row.name,
+                fields: Object.keys(body).sort(),
+                scope: row.scope,
+                owner: row.owner,
+                ownerKind: row.ownerKind,
+                tool: row.tool,
+                purpose: row.purpose,
+              },
             })
             return ok({ row, targets: await readKeyTargets(tx.keys, id) })
           },

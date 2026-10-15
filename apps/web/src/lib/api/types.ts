@@ -3,6 +3,7 @@ import type {
   AccountStatus,
   AuthKind,
   Dialect,
+  KeyOwnerKind,
   KeyScope,
   ProviderId,
   QuotaWindowKind,
@@ -204,11 +205,18 @@ export interface KeyScopeView {
   readonly accountIds: readonly string[]
 }
 
+export type { KeyOwnerKind }
+
 export interface ApiKeyView {
   readonly id: string
   readonly name: string
   /** The clear, indexed display prefix. The list never carries the full value. */
   readonly prefix: string
+  /** Attribution labels — usage reports only; they never authenticate or gate anything. */
+  readonly owner: string | null
+  readonly ownerKind: KeyOwnerKind | null
+  readonly tool: string | null
+  readonly purpose: string | null
   readonly scope: KeyScopeView
   readonly rateLimit: KeyRateLimitView | null
   readonly expiresAt: string | null

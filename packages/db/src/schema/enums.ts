@@ -1,6 +1,7 @@
 import {
   AccountBilling,
   AccountStatus,
+  KeyOwnerKind,
   KeyScope,
   ProviderId,
   ResetSource,
@@ -51,6 +52,12 @@ export const routingPolicy = pgEnumFrom("routing_policy", RoutingPolicy.options)
 
 /** `all` | `pools` | `accounts`. Enforced as an intersection, never widened. */
 export const keyScope = pgEnumFrom("key_scope", KeyScope.options)
+
+/**
+ * What a key's `owner` label names: a person or a service. Closed because a
+ * usage view groups by it — but it is attribution only, and gates nothing.
+ */
+export const keyOwnerKind = pgEnumFrom("key_owner_kind", KeyOwnerKind.options)
 
 /**
  * Continuous reads a real percentage at any point in a window; threshold-triggered

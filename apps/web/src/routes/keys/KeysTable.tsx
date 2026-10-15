@@ -23,6 +23,8 @@ export interface KeysTableProps {
   readonly usageWindowLabel: string
   readonly onReveal: (key: ApiKeyView) => void
   readonly onEdit: (key: ApiKeyView) => void
+  /** Mints a fresh key carrying this one's attribution — see the action's comment. */
+  readonly onMintSuccessor: (key: ApiKeyView) => void
   readonly onRevoke: (key: ApiKeyView) => void
   readonly onDelete: (key: ApiKeyView) => void
 }
@@ -47,6 +49,9 @@ export function KeysTable(props: KeysTableProps) {
       cell: (key) => (
         <div class={styles.identity}>
           <span class={styles.name}>{key.name}</span>
+          <Show when={attributionLine(key)}>
+            {(line) => <span class={styles.attribution}>{line()}</span>}
+          </Show>
           <span class={styles.prefix}>{key.prefix}…</span>
         </div>
       ),
@@ -135,6 +140,12 @@ export function KeysTable(props: KeysTableProps) {
           <Button onClick={() => props.onEdit(key)} size="sm" tone="neutral">
             Edit
           </Button>
+          {/* Rotation without orphaning the attribution: a successor is a fresh key
+              that opens the mint form prefilled with this one's owner, tool, purpose,
+              scope and ceiling. The name starts empty and the value is never shown. */}
+          <Button onClick={() => props.onMintSuccessor(key)} size="sm" tone="neutral">
+            Mint successor
+          </Button>
           <Show when={!key.revoked}>
             <Button onClick={() => props.onRevoke(key)} size="sm" tone="danger">
               Revoke
@@ -168,4 +179,10 @@ function describeScope(key: ApiKeyView): string {
     case "accounts":
       return `${key.scope.accountIds.length} account(s)`
   }
+}
+
+/** "owner / tool" for the identity cell — whichever halves the key carries, or nothing at all. */
+function attributionLine(key: ApiKeyView): string | null {
+  const parts = [key.owner, key.tool].filter((part): part is string => part !== null)
+  return parts.length === 0 ? null : parts.join(" / ")
 }

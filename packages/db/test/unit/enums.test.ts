@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import {
   AccountStatus,
+  KeyOwnerKind,
   KeyScope,
   ProviderId,
   ResetSource,
@@ -10,6 +11,7 @@ import {
 import {
   accountStatus,
   costBasis,
+  keyOwnerKind,
   keyScope,
   providerId,
   resetSource,
@@ -27,6 +29,7 @@ describe("postgres enums track @multi-ai-router/core", () => {
     expect(accountStatus.enumValues).toEqual(AccountStatus.options)
     expect(routingPolicy.enumValues).toEqual(RoutingPolicy.options)
     expect(keyScope.enumValues).toEqual(KeyScope.options)
+    expect(keyOwnerKind.enumValues).toEqual(KeyOwnerKind.options)
     expect(utilizationSource.enumValues).toEqual(UtilizationSource.options)
     expect(resetSource.enumValues).toEqual(ResetSource.options)
   })
@@ -50,6 +53,7 @@ describe("closed sets are enums, open labels are text", () => {
       accountStatus,
       routingPolicy,
       keyScope,
+      keyOwnerKind,
       utilizationSource,
       resetSource,
     ]) {
@@ -97,6 +101,12 @@ describe("documented enum values", () => {
 
   test("key scope is all | pools | accounts", () => {
     expect(keyScope.enumValues).toEqual(["all", "pools", "accounts"])
+  })
+
+  test("a key's owner is a person or a service, and that is the whole set", () => {
+    // Attribution only: the enum exists so a filter or chart can group by it, never to
+    // gate a request — an unknown value here is a bug, which is why it is an enum.
+    expect(keyOwnerKind.enumValues).toEqual(["person", "service"])
   })
 
   test("utilization and reset sources are carried, and separate", () => {

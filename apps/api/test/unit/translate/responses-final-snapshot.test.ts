@@ -16,6 +16,13 @@ function text(events: readonly SseEvent[]) {
     )
     .join("")
 }
+/** openai-chat streams a refusal in `delta.refusal`, apart from the answer text. */
+function refusal(events: readonly SseEvent[]) {
+  return events
+    .filter((e) => e.data !== "[DONE]")
+    .map((e) => JSON.parse(e.data).choices?.[0]?.delta?.refusal ?? "")
+    .join("")
+}
 const factories = [
   () => openAiResponsesToAnthropicStream(),
   () => openAiResponsesToOpenAiChatStream({ created: 1 }),
@@ -38,7 +45,11 @@ for (const [index, factory] of factories.entries()) {
       }),
       ...push(t, { type: "response.refusal.done", item_id: "a", content_index: 1, refusal: "no" }),
     ]
-    expect(text(events)).toBe("hello\nno")
+    if (index === 0) expect(text(events)).toBe("hello\nno")
+    else {
+      expect(text(events)).toBe("hello")
+      expect(refusal(events)).toBe("no")
+    }
   })
   test(`Responses ${index}: partial deltas plus final snapshot emit only the suffix`, () => {
     const t = factory()

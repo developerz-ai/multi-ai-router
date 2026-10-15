@@ -100,8 +100,8 @@ export const openAiChatRequestSchema = z.object({
   n: z.number().int().nullish(),
   logprobs: z.boolean().nullish(),
   top_logprobs: z.number().int().nullish(),
-  // Structured output, declared only so it can be refused by name. Loose because the refusal reads
-  // `type` and nothing else — a schema this build never carries is not worth validating.
+  // Structured output. Loose here: toward openai-responses `shared/structured-output.ts` validates
+  // the `json_schema` member it carries, and every other hop refuses on `type` alone.
   response_format: z.looseObject({ type: z.string() }).nullish(),
 })
 

@@ -213,6 +213,17 @@ export type OpenAiResponsesToolChoice =
   | "required"
   | { readonly type: "function"; readonly name: string }
 
+/** `text.format` other than plain text — see `shared/structured-output.ts`. */
+export type OpenAiResponsesTextFormat =
+  | {
+      readonly type: "json_schema"
+      readonly name: string
+      readonly schema: Record<string, unknown>
+      readonly strict?: boolean | undefined
+      readonly description?: string | undefined
+    }
+  | { readonly type: "json_object" }
+
 export interface OpenAiResponsesRequest {
   readonly model: string
   readonly input: readonly OpenAiResponsesItem[]
@@ -231,6 +242,8 @@ export interface OpenAiResponsesRequest {
   readonly reasoning?:
     | { readonly effort?: string | undefined; readonly summary?: "auto" | undefined }
     | undefined
+  /** A structured-output constraint, carried from openai-chat's `response_format` only. */
+  readonly text?: { readonly format: OpenAiResponsesTextFormat } | undefined
   /**
    * Always `false` on a translated request, never the caller's value.
    *

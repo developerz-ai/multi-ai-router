@@ -50,17 +50,67 @@ const frames = [
     content_index: 1,
   },
 ]
-test("mixed text and refusal preserves nonstream Chat text", () => {
+/**
+ * openai-chat states a refusal in its own field (`message.refusal`, `delta.refusal`), so a
+ * structured-output caller never finds the refusal sentence inside the JSON it parses. Production
+ * fingerprint: before 2.28.0 both halves glued it onto `content` ("Answer\nCannot comply").
+ */
+test("mixed text and refusal: Chat carries the refusal in its own field, streamed and collected alike", () => {
   const t = chat({ created: 0 })
   const events = frames.flatMap((frame) =>
     t.push({ event: frame.type, data: JSON.stringify(frame) }),
   )
-  const actual = events.map((e) => JSON.parse(e.data).choices?.[0]?.delta?.content ?? "").join("")
-  const expected = (
-    chatResponse(body, { created: 0 }).body as { choices: { message: { content: string } }[] }
-  ).choices[0]?.message.content
-  if (expected === undefined) throw new Error("Missing fixture completion text")
-  expect(actual).toBe(expected)
+  const deltas = events.map((e) => JSON.parse(e.data).choices?.[0]?.delta ?? {})
+  const streamedContent = deltas.map((d) => d.content ?? "").join("")
+  const streamedRefusal = deltas.map((d) => d.refusal ?? "").join("")
+  const message = (
+    chatResponse(body, { created: 0 }).body as {
+      choices: { message: { content: string | null; refusal?: string } }[]
+    }
+  ).choices[0]?.message
+  if (message === undefined) throw new Error("Missing fixture completion")
+  expect(message.content).toBe("Answer")
+  expect(message.refusal).toBe("Cannot comply")
+  expect(streamedContent).toBe("Answer")
+  expect(streamedRefusal).toBe("Cannot comply")
+})
+
+test("a refusal-only answer is content: null plus message.refusal, finish_reason stop", () => {
+  const out = chatResponse(
+    {
+      id: "r",
+      model: "m",
+      status: "completed",
+      output: [
+        {
+          type: "message",
+          id: "msg",
+          role: "assistant",
+          content: [{ type: "refusal", refusal: "Cannot comply" }],
+        },
+      ],
+    },
+    { created: 0 },
+  ).body as {
+    choices: { message: { content: string | null; refusal?: string }; finish_reason: string }[]
+  }
+  expect(out.choices[0]?.message).toEqual({
+    role: "assistant",
+    content: null,
+    refusal: "Cannot comply",
+  })
+  expect(out.choices[0]?.finish_reason).toBe("stop")
+})
+
+test("an answer with no refusal carries no refusal field", () => {
+  const out = chatResponse(
+    {
+      status: "completed",
+      output: [{ type: "message", content: [{ type: "output_text", text: '{"a":1}' }] }],
+    },
+    { created: 0 },
+  ).body as { choices: { message: Record<string, unknown> }[] }
+  expect(out.choices[0]?.message).not.toHaveProperty("refusal")
 })
 test("mixed text and refusal preserves nonstream Anthropic text", () => {
   const t = anthropic()
@@ -133,9 +183,8 @@ for (const dialect of ["chat", "anthropic"] as const) {
     )
     const parsed = events.filter((e) => e.data !== "[DONE]").map((e) => JSON.parse(e.data))
     if (dialect === "chat") {
-      expect(parsed.map((e) => e.choices?.[0]?.delta?.content ?? "").join("")).toBe(
-        "Cannot comply\nSecond\npart",
-      )
+      expect(parsed.map((e) => e.choices?.[0]?.delta?.content ?? "").join("")).toBe("Second\npart")
+      expect(parsed.map((e) => e.choices?.[0]?.delta?.refusal ?? "").join("")).toBe("Cannot comply")
     } else {
       expect(parsed.map((e) => e.delta?.text ?? "").join("")).toBe("Cannot complySecond\npart")
       expect(parsed.filter((e) => e.type === "content_block_start")).toHaveLength(2)

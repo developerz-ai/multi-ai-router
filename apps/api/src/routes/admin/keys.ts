@@ -1,7 +1,7 @@
 import { Hono, type MiddlewareHandler } from "hono"
 import type { AdminAuthEnv } from "../../middleware/adminAuth"
 import { readJsonBody, validate, validateId } from "../../services/admin"
-import { createKeyBody, type KeysService, updateKeyBody } from "../../services/keys"
+import { createKeyBody, type KeysService, keyListQuery, updateKeyBody } from "../../services/keys"
 import { render } from "./render"
 
 /**
@@ -32,7 +32,13 @@ export function adminKeyRoutes(deps: AdminKeyRoutesDeps): Hono<AdminAuthEnv> {
   const routes = new Hono<AdminAuthEnv>()
   routes.use("*", deps.guard)
 
-  routes.get("/", async (c) => render(c, await deps.service.list()))
+  // `?owner=` / `?tool=` narrow the list by the attribution labels; an invalid
+  // slug is a 400 like any other malformed input, never a silent empty list.
+  routes.get("/", async (c) => {
+    const query = validate(keyListQuery, c.req.query())
+    if (!query.ok) return render(c, query)
+    return render(c, await deps.service.list(query.value))
+  })
 
   routes.post("/", async (c) => {
     const body = validate(

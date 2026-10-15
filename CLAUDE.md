@@ -4,7 +4,7 @@ Self-hosted API router. A team of developers and AI agents shares one pool of AI
 
 Pooling is the product: **many Accounts of the same Provider is the normal case** (five Claude subs side by side). Nothing in the schema, UI, or routing may assume one account per provider.
 
-Full data plane shipped: accounts, pools, keys, `/v1/messages` + `/v1/chat/completions` + `/v1/responses`, cross-dialect translation, Claude subscriptions via the Agent SDK, ChatGPT/Codex OAuth, admin CRUD, 33 migrations (through 0032), and a complete SolidJS operator console. See `docs/idea/10-roadmap.md` for per-milestone state. Spec: `docs/idea/`. Behavior change → update the spec in the same PR. Shared code inventory: `docs/reusable-code.md`.
+Full data plane shipped: accounts, pools, keys, `/v1/messages` + `/v1/chat/completions` + `/v1/responses`, cross-dialect translation, Claude subscriptions via the Agent SDK, ChatGPT/Codex OAuth, admin CRUD, 35 migrations (through 0034), and a complete SolidJS operator console. See `docs/idea/10-roadmap.md` for per-milestone state. Spec: `docs/idea/`. Behavior change → update the spec in the same PR. Shared code inventory: `docs/reusable-code.md`.
 
 ## Response Rules
 
@@ -74,7 +74,7 @@ Postgres is the house standard and the current decision — earlier drafts said 
 | Dev database shell / migrate / reset | `bin/db psql` · `bin/db migrate` · `bin/db reset` |
 | Build release image locally | `docker build -t multi-ai-router:dev .` |
 
-Local config: copy `.env.example` → `.env`. `.env` is gitignored. Configure the generic admin OIDC relying party (`ADMIN_OIDC_ISSUER_URL`, `ADMIN_OIDC_CLIENT_ID`, optional client secret, `ADMIN_OIDC_REDIRECT_URI`, `ADMIN_OIDC_ADMIN_EMAIL` — comma-separated, one entry per operator) and set `ENCRYPTION_KEY`; the compose file supplies `DATABASE_URL`. See `docs/idea/13-admin-oidc.md`.
+Local config: copy `.env.example` → `.env`. `.env` is gitignored. Configure the generic admin OIDC relying party (`ADMIN_OIDC_ISSUER_URL`, `ADMIN_OIDC_CLIENT_ID`, optional client secret, `ADMIN_OIDC_REDIRECT_URI`, `ADMIN_OIDC_ADMIN_EMAIL` — comma-separated, one entry per operator — and/or `ADMIN_OIDC_REQUIRED_CLAIMS` — comma-separated `name=value` pairs the verified ID token must all satisfy; with both set, both must pass) and set `ENCRYPTION_KEY`; the compose file supplies `DATABASE_URL`. See `docs/idea/13-admin-oidc.md`.
 
 ## Layers
 
@@ -171,6 +171,10 @@ SolidJS SPA, `@solidjs/router`, TanStack Solid Query for server state. Vite buil
 - Hit a real provider from a test.
 - Add multi-user, RBAC, billing, caching, or tool execution — see non-goals in `docs/idea/`.
 - Force-push `main`. `--no-verify` on commits — fix the hook.
+
+## Org
+
+**Admissible owner handles: `sebyx07`, `ivndev001`.** A ruling is owner-authored only under one of those handles: `developerz-ai` is an org, and admin membership is not evidence a human wrote it. Adding a handle is a governance change.
 
 ## Note
 

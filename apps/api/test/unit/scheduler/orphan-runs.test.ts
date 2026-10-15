@@ -78,3 +78,22 @@ test("batch one rotates past a live early task to reclaim a later removed orphan
   expect(repo.rows.find((row) => row.id === orphan)?.outcome).toBe("failed")
   expect(repo.rows.find((row) => row.id === live)?.finishedAt).toBeNull()
 })
+
+test("a run row whose task name no longer exists is swept, not thrown on", async () => {
+  // Rollback guard: after a task is removed from the enum (or a database is rolled back
+  // past the migration that added it), rows naming it survive in scheduled_task_runs.
+  // The sweep reads task names as data, so such a row must become failed — an assert or
+  // a throw here would strand every *other* orphan behind it in the cursor's sort order.
+  const repo = memoryTaskRepository()
+  const removed = await repo.begin("usage_rollup", new Date(0))
+  repo.rows[0].task = "removed_task_name" as (typeof repo.rows)[number]["task"]
+  await createInterruptedRunMaintenance({
+    repo,
+    lock: alwaysFree(),
+    cutoffAgeMs: 1,
+    batchSize: 10,
+    now: () => NOW,
+  })(new AbortController().signal)
+  expect(repo.rows.find((row) => row.id === removed)?.outcome).toBe("failed")
+  expect(await repo.deleteOlderThan(new Date(NOW.getTime() + 1), 10)).toBe(1)
+})

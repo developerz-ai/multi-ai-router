@@ -257,6 +257,8 @@ For operators, at deploy time:
   optional defense in depth, not an architectural requirement. Do not publish the container port.
 - Register the exact OIDC callback URI, require PKCE S256, and make the IdP include verified email in
   the signed ID token. Set `ADMIN_OIDC_ADMIN_SUBJECT` as an additional immutable pin when practical.
+  Gate on `ADMIN_OIDC_REQUIRED_CLAIMS` alone only when the IdP client itself restricts who can
+  authenticate and the claim is IdP-controlled — otherwise keep `ADMIN_OIDC_ADMIN_EMAIL` set too.
   Enforce MFA and account-recovery policy at the IdP. See [13-admin-oidc.md](13-admin-oidc.md).
 - Reach for the local admin password only when an IdP is genuinely not available, and treat it as
   own-machine scope: leave `PUBLIC_URL` unset or loopback so the boot refusal stands, pick a password

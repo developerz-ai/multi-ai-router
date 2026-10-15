@@ -1,0 +1,13 @@
+// The chips narrowed the table to nothing. Muted on purpose: not an error, not
+// an empty fleet — the filter is the whole story and the chips are still there.
+.filterEmpty {
+  padding: var(--space-4);
+  border: 1px dashed var(--border);
+  border-radius: var(--radius-1);
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+}
+
+.filterEmpty p {
+  margin: 0 0 var(--space-3);
+}

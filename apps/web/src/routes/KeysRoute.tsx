@@ -1,6 +1,5 @@
-import { createSignal, Show } from "solid-js"
+import { createEffect, createSignal, Show } from "solid-js"
 import { Button } from "../components/Button"
-import { ConfirmDialog } from "../components/ConfirmDialog"
 import { EmptyState } from "../components/EmptyState"
 import { PageHeader } from "../components/PageHeader"
 import { QueryBoundary } from "../components/QueryBoundary"
@@ -25,9 +24,12 @@ import { useSettings } from "../lib/queries/settings"
 import { useTableUsage } from "../lib/queries/table-usage"
 import { isSubscriptionLogin } from "../lib/subscription-login"
 import styles from "./KeysRoute.module.scss"
-import { KeyFormDialog, type KeyFormValues, toCreateKeyInput } from "./keys/KeyFormDialog"
-import { KeysTable } from "./keys/KeysTable"
+import { FilteredKeys } from "./keys/FilteredKeys"
+import { distinctOwners, distinctTools } from "./keys/filter-keys"
+import { KeyDangerDialogs } from "./keys/KeyDangerDialogs"
+import { KeyFormDialog } from "./keys/KeyFormDialog"
 import { KeyValueDialog } from "./keys/KeyValueDialog"
+import { type KeyFormValues, toCreateKeyInput } from "./keys/key-form-values"
 
 interface ShownKey {
   readonly name: string
@@ -87,20 +89,49 @@ export default function KeysRoute() {
 
   const [formOpen, setFormOpen] = createSignal(false)
   const [editing, setEditing] = createSignal<ApiKeyView | null>(null)
+  /** The key a successor is being minted from — a mint that opens prefilled. */
+  const [successorOf, setSuccessorOf] = createSignal<ApiKeyView | null>(null)
   const [shown, setShown] = createSignal<ShownKey | null>(null)
   const [pendingRevoke, setPendingRevoke] = createSignal<ApiKeyView | null>(null)
   const [pendingDelete, setPendingDelete] = createSignal<ApiKeyView | null>(null)
+  const [ownerFilter, setOwnerFilter] = createSignal<string | null>(null)
+  const [toolFilter, setToolFilter] = createSignal<string | null>(null)
+  // Drop a selection no key carries any more. Here, not in FilteredKeys: that is unmounted
+  // while the list is empty, and a selection kept through it would re-apply on its own.
+  createEffect(() => {
+    const rows = keys.data
+    if (rows === undefined) return
+    const owner = ownerFilter()
+    if (owner !== null && !distinctOwners(rows).includes(owner)) setOwnerFilter(null)
+    const tool = toolFilter()
+    if (tool !== null && !distinctTools(rows).includes(tool)) setToolFilter(null)
+  })
 
   const openForm = (key: ApiKeyView | null) => {
     create.reset()
     update.reset()
     setEditing(key)
+    setSuccessorOf(null)
+    setFormOpen(true)
+  }
+
+  /**
+   * Rotation entry point: opens the mint form seeded with this key's
+   * attribution, scope and ceiling — never its name and never its value, both
+   * of which belong to the new key alone.
+   */
+  const openSuccessorForm = (key: ApiKeyView) => {
+    create.reset()
+    update.reset()
+    setEditing(null)
+    setSuccessorOf(key)
     setFormOpen(true)
   }
 
   const closeForm = () => {
     setFormOpen(false)
     setEditing(null)
+    setSuccessorOf(null)
   }
 
   /**
@@ -162,40 +193,47 @@ export default function KeysRoute() {
         loading={<TableSkeleton label="Loading keys" rows={4} />}
         query={keys}
       >
-        {(rows) => (
-          <Show
-            fallback={
-              <EmptyState
-                action={mintButton()}
-                description="A router key is what a client presents instead of an upstream credential. Mint one per client — per developer, per CI job — so usage is attributable and revoking one breaks exactly one thing."
-                icon="keys"
-                title="No keys yet"
-              />
-            }
-            when={rows.length > 0}
-          >
-            <KeysTable
-              keys={rows}
-              nowMs={now()}
-              onDelete={setPendingDelete}
-              onEdit={(key) => openForm(key)}
-              onReveal={(key) =>
-                reveal.mutate(key.id, {
-                  onSuccess: (revealed) =>
-                    setShown({
-                      name: revealed.name,
-                      value: revealed.value,
-                      minted: false,
-                      scope: key.scope,
-                    }),
-                })
+        {(rows) => {
+          return (
+            <Show
+              fallback={
+                <EmptyState
+                  action={mintButton()}
+                  description="A router key is what a client presents instead of an upstream credential. Mint one per client — per developer, per CI job — so usage is attributable and revoking one breaks exactly one thing."
+                  icon="keys"
+                  title="No keys yet"
+                />
               }
-              onRevoke={setPendingRevoke}
-              revealingId={reveal.isPending ? (reveal.variables ?? null) : null}
-              {...usage()}
-            />
-          </Show>
-        )}
+              when={rows.length > 0}
+            >
+              <FilteredKeys
+                nowMs={now()}
+                onDelete={setPendingDelete}
+                onEdit={(key) => openForm(key)}
+                onMintSuccessor={openSuccessorForm}
+                onOwnerFilterChange={setOwnerFilter}
+                onReveal={(key) =>
+                  reveal.mutate(key.id, {
+                    onSuccess: (revealed) =>
+                      setShown({
+                        name: revealed.name,
+                        value: revealed.value,
+                        minted: false,
+                        scope: key.scope,
+                      }),
+                  })
+                }
+                onRevoke={setPendingRevoke}
+                onToolFilterChange={setToolFilter}
+                ownerFilter={ownerFilter()}
+                revealingId={reveal.isPending ? (reveal.variables ?? null) : null}
+                rows={rows}
+                toolFilter={toolFilter()}
+                {...usage()}
+              />
+            </Show>
+          )
+        }}
       </QueryBoundary>
 
       <KeyFormDialog
@@ -207,6 +245,7 @@ export default function KeysRoute() {
         onSubmit={submit}
         open={formOpen()}
         pools={pools.isSuccess ? (pools.data ?? []) : []}
+        successorOf={successorOf()}
       />
 
       <Show when={shown()}>
@@ -223,60 +262,28 @@ export default function KeysRoute() {
         )}
       </Show>
 
-      <Show when={pendingRevoke()}>
-        {(key) => (
-          <ConfirmDialog
-            busy={revoke.isPending}
-            confirmLabel="Revoke key"
-            consequences={revokeConsequences(key())}
-            error={revoke.error}
-            onClose={() => {
-              revoke.reset()
-              setPendingRevoke(null)
-            }}
-            onConfirm={() => revoke.mutate(key().id, { onSuccess: () => setPendingRevoke(null) })}
-            open
-            subject={key().name}
-            title="Revoke this key?"
-          />
-        )}
-      </Show>
-
-      <Show when={pendingDelete()}>
-        {(key) => (
-          <ConfirmDialog
-            busy={remove.isPending}
-            confirmLabel="Delete key"
-            consequences={deleteConsequences(key())}
-            error={remove.error}
-            onClose={() => {
-              remove.reset()
-              setPendingDelete(null)
-            }}
-            onConfirm={() => remove.mutate(key().id, { onSuccess: () => setPendingDelete(null) })}
-            open
-            subject={key().name}
-            title="Delete this key?"
-          />
-        )}
-      </Show>
+      <KeyDangerDialogs
+        deleteBusy={remove.isPending}
+        deleteError={remove.error}
+        onDeleteClose={() => {
+          remove.reset()
+          setPendingDelete(null)
+        }}
+        onDeleteConfirm={(key) =>
+          remove.mutate(key.id, { onSuccess: () => setPendingDelete(null) })
+        }
+        onRevokeClose={() => {
+          revoke.reset()
+          setPendingRevoke(null)
+        }}
+        onRevokeConfirm={(key) =>
+          revoke.mutate(key.id, { onSuccess: () => setPendingRevoke(null) })
+        }
+        pendingDelete={pendingDelete()}
+        pendingRevoke={pendingRevoke()}
+        revokeBusy={revoke.isPending}
+        revokeError={revoke.error}
+      />
     </>
   )
-}
-
-/** Exactly what breaks — named clients, not "this cannot be undone". */
-function revokeConsequences(key: ApiKeyView): readonly string[] {
-  return [
-    `Every client presenting "${key.name}" starts failing on its next request. In-flight requests finish.`,
-    "Revocation is one-way. Mint a replacement and hand it out before revoking, not after.",
-    "The key stays listed and its usage history stays attributable.",
-  ]
-}
-
-function deleteConsequences(key: ApiKeyView): readonly string[] {
-  return [
-    `"${key.name}" is removed outright — clients presenting it fail immediately.`,
-    "Its usage rows survive, but they no longer name a key.",
-    "Revoke is the softer door: it stops the key while keeping the row and its scope visible.",
-  ]
 }

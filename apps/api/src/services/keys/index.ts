@@ -4,8 +4,20 @@
  */
 
 export type { KeyMutationKind } from "./mutations"
-export type { CreateKeyBody, KeyScopeInput, RateLimitInput, UpdateKeyBody } from "./schemas"
-export { createKeyBody, keyScopeInput, rateLimitInput, updateKeyBody } from "./schemas"
+export type {
+  CreateKeyBody,
+  KeyListQuery,
+  KeyScopeInput,
+  RateLimitInput,
+  UpdateKeyBody,
+} from "./schemas"
+export {
+  createKeyBody,
+  keyListQuery,
+  keyScopeInput,
+  rateLimitInput,
+  updateKeyBody,
+} from "./schemas"
 export type { ResolvedScope, ScopeResolverDeps } from "./scope"
 export { resolveScopeInput } from "./scope"
 export type { KeysService, KeysServiceDeps } from "./service"

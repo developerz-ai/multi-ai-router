@@ -1,0 +1,57 @@
+@use "../../styles/mixins" as *;
+
+.filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-4);
+}
+
+.group {
+  display: grid;
+  gap: var(--space-2);
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.legend {
+  @include eyebrow;
+
+  padding: 0;
+  color: var(--text-muted);
+}
+
+.chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+// A chip states a filter, it does not act on the fleet: neutral surface, with
+// the pressed state carrying the accent. `aria-pressed` is the single source
+// for the styling so the visual can never disagree with the semantics.
+.chip {
+  @include tappable(1.75rem);
+
+  padding-inline: var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-full);
+  background: var(--surface-raised);
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+  cursor: pointer;
+}
+
+.chip:hover {
+  border-color: var(--border-strong);
+  color: var(--text);
+}
+
+.chip[aria-pressed="true"] {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 15%, var(--surface-raised));
+  color: var(--text);
+}

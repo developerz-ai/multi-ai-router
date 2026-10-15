@@ -16,7 +16,8 @@ import { responsesUsageToOpenAiChat } from "../shared/usage"
  * pair all belong to `request.ts` and all happen before the upstream call.
  *
  * Responses states an ordered array of typed *items* where openai-chat states one message, so the
- * array collapses: `message` items concatenate into `message.content`, `function_call` items become
+ * array collapses: `message` items concatenate into `message.content` (their `refusal` parts into
+ * `message.refusal`, which is where OpenAI puts them), `function_call` items become
  * `tool_calls[]`, and `reasoning` items are **dropped** as documented — openai-chat has no
  * reasoning-summary field, exactly as it has none for an Anthropic `thinking` block. A completion
  * carrying only tool calls states `content: null`, which is how OpenAI itself spells it: an empty
@@ -52,10 +53,12 @@ export function openAiResponsesToOpenAiChatResponse(
   const read = readResponsesBody(body)
 
   const texts: string[] = []
+  const refusals: string[] = []
   const toolCalls: OpenAiChatToolCall[] = []
   for (const item of read.items) {
     if (item.kind === "text") {
-      texts.push(item.text)
+      if (item.content.length > 0) texts.push(item.content)
+      if (item.refusal.length > 0) refusals.push(item.refusal)
       continue
     }
     // `reasoning` falls through here: dropped, as documented.
@@ -82,6 +85,9 @@ export function openAiResponsesToOpenAiChatResponse(
           message: {
             role: "assistant",
             content: texts.length === 0 ? null : texts.join(ITEM_JOIN),
+            // Its own field, as OpenAI spells it: a structured-output caller parses `content` and
+            // checks `refusal`, so a refusal sentence inside `content` would fail its `JSON.parse`.
+            ...(refusals.length === 0 ? {} : { refusal: refusals.join(ITEM_JOIN) }),
             ...(toolCalls.length === 0 ? {} : { tool_calls: toolCalls }),
           },
           finish_reason: stop.value,

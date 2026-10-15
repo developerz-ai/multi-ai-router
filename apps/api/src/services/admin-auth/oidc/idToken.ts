@@ -18,8 +18,13 @@ import type { CryptoKeyHolder, JWKSCache } from "./jwks"
 
 const ALG = "RS256"
 
-/** RFC 7519 §4.1 — the standard claims we actually use. */
-const idTokenClaimsSchema = z.object({
+/**
+ * RFC 7519 §4.1 — the standard claims we actually use, typed. Loose rather than stripping: every
+ * other claim survives verification untouched, because `ADMIN_OIDC_REQUIRED_CLAIMS` gates on
+ * provider-specific claims (`kind`, `groups`, …) and must read them from the *verified* payload,
+ * never from a second, unverified decode.
+ */
+const idTokenClaimsSchema = z.looseObject({
   iss: z.string(),
   aud: z.union([z.string().min(1), z.array(z.string().min(1)).min(1)]),
   sub: z.string(),

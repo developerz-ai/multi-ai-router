@@ -78,6 +78,8 @@ interface Harness {
   emailOverride: string | null
   subOverride: string | null
   verifiedOverride: boolean | null
+  /** Provider-specific claims (`kind`, `groups`, …) signed into the id_token. */
+  extraClaims: Record<string, unknown>
 }
 
 interface TestHarness {
@@ -90,6 +92,7 @@ async function buildHarness(
     email: string
     sub: string | null
     verified: boolean | null
+    extraClaims: Record<string, unknown>
   }> = {},
 ): Promise<TestHarness> {
   const store = createMemoryStore()
@@ -104,6 +107,7 @@ async function buildHarness(
     emailOverride: overrides.email ?? null,
     subOverride: overrides.sub ?? null,
     verifiedOverride: overrides.verified ?? null,
+    extraClaims: overrides.extraClaims ?? {},
   }
 
   const discovery = buildDiscovery()
@@ -140,7 +144,17 @@ async function buildHarness(
       const sub = h.subOverride ?? "subject-1"
       const verified = h.verifiedOverride ?? true
       const idToken = await signId(
-        { iss: ISSUER, aud: CLIENT_ID, sub, iat, exp, email, email_verified: verified, nonce },
+        {
+          iss: ISSUER,
+          aud: CLIENT_ID,
+          sub,
+          iat,
+          exp,
+          email,
+          email_verified: verified,
+          nonce,
+          ...h.extraClaims,
+        },
         keyPair,
       )
       return new Response(JSON.stringify({ id_token: idToken }))
@@ -292,6 +306,145 @@ describe("createOIDCFlow", () => {
     const { code } = await startAndMintCode(h, flow, state)
 
     expect(flow.complete({ code, state })).rejects.toBeInstanceOf(AdminAuthError)
+  })
+})
+
+/**
+ * `ADMIN_OIDC_REQUIRED_CLAIMS`: claim-based admission for an IdP that marks who may sign in (equipo
+ * signs `kind: "dev_user"` into the id_token for staff). Failure cases first.
+ */
+describe("createOIDCFlow required claims", () => {
+  const STAFF = [{ name: "kind", value: "dev_user" }] as const
+
+  function claimsOnly(): Parameters<typeof createOIDCFlow>[0]["config"] {
+    return { ...baseConfig(), adminEmails: null, requiredClaims: STAFF }
+  }
+
+  async function signIn(
+    config: Parameters<typeof createOIDCFlow>[0]["config"],
+    overrides: Parameters<typeof buildHarness>[0],
+  ): Promise<{ readonly email: string } | AdminAuthError> {
+    const { h, fetch } = await buildHarness(overrides)
+    const flow = buildFlow(h, fetch, config)
+    const { state } = await flow.start()
+    const { code } = await startAndMintCode(h, flow, state)
+    return flow.complete({ code, state }).then(
+      (principal) => principal,
+      (err: unknown) => {
+        if (err instanceof AdminAuthError) return err
+        throw err
+      },
+    )
+  }
+
+  function expectPrincipalRejection(result: unknown, ...mustNotContain: string[]): string {
+    expect(result).toBeInstanceOf(AdminAuthError)
+    const err = result as AdminAuthError
+    const reason = err.reason ?? ""
+    expect(reason.startsWith("principal: ")).toBe(true)
+    expect(reason).toContain('"kind"')
+    expect(err.message).toBe("Single sign-on verification failed. Try again.")
+    for (const leaked of mustNotContain) expect(reason).not.toContain(leaked)
+    return reason
+  }
+
+  test("claim missing: rejected as a principal mismatch", async () => {
+    const reason = expectPrincipalRejection(await signIn(claimsOnly(), {}))
+    expect(reason).toContain('no "kind" claim')
+  })
+
+  test("wrong value: rejected, and the token's value is never echoed", async () => {
+    expectPrincipalRejection(
+      await signIn(claimsOnly(), { extraClaims: { kind: "user" } }),
+      '"user"',
+      "=user",
+    )
+  })
+
+  test("comparison is case-sensitive: DEV_USER is not dev_user", async () => {
+    expectPrincipalRejection(await signIn(claimsOnly(), { extraClaims: { kind: "DEV_USER" } }))
+  })
+
+  for (const shape of [true, 1, null, { value: "dev_user" }]) {
+    test(`a non-string, non-array claim (${JSON.stringify(shape)}) is rejected`, async () => {
+      expectPrincipalRejection(await signIn(claimsOnly(), { extraClaims: { kind: shape } }))
+    })
+  }
+
+  test("an array that does not contain the value is rejected", async () => {
+    expectPrincipalRejection(
+      await signIn(claimsOnly(), { extraClaims: { kind: ["user", "dev_user_x"] } }),
+    )
+  })
+
+  test("every pair must match: one of two failing rejects", async () => {
+    const config = {
+      ...claimsOnly(),
+      requiredClaims: [...STAFF, { name: "wid", value: "ws-1" }],
+    }
+    const result = await signIn(config, { extraClaims: { kind: "dev_user", wid: "ws-2" } })
+    expect(result).toBeInstanceOf(AdminAuthError)
+    expect((result as AdminAuthError).reason).toContain('"wid"')
+  })
+
+  test("both gates set and the email fails: rejected even though the claims match", async () => {
+    const result = await signIn(
+      { ...baseConfig(), requiredClaims: STAFF },
+      { email: "outsider@test", extraClaims: { kind: "dev_user" } },
+    )
+    expect(result).toBeInstanceOf(AdminAuthError)
+    // The email message it always had — the claim gate runs second and never widens the list.
+    expect((result as AdminAuthError).reason).toContain("is not in ADMIN_OIDC_ADMIN_EMAIL")
+  })
+
+  test("both gates set and the claim fails: rejected even though the email is allowlisted", async () => {
+    expectPrincipalRejection(
+      await signIn({ ...baseConfig(), requiredClaims: STAFF }, { extraClaims: { kind: "user" } }),
+    )
+  })
+
+  test("email_verified=false still rejects when the claims match", async () => {
+    const result = await signIn(claimsOnly(), {
+      verified: false,
+      extraClaims: { kind: "dev_user" },
+    })
+    expect(result).toBeInstanceOf(AdminAuthError)
+    expect((result as AdminAuthError).reason).toContain("idtoken:")
+  })
+
+  test("string claim matches: any verified email is admitted, as itself", async () => {
+    const result = await signIn(claimsOnly(), {
+      email: "new.staff@test",
+      extraClaims: { kind: "dev_user" },
+    })
+    expect(result).not.toBeInstanceOf(AdminAuthError)
+    expect((result as { email: string }).email).toBe("new.staff@test")
+  })
+
+  test("array claim containing the value is admitted", async () => {
+    const result = await signIn(claimsOnly(), { extraClaims: { kind: ["user", "dev_user"] } })
+    expect(result).not.toBeInstanceOf(AdminAuthError)
+  })
+
+  test("both gates set and both pass: admitted", async () => {
+    const result = await signIn(
+      { ...baseConfig(), requiredClaims: STAFF },
+      { extraClaims: { kind: "dev_user" } },
+    )
+    expect(result).not.toBeInstanceOf(AdminAuthError)
+  })
+
+  test("email-only config ignores provider claims entirely (regression)", async () => {
+    // No `requiredClaims` key at all — the shape every pre-existing caller builds.
+    const result = await signIn(baseConfig(), { extraClaims: { kind: "user" } })
+    expect(result).not.toBeInstanceOf(AdminAuthError)
+  })
+
+  test("a flow with neither gate cannot be built", async () => {
+    const { h, fetch } = await buildHarness()
+    expect(() => buildFlow(h, fetch, { ...baseConfig(), adminEmails: null })).toThrow(
+      "createOIDCFlow needs adminEmails, requiredClaims, or both",
+    )
   })
 })
 

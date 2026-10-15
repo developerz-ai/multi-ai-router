@@ -1,5 +1,5 @@
 import { boolean, index, integer, pgTable, text, timestamp, uuid } from "drizzle-orm/pg-core"
-import { keyScope } from "./enums"
+import { keyOwnerKind, keyScope } from "./enums"
 
 /**
  * A router-issued `mar_live_…` credential.
@@ -24,6 +24,18 @@ export const apiKeys = pgTable(
     prefix: text("prefix").notNull(),
 
     scope: keyScope("scope").notNull().default("all"),
+
+    /**
+     * Attribution labels (issue #219): who a key was issued to, and what it is
+     * for. They never gate a request — the data plane does not read them — and
+     * every one is nullable, so a key minted before they existed is simply
+     * unlabelled. `owner`/`tool` are lowercase slugs so a usage view can group
+     * on them; the `<owner>/<tool>` key-name convention is documentation only.
+     */
+    owner: text("owner"),
+    ownerKind: keyOwnerKind("owner_kind"),
+    tool: text("tool"),
+    purpose: text("purpose"),
 
     /**
      * Per-key ceiling. NULL means no per-key limit.
