@@ -3,6 +3,7 @@ import { eq } from "drizzle-orm"
 import { createDatabase, type DatabaseHandle } from "../../src/client"
 import { defaultMigrationsFolder, runMigrations } from "../../src/migrate"
 import { createUsageHistoryRepository } from "../../src/repositories/usage-history-repository"
+import { createUsageReadRepository } from "../../src/repositories/usage-read-repository"
 import {
   createUsageRecordRepository,
   type UsageRecordInsert,
@@ -47,6 +48,7 @@ export function usageHistoryFixture() {
     db: () => get().db,
     usage: () => createUsageRecordRepository(get().db),
     history: () => createUsageHistoryRepository(get().db),
+    raw: () => createUsageReadRepository(get().db),
     /** Moves the unpriced measure's first measured day — the migration seeds it tomorrow. */
     setUnpricedSince: async (day: string) => {
       await get()
