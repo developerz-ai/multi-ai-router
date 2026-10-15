@@ -235,7 +235,7 @@ Never comma-split: a model name may contain a comma. Values within one dimension
 dimensions are **AND**. `keyId`, `poolId` and `accountId` must be uuids and a malformed one is a
 `400` at the boundary, not a database error; an empty value (`?owner=`) is a `400`; a list is
 capped at 500 values. `window`, `from` and `to` stay single-valued, and a repeated one keeps the
-first value, as before. #226 and the breakdown issue inherit this encoding.
+first value, as before. The [CSV export](#csv-export) and the breakdown issue inherit this encoding.
 
 **Resolution.** `owner` and `tool` are resolved by a pure function to a key-id set from the label
 map (live keys plus tombstones, so a purged key still counts). Owner, tool and `keyId` combine as
@@ -264,6 +264,58 @@ every other measure.
 - A `poolId` filter cannot select the pool-less rows that `byPool` shows with note "none": a NULL
   pool never matches an id list.
 - No `byOwner` / `byTool` breakdowns, `unassigned` buckets or retired-key marker (#246).
+
+### CSV export
+
+`GET /api/admin/usage/export.csv` takes the same window (`window` or `from`/`to`) and the same six
+[filters](#filters) as the summary, read by the same code, and answers the matching usage as a CSV
+attachment. The Usage page's **Export CSV** link is built from the params the summary query sends,
+and forwards any filter params present, so the file is the window on screen.
+
+**Rows** are one per UTC day x key x account x pool x model, read from the same three sources and
+under the same predicate as the summary `totals` (`historySource`, no hourly flag; the current
+day's rows come from the receipt contributions). That shared source is why the per-column sums of
+the file equal the summary for the same filters, including a window ending today. A group with
+nothing in it has no row.
+
+**Columns**, exactly and in this order: `day, owner, owner_kind, tool, key_name, key_prefix, pool,
+account, provider, model, requests, attempts, errors, tokens_in, tokens_out, cache_read,
+cache_write, cost_metered_usd, cost_notional_usd, unpriced_attempts`. There is no combined cost
+column: metered and notional stay apart.
+
+**Cells.**
+
+- `day` is `YYYY-MM-DD` in UTC. `account` is the account label, `pool` the pool name,
+  `key_prefix` the public display prefix (never a key value or its ciphertext), `provider` the
+  provider id from the catalog snapshot.
+- `owner`, `owner_kind`, `tool`, `key_name` and `key_prefix` come from the key label map (live row,
+  else tombstone), so a purged key keeps them.
+- An absent value is an **empty cell**: a pool-less key, an unlabelled key, a deleted account (its
+  `account` and `provider` are blank, because the rollups do not carry them). There is no
+  `#unassigned` sentinel and no `unknown` kind.
+- Costs are fixed-point text with six decimals; counts are integers.
+- `unpriced_attempts` mirrors the summary: **empty** for a day before the measure started (never a
+  back-filled zero), `0` on a measured day where the group holds only request-level facts.
+
+**What the file does not carry.** No id columns: two deleted accounts, or two keys with no
+tombstone, on the same day/pool/model read identically, where the summary keeps them apart under
+their id. No coverage or `incomplete` signal: an export over lifetime or a window spanning legacy
+or pending history is silently partial in the same way the summary's `coverage` would flag. Read
+the summary beside it when reconciling.
+
+**Safety.** Any router-key holder chooses the `model` string, so every **text** cell is guarded
+against spreadsheet formula injection in the writer: a leading `=`, `+`, `-`, `@`, tab or CR gets
+a leading `'`. The guard runs before RFC 4180 quoting, so the apostrophe is inside the quotes.
+Numeric cells are non-negative counts and costs and are not guarded.
+
+**Limit.** `USAGE_EXPORT_MAX_ROWS` (default 50000, 1..200000) bounds the rows. The query fetches
+one past the cap inside the snapshot, and seeing the extra row answers `400` naming the cap before
+any byte of the file is written: never a truncated `200`. Narrow the window or add filters.
+
+**Response.** `text/csv; charset=utf-8`, CRLF record ends (RFC 4180), `Cache-Control: no-store`,
+and a `Content-Disposition` filename carrying the window, `usage-<window>-<from>-<to>.csv`, with
+every character in `[A-Za-z0-9._-]` (a custom ISO range would otherwise put `:` in it). The route
+sits in the admin usage group, behind the same session guard as the summary.
 
 ### Where the numbers appear
 

@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.33.0] — 2026-10-15
+
+### Added
+
+- `GET /api/admin/usage/export.csv` (#226): the usage the summary shows, as a CSV attachment, with the same window and the same six filters. One row per UTC day x key x account x pool x model, read from the same sources and predicate as the summary totals, so each column sums to the summary. Header `day, owner, owner_kind, tool, key_name, key_prefix, pool, account, provider, model, requests, attempts, errors, tokens_in, tokens_out, cache_read, cache_write, cost_metered_usd, cost_notional_usd, unpriced_attempts`. Absent labels are empty cells; `unpriced_attempts` is empty before the measure started. Every text cell is guarded against spreadsheet formulas (a leading `=`, `+`, `-`, `@`, tab or CR gets a leading `'`), because any router-key holder chooses the `model` string. No key value or ciphertext is ever written; `key_prefix` is the public display prefix. `USAGE_EXPORT_MAX_ROWS` (default 50000, 1..200000) is decided before the first byte: over it answers 400 naming the cap. The file carries no ids and no coverage signal (stated in `docs/idea/08-observability.md`). The Usage page gains an **Export CSV** link built from the params the summary sends.
+
+### Changed
+
+- `KeyLabel` carries the key's display `prefix` (live row or tombstone). The window resolution shared by the summary and the export moves to `read-window.ts`.
+
 ## [2.32.0] — 2026-10-15
 
 ### Added
@@ -1263,3 +1273,4 @@ your tooling config.
 [2.30.1]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.30.1
 [2.31.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.31.0
 [2.32.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.32.0
+[2.33.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.33.0
