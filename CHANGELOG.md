@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.31.0] — 2026-10-15
+
+### Added
+
+- A purged or deleted key keeps its attribution (#224). Migration `0036_key_tombstones` adds `api_key_tombstones` (`id, name, prefix, owner, owner_kind, tool, purged_at`; no value or ciphertext column). The janitor's revoked-key purge deletes the key and writes its tombstone in one statement, and `DELETE /api/admin/keys/:id` does the same in one statement, both stamped from the injected clock. The usage label loader names a key by its live row, else its tombstone, so `byKey` and the recent-attempts key subject keep the name (and the loader carries owner, owner kind and tool) instead of showing "deleted". The janitor sweeps tombstones at `RETENTION_USAGE_DAILY_DAYS` plus one day, since rollups age by whole UTC day and the tombstone must outlive the rollups it labels. Verification, reveal and the admin key list never read tombstones; the `GET /api/admin/usage` wire shape is unchanged. Keys purged before this release have no tombstone and stay "deleted"; there is no backfill.
+
 ## [2.30.1] — 2026-10-15
 
 ### Documentation
@@ -1245,3 +1251,4 @@ your tooling config.
 [2.29.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.29.0
 [2.30.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.30.0
 [2.30.1]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.30.1
+[2.31.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.31.0

@@ -4,6 +4,7 @@ import {
   createAccountRepository,
   createAdminMutationRepository,
   createApiKeyRepository,
+  createApiKeyTombstoneRepository,
   createAuditRepository,
   createDatabase,
   createPoolRepository,
@@ -17,6 +18,7 @@ export function adminMutationDatabase(url: string, maxConnections = 2) {
   const handle = createDatabase({ url, maxConnections })
   const accounts = createAccountRepository(handle.db)
   const keys = createApiKeyRepository(handle.db)
+  const tombstones = createApiKeyTombstoneRepository(handle.db)
   const pools = createPoolRepository(handle.db)
   const audit = createAuditRepository(handle.db)
   const repository = createAdminMutationRepository(handle.db)
@@ -90,6 +92,8 @@ export function adminMutationDatabase(url: string, maxConnections = 2) {
         pools: poolRows,
         targets: await keys.listTargetsForKeys(keyRows.map((row) => row.id)),
         members: await pools.listMembersForPools(poolRows.map((row) => row.id)),
+        // A rolled-back remove must leave no tombstone either.
+        tombstones: (await tombstones.listAll()).filter((row) => subjects.has(row.id)),
         audit: (await Promise.all([...subjects].map((id) => audit.listForSubject(id, 100)))).flat(),
       }
     },
@@ -97,7 +101,9 @@ export function adminMutationDatabase(url: string, maxConnections = 2) {
       try {
         for (const id of subjects) {
           await handle.sql`delete from audit_events where subject_id = ${id}`
-          await keys.delete(id)
+          // Test cleanup only: production deletes go through the tombstone repository.
+          await handle.sql`delete from api_keys where id = ${id}`
+          await handle.sql`delete from api_key_tombstones where id = ${id}`
         }
         for (const id of subjects) await pools.delete(id)
         for (const id of accountIds) await accounts.delete(id)

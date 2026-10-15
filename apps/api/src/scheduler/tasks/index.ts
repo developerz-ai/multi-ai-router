@@ -1,7 +1,7 @@
 import type {
   AccountRepository,
   AccountRow,
-  ApiKeyRepository,
+  ApiKeyTombstoneRepository,
   AuditRepository,
   ModelCatalogRepository,
   OauthStateRepository,
@@ -51,7 +51,7 @@ export interface ScheduledTaskDeps
   readonly sessions: Pick<SessionRepository, "deleteIdleBefore">
   readonly usageRecords: Pick<UsageRecordRepository, "deleteRetainedBatch">
   readonly auditEvents: Pick<AuditRepository, "deleteOlderThan">
-  readonly apiKeys: Pick<ApiKeyRepository, "deleteRevokedOlderThan">
+  readonly keyTombstones: Pick<ApiKeyTombstoneRepository, "purgeRevoked" | "deleteOlderThan">
   readonly oauthStates: Pick<OauthStateRepository, "deleteExpiredBefore">
   readonly history: Pick<UsageHistoryRepository, "backfill" | "deleteRetainedHistory">
   /**
@@ -175,7 +175,7 @@ export function createScheduledTasks(deps: ScheduledTaskDeps): readonly Schedule
       history: deps.history,
       auditEvents: deps.auditEvents,
       taskRuns: deps.scheduledTasks,
-      apiKeys: deps.apiKeys,
+      keyTombstones: deps.keyTombstones,
       retention: env.retention,
       intervalMs: intervals.janitor_sweep,
       batchSize,

@@ -2,7 +2,7 @@ import type { Dialect, EgressMode, ProviderId, UsageFault } from "@multi-ai-rout
 import { isSuccessOutcome, UsageOutcome, usageOutcomeFault } from "@multi-ai-router/core"
 import type { RecentAttemptRow } from "@multi-ai-router/db"
 import { z } from "zod"
-import type { UsageLabelSets } from "./service"
+import type { DisplayNames } from "./types"
 
 /**
  * The live request feed's contract: what the console may ask for, and what one
@@ -93,7 +93,7 @@ export function outcomesFor(query: RecentQuery): readonly UsageOutcome[] | undef
  * served, the pool it was drawn from.
  *
  * Same three fields and same rules as a breakdown row: a label may be missing
- * because the subject was deleted (usage rows outlive what they name) or because
+ * because the subject was deleted (usage rows outlive what they name; for a key, no live row and no tombstone) or because
  * the dimension did not apply (a key scoped `all` was placed by no pool), and
  * the reason is on the row so the console never has to guess which.
  */
@@ -150,7 +150,7 @@ export interface RecentView {
 
 export function toRecentAttemptView(
   row: RecentAttemptRow,
-  labels: UsageLabelSets,
+  labels: DisplayNames,
 ): RecentAttemptView {
   return {
     id: row.id,

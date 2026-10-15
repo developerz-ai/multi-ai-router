@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import type { Database } from "../../../src/client"
-import { createApiKeyRepository } from "../../../src/repositories/api-key-repository"
+import { createApiKeyTombstoneRepository } from "../../../src/repositories/api-key-tombstone-repository"
 import { createAuditRepository } from "../../../src/repositories/audit-repository"
 import { createOauthStateRepository } from "../../../src/repositories/oauth-state-repository"
 import { createSessionRepository } from "../../../src/repositories/session-repository"
@@ -37,10 +37,10 @@ const SWEEPS: readonly Sweep[] = [
     run: (db, limit) => createAuditRepository(db).deleteOlderThan(CUTOFF, limit),
   },
   {
-    name: "revoked keys",
-    table: "api_keys",
-    ageColumn: "revoked_at",
-    run: (db, limit) => createApiKeyRepository(db).deleteRevokedOlderThan(CUTOFF, limit),
+    name: "key tombstones",
+    table: "api_key_tombstones",
+    ageColumn: "purged_at",
+    run: (db, limit) => createApiKeyTombstoneRepository(db).deleteOlderThan(CUTOFF, limit),
   },
   {
     name: "idle sessions",
@@ -98,23 +98,36 @@ describe("every sweep deletes a bounded batch, oldest first", () => {
 describe("what each sweep is allowed to reach", () => {
   test("revoked keys: the flag narrows the batch, not just the timestamp", async () => {
     const stub = harness()
-    await createApiKeyRepository(stub.db).deleteRevokedOlderThan(CUTOFF, 100)
+    await createApiKeyTombstoneRepository(stub.db).purgeRevoked(CUTOFF, CUTOFF, 100)
 
     // `revoked` is what verification reads, so requiring it means the sweep can
     // only ever reach a key that is already refused.
-    const { sql, params } = stub.only()
-    expect(sql).toContain('"api_keys"."revoked" = $2')
-    expect(params).toContain(true)
+    const { sql } = stub.only()
+    expect(sql).toMatch(/"revoked"\s*=\s*true/)
   })
 
   test("revoked keys: a revocation with no timestamp has no age and is never purged", async () => {
     const stub = harness()
-    await createApiKeyRepository(stub.db).deleteRevokedOlderThan(CUTOFF, 100)
+    await createApiKeyTombstoneRepository(stub.db).purgeRevoked(CUTOFF, CUTOFF, 100)
 
     // `revoked_at < cutoff` excludes NULL in SQL, and nothing here coalesces it
     // into a date. Unpurged is recoverable; purged is not.
     const { sql } = stub.only()
     expect(sql).not.toMatch(/coalesce|is null/i)
+  })
+
+  test("revoked keys: strict age, oldest first, bounded, in one statement with the tombstone", async () => {
+    const stub = harness()
+    await createApiKeyTombstoneRepository(stub.db).purgeRevoked(CUTOFF, CUTOFF, 100)
+
+    const { sql, params } = stub.only()
+    expect(sql).toMatch(/"api_keys"\."revoked_at"\s*<\s*\$\d+::timestamptz/)
+    expect(sql).not.toMatch(/revoked_at"\s*<=/)
+    expect(sql).toMatch(/order by\s+"api_keys"\."revoked_at"\s+asc\s+limit/i)
+    expect(sql).toMatch(/insert into "api_key_tombstones"/i)
+    expect(sql).toMatch(/on conflict \("id"\) do nothing/i)
+    expect(params).toContain(CUTOFF_PARAM)
+    expect(params).toContain(100)
   })
 
   test("audit events: age is the only predicate a caller can supply", async () => {

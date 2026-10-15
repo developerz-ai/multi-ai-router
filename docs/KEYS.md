@@ -97,14 +97,15 @@ Console: **Revoke** on the key's row. API: `POST /api/admin/keys/:id/revoke`.
 - In-flight requests finish. A stream is not torn down.
 - Revocation is one-way. A revoked key is never reactivated.
 - A revoked key keeps its row, scope and usage attribution until `RETENTION_REVOKED_KEYS_DAYS`
-  (default 30) after revocation. Then it is purged, and its usage rows keep an id that no longer
-  resolves to a name, owner or tool.
+  (default 30) after revocation. Then the row is purged and a tombstone keeps its name, owner and tool,
+  so its usage stays attributed for `RETENTION_USAGE_DAILY_DAYS` (default 730) plus one day.
 
 ### Hand back is revoke
 
-When a key is handed back, revoke it. Do not use **Delete** (`DELETE /api/admin/keys/:id`): a hard
-delete removes the row at once, so its past usage stops resolving to a name, owner or tool
-immediately.
+When a key is handed back, revoke it. Do not use **Delete** (`DELETE /api/admin/keys/:id`) for this:
+a revoked key stays listed, with its scope and limits visible, for `RETENTION_REVOKED_KEYS_DAYS`,
+while a delete removes the row at once. Either way its usage stays attributed through its
+tombstone.
 
 ## Requester
 

@@ -4,11 +4,13 @@ import { createDatabase, type Database, type DatabaseHandle } from "../../src/cl
 import { defaultMigrationsFolder, runMigrations } from "../../src/migrate"
 import { createAccountRepository } from "../../src/repositories/account-repository"
 import { createApiKeyRepository } from "../../src/repositories/api-key-repository"
+import { createApiKeyTombstoneRepository } from "../../src/repositories/api-key-tombstone-repository"
 import { createAuditRepository } from "../../src/repositories/audit-repository"
 import { createScheduledTaskRepository } from "../../src/repositories/scheduled-task-repository"
 import { createUsageDailyRepository } from "../../src/repositories/usage-daily-repository"
 import { createUsageRecordRepository } from "../../src/repositories/usage-repository"
 import { accounts } from "../../src/schema/accounts"
+import { apiKeyTombstones } from "../../src/schema/api-key-tombstones"
 import { apiKeys } from "../../src/schema/api-keys"
 import { auditEvents } from "../../src/schema/audit-events"
 import { scheduledTaskRuns } from "../../src/schema/scheduled-task-runs"
@@ -58,6 +60,7 @@ afterAll(async () => {
   if (handle !== undefined) {
     // Anything the sweeps under test left behind, plus the rows they are not
     // allowed to touch. A shared dev database must look untouched afterwards.
+    await db.delete(apiKeyTombstones).where(inArray(apiKeyTombstones.id, keyIds))
     if (keyIds.length > 0) await db.delete(apiKeys).where(inArray(apiKeys.id, keyIds))
     if (accountIds.length > 0) await db.delete(accounts).where(inArray(accounts.id, accountIds))
     await db.delete(auditEvents).where(eq(auditEvents.kind, "test.retention"))
@@ -123,7 +126,7 @@ describe.skipIf(!runnable)("bounded retention deletes against a live database", 
     expect(left).toHaveLength(1)
   })
 
-  test("revoked keys: purged by revocation age, and only when revoked", async () => {
+  test("revoked keys: purged (with a tombstone) by revocation age, and only when revoked", async () => {
     const repository = createApiKeyRepository(db)
     const swept = await repository.create({
       name: "test-retention-swept",
@@ -152,10 +155,16 @@ describe.skipIf(!runnable)("bounded retention deletes against a live database", 
     // Revoked with no stamp: no measurable age, so it stays until one exists.
     await db.update(apiKeys).set({ revoked: true }).where(eq(apiKeys.id, noStamp.id))
 
-    expect(await repository.deleteRevokedOlderThan(CUTOFF, 100)).toBe(1)
+    const tombstones = createApiKeyTombstoneRepository(db)
+    expect(await tombstones.purgeRevoked(CUTOFF, new Date("2031-01-01T00:00:00.000Z"), 100)).toBe(1)
     expect(await repository.findById(swept.id)).toBeUndefined()
     expect(await repository.findById(liveButStamped.id)).toBeDefined()
     expect(await repository.findById(noStamp.id)).toBeDefined()
+    // A tombstone exists for the swept key only.
+    const stoneIds = (await tombstones.listAll()).map((row) => row.id)
+    expect(stoneIds).toContain(swept.id)
+    expect(stoneIds).not.toContain(liveButStamped.id)
+    expect(stoneIds).not.toContain(noStamp.id)
   })
 
   test("daily usage: aggregates go by day, and the cutoff's own day stays", async () => {

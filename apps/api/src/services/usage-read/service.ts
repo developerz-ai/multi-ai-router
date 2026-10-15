@@ -2,11 +2,13 @@ import type { UsageHistoryRepository, UsageRecentRepository } from "@multi-ai-ro
 import { type AdminResult, ok } from "../admin/result"
 import { outcomesFor, type RecentQuery, type RecentView, toRecentAttemptView } from "./recent"
 import { readSummary } from "./summary"
+import { keyNames } from "./summary-view"
 import type { UsageWindowQuery } from "./window"
 
 /** Summary facts share one database snapshot; labels are current best-effort decoration. */
 
 export type {
+  KeyLabel,
   UsageBreakdownRow,
   UsageCoverage,
   UsageLabelSets,
@@ -54,11 +56,14 @@ export function createUsageService(deps: UsageServiceDeps): UsageService {
         }),
       ])
 
+      // Projected once, not per row: a poll costs O(rows + labels).
+      const names = { keys: keyNames(labels.keys), accounts: labels.accounts, pools: labels.pools }
+
       // `limit` is echoed as asked for, never as `rows.length`: a quiet router
       // returning four rows has truncated nothing, and a caption reading "at
       // most 4" would be describing the traffic rather than the page.
       return ok({
-        attempts: rows.map((row) => toRecentAttemptView(row, labels)),
+        attempts: rows.map((row) => toRecentAttemptView(row, names)),
         limit: query.limit,
       })
     },

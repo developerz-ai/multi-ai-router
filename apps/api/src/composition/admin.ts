@@ -2,6 +2,7 @@ import {
   type AccountRepository,
   type AdminCredentialRepository,
   type ApiKeyRepository,
+  type ApiKeyTombstoneRepository,
   type AuditRepository,
   type CredentialRefreshLock,
   createAdminMutationRepository,
@@ -100,6 +101,7 @@ export interface AdminPlaneDeps {
   readonly accounts: AccountRepository
   readonly refreshLock: Pick<CredentialRefreshLock, "tryRun">
   readonly keys: ApiKeyRepository
+  readonly keyTombstones: Pick<ApiKeyTombstoneRepository, "listAll">
   readonly pools: PoolRepository
   readonly auditEvents: AuditRepository
   readonly oauthStates: OauthStateRepository
@@ -165,7 +167,8 @@ export interface AdminPlane {
 }
 
 export function createAdminPlane(deps: AdminPlaneDeps): AdminPlane {
-  const { env, logger, now, accounts, keys, cipher, catalog, health, configDirs } = deps
+  const { env, logger, now, accounts, keys, keyTombstones, cipher, catalog, health, configDirs } =
+    deps
   const audit = createAuditRecorder(deps.auditEvents)
   const mutations = createAdminMutationRepository(deps.database)
 
@@ -388,7 +391,7 @@ export function createAdminPlane(deps: AdminPlaneDeps): AdminPlane {
       usage: createUsageService({
         history: createUsageHistoryRepository(deps.database),
         recent: createUsageRecentRepository(deps.database),
-        labels: catalogLabels({ keys, catalog }),
+        labels: catalogLabels({ keys, tombstones: keyTombstones, catalog }),
         ...env.usageRead,
         now,
       }),

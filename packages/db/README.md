@@ -54,6 +54,7 @@ test/integration/     needs a live Postgres, skips cleanly without one
 | `usage_daily` | Hourly rollup, idempotent per (day, key, account, model) |
 | `audit_events` | Append-only admin-plane mutations. Never credential material |
 | `scheduled_task_runs` | One row per periodic-task run — how anyone knows a sweep happened |
+| `api_key_tombstones` | What a purged or deleted key leaves behind: id, name, display prefix, owner, owner kind, tool, purge time. Never the value. Read only by the usage label loader; swept on `RETENTION_USAGE_DAILY_DAYS` + 1 day |
 | `oauth_states` | One-shot OAuth `state` + PKCE verifier, short TTL |
 
 Modeling decisions worth knowing:
@@ -61,7 +62,7 @@ Modeling decisions worth knowing:
 | Decision | Why |
 |---|---|
 | Scope targets are join tables, not a JSONB array | Scope is enforced as an intersection on every request. A join keeps that a query, and a deleted pool cannot leave a dangling id behind |
-| `usage_records.api_key_id` / `account_id` are nullable, `ON DELETE SET NULL` | A revoked key is purged 30 days later, and its historical rows must stay joinable until then and readable after. An attempt that failed before selection has no account at all |
+| `usage_records.api_key_id` / `account_id` are nullable and carry **no foreign key** (dropped in `0030`) | A purged key or deleted account must not erase or null its historical rows; the id stays on every usage row and `api_key_tombstones` keeps a purged key's name. An attempt that failed before selection has no account at all |
 | `usage_daily` carries **no** foreign keys | Raw rows expire on the retention window; the rollup does not. A lifetime total has to outlive the key that earned it |
 | `cost_metered` and `cost_notional` are separate columns | A subscription is a flat fee, so its per-request cost is an attribution, not a charge. The docs forbid summing the two |
 | `sessions.account_id` is `ON DELETE SET NULL` | A binding is *invalidated*, never migrated: another account cannot resume an SDK session id. The FK is the backstop; the service clears `sdk_session_id` and lineage with it |

@@ -4,7 +4,7 @@ import type {
   ApiKeyRepository,
   ApiKeyRow,
 } from "@multi-ai-router/db"
-import { drop, remove, replace } from "./memory-row-operations"
+import { drop, replace } from "./memory-row-operations"
 
 /**
  * The admin-plane key store of `createMemoryStore`, over arrays — the same
@@ -26,7 +26,6 @@ export function memoryKeys(
   | "findById"
   | "findByName"
   | "update"
-  | "delete"
   | "markRevoked"
   | "listPoolTargets"
   | "listAccountTargets"
@@ -70,7 +69,6 @@ export function memoryKeys(
     findById: async (id) => keys.find((row) => row.id === id),
     findByName: async (name) => keys.find((row) => row.name === name),
     update: async (id, patch, now) => replace(keys, id, patch, now),
-    delete: async (id) => remove(keys, id),
     markRevoked: async (id, now) => {
       replace(keys, id, { revoked: true, revokedAt: now }, now)
     },

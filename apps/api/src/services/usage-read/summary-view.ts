@@ -1,6 +1,6 @@
 import type { UsageGroupRow, UsageGroupSeriesPoint, UsageSeriesPoint } from "@multi-ai-router/db"
 import { densify } from "./axis"
-import type { UsageBreakdownRow, UsageSeriesEntry } from "./types"
+import type { KeyLabel, UsageBreakdownRow, UsageSeriesEntry } from "./types"
 
 /**
  * Puts the summary series on the same axis every breakdown row uses.
@@ -23,6 +23,11 @@ export function alignSeries(
       errors: found?.errors ?? 0,
     }
   })
+}
+
+/** Projects the loader's richer key entries to the display name the wire shape carries. */
+export function keyNames(keys: ReadonlyMap<string, KeyLabel>): ReadonlyMap<string, string> {
+  return new Map([...keys].map(([id, key]) => [id, key.name]))
 }
 
 export function label(

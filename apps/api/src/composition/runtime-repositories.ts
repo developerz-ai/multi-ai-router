@@ -2,6 +2,7 @@ import {
   createAccountRepository,
   createAdminCredentialRepository,
   createApiKeyRepository,
+  createApiKeyTombstoneRepository,
   createAuditRepository,
   createCredentialRefreshLockPool,
   createModelCatalogRepository,
@@ -21,6 +22,7 @@ export interface RuntimeRepositories {
   readonly schedulerLock: ReturnType<typeof createSchedulerLockPool>
   readonly accounts: ReturnType<typeof createAccountRepository>
   readonly keys: ReturnType<typeof createApiKeyRepository>
+  readonly keyTombstones: ReturnType<typeof createApiKeyTombstoneRepository>
   readonly pools: ReturnType<typeof createPoolRepository>
   readonly auditEvents: ReturnType<typeof createAuditRepository>
   readonly usageRecords: ReturnType<typeof createUsageRecordRepository>
@@ -51,6 +53,7 @@ export function createRuntimeRepositories(deps: RuntimeDeps): RuntimeRepositorie
     recoveryCooldownMs: env.recovery.cooldownMs,
   })
   const keys = createApiKeyRepository(database)
+  const keyTombstones = createApiKeyTombstoneRepository(database)
   const pools = createPoolRepository(database)
   const auditEvents = createAuditRepository(database)
   const usageRecords = createUsageRecordRepository(database)
@@ -76,6 +79,7 @@ export function createRuntimeRepositories(deps: RuntimeDeps): RuntimeRepositorie
     schedulerLock,
     accounts,
     keys,
+    keyTombstones,
     pools,
     auditEvents,
     usageRecords,

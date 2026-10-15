@@ -1,3 +1,4 @@
+import type { KeyOwnerKind } from "@multi-ai-router/core"
 import type { UsageTotals } from "@multi-ai-router/db"
 import type { UsageFailures } from "./failures"
 
@@ -39,7 +40,7 @@ export interface UsageSeriesEntry {
 
 export interface UsageBreakdownRow {
   readonly id: string | null
-  /** Human name. `null` when the subject is gone or the dimension did not apply. */
+  /** Human name. `null` when the subject is gone (no live row and, for a key, no tombstone) or the dimension did not apply. */
   readonly label: string | null
   /** Why the label is absent, so the console never has to guess. */
   readonly note: "deleted" | "none" | null
@@ -53,13 +54,31 @@ export interface UsageBreakdownRow {
 }
 
 /**
+ * What the loader knows about a key: read from the live row, else its tombstone. Only `name`
+ * reaches the wire in this slice; owner, kind and tool ride along for the consumers that follow.
+ */
+export interface KeyLabel {
+  readonly name: string
+  readonly owner: string | null
+  readonly ownerKind: KeyOwnerKind | null
+  readonly tool: string | null
+}
+
+/** `UsageLabelSets` projected to the names the wire carries; built once per request. */
+export interface DisplayNames {
+  readonly keys: ReadonlyMap<string, string>
+  readonly accounts: ReadonlyMap<string, string>
+  readonly pools: ReadonlyMap<string, string>
+}
+
+/**
  * Display names for every id a breakdown can carry, read once per summary.
  *
  * Maps rather than per-id lookups: a breakdown can be hundreds of rows, and resolving each one
  * separately is how an admin screen quietly becomes N queries.
  */
 export interface UsageLabelSets {
-  readonly keys: ReadonlyMap<string, string>
+  readonly keys: ReadonlyMap<string, KeyLabel>
   readonly accounts: ReadonlyMap<string, string>
   readonly pools: ReadonlyMap<string, string>
 }

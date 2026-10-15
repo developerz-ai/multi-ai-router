@@ -156,7 +156,10 @@ export function createKeyMutations(deps: KeysServiceDeps): Pick<KeysService, Key
         deps.mutations.run({ kind: "key", id }, async (tx) => {
           const current = await tx.keys.findById(id)
           if (current === undefined) return notFound(`no key with id "${id}"`)
-          if (!(await tx.keys.delete(id))) return notFound(`no key with id "${id}"`)
+          // One statement deletes the row and writes its tombstone (the key's name outlives its
+          // row for the rollups). The row is already locked FOR UPDATE by `run`.
+          if (!(await tx.tombstones.deleteKey(id, deps.now())))
+            return notFound(`no key with id "${id}"`)
           await createAuditRecorder(tx.audit).record({
             kind: AUDIT_KINDS.keyDeleted,
             subjectType: AUDIT_SUBJECTS.key,

@@ -71,7 +71,7 @@ function revokeConsequences(key: ApiKeyView): readonly string[] {
 function deleteConsequences(key: ApiKeyView): readonly string[] {
   return [
     `"${key.name}" is removed outright — clients presenting it fail immediately.`,
-    "Its usage rows survive, but they no longer name a key.",
-    "Revoke is the softer door: it stops the key while keeping the row and its scope visible.",
+    "Its usage stays attributed to its name, owner and tool until the usage history it labels ages out.",
+    "Revoke is the softer door: it stops the key while keeping the row and its scope visible for the revoked-key grace period.",
   ]
 }
