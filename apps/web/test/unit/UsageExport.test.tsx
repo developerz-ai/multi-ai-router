@@ -14,7 +14,11 @@ import { UsageExport } from "../../src/routes/usage/UsageExport"
 const originalFetch = globalThis.fetch
 afterEach(() => {
   globalThis.fetch = originalFetch
+  window.happyDOM.setURL("http://router.test/usage")
 })
+
+/** Router navigation lands after the click's own task; what is awaited is the URL write. */
+const settle = () => new Promise<void>((resolve) => setTimeout(resolve, 20))
 
 const search = (href: string) => new URL(href, "http://router.test").searchParams
 
@@ -52,19 +56,26 @@ describe("UsageRoute export control", () => {
   function mount() {
     globalThis.fetch = (async (input: RequestInfo | URL) => {
       const url = typeof input === "string" ? input : input.toString()
-      const body = url.includes("/usage/recent") ? { attempts: [], limit: 50 } : []
+      const body = url.includes("/usage/recent")
+        ? { attempts: [], limit: 50 }
+        : url.includes("/usage/reports")
+          ? { reports: [] }
+          : []
       return new Response(JSON.stringify(body), {
         status: 200,
         headers: { "content-type": "application/json" },
       })
     }) as typeof fetch
+    window.happyDOM.setURL("http://router.test/usage")
     const container = document.createElement("div")
     document.body.appendChild(container)
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
     const dispose = render(
       () => (
         <QueryClientProvider client={client}>
-          <UsageRoute />
+          <Router>
+            <Route path="*" component={UsageRoute} />
+          </Router>
         </QueryClientProvider>
       ),
       container,
@@ -82,6 +93,7 @@ describe("UsageRoute export control", () => {
       expect(search(anchor?.getAttribute("href") ?? "").get("window")).toBe("7d")
       const buttons = Array.from(container.querySelectorAll("button"))
       buttons.find((b) => b.textContent?.trim() === "30 days")?.click()
+      await settle()
       expect(search(link(container)?.getAttribute("href") ?? "").get("window")).toBe("30d")
     } finally {
       dispose()
@@ -102,6 +114,7 @@ describe("UsageRoute export control", () => {
       container
         .querySelector("form")
         ?.dispatchEvent(new SubmitEvent("submit", { bubbles: true, cancelable: true }))
+      await settle()
       const params = search(link(container)?.getAttribute("href") ?? "")
       expect(params.has("window")).toBe(false)
       expect(Date.parse(params.get("from") ?? "")).toBe(Date.parse("2026-10-01T00:00"))

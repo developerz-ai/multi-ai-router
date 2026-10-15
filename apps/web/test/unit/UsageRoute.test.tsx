@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test"
+import { Route, Router } from "@solidjs/router"
 import { QueryClient, QueryClientProvider } from "@tanstack/solid-query"
 import { render } from "solid-js/web"
 import UsageRoute from "../../src/routes/UsageRoute"
@@ -22,6 +23,7 @@ const originalFetch = globalThis.fetch
 
 afterEach(() => {
   globalThis.fetch = originalFetch
+  window.happyDOM.setURL("http://router.test/usage")
 })
 
 function stubFetch(failures: unknown): void {
@@ -36,11 +38,14 @@ function stubFetch(failures: unknown): void {
 
 function responseFor(url: string, failures: unknown): unknown {
   if (url.includes("/usage/recent")) return { attempts: [], limit: 50 }
+  // Before `/usage`: the reports list is a sibling read under the same prefix.
+  if (url.includes("/usage/reports")) return { reports: [] }
   if (url.includes("/usage")) return summary(failures)
   return []
 }
 
 function mount(): { readonly dispose: () => void; readonly container: HTMLElement } {
+  window.happyDOM.setURL("http://router.test/usage")
   const container = document.createElement("div")
   document.body.appendChild(container)
   // No retries: a stubbed response that does not parse should fail the test rather than be
@@ -49,7 +54,9 @@ function mount(): { readonly dispose: () => void; readonly container: HTMLElemen
   const dispose = render(
     () => (
       <QueryClientProvider client={client}>
-        <UsageRoute />
+        <Router>
+          <Route path="*" component={UsageRoute} />
+        </Router>
       </QueryClientProvider>
     ),
     container,
@@ -148,5 +155,7 @@ function summary(failures: unknown): unknown {
     byAccount: [],
     byPool: [],
     byModel: [],
+    byOwner: [],
+    byTool: [],
   }
 }

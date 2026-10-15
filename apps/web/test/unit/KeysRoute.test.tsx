@@ -419,5 +419,7 @@ function usageSummary() {
     byAccount: [],
     byPool: [],
     byModel: [],
+    byOwner: [],
+    byTool: [],
   }
 }
