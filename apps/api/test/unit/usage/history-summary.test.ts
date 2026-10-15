@@ -147,7 +147,7 @@ test("the maximum group setting queries a sentinel and only charts selected grou
     { window: "today" },
   )
   expect(limits).toEqual([1001, 1001, 1001, 1001, 1001, 1001])
-  expect(selected).toEqual([1000, 1000, 1000, 1000])
+  expect(selected).toEqual([1000, 1000, 1000, 1000, 1000, 1000])
   expect(summary.byKey).toHaveLength(1000)
   expect(summary.coverage.breakdown.truncated).toEqual([
     "apiKeyId",
