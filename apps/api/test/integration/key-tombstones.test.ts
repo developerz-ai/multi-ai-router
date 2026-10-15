@@ -153,7 +153,8 @@ describe.skipIf(!historyUrl)("a purged key keeps its attribution", () => {
   })
 
   test("operator delete writes the same tombstone, and the label survives", async () => {
-    const { keysService, keys, usage, tombstones } = services(() => new Date())
+    const deletedAt = new Date(Date.now() - 1000)
+    const { keysService, keys, usage, tombstones } = services(() => deletedAt)
     const created = await keysService.create({
       name: "ci/agent",
       owner: "ci",
@@ -182,6 +183,8 @@ describe.skipIf(!historyUrl)("a purged key keeps its attribution", () => {
       ownerKind: "service",
       tool: "agent",
     })
+    // One clock on the operator path too: purged_at is the service's injected now.
+    expect((await tombstones.listAll()).find((row) => row.id === id)?.purgedAt).toEqual(deletedAt)
   })
 
   test("a tombstone survives inside the usage-daily window and is swept once older", async () => {
