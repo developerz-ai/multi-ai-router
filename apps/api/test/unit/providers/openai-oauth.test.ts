@@ -22,6 +22,7 @@ import {
   parseCodexQuotaHeaders,
   readOpenAiOAuthTokens,
 } from "../../../src/providers"
+import { CODEX_QUOTA_CODES } from "../../../src/providers/drivers/openai-oauth-stream-errors"
 import { account, response } from "./fixtures"
 
 function jwt(payload: Record<string, unknown>): string {
@@ -238,6 +239,40 @@ describe("Codex failure wording", () => {
     expect(result?.kind).toBe("credits-exhausted")
     expect(result?.retryable).toBe(true)
     expect(result?.signal).toBe("openai-oauth:account_deactivated")
+  })
+  test("a 429 carrying a quota code is a spent balance, not a cooldown (#206)", () => {
+    for (const body of [
+      // The `error` envelope is the one the Codex CLI reads; `detail` is the one this driver reads
+      // every Codex code from, so both classify.
+      ...CODEX_QUOTA_CODES.map((code) => ({ error: { code, message: "quota" } })),
+      ...CODEX_QUOTA_CODES.map((code) => ({ detail: { code, message: "quota" } })),
+      { error: { type: "insufficient_quota", message: "quota" } },
+    ]) {
+      const result = codex.classifyFailure(response(429, { body }))
+      expect(result?.kind).toBe("credits-exhausted")
+      expect(result?.signal).toBe("openai-oauth:insufficient_quota")
+    }
+  })
+  test.each([
+    [400, { detail: { code: "insufficient_quota" } }],
+    [400, { error: { type: "insufficient_quota" } }],
+    [403, { error: { type: "insufficient_quota" } }],
+    [500, { error: { type: "insufficient_quota" } }],
+    [400, { detail: { type: "insufficient_quota" } }],
+  ])("a quota signal on status %i does not park the account (#207 round 11)", (status, body) => {
+    expect(codex.classifyFailure(response(status, { body }))?.kind).not.toBe("credits-exhausted")
+  })
+  test.each([
+    { error: { type: "credit_balance_exhausted" } },
+    { error: { code: "usage_limit_reached", type: "insufficient_quota" } },
+  ])("a 429 the driver reads as a limit, not quota (#207 round 11): %o", (body) => {
+    expect(codex.classifyFailure(response(429, { body }))?.kind).toBe("rate-limited")
+  })
+  test("a quota code on another status does not park the account (#207 review)", () => {
+    const result = codex.classifyFailure(
+      response(400, { body: { detail: { code: "insufficient_quota", message: "quota" } } }),
+    )
+    expect(result?.kind).not.toBe("credits-exhausted")
   })
   test("a bare string detail still yields a message, and falls back to the status", () => {
     const result = codex.classifyFailure(response(401, { body: { detail: "invalid token" } }))
