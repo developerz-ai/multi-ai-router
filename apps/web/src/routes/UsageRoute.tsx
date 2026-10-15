@@ -25,6 +25,7 @@ import styles from "./UsageRoute.module.scss"
 import { UsageBreakdown } from "./usage/UsageBreakdown"
 import { UsageChart } from "./usage/UsageChart"
 import { UsageCoverage } from "./usage/UsageCoverage"
+import { UsageExport } from "./usage/UsageExport"
 import { UsageFailures } from "./usage/UsageFailures"
 import { UsageQuota } from "./usage/UsageQuota"
 import { UsageRecent } from "./usage/UsageRecent"
@@ -93,24 +94,29 @@ export default function UsageRoute() {
     <>
       <PageHeader
         actions={
-          // A real `<fieldset>` rather than `role="group"`: the grouping is
-          // native, so the `<legend>` names it for assistive tech without an
-          // `aria-label` that can drift from the visible wording.
-          <fieldset class={styles.windows}>
-            <legend class={styles.groupLabel}>Window</legend>
-            <For each={USAGE_WINDOWS}>
-              {(value) => (
-                <button
-                  aria-pressed={!isCustomRange(range()) && range() === value ? "true" : "false"}
-                  class={styles.window}
-                  onClick={() => selectWindow(value)}
-                  type="button"
-                >
-                  {usageWindowLabel(value)}
-                </button>
-              )}
-            </For>
-          </fieldset>
+          <>
+            {/* The export reads the range signal the summary query reads, so the file is the
+                window on screen. */}
+            <UsageExport range={range()} />
+            {/* A real `<fieldset>` rather than `role="group"`: the grouping is native, so the
+                `<legend>` names it for assistive tech without an `aria-label` that can drift
+                from the visible wording. */}
+            <fieldset class={styles.windows}>
+              <legend class={styles.groupLabel}>Window</legend>
+              <For each={USAGE_WINDOWS}>
+                {(value) => (
+                  <button
+                    aria-pressed={!isCustomRange(range()) && range() === value ? "true" : "false"}
+                    class={styles.window}
+                    onClick={() => selectWindow(value)}
+                    type="button"
+                  >
+                    {usageWindowLabel(value)}
+                  </button>
+                )}
+              </For>
+            </fieldset>
+          </>
         }
         subtitle="Who burned what — and, in the live feed below, which request failed and why."
         title="Usage"

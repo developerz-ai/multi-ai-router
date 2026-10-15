@@ -94,12 +94,12 @@ describe("UsageRoute export control", () => {
       if (!(from instanceof HTMLInputElement) || !(to instanceof HTMLInputElement))
         throw new Error("custom range inputs missing")
       from.value = "2026-10-01T00:00"
-      from.dispatchEvent(new Event("input", { bubbles: true }))
+      from.dispatchEvent(new InputEvent("input", { bubbles: true }))
       to.value = "2026-10-08T00:00"
-      to.dispatchEvent(new Event("input", { bubbles: true }))
+      to.dispatchEvent(new InputEvent("input", { bubbles: true }))
       container
         .querySelector("form")
-        ?.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }))
+        ?.dispatchEvent(new SubmitEvent("submit", { bubbles: true, cancelable: true }))
       const params = search(link(container)?.getAttribute("href") ?? "")
       expect(params.has("window")).toBe(false)
       expect(Date.parse(params.get("from") ?? "")).toBe(Date.parse("2026-10-01T00:00"))
