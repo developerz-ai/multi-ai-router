@@ -238,6 +238,24 @@ describe("Usage page tiles", () => {
     }
   })
 
+  test("token tiles count every prompt token and say how much the cache served", async () => {
+    stub({
+      summary: { totals: { tokensIn: 600_000, cacheReadTokens: 400_000, tokensOut: 25_000 } },
+    })
+    const { container, dispose } = mount()
+    try {
+      await settle()
+      const tile = (name: string) =>
+        Array.from(container.querySelectorAll("span")).find((el) => el.textContent === name)
+          ?.parentElement
+      expect(tile("Input tokens")?.textContent).toContain("1M")
+      expect(tile("Input tokens")?.textContent).toContain("400k from cache · 40")
+      expect(tile("Output tokens")?.textContent).toContain("25k")
+    } finally {
+      dispose()
+    }
+  })
+
   test("no rendered figure adds metered and notional spend", async () => {
     stub({ summary: { totals: { metered: "1.00", notional: "2.00" } } })
     const { container, dispose } = mount()
