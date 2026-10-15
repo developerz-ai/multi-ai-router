@@ -130,6 +130,8 @@ logs in again, which is the honest outcome rather than a session silently downgr
 
 ## Router API keys
 
+The day-to-day runbook (mint, rotate, revoke, the errors a key holder sees) is [../KEYS.md](../KEYS.md); this section is the contract behind it.
+
 ### Format
 
 ```
@@ -242,7 +244,7 @@ created (named)  ──▶  active  ──▶  revoked  ──▶  purged
 |---|---|
 | created → active | Immediate. The key works on the next request. |
 | active | The value can be decrypted and re-copied from the admin UI whenever the operator needs it. Editing name, limits, or scope never changes the value — **Edit** on any key row is the console's door to `PATCH /api/admin/keys/:id`, so a wrong scope or a missing ceiling is fixed in place rather than by minting a replacement and re-issuing a value to every client holding the old one. A rate limit is not a mint-time decision: both halves are set, changed, and removed (`rateLimit: null`) from that same form. **Mint successor** on a row opens the mint form prefilled for rotation (attribution, scope, ceiling); the value is never copied and the expiry is not inherited. |
-| active → revoked | **Immediate** for new requests — the next one gets `401`. **In-flight requests finish**: the router does not tear down a stream mid-response, because a half-written response is worse than one extra completed call. Revocation is one-way; a revoked key is never reactivated. |
+| active → revoked | **Immediate** on the replica that served the revoke, and within `KEY_CACHE_TTL_SECONDS` (default 60) on every other replica, because verified keys are cached per process ([09-deployment.md](09-deployment.md)); after that the next request gets `401`. **In-flight requests finish**: the router does not tear down a stream mid-response, because a half-written response is worse than one extra completed call. Revocation is one-way; a revoked key is never reactivated. |
 | revoked → purged | 30 days after revocation (configurable), so historical usage stays joinable for a while. See [09-deployment.md](09-deployment.md). |
 
 Every mint, edit, and revocation writes an `AuditEvent`. Audit events never contain key

@@ -13,6 +13,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - A purged or deleted key keeps its attribution (#224). Migration `0036_key_tombstones` adds `api_key_tombstones` (`id, name, prefix, owner, owner_kind, tool, purged_at`; no value or ciphertext column). The janitor's revoked-key purge deletes the key and writes its tombstone in one statement, and `DELETE /api/admin/keys/:id` writes it in the same transaction, both stamped from the injected clock. The usage label loader names a key by its live row, else its tombstone, so `byKey` and the recent-attempts key subject keep the name (and the loader carries owner, owner kind and tool) instead of showing "deleted". The janitor sweeps tombstones at `RETENTION_USAGE_DAILY_DAYS`, the horizon of the rollups they label. Verification, reveal and the admin key list never read tombstones; the `GET /api/admin/usage` wire shape is unchanged. Keys purged before this release have no tombstone and stay "deleted"; there is no backfill.
 
+## [2.30.1] — 2026-10-15
+
+### Documentation
+
+- `docs/KEYS.md`: the router-key runbook for operators and requesters (mint with owner, kind, tool and purpose; scope to a pool; client setup; planned rotation through Mint successor under a new name; a separate leaked-or-lost path that revokes first; revoke, including the per-replica `KEY_CACHE_TTL_SECONDS` bound and the `RETENTION_REVOKED_KEYS_DAYS` attribution window; hand back is revoke, never delete), the key, scope and capacity errors a key holder sees, and where per-key usage shows today. Linked from `README.md` and `docs/idea/04-api-keys-and-access.md`, whose revocation row now states the per-replica bound, as do the two revocation lines in `docs/idea/02-domain-model.md`. The per-key spend budgets row in `docs/idea/10-roadmap.md` gains its current-state reason. A test (`apps/api/test/integration/keys-runbook-docs.test.ts`) holds the file and both links in place, and checks every status/code pair in the runbook's error table against the error classes. Refs #230.
+
 ## [2.30.0] — 2026-10-15
 
 ### Added
@@ -1244,4 +1250,5 @@ your tooling config.
 [2.28.1]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.28.1
 [2.29.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.29.0
 [2.30.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.30.0
+[2.30.1]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.30.1
 [2.31.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.31.0

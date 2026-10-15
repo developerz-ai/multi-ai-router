@@ -252,7 +252,7 @@ overhead p99 over `--budget-ms`, or added TTFT p95 over `--ttft-budget-ms`.
 
 Router keys are accepted in both dialects: `Authorization: Bearer mar_live_…` and `x-api-key: mar_live_…`. Anything that can set a base URL and a key works; the table below is what the console's own client snippets cover today — there's no automated integration test against each of these clients, so treat it as a documented, not verified, list.
 
-**The console says all of this too, filled in.** Mint or reveal a key and the dialog carries a **Point your tool at it** panel — tabs for Claude Code, Cursor, Codex CLI, Aider, the OpenAI SDKs and `curl`, each block already containing this deployment's base URL (`PUBLIC_URL`, else the console's own origin) and that key's real value. [`docs/clients.md`](docs/clients.md) is the same content for someone who never opened the console.
+**The console says all of this too, filled in.** Mint or reveal a key and the dialog carries a **Point your tool at it** panel — tabs for Claude Code, Cursor, Codex CLI, Aider, the OpenAI SDKs and `curl`, each block already containing this deployment's base URL (`PUBLIC_URL`, else the console's own origin) and that key's real value. [`docs/clients.md`](docs/clients.md) is the same content for someone who never opened the console. Minting, rotating and revoking keys, and the errors a key holder sees, are in [`docs/KEYS.md`](docs/KEYS.md).
 
 | Client | How you point it at the router |
 |---|---|
