@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.34.0] — 2026-10-15
+
+### Added
+
+- `GET /api/admin/usage` returns `byOwner` and `byTool` (#246). Rows are folded in SQL, before the breakdown row cap, from the key labels the service already loads (live keys plus tombstones), passed as one `unnest(uuid[], text[], text[], text[])` relation so a large key set costs four binds. The history, raw latency and per-row series queries share one bucket expression, so their group keys match. `byOwner` ids are `<ownerKind>/<owner>` with an `ownerKind` field (a person and a service sharing a slug are two rows; an owner with no kind uses the segment `unknown` and `ownerKind: null`); `byTool` ids are the tool slug. Three non-owner buckets are their own rows with `id: null`, `label: null` and a `note` of `unassigned` (key present, no owner or tool), `deleted` (key id with neither a live row nor a tombstone) or `none` (no key); the SQL tells them apart by sentinels outside the slug grammar, so their latency and series cannot collapse. `byKey` rows gain a boolean `retired`, true only for a key that survives solely as a tombstone. `coverage.breakdown.truncated` names `owner` and `tool` when capped. Owner and tool attribution follows each key's current label. `UsageDimension` gains `owner` and `tool`; the history and raw `breakdown` and `seriesByDimension` are overloaded so `owner` and `tool` require a key-attribution argument (an absent one throws), and `UsageDailyRepository.breakdown` is narrowed to the four column dimensions. `KeyLabel` gains `retired`. The `/recent` feed is unchanged.
+
+### Documentation
+
+- The `usage_records.pool_id` gloss now says it is null whenever no pool was in play, including an attempt that failed before an account was selected on a pool-scoped key, in the schema comment, the observability spec, the recent-feed and web wire-type comments and the repository types.
+
+### Changed
+
+- The Usage page's truncated-breakdown notice names Owner and Tool instead of "Other groups".
+
 ## [2.33.0] — 2026-10-15
 
 ### Added
@@ -1275,3 +1289,4 @@ your tooling config.
 [2.31.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.31.0
 [2.32.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.32.0
 [2.33.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.33.0
+[2.34.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.34.0

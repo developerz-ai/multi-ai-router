@@ -1,9 +1,11 @@
 import type { UsageExportRow } from "./usage-export-repository"
 import type {
-  UsageDimension,
+  UsageAttributedDimension,
+  UsageColumnDimension,
   UsageFilter,
   UsageGroupRow,
   UsageGroupSeriesPoint,
+  UsageKeyAttribution,
   UsageReadRepository,
   UsageSeriesPoint,
   UsageTotals,
@@ -26,9 +28,16 @@ export interface UsageHistoryRepository {
   totals(window: UsageWindow, filter: UsageFilter): Promise<UsageTotals>
   breakdown(
     window: UsageWindow,
-    dimension: UsageDimension,
+    dimension: UsageColumnDimension,
     limit: number | undefined,
     filter: UsageFilter,
+  ): Promise<UsageGroupRow[]>
+  breakdown(
+    window: UsageWindow,
+    dimension: UsageAttributedDimension,
+    limit: number | undefined,
+    filter: UsageFilter,
+    attribution: UsageKeyAttribution,
   ): Promise<UsageGroupRow[]>
   series(
     window: UsageWindow,
@@ -39,10 +48,19 @@ export interface UsageHistoryRepository {
   seriesByDimension(
     window: UsageWindow,
     bucket: "hour" | "day",
-    dimension: UsageDimension,
+    dimension: UsageColumnDimension,
     bucketWidth: number | undefined,
     ids: readonly (string | null)[] | undefined,
     filter: UsageFilter,
+  ): Promise<UsageGroupSeriesPoint[]>
+  seriesByDimension(
+    window: UsageWindow,
+    bucket: "hour" | "day",
+    dimension: UsageAttributedDimension,
+    bucketWidth: number | undefined,
+    ids: readonly (string | null)[] | undefined,
+    filter: UsageFilter,
+    attribution: UsageKeyAttribution,
   ): Promise<UsageGroupSeriesPoint[]>
   /**
    * At most `limit` rows at UTC day x key x account x pool x model for the CSV export, over the

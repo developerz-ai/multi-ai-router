@@ -32,3 +32,43 @@ test("tombstones are read only after the live key read has resolved", async () =
   expect(tombstoneCalls).toBe(1)
   expect([...loaded.keys.keys()].sort()).toEqual(["gone", "live"])
 })
+
+test("a key present in both reads keeps its live name and attribution but reads as retired", async () => {
+  // A delete racing the loader can leave the key in the live read AND its tombstone. The live row
+  // still names it; the tombstone says it is going, so retired wins.
+  const labels = catalogLabels({
+    keys: {
+      list: async () =>
+        [
+          { ...row("both", "live-name"), prefix: "mar_live_aaaa", owner: "alice", tool: "cli" },
+        ] as never,
+    },
+    tombstones: {
+      listAll: async () =>
+        [
+          { ...row("both", "stone-name"), prefix: "mar_live_bbbb", owner: "bob", tool: "editor" },
+        ] as never,
+    },
+    catalog: { accounts: () => [], pools: () => [] },
+  })
+  const loaded = await labels()
+  expect(loaded.keys.get("both")).toEqual({
+    name: "live-name",
+    prefix: "mar_live_aaaa",
+    owner: "alice",
+    ownerKind: null,
+    tool: "cli",
+    retired: true,
+  })
+})
+
+test("a live-only key is not retired and a tombstone-only key is", async () => {
+  const labels = catalogLabels({
+    keys: { list: async () => [row("live", "kept")] as never },
+    tombstones: { listAll: async () => [row("gone", "purged")] as never },
+    catalog: { accounts: () => [], pools: () => [] },
+  })
+  const loaded = await labels()
+  expect(loaded.keys.get("live")?.retired).toBe(false)
+  expect(loaded.keys.get("gone")?.retired).toBe(true)
+})

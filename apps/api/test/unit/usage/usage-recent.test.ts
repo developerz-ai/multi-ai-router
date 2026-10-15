@@ -82,7 +82,14 @@ function service(rows: readonly RecentAttemptRow[]) {
       keys: new Map([
         [
           "key-1",
-          { name: "dev-laptops", owner: null, ownerKind: null, tool: null, prefix: "mar_dev" },
+          {
+            name: "dev-laptops",
+            owner: null,
+            ownerKind: null,
+            tool: null,
+            retired: false,
+            prefix: "mar_dev",
+          },
         ],
       ]),
       accounts: new Map([["acct-1", "claude-max-01"]]),

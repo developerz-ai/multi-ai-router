@@ -10,7 +10,7 @@ import type { FailureCount } from "../failure-classes"
 //     once here, at the edge, so no component has to know.
 //   - **A label may be null**, with a `note` saying why: `deleted` when the key
 //     or account is gone (usage rows outlive what they name; for a key: no live row and no tombstone), `none` when the
-//     dimension did not apply — a key scoped `all` was placed by no pool. Both
+//     dimension did not apply — no pool was in play (a key scoped `all`, or an attempt that failed before an account was chosen). Both
 //     still render, because spend that happened is still spend and hiding a row
 //     would make the breakdown stop adding up to the total printed above it.
 //   - **Percentiles are per group** on the wire and are folded into this

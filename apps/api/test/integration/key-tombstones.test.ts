@@ -148,6 +148,7 @@ describe.skipIf(!historyUrl)("a purged key keeps its attribution", () => {
       owner: "alice",
       ownerKind: "person",
       tool: "editor",
+      retired: true,
       prefix: created.value.prefix,
     })
     // One clock: purged_at is the janitor tick's date, not the database's now().
@@ -184,6 +185,7 @@ describe.skipIf(!historyUrl)("a purged key keeps its attribution", () => {
       owner: "ci",
       ownerKind: "service",
       tool: "agent",
+      retired: true,
       prefix: created.value.prefix,
     })
     // One clock on the operator path too: purged_at is the service's injected now.

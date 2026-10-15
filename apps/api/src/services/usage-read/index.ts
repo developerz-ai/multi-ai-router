@@ -33,11 +33,14 @@ export { EMPTY_TOTALS } from "./rollup"
 export type {
   UsageBreakdownRow,
   UsageCoverage,
+  UsageKeyRow,
   UsageLabelSets,
+  UsageOwnerRow,
   UsageSeriesEntry,
   UsageService,
   UsageServiceDeps,
   UsageSummary,
+  UsageToolRow,
 } from "./service"
 export { createUsageService } from "./service"
 export type { ResolvedWindow, UsageBucket, UsageWindowQuery } from "./window"

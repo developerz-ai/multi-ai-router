@@ -93,7 +93,14 @@ function service(rows: readonly UsageGroupRow[], stub: Stub = {}) {
       keys: new Map([
         [
           "key-1",
-          { name: "dev-laptops", owner: null, ownerKind: null, tool: null, prefix: "mar_dev" },
+          {
+            name: "dev-laptops",
+            owner: null,
+            ownerKind: null,
+            tool: null,
+            retired: false,
+            prefix: "mar_dev",
+          },
         ],
       ]),
       accounts: new Map([["acct-1", "claude-max-01"]]),
@@ -161,7 +168,7 @@ describe("breakdown labelling", () => {
 
     expect(result.ok).toBe(true)
     if (!result.ok) return
-    // A key scoped `all` was placed by no pool at all.
+    // No pool was in play (including a failure before an account was selected).
     expect(result.value.byPool[0]).toMatchObject({ id: null, label: null, note: "none" })
   })
 

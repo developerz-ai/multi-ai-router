@@ -11,6 +11,7 @@ const label = (owner: string | null, tool: string | null): KeyLabel => ({
   owner,
   ownerKind: owner === null ? null : "person",
   tool,
+  retired: false,
   prefix: "mar_test",
 })
 const keys = new Map<string, KeyLabel>([

@@ -143,10 +143,13 @@ export type {
 export type {
   TokenSpanShape,
   TokenSpanUsage,
+  UsageAttributedDimension,
+  UsageColumnDimension,
   UsageDimension,
   UsageFilter,
   UsageGroupRow,
   UsageGroupSeriesPoint,
+  UsageKeyAttribution,
   UsageLatency,
   UsageOutcomeCount,
   UsageRawGroupRow,

@@ -14,9 +14,12 @@ export type {
   KeyLabel,
   UsageBreakdownRow,
   UsageCoverage,
+  UsageKeyRow,
   UsageLabelSets,
+  UsageOwnerRow,
   UsageSeriesEntry,
   UsageSummary,
+  UsageToolRow,
 } from "./types"
 
 import type { UsageLabelSets, UsageSummary } from "./types"

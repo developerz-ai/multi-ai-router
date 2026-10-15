@@ -25,6 +25,9 @@ export const historyDimensions = {
   accountId: "account_id",
   poolId: "pool_id",
   model: "model",
+  // Computed by the `labelled` relation in `usage-history-repository.ts`, not a stored column.
+  owner: "grp",
+  tool: "grp",
 } as const
 const dayMs = 86400000
 /** Full days use materialized facts; exact partial edges use durable receipts, not retained raw. */

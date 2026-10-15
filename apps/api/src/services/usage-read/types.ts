@@ -25,10 +25,17 @@ export interface UsageSummary {
   readonly axis: readonly string[]
   /** One entry per axis point, always. A bucket with no traffic is zeros, never a missing entry. */
   readonly series: readonly UsageSeriesEntry[]
-  readonly byKey: readonly UsageBreakdownRow[]
+  readonly byKey: readonly UsageKeyRow[]
   readonly byAccount: readonly UsageBreakdownRow[]
   readonly byPool: readonly UsageBreakdownRow[]
   readonly byModel: readonly UsageBreakdownRow[]
+  /**
+   * Folded on (owner kind, owner) in SQL before the row cap. Attribution follows each key's
+   * CURRENT label, so relabelling a key moves its whole history between rows.
+   */
+  readonly byOwner: readonly UsageOwnerRow[]
+  /** Folded on the tool slug, with the same non-owner buckets and the same current-label rule. */
+  readonly byTool: readonly UsageToolRow[]
 }
 
 export interface UsageSeriesEntry {
@@ -38,12 +45,12 @@ export interface UsageSeriesEntry {
   readonly errors: number
 }
 
-export interface UsageBreakdownRow {
+interface UsageBreakdownBase<Note> {
   readonly id: string | null
   /** Human name. `null` when the subject is gone (no live row and, for a key, no tombstone) or the dimension did not apply. */
   readonly label: string | null
   /** Why the label is absent, so the console never has to guess. */
-  readonly note: "deleted" | "none" | null
+  readonly note: Note
   readonly totals: UsageTotals
   /** This group's percentiles. A global p95 cannot answer "which account is slow". */
   readonly latencyP50Ms: number | null
@@ -53,17 +60,45 @@ export interface UsageBreakdownRow {
   readonly series: readonly number[]
 }
 
+/** `deleted`: the subject is gone. `none`: the dimension did not apply to the attempt. */
+export type UsageBreakdownRow = UsageBreakdownBase<"deleted" | "none" | null>
+
 /**
- * What the loader knows about a key: read from the live row, else its tombstone. The summary puts
- * only `name` on the wire; owner, kind and tool feed the filters and the CSV export, which also
- * prints `prefix` (the public display prefix, in clear on both the live row and the tombstone).
- * Never a key value or its ciphertext: the loader copies named fields, never a whole row.
+ * Owner and tool rows add `unassigned`: the key is there but names no owner (or tool). It exists
+ * only on these two breakdowns, so it is part of their row types and not of the shared one.
+ */
+type UsageAttributionNote = "deleted" | "none" | "unassigned" | null
+export type UsageToolRow = UsageBreakdownBase<UsageAttributionNote>
+
+export interface UsageKeyRow extends UsageBreakdownRow {
+  /**
+   * True only when the key survives solely as a tombstone: its row was purged or deleted, its name
+   * and attribution remain. False for a live key and for the `deleted` and `none` rows, so `note`
+   * keeps meaning "why the label is absent" and nothing else.
+   */
+  readonly retired: boolean
+}
+
+export interface UsageOwnerRow extends UsageBreakdownBase<UsageAttributionNote> {
+  /** Null on the non-owner buckets and on an owner whose key carries no kind. */
+  readonly ownerKind: KeyOwnerKind | null
+}
+
+/**
+ * What the loader knows about a key: read from the live row, else its tombstone. What reaches the
+ * wire: `name` is the `byKey` label; `retired` is `byKey.retired`; `owner` and `ownerKind` are the
+ * `byOwner` id, label and `ownerKind`; `tool` is the `byTool` id and label. All of them also feed
+ * the owner/tool filters' key-id resolution. `prefix` (the public display prefix, in clear on both
+ * the live row and the tombstone) is read only by the CSV export. Never a key value or its
+ * ciphertext: the loader copies named fields, never a whole row.
  */
 export interface KeyLabel {
   readonly name: string
   readonly owner: string | null
   readonly ownerKind: KeyOwnerKind | null
   readonly tool: string | null
+  /** True when only the tombstone remains (the live row is gone). */
+  readonly retired: boolean
   readonly prefix: string
 }
 

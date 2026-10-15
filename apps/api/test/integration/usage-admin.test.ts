@@ -75,7 +75,14 @@ function harness(rows: readonly RecentAttemptRow[] = [attemptRow()], guard = stu
       keys: new Map([
         [
           "key-1",
-          { name: "dev-laptops", owner: null, ownerKind: null, tool: null, prefix: "mar_dev" },
+          {
+            name: "dev-laptops",
+            owner: null,
+            ownerKind: null,
+            tool: null,
+            retired: false,
+            prefix: "mar_dev",
+          },
         ],
       ]),
       accounts: new Map([["acct-1", "claude-max-01"]]),
@@ -123,7 +130,7 @@ describe("GET /api/admin/usage/recent", () => {
       // A key purged 30 days after revocation still names the attempt it made.
       key: { id: "key-gone", label: null, note: "deleted" },
       account: { id: "acct-1", label: "claude-max-01", note: null },
-      // Scope was `all` or an explicit account list, so no pool was ever involved.
+      // No pool was in play (an `all`/account scope, or a failure before an account was selected).
       pool: { id: null, label: null, note: "none" },
     })
   })

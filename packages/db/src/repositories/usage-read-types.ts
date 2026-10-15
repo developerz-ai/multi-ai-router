@@ -104,7 +104,10 @@ export interface UsageOutcomeCount {
 
 /** Per-group latency, shared by the raw and the history-served breakdown rows. */
 interface UsageGroupLatency {
-  /** Null when the dimension does not apply — no pool in scope, or an account since deleted. */
+  /**
+   * Null when the dimension does not apply — no pool was in play (including an attempt that failed before an account was chosen), or an account since deleted. Never
+   * null for owner and tool, which carry a `#`-prefixed bucket id instead (`usage-attribution.ts`).
+   */
   readonly id: string | null
   /** Percentiles for this group alone. "Which account is slow" is not answerable from a global p95. */
   readonly latencyP50Ms: number | null
@@ -118,7 +121,26 @@ export interface UsageRawGroupRow extends UsageRawTotals, UsageGroupLatency {}
 /** One row of a breakdown, keyed by whatever dimension was grouped on. */
 export interface UsageGroupRow extends UsageTotals, UsageGroupLatency {}
 
-export type UsageDimension = "apiKeyId" | "accountId" | "poolId" | "model"
+/**
+ * `owner` and `tool` group by a key's current label, not by a column: the repository signatures
+ * are overloaded so they cannot be requested without a `UsageKeyAttribution` saying what each key
+ * id maps to (without one every key would read as gone).
+ */
+export type UsageColumnDimension = "apiKeyId" | "accountId" | "poolId" | "model"
+/** The dimensions folded from a key's label; every read of one requires a `UsageKeyAttribution`. */
+export type UsageAttributedDimension = "owner" | "tool"
+export type UsageDimension = UsageColumnDimension | UsageAttributedDimension
+
+/**
+ * The key-to-label map behind the owner and tool dimensions, as four parallel arrays (one bind
+ * each). Index i describes key `ids[i]`; a null is a key that exists but names nothing.
+ */
+export interface UsageKeyAttribution {
+  readonly ids: readonly string[]
+  readonly owners: readonly (string | null)[]
+  readonly ownerKinds: readonly (string | null)[]
+  readonly tools: readonly (string | null)[]
+}
 
 export interface UsageReadRepository {
   totals(window: UsageWindow, filter: UsageFilter): Promise<UsageRawTotals>
@@ -142,10 +164,18 @@ export interface UsageReadRepository {
   /** Totals grouped by one dimension, biggest first. */
   breakdown(
     window: UsageWindow,
-    dimension: UsageDimension,
+    dimension: UsageColumnDimension,
     ids: readonly (string | null)[] | undefined,
     limit: number | undefined,
     filter: UsageFilter,
+  ): Promise<UsageRawGroupRow[]>
+  breakdown(
+    window: UsageWindow,
+    dimension: UsageAttributedDimension,
+    ids: readonly (string | null)[] | undefined,
+    limit: number | undefined,
+    filter: UsageFilter,
+    attribution: UsageKeyAttribution,
   ): Promise<UsageRawGroupRow[]>
   /**
    * Attempts per outcome over the window — the split behind "3% failed, of which what?".
@@ -170,8 +200,15 @@ export interface UsageReadRepository {
   seriesByDimension(
     window: UsageWindow,
     bucket: "hour" | "day",
-    dimension: UsageDimension,
+    dimension: UsageColumnDimension,
     filter: UsageFilter,
+  ): Promise<UsageGroupSeriesPoint[]>
+  seriesByDimension(
+    window: UsageWindow,
+    bucket: "hour" | "day",
+    dimension: UsageAttributedDimension,
+    filter: UsageFilter,
+    attribution: UsageKeyAttribution,
   ): Promise<UsageGroupSeriesPoint[]>
   /**
    * p50/p95 latency and router overhead over the window. Null when nothing was recorded.

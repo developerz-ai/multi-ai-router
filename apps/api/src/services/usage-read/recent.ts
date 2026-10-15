@@ -94,7 +94,7 @@ export function outcomesFor(query: RecentQuery): readonly UsageOutcome[] | undef
  *
  * Same three fields and same rules as a breakdown row: a label may be missing
  * because the subject was deleted (usage rows outlive what they name; for a key, no live row and no tombstone) or because
- * the dimension did not apply (a key scoped `all` was placed by no pool), and
+ * the dimension did not apply (no pool was in play: a key scoped `all`, or an attempt that failed before an account was chosen), and
  * the reason is on the row so the console never has to guess which.
  */
 export interface RecentSubject {
