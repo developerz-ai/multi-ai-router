@@ -2,8 +2,10 @@
  * A small RFC 4180 writer for the usage export, with the spreadsheet formula guard built in.
  *
  * **Text is guarded by default.** A plain `string` cell is treated as text: a leading `=`, `+`,
- * `-`, `@`, tab or CR gets a leading apostrophe so a spreadsheet shows it instead of evaluating
- * it. The model name is chosen by any router-key holder, so the guard belongs to the writer, not
+ * `-`, `@`, tab or CR (or their full-width forms, after any leading spaces) gets a leading
+ * apostrophe so a spreadsheet shows it instead of evaluating it. The same lead right after a `;`
+ * or a tab anywhere in the text is neutralised too: spreadsheets in comma-decimal locales split on
+ * `;`, and some on tab, which would make the tail a cell of its own. The model name is chosen by any router-key holder, so the guard belongs to the writer, not
  * to the one column someone remembered. The guard runs before quoting, so the apostrophe sits
  * inside the quotes.
  *
@@ -14,7 +16,11 @@
 
 export const CSV_EOL = "\r\n"
 
-const FORMULA_LEADS = new Set(["=", "+", "-", "@", "\t", "\r"])
+// = + - @ tab CR, plus their full-width forms (a spreadsheet may fold them to the ASCII ones).
+const LEAD = "[=+\\-@\\t\\r\uFF1D\uFF0B\uFF0D\uFF20]"
+const STARTS_FORMULA = new RegExp(`^ *${LEAD}`)
+// ';' (the list separator in comma-decimal locales) and tab can split one cell into several.
+const AFTER_SEPARATOR = new RegExp(`([;\\t] *)(?=${LEAD})`, "g")
 
 export interface Verbatim {
   readonly verbatim: string
@@ -27,8 +33,8 @@ export function verbatim(value: string): Verbatim {
 }
 
 export function guardFormula(text: string): string {
-  const lead = text[0]
-  return lead !== undefined && FORMULA_LEADS.has(lead) ? `'${text}` : text
+  const lead = STARTS_FORMULA.test(text) ? `'${text}` : text
+  return lead.replace(AFTER_SEPARATOR, "$1'")
 }
 
 function quote(text: string): string {

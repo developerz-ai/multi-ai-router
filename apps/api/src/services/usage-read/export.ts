@@ -39,8 +39,12 @@ export const USAGE_EXPORT_HEADER = [
 
 export interface UsageCsv {
   readonly filename: string
-  readonly body: string
+  /** Rendered a bounded chunk per pull, so a large file never blocks the event loop. */
+  readonly body: ReadableStream<Uint8Array>
 }
+
+/** Rows rendered per pull. A chunk is a few hundred KB of text, well under a millisecond or two. */
+export const USAGE_EXPORT_CHUNK_ROWS = 1_000
 
 /** What turns the ids on a row into the words the file prints. */
 export interface ExportSubjects {
@@ -76,11 +80,48 @@ export function exportCells(row: UsageExportRow, subjects: ExportSubjects): CsvC
   ]
 }
 
+/** The whole file in one pass: the reference the chunked form must equal, and small-input use. */
 export function renderUsageCsv(rows: readonly UsageExportRow[], subjects: ExportSubjects): string {
   return (
     csvLine([...USAGE_EXPORT_HEADER]) +
     rows.map((row) => csvLine(exportCells(row, subjects))).join("")
   )
+}
+
+/** The file as strings of at most {@link USAGE_EXPORT_CHUNK_ROWS} rows; the first carries the header. */
+export function* usageCsvChunks(
+  rows: readonly UsageExportRow[],
+  subjects: ExportSubjects,
+  size = USAGE_EXPORT_CHUNK_ROWS,
+): Generator<string> {
+  let head = csvLine([...USAGE_EXPORT_HEADER])
+  for (let at = 0; at < rows.length || head !== ""; at += size) {
+    let chunk = head
+    head = ""
+    for (const row of rows.slice(at, at + size)) chunk += csvLine(exportCells(row, subjects))
+    yield chunk
+  }
+}
+
+/**
+ * The body as a byte stream. `pull()` renders one chunk and first yields to the event loop, so the
+ * /v1 traffic sharing it is never held for the whole file (non-negotiable 8). The row cap was
+ * decided before this is built: nothing here can turn into a late error.
+ */
+export function usageCsvStream(
+  rows: readonly UsageExportRow[],
+  subjects: ExportSubjects,
+): ReadableStream<Uint8Array> {
+  const chunks = usageCsvChunks(rows, subjects)
+  const encoder = new TextEncoder()
+  return new ReadableStream<Uint8Array>({
+    async pull(controller) {
+      await new Promise<void>((resolve) => setImmediate(resolve))
+      const next = chunks.next()
+      if (next.done === true) controller.close()
+      else controller.enqueue(encoder.encode(next.value))
+    },
+  })
 }
 
 /**

@@ -7,9 +7,9 @@ export const USAGE_READ_ENV_FIELDS = {
   USAGE_BREAKDOWN_MAX_ROWS: atLeastOne
     .refine((value) => value <= 1_000, "must be at most 1000")
     .optional(),
-  // The CSV export is built in memory after the cap is decided, so the ceiling bounds the heap.
+  // The rows are fetched into memory before the body streams, so the ceiling bounds the heap.
   USAGE_EXPORT_MAX_ROWS: atLeastOne
-    .refine((value) => value <= 200_000, "must be at most 200000")
+    .refine((value) => value <= 100_000, "must be at most 100000")
     .optional(),
 }
 

@@ -97,7 +97,7 @@ export default function UsageRoute() {
           <>
             {/* The export reads the range signal the summary query reads, so the file is the
                 window on screen. */}
-            <UsageExport range={range()} />
+            <UsageExport filters={{}} range={range()} />
             {/* A real `<fieldset>` rather than `role="group"`: the grouping is native, so the
                 `<legend>` names it for assistive tech without an `aria-label` that can drift
                 from the visible wording. */}

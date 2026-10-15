@@ -1,6 +1,6 @@
 import type { UsageHistoryRepository, UsageRecentRepository } from "@multi-ai-router/db"
 import { type AdminResult, invalid, ok } from "../admin/result"
-import { exportFilename, overCapMessage, renderUsageCsv, type UsageCsv } from "./export"
+import { exportFilename, overCapMessage, type UsageCsv, usageCsvStream } from "./export"
 import { resolveUsageFilter, type UsageFilterQuery } from "./filter"
 import { resolveReadWindow } from "./read-window"
 import { outcomesFor, type RecentQuery, type RecentView, toRecentAttemptView } from "./recent"
@@ -28,7 +28,8 @@ export interface UsageServiceDeps {
   /** Account id to provider id, read from the warm catalog; absent means no provider cells. */
   readonly providers?: () => ReadonlyMap<string, string>
   readonly now: () => Date
-  readonly exportMaxRows?: number
+  /** `USAGE_EXPORT_MAX_ROWS`; always supplied by the env reader, so no second default here. */
+  readonly exportMaxRows: number
   readonly maxChartPoints?: number
   readonly breakdownMaxRows?: number
 }
@@ -64,15 +65,17 @@ export function createUsageService(deps: UsageServiceDeps): UsageService {
       const labels = await deps.labels()
       const providers = deps.providers?.() ?? new Map<string, string>()
       const resolved = resolveUsageFilter(filter, labels.keys)
-      const cap = deps.exportMaxRows ?? 50_000
-      return deps.history.withSnapshot(async (history) => {
+      const cap = deps.exportMaxRows
+      // The cap is decided inside the snapshot (one past it is fetched); the snapshot is released
+      // before any byte is rendered, and the body then streams a bounded chunk per pull.
+      const read = await deps.history.withSnapshot(async (history) => {
         const window = await resolveReadWindow(history, query)
-        const rows = await history.exportRows(window, resolved, cap + 1)
-        if (rows.length > cap) return invalid(overCapMessage(cap), "export_too_large")
-        return ok({
-          filename: exportFilename(window),
-          body: renderUsageCsv(rows, { labels, providers }),
-        })
+        return { window, rows: await history.exportRows(window, resolved, cap + 1) }
+      })
+      if (read.rows.length > cap) return invalid(overCapMessage(cap), "export_too_large")
+      return ok({
+        filename: exportFilename(read.window),
+        body: usageCsvStream(read.rows, { labels, providers }),
       })
     },
 
