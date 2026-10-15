@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.37.1] — 2026-10-15
+
+### Added
+
+- Tests pinning that `POST /v1/messages?beta=true` and `POST /v1/messages/count_tokens?beta=true` — the query Claude Code sends — route, relay and account exactly like the bare paths (#214). Covered on a passthrough (Anthropic API-key) account against a mocked upstream and on a subscription account stubbed at the `SdkInvoker` boundary; the suite fails if routing ever matches the full URL instead of the path. No runtime change.
+- An optional `bin/smoke` leg `messages.claude_code_turn` (#214). It replays the redacted Claude Code 2.1.299 main-turn capture (`apps/api/test/fixtures/claude-code/`) as a streamed request carrying an `x-claude-code-session-id` header, and passes on a well-formed SSE answer (`message_start`, at least one content block, `message_stop`). Optional, so it never decides the exit code. A test enforces the capture's public-safe shape: `metadata.user_id` is `"<user_id>"`, every system and user text is a placeholder, and the bytes carry no `@`, no non-loopback IP, no credential shape and no home path.
+
+### Documentation
+
+- `docs/idea/11-anthropic-agent-sdk.md` notes that Claude Code posts with `?beta=true` and that the route is tested.
+
 ## [2.37.0] — 2026-10-15
 
 ### Added
