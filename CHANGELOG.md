@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.35.0] — 2026-10-15
+
+### Added
+
+- Weekly usage report (#227), generated and stored in-process. The `usage_weekly_report` scheduled task makes one report per UTC Monday-to-Monday week, once its anchor has passed (the latest Monday 00:00 UTC plus `USAGE_REPORT_WEEKDAY`, `USAGE_REPORT_HOUR_UTC` and `USAGE_REPORT_SETTLE_MINUTES`) and the last complete week has no row; three missed weeks make one late report for the latest week. It is stored in the new `usage_reports` table (migration 0037, unique `period_start`, inserted `ON CONFLICT DO NOTHING`, `delivery_status` text typed against a core union and starting `pending`); delivery is a later change. The payload has people, services and unknown-kind sections by owner x tool, the `unassigned`, `deleted` and `none` buckets, totals, top models, the overflow share per (service key, pool with an overflow account), and caveats. METERED and NOTIONAL are separate fields, summed exactly, and an unmeasured unpriced count is `null`, not 0. It never carries an account label.
+- `GET /api/admin/usage/reports`, `GET /api/admin/usage/reports/:periodStart` (`400` for a malformed or non-Monday date, `404` when absent) and `POST /api/admin/usage/reports/preview` (builds the last complete week, stores nothing; needs the CSRF token like every admin `POST`).
+- `USAGE_REPORT_INTERVAL_MINUTES`, `USAGE_REPORT_WEEKDAY`, `USAGE_REPORT_HOUR_UTC`, `USAGE_REPORT_SETTLE_MINUTES` and `RETENTION_USAGE_REPORTS_DAYS` (default 730). Boot refuses `RETENTION_USAGE_REPORTS_DAYS` below 14, by name: the task regenerates a missing last-complete week, so a row swept while its week is still the target would be generated again. Boot also refuses the three schedule settings when they add up to a full week, which would never fire. The janitor sweeps `usage_reports` on the `period_start` instant, strictly.
+
+### Changed
+
+- The `scheduled_task` enum gains `usage_weekly_report` (one-way; an older image reading a run row under the new name is covered by the removed-task rollback test).
+- `historySource` gains a named week read beside it (`readUsageWeekRows`, key x account x pool x model, no day dimension). The scheduler's re-export tail moves from `tasks/index.ts` to `tasks/exports.ts` to keep the registry under the file cap.
+
+### Documentation
+
+- `docs/idea/05-routing-and-failover.md` no longer claims overflow-served requests are marked in `UsageRecord` (there is no such marker) and says how the question is answered now: the report's overflow share, read against the pool's designation at generation time. Weekly report spec in `01`, `08` and `09`.
+
 ## [2.34.0] — 2026-10-15
 
 ### Added
@@ -1285,3 +1302,4 @@ your tooling config.
 [2.32.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.32.0
 [2.33.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.33.0
 [2.34.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.34.0
+[2.35.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.35.0
