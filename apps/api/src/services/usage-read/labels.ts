@@ -47,3 +47,14 @@ export function catalogLabels(deps: {
     }
   }
 }
+
+/**
+ * Account id to provider id, for the CSV export's `provider` column. Copies the one string off
+ * each snapshot: a routable account also carries its encrypted auth material, and nothing but
+ * this field may leave it. A deleted account has no entry, so its provider cell is empty.
+ */
+export function accountProviders(
+  catalog: Pick<RoutingCatalogStore, "accounts">,
+): () => ReadonlyMap<string, string> {
+  return () => new Map(catalog.accounts().map((account) => [account.id, account.snapshot.provider]))
+}

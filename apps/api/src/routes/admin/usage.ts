@@ -1,6 +1,6 @@
-import { Hono, type MiddlewareHandler } from "hono"
+import { type Context, Hono, type MiddlewareHandler } from "hono"
 import type { AdminAuthEnv } from "../../middleware/adminAuth"
-import { validate } from "../../services/admin"
+import { ok, validate } from "../../services/admin"
 import {
   recentQuery,
   USAGE_FILTER_PARAMS,
@@ -36,9 +36,10 @@ export function adminUsageRoutes(deps: AdminUsageRoutesDeps): Hono<AdminAuthEnv>
   const routes = new Hono<AdminAuthEnv>()
   routes.use("*", deps.guard)
 
-  routes.get("/", async (c) => {
-    // The six filters are repeated params (`?owner=a&owner=b`), read as arrays; window, from and
-    // to are single-valued, and a repeated one keeps today's first-value-wins behaviour.
+  // The six filters are repeated params (`?owner=a&owner=b`), read as arrays; window, from and
+  // to are single-valued, and a repeated one keeps today's first-value-wins behaviour. One reader
+  // for the summary and the export, so they cannot disagree about what a query means.
+  const readQuery = (c: Context<AdminAuthEnv>) => {
     const all = c.req.queries()
     const filters: Record<string, string[]> = {}
     for (const name of USAGE_FILTER_PARAMS) {
@@ -46,10 +47,31 @@ export function adminUsageRoutes(deps: AdminUsageRoutesDeps): Hono<AdminAuthEnv>
       if (values !== undefined) filters[name] = values
     }
     const query = validate(usageWindowQuery, c.req.query())
-    if (!query.ok) return render(c, query)
+    if (!query.ok) return query
     const filter = validate(usageFilterQuery, filters)
-    if (!filter.ok) return render(c, filter)
-    return render(c, await deps.service.summary(query.value, filter.value))
+    if (!filter.ok) return filter
+    return ok({ query: query.value, filter: filter.value })
+  }
+
+  routes.get("/", async (c) => {
+    const read = readQuery(c)
+    if (!read.ok) return render(c, read)
+    return render(c, await deps.service.summary(read.value.query, read.value.filter))
+  })
+
+  // The same filters as the summary, as a CSV attachment. `no-store`: it is an authenticated
+  // report, and a shared cache must not keep a copy. A rejection (400 over the cap) renders as the
+  // JSON error every admin route uses, never a truncated 200.
+  routes.get("/export.csv", async (c) => {
+    const read = readQuery(c)
+    if (!read.ok) return render(c, read)
+    const result = await deps.service.exportCsv(read.value.query, read.value.filter)
+    if (!result.ok) return render(c, result)
+    return c.body(result.value.body, 200, {
+      "Content-Type": "text/csv; charset=utf-8",
+      "Content-Disposition": `attachment; filename="${result.value.filename}"`,
+      "Cache-Control": "no-store",
+    })
   })
 
   // Registered after `/` and before nothing: Hono matches literal segments exactly, so the two
