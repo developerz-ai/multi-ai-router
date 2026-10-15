@@ -130,8 +130,8 @@ describe.skipIf(!historyUrl)("weekly usage reports over HTTP and Postgres", () =
       history: fixture.history(),
       labels,
       pools: async () => [
-        { id: P1, name: "main", overflowAccountId: O },
-        { id: P2, name: "side", overflowAccountId: null },
+        { id: P1, name: "main", overflowAccountId: O, overflowProvider: "openai-oauth" },
+        { id: P2, name: "side", overflowAccountId: null, overflowProvider: null },
       ],
       settleMinutes: 30,
       upstreamTimeoutMs: 600_000,
@@ -216,6 +216,7 @@ describe.skipIf(!historyUrl)("weekly usage reports over HTTP and Postgres", () =
         ownerKind: "service",
         tool: "ci",
         poolName: "main",
+        provider: "openai-oauth",
         overflowAttempts: 2,
         attempts: 8,
         share: 0.25,

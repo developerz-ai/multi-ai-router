@@ -42,8 +42,13 @@ const labels = new Map([
 ] as const)
 
 const pools = [
-  { id: POOL.p1, name: "main", overflowAccountId: ACCOUNT.overflow },
-  { id: POOL.p2, name: "side", overflowAccountId: null },
+  {
+    id: POOL.p1,
+    name: "main",
+    overflowAccountId: ACCOUNT.overflow,
+    overflowProvider: "openai-oauth",
+  },
+  { id: POOL.p2, name: "side", overflowAccountId: null, overflowProvider: null },
 ]
 
 function row(over: Partial<UsageWeekRow>): UsageWeekRow {
@@ -323,6 +328,7 @@ describe("overflow share", () => {
         ownerKind: "service",
         tool: null,
         poolName: "main",
+        provider: "openai-oauth",
         overflowAttempts: 2,
         attempts: 8,
         share: 0.25,
