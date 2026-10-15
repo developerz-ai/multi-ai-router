@@ -246,6 +246,13 @@
       "when": 1791988105614,
       "tag": "0034_pool_scope_position",
       "breakpoints": true
+    },
+    {
+      "idx": 35,
+      "version": "7",
+      "when": 1791997674761,
+      "tag": "0035_unpriced_attempts",
+      "breakpoints": true
     }
   ]
 }

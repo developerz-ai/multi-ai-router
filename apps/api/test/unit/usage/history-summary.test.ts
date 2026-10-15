@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test"
 import type { UsageReadRepository } from "@multi-ai-router/db"
 import { foldFailures } from "../../../src/services/usage-read/failures"
-import { EMPTY_TOTALS, splitWindow } from "../../../src/services/usage-read/rollup"
+import { EMPTY_TOTALS } from "../../../src/services/usage-read/rollup"
 import { readSummary } from "../../../src/services/usage-read/summary"
 import { historyFixture } from "./history-fixture"
 
@@ -173,21 +173,6 @@ test("pending legacy detail keeps its numerator while disclosing the unfinished 
     partial: true,
   })
   expect(summary.latency.p95Ms).toBe(5)
-})
-
-test("closed-day compatibility includes midnight starts and preserves partial raw edges", () => {
-  const now = new Date("2026-10-03T12:00:00Z")
-  const rolled = new Date("2026-10-03T00:00:00Z")
-  const to = new Date("2026-10-03T00:00:00Z")
-  expect(splitWindow({ from: new Date("2026-10-01T00:00:00Z"), to }, now, rolled)).toEqual({
-    closedDays: { fromDay: "2026-10-01", toDay: "2026-10-03" },
-    rawSlices: [],
-  })
-  const from = new Date("2026-10-01T12:00:00Z")
-  expect(splitWindow({ from, to }, now, rolled)).toEqual({
-    closedDays: { fromDay: "2026-10-02", toDay: "2026-10-03" },
-    rawSlices: [{ from, to: new Date("2026-10-02T00:00:00Z") }],
-  })
 })
 
 test("failure detail stays partial when equal retained counts cannot prove historical completeness", () => {

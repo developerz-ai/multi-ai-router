@@ -5,8 +5,8 @@ import { usageRecords } from "../schema/usage-records"
 
 import {
   foldTokenSpans,
+  type UsageRawTotals,
   type UsageReadRepository,
-  type UsageTotals,
   type UsageWindow,
 } from "./usage-read-types"
 
@@ -158,15 +158,19 @@ export function createUsageReadRepository(db: Database): UsageReadRepository {
 
     totals: async (window) => {
       const [row] = await db.select(aggregates).from(usageRecords).where(inWindow(window))
-      return row ?? EMPTY_TOTALS
+      return row === undefined ? EMPTY_TOTALS : row
     },
 
     breakdown: async (window, dimension, ids, limit = 1000) => {
       if (!Number.isSafeInteger(limit) || limit < 1 || limit > 1001 || (ids?.length ?? 0) > 1000)
         throw new Error("usage breakdown outside bounds")
       const column = DIMENSION_COLUMNS[dimension]
-      return db
-        .select({ id: sql<string | null>`${column}::text`, ...aggregates, ...latencyAggregates })
+      const rows = await db
+        .select({
+          id: sql<string | null>`${column}::text`,
+          ...aggregates,
+          ...latencyAggregates,
+        })
         .from(usageRecords)
         .where(
           and(
@@ -184,6 +188,7 @@ export function createUsageReadRepository(db: Database): UsageReadRepository {
         .groupBy(column)
         .orderBy(sql`count(*) desc`)
         .limit(limit)
+      return rows
     },
 
     outcomes: async (window) =>
@@ -252,7 +257,7 @@ export function createUsageReadRepository(db: Database): UsageReadRepository {
   }
 }
 
-const EMPTY_TOTALS: UsageTotals = {
+const EMPTY_TOTALS: UsageRawTotals = {
   requests: 0,
   attempts: 0,
   errors: 0,

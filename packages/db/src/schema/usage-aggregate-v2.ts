@@ -22,11 +22,23 @@ function grain() {
     updatedAt: timestamp("updated_at", { withTimezone: true, mode: "date" }).notNull().defaultNow(),
   }
 }
-export const usageAttemptDailyV2 = pgTable("usage_attempt_daily_v2", grain(), (table) => [
-  unique("usage_attempt_daily_v2_grain")
-    .on(table.day, table.apiKeyId, table.accountId, table.poolId, table.model, table.basis)
-    .nullsNotDistinct(),
-])
+export const usageAttemptDailyV2 = pgTable(
+  "usage_attempt_daily_v2",
+  {
+    ...grain(),
+    /**
+     * Unknown-basis attempts that used tokens. Outside `grain()` and nullable on purpose: only
+     * attempt rows carry it (request-level rows carry no cost), and NULL means "written before the
+     * measure existed" — never back-filled with an invented 0.
+     */
+    unpricedAttempts: bigint("unpriced_attempts", { mode: "number" }),
+  },
+  (table) => [
+    unique("usage_attempt_daily_v2_grain")
+      .on(table.day, table.apiKeyId, table.accountId, table.poolId, table.model, table.basis)
+      .nullsNotDistinct(),
+  ],
+)
 export const usageRequestDailyV2 = pgTable("usage_request_daily_v2", grain(), (table) => [
   unique("usage_request_daily_v2_grain")
     .on(table.day, table.apiKeyId, table.accountId, table.poolId, table.model, table.basis)

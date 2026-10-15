@@ -1,4 +1,5 @@
 import { afterAll, beforeAll } from "bun:test"
+import { eq } from "drizzle-orm"
 import { createDatabase, type DatabaseHandle } from "../../src/client"
 import { defaultMigrationsFolder, runMigrations } from "../../src/migrate"
 import { createUsageHistoryRepository } from "../../src/repositories/usage-history-repository"
@@ -6,6 +7,7 @@ import {
   createUsageRecordRepository,
   type UsageRecordInsert,
 } from "../../src/repositories/usage-repository"
+import { usageHistoryState } from "../../src/schema/usage-history-state"
 import type { UsageRequestTerminalInsert } from "../../src/schema/usage-request-terminals"
 
 export const historyUrl = process.env.DATABASE_URL ?? ""
@@ -45,6 +47,13 @@ export function usageHistoryFixture() {
     db: () => get().db,
     usage: () => createUsageRecordRepository(get().db),
     history: () => createUsageHistoryRepository(get().db),
+    /** Moves the unpriced measure's first measured day — the migration seeds it tomorrow. */
+    setUnpricedSince: async (day: string) => {
+      await get()
+        .db.update(usageHistoryState)
+        .set({ unpricedSince: day })
+        .where(eq(usageHistoryState.id, "v2"))
+    },
     window: { from: new Date("1984-01-01"), to: new Date("1984-02-01") },
   }
 }

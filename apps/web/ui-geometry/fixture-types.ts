@@ -15,6 +15,7 @@ export interface WireTotals {
   readonly cacheWriteTokens: number
   readonly costMetered: string
   readonly costNotional: string
+  readonly unpriced: { readonly attempts: number | null; readonly since: string }
 }
 
 /** The SPA's own wire types — the fixture is checked against them, not a restated copy. */

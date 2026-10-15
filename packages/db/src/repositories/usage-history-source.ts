@@ -3,6 +3,7 @@ import { usageAttemptDailyV2, usageRequestDailyV2 } from "../schema/usage-aggreg
 import { usageContributions } from "../schema/usage-contributions"
 import { usageDaily } from "../schema/usage-daily"
 import { usageHistoryState } from "../schema/usage-history-state"
+import { payloadMeasures, unpricedSinceSql } from "./usage-history-shared"
 import type { UsageWindow } from "./usage-read-repository"
 
 const measures = [
@@ -15,6 +16,7 @@ const measures = [
   "cache_write_tokens",
   "cost_metered",
   "cost_notional",
+  "unpriced_attempts",
 ]
 export const historyMeasures = measures
 export const historyDimensions = {
@@ -31,38 +33,36 @@ export function historySource(window: UsageWindow, hourly = false): SQL {
     .slice(0, 10)
   const end = new Date(Math.floor(window.to.getTime() / dayMs) * dayMs).toISOString().slice(0, 10)
   const horizon = sql`coalesce((select retention_before_day from ${usageHistoryState} where id = 'v2'), '-infinity'::date)`
+  const since = unpricedSinceSql()
+  // The unpriced measure counts only days on or after `since`, in every branch that can carry it —
+  // a legacy-adopted pre-`since` day has the value but the day was never fully measured.
+  const attemptProjection = sql`${sql.raw(measures.slice(0, 9).join(","))}, case when day >= ${since} then unpriced_attempts end as unpriced_attempts`
+  const unmeasuredProjection = sql`${sql.raw(measures.slice(0, 9).join(","))}, null::numeric as unpriced_attempts`
   const parts: SQL[] = []
   if (!hourly) {
-    for (const table of [usageDaily, usageAttemptDailyV2, usageRequestDailyV2])
+    const bounds = sql`where day >= ${first}::date and day < ${end}::date and day >= ${horizon}`
+    for (const table of [usageDaily, usageRequestDailyV2])
       parts.push(
-        sql`select day::timestamp at time zone 'UTC' as event_at, api_key_id, account_id, pool_id, model, ${sql.raw(measures.join(","))} from ${table} where day >= ${first}::date and day < ${end}::date and day >= ${horizon}`,
+        sql`select day::timestamp at time zone 'UTC' as event_at, api_key_id, account_id, pool_id, model, ${unmeasuredProjection} from ${table} ${bounds}`,
       )
+    parts.push(
+      sql`select day::timestamp at time zone 'UTC' as event_at, api_key_id, account_id, pool_id, model, ${attemptProjection} from ${usageAttemptDailyV2} ${bounds}`,
+    )
   }
-  const jsonMeasures = [
-    "requests",
-    "attempts",
-    "errors",
-    "tokensIn",
-    "tokensOut",
-    "cacheReadTokens",
-    "cacheWriteTokens",
-    "costMetered",
-    "costNotional",
-  ]
   parts.push(sql`select (payload->>'eventAt')::timestamptz as event_at, (payload->>'apiKeyId')::uuid as api_key_id, (payload->>'accountId')::uuid as account_id, (payload->>'poolId')::uuid as pool_id, payload->>'model' as model,
     ${sql.join(
-      jsonMeasures.map(
+      payloadMeasures.map(
         (name, index) =>
           sql`(payload->>${name})::numeric as ${sql.identifier(measures[index] as string)}`,
       ),
       sql`, `,
-    )}
+    )}, case when day >= ${since} then (payload->>'unpricedAttempts')::numeric end as unpriced_attempts
     from ${usageContributions} where source in ('live','legacy_unbanked','legacy_overlap') and day >= ${horizon}
       and (payload->>'eventAt')::timestamptz >= ${window.from.toISOString()} and (payload->>'eventAt')::timestamptz < ${window.to.toISOString()}
       ${hourly ? sql`` : sql`and (day < ${first}::date or day >= ${end}::date)`}`)
   return sql.join(parts, sql` union all `)
 }
-export function historySums() {
+export function historySums(window: UsageWindow) {
   const names = [
     "requests",
     "attempts",
@@ -74,11 +74,25 @@ export function historySums() {
     "costMetered",
     "costNotional",
   ]
+  const since = unpricedSinceSql()
+  // The last day any instant of the window can fall on: `to` is exclusive, so a window ending at
+  // exact midnight never touches that day.
+  const lastDay = new Date(Math.floor((window.to.getTime() - 1) / dayMs) * dayMs)
+    .toISOString()
+    .slice(0, 10)
   return sql.join(
-    measures.map(
-      (column, index) =>
-        sql`coalesce(sum(${sql.identifier(column)}),0)${index < 7 ? sql`::float8` : sql`::text`} as ${sql.identifier(names[index] as string)}`,
-    ),
+    [
+      ...measures
+        .slice(0, 9)
+        .map(
+          (column, index) =>
+            sql`coalesce(sum(${sql.identifier(column)}),0)${index < 7 ? sql`::float8` : sql`::text`} as ${sql.identifier(names[index] as string)}`,
+        ),
+      // Null only when the window lies wholly before measurement; a group with nothing measured
+      // inside a window that reaches past `since` reads 0, because the window did measure.
+      sql`(case when ${since} > ${lastDay}::date then null::float8 else coalesce(sum(${sql.identifier("unpriced_attempts")}),0) end)::float8 as "unpricedAttempts"`,
+      sql`${since}::text as "unpricedSince"`,
+    ],
     sql`, `,
   )
 }
