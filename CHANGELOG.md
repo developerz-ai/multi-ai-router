@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.37.4] — 2026-10-15
+
+### Fixed
+
+- A forced tool a third-party vendor answered in text is now returned as the tool call. MiniMax treats `tool_choice` as a hint even with thinking disabled: given a forced tool it answers `end_turn` with a text block holding the JSON and no `tool_use` (live matrix, 2026-10-15), so developerz.ai's structured-output probe (`generateObject`: tool `json`, `tool_choice any`) still failed with "no content parts". For an Account whose driver declares `thinkingOnByDefault`, when the upstream body forces a tool (`tool_choice` `tool` naming X, or `any` with exactly one tool) and the answer has no `tool_use` block, the text, trimmed and optionally inside one json fence, is parsed; if it is a JSON object it becomes that tool's `tool_use` block (`toolu_` id, `stop_reason: tool_use`, other text dropped, usage kept). The object is not validated against the schema. Prose, arrays, truncated answers (`max_tokens`), `any` over several tools and Anthropic accounts pass through unchanged. A forced request to these vendors is buffered whole, a stream included, and re-emitted as a valid SSE sequence; this costs only their forced calls' time-to-first-token. It applies on `/v1/messages` and on the openai-chat translation, so `tool_choice: "required"` and `response_format` (the `router_structured_output` tool) get it too. Each coercion logs one `forced_tool_coerced` line (account, provider, streamed; no content).
+
 ## [2.37.3] — 2026-10-15
 
 ### Fixed
