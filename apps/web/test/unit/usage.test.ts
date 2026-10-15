@@ -70,6 +70,19 @@ describe("breakdownFor", () => {
   })
 })
 
+describe("owner and tool dimensions", () => {
+  test("are offered, labelled, and select their own breakdown", () => {
+    expect(USAGE_DIMENSIONS).toContain("owner")
+    expect(USAGE_DIMENSIONS).toContain("tool")
+    expect(usageDimensionLabel("owner")).toBe("Owner")
+    expect(usageDimensionLabel("tool")).toBe("Tool")
+    const row = { id: "a", label: "a", note: "", series: [], totals: EMPTY_TOTALS }
+    const summary = { byOwner: [row, row], byTool: [row] } as never
+    expect(breakdownFor(summary, "owner")).toHaveLength(2)
+    expect(breakdownFor(summary, "tool")).toHaveLength(1)
+  })
+})
+
 describe("labels", () => {
   test("every window and dimension has one, so no control renders a raw key", () => {
     for (const window of USAGE_WINDOWS) expect(usageWindowLabel(window).length).toBeGreaterThan(0)

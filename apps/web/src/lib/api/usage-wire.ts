@@ -1,6 +1,7 @@
 import type { UsageOutcome } from "@multi-ai-router/core"
 import type { FailureCount } from "../failure-classes"
 import { request } from "./client"
+import type { KeyOwnerKind } from "./types"
 import type {
   UsageBreakdownRow,
   UsageCoverage,
@@ -10,7 +11,7 @@ import type {
   UsageTotals,
   UsageWindowLabel,
 } from "./usage"
-import { usageQueryParams } from "./usage-params"
+import { NO_USAGE_FILTERS, type UsageFilters, usageRequestParams } from "./usage-params"
 
 // ------------------------------------------------------------------ the wire
 
@@ -31,15 +32,28 @@ interface WireTotals {
   }
 }
 
+/** `unassigned` exists only on the owner and tool breakdowns; the others never carry it. */
+type WireNote = "deleted" | "none" | "unassigned" | null
+
 interface WireRow {
   readonly id: string | null
   readonly label: string | null
-  readonly note: "deleted" | "none" | null
+  readonly note: WireNote
   readonly totals: WireTotals
   readonly latencyP50Ms: number | null
   readonly latencyP95Ms: number | null
   readonly routerOverheadP95Ms: number | null
   readonly series: readonly number[]
+}
+
+/** `retired`: the key survives only as a tombstone. Present on `byKey` rows alone. */
+interface WireKeyRow extends WireRow {
+  readonly retired: boolean
+}
+
+/** `ownerKind` is null on the buckets and on an owner whose key names no kind. `byOwner` alone. */
+interface WireOwnerRow extends WireRow {
+  readonly ownerKind: KeyOwnerKind | null
 }
 
 export interface WireSummary {
@@ -68,14 +82,19 @@ export interface WireSummary {
     readonly attempts: number
     readonly errors: number
   }[]
-  readonly byKey: readonly WireRow[]
+  readonly byKey: readonly WireKeyRow[]
   readonly byAccount: readonly WireRow[]
   readonly byPool: readonly WireRow[]
   readonly byModel: readonly WireRow[]
+  readonly byOwner: readonly WireOwnerRow[]
+  readonly byTool: readonly WireRow[]
 }
 
-export async function fetchUsageSummary(range: UsageRange): Promise<UsageSummary> {
-  const query = usageQueryParams(range)
+export async function fetchUsageSummary(
+  range: UsageRange,
+  filters: UsageFilters = NO_USAGE_FILTERS,
+): Promise<UsageSummary> {
+  const query = usageRequestParams(range, filters)
   const wire = await request<WireSummary>({ method: "GET", path: "/usage", query })
 
   return {
@@ -102,10 +121,12 @@ export async function fetchUsageSummary(range: UsageRange): Promise<UsageSummary
       attempts: point.attempts,
       errors: point.errors,
     })),
-    byKey: wire.byKey.map(toRow),
+    byKey: wire.byKey.map((row) => ({ ...toRow(row), retired: row.retired })),
     byAccount: wire.byAccount.map(toRow),
     byPool: wire.byPool.map(toRow),
     byModel: wire.byModel.map(toRow),
+    byOwner: wire.byOwner.map(toOwnerRow),
+    byTool: wire.byTool.map(toRow),
   }
 }
 
@@ -153,7 +174,7 @@ function parseTotals(
 function toRow(row: WireRow): UsageBreakdownRow {
   return {
     id: row.id ?? `none-${row.note ?? "unknown"}`,
-    label: row.label ?? (row.note === "deleted" ? "(deleted)" : "(none)"),
+    label: row.label ?? bucketLabel(row.note),
     note: noteFor(row),
     series: row.series,
     totals: {
@@ -171,8 +192,38 @@ function toRow(row: WireRow): UsageBreakdownRow {
   }
 }
 
+/**
+ * An owner row names its owner by slug; the kind rides beside it because a person and a service
+ * can share one. A key that names no kind reads `unknown`, never silently a person. Buckets have no
+ * owner, so they carry no kind at all.
+ */
+function toOwnerRow(row: WireOwnerRow): UsageBreakdownRow {
+  const base = toRow(row)
+  return row.note === null ? { ...base, ownerKind: row.ownerKind ?? "unknown" } : base
+}
+
+/** Each bucket reads as its own word: `unassigned` (a key with no owner) is not `none` (no key). */
+function bucketLabel(note: WireNote): string {
+  switch (note) {
+    case "deleted":
+      return "(deleted)"
+    case "unassigned":
+      return "(unassigned)"
+    case "none":
+    case null:
+      return "(none)"
+  }
+}
+
 function noteFor(row: WireRow): string {
-  if (row.note === "deleted") return "no longer exists"
-  if (row.note === "none") return "not attributed"
-  return ""
+  switch (row.note) {
+    case "deleted":
+      return "no longer exists"
+    case "none":
+      return "not attributed"
+    case "unassigned":
+      return "not set on the key"
+    case null:
+      return ""
+  }
 }
