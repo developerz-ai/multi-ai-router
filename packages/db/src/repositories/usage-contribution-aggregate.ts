@@ -2,6 +2,7 @@ import { sql } from "drizzle-orm"
 import type { DatabaseExecutor } from "../client"
 import { usageAttemptDailyV2, usageRequestDailyV2 } from "../schema/usage-aggregate-v2"
 import { usageContributions } from "../schema/usage-contributions"
+import { payloadMeasures } from "./usage-history-shared"
 
 export type ContributionRow = typeof usageContributions.$inferSelect
 const columns = [
@@ -14,17 +15,6 @@ const columns = [
   "cache_write_tokens",
   "cost_metered",
   "cost_notional",
-]
-const payloadMeasures = [
-  "requests",
-  "attempts",
-  "errors",
-  "tokensIn",
-  "tokensOut",
-  "cacheReadTokens",
-  "cacheWriteTokens",
-  "costMetered",
-  "costNotional",
 ]
 /** Only the attempt table carries the unpriced measure; request-level rows carry no cost. */
 const attemptColumns = [...columns, "unpriced_attempts"]
@@ -54,9 +44,9 @@ export async function applyUsageContributions(
         : sql`select payload || jsonb_build_object('day', day, 'basis', case when source = 'live' then 'live' else 'legacy' end) as p
         from ${usageContributions} where day = ${repairDay}::date and kind = ${kind} and source in ('live','legacy_unbanked','legacy_overlap')`
     const sum = (field: string) => sql.raw(`sum((p->>'${field}')::numeric)`)
-    // A payload without the measure sums to NULL here, so a pre-measure day repairs to NULL rather
-    // than to 0 — and on conflict the existing side is coalesced, never the incoming one, so an
-    // unmeasured batch still wipes through as not measured.
+    // NULL only when no payload in the group carries the field, so a pre-measure day repairs to
+    // NULL rather than to 0. On conflict the existing side is coalesced, never the incoming one,
+    // so an unmeasured incoming batch leaves the stored value as it was.
     const unpriced = sql`sum((p->>'unpricedAttempts')::numeric)`
     const measures =
       kind === "attempt" ? [...payloadMeasures.map(sum), unpriced] : payloadMeasures.map(sum)

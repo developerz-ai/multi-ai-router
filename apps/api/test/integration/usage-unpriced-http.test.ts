@@ -31,6 +31,14 @@ const app = () => {
   )
   return hono
 }
+/**
+ * Midway between today's UTC midnight and now: never yesterday (a `now - 2s` stamp is, just after
+ * midnight) and never in the future, which the `today` window would not include.
+ */
+const insideToday = () => {
+  const midnight = new Date(`${new Date().toISOString().slice(0, 10)}T00:00:00Z`).getTime()
+  return new Date((midnight + Date.now()) / 2)
+}
 const setSince = (day: string) => fixture.setUnpricedSince(day)
 
 describe.skipIf(!historyUrl)("unpriced attempts through actual HTTP and Postgres", () => {
@@ -45,7 +53,7 @@ describe.skipIf(!historyUrl)("unpriced attempts through actual HTTP and Postgres
           costEstimate: null,
           tokensIn: 25,
           tokensOut: 5,
-          createdAt: new Date(Date.now() - 2_000),
+          createdAt: insideToday(),
         }),
       ],
       terminals: [],

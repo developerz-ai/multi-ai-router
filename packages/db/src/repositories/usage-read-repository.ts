@@ -1,14 +1,12 @@
 import { type AnyColumn, and, countDistinct, gte, lt, sql } from "drizzle-orm"
 import type { Database } from "../client"
 import { USAGE_OUTCOME_SUCCESS } from "../schema/enums"
-import { usageHistoryState } from "../schema/usage-history-state"
 import { usageRecords } from "../schema/usage-records"
 
 import {
   foldTokenSpans,
-  nestUnpriced,
+  type UsageRawTotals,
   type UsageReadRepository,
-  type UsageTotals,
   type UsageWindow,
 } from "./usage-read-types"
 
@@ -135,14 +133,7 @@ export function createUsageReadRepository(db: Database): UsageReadRepository {
     cacheWriteTokens: tokenSum(usageRecords.cacheWriteTokens),
     costMetered: sql<string>`coalesce(sum(${usageRecords.costEstimate}) filter (where ${usageRecords.costBasis} = 'metered'), 0)::text`,
     costNotional: sql<string>`coalesce(sum(${usageRecords.costEstimate}) filter (where ${usageRecords.costBasis} = 'notional'), 0)::text`,
-    // Same counting rule as the rollup (tokens required), gated to days the measure covers; raw
-    // rows can outlive `unpriced_since`, and an ungated count would disagree with every rolled
-    // read of the same window.
-    unpricedAttempts: sql<
-      number | null
-    >`count(*) filter (where ${usageRecords.costBasis} = 'unknown' and ${usageRecords.tokensIn} + ${usageRecords.tokensOut} > 0 and (${usageRecords.createdAt} at time zone 'UTC')::date >= coalesce((select unpriced_since from ${usageHistoryState} where id = 'v2'), 'infinity'::date))::float8`,
   }
-  const unpricedSince = sql<string>`coalesce((select unpriced_since from ${usageHistoryState} where id = 'v2'), 'infinity'::date)::text`
 
   // `bucket` is a value in a raw fragment, so no column encoder types it — `::text` names the
   // `date_trunc(text, timestamptz)` overload explicitly rather than leaning on inference from the
@@ -166,11 +157,8 @@ export function createUsageReadRepository(db: Database): UsageReadRepository {
     tokensSince,
 
     totals: async (window) => {
-      const [row] = await db
-        .select({ ...aggregates, unpricedSince })
-        .from(usageRecords)
-        .where(inWindow(window))
-      return row === undefined ? EMPTY_TOTALS : nestUnpriced(row)
+      const [row] = await db.select(aggregates).from(usageRecords).where(inWindow(window))
+      return row === undefined ? EMPTY_TOTALS : row
     },
 
     breakdown: async (window, dimension, ids, limit = 1000) => {
@@ -181,7 +169,6 @@ export function createUsageReadRepository(db: Database): UsageReadRepository {
         .select({
           id: sql<string | null>`${column}::text`,
           ...aggregates,
-          unpricedSince,
           ...latencyAggregates,
         })
         .from(usageRecords)
@@ -201,7 +188,7 @@ export function createUsageReadRepository(db: Database): UsageReadRepository {
         .groupBy(column)
         .orderBy(sql`count(*) desc`)
         .limit(limit)
-      return rows.map(nestUnpriced)
+      return rows
     },
 
     outcomes: async (window) =>
@@ -270,7 +257,7 @@ export function createUsageReadRepository(db: Database): UsageReadRepository {
   }
 }
 
-const EMPTY_TOTALS: UsageTotals = {
+const EMPTY_TOTALS: UsageRawTotals = {
   requests: 0,
   attempts: 0,
   errors: 0,
@@ -280,5 +267,4 @@ const EMPTY_TOTALS: UsageTotals = {
   cacheWriteTokens: 0,
   costMetered: "0",
   costNotional: "0",
-  unpriced: { attempts: null, since: "infinity" },
 }

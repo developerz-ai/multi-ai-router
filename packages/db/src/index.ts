@@ -145,6 +145,8 @@ export type {
   UsageGroupSeriesPoint,
   UsageLatency,
   UsageOutcomeCount,
+  UsageRawGroupRow,
+  UsageRawTotals,
   UsageReadRepository,
   UsageSeriesPoint,
   UsageTotals,

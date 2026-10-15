@@ -11,7 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- Unpriced traffic is counted instead of reading as $0 (#220). The attempt rollup gains `unpriced_attempts` (attempts with unknown cost that used tokens; NULL = not measured, never back-filled). The usage API reports `unpriced: { attempts, since }` on totals and breakdown rows, across the daily tables and the receipts query that answers `today`. Migration `0035_unpriced_attempts` adds the columns and records `unpriced_since` as the day after it runs; a window wholly before that date reads `attempts: null`, never 0. This differs on purpose from `router_cost_basis_total`, which also counts token-less failed attempts.
+- Unpriced traffic is counted instead of reading as $0 (#220). The attempt rollup gains `unpriced_attempts` (attempts with unknown cost that used tokens; NULL = not measured, never back-filled). The usage API reports `unpriced: { attempts, since }` on totals and breakdown rows, across the daily tables and the receipts query that answers `today`. Migration `0035_unpriced_attempts` adds the columns and records `unpriced_since` as the day after it runs; a window wholly before that date reads `attempts: null`, never 0. This differs on purpose from `router_cost_basis_total`, which also counts token-less failed attempts. Rolling back past 2.28.0 and upgrading again requires moving `usage_history_state.unpriced_since` forward past the last day the old image wrote, or those days read as measured.
 
 ## [2.26.1] — 2026-10-14
 

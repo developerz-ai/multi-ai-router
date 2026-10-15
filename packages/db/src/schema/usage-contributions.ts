@@ -22,7 +22,7 @@ export interface UsageContribution {
    * payloads (request-level rows carry no cost) and on payloads written before the measure
    * existed — absent always reads back as not measured, never as an error or a zero.
    */
-  unpricedAttempts?: number | null
+  unpricedAttempts?: number
 }
 export const usageContributions = pgTable(
   "usage_contributions",

@@ -3,6 +3,7 @@ import { usageAttemptDailyV2, usageRequestDailyV2 } from "../schema/usage-aggreg
 import { usageContributions } from "../schema/usage-contributions"
 import { usageDaily } from "../schema/usage-daily"
 import { usageHistoryState } from "../schema/usage-history-state"
+import { payloadMeasures, unpricedSinceSql } from "./usage-history-shared"
 import type { UsageWindow } from "./usage-read-repository"
 
 const measures = [
@@ -17,17 +18,6 @@ const measures = [
   "cost_notional",
   "unpriced_attempts",
 ]
-const payloadMeasures = [
-  "requests",
-  "attempts",
-  "errors",
-  "tokensIn",
-  "tokensOut",
-  "cacheReadTokens",
-  "cacheWriteTokens",
-  "costMetered",
-  "costNotional",
-]
 export const historyMeasures = measures
 export const historyDimensions = {
   apiKeyId: "api_key_id",
@@ -36,12 +26,6 @@ export const historyDimensions = {
   model: "model",
 } as const
 const dayMs = 86400000
-/**
- * `infinity` when the state has no `unpriced_since` (never migrated): every day then reads as
- * before measurement, so the measure reports null rather than inventing coverage.
- */
-const unpricedSince = () =>
-  sql`coalesce((select unpriced_since from ${usageHistoryState} where id = 'v2'), 'infinity'::date)`
 /** Full days use materialized facts; exact partial edges use durable receipts, not retained raw. */
 export function historySource(window: UsageWindow, hourly = false): SQL {
   const first = new Date(Math.ceil(window.from.getTime() / dayMs) * dayMs)
@@ -49,7 +33,7 @@ export function historySource(window: UsageWindow, hourly = false): SQL {
     .slice(0, 10)
   const end = new Date(Math.floor(window.to.getTime() / dayMs) * dayMs).toISOString().slice(0, 10)
   const horizon = sql`coalesce((select retention_before_day from ${usageHistoryState} where id = 'v2'), '-infinity'::date)`
-  const since = unpricedSince()
+  const since = unpricedSinceSql()
   // The unpriced measure counts only days on or after `since`, in every branch that can carry it —
   // a legacy-adopted pre-`since` day has the value but the day was never fully measured.
   const attemptProjection = sql`${sql.raw(measures.slice(0, 9).join(","))}, case when day >= ${since} then unpriced_attempts end as unpriced_attempts`
@@ -90,7 +74,7 @@ export function historySums(window: UsageWindow) {
     "costMetered",
     "costNotional",
   ]
-  const since = unpricedSince()
+  const since = unpricedSinceSql()
   // The last day any instant of the window can fall on: `to` is exclusive, so a window ending at
   // exact midnight never touches that day.
   const lastDay = new Date(Math.floor((window.to.getTime() - 1) / dayMs) * dayMs)

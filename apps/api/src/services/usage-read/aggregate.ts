@@ -6,7 +6,7 @@ import type {
   UsageTotals,
   UsageWindow,
 } from "@multi-ai-router/db"
-import { mergeGroupRows, splitWindow, sumTotals } from "./rollup"
+import { EMPTY_TOTALS, mergeGroupRows, splitWindow, sumTotals } from "./rollup"
 
 /**
  * The two-table read: `usage_daily` for closed days, `usage_records` for the edges.
@@ -38,6 +38,12 @@ export interface UsageAggregateSources {
   readonly daily: Pick<UsageDailyRepository, "totals" | "breakdown">
 }
 
+/** Raw rows carry no unpriced measure, so they enter a stitch as not measured. */
+const unmeasured = <T extends object>(row: T): T & Pick<UsageTotals, "unpriced"> => ({
+  ...row,
+  unpriced: EMPTY_TOTALS.unpriced,
+})
+
 export async function readTotals(
   sources: UsageAggregateSources,
   window: UsageWindow,
@@ -47,7 +53,7 @@ export async function readTotals(
   const split = splitWindow(window, now, lastRollupAt)
 
   const parts = await Promise.all([
-    ...split.rawSlices.map((slice) => sources.usage.totals(slice)),
+    ...split.rawSlices.map(async (slice) => unmeasured(await sources.usage.totals(slice))),
     ...(split.closedDays === null ? [] : [sources.daily.totals(split.closedDays)]),
   ])
   return sumTotals(parts)
@@ -83,12 +89,17 @@ export async function readBreakdown(
   // Nothing closed — "today", a window inside one UTC day, or a rollup that has
   // not caught up. The single raw read over the whole window already *is* the
   // answer, totals included.
-  if (split.closedDays === null) return sources.usage.breakdown(window, dimension)
+  if (split.closedDays === null)
+    return (await sources.usage.breakdown(window, dimension)).map(unmeasured)
 
   const [latency, closed, edges] = await Promise.all([
     sources.usage.breakdown(window, dimension),
     sources.daily.breakdown(split.closedDays, dimension),
-    Promise.all(split.rawSlices.map((slice) => sources.usage.breakdown(slice, dimension))),
+    Promise.all(
+      split.rawSlices.map(async (slice) =>
+        (await sources.usage.breakdown(slice, dimension)).map(unmeasured),
+      ),
+    ),
   ])
 
   const percentiles = new Map(latency.map((row) => [row.id, row]))

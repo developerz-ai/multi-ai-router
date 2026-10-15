@@ -22,7 +22,8 @@ export interface UsageWindow {
   readonly to: Date
 }
 
-export interface UsageTotals {
+/** Totals from raw rows. Carries no unpriced measure: the history repository serves that. */
+export interface UsageRawTotals {
   readonly requests: number
   readonly attempts: number
   readonly errors: number
@@ -34,6 +35,9 @@ export interface UsageTotals {
   readonly costMetered: string
   /** What the same traffic would have cost at list price on a subscription account. */
   readonly costNotional: string
+}
+
+export interface UsageTotals extends UsageRawTotals {
   /** Traffic the price table cannot see, so it never reads as free. */
   readonly unpriced: UsageUnpriced
 }
@@ -45,7 +49,10 @@ export interface UsageUnpriced {
    * "nothing unpriced happened".
    */
   readonly attempts: number | null
-  /** First fully measured day, `YYYY-MM-DD` UTC. */
+  /**
+   * First fully measured day, `YYYY-MM-DD` UTC. The literal `infinity` when the history state
+   * never recorded one (never migrated): no day then counts as measured.
+   */
   readonly since: string
 }
 
@@ -77,8 +84,8 @@ export interface UsageOutcomeCount {
   readonly attempts: number
 }
 
-/** One row of a breakdown, keyed by whatever dimension was grouped on. */
-export interface UsageGroupRow extends UsageTotals {
+/** Per-group latency, shared by the raw and the history-served breakdown rows. */
+interface UsageGroupLatency {
   /** Null when the dimension does not apply — no pool in scope, or an account since deleted. */
   readonly id: string | null
   /** Percentiles for this group alone. "Which account is slow" is not answerable from a global p95. */
@@ -87,10 +94,16 @@ export interface UsageGroupRow extends UsageTotals {
   readonly routerOverheadP95Ms: number | null
 }
 
+/** One row of a raw breakdown (latency source); no unpriced measure. */
+export interface UsageRawGroupRow extends UsageRawTotals, UsageGroupLatency {}
+
+/** One row of a breakdown, keyed by whatever dimension was grouped on. */
+export interface UsageGroupRow extends UsageTotals, UsageGroupLatency {}
+
 export type UsageDimension = "apiKeyId" | "accountId" | "poolId" | "model"
 
 export interface UsageReadRepository {
-  totals(window: UsageWindow): Promise<UsageTotals>
+  totals(window: UsageWindow): Promise<UsageRawTotals>
   /**
    * Tokens this account consumed **inside one quota window's own span**, per (account, window).
    *
@@ -114,7 +127,7 @@ export interface UsageReadRepository {
     dimension: UsageDimension,
     ids?: readonly (string | null)[],
     limit?: number,
-  ): Promise<UsageGroupRow[]>
+  ): Promise<UsageRawGroupRow[]>
   /**
    * Attempts per outcome over the window — the split behind "3% failed, of which what?".
    *

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { eq } from "drizzle-orm"
+import { sql } from "drizzle-orm"
 import { usageAttemptDailyV2 } from "../../src/schema/usage-aggregate-v2"
 import { usageContributions } from "../../src/schema/usage-contributions"
 import { usageHistoryState } from "../../src/schema/usage-history-state"
@@ -12,38 +12,69 @@ import { historyAttempt, historyUrl, usageHistoryFixture } from "./usage-history
  */
 
 const fixture = usageHistoryFixture()
-const setSince = async (day: string) =>
-  fixture
-    .db()
-    .update(usageHistoryState)
-    .set({ unpricedSince: day })
-    .where(eq(usageHistoryState.id, "v2"))
+const setSince = (day: string) => fixture.setUnpricedSince(day)
+/** Every test owns its days and model names, so no test reads another's rows. */
+const unknown = (
+  model: string,
+  at: string,
+  over: Partial<Parameters<typeof historyAttempt>[0]> = {},
+) =>
+  historyAttempt({
+    model,
+    costBasis: "unknown",
+    costEstimate: null,
+    tokensIn: 10,
+    tokensOut: 10,
+    createdAt: new Date(at),
+    ...over,
+  })
+const dailyRow = async (model: string) =>
+  (await fixture.db().select().from(usageAttemptDailyV2)).find((row) => row.model === model)
+const dayWindow = (from: string, to: string) => ({
+  from: new Date(`${from}T00:00:00Z`),
+  to: new Date(`${to}T00:00:00Z`),
+})
 
 describe.skipIf(!historyUrl)("unpriced attempts through the rollup and reads", () => {
-  test("a fresh database gets a non-null unpriced_since from the migration", async () => {
+  // Must stay first: later tests move unpriced_since, and this one reads what the migration seeded.
+  test("a fresh database seeds unpriced_since to the day after the migration ran", async () => {
     const [state] = await fixture.db().select().from(usageHistoryState)
-    expect(state?.unpricedSince).toEqual(expect.any(String))
-    expect(state.unpricedSince >= new Date().toISOString().slice(0, 10)).toBe(true)
+    const [expected] = await fixture
+      .db()
+      .execute<{ day: string }>(
+        sql`select ((clock_timestamp() at time zone 'UTC')::date + 1)::text as day`,
+      )
+    expect(state?.unpricedSince).toBe(expected?.day as string)
   })
 
   test("a window wholly before unpriced_since reports null attempts, never 0", async () => {
-    const totals = await fixture.history().totals(fixture.window)
+    await setSince("2099-01-01")
+    const totals = await fixture.history().totals(dayWindow("1984-01-01", "1984-02-01"))
+    expect(totals.unpriced).toEqual({ attempts: null, since: "2099-01-01" })
+  })
+
+  test("a window ending exactly at since midnight is still wholly before it", async () => {
+    await setSince("1984-04-05")
+    await fixture
+      .usage()
+      .insertBatch({ attempts: [unknown("edge-model", "1984-04-04T12:00:00Z")], terminals: [] })
+    // `to` is exclusive: [04-04, 04-05) never touches since's day, so it is not measured.
+    const totals = await fixture.history().totals(dayWindow("1984-04-04", "1984-04-05"))
     expect(totals.unpriced.attempts).toBeNull()
-    expect(totals.unpriced.since > "1984-02-01").toBe(true)
+    // One millisecond more reaches the first measured day.
+    const reached = await fixture.history().totals({
+      from: new Date("1984-04-04T00:00:00Z"),
+      to: new Date("1984-04-05T00:00:00.001Z"),
+    })
+    expect(reached.unpriced.attempts).toBe(0)
   })
 
   test("a token-bearing unknown attempt counts 1; token-less failures and priced attempts add 0", async () => {
-    const unpriced = historyAttempt({
-      model: "unpriced-model",
-      costBasis: "unknown",
-      costEstimate: null,
+    const unpriced = unknown("unpriced-model", "1984-01-02T12:00:00Z", {
       tokensIn: 400,
       tokensOut: 100,
     })
-    const failed = historyAttempt({
-      model: "unpriced-model",
-      costBasis: "unknown",
-      costEstimate: null,
+    const failed = unknown("unpriced-model", "1984-01-02T12:00:00Z", {
       tokensIn: 0,
       tokensOut: 0,
       outcome: "upstream_error",
@@ -55,25 +86,73 @@ describe.skipIf(!historyUrl)("unpriced attempts through the rollup and reads", (
     })
     const write = fixture.usage()
     await write.insertBatch({ attempts: [unpriced, failed, priced], terminals: [] })
-    const rows = await fixture.db().select().from(usageAttemptDailyV2)
-    const unknownRow = rows.find((row) => row.model === "unpriced-model")
-    expect(unknownRow).toMatchObject({
+    expect(await dailyRow("unpriced-model")).toMatchObject({
       attempts: 2,
       errors: 1,
       unpricedAttempts: 1,
       costMetered: "0.000000",
       costNotional: "0.000000",
     })
-    expect(rows.find((row) => row.model === "priced-model")).toMatchObject({
-      unpricedAttempts: 0,
-    })
-    // Replaying the same contributions is idempotent, at admission and at day repair.
+    expect(await dailyRow("priced-model")).toMatchObject({ unpricedAttempts: 0 })
+    // Replaying the same contributions is idempotent at admission, and the table is untouched.
     expect(
       await write.insertBatch({ attempts: [unpriced, failed, priced], terminals: [] }),
     ).toEqual({ insertedAttempts: 0, insertedTerminals: 0 })
+    expect((await dailyRow("unpriced-model"))?.unpricedAttempts).toBe(1)
+    // And again at day repair.
     await fixture.history().rollupDay(new Date("1984-01-02T12:00:00Z"))
-    const repaired = await fixture.db().select().from(usageAttemptDailyV2)
-    expect(repaired.find((row) => row.model === "unpriced-model")?.unpricedAttempts).toBe(1)
+    expect((await dailyRow("unpriced-model"))?.unpricedAttempts).toBe(1)
+  })
+
+  test("separate batches on the same grain add: 1 then 2", async () => {
+    const write = fixture.usage()
+    await write.insertBatch({
+      attempts: [unknown("additive-model", "1984-05-02T10:00:00Z")],
+      terminals: [],
+    })
+    expect((await dailyRow("additive-model"))?.unpricedAttempts).toBe(1)
+    await write.insertBatch({
+      attempts: [unknown("additive-model", "1984-05-02T11:00:00Z")],
+      terminals: [],
+    })
+    expect((await dailyRow("additive-model"))?.unpricedAttempts).toBe(2)
+  })
+
+  test("a measured batch on a pre-measure NULL row counts from 0, not NULL", async () => {
+    await fixture
+      .db()
+      .insert(usageContributions)
+      .values({
+        id: crypto.randomUUID(),
+        kind: "attempt",
+        day: "1984-05-03",
+        source: "live",
+        payloadHash: "null-row-fixture",
+        payload: {
+          apiKeyId: null,
+          accountId: null,
+          poolId: null,
+          model: "null-row-model",
+          correlationId: crypto.randomUUID(),
+          eventAt: "1984-05-03T09:00:00.000Z",
+          attempts: 1,
+          requests: 0,
+          errors: 0,
+          tokensIn: 5,
+          tokensOut: 5,
+          cacheReadTokens: 0,
+          cacheWriteTokens: 0,
+          costMetered: "0",
+          costNotional: "0",
+        },
+      })
+    await fixture.history().rollupDay(new Date("1984-05-03T12:00:00Z"))
+    expect((await dailyRow("null-row-model"))?.unpricedAttempts).toBeNull()
+    await fixture.usage().insertBatch({
+      attempts: [unknown("null-row-model", "1984-05-03T12:00:00Z")],
+      terminals: [],
+    })
+    expect(await dailyRow("null-row-model")).toMatchObject({ attempts: 2, unpricedAttempts: 1 })
   })
 
   test("repairing a day whose contributions predate the migration leaves the measure NULL", async () => {
@@ -105,67 +184,73 @@ describe.skipIf(!historyUrl)("unpriced attempts through the rollup and reads", (
         },
       })
     expect(await fixture.history().rollupDay(new Date("1984-01-06T12:00:00Z"))).toBe(1)
-    const [row] = await fixture
-      .db()
-      .select()
-      .from(usageAttemptDailyV2)
-      .where(eq(usageAttemptDailyV2.day, "1984-01-06"))
-    expect(row?.unpricedAttempts).toBeNull()
+    expect((await dailyRow("legacy-model"))?.unpricedAttempts).toBeNull()
   })
 
   test("measured days count through the daily table, the receipts query, and breakdown rows", async () => {
-    await setSince("1984-01-01")
-    const attempt = historyAttempt({
-      model: "measured-model",
-      costBasis: "unknown",
-      costEstimate: null,
-      tokensIn: 10,
-      tokensOut: 10,
-      createdAt: new Date("1984-01-02T12:00:00Z"),
+    await setSince("1984-02-10")
+    await fixture.usage().insertBatch({
+      attempts: [
+        unknown("measured-model", "1984-02-10T12:00:00Z"),
+        historyAttempt({
+          model: "measured-priced",
+          costBasis: "metered",
+          costEstimate: "0.5",
+          createdAt: new Date("1984-02-10T12:00:00Z"),
+        }),
+      ],
+      terminals: [],
     })
-    await fixture.usage().insertBatch({ attempts: [attempt], terminals: [] })
-    const totals = await fixture.history().totals(fixture.window)
-    // 2 = this attempt + the token-bearing unpriced-model attempt the earlier test left on the
-    // same day of this shared fixture database (the failed and priced ones add 0).
-    expect(totals.unpriced).toEqual({ attempts: 2, since: "1984-01-01" })
-    const groups = await fixture.history().breakdown(fixture.window, "model")
+    const window = dayWindow("1984-02-10", "1984-02-11")
+    expect((await fixture.history().totals(window)).unpriced).toEqual({
+      attempts: 1,
+      since: "1984-02-10",
+    })
+    const groups = await fixture.history().breakdown(window, "model")
     expect(groups.find((row) => row.id === "measured-model")?.unpriced).toEqual({
       attempts: 1,
-      since: "1984-01-01",
+      since: "1984-02-10",
     })
-    expect(groups.find((row) => row.id === "unpriced-model")?.unpriced.attempts).toBe(1)
-    expect(groups.find((row) => row.id === "priced-model")?.unpriced).toEqual({
+    expect(groups.find((row) => row.id === "measured-priced")?.unpriced).toEqual({
       attempts: 0,
-      since: "1984-01-01",
+      since: "1984-02-10",
     })
     // A within-day window's days are all partial edges, so the receipts query alone serves it.
     const receiptsOnly = await fixture.history().totals({
-      from: new Date("1984-01-02T12:00:00Z"),
-      to: new Date("1984-01-02T14:00:00Z"),
+      from: new Date("1984-02-10T12:00:00Z"),
+      to: new Date("1984-02-10T14:00:00Z"),
     })
-    expect(receiptsOnly.unpriced.attempts).toBe(2)
+    expect(receiptsOnly.unpriced.attempts).toBe(1)
+  })
+
+  test("the receipts query only counts days on or after unpriced_since", async () => {
+    await setSince("1984-06-03")
+    await fixture.usage().insertBatch({
+      attempts: [
+        unknown("gate-model", "1984-06-02T18:00:00Z"),
+        unknown("gate-model", "1984-06-03T06:00:00Z"),
+      ],
+      terminals: [],
+    })
+    // Both edges are partial days (no whole day inside the window), so receipts serve all of it.
+    const totals = await fixture.history().totals({
+      from: new Date("1984-06-02T12:00:00Z"),
+      to: new Date("1984-06-03T12:00:00Z"),
+    })
+    expect(totals.attempts).toBe(2)
+    expect(totals.unpriced.attempts).toBe(1)
   })
 
   test("a straddling window counts only measured days; a pre-since-only group reads 0", async () => {
-    await setSince("1984-01-03")
-    const before = historyAttempt({
-      model: "pre-since-model",
-      costBasis: "unknown",
-      costEstimate: null,
-      tokensIn: 5,
-      tokensOut: 5,
-      createdAt: new Date("1984-01-02T12:00:00Z"),
+    await setSince("1984-03-11")
+    await fixture.usage().insertBatch({
+      attempts: [
+        unknown("pre-since-model", "1984-03-10T12:00:00Z"),
+        unknown("post-since-model", "1984-03-11T12:00:00Z"),
+      ],
+      terminals: [],
     })
-    const after = historyAttempt({
-      model: "post-since-model",
-      costBasis: "unknown",
-      costEstimate: null,
-      tokensIn: 5,
-      tokensOut: 5,
-      createdAt: new Date("1984-01-03T12:00:00Z"),
-    })
-    await fixture.usage().insertBatch({ attempts: [before, after], terminals: [] })
-    const window = { from: new Date("1984-01-01"), to: new Date("1984-01-05") }
+    const window = dayWindow("1984-03-09", "1984-03-13")
     expect((await fixture.history().totals(window)).unpriced.attempts).toBe(1)
     const groups = await fixture.history().breakdown(window, "model")
     expect(groups.find((row) => row.id === "pre-since-model")?.unpriced.attempts).toBe(0)

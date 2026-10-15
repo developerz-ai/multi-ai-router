@@ -62,7 +62,7 @@ export function createUsageHistoryRepository(
     }
   }
   const totals = async (window: UsageWindow) => {
-    const [row] = await read<UsageTotals & UnpricedRow>(
+    const [row] = await read<Omit<UsageTotals, "unpriced"> & UnpricedRow>(
       sql`with facts as (${historySource(window)}) select ${historySums(window)} from facts`,
     )
     if (row === undefined) throw new Error("usage totals unavailable")
@@ -71,7 +71,7 @@ export function createUsageHistoryRepository(
   const breakdown = async (window: UsageWindow, dimension: UsageDimension, limit = 1000) => {
     if (!Number.isSafeInteger(limit) || limit < 1 || limit > 1001)
       throw new Error("usage breakdown outside bounds")
-    const rows = await read<UsageGroupRow & UnpricedRow>(
+    const rows = await read<Omit<UsageGroupRow, "unpriced"> & UnpricedRow>(
       sql`with facts as (${historySource(window)}) select ${sql.identifier(historyDimensions[dimension])}::text as id, ${historySums(window)}, null::float8 as "latencyP50Ms", null::float8 as "latencyP95Ms", null::float8 as "routerOverheadP95Ms" from facts group by ${sql.identifier(historyDimensions[dimension])} order by sum(tokens_in)+sum(tokens_out) desc, ${sql.identifier(historyDimensions[dimension])}::text nulls last limit ${limit}`,
     )
     return rows.map(nestUnpriced)
