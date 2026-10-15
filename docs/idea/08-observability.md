@@ -312,12 +312,14 @@ or pending history is silently partial in the same way the summary's `coverage` 
 the summary beside it when reconciling.
 
 **Safety.** Any router-key holder chooses the `model` string, so every **text** cell is guarded
-against spreadsheet formula injection in the writer. A leading `=`, `+`, `-`, `@`, tab or CR (or
-their full-width forms, after any leading spaces) gets a leading `'`. Spreadsheets in comma-decimal
-locales split on `;`, and some on tab, so the same lead right after a `;` or a tab, with spaces or
-quotes between, is neutralised too. A CR or LF inside a cell would end the record under a naive
-split and start the next "row" with a live formula, so each CR, LF or CRLF in a text cell becomes
-one space first; no model, label or name legitimately contains a line break. The guard runs before
+against spreadsheet formula injection in the writer. A leading `=`, `+`, `-`, `@` or tab (or their
+full-width forms, after any leading spaces) gets a leading `'`. Spreadsheets in comma-decimal
+locales split on `;`, some on tab, and a lenient importer may ignore quoting on `,`, so the same
+lead right after a `;`, tab or `,`, with spaces or quotes between, is neutralised too. A line break
+inside a cell would end the record under a naive split and start the next "row" with a live
+formula, so each CR, LF, CRLF, VT, FF, NEL, U+2028 or U+2029 in a text cell becomes one space
+first; no model, label or name legitimately contains one. A reconciliation against the text columns
+strips the inserted apostrophes. The guard runs before
 RFC 4180 quoting, so the apostrophe is inside the quotes. Numeric cells are non-negative counts and
 costs and are not guarded.
 
@@ -326,7 +328,7 @@ query fetches one past the cap inside the snapshot, and seeing the extra row ans
 the cap before any byte of the file is written: never a truncated `200`. Narrow the window or add
 filters. After the cap check the snapshot is released and the body is **streamed**: a
 `ReadableStream` whose `pull()` yields to the event loop, then renders one chunk cut at 1000 rows or
-about 32 KiB of output, whichever comes first. The render therefore yields between bounded chunks
+about 32K characters of output, whichever comes first. The render therefore yields between bounded chunks
 rather than holding the loop the `/v1` traffic shares for the whole file (non-negotiable 8); a
 chunk still takes a few milliseconds. The rows themselves are held in memory until the stream
 drains, which is why the cap has a ceiling.

@@ -45,8 +45,12 @@ export interface UsageCsv {
 
 /** Row ceiling per chunk. */
 export const USAGE_EXPORT_CHUNK_ROWS = 1_000
-/** Rendered-size cut per chunk: wide rows (long, quote-filled models) cost more to render. */
-export const USAGE_EXPORT_CHUNK_BYTES = 32 * 1024
+/**
+ * Rendered-size cut per chunk, in characters (UTF-16 units, so non-ASCII text encodes larger).
+ * Wide rows (long, quote-filled models) cost more to render: with a row-only cut, 1000 such rows
+ * took ~30 ms per pull on the shared event loop; at 32K characters a pull stays at a few ms.
+ */
+export const USAGE_EXPORT_CHUNK_CHARS = 32 * 1024
 
 /** What turns the ids on a row into the words the file prints. */
 export interface ExportSubjects {
@@ -91,7 +95,7 @@ export function renderUsageCsv(rows: readonly UsageExportRow[], subjects: Export
 }
 
 /**
- * The file as strings, each cut after the row that takes it past {@link USAGE_EXPORT_CHUNK_BYTES}
+ * The file as strings, each cut after the row that takes it past {@link USAGE_EXPORT_CHUNK_CHARS}
  * (or {@link USAGE_EXPORT_CHUNK_ROWS} rows); the first carries the header.
  */
 export function* usageCsvChunks(
@@ -104,7 +108,7 @@ export function* usageCsvChunks(
   for (const row of rows) {
     chunk += csvLine(exportCells(row, subjects))
     inChunk += 1
-    if (inChunk >= size || chunk.length >= USAGE_EXPORT_CHUNK_BYTES) {
+    if (inChunk >= size || chunk.length >= USAGE_EXPORT_CHUNK_CHARS) {
       yield chunk
       chunk = ""
       inChunk = 0
