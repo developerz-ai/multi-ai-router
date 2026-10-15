@@ -1,12 +1,22 @@
 /**
- * The four knobs an OIDC admin login needs at boot. The router does not
+ * One `name=value` pair of `ADMIN_OIDC_REQUIRED_CLAIMS`. The id_token's `name` claim matches when it
+ * is a string equal to `value`, or an array containing it — exact and case-sensitive.
+ */
+export interface RequiredClaim {
+  readonly name: string
+  readonly value: string
+}
+
+/**
+ * The knobs an OIDC admin login needs at boot. The router does not
  * implement the protocol itself — it relies on the IdP's discovery document
  * for the endpoint URLs — so the configuration here is the *identity* of the
  * issuer and the *principal* we are willing to admit. The IdP is the source of
  * truth for everything else.
  *
- * `adminSubject` is optional: the `email` is the primary check, and the
- * `sub` is the optional stricter one. Pinning subject matters when the IdP
+ * The principal is gated by an email allowlist, required id_token claims, or
+ * both (both must pass). `adminSubject` is optional: the `sub` is the optional
+ * stricter check on top. Pinning subject matters when the IdP
  * reuses emails across tenants; the operator who needs that can set it.
  */
 export interface AdminOidcConfig {
@@ -20,7 +30,9 @@ export interface AdminOidcConfig {
   readonly redirectUri: string
   /**
    * The emails the IdP may assert for the admin to be admitted, lowercased and
-   * deduplicated at parse time. Never empty when this config exists.
+   * deduplicated at parse time. Null when `ADMIN_OIDC_ADMIN_EMAIL` is unset —
+   * then `requiredClaims` is non-empty and is the only principal gate. Never an
+   * empty list.
    *
    * A list rather than one string because a self-hosted router is normally run
    * by a *team* — every operator has their own IdP identity, and pinning one
@@ -29,7 +41,13 @@ export interface AdminOidcConfig {
    * state. Every entry maps onto the same single admin principal and the same
    * session model, exactly as the single email did.
    */
-  readonly adminEmails: readonly string[]
+  readonly adminEmails: readonly string[] | null
+  /**
+   * `ADMIN_OIDC_REQUIRED_CLAIMS`, parsed: every pair must match the verified id_token. Empty when
+   * unset — then `adminEmails` is non-null. When both are set, both gates apply; neither widens
+   * the other.
+   */
+  readonly requiredClaims: readonly RequiredClaim[]
   /** Optional stricter: the `sub` claim must equal this value. */
   readonly adminSubject: string | null
   /**

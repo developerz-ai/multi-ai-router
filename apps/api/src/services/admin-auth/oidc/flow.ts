@@ -1,8 +1,10 @@
 import { createHash } from "node:crypto"
 import { AdminAuthError, describeError } from "@multi-ai-router/core"
+import type { RequiredClaim } from "../../../config/env-admin-types"
 import { type DiscoveryDocument, discoverySchema, OIDCDiscoveryError } from "./discovery"
 import { assertEmailVerified, OIDCIdTokenInvalidError, verifyIdToken } from "./idToken"
 import { createJWKSCache, OIDCJWKSError } from "./jwks"
+import { unmetRequiredClaim } from "./requiredClaims"
 import { createOIDCStateStore, OIDCStateMismatchError, type OIDCStateStoreDeps } from "./state"
 
 /**
@@ -35,12 +37,18 @@ export interface OIDCFlowConfig {
   /**
    * The principals that may sign in. The IdP-asserted email must be one of these; entries are
    * expected already lowercased (the env layer normalizes), and the comparison lowercases the
-   * asserted side so a provider changing case cannot lock the operator out.
+   * asserted side so a provider changing case cannot lock the operator out. Null means "no email
+   * gate" and is only accepted alongside a non-empty `requiredClaims`; an empty list admits nobody.
    *
    * Several entries do not make this multi-user: they all map onto the one admin principal, with
    * one session model and no per-person state. It is a list because a team shares one router.
    */
-  readonly adminEmails: readonly string[]
+  readonly adminEmails: readonly string[] | null
+  /**
+   * Claims the verified id_token must carry — every pair, on top of the email gate when both are
+   * set. Omitted or empty means no claim gate.
+   */
+  readonly requiredClaims?: readonly RequiredClaim[]
   /** Optional stricter check: the `sub` claim must match this exactly. */
   readonly adminSubject?: string | null
   /** Scopes to request. `openid` is mandatory; the rest are passed through. */
@@ -87,6 +95,12 @@ export interface OIDCFlowDeps {
 
 export function createOIDCFlow(deps: OIDCFlowDeps): OIDCFlow {
   const { config } = deps
+  const requiredClaims = config.requiredClaims ?? []
+  // The env layer already refuses this; restated at the seam so no other caller can build a flow
+  // that admits every verified identity the IdP will sign for.
+  if (config.adminEmails === null && requiredClaims.length === 0) {
+    throw new Error("createOIDCFlow needs adminEmails, requiredClaims, or both")
+  }
   const now = deps.now ?? ((): Date => new Date())
   const execFetch: typeof fetch = deps.fetch ?? fetch
   const discoveryFetch = async (url: string | URL, init?: RequestInit): Promise<Response> => {
@@ -213,11 +227,15 @@ export function createOIDCFlow(deps: OIDCFlowDeps): OIDCFlow {
           { jwks: cachedJwks ?? createJWKSCache(doc.jwks_uri, undefined, () => now().getTime()) },
         )
         const { email, sub } = assertEmailVerified(verified.claims)
-        if (!config.adminEmails.includes(email.toLowerCase())) {
+        if (config.adminEmails !== null && !config.adminEmails.includes(email.toLowerCase())) {
           throw new OIDCPrincipalMismatchError(
             `sign-in email "${email}" is not in ADMIN_OIDC_ADMIN_EMAIL`,
           )
         }
+        // After the email gate, so a deployment with both keeps the email message it always had;
+        // either gate failing is a rejection — the claims never widen the allowlist.
+        const unmet = unmetRequiredClaim(verified.claims, requiredClaims)
+        if (unmet !== null) throw new OIDCPrincipalMismatchError(unmet)
         if (config.adminSubject !== undefined && config.adminSubject !== null) {
           if (sub !== config.adminSubject) {
             throw new OIDCPrincipalMismatchError(

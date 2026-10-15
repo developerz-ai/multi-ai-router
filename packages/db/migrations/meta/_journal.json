@@ -239,6 +239,13 @@
       "when": 1791984233566,
       "tag": "0033_key_attribution",
       "breakpoints": true
+    },
+    {
+      "idx": 34,
+      "version": "7",
+      "when": 1791988105614,
+      "tag": "0034_pool_scope_position",
+      "breakpoints": true
     }
   ]
 }

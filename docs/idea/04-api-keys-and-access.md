@@ -66,7 +66,8 @@ A single admin principal. It is asserted either by an OpenID Connect provider or
 | `ADMIN_OIDC_CLIENT_ID` | OIDC client and expected ID-token audience. |
 | `ADMIN_OIDC_CLIENT_SECRET` | Confidential-client secret; optional for public clients. PKCE remains mandatory. |
 | `ADMIN_OIDC_REDIRECT_URI` | Exact registered callback URI. |
-| `ADMIN_OIDC_ADMIN_EMAIL` | Required. Comma-separated; a verified `email` claim in the ID token must match one entry, case-insensitively. |
+| `ADMIN_OIDC_ADMIN_EMAIL` | This, `ADMIN_OIDC_REQUIRED_CLAIMS`, or both. Comma-separated; a verified `email` claim in the ID token must match one entry, case-insensitively. |
+| `ADMIN_OIDC_REQUIRED_CLAIMS` | This, `ADMIN_OIDC_ADMIN_EMAIL`, or both. Comma-separated `name=value` pairs every one of which the verified ID token must satisfy; see [13-admin-oidc.md](13-admin-oidc.md#trusting-the-idps-user-gating). |
 | `ADMIN_OIDC_ADMIN_SUBJECT` | Optional stricter exact match against `sub`. |
 
 The only password-shaped credential is the optional local admin password above; the router keeps no TOTP secret. TOTP, passkeys, MFA policy, enrollment, and account recovery belong to the configured IdP — which is exactly why the password door, having no second factor, is loopback-only by default. Adding a second factor *after* the router-issued session would be a separate design decision, not a deferred field.
@@ -316,7 +317,7 @@ version of another.
 | Scope | Meaning | Typical use |
 |---|---|---|
 | `all` | Every `active` Account is a candidate. **Full scope.** | The operator's own laptop key — the trusted teammate. |
-| *pools* | Bound to one or more Pools. Candidates are the union, in the listed order, and each pool's own routing policy applies within that pool. | **The normal case.** One agent, one budget; or a primary pool with an overflow pool behind it. |
+| *pools* | Bound to one or more Pools. Candidates are the union, in the listed order — the order is persisted (`api_key_pools.position`, written from the request's array index) and every read returns it, so the list survives the scope edit that rewrites it. Across pools a natively-serving account still outranks an aliased one, and an honored binding still outranks both ([05-routing-and-failover.md](05-routing-and-failover.md#native-before-alias)); within a pool, that pool's own routing policy applies. | **The normal case.** One agent, one budget; or a primary pool with an overflow pool behind it. |
 | *accounts* | Pinned to an explicit list of Accounts, **ignoring pool membership entirely**. | "This CI agent may only ever burn the cheap OpenRouter key." "This contractor's key touches exactly one sub." |
 
 ### How scope is enforced

@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test"
 import { createHash } from "node:crypto"
 import { generateRouterKey, ROUTER_KEY_PREFIX } from "@multi-ai-router/core"
 import { Hono } from "hono"
+import type { RequiredClaim } from "../../src/config/env-admin-types"
 import { createLogger } from "../../src/logging/logger"
 import { type AdminAuthEnv, adminAuth } from "../../src/middleware/adminAuth"
 import { errorHandler, notFoundHandler } from "../../src/middleware/errorHandler"
@@ -123,14 +124,19 @@ async function harness(
     email: string | null
     sub: string | null
     verified: boolean | null
-    adminEmails: readonly string[]
+    adminEmails: readonly string[] | null
+    requiredClaims: readonly RequiredClaim[]
+    /** Extra id_token claims, beyond the standard ones, the token endpoint signs in. */
+    extraClaims: Record<string, unknown>
   }> = {},
 ): Promise<Harness> {
   const clock = { nowMs: 1_700_000_000_000 }
   const store = createMemoryStore()
   const cipher = createCredentialCipher({ key: new Uint8Array(32).fill(7) })
   const keyPair = await newKeyPair("kid-1")
-  const adminEmails = overlaps.adminEmails ?? [ADMIN_EMAIL]
+  // `null` is a meaningful override (no email gate), so `??` would be wrong here.
+  const adminEmails = overlaps.adminEmails === undefined ? [ADMIN_EMAIL] : overlaps.adminEmails
+  const requiredClaims = overlaps.requiredClaims ?? []
   const audits: AuditEventInput[] = []
   const override = {
     email: overlaps.email ?? null,
@@ -176,6 +182,7 @@ async function harness(
           email: override.email ?? ADMIN_EMAIL,
           email_verified: override.verified ?? true,
           nonce,
+          ...overlaps.extraClaims,
         },
         keyPair,
       )
@@ -190,6 +197,7 @@ async function harness(
       clientSecret: "shh",
       redirectUri: "https://router.test/api/admin/auth/oidc/callback",
       adminEmails,
+      requiredClaims,
       scopes: ["openid", "profile", "email"],
     },
     stateStore: {
@@ -209,6 +217,7 @@ async function harness(
         clientSecret: "shh",
         redirectUri: "https://router.test/api/admin/auth/oidc/callback",
         adminEmails,
+        requiredClaims,
         adminSubject: null,
         scopes: ["openid", "profile", "email"],
         clockSkewSeconds: 60,
@@ -449,6 +458,54 @@ describe("GET /api/admin/auth/oidc/callback", () => {
     const detail = row.detail as { method: string; reason: string }
     expect(detail.method).toBe("oidc")
     expect(detail.reason).toContain("principal")
+  })
+
+  /**
+   * `ADMIN_OIDC_REQUIRED_CLAIMS` rejections leave the trail an email mismatch leaves (#72): the one
+   * wording in the body, a `principal:` reason on the structured line, an `admin.login_failed` row
+   * attributed to nobody. The reason names the claim and the configured value, never the token's.
+   */
+  test("a required-claim rejection leaves the same log and audit trail as an email mismatch", async () => {
+    const h = await harness({}, false, null, {
+      adminEmails: null,
+      requiredClaims: [{ name: "kind", value: "dev_user" }],
+      extraClaims: { kind: "customer-secret-kind" },
+    })
+    const res = await get(h.app, await callbackUrlFor(h))
+    expect(res.status).toBe(401)
+
+    const failure = h.logs.find((line) => line.errorCode === "admin_auth_failed")
+    expect(String(failure?.reason)).toContain("principal")
+    expect(String(failure?.reason)).toContain('"kind"')
+    expect(String(failure?.reason)).not.toContain("customer-secret-kind")
+    expect(failure?.requestId).toBeTruthy()
+
+    const body = await res.text()
+    expect(body.toLowerCase()).toContain("single sign-on")
+    expect(body).not.toContain("dev_user")
+    expect(body).not.toContain("customer-secret-kind")
+
+    const row = h.audits.find((event) => event.kind === "admin.login_failed")
+    if (row === undefined) throw new Error("expected an admin.login_failed audit row")
+    expect(row.subjectId).toBe("unknown")
+    const detail = row.detail as { method: string; reason: string }
+    expect(detail.method).toBe("oidc")
+    expect(detail.reason).toContain("principal")
+    expect(detail.reason).not.toContain("customer-secret-kind")
+    expect(h.audits.some((event) => event.kind === "admin.login")).toBe(false)
+  })
+
+  test("claims-only: any verified email carrying the required claim signs in as itself", async () => {
+    const h = await harness({}, false, null, {
+      email: "new.staff@test",
+      adminEmails: null,
+      requiredClaims: [{ name: "kind", value: "dev_user" }],
+      extraClaims: { kind: "dev_user" },
+    })
+    const res = await get(h.app, await callbackUrlFor(h))
+    expect(res.status).toBe(200)
+    const row = h.audits.find((event) => event.kind === "admin.login")
+    expect(row?.subjectId).toBe("new.staff@test")
   })
 
   test("a second allowlisted email signs in and owns its own session and audit identity", async () => {

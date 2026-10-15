@@ -346,6 +346,7 @@ export function createAdminPlane(deps: AdminPlaneDeps): AdminPlane {
                   clientSecret: env.adminOidc.clientSecret,
                   redirectUri: env.adminOidc.redirectUri,
                   adminEmails: env.adminOidc.adminEmails,
+                  requiredClaims: env.adminOidc.requiredClaims,
                   adminSubject: env.adminOidc.adminSubject,
                   scopes: env.adminOidc.scopes,
                   clockSkewSeconds: env.adminOidc.clockSkewSeconds,

@@ -18,6 +18,13 @@ function text(events: readonly SseEvent[]) {
     )
     .join("")
 }
+/** openai-chat streams a refusal in `delta.refusal`, apart from the answer text. */
+function refusal(events: readonly SseEvent[]) {
+  return events
+    .filter((e) => e.data !== "[DONE]")
+    .map((e) => JSON.parse(e.data).choices?.[0]?.delta?.refusal ?? "")
+    .join("")
+}
 const factories = [
   () => openAiResponsesToAnthropicStream(),
   () => openAiResponsesToOpenAiChatStream({ created: 1 }),
@@ -81,7 +88,11 @@ for (const [index, factory] of factories.entries()) {
       ...push(t, { type: "response.output_item.done", output_index: 0, item }),
       ...push(t, { type: "response.output_item.done", output_index: 0, item }),
     ]
-    expect(text(out)).toBe("hello\nno")
+    if (index === 0) expect(text(out)).toBe("hello\nno")
+    else {
+      expect(text(out)).toBe("hello")
+      expect(refusal(out)).toBe("no")
+    }
   })
 }
 test("snapshot hashing preserves split surrogate pairs and distinct part identities", () => {

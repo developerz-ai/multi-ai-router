@@ -74,10 +74,11 @@ export function memoryKeys(
     markRevoked: async (id, now) => {
       replace(keys, id, { revoked: true, revokedAt: now }, now)
     },
-    listPoolTargets: async (apiKeyId) => keyPools.filter((row) => row.apiKeyId === apiKeyId),
+    listPoolTargets: async (apiKeyId) =>
+      keyPools.filter((row) => row.apiKeyId === apiKeyId).sort(byPositionThenId),
     listAccountTargets: async (apiKeyId) => keyAccounts.filter((row) => row.apiKeyId === apiKeyId),
     listTargetsForKeys: async (ids) => ({
-      pools: keyPools.filter((row) => ids.includes(row.apiKeyId)),
+      pools: keyPools.filter((row) => ids.includes(row.apiKeyId)).sort(byPositionThenId),
       accounts: keyAccounts.filter((row) => ids.includes(row.apiKeyId)),
     }),
     listKeysScopedToPool: async (poolId) =>
@@ -91,12 +92,20 @@ export function memoryKeys(
     replaceScopeTargets: async (apiKeyId, targets) => {
       drop(keyPools, (row) => row.apiKeyId === apiKeyId)
       drop(keyAccounts, (row) => row.apiKeyId === apiKeyId)
-      for (const poolId of targets.poolIds ?? []) {
-        keyPools.push({ id: crypto.randomUUID(), apiKeyId, poolId, createdAt: epoch })
+      for (const [position, poolId] of (targets.poolIds ?? []).entries()) {
+        keyPools.push({ id: crypto.randomUUID(), apiKeyId, poolId, position, createdAt: epoch })
       }
       for (const accountId of targets.accountIds ?? []) {
         keyAccounts.push({ id: crypto.randomUUID(), apiKeyId, accountId, createdAt: epoch })
       }
     },
   }
+}
+
+/** The real repository's read order: listed position, then row id. */
+function byPositionThenId(
+  a: { position: number; id: string },
+  b: { position: number; id: string },
+): number {
+  return a.position - b.position || a.id.localeCompare(b.id)
 }

@@ -152,7 +152,8 @@ Then open **<http://localhost:8080>** and sign in — **Sign in with SSO**, or t
 | `ADMIN_OIDC_CLIENT_ID` | ✅* | OIDC client id and expected ID-token audience. |
 | `ADMIN_OIDC_CLIENT_SECRET` | — | Confidential-client secret. The shipped setup uses a confidential client; omit only for an explicitly configured public client. PKCE remains mandatory. |
 | `ADMIN_OIDC_REDIRECT_URI` | ✅* | Exact registered callback: `/api/admin/auth/oidc/callback`. |
-| `ADMIN_OIDC_ADMIN_EMAIL` | ✅* | Comma-separated allowlist of admin emails; the IdP must assert one of them as verified in the ID token. Still one admin principal — no users, no roles. |
+| `ADMIN_OIDC_ADMIN_EMAIL` | ✅*† | Comma-separated allowlist of admin emails; the IdP must assert one of them as verified in the ID token. Still one admin principal — no users, no roles. |
+| `ADMIN_OIDC_REQUIRED_CLAIMS` | ✅*† | Comma-separated `name=value` pairs (e.g. `kind=dev_user`) the verified ID token must all satisfy — admits anyone the IdP marks that way, so only for an IdP client that itself restricts who can sign in. |
 | `ADMIN_OIDC_ADMIN_SUBJECT`, `ADMIN_OIDC_SCOPES`, `ADMIN_OIDC_CLOCK_SKEW_SECONDS` | — | Optional stricter `sub` pin, scopes, and clock-skew tolerance. |
 | `ADMIN_LOCAL_LOGIN_ALLOW_PUBLIC` | — | Opts out of the boot refusal for a local password on a non-loopback `PUBLIC_URL`. Default off; boot warns while on. |
 | `ADMIN_API_TOKEN` | — | Break-glass bearer for scripts and recovery; separate from browser sign-in. |
@@ -163,7 +164,7 @@ Then open **<http://localhost:8080>** and sign in — **Sign in with SSO**, or t
 | `CATALOG_REFRESH_SECONDS`, `KEY_CACHE_*`, `USAGE_*` | — | The request path's staleness and memory bounds. Nothing there queries Postgres, so these decide how fast it learns about a change. |
 | `RETENTION_*`, `JANITOR_INTERVAL_MINUTES`, `CLAUDE_CONFIG_ROOT`, `ACCOUNT_RECHECK_COOLDOWN_SECONDS` | — | Retention windows and background-work knobs. Every one is config, never a constant. |
 
-\* The four `ADMIN_OIDC_*` fields are all-or-nothing, and required only for the OIDC path. The alternative is `bin/admin set-password` — one sign-in method or the other must exist, and both may be enabled at once.
+\* The required `ADMIN_OIDC_*` fields are all-or-nothing, and required only for the OIDC path. † At least one of the two principal gates; with both set, both must pass. The alternative is `bin/admin set-password` — one sign-in method or the other must exist, and both may be enabled at once.
 
 Env is validated by Zod at boot; a bad config exits non-zero naming the offending variable. Run HTTPS in front — cookies are `Secure` by default. Full matrix in [`docs/idea/09-deployment.md`](docs/idea/09-deployment.md).
 
