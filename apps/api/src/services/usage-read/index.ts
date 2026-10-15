@@ -3,6 +3,7 @@
  * writer the request path feeds — same table, opposite direction, different reasons to change.
  */
 
+export type { UsageCsv } from "./export"
 export type { UsageFailures } from "./failures"
 export { EMPTY_FAILURES, foldFailures } from "./failures"
 export type { UsageFilterQuery } from "./filter"
@@ -13,7 +14,7 @@ export {
   unknownQueryParam,
   usageFilterQuery,
 } from "./filter"
-export { catalogLabels } from "./labels"
+export { accountProviders, catalogLabels } from "./labels"
 export type {
   RecentAttemptView,
   RecentQuery,

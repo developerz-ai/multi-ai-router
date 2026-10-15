@@ -57,6 +57,7 @@ function harness(rows: readonly RecentAttemptRow[] = [attemptRow()], guard = stu
   }
 
   const service = createUsageService({
+    exportMaxRows: 50_000,
     history: historyFixture(
       {
         totals: unreached,
@@ -71,7 +72,12 @@ function harness(rows: readonly RecentAttemptRow[] = [attemptRow()], guard = stu
     recent: { recent: async () => [...rows] },
 
     labels: async () => ({
-      keys: new Map([["key-1", { name: "dev-laptops", owner: null, ownerKind: null, tool: null }]]),
+      keys: new Map([
+        [
+          "key-1",
+          { name: "dev-laptops", owner: null, ownerKind: null, tool: null, prefix: "mar_dev" },
+        ],
+      ]),
       accounts: new Map([["acct-1", "claude-max-01"]]),
       pools: new Map(),
     }),
@@ -204,6 +210,7 @@ describe("GET /api/admin/usage — the failure split", () => {
 function summaryHarness(outcomes: readonly UsageOutcomeCount[], guard = stubSession()) {
   const attempts = outcomes.reduce((sum, row) => sum + row.attempts, 0)
   const service = createUsageService({
+    exportMaxRows: 50_000,
     history: historyFixture(
       {
         totals: async () => ({ ...ZERO_TOTALS, attempts }),

@@ -1,3 +1,4 @@
+import type { UsageExportRow } from "./usage-export-repository"
 import type {
   UsageDimension,
   UsageFilter,
@@ -43,6 +44,12 @@ export interface UsageHistoryRepository {
     ids: readonly (string | null)[] | undefined,
     filter: UsageFilter,
   ): Promise<UsageGroupSeriesPoint[]>
+  /**
+   * At most `limit` rows at UTC day x key x account x pool x model for the CSV export, over the
+   * same source and (required) filter as `totals`. The caller asks for `cap + 1` to learn it is
+   * over the cap.
+   */
+  exportRows(window: UsageWindow, filter: UsageFilter, limit: number): Promise<UsageExportRow[]>
   /** All history and retained detail reads use one repeatable-read snapshot. */
   withSnapshot<T>(
     callback: (history: UsageHistoryRepository, raw: UsageReadRepository) => Promise<T>,

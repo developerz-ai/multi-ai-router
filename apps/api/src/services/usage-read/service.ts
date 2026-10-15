@@ -1,6 +1,8 @@
 import type { UsageHistoryRepository, UsageRecentRepository } from "@multi-ai-router/db"
-import { type AdminResult, ok } from "../admin/result"
+import { type AdminResult, invalid, ok } from "../admin/result"
+import { exportFilename, overCapMessage, type UsageCsv, usageCsvStream } from "./export"
 import { resolveUsageFilter, type UsageFilterQuery } from "./filter"
+import { resolveReadWindow } from "./read-window"
 import { outcomesFor, type RecentQuery, type RecentView, toRecentAttemptView } from "./recent"
 import { readSummary } from "./summary"
 import { keyNames } from "./summary-view"
@@ -23,13 +25,23 @@ export interface UsageServiceDeps {
   readonly history: UsageHistoryRepository
   readonly recent: UsageRecentRepository
   readonly labels: () => Promise<UsageLabelSets>
+  /** Account id to provider id, read from the warm catalog; absent means no provider cells. */
+  readonly providers?: () => ReadonlyMap<string, string>
   readonly now: () => Date
+  /** `USAGE_EXPORT_MAX_ROWS`; always supplied by the env reader, so no second default here. */
+  readonly exportMaxRows: number
   readonly maxChartPoints?: number
   readonly breakdownMaxRows?: number
 }
 
 export interface UsageService {
   summary(query: UsageWindowQuery, filter: UsageFilterQuery): Promise<AdminResult<UsageSummary>>
+  /**
+   * The CSV export at day x key x account x pool x model, under a required filter (`{}` = none).
+   * The row cap is decided before any byte is written: one past it is fetched, and seeing it
+   * answers 400.
+   */
+  exportCsv(query: UsageWindowQuery, filter: UsageFilterQuery): Promise<AdminResult<UsageCsv>>
   /** Individual attempts, newest first — the feed the summary cannot answer for. */
   recent(query: RecentQuery): Promise<AdminResult<RecentView>>
 }
@@ -47,6 +59,24 @@ export function createUsageService(deps: UsageServiceDeps): UsageService {
           readSummary({ ...deps, history, raw, labels }, query, resolved),
         ),
       )
+    },
+
+    exportCsv: async (query, filter) => {
+      const labels = await deps.labels()
+      const providers = deps.providers?.() ?? new Map<string, string>()
+      const resolved = resolveUsageFilter(filter, labels.keys)
+      const cap = deps.exportMaxRows
+      // The cap is decided inside the snapshot (one past it is fetched); the snapshot is released
+      // before any byte is rendered, and the body then streams a bounded chunk per pull.
+      const read = await deps.history.withSnapshot(async (history) => {
+        const window = await resolveReadWindow(history, query)
+        return { window, rows: await history.exportRows(window, resolved, cap + 1) }
+      })
+      if (read.rows.length > cap) return invalid(overCapMessage(cap), "export_too_large")
+      return ok({
+        filename: exportFilename(read.window),
+        body: usageCsvStream(read.rows, { labels, providers }),
+      })
     },
 
     recent: async (query) => {

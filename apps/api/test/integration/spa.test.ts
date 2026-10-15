@@ -379,6 +379,7 @@ describe("the full app, mounted end to end", () => {
           now,
         }),
         usage: createUsageService({
+          exportMaxRows: 50_000,
           history: historyFixture(
             {
               totals: unreached,

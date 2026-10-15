@@ -179,6 +179,7 @@ describe.skipIf(!historyUrl)("usage filters over HTTP and Postgres", () => {
     expect(await keys.findById(ids.bobeditor)).toBeUndefined()
 
     const service = createUsageService({
+      exportMaxRows: 50_000,
       history: fixture.history(),
       recent: createUsageRecentRepository(db),
       labels: catalogLabels({ keys, tombstones, catalog: { accounts: () => [], pools: () => [] } }),

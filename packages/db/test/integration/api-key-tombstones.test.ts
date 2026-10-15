@@ -1,5 +1,4 @@
 import { describe, expect, test } from "bun:test"
-import { eq } from "drizzle-orm"
 import { createApiKeyRepository } from "../../src/repositories/api-key-repository"
 import { createApiKeyTombstoneRepository } from "../../src/repositories/api-key-tombstone-repository"
 import { apiKeys } from "../../src/schema/api-keys"
