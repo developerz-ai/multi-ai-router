@@ -1,5 +1,6 @@
 import type { UsageHistoryRepository, UsageRecentRepository } from "@multi-ai-router/db"
 import { type AdminResult, ok } from "../admin/result"
+import { resolveUsageFilter, type UsageFilterQuery } from "./filter"
 import { outcomesFor, type RecentQuery, type RecentView, toRecentAttemptView } from "./recent"
 import { readSummary } from "./summary"
 import { keyNames } from "./summary-view"
@@ -28,18 +29,21 @@ export interface UsageServiceDeps {
 }
 
 export interface UsageService {
-  summary(query: UsageWindowQuery): Promise<AdminResult<UsageSummary>>
+  summary(query: UsageWindowQuery, filter?: UsageFilterQuery): Promise<AdminResult<UsageSummary>>
   /** Individual attempts, newest first — the feed the summary cannot answer for. */
   recent(query: RecentQuery): Promise<AdminResult<RecentView>>
 }
 
 export function createUsageService(deps: UsageServiceDeps): UsageService {
   return {
-    summary: async (query) => {
+    summary: async (query, filter) => {
       const labels = await deps.labels()
+      // Resolved from the label read above, which sits outside the snapshot below: the owner/tool
+      // to key-id set is current labels, not the labels as of the facts' snapshot.
+      const resolved = filter === undefined ? undefined : resolveUsageFilter(filter, labels.keys)
       return ok(
         await deps.history.withSnapshot((history, raw) =>
-          readSummary({ ...deps, history, raw, labels }, query),
+          readSummary({ ...deps, history, raw, labels }, query, resolved),
         ),
       )
     },

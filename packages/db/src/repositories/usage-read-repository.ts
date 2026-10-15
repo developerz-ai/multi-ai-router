@@ -3,12 +3,14 @@ import type { Database } from "../client"
 import { USAGE_OUTCOME_SUCCESS } from "../schema/enums"
 import { usageRecords } from "../schema/usage-records"
 
-import {
-  foldTokenSpans,
-  type UsageRawTotals,
-  type UsageReadRepository,
-  type UsageWindow,
+import { filterConditions } from "./usage-filter"
+import type {
+  UsageFilter,
+  UsageRawTotals,
+  UsageReadRepository,
+  UsageWindow,
 } from "./usage-read-types"
+import { createTokensSince } from "./usage-tokens-since"
 
 export * from "./usage-read-types"
 
@@ -37,84 +39,20 @@ function tokenSum(column: AnyColumn) {
 }
 
 export function createUsageReadRepository(db: Database): UsageReadRepository {
-  /**
-   * One statement over a VALUES list of (account, window, since), so a fleet of subscriptions
-   * costs one round trip rather than one per window per account.
-   */
-  const tokensSince: UsageReadRepository["tokensSince"] = async (spans, shape) => {
-    if (spans.length === 0) return []
-
-    // `width_bucket` refuses a range whose bounds are equal, and a span that has not opened yet has
-    // nothing to measure anyway. Dropped rather than clamped: a zero-width window is a caller bug,
-    // and silently widening it would report tokens against a range nobody asked about.
-    const usable =
-      shape === undefined
-        ? spans
-        : spans.filter((span) => span.since.getTime() < shape.until.getTime())
-    if (usable.length === 0) return []
-
-    const values = sql.join(
-      usable.map(
-        (span) =>
-          sql`(${span.accountId}::uuid, ${span.window}::text, ${span.since.toISOString()}::timestamptz)`,
-      ),
-      sql`, `,
+  // The filter is applied inside the `created_at` range and nowhere else: the raw key and account
+  // indexes were dropped (migration 0015), so a filter-only scan would read the whole table. Raw
+  // panes therefore filter the same window the history facts do, and totals and outcomes agree.
+  const inWindow = (window: UsageWindow, filter?: UsageFilter) =>
+    and(
+      gte(usageRecords.createdAt, window.from),
+      lt(usageRecords.createdAt, window.to),
+      ...filterConditions(filter, {
+        apiKeyId: sql`${usageRecords.apiKeyId}`,
+        accountId: sql`${usageRecords.accountId}`,
+        poolId: sql`${usageRecords.poolId}`,
+        model: sql`${usageRecords.model}`,
+      }),
     )
-
-    const tokenSum = sql`coalesce(sum(
-      ${usageRecords.tokensIn} + ${usageRecords.tokensOut}
-      + ${usageRecords.cacheReadTokens} + ${usageRecords.cacheWriteTokens}
-    ), 0)`
-
-    // Equal divisions of each span's own `since..until`, so every window yields the same number of
-    // points whatever its length. `width_bucket` answers 1..slots inside the range; the join's own
-    // bounds keep anything outside it out, and a `null` here is the left join's empty side.
-    //
-    // `width_bucket` refuses a non-positive bucket count as hard as it refuses equal bounds, and
-    // `slots` crosses as a bare parameter no column encoder types (hence the `::int`). A shape with
-    // no positive width keeps its bounds — they still name each span's measured range — but draws
-    // no curve, the same answer `foldTokenSpans` gives an empty width: a caller bug degrades to
-    // "no sparkline", never a server error on the whole statement.
-    const bucketed = shape !== undefined && shape.slots > 0
-    const slot = bucketed
-      ? sql`width_bucket(
-          extract(epoch from ${usageRecords.createdAt}),
-          extract(epoch from s.since),
-          extract(epoch from ${shape.until.toISOString()}::timestamptz),
-          ${shape.slots}::int
-        )`
-      : sql`null::int`
-
-    const upperBound =
-      shape === undefined
-        ? sql``
-        : sql`and ${usageRecords.createdAt} < ${shape.until.toISOString()}::timestamptz`
-
-    // `window_kind`, never `window`: WINDOW is a reserved keyword in Postgres (it introduces a
-    // window-function clause), so an alias column named `window` makes the whole statement a
-    // syntax error. Renaming is clearer than quoting — nobody has to remember the quotes later.
-    const rows = await db.execute<{
-      account_id: string
-      window_kind: string
-      slot: number | null
-      tokens: string | number
-    }>(
-      sql`
-        select s.account_id, s.window_kind, ${slot} as slot, ${tokenSum} as tokens
-        from (values ${values}) as s(account_id, window_kind, since)
-        left join ${usageRecords}
-          on ${usageRecords.accountId} = s.account_id
-         and ${usageRecords.createdAt} >= s.since
-         ${upperBound}
-        group by s.account_id, s.window_kind, slot
-      `,
-    )
-
-    return foldTokenSpans([...rows], bucketed ? shape.slots : 0)
-  }
-
-  const inWindow = (window: UsageWindow) =>
-    and(gte(usageRecords.createdAt, window.from), lt(usageRecords.createdAt, window.to))
 
   // `count(distinct correlation_id)` for requests, `count(*)` for attempts — see the note above.
   //
@@ -154,14 +92,14 @@ export function createUsageReadRepository(db: Database): UsageReadRepository {
   }
 
   return {
-    tokensSince,
+    tokensSince: createTokensSince(db),
 
-    totals: async (window) => {
-      const [row] = await db.select(aggregates).from(usageRecords).where(inWindow(window))
+    totals: async (window, filter) => {
+      const [row] = await db.select(aggregates).from(usageRecords).where(inWindow(window, filter))
       return row === undefined ? EMPTY_TOTALS : row
     },
 
-    breakdown: async (window, dimension, ids, limit = 1000) => {
+    breakdown: async (window, dimension, ids, limit = 1000, filter) => {
       if (!Number.isSafeInteger(limit) || limit < 1 || limit > 1001 || (ids?.length ?? 0) > 1000)
         throw new Error("usage breakdown outside bounds")
       const column = DIMENSION_COLUMNS[dimension]
@@ -174,7 +112,7 @@ export function createUsageReadRepository(db: Database): UsageReadRepository {
         .from(usageRecords)
         .where(
           and(
-            inWindow(window),
+            inWindow(window, filter),
             ids === undefined
               ? undefined
               : ids.length === 0
@@ -191,14 +129,14 @@ export function createUsageReadRepository(db: Database): UsageReadRepository {
       return rows
     },
 
-    outcomes: async (window) =>
+    outcomes: async (window, filter) =>
       db
         .select({ outcome: usageRecords.outcome, attempts: sql<number>`count(*)::float8` })
         .from(usageRecords)
-        .where(inWindow(window))
+        .where(inWindow(window, filter))
         .groupBy(usageRecords.outcome),
 
-    series: async (window, bucket) =>
+    series: async (window, bucket, filter) =>
       db
         .select({
           at: bucketExpr(bucket),
@@ -207,11 +145,11 @@ export function createUsageReadRepository(db: Database): UsageReadRepository {
           errors: errorAttempts(),
         })
         .from(usageRecords)
-        .where(inWindow(window))
+        .where(inWindow(window, filter))
         .groupBy(sql`1`)
         .orderBy(sql`1`),
 
-    seriesByDimension: async (window, bucket, dimension) => {
+    seriesByDimension: async (window, bucket, dimension, filter) => {
       const column = DIMENSION_COLUMNS[dimension]
       return (
         db
@@ -221,7 +159,7 @@ export function createUsageReadRepository(db: Database): UsageReadRepository {
             requests: countDistinct(usageRecords.correlationId),
           })
           .from(usageRecords)
-          .where(inWindow(window))
+          .where(inWindow(window, filter))
           // By ordinal, not by repeating the expression: a second `bucketExpr(bucket)` binds its own
           // parameter placeholder, so Postgres sees `date_trunc($1, …)` and `date_trunc($4, …)` as
           // two different expressions and rejects the select as not grouped.
@@ -229,7 +167,7 @@ export function createUsageReadRepository(db: Database): UsageReadRepository {
       )
     },
 
-    latency: async (window) => {
+    latency: async (window, filter) => {
       const [row] = await db
         .select({
           // `percentile_disc` returns a value that actually occurred, rather than interpolating
@@ -251,7 +189,7 @@ export function createUsageReadRepository(db: Database): UsageReadRepository {
           >`(percentile_disc(0.95) within group (order by ${usageRecords.ttfbMs}) filter (where ${usageRecords.ttfbMs} is not null))::int`,
         })
         .from(usageRecords)
-        .where(inWindow(window))
+        .where(inWindow(window, filter))
       return row ?? { p50Ms: null, p95Ms: null, routerOverheadP95Ms: null, ttfbP95Ms: null }
     },
   }

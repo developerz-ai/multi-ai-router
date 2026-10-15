@@ -143,6 +143,7 @@ export type {
   TokenSpanShape,
   TokenSpanUsage,
   UsageDimension,
+  UsageFilter,
   UsageGroupRow,
   UsageGroupSeriesPoint,
   UsageLatency,

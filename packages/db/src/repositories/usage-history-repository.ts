@@ -12,6 +12,7 @@ import {
   nestUnpriced,
   type UnpricedRow,
   type UsageDimension,
+  type UsageFilter,
   type UsageGroupRow,
   type UsageGroupSeriesPoint,
   type UsageSeriesPoint,
@@ -61,18 +62,23 @@ export function createUsageHistoryRepository(
       historicalPrecision: "day",
     }
   }
-  const totals = async (window: UsageWindow) => {
+  const totals = async (window: UsageWindow, filter?: UsageFilter) => {
     const [row] = await read<Omit<UsageTotals, "unpriced"> & UnpricedRow>(
-      sql`with facts as (${historySource(window)}) select ${historySums(window)} from facts`,
+      sql`with facts as (${historySource(window, false, filter)}) select ${historySums(window)} from facts`,
     )
     if (row === undefined) throw new Error("usage totals unavailable")
     return nestUnpriced(row)
   }
-  const breakdown = async (window: UsageWindow, dimension: UsageDimension, limit = 1000) => {
+  const breakdown = async (
+    window: UsageWindow,
+    dimension: UsageDimension,
+    limit = 1000,
+    filter?: UsageFilter,
+  ) => {
     if (!Number.isSafeInteger(limit) || limit < 1 || limit > 1001)
       throw new Error("usage breakdown outside bounds")
     const rows = await read<Omit<UsageGroupRow, "unpriced"> & UnpricedRow>(
-      sql`with facts as (${historySource(window)}) select ${sql.identifier(historyDimensions[dimension])}::text as id, ${historySums(window)}, null::float8 as "latencyP50Ms", null::float8 as "latencyP95Ms", null::float8 as "routerOverheadP95Ms" from facts group by ${sql.identifier(historyDimensions[dimension])} order by sum(tokens_in)+sum(tokens_out) desc, ${sql.identifier(historyDimensions[dimension])}::text nulls last limit ${limit}`,
+      sql`with facts as (${historySource(window, false, filter)}) select ${sql.identifier(historyDimensions[dimension])}::text as id, ${historySums(window)}, null::float8 as "latencyP50Ms", null::float8 as "latencyP95Ms", null::float8 as "routerOverheadP95Ms" from facts group by ${sql.identifier(historyDimensions[dimension])} order by sum(tokens_in)+sum(tokens_out) desc, ${sql.identifier(historyDimensions[dimension])}::text nulls last limit ${limit}`,
     )
     return rows.map(nestUnpriced)
   }
@@ -82,11 +88,12 @@ export function createUsageHistoryRepository(
     dimension?: UsageDimension,
     width = 1,
     ids?: readonly (string | null)[],
+    filter?: UsageFilter,
   ) => {
     if (!Number.isSafeInteger(width) || width < 1 || width > 1000000)
       throw new Error("usage series width outside bounds")
     const interval = `${width} ${bucket === "hour" ? "hours" : "days"}`
-    return sql`with facts as (${historySource(window, bucket === "hour")}) select to_char(date_bin(${interval}::interval, event_at, '1970-01-01 00:00:00+00'::timestamptz) at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') as at,
+    return sql`with facts as (${historySource(window, bucket === "hour", filter)}) select to_char(date_bin(${interval}::interval, event_at, '1970-01-01 00:00:00+00'::timestamptz) at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') as at,
       ${dimension === undefined ? sql`` : sql`${sql.identifier(historyDimensions[dimension])}::text as id,`} sum(requests)::float8 as requests, sum(attempts)::float8 as attempts, sum(errors)::float8 as errors,
       sum(tokens_in)::float8 as "tokensIn", sum(tokens_out)::float8 as "tokensOut"
       from facts ${
@@ -107,10 +114,10 @@ export function createUsageHistoryRepository(
     coverage,
     totals,
     breakdown,
-    series: (window, bucket, width) =>
-      read<UsageSeriesPoint>(seriesQuery(window, bucket, undefined, width)),
-    seriesByDimension: (window, bucket, dimension, width, ids) =>
-      read<UsageGroupSeriesPoint>(seriesQuery(window, bucket, dimension, width, ids)),
+    series: (window, bucket, width, filter) =>
+      read<UsageSeriesPoint>(seriesQuery(window, bucket, undefined, width, undefined, filter)),
+    seriesByDimension: (window, bucket, dimension, width, ids, filter) =>
+      read<UsageGroupSeriesPoint>(seriesQuery(window, bucket, dimension, width, ids, filter)),
     withSnapshot: (callback) =>
       inSnapshot
         ? callback(repo, createUsageReadRepository(db))

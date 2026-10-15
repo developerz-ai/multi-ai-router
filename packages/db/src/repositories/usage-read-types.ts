@@ -1,4 +1,7 @@
 import type { UsageOutcome } from "../schema/enums"
+import type { TokenSpanShape, TokenSpanUsage } from "./usage-token-spans"
+
+export * from "./usage-token-spans"
 /**
  * Reads over `usage_records` for the console's usage surface.
  *
@@ -20,6 +23,21 @@ export interface UsageWindow {
   readonly from: Date
   /** Exclusive, so adjacent windows never double-count the boundary row. */
   readonly to: Date
+}
+
+/**
+ * Which facts a usage read counts. A dimension that is `undefined` is not filtered; a dimension
+ * that is an **empty array** matches nothing, so the read yields zeros produced by the query
+ * itself. Dimensions combine with AND, the ids within one with OR.
+ *
+ * `apiKeyIds` is already resolved: owner and tool become key ids in the service layer, so the
+ * repositories know nothing of labels. A `null` pool, account or key never matches an id list.
+ */
+export interface UsageFilter {
+  readonly apiKeyIds?: readonly string[]
+  readonly accountIds?: readonly string[]
+  readonly poolIds?: readonly string[]
+  readonly models?: readonly string[]
 }
 
 /** Totals from raw rows. Carries no unpriced measure: the history repository serves that. */
@@ -103,7 +121,7 @@ export interface UsageGroupRow extends UsageTotals, UsageGroupLatency {}
 export type UsageDimension = "apiKeyId" | "accountId" | "poolId" | "model"
 
 export interface UsageReadRepository {
-  totals(window: UsageWindow): Promise<UsageRawTotals>
+  totals(window: UsageWindow, filter?: UsageFilter): Promise<UsageRawTotals>
   /**
    * Tokens this account consumed **inside one quota window's own span**, per (account, window).
    *
@@ -127,6 +145,7 @@ export interface UsageReadRepository {
     dimension: UsageDimension,
     ids?: readonly (string | null)[],
     limit?: number,
+    filter?: UsageFilter,
   ): Promise<UsageRawGroupRow[]>
   /**
    * Attempts per outcome over the window — the split behind "3% failed, of which what?".
@@ -135,9 +154,13 @@ export interface UsageReadRepository {
    * an operator should read first is a display decision that belongs in a pure function a test can
    * reach without a database (`usage-read/failures.ts`), not in an `ORDER BY` nobody can assert.
    */
-  outcomes(window: UsageWindow): Promise<UsageOutcomeCount[]>
+  outcomes(window: UsageWindow, filter?: UsageFilter): Promise<UsageOutcomeCount[]>
   /** Request counts per time bucket, for the sparkline. Gaps are absent, not zero-filled. */
-  series(window: UsageWindow, bucket: "hour" | "day"): Promise<UsageSeriesPoint[]>
+  series(
+    window: UsageWindow,
+    bucket: "hour" | "day",
+    filter?: UsageFilter,
+  ): Promise<UsageSeriesPoint[]>
   /**
    * Request counts per (group, bucket), for the inline sparkline on every breakdown row.
    *
@@ -148,6 +171,7 @@ export interface UsageReadRepository {
     window: UsageWindow,
     bucket: "hour" | "day",
     dimension: UsageDimension,
+    filter?: UsageFilter,
   ): Promise<UsageGroupSeriesPoint[]>
   /**
    * p50/p95 latency and router overhead over the window. Null when nothing was recorded.
@@ -155,97 +179,7 @@ export interface UsageReadRepository {
    * Cast to `int` explicitly: `percentile_disc` is exact-valued, and without the cast the driver
    * can hand back a numeric as a string.
    */
-  latency(window: UsageWindow): Promise<UsageLatency>
-}
-
-/**
- * Ask `tokensSince` for the *shape* of a window's consumption as well as its total.
- *
- * Optional because the total alone answers "how much of this window is gone", which is what the
- * progress bar needs. The shape answers the different question beside it — "how fast" — and a
- * window two-thirds spent in its first hour is a very different situation from one two-thirds spent
- * evenly, which a single number cannot distinguish.
- *
- * One query either way: the total is the sum of the buckets, so asking for both costs nothing over
- * asking for one. Slots are **equal divisions of `since..until`**, not clock hours, because each
- * window has its own span and a fixed bucket would give a five-hour window five points and a
- * seven-day one a hundred and sixty-eight.
- */
-export interface TokenSpanShape {
-  /** The end of every span. The same instant for all of them — "now", as the caller sees it. */
-  readonly until: Date
-  /** How many equal buckets to divide each span into. */
-  readonly slots: number
-}
-
-export interface TokenSpanUsage {
-  readonly accountId: string
-  readonly window: string
-  readonly tokens: number
-  /**
-   * Tokens per slot, oldest first, zero-filled. Empty when no shape was asked for.
-   *
-   * Zero-filled rather than sparse: a quiet hour inside a window is a real measurement and a
-   * sparkline that closed the gap would draw a smooth line through a pause that actually happened.
-   */
-  readonly series: readonly number[]
-}
-
-/**
- * Slot rows back into one entry per (account, window): the zero-filled series, and the total as the
- * sum of it.
- *
- * The total is derived from the buckets rather than summed by a second aggregate, so the bar and
- * the sparkline beside it cannot disagree — they are literally the same numbers. A `null` slot is
- * the left join's empty side (an account that recorded nothing in its span) and contributes zero
- * without disturbing the series, which is what makes an idle account render as a flat line at zero
- * rather than dropping out of the answer.
- *
- * Exported for its own test: the SQL needs a database, this does not.
- */
-export function foldTokenSpans(
-  rows: readonly {
-    readonly account_id: string
-    readonly window_kind: string
-    readonly slot: number | null
-    readonly tokens: string | number
-  }[],
-  slots: number,
-): readonly TokenSpanUsage[] {
-  const width = Math.max(0, slots)
-  const byPair = new Map<
-    string,
-    { accountId: string; window: string; series: number[]; unbucketed: number }
-  >()
-
-  for (const row of rows) {
-    const key = `${row.account_id} ${row.window_kind}`
-    const entry = byPair.get(key) ?? {
-      accountId: row.account_id,
-      window: row.window_kind,
-      series: Array.from({ length: width }, () => 0),
-      unbucketed: 0,
-    }
-    // `sum` is bigint-shaped, which the driver hands back as a string.
-    const tokens = Number(row.tokens)
-    // `width_bucket` numbers from 1; `null` is the empty side of the left join, and anything
-    // outside 1..slots is a boundary the join's own bounds should already have excluded. Either
-    // way those tokens still count toward the total — they are simply not placed on the curve.
-    const index = (row.slot ?? 0) - 1
-    if (index >= 0 && index < width) {
-      entry.series[index] = (entry.series[index] ?? 0) + tokens
-    } else {
-      entry.unbucketed += tokens
-    }
-    byPair.set(key, entry)
-  }
-
-  return [...byPair.values()].map((entry) => ({
-    accountId: entry.accountId,
-    window: entry.window,
-    tokens: entry.series.reduce((sum, value) => sum + value, entry.unbucketed),
-    series: width > 0 ? entry.series : [],
-  }))
+  latency(window: UsageWindow, filter?: UsageFilter): Promise<UsageLatency>
 }
 
 export interface UsageSeriesPoint {

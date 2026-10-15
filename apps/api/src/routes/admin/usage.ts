@@ -1,7 +1,13 @@
 import { Hono, type MiddlewareHandler } from "hono"
 import type { AdminAuthEnv } from "../../middleware/adminAuth"
 import { validate } from "../../services/admin"
-import { recentQuery, type UsageService, usageWindowQuery } from "../../services/usage-read"
+import {
+  recentQuery,
+  USAGE_FILTER_PARAMS,
+  type UsageService,
+  usageFilterQuery,
+  usageWindowQuery,
+} from "../../services/usage-read"
 import { render } from "./render"
 
 /**
@@ -31,9 +37,19 @@ export function adminUsageRoutes(deps: AdminUsageRoutesDeps): Hono<AdminAuthEnv>
   routes.use("*", deps.guard)
 
   routes.get("/", async (c) => {
+    // The six filters are repeated params (`?owner=a&owner=b`), read as arrays; window, from and
+    // to are single-valued, and a repeated one keeps today's first-value-wins behaviour.
+    const all = c.req.queries()
+    const filters: Record<string, string[]> = {}
+    for (const name of USAGE_FILTER_PARAMS) {
+      const values = all[name]
+      if (values !== undefined) filters[name] = values
+    }
     const query = validate(usageWindowQuery, c.req.query())
     if (!query.ok) return render(c, query)
-    return render(c, await deps.service.summary(query.value))
+    const filter = validate(usageFilterQuery, filters)
+    if (!filter.ok) return render(c, filter)
+    return render(c, await deps.service.summary(query.value, filter.value))
   })
 
   // Registered after `/` and before nothing: Hono matches literal segments exactly, so the two
