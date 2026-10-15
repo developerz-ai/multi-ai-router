@@ -1,5 +1,10 @@
 import { describe, expect, test } from "bun:test"
-import { historyAttempt, historyTerminal, historyUrl, usageHistoryFixture } from "./usage-history-fixture"
+import {
+  historyAttempt,
+  historyTerminal,
+  historyUrl,
+  usageHistoryFixture,
+} from "./usage-history-fixture"
 
 /**
  * The named week read behind the weekly report: one UTC Monday-to-Monday window at key x account x
@@ -63,7 +68,13 @@ describe.skipIf(!historyUrl)("the week read", () => {
       costNotional: "0.000000",
       unpricedAttempts: 0,
     })
-    expect(b).toMatchObject({ requests: 1, attempts: 1, tokensIn: 5, tokensOut: 5, unpricedAttempts: 1 })
+    expect(b).toMatchObject({
+      requests: 1,
+      attempts: 1,
+      tokensIn: 5,
+      tokensOut: 5,
+      unpricedAttempts: 1,
+    })
   })
 
   test("a measured week reads 0 for a group with nothing unpriced, never null", async () => {

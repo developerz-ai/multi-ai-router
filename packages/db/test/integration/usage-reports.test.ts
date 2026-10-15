@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test"
+import { beforeEach, describe, expect, test } from "bun:test"
 import { sql } from "drizzle-orm"
 import { createUsageReportRepository } from "../../src/repositories/usage-report-repository"
 import { historyUrl, usageHistoryFixture } from "./usage-history-fixture"
@@ -78,15 +78,20 @@ describe.skipIf(!historyUrl)("the retention sweep boundary", () => {
   /** What the janitor computes: the tick's clock minus the window, to the millisecond. */
   const cutoffAt = (now: Date, days: number) => new Date(now.getTime() - days * DAY)
 
+  beforeEach(async () => {
+    await fixture.db().execute(sql`delete from usage_reports`)
+  })
+
   test("at Monday 00:00 UTC minus 1 s the target week's row is kept, and the older ones go", async () => {
     const repo = createUsageReportRepository(fixture.db())
-    // Target week at t = Mon 2026-10-19 00:00:00 minus 1 s is 2026-10-05 .. 2026-10-12.
-    for (const week of ["2026-09-21", "2026-09-28", "2026-10-05"]) await repo.insertIfAbsent(input(week))
+    // At t = Mon 2026-10-19 00:00:00 minus 1 s the target week is 2026-10-05 .. 2026-10-12: its
+    // period_start is 13 d 23 h 59 m 59 s old, one second inside the 14-day floor.
+    for (const week of ["2026-09-21", "2026-09-28", "2026-10-05"])
+      await repo.insertIfAbsent(input(week))
     const now = new Date("2026-10-18T23:59:59.000Z")
-    expect(await repo.deleteOlderThan(cutoffAt(now, 14), 100)).toBeGreaterThanOrEqual(1)
+    expect(await repo.deleteOlderThan(cutoffAt(now, 14), 100)).toBe(2)
     expect(await repo.exists("2026-10-05")).toBe(true)
-    expect(await repo.exists("2026-09-28")).toBe(true)
-    // 2026-09-21 is 27 days old at `now`.
+    expect(await repo.exists("2026-09-28")).toBe(false)
     expect(await repo.exists("2026-09-21")).toBe(false)
   })
 
@@ -113,7 +118,8 @@ describe.skipIf(!historyUrl)("the retention sweep boundary", () => {
 
   test("a batch limit bounds one sweep, oldest first", async () => {
     const repo = createUsageReportRepository(fixture.db())
-    for (const week of ["2025-01-06", "2025-01-13", "2025-01-20"]) await repo.insertIfAbsent(input(week))
+    for (const week of ["2025-01-06", "2025-01-13", "2025-01-20"])
+      await repo.insertIfAbsent(input(week))
     expect(await repo.deleteOlderThan(new Date("2025-02-01T00:00:00Z"), 2)).toBe(2)
     expect(await repo.exists("2025-01-06")).toBe(false)
     expect(await repo.exists("2025-01-13")).toBe(false)

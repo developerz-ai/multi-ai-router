@@ -53,6 +53,7 @@ export {
   usageOutcomeFault,
   usageOutcomeForErrorCode,
 } from "./domain/usage"
+export { UsageReportDeliveryStatus } from "./domain/usage-report"
 export type { AdminAuthInit, QuotaExhaustedInit, RetryableInit, RouterErrorCode } from "./errors"
 export {
   AdminAuthError,

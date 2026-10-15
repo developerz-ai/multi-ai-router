@@ -22,6 +22,7 @@ import {
   type UsageTotals,
   type UsageWindow,
 } from "./usage-read-repository"
+import { readUsageWeekRows } from "./usage-week-read"
 
 export function createUsageHistoryRepository(
   db: Database,
@@ -165,6 +166,7 @@ export function createUsageHistoryRepository(
     totals,
     breakdown,
     exportRows: (window, filter, limit) => readUsageExportRows(db, window, filter, limit),
+    weekRows: (window) => readUsageWeekRows(db, window),
     series: (window, bucket, width, filter) =>
       read<UsageSeriesPoint>(seriesQuery(window, bucket, undefined, width, undefined, filter)),
     seriesByDimension,

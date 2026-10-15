@@ -166,6 +166,12 @@ export type {
   UsageRecentRepository,
 } from "./repositories/usage-recent-repository"
 export { createUsageRecentRepository } from "./repositories/usage-recent-repository"
+export type {
+  NewUsageReport,
+  UsageReportRepository,
+  UsageReportSummary,
+} from "./repositories/usage-report-repository"
+export { createUsageReportRepository } from "./repositories/usage-report-repository"
 export type { UsageRecordInsert, UsageRecordRepository } from "./repositories/usage-repository"
 export {
   createUsageRecordRepository,
@@ -173,6 +179,7 @@ export {
   USAGE_RECORD_BIND_PARAMETERS_PER_ROW,
   USAGE_RECORD_MAX_BATCH_ROWS,
 } from "./repositories/usage-repository"
+export type { UsageWeekRead, UsageWeekRow } from "./repositories/usage-week-read"
 export type { SchedulerLockPoolHandle, SchedulerLockPoolOptions } from "./scheduler-lock"
 export { createSchedulerLockPool } from "./scheduler-lock"
 export type { RecoveryReason, RecoveryRow, RecoveryState } from "./schema/account-recoveries"
@@ -243,6 +250,8 @@ export type { NewUsageDailyRow, UsageDailyRow } from "./schema/usage-daily"
 export { usageDaily } from "./schema/usage-daily"
 export type { NewUsageRecordRow, UsageRecordRow } from "./schema/usage-records"
 export { usageRecords } from "./schema/usage-records"
+export type { NewUsageReportRow, UsageReportRow } from "./schema/usage-reports"
+export { usageReports } from "./schema/usage-reports"
 export type {
   UsageRequestTerminalInsert,
   UsageRequestTerminalRow,
