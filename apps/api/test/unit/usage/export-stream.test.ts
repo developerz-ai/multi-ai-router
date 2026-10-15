@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test"
 import type { UsageExportRow } from "@multi-ai-router/db"
 import {
   renderUsageCsv,
-  USAGE_EXPORT_CHUNK_BYTES,
+  USAGE_EXPORT_CHUNK_CHARS,
   USAGE_EXPORT_CHUNK_ROWS,
   usageCsvChunks,
   usageCsvStream,
@@ -71,8 +71,11 @@ describe("usage CSV chunking", () => {
     const chunks = [...usageCsvChunks(wide, subjects)]
     // 500 rows at ~520 bytes is ~260 KB: far more than the one chunk a row-count cut would give.
     expect(chunks.length).toBeGreaterThan(5)
-    // Cut after the row that crosses the limit, so a chunk overshoots by at most one row.
-    for (const chunk of chunks) expect(chunk.length).toBeLessThan(USAGE_EXPORT_CHUNK_BYTES + 1024)
+    // Cut after the row that crosses the limit: a chunk without its last row is under the limit.
+    for (const chunk of chunks) {
+      const withoutLast = chunk.slice(0, chunk.lastIndexOf("\r\n", chunk.length - 3) + 2)
+      expect(withoutLast.length).toBeLessThan(USAGE_EXPORT_CHUNK_CHARS)
+    }
     expect(chunks.join("")).toBe(renderUsageCsv(wide, subjects))
   })
 

@@ -19,7 +19,7 @@ describe("csvLine", () => {
     expect(line).toBe(`a,b${CSV_EOL}`)
   })
 
-  test("a leading = + - @ tab or CR gets a leading apostrophe", () => {
+  test("a leading = + - @ or tab gets a leading apostrophe", () => {
     for (const lead of ["=", "+", "-", "@", "\t"]) {
       expect(one(`${lead}SUM(1)`)).toBe(`'${lead}SUM(1)`)
     }
@@ -76,7 +76,7 @@ describe("csvLine", () => {
     ])
   })
 
-  test("no cell starts with a formula char under any naive split, newline included", () => {
+  test("no cell starts with a formula char when a spreadsheet splits on ; tab or comma and ignores quoting, line breaks included", () => {
     const payloads = [
       "x;=1+1;",
       "y\t=1+1",
@@ -85,6 +85,13 @@ describe("csvLine", () => {
       "x\r\n-1",
       'x;"=1+1;',
       "w;\t-1",
+      "x,=1+1",
+      'x,"=1',
+      "x\u2028=1",
+      "x\u2029+1",
+      "x\u0085@1",
+      "x\v-1",
+      "x\f=1",
     ]
     for (const payload of payloads) {
       // A full row: nine unquoted cells, then the payload as the model (column 10).
@@ -107,9 +114,10 @@ describe("csvLine", () => {
           delimiter,
           quote: false,
           relax_column_count: true,
-          record_delimiter: ["\r\n", "\n", "\r"],
+          record_delimiter: ["\r\n", "\n", "\r", "\u2028", "\u2029", "\u0085", "\v", "\f"],
         }) as string[][]
-        for (const cell of records.flat()) expect(cell).not.toMatch(/^[=+\-@]/)
+        // A leading quote or space may be stripped by a lenient parser, so look past them.
+        for (const cell of records.flat()) expect(cell).not.toMatch(/^[\s"]*[=+\-@]/)
       }
     }
   })
