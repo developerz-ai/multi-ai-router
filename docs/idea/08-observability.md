@@ -119,6 +119,14 @@ Extra Usage charges. K2.8 Preview, guessed date prefixes, metered coding identit
 writes without a known TTL remain unpriced unless the operator supplies an override. Pricing never
 changes the client model or the model sent upstream.
 
+MiniMax's `MiniMax-M3.1-Flash-Preview` is served but deliberately unpriced: the vendor's public
+price list (platform.minimax.io/docs/guides/pricing, read 2026-10-15) carries no row for the
+preview — it is served from the coding plan, and the per-token figures that circulate for it are
+resellers' and aggregators', not the vendor's price. The model is pinned in
+`services/cost/tables/minimax.ts` by `MINIMAX_UNPRICED`, a registry of deliberately unpriced
+models whose entries must keep looking up null, so the documentation cannot drift from the table.
+An operator override is the way to price it.
+
 The GPT-6 family (`gpt-6-luna`, `gpt-6-sol`, `gpt-6.1-sol`, `gpt-6-astra`) ships its own four-card
 rows in `services/cost/tables/openai.ts`, one per model, with the same long-context tier
 (272k input tokens) the GPT-5.6 rows use. Provenance: the model pages under
