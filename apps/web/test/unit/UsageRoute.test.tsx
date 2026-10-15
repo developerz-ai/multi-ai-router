@@ -139,6 +139,7 @@ function summary(failures: unknown): unknown {
     cacheWriteTokens: 0,
     costMetered: "0",
     costNotional: "0",
+    unpriced: { attempts: 0, since: "2026-01-01" },
   }
   return {
     window: "7d",
