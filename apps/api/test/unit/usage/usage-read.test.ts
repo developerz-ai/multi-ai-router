@@ -168,7 +168,7 @@ describe("breakdown labelling", () => {
 
     expect(result.ok).toBe(true)
     if (!result.ok) return
-    // A key scoped `all` was placed by no pool at all.
+    // No pool was in play (including a failure before an account was selected).
     expect(result.value.byPool[0]).toMatchObject({ id: null, label: null, note: "none" })
   })
 

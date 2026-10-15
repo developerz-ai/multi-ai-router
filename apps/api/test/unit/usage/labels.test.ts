@@ -38,17 +38,23 @@ test("a key present in both reads keeps its live name and attribution but reads 
   // still names it; the tombstone says it is going, so retired wins.
   const labels = catalogLabels({
     keys: {
-      list: async () => [{ ...row("both", "live-name"), owner: "alice", tool: "cli" }] as never,
+      list: async () =>
+        [
+          { ...row("both", "live-name"), prefix: "mar_live_aaaa", owner: "alice", tool: "cli" },
+        ] as never,
     },
     tombstones: {
       listAll: async () =>
-        [{ ...row("both", "stone-name"), owner: "bob", tool: "editor" }] as never,
+        [
+          { ...row("both", "stone-name"), prefix: "mar_live_bbbb", owner: "bob", tool: "editor" },
+        ] as never,
     },
     catalog: { accounts: () => [], pools: () => [] },
   })
   const loaded = await labels()
   expect(loaded.keys.get("both")).toEqual({
     name: "live-name",
+    prefix: "mar_live_aaaa",
     owner: "alice",
     ownerKind: null,
     tool: "cli",

@@ -8,8 +8,6 @@ import type {
   UsageWindow,
 } from "@multi-ai-router/db"
 
-const NO_KEYS: UsageKeyAttribution = { ids: [], owners: [], ownerKinds: [], tools: [] }
-
 /** A coherent injected history view for service tests; SQL semantics have independent PG tests. */
 export function historyFixture(
   raw: UsageReadRepository,
@@ -27,7 +25,9 @@ export function historyFixture(
     attribution?: UsageKeyAttribution,
   ) =>
     dimension === "owner" || dimension === "tool"
-      ? raw.breakdown(window, dimension, undefined, limit, filter, attribution ?? NO_KEYS)
+      ? attribution === undefined
+        ? Promise.reject(new Error("owner/tool requires a key attribution"))
+        : raw.breakdown(window, dimension, undefined, limit, filter, attribution)
       : raw.breakdown(window, dimension, undefined, limit, filter)
   const seriesByDimension = (
     window: UsageWindow,
@@ -39,7 +39,9 @@ export function historyFixture(
     attribution?: UsageKeyAttribution,
   ) =>
     dimension === "owner" || dimension === "tool"
-      ? raw.seriesByDimension(window, bucket, dimension, filter, attribution ?? NO_KEYS)
+      ? attribution === undefined
+        ? Promise.reject(new Error("owner/tool requires a key attribution"))
+        : raw.seriesByDimension(window, bucket, dimension, filter, attribution)
       : raw.seriesByDimension(window, bucket, dimension, filter)
   const history: UsageHistoryRepository = {
     coverage: async () => ({
