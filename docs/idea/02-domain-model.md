@@ -254,7 +254,7 @@ Verification path: indexed lookup by display prefix → decrypt → constant-tim
 | `purpose` | string, optional | Free text, trimmed, at most 500 characters |
 | `rateLimit` | config | Per-key request/token ceiling |
 | `expiresAt` | timestamp, optional | |
-| `revoked` | bool | Excluded from verification immediately |
+| `revoked` | bool | Excluded from verification at once on the replica that handled the revoke, and on the others within `KEY_CACHE_TTL_SECONDS` |
 
 ### Key scope — full vs. limited
 
@@ -445,7 +445,7 @@ means a restarted conversation, not a relocated one. See the table under
 |---|---|
 | **created** | The operator names the key and binds it to Pools. The value is generated and stored encrypted |
 | **active** | Verifies on the data plane. The value is viewable and copyable from the admin UI at any time, as often as needed — viewing is audited and does not rotate the key |
-| **revoked** | Fails verification immediately. Historical `UsageRecord` rows stay joinable |
+| **revoked** | Fails verification at once on the replica that handled the revoke, and on the others within `KEY_CACHE_TTL_SECONDS`. Historical `UsageRecord` rows stay joinable |
 | **purged** | 30 days after revocation the row is deleted by the janitor |
 
 ## Session lifecycle
