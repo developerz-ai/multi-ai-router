@@ -46,7 +46,7 @@ export interface UsageExportRow {
 export async function readUsageExportRows(
   db: Database,
   window: UsageWindow,
-  filter: UsageFilter | undefined,
+  filter: UsageFilter,
   limit: number,
 ): Promise<UsageExportRow[]> {
   if (!Number.isSafeInteger(limit) || limit < 1)

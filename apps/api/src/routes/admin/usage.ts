@@ -1,10 +1,11 @@
 import { type Context, Hono, type MiddlewareHandler } from "hono"
 import type { AdminAuthEnv } from "../../middleware/adminAuth"
-import { ok, validate } from "../../services/admin"
+import { invalid, ok, validate } from "../../services/admin"
 import {
   recentQuery,
   USAGE_FILTER_PARAMS,
   type UsageService,
+  unknownQueryParam,
   usageFilterQuery,
   usageWindowQuery,
 } from "../../services/usage-read"
@@ -37,10 +38,14 @@ export function adminUsageRoutes(deps: AdminUsageRoutesDeps): Hono<AdminAuthEnv>
   routes.use("*", deps.guard)
 
   // The six filters are repeated params (`?owner=a&owner=b`), read as arrays; window, from and
-  // to are single-valued, and a repeated one keeps today's first-value-wins behaviour. One reader
-  // for the summary and the export, so they cannot disagree about what a query means.
+  // to are single-valued, and a repeated one keeps first-value-wins. One reader for the summary and
+  // the export, so they cannot disagree about what a query means.
   const readQuery = (c: Context<AdminAuthEnv>) => {
     const all = c.req.queries()
+    // A misspelled filter (`?apiKeyId=`, `?owners=`) must not silently return the unfiltered
+    // totals, so any key outside the window and filter parameters is a 400 naming it.
+    const unknown = unknownQueryParam(Object.keys(all))
+    if (unknown !== undefined) return invalid(`unknown query parameter "${unknown}"`)
     const filters: Record<string, string[]> = {}
     for (const name of USAGE_FILTER_PARAMS) {
       const values = all[name]
@@ -59,9 +64,9 @@ export function adminUsageRoutes(deps: AdminUsageRoutesDeps): Hono<AdminAuthEnv>
     return render(c, await deps.service.summary(read.value.query, read.value.filter))
   })
 
-  // The same filters as the summary, as a CSV attachment. `no-store`: it is an authenticated
-  // report, and a shared cache must not keep a copy. A rejection (400 over the cap) renders as the
-  // JSON error every admin route uses, never a truncated 200.
+  // The same window and filters as the summary, as a CSV attachment. `no-store`: it is an
+  // authenticated report, and a shared cache must not keep a copy. A rejection (400 over the cap)
+  // renders as the JSON error every admin route uses, never a truncated 200.
   routes.get("/export.csv", async (c) => {
     const read = readQuery(c)
     if (!read.ok) return render(c, read)

@@ -63,7 +63,7 @@ export function createUsageHistoryRepository(
       historicalPrecision: "day",
     }
   }
-  const totals = async (window: UsageWindow, filter?: UsageFilter) => {
+  const totals = async (window: UsageWindow, filter: UsageFilter) => {
     const [row] = await read<Omit<UsageTotals, "unpriced"> & UnpricedRow>(
       sql`with facts as (${historySource(window, false, filter)}) select ${historySums(window)} from facts`,
     )
@@ -73,9 +73,10 @@ export function createUsageHistoryRepository(
   const breakdown = async (
     window: UsageWindow,
     dimension: UsageDimension,
-    limit = 1000,
-    filter?: UsageFilter,
+    requestedLimit: number | undefined,
+    filter: UsageFilter,
   ) => {
+    const limit = requestedLimit ?? 1000
     if (!Number.isSafeInteger(limit) || limit < 1 || limit > 1001)
       throw new Error("usage breakdown outside bounds")
     const rows = await read<Omit<UsageGroupRow, "unpriced"> & UnpricedRow>(
@@ -86,11 +87,12 @@ export function createUsageHistoryRepository(
   const seriesQuery = (
     window: UsageWindow,
     bucket: "hour" | "day",
-    dimension?: UsageDimension,
-    width = 1,
-    ids?: readonly (string | null)[],
-    filter?: UsageFilter,
+    dimension: UsageDimension | undefined,
+    requestedWidth: number | undefined,
+    ids: readonly (string | null)[] | undefined,
+    filter: UsageFilter,
   ) => {
+    const width = requestedWidth ?? 1
     if (!Number.isSafeInteger(width) || width < 1 || width > 1000000)
       throw new Error("usage series width outside bounds")
     const interval = `${width} ${bucket === "hour" ? "hours" : "days"}`

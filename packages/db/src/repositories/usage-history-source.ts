@@ -28,7 +28,7 @@ export const historyDimensions = {
 } as const
 const dayMs = 86400000
 /** Full days use materialized facts; exact partial edges use durable receipts, not retained raw. */
-export function historySource(window: UsageWindow, hourly = false, filter?: UsageFilter): SQL {
+export function historySource(window: UsageWindow, hourly: boolean, filter: UsageFilter): SQL {
   // The predicate rides inside each of the four sources, so totals, breakdown and both series
   // read the same filtered facts and cannot disagree.
   const tableFilter = andAll(

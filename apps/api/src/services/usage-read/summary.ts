@@ -23,7 +23,7 @@ export async function readSummary(
     breakdownMaxRows?: number
   },
   query: UsageWindowQuery,
-  filter?: UsageFilter,
+  filter: UsageFilter,
 ): Promise<UsageSummary> {
   const window = await resolveReadWindow(deps.history, query)
   // Unfiltered on purpose: coverage asks "is any history in this window pending or legacy", and a

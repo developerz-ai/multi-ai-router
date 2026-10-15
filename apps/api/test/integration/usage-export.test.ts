@@ -355,6 +355,15 @@ describe.skipIf(!historyUrl)("usage CSV export over HTTP and Postgres", () => {
     }
   })
 
+  test("an unknown query key is a 400, as on the summary (a misspelled filter must not export everything)", async () => {
+    for (const q of ["window=7d&apiKeyId=nope", "window=7d&owners=alice", "window=7d&limit=5"]) {
+      const { response, text } = await exportOf(q)
+      expect(response.status).toBe(400)
+      expect(text.includes(HEADER)).toBe(false)
+    }
+    expect((await exportOf("window=7d&owner=alice")).response.status).toBe(200)
+  })
+
   test("the admin guard covers the export: no session, no file", async () => {
     const service = createUsageService({
       history: fixture.history(),

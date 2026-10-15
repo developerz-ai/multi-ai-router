@@ -42,7 +42,7 @@ export function createUsageReadRepository(db: Database): UsageReadRepository {
   // The filter is applied inside the `created_at` range and nowhere else: the raw key and account
   // indexes were dropped (migration 0015), so a filter-only scan would read the whole table. Raw
   // panes therefore filter the same window the history facts do, and totals and outcomes agree.
-  const inWindow = (window: UsageWindow, filter?: UsageFilter) =>
+  const inWindow = (window: UsageWindow, filter: UsageFilter) =>
     and(
       gte(usageRecords.createdAt, window.from),
       lt(usageRecords.createdAt, window.to),
@@ -99,7 +99,8 @@ export function createUsageReadRepository(db: Database): UsageReadRepository {
       return row === undefined ? EMPTY_TOTALS : row
     },
 
-    breakdown: async (window, dimension, ids, limit = 1000, filter) => {
+    breakdown: async (window, dimension, ids, requestedLimit, filter) => {
+      const limit = requestedLimit ?? 1000
       if (!Number.isSafeInteger(limit) || limit < 1 || limit > 1001 || (ids?.length ?? 0) > 1000)
         throw new Error("usage breakdown outside bounds")
       const column = DIMENSION_COLUMNS[dimension]

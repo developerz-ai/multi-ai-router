@@ -20,11 +20,10 @@ export interface FilterColumns {
  *
  * A NULL column never satisfies `= any(...)`, so a pool filter cannot select the pool-less rows.
  */
-export function filterConditions(
-  filter: UsageFilter | undefined,
-  columns: FilterColumns,
-): readonly SQL[] {
-  if (filter === undefined) return []
+export function filterConditions(filter: UsageFilter, columns: FilterColumns): readonly SQL[] {
+  // Typed required so a missing forward in src fails to compile. Tests are not type-checked and
+  // several call the repositories without a filter, so an absent one at runtime means no filter.
+  if ((filter as UsageFilter | undefined) === undefined) return []
   const conditions: SQL[] = []
   const add = (column: SQL, values: readonly string[] | undefined, type: "uuid" | "text") => {
     if (values === undefined) return

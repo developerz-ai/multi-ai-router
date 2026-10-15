@@ -34,12 +34,13 @@ export interface UsageServiceDeps {
 }
 
 export interface UsageService {
-  summary(query: UsageWindowQuery, filter?: UsageFilterQuery): Promise<AdminResult<UsageSummary>>
+  summary(query: UsageWindowQuery, filter: UsageFilterQuery): Promise<AdminResult<UsageSummary>>
   /**
-   * The CSV export at day x key x account x pool x model. The row cap is decided before any byte
-   * is written: one past it is fetched, and seeing it answers 400.
+   * The CSV export at day x key x account x pool x model, under a required filter (`{}` = none).
+   * The row cap is decided before any byte is written: one past it is fetched, and seeing it
+   * answers 400.
    */
-  exportCsv(query: UsageWindowQuery, filter?: UsageFilterQuery): Promise<AdminResult<UsageCsv>>
+  exportCsv(query: UsageWindowQuery, filter: UsageFilterQuery): Promise<AdminResult<UsageCsv>>
   /** Individual attempts, newest first — the feed the summary cannot answer for. */
   recent(query: RecentQuery): Promise<AdminResult<RecentView>>
 }
@@ -50,7 +51,8 @@ export function createUsageService(deps: UsageServiceDeps): UsageService {
       const labels = await deps.labels()
       // Resolved from the label read above, which sits outside the snapshot below: the owner/tool
       // to key-id set is current labels, not the labels as of the facts' snapshot.
-      const resolved = filter === undefined ? undefined : resolveUsageFilter(filter, labels.keys)
+      // Required by type; tests are not type-checked, so an absent filter at runtime reads as none.
+      const resolved = resolveUsageFilter(filter ?? {}, labels.keys)
       return ok(
         await deps.history.withSnapshot((history, raw) =>
           readSummary({ ...deps, history, raw, labels }, query, resolved),
@@ -61,7 +63,7 @@ export function createUsageService(deps: UsageServiceDeps): UsageService {
     exportCsv: async (query, filter) => {
       const labels = await deps.labels()
       const providers = deps.providers?.() ?? new Map<string, string>()
-      const resolved = filter === undefined ? undefined : resolveUsageFilter(filter, labels.keys)
+      const resolved = resolveUsageFilter(filter, labels.keys)
       const cap = deps.exportMaxRows ?? 50_000
       return deps.history.withSnapshot(async (history) => {
         const window = await resolveReadWindow(history, query)
