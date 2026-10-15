@@ -58,6 +58,7 @@ describe("docs/KEYS.md", () => {
       return [...cell.matchAll(/`([a-z_]+)`/g)].map((m) => ({ code: m[1], status }))
     })
     expect(pairs.length).toBe(declared.size)
+    expect(new Set(pairs.map((p) => p.code))).toEqual(new Set(declared.keys()))
     for (const { code, status } of pairs) {
       expect({ code, status }).toEqual({ code, status: declared.get(code ?? "") ?? -1 })
     }

@@ -64,8 +64,10 @@ lost key, use [Leaked or lost key](#leaked-or-lost-key) instead.
    `KEY_CACHE_TTL_SECONDS` per replica (default 60), not on every request.
 4. **Revoke** the old key.
 
-Rotate when someone leaves or a tool is retired. There is no scheduled rotation: a key does not
-expire unless you set one.
+Rotate a key that is still needed when someone who has seen its value leaves (a shared service key,
+for example). A key whose holder leaves, or whose tool is retired, is not rotated: it is handed
+back, which means revoked (see [Hand back is revoke](#hand-back-is-revoke)). There is no scheduled
+rotation: a key does not expire unless you set one.
 
 ### Leaked or lost key
 
@@ -74,9 +76,12 @@ accept that the client stops working until it gets a successor. Waiting for **La
 does not work here: whoever holds the leaked key keeps it advancing.
 
 1. **Revoke** the key now.
-2. On a deployment with more than one replica, restart or roll the other replicas: that empties
-   their key caches immediately. Otherwise they keep accepting the key for up to
-   `KEY_CACHE_TTL_SECONDS`.
+2. On a deployment with more than one replica, the others keep accepting the key for up to
+   `KEY_CACHE_TTL_SECONDS`. If that window is longer than a roll of every replica takes, roll them
+   all: a restart empties a replica's key cache. A roll gives in-flight requests on each replica up
+   to `SHUTDOWN_DRAIN_MS` to finish and then ends the rest (long streams included), for every key,
+   and resets every key's in-memory rate-limit window, so at the 60-second default waiting is
+   usually the better choice. A single replica needs nothing here.
 3. **Mint successor**, under a new name, and hand it over privately.
 
 ### Revoke
@@ -85,9 +90,10 @@ Console: **Revoke** on the key's row. API: `POST /api/admin/keys/:id/revoke`.
 
 - The next request on the replica that handled the revoke gets `401` `key_revoked`.
 - Other replicas keep accepting the key for up to `KEY_CACHE_TTL_SECONDS` (default 60 seconds). That
-  setting is the bound; read it from your own environment. Restarting or rolling the other replicas
-  drops their caches at once. Lowering the setting needs a restart too, and only shortens future
-  windows, at a database round trip per uncached verification.
+  setting is the bound; read it from your own environment. Rolling every replica drops their caches
+  at once, at the cost described under [Leaked or lost key](#leaked-or-lost-key). Lowering the
+  setting needs a restart too, and only shortens future windows, at a database round trip per
+  uncached verification.
 - In-flight requests finish. A stream is not torn down.
 - Revocation is one-way. A revoked key is never reactivated.
 - A revoked key keeps its row, scope and usage attribution until `RETENTION_REVOKED_KEYS_DAYS`
@@ -125,9 +131,9 @@ error class table is in
 |---|---|
 | 401 `key_revoked` | revoked, unknown, expired, malformed or missing key, or Bearer and `x-api-key` disagree |
 | 402 `credits_exhausted` | an account is out of credits. Do not retry: it stays this way until the operator tops it up |
-| 403 `scope_violation` | nothing is in scope. Do not retry: ask the operator for a wider scope |
+| 403 `scope_violation` | the key's scope reaches no account (a narrow scope, or a pool with no members). Do not retry: ask the operator |
 | 429 `key_rate_limited` / `quota_exhausted` | the key's rate limit, or accounts cooling (clock-recoverable); with `Retry-After` |
-| 503 `key_verification_unavailable` | transient; retry after `Retry-After: 1` |
+| 503 `key_verification_unavailable` | transient; retry after `Retry-After: 1`, a bounded number of times |
 | 503 `no_healthy_account` | nothing in scope can serve this request; read the message (below). No `Retry-After` |
 
 For `no_healthy_account`, the message names the cause:
