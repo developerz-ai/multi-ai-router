@@ -313,13 +313,15 @@ the summary beside it when reconciling.
 
 **Safety.** Any router-key holder chooses the `model` string, so every **text** cell is guarded
 against spreadsheet formula injection in the writer. A leading `=`, `+`, `-`, `@` or tab (or their
-full-width forms, after any leading spaces) gets a leading `'`. Spreadsheets in comma-decimal
+full-width forms, after any leading spaces or quotes) gets a leading `'`. Spreadsheets in comma-decimal
 locales split on `;`, some on tab, and a lenient importer may ignore quoting on `,`, so the same
 lead right after a `;`, tab or `,`, with spaces or quotes between, is neutralised too. A line break
 inside a cell would end the record under a naive split and start the next "row" with a live
-formula, so each CR, LF, CRLF, VT, FF, NEL, U+2028 or U+2029 in a text cell becomes one space
-first; no model, label or name legitimately contains one. A reconciliation against the text columns
-strips the inserted apostrophes. The guard runs before
+formula, so each CR, LF, CRLF, VT, FF, U+001C-U+001E, NEL, U+2028 or U+2029 in a text cell becomes one space
+first; no model, label or name legitimately contains one. The guard inserts an apostrophe at the
+start of a cell or right after a guarded separator, and cannot be told apart from one already in a
+label, so reconciliation should rely on the numeric columns; matching text columns back to their
+sources is best-effort. The guard runs before
 RFC 4180 quoting, so the apostrophe is inside the quotes. Numeric cells are non-negative counts and
 costs and are not guarded.
 
