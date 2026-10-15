@@ -92,7 +92,14 @@ test("lifetime retains modern history, exact historical counts and explicit raw-
     partial: true,
   })
   expect(summary.coverage.legacy).toBe(true)
-  expect(summary.coverage.breakdown.truncated).toEqual(["apiKeyId", "accountId", "poolId", "model"])
+  expect(summary.coverage.breakdown.truncated).toEqual([
+    "apiKeyId",
+    "accountId",
+    "poolId",
+    "model",
+    "owner",
+    "tool",
+  ])
   expect(summary.byAccount).toHaveLength(1)
   expect(summary.byAccount[0]).toMatchObject({
     id: "gone",
@@ -139,10 +146,17 @@ test("the maximum group setting queries a sentinel and only charts selected grou
     },
     { window: "today" },
   )
-  expect(limits).toEqual([1001, 1001, 1001, 1001])
+  expect(limits).toEqual([1001, 1001, 1001, 1001, 1001, 1001])
   expect(selected).toEqual([1000, 1000, 1000, 1000])
   expect(summary.byKey).toHaveLength(1000)
-  expect(summary.coverage.breakdown.truncated).toEqual(["apiKeyId", "accountId", "poolId", "model"])
+  expect(summary.coverage.breakdown.truncated).toEqual([
+    "apiKeyId",
+    "accountId",
+    "poolId",
+    "model",
+    "owner",
+    "tool",
+  ])
 })
 
 test("pending legacy detail keeps its numerator while disclosing the unfinished historical denominator", async () => {
