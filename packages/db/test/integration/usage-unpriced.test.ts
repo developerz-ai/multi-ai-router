@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test"
+import { beforeAll, describe, expect, test } from "bun:test"
 import { sql } from "drizzle-orm"
 import { usageAttemptDailyV2 } from "../../src/schema/usage-aggregate-v2"
 import { usageContributions } from "../../src/schema/usage-contributions"
@@ -36,15 +36,33 @@ const dayWindow = (from: string, to: string) => ({
 })
 
 describe.skipIf(!historyUrl)("unpriced attempts through the rollup and reads", () => {
-  // Must stay first: later tests move unpriced_since, and this one reads what the migration seeded.
-  test("a fresh database seeds unpriced_since to the day after the migration ran", async () => {
-    const [state] = await fixture.db().select().from(usageHistoryState)
-    const [expected] = await fixture
-      .db()
-      .execute<{ day: string }>(
-        sql`select ((clock_timestamp() at time zone 'UTC')::date + 1)::text as day`,
-      )
-    expect(state?.unpricedSince).toBe(expected?.day as string)
+  // Snapshot taken before any test moves unpriced_since. Both columns come from the one INSERT in
+  // migration 0035, so the relation is exact and independent of the test clock and test order.
+  let seeded: { since: string | null; expected: string } | undefined
+  beforeAll(async () => {
+    const rows = await fixture.db().execute<{ since: string | null; expected: string }>(
+      sql`select unpriced_since::text as since,
+                 ((updated_at at time zone 'UTC')::date + 1)::text as expected
+          from usage_history_state where id = 'v2'`,
+    )
+    seeded = rows[0]
+  })
+
+  test("a fresh database seeds unpriced_since to the day after the migration ran", () => {
+    expect(seeded).toBeDefined()
+    expect(seeded?.since).toBe(seeded?.expected as string)
+  })
+
+  test("without a v2 state row nothing is measured: attempts null, since 'infinity'", async () => {
+    const db = fixture.db()
+    const [row] = await db.select().from(usageHistoryState)
+    await db.delete(usageHistoryState).where(sql`id = 'v2'`)
+    try {
+      const totals = await fixture.history().totals(dayWindow("1984-01-01", "1984-02-01"))
+      expect(totals.unpriced).toEqual({ attempts: null, since: "infinity" })
+    } finally {
+      if (row) await db.insert(usageHistoryState).values(row)
+    }
   })
 
   test("a window wholly before unpriced_since reports null attempts, never 0", async () => {

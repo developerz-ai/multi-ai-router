@@ -3,8 +3,6 @@
  * writer the request path feeds — same table, opposite direction, different reasons to change.
  */
 
-export type { UsageAggregateSources } from "./aggregate"
-export { readBreakdown, readTotals } from "./aggregate"
 export type { UsageFailures } from "./failures"
 export { EMPTY_FAILURES, foldFailures } from "./failures"
 export { catalogLabels } from "./labels"
@@ -22,8 +20,7 @@ export {
   recentQuery,
   toRecentAttemptView,
 } from "./recent"
-export type { WindowSplit } from "./rollup"
-export { addDecimal, EMPTY_TOTALS, mergeGroupRows, splitWindow, sumTotals } from "./rollup"
+export { EMPTY_TOTALS } from "./rollup"
 export type {
   UsageBreakdownRow,
   UsageCoverage,
