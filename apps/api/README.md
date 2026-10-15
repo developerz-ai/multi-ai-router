@@ -126,6 +126,7 @@ explicitly, before an upstream call, rather than degrading into a lossy approxim
 | `RETENTION_SESSIONS_HOURS` | no | `24` | Idle session + fingerprint TTL |
 | `RETENTION_USAGE_DAYS` | no | `90` | Raw `UsageRecord` retention before rollup |
 | `RETENTION_USAGE_DAILY_DAYS` | no | `730` | Daily aggregate retention. Must be ≥ `RETENTION_USAGE_DAYS` |
+| `RETENTION_USAGE_REPORTS_DAYS` | no | `730` | Stored weekly usage report retention. Refused below 14 |
 | `RETENTION_AUDIT_DAYS` | no | `365` | `AuditEvent` retention |
 | `RETENTION_TASK_RUNS_DAYS` | no | `30` | Finished `ScheduledTaskRun` retention. An unfinished run is never swept |
 | `RETENTION_REVOKED_KEYS_DAYS` | no | `30` | Revoked key survival before purge |

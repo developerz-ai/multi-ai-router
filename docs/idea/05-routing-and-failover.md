@@ -800,7 +800,7 @@ A Pool may designate one of its **members** as the **overflow Account** — typi
 | Trigger | The primary candidate set — the members *other than* the overflow — is empty after filtering. Not on a single 429, not on latency. |
 | Existing session | A healthy, in-scope binding to the overflow remains first when primary members recover. A disabled, removed or out-of-scope overflow cannot regain eligibility through the binding. |
 | Scope | The same intersection as everything else, `pool_members ∩ key_scope`, with no exception for the overflow. |
-| Visibility | Every overflow-served request is marked as such in its `UsageRecord`, so "why did we spend money last night" has an answer. |
+| Visibility | **A `UsageRecord` carries no overflow marker** (it records `pool_id` and `account_id`, nothing that says an attempt was overflow-served). "Why did we spend money last night" is answered by *where attempts landed*: the [weekly usage report](08-observability.md#weekly-usage-report) derives, per service key and per pool with an overflow account, the share of that key's attempts in the pool that landed on the pool's overflow account (2 of 8 attempts is 25%). It reads the pool's overflow designation as it stands when the report is generated, not as it stood during the week, and says so in a caveat. The usage page's account and pool breakdowns show the same spend by account. |
 
 Overflow is distinct from `priority-failover`: that policy orders the pool's own members;
 overflow is a member of last resort, included only when primary candidates are unavailable or an
