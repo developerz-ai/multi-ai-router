@@ -1,8 +1,10 @@
 import { afterEach, describe, expect, test } from "bun:test"
+import { Router } from "@solidjs/router"
 import { QueryClient, QueryClientProvider } from "@tanstack/solid-query"
 import { render } from "solid-js/web"
 import { usageExportHref, usageQueryParams } from "../../src/lib/api/usage-params"
 import UsageRoute from "../../src/routes/UsageRoute"
+import { UsageExport } from "../../src/routes/usage/UsageExport"
 
 /**
  * The Export CSV control (issue #226). Its href is built from the same params object the summary
@@ -104,6 +106,34 @@ describe("UsageRoute export control", () => {
       expect(params.has("window")).toBe(false)
       expect(Date.parse(params.get("from") ?? "")).toBe(Date.parse("2026-10-01T00:00"))
       expect(Date.parse(params.get("to") ?? "")).toBe(Date.parse("2026-10-08T00:00"))
+    } finally {
+      dispose()
+      container.remove()
+    }
+  })
+})
+
+describe("UsageExport inside the router", () => {
+  test("a primary click is left to the browser: the SPA router must not intercept the download", () => {
+    const container = document.createElement("div")
+    document.body.appendChild(container)
+    const dispose = render(
+      () => (
+        <Router>
+          <UsageExport filters={{}} range="7d" />
+        </Router>
+      ),
+      container,
+    )
+    try {
+      const anchor = container.querySelector("a")
+      if (anchor === null) throw new Error("export link missing")
+      const click = new MouseEvent("click", { bubbles: true, cancelable: true, button: 0 })
+      anchor.dispatchEvent(click)
+      // @solidjs/router's document click handler preventDefaults any same-origin anchor it does
+      // not recognise as external, and then navigates the SPA to a route that does not exist.
+      expect(click.defaultPrevented).toBe(false)
+      expect(anchor.getAttribute("rel")).toBe("external")
     } finally {
       dispose()
       container.remove()

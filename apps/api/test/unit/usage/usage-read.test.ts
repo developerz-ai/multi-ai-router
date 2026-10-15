@@ -80,6 +80,7 @@ function service(rows: readonly UsageGroupRow[], stub: Stub = {}) {
     breakdown: async () => [...rows],
   }
   return createUsageService({
+    exportMaxRows: 50_000,
     history,
     // The live feed is its own read and its own test file; a summary that
     // touched it would be reading rows no chart on the screen plots.

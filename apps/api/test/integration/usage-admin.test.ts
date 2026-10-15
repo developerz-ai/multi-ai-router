@@ -57,6 +57,7 @@ function harness(rows: readonly RecentAttemptRow[] = [attemptRow()], guard = stu
   }
 
   const service = createUsageService({
+    exportMaxRows: 50_000,
     history: historyFixture(
       {
         totals: unreached,
@@ -209,6 +210,7 @@ describe("GET /api/admin/usage — the failure split", () => {
 function summaryHarness(outcomes: readonly UsageOutcomeCount[], guard = stubSession()) {
   const attempts = outcomes.reduce((sum, row) => sum + row.attempts, 0)
   const service = createUsageService({
+    exportMaxRows: 50_000,
     history: historyFixture(
       {
         totals: async () => ({ ...ZERO_TOTALS, attempts }),

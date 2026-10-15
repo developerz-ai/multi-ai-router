@@ -49,6 +49,7 @@ describe.skipIf(!historyUrl)("historical usage through actual HTTP and Postgres"
       },
     )
     const service = createUsageService({
+      exportMaxRows: 50_000,
       history: fixture.history(),
       recent: createUsageRecentRepository(fixture.db()),
       labels: async () => ({ keys: new Map(), accounts: new Map(), pools: new Map() }),

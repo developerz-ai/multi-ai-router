@@ -33,7 +33,8 @@ describe("csvLine", () => {
 
   test("a model that is a formula or starts with a tab is guarded like any other text", () => {
     expect(one("@SUM(1)")).toBe("'@SUM(1)")
-    expect(one("\t=cmd|' /C calc'!A0")).toBe("'\t=cmd|' /C calc'!A0")
+    // The tab is also a separator in some spreadsheets, so the formula after it is neutralised too.
+    expect(one("\t=cmd|' /C calc'!A0")).toBe("'\t'=cmd|' /C calc'!A0")
   })
 
   test("only a leading character is guarded", () => {
@@ -71,5 +72,24 @@ describe("csvLine", () => {
       ["a,b", "'=c"],
       ["", "d"],
     ])
+  })
+
+  test("a formula lead after ';' or tab is neutralised: a spreadsheet may split on either", () => {
+    const line = csvLine(["x;=HYPERLINK(CHAR(104)&CHAR(116));", "y\t=1+1", "z;@SUM(1)", "w;\t-1"])
+    for (const delimiter of [";", "\t", ","]) {
+      const cells = (
+        parse(line, { delimiter, relax_quotes: true, relax_column_count: true }) as string[][]
+      ).flat()
+      for (const cell of cells) expect(cell).not.toMatch(/^[=+\-@]/)
+    }
+    expect(one("x;=1+1;")).toBe("x;'=1+1;")
+    expect(one("y\t=1+1")).toBe("y\t'=1+1")
+  })
+
+  test("a full-width equals sign or a leading space before a formula char is guarded", () => {
+    expect(one("＝1+1")).toBe("'＝1+1")
+    expect(one(" =1+1")).toBe("' =1+1")
+    expect(one("   @SUM(1)")).toBe("'   @SUM(1)")
+    expect(one(" plain")).toBe(" plain")
   })
 })

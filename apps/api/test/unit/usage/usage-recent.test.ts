@@ -59,6 +59,7 @@ function service(rows: readonly RecentAttemptRow[]) {
   }
 
   const usage = createUsageService({
+    exportMaxRows: 50_000,
     history: historyFixture(
       {
         totals: unreached,

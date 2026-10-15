@@ -76,6 +76,7 @@ function services(nowMs: () => Date) {
     now: nowMs,
   })
   const usage = createUsageService({
+    exportMaxRows: 50_000,
     history: fixture.history(),
     recent: createUsageRecentRepository(db),
     labels: catalogLabels({

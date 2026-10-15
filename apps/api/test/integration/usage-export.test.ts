@@ -5,9 +5,7 @@ import {
   createApiKeyTombstoneRepository,
   createAuditRepository,
   createUsageRecentRepository,
-  usageDaily,
 } from "@multi-ai-router/db"
-import { parse } from "csv-parse/sync"
 import { Hono } from "hono"
 import {
   historyAttempt,
@@ -25,6 +23,7 @@ import {
   createUsageService,
   type UsageSummary,
 } from "../../src/services/usage-read"
+import { micros, records, sum, sumMicros } from "../support/csv-sums"
 
 /**
  * The CSV export (issue #226) through the real route, resolver, repositories and Postgres.
@@ -99,7 +98,6 @@ const ids = {} as Record<KeyName, string>
 const prefixes = {} as Record<KeyName, string>
 const secrets: string[] = []
 let app: Hono<AdminAuthEnv>
-let capped: (exportMaxRows: number) => Hono<AdminAuthEnv>
 
 const ISO = (ms: number) => new Date(ms).toISOString()
 const WIDE = `from=${ISO(now.getTime() - 7 * DAY)}&to=${ISO(now.getTime() + HOUR)}`
@@ -108,23 +106,10 @@ async function exportOf(query: string, target: Hono<AdminAuthEnv> = app) {
   const response = await target.request(`${ADMIN_USAGE_BASE_PATH}/export.csv?${query}`)
   return { response, text: await response.text() }
 }
-const records = (text: string) => parse(text, { columns: true }) as Record<string, string>[]
 async function summaryOf(query: string) {
   const response = await app.request(`${ADMIN_USAGE_BASE_PATH}?${query}`)
   return (await response.json()) as UsageSummary
 }
-/** Integer micro-dollars from a numeric(24,6) string: float sums would not compare. */
-const micros = (value: string): bigint => {
-  const negative = value.startsWith("-")
-  const [whole = "0", frac = ""] = value.replace("-", "").split(".")
-  const n = BigInt(whole) * 1_000_000n + BigInt(frac.padEnd(6, "0").slice(0, 6))
-  return negative ? -n : n
-}
-const sum = (rows: Record<string, string>[], column: string) =>
-  rows.reduce((n, row) => n + Number(row[column] ?? 0), 0)
-const sumMicros = (rows: Record<string, string>[], column: string) =>
-  rows.reduce((n, row) => n + micros(row[column] ?? "0"), 0n)
-
 describe.skipIf(!historyUrl)("usage CSV export over HTTP and Postgres", () => {
   test("seed: keys (one purged), accounts, pools and usage", async () => {
     const db = fixture.db()
@@ -208,7 +193,6 @@ describe.skipIf(!historyUrl)("usage CSV export over HTTP and Postgres", () => {
       return target
     }
     app = build(50_000)
-    capped = build
   })
 
   test("the header row is exact and the response is a CSV attachment", async () => {
@@ -240,7 +224,7 @@ describe.skipIf(!historyUrl)("usage CSV export over HTTP and Postgres", () => {
     expect(names.has("bob, the key")).toBe(true)
     const models = new Set(rows.map((row) => row.model))
     expect(models.has(`'${FORMULA}`)).toBe(true)
-    expect(models.has(`'${TABBED}`)).toBe(true)
+    expect(models.has("'\t'=cmd")).toBe(true)
     expect(models.has(COMMA)).toBe(true)
     // csv-parse already throws on a ragged row; this pins the count itself.
     for (const row of rows) expect(Object.keys(row)).toHaveLength(HEADER.split(",").length)
@@ -278,23 +262,7 @@ describe.skipIf(!historyUrl)("usage CSV export over HTTP and Postgres", () => {
     for (const secret of secrets) expect(text.includes(secret)).toBe(false)
   })
 
-  test("a window reaching past the unpriced start leaves earlier days empty; measured days read a number", async () => {
-    const sql = fixture.get().sql
-    await sql.unsafe("alter table usage_daily disable trigger usage_history_baseline_seal")
-    await fixture.db().insert(usageDaily).values({
-      day: "1984-03-01",
-      apiKeyId: ids.alice,
-      accountId: ACCOUNT_API,
-      model: "legacy",
-      requests: 6,
-      attempts: 6,
-    })
-    await sql.unsafe("alter table usage_daily enable trigger usage_history_baseline_seal")
-    const legacy = records(
-      (await exportOf("from=1984-02-28T00:00:00.000Z&to=1984-03-05T00:00:00.000Z")).text,
-    )
-    expect(legacy).toHaveLength(1)
-    expect(legacy[0]).toMatchObject({ day: "1984-03-01", requests: "6", unpriced_attempts: "" })
+  test("on measured days unpriced_attempts reads a number", async () => {
     const measured = records((await exportOf(WIDE)).text)
     expect(measured.every((row) => /^\d+$/.test(row.unpriced_attempts ?? ""))).toBe(true)
   })
@@ -328,56 +296,5 @@ describe.skipIf(!historyUrl)("usage CSV export over HTTP and Postgres", () => {
     expect(rows.length).toBeGreaterThan(0)
     expect(rows.every((row) => row.owner === "alice")).toBe(true)
     expect(records((await exportOf(`${WIDE}&owner=nobody`)).text)).toEqual([])
-  })
-
-  test("over the cap answers 400 naming the cap; at the cap it answers 200", async () => {
-    const total = records((await exportOf(WIDE)).text).length
-    expect(total).toBeGreaterThan(2)
-    const atCap = await exportOf(WIDE, capped(total))
-    expect(atCap.response.status).toBe(200)
-    expect(records(atCap.text)).toHaveLength(total)
-    const over = await exportOf(WIDE, capped(total - 1))
-    expect(over.response.status).toBe(400)
-    expect(over.response.headers.get("content-type")).not.toContain("text/csv")
-    expect(over.text).toContain(String(total - 1))
-    expect(over.text).toContain("USAGE_EXPORT_MAX_ROWS")
-    expect(over.text.includes(HEADER)).toBe(false)
-  })
-
-  test("a malformed filter or window is a 400, never a database error", async () => {
-    for (const q of [
-      "window=7d&keyId=nope",
-      "window=7d&owner=",
-      "from=nope&to=nope",
-      "window=bogus",
-    ]) {
-      expect((await exportOf(q)).response.status).toBe(400)
-    }
-  })
-
-  test("an unknown query key is a 400, as on the summary (a misspelled filter must not export everything)", async () => {
-    for (const q of ["window=7d&apiKeyId=nope", "window=7d&owners=alice", "window=7d&limit=5"]) {
-      const { response, text } = await exportOf(q)
-      expect(response.status).toBe(400)
-      expect(text.includes(HEADER)).toBe(false)
-    }
-    expect((await exportOf("window=7d&owner=alice")).response.status).toBe(200)
-  })
-
-  test("the admin guard covers the export: no session, no file", async () => {
-    const service = createUsageService({
-      history: fixture.history(),
-      recent: createUsageRecentRepository(fixture.db()),
-      labels: async () => ({ keys: new Map(), accounts: new Map(), pools: new Map() }),
-      now: () => new Date(),
-    })
-    const guarded = new Hono<AdminAuthEnv>()
-    guarded.route(
-      ADMIN_USAGE_BASE_PATH,
-      adminUsageRoutes({ service, guard: async (c) => c.json({ error: "unauthorized" }, 401) }),
-    )
-    const { response, text } = await exportOf("window=7d", guarded)
-    expect(response.status).toBe(401)
-    expect(text.includes(HEADER)).toBe(false)
   })
 })

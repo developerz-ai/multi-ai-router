@@ -19,6 +19,7 @@ import { createUsageService, type UsageSummary } from "../../src/services/usage-
 const fixture = usageHistoryFixture()
 const app = () => {
   const service = createUsageService({
+    exportMaxRows: 50_000,
     history: fixture.history(),
     recent: createUsageRecentRepository(fixture.db()),
     labels: async () => ({ keys: new Map(), accounts: new Map(), pools: new Map() }),

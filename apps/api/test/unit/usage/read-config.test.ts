@@ -20,9 +20,9 @@ test("usage presentation bounds have explicit defaults and honor both supported 
       ...base,
       USAGE_CHART_MAX_POINTS: "2000",
       USAGE_BREAKDOWN_MAX_ROWS: "1000",
-      USAGE_EXPORT_MAX_ROWS: "200000",
+      USAGE_EXPORT_MAX_ROWS: "100000",
     }).usageRead,
-  ).toEqual({ maxChartPoints: 2000, breakdownMaxRows: 1000, exportMaxRows: 200_000 })
+  ).toEqual({ maxChartPoints: 2000, breakdownMaxRows: 1000, exportMaxRows: 100_000 })
   expect(parseEnv({ ...base, USAGE_EXPORT_MAX_ROWS: "1" }).usageRead.exportMaxRows).toBe(1)
 })
 
@@ -35,8 +35,8 @@ test("out-of-domain usage limits fail boot rather than silently truncating", () 
   }
 })
 
-test("USAGE_EXPORT_MAX_ROWS outside 1..200000 or not an integer fails boot", () => {
-  for (const value of ["0", "-5", "200001", "1.5", "lots"]) {
+test("USAGE_EXPORT_MAX_ROWS outside 1..100000 or not an integer fails boot", () => {
+  for (const value of ["0", "-5", "100001", "1.5", "lots"]) {
     expect(() => parseEnv({ ...base, USAGE_EXPORT_MAX_ROWS: value })).toThrow(EnvValidationError)
   }
 })
