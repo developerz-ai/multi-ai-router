@@ -11,6 +11,7 @@ import type { readMetricInventoryEnv } from "./metric-inventory"
 import type { readRecoveryEnv } from "./recovery"
 import type { readRelayLifetimesEnv } from "./relay-lifetimes"
 import type { readUsageReadEnv } from "./usage-read"
+import type { UsageReportConfig } from "./usage-report"
 
 export interface Env {
   readonly recovery: ReturnType<typeof readRecoveryEnv>["recovery"]
@@ -210,6 +211,8 @@ export interface Env {
    * access-token keepalive cadence — `config/claude-login.ts`.
    */
   readonly claudeLogin: ClaudeLoginConfig
+  /** When the weekly usage report is due — `config/usage-report.ts`. */
+  readonly usageReport: UsageReportConfig
   readonly oauthRefresh: OAuthRefreshConfig
   readonly translation: TranslationConfig
 }

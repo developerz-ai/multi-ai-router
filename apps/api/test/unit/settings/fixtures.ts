@@ -27,6 +27,7 @@ export const MINUTE_MS = 60_000
 export const RETENTION: RetentionConfig = {
   sessionsHours: 12,
   usageDays: 45,
+  usageReportsDays: 730,
   auditDays: 180,
   revokedKeysDays: 15,
   oauthStateMinutes: 7,
@@ -40,6 +41,7 @@ export const INTERVALS: Readonly<Record<ScheduledTaskName, number>> = {
   oauth_state_purge: 5 * MINUTE_MS,
   quota_floor_refresh: 30 * MINUTE_MS,
   config_dir_reap: 360 * MINUTE_MS,
+  usage_weekly_report: 60 * MINUTE_MS,
 }
 
 export interface MemoryPrices {

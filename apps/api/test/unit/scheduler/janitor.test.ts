@@ -20,6 +20,7 @@ const RETENTION: RetentionConfig = {
   revokedKeysDays: 1,
   oauthStateMinutes: 10,
   orphanConfigDirHours: 1,
+  usageReportsDays: 14,
 }
 
 /** Older than every cutoff `RETENTION` computes off `NOW`. */
@@ -45,6 +46,7 @@ describe("the janitor sweep", () => {
     const taskRuns = ageBucket([OLD, OLD, OLD])
     const apiKeys = ageBucket([])
     const keyTombstones = ageBucket([])
+    const usageReports = ageBucket([])
 
     const task = createJanitorTask({
       sessions: { deleteIdleBefore: sessions.deleteBatch },
@@ -59,6 +61,7 @@ describe("the janitor sweep", () => {
       auditEvents: { deleteOlderThan: auditEvents.deleteBatch },
       taskRuns: { deleteOlderThan: taskRuns.deleteBatch },
       keyTombstones: tombstones(apiKeys, keyTombstones),
+      usageReports: { deleteOlderThan: usageReports.deleteBatch },
       retention: RETENTION,
       intervalMs: 60_000,
       batchSize: 2,
@@ -81,6 +84,7 @@ describe("the janitor sweep", () => {
       taskRuns: 3,
       revokedKeys: 0,
       keyTombstones: 0,
+      usageReports: 0,
     })
 
     const second = await task.run({
@@ -98,6 +102,7 @@ describe("the janitor sweep", () => {
       taskRuns: 0,
       revokedKeys: 0,
       keyTombstones: 0,
+      usageReports: 0,
     })
   })
 
@@ -133,6 +138,7 @@ describe("the janitor sweep", () => {
         },
         deleteOlderThan: record("keyTombstones"),
       },
+      usageReports: { deleteOlderThan: record("usageReports") },
       retention: { ...RETENTION, usageDays: 90, usageDailyDays: 730, taskRunsDays: 30 },
       intervalMs: 60_000,
       batchSize: 2,
@@ -145,6 +151,7 @@ describe("the janitor sweep", () => {
     expect(daysBack("usageRecords")).toBe(90)
     expect(daysBack("usageDaily")).toBe(730)
     expect(daysBack("taskRuns")).toBe(30)
+    expect(daysBack("usageReports")).toBe(14)
     // Tombstones outlive the rollups they label by one day: rollups age by whole UTC day.
     expect(daysBack("keyTombstones")).toBe(731)
     // The tombstone's purge time is this tick's clock, not the database's.
@@ -180,6 +187,7 @@ describe("the janitor sweep", () => {
       auditEvents: { deleteOlderThan: empty.deleteBatch },
       taskRuns: { deleteOlderThan: empty.deleteBatch },
       keyTombstones: tombstones(empty, empty),
+      usageReports: { deleteOlderThan: empty.deleteBatch },
       retention: RETENTION,
       intervalMs: 60_000,
       batchSize: 2,

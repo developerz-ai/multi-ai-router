@@ -10,6 +10,11 @@ export interface SchedulerConfig {
   readonly localCapacityRetryMs: number
   /** Usage record rollup interval, in minutes. */
   readonly usageRollupIntervalMinutes: number
+  /**
+   * How often the weekly usage report task checks whether a report is due, in minutes. The week and
+   * the instant it becomes due are `usageReport`; this only bounds how late a due report can start.
+   */
+  readonly usageReportIntervalMinutes: number
   /** OAuth state (and PKCE verifier) purge interval, in minutes. */
   readonly oauthStatePurgeIntervalMinutes: number
   /** Account quota floor probe interval, in minutes. */

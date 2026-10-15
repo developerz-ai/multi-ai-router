@@ -12,6 +12,7 @@ import type { KeysService } from "./services/keys"
 import type { PoolsService } from "./services/pools"
 import type { SettingsService } from "./services/settings"
 import type { UsageService } from "./services/usage-read"
+import type { UsageReportService } from "./services/usage-report"
 
 /**
  * The Hono environment every route and middleware in the transport layer shares. Transport is
@@ -46,6 +47,11 @@ export interface AdminServices {
   readonly pools: PoolsService
   readonly keys: KeysService
   readonly usage: UsageService
+  /**
+   * The weekly usage reports (issue #227): the list/get/preview endpoints, and `generate`, which
+   * the scheduler's report task calls so one builder serves both.
+   */
+  readonly usageReports: UsageReportService
   /**
    * One field for three route groups: configuration, scheduled-task health and the audit feed are
    * one screen and one service — see `services/settings/service.ts`.

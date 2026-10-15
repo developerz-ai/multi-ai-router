@@ -7,6 +7,12 @@ export interface RetentionConfig {
    * while raw detail should still be retained. Boot refuses that ordering.
    */
   readonly usageDailyDays: number
+  /**
+   * How long a stored weekly usage report is kept, by its `period_start`. Boot refuses less than
+   * 14: the report task regenerates a missing last-complete week, so a row swept while its week is
+   * still the target would be generated (and, once delivery lands, sent) again.
+   */
+  readonly usageReportsDays: number
   readonly auditDays: number
   /** How long a *finished* scheduled-task run is kept. An unfinished one is never swept. */
   readonly taskRunsDays: number

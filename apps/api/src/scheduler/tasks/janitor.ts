@@ -5,15 +5,16 @@ import type {
   SessionRepository,
   UsageHistoryRepository,
   UsageRecordRepository,
+  UsageReportRepository,
 } from "@multi-ai-router/db"
 import type { RetentionConfig } from "../../config/env"
 import type { ScheduledTask } from "../types"
 import { runSweeps } from "./sweep"
 
 /**
- * The janitor: the retention sweep for the seven tables that grow without bound.
+ * The janitor: the retention sweep for the eight tables that grow without bound.
  *
- * One task rather than seven, because they share a schedule and an operator reads
+ * One task rather than eight, because they share a schedule and an operator reads
  * them as one answer — "the janitor ran 4 min ago and deleted 812 rows"
  * (docs/idea/09-deployment.md, "Cleanups & retention"). The per-category counts
  * are in the summary line, so "deleted 812 rows" can still be broken down.
@@ -26,7 +27,7 @@ import { runSweeps } from "./sweep"
  * own cascade for no reason. The key-tombstone sweep goes last: it touches only its own table, and
  * a tombstone written by this very tick's purge is far too young to be swept.
  *
- * Two of the seven grow slowly enough to have been overlooked rather than
+ * Two of the eight grow slowly enough to have been overlooked rather than
  * excluded, and both are here for the same reason the other five are: `usage_daily`
  * banks one row per distinct `(day, key, account, pool, model)` and outlives the
  * raw rows by design, which is not the same as outliving them forever; and
@@ -37,6 +38,13 @@ import { runSweeps } from "./sweep"
  * the tick's clock and the predicate is an age, so a sweep that runs twice finds
  * nothing the second time and a sweep killed halfway leaves a smaller backlog,
  * never an inconsistent one.
+ *
+ * The stored weekly usage reports are the eighth: one row a week, swept on `period_start` strictly
+ * older than `RETENTION_USAGE_REPORTS_DAYS` (boot refuses fewer than 14). The cutoff is the tick's
+ * clock minus the window to the millisecond and the repository compares the instant, never a date
+ * rounded either way: just before Monday 00:00 UTC the target week's row is almost exactly 14
+ * days old, and sweeping it would have the report task generate (and, once delivery lands, send)
+ * that week again.
  *
  * The OAuth `state` purge is deliberately *not* here: it is its own
  * `scheduled_task` enum value on its own much shorter cadence (minutes, not
@@ -51,6 +59,7 @@ export interface JanitorDeps {
   readonly auditEvents: Pick<AuditRepository, "deleteOlderThan">
   readonly taskRuns: Pick<ScheduledTaskRepository, "deleteOlderThan">
   readonly keyTombstones: Pick<ApiKeyTombstoneRepository, "purgeRevoked" | "deleteOlderThan">
+  readonly usageReports: Pick<UsageReportRepository, "deleteOlderThan">
   /** Every retention window, straight from `env.retention`. */
   readonly retention: RetentionConfig
   /** `JANITOR_INTERVAL_MINUTES`, in milliseconds. The runner jitters it. */
@@ -81,6 +90,7 @@ export function createJanitorTask(deps: JanitorDeps): ScheduledTask {
       // age by whole UTC day: the purge day's own rollup is still inside the window for up to a day
       // after `purged_at + usageDailyDays`.
       const staleTombstones = before(now, (retention.usageDailyDays + 1) * DAY_MS)
+      const staleReports = before(now, retention.usageReportsDays * DAY_MS)
 
       const report = await runSweeps(
         [
@@ -121,6 +131,10 @@ export function createJanitorTask(deps: JanitorDeps): ScheduledTask {
           {
             category: "keyTombstones",
             deleteBatch: (limit) => deps.keyTombstones.deleteOlderThan(staleTombstones, limit),
+          },
+          {
+            category: "usageReports",
+            deleteBatch: (limit) => deps.usageReports.deleteOlderThan(staleReports, limit),
           },
         ],
         { batchSize: deps.batchSize, signal },

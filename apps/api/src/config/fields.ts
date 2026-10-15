@@ -181,6 +181,7 @@ export const ZERO_IS_LEGAL: ReadonlyMap<string, string> = new Map([
     "re-read a subscription's credential file on every admin accounts read",
   ],
   ["CLAUDE_SDK_USAGE_GAUGE_MIN_INTERVAL_SECONDS", "ask the usage gauge on every subscription turn"],
+  ["USAGE_REPORT_HOUR_UTC", "generate the weekly report at midnight UTC on its weekday"],
   [
     "RECOVERY_REQUEST_WAIT_MS",
     "never hold a request for a recovery permit — the router's own recovery hold answers 429 at once",

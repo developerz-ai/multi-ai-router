@@ -27,6 +27,7 @@ export function createRuntimeScheduler(
     keyTombstones,
     oauthStates,
     usageHistory,
+    usageReports,
     accounts,
     scheduledTasks,
     modelCatalog,
@@ -45,6 +46,9 @@ export function createRuntimeScheduler(
     usageRecords,
     auditEvents,
     keyTombstones,
+    usageReportRows: usageReports,
+    // The same service the admin endpoints use, so a stored report and a preview share a builder.
+    usageReports: admin.usageReports,
     oauthStates,
     history: usageHistory,
     accounts,

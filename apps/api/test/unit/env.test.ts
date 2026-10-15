@@ -64,6 +64,7 @@ describe("parseEnv", () => {
       sessionsHours: 24,
       usageDays: 90,
       usageDailyDays: 730,
+      usageReportsDays: 730,
       auditDays: 365,
       taskRunsDays: 30,
       revokedKeysDays: 30,
@@ -73,6 +74,7 @@ describe("parseEnv", () => {
     })
     expect(env.scheduler).toEqual({
       usageRollupIntervalMinutes: 60,
+      usageReportIntervalMinutes: 60,
       oauthStatePurgeIntervalMinutes: 5,
       quotaFloorIntervalMinutes: 30,
       configDirReapIntervalMinutes: 360,
@@ -192,6 +194,7 @@ describe("parseEnv", () => {
     expect(env.janitorIntervalMinutes).toBe(15)
     expect(env.scheduler).toEqual({
       usageRollupIntervalMinutes: 120,
+      usageReportIntervalMinutes: 60,
       oauthStatePurgeIntervalMinutes: 10,
       quotaFloorIntervalMinutes: 45,
       configDirReapIntervalMinutes: 90,

@@ -138,6 +138,7 @@ describe("the tasks read", () => {
       "sdk_transcript_sweep",
       "credential_keepalive",
       "login_lifetime_watch",
+      "usage_weekly_report",
     ])
 
     const janitor = result.value.tasks[0]

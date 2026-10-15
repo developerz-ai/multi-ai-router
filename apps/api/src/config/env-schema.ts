@@ -25,6 +25,7 @@ import { validateNumericBounds } from "./numeric-bounds"
 import { RECOVERY_ENV_FIELDS } from "./recovery"
 import { RELAY_LIFETIME_ENV_FIELDS } from "./relay-lifetimes"
 import { USAGE_READ_ENV_FIELDS } from "./usage-read"
+import { USAGE_REPORT_ENV_FIELDS } from "./usage-report"
 
 /**
  * Every variable this module parses, deliberately kept as a flat list of names and parsers: the
@@ -42,6 +43,7 @@ export const ENV_FIELDS = {
   ...ADMIN_BODY_ENV_FIELDS,
   ...USAGE_READ_ENV_FIELDS,
   ...CLAUDE_LOGIN_ENV_FIELDS,
+  ...USAGE_REPORT_ENV_FIELDS,
   ...BACKGROUND_ENV_FIELDS,
   ...RELAY_LIFETIME_ENV_FIELDS,
   ...METRIC_INVENTORY_ENV_FIELDS,
