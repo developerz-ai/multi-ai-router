@@ -467,6 +467,10 @@ describe("redactValue cost", () => {
       "eyJaaaaa-".repeat(8 * 1024),
       "eyJ-".repeat(16 * 1024),
       "a://b:".repeat(10 * 1024),
+      "://u:p/".repeat(10 * 1024),
+      `://u:${"p/".repeat(32 * 1024)}`,
+      "://".repeat(64 * 1024),
+      "://:".repeat(48 * 1024),
     ]) {
       const started = performance.now()
       redactValue(message)
@@ -490,6 +494,37 @@ describe("redactValue cost", () => {
 
   test("a userinfo URL with an empty username is scrubbed", () => {
     expect(redactValue("redis://:onlypassword@cache:6379")).toBe(`redis://${REDACTED}@cache:6379`)
+  })
+
+  test("a userinfo password with an unencoded `/` is scrubbed whole (#206)", () => {
+    expect(redactValue("connect failed: postgres://u:p/ss@h:5432/app")).toBe(
+      `connect failed: postgres://${REDACTED}@h:5432/app`,
+    )
+    expect(redactValue("redis://:a/b/c@cache")).toBe(`redis://${REDACTED}@cache`)
+  })
+
+  test("the slash branch stops at a quote, and a port-plus-`@` URL pays its documented price", () => {
+    const json = '{"url":"https://h:8080/a","owner":"x@y"}'
+    expect(redactValue(json)).toBe(json)
+    expect(redactValue("https://host:8080/a@b")).toBe(`https://${REDACTED}@b`)
+  })
+
+  test("a base64 slash password with `=` padding is scrubbed (#207 review)", () => {
+    expect(redactValue("connect failed: postgres://router:Zk3/q+Vb9xQ==@db:5432/app")).toBe(
+      `connect failed: postgres://${REDACTED}@db:5432/app`,
+    )
+  })
+
+  test("a query-string secret holding an `@` behind a host:port stays redacted (#207 review)", () => {
+    for (const [input, secret] of [
+      ["postgresql://db.internal:5432/app?user=app&password=p@ssw0rd", "ssw0rd"],
+      ["redis://cache:6379/0?password=hunter@2secret", "2secret"],
+      ["connect https://h:8443/cb?token=tok@en_SECRET_TAIL failed", "SECRET_TAIL"],
+      ["postgres://db?sslmode=require&password=Ab:c/d@ef9", "ef9"],
+      ["GET https://host:8080/v1&api_key=ab@cdSECRET", "cdSECRET"],
+    ] as const) {
+      expect(redactValue(input)).not.toContain(secret)
+    }
   })
 
   test("a userinfo URL with a long but real scheme is still scrubbed", () => {

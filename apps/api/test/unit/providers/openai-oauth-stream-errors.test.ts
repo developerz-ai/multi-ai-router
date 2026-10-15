@@ -102,6 +102,108 @@ describe("inspectCodexStreamFrame", () => {
     })
   })
 
+  test.each([
+    "insufficient_quota",
+    "credit_balance_exhausted",
+    "organization_spend_limit_exceeded",
+    "project_spend_limit_exceeded",
+  ])(
+    "in-stream %s classifies credits-exhausted, as the Codex CLI's QuotaExceeded (#206)",
+    (code) => {
+      // The shape the Codex CLI's own test feeds its stream parser (openai/codex
+      // codex-rs/codex-api/src/sse/responses.rs, `quota_exceeded_error_is_fatal`).
+      const verdict = inspectCodexStreamFrame(
+        {
+          type: "response.failed",
+          response: {
+            status: "failed",
+            error: { code, message: "You exceeded your current quota" },
+          },
+        },
+        "response.failed",
+      )
+      expect(verdict?.kind).toBe("credits-exhausted")
+      expect(verdict?.signal).toBe(`codex:stream-error:${code}`)
+    },
+  )
+
+  test("a quota code on a bare error event is not a spent balance: the CLI ignores that event", () => {
+    // openai/codex reads a quota code only from `response.failed` at `response.error.code`; a bare
+    // `error` event other than flex_unavailable is ignored there, so it must not park the account.
+    for (const frame of [
+      { type: "error", code: "insufficient_quota" },
+      { type: "error", error: { code: "credit_balance_exhausted" } },
+    ]) {
+      const verdict = inspectCodexStreamFrame(frame, "error")
+      expect(verdict?.kind).toBe("server-error")
+      expect(verdict?.signal).toBe("codex:stream-error:other")
+    }
+  })
+
+  test.each([
+    [
+      "a top-level code on response.failed",
+      { type: "response.failed", code: "insufficient_quota" },
+      "response.failed",
+    ],
+    [
+      "a root error on response.failed",
+      { type: "response.failed", error: { code: "insufficient_quota" } },
+      "response.failed",
+    ],
+    [
+      "no JSON type, only the SSE event name",
+      { response: { error: { code: "insufficient_quota" } } },
+      "response.failed",
+    ],
+  ])(
+    "a quota code the CLI would not read (%s) does not park the account (#207 round 4)",
+    (_label, frame, event) => {
+      // openai/codex reads a quota code only from `response.error.code` of a frame whose own JSON
+      // `type` is `response.failed`; every other shape is retried or skipped there.
+      const verdict = inspectCodexStreamFrame(frame, event)
+      expect(verdict?.kind).toBe("server-error")
+      expect(verdict?.signal).toBe("codex:stream-error:other")
+    },
+  )
+
+  test("a root field does not hide a quota code at response.error.code (#207 round 6)", () => {
+    const verdict = inspectCodexStreamFrame(
+      {
+        type: "response.failed",
+        error: { message: "" },
+        response: { error: { code: "organization_spend_limit_exceeded" } },
+      },
+      "response.failed",
+    )
+    expect(verdict?.kind).toBe("credits-exhausted")
+    expect(verdict?.signal).toBe("codex:stream-error:organization_spend_limit_exceeded")
+  })
+
+  test("a quota code at response.error.code beats a listed root code, as the CLI reads it", () => {
+    const verdict = inspectCodexStreamFrame(
+      {
+        type: "response.failed",
+        code: "rate_limit_exceeded",
+        response: { error: { code: "insufficient_quota" } },
+      },
+      "response.failed",
+    )
+    expect(verdict?.kind).toBe("credits-exhausted")
+    expect(verdict?.signal).toBe("codex:stream-error:insufficient_quota")
+  })
+
+  test("a quota type with no code is not a spent balance in-stream: the CLI reads only the code", () => {
+    // openai/codex responses_error.rs reads `code` alone; a type-only frame is retried there, so it
+    // must not park the account here.
+    const verdict = inspectCodexStreamFrame(
+      { type: "error", error: { type: "insufficient_quota" } },
+      "error",
+    )
+    expect(verdict?.kind).toBe("server-error")
+    expect(verdict?.signal).toBe("codex:stream-error:other")
+  })
+
   test("an unknown code is fail-closed server-error with the closed `other` signal", () => {
     const verdict = inspectCodexStreamFrame(
       { type: "error", code: "some_made_up_code", message: "fixture failure" },

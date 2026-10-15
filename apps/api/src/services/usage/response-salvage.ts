@@ -1,36 +1,29 @@
-import { responseObject } from "./response-usage"
+import {
+  BACKSLASH,
+  CEILING_CHILDREN,
+  CLOSE_ARRAY,
+  CLOSE_OBJECT,
+  COLON,
+  COMMA,
+  KEY_MAX_BYTES,
+  OPEN_ARRAY,
+  OPEN_OBJECT,
+  OPTIONAL,
+  QUOTE,
+  rebuildSalvage,
+  SLOT_MAX_BYTES,
+  slotKeys,
+} from "./response-salvage-slots"
 
 /**
  * Bounded salvage of an oversized JSON payload. Some upstreams echo the whole request into a
  * terminal frame (Codex `response.completed` carries instructions, tools and output), pushing it
  * past the observation cap while the usage that settles the attempt sits inside. This scanner
  * walks the oversized bytes once, retains only the few shallow members usage and terminal
- * evidence are read from, and rebuilds a small payload from them. It never retains more than
- * `maximumBytes` in total; anything it cannot account for honestly yields `null`.
+ * evidence are read from, and rebuilds a small payload from them. It never counts more than
+ * `maximumBytes`; one lent ceiling slot (32 bytes at most) is held aside beyond it. Anything it
+ * cannot account for honestly yields `null`.
  */
-
-// Shallow members kept verbatim, by parent key (root = ""). Everything else is skipped unread.
-const SLOTS: Readonly<Record<string, readonly string[]>> = {
-  "": ["type", "usage", "status", "incomplete_details", "error", "code"],
-  message: ["usage"],
-  response: ["usage", "status", "incomplete_details", "error"],
-}
-/**
- * Error evidence a driver hook classifies from (`code`, the nested `error`; a root `message` is
- * Anthropic's message object, so it is not a slot). Kept when it is small,
- * and dropped — never failing the salvage — when it is not: a lost code reads as an unclassified
- * failure, while a failed salvage would lose the failure itself.
- */
-const OPTIONAL = new Set(["error", "code", "response.error"])
-const KEY_MAX_BYTES = 32
-const QUOTE = 34
-const BACKSLASH = 92
-const OPEN_OBJECT = 123
-const CLOSE_OBJECT = 125
-const OPEN_ARRAY = 91
-const CLOSE_ARRAY = 93
-const COLON = 58
-const COMMA = 44
 
 interface Capture {
   readonly path: string
@@ -65,36 +58,86 @@ export function createResponseSalvage(maximumBytes: number): ResponseSalvage {
   let capture: Capture | null = null
   let retained = 0
   let errorObject = false
+  // Depths 1-2: a second value under a key, or a non-string value where a key or colon belongs, is
+  // invalid JSON, so the frame keeps no ceiling slot, even one kept earlier. Not a validator: other
+  // malformed frames can still yield a code (#209). `primitiveRun` marks continuation bytes.
+  const valueStarted: boolean[] = [false, false, false]
+  let primitiveRun = false
+  let ceilingBlocked = false
 
   const slotAt = (): string | null => {
     if (depth === 1 && objects[1] && !expectKey[1]) {
       const key = keys[1]
-      return key != null && SLOTS[""]?.includes(key) ? key : null
+      return key != null && slotKeys("").includes(key) ? key : null
     }
     if (depth === 2 && objects[2] && !expectKey[2]) {
       const parent = keys[1]
       const key = keys[2]
       if (parent == null || key == null) return null
-      return SLOTS[parent]?.includes(key) ? `${parent}.${key}` : null
+      return slotKeys(parent).includes(key) ? `${parent}.${key}` : null
     }
     return null
   }
   const optionalMaxBytes = Math.floor(maximumBytes / 4)
-  // Release every completed optional capture: room for a required member, never a failed salvage.
-  const evictOptional = () => {
-    for (const path of OPTIONAL) {
+  // Release completed captures for room: ceiling slots first, optional evidence only if still full.
+  const release = (paths: Iterable<string>) => {
+    for (const path of paths) {
       const bytes = captured.get(path)
       if (bytes === undefined) continue
       retained -= bytes.length
       captured.delete(path)
     }
   }
+  // Ceiling slots lent to the error capture in progress: given back if it drops (it frees at least
+  // what it borrowed, so they fit), forgotten once it is kept.
+  let lent: [string, number[]][] = []
+  const lend = () => {
+    for (const path of SLOT_MAX_BYTES.keys()) {
+      const bytes = captured.get(path)
+      if (bytes === undefined) continue
+      lent.push([path, bytes])
+      retained -= bytes.length
+      captured.delete(path)
+    }
+  }
+  const giveBack = () => {
+    for (const [path, bytes] of lent) {
+      captured.set(path, bytes)
+      retained += bytes.length
+    }
+    lent = []
+  }
+  const blockCeiling = () => {
+    ceilingBlocked = true
+    release(SLOT_MAX_BYTES.keys())
+    lent = []
+    if (capture === null || !SLOT_MAX_BYTES.has(capture.path) || capture.dropped) return
+    retained -= capture.bytes.length
+    capture.bytes = []
+    capture.dropped = true
+  }
+  const evictOptional = () => {
+    release(SLOT_MAX_BYTES.keys())
+    if (retained >= maximumBytes) release(OPTIONAL)
+  }
   const keep = (byte: number) => {
     if (capture === null || capture.dropped) return
+    const ceiling = SLOT_MAX_BYTES.get(capture.path)
+    // Error evidence outranks a ceiling slot: borrow its room before giving way.
+    if (OPTIONAL.has(capture.path) && retained >= maximumBytes && lent.length === 0) lend()
     if (
-      OPTIONAL.has(capture.path) &&
-      (capture.bytes.length >= optionalMaxBytes || retained >= maximumBytes)
+      (ceiling !== undefined && capture.bytes.length >= ceiling) ||
+      (OPTIONAL.has(capture.path) &&
+        (capture.bytes.length >= optionalMaxBytes || retained >= maximumBytes))
     ) {
+      retained -= capture.bytes.length
+      capture.bytes = []
+      capture.dropped = true
+      giveBack()
+      return
+    }
+    // A ceiling slot gives way itself at a full budget; it never evicts the evidence others hold.
+    if (retained >= maximumBytes && ceiling !== undefined) {
       retained -= capture.bytes.length
       capture.bytes = []
       capture.dropped = true
@@ -115,14 +158,28 @@ export function createResponseSalvage(maximumBytes: number): ResponseSalvage {
     retained -= captured.get(capture.path)?.length ?? 0
     if (!capture.dropped) captured.set(capture.path, capture.bytes)
     else captured.delete(capture.path)
+    if (!capture.dropped) lent = []
     capture = null
   }
-  const beginValue = (byte: number) => {
+  const beginValue = (byte: number, fresh: boolean) => {
     if (depth === 1 && objects[1] && !expectKey[1] && keys[1] === "error" && byte === OPEN_OBJECT)
       errorObject = true
+    if (fresh && depth <= 2 && objects[depth]) {
+      if (expectKey[depth] || valueStarted[depth]) blockCeiling()
+      valueStarted[depth] = true
+    }
     if (capture !== null) return
+    // Last wins, as in JSON.parse: a new parent value, or a repeated slot in one parent, replaces
+    // what the slot held. Keys are compared as raw bytes, escapes not decoded, like every slot (#209).
+    if (depth === 1 && objects[1] && !expectKey[1] && keys[1] != null) {
+      release(CEILING_CHILDREN.get(keys[1]) ?? [])
+    }
     const path = slotAt()
     if (path === null) return
+    if (SLOT_MAX_BYTES.has(path)) {
+      release([path])
+      if (ceilingBlocked) return
+    }
     capture = {
       path,
       depth,
@@ -157,6 +214,7 @@ export function createResponseSalvage(maximumBytes: number): ResponseSalvage {
         return
       }
       if (whitespace(byte)) {
+        primitiveRun = false
         if (capture?.kind === "primitive" && capture.depth === depth) endCapture()
         else keep(byte)
         return
@@ -175,27 +233,31 @@ export function createResponseSalvage(maximumBytes: number): ResponseSalvage {
         }
         started = true
       }
+      const continuesPrimitive = primitiveRun
+      primitiveRun = false
       switch (byte) {
         case QUOTE:
           inString = true
           if (depth >= 1 && depth <= 2 && objects[depth] && expectKey[depth]) {
             keyBytes = []
             keys[depth] = null
+            valueStarted[depth] = false
             keep(byte)
             return
           }
-          beginValue(byte)
+          beginValue(byte, true)
           keep(byte)
           return
         case OPEN_OBJECT:
         case OPEN_ARRAY:
-          if (depth > 0) beginValue(byte)
+          if (depth > 0) beginValue(byte, true)
           keep(byte)
           depth++
           if (depth <= 2) {
             objects[depth] = byte === OPEN_OBJECT
             expectKey[depth] = byte === OPEN_OBJECT
             keys[depth] = null
+            valueStarted[depth] = false
           }
           return
         case CLOSE_OBJECT:
@@ -222,30 +284,14 @@ export function createResponseSalvage(maximumBytes: number): ResponseSalvage {
             failed = true
             return
           }
-          if (capture === null) beginValue(byte)
+          primitiveRun = true
+          if (capture === null || !continuesPrimitive) beginValue(byte, !continuesPrimitive)
           keep(byte)
       }
     },
     finish() {
       if (failed || !closed || inString) return null
-      const parts: Record<string, unknown> = {}
-      try {
-        for (const [path, bytes] of captured) {
-          const value: unknown = JSON.parse(decoder.decode(Uint8Array.from(bytes)))
-          const [first, second] = path.split(".")
-          if (first === undefined) continue
-          if (second === undefined) parts[first] = value
-          else {
-            const parent = responseObject(parts[first]) ?? {}
-            parent[second] = value
-            parts[first] = parent
-          }
-        }
-      } catch {
-        return null
-      }
-      if (errorObject && responseObject(parts.error) === undefined) parts.error = {}
-      return parts
+      return rebuildSalvage(captured, errorObject, decoder)
     },
     get retainedBytes() {
       return retained

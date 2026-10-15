@@ -1,0 +1,29 @@
+#!/bin/sh
+# The permanent layout gate: real headless Chromium against the real built SPA.
+#
+# #62 (cost text painting through the credential pill) was fixed, then #94
+# undid the fix with CI green because the geometry check was never committed.
+# This script is that check, committed. Unlike bin/bench it is a GATE, not a
+# report: a layout regression fails the build.
+#
+# Determinism, because a flaky layout gate is one people learn to ignore:
+#   - Playwright is pinned exactly in the root package.json (1.64.1, the stable
+#     of 2026-10, recorded here because package.json cannot carry comments);
+#     bumping it re-rolls the browser build and every measured pixel with it.
+#   - Fonts are pinned to DejaVu (fonts-dejavu-core) and deviceScaleFactor is 1.
+#   - The SPA is rebuilt every run — never measure a stale dist.
+#
+# No router process, database or upstream is involved: the SPA is served from an
+# in-process static server and every /api/admin call is answered by Playwright
+# route mocks over apps/web/ui-geometry/fixture.ts, so no request can reach a
+# provider and no `claude` subprocess can spawn — structurally, not by luck.
+#
+#   bin/ui-geometry          # build, serve, measure /accounts and /keys at
+#                            # 1024/1280/1440px, print the numbers, exit 0/1
+set -eu
+
+cd "$(dirname "$0")/.."
+
+bin/lib/require-bun
+
+exec bun apps/web/ui-geometry/run.ts "$@"
