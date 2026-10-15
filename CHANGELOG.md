@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.30.1] — 2026-10-15
+
+### Documentation
+
+- `docs/KEYS.md`: the router-key runbook for operators and requesters (mint with owner, kind, tool and purpose; scope to a pool; client setup; rotate through Mint successor; revoke, including the per-replica `KEY_CACHE_TTL_SECONDS` bound and the `RETENTION_REVOKED_KEYS_DAYS` attribution window; hand back is revoke, never delete), the key, scope and capacity errors a key holder sees, and where per-key usage shows today. Linked from `README.md` and `docs/idea/04-api-keys-and-access.md`, whose revocation row now states the per-replica bound. The per-key spend budgets row in `docs/idea/10-roadmap.md` gains its current-state reason. A test (`apps/api/test/integration/keys-runbook-docs.test.ts`) holds the file and both links in place. Refs #230.
+
 ## [2.29.0] — 2026-10-15
 
 ### Added
@@ -1231,3 +1237,4 @@ your tooling config.
 [2.28.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.28.0
 [2.28.1]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.28.1
 [2.29.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.29.0
+[2.30.1]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.30.1
