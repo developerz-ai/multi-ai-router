@@ -1,12 +1,16 @@
 /**
  * A small RFC 4180 writer for the usage export, with the spreadsheet formula guard built in.
  *
- * **Text is guarded by default.** A plain `string` cell is treated as text: a leading `=`, `+`,
+ * **Text is guarded by default.** A plain `string` cell is treated as text. A leading `=`, `+`,
  * `-`, `@`, tab or CR (or their full-width forms, after any leading spaces) gets a leading
- * apostrophe so a spreadsheet shows it instead of evaluating it. The same lead right after a `;`
- * or a tab anywhere in the text is neutralised too: spreadsheets in comma-decimal locales split on
- * `;`, and some on tab, which would make the tail a cell of its own. The model name is chosen by any router-key holder, so the guard belongs to the writer, not
- * to the one column someone remembered. The guard runs before quoting, so the apostrophe sits
+ * apostrophe, so a spreadsheet shows it instead of evaluating it. The model name is chosen by any
+ * router-key holder, so the guard belongs to the writer, not to the one column someone remembered.
+ *
+ * Spreadsheets in comma-decimal locales split on `;`, and some on tab, so the same lead right
+ * after a `;` or a tab (with spaces or quotes between) is neutralised too. A CR or LF inside a
+ * cell would end the record under a naive split and start the next "row" with a live formula, so
+ * text cells have each CR, LF or CRLF replaced by one space before guarding. No model, label or
+ * name legitimately contains a line break. The guard runs before quoting, so the apostrophe sits
  * inside the quotes.
  *
  * What is not text must say so: a number is never guarded (it is a non-negative count or cost),
@@ -20,7 +24,7 @@ export const CSV_EOL = "\r\n"
 const LEAD = "[=+\\-@\\t\\r\uFF1D\uFF0B\uFF0D\uFF20]"
 const STARTS_FORMULA = new RegExp(`^ *${LEAD}`)
 // ';' (the list separator in comma-decimal locales) and tab can split one cell into several.
-const AFTER_SEPARATOR = new RegExp(`([;\\t] *)(?=${LEAD})`, "g")
+const AFTER_SEPARATOR = new RegExp(`([;\\t][ "]*)(?=${LEAD})`, "g")
 
 export interface Verbatim {
   readonly verbatim: string
@@ -33,7 +37,8 @@ export function verbatim(value: string): Verbatim {
 }
 
 export function guardFormula(text: string): string {
-  const lead = STARTS_FORMULA.test(text) ? `'${text}` : text
+  const flat = text.replace(/\r\n|[\r\n]/g, " ")
+  const lead = STARTS_FORMULA.test(flat) ? `'${flat}` : flat
   return lead.replace(AFTER_SEPARATOR, "$1'")
 }
 

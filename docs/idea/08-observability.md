@@ -312,19 +312,24 @@ or pending history is silently partial in the same way the summary's `coverage` 
 the summary beside it when reconciling.
 
 **Safety.** Any router-key holder chooses the `model` string, so every **text** cell is guarded
-against spreadsheet formula injection in the writer: a leading `=`, `+`, `-`, `@`, tab or CR gets
-a leading `'` (also their full-width forms, and after leading spaces). The same lead right after a
-`;` or a tab anywhere in the text is neutralised too, because spreadsheets in comma-decimal locales
-split on `;` and some on tab, which would turn the tail into a cell of its own. The guard runs
-before RFC 4180 quoting, so the apostrophe is inside the quotes. Numeric cells are non-negative counts and costs and are not guarded.
+against spreadsheet formula injection in the writer. A leading `=`, `+`, `-`, `@`, tab or CR (or
+their full-width forms, after any leading spaces) gets a leading `'`. Spreadsheets in comma-decimal
+locales split on `;`, and some on tab, so the same lead right after a `;` or a tab, with spaces or
+quotes between, is neutralised too. A CR or LF inside a cell would end the record under a naive
+split and start the next "row" with a live formula, so each CR, LF or CRLF in a text cell becomes
+one space first; no model, label or name legitimately contains a line break. The guard runs before
+RFC 4180 quoting, so the apostrophe is inside the quotes. Numeric cells are non-negative counts and
+costs and are not guarded.
 
 **Limit and streaming.** `USAGE_EXPORT_MAX_ROWS` (default 50000, 1..100000) bounds the rows. The
 query fetches one past the cap inside the snapshot, and seeing the extra row answers `400` naming
 the cap before any byte of the file is written: never a truncated `200`. Narrow the window or add
 filters. After the cap check the snapshot is released and the body is **streamed**: a
-`ReadableStream` whose `pull()` yields to the event loop and renders at most 1000 rows, so a large
-file never holds the loop the `/v1` traffic shares (non-negotiable 8). The rows themselves are held
-in memory until the stream drains, which is why the cap has a ceiling.
+`ReadableStream` whose `pull()` yields to the event loop, then renders one chunk cut at 1000 rows or
+about 32 KiB of output, whichever comes first. The render therefore yields between bounded chunks
+rather than holding the loop the `/v1` traffic shares for the whole file (non-negotiable 8); a
+chunk still takes a few milliseconds. The rows themselves are held in memory until the stream
+drains, which is why the cap has a ceiling.
 
 **Response.** `text/csv; charset=utf-8`, CRLF record ends (RFC 4180), `Cache-Control: no-store`,
 and a `Content-Disposition` filename carrying the window, `usage-<window>-<from>-<to>.csv`, with

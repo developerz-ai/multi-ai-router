@@ -39,12 +39,14 @@ export const USAGE_EXPORT_HEADER = [
 
 export interface UsageCsv {
   readonly filename: string
-  /** Rendered a bounded chunk per pull, so a large file never blocks the event loop. */
+  /** Rendered a bounded chunk per pull, yielding to the event loop between chunks. */
   readonly body: ReadableStream<Uint8Array>
 }
 
-/** Rows rendered per pull. A chunk is a few hundred KB of text, well under a millisecond or two. */
+/** Row ceiling per chunk. */
 export const USAGE_EXPORT_CHUNK_ROWS = 1_000
+/** Rendered-size cut per chunk: wide rows (long, quote-filled models) cost more to render. */
+export const USAGE_EXPORT_CHUNK_BYTES = 32 * 1024
 
 /** What turns the ids on a row into the words the file prints. */
 export interface ExportSubjects {
@@ -88,25 +90,35 @@ export function renderUsageCsv(rows: readonly UsageExportRow[], subjects: Export
   )
 }
 
-/** The file as strings of at most {@link USAGE_EXPORT_CHUNK_ROWS} rows; the first carries the header. */
+/**
+ * The file as strings, each cut after the row that takes it past {@link USAGE_EXPORT_CHUNK_BYTES}
+ * (or {@link USAGE_EXPORT_CHUNK_ROWS} rows); the first carries the header.
+ */
 export function* usageCsvChunks(
   rows: readonly UsageExportRow[],
   subjects: ExportSubjects,
   size = USAGE_EXPORT_CHUNK_ROWS,
 ): Generator<string> {
-  let head = csvLine([...USAGE_EXPORT_HEADER])
-  for (let at = 0; at < rows.length || head !== ""; at += size) {
-    let chunk = head
-    head = ""
-    for (const row of rows.slice(at, at + size)) chunk += csvLine(exportCells(row, subjects))
-    yield chunk
+  let chunk = csvLine([...USAGE_EXPORT_HEADER])
+  let inChunk = 0
+  for (const row of rows) {
+    chunk += csvLine(exportCells(row, subjects))
+    inChunk += 1
+    if (inChunk >= size || chunk.length >= USAGE_EXPORT_CHUNK_BYTES) {
+      yield chunk
+      chunk = ""
+      inChunk = 0
+    }
   }
+  if (chunk !== "") yield chunk
 }
 
 /**
- * The body as a byte stream. `pull()` renders one chunk and first yields to the event loop, so the
- * /v1 traffic sharing it is never held for the whole file (non-negotiable 8). The row cap was
- * decided before this is built: nothing here can turn into a late error.
+ * The body as a byte stream. Each `pull()` first yields to the event loop, then renders one
+ * bounded chunk, so the render is split into short pieces with the loop free between them rather
+ * than held for the whole file (non-negotiable 8). It is not zero-cost: a chunk still takes a few
+ * milliseconds of the shared loop. The row cap was decided before this is built, so nothing here
+ * can turn into a late error.
  */
 export function usageCsvStream(
   rows: readonly UsageExportRow[],
