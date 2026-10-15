@@ -250,6 +250,7 @@ const ZERO_TOTALS: UsageTotals = {
   cacheWriteTokens: 0,
   costMetered: "0",
   costNotional: "0",
+  unpriced: { attempts: null, since: "infinity" },
 }
 
 function stubSession(): MiddlewareHandler<AdminAuthEnv> {

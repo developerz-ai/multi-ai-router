@@ -37,6 +37,11 @@ export function attemptContribution(row: NewUsageRecordRow, fallback: Date): Usa
     cacheWriteTokens: row.cacheWriteTokens ?? 0,
     costMetered: row.costBasis === "metered" ? (row.costEstimate ?? "0") : "0",
     costNotional: row.costBasis === "notional" ? (row.costEstimate ?? "0") : "0",
+    // Tokens required: a token-less failure never reached pricing, so counting it would report
+    // refusals as unpriced traffic — the measure answers "how much spend is invisible", not "how
+    // often did an unknown model fail".
+    unpricedAttempts:
+      row.costBasis === "unknown" && (row.tokensIn ?? 0) + (row.tokensOut ?? 0) > 0 ? 1 : 0,
   }
 }
 export function terminalContribution(row: UsageRequestTerminalInsert): UsageContribution {
