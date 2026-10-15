@@ -117,7 +117,8 @@ describe("csvLine", () => {
   test("the guarded forms, spelled out", () => {
     expect(one("x;=1+1;")).toBe("x;'=1+1;")
     expect(one("y\t=1+1")).toBe("y\t'=1+1")
-    expect(one('x;"=1+1;')).toBe('"x;""\'=1+1;"')
+    expect(one('x;"=1+1;')).toBe("x;\"'=1+1;")
+    expect(csvLine(['x;"=1+1;'])).toBe(`"x;""'=1+1;"${CSV_EOL}`)
   })
 
   test("a full-width equals sign or a leading space before a formula char is guarded", () => {
