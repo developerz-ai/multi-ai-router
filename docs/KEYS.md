@@ -159,5 +159,16 @@ Today, on the console's **Keys** page:
   combinable). Scripts use `GET /api/admin/keys?owner=<owner>&tool=<tool>` with the same rule; a
   value that is not a valid slug answers `400` there.
 
-The Usage page broken down by owner and tool, and a weekly report, extend this section when they
-land.
+On the console's **Usage** page:
+
+- a **Break down by** switch with **Owner** and **Tool** beside Key, Account, Pool and Model. An
+  owner row shows its kind (`person`, `service`, or `unknown` when the key names none), so a person
+  and a service called the same thing are two rows. Keys with no owner or tool land in an
+  `unassigned` row, and spend whose key is gone in `deleted` and `none` rows;
+- **Owner**, **Tool** and **Model** filters, which narrow every figure on the page (and the
+  **Export CSV** link, which carries them). The view is in the URL, so a link restores it:
+  `/usage?window=30d&owner=alice&tool=editor`, repeating a name for several values;
+- an **Unpriced attempts** tile, a dash when the window predates measurement;
+- the stored **weekly reports** and where delivery of each stands, read-only.
+
+Metered and notional spend are separate everywhere on that page and are never added together.

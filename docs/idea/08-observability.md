@@ -422,7 +422,36 @@ share needs attempt rollups; a preview of a week before the v2 rollups existed u
 | `/accounts` table | Same live per-row totals — trend, count and both spend figures inside one compact usage cell (`TrafficCell`, no separate COST column since #94) — plus current quota utilization and reset ([below](#quota-resets-and-manual-re-check)) |
 | Account detail | Full measure set, plus per-window quota history |
 | `/pools` | Per-pool totals and the observed split across members — the answer to "is my policy doing what I set it to" |
-| `/usage` | The dedicated screen: any dimension, any window, charts and leaderboards, the [failure split](#the-failure-split) under the error-rate tile, and the live request feed below them |
+| `/usage` | The dedicated screen: any dimension (key, owner, tool, account, pool, model), any window, charts and leaderboards, the [failure split](#the-failure-split) under the error-rate tile, the live request feed below them, and the stored [weekly reports](#weekly-usage-report) as a read-only list. Owner, tool and model filters narrow every figure; see [the Usage page](#the-usage-page) |
+
+#### The Usage page
+
+The console reads the API above and adds no figures of its own.
+
+- **State is the URL.** `window` (omitted for the default, 7 days) or a custom `from` and `to`, plus
+  `owner`, `tool` and `model`, each repeated once per value (`?owner=alice&owner=bob`, never
+  comma-joined). They are the API's own parameter names, so a link into the page reads like the
+  request it causes, and a reload or a deep link restores the view. A window or range the server
+  would refuse falls back to the default; nothing but those three filters is read from the URL,
+  because the API answers `400` to an unknown key.
+- **Filter options** come from the unfiltered summary for the same window, never from the current
+  selection (which would shrink to itself). Owner options are deduped by slug, because the filter
+  matches the slug against both kinds. The breakdown tables are capped, so a selected value the
+  capped table no longer lists is still shown, checked and removable.
+- **Cache.** The unfiltered read keeps the key `["usage", "summary", <window>]` that the keys and
+  accounts tables share; filters append a sorted segment only when one is set.
+- **Owner rows** show the owner's kind beside the slug, so a person and a service sharing one are two
+  distinguishable rows; a key that names no kind reads `unknown`. **Tool rows** show the tool slug.
+  The `unassigned`, `deleted` and `none` buckets render under their own labels, and a key that
+  survives only as a tombstone carries a `retired` marker.
+- **Unpriced attempts** is a headline tile: the count, or a dash when the window predates
+  measurement. It is never 0, and it is not part of either spend figure.
+- **Metered and notional spend** stay separate on every tile, row and leaderboard; no figure on the
+  page adds them.
+- **Weekly reports** lists the stored weeks with their delivery status (`pending`, `not_configured`,
+  `sent`, `failed`), from `GET /api/admin/usage/reports`. It is read-only and never shows a failure's
+  error text.
+- **Export CSV** carries the page's window and its active filters, so the file is the view on screen.
 
 ### The failure split
 
