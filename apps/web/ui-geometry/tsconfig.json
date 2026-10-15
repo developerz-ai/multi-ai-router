@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json.schemastore.org/tsconfig",
+  "extends": "../../../tsconfig.base.json",
+  "compilerOptions": {
+    // The gate runs under Bun (types: bun, from the base) but its page-side
+    // measurement code is DOM code serialized into Chromium, so both libs apply.
+    "lib": ["ESNext", "DOM", "DOM.Iterable"],
+    "rootDir": "..",
+    "outDir": "../dist-types-gate"
+  },
+  // The gate and its unit tests; typechecked as a project of its own
+  // because the SPA's tsconfig (src only) and `bun test` check neither.
+  "include": ["./*.ts", "../test/unit/ui-geometry-*.test.ts"],
+  // The fixture imports the SPA's wire types; the reference supplies them as
+  // declarations rather than re-compiling src into this project.
+  "references": [{ "path": ".." }]
+}

@@ -166,6 +166,33 @@ jobs:
           path: bench-report.json
           retention-days: 30
 
+  ui-geometry:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    # A gate, not a report — the opposite deal from `bench` above, on purpose.
+    # #62's cost-through-the-credential-pill fix was undone by #94 with CI green
+    # because the geometry check was never committed; this job is that check,
+    # committed, so it fails the PR and not the operator's morning. No
+    # `continue-on-error` anywhere in it, at job or step level.
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+      - run: bun install --frozen-lockfile
+      # Determinism inputs, installed explicitly rather than inherited from the
+      # runner image: DejaVu is the font stack bin/ui-geometry pins text metrics
+      # to, and the browser build is whatever the pinned playwright in
+      # package.json resolves to — never `latest`.
+      - name: install pinned fonts and headless Chromium
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends fonts-dejavu-core
+          bunx playwright install --with-deps chromium
+      - run: bin/ui-geometry
+
   build:
     runs-on: ubuntu-24.04
     timeout-minutes: 15

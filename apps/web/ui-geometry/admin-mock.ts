@@ -1,0 +1,94 @@
+// The admin API as seen by the browser during a geometry run: Playwright route
+// mocks over `apps/web/ui-geometry/fixture.ts`. This layer is half of the
+// "nothing leaves the runner" guarantee — there is no router process to serve
+// `/api/admin/**`, so the SPA's fetches are answered in-process, and the
+// catch-all below aborts anything aimed at any other origin before the network
+// stack could emit it. A table that never renders, or a call the fixture does not
+// know, is reported by run.ts as a named failure rather than swallowed here.
+import type { BrowserContext } from "playwright"
+import type { AuthMethods } from "../src/lib/api/auth"
+import type { SettingsView } from "../src/lib/api/settings"
+import type { PoolView, ProviderListResponse, SessionView } from "../src/lib/api/types"
+import type { WireSummary } from "../src/lib/api/usage-wire"
+import { accounts, keys, pools, providers, session, settings, usage } from "./fixture"
+import { authMethods } from "./fixture-ids"
+import type { FixtureAccount, FixtureKey } from "./fixture-types"
+
+/** Everything `GET /api/admin/<path>` can answer with. Fixture-complete or the run fails. */
+const GET = {
+  "/api/admin/auth/session": session satisfies SessionView,
+  "/api/admin/auth/methods": authMethods satisfies AuthMethods,
+  "/api/admin/settings": settings satisfies SettingsView,
+  "/api/admin/providers": providers satisfies ProviderListResponse,
+  "/api/admin/accounts": accounts satisfies readonly FixtureAccount[],
+  "/api/admin/keys": keys satisfies readonly FixtureKey[],
+  "/api/admin/pools": pools satisfies readonly PoolView[],
+  "/api/admin/usage": usage satisfies WireSummary,
+} as const satisfies Readonly<Record<string, unknown>>
+
+/** Origins a run may talk to: only the in-process static server. Anything else is a violation. */
+export interface Egress {
+  /** Requests the catch-all aborted because they left the static origin. */
+  readonly blocked: readonly string[]
+  /** Admin paths the fixture does not know — a fixture gap, not an app bug. */
+  readonly unmapped: readonly string[]
+}
+
+export interface MockStack {
+  readonly egress: Egress
+  /** Cross-origin requests are aborted at the route layer, so the page can never depend on them. */
+  readonly violations: () => readonly string[]
+}
+
+/** Install the mock API and the structural egress fence on one browser context. */
+export async function installAdminMock(
+  context: BrowserContext,
+  origin: string,
+): Promise<MockStack> {
+  const blocked: string[] = []
+  const unmapped: string[] = []
+
+  // Registered first so the admin handler (registered second) takes precedence:
+  // Playwright consults routes in reverse registration order.
+  await context.route("**/*", (route) => {
+    const url = new URL(route.request().url())
+    if (url.origin === origin) {
+      void route.continue()
+      return
+    }
+    blocked.push(route.request().url())
+    void route.abort()
+  })
+
+  await context.route("**/api/admin/**", (route) => {
+    const url = new URL(route.request().url())
+    // The glob matches any origin; an admin call aimed elsewhere is a wrong API
+    // base, not a mocked read, so it is blocked and reported like any other.
+    if (url.origin !== origin) {
+      blocked.push(route.request().url())
+      void route.abort()
+      return
+    }
+    if (route.request().method() !== "GET") {
+      // A geometry run reads; the SPA mutates only from operator actions, and
+      // none happen. A mutation here means something navigated itself.
+      unmapped.push(`${route.request().method()} ${url.pathname}`)
+      void route.fulfill({ status: 404, contentType: "application/json", body: "{}" })
+      return
+    }
+    const body = (GET as Readonly<Record<string, unknown>>)[url.pathname]
+    if (body === undefined) {
+      unmapped.push(`GET ${url.pathname}`)
+      void route.fulfill({ status: 404, contentType: "application/json", body: "{}" })
+      return
+    }
+    void route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(body) })
+  })
+
+  const violations = () => [
+    ...blocked.map((u) => `cross-origin request: ${u}`),
+    ...unmapped.map((p) => `unmocked admin call: ${p}`),
+  ]
+
+  return { egress: { blocked, unmapped }, violations }
+}

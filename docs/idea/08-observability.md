@@ -202,7 +202,7 @@ Measures, identical in every dimension × window cell:
 |---|---|
 | `/keys` table | A live total per row — requests for the selected window plus an inline sparkline, with spend in its own COST column beside it (metered and notional apart, never summed). The operator sees the busy key without opening anything |
 | Key detail | Full measure set, all windows, broken down by account and by model |
-| `/accounts` table | Same live per-row totals and COST column, plus current quota utilization and reset ([below](#quota-resets-and-manual-re-check)) |
+| `/accounts` table | Same live per-row totals — trend, count and both spend figures inside one compact usage cell (`TrafficCell`, no separate COST column since #94) — plus current quota utilization and reset ([below](#quota-resets-and-manual-re-check)) |
 | Account detail | Full measure set, plus per-window quota history |
 | `/pools` | Per-pool totals and the observed split across members — the answer to "is my policy doing what I set it to" |
 | `/usage` | The dedicated screen: any dimension, any window, charts and leaderboards, the [failure split](#the-failure-split) under the error-rate tile, and the live request feed below them |

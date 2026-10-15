@@ -98,8 +98,10 @@ export function KeysTable(props: KeysTableProps) {
       ),
     },
     {
-      // Same rule as the accounts table: cost is its own column, never part of
-      // the usage cell (#62).
+      // Cost keeps its own column here; the accounts table instead folds both
+      // spend figures into its usage cell (TrafficCell, #94), where its eleven
+      // columns compete for the width.
+      // What survives both layouts: metered and notional are printed apart, never summed.
       id: "cost",
       header: `Cost · ${props.usageWindowLabel}`,
       cell: (key) => (

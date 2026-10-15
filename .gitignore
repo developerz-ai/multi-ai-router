@@ -8,6 +8,7 @@ native/config-owner
 dist/
 build/
 apps/web/dist/
+apps/web/dist-types-gate/
 *.tsbuildinfo
 
 # Environment — real secrets, never committed

@@ -38,7 +38,7 @@ interface WireRow {
   readonly series: readonly number[]
 }
 
-interface WireSummary {
+export interface WireSummary {
   readonly coverage: UsageCoverage
   readonly window: string
   readonly bucket: "hour" | "day"
