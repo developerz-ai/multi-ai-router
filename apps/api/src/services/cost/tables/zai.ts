@@ -16,16 +16,21 @@ import { type ModelTable, rates } from "../rates"
  * `notional`, not as spend.
  */
 export const ZAI_MODELS: ModelTable = {
-  /** The current flagship, and what the coding plan runs on. */
+  /**
+   * The current flagship, and what the coding plan runs on. Listed on the vendor's pricing page
+   * (docs.z.ai/guides/overview/pricing, read 2026-10-15) at the same figures as its 5.2/5.1
+   * siblings, with no cache-write price published (the cache-storage column is a limited-time
+   * freebie, not a write rate).
+   */
+  "glm-5.3": rates(1.4, 4.4, { read: 0.26 }),
   "glm-5.2": rates(1.4, 4.4, { read: 0.26 }),
   "glm-5.1": rates(1.4, 4.4, { read: 0.26 }),
   "glm-5": rates(1, 3.2, { read: 0.2 }),
   "glm-5-turbo": rates(1.2, 4, { read: 0.24 }),
   /**
-   * Not from docs.z.ai: OpenRouter's list price for `z-ai/glm-5.3-flash`, read 2026-10-14
-   * (openrouter.ai/z-ai/glm-5.3-flash) — input 0.15, output 0.50, cached read 0.03 USD per Mtok.
-   * Replace with z.ai's own figure once its pricing page lists the model; until then a metered
-   * account on it prices at the reseller list, not the vendor list.
+   * Listed at docs.z.ai/guides/overview/pricing on 2026-10-15 at the figures OpenRouter already
+   * charged (input 0.15, output 0.50, cached read 0.03 USD per Mtok), so the row's numbers stand
+   * and only its source moved from the reseller to the vendor.
    */
   "glm-5.3-flash": rates(0.15, 0.5, { read: 0.03 }),
   "glm-4.7": rates(0.6, 2.2, { read: 0.11 }),

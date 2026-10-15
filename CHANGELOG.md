@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.36.1] — 2026-10-15
+
+### Added
+
+- `glm-5.3` joins the shipped `zai` price table (#253). The #217 model census found it served on the production router with no price, so its tokens recorded `cost_basis = unknown`. Rates are z.ai's own published list (docs.z.ai/guides/overview/pricing, read 2026-10-15): input $1.4, output $4.4, cached input $0.26 per Mtok, no cache-write price published. A coding-plan account reports the row as a `notional` attribution, as with every zai model.
+
+### Changed
+
+- The `glm-5.3-flash` row keeps its numbers and moves its citation from OpenRouter's reseller list to the vendor's own pricing page, which now lists the model at the same figures.
+
 ## [2.35.0] — 2026-10-15
 
 ### Added
@@ -1308,3 +1318,4 @@ your tooling config.
 [2.33.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.33.0
 [2.34.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.34.0
 [2.35.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.35.0
+[2.36.1]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.36.1
