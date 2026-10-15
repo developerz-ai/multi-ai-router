@@ -1,0 +1,13 @@
+.panel {
+  display: grid;
+  gap: var(--space-3);
+}
+
+.title {
+  font-size: var(--text-md);
+  font-weight: var(--weight-medium);
+}
+
+.status {
+  white-space: nowrap;
+}
