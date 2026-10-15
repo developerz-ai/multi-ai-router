@@ -96,9 +96,9 @@ describe("weekly report env", () => {
 
     test("refuses a window not longer than one jittered tick plus margin, accepts one minute more", () => {
       // settle 54 leaves 6 minutes (1 + 5 >= 6: refused); settle 53 leaves 7 (accepted).
-      expect(
-        refused({ ...tight, ...sunday, USAGE_REPORT_SETTLE_MINUTES: "54" }).variables,
-      ).toEqual(["USAGE_REPORT_SETTLE_MINUTES"])
+      expect(refused({ ...tight, ...sunday, USAGE_REPORT_SETTLE_MINUTES: "54" }).variables).toEqual(
+        ["USAGE_REPORT_SETTLE_MINUTES"],
+      )
       const env = parseEnv({ ...base, ...tight, ...sunday, USAGE_REPORT_SETTLE_MINUTES: "53" })
       expect(env.usageReport.settleMinutes).toBe(53)
     })
@@ -108,23 +108,30 @@ describe("weekly report env", () => {
       expect(error.variables).toEqual(["USAGE_REPORT_SETTLE_MINUTES"])
     })
 
-    test("the jitter fraction widens the tick: 60 minutes at 0.5 is 90", () => {
-      // Window of 100 minutes: fine at jitter 0 (60 + 5), refused at 0.5 (90 + 5 < 100 is fine, so use 95).
-      const settle = String(10080 - 8640 - 1380 - 95)
+    test("the jitter fraction widens the tick: a 95 minute window fits 60 minutes at 0 and not at 0.5", () => {
+      // Saturday 23:00 plus 1405 minutes of settle leaves 1500 - 1405 = 95 minutes of the week.
+      const window95 = {
+        USAGE_REPORT_WEEKDAY: "6",
+        USAGE_REPORT_HOUR_UTC: "23",
+        USAGE_REPORT_SETTLE_MINUTES: "1405",
+      }
+      // 60 x 1 + 5 = 65 < 95: accepted. 60 x 1.5 + 5 = 95 >= 95: refused.
       expect(
-        parseEnv({ ...base, ...sunday, USAGE_REPORT_SETTLE_MINUTES: settle, SCHEDULER_JITTER_FRACTION: "0" })
-          .usageReport.settleMinutes,
-      ).toBe(Number(settle))
-      expect(
-        refused({ ...sunday, USAGE_REPORT_SETTLE_MINUTES: settle, SCHEDULER_JITTER_FRACTION: "0.5" })
-          .variables,
-      ).toEqual(["USAGE_REPORT_SETTLE_MINUTES"])
+        parseEnv({ ...base, ...window95, SCHEDULER_JITTER_FRACTION: "0" }).usageReport
+          .settleMinutes,
+      ).toBe(1405)
+      expect(refused({ ...window95, SCHEDULER_JITTER_FRACTION: "0.5" }).variables).toEqual([
+        "USAGE_REPORT_SETTLE_MINUTES",
+      ])
     })
   })
 
   describe("USAGE_REPORT_INTERVAL_MINUTES and USAGE_REPORT_MAX_ROWS bounds", () => {
     test("the interval is bounded above by a day", () => {
-      expect(parseEnv({ ...base, USAGE_REPORT_INTERVAL_MINUTES: "1440" }).scheduler.usageReportIntervalMinutes).toBe(1440)
+      expect(
+        parseEnv({ ...base, USAGE_REPORT_INTERVAL_MINUTES: "1440" }).scheduler
+          .usageReportIntervalMinutes,
+      ).toBe(1440)
       expect(refused({ USAGE_REPORT_INTERVAL_MINUTES: "1441" }).variables).toEqual([
         "USAGE_REPORT_INTERVAL_MINUTES",
       ])

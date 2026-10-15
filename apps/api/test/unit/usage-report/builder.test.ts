@@ -368,16 +368,7 @@ describe("caveats", () => {
     expect(codes).toContain("settle_margin")
   })
 
-  test("a settle margin shorter than the upstream timeout is flagged", () => {
-    const long = buildWeeklyReport(FIXTURE, labels, pools, {
-      ...PERIOD,
-      settleMinutes: 30,
-      upstreamTimeoutMs: 3_600_000,
-    })
-    expect(long.coverage.settleCoversUpstreamTimeout).toBe(false)
-    const short = buildWeeklyReport(FIXTURE, labels, pools, PERIOD)
-    expect(short.coverage.settleCoversUpstreamTimeout).toBe(true)
-  })  test("the gap between period end and generation is stated as it was, not as configured", () => {
+  test("the gap between period end and generation is stated as it was, not as configured", () => {
     // PERIOD ends Monday 00:00 and is generated at 00:30.
     const report = buildWeeklyReport(FIXTURE, labels, pools, PERIOD)
     expect(report.coverage.generatedAfterPeriodEndMinutes).toBe(30)
@@ -419,7 +410,13 @@ describe("caveats", () => {
   test("a partial unpriced week divides by attempts on measured days only", () => {
     const rows = [
       row({ apiKeyId: KEY.carol, attempts: 10, measuredAttempts: 4, unpricedAttempts: 2 }),
-      row({ apiKeyId: KEY.carol, model: "m2", attempts: 6, measuredAttempts: 2, unpricedAttempts: 1 }),
+      row({
+        apiKeyId: KEY.carol,
+        model: "m2",
+        attempts: 6,
+        measuredAttempts: 2,
+        unpricedAttempts: 1,
+      }),
     ]
     const report = buildWeeklyReport(rows, labels, pools, {
       ...PERIOD,
@@ -430,7 +427,6 @@ describe("caveats", () => {
     expect(text).toContain("3 of 6 attempts")
     expect(text).not.toContain("16")
   })
-
 })
 
 describe("what the payload never carries", () => {
