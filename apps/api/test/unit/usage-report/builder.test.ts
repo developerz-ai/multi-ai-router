@@ -11,7 +11,6 @@ const PERIOD: ReportPeriod = {
   start: new Date("2026-10-05T00:00:00.000Z"),
   end: new Date("2026-10-12T00:00:00.000Z"),
   generatedAt: new Date("2026-10-12T00:30:00.000Z"),
-  settleMinutes: 30,
   upstreamTimeoutMs: 600_000,
   unpricedSince: "2026-01-01",
 }
@@ -67,6 +66,7 @@ function row(over: Partial<UsageWeekRow>): UsageWeekRow {
     costMetered: "0.000000",
     costNotional: "0.000000",
     unpricedAttempts: 0,
+    measuredAttempts: over.attempts ?? 0,
     ...over,
   }
 }
@@ -78,6 +78,8 @@ const FIXTURE: UsageWeekRow[] = [
     attempts: 12,
     tokensIn: 100,
     tokensOut: 50,
+    cacheReadTokens: 11,
+    cacheWriteTokens: 5,
     costMetered: "1.100000",
     costNotional: "0.250000",
     unpricedAttempts: 1,
@@ -89,6 +91,8 @@ const FIXTURE: UsageWeekRow[] = [
     attempts: 4,
     tokensIn: 40,
     tokensOut: 20,
+    cacheReadTokens: 4,
+    cacheWriteTokens: 2,
     costMetered: "0.200000",
     costNotional: "0.000001",
     unpricedAttempts: 0,
@@ -144,6 +148,8 @@ const MEASURES = [
   "requests",
   "tokensIn",
   "tokensOut",
+  "cacheReadTokens",
+  "cacheWriteTokens",
   "costMetered",
   "costNotional",
   "unpricedAttempts",
@@ -188,6 +194,8 @@ describe("sections by owner and tool", () => {
       requests: 14,
       tokensIn: 140,
       tokensOut: 70,
+      cacheReadTokens: 15,
+      cacheWriteTokens: 7,
       costMetered: "1.300000",
       costNotional: "0.250001",
       unpricedAttempts: 1,
@@ -360,15 +368,64 @@ describe("caveats", () => {
     expect(codes).toContain("settle_margin")
   })
 
-  test("a settle margin shorter than the upstream timeout is flagged", () => {
+  test("the gap between period end and generation is stated as it was, not as configured", () => {
+    // PERIOD ends Monday 00:00 and is generated at 00:30.
+    const report = buildWeeklyReport(FIXTURE, labels, pools, PERIOD)
+    expect(report.coverage.generatedAfterPeriodEndMinutes).toBe(30)
+    const caveat = report.caveats.find((c) => c.code === "settle_margin")
+    expect(caveat?.text).toContain("30 minutes")
+  })
+
+  test("a gap shorter than the upstream timeout is flagged", () => {
     const long = buildWeeklyReport(FIXTURE, labels, pools, {
       ...PERIOD,
-      settleMinutes: 30,
       upstreamTimeoutMs: 3_600_000,
     })
     expect(long.coverage.settleCoversUpstreamTimeout).toBe(false)
+    expect(long.caveats.find((c) => c.code === "settle_margin")?.text).toContain("missed")
     const short = buildWeeklyReport(FIXTURE, labels, pools, PERIOD)
     expect(short.coverage.settleCoversUpstreamTimeout).toBe(true)
+  })
+
+  test("the whole anchor offset counts: a Wednesday run covers a one hour timeout", () => {
+    // Settle is 30 minutes, but the report is generated 2 d 9 h 30 min after the boundary.
+    const wednesday = buildWeeklyReport(FIXTURE, labels, pools, {
+      ...PERIOD,
+      generatedAt: new Date("2026-10-14T09:30:00.000Z"),
+      upstreamTimeoutMs: 3_600_000,
+    })
+    expect(wednesday.coverage.generatedAfterPeriodEndMinutes).toBe(2 * 1440 + 9 * 60 + 30)
+    expect(wednesday.coverage.settleCoversUpstreamTimeout).toBe(true)
+  })
+
+  test("a preview run before the boundary settled states its true gap", () => {
+    const early = buildWeeklyReport(FIXTURE, labels, pools, {
+      ...PERIOD,
+      generatedAt: new Date("2026-10-12T00:02:00.000Z"),
+    })
+    expect(early.coverage.generatedAfterPeriodEndMinutes).toBe(2)
+    expect(early.coverage.settleCoversUpstreamTimeout).toBe(false)
+  })
+
+  test("a partial unpriced week divides by attempts on measured days only", () => {
+    const rows = [
+      row({ apiKeyId: KEY.carol, attempts: 10, measuredAttempts: 4, unpricedAttempts: 2 }),
+      row({
+        apiKeyId: KEY.carol,
+        model: "m2",
+        attempts: 6,
+        measuredAttempts: 2,
+        unpricedAttempts: 1,
+      }),
+    ]
+    const report = buildWeeklyReport(rows, labels, pools, {
+      ...PERIOD,
+      unpricedSince: "2026-10-09",
+    })
+    expect(report.coverage.unpricedMeasured).toBe("partial")
+    const text = report.caveats.find((c) => c.code === "unpriced_share")?.text
+    expect(text).toContain("3 of 6 attempts")
+    expect(text).not.toContain("16")
   })
 })
 

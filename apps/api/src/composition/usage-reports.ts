@@ -53,7 +53,7 @@ export function createUsageReports(deps: {
           pool.overflowAccountId === null ? null : (providers.get(pool.overflowAccountId) ?? null),
       }))
     },
-    settleMinutes: env.usageReport.settleMinutes,
+    maxRows: env.usageReport.maxRows,
     upstreamTimeoutMs: env.failover.upstreamTimeoutMs,
     // One row a week, plus two for a week in flight and a clock edge.
     listLimit: Math.ceil(env.retention.usageReportsDays / 7) + 2,

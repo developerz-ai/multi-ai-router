@@ -12,6 +12,8 @@ export interface Accumulator {
   requests: number
   tokensIn: number
   tokensOut: number
+  cacheRead: number
+  cacheWrite: number
   metered: bigint
   notional: bigint
   /** `null` while nothing measured has been added: unmeasured, never 0. */
@@ -23,6 +25,8 @@ export function emptyAccumulator(unpricedMeasured: boolean): Accumulator {
     requests: 0,
     tokensIn: 0,
     tokensOut: 0,
+    cacheRead: 0,
+    cacheWrite: 0,
     metered: 0n,
     notional: 0n,
     unpriced: unpricedMeasured ? 0 : null,
@@ -50,6 +54,8 @@ export function addRow(acc: Accumulator, row: UsageWeekRow): void {
   acc.requests += row.requests
   acc.tokensIn += row.tokensIn
   acc.tokensOut += row.tokensOut
+  acc.cacheRead += row.cacheReadTokens
+  acc.cacheWrite += row.cacheWriteTokens
   acc.metered += toMicros(row.costMetered)
   acc.notional += toMicros(row.costNotional)
   if (row.unpricedAttempts !== null) acc.unpriced = (acc.unpriced ?? 0) + row.unpricedAttempts
@@ -59,6 +65,8 @@ export function addAccumulator(into: Accumulator, from: Accumulator): void {
   into.requests += from.requests
   into.tokensIn += from.tokensIn
   into.tokensOut += from.tokensOut
+  into.cacheRead += from.cacheRead
+  into.cacheWrite += from.cacheWrite
   into.metered += from.metered
   into.notional += from.notional
   if (from.unpriced !== null) into.unpriced = (into.unpriced ?? 0) + from.unpriced
@@ -69,6 +77,8 @@ export function toMeasures(acc: Accumulator): ReportMeasures {
     requests: acc.requests,
     tokensIn: acc.tokensIn,
     tokensOut: acc.tokensOut,
+    cacheReadTokens: acc.cacheRead,
+    cacheWriteTokens: acc.cacheWrite,
     costMetered: fromMicros(acc.metered),
     costNotional: fromMicros(acc.notional),
     unpricedAttempts: acc.unpriced,

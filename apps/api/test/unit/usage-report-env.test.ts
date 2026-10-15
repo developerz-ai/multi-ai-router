@@ -21,7 +21,7 @@ function refused(over: Record<string, string>): EnvValidationError {
 describe("weekly report env", () => {
   test("defaults: Monday 00:00 UTC, 30 minute settle, hourly check, two years retained", () => {
     const env = parseEnv(base)
-    expect(env.usageReport).toEqual({ weekday: 1, hourUtc: 0, settleMinutes: 30 })
+    expect(env.usageReport).toEqual({ weekday: 1, hourUtc: 0, settleMinutes: 30, maxRows: 50_000 })
     expect(env.scheduler.usageReportIntervalMinutes).toBe(60)
     expect(env.retention.usageReportsDays).toBe(730)
   })
@@ -34,8 +34,9 @@ describe("weekly report env", () => {
       USAGE_REPORT_SETTLE_MINUTES: "45",
       USAGE_REPORT_INTERVAL_MINUTES: "15",
       RETENTION_USAGE_REPORTS_DAYS: "400",
+      USAGE_REPORT_MAX_ROWS: "2000",
     })
-    expect(env.usageReport).toEqual({ weekday: 5, hourUtc: 17, settleMinutes: 45 })
+    expect(env.usageReport).toEqual({ weekday: 5, hourUtc: 17, settleMinutes: 45, maxRows: 2_000 })
     expect(env.scheduler.usageReportIntervalMinutes).toBe(15)
     expect(env.retention.usageReportsDays).toBe(400)
   })
@@ -72,27 +73,78 @@ describe("weekly report env", () => {
     })
   })
 
-  describe("the combined anchor offset", () => {
+  describe("the firing window", () => {
+    // The window is the time between the anchor and the end of the week: the report is only
+    // generated if a tick lands in it. A tick can be as late as interval * (1 + jitter), and the
+    // reader keeps a 5 minute margin for the tick's own work. Interval 1 and jitter 0 make the
+    // arithmetic exact: the window must exceed 1 + 5 = 6 minutes.
+    const tight = { USAGE_REPORT_INTERVAL_MINUTES: "1", SCHEDULER_JITTER_FRACTION: "0" }
+    const sunday = { USAGE_REPORT_WEEKDAY: "7", USAGE_REPORT_HOUR_UTC: "23" }
+
+    test("the defaults pass", () => {
+      expect(() => parseEnv(base)).not.toThrow()
+    })
+
     test("refuses an offset of a full week or more: the anchor would always fall after the next Monday", () => {
       // 6 d + 23 h + 60 min = 10080 minutes.
-      const error = refused({
-        USAGE_REPORT_WEEKDAY: "7",
-        USAGE_REPORT_HOUR_UTC: "23",
-        USAGE_REPORT_SETTLE_MINUTES: "60",
-      })
+      const error = refused({ ...sunday, USAGE_REPORT_SETTLE_MINUTES: "60" })
       expect(error.variables).toEqual(["USAGE_REPORT_SETTLE_MINUTES"])
       expect(error.message).toContain("USAGE_REPORT_WEEKDAY")
       expect(error.message).toContain("USAGE_REPORT_HOUR_UTC")
+      expect(error.message).toContain("USAGE_REPORT_INTERVAL_MINUTES")
     })
 
-    test("accepts one minute less", () => {
-      const env = parseEnv({
-        ...base,
-        USAGE_REPORT_WEEKDAY: "7",
+    test("refuses a window not longer than one jittered tick plus margin, accepts one minute more", () => {
+      // settle 54 leaves 6 minutes (1 + 5 >= 6: refused); settle 53 leaves 7 (accepted).
+      expect(refused({ ...tight, ...sunday, USAGE_REPORT_SETTLE_MINUTES: "54" }).variables).toEqual(
+        ["USAGE_REPORT_SETTLE_MINUTES"],
+      )
+      const env = parseEnv({ ...base, ...tight, ...sunday, USAGE_REPORT_SETTLE_MINUTES: "53" })
+      expect(env.usageReport.settleMinutes).toBe(53)
+    })
+
+    test("the default hourly check cannot fire in a 30 minute window", () => {
+      const error = refused({ ...sunday, USAGE_REPORT_SETTLE_MINUTES: "30" })
+      expect(error.variables).toEqual(["USAGE_REPORT_SETTLE_MINUTES"])
+    })
+
+    test("the jitter fraction widens the tick: a 95 minute window fits 60 minutes at 0 and not at 0.5", () => {
+      // Saturday 23:00 plus 1405 minutes of settle leaves 1500 - 1405 = 95 minutes of the week.
+      const window95 = {
+        USAGE_REPORT_WEEKDAY: "6",
         USAGE_REPORT_HOUR_UTC: "23",
-        USAGE_REPORT_SETTLE_MINUTES: "59",
-      })
-      expect(env.usageReport.settleMinutes).toBe(59)
+        USAGE_REPORT_SETTLE_MINUTES: "1405",
+      }
+      // 60 x 1 + 5 = 65 < 95: accepted. 60 x 1.5 + 5 = 95 >= 95: refused.
+      expect(
+        parseEnv({ ...base, ...window95, SCHEDULER_JITTER_FRACTION: "0" }).usageReport
+          .settleMinutes,
+      ).toBe(1405)
+      expect(refused({ ...window95, SCHEDULER_JITTER_FRACTION: "0.5" }).variables).toEqual([
+        "USAGE_REPORT_SETTLE_MINUTES",
+      ])
+    })
+  })
+
+  describe("USAGE_REPORT_INTERVAL_MINUTES and USAGE_REPORT_MAX_ROWS bounds", () => {
+    test("the interval is bounded above by a day", () => {
+      expect(
+        parseEnv({ ...base, USAGE_REPORT_INTERVAL_MINUTES: "1440" }).scheduler
+          .usageReportIntervalMinutes,
+      ).toBe(1440)
+      expect(refused({ USAGE_REPORT_INTERVAL_MINUTES: "1441" }).variables).toEqual([
+        "USAGE_REPORT_INTERVAL_MINUTES",
+      ])
+    })
+
+    test("the row ceiling is positive and at most 100000", () => {
+      expect(refused({ USAGE_REPORT_MAX_ROWS: "0" }).variables).toEqual(["USAGE_REPORT_MAX_ROWS"])
+      expect(refused({ USAGE_REPORT_MAX_ROWS: "100001" }).variables).toEqual([
+        "USAGE_REPORT_MAX_ROWS",
+      ])
+      expect(parseEnv({ ...base, USAGE_REPORT_MAX_ROWS: "100000" }).usageReport.maxRows).toBe(
+        100_000,
+      )
     })
   })
 })

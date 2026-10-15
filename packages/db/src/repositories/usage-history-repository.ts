@@ -166,7 +166,7 @@ export function createUsageHistoryRepository(
     totals,
     breakdown,
     exportRows: (window, filter, limit) => readUsageExportRows(db, window, filter, limit),
-    weekRows: (window) => readUsageWeekRows(db, window),
+    weekRows: (window, ceiling) => readUsageWeekRows(db, window, ceiling),
     series: (window, bucket, width, filter) =>
       read<UsageSeriesPoint>(seriesQuery(window, bucket, undefined, width, undefined, filter)),
     seriesByDimension,

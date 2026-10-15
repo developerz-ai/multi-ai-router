@@ -390,7 +390,7 @@ Rows are swept by the janitor on `period_start`, strictly older than `RETENTION_
 - `buckets.unassigned` (a labelled key with no owner), `buckets.deleted` (a key id with neither a
   live row nor a tombstone) and `buckets.none` (no key on the attempt), each with its own totals.
   Sections plus buckets sum to `totals`, per measure.
-- Measures on every line: `requests`, `tokensIn`, `tokensOut`, `costMetered` (METERED), `costNotional`
+- Measures on every line: `requests`, `tokensIn`, `tokensOut`, `cacheReadTokens`, `cacheWriteTokens`, `costMetered` (METERED), `costNotional`
   (NOTIONAL, a list-price attribution on subscription accounts, never added to METERED) and
   `unpricedAttempts`. Money is summed exactly and rendered as six-decimal strings. `unpricedAttempts`
   is `null` ("not measured") for a week before the measure started, never 0.
@@ -400,8 +400,11 @@ Rows are swept by the janitor on `period_start`, strictly older than `RETENTION_
   name, the pool name and the provider id of the pool's overflow account (never an account label).
 - `caveats`: the unpriced share, the overflow designation being the pool's *at generation time*,
   the generated-at and coverage, the dating basis (requests by the instant they settled, attempts by
-  the instant they started), and whether the settle margin covers `UPSTREAM_TIMEOUT_MS` (an attempt
-  that outlives it can land after generation and is missed for good).
+  the instant they started), and whether the real gap between the week's end and generation (the
+  schedule's whole anchor offset plus tick lateness; for a preview, whenever it was asked for)
+  covers `UPSTREAM_TIMEOUT_MS` (an attempt that outlives it can land after generation and is missed
+  for good). The unpriced share is divided by attempts on days the measure covers, so a week that
+  straddles the start of the measure is not diluted by unmeasured days.
 
 **Endpoints** (admin session; the `POST` also needs the CSRF token):
 `GET /api/admin/usage/reports` (stored reports, newest first, without payloads),
@@ -411,7 +414,14 @@ and stores nothing).
 
 The week is read at key x account x pool x model from the same three-source union as the usage
 summary (`historySource`), so the report's totals equal the summary's for the same week. The overflow
-share needs attempt rollups; a preview of a week before the v2 rollups existed undercounts it.
+share reads attempts per account and pool from the same union (legacy daily rows carry that grain
+too), so it is derivable for any retained week.
+
+The read is bounded by `USAGE_REPORT_MAX_ROWS` (default 50000, at most 100000): a week with more
+key x account x pool x model rows fails loudly rather than producing a truncated report. The task
+ends `failed` with a message naming the variable and the preview answers `400 report_too_large`.
+The top ten models by tokens are kept in `topModels`; that cut is part of the payload contract, not
+a setting.
 
 ### Where the numbers appear
 
