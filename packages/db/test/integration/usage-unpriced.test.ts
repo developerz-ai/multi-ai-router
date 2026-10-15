@@ -55,7 +55,7 @@ describe.skipIf(!historyUrl)("unpriced attempts through the rollup and reads", (
 
   test("without a v2 state row nothing is measured: attempts null, since 'infinity'", async () => {
     const db = fixture.db()
-    const [row] = await db.select().from(usageHistoryState)
+    const [row] = await db.select().from(usageHistoryState).where(sql`id = 'v2'`)
     await db.delete(usageHistoryState).where(sql`id = 'v2'`)
     try {
       const totals = await fixture.history().totals(dayWindow("1984-01-01", "1984-02-01"))
