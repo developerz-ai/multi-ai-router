@@ -1,5 +1,7 @@
 import type { SettingsView } from "../src/lib/api/settings"
 import type { PoolView, ProviderListResponse, SessionView } from "../src/lib/api/types"
+import type { WireSummary } from "../src/lib/api/usage-wire"
+import { ID } from "./fixture-ids"
 import type { FixtureAccount, FixtureKey, WireTotals } from "./fixture-types"
 
 // The admin-API fixture `bin/ui-geometry` serves to the built SPA from Playwright
@@ -150,7 +152,7 @@ const account = (
 /** `GET /accounts` — see the module comment for what each row is for. */
 export const accounts: readonly FixtureAccount[] = [
   account({
-    id: "acc-subscription",
+    id: ID.accSubscription,
     label: "claude-max-1",
     provider: "anthropic-oauth",
     billing: "subscription",
@@ -170,7 +172,7 @@ export const accounts: readonly FixtureAccount[] = [
     },
   }),
   account({
-    id: "acc-api-key",
+    id: ID.accApiKey,
     label: "anthropic-console-api",
     provider: "anthropic-api",
     hasCredential: true,
@@ -183,7 +185,7 @@ export const accounts: readonly FixtureAccount[] = [
     updatedAt: iso(-2 * DAY),
   }),
   account({
-    id: "acc-long-label",
+    id: ID.accLongLabel,
     label: LONG_LABEL,
     provider: "anthropic-api",
     hasCredential: true,
@@ -213,16 +215,16 @@ const key = (over: Partial<FixtureKey> & Pick<FixtureKey, "id" | "name">): Fixtu
 
 export const keys: readonly FixtureKey[] = [
   key({
-    id: "key-big-spender",
+    id: ID.keyBigSpender,
     name: "team-batch-pipeline",
     prefix: "mar_live_9f2Kd",
-    owner: "ivann",
+    owner: "fixture-owner",
     ownerKind: "person",
     tool: "claude-code",
     purpose: "nightly evals",
   }),
   key({
-    id: "key-revoked",
+    id: ID.keyRevoked,
     name: "legacy-runner",
     prefix: "mar_live_old01",
     scope: { kind: "pools", poolIds: ["pool-1"], accountIds: [] },
@@ -238,7 +240,7 @@ export const keys: readonly FixtureKey[] = [
 export const pools: readonly PoolView[] = []
 
 /** `GET /usage?window=7d` — totals plus the two breakdowns the tables join on. */
-export const usage = {
+export const usage: WireSummary = {
   coverage: {
     timeBasis: "event-time",
     requestsBasis: "terminal",
@@ -269,28 +271,28 @@ export const usage = {
     // The five-digit spend: wide enough that a cramped COST column would push it
     // into the neighbouring cell — the exact regression this gate exists for.
     row(
-      "key-big-spender",
+      ID.keyBigSpender,
       "team-batch-pipeline",
       totals(600, "45678.90", "0"),
       [80, 90, 100, 95, 110, 105, 20],
     ),
-    row("key-revoked", "legacy-runner", totals(12, "34.56", "0"), [2, 2, 3, 1, 2, 1, 1]),
+    row(ID.keyRevoked, "legacy-runner", totals(12, "34.56", "0"), [2, 2, 3, 1, 2, 1, 1]),
   ],
   byAccount: [
     row(
-      "acc-subscription",
+      ID.accSubscription,
       "claude-max-1",
       totals(412, "0", "88.40"),
       [50, 60, 58, 62, 61, 70, 51],
     ),
     // Non-zero metered AND notional on a STORED-badge row: the collision #62 was.
     row(
-      "acc-api-key",
+      ID.accApiKey,
       "anthropic-console-api",
       totals(588, "842.13", "96.25"),
       [90, 80, 85, 88, 79, 84, 82],
     ),
-    row("acc-long-label", LONG_LABEL, totals(64, "12.00", "3.50"), [9, 10, 8, 11, 9, 10, 7]),
+    row(ID.accLongLabel, LONG_LABEL, totals(64, "12.00", "3.50"), [9, 10, 8, 11, 9, 10, 7]),
   ],
   byPool: [],
   byModel: [],

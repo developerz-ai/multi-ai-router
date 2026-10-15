@@ -43,8 +43,8 @@ function alphaRule(c: Checker, badges: readonly BadgeMeas[], page: string): void
   for (const badge of badges) {
     const alpha = backgroundAlpha(badge.background)
     c.check(
-      alpha === 1,
-      `${page}: badge "${badge.text}" background ${badge.background} has alpha ${alpha}, expected 1 (Badge.module.scss pins it opaque for #62)`,
+      alpha === 1 && badge.opacity === "1",
+      `${page}: badge "${badge.text}" background ${badge.background} has alpha ${alpha} and opacity ${badge.opacity}, expected 1 and 1 (Badge.module.scss pins it opaque for #62)`,
     )
   }
 }

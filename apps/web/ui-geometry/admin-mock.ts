@@ -3,21 +3,28 @@
 // "nothing leaves the runner" guarantee — there is no router process to serve
 // `/api/admin/**`, so the SPA's fetches are answered in-process, and the
 // catch-all below aborts anything aimed at any other origin before the network
-// stack could emit it.
+// stack could emit it. A table that never renders, or a call the fixture does not
+// know, is reported by run.ts as a named failure rather than swallowed here.
 import type { BrowserContext } from "playwright"
+import type { AuthMethods } from "../src/lib/api/auth"
+import type { SettingsView } from "../src/lib/api/settings"
+import type { PoolView, ProviderListResponse, SessionView } from "../src/lib/api/types"
+import type { WireSummary } from "../src/lib/api/usage-wire"
 import { accounts, keys, pools, providers, session, settings, usage } from "./fixture"
+import { authMethods } from "./fixture-ids"
+import type { FixtureAccount, FixtureKey } from "./fixture-types"
 
 /** Everything `GET /api/admin/<path>` can answer with. Fixture-complete or the run fails. */
-const GET: Readonly<Record<string, unknown>> = {
-  "/api/admin/auth/session": session,
-  "/api/admin/auth/methods": { passwordEnabled: false, oidcEnabled: false },
-  "/api/admin/settings": settings,
-  "/api/admin/providers": providers,
-  "/api/admin/accounts": accounts,
-  "/api/admin/keys": keys,
-  "/api/admin/pools": pools,
-  "/api/admin/usage": usage,
-}
+const GET = {
+  "/api/admin/auth/session": session satisfies SessionView,
+  "/api/admin/auth/methods": authMethods satisfies AuthMethods,
+  "/api/admin/settings": settings satisfies SettingsView,
+  "/api/admin/providers": providers satisfies ProviderListResponse,
+  "/api/admin/accounts": accounts satisfies readonly FixtureAccount[],
+  "/api/admin/keys": keys satisfies readonly FixtureKey[],
+  "/api/admin/pools": pools satisfies readonly PoolView[],
+  "/api/admin/usage": usage satisfies WireSummary,
+} as const satisfies Readonly<Record<string, unknown>>
 
 /** Origins a run may talk to: only the in-process static server. Anything else is a violation. */
 export interface Egress {
@@ -62,7 +69,7 @@ export async function installAdminMock(
       void route.fulfill({ status: 404, contentType: "application/json", body: "{}" })
       return
     }
-    const body = GET[url.pathname]
+    const body = (GET as Readonly<Record<string, unknown>>)[url.pathname]
     if (body === undefined) {
       unmapped.push(`GET ${url.pathname}`)
       void route.fulfill({ status: 404, contentType: "application/json", body: "{}" })

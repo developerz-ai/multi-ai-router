@@ -29,6 +29,8 @@ export interface BadgeMeas {
   readonly text: string
   readonly box: Box
   readonly background: string
+  /** Computed opacity of the badge itself — a faded pill would pass the alpha rule yet bleed. */
+  readonly opacity: string
 }
 
 /**
@@ -42,6 +44,8 @@ export interface RowMeas {
   readonly costCell: Box
   readonly costBlock: Box | null
   readonly costText: Box | null
+  /** What the cost block actually printed — proves the stress figures rendered, not $0.00. */
+  readonly costBlockText: string | null
   readonly badges: readonly BadgeMeas[]
   /** Every other cell in the row that paints anything: its box and its content ink. */
   readonly others: readonly { readonly cell: Box; readonly ink: Box }[]
@@ -94,6 +98,7 @@ function measureTables(args: MeasureArgs): PageMeas {
     text: (el.textContent ?? "").trim(),
     box: box(el),
     background: getComputedStyle(el).backgroundColor,
+    opacity: getComputedStyle(el).opacity,
   })
 
   return {
@@ -116,6 +121,7 @@ function measureTables(args: MeasureArgs): PageMeas {
           costCell: costTd === null ? { x: 0, y: 0, width: 0, height: 0 } : box(costTd),
           costBlock: blockEl === null ? null : ink(blockEl),
           costText: textEl === null ? null : ink(textEl),
+          costBlockText: blockEl === null ? null : (blockEl.textContent ?? "").trim(),
           badges: credTd === null ? [] : badgeEls(credTd).map(badge),
           others:
             costIdx === -1

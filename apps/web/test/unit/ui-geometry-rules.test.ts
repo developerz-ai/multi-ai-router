@@ -23,6 +23,7 @@ const badge = (background: string, box: Box = BADGE_BOX): BadgeMeas => ({
   text: "stored",
   box,
   background,
+  opacity: "1",
 })
 
 const row = (
@@ -36,6 +37,7 @@ const row = (
   costCell: CELL,
   costBlock: over.costBlock === undefined ? INSIDE : over.costBlock,
   costText: over.costText === undefined ? INSIDE : over.costText,
+  costBlockText: "$1.00",
   badges: over.badges ?? [badge("rgb(18, 22, 31)")],
   others: over.others ?? [],
 })
@@ -131,6 +133,7 @@ describe("assertKeys", () => {
             costCell: CELL,
             costBlock: spend,
             costText: spend,
+            costBlockText: "$1.00",
             badges: [],
             others: neighbors.map((ink) => ({ cell: ink, ink })),
           },
@@ -138,6 +141,7 @@ describe("assertKeys", () => {
             costCell: CELL,
             costBlock: null,
             costText: null,
+            costBlockText: null,
             badges: [],
             others: [],
           })),

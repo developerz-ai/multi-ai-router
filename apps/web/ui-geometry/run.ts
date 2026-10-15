@@ -12,10 +12,11 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { type Browser, chromium } from "playwright"
 import { installAdminMock } from "./admin-mock"
-import { NOW } from "./fixture"
+import { accounts, keys, NOW } from "./fixture"
 import { Checker, measure, pinnedFontsInstalled } from "./geometry"
 import { assertAccounts, assertKeys, reportLine } from "./rules"
 import { startStaticServer } from "./server"
+import { assertStress, type StressExpectation } from "./stress"
 
 /** The three widths the gate holds: compact laptop, common default, roomy desktop. */
 const WIDTHS = [1024, 1280, 1440] as const
@@ -39,6 +40,7 @@ interface Surface {
   readonly blockSelector: string
   readonly textSelector: string | null
   readonly assert: typeof assertAccounts | typeof assertKeys
+  readonly stress: StressExpectation
 }
 
 const SURFACES: readonly Surface[] = [
@@ -51,6 +53,7 @@ const SURFACES: readonly Surface[] = [
     blockSelector: '[class*="_figures_"]',
     textSelector: '[class*="_spend_"]',
     assert: assertAccounts,
+    stress: { rows: accounts.length, figures: [], storedRowNotZero: true },
   },
   {
     path: "/keys",
@@ -61,6 +64,11 @@ const SURFACES: readonly Surface[] = [
     blockSelector: '[class*="_spend_"]',
     textSelector: null,
     assert: assertKeys,
+    stress: {
+      rows: keys.length,
+      figures: [{ label: "big-spender Keys cost", text: "$45,679" }],
+      storedRowNotZero: false,
+    },
   },
 ]
 
@@ -114,8 +122,20 @@ async function main(): Promise<number> {
       const page = await context.newPage()
 
       for (const surface of SURFACES) {
-        await page.goto(`${server.origin}${surface.path}`)
-        await page.waitForSelector("table")
+        // A table that never renders is a named failure for this surface and
+        // width, not a thrown timeout that skips the egress report below.
+        const rendered = await page
+          .goto(`${server.origin}${surface.path}`)
+          .then(() => page.waitForSelector("table", { timeout: 30_000 }))
+          .then(() => true)
+          .catch(() => false)
+        if (!rendered) {
+          checker.check(
+            false,
+            `${surface.name} @${width}: no <table> rendered within 30s — the page errored, the route moved, or an admin call was unmocked`,
+          )
+          continue
+        }
         await page.addStyleTag({ content: FONT_PIN })
         await page.evaluate(async () => {
           await document.fonts.ready
@@ -143,9 +163,11 @@ async function main(): Promise<number> {
           textSelector: surface.textSelector,
         })
         const report = surface.assert(checker, meas)
+        assertStress(checker, `${surface.name} @${width}`, meas, surface.stress)
         lines.push(reportLine(surface.name, width, report))
       }
 
+      // Reported even when a surface failed to render: an unmocked call is often why.
       for (const violation of mock.violations()) {
         checker.check(false, `@${width}px egress fence: ${violation}`)
       }
