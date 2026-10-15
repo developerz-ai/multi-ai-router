@@ -41,6 +41,9 @@ export interface TombstoneSource {
 
 export function createApiKeyTombstoneRepository(db: DatabaseExecutor): ApiKeyTombstoneRepository {
   return {
+    // Rides `api_keys_revoked_at_idx`. The `revoked` predicate is not redundant with a non-null
+    // `revoked_at`: the flag is what `findUsableByPrefix` reads, so the sweep can only reach a key
+    // verification already refuses.
     purgeRevoked: async (cutoff, purgedAt, limit) => {
       // Dates go as ISO text with an explicit cast: this is raw SQL, so no column encoder runs.
       const rows = await db.execute(sql`
