@@ -1,4 +1,5 @@
 import {
+  type AccountRepository,
   type ApiKeyRepository,
   type ApiKeyTombstoneRepository,
   createUsageHistoryRepository,
@@ -24,6 +25,7 @@ export function createUsageReports(deps: {
   readonly keys: Pick<ApiKeyRepository, "list">
   readonly keyTombstones: Pick<ApiKeyTombstoneRepository, "listAll">
   readonly pools: Pick<PoolRepository, "list">
+  readonly accounts: Pick<AccountRepository, "list">
   readonly catalog: Pick<RoutingCatalogStore, "accounts" | "pools">
   readonly now: () => Date
 }): UsageReportService {
@@ -38,12 +40,19 @@ export function createUsageReports(deps: {
     }),
     // Read live rather than from the warm catalog: the overflow designation is the pool's as it
     // stands at generation time, and a 30 s stale snapshot is not that.
-    pools: async () =>
-      (await deps.pools.list()).map((pool) => ({
+    // The overflow account's provider id comes from the accounts table rather than the catalog,
+    // which holds routable accounts only: a disabled overflow account still has a provider.
+    pools: async () => {
+      const [pools, accounts] = await Promise.all([deps.pools.list(), deps.accounts.list({})])
+      const providers = new Map(accounts.map((account) => [account.id, account.provider]))
+      return pools.map((pool) => ({
         id: pool.id,
         name: pool.name,
         overflowAccountId: pool.overflowAccountId,
-      })),
+        overflowProvider:
+          pool.overflowAccountId === null ? null : (providers.get(pool.overflowAccountId) ?? null),
+      }))
+    },
     settleMinutes: env.usageReport.settleMinutes,
     upstreamTimeoutMs: env.failover.upstreamTimeoutMs,
     // One row a week, plus two for a week in flight and a clock edge.

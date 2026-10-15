@@ -13,8 +13,8 @@ import { render } from "./render"
  * and the audit feed is paged.
  *
  * Only `PATCH /api/admin/settings` mutates, and it carries a CSRF token because the guard demands
- * one on every mutating method. The two `GET`s do not, for the reason `routes/admin/usage.ts`
- * states: nothing read-only needs one.
+ * one on every mutating method. The two `GET`s do not: nothing read-only needs one (the usage
+ * group's `GET`s are the same; only its `POST /reports/preview` carries the token).
  *
  * The retention windows, the log level and the janitor interval are rendered by the `GET` and have
  * no write path at all. They are environment configuration (CLAUDE.md non-negotiable 11) — the

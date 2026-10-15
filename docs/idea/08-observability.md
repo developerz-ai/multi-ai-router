@@ -397,7 +397,7 @@ Rows are swept by the janitor on `period_start`, strictly older than `RETENTION_
 - `topModels` by tokens, and `overflow`: per (service key, pool with an overflow account) the key's
   attempts in the pool, how many landed on the overflow account, and the share. A pool with no
   overflow account has no line, and attempts with no pool are in no ratio. Each line carries the key
-  name and the pool name.
+  name, the pool name and the provider id of the pool's overflow account (never an account label).
 - `caveats`: the unpriced share, the overflow designation being the pool's *at generation time*,
   the generated-at and coverage, the dating basis (requests by the instant they settled, attempts by
   the instant they started), and whether the settle margin covers `UPSTREAM_TIMEOUT_MS` (an attempt

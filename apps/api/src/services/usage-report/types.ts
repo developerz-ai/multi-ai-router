@@ -22,6 +22,8 @@ export interface ReportPool {
   readonly id: string
   readonly name: string
   readonly overflowAccountId: string | null
+  /** The provider id of that overflow account (not its label), for the overflow line. */
+  readonly overflowProvider: string | null
 }
 
 /**
@@ -77,6 +79,8 @@ export interface ReportOverflowLine {
   readonly ownerKind: KeyOwnerKind | null
   readonly tool: string | null
   readonly poolName: string
+  /** The provider id of the pool's overflow account, e.g. `anthropic`. Never the account's label. */
+  readonly provider: string | null
   readonly overflowAttempts: number
   /** All of the key's attempts in the pool, the denominator. */
   readonly attempts: number

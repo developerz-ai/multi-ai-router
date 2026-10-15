@@ -45,6 +45,7 @@ export function overflowShares(
       ownerKind: label.ownerKind,
       tool: label.tool,
       poolName: pool.name,
+      provider: pool.overflowProvider,
       overflowAttempts: overflow,
       attempts,
       share: overflow / attempts,
