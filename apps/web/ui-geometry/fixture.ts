@@ -48,6 +48,7 @@ const totals = (requests: number, metered: string, notional: string): WireTotals
   cacheWriteTokens: 0,
   costMetered: metered,
   costNotional: notional,
+  unpriced: { attempts: 0, since: "2026-01-01" },
 })
 
 const row = (id: string, label: string, t: WireTotals, series: readonly number[]) => ({
