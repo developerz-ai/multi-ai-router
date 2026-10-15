@@ -11,7 +11,7 @@ import { deleteOldestBatch } from "./bounded-delete"
  * admin key list reads this table; the only reader is the usage label loader, through `listAll`.
  * Every `purged_at` comes from the caller's injected clock, never the database's `now()`.
  *
- * **This is the only code that deletes an `api_keys` row.** Both deletes (the janitor purge and the
+ * **This is the only production code that deletes an `api_keys` row** (bench and test cleanup aside). Both deletes (the janitor purge and the
  * operator delete) are one statement that also writes the tombstone, so a key's name cannot be lost
  * with its row.
  */
@@ -24,8 +24,9 @@ export interface ApiKeyTombstoneRepository {
   purgeRevoked(cutoff: Date, purgedAt: Date, limit: number): Promise<number>
   /**
    * The operator delete: removes one key and writes its tombstone in the same statement.
-   * `true` when a row was removed. `ON CONFLICT DO NOTHING`, so a delete racing a janitor purge
-   * cannot collide on the primary key. Scope rows cascade.
+   * `true` when a row was removed. A concurrent janitor purge cannot double-insert (the row lock lets
+   * one DELETE return the row); `ON CONFLICT DO NOTHING` is belt and braces for a tombstone that
+   * already exists for the id. Scope rows cascade.
    */
   deleteKey(id: string, purgedAt: Date): Promise<boolean>
   /** Every tombstone. Small by construction: one row per key rotated away in the retention window. */
