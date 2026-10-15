@@ -107,15 +107,18 @@ describe.skipIf(!historyUrl)("usage CSV export refusals", () => {
   test("a legacy day before the unpriced start exports an empty unpriced_attempts, not a zero", async () => {
     const sql = fixture.get().sql
     await sql.unsafe("alter table usage_daily disable trigger usage_history_baseline_seal")
-    await fixture.db().insert(usageDaily).values({
-      day: "1984-03-01",
-      apiKeyId: crypto.randomUUID(),
-      accountId: crypto.randomUUID(),
-      model: "legacy",
-      requests: 6,
-      attempts: 6,
-    })
-    await sql.unsafe("alter table usage_daily enable trigger usage_history_baseline_seal")
+    try {
+      await fixture.db().insert(usageDaily).values({
+        day: "1984-03-01",
+        apiKeyId: crypto.randomUUID(),
+        accountId: crypto.randomUUID(),
+        model: "legacy",
+        requests: 6,
+        attempts: 6,
+      })
+    } finally {
+      await sql.unsafe("alter table usage_daily enable trigger usage_history_baseline_seal")
+    }
     const legacy = records(
       (await exportOf("from=1984-02-28T00:00:00.000Z&to=1984-03-05T00:00:00.000Z")).text,
     )

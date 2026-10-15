@@ -115,7 +115,8 @@ describe("UsageRoute export control", () => {
 
 describe("UsageExport inside the router", () => {
   test("a primary click is left to the browser: the SPA router must not intercept the download", () => {
-    window.happyDOM?.setURL("http://router.test/usage")
+    const previous = window.location.href
+    window.happyDOM.setURL("http://router.test/usage")
     const container = document.createElement("div")
     document.body.appendChild(container)
     const dispose = render(
@@ -127,6 +128,8 @@ describe("UsageExport inside the router", () => {
       container,
     )
     try {
+      // Without a same-origin page the router never treats the anchor as its own.
+      expect(window.location.origin).toBe("http://router.test")
       const anchor = container.querySelector("a")
       if (anchor === null) throw new Error("export link missing")
       const click = new MouseEvent("click", { bubbles: true, cancelable: true, button: 0 })
@@ -138,6 +141,7 @@ describe("UsageExport inside the router", () => {
     } finally {
       dispose()
       container.remove()
+      window.happyDOM.setURL(previous)
     }
   })
 })

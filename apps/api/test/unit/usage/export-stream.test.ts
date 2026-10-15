@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test"
 import type { UsageExportRow } from "@multi-ai-router/db"
 import {
   renderUsageCsv,
+  USAGE_EXPORT_CHUNK_BYTES,
   USAGE_EXPORT_CHUNK_ROWS,
   usageCsvChunks,
   usageCsvStream,
@@ -63,5 +64,36 @@ describe("usage CSV chunking", () => {
     }
     expect(parts.length).toBeGreaterThan(1)
     expect(new TextDecoder().decode(Buffer.concat(parts))).toBe(renderUsageCsv(all, subjects))
+  })
+
+  test("a chunk is cut by rendered size too: wide rows give more, smaller chunks", () => {
+    const wide = rows(500).map((r) => ({ ...r, model: '"'.repeat(256) }))
+    const chunks = [...usageCsvChunks(wide, subjects)]
+    // 500 rows at ~520 bytes is ~260 KB: far more than the one chunk a row-count cut would give.
+    expect(chunks.length).toBeGreaterThan(5)
+    // Cut after the row that crosses the limit, so a chunk overshoots by at most one row.
+    for (const chunk of chunks) expect(chunk.length).toBeLessThan(USAGE_EXPORT_CHUNK_BYTES + 1024)
+    expect(chunks.join("")).toBe(renderUsageCsv(wide, subjects))
+  })
+
+  test("pull yields to the event loop before it renders", async () => {
+    const order: string[] = []
+    class Spy extends Map<string, string> {
+      override get(key: string) {
+        if (order[order.length - 1] !== "render") order.push("render")
+        return super.get(key)
+      }
+    }
+    // Scheduled before the stream exists: if pull() awaits setImmediate first, the marker runs
+    // before the first render; if pull() renders synchronously, "render" comes first.
+    setImmediate(() => order.push("marker"))
+    const spied = { ...subjects, providers: new Spy() }
+    const reader = usageCsvStream(
+      [{ ...row(1), accountId: crypto.randomUUID() }],
+      spied,
+    ).getReader()
+    while (!(await reader.read()).done) {}
+    expect(order[0]).toBe("marker")
+    expect(order).toContain("render")
   })
 })

@@ -20,7 +20,7 @@ describe("csvLine", () => {
   })
 
   test("a leading = + - @ tab or CR gets a leading apostrophe", () => {
-    for (const lead of ["=", "+", "-", "@", "\t", "\r"]) {
+    for (const lead of ["=", "+", "-", "@", "\t"]) {
       expect(one(`${lead}SUM(1)`)).toBe(`'${lead}SUM(1)`)
     }
   })
@@ -43,11 +43,13 @@ describe("csvLine", () => {
     expect(one("")).toBe("")
   })
 
-  test("a value with a comma, quote or newline keeps the column count", () => {
+  test("CR and LF inside a text cell become one space; a quote or comma keeps the column count", () => {
     const row = ["a,b", 'say "hi"', "line1\nline2", "plain", "=x,y"]
     const parsed = read(csvLine(row))
     expect(parsed).toHaveLength(1)
-    expect(parsed[0]).toEqual(["a,b", 'say "hi"', "line1\nline2", "plain", "'=x,y"])
+    expect(parsed[0]).toEqual(["a,b", 'say "hi"', "line1 line2", "plain", "'=x,y"])
+    expect(one("a\r\nb\rc\nd")).toBe("a b c d")
+    expect(one("\r=1+1")).toBe("' =1+1")
   })
 
   test("null and undefined are empty cells", () => {
@@ -74,16 +76,48 @@ describe("csvLine", () => {
     ])
   })
 
-  test("a formula lead after ';' or tab is neutralised: a spreadsheet may split on either", () => {
-    const line = csvLine(["x;=HYPERLINK(CHAR(104)&CHAR(116));", "y\t=1+1", "z;@SUM(1)", "w;\t-1"])
-    for (const delimiter of [";", "\t", ","]) {
-      const cells = (
-        parse(line, { delimiter, relax_quotes: true, relax_column_count: true }) as string[][]
-      ).flat()
-      for (const cell of cells) expect(cell).not.toMatch(/^[=+\-@]/)
+  test("no cell starts with a formula char under any naive split, newline included", () => {
+    const payloads = [
+      "x;=1+1;",
+      "y\t=1+1",
+      "x\n=1+1",
+      "x\r@SUM(1)",
+      "x\r\n-1",
+      'x;"=1+1;',
+      "w;\t-1",
+    ]
+    for (const payload of payloads) {
+      // A full row: nine unquoted cells, then the payload as the model (column 10).
+      const line = csvLine([
+        "2026-10-15",
+        "o",
+        "person",
+        "t",
+        "k",
+        "p",
+        "pool",
+        "acct",
+        "prov",
+        payload,
+        1,
+      ])
+      for (const delimiter of [";", "\t", ","]) {
+        // quote: false is a spreadsheet that splits on the raw bytes and ignores quoting.
+        const records = parse(line, {
+          delimiter,
+          quote: false,
+          relax_column_count: true,
+          record_delimiter: ["\r\n", "\n", "\r"],
+        }) as string[][]
+        for (const cell of records.flat()) expect(cell).not.toMatch(/^[=+\-@]/)
+      }
     }
+  })
+
+  test("the guarded forms, spelled out", () => {
     expect(one("x;=1+1;")).toBe("x;'=1+1;")
     expect(one("y\t=1+1")).toBe("y\t'=1+1")
+    expect(one('x;"=1+1;')).toBe('"x;""\'=1+1;"')
   })
 
   test("a full-width equals sign or a leading space before a formula char is guarded", () => {
