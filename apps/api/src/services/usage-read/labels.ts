@@ -31,21 +31,11 @@ export function catalogLabels(deps: {
     const live = await deps.keys.list()
     const stones = await deps.tombstones.listAll()
     const keys = new Map<string, KeyLabel>()
-    // Tombstones first, so a live row wins if the two ever coexist (a delete racing a read).
-    for (const [rows, retired] of [
-      [stones, true],
-      [live, false],
-    ] as const) {
-      for (const row of rows) {
-        keys.set(row.id, {
-          name: row.name,
-          owner: row.owner,
-          ownerKind: row.ownerKind,
-          tool: row.tool,
-          retired,
-        })
-      }
-    }
+    // Tombstones first, so a live row's name and attribution win if the two ever coexist (a delete
+    // racing a read). `retired` is the exception: a tombstone's existence means the key is going or
+    // gone, so it stays true even when the live row still names the key.
+    for (const row of stones) keys.set(row.id, labelOf(row, true))
+    for (const row of live) keys.set(row.id, labelOf(row, keys.get(row.id)?.retired === true))
     return {
       keys,
       accounts: new Map(
@@ -54,4 +44,16 @@ export function catalogLabels(deps: {
       pools: new Map(deps.catalog.pools().map((pool) => [pool.id, pool.name])),
     }
   }
+}
+
+function labelOf(
+  row: {
+    name: string
+    owner: string | null
+    ownerKind: KeyLabel["ownerKind"]
+    tool: string | null
+  },
+  retired: boolean,
+): KeyLabel {
+  return { name: row.name, owner: row.owner, ownerKind: row.ownerKind, tool: row.tool, retired }
 }
