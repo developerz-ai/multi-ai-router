@@ -334,13 +334,12 @@ describe.skipIf(!historyUrl)("usage owner and tool breakdowns over HTTP and Post
 
   test("metered and notional are never summed", async () => {
     const { body } = await get(app, "window=7d")
-    const bob = byId(body.byOwner, "person/bob")
-    expect(bob?.totals).toMatchObject({ attempts: 2 })
-    expect(Number((bob?.totals as unknown as Record<string, string>).costMetered)).toBe(0)
-    expect(Number((bob?.totals as unknown as Record<string, string>).costNotional)).toBeCloseTo(
-      0.2,
-      6,
-    )
+    const bob = byId(body.byOwner, "person/bob") as unknown as {
+      totals: { attempts: number; costMetered: string; costNotional: string }
+    }
+    expect(bob.totals.attempts).toBe(2)
+    expect(Number(bob.totals.costMetered)).toBe(0)
+    expect(Number(bob.totals.costNotional)).toBeCloseTo(0.2, 6)
   })
 
   test("a window served from usage_daily groups the same way", async () => {

@@ -89,7 +89,12 @@ function service(rows: readonly UsageGroupRow[], stub: Stub = {}) {
       },
     },
     labels: async () => ({
-      keys: new Map([["key-1", { name: "dev-laptops", owner: null, ownerKind: null, tool: null, retired: false }]]),
+      keys: new Map([
+        [
+          "key-1",
+          { name: "dev-laptops", owner: null, ownerKind: null, tool: null, retired: false },
+        ],
+      ]),
       accounts: new Map([["acct-1", "claude-max-01"]]),
       pools: new Map([["pool-1", "default"]]),
     }),
