@@ -41,8 +41,8 @@ export interface ApiKeyRepository {
   findByName(name: string): Promise<ApiKeyRow | undefined>
   /** Never touches `value` or `prefix`: editing a key does not rotate it. */
   update(id: string, patch: UpdateApiKeyInput, now: Date): Promise<ApiKeyRow | undefined>
-  /** `true` when a row was removed. Scope rows cascade. */
-  delete(id: string): Promise<boolean>
+  // There is deliberately no `delete`: removing an `api_keys` row writes a tombstone in the same
+  // statement, and that lives in `ApiKeyTombstoneRepository` (`deleteKey`, `purgeRevoked`).
 
   listPoolTargets(apiKeyId: string): Promise<ApiKeyPoolRow[]>
   listAccountTargets(apiKeyId: string): Promise<ApiKeyAccountRow[]>
@@ -206,11 +206,6 @@ export function createApiKeyRepository(db: DatabaseExecutor): ApiKeyRepository {
         .where(eq(apiKeys.id, id))
         .returning()
       return rows[0]
-    },
-
-    delete: async (id) => {
-      const rows = await db.delete(apiKeys).where(eq(apiKeys.id, id)).returning({ id: apiKeys.id })
-      return rows.length > 0
     },
 
     listPoolTargets: (apiKeyId) => poolTargetsWhere(eq(apiKeyPools.apiKeyId, apiKeyId)),

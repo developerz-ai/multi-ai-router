@@ -101,7 +101,7 @@ export interface AdminPlaneDeps {
   readonly accounts: AccountRepository
   readonly refreshLock: Pick<CredentialRefreshLock, "tryRun">
   readonly keys: ApiKeyRepository
-  readonly keyTombstones: ApiKeyTombstoneRepository
+  readonly keyTombstones: Pick<ApiKeyTombstoneRepository, "listAll">
   readonly pools: PoolRepository
   readonly auditEvents: AuditRepository
   readonly oauthStates: OauthStateRepository

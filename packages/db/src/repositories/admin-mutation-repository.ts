@@ -27,14 +27,13 @@ export interface AdminMutationScope {
     | "findById"
     | "findByName"
     | "update"
-    | "delete"
     | "markRevoked"
     | "listPoolTargets"
     | "listAccountTargets"
     | "listKeysScopedToPool"
     | "replaceScopeTargets"
   >
-  readonly tombstones: Pick<ApiKeyTombstoneRepository, "record">
+  readonly tombstones: Pick<ApiKeyTombstoneRepository, "deleteKey">
   readonly pools: PoolRepository
   readonly accounts: Pick<AccountRepository, "list" | "findByIds">
   readonly audit: Pick<AuditRepository, "append">

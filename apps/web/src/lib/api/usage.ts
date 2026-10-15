@@ -9,7 +9,7 @@ import type { FailureCount } from "../failure-classes"
 //     them as JSON numbers would round money through a float. They are parsed
 //     once here, at the edge, so no component has to know.
 //   - **A label may be null**, with a `note` saying why: `deleted` when the key
-//     or account is gone (usage rows outlive what they name), `none` when the
+//     or account is gone (usage rows outlive what they name; for a key: no live row and no tombstone), `none` when the
 //     dimension did not apply — a key scoped `all` was placed by no pool. Both
 //     still render, because spend that happened is still spend and hiding a row
 //     would make the breakdown stop adding up to the total printed above it.

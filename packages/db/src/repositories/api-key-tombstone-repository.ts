@@ -1,7 +1,7 @@
-import type { KeyOwnerKind } from "@multi-ai-router/core"
-import { asc, sql } from "drizzle-orm"
+import { asc, type SQL, sql } from "drizzle-orm"
 import type { DatabaseExecutor } from "../client"
 import { type ApiKeyTombstoneRow, apiKeyTombstones } from "../schema/api-key-tombstones"
+import { apiKeys } from "../schema/api-keys"
 import { deleteOldestBatch } from "./bounded-delete"
 
 /**
@@ -10,33 +10,77 @@ import { deleteOldestBatch } from "./bounded-delete"
  * Kept out of `api-key-repository.ts` on purpose. Nothing on the request path, no reveal and no
  * admin key list reads this table; the only reader is the usage label loader, through `listAll`.
  * Every `purged_at` comes from the caller's injected clock, never the database's `now()`.
+ *
+ * **This is the only code that deletes an `api_keys` row.** Both deletes (the janitor purge and the
+ * operator delete) are one statement that also writes the tombstone, so a key's name cannot be lost
+ * with its row.
  */
 export interface ApiKeyTombstoneRepository {
   /**
    * Deletes keys revoked before `cutoff` — one bounded batch, oldest revocation first — and writes
-   * their tombstones in the same statement, so a crash cannot lose a key's name with its row.
-   * Returns how many keys went; exactly `limit` means there is more. A revoked row whose
-   * `revoked_at` is NULL has no measurable age and is never swept.
+   * their tombstones in the same statement. Returns how many keys went; exactly `limit` means there
+   * is more. A revoked row whose `revoked_at` is NULL has no measurable age and is never swept.
    */
   purgeRevoked(cutoff: Date, purgedAt: Date, limit: number): Promise<number>
   /**
-   * Records one key's tombstone, for the operator delete (which removes the row itself in the same
-   * transaction). `ON CONFLICT DO NOTHING`: a delete racing a janitor purge must not collide.
+   * The operator delete: removes one key and writes its tombstone in the same statement.
+   * `true` when a row was removed. `ON CONFLICT DO NOTHING`, so a delete racing a janitor purge
+   * cannot collide on the primary key. Scope rows cascade.
    */
-  record(key: TombstoneSource, purgedAt: Date): Promise<void>
+  deleteKey(id: string, purgedAt: Date): Promise<boolean>
   /** Every tombstone. Small by construction: one row per key rotated away in the retention window. */
   listAll(): Promise<ApiKeyTombstoneRow[]>
   /** Sweeps tombstones with `purged_at` before `cutoff`, bounded, oldest first. */
   deleteOlderThan(cutoff: Date, limit: number): Promise<number>
 }
 
-export interface TombstoneSource {
-  readonly id: string
-  readonly name: string
-  readonly prefix: string
-  readonly owner: string | null
-  readonly ownerKind: KeyOwnerKind | null
-  readonly tool: string | null
+/** The `api_keys` columns a tombstone copies, in the order of `TOMBSTONE_COLUMNS`. */
+const COPIED = [
+  apiKeys.id,
+  apiKeys.name,
+  apiKeys.prefix,
+  apiKeys.owner,
+  apiKeys.ownerKind,
+  apiKeys.tool,
+]
+const TOMBSTONE_COLUMNS = sql.join(
+  [
+    apiKeyTombstones.id,
+    apiKeyTombstones.name,
+    apiKeyTombstones.prefix,
+    apiKeyTombstones.owner,
+    apiKeyTombstones.ownerKind,
+    apiKeyTombstones.tool,
+    apiKeyTombstones.purgedAt,
+  ].map((column) => sql.identifier(column.name)),
+  sql`, `,
+)
+
+/**
+ * `DELETE ... RETURNING` feeding `INSERT ... ON CONFLICT DO NOTHING`, counted from the delete so a
+ * skipped insert cannot understate how many keys went. Dates travel as ISO text with an explicit
+ * cast: this is raw SQL, so no column encoder runs.
+ */
+async function deleteAndTombstone(
+  db: DatabaseExecutor,
+  where: SQL,
+  purgedAt: Date,
+): Promise<number> {
+  const returned = sql.join(COPIED, sql`, `)
+  const [row] = await db.execute<{ deleted: number }>(sql`
+    WITH gone AS (
+      DELETE FROM ${apiKeys} WHERE ${where} RETURNING ${returned}
+    ), written AS (
+      INSERT INTO ${apiKeyTombstones} (${TOMBSTONE_COLUMNS})
+      SELECT ${sql.join(
+        COPIED.map((column) => sql.identifier(column.name)),
+        sql`, `,
+      )}, ${purgedAt.toISOString()}::timestamptz
+      FROM gone
+      ON CONFLICT (${sql.identifier(apiKeyTombstones.id.name)}) DO NOTHING
+    )
+    SELECT count(*)::int AS deleted FROM gone`)
+  return row?.deleted ?? 0
 }
 
 export function createApiKeyTombstoneRepository(db: DatabaseExecutor): ApiKeyTombstoneRepository {
@@ -44,43 +88,20 @@ export function createApiKeyTombstoneRepository(db: DatabaseExecutor): ApiKeyTom
     // Rides `api_keys_revoked_at_idx`. The `revoked` predicate is not redundant with a non-null
     // `revoked_at`: the flag is what `findUsableByPrefix` reads, so the sweep can only reach a key
     // verification already refuses.
-    purgeRevoked: async (cutoff, purgedAt, limit) => {
-      // Dates go as ISO text with an explicit cast: this is raw SQL, so no column encoder runs.
-      const rows = await db.execute(sql`
-        WITH gone AS (
-          DELETE FROM api_keys
-          WHERE id IN (
-            SELECT id FROM api_keys
-            WHERE revoked = true AND revoked_at < ${cutoff.toISOString()}::timestamptz
-            ORDER BY revoked_at ASC
-            LIMIT ${limit}
-          )
-          RETURNING id, name, prefix, owner, owner_kind, tool
-        ), written AS (
-          INSERT INTO api_key_tombstones (id, name, prefix, owner, owner_kind, tool, purged_at)
-          SELECT id, name, prefix, owner, owner_kind, tool, ${purgedAt.toISOString()}::timestamptz
-          FROM gone
-          ON CONFLICT (id) DO NOTHING
-        )
-        SELECT count(*)::int AS deleted FROM gone`)
-      const first = (rows as unknown as readonly { deleted: number }[])[0]
-      return first?.deleted ?? 0
-    },
+    purgeRevoked: (cutoff, purgedAt, limit) =>
+      deleteAndTombstone(
+        db,
+        sql`${apiKeys.id} IN (
+          SELECT ${apiKeys.id} FROM ${apiKeys}
+          WHERE ${apiKeys.revoked} = true AND ${apiKeys.revokedAt} < ${cutoff.toISOString()}::timestamptz
+          ORDER BY ${apiKeys.revokedAt} ASC
+          LIMIT ${limit}
+        )`,
+        purgedAt,
+      ),
 
-    record: async (key, purgedAt) => {
-      await db
-        .insert(apiKeyTombstones)
-        .values({
-          id: key.id,
-          name: key.name,
-          prefix: key.prefix,
-          owner: key.owner,
-          ownerKind: key.ownerKind,
-          tool: key.tool,
-          purgedAt,
-        })
-        .onConflictDoNothing({ target: apiKeyTombstones.id })
-    },
+    deleteKey: async (id, purgedAt) =>
+      (await deleteAndTombstone(db, sql`${apiKeys.id} = ${id}::uuid`, purgedAt)) > 0,
 
     listAll: () => db.select().from(apiKeyTombstones).orderBy(asc(apiKeyTombstones.purgedAt)),
 

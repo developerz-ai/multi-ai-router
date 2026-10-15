@@ -64,10 +64,7 @@ export type { AdminSessionRepository } from "./repositories/admin-session-reposi
 export { createAdminSessionRepository } from "./repositories/admin-session-repository"
 export type { ApiKeyRepository } from "./repositories/api-key-repository"
 export { createApiKeyRepository } from "./repositories/api-key-repository"
-export type {
-  ApiKeyTombstoneRepository,
-  TombstoneSource,
-} from "./repositories/api-key-tombstone-repository"
+export type { ApiKeyTombstoneRepository } from "./repositories/api-key-tombstone-repository"
 export { createApiKeyTombstoneRepository } from "./repositories/api-key-tombstone-repository"
 export type {
   AppendAuditEventInput,

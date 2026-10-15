@@ -13,6 +13,12 @@ import type { KeyLabel, UsageLabelSets } from "./service"
  * A key is named by its live row, else by the tombstone its purge or delete left behind (the
  * rollups outlive the row). Tombstones are read through their own method and merged here, never
  * unioned into `keys.list()`: that list is the admin keys list, which must not show a purged key.
+ *
+ * The two reads are not one snapshot. A delete committing between them removes the row after
+ * `keys.list()` saw it, so for that one load the key is still named from the live read; a delete
+ * committing the other way round (row read as gone, tombstone read before the commit lands) shows
+ * a transient "deleted" for that key until the next load. Neither is worse than the label being
+ * decoration, so it is not worth a transaction.
  */
 export function catalogLabels(deps: {
   readonly keys: Pick<ApiKeyRepository, "list">

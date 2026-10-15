@@ -1,4 +1,5 @@
 import type { AdminMutationRepository, AdminMutationScope } from "@multi-ai-router/db"
+import { remove } from "./memory-row-operations"
 import type { MemoryStore } from "./memory-store"
 
 /** Serial transactions with rollback, over the same rows existing service fixtures inspect. */
@@ -28,7 +29,7 @@ export function createMemoryMutations(store: MemoryStore): AdminMutationReposito
       const scope: AdminMutationScope = {
         keys: store.keys,
         // The in-memory store keeps no tombstones; the live path is covered against Postgres.
-        tombstones: { record: async () => {} },
+        tombstones: { deleteKey: async (id) => remove(store.rows.keys, id) },
         pools: store.pools,
         accounts: store.accounts,
         audit: store.audit,

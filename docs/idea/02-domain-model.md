@@ -447,7 +447,7 @@ means a restarted conversation, not a relocated one. See the table under
 | **active** | Verifies on the data plane. The value is viewable and copyable from the admin UI at any time, as often as needed — viewing is audited and does not rotate the key |
 | **revoked** | Fails verification immediately. Historical `UsageRecord` rows stay joinable |
 | **purged** | 30 days after revocation the row is deleted by the janitor. The same statement writes an `api_key_tombstones` row (id, name, display prefix, owner, owner kind, tool, purge time; never the value), and an operator delete writes the same row in its transaction. Usage rows keep the key id, so reports still name the key |
-| **tombstone swept** | `RETENTION_USAGE_DAILY_DAYS` (730) after the purge, the horizon of the rollups it labels. Only the usage label loader reads a tombstone: verification, reveal and the admin key list never do. Keys purged before tombstones existed stay "deleted" |
+| **tombstone swept** | `RETENTION_USAGE_DAILY_DAYS` (730) plus one day after the purge, the horizon of the rollups it labels. Only the usage label loader reads a tombstone: verification, reveal and the admin key list never do. Keys purged before tombstones existed stay "deleted" |
 
 ## Session lifecycle
 

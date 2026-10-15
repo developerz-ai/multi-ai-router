@@ -13,20 +13,21 @@ import { runSweeps } from "./sweep"
 /**
  * The janitor: the retention sweep for the seven tables that grow without bound.
  *
- * One task rather than six, because they share a schedule and an operator reads
+ * One task rather than seven, because they share a schedule and an operator reads
  * them as one answer — "the janitor ran 4 min ago and deleted 812 rows"
  * (docs/idea/09-deployment.md, "Cleanups & retention"). The per-category counts
  * are in the summary line, so "deleted 812 rows" can still be broken down.
  *
  * **Every window is `env.retention`, never a number in this file** (CLAUDE.md
  * non-negotiable 11). What is decided here is only the *order*, and it is
- * deliberate: revoked keys go last, because deleting one cascades to its
+ * deliberate: revoked keys go after the rest, because deleting one cascades to its
  * sessions and scope rows (its usage rows keep the id, and a tombstone written in the same
  * statement keeps the name), and doing that first would make the sweeps in front of it race their
- * own cascade for no reason.
+ * own cascade for no reason. The key-tombstone sweep goes last: it touches only its own table, and
+ * a tombstone written by this very tick's purge is far too young to be swept.
  *
  * Two of the seven grow slowly enough to have been overlooked rather than
- * excluded, and both are here for the same reason the other four are: `usage_daily`
+ * excluded, and both are here for the same reason the other five are: `usage_daily`
  * banks one row per distinct `(day, key, account, pool, model)` and outlives the
  * raw rows by design, which is not the same as outliving them forever; and
  * `scheduled_task_runs` takes a row per task per tick, about a thousand a day,
@@ -76,8 +77,10 @@ export function createJanitorTask(deps: JanitorDeps): ScheduledTask {
       const staleAudit = before(now, retention.auditDays * DAY_MS)
       const staleTaskRuns = before(now, retention.taskRunsDays * DAY_MS)
       const purgeableKeys = before(now, retention.revokedKeysDays * DAY_MS)
-      // A tombstone labels rollups, so it lives as long as they do.
-      const staleTombstones = before(now, retention.usageDailyDays * DAY_MS)
+      // A tombstone labels rollups, so it lives as long as they do — plus one day, because rollups
+      // age by whole UTC day: the purge day's own rollup is still inside the window for up to a day
+      // after `purged_at + usageDailyDays`.
+      const staleTombstones = before(now, (retention.usageDailyDays + 1) * DAY_MS)
 
       const report = await runSweeps(
         [
