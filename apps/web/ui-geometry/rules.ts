@@ -192,6 +192,10 @@ export function assertKeys(c: Checker, meas: PageMeas): PageReport {
         `${page}: table #${i + 1} row ${r + 1} SpendCell ink escapes its cell by ${(-clearance(block, row.costCell)).toFixed(1)}px`,
       )
       minCellClearance = Math.min(minCellClearance, clearance(block, row.costCell))
+      c.check(
+        row.others.length > 0,
+        `${page}: table #${i + 1} row ${r + 1} matched zero neighbouring cells — selector scope empty`,
+      )
       for (const other of row.others) {
         c.check(
           !intersects(block, other.ink),

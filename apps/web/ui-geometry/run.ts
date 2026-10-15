@@ -10,6 +10,7 @@
 import { mkdtemp, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
+import { fileURLToPath } from "node:url"
 import { type Browser, chromium } from "playwright"
 import { installAdminMock } from "./admin-mock"
 import { accounts, keys, NOW } from "./fixture"
@@ -74,7 +75,7 @@ const SURFACES: readonly Surface[] = [
 
 async function main(): Promise<number> {
   // This file is apps/web/ui-geometry/run.ts — the package root is one level up.
-  const webDir = new URL("../", import.meta.url).pathname
+  const webDir = fileURLToPath(new URL("../", import.meta.url))
   // Built into a throwaway dir so a gate run never overwrites the apps/web/dist
   // an operator (or bin/dev) may be serving.
   const outDir = await mkdtemp(join(tmpdir(), "ui-geometry-dist-"))

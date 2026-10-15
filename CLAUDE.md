@@ -71,7 +71,7 @@ Postgres is the house standard and the current decision — earlier drafts said 
 | Overhead budget: p50/p95/p99 + added TTFT vs a stub upstream | `bin/bench` |
 | Live check against a deployed router: text, tool call, round trip, stream, reasoning, plus informational legs on the other two dialects | `bin/smoke` — `bin/smoke --url URL --model ID --key-env NAME` |
 | Before cutting a tag: the tree agrees on one version, and the tag names it | `bin/verify-version` · `bin/verify-version v1.0.0` — `release.yml` runs the same check before it builds a layer |
-| Layout gate: real headless Chromium against the built SPA, `/accounts` + `/keys` at 1024/1280/1440px, fails on cost text/blocks painting outside their cell or through a credential badge | `bin/ui-geometry` (fixture-mocked admin API, no router or DB needed; CI runs it) |
+| Layout gate: real headless Chromium against the built SPA, `/accounts` + `/keys` at 1024/1280/1440px, fails on cost text/blocks painting outside their cell, through a credential badge (`/accounts`) or into a neighbouring cell (`/keys`) | `bin/ui-geometry` (fixture-mocked admin API, no router or DB needed; CI runs it) |
 | Dev database shell / migrate / reset | `bin/db psql` · `bin/db migrate` · `bin/db reset` |
 | Build release image locally | `docker build -t multi-ai-router:dev .` |
 

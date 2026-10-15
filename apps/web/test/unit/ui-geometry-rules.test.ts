@@ -208,6 +208,12 @@ describe("assertKeys", () => {
     expect(c.failures.some((f) => f.includes("zero State badges"))).toBe(true)
   })
 
+  test("a SpendCell row with no neighbouring cells fails on the empty scope", () => {
+    const c = new Checker()
+    assertKeys(c, keysPage(INSIDE, []))
+    expect(c.failures.some((f) => f.includes("matched zero neighbouring cells"))).toBe(true)
+  })
+
   test("a clean keys measurement passes", () => {
     const c = new Checker()
     assertKeys(c, keysPage(INSIDE, [{ x: 300, y: 50, width: 120, height: 80 }]))

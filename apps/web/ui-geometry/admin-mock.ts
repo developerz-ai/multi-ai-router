@@ -62,6 +62,13 @@ export async function installAdminMock(
 
   await context.route("**/api/admin/**", (route) => {
     const url = new URL(route.request().url())
+    // The glob matches any origin; an admin call aimed elsewhere is a wrong API
+    // base, not a mocked read, so it is blocked and reported like any other.
+    if (url.origin !== origin) {
+      blocked.push(route.request().url())
+      void route.abort()
+      return
+    }
     if (route.request().method() !== "GET") {
       // A geometry run reads; the SPA mutates only from operator actions, and
       // none happen. A mutation here means something navigated itself.

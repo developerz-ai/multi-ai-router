@@ -8,9 +8,9 @@
     "rootDir": "..",
     "outDir": "../dist-types-gate"
   },
-  // The gate and the unit test of its rules; typechecked as a project of its own
+  // The gate and its unit tests; typechecked as a project of its own
   // because the SPA's tsconfig (src only) and `bun test` check neither.
-  "include": ["./*.ts", "../test/unit/ui-geometry-rules.test.ts"],
+  "include": ["./*.ts", "../test/unit/ui-geometry-*.test.ts"],
   // The fixture imports the SPA's wire types; the reference supplies them as
   // declarations rather than re-compiling src into this project.
   "references": [{ "path": ".." }]
