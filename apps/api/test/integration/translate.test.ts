@@ -548,58 +548,126 @@ describe("the openai-chat output ceiling (translate egress)", () => {
 })
 
 /**
- * Structured output end to end: the refusal a *client library* is the one that notices.
- *
- * An OpenAI SDK `.parse()`, LangChain's `withStructuredOutput()`, Instructor, and `generateObject`
- * all send `response_format` and then parse the reply as the schema they sent. Dropped in
- * translation the call succeeds, prose comes back, and the failure lands at the caller's own
- * `JSON.parse` with nothing on the wire naming the cause. These assert the `400` arrives instead —
- * **before a socket is opened**, in the client's own dialect, naming the field to remove.
+ * Structured output end to end on an anthropic-dialect account. An OpenAI SDK `.parse()`,
+ * LangChain's `withStructuredOutput()`, Instructor and `generateObject` send `response_format` and
+ * parse the reply as the schema they sent. The router carries it as a forced tool call and hands the
+ * tool's input back as `message.content`, so the client sees an ordinary openai-chat answer.
  */
 describe("response_format on translate egress (the structured-output contract)", () => {
-  const CHAT = (responseFormat: unknown) =>
+  const SCHEMA = { type: "object", properties: { answer: { type: "boolean" } } }
+  const CHAT = (extra: Record<string, unknown>) =>
     JSON.stringify({
       model: "claude-opus-5",
       messages: [{ role: "user", content: "who won?" }],
-      response_format: responseFormat,
+      ...extra,
     })
 
   const ok = () =>
     jsonResponse(200, {
       id: "msg_01",
+      model: "claude-opus-5",
       content: [{ type: "text", text: "hi" }],
       stop_reason: "end_turn",
       usage: { input_tokens: 1, output_tokens: 2 },
     })
+  const forced = () =>
+    jsonResponse(200, {
+      id: "msg_02",
+      model: "claude-opus-5",
+      content: [
+        {
+          type: "tool_use",
+          id: "toolu_1",
+          name: "router_structured_output",
+          input: { answer: true },
+        },
+      ],
+      stop_reason: "tool_use",
+      usage: { input_tokens: 1, output_tokens: 2 },
+    })
 
-  test("a json_schema request is refused 400 naming the field, and no upstream is called", async () => {
-    // An anthropic-dialect account: openai-chat ingress, so the body goes through a translator.
+  test("json_schema is sent as a forced tool with thinking disabled and answers as content", async () => {
+    const { app, upstream } = harness({ responses: [forced] })
+
+    const res = await app.request(
+      "/v1/chat/completions",
+      post(
+        CHAT({
+          response_format: { type: "json_schema", json_schema: { name: "w", schema: SCHEMA } },
+        }),
+        bearer(),
+      ),
+    )
+    const body = (await res.json()) as {
+      choices: { message: { content: string; tool_calls?: unknown }; finish_reason: string }[]
+    }
+    await settle()
+
+    expect(res.status).toBe(200)
+    expect(body.choices[0]?.message.content).toBe('{"answer":true}')
+    expect(body.choices[0]?.message.tool_calls).toBeUndefined()
+    expect(body.choices[0]?.finish_reason).toBe("stop")
+    const sent = JSON.parse(upstream.calls[0]?.body ?? "{}") as Record<string, unknown>
+    expect(sent.tool_choice).toEqual({ type: "tool", name: "router_structured_output" })
+    expect(sent.thinking).toEqual({ type: "disabled" })
+    expect(sent.tools).toEqual([
+      expect.objectContaining({ name: "router_structured_output", input_schema: SCHEMA }),
+    ])
+  })
+
+  test("json_schema beside tools is refused 400 naming tools, and no upstream is called", async () => {
     const { app, upstream, usage } = harness({ responses: [ok] })
 
     const res = await app.request(
       "/v1/chat/completions",
-      post(CHAT({ type: "json_schema", json_schema: { name: "winner", strict: true } }), bearer()),
+      post(
+        CHAT({
+          response_format: { type: "json_schema", json_schema: { name: "winner", schema: SCHEMA } },
+          tools: [{ type: "function", function: { name: "f", parameters: { type: "object" } } }],
+        }),
+        bearer(),
+      ),
     )
     const body = (await res.json()) as { error?: { type?: string; message?: string } }
     await settle()
 
     expect(res.status).toBe(400)
-    // The client's own dialect, since openai-chat is what it spoke.
     expect(body.error?.type).toBe("invalid_request_error")
-    expect(body.error?.message).toContain("response_format.type")
+    expect(body.error?.message).toContain("`tools`")
     expect(upstream.calls).toHaveLength(0)
-    // The schema the caller sent is never quoted back — `shared/reject.ts` interpolates no value
-    // out of a body it refused, and this one is a client-facing surface.
     expect(body.error?.message).not.toContain("winner")
-    // A refused request is still a request: one row, priced at nothing, named a client error.
     expect(usage.rows).toHaveLength(1)
     expect(usage.rows[0]).toMatchObject({ outcome: "client_error", tokensIn: 0, tokensOut: 0 })
+  })
+
+  test("tool_choice required is sent as any with thinking disabled", async () => {
+    const { app, upstream } = harness({ responses: [ok] })
+
+    const res = await app.request(
+      "/v1/chat/completions",
+      post(
+        CHAT({
+          tools: [{ type: "function", function: { name: "f", parameters: { type: "object" } } }],
+          tool_choice: "required",
+        }),
+        bearer(),
+      ),
+    )
+    await res.text()
+    await settle()
+
+    const sent = JSON.parse(upstream.calls[0]?.body ?? "{}") as Record<string, unknown>
+    expect(sent.tool_choice).toEqual({ type: "any" })
+    expect(sent.thinking).toEqual({ type: "disabled" })
   })
 
   test("response_format: text is served: it is the default and constrains nothing", async () => {
     const { app, upstream } = harness({ responses: [ok] })
 
-    const res = await app.request("/v1/chat/completions", post(CHAT({ type: "text" }), bearer()))
+    const res = await app.request(
+      "/v1/chat/completions",
+      post(CHAT({ response_format: { type: "text" } }), bearer()),
+    )
     await res.text()
     await settle()
 

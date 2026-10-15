@@ -93,7 +93,6 @@ export type {
 } from "./shared/openai-responses"
 export {
   assertNoStopSequence,
-  assertPlainResponseFormat,
   assertPlainTextFormat,
   assertStatelessResponses,
   assertTranslatableToAnthropic,

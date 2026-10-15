@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.37.2] — 2026-10-15
+
+### Fixed
+
+- openai-chat `response_format` (`json_schema`, `json_object`) on an anthropic-dialect account is carried instead of refused `400`. It travels as the standard forced-tool technique: one synthesized tool (`router_structured_output`) whose `input_schema` is the caller's schema, forced with `tool_choice {type: "tool"}` and thinking disabled. The tool's input comes back as `message.content` (a JSON string) with `finish_reason: "stop"` and no `tool_calls`, non-streaming and streaming (as `delta.content`). `response_format` beside the caller's own `tools` is refused `400` naming `tools`, a non-object schema root is refused naming the field, and a client tool named `router_structured_output` is refused as reserved. Caught on MiniMax-M3.
+- A forced `tool_choice` (`"required"` or a named function) on an openai-chat to anthropic hop now states `thinking: {type: "disabled"}`. The `any` / `tool` choice was already sent, but a forced tool and extended thinking cannot share a request on this dialect, and MiniMax's endpoint ignored the force while thinking was on and answered in prose with `finish_reason: "stop"`, so the constraint was lost at the upstream rather than in translation.
+
+### Changed
+
+- `assertPlainResponseFormat` is removed: no hop refuses openai-chat `response_format` wholesale any more. `docs/idea/06-protocol-translation.md` rows updated.
+
 ## [2.37.1] — 2026-10-15
 
 ### Added

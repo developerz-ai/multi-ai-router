@@ -5,6 +5,7 @@ import { type ChunkDelta, chatStreamChunk, type ToolCallDelta } from "../shared/
 import { parseUpstreamError } from "../shared/errors"
 import type { OpenAiFinishReason } from "../shared/stop-reason"
 import { CONSERVATIVE_FINISH_REASON, toOpenAiFinishReason } from "../shared/stop-reason"
+import { STRUCTURED_OUTPUT_TOOL } from "../shared/structured-output-anthropic"
 import type { AnthropicUsage } from "../shared/usage"
 import { parseAnthropicUsage, usageToOpenAiChat } from "../shared/usage"
 import type { SseEvent, StreamTranslator } from "../sse/emit"
@@ -31,6 +32,11 @@ import { frameJson } from "../sse/parse"
  * exception — their `start` carries the id and name that openai-chat puts on the first
  * `delta.tool_calls[]` entry, keyed by a call ordinal this module assigns, because Anthropic's
  * block index counts text blocks too and openai's `index` counts only calls.
+ *
+ * **The router's structured-output tool streams as `delta.content`.** A `tool_use` block named
+ * `STRUCTURED_OUTPUT_TOOL` carries a `response_format` answer (`shared/structured-output-anthropic.ts`):
+ * its `input_json_delta` fragments are the JSON text the client parses, so each leaves as a content
+ * delta as it arrives, no `tool_calls` entry is opened, and the `tool_use` stop reads `stop`.
  *
  * Dropped, as documented: `thinking` / `redacted_thinking` deltas (no counterpart) and `ping`.
  *
@@ -117,6 +123,9 @@ export function anthropicToOpenAiChatStream(
   /** Anthropic block index → openai call ordinal, for the blocks whose deltas have somewhere to go. */
   const toolCalls = new Map<number, number>()
   const argumentBlocks = new Set<number>()
+  /** Blocks of the structured-output tool: their JSON fragments are the message content. */
+  const structuredBlocks = new Set<number>()
+  let structuredSeen = false
 
   function chunk(delta: ChunkDelta, finishReason: OpenAiFinishReason | null): SseEvent {
     return chatStreamChunk({ id, model, created: options.created }, delta, finishReason)
@@ -138,6 +147,11 @@ export function anthropicToOpenAiChatStream(
     if (!parsed.success) return NO_EVENTS
     const { index, content_block: block } = parsed.data
 
+    if (block.type === "tool_use" && block.name === STRUCTURED_OUTPUT_TOOL) {
+      structuredBlocks.add(index)
+      structuredSeen = true
+      return NO_EVENTS
+    }
     if (block.type === "tool_use") {
       const ordinal = nextToolCall
       nextToolCall += 1
@@ -168,6 +182,10 @@ export function anthropicToOpenAiChatStream(
     }
     if (delta.type !== "input_json_delta") return NO_EVENTS
 
+    if (structuredBlocks.has(index)) {
+      const json = delta.partial_json ?? ""
+      return json.length === 0 ? NO_EVENTS : [chunk({ content: json }, null)]
+    }
     const ordinal = toolCalls.get(index)
     if (ordinal === undefined) return NO_EVENTS
     if ((delta.partial_json ?? "").length > 0) argumentBlocks.add(index)
@@ -189,7 +207,11 @@ export function anthropicToOpenAiChatStream(
     if (!parsed.success) return NO_EVENTS
     finished = true
 
-    const mapped = toOpenAiFinishReason(parsed.data.delta?.stop_reason)
+    const stopReason = parsed.data.delta?.stop_reason
+    const mapped =
+      structuredSeen && stopReason === "tool_use"
+        ? { value: "stop" as const, unrecognized: null }
+        : toOpenAiFinishReason(stopReason)
     unrecognized = mapped.unrecognized ?? unrecognized
     // This chunk *is* the last one, so an absent reason cannot travel as absence: see the module
     // note. The upstream ended the message without naming why — a turn whose stream stopped
