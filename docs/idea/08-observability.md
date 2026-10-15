@@ -179,7 +179,9 @@ inside a window that reaches past it.
 
 **Rollback note.** Rolling back past 2.30.0 and upgrading again requires moving
 `usage_history_state.unpriced_since` forward past the last day the old image wrote: days it wrote
-carry no measure and would otherwise read as measured zeros instead of not measured.
+carry no or partial measure (rows it inserts read 0; rows the new image created stop counting) and
+would otherwise read as measured instead of not measured. The same applies to an upgrade where an old
+replica keeps writing past the UTC midnight after the migration: move `since` past its last day.
 
 ## Usage reporting
 

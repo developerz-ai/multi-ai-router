@@ -1,4 +1,6 @@
-ALTER TABLE "usage_attempt_daily_v2" ADD COLUMN "unpriced_attempts" bigint;--> statement-breakpoint
+-- usage_history_state is altered first: every runtime transaction locks it before the rollup
+-- (the history lock), so taking the two locks in the same order keeps an upgrade that overlaps a
+-- running replica from deadlocking.
 ALTER TABLE "usage_history_state" ADD COLUMN "unpriced_since" date;--> statement-breakpoint
 -- The state row is created lazily by the history lock and 0030 never seeds it, so an UPDATE alone
 -- would leave a fresh install without a row and without a `since`. The day after the migration
@@ -6,4 +8,5 @@ ALTER TABLE "usage_history_state" ADD COLUMN "unpriced_since" date;--> statement
 INSERT INTO "usage_history_state" ("id", "unpriced_since", "updated_at")
 VALUES ('v2', ((now() AT TIME ZONE 'UTC')::date + 1), now())
 ON CONFLICT ("id") DO UPDATE
-SET "unpriced_since" = EXCLUDED."unpriced_since", "updated_at" = EXCLUDED."updated_at";
+SET "unpriced_since" = EXCLUDED."unpriced_since", "updated_at" = EXCLUDED."updated_at";--> statement-breakpoint
+ALTER TABLE "usage_attempt_daily_v2" ADD COLUMN "unpriced_attempts" bigint;
