@@ -103,7 +103,7 @@ describe("what each sweep is allowed to reach", () => {
     // `revoked` is what verification reads, so requiring it means the sweep can
     // only ever reach a key that is already refused.
     const { sql } = stub.only()
-    expect(sql).toMatch(/revoked\s*=\s*true/)
+    expect(sql).toMatch(/"revoked"\s*=\s*true/)
   })
 
   test("revoked keys: a revocation with no timestamp has no age and is never purged", async () => {
@@ -114,6 +114,20 @@ describe("what each sweep is allowed to reach", () => {
     // into a date. Unpurged is recoverable; purged is not.
     const { sql } = stub.only()
     expect(sql).not.toMatch(/coalesce|is null/i)
+  })
+
+  test("revoked keys: strict age, oldest first, bounded, in one statement with the tombstone", async () => {
+    const stub = harness()
+    await createApiKeyTombstoneRepository(stub.db).purgeRevoked(CUTOFF, CUTOFF, 100)
+
+    const { sql, params } = stub.only()
+    expect(sql).toMatch(/"api_keys"\."revoked_at"\s*<\s*\$\d+::timestamptz/)
+    expect(sql).not.toMatch(/revoked_at"\s*<=/)
+    expect(sql).toMatch(/order by\s+"api_keys"\."revoked_at"\s+asc\s+limit/i)
+    expect(sql).toMatch(/insert into "api_key_tombstones"/i)
+    expect(sql).toMatch(/on conflict \("id"\) do nothing/i)
+    expect(params).toContain(CUTOFF_PARAM)
+    expect(params).toContain(100)
   })
 
   test("audit events: age is the only predicate a caller can supply", async () => {

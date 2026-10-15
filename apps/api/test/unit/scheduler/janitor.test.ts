@@ -106,6 +106,7 @@ describe("the janitor sweep", () => {
     // three different windows, one `now`, so a row is judged by the window that
     // names it and not by whichever sweep happens to run first.
     const cutoffs: Record<string, Date> = {}
+    let purgedAt: Date | undefined
     const record =
       (category: string) =>
       async (cutoff: Date, _limit: number): Promise<number> => {
@@ -126,7 +127,10 @@ describe("the janitor sweep", () => {
       auditEvents: { deleteOlderThan: record("auditEvents") },
       taskRuns: { deleteOlderThan: record("taskRuns") },
       keyTombstones: {
-        purgeRevoked: async (cutoff, _at, limit) => record("revokedKeys")(cutoff, limit),
+        purgeRevoked: async (cutoff, at, limit) => {
+          purgedAt = at
+          return record("revokedKeys")(cutoff, limit)
+        },
         deleteOlderThan: record("keyTombstones"),
       },
       retention: { ...RETENTION, usageDays: 90, usageDailyDays: 730, taskRunsDays: 30 },
@@ -141,6 +145,11 @@ describe("the janitor sweep", () => {
     expect(daysBack("usageRecords")).toBe(90)
     expect(daysBack("usageDaily")).toBe(730)
     expect(daysBack("taskRuns")).toBe(30)
+    // Tombstones outlive the rollups they label by one day: rollups age by whole UTC day.
+    expect(daysBack("keyTombstones")).toBe(731)
+    // The tombstone's purge time is this tick's clock, not the database's.
+    expect(purgedAt).toEqual(NOW)
+    expect(daysBack("revokedKeys")).toBe(1)
   })
 
   test("a shutdown mid-drain reports partial, and the next tick finishes it", async () => {

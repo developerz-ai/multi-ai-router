@@ -87,24 +87,41 @@ describe.skipIf(!historyUrl)("api key tombstones against a live database", () =>
     expect((await tombstones.listAll()).map((row) => row.id)).toContain(newer.id)
   })
 
-  test("recording an existing tombstone again is a no-op, not a primary-key collision", async () => {
+  test("deleting a key writes its tombstone in one statement; a repeat on the same id keeps the first", async () => {
     const key = await revokedKey("twicekey", REVOKED_AT, { owner: "bob" })
     const tombstones = createApiKeyTombstoneRepository(fixture.db())
-    await tombstones.record(key, PURGED_AT)
-    await tombstones.record(key, new Date("2040-01-01T00:00:00.000Z"))
+    expect(await tombstones.deleteKey(key.id, PURGED_AT)).toBe(true)
+    expect(await createApiKeyRepository(fixture.db()).findById(key.id)).toBeUndefined()
+    // Gone already: nothing to delete, nothing written.
+    expect(await tombstones.deleteKey(key.id, new Date("2040-01-01T00:00:00.000Z"))).toBe(false)
+
+    // A row with the same id coming back (a delete racing a purge) must not collide on the PK.
+    await fixture
+      .db()
+      .insert(apiKeys)
+      .values({ ...key })
+    expect(await tombstones.deleteKey(key.id, new Date("2040-01-01T00:00:00.000Z"))).toBe(true)
     const rows = (await tombstones.listAll()).filter((row) => row.id === key.id)
     expect(rows).toHaveLength(1)
-    expect(rows[0]?.purgedAt).toEqual(PURGED_AT)
-    // record() never deletes the key: that is the caller's statement, in the same transaction.
-    expect(await fixture.db().select().from(apiKeys).where(eq(apiKeys.id, key.id))).toHaveLength(1)
+    expect(rows[0]).toMatchObject({ name: "twicekey", owner: "bob", purgedAt: PURGED_AT })
+  })
+
+  test("purge boundary: revoked_at exactly at the cutoff is kept", async () => {
+    const atCutoff = await revokedKey("boundary1", CUTOFF, {})
+    const justBefore = await revokedKey("boundary2", new Date(CUTOFF.getTime() - 1), {})
+    const tombstones = createApiKeyTombstoneRepository(fixture.db())
+    expect(await tombstones.purgeRevoked(CUTOFF, PURGED_AT, 100)).toBe(1)
+    const repo = createApiKeyRepository(fixture.db())
+    expect(await repo.findById(atCutoff.id)).toBeDefined()
+    expect(await repo.findById(justBefore.id)).toBeUndefined()
   })
 
   test("tombstones are swept by purged_at only: young survive, old go, bounded", async () => {
     const tombstones = createApiKeyTombstoneRepository(fixture.db())
     const young = await revokedKey("youngone", REVOKED_AT, {})
     const old = await revokedKey("oldoneey", REVOKED_AT, {})
-    await tombstones.record(young, new Date("2030-01-01T00:00:00.000Z"))
-    await tombstones.record(old, new Date("2001-01-01T00:00:00.000Z"))
+    await tombstones.deleteKey(young.id, new Date("2030-01-01T00:00:00.000Z"))
+    await tombstones.deleteKey(old.id, new Date("2001-01-01T00:00:00.000Z"))
     const horizon = new Date("2020-01-01T00:00:00.000Z")
     expect(await tombstones.deleteOlderThan(horizon, 100)).toBe(1)
     const ids = (await tombstones.listAll()).map((row) => row.id)
