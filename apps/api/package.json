@@ -17,5 +17,8 @@
     "@sentry/bun": "^11.4.0",
     "hono": "^4.13.13",
     "zod": "^4.6.5"
+  },
+  "devDependencies": {
+    "csv-parse": "7.0.3"
   }
 }

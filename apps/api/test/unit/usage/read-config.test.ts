@@ -7,14 +7,23 @@ const base = {
 }
 
 test("usage presentation bounds have explicit defaults and honor both supported edges", () => {
-  expect(parseEnv(base).usageRead).toEqual({ maxChartPoints: 400, breakdownMaxRows: 100 })
+  expect(parseEnv(base).usageRead).toEqual({
+    maxChartPoints: 400,
+    breakdownMaxRows: 100,
+    exportMaxRows: 50_000,
+  })
   expect(
     parseEnv({ ...base, USAGE_CHART_MAX_POINTS: "2", USAGE_BREAKDOWN_MAX_ROWS: "1" }).usageRead,
-  ).toEqual({ maxChartPoints: 2, breakdownMaxRows: 1 })
+  ).toEqual({ maxChartPoints: 2, breakdownMaxRows: 1, exportMaxRows: 50_000 })
   expect(
-    parseEnv({ ...base, USAGE_CHART_MAX_POINTS: "2000", USAGE_BREAKDOWN_MAX_ROWS: "1000" })
-      .usageRead,
-  ).toEqual({ maxChartPoints: 2000, breakdownMaxRows: 1000 })
+    parseEnv({
+      ...base,
+      USAGE_CHART_MAX_POINTS: "2000",
+      USAGE_BREAKDOWN_MAX_ROWS: "1000",
+      USAGE_EXPORT_MAX_ROWS: "200000",
+    }).usageRead,
+  ).toEqual({ maxChartPoints: 2000, breakdownMaxRows: 1000, exportMaxRows: 200_000 })
+  expect(parseEnv({ ...base, USAGE_EXPORT_MAX_ROWS: "1" }).usageRead.exportMaxRows).toBe(1)
 })
 
 test("out-of-domain usage limits fail boot rather than silently truncating", () => {
@@ -23,5 +32,11 @@ test("out-of-domain usage limits fail boot rather than silently truncating", () 
   }
   for (const value of ["0", "1001", "1.5"]) {
     expect(() => parseEnv({ ...base, USAGE_BREAKDOWN_MAX_ROWS: value })).toThrow(EnvValidationError)
+  }
+})
+
+test("USAGE_EXPORT_MAX_ROWS outside 1..200000 or not an integer fails boot", () => {
+  for (const value of ["0", "-5", "200001", "1.5", "lots"]) {
+    expect(() => parseEnv({ ...base, USAGE_EXPORT_MAX_ROWS: value })).toThrow(EnvValidationError)
   }
 })

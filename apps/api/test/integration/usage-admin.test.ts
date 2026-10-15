@@ -71,7 +71,12 @@ function harness(rows: readonly RecentAttemptRow[] = [attemptRow()], guard = stu
     recent: { recent: async () => [...rows] },
 
     labels: async () => ({
-      keys: new Map([["key-1", { name: "dev-laptops", owner: null, ownerKind: null, tool: null, prefix: "mar_dev" }]]),
+      keys: new Map([
+        [
+          "key-1",
+          { name: "dev-laptops", owner: null, ownerKind: null, tool: null, prefix: "mar_dev" },
+        ],
+      ]),
       accounts: new Map([["acct-1", "claude-max-01"]]),
       pools: new Map(),
     }),
