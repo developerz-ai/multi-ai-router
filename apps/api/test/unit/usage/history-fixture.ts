@@ -58,6 +58,7 @@ export function historyFixture(
     breakdown,
     series: (window, bucket, _width, filter) => raw.series(window, bucket, filter),
     seriesByDimension,
+    exportRows: async () => [],
     withSnapshot: (callback) => callback(history, raw),
     backfill: async () => ({ processed: 0, remaining: false }),
     rollupDay: async () => 0,

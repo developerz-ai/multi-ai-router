@@ -59,6 +59,7 @@ function service(rows: readonly RecentAttemptRow[]) {
   }
 
   const usage = createUsageService({
+    exportMaxRows: 50_000,
     history: historyFixture(
       {
         totals: unreached,
@@ -81,7 +82,14 @@ function service(rows: readonly RecentAttemptRow[]) {
       keys: new Map([
         [
           "key-1",
-          { name: "dev-laptops", owner: null, ownerKind: null, tool: null, retired: false },
+          {
+            name: "dev-laptops",
+            owner: null,
+            ownerKind: null,
+            tool: null,
+            retired: false,
+            prefix: "mar_dev",
+          },
         ],
       ]),
       accounts: new Map([["acct-1", "claude-max-01"]]),

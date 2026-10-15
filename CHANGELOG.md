@@ -11,11 +11,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- `GET /api/admin/usage` returns `byOwner` and `byTool` (#246). Rows are folded in SQL, before the breakdown row cap, from the key labels the service already loads (live keys plus tombstones), passed as one `unnest(uuid[], text[], text[], text[])` relation so a large key set costs four binds. The history, raw latency and per-row series queries share one bucket expression, so their group keys match. `byOwner` ids are `<ownerKind>/<owner>` with an `ownerKind` field (a person and a service sharing a slug are two rows; an owner with no kind uses the segment `unknown` and `ownerKind: null`); `byTool` ids are the tool slug. Three non-owner buckets are their own rows with `id: null`, `label: null` and a `note` of `unassigned` (key present, no owner or tool), `deleted` (key id with neither a live row nor a tombstone) or `none` (no key); the SQL tells them apart by sentinels outside the slug grammar, so their latency and series cannot collapse. `byKey` rows gain a boolean `retired`, true only for a key that survives solely as a tombstone. `coverage.breakdown.truncated` names `owner` and `tool` when capped. Owner and tool attribution follows each key's current label. `UsageDimension` gains `owner` and `tool`; the history and raw `breakdown` and `seriesByDimension` take an optional trailing key-attribution argument. `KeyLabel` gains `retired`. The `/recent` feed is unchanged.
+- `GET /api/admin/usage` returns `byOwner` and `byTool` (#246). Rows are folded in SQL, before the breakdown row cap, from the key labels the service already loads (live keys plus tombstones), passed as one `unnest(uuid[], text[], text[], text[])` relation so a large key set costs four binds. The history, raw latency and per-row series queries share one bucket expression, so their group keys match. `byOwner` ids are `<ownerKind>/<owner>` with an `ownerKind` field (a person and a service sharing a slug are two rows; an owner with no kind uses the segment `unknown` and `ownerKind: null`); `byTool` ids are the tool slug. Three non-owner buckets are their own rows with `id: null`, `label: null` and a `note` of `unassigned` (key present, no owner or tool), `deleted` (key id with neither a live row nor a tombstone) or `none` (no key); the SQL tells them apart by sentinels outside the slug grammar, so their latency and series cannot collapse. `byKey` rows gain a boolean `retired`, true only for a key that survives solely as a tombstone. `coverage.breakdown.truncated` names `owner` and `tool` when capped. Owner and tool attribution follows each key's current label. `UsageDimension` gains `owner` and `tool`; the history and raw `breakdown` and `seriesByDimension` are overloaded so `owner` and `tool` require a key-attribution argument (an absent one throws), and `UsageDailyRepository.breakdown` is narrowed to the four column dimensions. `KeyLabel` gains `retired`. The `/recent` feed is unchanged.
 
 ### Documentation
 
 - The `usage_records.pool_id` gloss now says it is null whenever no pool was in play, including an attempt that failed before an account was selected on a pool-scoped key, in the schema comment, the observability spec, the recent-feed and web wire-type comments and the repository types.
+## [2.33.0] — 2026-10-15
+
+### Added
+
+- `GET /api/admin/usage/export.csv` (#226): the usage the summary shows, as a CSV attachment, with the same window and the same six filters. One row per UTC day x key x account x pool x model, read from the same sources and predicate as the summary totals, so each column sums to the summary. Header `day, owner, owner_kind, tool, key_name, key_prefix, pool, account, provider, model, requests, attempts, errors, tokens_in, tokens_out, cache_read, cache_write, cost_metered_usd, cost_notional_usd, unpriced_attempts`. Absent labels are empty cells; `unpriced_attempts` is empty before the measure started. Every text cell is guarded against spreadsheet formulas (a leading `=`, `+`, `-`, `@` or tab, their full-width forms, or the same lead after `;`, tab or `,`, gets a leading `'`; CR, LF, VT, FF, U+001C-U+001E, NEL, U+2028 and U+2029 inside a text cell become a space), because any router-key holder chooses the `model` string. No key value or ciphertext is ever written; `key_prefix` is the public display prefix. `USAGE_EXPORT_MAX_ROWS` (default 50000, 1..100000) is decided before the first byte: over it answers 400 naming the cap; the body then streams in chunks of at most 1000 rows or about 32K characters, yielding to the event loop between them, instead of one synchronous render. The file carries no ids and no coverage signal (stated in `docs/idea/08-observability.md`). The Usage page gains an **Export CSV** link built from the params the summary sends.
+
+### Changed
+
+- `KeyLabel` carries the key's display `prefix` (live row or tombstone). The window resolution shared by the summary and the export moves to `read-window.ts`.
 
 ## [2.32.0] — 2026-10-15
 
@@ -1274,4 +1283,5 @@ your tooling config.
 [2.30.1]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.30.1
 [2.31.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.31.0
 [2.32.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.32.0
+[2.33.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.33.0
 [2.34.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.34.0

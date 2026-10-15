@@ -80,6 +80,7 @@ function service(rows: readonly UsageGroupRow[], stub: Stub = {}) {
     breakdown: async () => [...rows],
   }
   return createUsageService({
+    exportMaxRows: 50_000,
     history,
     // The live feed is its own read and its own test file; a summary that
     // touched it would be reading rows no chart on the screen plots.
@@ -92,7 +93,14 @@ function service(rows: readonly UsageGroupRow[], stub: Stub = {}) {
       keys: new Map([
         [
           "key-1",
-          { name: "dev-laptops", owner: null, ownerKind: null, tool: null, retired: false },
+          {
+            name: "dev-laptops",
+            owner: null,
+            ownerKind: null,
+            tool: null,
+            retired: false,
+            prefix: "mar_dev",
+          },
         ],
       ]),
       accounts: new Map([["acct-1", "claude-max-01"]]),

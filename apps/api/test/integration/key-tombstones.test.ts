@@ -76,6 +76,7 @@ function services(nowMs: () => Date) {
     now: nowMs,
   })
   const usage = createUsageService({
+    exportMaxRows: 50_000,
     history: fixture.history(),
     recent: createUsageRecentRepository(db),
     labels: catalogLabels({
@@ -148,6 +149,7 @@ describe.skipIf(!historyUrl)("a purged key keeps its attribution", () => {
       ownerKind: "person",
       tool: "editor",
       retired: true,
+      prefix: created.value.prefix,
     })
     // One clock: purged_at is the janitor tick's date, not the database's now().
     expect((await tombstones.listAll()).find((row) => row.id === id)?.purgedAt).toEqual(tickAt)
@@ -184,6 +186,7 @@ describe.skipIf(!historyUrl)("a purged key keeps its attribution", () => {
       ownerKind: "service",
       tool: "agent",
       retired: true,
+      prefix: created.value.prefix,
     })
     // One clock on the operator path too: purged_at is the service's injected now.
     expect((await tombstones.listAll()).find((row) => row.id === id)?.purgedAt).toEqual(deletedAt)

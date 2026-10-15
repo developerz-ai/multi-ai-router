@@ -7,16 +7,22 @@ export const USAGE_READ_ENV_FIELDS = {
   USAGE_BREAKDOWN_MAX_ROWS: atLeastOne
     .refine((value) => value <= 1_000, "must be at most 1000")
     .optional(),
+  // The rows are fetched into memory before the body streams, so the ceiling bounds the heap.
+  USAGE_EXPORT_MAX_ROWS: atLeastOne
+    .refine((value) => value <= 100_000, "must be at most 100000")
+    .optional(),
 }
 
 export function readUsageReadEnv(raw: {
   USAGE_CHART_MAX_POINTS?: number
   USAGE_BREAKDOWN_MAX_ROWS?: number
+  USAGE_EXPORT_MAX_ROWS?: number
 }) {
   return {
     usageRead: {
       maxChartPoints: raw.USAGE_CHART_MAX_POINTS ?? 400,
       breakdownMaxRows: raw.USAGE_BREAKDOWN_MAX_ROWS ?? 100,
+      exportMaxRows: raw.USAGE_EXPORT_MAX_ROWS ?? 50_000,
     },
   }
 }

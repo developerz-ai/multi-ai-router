@@ -8,9 +8,10 @@ import { axisBucketWidth, buildAxis } from "./axis"
 import { attributionOf, ownerRows, toolRows } from "./buckets"
 import { foldFailures } from "./failures"
 import { historyBreakdown, historySeriesBy, rawBreakdown } from "./group-reads"
+import { resolveReadWindow } from "./read-window"
 import { alignSeries, breakdownRow, keyNames, label } from "./summary-view"
 import type { UsageLabelSets, UsageSummary } from "./types"
-import { resolveWindow, type UsageWindowQuery } from "./window"
+import type { UsageWindowQuery } from "./window"
 
 const dimensions: readonly UsageDimension[] = [
   "apiKeyId",
@@ -33,18 +34,7 @@ export async function readSummary(
   query: UsageWindowQuery,
   filter: UsageFilter,
 ): Promise<UsageSummary> {
-  const initial = await deps.history.coverage()
-  const requested = resolveWindow(query, initial.dbNow)
-  const window =
-    requested.label === "lifetime"
-      ? {
-          ...requested,
-          from:
-            initial.earliestAt !== null && initial.earliestAt < requested.to
-              ? initial.earliestAt
-              : requested.to,
-        }
-      : requested
+  const window = await resolveReadWindow(deps.history, query)
   // Unfiltered on purpose: coverage asks "is any history in this window pending or legacy", and a
   // superset can only over-report `incomplete`, the safe direction (docs/idea/08-observability.md).
   const coverage = await deps.history.coverage(window)

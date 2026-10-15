@@ -52,8 +52,27 @@ function labelOf(
     owner: string | null
     ownerKind: KeyLabel["ownerKind"]
     tool: string | null
+    prefix: string
   },
   retired: boolean,
 ): KeyLabel {
-  return { name: row.name, owner: row.owner, ownerKind: row.ownerKind, tool: row.tool, retired }
+  return {
+    name: row.name,
+    owner: row.owner,
+    ownerKind: row.ownerKind,
+    tool: row.tool,
+    prefix: row.prefix,
+    retired,
+  }
+}
+
+/**
+ * Account id to provider id, for the CSV export's `provider` column. Copies the one string off
+ * each snapshot: a routable account also carries its encrypted auth material, and nothing but
+ * this field may leave it. A deleted account has no entry, so its provider cell is empty.
+ */
+export function accountProviders(
+  catalog: Pick<RoutingCatalogStore, "accounts">,
+): () => ReadonlyMap<string, string> {
+  return () => new Map(catalog.accounts().map((account) => [account.id, account.snapshot.provider]))
 }

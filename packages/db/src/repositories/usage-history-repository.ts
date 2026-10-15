@@ -5,6 +5,7 @@ import { usageDaily } from "../schema/usage-daily"
 import { usageHistoryState } from "../schema/usage-history-state"
 import { usageRecords } from "../schema/usage-records"
 import { attributionRelation, bucketSql, isAttributionDimension } from "./usage-attribution"
+import { readUsageExportRows } from "./usage-export-repository"
 import { createUsageHistoryMaintenance } from "./usage-history-maintenance"
 import { historyDimensions, historySource, historySums } from "./usage-history-source"
 import type { UsageHistoryCoverage, UsageHistoryRepository } from "./usage-history-types"
@@ -163,6 +164,7 @@ export function createUsageHistoryRepository(
     coverage,
     totals,
     breakdown,
+    exportRows: (window, filter, limit) => readUsageExportRows(db, window, filter, limit),
     series: (window, bucket, width, filter) =>
       read<UsageSeriesPoint>(seriesQuery(window, bucket, undefined, width, undefined, filter)),
     seriesByDimension,

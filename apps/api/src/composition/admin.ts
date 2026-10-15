@@ -62,7 +62,7 @@ import { createKeysService } from "../services/keys"
 import type { RefreshSubscriptionModels } from "../services/models"
 import { createPoolsService } from "../services/pools"
 import { createSettingsService } from "../services/settings"
-import { catalogLabels, createUsageService } from "../services/usage-read"
+import { accountProviders, catalogLabels, createUsageService } from "../services/usage-read"
 import type { AdminServices } from "../types"
 import { ownedCredentialMetadataReader } from "./credential-ownership"
 
@@ -392,6 +392,7 @@ export function createAdminPlane(deps: AdminPlaneDeps): AdminPlane {
         history: createUsageHistoryRepository(deps.database),
         recent: createUsageRecentRepository(deps.database),
         labels: catalogLabels({ keys, tombstones: keyTombstones, catalog }),
+        providers: accountProviders(catalog),
         ...env.usageRead,
         now,
       }),

@@ -134,6 +134,7 @@ export {
   startOfUtcDay,
   toUtcDay,
 } from "./repositories/usage-daily-repository"
+export type { UsageExportRow } from "./repositories/usage-export-repository"
 export { createUsageHistoryRepository } from "./repositories/usage-history-repository"
 export type {
   UsageHistoryCoverage,

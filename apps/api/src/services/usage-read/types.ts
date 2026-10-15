@@ -88,7 +88,9 @@ export interface UsageOwnerRow extends UsageBreakdownBase<UsageAttributionNote> 
  * What the loader knows about a key: read from the live row, else its tombstone. What reaches the
  * wire: `name` is the `byKey` label; `retired` is `byKey.retired`; `owner` and `ownerKind` are the
  * `byOwner` id, label and `ownerKind`; `tool` is the `byTool` id and label. All of them also feed
- * the owner/tool filters' key-id resolution.
+ * the owner/tool filters' key-id resolution. `prefix` (the public display prefix, in clear on both
+ * the live row and the tombstone) is read only by the CSV export. Never a key value or its
+ * ciphertext: the loader copies named fields, never a whole row.
  */
 export interface KeyLabel {
   readonly name: string
@@ -97,6 +99,7 @@ export interface KeyLabel {
   readonly tool: string | null
   /** True when only the tombstone remains (the live row is gone). */
   readonly retired: boolean
+  readonly prefix: string
 }
 
 /** `UsageLabelSets` projected to the names the wire carries; built once per request. */

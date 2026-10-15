@@ -1,16 +1,16 @@
 import type { UsageOutcome } from "@multi-ai-router/core"
 import type { FailureCount } from "../failure-classes"
 import { request } from "./client"
-import {
-  isCustomRange,
-  type UsageBreakdownRow,
-  type UsageCoverage,
-  type UsageFailureSplit,
-  type UsageRange,
-  type UsageSummary,
-  type UsageTotals,
-  type UsageWindowLabel,
+import type {
+  UsageBreakdownRow,
+  UsageCoverage,
+  UsageFailureSplit,
+  UsageRange,
+  UsageSummary,
+  UsageTotals,
+  UsageWindowLabel,
 } from "./usage"
+import { usageQueryParams } from "./usage-params"
 
 // ------------------------------------------------------------------ the wire
 
@@ -75,7 +75,7 @@ export interface WireSummary {
 }
 
 export async function fetchUsageSummary(range: UsageRange): Promise<UsageSummary> {
-  const query = isCustomRange(range) ? { from: range.from, to: range.to } : { window: range }
+  const query = usageQueryParams(range)
   const wire = await request<WireSummary>({ method: "GET", path: "/usage", query })
 
   return {
