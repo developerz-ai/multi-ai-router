@@ -10,6 +10,9 @@ export interface WireTotalsOptions {
   readonly metered?: string
   readonly notional?: string
   readonly unpricedAttempts?: number | null
+  readonly tokensIn?: number
+  readonly tokensOut?: number
+  readonly cacheReadTokens?: number
 }
 
 export function wireTotals(options: WireTotalsOptions = {}) {
@@ -18,9 +21,9 @@ export function wireTotals(options: WireTotalsOptions = {}) {
     requests,
     attempts: requests,
     errors: 0,
-    tokensIn: 0,
-    tokensOut: 0,
-    cacheReadTokens: 0,
+    tokensIn: options.tokensIn ?? 0,
+    tokensOut: options.tokensOut ?? 0,
+    cacheReadTokens: options.cacheReadTokens ?? 0,
     cacheWriteTokens: 0,
     costMetered: options.metered ?? "0",
     costNotional: options.notional ?? "0",

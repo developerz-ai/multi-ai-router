@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.37.0] — 2026-10-15
+
+### Added
+
+- Input tokens and Output tokens tiles on the Usage page. Input counts every prompt token the upstream read (uncached, cache reads and cache writes, which the router stores apart) and its note gives the cache-read count and hit rate; output includes reasoning tokens. The Notional spend note now says it is the subscription traffic priced at list rates.
+
+### Fixed
+
+- The Overview's "Get your first working key" panel no longer stays up forever on a deployment that never created a pool. `onboardingComplete` needs an account and a key; a key scoped straight to accounts is a working deployment, so a pool is no longer required for the walk to count as done.
+
 ## [2.36.0] — 2026-10-15
 
 ### Added
