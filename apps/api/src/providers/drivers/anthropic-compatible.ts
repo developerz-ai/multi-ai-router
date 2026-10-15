@@ -13,7 +13,7 @@ import { genericCreditsRule, reportedQuotaResetRule } from "./compatible-rules"
  */
 export const anthropicCompatibleDriver = createHttpDriver({
   id: "anthropic-compatible",
-  surfaces: [{ dialect: "anthropic", baseUrl: null }],
+  surfaces: [{ dialect: "anthropic", baseUrl: null, thinkingOnByDefault: true }],
   parseRateLimit: parseCompatibleRateLimit,
   rules: [reportedQuotaResetRule, genericCreditsRule],
 })

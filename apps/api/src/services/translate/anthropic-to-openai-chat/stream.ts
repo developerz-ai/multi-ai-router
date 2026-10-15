@@ -208,10 +208,15 @@ export function anthropicToOpenAiChatStream(
     finished = true
 
     const stopReason = parsed.data.delta?.stop_reason
+    const base = toOpenAiFinishReason(stopReason)
+    // See the response half: a call in the message makes the finish `tool_calls` even when the
+    // vendor wrote `end_turn` beside it.
     const mapped =
       structuredSeen && stopReason === "tool_use"
         ? { value: "stop" as const, unrecognized: null }
-        : toOpenAiFinishReason(stopReason)
+        : nextToolCall > 0 && (base.value === null || base.value === "stop")
+          ? { value: "tool_calls" as const, unrecognized: base.unrecognized }
+          : base
     unrecognized = mapped.unrecognized ?? unrecognized
     // This chunk *is* the last one, so an absent reason cannot travel as absence: see the module
     // note. The upstream ended the message without naming why — a turn whose stream stopped
