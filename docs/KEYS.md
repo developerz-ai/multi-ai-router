@@ -29,11 +29,14 @@ plus CSRF token, or `ADMIN_API_TOKEN`).
    an explicit account list. Leaving `scope` out of a create request means `all`. Scope is
    intersected with pool membership and never widened.
 4. Optionally set a **rate limit**: `requests` per `windowSeconds`. It is enforced per replica, in
-   memory. Over the ceiling the key gets `429` `key_rate_limited`.
+   memory, so N replicas together admit up to N times the ceiling. Over it the key gets `429`
+   `key_rate_limited`.
 5. Optionally set an expiry (`expiresAt`). Keys have no expiry by default.
 
 An attribution field can be changed later with **Edit** (`PATCH /api/admin/keys/:id`); `null`
-clears it. Editing never changes the key's value.
+clears it. Editing never changes the key's value. Like a revoke, an edit (a narrower scope, a new
+rate limit) takes effect at once on the replica that handled it and on the others within
+`KEY_CACHE_TTL_SECONDS`.
 
 ### Client setup
 
@@ -47,16 +50,34 @@ filled in; do not copy those prefilled values into tickets or chat.
 There is no rotate endpoint, by design (`updateKeyBody` in
 `apps/api/src/services/keys/schemas.ts`): a key you can re-read does not need one.
 
+This is planned rotation, where the old key stays live until the client has moved. For a leaked or
+lost key, use [Leaked or lost key](#leaked-or-lost-key) instead.
+
 1. On the old key's row, choose **Mint successor**. The mint form opens prefilled with the
-   attribution, scope and rate limit. The value is never copied and the expiry is not inherited.
-2. Mint it, then give the new value to the client and swap it in.
+   attribution, scope and rate limit. The value is never copied and the expiry is not inherited:
+   set it again if the old key had one.
+2. Give the successor its own name, such as `<owner>/<tool>-2` or a date suffix. Names are unique
+   and the old key keeps its name, revoked or not, until it is purged; reusing it answers `409`.
+   Mint it, then give the new value to the client and swap it in.
 3. Watch the **Last used** column: the old key's should stop advancing and the new key's should
    start. Last-used is stamped on a verified cache miss, so it moves about once per
    `KEY_CACHE_TTL_SECONDS` per replica (default 60), not on every request.
 4. **Revoke** the old key.
 
-Rotate when someone leaves, when a device is lost, when a key is pasted somewhere public, or when
-a leak is suspected. There is no scheduled rotation: a key does not expire unless you set one.
+Rotate when someone leaves or a tool is retired. There is no scheduled rotation: a key does not
+expire unless you set one.
+
+### Leaked or lost key
+
+When a device is lost, a key is pasted somewhere public, or a leak is suspected, revoke first and
+accept that the client stops working until it gets a successor. Waiting for **Last used** to settle
+does not work here: whoever holds the leaked key keeps it advancing.
+
+1. **Revoke** the key now.
+2. On a deployment with more than one replica, restart or roll the other replicas: that empties
+   their key caches immediately. Otherwise they keep accepting the key for up to
+   `KEY_CACHE_TTL_SECONDS`.
+3. **Mint successor**, under a new name, and hand it over privately.
 
 ### Revoke
 
@@ -64,17 +85,20 @@ Console: **Revoke** on the key's row. API: `POST /api/admin/keys/:id/revoke`.
 
 - The next request on the replica that handled the revoke gets `401` `key_revoked`.
 - Other replicas keep accepting the key for up to `KEY_CACHE_TTL_SECONDS` (default 60 seconds). That
-  setting is the bound; read it from your own environment. There is no faster path than lowering
-  it, which costs a database round trip per uncached verification.
+  setting is the bound; read it from your own environment. Restarting or rolling the other replicas
+  drops their caches at once. Lowering the setting needs a restart too, and only shortens future
+  windows, at a database round trip per uncached verification.
 - In-flight requests finish. A stream is not torn down.
 - Revocation is one-way. A revoked key is never reactivated.
 - A revoked key keeps its row, scope and usage attribution until `RETENTION_REVOKED_KEYS_DAYS`
-  (default 30) after revocation. Then it is purged and its usage rows lose the key.
+  (default 30) after revocation. Then it is purged, and its usage rows keep an id that no longer
+  resolves to a name, owner or tool.
 
 ### Hand back is revoke
 
 When a key is handed back, revoke it. Do not use **Delete** (`DELETE /api/admin/keys/:id`): a hard
-delete removes the row at once and its past usage loses attribution immediately.
+delete removes the row at once, so its past usage stops resolving to a name, owner or tool
+immediately.
 
 ## Requester
 
@@ -86,21 +110,22 @@ delete removes the row at once and its past usage loses attribution immediately.
    shell history.
 3. **Configure** your tool with `<router-url>` as the base URL and the key as its API key. See
    [`clients.md`](clients.md) for the recipe and a verification command.
-4. **Rotate** when the operator asks, or yourself when a device is lost or the key leaks: tell the
-   operator, take the successor key, swap it in, and let them revoke the old one.
+4. **Rotate** when the operator asks: take the successor key, swap it in, and tell the operator so
+   they can revoke the old one. If a device is lost or the key leaks, tell the operator at once;
+   they revoke it first, and you wait for the successor.
 5. **Hand back** by telling the operator you no longer need it. They revoke it.
 
 ## Errors a key holder sees
 
 This is the key, scope and capacity subset of what the data plane can return, not every status. The
-full error table (every class, code and status) is in
+error class table is in
 [`packages/core/README.md`](../packages/core/README.md#errors--each-class-fixes-its-code-and-status-at-declaration-not-at-the-call-site).
 
 | Status | Meaning |
 |---|---|
 | 401 `key_revoked` | revoked, unknown, expired, malformed or missing key, or Bearer and `x-api-key` disagree |
-| 402 `credits_exhausted` | an account is out of credits |
-| 403 `scope_violation` | nothing is in scope |
+| 402 `credits_exhausted` | an account is out of credits. Do not retry: it stays this way until the operator tops it up |
+| 403 `scope_violation` | nothing is in scope. Do not retry: ask the operator for a wider scope |
 | 429 `key_rate_limited` / `quota_exhausted` | the key's rate limit, or accounts cooling (clock-recoverable); with `Retry-After` |
 | 503 `key_verification_unavailable` | transient; retry after `Retry-After: 1` |
 | 503 `no_healthy_account` | nothing in scope can serve this request; read the message (below). No `Retry-After` |
@@ -110,7 +135,8 @@ For `no_healthy_account`, the message names the cause:
 - A model no in-scope account serves: a client change. Pick another model, or ask the operator for
   a wider scope.
 - A missing endpoint, or a misconfigured account: an operator fix.
-- "every attempt failed": may clear on retry.
+- "every attempt failed": may clear on retry. Back off (exponential, bounded) rather than retry at
+  once.
 - Anything else, including an account that is disabled or needs re-auth: the operator.
 
 A revoked key and a never-existed key look the same (`401`). If you were working an hour ago,
@@ -122,9 +148,9 @@ Today, on the console's **Keys** page:
 
 - the per-key usage and cost columns, for the selected window;
 - the **Last used** column;
-- the owner and tool filters, which are the console's door to
-  `GET /api/admin/keys?owner=<owner>&tool=<tool>` (exact match, combinable; a value that is not a
-  valid slug answers `400`).
+- the owner and tool filters, which narrow the loaded list in the browser (exact match,
+  combinable). Scripts use `GET /api/admin/keys?owner=<owner>&tool=<tool>` with the same rule; a
+  value that is not a valid slug answers `400` there.
 
 The Usage page broken down by owner and tool, and a weekly report, extend this section when they
 land.
