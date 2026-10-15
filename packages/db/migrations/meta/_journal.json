@@ -260,6 +260,13 @@
       "when": 1792041117859,
       "tag": "0036_key_tombstones",
       "breakpoints": true
+    },
+    {
+      "idx": 37,
+      "version": "7",
+      "when": 1792063945907,
+      "tag": "0037_usage_weekly_reports",
+      "breakpoints": true
     }
   ]
 }

@@ -14,6 +14,7 @@ import { readMetricInventoryEnv } from "./metric-inventory"
 import { readRecoveryEnv } from "./recovery"
 import { readRelayLifetimesEnv } from "./relay-lifetimes"
 import { readUsageReadEnv } from "./usage-read"
+import { readUsageReportEnv } from "./usage-report"
 
 export function readParsedEnv(raw: ParsedEnv, ctx: z.RefinementCtx): Env {
   const adminOidc = readAdminOidcEnv(raw, ctx)
@@ -72,8 +73,12 @@ export function readParsedEnv(raw: ParsedEnv, ctx: z.RefinementCtx): Env {
   const claudeLogin = readClaudeLoginEnv(raw, ctx)
   if (claudeLogin === undefined) return z.NEVER
 
+  const usageReport = readUsageReportEnv(raw, ctx)
+  if (usageReport === undefined) return z.NEVER
+
   return {
     ...claudeLogin,
+    usageReport: usageReport.usageReport,
     ...readRecoveryEnv(raw),
     ...readUsageReadEnv(raw),
     ...readAdminBodiesEnv(raw),
@@ -160,6 +165,7 @@ export function readParsedEnv(raw: ParsedEnv, ctx: z.RefinementCtx): Env {
       sessionsHours: raw.RETENTION_SESSIONS_HOURS ?? 24,
       usageDays,
       usageDailyDays,
+      usageReportsDays: usageReport.usageReportsDays,
       auditDays: raw.RETENTION_AUDIT_DAYS ?? 365,
       // A month of run rows: long enough to answer "has this task been failing all week", short
       // enough that six tasks ticking as often as every five minutes stay a table nobody notices.
@@ -180,6 +186,7 @@ export function readParsedEnv(raw: ParsedEnv, ctx: z.RefinementCtx): Env {
       lockPoolMaxConnections: raw.SCHEDULER_LOCK_POOL_MAX_CONNECTIONS ?? 1,
       localCapacityRetryMs: raw.SCHEDULER_LOCAL_CAPACITY_RETRY_MS ?? 1_000,
       usageRollupIntervalMinutes: raw.USAGE_ROLLUP_INTERVAL_MINUTES ?? 60,
+      usageReportIntervalMinutes: usageReport.usageReportIntervalMinutes,
       oauthStatePurgeIntervalMinutes: raw.OAUTH_STATE_PURGE_INTERVAL_MINUTES ?? 5,
       quotaFloorIntervalMinutes: raw.QUOTA_FLOOR_INTERVAL_MINUTES ?? 30,
       // Hours, not minutes: an orphan is a crash artifact, so a router that never crashes sweeps

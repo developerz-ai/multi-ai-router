@@ -14,6 +14,7 @@ import {
   createSessionRepository,
   createUsageHistoryRepository,
   createUsageRecordRepository,
+  createUsageReportRepository,
 } from "@multi-ai-router/db"
 
 import type { RuntimeDeps } from "./runtime-types"
@@ -31,6 +32,7 @@ export interface RuntimeRepositories {
   readonly oauthStates: ReturnType<typeof createOauthStateRepository>
   readonly adminCredentials: ReturnType<typeof createAdminCredentialRepository>
   readonly usageHistory: ReturnType<typeof createUsageHistoryRepository>
+  readonly usageReports: ReturnType<typeof createUsageReportRepository>
   readonly scheduledTasks: ReturnType<typeof createScheduledTaskRepository>
   readonly modelCatalog: ReturnType<typeof createModelCatalogRepository>
 }
@@ -67,6 +69,8 @@ export function createRuntimeRepositories(deps: RuntimeDeps): RuntimeRepositorie
   const adminCredentials = createAdminCredentialRepository(database)
   // Receipt-admitted event history and bounded migration/retention share one repository.
   const usageHistory = createUsageHistoryRepository(database)
+  // Stored weekly usage reports: written by the report task, swept by the janitor.
+  const usageReports = createUsageReportRepository(database)
   // The scheduler's run log records bounded maintenance outcomes.
   const scheduledTasks = createScheduledTaskRepository(database)
   // What each account's upstream says it serves, and how big. A *description* — the hourly sweep
@@ -88,6 +92,7 @@ export function createRuntimeRepositories(deps: RuntimeDeps): RuntimeRepositorie
     oauthStates,
     adminCredentials,
     usageHistory,
+    usageReports,
     scheduledTasks,
     modelCatalog,
   }

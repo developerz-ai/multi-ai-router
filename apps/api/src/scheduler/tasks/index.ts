@@ -10,6 +10,7 @@ import type {
   SessionRepository,
   UsageHistoryRepository,
   UsageRecordRepository,
+  UsageReportRepository,
 } from "@multi-ai-router/db"
 import type { Env } from "../../config/env"
 import type { AccountConfigDirs } from "../../providers/claude-sdk/config-dir"
@@ -28,6 +29,7 @@ import {
 } from "./model-catalog-refresh"
 import { createOauthPurgeTask } from "./oauth-purge"
 import { createQuotaFloorTask } from "./quota-floor"
+import { createReportTasks, type ReportTaskDeps } from "./report-tasks"
 import { createTranscriptSweepTask } from "./sdk-transcript-sweep"
 import { createUsageRollupTask } from "./usage-rollup"
 
@@ -47,11 +49,14 @@ import { createUsageRollupTask } from "./usage-rollup"
  */
 
 export interface ScheduledTaskDeps
-  extends Pick<CredentialTaskDeps, "credentialMetadata" | "lastLogins"> {
+  extends Pick<CredentialTaskDeps, "credentialMetadata" | "lastLogins">,
+    Pick<ReportTaskDeps, "usageReports"> {
   readonly sessions: Pick<SessionRepository, "deleteIdleBefore">
   readonly usageRecords: Pick<UsageRecordRepository, "deleteRetainedBatch">
   readonly auditEvents: Pick<AuditRepository, "deleteOlderThan">
   readonly keyTombstones: Pick<ApiKeyTombstoneRepository, "purgeRevoked" | "deleteOlderThan">
+  /** The janitor's sweep of stored weekly reports. The report task itself uses `usageReports`. */
+  readonly usageReportRows: Pick<UsageReportRepository, "deleteOlderThan">
   readonly oauthStates: Pick<OauthStateRepository, "deleteExpiredBefore">
   readonly history: Pick<UsageHistoryRepository, "backfill" | "deleteRetainedHistory">
   /**
@@ -128,7 +133,9 @@ export interface ScheduledTaskDeps
    */
   readonly refreshCatalog?: ModelCatalogRefreshDeps["refresh"]
   /** A full `Env` satisfies this, so the composition root passes `env` straight through. */
-  readonly env: Pick<Env, "retention" | "janitorIntervalMinutes"> & CredentialTaskDeps["env"]
+  readonly env: Pick<Env, "retention" | "janitorIntervalMinutes"> &
+    CredentialTaskDeps["env"] &
+    ReportTaskDeps["env"]
 }
 
 const MINUTE_MS = 60_000
@@ -159,6 +166,7 @@ export function scheduledTaskIntervals(
     model_catalog_refresh: env.scheduler.modelCatalogRefreshIntervalMinutes * MINUTE_MS,
     credential_keepalive: env.claudeLogin.keepaliveIntervalSeconds * 1_000,
     login_lifetime_watch: env.claudeLogin.watchIntervalMinutes * MINUTE_MS,
+    usage_weekly_report: env.scheduler.usageReportIntervalMinutes * MINUTE_MS,
   }
 }
 
@@ -176,6 +184,7 @@ export function createScheduledTasks(deps: ScheduledTaskDeps): readonly Schedule
       auditEvents: deps.auditEvents,
       taskRuns: deps.scheduledTasks,
       keyTombstones: deps.keyTombstones,
+      usageReports: deps.usageReportRows,
       retention: env.retention,
       intervalMs: intervals.janitor_sweep,
       batchSize,
@@ -268,30 +277,9 @@ export function createScheduledTasks(deps: ScheduledTaskDeps): readonly Schedule
         ]),
     // Access-token keepalive and the daily login-lifetime warn line — `credential-tasks.ts`.
     ...createCredentialTasks(deps, intervals),
+    // The weekly usage report, once per UTC week — `report-tasks.ts`.
+    ...createReportTasks(deps, intervals),
   ]
 }
 
-export type { AdminSessionPurgeDeps, AdminSessionStoreForPurge } from "./admin-session-purge"
-export { createAdminSessionPurgeTask } from "./admin-session-purge"
-export type { ConfigDirReapDeps, OrphanConfigDir, ReapPlan, ReapPlanInput } from "./config-dir-reap"
-export { createConfigDirReapTask, planConfigDirReap } from "./config-dir-reap"
-export type { IdleAccountProbeDeps } from "./idle-account-probe"
-export { createIdleAccountProbeTask, IDLE_PROBE_MODELS } from "./idle-account-probe"
-export type { JanitorDeps } from "./janitor"
-export { createJanitorTask } from "./janitor"
-export type { ModelCatalogRefreshDeps } from "./model-catalog-refresh"
-export { createModelCatalogRefreshTask } from "./model-catalog-refresh"
-export type { OauthPurgeDeps } from "./oauth-purge"
-export { createOauthPurgeTask } from "./oauth-purge"
-export type { QuotaFloorDeps } from "./quota-floor"
-export { createQuotaFloorTask } from "./quota-floor"
-export type {
-  TranscriptSweepDeps,
-  TranscriptSweepPlan,
-  TranscriptSweepPlanInput,
-} from "./sdk-transcript-sweep"
-export { createTranscriptSweepTask, planTranscriptSweep } from "./sdk-transcript-sweep"
-export type { Sweep, SweepOptions, SweepReport } from "./sweep"
-export { runSweeps } from "./sweep"
-export type { UsageRollupDeps } from "./usage-rollup"
-export { createUsageRollupTask } from "./usage-rollup"
+export * from "./exports"

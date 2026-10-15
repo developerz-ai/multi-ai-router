@@ -36,6 +36,7 @@ const RETENTION: RetentionConfig = {
   revokedKeysDays: 30,
   oauthStateMinutes: 10,
   orphanConfigDirHours: 24,
+  usageReportsDays: 730,
 }
 const DAY = 86_400_000
 const none = async () => 0
@@ -49,6 +50,7 @@ function janitor() {
     auditEvents: { deleteOlderThan: none },
     taskRuns: { deleteOlderThan: none },
     keyTombstones: createApiKeyTombstoneRepository(db),
+    usageReports: { deleteOlderThan: none },
     retention: RETENTION,
     intervalMs: 60_000,
     batchSize: 100,
