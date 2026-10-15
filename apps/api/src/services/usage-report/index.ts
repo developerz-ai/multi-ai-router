@@ -16,7 +16,7 @@ export {
   WEEK_MS,
 } from "./period"
 export type { StoredReportView, UsageReportService, UsageReportServiceDeps } from "./service"
-export { createUsageReportService } from "./service"
+export { createUsageReportService, ReportTooLargeError } from "./service"
 export type {
   ReportCaveat,
   ReportCoverage,

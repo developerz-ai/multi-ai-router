@@ -34,14 +34,13 @@ export interface ReportPeriod {
   readonly start: Date
   readonly end: Date
   readonly generatedAt: Date
-  readonly settleMinutes: number
   readonly upstreamTimeoutMs: number
   /** First fully measured day of the unpriced measure, `YYYY-MM-DD`, or `infinity`. */
   readonly unpricedSince: string
 }
 
 /**
- * The seven measures of one line. METERED and NOTIONAL are separate fields and are never added
+ * The measures of one line. METERED and NOTIONAL are separate fields and are never added
  * together anywhere: a subscription has no per-token price, only an attribution. Money is a
  * `numeric(24,6)` string, summed exactly. `unpricedAttempts` is `null` when the week was not
  * measured, never 0.
@@ -50,6 +49,8 @@ export interface ReportMeasures {
   readonly requests: number
   readonly tokensIn: number
   readonly tokensOut: number
+  readonly cacheReadTokens: number
+  readonly cacheWriteTokens: number
   readonly costMetered: string
   readonly costNotional: string
   readonly unpricedAttempts: number | null
@@ -97,9 +98,14 @@ export interface ReportCoverage {
   readonly timeBasis: "event-time"
   readonly requestsDatedBy: "settled-at"
   readonly attemptsDatedBy: "started-at"
-  readonly settleMinutes: number
   readonly upstreamTimeoutMs: number
-  /** False when an upstream attempt can outlive the settle margin and be missed for good. */
+  /**
+   * Whole minutes between the end of the week and the instant the report was generated: the real
+   * gap (the schedule's weekday, hour and settle margin, plus however late the tick ran), which for
+   * a preview is whenever it was asked for. Not the configured margin.
+   */
+  readonly generatedAfterPeriodEndMinutes: number
+  /** False when an upstream attempt can outlive that gap and be missed for good. */
   readonly settleCoversUpstreamTimeout: boolean
   readonly unpricedSince: string
   readonly unpricedMeasured: "none" | "partial" | "full"

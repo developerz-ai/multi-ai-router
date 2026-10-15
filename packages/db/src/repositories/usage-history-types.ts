@@ -71,9 +71,10 @@ export interface UsageHistoryRepository {
   exportRows(window: UsageWindow, filter: UsageFilter, limit: number): Promise<UsageExportRow[]>
   /**
    * One whole UTC week at key x account x pool x model for the weekly report, over the same source
-   * as `totals`. The window must be whole UTC days.
+   * as `totals`. The window must be whole UTC days. Throws `UsageWeekRowCeilingError` when the week has
+   * more than `ceiling` rows, never a truncated read.
    */
-  weekRows(window: UsageWindow): Promise<UsageWeekRead>
+  weekRows(window: UsageWindow, ceiling: number): Promise<UsageWeekRead>
   /** All history and retained detail reads use one repeatable-read snapshot. */
   withSnapshot<T>(
     callback: (history: UsageHistoryRepository, raw: UsageReadRepository) => Promise<T>,

@@ -34,12 +34,20 @@ import type {
  * `retired` flag on a label changes nothing here.
  */
 
+/**
+ * Part of the report contract, not tuning: the stored payload is immutable and delivery renders it
+ * as is, so the cut is fixed at ten rather than moved by an env var that would make two weeks'
+ * reports incomparable. A week with more models than this is read in full (the week read is
+ * bounded by `USAGE_REPORT_MAX_ROWS`) and only the top ten by tokens are kept here.
+ */
 const TOP_MODELS = 10
 
 const MEASURE_LABELS: WeeklyReport["measureLabels"] = {
   requests: "Requests",
   tokensIn: "Input tokens",
   tokensOut: "Output tokens",
+  cacheReadTokens: "Cache read tokens",
+  cacheWriteTokens: "Cache write tokens",
   costMetered: "METERED $ (billed per token)",
   costNotional:
     "NOTIONAL $ (list-price attribution on flat-fee subscription accounts, not spend; never added to METERED)",
@@ -75,10 +83,10 @@ export function buildWeeklyReport(
     unknown: new Map<string, Line>(),
   }
   const models = new Map<string | null, Accumulator>()
-  let attempts = 0
+  let measuredAttempts = 0
 
   for (const row of rows) {
-    attempts += row.attempts
+    measuredAttempts += row.measuredAttempts
     addRow(totals, row)
     addRow(models.get(row.model) ?? setDefault(models, row.model, fresh()), row)
 
@@ -132,7 +140,7 @@ export function buildWeeklyReport(
       period,
       coverage,
       unpriced: toMeasures(totals).unpricedAttempts,
-      attempts,
+      measuredAttempts,
     }),
   }
 }

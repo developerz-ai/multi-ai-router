@@ -32,6 +32,23 @@ export interface UsageWeekRow {
    * `null` for its request rows and a plain `sum` would turn them into a null.
    */
   readonly unpricedAttempts: number | null
+  /**
+   * Attempts on days on or after `unpricedSince`: the denominator of the unpriced share. In a week
+   * that straddles the start of the measure, `attempts` includes unmeasured days and dividing the
+   * measured numerator by it would understate the share.
+   */
+  readonly measuredAttempts: number
+}
+
+/**
+ * The week has more key x account x pool x model rows than the ceiling. Thrown, never absorbed
+ * into a truncated report: a report that silently dropped rows would still add up to itself.
+ */
+export class UsageWeekRowCeilingError extends Error {
+  constructor(readonly ceiling: number) {
+    super(`usage week read exceeds its ceiling of ${ceiling} rows`)
+    this.name = "UsageWeekRowCeilingError"
+  }
 }
 
 export interface UsageWeekRead {
@@ -51,7 +68,13 @@ const DAY_MS = 86_400_000
  * The window must be whole UTC days. A fractional window would pull the contributions edge branch
  * of the source in, and the report is dated by day.
  */
-export async function readUsageWeekRows(db: Database, window: UsageWindow): Promise<UsageWeekRead> {
+export async function readUsageWeekRows(
+  db: Database,
+  window: UsageWindow,
+  ceiling: number,
+): Promise<UsageWeekRead> {
+  if (!Number.isSafeInteger(ceiling) || ceiling < 1)
+    throw new Error("usage week ceiling outside bounds")
   const from = window.from.getTime()
   const to = window.to.getTime()
   if (from % DAY_MS !== 0 || to % DAY_MS !== 0 || to <= from)
@@ -69,10 +92,13 @@ export async function readUsageWeekRows(db: Database, window: UsageWindow): Prom
       round(coalesce(sum(cost_metered),0), 6)::text as "costMetered",
       round(coalesce(sum(cost_notional),0), 6)::text as "costNotional",
       (case when ${since} > ${lastDay}::date then null::float8 else coalesce(sum(unpriced_attempts),0)::float8 end) as "unpricedAttempts",
+      coalesce(sum(attempts) filter (where (event_at at time zone 'UTC')::date >= ${since}),0)::float8 as "measuredAttempts",
       ${since}::text as "unpricedSince"
     from facts
     group by api_key_id, account_id, pool_id, model
-    order by api_key_id nulls last, account_id nulls last, pool_id nulls last, model nulls last`)
+    order by api_key_id nulls last, account_id nulls last, pool_id nulls last, model nulls last
+    limit ${ceiling + 1}`)
+  if ([...result].length > ceiling) throw new UsageWeekRowCeilingError(ceiling)
   const raw = [...result] as unknown as (UsageWeekRow & { unpricedSince: string })[]
   if (raw.length === 0) {
     // An empty week still reports the measure's start, so the report can say "not measured".

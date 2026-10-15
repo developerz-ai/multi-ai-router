@@ -1,4 +1,5 @@
 import type { UsageHistoryRepository, UsageReportRepository } from "@multi-ai-router/db"
+import { UsageWeekRowCeilingError } from "@multi-ai-router/db"
 import { type AdminResult, invalid, notFound, ok } from "../admin/result"
 import { buildWeeklyReport } from "./builder"
 import { isoDay, lastCompleteWeek, parseReportWeek, type ReportWeek } from "./period"
@@ -20,10 +21,10 @@ export interface UsageReportServiceDeps {
   readonly labels: () => Promise<{ readonly keys: ReadonlyMap<string, ReportKeyLabel> }>
   /** Pools as they stand now, for the overflow designation. */
   readonly pools: () => Promise<readonly ReportPool[]>
-  /** `USAGE_REPORT_SETTLE_MINUTES`, recorded in the report's coverage. */
-  readonly settleMinutes: number
-  /** `UPSTREAM_TIMEOUT_MS`, compared with the settle margin in the report's coverage. */
+  /** `UPSTREAM_TIMEOUT_MS`, compared with the real gap after the week boundary in the coverage. */
   readonly upstreamTimeoutMs: number
+  /** `USAGE_REPORT_MAX_ROWS`: the week read's ceiling. Over it, building fails loudly. */
+  readonly maxRows: number
   /** The most reports the list returns: enough weeks to cover the retention window. */
   readonly listLimit: number
   readonly now: () => Date
@@ -56,20 +57,32 @@ export interface UsageReportService {
   generate(week: ReportWeek, now: Date): Promise<boolean>
 }
 
+/** The week has more rows than `USAGE_REPORT_MAX_ROWS`; a report would be partial, so none is made. */
+export class ReportTooLargeError extends Error {
+  constructor(readonly maxRows: number) {
+    super(
+      `the week has more than ${maxRows} key x account x pool x model rows; raise USAGE_REPORT_MAX_ROWS (at most 100000) to build it`,
+    )
+    this.name = "ReportTooLargeError"
+  }
+}
+
 export function createUsageReportService(deps: UsageReportServiceDeps): UsageReportService {
   const build = async (week: ReportWeek, now: Date): Promise<WeeklyReport> => {
-    // Labels first: live keys, then tombstones (`catalogLabels` orders its own reads), so a key
-    // deleted mid-read is still named. The rows are one query.
+    // The three reads run concurrently. `deps.labels` orders its own two reads (live keys, then
+    // tombstones) so a key deleted mid-read is still named; the rows are one query.
     const [labels, pools, read] = await Promise.all([
       deps.labels(),
       deps.pools(),
-      deps.history.weekRows({ from: week.start, to: week.end }),
+      deps.history.weekRows({ from: week.start, to: week.end }, deps.maxRows).catch((error) => {
+        if (error instanceof UsageWeekRowCeilingError) throw new ReportTooLargeError(deps.maxRows)
+        throw error
+      }),
     ])
     return buildWeeklyReport(read.rows, labels.keys, pools, {
       start: week.start,
       end: week.end,
       generatedAt: now,
-      settleMinutes: deps.settleMinutes,
       upstreamTimeoutMs: deps.upstreamTimeoutMs,
       unpricedSince: read.unpricedSince,
     })
@@ -88,7 +101,15 @@ export function createUsageReportService(deps: UsageReportServiceDeps): UsageRep
       return ok({ ...rest, report: payload })
     },
 
-    preview: async () => ok(await build(lastCompleteWeek(deps.now()), deps.now())),
+    preview: async () => {
+      const now = deps.now()
+      try {
+        return ok(await build(lastCompleteWeek(now), now))
+      } catch (error) {
+        if (error instanceof ReportTooLargeError) return invalid(error.message, "report_too_large")
+        throw error
+      }
+    },
 
     exists: (periodStart) => deps.reports.exists(periodStart),
 
