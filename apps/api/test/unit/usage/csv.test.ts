@@ -92,6 +92,12 @@ describe("csvLine", () => {
       "x\u0085@1",
       "x\v-1",
       "x\f=1",
+      '"=1+1',
+      '\n"=1+1',
+      ' "@SUM(1)',
+      "x\u001c=1",
+      "x\u001d+1",
+      "x\u001e-1",
     ]
     for (const payload of payloads) {
       // A full row: nine unquoted cells, then the payload as the model (column 10).
@@ -114,7 +120,19 @@ describe("csvLine", () => {
           delimiter,
           quote: false,
           relax_column_count: true,
-          record_delimiter: ["\r\n", "\n", "\r", "\u2028", "\u2029", "\u0085", "\v", "\f"],
+          record_delimiter: [
+            "\r\n",
+            "\n",
+            "\r",
+            "\u2028",
+            "\u2029",
+            "\u0085",
+            "\v",
+            "\f",
+            "\u001c",
+            "\u001d",
+            "\u001e",
+          ],
         }) as string[][]
         // A leading quote or space may be stripped by a lenient parser, so look past them.
         for (const cell of records.flat()) expect(cell).not.toMatch(/^[\s"]*[=+\-@]/)
