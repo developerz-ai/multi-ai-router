@@ -182,6 +182,38 @@ describe("minimax closed base_resp signal stays bounded under the generic rule",
   })
 })
 
+describe("a MiniMax in-body failure past the observation cap (#206)", () => {
+  test.each([
+    [
+      "before the padding",
+      (pad: string) => ({ base_resp: { status_code: 1008, status_msg: "x" }, content: pad }),
+    ],
+    [
+      "after the padding",
+      (pad: string) => ({ content: pad, base_resp: { status_code: 1008, status_msg: "x" } }),
+    ],
+    [
+      "with a status_msg too large to keep (#207 review)",
+      (pad: string) => ({
+        content: pad,
+        base_resp: { status_code: 1008, status_msg: "m".repeat(400) },
+      }),
+    ],
+  ])("base_resp %s keeps its code through salvage", (_label, body) => {
+    const observer = createResponseObserver({
+      dialect: "anthropic",
+      operation: "messages",
+      contentType: "application/json",
+      maximumObservationBytes: 1024,
+      descriptor: miniMaxDriver.responseObservation,
+    })
+    observer.observe(encoder.encode(JSON.stringify(body("x".repeat(4096)))))
+    const facts = observer.finish()
+    expect(facts.failure?.kind).toBe("credits-exhausted")
+    expect(facts.failure?.signal).toBe("minimax:base_resp-1008")
+  })
+})
+
 describe("errorClass from a driver hook, through relay-terminal", () => {
   test("a MiniMax in-body failure records its closed base_resp signal as errorClass", () => {
     const observer = createResponseObserver({

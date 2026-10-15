@@ -41,4 +41,76 @@ describe("scrubCredentials", () => {
     const line = 'migration failed: relation "accounts" already exists (migrations/0007.sql)'
     expect(scrubCredentials(line)).toBe(line)
   })
+
+  test("a password holding an unencoded slash is scrubbed whole (#206)", () => {
+    expect(scrubCredentials("connect failed: postgres://u:p/ss@db:5432/x")).toBe(
+      "connect failed: postgres://[REDACTED]@db:5432/x",
+    )
+  })
+
+  test("a base64 slash password with `=` padding is scrubbed (#207 review)", () => {
+    expect(scrubCredentials("connect failed: postgres://router:Zk3/q+Vb9xQ==@db:5432/app")).toBe(
+      "connect failed: postgres://[REDACTED]@db:5432/app",
+    )
+  })
+
+  test("userinfo needs a real scheme in front, as before the scheme left the match (#207 round 3)", () => {
+    for (const [input, secret] of [
+      ["x_y://a:password=@SECRET1", "SECRET1"],
+      ["1db://pwd=@SECRET2", "SECRET2"],
+      ["://token=@SECRET3", "SECRET3"],
+    ] as const) {
+      expect(scrubCredentials(input)).not.toContain(secret)
+    }
+  })
+
+  test("padding never swallows a key=value key before an `@` (#207 round 3)", () => {
+    for (const [input, secret] of [
+      ["jdbc:postgresql://host:5432/db;password=@Hunter2Secret", "Hunter2Secret"],
+      ["pg://a:/password=@xSECRET", "xSECRET"],
+      ["redis://cache:6379/0,token=@SSECRET", "SSECRET"],
+    ] as const) {
+      expect(scrubCredentials(input)).not.toContain(secret)
+    }
+  })
+
+  test("a query-string secret holding an `@` behind a host:port stays scrubbed (#207 review)", () => {
+    for (const [input, secret] of [
+      ["postgresql://db.internal:5432/app?user=app&password=p@ssw0rd", "ssw0rd"],
+      ["redis://cache:6379/0?password=hunter@2secret", "2secret"],
+      ["connect https://h:8443/cb?token=tok@en_SECRET_TAIL failed", "SECRET_TAIL"],
+      ["postgres://db?sslmode=require&password=Ab:c/d@ef9", "ef9"],
+      ["GET https://host:8080/v1&api_key=ab@cdSECRET", "cdSECRET"],
+    ] as const) {
+      expect(scrubCredentials(input)).not.toContain(secret)
+    }
+  })
+
+  test("a JWT whose header is over 512 characters is still scrubbed whole", () => {
+    const segment = (bytes: number) => Buffer.from("k".repeat(bytes)).toString("base64url")
+    const jwt = `eyJ${segment(420)}.${segment(200)}.${segment(256)}`
+    expect(jwt.indexOf(".")).toBeGreaterThan(512)
+    expect(scrubCredentials(`proof ${jwt} end`)).toBe("proof [REDACTED] end")
+  })
+})
+
+describe("scrubCredentials cost (#206)", () => {
+  test("long scheme-like and JWT-like runs are scanned in linear time", () => {
+    // The scheme quantifier and the unbounded JWT header made these quadratic: 16 KB of `a-` took
+    // about 4 s. The bound is loose, the regression is not.
+    for (const text of [
+      "a-".repeat(32 * 1024),
+      "eyJaaaaa-".repeat(8 * 1024),
+      "eyJ-".repeat(16 * 1024),
+      "a://b:".repeat(10 * 1024),
+      "://u:p/".repeat(10 * 1024),
+      "://".repeat(64 * 1024),
+      "://:".repeat(48 * 1024),
+      `${"ab-".repeat(2000)}://`.repeat(40),
+    ]) {
+      const started = performance.now()
+      scrubCredentials(text)
+      expect(performance.now() - started).toBeLessThan(500)
+    }
+  })
 })

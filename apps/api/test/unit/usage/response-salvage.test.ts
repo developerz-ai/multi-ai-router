@@ -231,3 +231,260 @@ test("a repeated optional key releases the earlier capture's bytes (#188)", () =
   expect(scanner.retainedBytes).toBe(40)
   expect(scanner.finish()).toEqual({ code: "d".repeat(10), usage: { t: "u".repeat(20) } })
 })
+
+test("a root key named like an Object built-in never throws (#207 review)", () => {
+  const scanner = createResponseSalvage(1024)
+  const text =
+    '{"constructor":{"a":1},"__proto__":{"b":2},"toString":{"c":3},"usage":{"input_tokens":5}}'
+  for (const byte of encoder.encode(text)) scanner.push(byte)
+  expect(scanner.finish()).toEqual({ usage: { input_tokens: 5 } })
+})
+
+test("an oversized base_resp.status_code is dropped, never fails the salvage (#207 review)", () => {
+  const scanner = createResponseSalvage(1024)
+  const text = `{"type":"response.completed","usage":{"input_tokens":5},"base_resp":{"status_code":"${"9".repeat(2048)}"}}`
+  for (const byte of encoder.encode(text)) scanner.push(byte)
+  expect(scanner.retainedBytes).toBeLessThanOrEqual(1024)
+  expect(scanner.finish()).toEqual({ type: "response.completed", usage: { input_tokens: 5 } })
+})
+
+test("at a tiny cap, base_resp.status_code gives way rather than failing the salvage (#207 round 3)", () => {
+  for (let cap = 36; cap <= 60; cap++) {
+    const scanner = createResponseSalvage(cap)
+    const text = `{"usage":{"input_tokens":5,"output_tokens":3},"pad":"${"x".repeat(200)}","base_resp":{"status_code":1008}}`
+    for (const byte of encoder.encode(text)) scanner.push(byte)
+    const usage = '{"input_tokens":5,"output_tokens":3}'.length
+    if (usage <= cap) expect(scanner.finish()).toMatchObject({ usage: { input_tokens: 5 } })
+  }
+})
+
+test("a full budget drops base_resp.status_code itself rather than evicting earlier error evidence (#207 round 4)", () => {
+  const scanner = createResponseSalvage(128)
+  const text = `{"error":{"code":"insufficient_quota"},"type":"${"t".repeat(94)}","base_resp":{"status_code":1008},"z":"${"q".repeat(128)}"}`
+  for (const byte of encoder.encode(text)) scanner.push(byte)
+  expect(scanner.finish()).toEqual({ error: { code: "insufficient_quota" }, type: "t".repeat(94) })
+})
+
+test("a full 64 KiB budget evicts base_resp.status_code before the code main kept (#207 round 4)", () => {
+  const cap = 65_536
+  const head = '{"code":"insufficient_quota","base_resp":{"status_code":1008},"usage":{"pad":"'
+  // code (20 bytes) and usage fit the cap together; with the 4-byte status code they do not.
+  const fill = "u".repeat(cap - 32)
+  const scanner = createResponseSalvage(cap)
+  for (const byte of encoder.encode(`${head}${fill}"}}`)) scanner.push(byte)
+  expect(scanner.finish()).toMatchObject({ code: "insufficient_quota", usage: { pad: fill } })
+})
+
+test("an error seen after base_resp at a full budget evicts base_resp, not itself (#207 round 5)", () => {
+  const scanner = createResponseSalvage(64)
+  const text = `{"usage":{"p":"${"u".repeat(50)}"},"base_resp":{"status_code":1008},"code":"q","status":"s"}`
+  for (const byte of encoder.encode(text)) scanner.push(byte)
+  expect(scanner.finish()).toMatchObject({ code: "q", status: "s" })
+})
+
+test("an error capture that drops anyway does not take base_resp with it (#207 round 6)", () => {
+  const scanner = createResponseSalvage(64)
+  const text = `{"usage":{"p":"${"u".repeat(50)}"},"base_resp":{"status_code":1008},"code":"insufficient_quota"}`
+  for (const byte of encoder.encode(text)) scanner.push(byte)
+  expect(scanner.retainedBytes).toBe(62)
+  expect(scanner.finish()).toMatchObject({ base_resp: { status_code: 1008 } })
+})
+
+test("lent room stays with a kept capture and is not double-counted later (#207 round 7)", () => {
+  const prefix = `{"usage":{"p":"${"u".repeat(50)}"},"base_resp":{"status_code":1008}`
+  const kept = createResponseSalvage(64)
+  for (const byte of encoder.encode(`${prefix},"code":"ab","error":"xyz"}`)) kept.push(byte)
+  expect(kept.retainedBytes).toBe(62)
+  expect(kept.finish()).not.toHaveProperty("base_resp")
+
+  const dropped = createResponseSalvage(64)
+  const text = `${prefix},"code":"insufficient_quota","error":"xyz"}`
+  for (const byte of encoder.encode(text)) dropped.push(byte)
+  expect(dropped.retainedBytes).toBe(63)
+  const rebuilt = dropped.finish()
+  expect(rebuilt).toMatchObject({ error: "xyz" })
+  expect(rebuilt).not.toHaveProperty("base_resp")
+})
+
+test("a repeated base_resp parent, each copy with a code, keeps the last one (#207 round 7)", () => {
+  const scanner = createResponseSalvage(64)
+  const text = `{"base_resp":{"status_code":1008},"usage":{"p":"${"x".repeat(52)}"},"code":"${"c".repeat(40)}","base_resp":{"status_code":1002}}`
+  for (const byte of encoder.encode(text)) {
+    scanner.push(byte)
+    expect(scanner.retainedBytes).toBeLessThanOrEqual(64)
+  }
+  expect(scanner.finish()).toMatchObject({ base_resp: { status_code: 1002 } })
+})
+
+test.each(['{"status_msg":"x"}', "{}", "null", "5", '"s"', "[1]"])(
+  "a later base_resp of %s replaces the earlier code, as JSON.parse does (#207 round 8)",
+  (later) => {
+    const scanner = createResponseSalvage(64)
+    const text = `{"base_resp":{"status_code":1008},"base_resp":${later},"pad":"${"x".repeat(200)}"}`
+    for (const byte of encoder.encode(text)) scanner.push(byte)
+    const rebuilt = scanner.finish()
+    expect(rebuilt?.base_resp).toBeUndefined()
+  },
+)
+
+test("a parent repeat after a lend, a drop and a give-back still clears the code (#207 round 8)", () => {
+  const scanner = createResponseSalvage(64)
+  const text = `{"usage":{"p":"${"u".repeat(50)}"},"base_resp":{"status_code":1008},"code":"${"c".repeat(40)}","base_resp":{}}`
+  for (const byte of encoder.encode(text)) {
+    scanner.push(byte)
+    expect(scanner.retainedBytes).toBeLessThanOrEqual(64)
+  }
+  expect(scanner.finish()?.base_resp).toBeUndefined()
+})
+
+test("a status_code repeated inside one base_resp keeps the last one, as JSON.parse does (#207 round 9)", () => {
+  const scanner = createResponseSalvage(64)
+  const text = `{"usage":{"p":"${"u".repeat(50)}"},"base_resp":{"status_code":1008,"status_code":1002},"pad":"${"x".repeat(200)}"}`
+  for (const byte of encoder.encode(text)) {
+    scanner.push(byte)
+    expect(scanner.retainedBytes).toBeLessThanOrEqual(64)
+  }
+  expect(scanner.finish()).toMatchObject({ base_resp: { status_code: 1002 } })
+})
+
+test.each([
+  "01008",
+  "+1008",
+  "NaN",
+  '"a\tb"',
+  "10 08",
+  "0 1008",
+  '"x"1008',
+  "{}1008",
+  "null 1008",
+  "0 :1008",
+  "0,:1008",
+  '0 "x"',
+  "1008,0",
+])("a malformed status_code %s is dropped, never failing the salvage (#207 round 9)", (code) => {
+  const scanner = createResponseSalvage(1024)
+  const text = `{"usage":{"input_tokens":11,"output_tokens":22},"base_resp":{"status_code":${code}},"pad":"${"x".repeat(2048)}"}`
+  for (const byte of encoder.encode(text)) scanner.push(byte)
+  expect(scanner.finish()).toEqual({ usage: { input_tokens: 11, output_tokens: 22 } })
+})
+
+test("an invalid UTF-8 status_code is dropped, never failing the salvage (#207 round 9)", () => {
+  const scanner = createResponseSalvage(1024)
+  const head = encoder.encode('{"usage":{"input_tokens":11},"base_resp":{"status_code":"')
+  const tail = encoder.encode(`"},"pad":"${"x".repeat(2048)}"}`)
+  for (const byte of [...head, 0xff, ...tail]) scanner.push(byte)
+  expect(scanner.finish()).toEqual({ usage: { input_tokens: 11 } })
+})
+
+test.each([
+  '"usage":{"input_tokens":01}',
+  '"type":tru',
+  '"response":{"status":+1}',
+  '"type":"a\tb"',
+  '"status":tru',
+  '"incomplete_details":{"a":01}',
+  '"response":{"usage":{"x":01}}',
+  '"message":{"usage":+1}',
+  '"error":{"a":01}',
+  '"response":{"error":{"a":01}}',
+  '"response":{"incomplete_details":{"a":01}}',
+  '"usage":{"input_tokens":1 2}',
+  '"error":{"a":1 2}',
+])("a malformed non-ceiling member %s still fails the salvage (#207 round 10)", (member) => {
+  const scanner = createResponseSalvage(1024)
+  const text = `{${member},"base_resp":{"status_code":1008},"pad":"${"x".repeat(2048)}"}`
+  for (const byte of encoder.encode(text)) scanner.push(byte)
+  expect(scanner.finish()).toBeNull()
+})
+
+test("a malformed optional code beside a malformed status_code still fails the salvage (#207 round 10)", () => {
+  const scanner = createResponseSalvage(1024)
+  const text = `{"usage":{"input_tokens":1},"base_resp":{"status_code":NaN},"code":+1,"pad":"${"x".repeat(2048)}"}`
+  for (const byte of encoder.encode(text)) scanner.push(byte)
+  expect(scanner.finish()).toBeNull()
+})
+
+test("a malformed status_code before usage drops only itself (#207 round 10)", () => {
+  const scanner = createResponseSalvage(1024)
+  const text = `{"base_resp":{"status_code":01008},"usage":{"input_tokens":11,"output_tokens":22},"pad":"${"x".repeat(2048)}"}`
+  for (const byte of encoder.encode(text)) scanner.push(byte)
+  expect(scanner.finish()).toEqual({ usage: { input_tokens: 11, output_tokens: 22 } })
+})
+
+test.each([
+  [32, true],
+  [33, false],
+])("a %i-byte status_code is kept: %s (the 32-byte ceiling, #207 round 11)", (length, kept) => {
+  const scanner = createResponseSalvage(1024)
+  const code = `1${"0".repeat(length - 1)}`
+  const text = `{"usage":{"input_tokens":1},"base_resp":{"status_code":${code}},"pad":"${"x".repeat(2048)}"}`
+  for (const byte of encoder.encode(text)) scanner.push(byte)
+  const rebuilt = scanner.finish()
+  if (kept) expect(rebuilt).toMatchObject({ base_resp: { status_code: Number(code) } })
+  else expect(rebuilt).toEqual({ usage: { input_tokens: 1 } })
+})
+
+test.each([
+  '"base_resp":{"status_code":0} {"status_code":1008}',
+  '"base_resp":{"status_code":0}{"status_code":1008}',
+  '"base_resp":0 {"status_code":1008}',
+  '"base_resp":{"status_code":0},{"status_code":1008}',
+  '"base_resp" {"status_code":1008}',
+  '"a":1 2,"base_resp":{"status_code":1008}',
+])("invalid JSON around base_resp never yields a code (#207 round 12): %s", (members) => {
+  const scanner = createResponseSalvage(1024)
+  const text = `{"usage":{"input_tokens":1},${members},"pad":"${"x".repeat(2048)}"}`
+  for (const byte of encoder.encode(text)) scanner.push(byte)
+  expect(scanner.finish()?.base_resp).toBeUndefined()
+})
+
+test.each([
+  '"base_resp":10,"base_resp":{"status_code":1008}',
+  '"usage":{"input_tokens":1,"output_tokens":2},"base_resp":{"status_msg":"x","status_code":1008}',
+  '"list":[1,2,{"a":3}],"base_resp":{"status_code":1008}',
+])("valid JSON keeps its code (#207 round 12): %s", (members) => {
+  const scanner = createResponseSalvage(1024)
+  const text = `{${members},"pad":"${"x".repeat(2048)}"}`
+  expect(JSON.parse(text).base_resp.status_code).toBe(1008)
+  for (const byte of encoder.encode(text)) scanner.push(byte)
+  expect(scanner.finish()).toMatchObject({ base_resp: { status_code: 1008 } })
+})
+
+test("a violation inside an error capture that borrowed base_resp never gives the code back (#207 round 12)", () => {
+  const scanner = createResponseSalvage(64)
+  // A 20-digit code stays lent long enough for the violation (`1 2`) to arrive before the drop.
+  const text = `{"usage":{"p":"${"u".repeat(34)}"},"base_resp":{"status_code":10080000000000000000},"code":{"a":1 2,"b":"${"z".repeat(40)}"},"pad":"${"x".repeat(200)}"}`
+  for (const byte of encoder.encode(text)) {
+    scanner.push(byte)
+    expect(scanner.retainedBytes).toBeLessThanOrEqual(64)
+  }
+  expect(scanner.finish()?.base_resp).toBeUndefined()
+})
+
+test.each([
+  // A violation after the code releases it; one under an earlier root key keeps the block in force.
+  ['"base_resp":{"status_code":1008},"a":1 2', { usage: { input_tokens: 1 } }],
+  ['"base_resp":{"status_code":1008},"q":{"r":1 2}', { usage: { input_tokens: 1 } }],
+  ['"q":{"r":1 2},"base_resp":{"status_code":1008}', { usage: { input_tokens: 1 } }],
+  // The block drops only the ceiling slot: other evidence stays.
+  [
+    '"code":"quota","base_resp":{"status_code":0 1008}',
+    { usage: { input_tokens: 1 }, code: "quota" },
+  ],
+])(
+  "a structural violation blocks only the code, before or after it (#207 round 13): %s",
+  (members, expected) => {
+    const scanner = createResponseSalvage(1024)
+    const text = `{"usage":{"input_tokens":1},${members},"pad":"${"x".repeat(2048)}"}`
+    for (const byte of encoder.encode(text)) scanner.push(byte)
+    expect(scanner.finish()).toEqual(expected)
+  },
+)
+
+test("a block drops a code still being captured, so its bytes stop counting (#207 round 13)", () => {
+  const scanner = createResponseSalvage(1024)
+  const text = `{"usage":{"input_tokens":1},"base_resp":{"status_code":1008"x"},"pad":"${"x".repeat(2048)}"}`
+  for (const byte of encoder.encode(text)) scanner.push(byte)
+  expect(scanner.retainedBytes).toBe('{"input_tokens":1}'.length)
+  expect(scanner.finish()).toEqual({ usage: { input_tokens: 1 } })
+})
