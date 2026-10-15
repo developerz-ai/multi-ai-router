@@ -115,3 +115,21 @@ test("plural limits and unavailable detail remain readable without leaking futur
     node.remove()
   }
 })
+
+test("a truncated owner or tool breakdown is named, not lumped into other groups", () => {
+  const coverage = {
+    ...usageCoverage(0),
+    breakdown: { maxRows: 5, truncated: ["owner", "tool"] },
+  }
+  const node = document.createElement("div")
+  document.body.append(node)
+  const dispose = render(() => <UsageCoverage summary={{ coverage, bucket: "day" }} />, node)
+  try {
+    const text = node.textContent ?? ""
+    expect(text).toContain("Owner, Tool")
+    expect(text).not.toContain("Other groups")
+  } finally {
+    dispose()
+    node.remove()
+  }
+})
