@@ -17,6 +17,7 @@ export type {
   UsageOwnerRow,
   UsageSeriesEntry,
   UsageSummary,
+  UsageToolRow,
 } from "./types"
 
 import type { UsageLabelSets, UsageSummary } from "./types"

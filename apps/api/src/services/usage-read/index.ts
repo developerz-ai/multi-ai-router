@@ -39,6 +39,7 @@ export type {
   UsageService,
   UsageServiceDeps,
   UsageSummary,
+  UsageToolRow,
 } from "./service"
 export { createUsageService } from "./service"
 export type { ResolvedWindow, UsageBucket, UsageWindowQuery } from "./window"

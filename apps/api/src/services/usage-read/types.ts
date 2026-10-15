@@ -35,7 +35,7 @@ export interface UsageSummary {
    */
   readonly byOwner: readonly UsageOwnerRow[]
   /** Folded on the tool slug, with the same non-owner buckets and the same current-label rule. */
-  readonly byTool: readonly UsageBreakdownRow[]
+  readonly byTool: readonly UsageToolRow[]
 }
 
 export interface UsageSeriesEntry {
@@ -45,15 +45,12 @@ export interface UsageSeriesEntry {
   readonly errors: number
 }
 
-export interface UsageBreakdownRow {
+interface UsageBreakdownBase<Note> {
   readonly id: string | null
   /** Human name. `null` when the subject is gone (no live row and, for a key, no tombstone) or the dimension did not apply. */
   readonly label: string | null
-  /**
-   * Why the label is absent, so the console never has to guess. `unassigned` exists only on the
-   * owner and tool breakdowns: a key that is there but names no owner (or tool).
-   */
-  readonly note: "deleted" | "none" | "unassigned" | null
+  /** Why the label is absent, so the console never has to guess. */
+  readonly note: Note
   readonly totals: UsageTotals
   /** This group's percentiles. A global p95 cannot answer "which account is slow". */
   readonly latencyP50Ms: number | null
@@ -62,6 +59,16 @@ export interface UsageBreakdownRow {
   /** Requests per bucket, aligned to `axis`, so two rows are comparable at a glance. */
   readonly series: readonly number[]
 }
+
+/** `deleted`: the subject is gone. `none`: the dimension did not apply to the attempt. */
+export type UsageBreakdownRow = UsageBreakdownBase<"deleted" | "none" | null>
+
+/**
+ * Owner and tool rows add `unassigned`: the key is there but names no owner (or tool). It exists
+ * only on these two breakdowns, so it is part of their row types and not of the shared one.
+ */
+type UsageAttributionNote = "deleted" | "none" | "unassigned" | null
+export type UsageToolRow = UsageBreakdownBase<UsageAttributionNote>
 
 export interface UsageKeyRow extends UsageBreakdownRow {
   /**
@@ -72,14 +79,16 @@ export interface UsageKeyRow extends UsageBreakdownRow {
   readonly retired: boolean
 }
 
-export interface UsageOwnerRow extends UsageBreakdownRow {
+export interface UsageOwnerRow extends UsageBreakdownBase<UsageAttributionNote> {
   /** Null on the non-owner buckets and on an owner whose key carries no kind. */
   readonly ownerKind: KeyOwnerKind | null
 }
 
 /**
- * What the loader knows about a key: read from the live row, else its tombstone. Only `name`
- * reaches the wire in this slice; owner, kind and tool ride along for the consumers that follow.
+ * What the loader knows about a key: read from the live row, else its tombstone. What reaches the
+ * wire: `name` is the `byKey` label; `retired` is `byKey.retired`; `owner` and `ownerKind` are the
+ * `byOwner` id, label and `ownerKind`; `tool` is the `byTool` id and label. All of them also feed
+ * the owner/tool filters' key-id resolution.
  */
 export interface KeyLabel {
   readonly name: string

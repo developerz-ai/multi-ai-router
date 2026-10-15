@@ -1,7 +1,7 @@
 import { KeyOwnerKind } from "@multi-ai-router/core"
 import type { UsageGroupRow, UsageGroupSeriesPoint, UsageKeyAttribution } from "@multi-ai-router/db"
 import { breakdownRow } from "./summary-view"
-import type { KeyLabel, UsageBreakdownRow, UsageOwnerRow } from "./types"
+import type { KeyLabel, UsageOwnerRow, UsageToolRow } from "./types"
 
 /**
  * The key-to-label map the owner and tool queries fold on, from the labels already loaded for the
@@ -56,7 +56,7 @@ export function toolRows(
   rows: readonly UsageGroupRow[],
   axis: readonly string[],
   points: readonly UsageGroupSeriesPoint[],
-): UsageBreakdownRow[] {
+): UsageToolRow[] {
   return rows.map((row) => {
     const base = breakdownRow(row, axis, points)
     const note = bucketNote(row.id)

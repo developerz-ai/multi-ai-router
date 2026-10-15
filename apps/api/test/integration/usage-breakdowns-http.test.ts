@@ -254,7 +254,8 @@ describe.skipIf(!historyUrl)("usage owner and tool breakdowns over HTTP and Post
         const found = rows.filter((r) => r.id === null && r.note === note)
         expect(found.length).toBe(1)
         expect(found[0]?.label).toBeNull()
-        expect(found[0]?.ownerKind ?? null).toBeNull()
+        // Only owner rows carry the field; on them it is null, never merely absent.
+        if (rows === body.byOwner) expect(found[0]?.ownerKind).toBeNull()
       }
     }
   })
