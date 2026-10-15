@@ -216,6 +216,61 @@ Measures, identical in every dimension × window cell:
 | Error rate | Share of retained attempts with non-success outcomes, with their own denominator and outcome split ([below](#the-failure-split)); historical attempt errors remain a separate count |
 | p50 / p95 latency | Router-observed, and `router_overhead_seconds` beside it so a slow upstream is not read as a slow router |
 
+### Filters
+
+`GET /api/admin/usage` narrows every number on the screen (totals, series, breakdowns, latency, the
+[failure split](#the-failure-split)) to the traffic that matches. Six filters, each optional:
+
+| Param | Matches |
+|---|---|
+| `owner` | keys whose stored `owner` slug equals the value, **exact** (no case folding, trimming or wildcard) |
+| `tool` | keys whose stored `tool` slug equals the value, exact |
+| `keyId` | that key id |
+| `accountId` | that account id |
+| `poolId` | that pool id |
+| `model` | the recorded client-facing model name, exact |
+
+**Encoding.** Repeated params (`?owner=alice&owner=bob&tool=editor`), read with `c.req.queries()`.
+Never comma-split: a model name may contain a comma. Values within one dimension are **OR**, and
+dimensions are **AND**. `keyId`, `poolId` and `accountId` must be uuids and a malformed one is a
+`400` at the boundary, not a database error; an empty value (`?owner=`) is a `400`; a list is
+capped at 500 values; a NUL character in a value is a `400`; ids are lowercased before matching.
+**Any query key outside `window`, `from`, `to` and the six filters is a `400` naming it**: a
+misspelled filter (`?apiKeyId=`, `?owners=`) would otherwise be dropped and answer with the
+unfiltered totals. `window`, `from` and `to` stay single-valued, and a repeated one keeps the
+first value, as before. #226 and the breakdown issue inherit this encoding.
+
+**Resolution.** `owner` and `tool` are resolved by a pure function to a key-id set from the label
+map (live keys plus tombstones, so a purged key still counts). Owner, tool and `keyId` combine as
+an intersection, so adding a filter can only narrow. "No filter" and "a filter that matched
+nothing" are different: an owner or tool that resolves to no key yields **zeros** (a valid empty
+response with the usual axis), never the unfiltered totals. The zero is produced by the same SQL
+(`= any('{}')` is false), so `unpriced.attempts` keeps its meaning (`null` before measurement, `0`
+after) instead of a hand-built object. The label map now feeds a filter, not just display names, and it is
+read outside the facts' snapshot, so it is not snapshot-consistent with them: a key relabelled
+during a request may be resolved against its newer label. The loader reads live keys first and
+tombstones second, so a key deleted between the two reads is always in at least one of the two reads (the delete writes
+its tombstone in the same transaction that removes the row) and cannot silently drop out of a
+filtered total.
+
+**Where it applies.** The predicate sits inside every source that feeds a number: the legacy
+`usage_daily` days, both v2 daily rollups and the receipt contributions, so totals, breakdowns and
+both series agree. The raw latency, outcome and breakdown panes take the same predicate, but only
+inside the window's `created_at` range (the raw key and account indexes were dropped in migration
+`0015`); filtering the totals and the outcomes together keeps `incomplete` and the failure
+denominators right. Id lists are bound as one array parameter (`= any($n::uuid[])`), so there is no
+id-count ceiling. Metered and notional are still never summed, and `unpriced` is filtered like
+every other measure.
+
+**What it does not do.**
+
+- `coverage` is **unfiltered**: it answers "is any pending or legacy history in this window" from
+  existence checks, and a superset can only over-report `incomplete`, the safe direction.
+- `GET /api/admin/usage/recent` ignores the filters.
+- A `poolId` filter cannot select the pool-less rows that `byPool` shows with note "none": a NULL
+  pool never matches an id list.
+- No `byOwner` / `byTool` breakdowns, `unassigned` buckets or retired-key marker (#246).
+
 ### Where the numbers appear
 
 | Surface | What it shows |
@@ -380,7 +435,7 @@ immediately if it is healthy.
 | `GET /metrics` | `METRICS_TOKEN` when set, none when not | Prometheus text exposition | `200`, `401` when the token is set and not presented |
 | `GET /v1/usage/quota` | router key or admin session | Per-Account, per-window utilization, `resetsAt`, `resetSource`, `status`, `lastCheckedAt` — the same shape the UI renders, so an operator can alert on it externally | `200` |
 | `POST /api/admin/accounts/:id/recheck` | admin session | Manual re-check. `POST /api/admin/accounts/recheck` re-checks every account. For Claude subscriptions it also carries the credential probe, reported as `auth` | `200` always — a cooldown refusal is `rechecked: false`, not `429` |
-| `GET /api/admin/usage` | admin session | Totals, series and breakdowns per key / account / pool / model over a window, plus the [failure split](#the-failure-split) behind the error rate | `200` |
+| `GET /api/admin/usage` | admin session | Totals, series and breakdowns per key / account / pool / model over a window, plus the [failure split](#the-failure-split) behind the error rate. Narrowed by the six repeated-param [filters](#filters) (`owner`, `tool`, `model`, `keyId`, `poolId`, `accountId`) | `200`; `400` on a malformed window, a non-uuid id, an empty or NUL-bearing value, more than 500 values, or any unknown query key |
 | `GET /api/admin/usage/recent` | admin session | The [live request feed](#the-live-request-feed): individual attempts, newest first. `limit` (1..200), `failed` or `outcome` (never both), `requestId` (matches either id) | `200`, `400` on a limit out of range or both filters at once |
 
 `/healthz` never touches the database.

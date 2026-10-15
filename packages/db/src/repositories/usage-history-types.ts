@@ -1,5 +1,6 @@
 import type {
   UsageDimension,
+  UsageFilter,
   UsageGroupRow,
   UsageGroupSeriesPoint,
   UsageReadRepository,
@@ -21,23 +22,26 @@ export interface UsageHistoryCoverage {
 }
 export interface UsageHistoryRepository {
   coverage(window?: UsageWindow): Promise<UsageHistoryCoverage>
-  totals(window: UsageWindow): Promise<UsageTotals>
+  totals(window: UsageWindow, filter: UsageFilter): Promise<UsageTotals>
   breakdown(
     window: UsageWindow,
     dimension: UsageDimension,
-    limit?: number,
+    limit: number | undefined,
+    filter: UsageFilter,
   ): Promise<UsageGroupRow[]>
   series(
     window: UsageWindow,
     bucket: "hour" | "day",
-    bucketWidth?: number,
+    bucketWidth: number | undefined,
+    filter: UsageFilter,
   ): Promise<UsageSeriesPoint[]>
   seriesByDimension(
     window: UsageWindow,
     bucket: "hour" | "day",
     dimension: UsageDimension,
-    bucketWidth?: number,
-    ids?: readonly (string | null)[],
+    bucketWidth: number | undefined,
+    ids: readonly (string | null)[] | undefined,
+    filter: UsageFilter,
   ): Promise<UsageGroupSeriesPoint[]>
   /** All history and retained detail reads use one repeatable-read snapshot. */
   withSnapshot<T>(

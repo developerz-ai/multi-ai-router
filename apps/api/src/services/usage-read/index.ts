@@ -5,6 +5,14 @@
 
 export type { UsageFailures } from "./failures"
 export { EMPTY_FAILURES, foldFailures } from "./failures"
+export type { UsageFilterQuery } from "./filter"
+export {
+  resolveUsageFilter,
+  USAGE_FILTER_PARAMS,
+  USAGE_QUERY_PARAMS,
+  unknownQueryParam,
+  usageFilterQuery,
+} from "./filter"
 export { catalogLabels } from "./labels"
 export type {
   RecentAttemptView,

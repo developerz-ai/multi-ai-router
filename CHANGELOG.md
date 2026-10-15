@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.32.0] — 2026-10-15
+
+### Added
+
+- `GET /api/admin/usage` filters by owner, tool, model, key, pool and account (#225). Each is a repeated query param (`?owner=a&owner=b`, never comma-split); values within one dimension are OR-ed and dimensions are AND-ed. `owner` and `tool` match a key's stored slug exactly, resolved to key ids from the live keys plus tombstones, so a purged key still counts; an owner or tool that matches no key returns zeros, never the unfiltered totals. `keyId`, `poolId` and `accountId` must be uuids (a malformed one is a 400). The predicate is applied inside every history source (legacy `usage_daily`, both v2 rollups, receipt contributions) and inside the raw latency, outcome and breakdown panes, so totals, series, breakdowns and `failures` agree; metered and notional stay separate and `unpriced` is filtered like every other measure. `coverage` stays unfiltered, which can only over-report `incomplete`. `filter` is a required argument on the history and raw usage repositories (`{}` = no filter), so a read that forgets to forward it fails to compile. Ids are lowercased; values are non-empty, NUL-free and at most 500 per filter. The usage label loader now reads live keys before tombstones, sequentially. `usage-filter.ts` (the array-bound predicate) is new. Before this, the params were silently dropped and a filter returned unfiltered totals. The `/recent` feed and the breakdown rows' own shape are unchanged.
+
+### Changed
+
+- `GET /api/admin/usage` now answers `400`, naming the key, for any query parameter outside `window`, `from`, `to` and the six filters. It was ignored before, which let a misspelled filter return unfiltered totals.
+- `usage-read-repository.ts` and `usage-read-types.ts` are split by responsibility (`usage-tokens-since.ts`, `usage-token-spans.ts`); exports are unchanged.
+
 ## [2.31.0] — 2026-10-15
 
 ### Added
@@ -1252,3 +1263,4 @@ your tooling config.
 [2.30.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.30.0
 [2.30.1]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.30.1
 [2.31.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.31.0
+[2.32.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.32.0

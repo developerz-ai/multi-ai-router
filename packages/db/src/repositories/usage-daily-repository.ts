@@ -34,8 +34,8 @@ export function createUsageDailyRepository(db: Database): UsageDailyRepository {
   })
   return {
     rollupDay: history.rollupDay,
-    totals: (range) => history.totals(window(range)),
-    breakdown: (range, dimension) => history.breakdown(window(range), dimension),
+    totals: (range) => history.totals(window(range), {}),
+    breakdown: (range, dimension) => history.breakdown(window(range), dimension, undefined, {}),
     deleteOlderThan: history.deleteOlderThan,
   }
 }

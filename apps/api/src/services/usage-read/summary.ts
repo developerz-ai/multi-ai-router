@@ -1,5 +1,6 @@
 import type {
   UsageDimension,
+  UsageFilter,
   UsageHistoryRepository,
   UsageReadRepository,
 } from "@multi-ai-router/db"
@@ -21,6 +22,7 @@ export async function readSummary(
     breakdownMaxRows?: number
   },
   query: UsageWindowQuery,
+  filter: UsageFilter,
 ): Promise<UsageSummary> {
   const initial = await deps.history.coverage()
   const requested = resolveWindow(query, initial.dbNow)
@@ -34,16 +36,18 @@ export async function readSummary(
               : requested.to,
         }
       : requested
+  // Unfiltered on purpose: coverage asks "is any history in this window pending or legacy", and a
+  // superset can only over-report `incomplete`, the safe direction (docs/idea/08-observability.md).
   const coverage = await deps.history.coverage(window)
   const maxChartPoints = deps.maxChartPoints ?? 400
   const maxRows = deps.breakdownMaxRows ?? 100
   const width = axisBucketWidth(window, maxChartPoints)
   const [totals, latency, series, outcomes, rows] = await Promise.all([
-    deps.history.totals(window),
-    deps.raw.latency(window),
-    deps.history.series(window, window.bucket, width),
-    deps.raw.outcomes(window),
-    Promise.all(dimensions.map((d) => deps.history.breakdown(window, d, maxRows + 1))),
+    deps.history.totals(window, filter),
+    deps.raw.latency(window, filter),
+    deps.history.series(window, window.bucket, width, filter),
+    deps.raw.outcomes(window, filter),
+    Promise.all(dimensions.map((d) => deps.history.breakdown(window, d, maxRows + 1, filter))),
   ])
   const axis = buildAxis(window, width)
   const retainedAttempts = outcomes.reduce((sum, row) => sum + row.attempts, 0)
@@ -57,6 +61,7 @@ export async function readSummary(
         dimension,
         (selected[index] ?? []).map((row) => row.id),
         maxRows,
+        filter,
       ),
     ),
   )
@@ -77,6 +82,7 @@ export async function readSummary(
         dimension,
         width,
         (limited[index] ?? []).map((row) => row.id),
+        filter,
       ),
     ),
   )
