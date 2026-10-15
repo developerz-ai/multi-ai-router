@@ -10,6 +10,7 @@ import {
   topNMeasureLabel,
   topNMeasureValue,
 } from "../../lib/usage-index"
+import { UsageRowBadges } from "./UsageRowBadges"
 import styles from "./UsageTopN.module.scss"
 
 export interface UsageTopNProps {
@@ -79,6 +80,7 @@ export function UsageTopN(props: UsageTopNProps) {
 
                 <div class={styles.identity}>
                   <span class={styles.label}>{row.label}</span>
+                  <UsageRowBadges row={row} />
                   <Show when={row.note}>{(note) => <span class={styles.note}>{note()}</span>}</Show>
                 </div>
 
@@ -149,6 +151,10 @@ function dimensionPlural(dimension: UsageDimension): string {
   switch (dimension) {
     case "key":
       return "keys"
+    case "owner":
+      return "owners"
+    case "tool":
+      return "tools"
     case "account":
       return "accounts"
     case "pool":

@@ -1,6 +1,7 @@
 import type { AccountListFilter } from "../api/accounts"
 import type { AuditQuery } from "../api/audit"
 import { isCustomRange, type UsageRange } from "../api/usage"
+import { hasUsageFilters, USAGE_FILTER_NAMES, type UsageFilters } from "../api/usage-params"
 import type { RecentQuery } from "../api/usage-recent"
 
 // Every cache key in the console, built here and nowhere else.
@@ -53,11 +54,23 @@ export const queryKeys = {
   usage: {
     root: () => ["usage"] as const,
     /** A custom range is flattened into the key by its own bounds — two different ranges must
-     *  never collide on one cache entry just because they are both "custom". */
-    summary: (range: UsageRange) =>
-      isCustomRange(range)
+     *  never collide on one cache entry just because they are both "custom".
+     *
+     *  Filters are appended only when one is set, each list sorted, so the unfiltered key stays
+     *  exactly `["usage", "summary", "7d"]`: the keys and accounts tables read that entry, and a
+     *  second spelling of "no filter" would turn their cache hit into a second aggregate. */
+    summary: (range: UsageRange, filters?: UsageFilters) => {
+      const base = isCustomRange(range)
         ? (["usage", "summary", "custom", range.from, range.to] as const)
-        : (["usage", "summary", range] as const),
+        : (["usage", "summary", range] as const)
+      if (filters === undefined || !hasUsageFilters(filters)) return base
+      const sorted = Object.fromEntries(
+        USAGE_FILTER_NAMES.map((name) => [name, [...filters[name]].sort()]),
+      )
+      return [...base, sorted] as const
+    },
+    /** The stored weekly reports list. Its own key: a filter change must not refetch it. */
+    reports: () => ["usage", "reports"] as const,
     /** The live feed. Every filter is part of the key, so switching one is a fetch, not a stale table. */
     recent: (query: RecentQuery) =>
       ["usage", "recent", query.limit, query.filter, query.requestId ?? null] as const,

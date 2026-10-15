@@ -1,4 +1,5 @@
 import type { FailureCount } from "../failure-classes"
+import type { UsageWindowLabel } from "./usage-window"
 
 // Usage reads, backed by `GET /api/admin/usage`.
 //
@@ -9,10 +10,13 @@ import type { FailureCount } from "../failure-classes"
 //     them as JSON numbers would round money through a float. They are parsed
 //     once here, at the edge, so no component has to know.
 //   - **A label may be null**, with a `note` saying why: `deleted` when the key
-//     or account is gone (usage rows outlive what they name; for a key: no live row and no tombstone), `none` when the
-//     dimension did not apply — no pool was in play (a key scoped `all`, or an attempt that failed before an account was chosen). Both
-//     still render, because spend that happened is still spend and hiding a row
-//     would make the breakdown stop adding up to the total printed above it.
+//     or account is gone (usage rows outlive what they name; for a key: no live row and no
+//     tombstone), `none` when the dimension did not apply (for a pool: no pool was in play,
+//     because the key's scope was `all` or an explicit account list, or the attempt failed before
+//     an account was selected; for an owner or tool: the request carried no key), and, on the owner and tool
+//     breakdowns only, `unassigned` when the key exists but names no owner (or tool). All three
+//     still render, because spend that happened is still spend and hiding a row would make the
+//     breakdown stop adding up to the total printed above it.
 //   - **Percentiles are per group** on the wire and are folded into this
 //     module\'s flat `UsageTotals`, which is the shape the tables already render.
 //   - **`failures.byOutcome` is narrowed to the failures.** The server already
@@ -26,45 +30,16 @@ import type { FailureCount } from "../failure-classes"
 // records at length: one runtime import of its Zod-backed vocabulary pulls Zod
 // into this route's chunk.
 
-export const USAGE_WINDOWS = ["today", "7d", "30d", "lifetime"] as const
-export type UsageWindow = (typeof USAGE_WINDOWS)[number]
-
-/**
- * A custom `from`/`to` range, both ISO-8601. The server already accepts this
- * (`services/usage-read/window.ts`) — it was only ever unreachable from the console.
- */
-export interface UsageRangeInput {
-  readonly from: string
-  readonly to: string
-}
-
-/** What a caller may ask for: one of the four named windows, or an explicit range. */
-export type UsageRange = UsageWindow | UsageRangeInput
-
-/** What the server actually resolved the request to — `"custom"` is its own label, not a window. */
-export type UsageWindowLabel = UsageWindow | "custom"
-
-export function isCustomRange(range: UsageRange): range is UsageRangeInput {
-  return typeof range === "object"
-}
-
-export function usageWindowLabel(window: UsageWindow): string {
-  switch (window) {
-    case "today":
-      return "Today"
-    case "7d":
-      return "7 days"
-    case "30d":
-      return "30 days"
-    case "lifetime":
-      return "Lifetime"
-  }
-}
-
-/** Same as `usageWindowLabel`, widened to the label a *resolved* summary can carry. */
-export function usageSummaryWindowLabel(window: UsageWindowLabel): string {
-  return window === "custom" ? "Custom range" : usageWindowLabel(window)
-}
+export {
+  isCustomRange,
+  USAGE_WINDOWS,
+  type UsageRange,
+  type UsageRangeInput,
+  type UsageWindow,
+  type UsageWindowLabel,
+  usageSummaryWindowLabel,
+  usageWindowLabel,
+} from "./usage-window"
 
 /** The measures every total and every breakdown row carries, in one shape. */
 export interface UsageTotals {
@@ -101,6 +76,9 @@ export interface UsageTotals {
   }
 }
 
+/** What an owner row says about its owner's kind: the enum, or `unknown` when the key names none. */
+export type UsageOwnerKind = "person" | "service" | "unknown"
+
 /** One row of a leaderboard: a dimension member and its totals. */
 export interface UsageBreakdownRow {
   readonly id: string
@@ -110,6 +88,13 @@ export interface UsageBreakdownRow {
   readonly totals: UsageTotals
   /** Requests per bucket, for the inline sparkline. Same length as the series. */
   readonly series: readonly number[]
+  /** Key rows only: the key survives solely as a tombstone. Absent on every other dimension. */
+  readonly retired?: boolean
+  /**
+   * Owner rows only, and only for a real owner (never a bucket): a person and a service can share
+   * a slug, so the kind is what tells the two rows apart. `unknown` when the key names no kind.
+   */
+  readonly ownerKind?: UsageOwnerKind
 }
 
 /**
@@ -125,14 +110,18 @@ export interface UsageChartPoint {
   readonly errors: number
 }
 
-export type UsageDimension = "key" | "account" | "pool" | "model"
+export type UsageDimension = "key" | "owner" | "tool" | "account" | "pool" | "model"
 
-export const USAGE_DIMENSIONS = ["key", "account", "pool", "model"] as const
+export const USAGE_DIMENSIONS = ["key", "owner", "tool", "account", "pool", "model"] as const
 
 export function usageDimensionLabel(dimension: UsageDimension): string {
   switch (dimension) {
     case "key":
       return "Key"
+    case "owner":
+      return "Owner"
+    case "tool":
+      return "Tool"
     case "account":
       return "Account"
     case "pool":
@@ -182,6 +171,9 @@ export interface UsageSummary {
   /** One entry per bucket across the window, dense — a quiet bucket is a zero, not a gap. */
   readonly series: readonly UsageChartPoint[]
   readonly byKey: readonly UsageBreakdownRow[]
+  /** Folded on (kind, owner) on the server, so a person and a service sharing a slug are two rows. */
+  readonly byOwner: readonly UsageBreakdownRow[]
+  readonly byTool: readonly UsageBreakdownRow[]
   readonly byAccount: readonly UsageBreakdownRow[]
   readonly byPool: readonly UsageBreakdownRow[]
   readonly byModel: readonly UsageBreakdownRow[]
@@ -194,6 +186,10 @@ export function breakdownFor(
   switch (dimension) {
     case "key":
       return summary.byKey
+    case "owner":
+      return summary.byOwner
+    case "tool":
+      return summary.byTool
     case "account":
       return summary.byAccount
     case "pool":

@@ -3,12 +3,7 @@ import { Route, Router } from "@solidjs/router"
 import { QueryClient, QueryClientProvider } from "@tanstack/solid-query"
 import { render } from "solid-js/web"
 import UsageRoute from "../../src/routes/UsageRoute"
-import {
-  type WireSummaryOptions,
-  wireReport,
-  wireRow,
-  wireSummary,
-} from "../support/usage-wire"
+import { type WireSummaryOptions, wireReport, wireRow, wireSummary } from "../support/usage-wire"
 
 /**
  * The Usage page as an operator meets it (issue #228): filters that live in the URL, the owner

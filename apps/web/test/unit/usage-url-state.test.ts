@@ -1,8 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import {
-  parseUsageUrl,
-  usageUrlParams,
-} from "../../src/routes/usage/usage-url-state"
+import { parseUsageUrl, usageUrlParams } from "../../src/routes/usage/usage-url-state"
 
 /** The Usage page's URL contract: #229's links into this page rely on these exact names. */
 
