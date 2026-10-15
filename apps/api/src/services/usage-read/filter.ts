@@ -1,14 +1,15 @@
 import type { UsageFilter } from "@multi-ai-router/db"
 import { z } from "zod"
 import type { KeyLabel } from "./types"
+import { usageWindowQuery } from "./window"
 
 /**
  * The usage filters, as they arrive on the wire: owner, tool, model, keyId, poolId and accountId,
  * each a list. Composed apart from `usageWindowQuery`, whose refinements make zod 4 refuse
  * `.pick`, `.omit` and key-overwriting `.extend` on it.
  *
- * Ids are validated as uuids (and lowercased) here so a malformed one is a 400 at the boundary, never a Postgres
- * cast error. `owner` and `tool` are matched exactly against the stored lowercase slug (no
+ * Ids are validated as uuids (and lowercased) here so a malformed one is a 400 at the boundary,
+ * never a Postgres cast error. `owner` and `tool` are matched exactly against the stored lowercase slug (no
  * trimming, no case folding, no wildcard); `model` is matched exactly against the recorded
  * client-facing model name. Lists are capped so one request cannot ship an unbounded array.
  */
@@ -35,6 +36,23 @@ export type UsageFilterQuery = z.output<typeof usageFilterQuery>
 
 /** The six filter parameter names, in one place for the route to read as repeated params. */
 export const USAGE_FILTER_PARAMS = Object.keys(usageFilterQuery.shape) as readonly string[]
+
+/**
+ * Every query key `GET /api/admin/usage` understands: the window keys (read off the window schema,
+ * so a new window key cannot be forgotten here) plus the six filters. Anything else is a `400`,
+ * because a misspelled filter would otherwise be dropped and answer with unfiltered totals.
+ * Exported so the sibling export route can apply the same check.
+ */
+export const USAGE_QUERY_PARAMS: ReadonlySet<string> = new Set([
+  ...Object.keys(usageWindowQuery.shape),
+  ...USAGE_FILTER_PARAMS,
+])
+
+/** Names the first query key outside `USAGE_QUERY_PARAMS`, truncated so a long key is not echoed. */
+export function unknownQueryParam(names: Iterable<string>): string | undefined {
+  for (const name of names) if (!USAGE_QUERY_PARAMS.has(name)) return name.slice(0, 64)
+  return undefined
+}
 
 /**
  * Resolves the wire filter to the repository's. Pure: the key label map is injected.

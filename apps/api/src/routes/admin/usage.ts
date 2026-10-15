@@ -5,6 +5,7 @@ import {
   recentQuery,
   USAGE_FILTER_PARAMS,
   type UsageService,
+  unknownQueryParam,
   usageFilterQuery,
   usageWindowQuery,
 } from "../../services/usage-read"
@@ -24,8 +25,6 @@ import { render } from "./render"
  * window switch re-read rows nobody asked to see again.
  */
 
-const KNOWN_PARAMS: ReadonlySet<string> = new Set(["window", "from", "to", ...USAGE_FILTER_PARAMS])
-
 export const ADMIN_USAGE_BASE_PATH = "/api/admin/usage"
 
 export interface AdminUsageRoutesDeps {
@@ -44,7 +43,7 @@ export function adminUsageRoutes(deps: AdminUsageRoutesDeps): Hono<AdminAuthEnv>
     const all = c.req.queries()
     // A misspelled filter (`?apiKeyId=`, `?owners=`) must not silently return the unfiltered
     // totals, so any key outside the window and filter parameters is a 400 naming it.
-    const unknown = Object.keys(all).find((name) => !KNOWN_PARAMS.has(name))
+    const unknown = unknownQueryParam(Object.keys(all))
     if (unknown !== undefined) return render(c, invalid(`unknown query parameter "${unknown}"`))
     const filters: Record<string, string[]> = {}
     for (const name of USAGE_FILTER_PARAMS) {

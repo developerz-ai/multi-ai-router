@@ -99,7 +99,8 @@ export function createUsageReadRepository(db: Database): UsageReadRepository {
       return row === undefined ? EMPTY_TOTALS : row
     },
 
-    breakdown: async (window, dimension, ids, limit = 1000, filter) => {
+    breakdown: async (window, dimension, ids, requestedLimit, filter) => {
+      const limit = requestedLimit ?? 1000
       if (!Number.isSafeInteger(limit) || limit < 1 || limit > 1001 || (ids?.length ?? 0) > 1000)
         throw new Error("usage breakdown outside bounds")
       const column = DIMENSION_COLUMNS[dimension]

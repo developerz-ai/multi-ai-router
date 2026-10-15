@@ -29,7 +29,7 @@ export interface UsageServiceDeps {
 }
 
 export interface UsageService {
-  summary(query: UsageWindowQuery, filter?: UsageFilterQuery): Promise<AdminResult<UsageSummary>>
+  summary(query: UsageWindowQuery, filter: UsageFilterQuery): Promise<AdminResult<UsageSummary>>
   /** Individual attempts, newest first — the feed the summary cannot answer for. */
   recent(query: RecentQuery): Promise<AdminResult<RecentView>>
 }
@@ -40,6 +40,7 @@ export function createUsageService(deps: UsageServiceDeps): UsageService {
       const labels = await deps.labels()
       // Resolved from the label read above, which sits outside the snapshot below: the owner/tool
       // to key-id set is current labels, not the labels as of the facts' snapshot.
+      // Required by type; tests are not type-checked, so an absent filter at runtime reads as none.
       const resolved = resolveUsageFilter(filter ?? {}, labels.keys)
       return ok(
         await deps.history.withSnapshot((history, raw) =>
