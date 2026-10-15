@@ -249,7 +249,7 @@ response with the usual axis), never the unfiltered totals. The zero is produced
 after) instead of a hand-built object. The label map now feeds a filter, not just display names, and it is
 read outside the facts' snapshot, so it is not snapshot-consistent with them: a key relabelled
 during a request may be resolved against its newer label. The loader reads live keys first and
-tombstones second, so a key deleted between the two reads is never in neither (the delete writes
+tombstones second, so a key deleted between the two reads is always in at least one of the two reads (the delete writes
 its tombstone in the same transaction that removes the row) and cannot silently drop out of a
 filtered total.
 
