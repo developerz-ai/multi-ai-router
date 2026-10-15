@@ -49,6 +49,13 @@ describe("resolveUsageFilter", () => {
     )
   })
 
+  test("an uppercase keyId is folded and still intersects with an owner", () => {
+    const upper = "11111111-1111-4111-8111-111111111111".toUpperCase()
+    expect(resolveUsageFilter(parse({ owner: ["alice"], keyId: [upper] }), keys)).toEqual({
+      apiKeyIds: ["11111111-1111-4111-8111-111111111111"],
+    })
+  })
+
   test("keyId alone passes through even for an id the map does not know", () => {
     expect(
       resolveUsageFilter(parse({ keyId: ["66666666-6666-4666-8666-666666666666"] }), keys),
@@ -79,6 +86,12 @@ describe("usageFilterQuery", () => {
     for (const field of ["keyId", "poolId", "accountId"])
       expect(usageFilterQuery.safeParse({ [field]: ["nope"] }).success).toBe(false)
     expect(usageFilterQuery.safeParse({ keyId: [uuid], poolId: [uuid] }).success).toBe(true)
+  })
+  test("a NUL byte is rejected, and a list is capped at 500", () => {
+    expect(usageFilterQuery.safeParse({ model: ["a\u0000b"] }).success).toBe(false)
+    expect(usageFilterQuery.safeParse({ owner: ["a\u0000"] }).success).toBe(false)
+    expect(usageFilterQuery.safeParse({ model: Array(500).fill("m") }).success).toBe(true)
+    expect(usageFilterQuery.safeParse({ model: Array(501).fill("m") }).success).toBe(false)
   })
   test("empty values are rejected rather than read as a filter", () => {
     expect(usageFilterQuery.safeParse({ owner: [""] }).success).toBe(false)
