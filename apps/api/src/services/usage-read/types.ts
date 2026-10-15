@@ -54,14 +54,17 @@ export interface UsageBreakdownRow {
 }
 
 /**
- * What the loader knows about a key: read from the live row, else its tombstone. Only `name`
- * reaches the wire in this slice; owner, kind and tool ride along for the consumers that follow.
+ * What the loader knows about a key: read from the live row, else its tombstone. The summary puts
+ * only `name` on the wire; owner, kind and tool feed the filters and the CSV export, which also
+ * prints `prefix` (the public display prefix, in clear on both the live row and the tombstone).
+ * Never a key value or its ciphertext: the loader copies named fields, never a whole row.
  */
 export interface KeyLabel {
   readonly name: string
   readonly owner: string | null
   readonly ownerKind: KeyOwnerKind | null
   readonly tool: string | null
+  readonly prefix: string
 }
 
 /** `UsageLabelSets` projected to the names the wire carries; built once per request. */

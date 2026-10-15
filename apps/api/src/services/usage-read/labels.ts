@@ -35,6 +35,7 @@ export function catalogLabels(deps: {
         owner: row.owner,
         ownerKind: row.ownerKind,
         tool: row.tool,
+        prefix: row.prefix,
       })
     }
     return {
