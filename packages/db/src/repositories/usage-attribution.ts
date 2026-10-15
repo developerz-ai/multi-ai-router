@@ -20,20 +20,17 @@ export const BUCKET_UNASSIGNED = "#unassigned"
 export const BUCKET_DELETED = "#deleted"
 export const BUCKET_NONE = "#none"
 
-export const EMPTY_ATTRIBUTION: UsageKeyAttribution = {
-  ids: [],
-  owners: [],
-  ownerKinds: [],
-  tools: [],
-}
-
 export function isAttributionDimension(dimension: UsageDimension): dimension is "owner" | "tool" {
   return dimension === "owner" || dimension === "tool"
 }
 
 /** `unnest(...) as m(id, owner, kind, tool)`: the injected key labels as a relation. */
 export function attributionRelation(attribution: UsageKeyAttribution | undefined): SQL {
-  const a = attribution ?? EMPTY_ATTRIBUTION
+  // Required for owner and tool: without the mapping every key would read as deleted, a silent
+  // misgroup. An empty mapping (no keys) is legitimate; an absent one is a caller bug.
+  if (attribution === undefined)
+    throw new Error("usage owner/tool breakdown requires a key attribution")
+  const a = attribution
   return sql`unnest(${sql.param([...a.ids])}::uuid[], ${sql.param([...a.owners])}::text[], ${sql.param([...a.ownerKinds])}::text[], ${sql.param([...a.tools])}::text[]) as m(id, owner, kind, tool)`
 }
 
