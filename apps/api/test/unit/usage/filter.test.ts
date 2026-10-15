@@ -25,8 +25,8 @@ describe("resolveUsageFilter", () => {
 
   test("owner and tool resolve to key ids, OR within a dimension", () => {
     expect(resolveUsageFilter(parse({ owner: ["alice"] }), keys).apiKeyIds?.sort()).toEqual([
-      "22222222-2222-4222-8222-222222222222",
       "11111111-1111-4111-8111-111111111111",
+      "22222222-2222-4222-8222-222222222222",
     ])
     expect(resolveUsageFilter(parse({ owner: ["alice", "bob"] }), keys).apiKeyIds).toHaveLength(4)
   })
