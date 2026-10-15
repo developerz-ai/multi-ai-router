@@ -216,6 +216,55 @@ Measures, identical in every dimension × window cell:
 | Error rate | Share of retained attempts with non-success outcomes, with their own denominator and outcome split ([below](#the-failure-split)); historical attempt errors remain a separate count |
 | p50 / p95 latency | Router-observed, and `router_overhead_seconds` beside it so a slow upstream is not read as a slow router |
 
+### Filters
+
+`GET /api/admin/usage` narrows every number on the screen (totals, series, breakdowns, latency, the
+[failure split](#the-failure-split)) to the traffic that matches. Six filters, each optional:
+
+| Param | Matches |
+|---|---|
+| `owner` | keys whose stored `owner` slug equals the value, **exact** (no case folding, trimming or wildcard) |
+| `tool` | keys whose stored `tool` slug equals the value, exact |
+| `keyId` | that key id |
+| `accountId` | that account id |
+| `poolId` | that pool id |
+| `model` | the recorded client-facing model name, exact |
+
+**Encoding.** Repeated params (`?owner=alice&owner=bob&tool=editor`), read with `c.req.queries()`.
+Never comma-split: a model name may contain a comma. Values within one dimension are **OR**, and
+dimensions are **AND**. `keyId`, `poolId` and `accountId` must be uuids and a malformed one is a
+`400` at the boundary, not a database error; an empty value (`?owner=`) is a `400`; a list is
+capped at 500 values. `window`, `from` and `to` stay single-valued, and a repeated one keeps the
+first value, as before. #226 and the breakdown issue inherit this encoding.
+
+**Resolution.** `owner` and `tool` are resolved by a pure function to a key-id set from the label
+map (live keys plus tombstones, so a purged key still counts). Owner, tool and `keyId` combine as
+an intersection, so adding a filter can only narrow. "No filter" and "a filter that matched
+nothing" are different: an owner or tool that resolves to no key yields **zeros** (a valid empty
+response with the usual axis), never the unfiltered totals. The zero is produced by the same SQL
+(`= any('{}')` is false), so `unpriced.attempts` keeps its meaning (`null` before measurement, `0`
+after) instead of a hand-built object. The resolution reads labels outside the facts' snapshot, so
+it is not snapshot-consistent with them: a key relabelled during a request may be resolved against
+its newer label.
+
+**Where it applies.** The predicate sits inside every source that feeds a number: the legacy
+`usage_daily` days, both v2 daily rollups and the receipt contributions, so totals, breakdowns and
+both series agree. The raw latency, outcome and breakdown panes take the same predicate, but only
+inside the window's `created_at` range (the raw key and account indexes were dropped in migration
+`0015`); filtering the totals and the outcomes together keeps `incomplete` and the failure
+denominators right. Id lists are bound as one array parameter (`= any($n::uuid[])`), so there is no
+id-count ceiling. Metered and notional are still never summed, and `unpriced` is filtered like
+every other measure.
+
+**What it does not do.**
+
+- `coverage` is **unfiltered**: it answers "is any pending or legacy history in this window" from
+  existence checks, and a superset can only over-report `incomplete`, the safe direction.
+- `GET /api/admin/usage/recent` ignores the filters.
+- A `poolId` filter cannot select the pool-less rows that `byPool` shows with note "none": a NULL
+  pool never matches an id list.
+- No `byOwner` / `byTool` breakdowns, `unassigned` buckets or retired-key marker (#246).
+
 ### Where the numbers appear
 
 | Surface | What it shows |
