@@ -46,7 +46,8 @@ export async function applyUsageContributions(
     const sum = (field: string) => sql.raw(`sum((p->>'${field}')::numeric)`)
     // NULL only when no payload in the group carries the field, so a pre-measure day repairs to
     // NULL rather than to 0. On conflict the existing side is coalesced, never the incoming one,
-    // so an unmeasured incoming batch leaves the stored value as it was.
+    // so an unmeasured incoming batch (NULL) turns the stored value NULL: not measured wins. Only
+    // field-less payloads from before the migration reach that, on days before `since`, which reads mask.
     const unpriced = sql`sum((p->>'unpricedAttempts')::numeric)`
     const measures =
       kind === "attempt" ? [...payloadMeasures.map(sum), unpriced] : payloadMeasures.map(sum)

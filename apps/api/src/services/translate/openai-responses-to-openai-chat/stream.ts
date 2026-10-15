@@ -40,6 +40,9 @@ import { frameJson } from "../sse/parse"
  * No `event:` line is emitted. openai-chat names no events; every payload is a bare `data:` JSON
  * object, and its terminator is the `[DONE]` sentinel.
  *
+ * A `response.refusal.delta` becomes `delta.refusal`, the field OpenAI itself streams a refusal in,
+ * so a structured-output caller never finds the refusal sentence inside the JSON it parses.
+ *
  * Dropped, as documented: `response.reasoning_summary_text.delta` — openai-chat has no
  * reasoning-summary field, the same row as an Anthropic `thinking_delta`.
  */
@@ -66,6 +69,7 @@ interface ToolCallDelta {
 interface ChunkDelta {
   readonly role?: "assistant"
   readonly content?: string
+  readonly refusal?: string
   readonly tool_calls?: readonly ToolCallDelta[]
 }
 
@@ -127,6 +131,9 @@ export function openAiResponsesToOpenAiChatStream(
   }
 
   const textBoundary = createResponsesTextBoundary()
+  // Its own boundary: refusal parts join one another on a newline, never onto the answer text,
+  // which travels in a different field.
+  const refusalBoundary = createResponsesTextBoundary()
   const recoverSnapshot = createResponsesSnapshotRecovery(options)
   const identifyItem = createResponsesItemIdentity(options)
 
@@ -135,6 +142,14 @@ export function openAiResponsesToOpenAiChatStream(
     return boundary === null
       ? NO_EVENTS
       : [chunk({ content: `${boundary.separator ? "\n" : ""}${boundary.text}` }, null)]
+  }
+
+  /** `delta.refusal`, as OpenAI streams it — never `content`, which a JSON-mode caller parses. */
+  function onRefusalDelta(event: ParsedResponsesEvent | null): readonly SseEvent[] {
+    const boundary = event === null ? null : refusalBoundary(event)
+    return boundary === null
+      ? NO_EVENTS
+      : [chunk({ refusal: `${boundary.separator ? "\n" : ""}${boundary.text}` }, null)]
   }
 
   function onArgumentsDelta(event: ParsedResponsesEvent | null): readonly SseEvent[] {
@@ -244,8 +259,9 @@ export function openAiResponsesToOpenAiChatStream(
       case "response.output_item.added":
         return onItemAdded(event)
       case "response.output_text.delta":
-      case "response.refusal.delta":
         return onTextDelta(event)
+      case "response.refusal.delta":
+        return onRefusalDelta(event)
       case "response.function_call_arguments.delta":
         return onArgumentsDelta(event)
       case "response.completed":

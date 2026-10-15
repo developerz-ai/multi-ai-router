@@ -48,7 +48,9 @@ import { toolChoiceFromOpenAiResponses, toolsFromOpenAiResponses } from "../shar
  * call carrying only the newest turn and the model would answer a conversation it was never shown,
  * so the refusal names the field and the client learns to send the whole transcript instead.
  * `text.format` is refused on the same terms: a schema-constrained answer is a contract the caller
- * will parse, not a hint.
+ * will parse, not a hint. The opposite pair carries `response_format` onto `text.format`; this one
+ * has not been given the reverse mapping, because every openai-chat upstream would need its own
+ * proof that it honours `response_format` before refusing here could safely become carrying.
  *
  * Assistant text and adjacent function calls share one assistant turn; ordinary same-role
  * messages remain separate. Tool replies stay keyed and images follow the complete reply run.

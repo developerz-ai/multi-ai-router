@@ -7,11 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.30.0] — 2026-10-15
+
+### Added
+
+- Unpriced traffic is counted instead of reading as $0 (#220). The attempt rollup gains `unpriced_attempts` (attempts with unknown cost that used tokens; NULL = not measured, never back-filled). The usage API reports `unpriced: { attempts, since }` on totals and breakdown rows, across the daily tables and the receipts query that answers `today`. Migration `0035_unpriced_attempts` adds the columns and records `unpriced_since` as the day after it runs; a window wholly before that date reads `attempts: null`, never 0. This differs on purpose from `router_cost_basis_total`, which also counts token-less failed attempts. Rolling back past 2.30.0 and upgrading again requires moving `usage_history_state.unpriced_since` forward past the last day the old image wrote, or those days read as measured.
+
 ## [2.28.0] — 2026-10-14
 
 ### Added
 
-- Unpriced traffic is counted instead of reading as $0 (#220). The attempt rollup gains `unpriced_attempts` (attempts with unknown cost that used tokens; NULL = not measured, never back-filled). The usage API reports `unpriced: { attempts, since }` on totals and breakdown rows, across the daily tables and the receipts query that answers `today`. Migration `0035_unpriced_attempts` adds the columns and records `unpriced_since` as the day after it runs; a window wholly before that date reads `attempts: null`, never 0. This differs on purpose from `router_cost_basis_total`, which also counts token-less failed attempts. Rolling back past 2.28.0 and upgrading again requires moving `usage_history_state.unpriced_since` forward past the last day the old image wrote, or those days read as measured.
+- **Structured output is carried from openai-chat onto openai-responses.** `/v1/chat/completions` with `response_format` against a Responses account (ChatGPT/Codex `openai-oauth`, or `openai-api` on Responses) was refused `400 translation_failed` ("this build translates no structured-output constraint onto another dialect"; production, 2026-10-14, `gpt-6-luna`), although the Codex backend honours `text.format`. It is now translated (`shared/structured-output.ts`): `{type: "text"}` / absent → no constraint; `{type: "json_object"}` → `text.format: {type: "json_object"}`; `{type: "json_schema", json_schema: {name, schema, strict?, description?}}` → `text.format: {type: "json_schema", name, schema, strict?, description?}`, every value verbatim. `name` is validated as OpenAI does (`^[a-zA-Z0-9_-]{1,64}$`) and defaults to `"response"` when omitted, since Responses requires one. A malformed `response_format` (no `json_schema` object, a bad name, no `schema`, a non-boolean `strict`, a non-string `description`, an unknown `type`) is still a `400` naming the field, never the value. Every other crossing (openai-chat → anthropic, openai-responses → openai-chat / anthropic) still refuses structured output, and `stop` is still refused toward Responses, which has no stop parameter.
+- `glm-5.3-flash` is priced in the `zai` table at OpenRouter's list (read 2026-10-14): input 0.15, output 0.50, cached read 0.03 USD per Mtok. Before this it priced as unknown. `gpt-6-luna` already had a row (OpenAI card, 0.10 / 0.50 / 0.01), so that row is unchanged.
+
+### Changed
+
+- A Responses `refusal` part reaches an openai-chat client in Chat's own refusal field: `message.refusal` collected, `delta.refusal` streamed. Before this it was joined onto `content`, which a structured-output caller would then fail to `JSON.parse`. A refusal-only answer is `content: null` plus `refusal`, with `finish_reason: "stop"`. Anthropic clients still get the refusal as text.
+
+## [2.27.0] — 2026-10-14
+
+### Added
+
+- `ADMIN_OIDC_REQUIRED_CLAIMS`: claim-based admin OIDC admission, IdP-agnostic. Comma-separated `name=value` pairs (e.g. `kind=dev_user`), every one of which the **verified** ID token must satisfy: a string claim exactly equal to the value, or an array claim containing it (case-sensitive). A missing claim, or one of any other shape, is rejected. The OIDC block now needs `ADMIN_OIDC_ADMIN_EMAIL`, `ADMIN_OIDC_REQUIRED_CLAIMS`, or both; neither is a boot error naming both, and a malformed pair (`kind`, `=x`, `kind=`) fails boot. With both set, both must pass, so adding claims to an email-allowlist deployment only narrows it. Email-only configurations behave exactly as before. `email_verified: true` is still required, a claim rejection is a `principal` failure with the same log line and `admin.login_failed` audit row as an email mismatch (naming the claim, never the token's value), and it is still one admin principal. Setting it alone trusts the IdP's own user gating; see `docs/idea/13-admin-oidc.md`.
+
+### Changed
+
+- ID-token claims beyond the standard ones are now kept on the verified payload instead of being stripped at parse time, so the claim gate reads the signed token, not a second decode.
 
 ## [2.26.1] — 2026-10-14
 
@@ -1184,3 +1205,5 @@ your tooling config.
 [2.25.6]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.25.6
 [2.25.7]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.25.7
 [2.25.8]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.25.8
+[2.28.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.28.0
+[2.27.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.27.0

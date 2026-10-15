@@ -177,7 +177,7 @@ written without the measure and are never back-filled: `attempts` is `null`, not
 that lies wholly before `since`, and a breakdown group with only pre-`since` traffic reads `0`
 inside a window that reaches past it.
 
-**Rollback note.** Rolling back past 2.28.0 and upgrading again requires moving
+**Rollback note.** Rolling back past 2.30.0 and upgrading again requires moving
 `usage_history_state.unpriced_since` forward past the last day the old image wrote: days it wrote
 carry no measure and would otherwise read as measured zeros instead of not measured.
 

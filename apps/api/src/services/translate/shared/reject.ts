@@ -227,16 +227,18 @@ export function assertNoStopSequence(
 }
 
 const NO_STRUCTURED_OUTPUT =
-  "constrains the response shape, and this build translates no structured-output constraint onto another dialect"
+  "constrains the response shape, which this build carries only from openai-chat onto openai-responses; on this hop it is refused rather than dropped"
 
 /**
- * Structured output, under both names the two OpenAI dialects give it.
+ * Structured output, under both names the two OpenAI dialects give it, on every hop that cannot
+ * carry it.
  *
- * `{"type":"text"}` is the default and the only form that survives: a JSON-Schema-constrained
- * response — and `json_object`'s weaker promise of *some* parseable JSON — is a **contract** the
- * caller will parse, and this build translates no such constraint onto another dialect. Refused by
- * name rather than dropped, because dropped it fails at the *caller's* `JSON.parse` with nothing
- * naming the cause: an OpenAI SDK `.parse()`, LangChain's `withStructuredOutput()`, Instructor, and
+ * `{"type":"text"}` is the default and passes everywhere. A JSON-Schema-constrained response — and
+ * `json_object`'s weaker promise of *some* parseable JSON — is a **contract** the caller will parse.
+ * Exactly one hop carries it: openai-chat → openai-responses, where `response_format` becomes
+ * `text.format` (`shared/structured-output.ts`). Every other crossing still refuses it by name rather
+ * than dropping it, because dropped it fails at the *caller's* `JSON.parse` with nothing naming the
+ * cause: an OpenAI SDK `.parse()`, LangChain's `withStructuredOutput()`, Instructor, and
  * `generateObject` all hand back prose and a parse error instead of the `400` they can act on.
  *
  * One rule behind both spellings for the reason `assertNoStopSequence` states: two copies could
