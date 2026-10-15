@@ -2,21 +2,20 @@ import { describe, expect, test } from "bun:test"
 import { AdminAuthError } from "@multi-ai-router/core"
 import { createUsageRecentRepository, createUsageReportRepository } from "@multi-ai-router/db"
 import { Hono } from "hono"
-import { sql } from "drizzle-orm"
 import {
   historyAttempt,
   historyTerminal,
   historyUrl,
   usageHistoryFixture,
 } from "../../../../packages/db/test/integration/usage-history-fixture"
-import { adminAuth } from "../../src/middleware/adminAuth"
-import type { AdminAuthEnv } from "../../src/middleware/adminAuth"
-import { errorHandler, notFoundHandler } from "../../src/middleware/errorHandler"
 import { createLogger } from "../../src/logging/logger"
+import type { AdminAuthEnv } from "../../src/middleware/adminAuth"
+import { adminAuth } from "../../src/middleware/adminAuth"
+import { errorHandler, notFoundHandler } from "../../src/middleware/errorHandler"
 import { ADMIN_USAGE_BASE_PATH, adminUsageRoutes } from "../../src/routes/admin/usage"
 import { createUsageService } from "../../src/services/usage-read"
-import { createUsageReportService } from "../../src/services/usage-report"
 import type { WeeklyReport } from "../../src/services/usage-report"
+import { createUsageReportService } from "../../src/services/usage-report"
 
 /**
  * The weekly report end to end: real Postgres rollups, the real builder, the real repository and
@@ -59,8 +58,8 @@ async function seedAttempt(over: Parameters<typeof historyAttempt>[0], minute: n
 }
 
 const count = async () => {
-  const [row] = await fixture.db().execute<{ n: number }>(sql`select count(*)::int as n from usage_reports`)
-  return row?.n ?? -1
+  const rows = await fixture.get().sql.unsafe("select count(*)::int as n from usage_reports")
+  return Number(rows[0]?.n ?? -1)
 }
 
 const csrfGuard = adminAuth(
@@ -94,8 +93,28 @@ describe.skipIf(!historyUrl)("weekly usage reports over HTTP and Postgres", () =
     reports = createUsageReportRepository(db)
     const labels = async () => ({
       keys: new Map([
-        [K, { name: "svc-bot", owner: "svc", ownerKind: "service" as const, tool: "ci", retired: false, prefix: "mar_k" }],
-        [PERSON, { name: "ann-cli", owner: "ann", ownerKind: "person" as const, tool: "cli", retired: false, prefix: "mar_p" }],
+        [
+          K,
+          {
+            name: "svc-bot",
+            owner: "svc",
+            ownerKind: "service" as const,
+            tool: "ci",
+            retired: false,
+            prefix: "mar_k",
+          },
+        ],
+        [
+          PERSON,
+          {
+            name: "ann-cli",
+            owner: "ann",
+            ownerKind: "person" as const,
+            tool: "cli",
+            retired: false,
+            prefix: "mar_p",
+          },
+        ],
       ]),
       accounts: new Map([
         [A, EMAIL_LABEL],
@@ -116,6 +135,7 @@ describe.skipIf(!historyUrl)("weekly usage reports over HTTP and Postgres", () =
       ],
       settleMinutes: 30,
       upstreamTimeoutMs: 600_000,
+      listLimit: 110,
       now: () => NOW,
     })
     const usage = createUsageService({
@@ -224,7 +244,8 @@ describe.skipIf(!historyUrl)("weekly usage reports over HTTP and Postgres", () =
   test("no account label, id or email appears in the stored payload", async () => {
     const row = await reports.findByPeriodStart(WEEK_START)
     const text = JSON.stringify(row?.payload)
-    for (const secret of [EMAIL_LABEL, "overflow@example.com", A, O]) expect(text).not.toContain(secret)
+    for (const secret of [EMAIL_LABEL, "overflow@example.com", A, O])
+      expect(text).not.toContain(secret)
   })
 
   test("a malformed or non-Monday period is a 400; an absent Monday is a 404", async () => {

@@ -48,9 +48,9 @@ describe("weekly report env", () => {
     })
 
     test("accepts 14", () => {
-      expect(parseEnv({ ...base, RETENTION_USAGE_REPORTS_DAYS: "14" }).retention.usageReportsDays).toBe(
-        14,
-      )
+      expect(
+        parseEnv({ ...base, RETENTION_USAGE_REPORTS_DAYS: "14" }).retention.usageReportsDays,
+      ).toBe(14)
     })
   })
 

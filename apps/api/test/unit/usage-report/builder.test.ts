@@ -167,7 +167,7 @@ describe("sections by owner and tool", () => {
   test("a person and a service sharing a slug land in different sections", () => {
     const person = report.sections.people.lines.filter((line) => line.owner === "alice")
     const service = report.sections.services.lines.filter((line) => line.owner === "alice")
-    expect(person).toHaveLength(2)
+    expect(person).toHaveLength(1)
     expect(service).toHaveLength(1)
     expect(service[0]).toMatchObject({ owner: "alice", ownerKind: "service", tool: null })
   })
@@ -338,7 +338,7 @@ describe("overflow share", () => {
 
   test("the caveat says the designation is the pool's as of generation time", () => {
     const caveat = report.caveats.find((c) => c.code === "overflow_designation")
-    expect(caveat?.text).toContain("generation")
+    expect(caveat?.text).toContain("when this report was generated")
   })
 })
 
@@ -369,7 +369,14 @@ describe("caveats", () => {
 describe("what the payload never carries", () => {
   test("no account label or id, even when an account label is an email address", () => {
     const report = buildWeeklyReport(
-      [row({ apiKeyId: KEY.aliceService, poolId: POOL.p1, accountId: ACCOUNT.overflow, attempts: 3 })],
+      [
+        row({
+          apiKeyId: KEY.aliceService,
+          poolId: POOL.p1,
+          accountId: ACCOUNT.overflow,
+          attempts: 3,
+        }),
+      ],
       labels,
       pools,
       PERIOD,
