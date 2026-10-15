@@ -271,7 +271,7 @@ describe.skipIf(!historyUrl)("usage filter against every history source", () => 
       { models: [] },
     ] satisfies UsageFilter[]) {
       const got = await fixture.history().totals(wholeDays, filter)
-      expect(got).toMatchObject({ requests: 0, attempts: 0, tokensIn: 0, costMetered: "0.000000" })
+      expect(got).toMatchObject({ requests: 0, attempts: 0, tokensIn: 0, costMetered: "0" })
       expect(got.unpriced.attempts).toBe(0)
     }
     // A window wholly before measurement stays null, not a hand-built 0.
