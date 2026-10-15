@@ -1,8 +1,11 @@
 import type { SettingsView } from "../src/lib/api/settings"
 import type { PoolView, ProviderListResponse, SessionView } from "../src/lib/api/types"
-import type { WireSummary } from "../src/lib/api/usage-wire"
 import { ID } from "./fixture-ids"
-import type { FixtureAccount, FixtureKey, WireTotals } from "./fixture-types"
+import { DAY, iso, LONG_LABEL, NOW } from "./fixture-time"
+import type { FixtureAccount, FixtureKey } from "./fixture-types"
+
+export { usage } from "./fixture-usage"
+export { NOW }
 
 // The admin-API fixture `bin/ui-geometry` serves to the built SPA from Playwright
 // route mocks. Nothing here is real: no credential is valid, no host is reachable,
@@ -19,48 +22,6 @@ import type { FixtureAccount, FixtureKey, WireTotals } from "./fixture-types"
 // account is synthetic by design: notional is attributed to subscription-basis
 // usage rows, and a geometry fixture may seed it directly rather than through
 // traffic.
-
-/** Days-to-ms, for the timestamps below. */
-const DAY = 86_400_000
-/** 118 characters exactly — the reported worst-case label. */
-const LONG_LABEL_BASE =
-  "platform-relay-eu-west-primary-long-haul-account-with-an-operator-chosen-descriptive-name-"
-const LONG_LABEL = (LONG_LABEL_BASE + "0".repeat(118)).slice(0, 118)
-if (LONG_LABEL.length !== 118) {
-  // The length is a fixture requirement, not an accident — #223 names 118 chars.
-  throw new Error(`fixture label must be 118 chars, got ${LONG_LABEL.length}`)
-}
-
-/** The instant the browser clock is pinned to — relative dates render from it. */
-export const NOW = Date.parse("2026-10-14T12:00:00Z")
-const iso = (offsetMs: number): string => new Date(NOW + offsetMs).toISOString()
-
-/** Seven daily buckets ending "now", oldest first — the shape `axis` promises. */
-const AXIS = Array.from({ length: 7 }, (_, i) => iso((i - 6) * DAY))
-
-const totals = (requests: number, metered: string, notional: string): WireTotals => ({
-  requests,
-  attempts: requests,
-  errors: 0,
-  tokensIn: requests * 4_096,
-  tokensOut: requests * 1_024,
-  cacheReadTokens: 0,
-  cacheWriteTokens: 0,
-  costMetered: metered,
-  costNotional: notional,
-  unpriced: { attempts: 0, since: "2026-01-01" },
-})
-
-const row = (id: string, label: string, t: WireTotals, series: readonly number[]) => ({
-  id,
-  label,
-  note: null,
-  totals: t,
-  latencyP50Ms: 240,
-  latencyP95Ms: 900,
-  routerOverheadP95Ms: 2,
-  series,
-})
 
 /** `GET /auth/session` — a live session, so the shell never redirects to /login. */
 export const session: SessionView = {
@@ -239,62 +200,3 @@ export const keys: readonly FixtureKey[] = [
 
 /** `GET /pools` — empty; nothing on either table needs a member to render. */
 export const pools: readonly PoolView[] = []
-
-/** `GET /usage?window=7d` — totals plus the two breakdowns the tables join on. */
-export const usage: WireSummary = {
-  coverage: {
-    timeBasis: "event-time",
-    requestsBasis: "terminal",
-    historicalPrecision: "day",
-    legacy: false,
-    incomplete: false,
-    bucketWidth: DAY,
-    maxChartPoints: 240,
-    retainedDetail: {
-      from: iso(-7 * DAY),
-      to: iso(0),
-      attempts: 1_000,
-      totalAttempts: 1_000,
-      partial: false,
-    },
-    breakdown: { maxRows: 20, truncated: [] },
-  },
-  window: "7d",
-  bucket: "day",
-  from: iso(-7 * DAY),
-  to: iso(0),
-  totals: totals(1_000, "46532.67", "188.15"),
-  latency: { p50Ms: 240, p95Ms: 900, routerOverheadP95Ms: 2, ttfbP95Ms: 420 },
-  failures: { attempts: 1_000, errors: 0, partial: false, byOutcome: [] },
-  axis: AXIS,
-  series: AXIS.map((at, i) => ({ at, requests: 100 + i * 10, attempts: 100 + i * 10, errors: 0 })),
-  byKey: [
-    // The five-digit spend: wide enough that a cramped COST column would push it
-    // into the neighbouring cell — the exact regression this gate exists for.
-    row(
-      ID.keyBigSpender,
-      "team-batch-pipeline",
-      totals(600, "45678.90", "0"),
-      [80, 90, 100, 95, 110, 105, 20],
-    ),
-    row(ID.keyRevoked, "legacy-runner", totals(12, "34.56", "0"), [2, 2, 3, 1, 2, 1, 1]),
-  ],
-  byAccount: [
-    row(
-      ID.accSubscription,
-      "claude-max-1",
-      totals(412, "0", "88.40"),
-      [50, 60, 58, 62, 61, 70, 51],
-    ),
-    // Non-zero metered AND notional on a STORED-badge row: the collision #62 was.
-    row(
-      ID.accApiKey,
-      "anthropic-console-api",
-      totals(588, "842.13", "96.25"),
-      [90, 80, 85, 88, 79, 84, 82],
-    ),
-    row(ID.accLongLabel, LONG_LABEL, totals(64, "12.00", "3.50"), [9, 10, 8, 11, 9, 10, 7]),
-  ],
-  byPool: [],
-  byModel: [],
-}

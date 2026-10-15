@@ -154,6 +154,8 @@ function usageSummary(): unknown {
     byAccount: [],
     byPool: [],
     byModel: [],
+    byOwner: [],
+    byTool: [],
   }
 }
 

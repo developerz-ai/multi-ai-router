@@ -4,6 +4,7 @@ import type { UsageBreakdownRow, UsageDimension } from "../../lib/api/usage"
 import { usageDimensionLabel } from "../../lib/api/usage"
 import { formatCost, formatCount, formatMillis, formatPercent } from "../../lib/format"
 import styles from "./UsageBreakdown.module.scss"
+import { UsageRowBadges } from "./UsageRowBadges"
 
 export interface UsageBreakdownProps {
   readonly dimension: UsageDimension
@@ -31,6 +32,7 @@ export function UsageBreakdown(props: UsageBreakdownProps) {
       cell: (row) => (
         <div class={styles.identity}>
           <span class={styles.label}>{row.label}</span>
+          <UsageRowBadges row={row} />
           <span class={styles.note}>{row.note}</span>
         </div>
       ),

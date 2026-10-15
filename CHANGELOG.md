@@ -17,6 +17,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - The `glm-5.3-flash` row keeps its numbers and moves its citation from OpenRouter's reseller list to the vendor's own pricing page, which now lists the model at the same figures.
 
+## [2.36.0] — 2026-10-15
+
+### Added
+
+- Usage page filters (#228). Owner, Tool and Model multi-selects narrow every figure, breakdown and the Export CSV link. Options come from the unfiltered summary for the page's window (owners deduped by slug, a selected value missing from the capped table still shown and removable). The window, a custom range and the filters live in the URL as `window` or `from` and `to`, plus `owner`, `tool` and `model` repeated once per value; a deep link restores the view and a window the server would refuse falls back to 7 days. The client sends repeated params, never comma-joined ones.
+- Owner and Tool in the Usage page's "Break down by" switch and leaderboards. An owner row shows its kind (`person`, `service`, or `unknown` for a key that names none) so a person and a service sharing a slug are two rows; `unassigned` renders under its own label, and a key that survives only as a tombstone carries a `retired` marker.
+- An Unpriced attempts tile (a dash when the window predates measurement, never 0) and a read-only weekly reports list on the Usage page, showing each stored week with its delivery status (`pending`, `not_configured`, `sent`, `failed`). A failure's error text is not shown.
+
+### Changed
+
+- The unfiltered usage summary keeps its cache key `["usage", "summary", <window>]`, so the keys and accounts tables still hit the Usage page's cache; filters append a sorted segment only when one is set.
+- `UsageRoute` is split (headline tiles, custom range, filters, reports list and URL state are components), `usage.ts` sheds its window types to `usage-window.ts`, and the ui-geometry fixture splits into `fixture.ts`, `fixture-usage.ts` and `fixture-time.ts` and carries the new required `byOwner`, `byTool` and `retired` fields. No API behaviour changes.
+
+### Documentation
+
+- `docs/idea/08-observability.md` ("Where the numbers appear", new "The Usage page") and `docs/KEYS.md` ("Where your usage shows") describe the page. The null-pool gloss in the web client's usage header now matches the documented meaning.
+
 ## [2.35.0] — 2026-10-15
 
 ### Added
@@ -1318,4 +1335,5 @@ your tooling config.
 [2.33.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.33.0
 [2.34.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.34.0
 [2.35.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.35.0
+[2.36.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.36.0
 [2.36.1]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.36.1

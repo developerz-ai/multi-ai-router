@@ -28,19 +28,26 @@ export function isMutating(method: HttpMethod): boolean {
 
 export const CSRF_HEADER = "x-csrf-token"
 
-export type QueryParams = Readonly<Record<string, string | undefined>>
+/** A list is a repeated parameter (`?owner=a&owner=b`), which is how the usage filters are read. */
+export type QueryParams = Readonly<Record<string, string | readonly string[] | undefined>>
 
 /**
  * Pure, so the path/query assembly is testable without a network. `undefined`
  * values are dropped rather than serialised as the string "undefined" — the
  * account list filter is built from optional selects and sends nothing when the
- * operator picks "any".
+ * operator picks "any". A list is appended once per value, never comma-joined, with its empty
+ * values dropped; a list that is empty after that sends nothing.
  */
 export function buildPath(path: string, query?: QueryParams): string {
   if (query === undefined) return `${ADMIN_BASE}${path}`
   const params = new URLSearchParams()
   for (const [key, value] of Object.entries(query)) {
-    if (value !== undefined && value.length > 0) params.set(key, value)
+    if (value === undefined) continue
+    if (typeof value === "string") {
+      if (value.length > 0) params.set(key, value)
+      continue
+    }
+    for (const item of value) if (item.length > 0) params.append(key, item)
   }
   const search = params.toString()
   return search.length === 0 ? `${ADMIN_BASE}${path}` : `${ADMIN_BASE}${path}?${search}`

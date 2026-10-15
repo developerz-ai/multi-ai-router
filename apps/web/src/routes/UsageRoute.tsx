@@ -1,8 +1,6 @@
-import { createSignal, For, Show } from "solid-js"
-import { Button } from "../components/Button"
+import { createMemo, createSignal, For } from "solid-js"
 import { PageHeader } from "../components/PageHeader"
 import { QueryBoundary } from "../components/QueryBoundary"
-import { StatTile } from "../components/StatTile"
 import { TableSkeleton } from "../components/TableSkeleton"
 import {
   breakdownFor,
@@ -10,26 +8,29 @@ import {
   USAGE_DIMENSIONS,
   USAGE_WINDOWS,
   type UsageDimension,
-  type UsageRange,
-  type UsageWindow,
   usageDimensionLabel,
   usageSummaryWindowLabel,
   usageWindowLabel,
 } from "../lib/api/usage"
+import { NO_USAGE_FILTERS } from "../lib/api/usage-params"
 import { createNow } from "../lib/clock"
-import { fromDateTimeInput } from "../lib/datetime-input"
-import { formatCost, formatCount, formatMillis, formatPercent } from "../lib/format"
 import { useAllAccounts } from "../lib/queries/accounts"
 import { useUsageSummary } from "../lib/queries/usage"
+import { usageFilterOptions, withSelected } from "../lib/usage-filter-options"
 import styles from "./UsageRoute.module.scss"
 import { UsageBreakdown } from "./usage/UsageBreakdown"
 import { UsageChart } from "./usage/UsageChart"
 import { UsageCoverage } from "./usage/UsageCoverage"
+import { UsageCustomRange } from "./usage/UsageCustomRange"
 import { UsageExport } from "./usage/UsageExport"
 import { UsageFailures } from "./usage/UsageFailures"
+import { UsageFilters } from "./usage/UsageFilters"
 import { UsageQuota } from "./usage/UsageQuota"
 import { UsageRecent } from "./usage/UsageRecent"
+import { UsageReports } from "./usage/UsageReports"
+import { UsageTiles } from "./usage/UsageTiles"
 import { UsageTopN } from "./usage/UsageTopN"
+import { useUsageUrlState } from "./usage/usage-url-state"
 
 /** How many rows a leaderboard shows. Enough to name the outliers, few enough to read at a glance. */
 const TOP_N = 5
@@ -52,6 +53,10 @@ const TOP_N = 5
  * subscription's limit is a window, not a currency, and the two do not belong in
  * one table.
  *
+ * The window and the owner, tool and model filters live in the URL (`usage-url-state.ts`), so a
+ * view can be linked to; the page's figures, its Export CSV link and its filter options all read
+ * that one state.
+ *
  * The live feed at the foot of the screen is the one panel here that is not an
  * aggregate. It answers *which* request failed rather than how many did, and it
  * sits outside the summary's `QueryBoundary` so a failing rollup cannot take the
@@ -59,45 +64,23 @@ const TOP_N = 5
  */
 export default function UsageRoute() {
   const now = createNow(30_000)
-  const [range, setRange] = createSignal<UsageRange>("7d")
+  const url = useUsageUrlState()
   const [dimension, setDimension] = createSignal<UsageDimension>("key")
-  const [customFrom, setCustomFrom] = createSignal("")
-  const [customTo, setCustomTo] = createSignal("")
-  const [customError, setCustomError] = createSignal<string | null>(null)
-  const summary = useUsageSummary(range)
+  const summary = useUsageSummary(url.range, url.filters)
+  // The options come from the unfiltered read of the same window: filtered, they would shrink to
+  // the current selection. With no filter set this is the very query above, so it costs nothing.
+  const everything = useUsageSummary(url.range, () => NO_USAGE_FILTERS)
+  const options = createMemo(() => withSelected(usageFilterOptions(everything.data), url.filters()))
   const accounts = useAllAccounts()
-
-  function selectWindow(value: UsageWindow) {
-    setCustomError(null)
-    setRange(value)
-  }
-
-  // A custom range is its own explicit action, not a side effect of typing: nothing is sent
-  // until Apply is pressed, so a half-edited `from` never fires a request for a nonsense window.
-  function applyCustomRange(event: SubmitEvent) {
-    event.preventDefault()
-    const from = fromDateTimeInput(customFrom())
-    const to = fromDateTimeInput(customTo())
-    if (from === null || to === null) {
-      setCustomError("Both from and to are required.")
-      return
-    }
-    if (Date.parse(from) >= Date.parse(to)) {
-      setCustomError("From must be before to.")
-      return
-    }
-    setCustomError(null)
-    setRange({ from, to })
-  }
 
   return (
     <>
       <PageHeader
         actions={
           <>
-            {/* The export reads the range signal the summary query reads, so the file is the
-                window on screen. */}
-            <UsageExport filters={{}} range={range()} />
+            {/* The export reads the range and filters the summary query reads, so the file is the
+                view on screen. */}
+            <UsageExport filters={url.filters()} range={url.range()} />
             {/* A real `<fieldset>` rather than `role="group"`: the grouping is native, so the
                 `<legend>` names it for assistive tech without an `aria-label` that can drift
                 from the visible wording. */}
@@ -106,9 +89,11 @@ export default function UsageRoute() {
               <For each={USAGE_WINDOWS}>
                 {(value) => (
                   <button
-                    aria-pressed={!isCustomRange(range()) && range() === value ? "true" : "false"}
+                    aria-pressed={
+                      !isCustomRange(url.range()) && url.range() === value ? "true" : "false"
+                    }
                     class={styles.window}
-                    onClick={() => selectWindow(value)}
+                    onClick={() => url.setRange(value)}
                     type="button"
                   >
                     {usageWindowLabel(value)}
@@ -122,40 +107,11 @@ export default function UsageRoute() {
         title="Usage"
       />
 
-      {/* A custom range is the fifth window CLAUDE.md asks for, not a special case: the server
-          has taken `from`/`to` since `services/usage-read/window.ts` was written, and this is the
-          one place in the console that was never wired to ask for it. Overview's own window
-          picker (`OverviewRoute`) is named-window only — a custom range is answered here. */}
-      <form class={styles.customRange} onSubmit={applyCustomRange}>
-        <span class={styles.customCaption}>Custom range</span>
-        <label class={styles.customField}>
-          From
-          <input
-            class={styles.customInput}
-            onInput={(event) => setCustomFrom(event.currentTarget.value)}
-            type="datetime-local"
-            value={customFrom()}
-          />
-        </label>
-        <label class={styles.customField}>
-          To
-          <input
-            class={styles.customInput}
-            onInput={(event) => setCustomTo(event.currentTarget.value)}
-            type="datetime-local"
-            value={customTo()}
-          />
-        </label>
-        <Button size="sm" tone="neutral" type="submit">
-          Apply
-        </Button>
-        <Show when={isCustomRange(range())}>
-          <span class={styles.customActive}>Showing a custom range</span>
-        </Show>
-        <Show when={customError()}>
-          {(message) => <span class={styles.customErr}>{message()}</span>}
-        </Show>
-      </form>
+      {/* Overview's own window picker (`OverviewRoute`) is named-window only — a custom range is
+          answered here. */}
+      <UsageCustomRange onApply={url.setRange} range={url.range()} />
+
+      <UsageFilters filters={url.filters()} onChange={url.setFilters} options={options()} />
 
       <QueryBoundary
         errorTitle="Usage could not be loaded"
@@ -165,58 +121,7 @@ export default function UsageRoute() {
         {(data) => (
           <>
             <UsageCoverage summary={data} />
-            <section aria-label="Headline figures" class={styles.tiles}>
-              <StatTile
-                label="Requests"
-                note={`Client-facing · ${usageSummaryWindowLabel(data.window).toLowerCase()}`}
-                value={formatCount(data.totals.requests)}
-              />
-              <StatTile
-                label="Upstream attempts"
-                note="Counted separately from requests"
-                value={formatCount(data.totals.attempts)}
-              />
-              <StatTile
-                label="Metered spend"
-                note="Real money, from a priced model"
-                value={formatCost(data.totals.costMetered)}
-              />
-              {/* Its own tile, not a footnote on the one above: two measures in different
-                  currencies of trust, and a reader who sees them stacked adds them. */}
-              <StatTile
-                label="Notional spend"
-                note="Attributed to subscriptions — never added to metered"
-                value={formatCost(data.totals.costNotional)}
-              />
-              {/* One number, and deliberately not the last word on it: the panel below takes it
-                  apart into the classes an operator can actually act on. */}
-              <StatTile
-                label="Error rate"
-                note="Non-success share of attempts — broken down below"
-                value={formatPercent(data.totals.errors, data.totals.attempts)}
-              />
-              {/* `formatMillis` on all four: a null reading renders as an explicitly unread
-                  track (`—`), never as zero — "0 ms" on the overhead tile is a perfect result
-                  nobody measured, the exact opposite of "no data in this window". */}
-              <StatTile
-                label="Latency p95"
-                note={`Retained attempts · p50 ${formatMillis(data.totals.latencyP50Ms)}`}
-                value={formatMillis(data.totals.latencyP95Ms)}
-              />
-              <StatTile
-                label="Router overhead p95"
-                note="Retained attempt measurements"
-                value={formatMillis(data.totals.routerOverheadP95Ms)}
-              />
-              {/* Fetched and rendered nowhere before this: the router's own budget is zero *added*
-                  TTFT (CLAUDE.md non-negotiable 8), and this is the only figure that can catch a
-                  regression there — overhead is measured off the critical path, this is on it. */}
-              <StatTile
-                label="Time to first byte p95"
-                note="Retained attempts · includes upstream wait"
-                value={formatMillis(data.totals.ttfbP95Ms)}
-              />
-            </section>
+            <UsageTiles data={data} />
 
             {/* Directly under the tiles, above the charts: the error-rate tile is the figure an
                 operator stops on, and this is the sentence that follows it. */}
@@ -272,10 +177,11 @@ export default function UsageRoute() {
         )}
       </QueryBoundary>
 
-      {/* Outside the summary's boundary on purpose. The feed is what an operator
-          opens when something is broken, and gating it on the aggregate would
-          mean a failing rollup takes the diagnosis down with it. Its own query,
-          its own window, its own error state. */}
+      {/* Outside the summary's boundary on purpose, both of these. The reports list and the feed
+          are what an operator opens to learn whether something happened, and gating either on the
+          aggregate would mean a failing rollup takes them down too. Each has its own query and
+          its own error state. */}
+      <UsageReports />
       <UsageRecent />
     </>
   )
