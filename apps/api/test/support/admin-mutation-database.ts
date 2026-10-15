@@ -97,7 +97,9 @@ export function adminMutationDatabase(url: string, maxConnections = 2) {
       try {
         for (const id of subjects) {
           await handle.sql`delete from audit_events where subject_id = ${id}`
-          await keys.delete(id)
+          // Test cleanup only: production deletes go through the tombstone repository.
+          await handle.sql`delete from api_keys where id = ${id}`
+          await handle.sql`delete from api_key_tombstones where id = ${id}`
         }
         for (const id of subjects) await pools.delete(id)
         for (const id of accountIds) await accounts.delete(id)
