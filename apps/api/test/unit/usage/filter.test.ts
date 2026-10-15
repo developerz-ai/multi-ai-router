@@ -1,5 +1,9 @@
 import { describe, expect, test } from "bun:test"
-import { resolveUsageFilter, usageFilterQuery } from "../../../src/services/usage-read/filter"
+import {
+  resolveUsageFilter,
+  unknownQueryParam,
+  usageFilterQuery,
+} from "../../../src/services/usage-read/filter"
 import type { KeyLabel } from "../../../src/services/usage-read/types"
 
 const label = (owner: string | null, tool: string | null): KeyLabel => ({
@@ -96,5 +100,28 @@ describe("usageFilterQuery", () => {
   test("empty values are rejected rather than read as a filter", () => {
     expect(usageFilterQuery.safeParse({ owner: [""] }).success).toBe(false)
     expect(usageFilterQuery.safeParse({ model: [""] }).success).toBe(false)
+  })
+})
+
+describe("unknownQueryParam", () => {
+  test("accepts the window keys and the six filters, names anything else", () => {
+    expect(
+      unknownQueryParam([
+        "window",
+        "from",
+        "to",
+        "owner",
+        "tool",
+        "model",
+        "keyId",
+        "poolId",
+        "accountId",
+      ]),
+    ).toBeUndefined()
+    expect(unknownQueryParam(["window", "owners"])).toBe("owners")
+    expect(unknownQueryParam(["owner[]"])).toBe("owner[]")
+  })
+  test("truncates a long name instead of echoing it", () => {
+    expect(unknownQueryParam(["x".repeat(500)])).toHaveLength(64)
   })
 })

@@ -299,7 +299,7 @@ describe.skipIf(!historyUrl)("usage filters over HTTP and Postgres", () => {
   })
 
   test("a misspelled parameter is a 400 naming it, never unfiltered totals", async () => {
-    for (const name of ["apiKeyId", "owners", "Owner"]) {
+    for (const name of ["apiKeyId", "owners", "Owner", "owner[]"]) {
       const response = await app.request(`${ADMIN_USAGE_BASE_PATH}?window=7d&${name}=x`)
       expect(response.status).toBe(400)
       expect(await response.text()).toContain(name)
@@ -342,6 +342,12 @@ describe.skipIf(!historyUrl)("usage filters over HTTP and Postgres", () => {
       const response = await app.request(`${ADMIN_USAGE_BASE_PATH}?window=7d&${q}`)
       expect(response.status).toBe(400)
     }
+  })
+
+  test("an unknown key is echoed truncated", async () => {
+    const response = await app.request(`${ADMIN_USAGE_BASE_PATH}?window=7d&${"z".repeat(500)}=1`)
+    expect(response.status).toBe(400)
+    expect(await response.text()).not.toContain("z".repeat(65))
   })
 
   test("window, from and to stay single-valued: the first value wins", async () => {
