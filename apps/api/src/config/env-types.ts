@@ -105,6 +105,8 @@ export interface Env {
    * operator did not name — `providers/claude-sdk/resolve-cli.ts`.
    */
   readonly claudeCliPath: string | null
+  /** Opt-in direct HTTP for warm Claude credentials; SDK continues to own login/refresh. */
+  readonly claudeFastMode: boolean
   /**
    * `claude` subprocesses in flight on this replica — every `query()` spawns a ~245 MB native
    * binary (measured, see docs/idea/09-deployment.md#sizing), so this is a memory bound, not a

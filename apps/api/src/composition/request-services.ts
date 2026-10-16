@@ -1,4 +1,8 @@
 import { createSdkInvoker, createSdkModelLister, createSdkUsageGaugeProbe } from "../providers"
+import { fastProfileAvailable } from "../providers/claude-fast/availability"
+import { readFastCredential } from "../providers/claude-fast/credential"
+import { createFastInvoker } from "../providers/claude-fast/invoker"
+import { UpstreamAdmissionRefused } from "../providers/upstream-admission"
 import type { createCredentialCipherFromEnv } from "../services/crypto/fromEnv"
 import {
   createDispatcher,
@@ -96,6 +100,37 @@ export function createRequestServices(
         value: detail.value,
       }),
   })
+  const fastEnabled = env.claudeFastMode && fastProfileAvailable(env.claudeCliPath)
+  if (env.claudeFastMode && !fastEnabled)
+    logger.warn("Claude fast mode profile is unverified for this CLI/runtime; using SDK", {
+      component: "claude-fast",
+    })
+  const fastInvoker = fastEnabled
+    ? createFastInvoker({
+        sdk: invokeSdk,
+        concurrency: sdkConcurrency,
+        errorMaxBytes: env.failover.upstreamErrorMaxBytes,
+        now: () => now().getTime(),
+        credential: (accountId, configDir) => {
+          if (configDir !== cli.configDirs.pathFor(accountId)) throw new UpstreamAdmissionRefused()
+          return ownership.withMetadataOwner(accountId, () => readFastCredential(configDir))
+        },
+        resolveModel: (accountId, model) => {
+          if (model.startsWith("claude-")) return model
+          const tag = model.endsWith("[1m]") ? "[1m]" : ""
+          const alias = tag ? model.slice(0, -4) : model
+          const descriptor = modelCatalogStore.describe(accountId, alias)
+          return descriptor?.listingSource === "live" && descriptor.resolvedModel
+            ? `${descriptor.resolvedModel}${tag}`
+            : null
+        },
+        onFallback: (reason) =>
+          logger.debug("Claude fast mode request uses SDK fallback", {
+            component: "claude-fast",
+            reason,
+          }),
+      })
+    : undefined
   const usageGaugeProbe = createSdkUsageGaugeProbe({
     ownerLaunch: ownership.ownerLaunch,
     gauge: usageGauge,
@@ -155,9 +190,10 @@ export function createRequestServices(
     cipher,
     usage,
     limiter,
-    invokeSdk,
+    invokeSdk: fastInvoker ?? invokeSdk,
     quota: sdkQuota,
-    sessions: sessionStore,
+    // Direct HTTP carries each full history; SDK resume claims would serialize unrelated children.
+    ...(fastInvoker === undefined ? { sessions: sessionStore } : {}),
     // Synchronous, warm, and the whole reason the book exists: an attempt is priced on the request
     // path, so a lookup that could await a query would put Postgres on it.
     prices: prices.lookup,
