@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.37.9] — 2026-10-16
+
+### Fixed
+
+- Restored the missing `[2.37.0]`–`[2.37.4]` footer links in `CHANGELOG.md` — every section again names its release, and the whole footer list is back in ascending order (#265).
+
+### Changed
+
+- `bin/verify-version` now also reads `CHANGELOG.md`: a section since 2.25.0 (the start of the fully-linked era) whose footer link is missing or duplicated fails the gate, as do footer links out of ascending order — the 2.37.0–2.37.4 gap cannot recur silently.
+
+### Documentation
+
+- `docs/RELEASING.md` and `docs/idea/08-observability.md` record the changelog gate and why the footer link is part of the release checklist.
+
 ## [2.37.7] — 2026-10-16
 
 ### Added
@@ -1412,3 +1426,4 @@ your tooling config.
 [2.37.5]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.37.5
 [2.37.6]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.37.6
 [2.37.7]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.37.7
+[2.37.9]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.37.9
