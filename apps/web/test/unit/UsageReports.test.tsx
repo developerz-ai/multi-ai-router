@@ -152,6 +152,54 @@ describe("UsageReports re-send", () => {
     }
   })
 
+  test("while one row's re-send is pending, only that row is busy and every other row stays enabled", async () => {
+    const calls: string[] = []
+    const gate = Promise.withResolvers<Response>()
+    const older = { ...REPORT, periodStart: "2026-09-28", periodEnd: "2026-10-05" }
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      calls.push(`${init?.method ?? "GET"} ${url}`)
+      if (url.endsWith("/deliver")) return gate.promise
+      return Response.json({ reports: [REPORT, older] })
+    }) as typeof fetch
+    const view = await mount()
+    const buttons = () => [...view.node.querySelectorAll("button")] as HTMLButtonElement[]
+    const posts = () => calls.filter((call) => call.startsWith("POST"))
+    try {
+      expect(buttons()).toHaveLength(2)
+      buttons()[0]?.click()
+      await settle()
+      const [acting, other] = buttons()
+      expect(posts()).toHaveLength(1)
+      // The acting row is busy but never `disabled`: a keyboard operator focused on it keeps
+      // focus, and the busy state is announced instead of silently swallowing the element.
+      expect(acting?.getAttribute("aria-disabled")).toBe("true")
+      expect(acting?.getAttribute("aria-busy")).toBe("true")
+      expect(acting?.disabled).toBe(false)
+      // Issue #270: one row's re-send must not disable the other rows.
+      expect(other?.disabled).toBe(false)
+      expect(other?.getAttribute("aria-disabled")).toBeNull()
+      // The guard behind `aria-disabled`: re-clicking the busy row issues no second POST.
+      acting?.click()
+      await settle()
+      expect(posts()).toHaveLength(1)
+      gate.resolve(
+        Response.json({
+          periodStart: "2026-10-05",
+          deliveryStatus: "sent",
+          deliveryAttempts: 1,
+          deliveredAt: "2026-10-16T09:00:00.000Z",
+        }),
+      )
+      await settle()
+      expect(buttons()[0]?.getAttribute("aria-disabled")).toBeNull()
+      expect(buttons()[0]?.getAttribute("aria-busy")).toBeNull()
+      expect(view.text()).toContain("Posted to the channel.")
+    } finally {
+      view.dispose()
+    }
+  })
+
   test("an HTTP-level refusal shows the server's own sentence", async () => {
     stubFetch(
       () =>
