@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.38.2] — 2026-10-16
+
+### Fixed
+
+- In the console's weekly-reports list, one row's **Resend** no longer disables every row's button: the busy state is tracked per week and rendered as `aria-disabled` + `aria-busy` with a click guard in place of `disabled`, so the acting row stays focusable and announces its in-flight post, the other rows keep working, and a re-click on the busy row issues no second POST (#270).
+
 ## [2.38.0] — 2026-10-16
 
 ### Added
@@ -1462,3 +1468,4 @@ your tooling config.
 [2.37.9]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.37.9
 [2.37.10]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.37.10
 [2.38.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.38.0
+[2.38.2]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.38.2
