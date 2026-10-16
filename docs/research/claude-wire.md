@@ -44,6 +44,7 @@ bin/claude-trace sdk --model claude-opus-5-5
 bin/claude-trace conversation --model claude-opus-5-5
 bin/claude-trace subagents --model claude-opus-5-5
 bin/claude-trace autocompact --model claude-opus-5-5
+bin/claude-trace fast --config-dir /absolute/selected/debug-account --model claude-opus-5-5
 bin/claude-trace tty --model claude-opus-5-5
 bin/claude-trace analyze tmp/claude-http/runs/<run>/flows.jsonl
 ```
@@ -292,3 +293,31 @@ The same native CLI used a different profile against the local API-key stub: no 
 origin headers and bare ephemeral cache controls (5m). Real OAuth/canonical-endpoint requests
 included checksums, origin diagnostics and 1h TTLs. Endpoint/auth context explains this difference;
 do not diagnose a version change from a stub trace alone.
+
+## Follow-up MITM audit, 2026-10-16
+
+The workstation CLI had advanced to 2.1.302 while the router dependency remained 0.3.301.
+A separate conversation/compaction capture explicitly selected the router's bundled 2.1.301
+binary; all four captured request checksums matched the calibrated projection. Do not use
+a PATH CLI capture as evidence for the bundled version without checking the run manifest.
+
+`fast` runs the real direct invoker through the same loopback MITM collector. It requires
+an explicit debug account directory, never selects an account silently, never refreshes tokens
+and fails if SDK fallback would be necessary. It performs a client-side synthetic echo tool
+round trip and a completed streaming turn, reporting only status/usage/assertion summaries.
+The live direct run returned HTTP 200 for all three requests, preserved `TRACE_42` through
+the client tool round trip, reported 10,416 cache-read input tokens on each folded turn and
+six quota-window readings, and released every permit. All three captured direct request
+checksums matched. These are invoker diagnostics through MITM, not deployed-router or
+cross-account soak measurements.
+
+This diagnostic reads the explicitly selected debug credential directly; production retains
+its account metadata-owner fence. Use a dedicated debug account, never a live managed account
+whose credential directory may be mutated concurrently.
+
+MITM success and checksum agreement establish protocol observations, not permission or account
+safety. Anthropic's [authentication guidance](https://support.claude.com/en/articles/13189465-log-in-to-your-claude-account)
+states that identity misrepresentation and routing third-party traffic against subscription
+limits are prohibited and may be enforced against. No capture can establish that a subscription
+router deployment will avoid account restrictions. API-key authentication is the documented
+route for products and tools for others.

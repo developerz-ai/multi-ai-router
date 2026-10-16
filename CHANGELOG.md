@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [2.39.4] — 2026-10-16
+## [2.39.5] — 2026-10-16
 
 ### Fixed
 
@@ -16,6 +16,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - `bin/bench-usage`: seeds the #250 fixture into a throwaway database, runs the real `readSummary` in its repeatable-read snapshot, re-runs every statement under EXPLAIN (ANALYZE, BUFFERS), and exits non-zero when the wall clock (default budget 240s; on the same harness against the same warm fixture the pre-fix build measured 149.7s wall and the post-fix build 43.9s — the cold pre-fix dump was 351.8s) or the total shared-buffer traffic (default 1.2M; ~0.95M measured, pre- and post-fix alike — the buffer leg guards scan volume, the wall leg per-row cost) crosses its budget. Deliberately not in `bin/check` — a timing gate on a shared runner flakes; the plan-shape pins live in the repository unit tests.
+
+## [2.39.4] — 2026-10-16
+
+### Fixed
+
+- Claude fast credentials are read after concurrency admission, so expiry, rotation or deletion while queued cannot reuse a pre-queue token snapshot. SDK fallback releases the direct permit before acquiring its own capacity.
+- Claude fast mode rejects successful HTTP responses without an SSE content type or body before forwarding client bytes. Proxy HTML/JSON errors become safe 502 responses and release the account permit without SDK retry.
+- Nonstream fast responses reject malformed JSON frames, repeated message boundaries, duplicate/invalid block indices, deltas outside open blocks and unmatched block stops instead of reporting partial output as a successful completion. Streaming SSE remains byte-preserving.
+
+### Added
+
+- `bin/claude-trace fast --config-dir PATH --model MODEL`: opt-in MITM diagnostics of the real direct invoker, with a synthetic client tool round trip, cache usage, streaming completion and permit-release checks. Credentials are never captured; exact private request bodies remain opt-in and gitignored.
 
 ## [2.39.3] — 2026-10-16
 
@@ -1519,4 +1531,6 @@ your tooling config.
 [2.39.1]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.39.1
 [2.39.2]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.39.2
 [2.39.3]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.39.3
+
 [2.39.4]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.39.4
+[2.39.5]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.39.5
