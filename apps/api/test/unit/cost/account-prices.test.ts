@@ -114,6 +114,34 @@ test("displayed inherited snapshot is derived from the oldest source snapshot", 
   for (const source of PRICE_SOURCES) expect(PRICE_TABLE_AS_OF <= source.snapshotAsOf).toBe(true)
 })
 
+test("glm-5.3 on zai carries the vendor's published rates (#253)", () => {
+  // docs.z.ai/guides/overview/pricing, read 2026-10-15: GLM-5.3 input $1.4, output $4.4, cached
+  // input $0.26 per Mtok, no cache-write price published. The #217 census saw this model served
+  // with no shipped price, so its tokens recorded cost_basis = unknown until this row.
+  const shipped = {
+    inputPerMtok: 1.4,
+    outputPerMtok: 4.4,
+    cacheReadPerMtok: 0.26,
+    cacheWritePerMtok: 0,
+  }
+  expect(lookupRates("zai", "glm-5.3", { billing: "subscription" })).toEqual(shipped)
+  expect(lookupRates("zai", "glm-5.3")).toEqual(shipped)
+  // A coding-plan account reports the same numbers as a notional attribution, not metered spend.
+  expect(
+    estimateCost({ provider: "zai", model: "glm-5.3", tokens, billing: "subscription" }),
+  ).toEqual({ costBasis: "notional", costEstimate: "0.000184" })
+  const zaiAccounts = [
+    {
+      id: "zai-coding",
+      label: "Coding plan",
+      provider: "zai" as const,
+      billing: "subscription" as const,
+      models: ["glm-5.3"],
+    },
+  ]
+  expect(unpricedModels(zaiAccounts, lookupRates)).toEqual([])
+})
+
 test("MiniMax-M3.1-Flash-Preview has no vendor price, so it stays unknown (#254)", () => {
   // platform.minimax.io's public price list (docs/guides/pricing, read 2026-10-15) carries no row
   // for the preview: MiniMax serves it from the coding plan, and only resellers quote per-token
