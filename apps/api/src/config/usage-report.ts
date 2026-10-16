@@ -1,4 +1,4 @@
-import type { z } from "zod"
+import { z } from "zod"
 import { DEFAULT_SCHEDULER_JITTER_FRACTION } from "./env-defaults"
 import { atLeastOne, wholeNumber } from "./fields"
 
@@ -39,6 +39,34 @@ export const USAGE_REPORT_MAX_ROWS_CEILING = 100_000
 /** The check cadence when `USAGE_REPORT_INTERVAL_MINUTES` is unset. */
 export const DEFAULT_USAGE_REPORT_INTERVAL_MINUTES = 60
 
+/**
+ * The hosts a Discord incoming webhook lives on. The log redactor recognizes webhook URLs by
+ * exactly this shape (`logging/redact.ts`), so validation and redaction must agree: a URL that is
+ * not an `https` webhook on one of these hosts would pass a plain absolute-URL check yet appear
+ * *unredacted* in `usage_reports.last_error`, log lines and Sentry the first delivery failed.
+ */
+const DISCORD_WEBHOOK_HOSTS: ReadonlySet<string> = new Set([
+  "discord.com",
+  "discordapp.com",
+  "ptb.discord.com",
+  "canary.discord.com",
+])
+
+/**
+ * A Discord incoming-webhook URL and nothing else: `https`, one of {@link DISCORD_WEBHOOK_HOSTS},
+ * path under `/api/webhooks/`. Anything else refuses boot naming the variable; the message is
+ * static — the value is a credential and is never echoed.
+ */
+const discordWebhookUrl = z.string().refine((value) => {
+  const url = URL.parse(value)
+  return (
+    url !== null &&
+    url.protocol === "https:" &&
+    DISCORD_WEBHOOK_HOSTS.has(url.hostname) &&
+    url.pathname.startsWith("/api/webhooks/")
+  )
+}, "must be an absolute https URL on discord.com, discordapp.com, ptb.discord.com or canary.discord.com whose path starts with /api/webhooks/ (a Discord incoming webhook; a proxy or any other URL is refused because the redactor would not recognize it)")
+
 export const USAGE_REPORT_ENV_FIELDS = {
   /** At most a day: a longer cadence is a report that can miss its window by design. */
   USAGE_REPORT_INTERVAL_MINUTES: atLeastOne
@@ -60,6 +88,23 @@ export const USAGE_REPORT_ENV_FIELDS = {
     .refine((value) => value <= 23, "must be between 0 and 23")
     .optional(),
   USAGE_REPORT_SETTLE_MINUTES: atLeastOne.optional(),
+  /**
+   * The Discord incoming-webhook URL the weekly report is delivered to (issue #229). Unset means
+   * delivery is off — reports store as `not_configured` and nothing makes a network call. The
+   * value is a credential: only the Discord webhook shape passes ({@link discordWebhookUrl}, the
+   * shape the redactor recognizes), and the refusal message is static, never an echo.
+   */
+  USAGE_REPORT_DISCORD_WEBHOOK_URL: discordWebhookUrl.optional(),
+  /**
+   * Automatic delivery attempts per report before the task gives up (`failed` + one capture).
+   * Capped at 50 so a typo cannot retry a dead webhook forever; it never limits an operator's
+   * re-send, which always claims and posts.
+   */
+  USAGE_REPORT_MAX_DELIVERY_ATTEMPTS: atLeastOne
+    .refine((value) => value <= 50, "must be at most 50")
+    .optional(),
+  /** Per-attempt timeout for the webhook POST: a hung Discord must not hang the task tick. */
+  USAGE_REPORT_DELIVERY_TIMEOUT_MS: atLeastOne.optional(),
   RETENTION_USAGE_REPORTS_DAYS: atLeastOne.optional(),
 }
 
@@ -72,6 +117,15 @@ export interface UsageReportConfig {
   readonly settleMinutes: number
   /** The week read's row ceiling (`USAGE_REPORT_MAX_ROWS`). */
   readonly maxRows: number
+  /**
+   * The Discord incoming-webhook URL, or `null` when delivery is off. A credential: never logged,
+   * never rendered into a view — the Settings screen gets a configured yes/no, not the value.
+   */
+  readonly discordWebhookUrl: string | null
+  /** Automatic delivery attempts before the task gives up on a period (`1`–`50`). */
+  readonly maxDeliveryAttempts: number
+  /** Per-attempt webhook timeout (`USAGE_REPORT_DELIVERY_TIMEOUT_MS`). */
+  readonly deliveryTimeoutMs: number
 }
 
 /**
@@ -109,6 +163,9 @@ export function readUsageReportEnv(
     USAGE_REPORT_HOUR_UTC?: number
     USAGE_REPORT_SETTLE_MINUTES?: number
     USAGE_REPORT_MAX_ROWS?: number
+    USAGE_REPORT_DISCORD_WEBHOOK_URL?: string
+    USAGE_REPORT_MAX_DELIVERY_ATTEMPTS?: number
+    USAGE_REPORT_DELIVERY_TIMEOUT_MS?: number
     SCHEDULER_JITTER_FRACTION?: number
     RETENTION_USAGE_REPORTS_DAYS?: number
   },
@@ -140,6 +197,10 @@ export function readUsageReportEnv(
     settleMinutes: raw.USAGE_REPORT_SETTLE_MINUTES ?? 30,
     // The CSV export's ceiling: the same rows are held in memory while the report is built.
     maxRows: raw.USAGE_REPORT_MAX_ROWS ?? 50_000,
+    // Null, not "": unset means delivery is off, and every consumer branches on exactly that.
+    discordWebhookUrl: raw.USAGE_REPORT_DISCORD_WEBHOOK_URL ?? null,
+    maxDeliveryAttempts: raw.USAGE_REPORT_MAX_DELIVERY_ATTEMPTS ?? 6,
+    deliveryTimeoutMs: raw.USAGE_REPORT_DELIVERY_TIMEOUT_MS ?? 15_000,
   }
   // The report is only made if a tick lands between the anchor and the end of the week. A tick can
   // be as late as interval * (1 + jitter) after the previous one, so the window must be longer

@@ -132,6 +132,30 @@ field; the implementation is the compact string above and it is what the code do
 | Cookies | `httpOnly` + `SameSite=Strict` always; `Secure` + `__Host-` by default, dropped together only under `SESSION_COOKIE_INSECURE` for a plain-HTTP LAN install (warned at boot — see [04-api-keys-and-access.md](04-api-keys-and-access.md#session-cookie)). No cookie on data-plane routes |
 | Upstream | TLS to the pinned base URLs in [03-providers.md](03-providers.md). No plaintext upstream, no proxy-through of client-supplied upstream URLs |
 
+## Outbound webhook URLs (Discord delivery, #229)
+
+`USAGE_REPORT_DISCORD_WEBHOOK_URL` is a credential by a different route: anyone holding
+`/webhooks/<id>/<token>` can post to the channel. It is never stored in the database — it lives in
+the environment only, like `ENCRYPTION_KEY` — and the rules below hold it:
+
+- **Redaction by shape.** The log redactor recognizes the URL whole — id and token path segment
+  included — across `discord.com`, `discordapp.com`, the `ptb.`/`canary.` hosts, an optional
+  `/api/v<N>/` prefix and the `?wait=` / `?thread_id=` query suffixes. A delivery failure is exactly
+  where a URL likes to appear (a fetch error message, a Discord error body), so the shape is
+  scrubbed from log lines, HTTP error bodies, `usage_reports.last_error`, scheduler persisted-error
+  text, and the Sentry event (`beforeSend` runs the same `redact()`). A table-driven redaction test
+  pins every host/path/query form, and an end-to-end leak test asserts the full URL appears in none
+  of those surfaces when the stub webhook throws a fetch error naming it.
+- **Never echoed, never foreign.** Env validation accepts only an `https` URL on `discord.com`,
+  `discordapp.com`, `ptb.discord.com` or `canary.discord.com` whose path starts with
+  `/api/webhooks/` — exactly the shape the redactor recognizes. An `http` URL, a proxied or
+  otherwise non-Discord host, or a wrong path refuses boot by name, with a static message that
+  never interpolates the value: a URL the redactor cannot recognize would otherwise leak
+  unredacted into `last_error`, log lines and Sentry.
+- **Never rendered.** The Settings screen shows whether a webhook is configured (yes/no) and the
+  last delivered time. The URL never enters a view, an API response, or the audit log.
+- **No real call in CI.** Tests stub the webhook; no suite contacts Discord.
+
 ## Router API keys
 
 | Property | Decision |

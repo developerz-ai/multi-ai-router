@@ -75,6 +75,20 @@ type ValuePattern = { readonly pattern: RegExp; readonly replacement: string }
  * redacts — a scrubbed log line costs a debugging session, a leaked one costs a credential.
  */
 const SECRET_VALUE_PATTERNS: readonly ValuePattern[] = [
+  // Discord incoming webhook URLs: the `/webhooks/<id>/<token>` path pair *is* the credential —
+  // anyone holding it can post to the channel — and a delivery failure message (fetch error,
+  // response snippet, `last_error`, Sentry extra) is exactly where a URL likes to appear. Covers
+  // both official hosts, the ptb/canary deployments, any `/api/v<N>/` prefix and the documented
+  // query suffixes (`?wait=`, `?thread_id=`). Unlike the URL shapes below, the whole match goes:
+  // the path is the secret, so there is no diagnostic half to keep. First in the list so a token
+  // segment that happens to contain another shape (`sk-…`) is swallowed whole, not nibbled. A
+  // trailing sentence period after a query is consumed with it; over-redacting punctuation is
+  // the point.
+  {
+    pattern:
+      /\bhttps?:\/\/(?:ptb\.|canary\.)?discord(?:app)?\.com\/api\/(?:v\d+\/)?webhooks\/\d+\/[A-Za-z0-9_-]+(?:[/?#][^\s"'<>]*)?/gi,
+    replacement: REDACTED,
+  },
   { pattern: new RegExp(`${ROUTER_KEY_PREFIX}[A-Za-z0-9_-]+`, "g"), replacement: REDACTED },
   // OpenAI and Anthropic API keys (`sk-…`, `sk-ant-…`, `sk-proj-…`).
   { pattern: /\bsk-[A-Za-z0-9_-]{8,}/g, replacement: REDACTED },
@@ -213,11 +227,20 @@ function redactUnknown(value: unknown, depth: number, maxDepth: number): unknown
   return redactRecord(value as Record<string, unknown>, depth, maxDepth)
 }
 
-function redactError(error: Error): string {
+/**
+ * An error's whole `cause` chain as one scrubbed, length-capped message — safe to persist in a
+ * column or quote into a log line. Redacted before the cap so truncation cannot split a
+ * credential and leave its tail in the kept half.
+ */
+export function describeRedacted(error: unknown): string {
   const scrubbed = redactValue(describeError(error, Number.POSITIVE_INFINITY))
   return scrubbed.length <= MAX_ERROR_CHARS
     ? scrubbed
     : `${scrubbed.slice(0, MAX_ERROR_CHARS - 1)}…`
+}
+
+function redactError(error: Error): string {
+  return describeRedacted(error)
 }
 
 /** Map keys become field names, so a `Map` keyed by header name is scrubbed by name like any record. */

@@ -1,9 +1,6 @@
-import { describeError } from "@multi-ai-router/core"
 import type { ScheduledTaskName } from "@multi-ai-router/db"
-import { redactValue } from "../logging/redact"
+import { describeRedacted } from "../logging/redact"
 import type { ScheduledTask } from "./types"
-
-const MAX_ERROR_CHARS = 500
 
 export function indexTasks(tasks: readonly ScheduledTask[]): Map<ScheduledTaskName, ScheduledTask> {
   const indexed = new Map<ScheduledTaskName, ScheduledTask>()
@@ -25,11 +22,7 @@ export function indexTasks(tasks: readonly ScheduledTask[]): Map<ScheduledTaskNa
  * driver's complaint one `cause` down from a wrapper whose message *is* the statement text, and
  * front-anchored truncation of the wrapper alone persisted 500 chars of SQL with the actual
  * reason discarded. Redacted before the cap, so truncation cannot split a credential and leave
- * its tail in the persisted half.
+ * its tail in the persisted half. Lives in `logging/redact.ts` — the report delivery service
+ * persists the same kind of string and must not import it from the scheduler layer.
  */
-export function describe(error: unknown): string {
-  const scrubbed = redactValue(describeError(error, Number.POSITIVE_INFINITY))
-  return scrubbed.length <= MAX_ERROR_CHARS
-    ? scrubbed
-    : `${scrubbed.slice(0, MAX_ERROR_CHARS - 1)}…`
-}
+export const describe = describeRedacted

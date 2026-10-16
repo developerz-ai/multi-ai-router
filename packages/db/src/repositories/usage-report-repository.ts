@@ -1,4 +1,5 @@
-import { desc, eq, sql } from "drizzle-orm"
+import type { UsageReportDeliveryStatus } from "@multi-ai-router/core"
+import { and, desc, eq, isNotNull, ne, sql } from "drizzle-orm"
 import type { DatabaseExecutor } from "../client"
 import { type UsageReportRow, usageReports } from "../schema/usage-reports"
 
@@ -39,6 +40,51 @@ export interface UsageReportRepository {
    * safe but inexact, so it is not done either.
    */
   deleteOlderThan(cutoff: Date, limit: number): Promise<number>
+  /**
+   * Claim one delivery attempt (issue #229), before any request goes out:
+   * `UPDATE ... SET delivery_attempts = delivery_attempts + 1 WHERE period_start = $1 AND
+   * delivery_status = $read AND delivery_attempts = $read RETURNING delivery_attempts`.
+   *
+   * An optimistic version check on `(status, attempts)`, not a lease: two concurrent deliverers
+   * that read the same row produce exactly one claim (and so exactly one webhook request); the
+   * loser gets `undefined` and must make no request. Returns the claimed attempts value, which
+   * every outcome write below is conditioned on — a stale writer's outcome is a no-op, so the
+   * last claim wins and nobody clobbers a newer attempt's result.
+   */
+  claimForDelivery(
+    periodStart: string,
+    readStatus: UsageReportDeliveryStatus,
+    readAttempts: number,
+  ): Promise<number | undefined>
+  /**
+   * `sent` + `delivered_at` + a cleared `last_error`, only where `delivery_attempts` still equals
+   * the claimed value. `true` when this call wrote the transition.
+   */
+  markDelivered(periodStart: string, claimedAttempts: number, deliveredAt: Date): Promise<boolean>
+  /**
+   * The give-up transition: `failed` + redacted `last_error`, only from `pending` and only for
+   * the claimed attempts. The exactly-once capture of a period's failure ties to `true` here —
+   * two deliverers racing to give up produce one transition and one capture.
+   */
+  markPendingFailed(
+    periodStart: string,
+    claimedAttempts: number,
+    lastError: string,
+  ): Promise<boolean>
+  /**
+   * A re-send's outcome write: `failed` + redacted `last_error` whatever the prior status was
+   * (a failed re-send of a `sent` week marks it `failed`), still conditional on the claimed
+   * attempts.
+   */
+  markFailed(periodStart: string, claimedAttempts: number, lastError: string): Promise<boolean>
+  /**
+   * `not_configured` without touching attempts (no request was made, so none is counted).
+   * `pendingOnly` is the task's variant — an older `sent`/`failed` row is never rewritten; the
+   * re-send's variant writes whatever the prior status was. `true` only on an actual transition.
+   */
+  recordNotConfigured(periodStart: string, pendingOnly: boolean): Promise<boolean>
+  /** The newest `delivered_at` across all weeks — what Settings shows; `null` if never sent. */
+  lastDeliveredAt(): Promise<Date | null>
 }
 
 /** Every column but the id and the payload, which the list endpoint does not carry. */
@@ -105,6 +151,90 @@ export function createUsageReportRepository(db: DatabaseExecutor): UsageReportRe
         )
         returning ${usageReports.id}`)
       return [...deleted].length
+    },
+
+    claimForDelivery: async (periodStart, readStatus, readAttempts) => {
+      const claimed = await db
+        .update(usageReports)
+        .set({ deliveryAttempts: sql`${usageReports.deliveryAttempts} + 1` })
+        .where(
+          and(
+            eq(usageReports.periodStart, periodStart),
+            eq(usageReports.deliveryStatus, readStatus),
+            eq(usageReports.deliveryAttempts, readAttempts),
+          ),
+        )
+        .returning({ deliveryAttempts: usageReports.deliveryAttempts })
+      return claimed[0]?.deliveryAttempts
+    },
+
+    markDelivered: async (periodStart, claimedAttempts, deliveredAt) => {
+      const written = await db
+        .update(usageReports)
+        .set({ deliveryStatus: "sent", deliveredAt, lastError: null })
+        .where(
+          and(
+            eq(usageReports.periodStart, periodStart),
+            eq(usageReports.deliveryAttempts, claimedAttempts),
+          ),
+        )
+        .returning({ id: usageReports.id })
+      return written.length > 0
+    },
+
+    markPendingFailed: async (periodStart, claimedAttempts, lastError) => {
+      const written = await db
+        .update(usageReports)
+        .set({ deliveryStatus: "failed", lastError })
+        .where(
+          and(
+            eq(usageReports.periodStart, periodStart),
+            eq(usageReports.deliveryStatus, "pending"),
+            eq(usageReports.deliveryAttempts, claimedAttempts),
+          ),
+        )
+        .returning({ id: usageReports.id })
+      return written.length > 0
+    },
+
+    markFailed: async (periodStart, claimedAttempts, lastError) => {
+      const written = await db
+        .update(usageReports)
+        .set({ deliveryStatus: "failed", lastError })
+        .where(
+          and(
+            eq(usageReports.periodStart, periodStart),
+            eq(usageReports.deliveryAttempts, claimedAttempts),
+          ),
+        )
+        .returning({ id: usageReports.id })
+      return written.length > 0
+    },
+
+    recordNotConfigured: async (periodStart, pendingOnly) => {
+      const written = await db
+        .update(usageReports)
+        .set({ deliveryStatus: "not_configured" })
+        .where(
+          and(
+            eq(usageReports.periodStart, periodStart),
+            pendingOnly
+              ? eq(usageReports.deliveryStatus, "pending")
+              : ne(usageReports.deliveryStatus, "not_configured"),
+          ),
+        )
+        .returning({ id: usageReports.id })
+      return written.length > 0
+    },
+
+    lastDeliveredAt: async () => {
+      const [row] = await db
+        .select({ deliveredAt: usageReports.deliveredAt })
+        .from(usageReports)
+        .where(isNotNull(usageReports.deliveredAt))
+        .orderBy(desc(usageReports.deliveredAt))
+        .limit(1)
+      return row?.deliveredAt ?? null
     },
   }
 }

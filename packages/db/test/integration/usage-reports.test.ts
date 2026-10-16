@@ -74,6 +74,131 @@ describe.skipIf(!historyUrl)("the usage_reports repository", () => {
   })
 })
 
+/**
+ * Delivery bookkeeping against a real PostgreSQL (issue #229). The claim is an optimistic version
+ * check on (status, attempts), and every outcome write is conditional on the attempts value the
+ * claim returned — so two concurrent deliverers post at most once, and the loser's write is a
+ * no-op rather than a clobber.
+ */
+describe.skipIf(!historyUrl)("delivery claims and outcome writes", () => {
+  beforeEach(async () => {
+    await fixture.db().execute(sql`delete from usage_reports`)
+  })
+
+  test("a claim bumps attempts only when status and attempts match what the caller read", async () => {
+    const repo = createUsageReportRepository(fixture.db())
+    await repo.insertIfAbsent(input("2026-09-28"))
+    expect(await repo.claimForDelivery("2026-09-28", "pending", 0)).toBe(1)
+    // The same read values again: the row has moved on, so the claim misses and nothing changes.
+    expect(await repo.claimForDelivery("2026-09-28", "pending", 0)).toBeUndefined()
+    // The fresh read values claim again.
+    expect(await repo.claimForDelivery("2026-09-28", "pending", 1)).toBe(2)
+    expect(await repo.findByPeriodStart("2026-09-28")).toMatchObject({
+      deliveryStatus: "pending",
+      deliveryAttempts: 2,
+    })
+  })
+
+  test("a claim for an absent period misses", async () => {
+    const repo = createUsageReportRepository(fixture.db())
+    expect(await repo.claimForDelivery("2026-09-21", "pending", 0)).toBeUndefined()
+  })
+
+  test("markDelivered writes only for the claimed attempts, and clears the last error", async () => {
+    const repo = createUsageReportRepository(fixture.db())
+    await repo.insertIfAbsent(input("2026-09-28"))
+    const claimed = await repo.claimForDelivery("2026-09-28", "pending", 0)
+    expect(claimed).toBe(1)
+    // A stale outcome write (wrong attempts value) changes nothing.
+    const at = new Date("2026-10-05T01:00:00Z")
+    expect(await repo.markDelivered("2026-09-28", 7, at)).toBe(false)
+    expect(await repo.findByPeriodStart("2026-09-28")).toMatchObject({ deliveryStatus: "pending" })
+    // The right one transitions, stamps delivered_at and drops a previous failure reason.
+    expect(await repo.markDelivered("2026-09-28", 1, at)).toBe(true)
+    expect(await repo.findByPeriodStart("2026-09-28")).toMatchObject({
+      deliveryStatus: "sent",
+      deliveryAttempts: 1,
+      deliveredAt: at,
+      lastError: null,
+    })
+  })
+
+  test("markPendingFailed only transitions a pending row, once per claimed attempts", async () => {
+    const repo = createUsageReportRepository(fixture.db())
+    await repo.insertIfAbsent(input("2026-09-28"))
+    const claimed = await repo.claimForDelivery("2026-09-28", "pending", 0)
+    expect(claimed).toBe(1)
+    expect(await repo.markPendingFailed("2026-09-28", 1, "webhook answered 503")).toBe(true)
+    expect(await repo.findByPeriodStart("2026-09-28")).toMatchObject({
+      deliveryStatus: "failed",
+      lastError: "webhook answered 503",
+    })
+    // The give-up transition is what a capture ties to: it must not happen twice.
+    expect(await repo.markPendingFailed("2026-09-28", 1, "second writer")).toBe(false)
+    expect(await repo.findByPeriodStart("2026-09-28")).toMatchObject({
+      lastError: "webhook answered 503",
+    })
+  })
+
+  test("markFailed writes over any status for the claimed attempts — a re-send owns its outcome", async () => {
+    const repo = createUsageReportRepository(fixture.db())
+    await repo.insertIfAbsent(input("2026-09-28"))
+    await repo.claimForDelivery("2026-09-28", "pending", 0)
+    await repo.markDelivered("2026-09-28", 1, new Date("2026-10-05T01:00:00Z"))
+    // Re-sending a sent row claims from (sent, 1); a failed re-send marks it failed whatever it was.
+    const claimed = await repo.claimForDelivery("2026-09-28", "sent", 1)
+    expect(claimed).toBe(2)
+    expect(await repo.markFailed("2026-09-28", 2, "webhook answered 500")).toBe(true)
+    expect(await repo.findByPeriodStart("2026-09-28")).toMatchObject({
+      deliveryStatus: "failed",
+      deliveryAttempts: 2,
+      lastError: "webhook answered 500",
+    })
+    // A stale attempts value still writes nothing.
+    expect(await repo.markFailed("2026-09-28", 1, "late writer")).toBe(false)
+  })
+
+  test("recordNotConfigured writes pending-only or any-status, and never bumps attempts", async () => {
+    const repo = createUsageReportRepository(fixture.db())
+    await repo.insertIfAbsent(input("2026-09-28"))
+    await repo.claimForDelivery("2026-09-28", "pending", 0)
+    await repo.markDelivered("2026-09-28", 1, new Date("2026-10-05T01:00:00Z"))
+    // The task's variant touches pending rows only: a sent week is never un-sent.
+    expect(await repo.recordNotConfigured("2026-09-28", true)).toBe(false)
+    expect(await repo.findByPeriodStart("2026-09-28")).toMatchObject({
+      deliveryStatus: "sent",
+      deliveryAttempts: 1,
+    })
+    // The re-send's variant writes whatever the prior status was.
+    expect(await repo.recordNotConfigured("2026-09-28", false)).toBe(true)
+    expect(await repo.findByPeriodStart("2026-09-28")).toMatchObject({
+      deliveryStatus: "not_configured",
+      deliveryAttempts: 1,
+    })
+    // Idempotent: a row already not_configured is not "written" again.
+    expect(await repo.recordNotConfigured("2026-09-28", false)).toBe(false)
+    // And the task's variant flips a pending row.
+    await repo.insertIfAbsent(input("2026-09-21"))
+    expect(await repo.recordNotConfigured("2026-09-21", true)).toBe(true)
+    expect(await repo.findByPeriodStart("2026-09-21")).toMatchObject({
+      deliveryStatus: "not_configured",
+      deliveryAttempts: 0,
+    })
+  })
+
+  test("lastDeliveredAt is the newest delivered_at, or null when nothing was ever sent", async () => {
+    const repo = createUsageReportRepository(fixture.db())
+    expect(await repo.lastDeliveredAt()).toBeNull()
+    await repo.insertIfAbsent(input("2026-09-21"))
+    await repo.claimForDelivery("2026-09-21", "pending", 0)
+    await repo.markDelivered("2026-09-21", 1, new Date("2026-09-28T01:00:00Z"))
+    await repo.insertIfAbsent(input("2026-09-28"))
+    await repo.claimForDelivery("2026-09-28", "pending", 0)
+    await repo.markDelivered("2026-09-28", 1, new Date("2026-10-05T01:00:00Z"))
+    expect(await repo.lastDeliveredAt()).toEqual(new Date("2026-10-05T01:00:00Z"))
+  })
+})
+
 describe.skipIf(!historyUrl)("the retention sweep boundary", () => {
   /** What the janitor computes: the tick's clock minus the window, to the millisecond. */
   const cutoffAt = (now: Date, days: number) => new Date(now.getTime() - days * DAY)

@@ -13,6 +13,7 @@ import { AuditLogSection } from "./settings/AuditLogSection"
 import { PriceOverridesSection } from "./settings/PriceOverridesSection"
 import { RetentionSection } from "./settings/RetentionSection"
 import { TaskHealthSection } from "./settings/TaskHealthSection"
+import { WeeklyReportSection } from "./settings/WeeklyReportSection"
 
 /**
  * What the operator can see and tune about the router itself.
@@ -119,6 +120,7 @@ export default function SettingsRoute() {
 
       <PriceOverridesSection />
       <RetentionSection />
+      <WeeklyReportSection />
       <TaskHealthSection />
       <AuditLogSection />
     </>

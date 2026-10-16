@@ -1,6 +1,6 @@
 {
   "name": "@multi-ai-router/db",
-  "version": "2.37.10",
+  "version": "2.38.0",
   "private": true,
   "type": "module",
   "license": "MIT",

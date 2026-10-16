@@ -169,6 +169,16 @@ On the console's **Usage** page:
   **Export CSV** link, which carries them). The view is in the URL, so a link restores it:
   `/usage?window=30d&owner=alice&tool=editor`, repeating a name for several values;
 - an **Unpriced attempts** tile, a dash when the window predates measurement;
-- the stored **weekly reports** and where delivery of each stands, read-only.
+- the stored **weekly reports** and where delivery of each stands, with a per-row **Resend**
+  control that posts that stored week to the Discord channel again (it says so on the button) and
+  shows the outcome the server returned.
+
+Off the console, wherever the report lands: when `USAGE_REPORT_DISCORD_WEBHOOK_URL` is set, the
+`usage_weekly_report` task also delivers each week's stored report to that Discord incoming webhook
+— an embed with the people and services tables (truncated with "+N more" inside Discord's limits),
+a link to that week's filtered Usage view when `PUBLIC_URL` is set, and the report CSV as an
+attachment. The post carries only what the stored report holds — owner, owner kind, tool, buckets,
+totals, top models and the overflow lines' key and pool names — and never an account label. Until
+the webhook is set, delivery stands at `not_configured` and nothing is posted.
 
 Metered and notional spend are separate everywhere on that page and are never added together.

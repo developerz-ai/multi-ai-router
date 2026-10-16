@@ -101,6 +101,14 @@ export const AUDIT_KINDS = {
    */
   settingsChanged: "settings.changed",
   /**
+   * An operator's re-send posted the week's usage report to the Discord channel — or tried and
+   * failed (issue #229). One row per re-send call that made a request; `detail.outcome` carries
+   * `sent`/`failed` because the kind name alone would mislead on the failure. The automatic task
+   * does not write here (it is not an operator act); its trail is `usage_reports` plus the task
+   * run record. A not-configured re-send writes nothing: no request happened.
+   */
+  usageReportDelivered: "usage_report.delivered",
+  /**
    * A credential authenticated on the admin plane. Alone among these kinds it records that
    * nothing changed: it is the row every later mutation is correlated back to when an operator
    * asks who was holding the console at the time.
@@ -128,6 +136,8 @@ export const AUDIT_SUBJECTS = {
    * name is chosen by us and never by a caller, which is what keeps it usable as a filter.
    */
   settings: "settings",
+  /** A stored weekly report; its subject id is the week's `period_start` (a UTC Monday). */
+  usageReport: "usage_report",
   /**
    * The single admin identity this deployment has. Its subject id is the stable
    * `admin` category; the OIDC-asserted email and subject are recorded in the

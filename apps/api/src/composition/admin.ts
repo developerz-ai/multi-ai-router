@@ -9,6 +9,7 @@ import {
   createUsageHistoryRepository,
   createUsageReadRepository,
   createUsageRecentRepository,
+  createUsageReportRepository,
   type Database,
   type OauthStateRepository,
   type PoolRepository,
@@ -65,7 +66,7 @@ import { createSettingsService } from "../services/settings"
 import { accountProviders, catalogLabels, createUsageService } from "../services/usage-read"
 import type { AdminServices } from "../types"
 import { ownedCredentialMetadataReader } from "./credential-ownership"
-import { createUsageReports } from "./usage-reports"
+import { createUsageReportDelivery, createUsageReports } from "./usage-reports"
 
 /**
  * The admin plane's assembly, split from the composition root because it changes for a different
@@ -398,8 +399,17 @@ export function createAdminPlane(deps: AdminPlaneDeps): AdminPlane {
         now,
       }),
       usageReports: createUsageReports({ ...deps, now }),
+      usageReportDelivery: createUsageReportDelivery({
+        database: deps.database,
+        env,
+        audit,
+        now,
+      }),
       settings: createSettingsService({
         prices: deps.priceOverrides,
+        // One read for the weekly-report panel (issue #229): the newest delivery instant. The
+        // webhook boolean comes from env; the URL is a credential and never reaches this service.
+        usageReports: createUsageReportRepository(deps.database),
         priceAccounts: () =>
           catalog.accounts().map((account) => ({
             id: account.id,

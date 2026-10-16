@@ -1,8 +1,8 @@
-import { useQuery } from "@tanstack/solid-query"
+import { useMutation, useQuery, useQueryClient } from "@tanstack/solid-query"
 import type { Accessor } from "solid-js"
 import { fetchUsageSummary, type UsageRange } from "../api/usage"
 import { NO_USAGE_FILTERS, type UsageFilters } from "../api/usage-params"
-import { fetchUsageReports } from "../api/usage-reports"
+import { deliverUsageReport, fetchUsageReports } from "../api/usage-reports"
 import { queryKeys } from "./query-keys"
 
 /**
@@ -24,10 +24,23 @@ export function useUsageSummary(range: Accessor<UsageRange>, filters?: Accessor<
   })
 }
 
-/** The stored weekly reports, newest week first. Read-only: delivery belongs to the task. */
+/** The stored weekly reports, newest week first. */
 export function useUsageReports() {
   return useQuery(() => ({
     queryKey: queryKeys.usage.reports(),
     queryFn: fetchUsageReports,
+  }))
+}
+
+/**
+ * The re-send (issue #229). Settled — not just succeeded — invalidates the list: a failed re-send
+ * moves the row too (status, attempts, last error), and the Delivery column would otherwise show
+ * the state from before the click.
+ */
+export function useDeliverUsageReport() {
+  const client = useQueryClient()
+  return useMutation(() => ({
+    mutationFn: (periodStart: string) => deliverUsageReport(periodStart),
+    onSettled: () => client.invalidateQueries({ queryKey: queryKeys.usage.reports() }),
   }))
 }

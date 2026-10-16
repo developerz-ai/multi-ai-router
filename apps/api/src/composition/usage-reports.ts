@@ -8,9 +8,15 @@ import {
   type PoolRepository,
 } from "@multi-ai-router/db"
 import type { Env } from "../config/env"
+import type { AuditRecorder } from "../services/admin/audit"
 import type { RoutingCatalogStore } from "../services/catalog"
 import { catalogLabels } from "../services/usage-read"
-import { createUsageReportService, type UsageReportService } from "../services/usage-report"
+import {
+  createReportDeliveryService,
+  createUsageReportService,
+  type ReportDeliveryService,
+  type UsageReportService,
+} from "../services/usage-report"
 
 /**
  * The weekly report service, wired. Its own module so the admin plane's assembly
@@ -57,6 +63,30 @@ export function createUsageReports(deps: {
     upstreamTimeoutMs: env.failover.upstreamTimeoutMs,
     // One row a week, plus two for a week in flight and a clock edge.
     listLimit: Math.ceil(env.retention.usageReportsDays / 7) + 2,
+    now: deps.now,
+  })
+}
+
+/**
+ * The Discord delivery service (issue #229), wired. One instance serves both entry points — the
+ * scheduler task's due-posting half and the admin re-send route — so both share one claim path,
+ * one attempt cap reading and one audit recorder. The capture defaults to the process's Sentry
+ * `captureException`; the webhook URL comes from env and is never handed to a view.
+ */
+export function createUsageReportDelivery(deps: {
+  readonly database: Database
+  readonly env: Pick<Env, "usageReport" | "publicUrl">
+  readonly audit: AuditRecorder
+  readonly now: () => Date
+}): ReportDeliveryService {
+  const { env } = deps
+  return createReportDeliveryService({
+    store: createUsageReportRepository(deps.database),
+    audit: deps.audit,
+    webhookUrl: env.usageReport.discordWebhookUrl,
+    maxDeliveryAttempts: env.usageReport.maxDeliveryAttempts,
+    publicUrl: env.publicUrl,
+    timeoutMs: env.usageReport.deliveryTimeoutMs,
     now: deps.now,
   })
 }
