@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test"
-import type { DiscordDelivery } from "../../../src/services/usage-report/discord-render"
 import { postDelivery } from "../../../src/services/usage-report/discord-post"
+import type { DiscordDelivery } from "../../../src/services/usage-report/discord-render"
 import {
   STUB_WEBHOOK_ID,
   STUB_WEBHOOK_TOKEN,
