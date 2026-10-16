@@ -146,8 +146,12 @@ the environment only, like `ENCRYPTION_KEY` — and the rules below hold it:
   text, and the Sentry event (`beforeSend` runs the same `redact()`). A table-driven redaction test
   pins every host/path/query form, and an end-to-end leak test asserts the full URL appears in none
   of those surfaces when the stub webhook throws a fetch error naming it.
-- **Never echoed.** Env validation refuses a non-absolute URL with a static message that never
-  interpolates the value.
+- **Never echoed, never foreign.** Env validation accepts only an `https` URL on `discord.com`,
+  `discordapp.com`, `ptb.discord.com` or `canary.discord.com` whose path starts with
+  `/api/webhooks/` — exactly the shape the redactor recognizes. An `http` URL, a proxied or
+  otherwise non-Discord host, or a wrong path refuses boot by name, with a static message that
+  never interpolates the value: a URL the redactor cannot recognize would otherwise leak
+  unredacted into `last_error`, log lines and Sentry.
 - **Never rendered.** The Settings screen shows whether a webhook is configured (yes/no) and the
   last delivered time. The URL never enters a view, an API response, or the audit log.
 - **No real call in CI.** Tests stub the webhook; no suite contacts Discord.

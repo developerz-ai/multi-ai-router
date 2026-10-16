@@ -19,6 +19,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Security
 
 - The Discord webhook URL is treated as a credential: `apps/api/src/logging/redact.ts` redacts it — token path segment included — across `discord.com`, `discordapp.com`, `ptb.`/`canary.` hosts, an optional `/api/v<N>/` prefix and `?wait=` / `?thread_id=` query suffixes, in log lines, HTTP error bodies, `usage_reports.last_error`, scheduler error text, the Settings task outcome and the captured Sentry event (message, breadcrumbs, extra). Env validation for the URL never echoes the value.
+- `USAGE_REPORT_DISCORD_WEBHOOK_URL` now accepts only an `https` URL on `discord.com`, `discordapp.com`, `ptb.discord.com` or `canary.discord.com` whose path starts with `/api/webhooks/` — exactly the shape the redactor recognizes. An `http` URL, a proxied/foreign host or a wrong path is refused at boot, naming the variable and never echoing the value; previously any absolute URL passed, and a URL the redactor did not recognize would have leaked unredacted into `usage_reports.last_error`, log lines and Sentry captures.
 
 ## [2.37.9] — 2026-10-16
 

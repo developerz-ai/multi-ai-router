@@ -1,6 +1,6 @@
-import type { z } from "zod"
+import { z } from "zod"
 import { DEFAULT_SCHEDULER_JITTER_FRACTION } from "./env-defaults"
-import { absoluteUrl, atLeastOne, wholeNumber } from "./fields"
+import { atLeastOne, wholeNumber } from "./fields"
 
 /**
  * The weekly usage report's schedule and retention, as configuration (CLAUDE.md non-negotiable 11).
@@ -39,6 +39,34 @@ export const USAGE_REPORT_MAX_ROWS_CEILING = 100_000
 /** The check cadence when `USAGE_REPORT_INTERVAL_MINUTES` is unset. */
 export const DEFAULT_USAGE_REPORT_INTERVAL_MINUTES = 60
 
+/**
+ * The hosts a Discord incoming webhook lives on. The log redactor recognizes webhook URLs by
+ * exactly this shape (`logging/redact.ts`), so validation and redaction must agree: a URL that is
+ * not an `https` webhook on one of these hosts would pass a plain absolute-URL check yet appear
+ * *unredacted* in `usage_reports.last_error`, log lines and Sentry the first delivery failed.
+ */
+const DISCORD_WEBHOOK_HOSTS: ReadonlySet<string> = new Set([
+  "discord.com",
+  "discordapp.com",
+  "ptb.discord.com",
+  "canary.discord.com",
+])
+
+/**
+ * A Discord incoming-webhook URL and nothing else: `https`, one of {@link DISCORD_WEBHOOK_HOSTS},
+ * path under `/api/webhooks/`. Anything else refuses boot naming the variable; the message is
+ * static — the value is a credential and is never echoed.
+ */
+const discordWebhookUrl = z.string().refine((value) => {
+  const url = URL.parse(value)
+  return (
+    url !== null &&
+    url.protocol === "https:" &&
+    DISCORD_WEBHOOK_HOSTS.has(url.hostname) &&
+    url.pathname.startsWith("/api/webhooks/")
+  )
+}, "must be an absolute https URL on discord.com, discordapp.com, ptb.discord.com or canary.discord.com whose path starts with /api/webhooks/ (a Discord incoming webhook; a proxy or any other URL is refused because the redactor would not recognize it)")
+
 export const USAGE_REPORT_ENV_FIELDS = {
   /** At most a day: a longer cadence is a report that can miss its window by design. */
   USAGE_REPORT_INTERVAL_MINUTES: atLeastOne
@@ -63,9 +91,10 @@ export const USAGE_REPORT_ENV_FIELDS = {
   /**
    * The Discord incoming-webhook URL the weekly report is delivered to (issue #229). Unset means
    * delivery is off — reports store as `not_configured` and nothing makes a network call. The
-   * value is a credential: the refusal message is {@link absoluteUrl}'s static one, never an echo.
+   * value is a credential: only the Discord webhook shape passes ({@link discordWebhookUrl}, the
+   * shape the redactor recognizes), and the refusal message is static, never an echo.
    */
-  USAGE_REPORT_DISCORD_WEBHOOK_URL: absoluteUrl.optional(),
+  USAGE_REPORT_DISCORD_WEBHOOK_URL: discordWebhookUrl.optional(),
   /**
    * Automatic delivery attempts per report before the task gives up (`failed` + one capture).
    * Capped at 50 so a typo cannot retry a dead webhook forever; it never limits an operator's
