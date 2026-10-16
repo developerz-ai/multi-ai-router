@@ -43,7 +43,10 @@ export async function postDelivery(
     if (response.ok) return { ok: true }
     const snippet = await response
       .text()
-      .then((text) => redactValue(text.slice(0, SNIPPET_MAX_CHARS)).trim())
+      // Redacted before the cap, `describeRedacted`'s rule: slicing first can cut a webhook URL
+      // into a fragment no redaction shape matches, and the head — scheme, host, path — of a
+      // credential would survive into `last_error`, log lines and Sentry.
+      .then((text) => redactValue(text).slice(0, SNIPPET_MAX_CHARS).trim())
       .catch(() => "")
     const message = `discord webhook answered ${response.status}${snippet === "" ? "" : `: ${snippet}`}`
     return {
