@@ -24,7 +24,10 @@ The calibrated profile is CLI `2.1.301`, SDK `0.3.301`, Bun `1.4.2`. A custom CL
 a different Bun version or SDK manifest, or a binary SHA-256 differing from the captured Linux x64
 glibc build disables
 the direct transport at boot and emits a warning. The check accepts the image's staged PATH copy
-after dependency pruning and hashes in bounded chunks, once at boot. Recalibrate before upgrading these pins.
+after dependency pruning and hashes in bounded chunks, once at boot. The build stages the SDK
+manifest alongside the bundled artifacts because workspace package links are absent in the image;
+a final-image gate checks availability before publication. Boot logs distinguish verified direct
+inference from SDK fallback and include safe fallback reason codes. Recalibrate before upgrading these pins.
 Concrete `claude-*` model IDs pass through; aliases require a live SDK catalog resolution.
 The `[1m]` model suffix becomes the corresponding beta header, without model substitution.
 

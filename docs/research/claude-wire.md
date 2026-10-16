@@ -321,3 +321,17 @@ states that identity misrepresentation and routing third-party traffic against s
 limits are prohibited and may be enforced against. No capture can establish that a subscription
 router deployment will avoid account restrictions. API-key authentication is the documented
 route for products and tools for others.
+
+### Packaged-image follow-up
+
+The v2.39.4 deployed profile warning exposed a packaging failure missed by the source-level
+MITM canary: the runtime copies root node_modules and bundles the SDK, so the SDK's workspace
+package link is absent. Resolving its manifest by package name fails even when Bun and the
+staged CLI checksum match. v2.39.5 stages the manifest before dependency pruning, checks the
+final image layout during Docker build and logs the active profile explicitly.
+
+A production canary must also constrain its key scope and verify the usage record's provider.
+An unrestricted key's `claude-opus-5` request was successfully served by a MiniMax alias; that
+is valid configured routing, but it provides no evidence about Claude subscription inference.
+Use a temporary key scoped to Claude accounts, verify `anthropic-oauth` usage and revoke the
+key afterwards. Do not count a model name or a 200 alone as proof of the transport tested.

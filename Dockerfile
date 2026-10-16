@@ -205,7 +205,7 @@ LABEL org.opencontainers.image.title="multi-ai-router" \
       org.opencontainers.image.url="https://github.com/developerz-ai/multi-ai-router" \
       org.opencontainers.image.documentation="https://github.com/developerz-ai/multi-ai-router/blob/main/README.md" \
       org.opencontainers.image.licenses="MIT" \
-      org.opencontainers.image.version="2.39.5" \
+      org.opencontainers.image.version="2.39.6" \
       org.opencontainers.image.revision="${ROUTER_REVISION}"
 
 # ---- PID 1 ----
@@ -269,6 +269,9 @@ VOLUME ["/data/claude"]
 COPY --from=builder --chown=bun:bun /src/dist ./dist
 COPY --from=builder --chown=bun:bun /src/node_modules ./node_modules
 COPY --from=builder --chown=bun:bun /src/package.json ./package.json
+
+# Prove fast-profile availability in the shipped, pruned layout. Unsupported arm64 stays SDK-only.
+RUN bun dist/libexec/claude-profile-check.js
 
 # The default listen port. Overridable via `PORT` (spec §15); EXPOSE is metadata
 # only, so this stays a documentation/compose hint, not an enforcement. Kept at

@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [2.39.5] — 2026-10-16
+## [2.39.6] — 2026-10-16
 
 ### Fixed
 
@@ -16,6 +16,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - `bin/bench-usage`: seeds the #250 fixture into a throwaway database, runs the real `readSummary` in its repeatable-read snapshot, re-runs every statement under EXPLAIN (ANALYZE, BUFFERS), and exits non-zero when the wall clock (default budget 240s; on the same harness against the same warm fixture the pre-fix build measured 149.7s wall and the post-fix build 43.9s — the cold pre-fix dump was 351.8s) or the total shared-buffer traffic (default 1.2M; ~0.95M measured, pre- and post-fix alike — the buffer leg guards scan volume, the wall leg per-row cost) crosses its budget. Deliberately not in `bin/check` — a timing gate on a shared runner flakes; the plan-shape pins live in the repository unit tests.
+
+## [2.39.5] — 2026-10-16
+
+### Fixed
+
+- The packaged fast-mode profile check no longer depends on workspace SDK package links absent from the runtime image. Build the SDK manifest into `dist/libexec` before pruning and read it when the bundled server cannot resolve the SDK by package name. The CLI binary checksum, version and runtime calibration remain required. The v2.39.4 production enablement exposed the failure by falling back to SDK despite a matching staged CLI binary.
+
+### Added
+
+- A final-image profile gate for amd64 and an offline bundled-layout regression test, including missing/wrong manifest refusals. Unsupported arm64 remains SDK-only.
+- Boot logs explicitly identify a verified direct HTTP transport; fallback warnings include a safe reason code so a configured flag cannot be mistaken for an active transport.
 
 ## [2.39.4] — 2026-10-16
 
@@ -1533,4 +1544,7 @@ your tooling config.
 [2.39.3]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.39.3
 
 [2.39.4]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.39.4
+
 [2.39.5]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.39.5
+
+[2.39.6]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.39.6
