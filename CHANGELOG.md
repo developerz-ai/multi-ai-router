@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.38.0] — 2026-10-16
+
+### Added
+
+- The weekly usage report (#227) is delivered to a Discord incoming webhook (#229). After the report task stores the row, the same task claims it with a conditional `UPDATE ... WHERE delivery_status = 'pending' AND delivery_attempts = $read` and posts a rendered Discord embed — people and services tables truncated with "+N more" to named embed limits, a link to the filtered Usage view when `PUBLIC_URL` is set, and the report CSV as an attachment — then records `sent`. Only the latest period's `pending` row is ever posted by the task; older rows never burst through. Unset `USAGE_REPORT_DISCORD_WEBHOOK_URL` records `not_configured` with no network call. A 5xx or 429 retries on later ticks up to `USAGE_REPORT_MAX_DELIVERY_ATTEMPTS` (default 6, bounds 1-50); any other 4xx stops at once. Give-up or stop records `failed` with a redacted `last_error` and exactly one Sentry capture per failed period, tied to the persisted `pending` → `failed` transition. The embed and CSV carry only what the stored payload holds (owner, owner kind, tool, buckets, totals, top models, overflow key/pool names) — never account labels, never live state re-read.
+- `POST /api/admin/usage/reports/:periodStart/deliver` re-sends a stored report (admin session + CSRF like the rest of the group). It claims the row the same way — a row already claimed by a concurrent tick makes zero requests — posts again even when the row is `sent`, writes one `usage_report.delivered` audit row per call, and returns `{ periodStart, deliveryStatus, deliveryAttempts, deliveredAt }`. Malformed or non-Monday period → 400; no row → 404 with no network call and no generation; unset env → `not_configured` with no network call. A failed re-send writes `failed` and a redacted `last_error` whatever the prior status and captures exactly once per failed call, surfaced as `200 { deliveryStatus: "failed" }` so the error handler never double-captures.
+- The console's reports list (#228) gains a per-row **Resend** button that calls the endpoint and shows the returned status; the button states that it posts to the channel.
+- Settings shows only whether the Discord webhook is configured (yes/no) and the last delivered time — never the URL.
+
+### Security
+
+- The Discord webhook URL is treated as a credential: `apps/api/src/logging/redact.ts` redacts it — token path segment included — across `discord.com`, `discordapp.com`, `ptb.`/`canary.` hosts, an optional `/api/v<N>/` prefix and `?wait=` / `?thread_id=` query suffixes, in log lines, HTTP error bodies, `usage_reports.last_error`, scheduler error text, the Settings task outcome and the captured Sentry event (message, breadcrumbs, extra). Env validation for the URL never echoes the value.
+
 ## [2.37.4] — 2026-10-15
 
 ### Fixed
@@ -1371,3 +1384,4 @@ your tooling config.
 [2.34.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.34.0
 [2.35.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.35.0
 [2.36.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.36.0
+[2.38.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.38.0
