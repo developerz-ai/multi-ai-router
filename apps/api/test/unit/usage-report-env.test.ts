@@ -115,14 +115,45 @@ describe("weekly report env", () => {
         USAGE_REPORT_HOUR_UTC: "23",
         USAGE_REPORT_SETTLE_MINUTES: "1405",
       }
-      // 60 x 1 + 5 = 65 < 95: accepted. 60 x 1.5 + 5 = 95 >= 95: refused.
+      // 60 x 1 + 5 = 65 < 95: accepted. 60 x 1.5 + 5 = 95 >= 95: refused. The default tick
+      // (60 x 1.2 + 5 = 77) fits the window, so the configured jitter closed it and the refusal
+      // points at the interval, not at the schedule.
       expect(
         parseEnv({ ...base, ...window95, SCHEDULER_JITTER_FRACTION: "0" }).usageReport
           .settleMinutes,
       ).toBe(1405)
       expect(refused({ ...window95, SCHEDULER_JITTER_FRACTION: "0.5" }).variables).toEqual([
-        "USAGE_REPORT_SETTLE_MINUTES",
+        "USAGE_REPORT_INTERVAL_MINUTES",
       ])
+    })
+
+    test("an interval too slow for a window the defaults fit is refused naming the interval", () => {
+      // The same 95 minute window: 90 x 1.2 + 5 = 113 >= 95, while the default tick (77) fits.
+      const window95 = {
+        USAGE_REPORT_WEEKDAY: "6",
+        USAGE_REPORT_HOUR_UTC: "23",
+        USAGE_REPORT_SETTLE_MINUTES: "1405",
+      }
+      expect(refused({ ...window95, USAGE_REPORT_INTERVAL_MINUTES: "90" }).variables).toEqual([
+        "USAGE_REPORT_INTERVAL_MINUTES",
+      ])
+    })
+
+    test("the refusal rounds the displayed slowest tick, and the comparison stays unrounded", () => {
+      // Interval 3 at jitter 0.25: the slowest tick is 3 x 1.25 + 5 = 8.75 minutes.
+      const odd = {
+        USAGE_REPORT_INTERVAL_MINUTES: "3",
+        SCHEDULER_JITTER_FRACTION: "0.25",
+        ...sunday,
+      }
+      // Settle 51 leaves 9 minutes: 8.75 < 9 fires, though the rounded 9 would not.
+      expect(
+        parseEnv({ ...base, ...odd, USAGE_REPORT_SETTLE_MINUTES: "51" }).usageReport.settleMinutes,
+      ).toBe(51)
+      // Settle 52 leaves 8: refused, and the message shows the tick as whole minutes.
+      const error = refused({ ...odd, USAGE_REPORT_SETTLE_MINUTES: "52" })
+      expect(error.message).toContain("= 9)")
+      expect(error.message).not.toContain("8.75")
     })
   })
 

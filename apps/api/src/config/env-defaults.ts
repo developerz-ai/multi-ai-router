@@ -24,6 +24,15 @@ export type LogLevel = (typeof LOG_LEVELS)[number]
 export const DEFAULT_SERVER_IDLE_TIMEOUT_SECONDS = 60
 
 /**
+ * The scheduler's jitter default (`SCHEDULER_JITTER_FRACTION` unset): ±20 %. One constant because
+ * four readers fall back to it — the env reader, the numeric bounds, the Claude-login keepalive
+ * and the weekly report's firing-window check — and a default that drifts between the schedules
+ * and the checks that judge them would refuse a boot it should accept, or accept one it should
+ * refuse.
+ */
+export const DEFAULT_SCHEDULER_JITTER_FRACTION = 0.2
+
+/**
  * The two probes the image's healthcheck and an orchestrator poll. `/` is deliberately not here:
  * it is the console's entry point, and whether a hit on it is a load balancer or an operator is
  * something only the deployment knows — an operator whose balancer probes `/` adds it.

@@ -411,7 +411,8 @@ Rows are swept by the janitor on `period_start`, strictly older than `RETENTION_
   the instant they started), and whether the real gap between the week's end and generation (the
   schedule's whole anchor offset plus tick lateness; for a preview, whenever it was asked for)
   covers `UPSTREAM_TIMEOUT_MS` (an attempt that outlives it can land after generation and is missed
-  for good). The unpriced share is divided by attempts on days the measure covers, so a week that
+  for good; a preview, which stores nothing, says it *would be missed in a stored report* instead).
+  The unpriced share is divided by attempts on days the measure covers, so a week that
   straddles the start of the measure is not diluted by unmeasured days.
 
 **Endpoints** (admin session; the `POST` also needs the CSRF token):
@@ -427,7 +428,9 @@ too), so it is derivable for any retained week.
 
 The read is bounded by `USAGE_REPORT_MAX_ROWS` (default 50000, at most 100000): a week with more
 key x account x pool x model rows fails loudly rather than producing a truncated report. The task
-ends `failed` with a message naming the variable and the preview answers `400 report_too_large`.
+ends `failed` with a message naming the variable and the preview answers `400 report_too_large`;
+with the cap already at 100000 the message says building the week needs a code change, rather than
+suggesting a raise boot would refuse.
 The top ten models by tokens are kept in `topModels`; that cut is part of the payload contract, not
 a setting.
 

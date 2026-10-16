@@ -387,6 +387,20 @@ describe("caveats", () => {
     expect(short.coverage.settleCoversUpstreamTimeout).toBe(true)
   })
 
+  test("inside the timeout a stored report says missed for good, a preview only would-be", () => {
+    const within = { ...PERIOD, upstreamTimeoutMs: 3_600_000 }
+    // A preview stores nothing, so nothing is lost yet: the attempt would be missed in the
+    // stored report, and the caveat must not claim it is missed for good.
+    const stored = buildWeeklyReport(FIXTURE, labels, pools, within)
+    expect(stored.caveats.find((c) => c.code === "settle_margin")?.text).toContain(
+      "is missed for good",
+    )
+    const preview = buildWeeklyReport(FIXTURE, labels, pools, { ...within, preview: true })
+    const text = preview.caveats.find((c) => c.code === "settle_margin")?.text ?? ""
+    expect(text).toContain("would be missed in a stored report")
+    expect(text).not.toContain("missed for good")
+  })
+
   test("the whole anchor offset counts: a Wednesday run covers a one hour timeout", () => {
     // Settle is 30 minutes, but the report is generated 2 d 9 h 30 min after the boundary.
     const wednesday = buildWeeklyReport(FIXTURE, labels, pools, {

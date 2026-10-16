@@ -37,6 +37,11 @@ export interface ReportPeriod {
   readonly upstreamTimeoutMs: number
   /** First fully measured day of the unpriced measure, `YYYY-MM-DD`, or `infinity`. */
   readonly unpricedSince: string
+  /**
+   * True only for the preview build. A preview stores nothing, so its settle caveat says an
+   * attempt "would be missed in a stored report" instead of claiming it "is missed for good".
+   */
+  readonly preview?: boolean
 }
 
 /**
