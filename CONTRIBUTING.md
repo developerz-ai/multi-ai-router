@@ -71,6 +71,23 @@ Other commands you'll use often:
 - CI (lint, typecheck, test, build) must be green before merge. `bin/check` runs
   the same gate locally in the same order, so there should be no surprises.
 
+## Version bumps
+
+Every PR ships a version: the same PR updates `CHANGELOG.md` and bumps the
+version in every file `docs/RELEASING.md` step 1 lists, and
+`bin/verify-version` proves the tree agrees with itself. Which digit moves is
+a rule, not a mood (#258):
+
+- An **addition** takes a **minor** bump (`2.37.9` → `2.38.0`): a new price
+  row, a new endpoint, a new env knob, a new provider — anything that ships
+  a capability that was not there before.
+- **Fixes, docs, tests and refactors** take a **patch** bump (`2.37.9` →
+  `2.37.10`): a change that adds no capability.
+
+A PR whose changelog section opens with `Added` while its version moves a
+patch is wrong whichever way it happened — a price row once shipped as a
+patch (#256) — so read the digit off the changelog group before bumping.
+
 ## Non-negotiables
 
 The full list — Claude subscriptions through the Agent SDK only, tool
