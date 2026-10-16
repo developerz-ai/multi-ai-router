@@ -1,5 +1,6 @@
 import type { z } from "zod"
 import { CLI_REFRESH_LEAD_MS } from "../providers/claude-sdk/credential-freshness"
+import { DEFAULT_SCHEDULER_JITTER_FRACTION } from "./env-defaults"
 import { atLeastOne } from "./fields"
 
 /**
@@ -49,7 +50,7 @@ export function readClaudeLoginEnv(
   // lead at least once. Under a wider configured jitter the *default* shrinks to keep that true;
   // an explicit cadence that can step over the lead is refused, not clamped: it would look
   // configured and let tokens lapse exactly as before.
-  const jitter = raw.SCHEDULER_JITTER_FRACTION ?? 0.2
+  const jitter = raw.SCHEDULER_JITTER_FRACTION ?? DEFAULT_SCHEDULER_JITTER_FRACTION
   const leadSeconds = CLI_REFRESH_LEAD_MS / 1_000
   const keepaliveIntervalSeconds =
     raw.CLAUDE_SDK_CREDENTIAL_KEEPALIVE_INTERVAL_SECONDS ??

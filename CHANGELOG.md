@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.36.3] — 2026-10-15
+
+### Added
+
+- Tests closing the weekly report's remaining gaps (#252): exact per-row cache-token sums (distinct non-zero reads/writes, loud out-of-week rows proving the clip) and a ceiling-equal week read that must not throw in the database integration suite; the over-cap preview driven through `POST /api/admin/usage/reports/preview` with the CSRF token, asserting `400 report_too_large` and that nothing was stored; and a unit suite pinning the too-large message below and at the row cap.
+
+### Changed
+
+- At the `USAGE_REPORT_MAX_ROWS` ceiling (100000) the too-large failure now says building the week needs a code change instead of suggesting a raise boot would refuse; below the ceiling it still says to raise, naming the cap.
+- The boot refusal for the report's firing window rounds the displayed slowest tick to whole minutes (the comparison stays exact) and names `USAGE_REPORT_INTERVAL_MINUTES` when a configured interval or jitter closed a window the defaults fit, `USAGE_REPORT_SETTLE_MINUTES` otherwise.
+- The scheduler jitter default (0.2) is one exported constant, `DEFAULT_SCHEDULER_JITTER_FRACTION`, instead of four literals.
+- A preview generated inside the upstream timeout says an attempt "would be missed in a stored report", not "is missed for good" — a preview stores nothing. `anchorOffsetMinutes` now takes only the schedule fields, keeping `maxRows` out of the schedule type.
+
+### Documentation
+
+- `docs/idea/08-observability.md` and `docs/idea/09-deployment.md` follow the refusal naming, the at-cap wording and the preview caveat.
+
 ## [2.36.0] — 2026-10-15
 
 ### Added
@@ -1326,3 +1343,4 @@ your tooling config.
 [2.34.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.34.0
 [2.35.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.35.0
 [2.36.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.36.0
+[2.36.3]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.36.3
