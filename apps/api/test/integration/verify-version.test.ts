@@ -328,6 +328,94 @@ describe("bin/verify-version", () => {
     expect(ran.output).toContain("2.37.6")
   })
 
+  test("accepts an rc footer link ascending into its final release", async () => {
+    // The docs/RELEASING.md rc re-spin flow: the candidate ships, the final supersedes it, and the
+    // footer records both. Ascending order is semver precedence, so X.Y.Z-rc.N comes before X.Y.Z
+    // (#267) — a numeric-triple-only comparison reads that pair as equal and refuses it.
+    const root = await fixture({
+      constant: "2.40.0",
+      changelog: [
+        "## [Unreleased]",
+        "",
+        "## [2.40.0] — 2026-10-16",
+        "",
+        "- final.",
+        "",
+        "## [2.40.0-rc.1] — 2026-10-15",
+        "",
+        "- candidate.",
+        "",
+        "[2.40.0-rc.1]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.40.0-rc.1",
+        "[2.40.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.40.0",
+        "",
+      ].join("\n"),
+    })
+
+    expect((await verify(root)).exitCode).toBe(0)
+  })
+
+  test("refuses a final release footer link placed before its rc", async () => {
+    // Semver precedence cuts both ways: 2.40.0-rc.1 < 2.40.0, so in an ascending list the final
+    // can never precede the candidate it superseded.
+    const root = await fixture({
+      constant: "2.40.0",
+      changelog: [
+        "## [Unreleased]",
+        "",
+        "## [2.40.0] — 2026-10-16",
+        "",
+        "- final.",
+        "",
+        "## [2.40.0-rc.1] — 2026-10-15",
+        "",
+        "- candidate.",
+        "",
+        "[2.40.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.40.0",
+        "[2.40.0-rc.1]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.40.0-rc.1",
+        "",
+      ].join("\n"),
+    })
+
+    const ran = await verify(root)
+
+    expect(ran.exitCode).toBe(1)
+    expect(ran.output).toContain("ascend")
+    expect(ran.output).toContain("2.40.0-rc.1")
+  })
+
+  test("accepts consecutive rc footer links in ascending order", async () => {
+    // A second re-spin: precedence is per identifier (semver §11.4), not just pre-release versus
+    // final, so rc.1 → rc.2 ascends and rc.2 → rc.1 does not.
+    const rcChangelog = (first: string, second: string): string =>
+      [
+        "## [Unreleased]",
+        "",
+        `## [${second}] — 2026-10-16`,
+        "",
+        "- newer candidate.",
+        "",
+        `## [${first}] — 2026-10-15`,
+        "",
+        "- older candidate.",
+        "",
+        `[${first}]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v${first}`,
+        `[${second}]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v${second}`,
+        "",
+      ].join("\n")
+
+    const ascending = await fixture({
+      constant: "2.40.0-rc.2",
+      changelog: rcChangelog("2.40.0-rc.1", "2.40.0-rc.2"),
+    })
+    expect((await verify(ascending)).exitCode).toBe(0)
+
+    const descending = await fixture({
+      constant: "2.40.0-rc.2",
+      changelog: rcChangelog("2.40.0-rc.2", "2.40.0-rc.1"),
+    })
+    expect((await verify(descending)).exitCode).toBe(1)
+  })
+
   test("accepts unlinked sections below the linked era's floor as history", async () => {
     // Sections older than 2.25.0 predate the linked-footer convention and mostly have no
     // links; the gate must not demand a retro-linking of the whole history to fix one gap.

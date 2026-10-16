@@ -45,10 +45,13 @@ the sources of truth, not memory.
 
 Add the new version's link reference at the bottom of the file
 (`[X.Y.Z]: https://github.com/developerz-ai/multi-ai-router/releases/tag/vX.Y.Z`),
-in ascending order after the previous last link. The link is not decoration:
-`bin/verify-version` refuses a tree whose sections since 2.25.0 lack their
-footer link or whose links do not ascend — the 2.37.0–2.37.4 links shipped
-missing once (#265), and this is what catches a repeat.
+in ascending order after the previous last link. Ascending means full semver
+precedence: a pre-release sorts before the release it precedes, so an rc
+re-spin's links read `X.Y.Z-rc.1`, `X.Y.Z-rc.2`, …, `X.Y.Z` — rc sections do
+enter the changelog, and the gate accepts them (#267). The link is not
+decoration: `bin/verify-version` refuses a tree whose sections since 2.25.0
+lack their footer link or whose links do not ascend — the 2.37.0–2.37.4 links
+shipped missing once (#265), and this is what catches a repeat.
 
 ## 3. Verify the gate is green
 
