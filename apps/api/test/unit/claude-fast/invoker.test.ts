@@ -246,6 +246,39 @@ describe("Claude fast invoker", () => {
     expect(directCalls).toBe(0)
     expect(held).toBe(false)
   })
+  test("a completed empty upstream refusal remains a valid Messages response", async () => {
+    const refusal = [
+      event({
+        type: "message_start",
+        message: {
+          id: "msg_refusal",
+          type: "message",
+          role: "assistant",
+          model: "claude-opus-5",
+          content: [],
+          usage: { input_tokens: 57, output_tokens: 0 },
+        },
+      }),
+      event({
+        type: "message_delta",
+        delta: { stop_reason: "refusal", stop_details: { type: "refusal" } },
+        usage: { output_tokens: 0 },
+      }),
+      event({ type: "message_stop" }),
+    ].join("")
+    const h = setup({ body: refusal })
+    const response = await h.invoke(input(false))
+    expect(response.status).toBe(200)
+    expect(await response.json()).toMatchObject({
+      type: "message",
+      content: [],
+      stop_reason: "refusal",
+      stop_details: { type: "refusal" },
+      usage: { output_tokens: 0 },
+    })
+    expect(h.fallback).toBe(0)
+    expect(h.concurrency.inFlight).toBe(0)
+  })
   test("reports included windows separately from rejected overage", () => {
     const values: unknown[] = []
     reportFastQuota(
