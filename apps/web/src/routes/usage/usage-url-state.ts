@@ -1,4 +1,5 @@
 import { useSearchParams } from "@solidjs/router"
+import { isIsoDateTime } from "@multi-ai-router/core"
 import { type Accessor, createMemo } from "solid-js"
 import {
   isCustomRange,
@@ -51,6 +52,10 @@ function windowOf(raw: string | undefined): UsageWindow | undefined {
 /** A custom range only if both ends parse and the start is before the end, as the server requires. */
 function customRangeOf(from: string | undefined, to: string | undefined): UsageRange | undefined {
   if (from === undefined || to === undefined) return undefined
+  // Only the ISO shape the API validates (the shared schema in @multi-ai-router/core). Anything
+  // else Date.parse happens to read (2026/10/01, 10/15/2026) would 400 upstream instead of
+  // falling back like every other refused window.
+  if (!isIsoDateTime(from) || !isIsoDateTime(to)) return undefined
   const start = Date.parse(from)
   const end = Date.parse(to)
   if (Number.isNaN(start) || Number.isNaN(end) || start >= end) return undefined
