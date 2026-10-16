@@ -36,3 +36,12 @@ export function toolChoiceForOpenAiChat(
   }
   return toolChoiceToOpenAiChat(choice)
 }
+
+/**
+ * Whether an openai-chat `tool_choice` obliges the model to call a tool. Accepts `unknown` so it
+ * can read a field off an already-translated body object as well as a typed choice; `null` (never
+ * emitted, but defensively handled) and the string policies `auto` / `none` force nothing.
+ */
+export function forcesOpenAiChatTool(choice: OpenAiChatToolChoice | unknown): boolean {
+  return choice === "required" || (typeof choice === "object" && choice !== null)
+}

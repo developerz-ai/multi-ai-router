@@ -12,6 +12,7 @@ import {
   encryptionKey,
   flag,
   fraction,
+  modelGlobList,
   nonEmpty,
   oidcScopes,
   oidcUrl,
@@ -225,6 +226,10 @@ export const ENV_FIELDS = {
   MAX_TRANSLATION_PENDING_BYTES: atLeastOne
     .refine((value) => value >= 1024 && value <= 33_554_432, "must be between 1024 and 33554432")
     .optional(),
+  // Upstream (post-alias) model ids / `prefix*` globs that reason by default on openai-chat egress;
+  // a forced `tool_choice` to a matched model is sent `enable_thinking: false`
+  // (docs/idea/06-protocol-translation.md). Empty/unset matches nothing — dormant by default.
+  OPENAI_CHAT_THINKING_DEFAULT_MODELS: modelGlobList.optional(),
 } as const
 
 export const boundedEnvSchema = z.object(ENV_FIELDS).superRefine(validateNumericBounds)

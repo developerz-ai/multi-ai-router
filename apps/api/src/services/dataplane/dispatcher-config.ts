@@ -5,6 +5,7 @@ import type { RateLookup } from "../cost"
 import type { CredentialCipher } from "../crypto/cipher"
 import type { ModelCatalogStore } from "../models/store"
 import type { FailoverOptions, SelectionOptions } from "../routing"
+import type { ThinkingDefaultMatcher } from "../translate"
 import type { UsageRecorder } from "../usage"
 import type { UsageRequestIdentity } from "../usage/request-identity"
 import type { ActiveRequestLease, ActiveRequestRegistry } from "./active-requests"
@@ -76,6 +77,12 @@ export interface TranslationOptions {
    */
   readonly defaultMaxTokens?: number
   readonly maximumPendingBytes?: number
+  /**
+   * Matches an upstream (post-alias) model id against the operator's think-by-default set
+   * (`OPENAI_CHAT_THINKING_DEFAULT_MODELS`). Built once from config in composition, not per request.
+   * Absent, or matching nothing, means `enable_thinking: false` is never emitted (the default).
+   */
+  readonly thinkingDefaultModels?: ThinkingDefaultMatcher
 }
 
 /** Long, because a long completion is a normal response, not a hung one. Configurable. */

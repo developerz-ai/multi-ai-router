@@ -91,6 +91,19 @@ export const pathList = z
     "must be a comma-separated list of paths, each starting with /",
   )
 
+/**
+ * A comma-separated list of model ids, each an exact id or a trailing-`*` prefix glob. Blank
+ * entries are dropped; the whole thing may be empty (it then matches nothing). Non-numeric, so it
+ * sits outside the `ZERO_IS_LEGAL` numeric-kill-switch guard entirely. Parsed to the raw list here;
+ * the matcher it feeds is built once in composition (`createThinkingDefaultMatcher`).
+ */
+export const modelGlobList = z.string().transform((v) =>
+  v
+    .split(",")
+    .map((id) => id.trim())
+    .filter((id) => id.length > 0),
+)
+
 export const absoluteUrl = z.string().refine((v) => URL.canParse(v), "must be an absolute URL")
 
 /** Browser redirects and discovery cannot use an opaque URL or embed credentials. */

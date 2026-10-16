@@ -1,5 +1,3 @@
-import { TranslationError } from "@multi-ai-router/core"
-
 /**
  * A forced `tool_choice` on an anthropic passthrough to a vendor that thinks by default.
  *
@@ -9,23 +7,23 @@ import { TranslationError } from "@multi-ai-router/core"
  * 2026-10-15) takes the same bytes, ignores the force, and answers `end_turn` in prose. The AI SDK's
  * `generateObject` is exactly that client: `tool_choice {type: "any"}`, no `thinking`.
  *
- * So for such a vendor the absent field is stated, the same call the translated path makes
- * (`openai-chat-to-anthropic/request.ts`). An explicit `enabled` / `adaptive` is a contradiction the
- * caller wrote, refused as Anthropic's own `invalid_request_error` rather than silently overridden:
- * the vendor would otherwise ignore the force and hand back prose.
+ * So for such a vendor thinking is stated off beside the force — the same move the translated path
+ * makes (`openai-chat-to-anthropic/request.ts`). An explicit `enabled` / `adaptive` is the same
+ * contradiction one level up: the force is the caller's contract (the AI SDK will parse the tool
+ * call), thinking is a dial, and the dial yields. It is rewritten to `disabled` rather than refused
+ * — the router's job is to serve, and a `400` on a request the vendor can answer served nothing
+ * (prod 2026-10-15..16, v2.37.3: 538 router-made `400`s on MiniMax-M3, every one the AI SDK's
+ * forced `json` tool beside a thinking budget). A forced tool answered in prose is already caught
+ * and coerced downstream (`dataplane/forced-tool-coercion.ts`). The model is never touched.
  *
  * This is the one passthrough edit besides the model name that parses the body, and it parses only
  * when the bytes contain `tool_choice` at all, so an ordinary turn pays one substring scan.
- * Pure: no clock, no I/O. A body that is not a JSON object is returned untouched for the upstream
- * to judge.
- *
- * @throws TranslationError (400) when `thinking` is enabled beside a forced tool choice.
+ * Pure: no clock, no I/O, no logger — the override is not reported, because the caller
+ * (`chain-body.ts`) holds the only clean sink (`ctx.log`) and this function stays a pure body edit.
+ * A body that is not a JSON object is returned untouched for the upstream to judge.
  */
 
 const MARKER = new TextEncoder().encode('"tool_choice"')
-
-const THINKING_WITH_FORCED_TOOL =
-  "`thinking` is enabled while `tool_choice` forces tool use: thinking may not be enabled when tool_choice forces tool use; set `thinking.type` to `disabled` or use `tool_choice` `auto`"
 
 export function disableThinkingForForcedTool(bytes: Uint8Array): Uint8Array {
   if (!contains(bytes, MARKER)) return bytes
@@ -39,13 +37,17 @@ export function disableThinkingForForcedTool(bytes: Uint8Array): Uint8Array {
   const record = body as Record<string, unknown>
   if (!forces(record.tool_choice)) return bytes
 
-  const thinking = record.thinking
-  if (thinking === undefined || thinking === null) {
+  // Absent, `enabled` or `adaptive` thinking all yield to the force and are stated `disabled`; a
+  // thinking the caller already set to `disabled` (or any other shape) is left as the client's bytes.
+  const type = (record.thinking as { type?: unknown } | null | undefined)?.type
+  if (
+    record.thinking === undefined ||
+    record.thinking === null ||
+    type === "enabled" ||
+    type === "adaptive"
+  ) {
     return new TextEncoder().encode(JSON.stringify({ ...record, thinking: { type: "disabled" } }))
   }
-  const type = (thinking as { type?: unknown }).type
-  if (type === "enabled" || type === "adaptive")
-    throw new TranslationError(THINKING_WITH_FORCED_TOOL)
   return bytes
 }
 

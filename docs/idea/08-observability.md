@@ -627,6 +627,36 @@ repeatable-read database snapshot. Legacy daily baselines cannot supply exact ho
 facts: coverage identifies that gap rather than fabricating zero traffic. History, raw detail and
 current subject labels have separate meanings; the UI states their coverage.
 
+**Bounded scans.** Two scans used to grow with total history rather than with the window, so a
+summary over a long window on a large install (prod: ~334k `usage_records`, ~360k
+`usage_contributions`) ran for seconds inside the snapshot:
+
+- *Window resolution* needs only the database clock and — for `lifetime` — the earliest retained
+  instant. It reads those through `clock()`, not `coverage()`. The old `coverage()` call carried no
+  window, so its `pending` existence check (an anti-join of every retained `usage_records` row
+  against `usage_contributions`) and its `legacy` check scanned the whole table for two fields the
+  window never reads — about half the cost of a large summary. `coverage(window)` still runs once,
+  bounded to the requested window, for the `incomplete`/`legacy` flags.
+- *The contributions facts source* (`historySource`) reads durable receipts only for the window's
+  partial-day edges. Its `day` column is indexed; its event-time filter is not. The scan is bounded
+  to `[startDay, endDay]` — the first and last UTC day the window can touch — so `day_idx` no longer
+  walks back to the retention horizon (~255k index entries for a 30-day window) before the
+  event-time filter discards the rows. The bound drops no row: every admitted receipt's event-time
+  already lies in `[from, to)`, so its `day` already lies in the range.
+
+One scan is still history-bounded: the per-window `pending` anti-join in `coverage(window)` is cheap
+for a named window but, for `lifetime`, still visits every retained row. Making it stop early needs a
+durable "banked through" watermark (or a marker column on `usage_records` with a partial index) that
+the backfill advances — a schema change, deferred to its own migration.
+
+These reads run inside one repeatable-read snapshot on a single pooled connection and send no byte
+until they complete, so the whole summary must finish within `Bun.serve`'s response idle timeout,
+`SERVER_IDLE_TIMEOUT_SECONDS` (default 60): a summary that stayed silent past it would have the HTTP
+connection dropped and the request aborted mid-snapshot, surfacing as a failed admin read rather than
+a slow one. The two bounds above keep a large-history summary far under that ceiling; the timeout is
+config, not a constant, so an operator who raises retention enough to approach it can raise the
+timeout with it.
+
 ## Quota, resets, and manual re-check
 
 A degraded pool raises exactly two operator questions — *"when does it come back?"* and *"is it back
@@ -731,8 +761,9 @@ constant is what the five surfaces above report, and the release workflow never 
 — so the drift test that normally holds the two together does not gate a tag. Run it by hand before
 cutting one ([RELEASING.md](../RELEASING.md)). The same script also reads `CHANGELOG.md`: a section
 since 2.25.0, the start of the fully-linked era, whose footer link is missing or duplicated fails
-the gate, as do footer links out of ascending order — the 2.37.0–2.37.4 links shipped missing once
-(#265), and a release gate is the right place for that to be loud.
+the gate, as do footer links out of ascending order — ascending by full semver precedence, so an
+rc section's link precedes the final release that superseded it (#267). The 2.37.0–2.37.4 links
+shipped missing once (#265), and a release gate is the right place for that to be loud.
 
 **The version says what the build calls itself; `ROUTER_REVISION` says which build it is.** Two
 images can both be `1.0.0` — a rebuilt `latest`, an rc respin, an image built from a dirty tree.

@@ -44,6 +44,10 @@ export function historyFixture(
         : raw.seriesByDimension(window, bucket, dimension, filter, attribution)
       : raw.seriesByDimension(window, bucket, dimension, filter)
   const history: UsageHistoryRepository = {
+    clock: async () => {
+      const c = await history.coverage()
+      return { dbNow: c.dbNow, earliestAt: c.earliestAt }
+    },
     coverage: async () => ({
       dbNow: now,
       earliestAt: now,
