@@ -1,0 +1,5 @@
+#!/bin/sh
+# Live, opt-in provider diagnostics. Never invoked by bin/test or CI.
+set -eu
+cd "$(dirname "$0")/.."
+exec bun bin/lib/claude-trace/main.ts "$@"

@@ -81,7 +81,7 @@ export const PROVIDER_REGISTRY: Readonly<Record<ProviderId, ProviderSupport>> = 
     transport: "agent-sdk",
     driver: claudeSdkDriver,
     reason:
-      "Claude Max/Pro subscriptions go through @anthropic-ai/claude-agent-sdk, one isolated CLAUDE_CONFIG_DIR per account. No subscription token is ever extracted or attached to an HTTP request — docs/idea/11-anthropic-agent-sdk.md.",
+      "Claude Max/Pro subscriptions go through @anthropic-ai/claude-agent-sdk, one isolated CLAUDE_CONFIG_DIR per account. Default inference uses SDK; opt-in CLAUDE_FAST_MODE uses selected-account credentials for direct HTTP — docs/idea/claude-fast-mode.md.",
   },
 }
 
