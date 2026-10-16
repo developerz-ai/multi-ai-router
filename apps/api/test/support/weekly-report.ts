@@ -58,7 +58,9 @@ export function weeklyReportFixture(over: Partial<WeeklyReport> = {}): WeeklyRep
         totals: measures({ requests: 15 }),
       },
       services: {
-        lines: [{ ...measures({ requests: 8 }), owner: "build-bot", ownerKind: "service", tool: null }],
+        lines: [
+          { ...measures({ requests: 8 }), owner: "build-bot", ownerKind: "service", tool: null },
+        ],
         totals: measures({ requests: 8 }),
       },
       unknownKind: { lines: [], totals: zero },

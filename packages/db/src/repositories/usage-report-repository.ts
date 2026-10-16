@@ -66,7 +66,11 @@ export interface UsageReportRepository {
    * the claimed attempts. The exactly-once capture of a period's failure ties to `true` here —
    * two deliverers racing to give up produce one transition and one capture.
    */
-  markPendingFailed(periodStart: string, claimedAttempts: number, lastError: string): Promise<boolean>
+  markPendingFailed(
+    periodStart: string,
+    claimedAttempts: number,
+    lastError: string,
+  ): Promise<boolean>
   /**
    * A re-send's outcome write: `failed` + redacted `last_error` whatever the prior status was
    * (a failed re-send of a `sent` week marks it `failed`), still conditional on the claimed
