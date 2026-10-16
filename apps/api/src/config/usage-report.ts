@@ -138,6 +138,24 @@ export function anchorOffsetMinutes(
   return (config.weekday - 1) * 1_440 + config.hourUtc * 60 + config.settleMinutes
 }
 
+/**
+ * The slowest tick as the firing-window refusal displays it. The comparison is exact; the display
+ * rounds, and the rounding must never land on the window itself: "leaving 13 minutes … = 13"
+ * reads as a window refused for being equal to itself, hiding the fraction (13.4) that actually
+ * closed it. One decimal keeps the fraction visible; when the tenth also collapses onto the
+ * window (13.04), round up instead — the displayed tick must be one the window visibly fails to
+ * exceed. A tick exactly equal to the window keeps its decimal ("13.0"): that refusal *is* the
+ * equality, and the decimal says the display is the real value rather than a rounding.
+ */
+export function displayedSlowestTick(slowestTick: number, windowMinutes: number): string {
+  const nearest = Math.round(slowestTick)
+  if (nearest !== windowMinutes) return String(nearest)
+  const tenth = slowestTick.toFixed(1)
+  if (Number(tenth) !== windowMinutes) return tenth
+  const roundedUp = Math.ceil(slowestTick)
+  return roundedUp === windowMinutes ? tenth : String(roundedUp)
+}
+
 export function readUsageReportEnv(
   raw: {
     USAGE_REPORT_INTERVAL_MINUTES?: number
@@ -208,14 +226,14 @@ export function readUsageReportEnv(
           ? "USAGE_REPORT_SETTLE_MINUTES"
           : "USAGE_REPORT_INTERVAL_MINUTES",
       ],
-      // The comparison above stays exact; only the display rounds, so the message never shows a
-      // fractional minute count that no setting can produce.
+      // The comparison above stays exact; only the display rounds, and it never rounds onto the
+      // window itself — see displayedSlowestTick.
       message:
         `USAGE_REPORT_WEEKDAY, USAGE_REPORT_HOUR_UTC and USAGE_REPORT_SETTLE_MINUTES add up to ` +
         `${offset} minutes after Monday 00:00 UTC, leaving ${window} minutes of the week to fire in, ` +
         `which must exceed one slowest tick (USAGE_REPORT_INTERVAL_MINUTES ${intervalMinutes} x ` +
         `(1 + SCHEDULER_JITTER_FRACTION ${jitter}) + ${TICK_WORK_MINUTES} minutes of work = ` +
-        `${Math.round(slowestTick)}): a tick could step over the whole window and the week would never be reported`,
+        `${displayedSlowestTick(slowestTick, window)}): a tick could step over the whole window and the week would never be reported`,
     })
     return undefined
   }

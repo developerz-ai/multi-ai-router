@@ -13,7 +13,8 @@ export interface UsageCustomRangeProps {
  * The fifth window: a `from`/`to` the server has always accepted, reachable from the console.
  * A `<form>` rather than a live-updating pair of inputs — nothing fires until the operator presses
  * Apply, so a half-typed date never sends a request for a nonsense range. The inputs follow the
- * range in the URL, so a deep link to a custom range shows the dates it is showing.
+ * range in the URL: a deep link to a custom range shows the dates it is showing, and a named
+ * window shows empty inputs rather than the dates of a range the page has left.
  */
 export function UsageCustomRange(props: UsageCustomRangeProps) {
   const [from, setFrom] = createSignal("")
@@ -25,6 +26,11 @@ export function UsageCustomRange(props: UsageCustomRangeProps) {
     if (isCustomRange(range)) {
       setFrom(toDateTimeInput(range.from))
       setTo(toDateTimeInput(range.to))
+    } else {
+      // A named window leaves the inputs holding the last custom dates: clear them, so the form
+      // never offers to re-apply a range the page has already left (#258).
+      setFrom("")
+      setTo("")
     }
     setError(null)
   })

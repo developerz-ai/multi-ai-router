@@ -171,6 +171,42 @@ describe("weekly report env", () => {
       expect(error.message).toContain("= 9)")
       expect(error.message).not.toContain("8.75")
     })
+
+    test("a refusal never displays a tick rounded onto the window itself (#258)", () => {
+      // Interval 8 at jitter 0.05: the slowest tick is 8 x 1.05 + 5 = 13.4 minutes; settle 47
+      // leaves a 13 minute window. Refused — and plain rounding would print "= 13" against
+      // "leaving 13 minutes": a window refused for being equal to itself, hiding the fraction
+      // that closed it. The display keeps the tenth instead.
+      const error = refused({
+        USAGE_REPORT_INTERVAL_MINUTES: "8",
+        SCHEDULER_JITTER_FRACTION: "0.05",
+        ...sunday,
+        USAGE_REPORT_SETTLE_MINUTES: "47",
+      })
+      expect(error.message).toContain("leaving 13 minutes")
+      expect(error.message).toContain("= 13.4)")
+      expect(error.message).not.toContain("= 13)")
+
+      // A tenth that still lands on the window (8 x 1.005 + 5 = 13.04, "13.0") reads equal too,
+      // so the display rounds up: the operator sees a tick the window visibly fails to exceed.
+      const collapsed = refused({
+        USAGE_REPORT_INTERVAL_MINUTES: "8",
+        SCHEDULER_JITTER_FRACTION: "0.005",
+        ...sunday,
+        USAGE_REPORT_SETTLE_MINUTES: "47",
+      })
+      expect(collapsed.message).toContain("= 14)")
+
+      // A tick exactly equal to the window is refused for that equality — "13.0" against
+      // "leaving 13 minutes" says the displayed equality is the real value, not a rounding.
+      const exact = refused({
+        USAGE_REPORT_INTERVAL_MINUTES: "8",
+        SCHEDULER_JITTER_FRACTION: "0",
+        ...sunday,
+        USAGE_REPORT_SETTLE_MINUTES: "47",
+      })
+      expect(exact.message).toContain("= 13.0)")
+    })
   })
 
   describe("delivery: USAGE_REPORT_DISCORD_WEBHOOK_URL and the attempt cap", () => {

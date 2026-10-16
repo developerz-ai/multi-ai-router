@@ -21,6 +21,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The Discord webhook URL is treated as a credential: `apps/api/src/logging/redact.ts` redacts it — token path segment included — across `discord.com`, `discordapp.com`, `ptb.`/`canary.` hosts, an optional `/api/v<N>/` prefix and `?wait=` / `?thread_id=` query suffixes, in log lines, HTTP error bodies, `usage_reports.last_error`, scheduler error text, the Settings task outcome and the captured Sentry event (message, breadcrumbs, extra). Env validation for the URL never echoes the value.
 - `USAGE_REPORT_DISCORD_WEBHOOK_URL` now accepts only an `https` URL on `discord.com`, `discordapp.com`, `ptb.discord.com` or `canary.discord.com` whose path starts with `/api/webhooks/` — exactly the shape the redactor recognizes. An `http` URL, a proxied/foreign host or a wrong path is refused at boot, naming the variable and never echoing the value; previously any absolute URL passed, and a URL the redactor did not recognize would have leaked unredacted into `usage_reports.last_error`, log lines and Sentry captures.
 
+## [2.37.10] — 2026-10-16
+
+### Fixed
+
+- A hand-edited Usage-page link with a non-ISO `from`/`to` (`?from=2026-10-01`) now falls back to the default 7-day window instead of reaching the API's `400` through the error boundary: the console's URL parser and the API's window schema gate on one shared ISO shape (`isoDatetimeSchema` in `@multi-ai-router/core`), so the two sides cannot drift apart (#258).
+- The Usage page's custom-range inputs no longer hold stale dates after switching to a named window — the form clears them, so it never offers to re-apply a range the page has already left (#258).
+- The `zai` price source records its 2026-10-15 vendor-page verification instead of reading `inherited` with `verifiedAt: null` — #256 read docs.z.ai on that date, and the provenance list said otherwise (#258).
+- The weekly report's firing-window refusal never displays a slowest tick rounded onto the window itself: 13.4 minutes against a 13-minute window refused while printing "= 13", which reads as a window refused for being equal to itself. The display keeps one decimal (`13.4`), rounds up when the decimal also lands on the window (`13.04` shows `14`), and keeps `13.0` for a tick exactly equal to the window; the comparison stays exact (#258).
+
+### Changed
+
+- `apps/web/test/unit/UsagePage.test.tsx` (386 lines) split by concern into `UsagePageUrl` / `UsagePageTiles` / `UsagePageBreakdowns` / `UsagePageReports` over a shared mount harness — a pure move, no test logic changed (#258).
+- The glm-5.3-flash pricing describe names the z.ai vendor list the row cites since #256, not the OpenRouter list its numbers originally came from (#258).
+
+### Documentation
+
+- `CONTRIBUTING.md` states the version-bump rule: an addition (a new price row, endpoint, env knob or provider) takes a minor bump; fixes, docs, tests and refactors take a patch (#258).
+- `docs/idea/09-deployment.md` follows the refusal-message display rule.
+
 ## [2.37.9] — 2026-10-16
 
 ### Fixed
@@ -1441,4 +1460,5 @@ your tooling config.
 [2.37.6]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.37.6
 [2.37.7]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.37.7
 [2.37.9]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.37.9
+[2.37.10]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.37.10
 [2.38.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.38.0
