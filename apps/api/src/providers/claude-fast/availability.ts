@@ -12,21 +12,34 @@ const VERIFIED_BINARY = "bc1aad9982c7b59c7d889ff92595d61cf46e0a6eae074cb551d932a
 
 /** Boot-only calibration check, including the image's staged PATH binary after dependency pruning. */
 export function fastProfileAvailable(cliOverride: string | null): boolean {
-  if (cliOverride !== null || Bun.version !== "1.4.2") return false
+  return fastProfileState(cliOverride) === "verified"
+}
+
+export function fastProfileState(
+  cliOverride: string | null,
+): "verified" | "override" | "runtime" | "cli" | "manifest" | "checksum" | "unavailable" {
+  if (cliOverride !== null) return "override"
+  if (Bun.version !== "1.4.2") return "runtime"
   try {
     const resolved = resolveClaudeCli(createCliProbe({ override: cliOverride }))
-    if (!resolved.ok) return false
-    const require = createRequire(import.meta.url)
-    const main = require.resolve("@anthropic-ai/claude-agent-sdk")
+    if (!resolved.ok) return "cli"
+    let manifestPath: string | URL
+    try {
+      const require = createRequire(import.meta.url)
+      manifestPath = join(
+        dirname(require.resolve("@anthropic-ai/claude-agent-sdk")),
+        "manifest.json",
+      )
+    } catch {
+      // The image copies root node_modules, not workspace links; the SDK is bundled into the API.
+      manifestPath = new URL("../libexec/claude-manifest.json", import.meta.url)
+    }
     const manifest = z.object({ version: z.literal(CLAUDE_FAST_CLI_VERSION) })
-    if (
-      !manifest.safeParse(JSON.parse(readFileSync(join(dirname(main), "manifest.json"), "utf8")))
-        .success
-    )
-      return false
-    return binaryChecksum(resolved.path) === VERIFIED_BINARY
+    if (!manifest.safeParse(JSON.parse(readFileSync(manifestPath, "utf8"))).success)
+      return "manifest"
+    return binaryChecksum(resolved.path) === VERIFIED_BINARY ? "verified" : "checksum"
   } catch {
-    return false
+    return "unavailable"
   }
 }
 

@@ -1,5 +1,5 @@
 import { createSdkInvoker, createSdkModelLister, createSdkUsageGaugeProbe } from "../providers"
-import { fastProfileAvailable } from "../providers/claude-fast/availability"
+import { fastProfileState } from "../providers/claude-fast/availability"
 import { readFastCredential } from "../providers/claude-fast/credential"
 import { createFastInvoker } from "../providers/claude-fast/invoker"
 import { UpstreamAdmissionRefused } from "../providers/upstream-admission"
@@ -100,10 +100,17 @@ export function createRequestServices(
         value: detail.value,
       }),
   })
-  const fastEnabled = env.claudeFastMode && fastProfileAvailable(env.claudeCliPath)
+  const fastProfile = env.claudeFastMode ? fastProfileState(env.claudeCliPath) : "disabled"
+  const fastEnabled = fastProfile === "verified"
   if (env.claudeFastMode && !fastEnabled)
     logger.warn("Claude fast mode profile is unverified for this CLI/runtime; using SDK", {
       component: "claude-fast",
+      reason: fastProfile,
+    })
+  if (fastEnabled)
+    logger.info("Claude subscription inference uses direct HTTP", {
+      component: "claude-fast",
+      profile: fastProfile,
     })
   const fastInvoker = fastEnabled
     ? createFastInvoker({
