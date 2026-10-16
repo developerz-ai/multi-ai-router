@@ -73,6 +73,8 @@ describe("owner/tool reads fold the facts before the label join", () => {
     await createUsageHistoryRepository(db).breakdown(window, "apiKeyId", 101, {})
     const sql = render()
     expect(sql).not.toContain("unnest(")
-    expect(sql).toContain("group by api_key_id")
+    expect(sql).not.toContain("folded")
+    // The outer grouping renders through sql.identifier, hence the quoting.
+    expect(sql).toContain(`group by "api_key_id"`)
   })
 })
