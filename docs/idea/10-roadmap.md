@@ -38,7 +38,6 @@ Named, with the reason. Not "someday" — a deliberate not-now.
 | **Subprocess pooling for the Agent-SDK path** | Claude subscriptions spawn a `claude` subprocess per request (M4). Reusing or pooling those processes is the obvious optimization and the obvious correctness hazard: sessions, config directories, and cancellation all become shared state, and the SDK's own lifecycle assumptions decide whether it is safe at all. **Measure first** — the ceiling is unknown, and tuning against a guess is how you get a cross-account leak. |
 | **BullMQ + Dragonfly job queue** | The house default for background jobs, and a decision on record rather than an omission. Background work here is small, periodic, and idempotent — sweeps, rollups, a state purge — with no fan-out, no user-submitted work, and no dead-letter needs. A broker means a third container, a third failure mode, and a third thing to back up, in a product whose install is three env vars and `docker compose up`. In-process jittered timers plus a Postgres advisory lock per task give the same guarantees for free ([01-architecture.md](01-architecture.md#background-work-and-scheduling)). **Revisit only if a genuinely queue-shaped workload appears** — per-request async work, user-triggered long jobs, or fan-out across many workers. |
 | **Per-key spend budgets** | Needs a trusted cost model first. Cost estimation lands in M8 from a static price table; enforcing money against an estimate is worse than not enforcing it. Current state: there is no priced pay-per-use account yet, so there is no spend to budget against; revisit after two weekly reports (#236). |
-| **Webhooks** | No consumer yet. Account health changes are visible in the UI and on `/metrics`; a push channel is speculative until someone needs one. |
 | **Response caching** | Explicit non-goal for v1. Prompt caching is the upstream's job and is per-account — which is exactly why routing is sticky by default. |
 | **OAuth encryption-key rotation** | Rotating `ENCRYPTION_KEY` means re-encrypting every stored OAuth credential in place, online, with a rollback that survives a crash mid-rotation — a migration with a live data plane on top of it. Worth doing; not worth doing before the credentials it protects exist in the field. (The reverse-engineered client ids are a separate matter and are handled by editing one provider file — see Maintenance posture.) |
 | **Chart library choice** | The usage data shape is specified; the renderer is not. Picking a charting library before the dashboard's real queries exist is a bet placed blind. |
@@ -70,6 +69,14 @@ Detail: [03-providers.md](03-providers.md) for the per-provider constants,
 
 Questions that were open here and are not any more. Kept so the answer is findable next to the
 question it settles, and so nobody re-opens one by reading the old wording.
+
+### Webhooks — **first consumer: the weekly usage report**
+
+Deferred for want of a consumer. The consumer arrived: the weekly usage report (#227) is delivered
+to a Discord incoming webhook (#229) by its own task — claim-before-post on the stored row, embed
+plus CSV attachment, retries on the cap, exactly one capture per failed period, and the URL treated
+as a credential throughout (07-security.md). The mechanism is generic enough for a second consumer;
+nothing about it is Discord-shaped beyond the renderer and the redaction pattern.
 
 ### Cost attribution for subscription accounts — **notional, and per Account**
 

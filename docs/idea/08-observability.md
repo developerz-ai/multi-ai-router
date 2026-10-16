@@ -412,6 +412,38 @@ Rows are swept by the janitor on `period_start`, strictly older than `RETENTION_
 Monday, `404` if absent) and `POST /api/admin/usage/reports/preview` (builds the last complete week
 and stores nothing).
 
+**Delivery** (issue #229). A stored report is delivered to a Discord incoming webhook by the same
+`usage_weekly_report` task — every post-anchor tick, not just the generating one, so a retryable
+failure is retried by the next tick. Each tick delivers only the latest period's row and only while
+it is `pending` with attempts below `USAGE_REPORT_MAX_DELIVERY_ATTEMPTS` (default 6): older
+`pending` or `not_configured` rows are never posted by the task, whatever piled up before delivery
+shipped. Before any request the deliverer claims the row with a conditional
+`UPDATE ... SET delivery_attempts = delivery_attempts + 1 WHERE delivery_status = $read AND
+delivery_attempts = $read RETURNING` — no row back means someone else claimed it and no request is
+made; every outcome write is conditional on the claimed attempts value, so a stale writer's result
+is a no-op. Unset `USAGE_REPORT_DISCORD_WEBHOOK_URL` records `not_configured` and makes no network
+call. A 5xx or 429 retries on later ticks up to the cap; any other 4xx stops at once (the webhook is
+gone). Give-up or a terminal 4xx writes `failed` with a redacted `last_error` and exactly one
+`captureException` per period, tied to the persisted `pending → failed` transition.
+
+The post is one Discord webhook execute request: an embed with the people and services tables
+(truncated with "+N more" inside Discord's documented embed limits — named constants in
+`apps/api/src/services/usage-report/discord-limits.ts`) and a link to the filtered Usage view when
+`PUBLIC_URL` is set, plus the report CSV as an attachment. The embed and CSV render **only what the
+stored payload holds** — owner, owner kind, tool, buckets, totals, top models and the overflow
+lines' key and pool names — and never an account label or any live state re-read.
+
+An operator re-sends from the console's reports list:
+`POST /api/admin/usage/reports/:periodStart/deliver` (admin session + CSRF) claims the row the same
+way and posts again — a `sent` week posts again on purpose, and the cap never limits a re-send. It
+answers `200 { periodStart, deliveryStatus, deliveryAttempts, deliveredAt }`; a malformed or
+non-Monday period is `400`, an absent week is `404` with no network call and no generation, and an
+unset webhook records `not_configured` and makes no request. A failed re-send answers
+`200 { deliveryStatus: "failed", lastError }` — never a 5xx, which the error handler would capture a
+second time — writes `failed` with the redacted reason whatever the row's prior status, captures
+exactly once per failed call, and writes one `audit_events` row (kind `usage_report.delivered`,
+subject the period start, `detail.outcome` carrying the result).
+
 The week is read at key x account x pool x model from the same three-source union as the usage
 summary (`historySource`), so the report's totals equal the summary's for the same week. The overflow
 share reads attempts per account and pool from the same union (legacy daily rows carry that grain
@@ -432,7 +464,7 @@ a setting.
 | `/accounts` table | Same live per-row totals — trend, count and both spend figures inside one compact usage cell (`TrafficCell`, no separate COST column since #94) — plus current quota utilization and reset ([below](#quota-resets-and-manual-re-check)) |
 | Account detail | Full measure set, plus per-window quota history |
 | `/pools` | Per-pool totals and the observed split across members — the answer to "is my policy doing what I set it to" |
-| `/usage` | The dedicated screen: any dimension (key, owner, tool, account, pool, model), any window, charts and leaderboards, the [failure split](#the-failure-split) under the error-rate tile, the live request feed below them, and the stored [weekly reports](#weekly-usage-report) as a read-only list. Owner, tool and model filters narrow every figure; see [the Usage page](#the-usage-page) |
+| `/usage` | The dedicated screen: any dimension (key, owner, tool, account, pool, model), any window, charts and leaderboards, the [failure split](#the-failure-split) under the error-rate tile, the live request feed below them, and the stored [weekly reports](#weekly-usage-report) with a per-row Resend control. Owner, tool and model filters narrow every figure; see [the Usage page](#the-usage-page) |
 
 #### The Usage page
 
@@ -618,7 +650,7 @@ immediately if it is healthy.
 | `POST /api/admin/accounts/:id/recheck` | admin session | Manual re-check. `POST /api/admin/accounts/recheck` re-checks every account. For Claude subscriptions it also carries the credential probe, reported as `auth` | `200` always — a cooldown refusal is `rechecked: false`, not `429` |
 | `GET /api/admin/usage` | admin session | Totals, series and breakdowns per key / account / pool / model over a window, plus the [failure split](#the-failure-split) behind the error rate. Narrowed by the six repeated-param [filters](#filters) (`owner`, `tool`, `model`, `keyId`, `poolId`, `accountId`) | `200`; `400` on a malformed window, a non-uuid id, an empty or NUL-bearing value, more than 500 values, or any unknown query key |
 | `GET /api/admin/usage/recent` | admin session | The [live request feed](#the-live-request-feed): individual attempts, newest first. `limit` (1..200), `failed` or `outcome` (never both), `requestId` (matches either id) | `200`, `400` on a limit out of range or both filters at once |
-| `GET /api/admin/usage/reports`, `GET /api/admin/usage/reports/:periodStart`, `POST /api/admin/usage/reports/preview` | admin session (`POST` needs CSRF) | The stored [weekly usage reports](#weekly-usage-report): the list, one week by its Monday, and a preview of the last complete week that stores nothing | `200`, `400` (malformed or non-Monday `:periodStart`), `404` (no report stored for that week) |
+| `GET /api/admin/usage/reports`, `GET /api/admin/usage/reports/:periodStart`, `POST /api/admin/usage/reports/preview`, `POST /api/admin/usage/reports/:periodStart/deliver` | admin session (`POST` needs CSRF) | The stored [weekly usage reports](#weekly-usage-report): the list, one week by its Monday, a preview of the last complete week that stores nothing, and the Discord re-send | `200`, `400` (malformed or non-Monday `:periodStart`), `404` (no report stored for that week); the re-send answers `200` with `deliveryStatus` even when delivery itself failed |
 
 `/healthz` never touches the database.
 
