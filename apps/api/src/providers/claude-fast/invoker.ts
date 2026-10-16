@@ -7,7 +7,7 @@ import type { FastCredential } from "./credential"
 import { FAST_URL, fastHeaders } from "./profile"
 import { reportFastQuota } from "./quota"
 import { prepareFastRequest, readFastRequest } from "./request"
-import { collectFastResponse, sanitizeFastError } from "./response"
+import { collectFastResponse, sanitizeFastError, validateFastResponse } from "./response"
 
 export interface FastInvokerDeps {
   readonly concurrency: SdkConcurrency
@@ -32,21 +32,7 @@ export function createFastInvoker(deps: FastInvokerDeps): SdkInvoker {
     input.signal.throwIfAborted()
     const model = deps.resolveModel(input.accountId, input.model)
     if (!model) return fallback(input, "model")
-    const credential = await deps.credential(input.accountId, input.configDir)
-    if (!credential || credential.expiresAt <= (deps.now?.() ?? Date.now()) + CLI_REFRESH_LEAD_MS)
-      return fallback(input, "credential")
     const body = readFastRequest(input.body)
-    const contextTag = model.endsWith("[1m]")
-    const prepared = prepareFastRequest({
-      request: body,
-      model: contextTag ? model.slice(0, -4) : model,
-      identity: credential,
-      accountId: input.accountId,
-      apiKeyId: input.apiKeyId ?? "",
-      sessionKey:
-        input.sessionKey ?? input.clientHeaders?.get("x-claude-code-session-id") ?? input.configDir,
-    })
-    if (!prepared) return fallback(input, "profile")
     const slot = await deps.concurrency.acquire(input.accountId, input.signal)
     let released = false
     const release = () => {
@@ -58,6 +44,30 @@ export function createFastInvoker(deps: FastInvokerDeps): SdkInvoker {
     input.signal.addEventListener("abort", release, { once: true })
     try {
       input.signal.throwIfAborted()
+      const credential = await deps.credential(input.accountId, input.configDir)
+      if (
+        !credential ||
+        credential.expiresAt <= (deps.now?.() ?? Date.now()) + CLI_REFRESH_LEAD_MS
+      ) {
+        release()
+        return fallback(input, "credential")
+      }
+      const contextTag = model.endsWith("[1m]")
+      const prepared = prepareFastRequest({
+        request: body,
+        model: contextTag ? model.slice(0, -4) : model,
+        identity: credential,
+        accountId: input.accountId,
+        apiKeyId: input.apiKeyId ?? "",
+        sessionKey:
+          input.sessionKey ??
+          input.clientHeaders?.get("x-claude-code-session-id") ??
+          input.configDir,
+      })
+      if (!prepared) {
+        release()
+        return fallback(input, "profile")
+      }
       const request = new Request(FAST_URL, {
         method: "POST",
         signal: input.signal,
@@ -76,7 +86,7 @@ export function createFastInvoker(deps: FastInvokerDeps): SdkInvoker {
       })
       input.beforeUpstreamStart?.()
       input.onUpstreamStarted?.()
-      const response = await call(request)
+      let response = await call(request)
       reportFastQuota(response.headers, input.onRateLimit)
       if (response.status >= 300 && response.status < 400) {
         await response.body?.cancel()
@@ -95,6 +105,11 @@ export function createFastInvoker(deps: FastInvokerDeps): SdkInvoker {
         } finally {
           release()
         }
+      }
+      response = await validateFastResponse(response)
+      if (!response.ok) {
+        release()
+        return response
       }
       if (!prepared.streaming) {
         try {

@@ -9,7 +9,8 @@ This is a router transport setting; it does not select Anthropic's paid fast inf
 Continue setting up accounts through the existing SDK/CLI login flow. The SDK alone owns
 refresh and background credential keepalive. Fast inference reads the selected account's
 `.credentials.json` and `.claude.json` under its metadata ownership fence, never HOME or another
-account directory. The access token is used only for the fixed Anthropic HTTPS endpoint.
+account directory. Credentials are read after concurrency admission so a queued request cannot reuse a stale
+pre-queue snapshot. The access token is used only for the fixed Anthropic HTTPS endpoint.
 Client authentication headers are discarded; redirects are refused and provider error prose
 is replaced with safe router-authored messages.
 
@@ -47,7 +48,9 @@ Explicit cache controls survive unchanged, including helper `5m` TTLs. If none a
 fast mode adds up to three native-style `1h` breakpoints to the identity/system prefix and last
 message. Existing thinking blocks are not assigned cache controls. Upstream cache usage counters
 remain available to normal accounting. Streaming calls relay upstream SSE without folding;
-nonstream calls fold it to a Messages response and refuse incomplete streams.
+nonstream calls fold it to a Messages response and refuse incomplete or malformed event
+lifecycles. Both paths require an SSE media type and a response body before accepting HTTP success;
+proxy HTML/JSON cannot masquerade as successful inference. Valid streaming bodies remain unchanged.
 
 ## Evidence and rollout
 
