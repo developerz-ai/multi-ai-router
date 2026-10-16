@@ -308,8 +308,9 @@ inside it, and `bin/bench-usage` is the tripwire that proves it still does.
 
 **Measured.** At the #250 fixture scale — a 30-day window over two v2 daily rollup tables of
 ~180k rows each plus receipts (~400k windowed facts) and ~200k raw records — the pre-fix summary
-fanned out to 24 statements inside one repeatable-read snapshot and took 351.8 s wall (~176 s
-summed EXPLAIN execution) on a loaded host (load ~7), against the 60 s idle bound. The single
+fanned out to 24 statements inside one repeatable-read snapshot and took 351.8 s wall on the
+cold seeded fixture (~176 s summed EXPLAIN execution; 149.7 s warm, on the bench harness) on a
+loaded host (load ~7), against the 60 s idle bound. The single
 dominant statement was the per-key series narrowed to the 101 selected key ids: its id filter was
 a 101-term `::text is not distinct from` OR-chain, so every row of the window scan paid up to 101
 uuid→text casts and text comparisons — 59.5 s execution, 156,600 rows removed by that filter,
@@ -336,14 +337,18 @@ into one `grouping sets` pass, a coarser series grain, and the rollup grain itse
 
 `bin/bench-usage` seeds the fixture into a throwaway database, runs the real `readSummary`, and
 re-runs every statement under EXPLAIN (ANALYZE, BUFFERS). It exits non-zero when the wall clock
-crosses `--budget-ms` (default 240 s; the pre-fix summary measured 351.8 s wall, the post-fix
-201.7 s on the same loaded host) or the total shared-buffer traffic crosses `--buffers-budget`
-(default 1.2 M, ~0.95 M measured; a scan-volume regression — the day bound on the receipts arm,
-say — moves buffers before it moves timings, and buffers do not skew with host load). It is
-deliberately not in `bin/check`, the same way `bin/bench` is not: a timing gate on a shared
-runner flakes — on this one the same fixed build measured 201.7 s and 451.6 s wall in two runs
-an hour apart, which is why the plan-shape pins live in the unit tests and the budgets here are
-regression tripwires, not SLOs.
+crosses `--budget-ms` (default 240 s) or the total shared-buffer traffic crosses
+`--buffers-budget` (default 1.2 M, ~0.95 M measured; a scan-volume regression — the day bound on
+the receipts arm, say — moves buffers before it moves timings, and buffers do not skew with host
+load). The two budgets catch different regressions, and neither is a before/after discriminator:
+on the same harness against the same warm fixture minutes apart the pre-fix build measured
+149.7 s wall and the post-fix build 43.9 s (3.4×; the per-label history client times fell
+3.7–7.7× at identical buffer traffic, ~931k vs ~946k — the win is per-row CPU, which is exactly
+the mechanism above), yet the cold pre-fix dump was 351.8 s and a warm pre-fix run can slip
+under the budget. It is deliberately not in `bin/check`, the same way `bin/bench` is not: a
+timing gate on a shared runner flakes — on this one the same fixed build measured 43.9 s,
+201.7 s and 451.6 s wall across one evening, which is why the plan-shape pins live in the unit
+tests and the budgets here are regression tripwires, not SLOs.
 
 **Beyond the bound.** No statement timeout is added under the idle timeout and the default
 window is unchanged: a smaller statement bound would only swap the error the operator sees for

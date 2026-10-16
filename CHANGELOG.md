@@ -15,7 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- `bin/bench-usage`: seeds the #250 fixture into a throwaway database, runs the real `readSummary` in its repeatable-read snapshot, re-runs every statement under EXPLAIN (ANALYZE, BUFFERS), and exits non-zero when the wall clock (default budget 240s; the pre-fix summary measured 351.8s wall, the post-fix 201.7s on the same loaded host) or the total shared-buffer traffic (default 1.2M; ~0.95M measured) crosses its budget. Deliberately not in `bin/check` — a timing gate on a shared runner flakes; the plan-shape pins live in the repository unit tests.
+- `bin/bench-usage`: seeds the #250 fixture into a throwaway database, runs the real `readSummary` in its repeatable-read snapshot, re-runs every statement under EXPLAIN (ANALYZE, BUFFERS), and exits non-zero when the wall clock (default budget 240s; on the same harness against the same warm fixture the pre-fix build measured 149.7s wall and the post-fix build 43.9s — the cold pre-fix dump was 351.8s) or the total shared-buffer traffic (default 1.2M; ~0.95M measured, pre- and post-fix alike — the buffer leg guards scan volume, the wall leg per-row cost) crosses its budget. Deliberately not in `bin/check` — a timing gate on a shared runner flakes; the plan-shape pins live in the repository unit tests.
 
 ## [2.39.3] — 2026-10-16
 
