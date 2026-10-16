@@ -54,6 +54,16 @@ export function historySource(window: UsageWindow, hourly: boolean, filter: Usag
     .toISOString()
     .slice(0, 10)
   const end = new Date(Math.floor(window.to.getTime() / dayMs) * dayMs).toISOString().slice(0, 10)
+  // The first and last UTC day any instant of the window can fall on. Every receipt the window
+  // admits has `day` in [startDay, endDay] (its event-time is in [from, to)), so bounding the
+  // contributions scan to that range drops no row the event-time filter would have kept — it only
+  // stops `day_idx` from walking back to the retention horizon for the partial start edge.
+  const startDay = new Date(Math.floor(window.from.getTime() / dayMs) * dayMs)
+    .toISOString()
+    .slice(0, 10)
+  const endDay = new Date(Math.floor((window.to.getTime() - 1) / dayMs) * dayMs)
+    .toISOString()
+    .slice(0, 10)
   const horizon = sql`coalesce((select retention_before_day from ${usageHistoryState} where id = 'v2'), '-infinity'::date)`
   const since = unpricedSinceSql()
   // The unpriced measure counts only days on or after `since`, in every branch that can carry it —
@@ -80,6 +90,7 @@ export function historySource(window: UsageWindow, hourly: boolean, filter: Usag
       sql`, `,
     )}, case when day >= ${since} then (payload->>'unpricedAttempts')::numeric end as unpriced_attempts
     from ${usageContributions} where source in ('live','legacy_unbanked','legacy_overlap') and day >= ${horizon}
+      and day >= ${startDay}::date and day <= ${endDay}::date
       and (payload->>'eventAt')::timestamptz >= ${window.from.toISOString()} and (payload->>'eventAt')::timestamptz < ${window.to.toISOString()}
       ${hourly ? sql`` : sql`and (day < ${first}::date or day >= ${end}::date)`}${payloadFilter}`)
   return sql.join(parts, sql` union all `)

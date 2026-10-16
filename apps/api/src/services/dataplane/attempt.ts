@@ -164,7 +164,7 @@ export async function runAttempt(input: AttemptInput): Promise<AttemptOutcome> {
   const classified = plan.driver.classifyFailure({
     status: response.status,
     headers: response.headers,
-    body: parseJson(bodyText),
+    body: classifiableBody(bodyText),
   })
   const classification =
     classified === null
@@ -262,11 +262,19 @@ export function attemptDeadline(timeoutMs: number, client: AbortSignal | undefin
   return client === undefined ? timeout : AbortSignal.any([timeout, client])
 }
 
-function parseJson(text: string): unknown {
+/**
+ * The already-sanitized error body in the shape the driver's classifier reads: a parsed object when
+ * it is JSON, otherwise the raw (redacted) string. A gateway in front of a provider may answer with
+ * plain text or HTML, and the classifier carries that as the upstream message
+ * (`providers/failure/error-body.ts` accepts a string) — returning `undefined` here dropped it, so
+ * four prod `400`s surfaced with no `upstreamMessage`. Empty stays `undefined`: no body, no facts.
+ * The text has already passed `sanitizeErrorBody`, so this adds no credential exposure.
+ */
+function classifiableBody(text: string): unknown {
   if (text.length === 0) return undefined
   try {
     return JSON.parse(text)
   } catch {
-    return undefined
+    return text
   }
 }

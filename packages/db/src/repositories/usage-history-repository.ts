@@ -30,6 +30,25 @@ export function createUsageHistoryRepository(
 ): UsageHistoryRepository {
   const read = async <T>(query: ReturnType<typeof sql>) =>
     [...(await db.execute(query))] as unknown as T[]
+  // Shared by `clock` and `coverage` so the earliest retained instant is computed byte-identically
+  // either way: the window-resolution step reads only these two, never the heavier checks below.
+  const boundsCte = sql`bounds as (select coalesce((select retention_before_day from ${usageHistoryState} where id='v2'),'-infinity'::date) as horizon)`
+  const firstReceiptCte = sql`first_receipt_day as (select day from ${usageContributions},bounds where day >= horizon order by day limit 1)`
+  const earliestExpr = sql`least(
+          (select day::timestamp at time zone 'UTC' from ${usageDaily},bounds where day >= horizon order by day limit 1),
+          (select min((payload->>'eventAt')::timestamptz) from ${usageContributions} where day = (select day from first_receipt_day)),
+          (select created_at from ${usageRecords},bounds where created_at >= (horizon::timestamp at time zone 'UTC') order by created_at limit 1)
+        )`
+  const clock = async (): Promise<Pick<UsageHistoryCoverage, "dbNow" | "earliestAt">> => {
+    const [row] = await read<{ now: Date; earliest: Date | null }>(
+      sql`with ${boundsCte}, ${firstReceiptCte} select clock_timestamp() as now, ${earliestExpr} as earliest`,
+    )
+    if (row === undefined) throw new Error("usage clock unavailable")
+    return {
+      dbNow: new Date(row.now),
+      earliestAt: row.earliest === null ? null : new Date(row.earliest),
+    }
+  }
   const coverage = async (window?: UsageWindow): Promise<UsageHistoryCoverage> => {
     const from = window?.from ?? new Date(0),
       to = window?.to ?? new Date("9999-01-01")
@@ -41,14 +60,10 @@ export function createUsageHistoryRepository(
       legacy: boolean
       pending: boolean
     }>(sql`
-      with bounds as (select coalesce((select retention_before_day from ${usageHistoryState} where id='v2'),'-infinity'::date) as horizon),
-      first_receipt_day as (select day from ${usageContributions},bounds where day >= horizon order by day limit 1)
+      with ${boundsCte},
+      ${firstReceiptCte}
       select clock_timestamp() as now,
-        least(
-          (select day::timestamp at time zone 'UTC' from ${usageDaily},bounds where day >= horizon order by day limit 1),
-          (select min((payload->>'eventAt')::timestamptz) from ${usageContributions} where day = (select day from first_receipt_day)),
-          (select created_at from ${usageRecords},bounds where created_at >= (horizon::timestamp at time zone 'UTC') order by created_at limit 1)
-        ) as earliest,
+        ${earliestExpr} as earliest,
         (select min(created_at) from ${usageRecords} where created_at >= ${from.toISOString()} and created_at < ${to.toISOString()}) as "rawFrom", (select max(created_at) from ${usageRecords} where created_at >= ${from.toISOString()} and created_at < ${to.toISOString()}) as "rawTo",
         (exists(select 1 from ${usageDaily},bounds where day >= ${new Date(Math.floor(from.getTime() / 86400000) * 86400000).toISOString().slice(0, 10)}::date and day < ${new Date(Math.ceil(to.getTime() / 86400000) * 86400000).toISOString().slice(0, 10)}::date and day >= horizon)
           or exists(select 1 from ${usageContributions},bounds where day >= greatest(${new Date(Math.floor(from.getTime() / 86400000) * 86400000).toISOString().slice(0, 10)}::date,horizon) and day < ${new Date(Math.ceil(to.getTime() / 86400000) * 86400000).toISOString().slice(0, 10)}::date and source <> 'live' and (payload->>'eventAt')::timestamptz >= ${from.toISOString()} and (payload->>'eventAt')::timestamptz < ${to.toISOString()})) as legacy,
@@ -162,6 +177,7 @@ export function createUsageHistoryRepository(
       seriesQuery(window, bucket, dimension, width, ids, filter, attribution),
     )
   const repo: UsageHistoryRepository = {
+    clock,
     coverage,
     totals,
     breakdown,

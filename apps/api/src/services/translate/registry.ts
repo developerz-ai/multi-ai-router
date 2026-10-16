@@ -21,6 +21,7 @@ import type { DropSink } from "./shared/drops"
 import type { TranslatedResponse } from "./shared/response"
 import { translatedResponseError } from "./shared/response-error"
 import { applyResponsesEgressRules, type ResponsesEgressRules } from "./shared/responses-egress"
+import type { ThinkingDefaultMatcher } from "./shared/thinking-default"
 import type { StreamTranslator } from "./sse/emit"
 
 /**
@@ -78,6 +79,15 @@ export interface TranslationContext {
    * candidate for the same reason as `chatCeiling`. Absent means an ordinary Responses upstream.
    */
   readonly responsesEgress?: ResponsesEgressRules | undefined
+  /**
+   * Matches an upstream (post-alias) model id against the operator's think-by-default set
+   * (`OPENAI_CHAT_THINKING_DEFAULT_MODELS`). A matched model that is forced to call a tool on
+   * openai-chat egress gets `enable_thinking: false` emitted beside the force
+   * (`shared/thinking-default.ts`), applied where the per-attempt model is reapplied
+   * (`dataplane/translate-body.ts`). Absent, or matching nothing, means the dial is never emitted.
+   * Request-level config, so unlike `chatCeiling` it does not vary per candidate.
+   */
+  readonly thinkingDefaultModels?: ThinkingDefaultMatcher | undefined
   /**
    * Where a request translator reports a field it dropped by name (`shared/drops.ts`). Injected like
    * the clock: the translator stays pure and never logs, and the caller — which holds the request
@@ -153,6 +163,9 @@ const OPENAI_CHAT_TO_ANTHROPIC: TranslationPair = {
     }),
 }
 
+/** Anthropic requires `max_tokens`, so every body this pair writes carries `max_output_tokens`. */
+const ANTHROPIC_CEILING: ReadonlySet<string> = new Set(["max_output_tokens"])
+
 const ANTHROPIC_TO_OPENAI_RESPONSES: TranslationPair = {
   ingress: "anthropic",
   egress: "openai-responses",
@@ -162,6 +175,7 @@ const ANTHROPIC_TO_OPENAI_RESPONSES: TranslationPair = {
       anthropicToOpenAiResponsesRequest(body, { onDrop: context.onDrop }),
       context.responsesEgress,
       context.onDrop,
+      ANTHROPIC_CEILING,
     ),
   response: (body, context) =>
     openAiResponsesToAnthropicResponse(body, {

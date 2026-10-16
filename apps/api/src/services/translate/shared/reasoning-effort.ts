@@ -81,6 +81,36 @@ export function openAiEffortFromAnthropic(request: AnthropicReasoningRequest): s
   return "high"
 }
 
+const THINKING_YIELDS_TO_FORCED_TOOL =
+  "`thinking` beside a `tool_choice` that forces a tool is a pair the anthropic dialect refuses; " +
+  "dropped so the forced call is served"
+
+/**
+ * Toward openai-chat, the reasoning fields to translate once a forced tool is settled: an
+ * `enabled` / `adaptive` `thinking` beside a forced `tool_choice` is removed and reported, so it
+ * does not become a `reasoning_effort` bucket.
+ *
+ * Anthropic refuses that pair outright, and so do OpenAI-compatible chat vendors ("The tool_choice
+ * parameter does not support being set to required or object in thinking mode", Qwen, prod
+ * 2026-10-16). The force is the contract the caller will parse; thinking is a dial. The rule is the
+ * one `openai-chat-to-anthropic/request.ts` already applies in the other direction. An explicit
+ * `output_config.effort` is not thinking and is kept — Anthropic accepts it beside a forced tool.
+ * Not applied toward openai-responses, whose upstreams serve a forced function beside reasoning.
+ *
+ * @param forced whether the `tool_choice` that survived translation still forces a tool; a choice
+ * dropped with its tool forces nothing, and thinking then travels as asked.
+ */
+export function reasoningBesideToolChoice(
+  request: AnthropicReasoningRequest,
+  forced: boolean,
+  onDrop: DropSink,
+): AnthropicReasoningRequest {
+  const type = request.thinking?.type
+  if (!forced || (type !== "enabled" && type !== "adaptive")) return request
+  onDrop({ field: "thinking", reason: THINKING_YIELDS_TO_FORCED_TOOL })
+  return request.output_config === undefined ? {} : { output_config: request.output_config }
+}
+
 /**
  * Whether the client asked to see reasoning at all — thinking switched on, or an effort stated.
  * Toward Responses this is what asks the upstream for a reasoning summary to carry back.
