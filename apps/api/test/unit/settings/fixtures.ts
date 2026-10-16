@@ -7,6 +7,7 @@ import type {
   ScheduledTaskRunRow,
 } from "@multi-ai-router/db"
 import type { RetentionConfig } from "../../../src/config/env"
+import type { UsageReportConfig } from "../../../src/config/usage-report"
 import type { PriceAccount } from "../../../src/services/cost/coverage"
 import { createSettingsService, type SettingsService } from "../../../src/services/settings"
 
@@ -32,6 +33,20 @@ export const RETENTION: RetentionConfig = {
   revokedKeysDays: 15,
   oauthStateMinutes: 7,
   orphanConfigDirHours: 12,
+}
+
+/**
+ * The weekly-report config the settings fixtures run with (issue #229). Deliberately the shipped
+ * defaults with delivery off: the panel's boolean and `lastDeliveredAt` are what tests vary.
+ */
+export const USAGE_REPORT_CONFIG: UsageReportConfig = {
+  weekday: 1,
+  hourUtc: 0,
+  settleMinutes: 30,
+  maxRows: 50_000,
+  discordWebhookUrl: null,
+  maxDeliveryAttempts: 6,
+  deliveryTimeoutMs: 15_000,
 }
 
 /** What `scheduledTaskIntervals(env)` returns — the same map the running tasks are built from. */
@@ -167,6 +182,10 @@ export interface HarnessOptions {
   readonly now?: Date
   /** Defaults to null — most fixtures exercise the no-`PUBLIC_URL` deployment. */
   readonly publicUrl?: string | null
+  /** Defaults to null — most fixtures exercise the no-Discord-webhook deployment. */
+  readonly discordWebhookUrl?: string | null
+  /** What the weekly-report panel's `lastDeliveredAt` read answers; null means never delivered. */
+  readonly lastDeliveredAt?: Date | null
 }
 
 export interface Harness {
@@ -184,11 +203,16 @@ export function harness(options: HarnessOptions = {}): Harness {
     scheduledTasks: memoryTasks(options.runs),
     auditEvents: memoryAuditLog(options.auditLog ?? []),
     audit,
+    usageReports: { lastDeliveredAt: async () => options.lastDeliveredAt ?? null },
     env: {
       retention: RETENTION,
       logLevel: "warn",
       janitorIntervalMinutes: 42,
       publicUrl: options.publicUrl ?? null,
+      usageReport: {
+        ...USAGE_REPORT_CONFIG,
+        discordWebhookUrl: options.discordWebhookUrl ?? null,
+      },
     },
     intervals: INTERVALS,
     now: () => options.now ?? NOW,

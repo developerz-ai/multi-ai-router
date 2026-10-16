@@ -42,6 +42,7 @@ import {
   memoryPrices,
   memoryTasks,
   RETENTION,
+  USAGE_REPORT_CONFIG,
 } from "../unit/settings/fixtures"
 import { historyFixture } from "../unit/usage/history-fixture"
 
@@ -400,7 +401,14 @@ describe("the full app, mounted end to end", () => {
           scheduledTasks: memoryTasks(),
           auditEvents: memoryAuditLog([]),
           audit,
-          env: { retention: RETENTION, logLevel: "warn", janitorIntervalMinutes: 42 },
+          usageReports: { lastDeliveredAt: async () => null },
+          env: {
+            retention: RETENTION,
+            logLevel: "warn",
+            janitorIntervalMinutes: 42,
+            publicUrl: null,
+            usageReport: USAGE_REPORT_CONFIG,
+          },
           intervals: INTERVALS,
           now,
         }),

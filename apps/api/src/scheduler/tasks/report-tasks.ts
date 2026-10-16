@@ -13,6 +13,8 @@ export interface ReportTaskDeps {
    * and the admin endpoints share one builder.
    */
   readonly usageReports: UsageWeeklyReportDeps["reports"]
+  /** The Discord delivery service (issue #229). Absent: the task only generates and stores. */
+  readonly usageReportDelivery?: UsageWeeklyReportDeps["delivery"]
   readonly env: Pick<Env, "usageReport">
 }
 
@@ -25,6 +27,7 @@ export function createReportTasks(
       reports: deps.usageReports,
       anchorOffsetMs: anchorOffsetMinutes(deps.env.usageReport) * 60_000,
       intervalMs: intervals.usage_weekly_report,
+      delivery: deps.usageReportDelivery,
     }),
   ]
 }

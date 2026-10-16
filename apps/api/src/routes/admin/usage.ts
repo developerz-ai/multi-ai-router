@@ -9,18 +9,18 @@ import {
   usageFilterQuery,
   usageWindowQuery,
 } from "../../services/usage-read"
-import type { UsageReportService } from "../../services/usage-report"
+import type { ReportDeliveryService, UsageReportService } from "../../services/usage-report"
 import { render } from "./render"
 
 /**
  * The usage surface — totals, a sparkline series, and breakdowns per key, account, pool and
  * model, over a named window or a custom range.
  *
- * Everything here is a `GET` except `POST /reports/preview`. That one stores nothing, but it is a
- * mutating method, so the admin guard demands a CSRF token for it like any other `POST` (the
- * guard enforces it, not this file); the console must send the CSRF header. Usage is a headline
- * surface rather than a tab afterthought (CLAUDE.md, Frontend), which is why the whole screen is
- * one request instead of a call per tile.
+ * Everything here is a `GET` except two `POST`s: `/reports/preview` and
+ * `/reports/:periodStart/deliver`. Both are mutating methods, so the admin guard demands a CSRF
+ * token for them like any other `POST` (the guard enforces it, not this file); the console must
+ * send the CSRF header. Usage is a headline surface rather than a tab afterthought (CLAUDE.md,
+ * Frontend), which is why the whole screen is one request instead of a call per tile.
  *
  * `/recent` is the second path rather than a field on the first because the two refresh at
  * different rates and answer different questions: the summary is an aggregate over a window, the
@@ -28,7 +28,11 @@ import { render } from "./render"
  * window switch re-read rows nobody asked to see again.
  *
  * `/reports` serves the stored weekly reports (issue #227): the list, one week by its Monday, and
- * a preview that builds the last complete week without storing it.
+ * a preview that builds the last complete week without storing it. The preview stores nothing —
+ * the stored report is the task's alone. `/reports/:periodStart/deliver` (issue #229) re-sends a
+ * stored week to the Discord webhook; like every route here it is parse → one service call →
+ * render, and a *failed* re-send renders as a 200 whose body says `failed` (see the delivery
+ * service for why it must not be a 5xx).
  */
 
 export const ADMIN_USAGE_BASE_PATH = "/api/admin/usage"
@@ -36,6 +40,8 @@ export const ADMIN_USAGE_BASE_PATH = "/api/admin/usage"
 export interface AdminUsageRoutesDeps {
   readonly service: UsageService
   readonly reports: UsageReportService
+  /** The re-send half of Discord delivery (issue #229). */
+  readonly delivery: ReportDeliveryService
   /** `adminAuth(adminAuthService)`. Required, so no mount can forget the guard. */
   readonly guard: MiddlewareHandler<AdminAuthEnv>
 }
@@ -102,6 +108,10 @@ export function adminUsageRoutes(deps: AdminUsageRoutesDeps): Hono<AdminAuthEnv>
 
   routes.get("/reports/:periodStart", async (c) =>
     render(c, await deps.reports.get(c.req.param("periodStart"))),
+  )
+
+  routes.post("/reports/:periodStart/deliver", async (c) =>
+    render(c, await deps.delivery.redeliver(c.req.param("periodStart"))),
   )
 
   return routes

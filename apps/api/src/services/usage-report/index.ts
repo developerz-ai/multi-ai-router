@@ -5,6 +5,18 @@
  */
 
 export { buildWeeklyReport } from "./builder"
+export type {
+  DueDelivery,
+  RedeliverView,
+  ReportDeliveryDeps,
+  ReportDeliveryService,
+  ReportDeliveryStore,
+} from "./delivery"
+export { createReportDeliveryService } from "./delivery"
+export * from "./discord-limits"
+export type { DiscordDelivery, DiscordWebhookPayload } from "./discord-render"
+export { renderDiscordDelivery, usageWindowUrl } from "./discord-render"
+export { weeklyReportPayload } from "./payload-schema"
 export type { ReportWeek } from "./period"
 export {
   DAY_MS,
@@ -15,6 +27,7 @@ export {
   reportAnchor,
   WEEK_MS,
 } from "./period"
+export { renderReportCsv, reportCsvFilename } from "./report-csv"
 export type { StoredReportView, UsageReportService, UsageReportServiceDeps } from "./service"
 export { createUsageReportService, ReportTooLargeError } from "./service"
 export type {

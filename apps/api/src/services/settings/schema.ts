@@ -165,6 +165,18 @@ export interface SettingsView {
    * console and the API are always the same origin (no CORS, CLAUDE.md non-negotiable 8).
    */
   readonly publicUrl: string | null
+  /**
+   * Discord delivery of the weekly usage report (issue #229). The webhook URL is a credential, so
+   * this is the whole of what the screen may see: whether one is configured, and when a report
+   * last reached the channel. Read-only like everything else here — the URL never enters a view.
+   */
+  readonly usageReport: UsageReportSettingsView
+}
+
+export interface UsageReportSettingsView {
+  readonly discordWebhookConfigured: boolean
+  /** ISO instant of the newest stored delivery, or null when none has ever been sent. */
+  readonly lastDeliveredAt: string | null
 }
 
 export interface TaskRunView {

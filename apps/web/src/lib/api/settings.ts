@@ -111,6 +111,16 @@ export interface SettingsView {
   readonly prices: PriceTable
   /** The configured `PUBLIC_URL`, or null. The onboarding panel's base URL falls back to this tab's own origin when null. */
   readonly publicUrl: string | null
+  /**
+   * The weekly report's Discord delivery (issue #229). The webhook URL is a credential, so the
+   * view carries a configured yes/no and the last delivery instant — never the value.
+   */
+  readonly usageReport: UsageReportSettings
+}
+
+export interface UsageReportSettings {
+  readonly discordWebhookConfigured: boolean
+  readonly lastDeliveredAt: string | null
 }
 
 /**

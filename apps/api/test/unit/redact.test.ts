@@ -281,6 +281,58 @@ describe("redact — self-identifying credential shapes", () => {
   })
 })
 
+describe("redact — Discord incoming webhook URLs", () => {
+  /**
+   * The webhook URL is the credential: anyone holding `/webhooks/<id>/<token>` can post to the
+   * channel, and a delivery failure (a fetch error message, a response snippet, `last_error`, a
+   * Sentry extra) is exactly where a URL likes to appear. Both official hosts, the ptb/canary
+   * deployments, any `/api/v<N>/` prefix and the documented query suffixes must all redact whole.
+   * A stub URL and token — never a real one anywhere in a fixture.
+   */
+  const TOKEN = "T0k3n-S3gm3nt_xY9"
+  const ID = "1234567890"
+  const forms = [
+    `https://discord.com/api/webhooks/${ID}/${TOKEN}`,
+    `https://discord.com/api/v9/webhooks/${ID}/${TOKEN}`,
+    `https://discord.com/api/v10/webhooks/${ID}/${TOKEN}`,
+    `https://discordapp.com/api/webhooks/${ID}/${TOKEN}`,
+    `https://ptb.discord.com/api/webhooks/${ID}/${TOKEN}`,
+    `https://canary.discord.com/api/webhooks/${ID}/${TOKEN}`,
+    `https://ptb.discordapp.com/api/webhooks/${ID}/${TOKEN}`,
+    `https://canary.discordapp.com/api/webhooks/${ID}/${TOKEN}`,
+    `http://discord.com/api/webhooks/${ID}/${TOKEN}`,
+    `https://discord.com/api/webhooks/${ID}/${TOKEN}?wait=true`,
+    `https://discord.com/api/webhooks/${ID}/${TOKEN}?thread_id=9876543210`,
+    `https://discord.com/api/webhooks/${ID}/${TOKEN}?wait=true&thread_id=9876543210`,
+  ]
+
+  for (const url of forms) {
+    test(`redacts ${url}`, () => {
+      const safe = redactValue(`delivery to ${url} failed: connection reset`)
+      expect(safe).not.toContain(TOKEN)
+      expect(safe).not.toContain(ID)
+      expect(safe).not.toContain("webhooks")
+      expect(safe).toContain(REDACTED)
+      expect(safe).toContain("delivery to ")
+    })
+  }
+
+  test("a webhook URL nested in a record is gone from every string field", () => {
+    const safe = redact({
+      task: "usage_weekly_report",
+      error: { message: `POST ${forms[0]}?wait=true rejected`, url: forms[3] },
+    })
+    const flat = JSON.stringify(safe)
+    expect(flat).not.toContain(TOKEN)
+    expect(flat).not.toContain(ID)
+  })
+
+  test("an unrelated discord.com URL is not a credential and stays readable", () => {
+    const line = "docs at https://discord.com/channels/1/2 say otherwise"
+    expect(redactValue(line)).toBe(line)
+  })
+})
+
 describe("redact — the spellings of one field name", () => {
   /**
    * A field name is matched with `-` and `_` stripped, so a call site cannot open a hole by

@@ -5,6 +5,7 @@ import type {
   PriceOverrideRow,
   ScheduledTaskName,
   ScheduledTaskRepository,
+  UsageReportRepository,
 } from "@multi-ai-router/db"
 import { PriceOverrideAccountConflict, scheduledTask } from "@multi-ai-router/db"
 import type { Env } from "../../config/env"
@@ -56,7 +57,16 @@ export interface SettingsServiceDeps {
   readonly auditEvents: Pick<AuditRepository, "list" | "listForSubject">
   readonly audit: AuditRecorder
   /** A full `Env` satisfies this, so the composition root passes `env` straight through. */
-  readonly env: Pick<Env, "retention" | "logLevel" | "janitorIntervalMinutes" | "publicUrl">
+  readonly env: Pick<
+    Env,
+    "retention" | "logLevel" | "janitorIntervalMinutes" | "publicUrl" | "usageReport"
+  >
+  /**
+   * One read for the settings screen's weekly-report panel (issue #229): the newest stored
+   * delivery instant. Whether the webhook is configured comes from env — the URL itself is a
+   * credential and never reaches a view, only the boolean.
+   */
+  readonly usageReports: Pick<UsageReportRepository, "lastDeliveredAt">
   /**
    * Each task's cadence in milliseconds — `scheduledTaskIntervals(env)`, the same function
    * `createScheduledTasks` builds the running tasks from. Injected rather than re-derived from
@@ -74,7 +84,10 @@ export interface SettingsServiceDeps {
 }
 
 export function createSettingsService(deps: SettingsServiceDeps): SettingsService {
-  const view = (overrides: readonly PriceOverrideRow[]): SettingsView => {
+  const view = (
+    overrides: readonly PriceOverrideRow[],
+    lastDeliveredAt: Date | null,
+  ): SettingsView => {
     const accounts = deps.priceAccounts?.() ?? []
     return {
       version: VERSION,
@@ -82,6 +95,10 @@ export function createSettingsService(deps: SettingsServiceDeps): SettingsServic
       logLevel: deps.env.logLevel,
       janitorIntervalMinutes: deps.env.janitorIntervalMinutes,
       publicUrl: deps.env.publicUrl,
+      usageReport: {
+        discordWebhookConfigured: deps.env.usageReport.discordWebhookUrl !== null,
+        lastDeliveredAt: lastDeliveredAt?.toISOString() ?? null,
+      },
       prices: {
         shippedAsOf: PRICE_TABLE_AS_OF,
         sources: PRICE_SOURCES,
@@ -94,7 +111,13 @@ export function createSettingsService(deps: SettingsServiceDeps): SettingsServic
   }
 
   return {
-    read: async () => ok(view(await deps.prices.list())),
+    read: async () => {
+      const [overrides, lastDeliveredAt] = await Promise.all([
+        deps.prices.list(),
+        deps.usageReports.lastDeliveredAt(),
+      ])
+      return ok(view(overrides, lastDeliveredAt))
+    },
 
     update: async (input) => {
       // Read before write, so the audit event can say how much moved. One extra query on a screen
@@ -125,7 +148,7 @@ export function createSettingsService(deps: SettingsServiceDeps): SettingsServic
 
       // Rendered from what the write returned rather than re-read: the row set is already in hand,
       // and a second read could disagree with what this request just stored.
-      return ok(view(after))
+      return ok(view(after, await deps.usageReports.lastDeliveredAt()))
     },
 
     tasks: async () => {

@@ -1,0 +1,74 @@
+@use "../../styles/breakpoints" as bp;
+@use "../../styles/mixins" as *;
+
+.section {
+  @include card;
+
+  display: grid;
+  gap: var(--space-3);
+  padding: var(--space-4);
+
+  @include bp.respond-to("sidebar") {
+    padding: var(--space-5);
+  }
+}
+
+.heading {
+  font-size: var(--text-lg);
+}
+
+.note {
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+  line-height: var(--line-snug);
+  text-wrap: pretty;
+}
+
+.facts {
+  display: grid;
+  gap: var(--space-4);
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 15rem), 1fr));
+}
+
+.fact {
+  display: grid;
+  gap: var(--space-1);
+  min-width: 0;
+}
+
+.term {
+  @include eyebrow;
+
+  color: var(--text-muted);
+}
+
+.value {
+  display: grid;
+  gap: var(--space-1);
+  margin: 0;
+  font-size: var(--text-md);
+  font-weight: var(--weight-medium);
+  overflow-wrap: anywhere;
+}
+
+.hint {
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+  font-weight: var(--weight-normal);
+  line-height: var(--line-snug);
+  text-wrap: pretty;
+}
+
+// The variable name is the operator's search key, so it is rendered as code
+// rather than paraphrased into prose.
+.env {
+  justify-self: start;
+  padding: 0 var(--space-1);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-1);
+  background: var(--surface-sunken);
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  font-weight: var(--weight-normal);
+}

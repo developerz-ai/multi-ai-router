@@ -49,6 +49,8 @@ export function createRuntimeScheduler(
     usageReportRows: usageReports,
     // The same service the admin endpoints use, so a stored report and a preview share a builder.
     usageReports: admin.usageReports,
+    // The same delivery instance the re-send route uses: one claim path, one cap, one audit kind.
+    usageReportDelivery: admin.usageReportDelivery,
     oauthStates,
     history: usageHistory,
     accounts,

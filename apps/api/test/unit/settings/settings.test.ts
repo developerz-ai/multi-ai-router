@@ -71,6 +71,42 @@ describe("the settings read", () => {
     expect(result.value.publicUrl).toBe("https://router.example.com")
   })
 
+  test("reports Discord delivery as off and never delivered when the webhook is unset", async () => {
+    const { service } = harness()
+    const result = await service.read()
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.value.usageReport).toEqual({
+      discordWebhookConfigured: false,
+      lastDeliveredAt: null,
+    })
+  })
+
+  test("reports the webhook as a configured yes/no — the URL itself never enters the view", async () => {
+    const { service } = harness({
+      discordWebhookUrl: "https://discord.com/api/webhooks/1234/NOT-A-REAL-TOKEN",
+    })
+    const result = await service.read()
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.value.usageReport.discordWebhookConfigured).toBe(true)
+    const wire = JSON.stringify(result.value)
+    expect(wire).not.toContain("NOT-A-REAL-TOKEN")
+    expect(wire).not.toContain("webhooks/")
+  })
+
+  test("reports the newest stored delivery instant", async () => {
+    const delivered = new Date("2026-10-12T00:31:05.000Z")
+    const { service } = harness({ lastDeliveredAt: delivered })
+    const result = await service.read()
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.value.usageReport.lastDeliveredAt).toBe(delivered.toISOString())
+  })
+
   test("renders the shipped price table with exactly the rate fields", async () => {
     const { service } = harness()
     const result = await service.read()

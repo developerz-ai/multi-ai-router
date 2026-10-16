@@ -21,7 +21,15 @@ function refused(over: Record<string, string>): EnvValidationError {
 describe("weekly report env", () => {
   test("defaults: Monday 00:00 UTC, 30 minute settle, hourly check, two years retained", () => {
     const env = parseEnv(base)
-    expect(env.usageReport).toEqual({ weekday: 1, hourUtc: 0, settleMinutes: 30, maxRows: 50_000 })
+    expect(env.usageReport).toEqual({
+      weekday: 1,
+      hourUtc: 0,
+      settleMinutes: 30,
+      maxRows: 50_000,
+      discordWebhookUrl: null,
+      maxDeliveryAttempts: 6,
+      deliveryTimeoutMs: 15_000,
+    })
     expect(env.scheduler.usageReportIntervalMinutes).toBe(60)
     expect(env.retention.usageReportsDays).toBe(730)
   })
@@ -36,7 +44,15 @@ describe("weekly report env", () => {
       RETENTION_USAGE_REPORTS_DAYS: "400",
       USAGE_REPORT_MAX_ROWS: "2000",
     })
-    expect(env.usageReport).toEqual({ weekday: 5, hourUtc: 17, settleMinutes: 45, maxRows: 2_000 })
+    expect(env.usageReport).toEqual({
+      weekday: 5,
+      hourUtc: 17,
+      settleMinutes: 45,
+      maxRows: 2_000,
+      discordWebhookUrl: null,
+      maxDeliveryAttempts: 6,
+      deliveryTimeoutMs: 15_000,
+    })
     expect(env.scheduler.usageReportIntervalMinutes).toBe(15)
     expect(env.retention.usageReportsDays).toBe(400)
   })
@@ -123,6 +139,52 @@ describe("weekly report env", () => {
       expect(refused({ ...window95, SCHEDULER_JITTER_FRACTION: "0.5" }).variables).toEqual([
         "USAGE_REPORT_SETTLE_MINUTES",
       ])
+    })
+  })
+
+  describe("delivery: USAGE_REPORT_DISCORD_WEBHOOK_URL and the attempt cap", () => {
+    test("delivery is off unless the webhook URL is set, and the value survives verbatim", () => {
+      expect(parseEnv(base).usageReport.discordWebhookUrl).toBeNull()
+      // A stub URL — never a real webhook anywhere in a fixture.
+      const url = "https://discord.com/api/webhooks/1/stub-token"
+      expect(
+        parseEnv({ ...base, USAGE_REPORT_DISCORD_WEBHOOK_URL: url }).usageReport.discordWebhookUrl,
+      ).toBe(url)
+    })
+
+    test("refuses a non-absolute URL, and the refusal never echoes the value", () => {
+      const error = refused({
+        USAGE_REPORT_DISCORD_WEBHOOK_URL: "discord.com/api/webhooks/1/UNIQUE-MARKER",
+      })
+      expect(error.variables).toEqual(["USAGE_REPORT_DISCORD_WEBHOOK_URL"])
+      expect(error.message).toContain("absolute")
+      // The URL is a credential: a boot error quoting it back would leak it into the log.
+      expect(error.message).not.toContain("UNIQUE-MARKER")
+    })
+
+    test("the attempt cap defaults to 6 and is bounded 1 to 50", () => {
+      expect(parseEnv(base).usageReport.maxDeliveryAttempts).toBe(6)
+      expect(refused({ USAGE_REPORT_MAX_DELIVERY_ATTEMPTS: "0" }).variables).toEqual([
+        "USAGE_REPORT_MAX_DELIVERY_ATTEMPTS",
+      ])
+      expect(refused({ USAGE_REPORT_MAX_DELIVERY_ATTEMPTS: "51" }).variables).toEqual([
+        "USAGE_REPORT_MAX_DELIVERY_ATTEMPTS",
+      ])
+      expect(
+        parseEnv({ ...base, USAGE_REPORT_MAX_DELIVERY_ATTEMPTS: "50" }).usageReport
+          .maxDeliveryAttempts,
+      ).toBe(50)
+    })
+
+    test("the webhook timeout defaults to 15 s and refuses zero", () => {
+      expect(parseEnv(base).usageReport.deliveryTimeoutMs).toBe(15_000)
+      expect(refused({ USAGE_REPORT_DELIVERY_TIMEOUT_MS: "0" }).variables).toEqual([
+        "USAGE_REPORT_DELIVERY_TIMEOUT_MS",
+      ])
+      expect(
+        parseEnv({ ...base, USAGE_REPORT_DELIVERY_TIMEOUT_MS: "5000" }).usageReport
+          .deliveryTimeoutMs,
+      ).toBe(5_000)
     })
   })
 

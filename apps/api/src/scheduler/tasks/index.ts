@@ -50,7 +50,7 @@ import { createUsageRollupTask } from "./usage-rollup"
 
 export interface ScheduledTaskDeps
   extends Pick<CredentialTaskDeps, "credentialMetadata" | "lastLogins">,
-    Pick<ReportTaskDeps, "usageReports"> {
+    Pick<ReportTaskDeps, "usageReports" | "usageReportDelivery"> {
   readonly sessions: Pick<SessionRepository, "deleteIdleBefore">
   readonly usageRecords: Pick<UsageRecordRepository, "deleteRetainedBatch">
   readonly auditEvents: Pick<AuditRepository, "deleteOlderThan">

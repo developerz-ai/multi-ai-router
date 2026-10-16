@@ -1,5 +1,5 @@
 import type { z } from "zod"
-import { atLeastOne, wholeNumber } from "./fields"
+import { absoluteUrl, atLeastOne, wholeNumber } from "./fields"
 
 /**
  * The weekly usage report's schedule and retention, as configuration (CLAUDE.md non-negotiable 11).
@@ -46,6 +46,22 @@ export const USAGE_REPORT_ENV_FIELDS = {
     .refine((value) => value <= 23, "must be between 0 and 23")
     .optional(),
   USAGE_REPORT_SETTLE_MINUTES: atLeastOne.optional(),
+  /**
+   * The Discord incoming-webhook URL the weekly report is delivered to (issue #229). Unset means
+   * delivery is off — reports store as `not_configured` and nothing makes a network call. The
+   * value is a credential: the refusal message is {@link absoluteUrl}'s static one, never an echo.
+   */
+  USAGE_REPORT_DISCORD_WEBHOOK_URL: absoluteUrl.optional(),
+  /**
+   * Automatic delivery attempts per report before the task gives up (`failed` + one capture).
+   * Capped at 50 so a typo cannot retry a dead webhook forever; it never limits an operator's
+   * re-send, which always claims and posts.
+   */
+  USAGE_REPORT_MAX_DELIVERY_ATTEMPTS: atLeastOne
+    .refine((value) => value <= 50, "must be at most 50")
+    .optional(),
+  /** Per-attempt timeout for the webhook POST: a hung Discord must not hang the task tick. */
+  USAGE_REPORT_DELIVERY_TIMEOUT_MS: atLeastOne.optional(),
   RETENTION_USAGE_REPORTS_DAYS: atLeastOne.optional(),
 }
 
@@ -58,6 +74,15 @@ export interface UsageReportConfig {
   readonly settleMinutes: number
   /** The week read's row ceiling (`USAGE_REPORT_MAX_ROWS`). */
   readonly maxRows: number
+  /**
+   * The Discord incoming-webhook URL, or `null` when delivery is off. A credential: never logged,
+   * never rendered into a view — the Settings screen gets a configured yes/no, not the value.
+   */
+  readonly discordWebhookUrl: string | null
+  /** Automatic delivery attempts before the task gives up on a period (`1`–`50`). */
+  readonly maxDeliveryAttempts: number
+  /** Per-attempt webhook timeout (`USAGE_REPORT_DELIVERY_TIMEOUT_MS`). */
+  readonly deliveryTimeoutMs: number
 }
 
 /** Minutes from the week's Monday 00:00 UTC to the instant the report becomes due. */
@@ -72,6 +97,9 @@ export function readUsageReportEnv(
     USAGE_REPORT_HOUR_UTC?: number
     USAGE_REPORT_SETTLE_MINUTES?: number
     USAGE_REPORT_MAX_ROWS?: number
+    USAGE_REPORT_DISCORD_WEBHOOK_URL?: string
+    USAGE_REPORT_MAX_DELIVERY_ATTEMPTS?: number
+    USAGE_REPORT_DELIVERY_TIMEOUT_MS?: number
     SCHEDULER_JITTER_FRACTION?: number
     RETENTION_USAGE_REPORTS_DAYS?: number
   },
@@ -103,6 +131,10 @@ export function readUsageReportEnv(
     settleMinutes: raw.USAGE_REPORT_SETTLE_MINUTES ?? 30,
     // The CSV export's ceiling: the same rows are held in memory while the report is built.
     maxRows: raw.USAGE_REPORT_MAX_ROWS ?? 50_000,
+    // Null, not "": unset means delivery is off, and every consumer branches on exactly that.
+    discordWebhookUrl: raw.USAGE_REPORT_DISCORD_WEBHOOK_URL ?? null,
+    maxDeliveryAttempts: raw.USAGE_REPORT_MAX_DELIVERY_ATTEMPTS ?? 6,
+    deliveryTimeoutMs: raw.USAGE_REPORT_DELIVERY_TIMEOUT_MS ?? 15_000,
   }
   // The report is only made if a tick lands between the anchor and the end of the week. A tick can
   // be as late as interval * (1 + jitter) after the previous one, so the window must be longer

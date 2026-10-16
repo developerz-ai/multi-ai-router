@@ -12,7 +12,7 @@ import type { KeysService } from "./services/keys"
 import type { PoolsService } from "./services/pools"
 import type { SettingsService } from "./services/settings"
 import type { UsageService } from "./services/usage-read"
-import type { UsageReportService } from "./services/usage-report"
+import type { ReportDeliveryService, UsageReportService } from "./services/usage-report"
 
 /**
  * The Hono environment every route and middleware in the transport layer shares. Transport is
@@ -52,6 +52,11 @@ export interface AdminServices {
    * the scheduler's report task calls so one builder serves both.
    */
   readonly usageReports: UsageReportService
+  /**
+   * Discord delivery of the weekly report (issue #229): the re-send route and the scheduler task's
+   * due-posting half share this one instance, so both claim through the same path.
+   */
+  readonly usageReportDelivery: ReportDeliveryService
   /**
    * One field for three route groups: configuration, scheduled-task health and the audit feed are
    * one screen and one service — see `services/settings/service.ts`.

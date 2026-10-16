@@ -17,6 +17,7 @@ import {
   memoryPrices,
   RETENTION,
   recordingAudit,
+  USAGE_REPORT_CONFIG,
 } from "../unit/settings/fixtures"
 
 /**
@@ -74,11 +75,13 @@ describe.skipIf(!runnable)("a scheduled_task enum value this build does not know
       scheduledTasks: repo,
       auditEvents: memoryAuditLog([]),
       audit: recordingAudit(),
+      usageReports: { lastDeliveredAt: async () => null },
       env: {
         retention: RETENTION,
         logLevel: "warn",
         janitorIntervalMinutes: 42,
         publicUrl: null,
+        usageReport: USAGE_REPORT_CONFIG,
       },
       intervals: INTERVALS,
       now: () => new Date(),

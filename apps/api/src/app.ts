@@ -210,7 +210,12 @@ function mountAdmin(app: Hono<AppEnv>, admin: AdminServices, options: AdminMount
   )
   app.route(
     ADMIN_USAGE_BASE_PATH,
-    adminUsageRoutes({ guard, service: admin.usage, reports: admin.usageReports }),
+    adminUsageRoutes({
+      guard,
+      service: admin.usage,
+      reports: admin.usageReports,
+      delivery: admin.usageReportDelivery,
+    }),
   )
   app.route(ADMIN_PROVIDERS_BASE_PATH, adminProviderRoutes({ guard }))
   // Three paths, one service: the settings screen reads configuration, task health and the audit

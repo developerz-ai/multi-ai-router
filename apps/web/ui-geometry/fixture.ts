@@ -45,6 +45,7 @@ export const settings: SettingsView = {
   janitorIntervalMinutes: 15,
   prices: { shippedAsOf: "2026-10-01", shipped: [], overrides: [] },
   publicUrl: null,
+  usageReport: { discordWebhookConfigured: false, lastDeliveredAt: null },
 }
 
 /**
