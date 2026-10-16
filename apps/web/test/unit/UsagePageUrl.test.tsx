@@ -1,13 +1,13 @@
 import { afterEach, describe, expect, test } from "bun:test"
 import {
   ATTRIBUTION,
+  filterGroup,
   mount,
   option,
   resetUsagePage,
   settle,
   stub,
   summaryRequests,
-  filterGroup,
 } from "../support/usage-page"
 
 /**
