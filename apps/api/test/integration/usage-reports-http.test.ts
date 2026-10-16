@@ -38,6 +38,8 @@ const EMAIL_LABEL = "someone@example.com"
 let app: Hono<AdminAuthEnv>
 let service: ReturnType<typeof createUsageReportService>
 let reports: ReturnType<typeof createUsageReportRepository>
+// Module-scoped so the over-cap route test can mount a second app with a tight reports service.
+let usage: ReturnType<typeof createUsageService>
 
 async function seedAttempt(over: Parameters<typeof historyAttempt>[0], minute: number) {
   const attempt = historyAttempt({
@@ -138,7 +140,7 @@ describe.skipIf(!historyUrl)("weekly usage reports over HTTP and Postgres", () =
       listLimit: 110,
       now: () => NOW,
     })
-    const usage = createUsageService({
+    usage = createUsageService({
       history: fixture.history(),
       recent: createUsageRecentRepository(db),
       labels,
@@ -274,5 +276,37 @@ describe.skipIf(!historyUrl)("weekly usage reports over HTTP and Postgres", () =
     }
     const week = { start: new Date("2026-10-05T00:00:00Z"), end: new Date("2026-10-12T00:00:00Z") }
     await expect(tight.generate(week, NOW)).rejects.toThrow("USAGE_REPORT_MAX_ROWS")
+  })
+
+  test("over the cap the preview route answers 400 report_too_large and stores nothing", async () => {
+    const tight = createUsageReportService({
+      reports,
+      history: fixture.history(),
+      labels: async () => ({ keys: new Map() }),
+      pools: async () => [],
+      upstreamTimeoutMs: 600_000,
+      listLimit: 10,
+      maxRows: 1,
+      now: () => NOW,
+    })
+    const tightApp = new Hono<AdminAuthEnv>()
+    tightApp.onError(errorHandler(createLogger({ level: "error", write: () => {} })))
+    tightApp.notFound(notFoundHandler())
+    tightApp.route(
+      ADMIN_USAGE_BASE_PATH,
+      adminUsageRoutes({ service: usage, reports: tight, guard: csrfGuard }),
+    )
+    const before = await count()
+    const response = await tightApp.request(`${ADMIN_USAGE_BASE_PATH}/reports/preview`, {
+      method: "POST",
+      headers: { "x-csrf-token": "csrf" },
+    })
+    expect(response.status).toBe(400)
+    const body = (await response.json()) as {
+      error: { readonly code: string | null; readonly message: string }
+    }
+    expect(body.error.code).toBe("report_too_large")
+    expect(body.error.message).toContain("USAGE_REPORT_MAX_ROWS")
+    expect(await count()).toBe(before)
   })
 })

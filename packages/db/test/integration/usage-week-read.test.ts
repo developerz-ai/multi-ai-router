@@ -37,17 +37,27 @@ async function seed(at: string, account: string, over: Parameters<typeof history
 
 describe.skipIf(!historyUrl)("the week read", () => {
   test("seed: two days of one grain, one unknown-basis attempt, and one on each side of the week", async () => {
-    await seed("2026-10-05T12:00:00.000Z", ACCOUNT_A)
-    await seed("2026-10-07T12:00:00.000Z", ACCOUNT_A)
+    // Distinct non-zero cache tokens per attempt, so a swapped SQL alias shows up in the sums.
+    await seed("2026-10-05T12:00:00.000Z", ACCOUNT_A, { cacheReadTokens: 7, cacheWriteTokens: 11 })
+    await seed("2026-10-07T12:00:00.000Z", ACCOUNT_A, { cacheReadTokens: 5, cacheWriteTokens: 13 })
     await seed("2026-10-11T23:59:59.000Z", ACCOUNT_B, {
       costBasis: "unknown",
       costEstimate: null,
       tokensIn: 5,
       tokensOut: 5,
+      cacheReadTokens: 3,
+      cacheWriteTokens: 17,
     })
-    // Outside: the last second of the previous week and the first instant of the next.
-    await seed("2026-10-04T23:59:59.000Z", ACCOUNT_A)
-    await seed("2026-10-12T00:00:00.000Z", ACCOUNT_A)
+    // Outside: the last second of the previous week and the first instant of the next. Loud cache
+    // tokens, so an unclipped window would swamp the in-week sums below.
+    await seed("2026-10-04T23:59:59.000Z", ACCOUNT_A, {
+      cacheReadTokens: 100,
+      cacheWriteTokens: 100,
+    })
+    await seed("2026-10-12T00:00:00.000Z", ACCOUNT_A, {
+      cacheReadTokens: 100,
+      cacheWriteTokens: 100,
+    })
     await fixture.setUnpricedSince("2026-10-01")
   })
 
@@ -100,13 +110,24 @@ describe.skipIf(!historyUrl)("the week read", () => {
     expect(b).toMatchObject({ attempts: 1, measuredAttempts: 1 })
   })
 
-  test("carries cache token sums", async () => {
+  test("carries cache token sums, each column its own and clipped to the week", async () => {
     const { rows } = await fixture.history().weekRows(WEEK, 1000)
-    expect(rows.every((r) => typeof r.cacheReadTokens === "number")).toBe(true)
+    const a = rows.find((r) => r.accountId === ACCOUNT_A)
+    const b = rows.find((r) => r.accountId === ACCOUNT_B)
+    // In-week: 7 + 5 read and 11 + 13 write; the 100s outside the week must not leak in. Swapped
+    // aliases would cross the distinct read/write sums and fail.
+    expect(a).toMatchObject({ cacheReadTokens: 12, cacheWriteTokens: 24 })
+    expect(b).toMatchObject({ cacheReadTokens: 3, cacheWriteTokens: 17 })
   })
 
   test("a week with more rows than the ceiling throws naming the ceiling, never truncates", async () => {
     await expect(fixture.history().weekRows(WEEK, 1)).rejects.toThrow(/ceiling of 1 rows/)
+  })
+
+  test("a ceiling equal to the row count is not over the ceiling", async () => {
+    // The fixture's week holds exactly two rows; a `>` that became `>=` would throw here.
+    const { rows } = await fixture.history().weekRows(WEEK, 2)
+    expect(rows).toHaveLength(2)
   })
 
   test("sums equal the summary totals for the same window", async () => {
