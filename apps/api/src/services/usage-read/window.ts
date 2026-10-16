@@ -1,3 +1,4 @@
+import { isoDatetimeSchema } from "@multi-ai-router/core"
 import type { UsageWindow } from "@multi-ai-router/db"
 import { startOfUtcDay } from "@multi-ai-router/db"
 import { z } from "zod"
@@ -13,8 +14,10 @@ import { z } from "zod"
 export const usageWindowQuery = z
   .object({
     window: z.enum(["today", "7d", "30d", "lifetime"]).optional(),
-    from: z.iso.datetime().optional(),
-    to: z.iso.datetime().optional(),
+    // The same schema the console's URL parser gates on (@multi-ai-router/core): a range the page
+    // let through is never refused here, and vice versa.
+    from: isoDatetimeSchema.optional(),
+    to: isoDatetimeSchema.optional(),
   })
   .refine((query) => !(query.window !== undefined && query.from !== undefined), {
     message: "pass either a named window or a from/to range, not both",

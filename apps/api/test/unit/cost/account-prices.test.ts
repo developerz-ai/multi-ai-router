@@ -142,6 +142,17 @@ test("glm-5.3 on zai carries the vendor's published rates (#253)", () => {
   expect(unpricedModels(zaiAccounts, lookupRates)).toEqual([])
 })
 
+test("the zai price source records the 2026-10-15 vendor-page verification (#258)", () => {
+  // #256 read docs.z.ai/guides/overview/pricing on 2026-10-15: glm-5.3 was priced from that read
+  // and glm-5.3-flash's figures were confirmed on it (only the source moved, not the numbers).
+  // The entry must not keep claiming the inherited 2026-10-01 snapshot with verifiedAt: null —
+  // an inherited snapshot is not a new verification, and this one had been re-verified.
+  const zai = PRICE_SOURCES.find((source) => source.id === "zai")
+  expect(zai?.url).toBe("https://docs.z.ai/guides/overview/pricing")
+  expect(zai?.snapshotAsOf).toBe("2026-10-15")
+  expect(zai?.verifiedAt).toBe("2026-10-15")
+})
+
 test("MiniMax-M3.1-Flash-Preview has no vendor price, so it stays unknown (#254)", () => {
   // platform.minimax.io's public price list (docs/guides/pricing, read 2026-10-15) carries no row
   // for the preview: MiniMax serves it from the coding plan, and only resellers quote per-token
