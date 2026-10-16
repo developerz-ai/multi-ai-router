@@ -656,7 +656,10 @@ against that same `VERSION` constant and against every workspace manifest, and
 reads the constant rather than the root `package.json` deliberately: the manifest is a copy, the
 constant is what the five surfaces above report, and the release workflow never runs the test suite
 — so the drift test that normally holds the two together does not gate a tag. Run it by hand before
-cutting one ([RELEASING.md](../RELEASING.md)).
+cutting one ([RELEASING.md](../RELEASING.md)). The same script also reads `CHANGELOG.md`: a section
+since 2.25.0, the start of the fully-linked era, whose footer link is missing or duplicated fails
+the gate, as do footer links out of ascending order — the 2.37.0–2.37.4 links shipped missing once
+(#265), and a release gate is the right place for that to be loud.
 
 **The version says what the build calls itself; `ROUTER_REVISION` says which build it is.** Two
 images can both be `1.0.0` — a rebuilt `latest`, an rc respin, an image built from a dirty tree.

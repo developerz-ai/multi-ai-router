@@ -1377,10 +1377,10 @@ your tooling config.
 - README rewritten around the actual product story: your tools → Multi AI
   Router → providers.
 
+[1.0.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v1.0.0
+[2.12.2]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.12.2
 [2.13.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.13.0
 [2.13.1]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.13.1
-[2.12.2]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.12.2
-[1.0.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v1.0.0
 [2.25.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.25.0
 [2.25.1]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.25.1
 [2.25.2]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.25.2
@@ -1404,6 +1404,11 @@ your tooling config.
 [2.34.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.34.0
 [2.35.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.35.0
 [2.36.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.36.0
+[2.37.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.37.0
+[2.37.1]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.37.1
+[2.37.2]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.37.2
+[2.37.3]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.37.3
+[2.37.4]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.37.4
 [2.37.5]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.37.5
 [2.37.6]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.37.6
 [2.37.7]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.37.7

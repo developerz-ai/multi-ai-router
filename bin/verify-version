@@ -19,8 +19,8 @@
 # image whose /healthz says 1.0.0 — passing the old check, and wrong.
 #
 # So this checks the source, checks every manifest against it, checks the OCI
-# `version` label the image carries against it, and checks the tag against the
-# source. All four or nothing.
+# `version` label the image carries against it, checks the changelog's release
+# links, and checks the tag against the source. All five or nothing.
 #
 # Pure shell (jq, sed and grep, all present on any runner) rather than
 # `bun test`: it runs before install, on a cold checkout, in about a second.
@@ -107,6 +107,68 @@ label=$(sed -n 's/.*org\.opencontainers\.image\.version="\([^"]*\)".*/\1/p' "$do
 [ -n "$label" ] || die "$dockerfile carries no org.opencontainers.image.version label"
 [ "$label" = "$version" ] ||
   die "$dockerfile labels the image $label; $source_file says $version"
+
+# The changelog is the release index a reader lands on, and 2.37.0–2.37.4 shipped
+# with sections and pushed tags but no footer links — nothing noticed for five
+# releases (#265). So: since 2.25.0, the start of the fully-linked era, every
+# section must carry exactly one footer link, and the links must run in ascending
+# order. Sections older than the floor predate the linked-footer convention and
+# stay as history; the pinned floor is what keeps that exemption explicit instead
+# of the gate silently passing whatever the links happen to stop at.
+#
+# Pre-release suffixes are tolerated in the patterns (an rc section must not
+# false-positive) but the order and floor comparisons are numeric triples only.
+changelog="CHANGELOG.md"
+[ -f "$changelog" ] || die "$changelog is missing — nothing to verify the release links against"
+
+link_base="https://github.com/developerz-ai/multi-ai-router/releases/tag/v"
+
+headings=$(sed -nE 's/^## \[([0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?)\].*/\1/p' "$changelog")
+linked=$(sed -nE "s|^\[([0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?)\]: ${link_base}\\1\$|\\1|p" "$changelog")
+
+out_of_order=$(printf '%s\n' $linked | awk '
+  function cmp(X, Y,   i) {
+    for (i = 1; i <= 3; i++) {
+      if (X[i] + 0 < Y[i] + 0) return -1
+      if (X[i] + 0 > Y[i] + 0) return 1
+    }
+    return 0
+  }
+  NR == 1 { prev = $1; split($1, P, "."); next }
+  {
+    split($1, A, ".")
+    # The violation is reported in the message below, off this string — awk itself
+    # must still exit 0, or `set -e` aborts the script before die can name the pair.
+    if (cmp(P, A) >= 0) { printf "%s then %s", prev, $1; exit }
+    prev = $1
+    split($1, P, ".")
+  }
+')
+[ -z "$out_of_order" ] ||
+  die "$changelog footer links must ascend: found $out_of_order"
+
+linked_floor="2.25.0"
+unlinked=$(printf '%s\n' $headings | awk -v floor="$linked_floor" -v base="$link_base" -v file="$changelog" '
+  function geq(H,   F, i) {
+    split(floor, F, ".")
+    for (i = 1; i <= 3; i++) {
+      if (H[i] + 0 > F[i] + 0) return 1
+      if (H[i] + 0 < F[i] + 0) return 0
+    }
+    return 1
+  }
+  {
+    split($1, H, ".")
+    if (!geq(H)) next
+    wanted = "[" $1 "]: " base $1
+    count = 0
+    while ((getline line < file) > 0) if (line == wanted) count++
+    close(file)
+    if (count != 1) printf " %s", $1
+  }
+')
+[ -z "$unlinked" ] ||
+  die "$changelog sections missing their footer link:$unlinked — every section since $linked_floor needs exactly one"
 
 if [ $# -gt 0 ]; then
   # vX.Y.Z is the tag convention (release.yml triggers on `v*`); the published
