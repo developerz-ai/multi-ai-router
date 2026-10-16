@@ -193,6 +193,40 @@ describe("weekly report env", () => {
       expect(error.message).not.toContain("UNIQUE-MARKER")
     })
 
+    // The redactor knows webhook URLs by the Discord shape only (logging/redact.ts): an http URL,
+    // a proxied/foreign host or a wrong path would pass a plain absolute-URL check yet appear
+    // unredacted in last_error, log lines and Sentry. Boot refuses them, by name, value never
+    // echoed. Stub URLs with unique markers only — never a real webhook.
+    test.each([
+      ["an http URL", "http://discord.com/api/webhooks/1/MARKER-http-scheme"],
+      ["a non-Discord host", "https://webhook-proxy.example/api/webhooks/1/MARKER-foreign-host"],
+      ["a wrong path", "https://discord.com/api/not-webhooks/1/MARKER-wrong-path"],
+    ])("refuses %s, naming the variable and never echoing the value", (_name, url) => {
+      const error = refused({ USAGE_REPORT_DISCORD_WEBHOOK_URL: url })
+      expect(error.variables).toEqual(["USAGE_REPORT_DISCORD_WEBHOOK_URL"])
+      expect(error.message).toContain("USAGE_REPORT_DISCORD_WEBHOOK_URL")
+      for (const fragment of [
+        url,
+        "MARKER-http-scheme",
+        "MARKER-foreign-host",
+        "MARKER-wrong-path",
+        "webhook-proxy.example",
+      ]) {
+        expect(error.message).not.toContain(fragment)
+      }
+    })
+
+    test.each(["discord.com", "discordapp.com", "ptb.discord.com", "canary.discord.com"])(
+      "accepts an https webhook URL on %s",
+      (host) => {
+        const url = `https://${host}/api/webhooks/1/stub-token`
+        expect(
+          parseEnv({ ...base, USAGE_REPORT_DISCORD_WEBHOOK_URL: url }).usageReport
+            .discordWebhookUrl,
+        ).toBe(url)
+      },
+    )
+
     test("the attempt cap defaults to 6 and is bounded 1 to 50", () => {
       expect(parseEnv(base).usageReport.maxDeliveryAttempts).toBe(6)
       expect(refused({ USAGE_REPORT_MAX_DELIVERY_ATTEMPTS: "0" }).variables).toEqual([
