@@ -28,7 +28,7 @@
   font-size: var(--text-xs);
   white-space: nowrap;
 
-  &:hover:not(:disabled) {
+  &:hover:not([aria-disabled="true"]) {
     border-color: var(--accent);
     color: var(--accent);
   }
@@ -38,7 +38,8 @@
     outline-offset: 1px;
   }
 
-  &:disabled {
+  // The busy row keeps focus (#270): `aria-disabled` + a click guard, never `disabled`.
+  &[aria-disabled="true"] {
     opacity: 0.55;
     cursor: progress;
   }
