@@ -44,7 +44,11 @@ applicable. Pull the entries from the merged PRs since the last tag —
 the sources of truth, not memory.
 
 Add the new version's link reference at the bottom of the file
-(`[X.Y.Z]: https://github.com/developerz-ai/multi-ai-router/releases/tag/vX.Y.Z`).
+(`[X.Y.Z]: https://github.com/developerz-ai/multi-ai-router/releases/tag/vX.Y.Z`),
+in ascending order after the previous last link. The link is not decoration:
+`bin/verify-version` refuses a tree whose sections since 2.25.0 lack their
+footer link or whose links do not ascend — the 2.37.0–2.37.4 links shipped
+missing once (#265), and this is what catches a repeat.
 
 ## 3. Verify the gate is green
 
