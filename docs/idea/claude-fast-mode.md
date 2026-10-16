@@ -61,9 +61,12 @@ These results do not establish identical production behavior or account-enforcem
 The initial RSS observation was about 265 MiB for the CLI process; a controlled router memory/
 latency benchmark across accounts is still required before claiming a measured improvement.
 
-Both infrastructure repositories explicitly keep `CLAUDE_FAST_MODE: "false"`. Publish and pin
-the release image using each repository's normal GitOps process, then enable one deployment
-and compare cache hits, quota headers, tool rounds, truncations and concurrent-history behavior.
+Each infrastructure repository pins the released image and explicitly configures
+`CLAUDE_FAST_MODE`. Publish and verify the image using each repository's normal GitOps process,
+then validate the selected deployment's cache hits, quota headers, tool rounds, truncations and
+concurrent-history behavior. The local MITM/HTTP canary evidence is recorded in the
+[wire research](../research/claude-wire.md#follow-up-mitm-audit-2026-10-16); deployed health and
+inference checks remain necessary after enabling the flag.
 Rollback is `CLAUDE_FAST_MODE=false` and a normal rollout. No credentials need migration.
 
 ## Live direct canary, 2026-10-16
