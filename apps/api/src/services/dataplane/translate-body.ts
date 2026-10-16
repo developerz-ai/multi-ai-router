@@ -1,5 +1,6 @@
 import type { OpenAiChatCeiling } from "@multi-ai-router/core"
 import { TranslationError } from "@multi-ai-router/core"
+import { disableThinkingDefaultForForcedTool } from "../translate"
 import type { TranslationContext, TranslationPair } from "../translate/registry"
 import type { TranslationDrop } from "../translate/shared/drops"
 import type { ResponsesEgressRules } from "../translate/shared/responses-egress"
@@ -124,7 +125,20 @@ export function createTranslatedRequestBody(
       }
       // Last, and unconditionally: the account's alias map is the operator saying which name this
       // upstream bills, and it must survive whatever the conversion put there.
-      return encoder.encode(JSON.stringify({ ...translated, model: upstreamModel }))
+      const withModel = { ...translated, model: upstreamModel }
+      // The one vendor dial decided by the *upstream* model (post-alias, the billed name) rather
+      // than the conversion shape, so it is applied here and not baked into the cached body: a
+      // forced tool to a think-by-default openai-chat vendor is sent `enable_thinking: false`
+      // (`translate/shared/thinking-default.ts`). Never toward any other egress.
+      const outgoing =
+        pair.egress === "openai-chat" && context.thinkingDefaultModels !== undefined
+          ? disableThinkingDefaultForForcedTool(
+              withModel,
+              upstreamModel,
+              context.thinkingDefaultModels,
+            )
+          : withModel
+      return encoder.encode(JSON.stringify(outgoing))
     },
   }
 }

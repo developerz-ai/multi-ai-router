@@ -181,6 +181,7 @@ export function createDispatcher(deps: DispatcherDeps): Dispatcher {
       fallbackId: input.requestId,
       defaultMaxTokens: options.translation?.defaultMaxTokens,
       maximumPendingBytes: options.translation?.maximumPendingBytes,
+      thinkingDefaultModels: options.translation?.thinkingDefaultModels,
     }
     // `warn`: the caller was answered without something it sent (06-protocol-translation.md).
     const translated = createTranslatedRequestBody(body.bytes, translation, (pair, drops) =>

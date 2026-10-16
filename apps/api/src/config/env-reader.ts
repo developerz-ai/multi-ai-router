@@ -278,6 +278,7 @@ export function readParsedEnv(raw: ParsedEnv, ctx: z.RefinementCtx): Env {
     translation: {
       defaultMaxTokens: raw.TRANSLATE_DEFAULT_MAX_TOKENS ?? 4_096,
       maximumPendingBytes: raw.MAX_TRANSLATION_PENDING_BYTES ?? 1_048_576,
+      thinkingDefaultModels: raw.OPENAI_CHAT_THINKING_DEFAULT_MODELS ?? [],
     },
   }
 }

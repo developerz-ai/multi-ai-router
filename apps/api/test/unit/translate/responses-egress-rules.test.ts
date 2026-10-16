@@ -55,8 +55,20 @@ describe("a Codex-ruled Responses surface", () => {
     expect(body.stream).toBe(true)
     expect(body.instructions).toBe("")
     expect(body.store).toBe(false)
-    expect(drops.map((d) => d.field).sort()).toEqual(["max_output_tokens", "temperature", "top_p"])
+    // `max_output_tokens` is removed but not reported: anthropic requires `max_tokens`, so every
+    // request carries it and the warn line said nothing (prod 2026-10-16: 174 lines an hour).
+    expect(drops.map((d) => d.field).sort()).toEqual(["temperature", "top_p"])
     expect(JSON.stringify(drops)).not.toContain("1024")
+  })
+
+  test("a Claude Code turn (only the mandatory ceiling refused) reports no drop at all", () => {
+    const { body, drops } = sent("anthropic", {
+      model: "gpt-5.5",
+      max_tokens: 32_000,
+      messages: [{ role: "user", content: "hi" }],
+    })
+    expect(body.max_output_tokens).toBeUndefined()
+    expect(drops).toHaveLength(0)
   })
 
   test("a system prompt still becomes the instructions", () => {
@@ -65,8 +77,9 @@ describe("a Codex-ruled Responses surface", () => {
     expect(body.stream).toBe(true)
   })
 
-  test("chat ingress gets the same treatment", () => {
-    const { body } = sent("openai-chat", CHAT)
+  test("chat ingress gets the same treatment, and a ceiling the caller chose is reported", () => {
+    const { body, drops } = sent("openai-chat", CHAT)
+    expect(drops.map((d) => d.field).sort()).toEqual(["max_output_tokens", "temperature", "top_p"])
     expect(body.max_output_tokens).toBeUndefined()
     expect(body.temperature).toBeUndefined()
     expect(body.top_p).toBeUndefined()

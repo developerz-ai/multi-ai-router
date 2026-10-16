@@ -163,4 +163,11 @@ export interface TranslationConfig {
    */
   readonly defaultMaxTokens: number
   readonly maximumPendingBytes: number
+  /**
+   * Upstream (post-alias) model ids / `prefix*` globs that reason by default on openai-chat egress.
+   * A forced `tool_choice` translated to one of them is sent the vendor dial `enable_thinking: false`
+   * (`OPENAI_CHAT_THINKING_DEFAULT_MODELS`, docs/idea/06). Empty by default, so the dial is never
+   * emitted until an operator names a model — a vendor dial, never a model change (non-negotiable 4).
+   */
+  readonly thinkingDefaultModels: readonly string[]
 }

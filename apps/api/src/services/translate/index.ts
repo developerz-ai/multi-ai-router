@@ -125,7 +125,12 @@ export {
   toOpenAiFinishReason,
   toResponsesCompletion,
 } from "./shared/stop-reason"
-export { toolChoiceForOpenAiChat } from "./shared/tool-choice"
+export type { ThinkingDefaultMatcher } from "./shared/thinking-default"
+export {
+  createThinkingDefaultMatcher,
+  disableThinkingDefaultForForcedTool,
+} from "./shared/thinking-default"
+export { forcesOpenAiChatTool, toolChoiceForOpenAiChat } from "./shared/tool-choice"
 export {
   argumentsFromInput,
   inputFromArguments,

@@ -58,6 +58,7 @@ function service(rows: readonly UsageGroupRow[], stub: Stub = {}) {
     outcomes: async () => [...(stub.outcomes ?? [])],
   }
   const history: UsageHistoryRepository = {
+    clock: async () => ({ dbNow: NOW, earliestAt: NOW }),
     coverage: async () => ({
       dbNow: NOW,
       earliestAt: NOW,

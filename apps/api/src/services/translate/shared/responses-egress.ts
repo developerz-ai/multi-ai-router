@@ -39,10 +39,20 @@ export const DEFAULT_RESPONSES_EGRESS: ResponsesEgressRules = {
 
 const REFUSED_BY_SURFACE = "the target account's Responses surface refuses this field"
 
+const NONE: ReadonlySet<string> = new Set()
+
+/**
+ * @param everyRequest Responses fields the ingress dialect puts on *every* body — Anthropic's
+ * mandatory `max_tokens` lands as `max_output_tokens`. Removing one is still done, but not
+ * reported: a drop every request carries is a documented hint, and a warn line per request says
+ * nothing (`shared/drops.ts`). Prod, 2026-10-16: 174 such lines an hour, one per Claude Code turn
+ * routed to a ChatGPT account.
+ */
 export function applyResponsesEgressRules(
   body: unknown,
   rules: ResponsesEgressRules | undefined,
   onDrop: DropSink | undefined,
+  everyRequest: ReadonlySet<string> = NONE,
 ): unknown {
   if (rules === undefined || typeof body !== "object" || body === null || Array.isArray(body)) {
     return body
@@ -51,7 +61,7 @@ export function applyResponsesEgressRules(
   for (const field of rules.unsupportedFields) {
     if (out[field] === undefined) continue
     delete out[field]
-    onDrop?.({ field, reason: REFUSED_BY_SURFACE })
+    if (!everyRequest.has(field)) onDrop?.({ field, reason: REFUSED_BY_SURFACE })
   }
   if (rules.requireStream) out.stream = true
   if (rules.requireInstructions && typeof out.instructions !== "string") out.instructions = ""

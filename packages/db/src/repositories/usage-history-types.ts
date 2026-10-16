@@ -25,6 +25,12 @@ export interface UsageHistoryCoverage {
   readonly historicalPrecision: "day"
 }
 export interface UsageHistoryRepository {
+  /**
+   * Just the database clock and the earliest retained instant, for the window-resolution step that
+   * needs nothing else. A whole `coverage()` call there would run its `pending`/`legacy` checks over
+   * every retained row for a result the window never reads — see docs/idea/08-observability.md.
+   */
+  clock(): Promise<Pick<UsageHistoryCoverage, "dbNow" | "earliestAt">>
   coverage(window?: UsageWindow): Promise<UsageHistoryCoverage>
   totals(window: UsageWindow, filter: UsageFilter): Promise<UsageTotals>
   breakdown(

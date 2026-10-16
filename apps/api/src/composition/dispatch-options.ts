@@ -1,5 +1,6 @@
 import type { Env } from "../config/env"
 import type { DispatchOptions } from "../services/dataplane"
+import { createThinkingDefaultMatcher } from "../services/translate"
 
 /**
  * The one place parsed env becomes dispatcher behavior.
@@ -45,6 +46,8 @@ export function dispatchOptionsFromEnv(env: Env): DispatchOptions {
     translation: {
       defaultMaxTokens: env.translation.defaultMaxTokens,
       maximumPendingBytes: env.translation.maximumPendingBytes,
+      // Built once here, not per request: the roster is config and the matcher is a pure closure.
+      thinkingDefaultModels: createThinkingDefaultMatcher(env.translation.thinkingDefaultModels),
     },
     // The one limit an unauthenticated-shaped mistake can spend memory on before anything else
     // runs, so it is the operator's to set rather than the reader's to assume.

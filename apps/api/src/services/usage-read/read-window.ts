@@ -7,10 +7,13 @@ import { type ResolvedWindow, resolveWindow, type UsageWindowQuery } from "./win
  * instants in both: "lifetime" starts at the earliest retained fact rather than the epoch.
  */
 export async function resolveReadWindow(
-  history: Pick<UsageHistoryRepository, "coverage">,
+  history: Pick<UsageHistoryRepository, "clock">,
   query: UsageWindowQuery,
 ): Promise<ResolvedWindow> {
-  const initial = await history.coverage()
+  // Only the clock and the earliest retained instant matter here. Calling `coverage()` with no
+  // window used to run its `pending`/`legacy` anti-joins over every retained row — ~half the cost
+  // of a large summary — for two fields. See docs/idea/08-observability.md.
+  const initial = await history.clock()
   const requested = resolveWindow(query, initial.dbNow)
   return requested.label === "lifetime"
     ? {

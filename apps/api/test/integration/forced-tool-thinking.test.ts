@@ -42,23 +42,34 @@ describe("POST /v1/messages, forced tool, anthropic passthrough to MiniMax", () 
     expect(sent(upstream.calls[0]?.body)).toEqual({ ...FORCED, thinking: { type: "disabled" } })
   })
 
-  test("thinking enabled: refused 400 in Anthropic's error shape, no upstream call", async () => {
-    const { app, upstream } = harness({ accounts: miniMax(), responses: [ok] })
-    const body = { ...FORCED, thinking: { type: "enabled", budget_tokens: 2048 } }
+  // Prod regression, 2026-10-15..16 (v2.37.3): the AI SDK forced a tool *and* stated a thinking
+  // budget, and the router answered 538 `400`s. The dial yields to the force — thinking is rewritten
+  // to disabled and the vendor is served the forced tool, the model untouched.
+  for (const thinkingType of ["enabled", "adaptive"] as const) {
+    for (const tool_choice of [
+      { type: "tool", name: "json" },
+      { type: "any", disable_parallel_tool_use: true },
+    ]) {
+      test(`thinking ${thinkingType} + ${tool_choice.type}: overridden to disabled, served`, async () => {
+        const { app, upstream } = harness({ accounts: miniMax(), responses: [ok] })
+        const body = {
+          ...FORCED,
+          tool_choice,
+          thinking: { type: thinkingType, budget_tokens: 2048 },
+        }
 
-    const res = await app.request("/v1/messages", post(JSON.stringify(body), bearer()))
-    const json = (await res.json()) as {
-      type?: string
-      error?: { type?: string; message?: string }
+        const res = await app.request("/v1/messages", post(JSON.stringify(body), bearer()))
+        await res.text()
+        await settle()
+
+        expect(res.status).toBe(200)
+        const upstreamBody = sent(upstream.calls[0]?.body)
+        expect(upstreamBody.thinking).toEqual({ type: "disabled" })
+        expect(upstreamBody.tool_choice).toEqual(tool_choice)
+        expect(upstreamBody.model).toBe("MiniMax-M3")
+      })
     }
-    await settle()
-
-    expect(res.status).toBe(400)
-    expect(json.type).toBe("error")
-    expect(json.error?.type).toBe("invalid_request_error")
-    expect(json.error?.message).toContain("tool_choice forces tool use")
-    expect(upstream.calls).toHaveLength(0)
-  })
+  }
 
   test("real Anthropic is relayed byte for byte", async () => {
     const { app, upstream } = harness({ responses: [ok] })

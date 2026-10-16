@@ -19,9 +19,9 @@ import type {
   OpenAiChatToolCall,
 } from "../shared/openai-chat"
 import { chatCeiling } from "../shared/openai-chat"
-import { openAiEffortFromAnthropic } from "../shared/reasoning-effort"
+import { openAiEffortFromAnthropic, reasoningBesideToolChoice } from "../shared/reasoning-effort"
 import { parseRequest, rejectField } from "../shared/reject"
-import { toolChoiceForOpenAiChat } from "../shared/tool-choice"
+import { forcesOpenAiChatTool, toolChoiceForOpenAiChat } from "../shared/tool-choice"
 import { argumentsFromInput, toolsToOpenAiChat } from "../shared/tools"
 
 /**
@@ -37,7 +37,8 @@ import { argumentsFromInput, toolsToOpenAiChat } from "../shared/tools"
  *    `content` and `tool_calls`.
  *
  * `output_config.effort` becomes `reasoning_effort`, and a `thinking` budget with no effort beside it
- * lands in an effort bucket (`shared/reasoning-effort.ts`).
+ * lands in an effort bucket (`shared/reasoning-effort.ts`) — unless the `tool_choice` forces a tool,
+ * which `thinking` yields to, dropped and reported.
  *
  * Dropped silently, as documented: `top_k`, `cache_control`, `thinking` / `redacted_thinking`
  * blocks (including the router-signed ones `shared/router-thinking.ts` describes), `metadata`, the
@@ -95,6 +96,8 @@ export function anthropicToOpenAiChatRequest(
   }
 
   const tools = request.tools === undefined ? undefined : toolsToOpenAiChat(request.tools, onDrop)
+  const toolChoice = toolChoiceForOpenAiChat(request.tool_choice, tools, onDrop)
+  const reasoning = reasoningBesideToolChoice(request, forcesOpenAiChatTool(toolChoice), onDrop)
 
   // `undefined` members are dropped by `JSON.stringify` on the way out, so an absent field stays
   // absent rather than becoming an explicit null the upstream has to interpret.
@@ -116,8 +119,8 @@ export function anthropicToOpenAiChatRequest(
       request.tool_choice?.disable_parallel_tool_use === undefined
         ? undefined
         : !request.tool_choice.disable_parallel_tool_use,
-    tool_choice: toolChoiceForOpenAiChat(request.tool_choice, tools, onDrop),
-    reasoning_effort: openAiEffortFromAnthropic(request),
+    tool_choice: toolChoice,
+    reasoning_effort: openAiEffortFromAnthropic(reasoning),
   }
 }
 
