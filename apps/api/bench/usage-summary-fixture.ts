@@ -36,11 +36,8 @@ export function benchUuid(n: number): string {
   return `${h.slice(0, 8)}-${h.slice(8, 12)}-4${h.slice(13, 16)}-8${h.slice(17, 20)}-${h.slice(20, 32)}`
 }
 
-export interface SeededUsageFixture {
-  /** Distinct keys the v2 tables and raw rows reference. */
-  readonly keys: number
-  readonly window: { from: Date; to: Date }
-}
+/** Distinct keys the v2 tables and raw rows reference, and the seeded window. */
+export type SeededUsageFixture = { keys: number; window: { from: Date; to: Date } }
 
 export async function seedUsageFixture(
   sql: SqlConnection,
@@ -257,7 +254,7 @@ async function seedRaw(sql: SqlConnection, rows: number, from: Date, to: Date, k
       outcome: error ? "upstream_error" : "success",
       created_at: new Date(t).toISOString(),
     }
-    for (const [i, c] of columns.entries()) data[i].push(row[c])
+    for (const [ci, c] of columns.entries()) data[ci].push(row[c])
   }
   await insertBatches(sql, "usage_records", columns, types, data)
 }
@@ -297,7 +294,7 @@ async function seedContributions(sql: SqlConnection, rows: number, lastFull: Dat
       }),
       ingested_at: new Date(t).toISOString(),
     }
-    for (const [i, c] of columns.entries()) data[i].push(row[c])
+    for (const [ci, c] of columns.entries()) data[ci].push(row[c])
   }
   await insertBatches(sql, "usage_contributions", columns, types, data)
 }
