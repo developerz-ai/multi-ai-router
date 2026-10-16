@@ -31,6 +31,7 @@ function capturedBuilder() {
     groupBy: () => builder,
     orderBy: () => builder,
     limit: () => builder,
+    // biome-ignore lint/suspicious/noThenProperty: Drizzle's query chain is a thenable the repository awaits — the fake mirrors it.
     then: (onFulfilled: (rows: unknown[]) => unknown) => Promise.resolve(onFulfilled([])),
   } as unknown as Chain
   const db = { select: () => builder } as unknown as Database
