@@ -107,6 +107,11 @@ client (Claude Code / OpenCode / Cline / …) ─ POST /v1/messages + mar_live_�
  SSE to client · Session mapping persisted · circuit breaker updated
 ```
 
+Claude Code posts to `/v1/messages?beta=true` (and to `/v1/messages/count_tokens?beta=true` before
+a turn). Routing matches the path only, so the query changes nothing about admission, account
+choice or relay — pinned by `apps/api/test/integration/beta-query.test.ts` on both a passthrough
+account and a subscription account.
+
 Walkthrough, grounded in `server.ts` (`handleMessages`, from :625):
 
 1. **Admission** — request id, then a FIFO semaphore (`server.ts:602`); queue wait measured.

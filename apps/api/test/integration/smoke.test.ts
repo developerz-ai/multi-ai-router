@@ -1,4 +1,5 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test"
+import { REQUIRED_LEG_NAMES, SMOKE_CLAUDE_CODE_SESSION_ID } from "../../smoke/legs"
 import {
   buildLegs,
   buildReport,
@@ -8,12 +9,13 @@ import {
   renderReport,
   runLegs,
 } from "../../smoke/run"
+import { CLAUDE_CODE_SESSION_HEADER } from "../../src/services/dataplane/body/session"
 import { jsonResponse } from "../unit/dataplane/fixtures"
 import { harness, KEY } from "./harness"
 
 /**
  * End-to-end drive of `bin/smoke` against the real router with a mocked upstream. Every required
- * leg returns a scripted response, the runner walks the eight legs in order, and the integration
+ * leg returns a scripted response, the runner walks the nine legs in order, and the integration
  * asserts the verdicts and exit code a real run would emit. Informational legs never decide the
  * exit code; the test asserts that too.
  *
@@ -74,6 +76,28 @@ const STREAMED_TOOL_SSE = [
   "\n",
 ].join("")
 
+/** A complete text stream — the well-formed SSE answer the Claude Code turn leg passes on. */
+const TEXT_SSE = [
+  "event: message_start\n",
+  'data: {"type":"message_start","message":{"id":"msg_1","type":"message","role":"assistant","model":"claude-opus-5","content":[],"stop_reason":null,"usage":{"input_tokens":11,"output_tokens":0}}}\n',
+  "\n",
+  "event: content_block_start\n",
+  'data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":"pong"}}\n',
+  "\n",
+  "event: content_block_stop\n",
+  'data: {"type":"content_block_stop","index":0}\n',
+  "\n",
+  "event: message_delta\n",
+  'data: {"type":"message_delta","delta":{"stop_reason":"end_turn","stop_sequence":null},"usage":{"output_tokens":3}}\n',
+  "\n",
+  "event: message_stop\n",
+  'data: {"type":"message_stop"}\n',
+  "\n",
+].join("")
+
+const TEXT_SSE_RESPONSE = () =>
+  new Response(TEXT_SSE, { status: 200, headers: { "content-type": "text/event-stream" } })
+
 const MALFORMED_STRING = { stop_reason: "end_turn", content: "not-an-array" }
 const MALFORMED_NULL = { stop_reason: "end_turn", content: [null] }
 
@@ -81,8 +105,8 @@ let server: ReturnType<typeof Bun.serve> | null = null
 let baseUrl = ""
 
 beforeAll(() => {
-  // Eight legs, scripted in the order the runner drives them. The non-stream legs return JSON; the
-  // streamed leg returns Anthropic SSE bytes the runner's parser will assemble.
+  // Nine legs, scripted in the order the runner drives them. The non-stream legs return JSON; the
+  // streamed legs return Anthropic SSE bytes the runner's parser will assemble.
   const { app } = harness({
     responses: [
       () => jsonResponse(200, TEXT),
@@ -95,6 +119,8 @@ beforeAll(() => {
           headers: { "content-type": "text/event-stream" },
         }),
       () => jsonResponse(200, REASONING_TOOL),
+      // messages.claude_code_turn: a complete text stream is the well-formed answer it passes on.
+      TEXT_SSE_RESPONSE,
       // /v1/chat/completions against an anthropic account: the router translates a tool_use block
       // into OpenAI tool_calls. The script returns the *upstream* shape; the dispatcher's
       // translate egress mode rebuilds the wire format.
@@ -192,7 +218,7 @@ describe("bin/smoke — readKey", () => {
 })
 
 describe("bin/smoke — leg construction", () => {
-  test("builds the eight documented legs in the documented order", () => {
+  test("builds the nine documented legs in the documented order", () => {
     const legs = buildLegs()
     expect(legs.map((leg) => leg.name)).toEqual([
       "messages.text",
@@ -201,23 +227,30 @@ describe("bin/smoke — leg construction", () => {
       "messages.tool_round_trip",
       "messages.streamed_forced_tool",
       "messages.reasoning_forced_tool",
+      "messages.claude_code_turn",
       "chat_completions.required_tool",
       "responses.function_call",
     ])
-    expect(legs.filter((leg) => leg.endpoint === "/v1/messages")).toHaveLength(6)
+    expect(legs.filter((leg) => leg.endpoint === "/v1/messages")).toHaveLength(7)
     expect(legs.filter((leg) => leg.endpoint === "/v1/chat/completions")).toHaveLength(1)
     expect(legs.filter((leg) => leg.endpoint === "/v1/responses")).toHaveLength(1)
-    expect(legs.filter((leg) => leg.stream)).toHaveLength(1)
-    expect(legs.filter((leg) => leg.endpoint === "/v1/messages").every((leg) => leg.required)).toBe(
+    expect(legs.filter((leg) => leg.stream)).toHaveLength(2)
+    // Exactly the six core Messages legs gate the exit code — the Claude Code replay is optional
+    // because `bin/smoke` runs against live deployments.
+    expect(legs.filter((leg) => leg.required).map((leg) => leg.name)).toEqual(REQUIRED_LEG_NAMES)
+    expect(legs.filter((leg) => leg.required).every((leg) => leg.endpoint === "/v1/messages")).toBe(
       true,
     )
-    expect(
-      legs
-        .filter(
-          (leg) => leg.endpoint === "/v1/chat/completions" || leg.endpoint === "/v1/responses",
-        )
-        .every((leg) => !leg.required),
-    ).toBe(true)
+  })
+
+  test("the Claude Code turn leg is a streamed /v1/messages POST carrying the CLI's session header", () => {
+    const leg = buildLegs().find((candidate) => candidate.name === "messages.claude_code_turn")
+    if (leg === undefined || leg.endpoint !== "/v1/messages") {
+      throw new Error("messages.claude_code_turn leg missing")
+    }
+    expect(leg.stream).toBe(true)
+    expect(leg.required).toBe(false)
+    expect(leg.headers?.[CLAUDE_CODE_SESSION_HEADER]).toBe(SMOKE_CLAUDE_CODE_SESSION_ID)
   })
 })
 
@@ -314,6 +347,7 @@ describe("bin/smoke — the runner actually sends tools, tool_choice and reasoni
             headers: { "content-type": "text/event-stream" },
           }),
         () => jsonResponse(200, TOOL_USE_NO_THINK),
+        TEXT_SSE_RESPONSE,
         () => jsonResponse(200, TOOL_USE),
         () => jsonResponse(200, TOOL_USE),
       ],
@@ -378,6 +412,18 @@ describe("bin/smoke — the runner actually sends tools, tool_choice and reasoni
         expect(body.thinking).toEqual({ type: "adaptive" })
         expect(body.output_config).toEqual({ effort: "low" })
         expect(body.tool_choice).toEqual({ type: "tool", name: "get_weather" })
+      }
+
+      // Leg 6 (claude_code_turn): the replayed fixture reached the upstream with the model swapped
+      // for --model, stream forced on, and the capture's own tools and metadata intact.
+      {
+        const body = bodyAt(6)
+        expect(body.model).toBe("claude-opus-5")
+        expect(body.stream).toBe(true)
+        expect(Array.isArray(body.tools)).toBe(true)
+        expect(body.metadata).toEqual({ user_id: "<user_id>" })
+        expect(headerAt(6, "accept")).toBe("text/event-stream")
+        expect(resultAt(6).outcome.verdict).toBe("PASS")
       }
 
       // And the grader reports PASS on the tool_use alone, with thinkingPresent=false.
@@ -448,7 +494,7 @@ describe("bin/smoke — key redaction", () => {
 
   test("bin/smoke subprocess: plain report never contains the key (stdout or stderr)", async () => {
     // The shared beforeAll harness is drained by the earlier integration tests, so spin up a
-    // dedicated harness whose scripted responses are still all eight — the subprocess must read
+    // dedicated harness whose scripted responses are still all nine — the subprocess must read
     // them in order, and the harness's "repeat the last one" fallback would otherwise mis-grade
     // every leg.
     const { app } = harness({
@@ -463,6 +509,7 @@ describe("bin/smoke — key redaction", () => {
             headers: { "content-type": "text/event-stream" },
           }),
         () => jsonResponse(200, REASONING_TOOL),
+        TEXT_SSE_RESPONSE,
         () => jsonResponse(200, TOOL_USE),
         () => jsonResponse(200, TOOL_USE),
       ],
@@ -516,6 +563,7 @@ describe("bin/smoke — key redaction", () => {
             headers: { "content-type": "text/event-stream" },
           }),
         () => jsonResponse(200, REASONING_TOOL),
+        TEXT_SSE_RESPONSE,
         () => jsonResponse(200, TOOL_USE),
         () => jsonResponse(200, TOOL_USE),
       ],
@@ -676,9 +724,9 @@ describe("bin/smoke — driveLeg backstop catches a grader throw", () => {
 })
 
 describe("bin/smoke — a malformed informational reply never gates the run", () => {
-  // The six /v1/messages legs get well-formed replies; the two informational legs get bodies
-  // that threw in the OpenAI graders before 2.25.4. The run must resolve, report all eight
-  // legs, FAIL the two informational ones, and still exit 0: informational legs never gate.
+  // The seven /v1/messages legs get well-formed replies; the two OpenAI legs get bodies
+  // that threw in the OpenAI graders before 2.25.4. The run must resolve, report all nine
+  // legs, FAIL the two malformed ones, and still exit 0: informational legs never gate.
   test("chat_completions `choices: [null]` and responses `output: [null]` FAIL without changing the exit code", async () => {
     const replies: (() => Response)[] = [
       () => jsonResponse(200, TEXT),
@@ -691,6 +739,7 @@ describe("bin/smoke — a malformed informational reply never gates the run", ()
           headers: { "content-type": "text/event-stream" },
         }),
       () => jsonResponse(200, REASONING_TOOL),
+      TEXT_SSE_RESPONSE,
       () => jsonResponse(200, { choices: [null] }),
       () => jsonResponse(200, { output: [null] }),
     ]
@@ -709,8 +758,9 @@ describe("bin/smoke — a malformed informational reply never gates the run", ()
       legs,
       fetchImpl,
     })
-    expect(results).toHaveLength(8)
-    expect(results.slice(0, 6).map((r) => r.outcome.verdict)).toEqual([
+    expect(results).toHaveLength(9)
+    expect(results.slice(0, 7).map((r) => r.outcome.verdict)).toEqual([
+      "PASS",
       "PASS",
       "PASS",
       "PASS",
@@ -718,11 +768,81 @@ describe("bin/smoke — a malformed informational reply never gates the run", ()
       "PASS",
       "PASS",
     ])
-    expect(results.slice(6).map((r) => r.outcome)).toEqual([
+    expect(results.slice(7).map((r) => r.outcome)).toEqual([
       { verdict: "FAIL", reason: "malformed-body" },
       { verdict: "FAIL", reason: "malformed-body" },
     ])
     expect(decideExitCode(results)).toBe(0)
+  })
+})
+
+describe("bin/smoke — the Claude Code turn leg", () => {
+  // A bare capture server, not the router: what this leg sends is the claim, so the server records
+  // the request itself rather than asserting what the router relays.
+  async function capture(reply: () => Response): Promise<{
+    readonly results: readonly import("../../smoke/run").LegRunResult[]
+    readonly request: { readonly headers: Headers; readonly body: string }
+  }> {
+    let seen: { headers: Headers; body: string } | null = null
+    const server = Bun.serve({
+      port: 0,
+      hostname: "127.0.0.1",
+      fetch: async (req) => {
+        seen = { headers: new Headers(req.headers), body: await req.text() }
+        return reply()
+      },
+    })
+    try {
+      const leg = buildLegs().find((candidate) => candidate.name === "messages.claude_code_turn")
+      if (leg === undefined) throw new Error("messages.claude_code_turn leg missing")
+      const results = await runLegs({
+        url: `http://127.0.0.1:${server.port}`,
+        model: "claude-opus-5",
+        key: KEY,
+        legs: [leg],
+      })
+      if (seen === null) throw new Error("the leg never reached the server")
+      return { results, request: seen }
+    } finally {
+      server.stop()
+    }
+  }
+
+  test("sends the fixture body (model swapped for --model, stream forced on) and the session header", async () => {
+    const { results, request } = await capture(TEXT_SSE_RESPONSE)
+
+    expect(results[0]?.outcome.verdict).toBe("PASS")
+    expect(request.headers.get(CLAUDE_CODE_SESSION_HEADER)).toBe(SMOKE_CLAUDE_CODE_SESSION_ID)
+    expect(request.headers.get("accept")).toBe("text/event-stream")
+    const body = JSON.parse(request.body) as Record<string, unknown>
+    expect(body.model).toBe("claude-opus-5")
+    expect(body.stream).toBe(true)
+    expect(body.metadata).toEqual({ user_id: "<user_id>" })
+    expect(Array.isArray(body.tools)).toBe(true)
+  })
+
+  test("a stream without message_stop is FAIL missing-message-stop, and the leg never gates the exit code", async () => {
+    const truncated = () =>
+      new Response(
+        [
+          "event: message_start\n",
+          'data: {"type":"message_start","message":{"id":"msg_1","type":"message","role":"assistant","model":"claude-opus-5","content":[],"stop_reason":null,"usage":{"input_tokens":11,"output_tokens":0}}}\n',
+          "\n",
+          "event: content_block_start\n",
+          'data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":"po"}}\n',
+          "\n",
+        ].join(""),
+        { status: 200, headers: { "content-type": "text/event-stream" } },
+      )
+    const { results } = await capture(truncated)
+
+    expect(results[0]?.outcome).toEqual({ verdict: "FAIL", reason: "missing-message-stop" })
+    expect(decideExitCode(results)).toBe(0)
+  })
+
+  test("a 200 with no SSE frames at all is FAIL missing-message-start", async () => {
+    const { results } = await capture(() => jsonResponse(200, TEXT))
+    expect(results[0]?.outcome).toEqual({ verdict: "FAIL", reason: "missing-message-start" })
   })
 })
 
