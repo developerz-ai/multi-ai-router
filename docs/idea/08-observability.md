@@ -306,31 +306,44 @@ same bucket expression, so their group keys match. Owner and tool attribution fo
 server-wide `SERVER_IDLE_TIMEOUT_SECONDS` (default 60). The summary is expected to complete well
 inside it, and `bin/bench-usage` is the tripwire that proves it still does.
 
-**Measured.** At the #250 fixture scale — a 30-day window over ~180k rows per v2 daily rollup
-table plus ~200k raw records — the pre-fix summary fanned out to ~22 grouped reads inside one
-repeatable-read snapshot and took minutes on a loaded host: every one of the six breakdown
-queries re-read the whole window (a full grain-index scan per dimension, with the id filter
-applied per-row after the read — up to ~157k rows filtered out per query), and the owner/tool
-breakdowns joined every fact row to the unnest label relation before aggregating, spilling the
-sort to disk.
+**Measured.** At the #250 fixture scale — a 30-day window over two v2 daily rollup tables of
+~180k rows each plus receipts (~400k windowed facts) and ~200k raw records — the pre-fix summary
+fanned out to 24 statements inside one repeatable-read snapshot and took 351.8 s wall (~176 s
+summed EXPLAIN execution) on a loaded host (load ~7), against the 60 s idle bound. The single
+dominant statement was the per-key series narrowed to the 101 selected key ids: its id filter was
+a 101-term `::text is not distinct from` OR-chain, so every row of the window scan paid up to 101
+uuid→text casts and text comparisons — 59.5 s execution, 156,600 rows removed by that filter,
+the group sort spilled to disk. The owner/tool reads joined every fact row (~400k) to the
+unnested label relation and re-ran the bucket CASE per row before aggregating, and spilled too.
 
 **Fix — mechanism, not symptom.**
 
-- Breakdown→series id lists bind as one typed array probe (`= any($n::uuid[])`, `text[]` for
-  models, an explicit `is null` term for the null group) instead of a per-id
-  `::text is not distinct from` OR-chain, so the filter reaches the index instead of running
-  per-row after a full scan.
-- Owner and tool fold the facts to one row per key **before** the label join, so the join runs
-  at grouped cardinality, not per fact row.
-- The six breakdowns and the window totals consolidate into two passes over the facts: one
-  `grouping sets` pass for the four column dimensions and the totals row, one fold-then-label
-  pass for owner and tool. The `grouping()` mask names the dimension and a `row_number()` per
-  mask keeps each dimension's cap and its tokens-desc order, so the wire shape is unchanged.
+- Breakdown→series id lists bind as ONE typed array probe (`= any($n::uuid[])`, `text[]` for the
+  model column and the owner/tool buckets, an explicit `is null` term for the null group)
+  instead of a per-id OR-chain. The probe rides inside each facts-union arm where the chain did:
+  the key series' facts step fell from 59.2 s to 9.7 s under the same host load, the statement
+  from 59.5 s to 12.0 s.
+- Owner and tool fold the facts to one row per key (per time bucket for the series) **before**
+  the label join, so the join and the bucket CASE run at grouped cardinality (~775 rows) instead
+  of per fact row (~400k), and those reads no longer spill. Sums of sums are exact
+  (`sum(bigint)` is numeric), so the wire rows are unchanged.
+
+The per-read scan count is unchanged: every breakdown and series still reads the windowed facts
+once (~62k shared buffers, 14 facts scans per summary at fixture scale), and the key series'
+group sort still spills (~52k rows over the default `work_mem`). If a deployment outgrows the
+budgets on this shape, the next levers — in order — are consolidating the per-dimension scans
+into one `grouping sets` pass, a coarser series grain, and the rollup grain itself.
 
 `bin/bench-usage` seeds the fixture into a throwaway database, runs the real `readSummary`, and
-exits non-zero when either the wall clock or the total shared-buffer traffic (EXPLAIN (ANALYZE,
-BUFFERS) — load-distortion-proof) crosses its budget. It is deliberately not in `bin/check`, the
-same way `bin/bench` is not: a timing gate on a shared runner flakes.
+re-runs every statement under EXPLAIN (ANALYZE, BUFFERS). It exits non-zero when the wall clock
+crosses `--budget-ms` (default 240 s; the pre-fix summary measured 351.8 s wall, the post-fix
+201.7 s on the same loaded host) or the total shared-buffer traffic crosses `--buffers-budget`
+(default 1.2 M, ~0.95 M measured; a scan-volume regression — the day bound on the receipts arm,
+say — moves buffers before it moves timings, and buffers do not skew with host load). It is
+deliberately not in `bin/check`, the same way `bin/bench` is not: a timing gate on a shared
+runner flakes — on this one the same fixed build measured 201.7 s and 451.6 s wall in two runs
+an hour apart, which is why the plan-shape pins live in the unit tests and the budgets here are
+regression tripwires, not SLOs.
 
 **Beyond the bound.** No statement timeout is added under the idle timeout and the default
 window is unchanged: a smaller statement bound would only swap the error the operator sees for
