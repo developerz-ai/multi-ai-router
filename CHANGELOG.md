@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.39.0] — 2026-10-16
+
+### Added
+
+- Opt-in `CLAUDE_FAST_MODE` for direct Claude subscription HTTP inference with account-scoped SDK credentials, preserved client tools/thinking/cache controls, SSE passthrough, quota reporting and SDK fallback before inference. Disabled by default; SDK retains login and refresh ownership. Calibrated for CLI 2.1.301 and Bun 1.4.2.
+- `bin/claude-trace`: isolated MITM workflows for TTY, print, SDK conversations, subagents and compaction; redacted summaries, offline integrity verification and local TLS/header-order comparison. Wire findings and a pinned Dario deep dive are documented under `docs/research/`.
+
+### Changed
+
+- Upgrade Claude Agent SDK from 0.3.289 to 0.3.301.
+
 ## [2.38.0] — 2026-10-16
 
 ### Added
@@ -1462,3 +1473,5 @@ your tooling config.
 [2.37.9]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.37.9
 [2.37.10]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.37.10
 [2.38.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.38.0
+
+[2.39.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.39.0

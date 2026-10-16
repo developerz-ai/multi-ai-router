@@ -19,7 +19,7 @@ Full data plane shipped: accounts, pools, keys, `/v1/messages` + `/v1/chat/compl
 
 ## Non-negotiables (MUST)
 
-1. **Claude subscriptions go through the Claude Agent SDK.** `@anthropic-ai/claude-agent-sdk`'s `query()`, one `CLAUDE_CONFIG_DIR` per Account, the `claude` CLI in the image. NEVER extract a subscription OAuth token, forge a request at `api.anthropic.com` with one, or patch a binary. Account safety is the reason; a subprocess per request plus protocol re-synthesis is the price, and we pay it. Anthropic **API keys** are a different path: plain HTTP, normal driver.
+1. **Claude subscriptions use the Agent SDK by default.** `CLAUDE_FAST_MODE=false` keeps `query()` and one `CLAUDE_CONFIG_DIR` per Account. The explicitly requested opt-in fast transport may read the selected Account's access token and identity under its ownership fence for direct HTTP inference. SDK/CLI alone owns login and refresh; never read another Account or HOME credentials, rotate refresh tokens independently, or patch a binary. Unknown profiles fall back before inference. See `docs/idea/claude-fast-mode.md`. Anthropic API keys remain the normal HTTP driver.
 2. **The SDK never executes a tool on this host. Passthrough-only, allowlisted by name.** The Agent SDK's built-ins (`bash`, `read`, `write`, `edit`, `glob`, `grep`, …) run *on the router*, so leaving them reachable is arbitrary command execution for anyone holding any router key — `ENCRYPTION_KEY`, the Postgres credentials, every Account's `CLAUDE_CONFIG_DIR`. Disable them with an **explicit allowlist that names the permitted tools** — never a blocklist, never a default. Tool calls are forwarded to the **client** to execute; the client owns the user's filesystem, which is what a router should do anyway. Launch with `settingSources: []` explicitly (omitting it slurps the host's `CLAUDE.md` and settings into the prompt — a cross-tenant leak, not clutter) and strip inherited `ANTHROPIC_*` env. **A test asserting a host-tool invocation is rejected is a security regression gate** — it fails the build; never skip, quarantine, or relax it. Rationale: `docs/idea/07-security.md`.
 3. Upstream credentials never leave the router. Not in responses, logs, errors, admin endpoints. Encrypted at rest (AES-256-GCM, `ENCRYPTION_KEY`). The log redactor is tested.
 4. **The client picks the model. The router picks the account.** Never re-route a model, never substitute a cheaper one. Model names pass through unchanged except through an Account's explicit alias map.
@@ -31,7 +31,7 @@ Full data plane shipped: accounts, pools, keys, `/v1/messages` + `/v1/chat/compl
 10. Same-dialect requests are byte-passthrough — headers swapped, body untouched, streaming forwarded byte-for-byte. Translate only across dialects.
 11. Every retention window is config, not a constant in code. Same for intervals and limits.
 12. Adding a provider touches exactly one file in `providers/`. Anything else changing means the interface is wrong.
-13. **Background work is in-process + Postgres advisory locks. No broker.** Jittered interval timers, `pg_try_advisory_lock` per task so exactly one replica runs a sweep, every task idempotent/resumable/bounded-batch, last run + outcome written to `ScheduledTaskRun` so a wedged task is visible. BullMQ/Dragonfly is deliberately deferred — don't reinstate it. **Credential refresh is expiry-driven and single-flighted per account, never a poll**; a failed refresh means `needs_reauth`, not a failed request. **Claude sub tokens are never touched by us** — the Agent SDK refreshes them inside the Account's `CLAUDE_CONFIG_DIR`; we only notice auth failure and mark `needs_reauth`. The one sanctioned nudge is the **credential keepalive**: when an idle sub's access-token timestamp enters the CLI's own refresh lead, we spend one minimal real turn so the CLI refreshes it — we read timestamps only, never a token. Rationale: `docs/idea/01-architecture.md`.
+13. **Background work is in-process + Postgres advisory locks. No broker.** Jittered interval timers, `pg_try_advisory_lock` per task so exactly one replica runs a sweep, every task idempotent/resumable/bounded-batch, last run + outcome written to `ScheduledTaskRun` so a wedged task is visible. BullMQ/Dragonfly is deliberately deferred — don't reinstate it. **Credential refresh is expiry-driven and single-flighted per account, never a poll**; a failed refresh means `needs_reauth`, not a failed request. **Claude refresh tokens are owned by the SDK** — it refreshes them inside the Account's `CLAUDE_CONFIG_DIR`; we only notice auth failure and mark `needs_reauth`. The one sanctioned nudge is the **credential keepalive**: when an idle sub's access-token timestamp enters the CLI's own refresh lead, we spend one minimal real turn so the CLI refreshes it — we read timestamps only, never a token. Rationale: `docs/idea/01-architecture.md`.
 
 ## Stack
 
@@ -135,7 +135,7 @@ Changes are made the way a senior engineer on this codebase would make them.
 
 ## Reverse-engineered flows
 
-**Claude Max/Pro is NOT in this category** — its login runs through the Agent SDK / `claude` CLI into a per-Account `CLAUDE_CONFIG_DIR` (non-negotiable 1). Only non-Anthropic subscription flows (ChatGPT/Codex today) are reverse-engineered from the official first-party clients.
+**Claude Max/Pro login and refresh stay with the SDK / CLI** in a per-Account `CLAUDE_CONFIG_DIR`. Opt-in fast-mode wire research is documented in `docs/research/claude-wire.md`; retain redacted summaries only, never real credentials or raw captures in git.
 
 - Client ids, scopes, authorization/token endpoints, required headers: **pinned constants, one file per provider** in `providers/`.
 - Each constant carries a comment recording provenance (where the value came from) and blast radius (what breaks if the provider changes it).
@@ -159,7 +159,7 @@ SolidJS SPA, `@solidjs/router`, TanStack Solid Query for server state. Vite buil
 
 ## NEVER
 
-- Extract a Claude subscription token, forge a request to `api.anthropic.com` with one, or patch the CLI. Subscriptions go through the SDK.
+- Read a Claude credential outside its selected Account ownership fence, independently refresh it, or patch the CLI. Direct inference is restricted to the documented opt-in fast transport.
 - Let the Agent SDK execute a tool on the router host, enable its internal-MCP execution mode, rely on a blocklist or a default instead of a named allowlist, or drop `settingSources: []`. Tool calls go to the client — see non-negotiable 2.
 - Return an upstream credential, refresh token, or OAuth code in any response, log, or error. (Router keys are admin-retrievable by design — that is the one exception, and only on the authenticated admin plane.)
 - Substitute, downgrade, or "optimize" the model the client asked for.

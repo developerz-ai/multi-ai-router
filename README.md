@@ -419,3 +419,8 @@ The router moves your own accounts through your own server. Claude subscriptions
 ## 📜 License
 
 MIT. See [`LICENSE`](LICENSE).
+
+Claude subscription fast mode is opt-in and disabled by default. See the
+[configuration and behavior](docs/idea/claude-fast-mode.md),
+[repeatable MITM investigation](docs/research/claude-wire.md), and
+[Dario source deep dive](docs/research/dario.md). Run `bin/claude-trace --help` for diagnostics.
