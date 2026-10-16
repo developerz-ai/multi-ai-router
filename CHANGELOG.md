@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.39.6] — 2026-10-16
+
+### Fixed
+
+- Usage-summary performance at large history sizes (#250). The per-dimension series and the raw latency breakdown narrowed to the selected group ids with one `::text is not distinct from` OR-chain term per id: at the 100-row breakdown cap every retained row of a ~400k-row windowed facts scan paid up to 101 uuid→text casts and text comparisons, and the 101-id key series alone ran 59.5s exec (EXPLAIN ANALYZE, BUFFERS on the seeded fixture; 156,600 rows removed by that filter, group sort spilled). Id lists now bind as ONE typed array probe (`= any($n::uuid[])`, `text[]` for the model column and the owner/tool buckets, explicit `is null` for the null group) riding inside each facts-union arm; the same statement measures 12.0s exec under the same host load, 1.3s client-side in a warm pass. Owner/tool reads joined the unnested key-label relation per fact row (~400k hash probes plus the bucket CASE per read) and spilled; the facts now fold to one row per key — per time bucket for the series — BEFORE the label join, so the join runs at ~775-row grouped cardinality and those spills are gone. Sums of sums are exact (`sum(bigint)` is numeric), so the wire rows are unchanged.
+
+### Added
+
+- `bin/bench-usage`: seeds the #250 fixture into a throwaway database, runs the real `readSummary` in its repeatable-read snapshot, re-runs every statement under EXPLAIN (ANALYZE, BUFFERS), and exits non-zero when the wall clock (default budget 240s; on the same harness against the same warm fixture the pre-fix build measured 149.7s wall and the post-fix build 43.9s — the cold pre-fix dump was 351.8s) or the total shared-buffer traffic (default 1.2M; ~0.95M measured, pre- and post-fix alike — the buffer leg guards scan volume, the wall leg per-row cost) crosses its budget. Deliberately not in `bin/check` — a timing gate on a shared runner flakes; the plan-shape pins live in the repository unit tests.
+
 ## [2.39.5] — 2026-10-16
 
 ### Fixed
@@ -1536,3 +1546,5 @@ your tooling config.
 [2.39.4]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.39.4
 
 [2.39.5]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.39.5
+
+[2.39.6]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.39.6

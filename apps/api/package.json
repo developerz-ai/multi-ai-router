@@ -1,6 +1,6 @@
 {
   "name": "@multi-ai-router/api",
-  "version": "2.39.5",
+  "version": "2.39.6",
   "private": true,
   "type": "module",
   "main": "src/main.ts",
@@ -19,6 +19,7 @@
     "zod": "^4.6.7"
   },
   "devDependencies": {
-    "csv-parse": "7.0.3"
+    "csv-parse": "7.0.3",
+    "drizzle-orm": "^0.45.4"
   }
 }

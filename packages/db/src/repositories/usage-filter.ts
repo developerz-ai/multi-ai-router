@@ -45,3 +45,32 @@ export function filterConditions(filter: UsageFilter, columns: FilterColumns): r
 export function andAll(conditions: readonly SQL[]): SQL {
   return conditions.length === 0 ? sql`` : sql` and ${sql.join([...conditions], sql` and `)}`
 }
+
+/**
+ * Narrows a grouped read to the selected group ids: ONE typed array probe for the non-null ids,
+ * plus an explicit `is null` term for the null group. Replaces a per-id `::text is not distinct
+ * from` OR-chain, which at the 100-row breakdown cap made every retained row of a ~400k-row
+ * window pay ~101 uuid→text casts and comparisons — the single dominant statement of the summary
+ * read (#250). The ids arrive canonical (they came out of the same column as `::text`), so the
+ * typed probe matches exactly the rows the chain matched. An empty list is `false`: nothing
+ * matches, same contract the chain had.
+ */
+export function groupIdsMatch(
+  column: SQL,
+  type: "uuid" | "text",
+  ids: readonly (string | null)[],
+): SQL {
+  const values = ids.filter((id): id is string => id !== null)
+  const terms: SQL[] = []
+  if (values.length > 0)
+    terms.push(
+      type === "uuid"
+        ? sql`${column} = any(${sql.param(values)}::uuid[])`
+        : sql`${column} = any(${sql.param(values)}::text[])`,
+    )
+  if (ids.some((id) => id === null)) terms.push(sql`${column} is null`)
+  if (terms.length === 0) return sql`false`
+  const [only] = terms
+  if (terms.length === 1 && only !== undefined) return only
+  return sql`(${sql.join(terms, sql` or `)})`
+}

@@ -300,6 +300,62 @@ same bucket expression, so their group keys match. Owner and tool attribution fo
   It is false for live keys and for the `deleted` and `none` rows; `note` keeps its meaning.
 - `coverage.breakdown.truncated` lists `owner` / `tool` when capped. `/recent` is unchanged.
 
+### Summary read budget (#250)
+
+`GET /api/admin/usage` sets no per-request statement timeout; the bound that applies is the
+server-wide `SERVER_IDLE_TIMEOUT_SECONDS` (default 60). The summary is expected to complete well
+inside it, and `bin/bench-usage` is the tripwire that proves it still does.
+
+**Measured.** At the #250 fixture scale — a 30-day window over two v2 daily rollup tables of
+~180k rows each plus receipts (~400k windowed facts) and ~200k raw records — the pre-fix summary
+fanned out to 24 statements inside one repeatable-read snapshot and took 351.8 s wall on the
+cold seeded fixture (~176 s summed EXPLAIN execution; 149.7 s warm, on the bench harness) on a
+loaded host (load ~7), against the 60 s idle bound. The single
+dominant statement was the per-key series narrowed to the 101 selected key ids: its id filter was
+a 101-term `::text is not distinct from` OR-chain, so every row of the window scan paid up to 101
+uuid→text casts and text comparisons — 59.5 s execution, 156,600 rows removed by that filter,
+the group sort spilled to disk. The owner/tool reads joined every fact row (~400k) to the
+unnested label relation and re-ran the bucket CASE per row before aggregating, and spilled too.
+
+**Fix — mechanism, not symptom.**
+
+- Breakdown→series id lists bind as ONE typed array probe (`= any($n::uuid[])`, `text[]` for the
+  model column and the owner/tool buckets, an explicit `is null` term for the null group)
+  instead of a per-id OR-chain. The probe rides inside each facts-union arm where the chain did:
+  the key series' facts step fell from 59.2 s to 9.7 s under the same host load, the statement
+  from 59.5 s to 12.0 s.
+- Owner and tool fold the facts to one row per key (per time bucket for the series) **before**
+  the label join, so the join and the bucket CASE run at grouped cardinality (~775 rows) instead
+  of per fact row (~400k), and those reads no longer spill. Sums of sums are exact
+  (`sum(bigint)` is numeric), so the wire rows are unchanged.
+
+The per-read scan count is unchanged: every breakdown and series still reads the windowed facts
+once (~62k shared buffers, 14 facts scans per summary at fixture scale), and the key series'
+group sort still spills (~52k rows over the default `work_mem`). If a deployment outgrows the
+budgets on this shape, the next levers — in order — are consolidating the per-dimension scans
+into one `grouping sets` pass, a coarser series grain, and the rollup grain itself.
+
+`bin/bench-usage` seeds the fixture into a throwaway database, runs the real `readSummary`, and
+re-runs every statement under EXPLAIN (ANALYZE, BUFFERS). It exits non-zero when the wall clock
+crosses `--budget-ms` (default 240 s) or the total shared-buffer traffic crosses
+`--buffers-budget` (default 1.2 M, ~0.95 M measured; a scan-volume regression — the day bound on
+the receipts arm, say — moves buffers before it moves timings, and buffers do not skew with host
+load). The two budgets catch different regressions, and neither is a before/after discriminator:
+on the same harness against the same warm fixture minutes apart the pre-fix build measured
+149.7 s wall and the post-fix build 43.9 s (3.4×; the per-label history client times fell
+3.7–7.7× at identical buffer traffic, ~931k vs ~946k — the win is per-row CPU, which is exactly
+the mechanism above), yet the cold pre-fix dump was 351.8 s and a warm pre-fix run can slip
+under the budget. It is deliberately not in `bin/check`, the same way `bin/bench` is not: a
+timing gate on a shared runner flakes — on this one the same fixed build measured 43.9 s,
+201.7 s and 451.6 s wall across one evening, which is why the plan-shape pins live in the unit
+tests and the budgets here are regression tripwires, not SLOs.
+
+**Beyond the bound.** No statement timeout is added under the idle timeout and the default
+window is unchanged: a smaller statement bound would only swap the error the operator sees for
+the same latency, and a smaller default window hides the same data rather than serving it. If a
+deployment outgrows the budgets, the lever is the rollup grain (finer or pre-joined daily
+tables), not the console's window.
+
 ### CSV export
 
 `GET /api/admin/usage/export.csv` takes the same window (`window` or `from`/`to`) and the same six
