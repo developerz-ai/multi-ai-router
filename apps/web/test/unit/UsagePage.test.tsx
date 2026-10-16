@@ -363,8 +363,9 @@ describe("Usage page weekly reports", () => {
       for (const status of ["Pending", "Not configured", "Sent", "Failed"]) {
         expect(text).toContain(status)
       }
-      // Read-only: no resend control, and the failure detail stays out of the page.
-      expect(reports?.querySelector("button")).toBeNull()
+      // Every row carries the Resend control (#229), and the failure detail stays out of the
+      // page: a row names the delivery state, never the webhook error text.
+      expect(reports?.querySelectorAll("button")).toHaveLength(4)
       expect(text).not.toContain("secret-looking")
       expect(requests.some((url) => url.pathname.endsWith("/usage/reports"))).toBe(true)
     } finally {
