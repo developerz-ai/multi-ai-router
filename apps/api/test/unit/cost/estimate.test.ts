@@ -343,7 +343,7 @@ describe("pricing the GPT-6 family (#181)", () => {
   })
 })
 
-describe("pricing glm-5.3-flash (OpenRouter list, 2026-10-14)", () => {
+describe("pricing glm-5.3-flash (z.ai vendor list, 2026-10-15)", () => {
   test("1M in + 1M out + 1M cached read prices 0.680000 USD on a metered zai account", () => {
     // Red before 2.28.0: the zai table had no row, so this priced null / unknown.
     // 0.15 input + 0.50 output + 0.03 cached read = 0.68 USD.
