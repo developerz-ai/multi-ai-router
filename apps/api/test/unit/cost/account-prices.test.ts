@@ -8,6 +8,7 @@ import {
 } from "../../../src/services/cost"
 import { priceLookupForRows } from "../../../src/services/cost/book"
 import { unpricedModels } from "../../../src/services/cost/coverage"
+import { MINIMAX_UNPRICED } from "../../../src/services/cost/tables/minimax"
 
 const accountId = "11111111-1111-4111-8111-111111111111"
 const tokens = { tokensIn: 100, tokensOut: 10, cacheReadTokens: 0, cacheWriteTokens: 0 }
@@ -139,6 +140,35 @@ test("glm-5.3 on zai carries the vendor's published rates (#253)", () => {
     },
   ]
   expect(unpricedModels(zaiAccounts, lookupRates)).toEqual([])
+})
+
+test("MiniMax-M3.1-Flash-Preview has no vendor price, so it stays unknown (#254)", () => {
+  // platform.minimax.io's public price list (docs/guides/pricing, read 2026-10-15) carries no row
+  // for the preview: MiniMax serves it from the coding plan, and only resellers quote per-token
+  // numbers. A reseller's figure is not the vendor's price, so the tokens price as unknown.
+  expect(
+    lookupRates("minimax", "MiniMax-M3.1-Flash-Preview", { billing: "subscription" }),
+  ).toBeNull()
+  expect(lookupRates("minimax", "MiniMax-M3.1-Flash-Preview", { billing: "metered" })).toBeNull()
+  // A date pin must not fall back to a family row that does not price it either.
+  expect(
+    lookupRates("minimax", "MiniMax-M3.1-Flash-Preview-20261001", { billing: "subscription" }),
+  ).toBeNull()
+  expect(
+    estimateCost({
+      provider: "minimax",
+      model: "MiniMax-M3.1-Flash-Preview",
+      tokens,
+      billing: "subscription",
+    }),
+  ).toEqual({ costBasis: "unknown", costEstimate: null })
+  // The registry is the documentation, so it cannot drift from the table: every entry names a
+  // reason and still looks up null.
+  expect(Object.keys(MINIMAX_UNPRICED)).toContain("minimax-m3.1-flash-preview")
+  for (const [model, reason] of Object.entries(MINIMAX_UNPRICED)) {
+    expect(reason.length).toBeGreaterThan(0)
+    expect(lookupRates("minimax", model)).toBeNull()
+  }
 })
 
 test("GPT-6 model coverage on openai-api and openai-oauth (#181)", () => {
