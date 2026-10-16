@@ -4,7 +4,17 @@ import { createSseParser, frameJson } from "../../services/translate/sse/parse"
 import { classifySdkFailure } from "../claude-sdk/errors"
 import { createMessageFold } from "../claude-sdk/render/message"
 
-const frame = z.looseObject({ type: z.string() })
+const frame = z.looseObject({
+  type: z.string(),
+  index: z.number().int().nonnegative().optional(),
+})
+const message = z.looseObject({
+  id: z.string().min(1),
+  type: z.literal("message"),
+  role: z.literal("assistant"),
+  model: z.string(),
+  content: z.array(z.looseObject({ type: z.string() })),
+})
 
 /** Only a non-streaming caller pays for a fold. Streaming callers receive the upstream body. */
 export async function collectFastResponse(
@@ -17,17 +27,42 @@ export async function collectFastResponse(
   const fold = createMessageFold()
   let stopped = false
   let started = false
+  let invalid = false
+  const seenBlocks = new Set<number>()
   const openBlocks = new Set<number>()
   const consume = (frames: ReturnType<typeof parser.push>) => {
     for (const event of frames) {
       const parsed = frame.safeParse(frameJson(event))
-      if (!parsed.success) continue
-      if (parsed.data.type === "message_start") started = true
-      if (parsed.data.type === "content_block_start" && typeof parsed.data.index === "number")
-        openBlocks.add(parsed.data.index)
-      if (parsed.data.type === "content_block_stop" && typeof parsed.data.index === "number")
-        openBlocks.delete(parsed.data.index)
-      if (parsed.data.type === "message_stop") stopped = true
+      if (!parsed.success) {
+        invalid = true
+        continue
+      }
+      const data = parsed.data
+      if (data.type === "ping") continue
+      if (stopped) invalid = true
+      if (data.type === "message_start") {
+        if (started || !message.safeParse(data.message).success) invalid = true
+        started = true
+      } else if (!started) invalid = true
+      if (data.type === "content_block_start") {
+        if (data.index === undefined || seenBlocks.has(data.index)) invalid = true
+        else {
+          seenBlocks.add(data.index)
+          openBlocks.add(data.index)
+        }
+      }
+      if (
+        data.type === "content_block_delta" &&
+        (data.index === undefined || !openBlocks.has(data.index))
+      )
+        invalid = true
+      if (data.type === "content_block_stop") {
+        if (data.index === undefined || !openBlocks.delete(data.index)) invalid = true
+      }
+      if (data.type === "message_stop") {
+        if (openBlocks.size > 0) invalid = true
+        stopped = true
+      }
       fold.push([parsed.data])
     }
   }
@@ -43,7 +78,7 @@ export async function collectFastResponse(
     await reader.cancel().catch(() => {})
     reader.releaseLock()
   }
-  if (!started || !stopped || openBlocks.size > 0 || fold.failed())
+  if (invalid || !started || !stopped || openBlocks.size > 0 || fold.failed())
     return safeError(502, "Claude ended the response before completion")
   return Response.json(fold.body())
 }
@@ -61,4 +96,12 @@ function safeError(status: number, message: string, retryAfter?: string | null):
     { type: "error", error: { type: "api_error", message } },
     { status, ...(retryAfter ? { headers: { "retry-after": retryAfter } } : {}) },
   )
+}
+
+/** A proxy's HTML/JSON success must never be relayed as an Anthropic event stream. */
+export async function validateFastResponse(response: Response): Promise<Response> {
+  const mediaType = response.headers.get("content-type")?.split(";", 1)[0]?.trim().toLowerCase()
+  if (mediaType === "text/event-stream" && response.body !== null) return response
+  await response.body?.cancel()
+  return safeError(502, "Claude returned an invalid event stream")
 }

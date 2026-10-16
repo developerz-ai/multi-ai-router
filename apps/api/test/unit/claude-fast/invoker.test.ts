@@ -58,6 +58,7 @@ function setup(
     expired?: boolean
     status?: number
     body?: string
+    contentType?: string
     model?: string | null
   } = {},
 ) {
@@ -82,7 +83,7 @@ function setup(
       requests.push(request)
       return new Response(options.body ?? wire, {
         status: options.status ?? 200,
-        headers: { "content-type": "text/event-stream" },
+        headers: { "content-type": options.contentType ?? "text/event-stream" },
       })
     },
   })
@@ -156,6 +157,38 @@ describe("Claude fast invoker", () => {
       expect(h.concurrency.inFlight).toBe(0)
     }
   })
+  test("a successful HTTP status with a non-SSE body is a safe upstream failure", async () => {
+    for (const stream of [true, false]) {
+      const h = setup({ contentType: "text/html", body: "<html>private upstream error</html>" })
+      const response = await h.invoke(input(stream))
+      expect(response.status).toBe(502)
+      expect(await response.text()).not.toContain("private upstream error")
+      expect(h.fallback).toBe(0)
+      expect(h.concurrency.inFlight).toBe(0)
+    }
+  })
+  test("nonstream refuses malformed event lifecycles instead of returning partial success", async () => {
+    for (const body of [
+      wire.replace(
+        event({ type: "message_stop" }),
+        `data: not-json\n\n${event({ type: "message_stop" })}`,
+      ),
+      wire + event({ type: "message_start", message: {} }),
+      wire.replace(
+        event({ type: "content_block_stop", index: 0 }),
+        event({ type: "content_block_stop", index: 9 }),
+      ),
+      wire.replace(
+        event({ type: "message_stop" }),
+        event({ type: "message_stop" }) + event({ type: "message_stop" }),
+      ),
+    ]) {
+      const h = setup({ body })
+      expect((await h.invoke(input(false))).status).toBe(502)
+      expect(h.concurrency.inFlight).toBe(0)
+      expect(h.fallback).toBe(0)
+    }
+  })
   test("HTTP failure status remains structured for billing and cooling", async () => {
     for (const status of [400, 402, 403, 429, 500, 529]) {
       const h = setup({ status, body: "upstream unavailable" })
@@ -177,6 +210,41 @@ describe("Claude fast invoker", () => {
     expect(h.requests).toHaveLength(2)
     await Promise.all(responses.map((r) => r.text()))
     expect(h.concurrency.inFlight).toBe(0)
+  })
+  test("credentials are read after queued admission and SDK fallback does not hold the slot", async () => {
+    let admitted = false
+    let held = false
+    let directCalls = 0
+    const invoke = createFastInvoker({
+      concurrency: {
+        acquire: async () => {
+          admitted = true
+          held = true
+          return {
+            release: () => {
+              held = false
+            },
+          }
+        },
+        inFlight: 0,
+        queued: 0,
+        inFlightFor: () => 0,
+      },
+      credential: async () => (admitted ? null : credential),
+      resolveModel: () => "claude-opus-5",
+      errorMaxBytes: 4096,
+      sdk: async () => {
+        expect(held).toBe(false)
+        return new Response("sdk after queue")
+      },
+      fetch: async () => {
+        directCalls++
+        return new Response(wire, { headers: { "content-type": "text/event-stream" } })
+      },
+    })
+    expect(await (await invoke(input())).text()).toBe("sdk after queue")
+    expect(directCalls).toBe(0)
+    expect(held).toBe(false)
   })
   test("reports included windows separately from rejected overage", () => {
     const values: unknown[] = []

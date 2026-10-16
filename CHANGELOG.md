@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.39.4] — 2026-10-16
+
+### Fixed
+
+- Claude fast credentials are read after concurrency admission, so expiry, rotation or deletion while queued cannot reuse a pre-queue token snapshot. SDK fallback releases the direct permit before acquiring its own capacity.
+- Claude fast mode rejects successful HTTP responses without an SSE content type or body before forwarding client bytes. Proxy HTML/JSON errors become safe 502 responses and release the account permit without SDK retry.
+- Nonstream fast responses reject malformed JSON frames, repeated message boundaries, duplicate/invalid block indices, deltas outside open blocks and unmatched block stops instead of reporting partial output as a successful completion. Streaming SSE remains byte-preserving.
+
+### Added
+
+- `bin/claude-trace fast --config-dir PATH --model MODEL`: opt-in MITM diagnostics of the real direct invoker, with a synthetic client tool round trip, cache usage, streaming completion and permit-release checks. Credentials are never captured; exact private request bodies remain opt-in and gitignored.
+
 ## [2.39.3] — 2026-10-16
 
 ### Fixed
@@ -1509,3 +1521,5 @@ your tooling config.
 [2.39.1]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.39.1
 [2.39.2]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.39.2
 [2.39.3]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.39.3
+
+[2.39.4]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.39.4

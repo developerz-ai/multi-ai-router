@@ -3,14 +3,14 @@ import { chmod, mkdir, open, writeFile } from "node:fs/promises"
 import { resolve } from "node:path"
 import { availablePort, parse, traceEnv } from "./options"
 
-const HELP = `Usage: bin/claude-trace <tty|print|sdk|conversation|subagents|autocompact> [options]
+const HELP = `Usage: bin/claude-trace <tty|print|sdk|conversation|subagents|autocompact|fast> [options]
        bin/claude-trace analyze <flows.jsonl>
        bin/claude-trace verify-bodies <private-bodies.jsonl>
        bin/claude-trace <versions|update-sdk>
        bin/claude-trace transport --model MODEL [--cli PATH] [--private-wire]
 
 Live diagnostics, using your Claude login. Never runs as part of CI.
-  --config-dir PATH   Isolated Claude account; omitted uses the CLI's normal login
+  --config-dir PATH   Selected debug account; required for fast, optional for CLI traces
   --model MODEL       Required for live traces; never silently selects another model
   --private-wire     Also save exact request bodies (private prompts/IDs, never auth headers)
   --cli PATH         Claude executable (default: claude on PATH)
@@ -21,7 +21,7 @@ TTY scenarios: normal turn, follow-up, /context, /usage, /compact, echo MCP, ari
 Only Agent and the synthetic echo MCP are allowed; no shell/filesystem tools.
 See docs/research/claude-wire.md for exact scenarios and interpretation.
 `
-const MODES = ["tty", "print", "sdk", "conversation", "subagents", "autocompact"] as const
+const MODES = ["tty", "print", "sdk", "conversation", "subagents", "autocompact", "fast"] as const
 type Mode = (typeof MODES)[number]
 
 async function main(): Promise<void> {
@@ -61,6 +61,8 @@ async function main(): Promise<void> {
   if (!MODES.includes(mode as Mode)) throw new Error(`unknown trace mode: ${mode}`)
   const options = parse(args)
   if (!options.model) throw new Error("live traces require --model MODEL")
+  if (mode === "fast" && !options.configDir)
+    throw new Error("fast requires an explicitly selected --config-dir")
   if (mode === "tty" && !process.stdin.isTTY) throw new Error("tty mode requires a terminal")
   for (const binary of ["uv", "python3", options.cli])
     if (!Bun.which(binary)) throw new Error(`missing diagnostic prerequisite: ${binary}`)
@@ -141,7 +143,11 @@ async function main(): Promise<void> {
     const command =
       mode === "tty" || mode === "print"
         ? await cliCommand(mode, options.cli, options.model, root)
-        : ["bun", resolve(import.meta.dir, "sdk-scenarios.ts"), mode]
+        : [
+            "bun",
+            resolve(import.meta.dir, mode === "fast" ? "fast-scenarios.ts" : "sdk-scenarios.ts"),
+            mode,
+          ]
     child = Bun.spawn(command, {
       cwd: resolve(root, "workspace"),
       env,
