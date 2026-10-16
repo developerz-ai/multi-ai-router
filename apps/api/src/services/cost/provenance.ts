@@ -17,7 +17,15 @@ export const PRICE_SOURCES: readonly PriceSource[] = [
   inherited("anthropic", "https://platform.claude.com/docs/en/about-claude/pricing"),
   inherited("openai", "https://openai.com/api/pricing/"),
   inherited("google", "https://ai.google.dev/gemini-api/docs/pricing"),
-  inherited("zai", "https://docs.z.ai/guides/overview/pricing"),
+  {
+    id: "zai",
+    url: "https://docs.z.ai/guides/overview/pricing",
+    currency: "USD",
+    // #256 read the vendor page on 2026-10-15: glm-5.3 priced from that read, glm-5.3-flash's
+    // figures confirmed on it — the snapshot and the verification share the date.
+    snapshotAsOf: "2026-10-15",
+    verifiedAt: "2026-10-15",
+  },
   inherited("minimax", "https://platform.minimax.io/docs/guides/pricing"),
   inherited("groq", "https://groq.com/pricing"),
   inherited("deepseek", "https://api-docs.deepseek.com/quick_start/pricing"),
