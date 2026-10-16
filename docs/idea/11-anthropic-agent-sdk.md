@@ -1,5 +1,10 @@
 # 11 — Claude subscriptions via the Claude Agent SDK
 
+The SDK remains the default inference transport and owns login/refresh in every mode.
+[Opt-in fast mode](claude-fast-mode.md) adds direct HTTP inference for a calibrated profile;
+the SDK-only statements below describe the default transport.
+
+
 Status: **built and served end to end.** `anthropic-oauth` has a driver
 (`providers/claude-sdk/driver.ts`) — a *separate* interface from `ProviderDriver`, because three of
 that interface's five members would be lies here (§9). A request routed to such an Account is
@@ -1125,7 +1130,7 @@ musl platform package exists (`@anthropic-ai/claude-code-linux-<arch>-musl`). Ei
 belongs on `PATH` as `claude` — a *symlink* or the real executable, never a shell wrapper, which the
 SDK's launcher rejects on some paths — so `claude auth status` and the SDK resolve the same file.
 
-**How our image actually does it, and why it differs.** `@anthropic-ai/claude-agent-sdk` (0.3.220+; pinned `^0.3.289`, whose bundled CLI is 2.1.289; the resolution ladder, the security gates, and the `auth login` / `auth status` shapes were re-verified against it)
+**How our image actually does it, and why it differs.** `@anthropic-ai/claude-agent-sdk` (0.3.220+; pinned `^0.3.301`, whose bundled CLI is 2.1.301; the resolution ladder, the security gates, and the `auth login` / `auth status` shapes were re-verified against it)
 ships the same binary as its *own* prebuilt optional dependency
 (`@anthropic-ai/claude-agent-sdk-<platform>-<arch>`, glibc and musl variants), and its internal
 resolution says so: it fails with "Reinstall `@anthropic-ai/claude-agent-sdk` without

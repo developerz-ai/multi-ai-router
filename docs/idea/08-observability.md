@@ -502,8 +502,11 @@ The console reads the API above and adds no figures of its own.
 - **Metered and notional spend** stay separate on every tile, row and leaderboard; no figure on the
   page adds them.
 - **Weekly reports** lists the stored weeks with their delivery status (`pending`, `not_configured`,
-  `sent`, `failed`), from `GET /api/admin/usage/reports`. It is read-only and never shows a failure's
-  error text.
+  `sent`, `failed`), from `GET /api/admin/usage/reports`. Each row's **Resend** control re-posts that
+  stored week; while a post is in flight only the acting row is busy — `aria-disabled` plus
+  `aria-busy` with a click guard, never `disabled`, so keyboard focus is never dropped — and the
+  other rows stay enabled. The row shows the outcome the server returned, including a failed
+  delivery and its redacted reason.
 - **Export CSV** carries the page's window and its active filters, so the file is the view on screen.
 
 ### The failure split

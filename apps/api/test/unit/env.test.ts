@@ -57,6 +57,7 @@ describe("parseEnv", () => {
     expect(env.publicUrl).toBeNull()
     expect(env.webRoot).toBeNull()
     expect(env.claudeConfigRoot).toBe("/data/claude")
+    expect(env.claudeFastMode).toBe(false)
     expect(env.accountRecheckCooldownSeconds).toBe(60)
     expect(env.accountTestNowCooldownSeconds).toBe(120)
     expect(env.janitorIntervalMinutes).toBe(60)

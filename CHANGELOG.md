@@ -7,11 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [2.38.1] — 2026-10-16
+## [2.39.2] — 2026-10-16
 
 ### Fixed
 
 - `bin/verify-version`'s changelog footer-link order check compared numeric triples only, so an rc section followed by its final release (`2.40.0-rc.1`, then `2.40.0`) compared equal and the gate refused the pair as out of order — blocking the rc re-spin flow `docs/RELEASING.md` documents. The order comparison is now full semver precedence (§11.3/§11.4): on equal cores a pre-release sorts before its final, and pre-release identifiers compare one by one, so `rc.1` ascends into `rc.2`; the final-before-its-rc reversal and exact ties are still refused. Pinned by tests; the rule is stated in the script comment, `RELEASING.md` and the observability spec (#267).
+
+## [2.39.1] — 2026-10-16
+
+### Fixed
+
+- In the console's weekly-reports list, one row's **Resend** no longer disables every row's button: the busy state is tracked per week and rendered as `aria-disabled` + `aria-busy` with a click guard in place of `disabled`, so the acting row stays focusable and announces its in-flight post, the other rows keep working, and a re-click on the busy row issues no second POST (#270).
+
+## [2.39.0] — 2026-10-16
+
+### Added
+
+- Opt-in `CLAUDE_FAST_MODE` for direct Claude subscription HTTP inference with account-scoped SDK credentials, preserved client tools/thinking/cache controls, SSE passthrough, quota reporting and SDK fallback before inference. Disabled by default; SDK retains login and refresh ownership. Calibrated for CLI 2.1.301 and Bun 1.4.2.
+- `bin/claude-trace`: isolated MITM workflows for TTY, print, SDK conversations, subagents and compaction; redacted summaries, offline integrity verification and local TLS/header-order comparison. Wire findings and a pinned Dario deep dive are documented under `docs/research/`.
+
+### Changed
+
+- Upgrade Claude Agent SDK from 0.3.289 to 0.3.301.
 
 ## [2.38.0] — 2026-10-16
 
@@ -1468,4 +1485,7 @@ your tooling config.
 [2.37.9]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.37.9
 [2.37.10]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.37.10
 [2.38.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.38.0
-[2.38.1]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.38.1
+
+[2.39.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.39.0
+[2.39.1]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.39.1
+[2.39.2]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.39.2

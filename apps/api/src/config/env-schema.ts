@@ -105,6 +105,7 @@ export const ENV_FIELDS = {
   WEB_ROOT: nonEmpty.optional(),
   CLAUDE_CONFIG_ROOT: nonEmpty.refine(isAbsolute, "must be an absolute path").optional(),
   CLAUDE_CLI_PATH: nonEmpty.optional(),
+  CLAUDE_FAST_MODE: flag.optional(),
   CLAUDE_SDK_MAX_CONCURRENCY: atLeastOne.optional(),
   CLAUDE_SDK_MAX_CONCURRENCY_PER_ACCOUNT: atLeastOne.optional(),
   CLAUDE_SDK_CREDENTIAL_KEEPALIVE: flag.optional(),

@@ -123,6 +123,7 @@ export function readParsedEnv(raw: ParsedEnv, ctx: z.RefinementCtx): Env {
     webRoot: raw.WEB_ROOT ?? null,
     claudeConfigRoot: raw.CLAUDE_CONFIG_ROOT ?? "/data/claude",
     claudeCliPath: raw.CLAUDE_CLI_PATH ?? null,
+    claudeFastMode: raw.CLAUDE_FAST_MODE ?? false,
     claudeSdkMaxConcurrency: raw.CLAUDE_SDK_MAX_CONCURRENCY ?? 10,
     claudeSdkMaxConcurrencyPerAccount: raw.CLAUDE_SDK_MAX_CONCURRENCY_PER_ACCOUNT ?? 4,
     // How near an access token's expiry counts as "inside the refresh window", where only one

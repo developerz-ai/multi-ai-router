@@ -17,39 +17,18 @@ import { errorResponseFailure, rateLimitCapture, releasingWith } from "./sdk-att
 import { sdkCancellation } from "./sdk-cancellation"
 
 /**
- * One Claude subscription attempt, in the same shape an HTTP one answers in.
- *
- * That symmetry is the whole design. `runAttempt` addresses a URL and relays what comes back;
- * this addresses a `CLAUDE_CONFIG_DIR` and hands back what the SDK produced. Both answer with an
- * `AttemptOutcome`, so the failover loop, the health store, the token observer, the relay, and the
- * `UsageRecord` are each written once — the transport difference stops at this module's edge.
- *
- * Two things are absent by construction rather than by discipline:
- *
- * - **No credential is decrypted.** `egress/credential.ts` is never reached from here. A
- *   subscription Account holds `authMaterial === null`; its credentials live inside the config
- *   directory and only the `claude` CLI reads them (docs/idea/11-anthropic-agent-sdk.md §3).
- * - **No client header is forwarded.** There is no request to attach them to. The client's own
- *   `anthropic-beta` opt-ins, `x-api-key`, and everything else stop at the router, which is also
- *   the per-Account billing-safety property the spec asks for (§7).
- *
- * The invoker is injected because spawning a subprocess is I/O: the data plane must be dispatchable
- * without one, and no test may spawn a real `claude` CLI.
- *
- * **A failure arrives as prose, not as a status** (§9). `providers/claude-sdk/errors.ts` reads the
- * class out of it and this module applies the one consequence that belongs to the attempt itself:
- * a stale session drops the binding that named it, so the replay the failover planner schedules
- * opens a fresh session instead of resuming one the CLI has already forgotten.
- *
- * **Session lineage brackets the call** (§4). Before it, a resume/fork/fresh plan is resolved from
- * what this Account's SDK sessions already hold; after it, whatever session the SDK named is
- * recorded against this Account. Both sides are keyed by Account because an SDK session id resumes
- * nowhere else — which is also why the record is written only once a session id exists, and why a
- * failed attempt records nothing: a binding to an Account that produced no session would pin the
- * conversation there for no gain and cost the next turn a failover it could have had.
+ * Shared Claude subscription attempt: default SDK or opt-in direct HTTP invoker.
+ * Account credentials remain outside the database; the selected config directory is the boundary.
+ * Client headers are provided only for the fast transport's explicit protocol allowlist.
+ * SDK launch never inherits client authentication or executes host tools.
+ * Session lineage brackets SDK calls; fast mode uses complete client histories without that store.
+ * Both transports feed the same failover, quota, health and accounting pipeline.
  */
 
 export interface SdkAttemptInput {
+  readonly clientHeaders?: Headers
+  readonly apiKeyId?: string
+  readonly sessionKey?: string
   readonly plan: SdkServableCandidate
   /** Anthropic Messages request bytes, already converted from the client's dialect if it differed. */
   readonly body: Uint8Array | null
@@ -141,6 +120,9 @@ export async function runSdkAttempt(input: SdkAttemptInput): Promise<AttemptOutc
   let response: Response
   try {
     response = await invoke({
+      ...(input.clientHeaders === undefined ? {} : { clientHeaders: input.clientHeaders }),
+      ...(input.apiKeyId === undefined ? {} : { apiKeyId: input.apiKeyId }),
+      ...(input.sessionKey === undefined ? {} : { sessionKey: input.sessionKey }),
       beforeUpstreamStart: input.beforeUpstreamStart,
       onUpstreamStarted: input.onUpstreamStarted,
       accountId: plan.account.id,

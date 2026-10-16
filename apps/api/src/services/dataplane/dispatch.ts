@@ -22,6 +22,9 @@ export function dispatch(
   const { runtime } = ctx
   if (servable.kind === "sdk") {
     return runSdkAttempt({
+      clientHeaders: ctx.request.headers,
+      apiKeyId: runtime.apiKeyId,
+      sessionKey: runtime.sessionKey,
       plan: servable,
       body,
       beforeUpstreamStart,
