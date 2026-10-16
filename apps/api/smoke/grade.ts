@@ -52,6 +52,13 @@ export type MessagesExpectation =
    * whether a thinking block came back as information.
    */
   | { readonly kind: "reasoning_forced_tool"; readonly name: string }
+  /**
+   * The replayed Claude Code main turn (`test/fixtures/claude-code/`), always streamed. The model
+   * answers a real CLI turn however it would in production — text, tool calls, anything — so the
+   * leg grades the *transport*, not the content: a well-formed SSE answer is `message_start`, at
+   * least one content block, `message_stop`. Optional, because it runs against live deployments.
+   */
+  | { readonly kind: "claude_code_turn" }
 
 export type OpenAiExpectation =
   | { readonly kind: "chat_completions_required_tool" }
@@ -64,6 +71,12 @@ export interface MessagesLeg {
   readonly expectation: MessagesExpectation
   /** Required legs gate the exit code. */
   readonly required: boolean
+  /**
+   * Extra request headers the leg sends beside auth and content-type — e.g. the Claude Code turn
+   * carries `x-claude-code-session-id`, the header the CLI sends on every request. Never a place
+   * for credentials: the runner's own auth headers are applied after these.
+   */
+  readonly headers?: Readonly<Record<string, string>>
 }
 
 export interface OpenAiLeg {
@@ -143,7 +156,7 @@ function gradeMessages(
   if (parsed.stop_reason === "max_tokens") return fail("truncated")
 
   const view: MessageView = { stopReason: parsed.stop_reason, content }
-  return gradeMessagesByExpectation(leg, view)
+  return gradeMessagesByExpectation(leg, view, events)
 }
 
 interface MessageView {
@@ -151,7 +164,11 @@ interface MessageView {
   readonly content: ReadonlyArray<{ readonly type: string }>
 }
 
-function gradeMessagesByExpectation(leg: MessagesLeg, view: MessageView): LegOutcome {
+function gradeMessagesByExpectation(
+  leg: MessagesLeg,
+  view: MessageView,
+  events: readonly StreamEvent[],
+): LegOutcome {
   switch (leg.expectation.kind) {
     case "text":
       return view.stopReason === "end_turn" && hasText(view)
@@ -172,7 +189,23 @@ function gradeMessagesByExpectation(leg: MessagesLeg, view: MessageView): LegOut
       return view.stopReason === "tool_use" && hasToolUseNamed(view, leg.expectation.name)
         ? withThinking(pass(), view)
         : fail(missingToolUseReason(view, leg.expectation.name))
+    case "claude_code_turn":
+      return gradeClaudeCodeTurn(view, events)
   }
+}
+
+/**
+ * The transport check for the replayed Claude Code turn: the SSE frame grammar is complete
+ * (`message_start` … `message_stop`) and the turn produced at least one content block. What the
+ * blocks say is the model's business, not the router's. Truncation was already graded `truncated`
+ * by the shared path above.
+ */
+function gradeClaudeCodeTurn(view: MessageView, events: readonly StreamEvent[]): LegOutcome {
+  const names = new Set(events.map((event) => event.event))
+  if (!names.has("message_start")) return fail("missing-message-start")
+  if (!names.has("message_stop")) return fail("missing-message-stop")
+  if (view.content.length === 0) return fail("empty-turn-response")
+  return pass()
 }
 
 function hasText(view: MessageView): boolean {

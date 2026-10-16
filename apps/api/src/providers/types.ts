@@ -297,6 +297,12 @@ export interface ProviderDriver {
   resolveResponsesEgress(account: DriverAccount): ResponsesEgressRules
 
   /**
+   * Whether this Account's anthropic surface thinks by default and ignores a forced `tool_choice`
+   * while it does (`ProviderSurface.thinkingOnByDefault`). Absent means no.
+   */
+  thinkingOnByDefault?(account: DriverAccount): boolean
+
+  /**
    * Auth plus every provider-mandated header. Never mutates the Account, never logs.
    *
    * `null` is an Account of a provider whose `authKind` is `none` holding no credential — a local

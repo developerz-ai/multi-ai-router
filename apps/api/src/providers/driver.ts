@@ -53,6 +53,14 @@ export interface ProviderSurface {
    */
   readonly anthropicAuth?: AnthropicAuthForm
   /**
+   * Anthropic-dialect surfaces only: true where the endpoint thinks unless told not to, and ignores
+   * a forced `tool_choice` while it does (MiniMax: `end_turn` with prose, measured 2026-10-15).
+   * Real Anthropic is off by default and refuses the pair, so it never states this. A passthrough
+   * body to such a surface gets `thinking: {type: "disabled"}` beside a forced tool choice
+   * (`services/dataplane/body/forced-tool-thinking.ts`).
+   */
+  readonly thinkingOnByDefault?: boolean
+  /**
    * openai-chat surfaces only: which spelling of the output ceiling this endpoint accepts. Defaults
    * to `max_tokens`, the name every OpenAI-compatible vendor states — a provider states the other
    * one here only where its own reference does, because guessing wrong drops the caller's ceiling
@@ -140,6 +148,7 @@ export function createHttpDriver(config: HttpDriverConfig): ProviderDriver {
     resolveChatCeiling: (account) => surfaceFor(account).chatCeiling ?? DEFAULT_OPENAI_CHAT_CEILING,
     resolveResponsesEgress: (account) =>
       surfaceFor(account).responsesEgress ?? DEFAULT_RESPONSES_EGRESS,
+    thinkingOnByDefault: (account) => surfaceFor(account).thinkingOnByDefault === true,
     buildHeaders: (account, credential) => {
       requireCredential(config, account, credential)
       return surfaceHeaders(surfaceFor(account), credential)

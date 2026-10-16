@@ -1,4 +1,4 @@
-import type { AnthropicBlock, AnthropicRequest } from "../shared/anthropic"
+import type { AnthropicBlock, AnthropicRequest, AnthropicToolChoice } from "../shared/anthropic"
 import { DEFAULT_MAX_TOKENS } from "../shared/anthropic"
 import type { AnthropicTurn } from "../shared/anthropic-turns"
 import {
@@ -16,12 +16,12 @@ import type {
 } from "../shared/openai-chat"
 import { openAiChatRequestSchema } from "../shared/openai-chat"
 import { anthropicReasoningFromEffort } from "../shared/reasoning-effort"
+import { assertTranslatableToAnthropic, parseRequest, rejectField } from "../shared/reject"
 import {
-  assertPlainResponseFormat,
-  assertTranslatableToAnthropic,
-  parseRequest,
-  rejectField,
-} from "../shared/reject"
+  assertNoReservedTool,
+  forcesToolUse,
+  structuredOutputToAnthropic,
+} from "../shared/structured-output-anthropic"
 import { inputFromArguments, toolChoiceToAnthropic, toolsToAnthropic } from "../shared/tools"
 
 /**
@@ -39,8 +39,15 @@ import { inputFromArguments, toolChoiceToAnthropic, toolsToAnthropic } from "../
  * `minimal` clamped to `low` and `none` stated as `thinking: {type: "disabled"}`
  * (`shared/reasoning-effort.ts`). A word Anthropic has no counterpart for is dropped and reported.
  *
- * Refused: `logprobs`, `top_logprobs`, `n > 1`, a `response_format` constraining the answer's shape,
- * audio and file parts, and a `tool_call_id` matching no call earlier in the transcript. Dropped, as
+ * **`tool_choice` is carried** (`required` → `{type: "any"}`, a named function → `{type: "tool"}`),
+ * and a forced choice states `thinking: {type: "disabled"}`: Anthropic's dialect refuses a forced tool
+ * beside extended thinking, and a compatible upstream (MiniMax) ignores the force instead of refusing,
+ * answering in prose.
+ *
+ * **`response_format` is carried as a forced tool call** (`shared/structured-output-anthropic.ts`),
+ * with thinking disabled; beside the caller's own `tools` it is refused.
+ *
+ * Refused: `logprobs`, `top_logprobs`, `n > 1`, a `response_format` beside `tools`, audio and file parts, and a `tool_call_id` matching no call earlier in the transcript. Dropped, as
  * documented: `seed`, `frequency_penalty`, `presence_penalty`, `logit_bias`, `user`,
  * `strict`, and image `detail`.
  */
@@ -58,7 +65,8 @@ export function openAiChatToAnthropicRequest(
 ): AnthropicRequest {
   const request = parseRequest(openAiChatRequestSchema, body, "openai-chat")
   assertTranslatableToAnthropic(request)
-  assertPlainResponseFormat(request)
+  assertNoReservedTool(request.tools)
+  const structured = structuredOutputToAnthropic(request.response_format, request.tools)
 
   const system: string[] = []
   const turns: AnthropicTurn[] = []
@@ -109,6 +117,7 @@ export function openAiChatToAnthropicRequest(
     rejectField("messages", "carries no user or assistant turn: an anthropic request needs one")
   }
 
+  const tool_choice = structured?.tool_choice ?? clientToolChoice(request)
   return {
     model: request.model,
     messages,
@@ -122,26 +131,34 @@ export function openAiChatToAnthropicRequest(
     top_p: request.top_p ?? undefined,
     stop_sequences: stopSequences(request.stop),
     stream: request.stream ?? undefined,
-    tools: request.tools === undefined ? undefined : toolsToAnthropic(request.tools),
-    tool_choice:
-      request.parallel_tool_calls === undefined ||
-      request.parallel_tool_calls === null ||
-      request.tools === undefined ||
-      request.tools.length === 0
-        ? request.tool_choice === undefined
-          ? undefined
-          : toolChoiceToAnthropic(request.tool_choice)
-        : {
-            ...(request.tool_choice === undefined
-              ? { type: "auto" as const }
-              : toolChoiceToAnthropic(request.tool_choice)),
-            disable_parallel_tool_use: !request.parallel_tool_calls,
-          },
+    tools:
+      structured?.tools ??
+      (request.tools === undefined ? undefined : toolsToAnthropic(request.tools)),
+    tool_choice,
     ...anthropicReasoningFromEffort(
       request.reasoning_effort,
       "reasoning_effort",
       options.onDrop ?? IGNORE_DROPS,
     ),
+    // Last, so it wins over `reasoning_effort`: a forced tool call and thinking cannot share a request.
+    ...(forcesToolUse(tool_choice) ? { thinking: { type: "disabled" as const } } : {}),
+  }
+}
+
+function clientToolChoice(request: ParsedOpenAiChatRequest): AnthropicToolChoice | undefined {
+  const choice =
+    request.tool_choice === undefined ? undefined : toolChoiceToAnthropic(request.tool_choice)
+  if (
+    request.parallel_tool_calls === undefined ||
+    request.parallel_tool_calls === null ||
+    request.tools === undefined ||
+    request.tools.length === 0
+  ) {
+    return choice
+  }
+  return {
+    ...(choice ?? { type: "auto" as const }),
+    disable_parallel_tool_use: !request.parallel_tool_calls,
   }
 }
 

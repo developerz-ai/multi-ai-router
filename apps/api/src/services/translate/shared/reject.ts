@@ -227,7 +227,7 @@ export function assertNoStopSequence(
 }
 
 const NO_STRUCTURED_OUTPUT =
-  "constrains the response shape, which this build carries only from openai-chat onto openai-responses; on this hop it is refused rather than dropped"
+  "constrains the response shape, which this build carries only from openai-chat onto openai-responses and anthropic; on this hop it is refused rather than dropped"
 
 /**
  * Structured output, under both names the two OpenAI dialects give it, on every hop that cannot
@@ -235,8 +235,9 @@ const NO_STRUCTURED_OUTPUT =
  *
  * `{"type":"text"}` is the default and passes everywhere. A JSON-Schema-constrained response — and
  * `json_object`'s weaker promise of *some* parseable JSON — is a **contract** the caller will parse.
- * Exactly one hop carries it: openai-chat → openai-responses, where `response_format` becomes
- * `text.format` (`shared/structured-output.ts`). Every other crossing still refuses it by name rather
+ * Two hops carry it, both from openai-chat: onto openai-responses, where `response_format` becomes
+ * `text.format` (`shared/structured-output.ts`), and onto anthropic, as a forced tool call
+ * (`shared/structured-output-anthropic.ts`). Every other crossing still refuses it by name rather
  * than dropping it, because dropped it fails at the *caller's* `JSON.parse` with nothing naming the
  * cause: an OpenAI SDK `.parse()`, LangChain's `withStructuredOutput()`, Instructor, and
  * `generateObject` all hand back prose and a parse error instead of the `400` they can act on.
@@ -255,11 +256,4 @@ export function assertPlainTextFormat(request: {
   readonly text?: { readonly format?: { readonly type: string } | null | undefined } | null
 }): void {
   assertPlainFormat(request.text?.format?.type, "text.format.type")
-}
-
-/** openai-chat's spelling: `response_format`, the same feature one dialect older. */
-export function assertPlainResponseFormat(request: {
-  readonly response_format?: { readonly type: string } | null | undefined
-}): void {
-  assertPlainFormat(request.response_format?.type, "response_format.type")
 }

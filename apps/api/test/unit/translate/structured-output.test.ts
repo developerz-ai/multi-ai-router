@@ -2,7 +2,6 @@ import { describe, expect, test } from "bun:test"
 import { TranslationError } from "@multi-ai-router/core"
 import { CODEX_RESPONSES_EGRESS } from "../../../src/providers"
 import {
-  openAiChatToAnthropicRequest,
   openAiChatToOpenAiResponsesRequest,
   openAiResponsesToAnthropicRequest,
   openAiResponsesToOpenAiChatRequest,
@@ -219,17 +218,7 @@ describe("response_format → text.format", () => {
   })
 })
 
-describe("every other crossing still refuses structured output", () => {
-  const JSON_SCHEMA = { type: "json_schema", json_schema: { name: "p", schema: PERSON_SCHEMA } }
-
-  test("openai-chat → anthropic: json_schema and json_object", () => {
-    for (const responseFormat of [JSON_SCHEMA, { type: "json_object" }]) {
-      expect(refusal(() => openAiChatToAnthropicRequest(chatWith(responseFormat)))).toContain(
-        "response_format.type",
-      )
-    }
-  })
-
+describe("every crossing that cannot carry structured output still refuses it (openai-chat → anthropic carries it: structured-output-anthropic.test.ts)", () => {
   test("openai-responses → openai-chat and → anthropic: text.format", () => {
     for (const format of [
       { type: "json_schema", name: "p", schema: {} },

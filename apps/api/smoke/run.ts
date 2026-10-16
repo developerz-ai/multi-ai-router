@@ -1,7 +1,7 @@
 /**
  * `bin/smoke` — a one-command live check against a deployed router.
  *
- * Sends eight legs through three endpoints and grades each one against the contract of what the
+ * Sends nine legs through three endpoints and grades each one against the contract of what the
  * router promises to do end to end: a plain text turn, a forced tool call, `tool_choice: any`, the
  * tool-result round trip, a streamed forced tool, reasoning plus a forced tool — all on
  * `/v1/messages` — plus informational legs on `/v1/chat/completions` and `/v1/responses` that an
@@ -94,6 +94,8 @@ async function driveLeg(
   let events: readonly import("./grade").StreamEvent[] = []
   try {
     const headers: Record<string, string> = {
+      // Leg headers first so they can never shadow the runner's own auth and content-type.
+      ...(leg.endpoint === "/v1/messages" ? leg.headers : undefined),
       "content-type": "application/json",
       authorization: `Bearer ${options.key}`,
       "x-api-key": options.key,

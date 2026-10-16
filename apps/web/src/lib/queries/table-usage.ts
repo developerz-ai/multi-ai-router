@@ -34,6 +34,8 @@ const TABLE_USAGE_WINDOW: UsageWindow = "7d"
  * Shared by the keys and accounts tables because the wiring was identical in both and the risk is
  * that it stops being: the same cache key means opening one table after the other — or after the
  * usage screen — is a cache hit rather than a second aggregate over the same `UsageRecord` rows.
+ * That key is the unfiltered one, `["usage", "summary", "7d"]`: these tables pass no filters, and
+ * the Usage page's own filters join its key without ever renaming this one.
  */
 export function useTableUsage(dimension: TableUsageDimension): () => TableUsage {
   const summary = useUsageSummary(() => TABLE_USAGE_WINDOW)

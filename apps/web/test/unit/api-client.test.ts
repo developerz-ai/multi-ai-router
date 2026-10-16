@@ -26,6 +26,27 @@ describe("buildPath", () => {
   })
 })
 
+describe("buildPath repeated params", () => {
+  test("an array is appended once per value, never joined", () => {
+    expect(buildPath("/usage", { owner: ["alice", "bob"] })).toBe(
+      "/api/admin/usage?owner=alice&owner=bob",
+    )
+  })
+
+  test("empty values and empty lists are dropped", () => {
+    expect(buildPath("/usage", { owner: ["alice", ""], tool: [], model: undefined })).toBe(
+      "/api/admin/usage?owner=alice",
+    )
+    expect(buildPath("/usage", { owner: [""] })).toBe("/api/admin/usage")
+  })
+
+  test("scalars and lists mix", () => {
+    expect(buildPath("/usage", { window: "7d", model: ["a b", "c"] })).toBe(
+      "/api/admin/usage?window=7d&model=a+b&model=c",
+    )
+  })
+})
+
 describe("isMutating", () => {
   test("GET is the only read", () => {
     expect(isMutating("GET")).toBe(false)
