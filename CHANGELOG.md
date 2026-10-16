@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.39.5] — 2026-10-16
+
+### Fixed
+
+- The packaged fast-mode profile check no longer depends on workspace SDK package links absent from the runtime image. Build the SDK manifest into `dist/libexec` before pruning and read it when the bundled server cannot resolve the SDK by package name. The CLI binary checksum, version and runtime calibration remain required. The v2.39.4 production enablement exposed the failure by falling back to SDK despite a matching staged CLI binary.
+
+### Added
+
+- A final-image profile gate for amd64 and an offline bundled-layout regression test, including missing/wrong manifest refusals. Unsupported arm64 remains SDK-only.
+- Boot logs explicitly identify a verified direct HTTP transport; fallback warnings include a safe reason code so a configured flag cannot be mistaken for an active transport.
+
 ## [2.39.4] — 2026-10-16
 
 ### Fixed
@@ -1523,3 +1534,5 @@ your tooling config.
 [2.39.3]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.39.3
 
 [2.39.4]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.39.4
+
+[2.39.5]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.39.5
