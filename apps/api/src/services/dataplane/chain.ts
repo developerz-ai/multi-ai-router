@@ -30,6 +30,7 @@ import { recordChainFailure } from "./chain-recovery"
 import { createChainRefusals } from "./chain-refusals"
 import { finishSuccessfulAttempt } from "./chain-success"
 import { dispatch } from "./dispatch"
+import { forcedToolOfBody } from "./forced-tool-coercion"
 import { accountHealthFacts } from "./health-observation"
 import type { ServableCandidate } from "./plan"
 import { admitHalfOpenProbe } from "./probe"
@@ -253,6 +254,7 @@ export async function runChain(ctx: ChainContext): Promise<Response> {
           ...at,
           upstreamStarted,
           observation,
+          ...forcedToolOn(servable, upstreamBody),
           releaseProbe: probe.release,
           ...(quota === undefined
             ? { rateLimited: outcome.rateLimit?.limited ?? false }
@@ -297,4 +299,15 @@ export async function runChain(ctx: ChainContext): Promise<Response> {
 
   runtime.activeRequest?.release()
   return finishChain(held, lastFailure, refusals.failIfAny, runtime.selectTerminal)
+}
+
+/** The coercion target, only for a vendor that thinks by default and ignores a forced tool. */
+function forcedToolOn(
+  servable: ServableCandidate,
+  upstreamBody: Uint8Array | null,
+): { forcedTool: string } | Record<string, never> {
+  if (servable.kind !== "http" || servable.dialect !== "anthropic") return {}
+  if (!servable.driver.thinkingOnByDefault?.(servable.account.driver)) return {}
+  const forcedTool = forcedToolOfBody(upstreamBody)
+  return forcedTool === undefined ? {} : { forcedTool }
 }

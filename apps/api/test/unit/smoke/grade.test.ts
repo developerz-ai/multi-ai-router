@@ -215,6 +215,73 @@ describe("grade — streamed forced tool", () => {
   })
 })
 
+describe("grade — Claude Code turn", () => {
+  const TURN_LEG = () => messagesLeg({ kind: "claude_code_turn" }, true)
+
+  test("PASS on a complete frame grammar with any content block — the model's answer is its own business", () => {
+    const events: StreamEvent[] = [
+      { event: "message_start", data: { message: { content: [] } } },
+      {
+        event: "content_block_start",
+        data: { index: 0, content_block: { type: "tool_use", id: "t1", name: "Bash", input: {} } },
+      },
+      { event: "content_block_stop", data: { index: 0 } },
+      { event: "message_delta", data: { delta: { stop_reason: "tool_use" } } },
+      { event: "message_stop", data: {} },
+    ]
+    const outcome = grade(TURN_LEG(), 200, undefined, events)
+    expect(outcome).toEqual({ verdict: "PASS" })
+  })
+
+  test("FAIL missing-message-stop on a truncated stream", () => {
+    const events: StreamEvent[] = [
+      { event: "message_start", data: { message: { content: [] } } },
+      {
+        event: "content_block_start",
+        data: { index: 0, content_block: { type: "text", text: "po" } },
+      },
+    ]
+    const outcome = grade(TURN_LEG(), 200, undefined, events)
+    expect(outcome).toEqual({ verdict: "FAIL", reason: "missing-message-stop" })
+  })
+
+  test("FAIL missing-message-start when no frames arrived at all", () => {
+    const outcome = grade(TURN_LEG(), 200, undefined, [])
+    expect(outcome).toEqual({ verdict: "FAIL", reason: "missing-message-start" })
+  })
+
+  test("FAIL empty-turn-response when the grammar is complete but no content block was produced", () => {
+    const events: StreamEvent[] = [
+      { event: "message_start", data: { message: { content: [] } } },
+      { event: "message_delta", data: { delta: { stop_reason: "end_turn" } } },
+      { event: "message_stop", data: {} },
+    ]
+    const outcome = grade(TURN_LEG(), 200, undefined, events)
+    expect(outcome).toEqual({ verdict: "FAIL", reason: "empty-turn-response" })
+  })
+
+  test("FAIL truncated on max_tokens — the shared path grades it before the transport check", () => {
+    const events: StreamEvent[] = [
+      { event: "message_start", data: { message: { content: [] } } },
+      {
+        event: "content_block_start",
+        data: { index: 0, content_block: { type: "text", text: "po" } },
+      },
+      { event: "message_delta", data: { delta: { stop_reason: "max_tokens" } } },
+      { event: "message_stop", data: {} },
+    ]
+    const outcome = grade(TURN_LEG(), 200, undefined, events)
+    expect(outcome).toEqual({ verdict: "FAIL", reason: "truncated" })
+  })
+
+  test("FAIL http-<status> with the upstream error surfaced, like every other leg", () => {
+    const outcome = grade(TURN_LEG(), 429, { error: { message: "slow down" } }, [])
+    expect(outcome.verdict).toBe("FAIL")
+    expect(outcome.reason).toContain("http-429")
+    expect(outcome.reason).toContain("slow down")
+  })
+})
+
 describe("grade — reasoning + forced tool", () => {
   test("PASS on a thinking block plus a tool_use block with the expected name", () => {
     const outcome = grade(

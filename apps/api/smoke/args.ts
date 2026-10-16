@@ -17,8 +17,9 @@ export const USAGE = `Usage: bin/smoke [options]
   --help             this
 
 The key is read from the named environment variable only. It is never accepted as an argument and
-never printed. Required legs run on /v1/messages; informational legs run on /v1/chat/completions
-and /v1/responses. Required legs decide the exit code; informational legs never do.
+never printed. Required legs run on /v1/messages and decide the exit code. Informational legs never
+do: a streamed Claude Code turn replayed from the captured fixture on /v1/messages (carrying an
+x-claude-code-session-id header), and one leg each on /v1/chat/completions and /v1/responses.
 `
 
 export interface CliOptions {

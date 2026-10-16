@@ -2,11 +2,15 @@ import { describe, expect, test } from "bun:test"
 import { onboardingComplete, routerBaseUrl } from "../../src/lib/onboarding"
 
 describe("onboardingComplete", () => {
-  test("false until an account, a pool and a key all exist", () => {
+  test("false until an account and a key both exist", () => {
     expect(onboardingComplete({ accounts: 0, pools: 0, keys: 0 })).toBe(false)
     expect(onboardingComplete({ accounts: 1, pools: 0, keys: 0 })).toBe(false)
     expect(onboardingComplete({ accounts: 1, pools: 1, keys: 0 })).toBe(false)
     expect(onboardingComplete({ accounts: 0, pools: 1, keys: 1 })).toBe(false)
+  })
+
+  test("a pool is not required: account-scoped keys are a working deployment", () => {
+    expect(onboardingComplete({ accounts: 2, pools: 0, keys: 2 })).toBe(true)
   })
 
   test("true once all three exist, regardless of how many", () => {
