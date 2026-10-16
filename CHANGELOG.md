@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.38.1] — 2026-10-16
+
+### Fixed
+
+- `bin/verify-version`'s changelog footer-link order check compared numeric triples only, so an rc section followed by its final release (`2.40.0-rc.1`, then `2.40.0`) compared equal and the gate refused the pair as out of order — blocking the rc re-spin flow `docs/RELEASING.md` documents. The order comparison is now full semver precedence (§11.3/§11.4): on equal cores a pre-release sorts before its final, and pre-release identifiers compare one by one, so `rc.1` ascends into `rc.2`; the final-before-its-rc reversal and exact ties are still refused. Pinned by tests; the rule is stated in the script comment, `RELEASING.md` and the observability spec (#267).
+
 ## [2.38.0] — 2026-10-16
 
 ### Added
@@ -1462,3 +1468,4 @@ your tooling config.
 [2.37.9]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.37.9
 [2.37.10]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.37.10
 [2.38.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.38.0
+[2.38.1]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.38.1
