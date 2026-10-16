@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.39.3] — 2026-10-16
+
+### Fixed
+
+- Production sweep: stop emitting router-made 4xx on requests an eligible account could serve (#274). A forced `tool_choice` beside `thinking` `enabled`/`adaptive` on anthropic passthrough is now rewritten to `thinking:{type:"disabled"}` and served instead of refused with a `TranslationError` 400 (538/wk on MiniMax-M3 since 2.37.3); the force is the contract, the reasoning dial yields, and a prose answer is still coerced to the forced tool downstream.
+- A recovery probe answered with a `client-error`/`model-unsupported` now records the account **healthy** rather than a failed recovery, so a 4xx on the probed *request* no longer re-gates a reopened account (kept `qwen3.8-max` out of rotation ~44h, 10-13→10-15). The upstream judged the request, not the account.
+- anthropic→openai-chat drops a client-sent `thinking`/`reasoning_effort` when the surviving `tool_choice` forces a tool, so reasoning models that reject forced tool choice in thinking mode (qwen) are served. OpenAI/Codex (`openai-responses`) are untouched.
+- Upstream error bodies that are not JSON are now surfaced in the `upstreamMessage` log field (previously dropped), still passing through the tested redactor.
+
+### Added
+
+- `OPENAI_CHAT_THINKING_DEFAULT_MODELS` (comma-separated upstream model ids / `prefix*` globs, default empty): for a listed think-by-default model, a forced `tool_choice` on openai-chat egress is sent `enable_thinking:false`, so e.g. `qwen3.8-max` serves forced-tool requests instead of returning `tool_choice … not supported in thinking mode`. Dormant until set; the model is never changed. See `docs/research/thinking-and-tool-choice.md`.
+
+### Changed
+
+- The admin usage summary no longer runs an unwindowed history `coverage()` for window resolution (a cheap `clock()` read replaces it) and bounds the facts-source day range to the requested window, removing ~2–2.5 s of DB time per summary at production history sizes (#250; lifetime-window tail tracked in #275).
+- The expected every-request `max_output_tokens` drop on Claude-Code→ChatGPT turns is no longer logged at `warn` (174 lines/hr of noise).
+- Dependency refresh across the workspace (Sentry, Zod, Drizzle, SolidJS, Vite, happy-dom 21 and others); the Claude Agent SDK is held at its calibrated version and Babel 8 is deferred.
+
 ## [2.39.2] — 2026-10-16
 
 ### Fixed
@@ -1489,3 +1508,4 @@ your tooling config.
 [2.39.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.39.0
 [2.39.1]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.39.1
 [2.39.2]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.39.2
+[2.39.3]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.39.3
