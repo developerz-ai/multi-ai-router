@@ -36,6 +36,13 @@ describe("parseUsageUrl", () => {
     expect(parseUsageUrl({ from: "2026-10-01T00:00:00.000Z" }).range).toBe("7d")
   })
 
+  test("non-ISO from/to shapes that Date.parse accepts fall back to 7d", () => {
+    // The API validates from/to with z.iso.datetime(); a hand-edited link in any other shape
+    // (slashes, swapped fields) must get the same 7-day fallback as any refused window, not a 400.
+    expect(parseUsageUrl({ from: "2026/10/01", to: "2026/10/08" }).range).toBe("7d")
+    expect(parseUsageUrl({ from: "10/01/2026", to: "10/08/2026" }).range).toBe("7d")
+  })
+
   test("unrelated params are never turned into filters", () => {
     expect(parseUsageUrl({ keyId: "x", utm: "y" }).filters).toEqual({
       owner: [],
