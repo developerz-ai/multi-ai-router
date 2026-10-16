@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [2.37.7] — 2026-10-15
+## [2.37.7] — 2026-10-16
 
 ### Added
 
@@ -23,6 +23,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Documentation
 
 - `docs/idea/08-observability.md` and `docs/idea/09-deployment.md` follow the refusal naming, the at-cap wording and the preview caveat.
+
+## [2.37.6] — 2026-10-15
+
+### Documentation
+
+- `MiniMax-M3.1-Flash-Preview` stays deliberately unpriced (#254). The vendor's public price list (platform.minimax.io/docs/guides/pricing, read 2026-10-15) carries no row for the preview — MiniMax serves it from the coding plan, and the per-token figures that circulate for it are resellers' and aggregators', not the vendor's price. `services/cost/tables/minimax.ts` now pins this in `MINIMAX_UNPRICED`, a registry of deliberately unpriced models whose entries must keep looking up null (asserted in `test/unit/cost/account-prices.test.ts`), so the documentation cannot drift from the table: its tokens keep recording `costBasis = unknown` and roll up as unpriced until an operator override prices it.
+
+## [2.37.5] — 2026-10-15
+
+### Added
+
+- `glm-5.3` joins the shipped `zai` price table (#253). The #217 model census found it served on the production router with no price, so its tokens recorded `cost_basis = unknown`. Rates are z.ai's own published list (docs.z.ai/guides/overview/pricing, read 2026-10-15): input $1.4, output $4.4, cached input $0.26 per Mtok, no cache-write price published. A coding-plan account reports the row as a `notional` attribution, as with every zai model.
+
+### Changed
+
+- The `glm-5.3-flash` row keeps its numbers and moves its citation from OpenRouter's reseller list to the vendor's own pricing page, which now lists the model at the same figures.
 
 ## [2.37.4] — 2026-10-15
 
@@ -1388,4 +1404,6 @@ your tooling config.
 [2.34.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.34.0
 [2.35.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.35.0
 [2.36.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.36.0
+[2.37.5]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.37.5
+[2.37.6]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.37.6
 [2.37.7]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.37.7
