@@ -39,9 +39,25 @@ interface Tree {
   readonly label?: string
   /** Omit the Dockerfile entirely — the gate must refuse rather than skip. */
   readonly noDockerfile?: boolean
+  /** Full override for `CHANGELOG.md`. Omitted writes a changelog that satisfies the gate. */
+  readonly changelog?: string
 }
 
 const BASE_MEMBERS = ["apps/api", "apps/web", "packages/core", "packages/db"] as const
+
+/** A changelog that satisfies the gate: the section at `version` carries its footer link. */
+function defaultChangelog(version: string): string {
+  return [
+    "## [Unreleased]",
+    "",
+    `## [${version}] — 2026-01-01`,
+    "",
+    `- ${version} shipped.`,
+    "",
+    `[${version}]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v${version}`,
+    "",
+  ].join("\n")
+}
 
 async function write(root: string, path: string, contents: string): Promise<void> {
   const file = join(root, path)
@@ -87,6 +103,7 @@ async function fixture(tree: Tree): Promise<string> {
       ].join("\n"),
     )
   }
+  await write(root, "CHANGELOG.md", tree.changelog ?? defaultChangelog(tree.constant))
   // The script resolves its own location, so it has to live where it would really live.
   await write(root, "bin/verify-version", await Bun.file(SCRIPT).text())
   await Bun.$`chmod +x ${join(root, "bin/verify-version")}`.quiet()
@@ -227,6 +244,122 @@ describe("bin/verify-version", () => {
 
     expect(ran.exitCode).toBe(1)
     expect(ran.output).toContain("Dockerfile")
+  })
+
+  test("refuses sections inside the linked era that lost their footer link", async () => {
+    // The 2.37.0–2.37.4 gap this gate was added for (#265): sections and tags shipped, the
+    // footer links never went in, and nothing noticed for five releases. The headings below
+    // 2.37.5 sit above the linked era's floor, so each must carry a link.
+    const root = await fixture({
+      constant: "2.37.7",
+      changelog: [
+        "## [Unreleased]",
+        "",
+        "## [2.37.7] — 2026-10-16",
+        "",
+        "- latest.",
+        "",
+        "## [2.37.6] — 2026-10-15",
+        "",
+        "- prior.",
+        "",
+        "## [2.37.4] — 2026-10-15",
+        "",
+        "- the gap.",
+        "",
+        "[2.37.5]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.37.5",
+        "[2.37.6]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.37.6",
+        "[2.37.7]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.37.7",
+        "",
+      ].join("\n"),
+    })
+
+    const ran = await verify(root)
+
+    expect(ran.exitCode).toBe(1)
+    expect(ran.output).toContain("2.37.4")
+  })
+
+  test("refuses a second footer link for a section that already has one", async () => {
+    // "Exactly one" is the invariant — a duplicated link reads as a section whose link moved
+    // and left a stale copy behind.
+    const root = await fixture({
+      constant: "2.37.7",
+      changelog: [
+        "## [Unreleased]",
+        "",
+        "## [2.37.7] — 2026-10-16",
+        "",
+        "- latest.",
+        "",
+        "[2.37.7]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.37.7",
+        "",
+        "[2.37.7]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.37.7",
+        "",
+      ].join("\n"),
+    })
+
+    const ran = await verify(root)
+
+    expect(ran.exitCode).toBe(1)
+    expect(ran.output).toContain("2.37.7")
+  })
+
+  test("refuses footer links that do not ascend", async () => {
+    const root = await fixture({
+      constant: "2.37.7",
+      changelog: [
+        "## [Unreleased]",
+        "",
+        "## [2.37.7] — 2026-10-16",
+        "",
+        "- latest.",
+        "",
+        "[2.37.7]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.37.7",
+        "[2.37.6]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.37.6",
+        "",
+      ].join("\n"),
+    })
+
+    const ran = await verify(root)
+
+    expect(ran.exitCode).toBe(1)
+    expect(ran.output).toContain("ascend")
+    expect(ran.output).toContain("2.37.6")
+  })
+
+  test("accepts unlinked sections below the linked era's floor as history", async () => {
+    // Sections older than 2.25.0 predate the linked-footer convention and mostly have no
+    // links; the gate must not demand a retro-linking of the whole history to fix one gap.
+    const root = await fixture({
+      constant: "2.30.0",
+      changelog: [
+        "## [Unreleased]",
+        "",
+        "## [2.30.0] — 2026-10-15",
+        "",
+        "- linked.",
+        "",
+        "## [2.0.0] — 2026-09-01",
+        "",
+        "- history without a link, and that is fine.",
+        "",
+        "[2.30.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.30.0",
+        "",
+      ].join("\n"),
+    })
+
+    expect((await verify(root)).exitCode).toBe(0)
+  })
+
+  test("refuses a missing CHANGELOG.md rather than skipping the link check", async () => {
+    const root = await fixture({ constant: "1.0.0" })
+    await rm(join(root, "CHANGELOG.md"))
+
+    const ran = await verify(root, "v1.0.0")
+
+    expect(ran.exitCode).toBe(1)
+    expect(ran.output).toContain("CHANGELOG.md")
   })
 
   test("refuses to pass by finding nothing — an empty sweep is not agreement", async () => {
