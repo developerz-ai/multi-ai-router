@@ -188,7 +188,10 @@ export function createUsageHistoryRepository(
         dimension === undefined || ids === undefined
           ? sql``
           : sql`where ${groupIdsMatch(
-              attributed ? sql`grp` : sql.identifier(historyDimensions[dimension]),
+              // sql.identifier is a Name chunk, not a SQL — the template wraps it into one.
+              attributed
+                ? sql`grp`
+                : sql`${sql.identifier(historyDimensions[dimension])}`,
               dimension === "model" || attributed ? "text" : "uuid",
               ids,
             )}`
