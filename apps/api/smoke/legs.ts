@@ -1,16 +1,28 @@
 /**
- * The eight legs `bin/smoke` drives and the request body each one sends. Pure data plus body
- * builders that match the leg's expectation kind and endpoint. `run.ts` is the only reader:
- * it drives each leg and hands the reply to the grader.
+ * The legs `bin/smoke` drives and the request body each one sends. Pure data plus body builders
+ * that match the leg's expectation kind and endpoint. `run.ts` is the only reader: it drives each
+ * leg and hands the reply to the grader.
  *
- * The `required` flag gates the exit code: every Messages leg is required, and the two OpenAI
- * legs are informational (an account may legitimately refuse them). The flag lives on every leg
- * (not on a separate list) so the runner decides from the leg itself.
+ * The `required` flag gates the exit code: the six core Messages legs are required, and the
+ * Claude Code turn plus the two OpenAI legs are informational (an account may legitimately refuse
+ * them). The flag lives on every leg (not on a separate list) so the runner decides from the leg
+ * itself.
  */
 
+import { CLAUDE_CODE_SESSION_HEADER } from "../src/services/dataplane/body/session"
+// The redacted Claude Code main turn #211 captured (Claude Code 2.1.299). Imported, not read at
+// runtime, so `bin/smoke` resolves it relative to this module no matter the caller's cwd. Its
+// public-safe shape is pinned by `test/integration/claude-code-fixture.test.ts`.
+import claudeCodeMainTurn from "../test/fixtures/claude-code/claude-code-2.1.299-main-turn.json"
 import type { LegSpec, MessagesExpectation, OpenAiExpectation } from "./grade"
 
 export const TOOL_NAME = "get_weather"
+
+/**
+ * The session id the Claude Code leg sends under `x-claude-code-session-id` — obviously
+ * synthetic, stable across runs, and never a real CLI session.
+ */
+export const SMOKE_CLAUDE_CODE_SESSION_ID = "00000000-0000-4000-8000-000000000000"
 
 export const REQUIRED_LEG_NAMES: readonly string[] = [
   "messages.text",
@@ -29,6 +41,14 @@ export function buildLegs(): readonly LegSpec[] {
     expectation: expectationForMessages(name),
     required: true,
   }))
+  const claudeCodeTurn: LegSpec = {
+    endpoint: "/v1/messages",
+    stream: true,
+    name: "messages.claude_code_turn",
+    expectation: { kind: "claude_code_turn" },
+    required: false,
+    headers: { [CLAUDE_CODE_SESSION_HEADER]: SMOKE_CLAUDE_CODE_SESSION_ID },
+  }
   const informational: readonly LegSpec[] = [
     {
       endpoint: "/v1/chat/completions",
@@ -45,7 +65,7 @@ export function buildLegs(): readonly LegSpec[] {
       required: false,
     },
   ]
-  return [...messages, ...informational]
+  return [...messages, claudeCodeTurn, ...informational]
 }
 
 function expectationForMessages(name: string): MessagesExpectation {
@@ -161,6 +181,11 @@ function buildMessagesBody(expectation: MessagesExpectation, model: string): unk
         tool_choice: { type: "tool", name: expectation.name },
         messages: [{ role: "user", content: "Weather in Paris?" }],
       }
+    case "claude_code_turn":
+      // The captured turn verbatim, with two deliberate edits: the model comes from `--model`
+      // like every other leg, and `stream: true` because the CLI always streams (and the grader
+      // reads the SSE frame grammar).
+      return { ...claudeCodeMainTurn, model, stream: true }
   }
 }
 

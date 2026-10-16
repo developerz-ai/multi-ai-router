@@ -6,6 +6,7 @@ import { RouterShutdownError } from "./active-requests"
 import type { UpstreamError } from "./attempt"
 import { logStreamFailure } from "./attempt-log"
 import { DEFAULT_LOG_REASON_MAX_CHARS } from "./dispatcher-config"
+import { coerceForcedToolResponse } from "./forced-tool-coercion"
 import { breakerOptionsFor } from "./health"
 import type { HealthObservation } from "./health-observation"
 import { observingModelOutput } from "./model-output"
@@ -41,6 +42,8 @@ export interface SuccessClock extends AttemptClock {
   readonly onSettled?: () => void
   readonly recovery?: RecoveryAttempt
   readonly upstreamStarted: number
+  /** The tool this attempt's request forces on a vendor that ignores a force (`forced-tool-coercion.ts`). */
+  readonly forcedTool?: string
   readonly observation?: HealthObservation
 }
 
@@ -69,9 +72,25 @@ export function relaySuccess(
   ctx: AttemptRelay,
   servable: ServableCandidate,
   attempt: number,
-  response: Response,
+  received: Response,
   at: SuccessClock,
 ): Response {
+  const response =
+    at.forcedTool === undefined
+      ? received
+      : coerceForcedToolResponse(
+          received,
+          at.forcedTool,
+          (streamed) =>
+            // Counted by line, never by content: how often a vendor ignores a forced tool.
+            ctx.log?.info("forced tool answered in text; coerced to tool_use", {
+              event: "forced_tool_coerced",
+              accountId: servable.account.id,
+              provider: servable.account.driver.provider,
+              streamed,
+            }),
+          ctx.request?.signal,
+        )
   const upstreamStreams = forcesUpstreamStream(servable)
   let modelOutput = false
   const observation = createResponseObserver({

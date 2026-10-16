@@ -2,6 +2,7 @@ import { z } from "zod"
 import type { OpenAiChatToolCall } from "../shared/openai-chat"
 import type { TranslatedResponse } from "../shared/response"
 import { CONSERVATIVE_FINISH_REASON, toOpenAiFinishReason } from "../shared/stop-reason"
+import { STRUCTURED_OUTPUT_TOOL } from "../shared/structured-output-anthropic"
 import { parseAnthropicUsage, usageToOpenAiChat } from "../shared/usage"
 
 /**
@@ -18,6 +19,13 @@ import { parseAnthropicUsage, usageToOpenAiChat } from "../shared/usage"
  * are dropped as documented. A completion carrying only tool calls states `content: null`, which is
  * how OpenAI itself spells it — an empty string there reads as "the model said nothing out loud",
  * which is a different claim.
+ *
+ * **The router's structured-output tool is the answer, not a call.** A `tool_use` named
+ * `STRUCTURED_OUTPUT_TOOL` is how a `response_format` travelled onto Anthropic
+ * (`shared/structured-output-anthropic.ts`); its `input` becomes `message.content` as a JSON string,
+ * it is no `tool_calls` entry, and its `tool_use` stop reads `stop`, so the client sees exactly what
+ * an openai-chat `json_schema` answer looks like. Text beside it is dropped: the forced call is the
+ * whole answer, and prose in front of it would break the JSON the caller parses.
  */
 
 const contentBlockSchema = z.looseObject({
@@ -54,7 +62,12 @@ export function anthropicToOpenAiChatResponse(
 
   const texts: string[] = []
   const toolCalls: OpenAiChatToolCall[] = []
+  let structured: string | null = null
   for (const block of message?.content ?? []) {
+    if (block.type === "tool_use" && block.name === STRUCTURED_OUTPUT_TOOL) {
+      structured = JSON.stringify(block.input ?? {})
+      continue
+    }
     if (block.type === "text") {
       const text = block.text ?? ""
       if (text.length > 0) texts.push(text)
@@ -69,6 +82,15 @@ export function anthropicToOpenAiChatResponse(
   }
 
   const stop = toOpenAiFinishReason(message?.stop_reason)
+  // A completion carrying a call is a `tool_calls` finish whatever the vendor wrote beside it: MiniMax
+  // answers a forced tool with `end_turn` and the block present, and a client keyed on
+  // `finish_reason` would read the call as the end of a plain answer.
+  const finish =
+    structured !== null && message?.stop_reason === "tool_use"
+      ? "stop"
+      : toolCalls.length > 0 && (stop.value === null || stop.value === "stop")
+        ? "tool_calls"
+        : stop.value
   const usage = parseAnthropicUsage(message?.usage)
 
   return {
@@ -83,10 +105,10 @@ export function anthropicToOpenAiChatResponse(
           index: 0,
           message: {
             role: "assistant",
-            content: texts.length === 0 ? null : texts.join(""),
+            content: structured ?? (texts.length === 0 ? null : texts.join("")),
             ...(toolCalls.length === 0 ? {} : { tool_calls: toolCalls }),
           },
-          finish_reason: stop.value ?? CONSERVATIVE_FINISH_REASON,
+          finish_reason: finish ?? CONSERVATIVE_FINISH_REASON,
         },
       ],
       // Omitted rather than zeroed when the upstream sent no usage block at all: a completion whose

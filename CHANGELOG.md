@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [2.36.3] — 2026-10-15
+## [2.37.7] — 2026-10-15
 
 ### Added
 
@@ -23,6 +23,51 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Documentation
 
 - `docs/idea/08-observability.md` and `docs/idea/09-deployment.md` follow the refusal naming, the at-cap wording and the preview caveat.
+
+## [2.37.4] — 2026-10-15
+
+### Fixed
+
+- A forced tool a third-party vendor answered in text is now returned as the tool call. MiniMax treats `tool_choice` as a hint even with thinking disabled: given a forced tool it answers `end_turn` with a text block holding the JSON and no `tool_use` (live matrix, 2026-10-15), so developerz.ai's structured-output probe (`generateObject`: tool `json`, `tool_choice any`) still failed with "no content parts". For an Account whose driver declares `thinkingOnByDefault`, when the upstream body forces a tool (`tool_choice` `tool` naming X, or `any` with exactly one tool) and the answer has no `tool_use` block, the text, trimmed and optionally inside one json fence, is parsed; if it is a JSON object it becomes that tool's `tool_use` block (`toolu_` id, `stop_reason: tool_use`, other text dropped, usage kept). The object is not validated against the schema. Prose, arrays, truncated answers (`max_tokens`), `any` over several tools and Anthropic accounts pass through unchanged. A forced request to these vendors is buffered whole, a stream included, and re-emitted as a valid SSE sequence; this costs only their forced calls' time-to-first-token. It applies on `/v1/messages` and on the openai-chat translation, so `tool_choice: "required"` and `response_format` (the `router_structured_output` tool) get it too. Each coercion logs one `forced_tool_coerced` line (account, provider, streamed; no content).
+
+## [2.37.3] — 2026-10-15
+
+### Fixed
+
+- A forced `tool_choice` (`any` or `tool`) on an anthropic request relayed to a vendor that thinks by default (MiniMax, Z.ai, Kimi, `anthropic-compatible`) now states `thinking: {type: "disabled"}` when the client stated no `thinking`. MiniMax ignores the force while thinking, so `@ai-sdk/anthropic` `generateObject` (developerz.ai's structured-output probe: tool `json`, `tool_choice {type: "any", disable_parallel_tool_use: true}`, no `thinking`) got `end_turn` prose and failed with "no content parts". An explicit `thinking` of `enabled` or `adaptive` beside a forced tool is refused 400 in Anthropic's error shape (`invalid_request_error`, "thinking may not be enabled when tool_choice forces tool use"), as Anthropic itself does, instead of being sent to a vendor that would ignore the force. Real Anthropic accounts are untouched and still relayed byte for byte, as is any body without a forced choice. This is the second passthrough body edit after the model name; it parses a body only when it contains `tool_choice` and the account's driver declares `thinkingOnByDefault`.
+- An anthropic completion that carries a tool call now reads `finish_reason: "tool_calls"` on openai-chat (non-streaming and streaming) when the vendor wrote `end_turn` beside the call, as MiniMax does under a forced tool. It read `stop`, which an OpenAI client takes as the end of a plain answer.
+
+## [2.37.2] — 2026-10-15
+
+### Fixed
+
+- openai-chat `response_format` (`json_schema`, `json_object`) on an anthropic-dialect account is carried instead of refused `400`. It travels as the standard forced-tool technique: one synthesized tool (`router_structured_output`) whose `input_schema` is the caller's schema, forced with `tool_choice {type: "tool"}` and thinking disabled. The tool's input comes back as `message.content` (a JSON string) with `finish_reason: "stop"` and no `tool_calls`, non-streaming and streaming (as `delta.content`). `response_format` beside the caller's own `tools` is refused `400` naming `tools`, a non-object schema root is refused naming the field, and a client tool named `router_structured_output` is refused as reserved. Caught on MiniMax-M3.
+- A forced `tool_choice` (`"required"` or a named function) on an openai-chat to anthropic hop now states `thinking: {type: "disabled"}`. The `any` / `tool` choice was already sent, but a forced tool and extended thinking cannot share a request on this dialect, and MiniMax's endpoint ignored the force while thinking was on and answered in prose with `finish_reason: "stop"`, so the constraint was lost at the upstream rather than in translation.
+
+### Changed
+
+- `assertPlainResponseFormat` is removed: no hop refuses openai-chat `response_format` wholesale any more. `docs/idea/06-protocol-translation.md` rows updated.
+
+## [2.37.1] — 2026-10-15
+
+### Added
+
+- Tests pinning that `POST /v1/messages?beta=true` and `POST /v1/messages/count_tokens?beta=true` — the query Claude Code sends — route, relay and account exactly like the bare paths (#214). Covered on a passthrough (Anthropic API-key) account against a mocked upstream and on a subscription account stubbed at the `SdkInvoker` boundary; the suite fails if routing ever matches the full URL instead of the path. No runtime change.
+- An optional `bin/smoke` leg `messages.claude_code_turn` (#214). It replays the redacted Claude Code 2.1.299 main-turn capture (`apps/api/test/fixtures/claude-code/`) as a streamed request carrying an `x-claude-code-session-id` header, and passes on a well-formed SSE answer (`message_start`, at least one content block, `message_stop`). Optional, so it never decides the exit code. A test enforces the capture's public-safe shape: `metadata.user_id` is `"<user_id>"`, every system and user text is a placeholder, and the bytes carry no `@`, no non-loopback IP, no credential shape and no home path.
+
+### Documentation
+
+- `docs/idea/11-anthropic-agent-sdk.md` notes that Claude Code posts with `?beta=true` and that the route is tested.
+
+## [2.37.0] — 2026-10-15
+
+### Added
+
+- Input tokens and Output tokens tiles on the Usage page. Input counts every prompt token the upstream read (uncached, cache reads and cache writes, which the router stores apart) and its note gives the cache-read count and hit rate; output includes reasoning tokens. The Notional spend note now says it is the subscription traffic priced at list rates.
+
+### Fixed
+
+- The Overview's "Get your first working key" panel no longer stays up forever on a deployment that never created a pool. `onboardingComplete` needs an account and a key; a key scoped straight to accounts is a working deployment, so a pool is no longer required for the walk to count as done.
 
 ## [2.36.0] — 2026-10-15
 
@@ -1343,4 +1388,4 @@ your tooling config.
 [2.34.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.34.0
 [2.35.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.35.0
 [2.36.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.36.0
-[2.36.3]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.36.3
+[2.37.7]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.37.7

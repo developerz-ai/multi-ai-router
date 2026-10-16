@@ -13,6 +13,8 @@ import styles from "./UsageTiles.module.scss"
 export function UsageTiles(props: { readonly data: UsageSummary }) {
   const totals = () => props.data.totals
   const unpriced = () => totals().unpriced.attempts
+  const promptTokens = () =>
+    totals().tokensIn + totals().cacheReadTokens + totals().cacheWriteTokens
 
   return (
     <section aria-label="Headline figures" class={styles.tiles}>
@@ -26,6 +28,20 @@ export function UsageTiles(props: { readonly data: UsageSummary }) {
         note="Counted separately from requests"
         value={formatCount(totals().attempts)}
       />
+      {/* Tokens are the one measure a subscription spends without a bill moving, so they sit
+          beside spend, not under it. Input counts every prompt token the upstream read — the
+          uncached part plus cache reads and writes, which the router stores apart — and the
+          note says how much of it the cache served. */}
+      <StatTile
+        label="Input tokens"
+        note={`${formatCount(totals().cacheReadTokens)} from cache · ${formatPercent(totals().cacheReadTokens, promptTokens())} hit rate`}
+        value={formatCount(promptTokens())}
+      />
+      <StatTile
+        label="Output tokens"
+        note="Generated, reasoning included"
+        value={formatCount(totals().tokensOut)}
+      />
       <StatTile
         label="Metered spend"
         note="Real money, from a priced model"
@@ -35,7 +51,7 @@ export function UsageTiles(props: { readonly data: UsageSummary }) {
           trust, and a reader who sees them stacked adds them. */}
       <StatTile
         label="Notional spend"
-        note="Attributed to subscriptions — never added to metered"
+        note="Subscriptions at list price — never added to metered"
         value={formatCost(totals().costNotional)}
       />
       {/* Attempts the price table could not price: their spend is in neither figure above. A dash

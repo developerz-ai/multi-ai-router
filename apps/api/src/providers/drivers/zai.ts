@@ -117,7 +117,12 @@ export const zaiDriver = createHttpDriver({
     // Verified: the operator drives this endpoint with Claude Code's `ANTHROPIC_AUTH_TOKEN`,
     // i.e. `Authorization: Bearer`. Blast radius of `x-api-key` here: an unexpected header a
     // vendor may reject or log.
-    { dialect: "anthropic", baseUrl: ANTHROPIC_BASE_URL, anthropicAuth: "vendor-bearer" },
+    {
+      dialect: "anthropic",
+      baseUrl: ANTHROPIC_BASE_URL,
+      anthropicAuth: "vendor-bearer",
+      thinkingOnByDefault: true,
+    },
     { dialect: "openai-chat", baseUrl: OPENAI_BASE_URL },
   ],
   parseRateLimit: parseZaiRateLimit,
