@@ -300,6 +300,44 @@ same bucket expression, so their group keys match. Owner and tool attribution fo
   It is false for live keys and for the `deleted` and `none` rows; `note` keeps its meaning.
 - `coverage.breakdown.truncated` lists `owner` / `tool` when capped. `/recent` is unchanged.
 
+### Summary read budget (#250)
+
+`GET /api/admin/usage` sets no per-request statement timeout; the bound that applies is the
+server-wide `SERVER_IDLE_TIMEOUT_SECONDS` (default 60). The summary is expected to complete well
+inside it, and `bin/bench-usage` is the tripwire that proves it still does.
+
+**Measured.** At the #250 fixture scale — a 30-day window over ~180k rows per v2 daily rollup
+table plus ~200k raw records — the pre-fix summary fanned out to ~22 grouped reads inside one
+repeatable-read snapshot and took minutes on a loaded host: every one of the six breakdown
+queries re-read the whole window (a full grain-index scan per dimension, with the id filter
+applied per-row after the read — up to ~157k rows filtered out per query), and the owner/tool
+breakdowns joined every fact row to the unnest label relation before aggregating, spilling the
+sort to disk.
+
+**Fix — mechanism, not symptom.**
+
+- Breakdown→series id lists bind as one typed array probe (`= any($n::uuid[])`, `text[]` for
+  models, an explicit `is null` term for the null group) instead of a per-id
+  `::text is not distinct from` OR-chain, so the filter reaches the index instead of running
+  per-row after a full scan.
+- Owner and tool fold the facts to one row per key **before** the label join, so the join runs
+  at grouped cardinality, not per fact row.
+- The six breakdowns and the window totals consolidate into two passes over the facts: one
+  `grouping sets` pass for the four column dimensions and the totals row, one fold-then-label
+  pass for owner and tool. The `grouping()` mask names the dimension and a `row_number()` per
+  mask keeps each dimension's cap and its tokens-desc order, so the wire shape is unchanged.
+
+`bin/bench-usage` seeds the fixture into a throwaway database, runs the real `readSummary`, and
+exits non-zero when either the wall clock or the total shared-buffer traffic (EXPLAIN (ANALYZE,
+BUFFERS) — load-distortion-proof) crosses its budget. It is deliberately not in `bin/check`, the
+same way `bin/bench` is not: a timing gate on a shared runner flakes.
+
+**Beyond the bound.** No statement timeout is added under the idle timeout and the default
+window is unchanged: a smaller statement bound would only swap the error the operator sees for
+the same latency, and a smaller default window hides the same data rather than serving it. If a
+deployment outgrows the budgets, the lever is the rollup grain (finer or pre-joined daily
+tables), not the console's window.
+
 ### CSV export
 
 `GET /api/admin/usage/export.csv` takes the same window (`window` or `from`/`to`) and the same six
