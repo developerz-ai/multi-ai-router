@@ -54,6 +54,8 @@ remain available to normal accounting. Streaming calls relay upstream SSE withou
 nonstream calls fold it to a Messages response and refuse incomplete or malformed event
 lifecycles. Both paths require an SSE media type and a response body before accepting HTTP success;
 proxy HTML/JSON cannot masquerade as successful inference. Valid streaming bodies remain unchanged.
+A completed upstream refusal, including empty content and zero output tokens, remains a valid
+Messages response with its refusal stop reason/details; it is not retried as a transport fault.
 
 ## Evidence and rollout
 

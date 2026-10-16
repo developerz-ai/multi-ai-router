@@ -335,3 +335,23 @@ An unrestricted key's `claude-opus-5` request was successfully served by a MiniM
 is valid configured routing, but it provides no evidence about Claude subscription inference.
 Use a temporary key scoped to Claude accounts, verify `anthropic-oauth` usage and revoke the
 key afterwards. Do not count a model name or a 200 alone as proof of the transport tested.
+
+### Deployed v2.39.5 verification
+
+The deployed amd64 pod logged `Claude subscription inference uses direct HTTP` with
+`profile=verified`. A fenced metadata probe found all six selected Claude accounts had
+valid identities and access tokens outside the refresh lead; no credential value left the pod.
+
+A temporary router key restricted to Claude accounts passed five real HTTP requests on
+`claude-opus-5`: a client-side addition tool round trip (19 + 23 = 42), a completed streamed
+answer, and two concurrent independent arithmetic histories (43 and 44). All five usage
+records reported successful `anthropic-oauth` attempts. The temporary key was revoked.
+
+The earlier synthetic echo fixture's tool-result follow-up returned an explicit upstream
+`stop_reason: "refusal"`, empty content and zero output tokens. A separate fenced invoker
+probe reproduced it, so it was not a lost stream or a router-generated empty answer.
+Preserve this valid response and its stop details; do not automatically retry a refusal as a
+transport failure. Anthropic documents this shape in
+[refusals and fallback](https://platform.claude.com/docs/en/build-with-claude/refusals-and-fallback).
+The ordinary calculator task passed without changing the requested model, transport headers,
+identity profile or refusal handling.
