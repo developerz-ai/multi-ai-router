@@ -4,7 +4,9 @@ import type { ReportMeasures, WeeklyReport } from "../../src/services/usage-repo
  * A stored-weekly-report fixture for delivery tests (issue #229). Hand-built to the payload
  * contract rather than run through the builder — delivery renders whatever #227 stored, and these
  * tests pin the renderer, not the aggregation. Names are generic; the overflow line is the only
- * place key and pool names legitimately appear, and no account label exists in the shape at all.
+ * place key and pool names legitimately appear, and no account label exists in the contract shape
+ * at all — {@link storedPayloadWithAccountLabel} seeds one where a builder bug could stash it, so
+ * the "no account label reaches an output" assertions have something to catch.
  */
 
 export function measures(over: Partial<ReportMeasures> = {}): ReportMeasures {
@@ -137,4 +139,29 @@ export function oversizedWeeklyReport(count = 400, nameLength = 120): WeeklyRepo
 /** The fixture as the repository would hand it back: through a JSON round trip, typed unknown. */
 export function storedPayload(report: WeeklyReport = weeklyReportFixture()): unknown {
   return JSON.parse(JSON.stringify(report))
+}
+
+/**
+ * An account label shaped like the real thing — labels are often email addresses, which is why
+ * they must never reach a report output. The contract has no field that holds one.
+ */
+export const SEEDED_ACCOUNT_LABEL = "ops-account@example.com"
+
+/**
+ * The fixture as the repository would hand back a payload a *buggy* builder stored: the contract
+ * fields intact, plus {@link SEEDED_ACCOUNT_LABEL} smuggled in at the two places an account label
+ * could enter — on the overflow line, beside the `provider` that must be the account's provider id
+ * and never its label (the boundary's `z.object` strips it), and at the payload's top level, which
+ * the boundary's loose parse deliberately passes through. Delivery must render neither into the
+ * embed JSON nor the CSV, and the seeded `@` is what makes that assertion able to fail.
+ */
+export function storedPayloadWithAccountLabel(): unknown {
+  const stored: {
+    accountLabel?: string
+    overflow: { accountLabel?: string }[]
+  } = JSON.parse(JSON.stringify(weeklyReportFixture()))
+  stored.accountLabel = SEEDED_ACCOUNT_LABEL
+  const firstOverflow = stored.overflow[0]
+  if (firstOverflow !== undefined) firstOverflow.accountLabel = SEEDED_ACCOUNT_LABEL
+  return stored
 }

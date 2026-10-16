@@ -16,7 +16,12 @@ import {
 } from "../../../src/services/usage-report/discord-render"
 import { weeklyReportPayload } from "../../../src/services/usage-report/payload-schema"
 import { renderReportCsv } from "../../../src/services/usage-report/report-csv"
-import { oversizedWeeklyReport, weeklyReportFixture } from "../../support/weekly-report"
+import {
+  oversizedWeeklyReport,
+  SEEDED_ACCOUNT_LABEL,
+  storedPayloadWithAccountLabel,
+  weeklyReportFixture,
+} from "../../support/weekly-report"
 
 /** The pure Discord renderer: embed limits, the Usage link, and the CSV attachment (issue #229). */
 
@@ -256,5 +261,24 @@ describe("weeklyReportPayload — the delivery boundary parse", () => {
     ]) {
       expect(weeklyReportPayload.safeParse(bad).success).toBe(false)
     }
+  })
+
+  test("an account label seeded into the stored payload reaches neither the embed JSON nor the CSV", () => {
+    // The seed travels the delivery's own path: repository `unknown` -> boundary parse -> render.
+    // It sits where a builder bug could stash a label: on the overflow line, whose `provider` is
+    // the account's provider id and never its label (the parse strips unknown keys there), and at
+    // the top level, which the loose parse passes through and only the renderer's contract
+    // adherence can drop. The old assertion on an unseeded fixture could never fail; this one is
+    // proven to bite by temporarily leaking the label in each renderer.
+    const parsed = weeklyReportPayload.safeParse(storedPayloadWithAccountLabel())
+    expect(parsed.success).toBe(true)
+    if (!parsed.success) return
+    const delivery = renderDiscordDelivery(parsed.data, { publicUrl: PUBLIC_URL })
+    // The exact label, not just "@": this is the account label that must stay out.
+    expect(delivery.payloadJson).not.toContain(SEEDED_ACCOUNT_LABEL)
+    expect(delivery.csvBody).not.toContain(SEEDED_ACCOUNT_LABEL)
+    // And nothing email-shaped at all: the seed is the only "@" in any input.
+    expect(delivery.payloadJson).not.toContain("@")
+    expect(delivery.csvBody).not.toContain("@")
   })
 })
