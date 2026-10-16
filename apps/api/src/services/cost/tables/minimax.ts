@@ -19,6 +19,8 @@ import { type ModelTable, rates, tiered } from "../rates"
  *
  * `MiniMax-M1` and the `abab-*` line are absent: off the current price list, and a retired id
  * priced at its last known rate is a guess about a bill nobody is issuing.
+ *
+ * `MiniMax-M3.1-Flash-Preview` is served but deliberately unpriced — see `MINIMAX_UNPRICED`.
  */
 
 /** M3 switches to its long rate once the prompt passes 512k. */
@@ -35,4 +37,21 @@ export const MINIMAX_MODELS: ModelTable = {
   "minimax-m2.5": rates(0.3, 1.2, { read: 0.03, write: 0.375 }),
   "minimax-m2.1": rates(0.3, 1.2, { read: 0.03, write: 0.375 }),
   "minimax-m2": rates(0.3, 1.2, { read: 0.03, write: 0.375 }),
+}
+
+/**
+ * Models `minimax` serves that this table deliberately prices as unknown, normalized name -> why.
+ *
+ * Provenance: platform.minimax.io/docs/guides/pricing (and its paygo page), read 2026-10-15 — the
+ * list carries no row for the preview. MiniMax serves it from the coding plan, and the per-token
+ * figures that do circulate are resellers' and aggregators', which are not the vendor's price; an
+ * override is the way to price one. Blast radius: these models roll up as unpriced until then.
+ *
+ * Machine-checked rather than a comment so the documentation cannot drift from the table: the pin
+ * in `test/unit/cost/account-prices.test.ts` fails the moment an entry gains a rate row (the entry
+ * must go) or a reason is dropped.
+ */
+export const MINIMAX_UNPRICED: Readonly<Record<string, string>> = {
+  "minimax-m3.1-flash-preview":
+    "no per-token price on the public list (read 2026-10-15): a preview model served from the coding plan; only resellers quote per-token rates",
 }

@@ -1,4 +1,5 @@
 import type { z } from "zod"
+import { DEFAULT_SCHEDULER_JITTER_FRACTION } from "./env-defaults"
 
 /** Bun/Node timers overflow to a near-immediate callback beyond this delay. */
 export const MAX_TIMER_MS = 2_147_483_647
@@ -26,7 +27,9 @@ const units: ReadonlyArray<readonly [string, number]> = [
 /** Validate after all fields parse so a task's bound includes its configured positive jitter. */
 export function validateNumericBounds(raw: Record<string, unknown>, ctx: z.RefinementCtx): void {
   const jitter =
-    typeof raw.SCHEDULER_JITTER_FRACTION === "number" ? raw.SCHEDULER_JITTER_FRACTION : 0.2
+    typeof raw.SCHEDULER_JITTER_FRACTION === "number"
+      ? raw.SCHEDULER_JITTER_FRACTION
+      : DEFAULT_SCHEDULER_JITTER_FRACTION
   for (const [name, value] of Object.entries(raw)) {
     if (typeof value !== "number") continue
     const unit = units.find(([suffix]) => name.endsWith(suffix))?.[1]

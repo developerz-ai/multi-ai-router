@@ -20,6 +20,53 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - The Discord webhook URL is treated as a credential: `apps/api/src/logging/redact.ts` redacts it — token path segment included — across `discord.com`, `discordapp.com`, `ptb.`/`canary.` hosts, an optional `/api/v<N>/` prefix and `?wait=` / `?thread_id=` query suffixes, in log lines, HTTP error bodies, `usage_reports.last_error`, scheduler error text, the Settings task outcome and the captured Sentry event (message, breadcrumbs, extra). Env validation for the URL never echoes the value.
 
+## [2.37.9] — 2026-10-16
+
+### Fixed
+
+- Restored the missing `[2.37.0]`–`[2.37.4]` footer links in `CHANGELOG.md` — every section again names its release, and the whole footer list is back in ascending order (#265).
+
+### Changed
+
+- `bin/verify-version` now also reads `CHANGELOG.md`: a section since 2.25.0 (the start of the fully-linked era) whose footer link is missing or duplicated fails the gate, as do footer links out of ascending order — the 2.37.0–2.37.4 gap cannot recur silently.
+
+### Documentation
+
+- `docs/RELEASING.md` and `docs/idea/08-observability.md` record the changelog gate and why the footer link is part of the release checklist.
+
+## [2.37.7] — 2026-10-16
+
+### Added
+
+- Tests closing the weekly report's remaining gaps (#252): exact per-row cache-token sums (distinct non-zero reads/writes, loud out-of-week rows proving the clip) and a ceiling-equal week read that must not throw in the database integration suite; the over-cap preview driven through `POST /api/admin/usage/reports/preview` with the CSRF token, asserting `400 report_too_large` and that nothing was stored; and a unit suite pinning the too-large message below and at the row cap.
+
+### Changed
+
+- At the `USAGE_REPORT_MAX_ROWS` ceiling (100000) the too-large failure now says building the week needs a code change instead of suggesting a raise boot would refuse; below the ceiling it still says to raise, naming the cap.
+- The boot refusal for the report's firing window rounds the displayed slowest tick to whole minutes (the comparison stays exact) and names `USAGE_REPORT_INTERVAL_MINUTES` when a configured interval or jitter closed a window the defaults fit, `USAGE_REPORT_SETTLE_MINUTES` otherwise.
+- The scheduler jitter default (0.2) is one exported constant, `DEFAULT_SCHEDULER_JITTER_FRACTION`, instead of four literals.
+- A preview generated inside the upstream timeout says an attempt "would be missed in a stored report", not "is missed for good" — a preview stores nothing. `anchorOffsetMinutes` now takes only the schedule fields, keeping `maxRows` out of the schedule type.
+
+### Documentation
+
+- `docs/idea/08-observability.md` and `docs/idea/09-deployment.md` follow the refusal naming, the at-cap wording and the preview caveat.
+
+## [2.37.6] — 2026-10-15
+
+### Documentation
+
+- `MiniMax-M3.1-Flash-Preview` stays deliberately unpriced (#254). The vendor's public price list (platform.minimax.io/docs/guides/pricing, read 2026-10-15) carries no row for the preview — MiniMax serves it from the coding plan, and the per-token figures that circulate for it are resellers' and aggregators', not the vendor's price. `services/cost/tables/minimax.ts` now pins this in `MINIMAX_UNPRICED`, a registry of deliberately unpriced models whose entries must keep looking up null (asserted in `test/unit/cost/account-prices.test.ts`), so the documentation cannot drift from the table: its tokens keep recording `costBasis = unknown` and roll up as unpriced until an operator override prices it.
+
+## [2.37.5] — 2026-10-15
+
+### Added
+
+- `glm-5.3` joins the shipped `zai` price table (#253). The #217 model census found it served on the production router with no price, so its tokens recorded `cost_basis = unknown`. Rates are z.ai's own published list (docs.z.ai/guides/overview/pricing, read 2026-10-15): input $1.4, output $4.4, cached input $0.26 per Mtok, no cache-write price published. A coding-plan account reports the row as a `notional` attribution, as with every zai model.
+
+### Changed
+
+- The `glm-5.3-flash` row keeps its numbers and moves its citation from OpenRouter's reseller list to the vendor's own pricing page, which now lists the model at the same figures.
+
 ## [2.37.4] — 2026-10-15
 
 ### Fixed
@@ -1357,10 +1404,10 @@ your tooling config.
 - README rewritten around the actual product story: your tools → Multi AI
   Router → providers.
 
+[1.0.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v1.0.0
+[2.12.2]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.12.2
 [2.13.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.13.0
 [2.13.1]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.13.1
-[2.12.2]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.12.2
-[1.0.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v1.0.0
 [2.25.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.25.0
 [2.25.1]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.25.1
 [2.25.2]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.25.2
@@ -1384,4 +1431,13 @@ your tooling config.
 [2.34.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.34.0
 [2.35.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.35.0
 [2.36.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.36.0
+[2.37.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.37.0
+[2.37.1]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.37.1
+[2.37.2]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.37.2
+[2.37.3]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.37.3
+[2.37.4]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.37.4
+[2.37.5]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.37.5
+[2.37.6]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.37.6
+[2.37.7]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.37.7
+[2.37.9]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.37.9
 [2.38.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.38.0

@@ -1,5 +1,6 @@
 import type { UsageHistoryRepository, UsageReportRepository } from "@multi-ai-router/db"
 import { UsageWeekRowCeilingError } from "@multi-ai-router/db"
+import { USAGE_REPORT_MAX_ROWS_CEILING } from "../../config/usage-report"
 import { type AdminResult, invalid, notFound, ok } from "../admin/result"
 import { buildWeeklyReport } from "./builder"
 import { isoDay, lastCompleteWeek, parseReportWeek, type ReportWeek } from "./period"
@@ -61,14 +62,18 @@ export interface UsageReportService {
 export class ReportTooLargeError extends Error {
   constructor(readonly maxRows: number) {
     super(
-      `the week has more than ${maxRows} key x account x pool x model rows; raise USAGE_REPORT_MAX_ROWS (at most 100000) to build it`,
+      maxRows >= USAGE_REPORT_MAX_ROWS_CEILING
+        ? // At the cap there is nothing left to raise: pointing at the setting would send the
+          // operator to a value boot refuses.
+          `the week has more than ${maxRows} key x account x pool x model rows; USAGE_REPORT_MAX_ROWS is already at its ceiling of ${USAGE_REPORT_MAX_ROWS_CEILING}, so building this week needs a code change — until then the week is not reported`
+        : `the week has more than ${maxRows} key x account x pool x model rows; raise USAGE_REPORT_MAX_ROWS (at most ${USAGE_REPORT_MAX_ROWS_CEILING}) to build it`,
     )
     this.name = "ReportTooLargeError"
   }
 }
 
 export function createUsageReportService(deps: UsageReportServiceDeps): UsageReportService {
-  const build = async (week: ReportWeek, now: Date): Promise<WeeklyReport> => {
+  const build = async (week: ReportWeek, now: Date, preview = false): Promise<WeeklyReport> => {
     // The three reads run concurrently. `deps.labels` orders its own two reads (live keys, then
     // tombstones) so a key deleted mid-read is still named; the rows are one query.
     const [labels, pools, read] = await Promise.all([
@@ -85,6 +90,7 @@ export function createUsageReportService(deps: UsageReportServiceDeps): UsageRep
       generatedAt: now,
       upstreamTimeoutMs: deps.upstreamTimeoutMs,
       unpricedSince: read.unpricedSince,
+      preview,
     })
   }
 
@@ -104,7 +110,7 @@ export function createUsageReportService(deps: UsageReportServiceDeps): UsageRep
     preview: async () => {
       const now = deps.now()
       try {
-        return ok(await build(lastCompleteWeek(now), now))
+        return ok(await build(lastCompleteWeek(now), now, true))
       } catch (error) {
         if (error instanceof ReportTooLargeError) return invalid(error.message, "report_too_large")
         throw error

@@ -6,7 +6,11 @@ import { readAdminBodiesEnv } from "./admin-bodies"
 import { readBackgroundEnv } from "./background"
 import { readClaudeLoginEnv } from "./claude-login"
 import { readCliOwnershipEnv } from "./cli-ownership"
-import { DEFAULT_LOG_QUIET_PATHS, DEFAULT_SERVER_IDLE_TIMEOUT_SECONDS } from "./env-defaults"
+import {
+  DEFAULT_LOG_QUIET_PATHS,
+  DEFAULT_SCHEDULER_JITTER_FRACTION,
+  DEFAULT_SERVER_IDLE_TIMEOUT_SECONDS,
+} from "./env-defaults"
 import { readAdminOidcEnv } from "./env-oidc"
 import type { ParsedEnv } from "./env-schema"
 import type { Env } from "./env-types"
@@ -211,7 +215,7 @@ export function readParsedEnv(raw: ParsedEnv, ctx: z.RefinementCtx): Env {
       modelCatalogRefreshIntervalMinutes: raw.MODEL_CATALOG_REFRESH_INTERVAL_MINUTES ?? 60,
       modelCatalogRefreshBatchSize: raw.MODEL_CATALOG_REFRESH_BATCH_SIZE ?? 25,
       sweepBatchSize: raw.SWEEP_BATCH_SIZE ?? 1_000,
-      jitterFraction: raw.SCHEDULER_JITTER_FRACTION ?? 0.2,
+      jitterFraction: raw.SCHEDULER_JITTER_FRACTION ?? DEFAULT_SCHEDULER_JITTER_FRACTION,
     },
     oauthRefresh: {
       lockPoolMaxConnections: raw.OAUTH_REFRESH_LOCK_POOL_MAX_CONNECTIONS ?? 1,

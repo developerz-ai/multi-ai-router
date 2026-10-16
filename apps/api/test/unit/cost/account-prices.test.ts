@@ -8,6 +8,7 @@ import {
 } from "../../../src/services/cost"
 import { priceLookupForRows } from "../../../src/services/cost/book"
 import { unpricedModels } from "../../../src/services/cost/coverage"
+import { MINIMAX_UNPRICED } from "../../../src/services/cost/tables/minimax"
 
 const accountId = "11111111-1111-4111-8111-111111111111"
 const tokens = { tokensIn: 100, tokensOut: 10, cacheReadTokens: 0, cacheWriteTokens: 0 }
@@ -111,6 +112,63 @@ test("coverage uses account scope and retains unknown model catalog evidence", (
 test("displayed inherited snapshot is derived from the oldest source snapshot", () => {
   expect(PRICE_SOURCES.some((source) => source.snapshotAsOf === PRICE_TABLE_AS_OF)).toBe(true)
   for (const source of PRICE_SOURCES) expect(PRICE_TABLE_AS_OF <= source.snapshotAsOf).toBe(true)
+})
+
+test("glm-5.3 on zai carries the vendor's published rates (#253)", () => {
+  // docs.z.ai/guides/overview/pricing, read 2026-10-15: GLM-5.3 input $1.4, output $4.4, cached
+  // input $0.26 per Mtok, no cache-write price published. The #217 census saw this model served
+  // with no shipped price, so its tokens recorded cost_basis = unknown until this row.
+  const shipped = {
+    inputPerMtok: 1.4,
+    outputPerMtok: 4.4,
+    cacheReadPerMtok: 0.26,
+    cacheWritePerMtok: 0,
+  }
+  expect(lookupRates("zai", "glm-5.3", { billing: "subscription" })).toEqual(shipped)
+  expect(lookupRates("zai", "glm-5.3")).toEqual(shipped)
+  // A coding-plan account reports the same numbers as a notional attribution, not metered spend.
+  expect(
+    estimateCost({ provider: "zai", model: "glm-5.3", tokens, billing: "subscription" }),
+  ).toEqual({ costBasis: "notional", costEstimate: "0.000184" })
+  const zaiAccounts = [
+    {
+      id: "zai-coding",
+      label: "Coding plan",
+      provider: "zai" as const,
+      billing: "subscription" as const,
+      models: ["glm-5.3"],
+    },
+  ]
+  expect(unpricedModels(zaiAccounts, lookupRates)).toEqual([])
+})
+
+test("MiniMax-M3.1-Flash-Preview has no vendor price, so it stays unknown (#254)", () => {
+  // platform.minimax.io's public price list (docs/guides/pricing, read 2026-10-15) carries no row
+  // for the preview: MiniMax serves it from the coding plan, and only resellers quote per-token
+  // numbers. A reseller's figure is not the vendor's price, so the tokens price as unknown.
+  expect(
+    lookupRates("minimax", "MiniMax-M3.1-Flash-Preview", { billing: "subscription" }),
+  ).toBeNull()
+  expect(lookupRates("minimax", "MiniMax-M3.1-Flash-Preview", { billing: "metered" })).toBeNull()
+  // A date pin must not fall back to a family row that does not price it either.
+  expect(
+    lookupRates("minimax", "MiniMax-M3.1-Flash-Preview-20261001", { billing: "subscription" }),
+  ).toBeNull()
+  expect(
+    estimateCost({
+      provider: "minimax",
+      model: "MiniMax-M3.1-Flash-Preview",
+      tokens,
+      billing: "subscription",
+    }),
+  ).toEqual({ costBasis: "unknown", costEstimate: null })
+  // The registry is the documentation, so it cannot drift from the table: every entry names a
+  // reason and still looks up null.
+  expect(Object.keys(MINIMAX_UNPRICED)).toContain("minimax-m3.1-flash-preview")
+  for (const [model, reason] of Object.entries(MINIMAX_UNPRICED)) {
+    expect(reason.length).toBeGreaterThan(0)
+    expect(lookupRates("minimax", model)).toBeNull()
+  }
 })
 
 test("GPT-6 model coverage on openai-api and openai-oauth (#181)", () => {

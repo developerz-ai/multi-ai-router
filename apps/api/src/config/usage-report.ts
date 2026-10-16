@@ -1,4 +1,5 @@
 import type { z } from "zod"
+import { DEFAULT_SCHEDULER_JITTER_FRACTION } from "./env-defaults"
 import { absoluteUrl, atLeastOne, wholeNumber } from "./fields"
 
 /**
@@ -19,7 +20,9 @@ import { absoluteUrl, atLeastOne, wholeNumber } from "./fields"
  * - a firing window (the time from the anchor to the end of the week) not longer than one slowest
  *   jittered tick plus {@link TICK_WORK_MINUTES}: the task would succeed with nothing to do and keep
  *   the health screen green while a tick stepped over the window and no report was made. An offset
- *   of a full week or more is the limit case, a window of zero.
+ *   of a full week or more is the limit case, a window of zero. The issue names the schedule when
+ *   the schedule closed the window and `USAGE_REPORT_INTERVAL_MINUTES` when the configured interval
+ *   or jitter did — the setting that would actually have to move.
  * - weekday and hour outside their ranges (the field parsers below).
  */
 export const MIN_USAGE_REPORTS_RETENTION_DAYS = 14
@@ -27,6 +30,14 @@ const WEEK_MINUTES = 7 * 24 * 60
 /** Minutes kept clear of the end of the week for a tick's own work: one week read and an insert. */
 export const TICK_WORK_MINUTES = 5
 const DAY_MINUTES = 24 * 60
+/**
+ * The most `USAGE_REPORT_MAX_ROWS` accepts. The rows are held in memory while the report is built,
+ * so past this the cap itself needs a code change — the too-large failure says so rather than
+ * suggesting a raise that boot would refuse.
+ */
+export const USAGE_REPORT_MAX_ROWS_CEILING = 100_000
+/** The check cadence when `USAGE_REPORT_INTERVAL_MINUTES` is unset. */
+export const DEFAULT_USAGE_REPORT_INTERVAL_MINUTES = 60
 
 export const USAGE_REPORT_ENV_FIELDS = {
   /** At most a day: a longer cadence is a report that can miss its window by design. */
@@ -35,7 +46,10 @@ export const USAGE_REPORT_ENV_FIELDS = {
     .optional(),
   /** Rows the week read may return; over it the task fails and the preview answers 400. */
   USAGE_REPORT_MAX_ROWS: atLeastOne
-    .refine((value) => value <= 100_000, "must be at most 100000")
+    .refine(
+      (value) => value <= USAGE_REPORT_MAX_ROWS_CEILING,
+      `must be at most ${USAGE_REPORT_MAX_ROWS_CEILING}`,
+    )
     .optional(),
   /** ISO weekday: 1 = Monday ... 7 = Sunday. */
   USAGE_REPORT_WEEKDAY: atLeastOne
@@ -85,8 +99,13 @@ export interface UsageReportConfig {
   readonly deliveryTimeoutMs: number
 }
 
-/** Minutes from the week's Monday 00:00 UTC to the instant the report becomes due. */
-export function anchorOffsetMinutes(config: UsageReportConfig): number {
+/**
+ * Minutes from the week's Monday 00:00 UTC to the instant the report becomes due. Takes only the
+ * schedule fields: the anchor is a property of the schedule, and `maxRows` is no part of it.
+ */
+export function anchorOffsetMinutes(
+  config: Pick<UsageReportConfig, "weekday" | "hourUtc" | "settleMinutes">,
+): number {
   return (config.weekday - 1) * 1_440 + config.hourUtc * 60 + config.settleMinutes
 }
 
@@ -141,21 +160,33 @@ export function readUsageReportEnv(
   // than that plus a margin for the tick's own work. Refused, not clamped: a schedule that can
   // step over its window looks configured and silently skips weeks. This also covers an offset of
   // a full week or more, where the window is zero or negative.
-  const intervalMinutes = raw.USAGE_REPORT_INTERVAL_MINUTES ?? 60
-  const jitter = raw.SCHEDULER_JITTER_FRACTION ?? 0.2
+  const intervalMinutes = raw.USAGE_REPORT_INTERVAL_MINUTES ?? DEFAULT_USAGE_REPORT_INTERVAL_MINUTES
+  const jitter = raw.SCHEDULER_JITTER_FRACTION ?? DEFAULT_SCHEDULER_JITTER_FRACTION
   const offset = anchorOffsetMinutes(usageReport)
   const window = WEEK_MINUTES - offset
   const slowestTick = intervalMinutes * (1 + jitter) + TICK_WORK_MINUTES
   if (slowestTick >= window) {
+    // Blame the setting that would have to move. When even the default cadence and jitter cannot
+    // fit the window, the schedule left too little of the week; a window the defaults fit was
+    // closed by the configured interval or jitter, so the issue points at the interval.
+    const defaultSlowestTick =
+      DEFAULT_USAGE_REPORT_INTERVAL_MINUTES * (1 + DEFAULT_SCHEDULER_JITTER_FRACTION) +
+      TICK_WORK_MINUTES
     ctx.addIssue({
       code: "custom",
-      path: ["USAGE_REPORT_SETTLE_MINUTES"],
+      path: [
+        defaultSlowestTick >= window
+          ? "USAGE_REPORT_SETTLE_MINUTES"
+          : "USAGE_REPORT_INTERVAL_MINUTES",
+      ],
+      // The comparison above stays exact; only the display rounds, so the message never shows a
+      // fractional minute count that no setting can produce.
       message:
         `USAGE_REPORT_WEEKDAY, USAGE_REPORT_HOUR_UTC and USAGE_REPORT_SETTLE_MINUTES add up to ` +
         `${offset} minutes after Monday 00:00 UTC, leaving ${window} minutes of the week to fire in, ` +
         `which must exceed one slowest tick (USAGE_REPORT_INTERVAL_MINUTES ${intervalMinutes} x ` +
         `(1 + SCHEDULER_JITTER_FRACTION ${jitter}) + ${TICK_WORK_MINUTES} minutes of work = ` +
-        `${slowestTick}): a tick could step over the whole window and the week would never be reported`,
+        `${Math.round(slowestTick)}): a tick could step over the whole window and the week would never be reported`,
     })
     return undefined
   }
