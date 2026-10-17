@@ -103,6 +103,9 @@ export const openAiChatRequestSchema = z.object({
   // Structured output. Loose here: toward openai-responses `shared/structured-output.ts` validates
   // the `json_schema` member it carries, and every other hop refuses on `type` alone.
   response_format: z.looseObject({ type: z.string() }).nullish(),
+  // The caller's name for a conversation's cache prefix. Both OpenAI dialects spell it identically,
+  // so toward openai-responses it is carried; toward anthropic it has no counterpart and is dropped.
+  prompt_cache_key: z.string().nullish(),
 })
 
 export type ParsedOpenAiChatRequest = z.infer<typeof openAiChatRequestSchema>

@@ -59,11 +59,16 @@ export const CODEX_ORIGINATOR_HEADER = "originator"
 // "match codex cli". The backend 400s on each deviation, so a translated request breaks outright.
 // It also compiles the JSON-Schema `pattern` and refuses a regex lookaround (`(?=`, `(?!`, `(?<=`,
 // `(?<!`) with `400` — stripped at the egress, reported by tool name + schema path.
+// `session-id`: codex-rs sends its `prompt_cache_key` under this header too (`core/src/client.rs`
+// `responses_session_id`, "ChatGPT derives cache affinity from the Responses session-id header";
+// `codex-api/src/requests/headers.rs`, 2026-10-17). If the backend moves it, cache reads on a
+// conversation's later steps fall back to cold prefill — slower and costlier, never a failure.
 export const CODEX_RESPONSES_EGRESS: ResponsesEgressRules = {
   requireStream: true,
   requireInstructions: true,
   unsupportedFields: ["max_output_tokens", "temperature", "top_p"],
   stripLookaroundPatterns: true,
+  cacheKeyHeader: "session-id",
 }
 
 export function openAiOAuthAuthorizeUrl(input: {

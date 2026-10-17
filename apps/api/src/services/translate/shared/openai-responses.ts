@@ -242,6 +242,11 @@ export interface OpenAiResponsesRequest {
   readonly reasoning?:
     | { readonly effort?: string | undefined; readonly summary?: "auto" | undefined }
     | undefined
+  /**
+   * The caller's own cache-prefix key, carried from openai-chat's identically spelled field. Never
+   * minted here: a key the router invented would merge or split conversations the caller drew.
+   */
+  readonly prompt_cache_key?: string | undefined
   /** A structured-output constraint, carried from openai-chat's `response_format` only. */
   readonly text?: { readonly format: OpenAiResponsesTextFormat } | undefined
   /**
