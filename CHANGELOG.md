@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.39.11] — 2026-10-17
+
+### Fixed
+
+- A caller's `prompt_cache_key` now reaches a ChatGPT (Codex) account (#291). The openai-chat → openai-responses translator rebuilds the body field by field and had no slot for it, so `/v1/chat/completions` traffic routed to Codex reached the backend with no cache key: tesote.ai measured 16–22% of input read from cache on later steps of one turn — identical prefix, seconds apart — against 98.5% for the same turns via OpenRouter (prod, 2026-10-16). The field is carried verbatim (absent, `null` or `""` sends none; the router never mints one), as the first-party Codex CLI sends it (openai/codex `codex-api/src/common.rs` `ResponsesApiRequest`).
+- The Codex surface is also sent the `session-id` header the backend derives cache affinity from (codex-rs `core/src/client.rs`: "ChatGPT derives cache affinity from the Responses session-id header"). A new `ResponsesEgressRules.cacheKeyHeader` names it once in `CODEX_RESPONSES_EGRESS`; `dataplane/egress/cache-key-header.ts` picks the value — the caller's `prompt_cache_key` on a translated request, the client's own `session-id` on a `/v1/responses` byte relay (where the trust-boundary allowlist used to strip it from real Codex CLI traffic), nothing when neither states one, and never over a driver header.
+
+### Documentation
+
+- `06-protocol-translation.md` lists `prompt_cache_key` among the carried fields and `cacheKeyHeader` among the surface rules; `03-providers.md` names the Codex `session-id` header. Account stickiness on `/v1/chat/completions` already keys on `x-session-id` (`body/session.ts`); a new integration test pins it on Codex accounts, with a headerless control that spreads.
+
 ## [2.39.10] — 2026-10-17
 
 ### Fixed
@@ -1592,3 +1603,5 @@ your tooling config.
 [2.39.9]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.39.9
 
 [2.39.10]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.39.10
+
+[2.39.11]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.39.11

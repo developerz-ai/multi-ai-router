@@ -28,6 +28,13 @@ export interface ResponsesEgressRules {
    * keywords are walked, and what is out of scope, is documented in `schema-lookarounds.ts`.
    */
   readonly stripLookaroundPatterns: boolean
+  /**
+   * The request header this upstream derives prompt-cache affinity from, or absent when it reads
+   * only the body. Unlike the rules above it applies to **both** modes, because it touches no body
+   * byte: a translated request sends the caller's `prompt_cache_key` under it, and a byte relay
+   * forwards the client's own header of that name. See `dataplane/egress/cache-key-header.ts`.
+   */
+  readonly cacheKeyHeader?: string | undefined
 }
 
 export const DEFAULT_RESPONSES_EGRESS: ResponsesEgressRules = {

@@ -66,6 +66,7 @@ const CHAT_REPLY = {
 function costlyTranslation(testClock: TestClock, ms: number): TranslatedRequestBody {
   return {
     includeUsage: () => false,
+    promptCacheKey: () => undefined,
     bodyFor: () => {
       testClock.advance(ms)
       return new TextEncoder().encode(JSON.stringify({ model: "gpt-4o", messages: [] }))

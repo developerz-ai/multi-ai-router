@@ -34,6 +34,10 @@ import { toolChoiceToOpenAiResponses, toolsToOpenAiResponses } from "../shared/t
  * effort word travels **verbatim** — the two dialects share one vocabulary, and mapping it through a
  * table of ours would let a value OpenAI adds later arrive as one it already understood.
  *
+ * **`prompt_cache_key` is carried verbatim**, spelled identically on both sides. It is what keeps a
+ * conversation's prefix cache warm upstream; dropping it made every step of one turn a cold read
+ * (prod 2026-10-16: 16–22% cached on Codex against 98.5% via OpenRouter).
+ *
  * **`response_format` is carried as `text.format`** (`shared/structured-output.ts`): the one pair
  * where both sides state structured output, so the constraint the caller will parse against reaches
  * the model instead of a `400`.
@@ -116,6 +120,11 @@ export function openAiChatToOpenAiResponsesRequest(body: unknown): OpenAiRespons
         ? { effort: request.reasoning_effort }
         : undefined,
     text: responseFormatToResponsesText(request.response_format),
+    // An empty key names no prefix, and sending one would key every such caller together.
+    prompt_cache_key:
+      typeof request.prompt_cache_key === "string" && request.prompt_cache_key.length > 0
+        ? request.prompt_cache_key
+        : undefined,
     // Never the caller's value: an openai-chat client has no way to name a stored response on its
     // next turn, so one left behind is litter on the provider that nobody can reference or delete.
     store: false,

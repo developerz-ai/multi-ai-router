@@ -41,6 +41,11 @@ export interface TranslatedRequestBody {
   ): Uint8Array
   /** Whether the client asked for a stream — read from the cached parse; false before one. */
   clientStreams(): boolean
+  /**
+   * The caller's `prompt_cache_key` — read from the cached parse; undefined before one. Both OpenAI
+   * dialects spell it this way and Anthropic states none, so the ingress name is the only one read.
+   */
+  promptCacheKey(): string | undefined
 }
 
 /**
@@ -97,6 +102,11 @@ export function createTranslatedRequestBody(
         "stream" in source &&
         source.stream === true
       )
+    },
+    promptCacheKey() {
+      if (!parsed || typeof source !== "object" || source === null) return undefined
+      const key = "prompt_cache_key" in source ? source.prompt_cache_key : undefined
+      return typeof key === "string" ? key : undefined
     },
     bodyFor(pair, upstreamModel, chatCeiling, defaultMaxTokens, responsesEgress) {
       const effectiveDefault = defaultMaxTokens ?? context.defaultMaxTokens

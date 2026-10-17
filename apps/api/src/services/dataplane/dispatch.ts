@@ -2,6 +2,7 @@ import type { UpstreamStartGuard } from "../../providers/upstream-admission"
 import { type AttemptOutcome, runAttempt } from "./attempt"
 import type { attemptQuota } from "./attempt-quota"
 import type { ChainContext } from "./chain"
+import { cacheKeyHeader } from "./egress/cache-key-header"
 import { forcesUpstreamStream, type ServableCandidate } from "./plan"
 import { runSdkAttempt } from "./sdk-attempt"
 
@@ -43,6 +44,13 @@ export function dispatch(
     })
   }
 
+  // After `bodyFor`, so a translated request's cached parse is there to read the caller's key from.
+  const cacheKey = cacheKeyHeader(
+    servable.responsesEgress.cacheKeyHeader,
+    servable.translation === null
+      ? { kind: "relay", client: ctx.request.headers }
+      : { kind: "translated", key: ctx.translated.promptCacheKey() },
+  )
   return runAttempt({
     plan: servable,
     beforeUpstreamStart,
@@ -56,5 +64,6 @@ export function dispatch(
     ...(runtime.errorMaxBytes === undefined ? {} : { errorMaxBytes: runtime.errorMaxBytes }),
     signal: ctx.request.signal,
     ...(forcesUpstreamStream(servable) ? { accept: "text/event-stream" } : {}),
+    ...(cacheKey === undefined ? {} : { cacheKey }),
   })
 }

@@ -59,6 +59,11 @@ export interface AttemptInput {
    * one the router asked the upstream for.
    */
   readonly accept?: string
+  /**
+   * The surface's prompt-cache affinity header and its value (`egress/cache-key-header.ts`). Never
+   * overrides a driver header: only the selected account's driver speaks for the account.
+   */
+  readonly cacheKey?: readonly [string, string]
 }
 
 /** What the upstream said, when it said something the client should see. */
@@ -96,6 +101,9 @@ export async function runAttempt(input: AttemptInput): Promise<AttemptOutcome> {
   const driverHeaders = plan.driver.buildHeaders(plan.account.driver, credential)
   const headers = upstreamHeaders(input.clientHeaders, driverHeaders)
   if (input.accept !== undefined) headers.set("accept", input.accept)
+  if (input.cacheKey !== undefined && !driverHeaders.has(input.cacheKey[0])) {
+    headers.set(input.cacheKey[0], input.cacheKey[1])
+  }
 
   const request = new Request(plan.url.toString(), {
     method: input.method,
