@@ -89,6 +89,22 @@ describe("withFixtureDatabase ordering (#286)", () => {
     expect(cluster.statements.filter((s) => s.startsWith("create database"))).toHaveLength(1)
   })
 
+  test("a raced create under --drop-existing still drops nothing — the flag authorizes only a database present at the probe", async () => {
+    const cluster = fakeCluster({ existsAtProbe: false, createFails: true })
+    const { promise, modes } = run(cluster, { dropExisting: true })
+
+    await expect(promise).rejects.toThrow("already exists")
+
+    // `--drop-existing` authorizes dropping a database that EXISTED AT THE PROBE.
+    // This name was absent at the probe and appeared afterwards, created by the
+    // racer, so this run's create failed: `fresh` is false, the body never ran,
+    // and the exit `finally` must not read the flag as a license to force-drop
+    // the other actor's database.
+    expect(modes).toEqual([])
+    expect(cluster.drops()).toEqual([])
+    expect(cluster.statements.filter((s) => s.startsWith("create database"))).toHaveLength(1)
+  })
+
   test("a clean probe and a successful create still seed and drop their own database", async () => {
     const cluster = fakeCluster({ existsAtProbe: false })
     const { promise, modes } = run(cluster)
