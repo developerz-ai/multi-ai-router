@@ -350,6 +350,16 @@ timing gate on a shared runner flakes — on this one the same fixed build measu
 201.7 s and 451.6 s wall across one evening, which is why the plan-shape pins live in the unit
 tests and the budgets here are regression tripwires, not SLOs.
 
+**Database lifecycle (#283).** The harness destroys only a database the run created itself. A
+`--db` name that already exists is refused before anything touches it — no migrations, no
+truncate, no drop — unless the run carries an explicit flag: `--reuse-db` benchmarks the
+existing seed as-is, and `--drop-existing` authorizes reseeding it and dropping it at the end.
+The exit drop fires exactly when the database was fresh or `--drop-existing` was passed, and
+never under `--keep-db`; both gates are pure functions
+(`apps/api/bench/usage-summary-lifecycle.ts`) with a tested truth table, and the refusal and the
+authorized drop are asserted end to end against throwaway databases in
+`apps/api/test/integration/bench-usage.test.ts`.
+
 **Beyond the bound.** No statement timeout is added under the idle timeout and the default
 window is unchanged: a smaller statement bound would only swap the error the operator sees for
 the same latency, and a smaller default window hides the same data rather than serving it. If a

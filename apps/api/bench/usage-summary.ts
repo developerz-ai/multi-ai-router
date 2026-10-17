@@ -16,6 +16,13 @@ import {
   labelCalls,
   type QueryMeasure,
 } from "./usage-summary-instrument"
+import {
+  dropsOnExit,
+  existingDbRefusal,
+  fixtureMode,
+  parseArgs,
+  USAGE,
+} from "./usage-summary-lifecycle"
 
 /**
  * `bin/bench-usage` — the admin usage summary at issue #250's seeded size, measured
@@ -38,64 +45,12 @@ import {
  * Deliberately not part of `bin/check`, for the same reason `bin/bench` is not: a
  * timing measurement on a shared runner is a flaky test. Run it when you touch
  * `usage-read`, the usage repositories, or their indexes.
+ *
+ * The database lifecycle is gated (#283): a run drops only a database it created or
+ * `--drop-existing` authorized, and a pre-existing `--db` name is refused untouched
+ * without `--reuse-db` or `--drop-existing`. The gates live — pure and tested — in
+ * `usage-summary-lifecycle.ts`.
  */
-
-interface Options {
-  url: string
-  budgetMs: number
-  buffersBudget: number
-  explain: boolean
-  keepDb: boolean
-  dbName: string | undefined
-  reuseDb: boolean
-}
-
-const DEFAULTS: Options = {
-  url: process.env.DATABASE_URL ?? "",
-  budgetMs: 240_000,
-  buffersBudget: 1_200_000,
-  explain: true,
-  keepDb: false,
-  dbName: undefined,
-  reuseDb: false,
-}
-
-function parseArgs(argv: string[]): Options {
-  const options = { ...DEFAULTS }
-  const numberFlag = (name: string, set: (v: number) => void) => {
-    const at = argv.indexOf(name)
-    if (at === -1) return
-    const raw = argv[at + 1]
-    if (raw === undefined || Number.isNaN(Number(raw))) throw new Error(`${name} needs a number`)
-    set(Number(raw))
-  }
-  const stringFlag = (name: string, set: (v: string) => void) => {
-    const at = argv.indexOf(name)
-    if (at === -1) return
-    const raw = argv[at + 1]
-    if (raw === undefined) throw new Error(`${name} needs a value`)
-    set(raw)
-  }
-  numberFlag("--budget-ms", (v) => (options.budgetMs = v))
-  numberFlag("--buffers-budget", (v) => (options.buffersBudget = v))
-  stringFlag("--url", (v) => (options.url = v))
-  stringFlag("--db", (v) => (options.dbName = v))
-  options.reuseDb = argv.includes("--reuse-db")
-  options.keepDb = argv.includes("--keep-db")
-  options.explain = !argv.includes("--no-explain")
-  return options
-}
-
-const USAGE = `Usage: bin/bench-usage [options]
-
-  --url URL              admin database URL; a throwaway database is created beside it
-  --db NAME              name the throwaway database (default: a random usage_bench_*)
-  --reuse-db             keep an existing --db database's seed; only re-run migrations
-  --budget-ms N          wall budget for one summary      (default ${DEFAULTS.budgetMs})
-  --buffers-budget N     shared-buffer budget, all queries (default ${DEFAULTS.buffersBudget})
-  --no-explain           skip the EXPLAIN pass, buffers, and the per-query table
-  --keep-db              keep the throwaway database (prints its URL)
-`
 
 function buildLabels(keys: number): UsageLabelSets {
   const keyLabels = new Map<string, KeyLabel>()
@@ -133,15 +88,26 @@ async function main() {
 
   const admin = createDatabase({ url: base.toString(), maxConnections: 1 })
   let handle: Awaited<ReturnType<typeof createDatabase>> | undefined
+  // Hoisted for the `finally` drop gate: only a database this run created — or one
+  // --drop-existing authorized — may be dropped, so a failure before the pg_database
+  // probe must read as "not ours" (#283).
+  let fresh = false
   try {
     const existing = await admin.sql.unsafe("select 1 from pg_database where datname = $1", [name])
-    const fresh = existing.length === 0
+    fresh = existing.length === 0
+    const mode = fixtureMode({
+      fresh,
+      reuseDb: options.reuseDb,
+      dropExisting: options.dropExisting,
+    })
+    // Before create, before migrations: a refused database is not touched at all.
+    if (mode === "refuse") throw new Error(existingDbRefusal(name))
     if (fresh) await admin.sql.unsafe(`create database "${name}"`)
     // Migrations always run: idempotent, and a reused database may predate a new one.
     await runMigrations({ url: fixtureUrl.toString(), migrationsFolder: defaultMigrationsFolder() })
     handle = createDatabase({ url: fixtureUrl.toString(), maxConnections: 4 })
     let keys = ISSUE_250_SCALE.v2RowsPerDay / 8
-    if (fresh || !options.reuseDb) {
+    if (mode === "seed") {
       const seeded = await seedUsageFixture(handle.sql, ISSUE_250_SCALE)
       keys = seeded.keys
       console.log(
@@ -217,7 +183,7 @@ async function main() {
       console.log(`kept database: ${fixtureUrl.toString().replace(/:\/\/.*@/, "://***@")}`)
   } finally {
     await handle?.close()
-    if (!options.keepDb) {
+    if (dropsOnExit({ fresh, dropExisting: options.dropExisting, keepDb: options.keepDb })) {
       try {
         await admin.sql.unsafe(`drop database if exists "${name}" with (force)`)
       } catch {
