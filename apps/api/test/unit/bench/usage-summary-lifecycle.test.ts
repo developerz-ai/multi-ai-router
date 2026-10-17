@@ -1,8 +1,11 @@
 import { describe, expect, test } from "bun:test"
 import {
+  DEFAULTS,
   existingDbRefusal,
   type FixtureMode,
   type LifecycleSql,
+  parseArgs,
+  USAGE,
   withFixtureDatabase,
 } from "../../../bench/usage-summary-lifecycle"
 
@@ -185,5 +188,20 @@ describe("withFixtureDatabase ordering (#286)", () => {
     expect(modes).toEqual(["seed"])
     expect(cluster.statements.some((s) => s.startsWith("create database"))).toBe(true)
     expect(cluster.drops()).toEqual([])
+  })
+})
+
+describe("the wall budget defaults to the operator bound (#284 item 3)", () => {
+  test("budgetMs defaults to the 60 s idle bound, not 4x it", () => {
+    expect(DEFAULTS.budgetMs).toBe(60_000)
+  })
+
+  test("--budget-ms still overrides the default", () => {
+    expect(parseArgs(["--budget-ms", "123456"]).budgetMs).toBe(123456)
+  })
+
+  test("USAGE names the default budget", () => {
+    expect(USAGE).toContain("--budget-ms")
+    expect(USAGE).toContain(String(DEFAULTS.budgetMs))
   })
 })
