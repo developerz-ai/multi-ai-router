@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.39.7] — 2026-10-16
+
+### Fixed
+
+- `bin/bench-usage` no longer destroys a database it did not create (#283). The seed step truncated the usage tables of whatever database `--db` named and the `finally` block dropped it with `with (force)`, so pointing a run at a real database destroyed it without confirmation. A pre-existing `--db` database is now refused before anything touches it — no migrations, no truncate, no drop — unless the run carries an explicit flag: `--reuse-db` benchmarks the existing seed as-is (unchanged semantics, but its database now also survives the exit), and the new `--drop-existing` authorizes reseeding and dropping it. The exit drop fires exactly when the database was fresh or `--drop-existing` was passed, and never under `--keep-db`; both gates are pure functions in `apps/api/bench/usage-summary-lifecycle.ts` with a tested truth table, plus end-to-end refusal and authorized-drop assertions against throwaway databases.
+
 ## [2.39.6] — 2026-10-16
 
 ### Fixed
@@ -1548,3 +1554,5 @@ your tooling config.
 [2.39.5]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.39.5
 
 [2.39.6]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.39.6
+
+[2.39.7]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.39.7
