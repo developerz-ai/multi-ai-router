@@ -73,9 +73,10 @@ export const USAGE = `Usage: bin/bench-usage [options]
   --db NAME              name the throwaway database (default: a random usage_bench_*)
   --reuse-db             keep an existing --db database's seed; only re-run migrations;
                          together with --drop-existing this wins the seed decision
-  --drop-existing        on a pre-existing --db database: reseed it, and drop it at the end;
-                         together with --reuse-db the seed is kept and the database is
-                         still dropped at exit
+  --drop-existing        on a --db database that already exists when this run probes it:
+                         reseed it, and drop it at the end — a name created only after the
+                         probe is never dropped; together with --reuse-db the seed is kept
+                         and the database is still dropped at exit
   --budget-ms N          wall budget for one summary      (default ${DEFAULTS.budgetMs})
   --buffers-budget N     shared-buffer budget, all queries (default ${DEFAULTS.buffersBudget})
   --no-explain           skip the EXPLAIN pass, buffers, and the per-query table
@@ -108,7 +109,10 @@ export function fixtureMode(gates: {
 /**
  * The `finally` block's drop gate. A run drops a database it created (`fresh`), or
  * one `--drop-existing` authorized — never any other pre-existing database, whatever
- * failed along the way. `--keep-db` keeps even those.
+ * failed along the way. `--keep-db` keeps even those. The `dropExisting` input is
+ * the flag *bound to the probe*: callers pass it only for a database that existed
+ * at the probe, so a name that appeared afterwards (a raced create) is outside the
+ * authorization (#286).
  */
 export function dropsOnExit(gates: {
   fresh: boolean
@@ -146,8 +150,9 @@ export interface LifecycleSql {
  * #286: the drop gate's `fresh` becomes true only after `create database`
  * succeeded. A name another actor creates between the probe and the create
  * fails the create; that database belongs to whoever created it, and the
- * `finally` must read it as "not ours". The probe result feeds `fixtureMode`
- * alone.
+ * `finally` must read it as "not ours" — `--drop-existing` authorizes only a
+ * database that existed at the probe, so the exit gate receives the flag bound
+ * to the probe (`dropExisting && !absentAtProbe`), never the raw flag.
  */
 export async function withFixtureDatabase<T>(deps: {
   sql: LifecycleSql
@@ -173,7 +178,10 @@ export async function withFixtureDatabase<T>(deps: {
     }
     return await deps.body(mode)
   } finally {
-    if (dropsOnExit({ fresh, dropExisting: deps.dropExisting, keepDb: deps.keepDb })) {
+    // The flag authorizes a database that existed at the probe; a name this run's
+    // create failed on appeared afterwards and belongs to whoever created it (#286).
+    const dropExisting = deps.dropExisting && !absentAtProbe
+    if (dropsOnExit({ fresh, dropExisting, keepDb: deps.keepDb })) {
       try {
         await deps.sql.unsafe(`drop database if exists "${deps.name}" with (force)`)
       } catch {
