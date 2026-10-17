@@ -1,9 +1,6 @@
-import type { SqlConnection } from "@multi-ai-router/db"
 import { describe, expect, test } from "bun:test"
-import {
-  explainMeasures,
-  type QueryMeasure,
-} from "../../../bench/usage-summary-instrument"
+import type { SqlConnection } from "@multi-ai-router/db"
+import { explainMeasures, type QueryMeasure } from "../../../bench/usage-summary-instrument"
 
 /**
  * Issue #284 item 4: the EXPLAIN (ANALYZE, BUFFERS) parser matched `\bread=` anywhere in a
@@ -26,10 +23,7 @@ function measure(sqlText: string): QueryMeasure {
 describe("explainMeasures counts shared buffers only", () => {
   test("temp read= is not counted as a shared read", async () => {
     const m = measure("select 1")
-    await explainMeasures(
-      fakePlanSql(["Buffers: shared hit=100, temp read=42 written=7"]),
-      [m],
-    )
+    await explainMeasures(fakePlanSql(["Buffers: shared hit=100, temp read=42 written=7"]), [m])
     expect(m.hit).toBe(100)
     expect(m.read).toBe(0)
   })
