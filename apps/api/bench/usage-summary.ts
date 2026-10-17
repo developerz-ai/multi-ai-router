@@ -33,8 +33,11 @@ import { parseArgs, USAGE, withFixtureDatabase } from "./usage-summary-lifecycle
  * wall budget catches per-row-cost blowups (an id filter regressing to a per-id
  * OR-chain quintupled the dominant statement), and the buffer budget — what
  * EXPLAIN (ANALYZE, BUFFERS) reports, which load does not distort — catches
- * scan-volume blowups (a lost day bound, a dropped rollup). The per-query table
- * it prints is what a PR records.
+ * scan-volume blowups (a lost day bound, a dropped rollup). The default wall budget is the
+ * operator's idle bound itself (60 s, #284): a summary this bench passes must also survive
+ * `SERVER_IDLE_TIMEOUT_SECONDS`. A loaded host inflates the wall leg, so raise `--budget-ms`
+ * there and read the buffers leg — load-insensitive — as the gate. The per-query table it
+ * prints is what a PR records.
  *
  * Deliberately not part of `bin/check`, for the same reason `bin/bench` is not: a
  * timing measurement on a shared runner is a flaky test. Run it when you touch
