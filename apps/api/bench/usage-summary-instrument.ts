@@ -121,7 +121,11 @@ export async function explainMeasures(
     for (const row of plan) {
       const line = row["QUERY PLAN"] as string
       const hit = /shared hit=(\d+)/.exec(line)
-      const read = /\bread=(\d+)/.exec(line)
+      // Anchored on `shared`, like the hit count: an unanchored `\bread=` also matches a
+      // spilled node's `temp read=` in the same Buffers line and overcounts the shared-buffer
+      // budget with temp traffic (#284). Postgres prints `shared hit=N read=N` in that order,
+      // each field only when non-zero, so hit is the only token that can sit between.
+      const read = /shared\s+(?:hit=\d+\s+)?read=(\d+)/.exec(line)
       if (hit) measure.hit = Math.max(measure.hit, Number(hit[1]))
       if (read) measure.read = Math.max(measure.read, Number(read[1]))
     }

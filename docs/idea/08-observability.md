@@ -321,9 +321,10 @@ unnested label relation and re-ran the bucket CASE per row before aggregating, a
 
 - Breakdown→series id lists bind as ONE typed array probe (`= any($n::uuid[])`, `text[]` for the
   model column and the owner/tool buckets, an explicit `is null` term for the null group)
-  instead of a per-id OR-chain. The probe rides inside each facts-union arm where the chain did:
-  the key series' facts step fell from 59.2 s to 9.7 s under the same host load, the statement
-  from 59.5 s to 12.0 s.
+  instead of a per-id OR-chain. The probe rides where the chain did — the outer `select` over
+  the `facts` / `folded` / `labelled` CTE for history reads, the grouped select's `where` for
+  the raw current-period read, not inside each facts-union arm: the key series' facts step fell
+  from 59.2 s to 9.7 s under the same host load, the statement from 59.5 s to 12.0 s.
 - Owner and tool fold the facts to one row per key (per time bucket for the series) **before**
   the label join, so the join and the bucket CASE run at grouped cardinality (~775 rows) instead
   of per fact row (~400k), and those reads no longer spill. Sums of sums are exact
@@ -337,7 +338,10 @@ into one `grouping sets` pass, a coarser series grain, and the rollup grain itse
 
 `bin/bench-usage` seeds the fixture into a throwaway database, runs the real `readSummary`, and
 re-runs every statement under EXPLAIN (ANALYZE, BUFFERS). It exits non-zero when the wall clock
-crosses `--budget-ms` (default 240 s) or the total shared-buffer traffic crosses
+crosses `--budget-ms` (default 60 s — the idle bound itself, so a summary the bench passes also
+survives `SERVER_IDLE_TIMEOUT_SECONDS`; a loaded host inflates the wall leg and not the buffers,
+so raise `--budget-ms` there and read the buffers leg as the load-insensitive gate) or the total
+shared-buffer traffic crosses
 `--buffers-budget` (default 1.2 M, ~0.95 M measured; a scan-volume regression — the day bound on
 the receipts arm, say — moves buffers before it moves timings, and buffers do not skew with host
 load). The two budgets catch different regressions, and neither is a before/after discriminator:
@@ -365,9 +369,12 @@ and their whole ordering run through `withFixtureDatabase`
 are asserted end to end against throwaway databases in
 `apps/api/test/integration/bench-usage.test.ts`.
 
-**Beyond the bound.** No statement timeout is added under the idle timeout and the default
-window is unchanged: a smaller statement bound would only swap the error the operator sees for
-the same latency, and a smaller default window hides the same data rather than serving it. If a
+**Beyond the bound.** What an operator sees past the bound is a failure, not a slow read: the
+listener closes the HTTP connection and the snapshot is aborted mid-flight, so the summary
+surfaces as a failed admin read — a dropped connection. No statement timeout is added under the
+idle timeout and the default window is unchanged: a smaller statement bound would only swap the
+error the operator sees for the same latency, and a smaller default window hides the same data
+rather than serving it. If a
 deployment outgrows the budgets, the lever is the rollup grain (finer or pre-joined daily
 tables), not the console's window.
 

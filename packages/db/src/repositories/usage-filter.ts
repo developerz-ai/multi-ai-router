@@ -1,5 +1,6 @@
 import { type SQL, sql } from "drizzle-orm"
-import type { UsageFilter } from "./usage-read-types"
+import { isAttributionDimension } from "./usage-attribution"
+import type { UsageDimension, UsageFilter } from "./usage-read-types"
 
 /** The four column expressions a filter constrains, spelled per source (a column, a payload cast). */
 export interface FilterColumns {
@@ -44,6 +45,18 @@ export function filterConditions(filter: UsageFilter, columns: FilterColumns): r
 /** ` and a and b`, or nothing, so a fragment can be appended to an existing where clause. */
 export function andAll(conditions: readonly SQL[]): SQL {
   return conditions.length === 0 ? sql`` : sql` and ${sql.join([...conditions], sql` and `)}`
+}
+
+/**
+ * The array type a dimension's group ids bind as: `model` and the owner/tool buckets are text,
+ * the remaining column dimensions are uuid. Both id-filter call sites — the raw breakdown's
+ * `idsMatch` and the history `seriesQuery` — read this one mapping, so a future text dimension
+ * has exactly one place to add it; spelled twice, the missed site binds text ids to `::uuid[]`
+ * and every read of that dimension fails with 22P02 (#284). The parity is pinned per dimension
+ * in `test/unit/repositories/usage-filter.test.ts`.
+ */
+export function dimensionIdType(dimension: UsageDimension): "text" | "uuid" {
+  return dimension === "model" || isAttributionDimension(dimension) ? "text" : "uuid"
 }
 
 /**

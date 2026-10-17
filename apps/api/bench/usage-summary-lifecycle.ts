@@ -31,7 +31,11 @@ export interface Options {
 
 export const DEFAULTS: Options = {
   url: process.env.DATABASE_URL ?? "",
-  budgetMs: 240_000,
+  // The operator's own bound: a summary the bench passes at 240 s could still die behind the
+  // default 60 s SERVER_IDLE_TIMEOUT_SECONDS, so the default wall budget IS that bound (#284).
+  // A loaded host inflates the wall leg — the buffers leg is the load-insensitive gate — so
+  // raise --budget-ms there rather than reading an inflated wall as a regression.
+  budgetMs: 60_000,
   buffersBudget: 1_200_000,
   explain: true,
   keepDb: false,
@@ -77,7 +81,10 @@ export const USAGE = `Usage: bin/bench-usage [options]
                          reseed it, and drop it at the end — a name created only after the
                          probe is never dropped; together with --reuse-db the seed is kept
                          and the database is still dropped at exit
-  --budget-ms N          wall budget for one summary      (default ${DEFAULTS.budgetMs})
+  --budget-ms N          wall budget for one summary      (default ${DEFAULTS.budgetMs} — the
+                         SERVER_IDLE_TIMEOUT_SECONDS bound itself; a loaded host inflates the
+                         wall, not the buffers, so raise this there and read --buffers-budget
+                         as the load-insensitive gate)
   --buffers-budget N     shared-buffer budget, all queries (default ${DEFAULTS.buffersBudget})
   --no-explain           skip the EXPLAIN pass, buffers, and the per-query table
   --keep-db              keep the throwaway database (prints its URL)
