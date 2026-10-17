@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.39.8] — 2026-10-17
+
+### Fixed
+
+- `bin/bench-usage` marks a database fresh only after it creates it (#286, follow-up to #283). The exit drop gate's `fresh` was set from the `pg_database` probe before `create database`: another actor creating the same name in between failed the create, yet the `finally` still dropped a database this run never created. Ownership now begins at a successful create and the probe result no longer claims a database by itself; the whole probe → gate → create → body → exit-drop sequence moved into `withFixtureDatabase` in `apps/api/bench/usage-summary-lifecycle.ts`, pinned against an injected executor — the race fingerprint first — in `apps/api/test/unit/bench/usage-summary-lifecycle.test.ts`.
+- `bin/bench-usage --drop-existing` authorizes only a database that existed when the run probed it (#286). The flag still reached the exit drop gate raw, so a `create database` that failed after a clean probe — another actor won the name — left `fresh` false yet the `finally` force-dropped the other actor's database. `withFixtureDatabase` now passes `dropExisting && !absentAtProbe` into `dropsOnExit`; `USAGE` and the gate's docstring state the authorization is probe-bound, and a raced-create-under-`--drop-existing` unit test pins zero drops.
+
+### Changed
+
+- `--reuse-db` together with `--drop-existing` is a documented composition, not a surprise: `--reuse-db` wins the seed decision (the existing seed is benchmarked as-is) and `--drop-existing` still authorizes the exit drop. `USAGE` states the precedence, the truth table pins the row, the live authorized-drop leg asserts the reuse fingerprint, and the authorized-reseed path (`--drop-existing` alone) is pinned at the seam (#286).
+- The `bin/bench-usage` lifecycle tests hand `DATABASE_URL` to the harness subprocess through its environment instead of `--url` in argv, so a URL password cannot appear in the process list (#286).
+
 ## [2.39.7] — 2026-10-16
 
 ### Fixed
@@ -1556,3 +1568,5 @@ your tooling config.
 [2.39.6]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.39.6
 
 [2.39.7]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.39.7
+
+[2.39.8]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.39.8

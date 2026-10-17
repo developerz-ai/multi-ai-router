@@ -16,13 +16,7 @@ import {
   labelCalls,
   type QueryMeasure,
 } from "./usage-summary-instrument"
-import {
-  dropsOnExit,
-  existingDbRefusal,
-  fixtureMode,
-  parseArgs,
-  USAGE,
-} from "./usage-summary-lifecycle"
+import { parseArgs, USAGE, withFixtureDatabase } from "./usage-summary-lifecycle"
 
 /**
  * `bin/bench-usage` — the admin usage summary at issue #250's seeded size, measured
@@ -46,9 +40,11 @@ import {
  * timing measurement on a shared runner is a flaky test. Run it when you touch
  * `usage-read`, the usage repositories, or their indexes.
  *
- * The database lifecycle is gated (#283): a run drops only a database it created or
- * `--drop-existing` authorized, and a pre-existing `--db` name is refused untouched
- * without `--reuse-db` or `--drop-existing`. The gates live — pure and tested — in
+ * The database lifecycle is gated (#283, #286): a run drops only a database it
+ * created — ownership beginning when `create database` succeeds, never at the
+ * `pg_database` probe — or one `--drop-existing` authorized, and a pre-existing
+ * `--db` name is refused untouched without `--reuse-db` or `--drop-existing`. The
+ * gates and their ordering live, pure and injected-executor tested, in
  * `usage-summary-lifecycle.ts`.
  */
 
@@ -87,109 +83,110 @@ async function main() {
   fixtureUrl.pathname = `/${name}`
 
   const admin = createDatabase({ url: base.toString(), maxConnections: 1 })
-  let handle: Awaited<ReturnType<typeof createDatabase>> | undefined
-  // Hoisted for the `finally` drop gate: only a database this run created — or one
-  // --drop-existing authorized — may be dropped, so a failure before the pg_database
-  // probe must read as "not ours" (#283).
-  let fresh = false
   try {
-    const existing = await admin.sql.unsafe("select 1 from pg_database where datname = $1", [name])
-    fresh = existing.length === 0
-    const mode = fixtureMode({
-      fresh,
+    // The whole destroy-decision sequence — probe, gate, create, exit drop — lives in
+    // `withFixtureDatabase` so it is testable against an injected executor (#286).
+    await withFixtureDatabase({
+      sql: admin.sql,
+      name,
       reuseDb: options.reuseDb,
       dropExisting: options.dropExisting,
-    })
-    // Before create, before migrations: a refused database is not touched at all.
-    if (mode === "refuse") throw new Error(existingDbRefusal(name))
-    if (fresh) await admin.sql.unsafe(`create database "${name}"`)
-    // Migrations always run: idempotent, and a reused database may predate a new one.
-    await runMigrations({ url: fixtureUrl.toString(), migrationsFolder: defaultMigrationsFolder() })
-    handle = createDatabase({ url: fixtureUrl.toString(), maxConnections: 4 })
-    let keys = ISSUE_250_SCALE.v2RowsPerDay / 8
-    if (mode === "seed") {
-      const seeded = await seedUsageFixture(handle.sql, ISSUE_250_SCALE)
-      keys = seeded.keys
-      console.log(
-        `fixture: ${ISSUE_250_SCALE.days}d window, ${seeded.keys} keys, ` +
-          `${(seeded.keys * 8 * (ISSUE_250_SCALE.days - 1)).toLocaleString()} rows per rollup table, ` +
-          `${ISSUE_250_SCALE.rawRows.toLocaleString()} raw, ` +
-          `${ISSUE_250_SCALE.contributionRows.toLocaleString()} contributions`,
-      )
-    } else {
-      console.log(`fixture: reusing seeded database "${name}" (seed untouched)`)
-    }
-    console.log(
-      `loadavg: ${os
-        .loadavg()
-        .map((x) => x.toFixed(1))
-        .join(" ")}`,
-    )
-
-    const measures: QueryMeasure[] = []
-    const labels = buildLabels(keys)
-    let wall = 0
-    await handle.db.transaction(
-      async (tx) => {
-        const instrumented = instrument(tx as unknown as Database, measures)
-        const history = labelCalls(createUsageHistoryRepository(instrumented), "history")
-        const raw = labelCalls(createUsageReadRepository(instrumented), "raw")
-        const t0 = performance.now()
-        await readSummary({ history, raw, labels, now: () => new Date() }, { window: "30d" }, {})
-        // The wall is the summary's own cost; the explain pass below is measurement, not product.
-        wall = performance.now() - t0
-        if (options.explain) {
-          const explainMs = await explainMeasures(handle?.sql ?? admin.sql, measures)
+      keepDb: options.keepDb,
+      body: async (mode) => {
+        // Migrations always run: idempotent, and a reused database may predate a new one.
+        await runMigrations({
+          url: fixtureUrl.toString(),
+          migrationsFolder: defaultMigrationsFolder(),
+        })
+        const handle = createDatabase({ url: fixtureUrl.toString(), maxConnections: 4 })
+        try {
+          let keys = ISSUE_250_SCALE.v2RowsPerDay / 8
+          if (mode === "seed") {
+            const seeded = await seedUsageFixture(handle.sql, ISSUE_250_SCALE)
+            keys = seeded.keys
+            console.log(
+              `fixture: ${ISSUE_250_SCALE.days}d window, ${seeded.keys} keys, ` +
+                `${(seeded.keys * 8 * (ISSUE_250_SCALE.days - 1)).toLocaleString()} rows per rollup table, ` +
+                `${ISSUE_250_SCALE.rawRows.toLocaleString()} raw, ` +
+                `${ISSUE_250_SCALE.contributionRows.toLocaleString()} contributions`,
+            )
+          } else {
+            console.log(`fixture: reusing seeded database "${name}" (seed untouched)`)
+          }
           console.log(
-            `explain pass: ${(explainMs / 1000).toFixed(0)}s (not part of the wall budget)`,
+            `loadavg: ${os
+              .loadavg()
+              .map((x) => x.toFixed(1))
+              .join(" ")}`,
           )
+
+          const measures: QueryMeasure[] = []
+          const labels = buildLabels(keys)
+          let wall = 0
+          await handle.db.transaction(
+            async (tx) => {
+              const instrumented = instrument(tx as unknown as Database, measures)
+              const history = labelCalls(createUsageHistoryRepository(instrumented), "history")
+              const raw = labelCalls(createUsageReadRepository(instrumented), "raw")
+              const t0 = performance.now()
+              await readSummary(
+                { history, raw, labels, now: () => new Date() },
+                { window: "30d" },
+                {},
+              )
+              // The wall is the summary's own cost; the explain pass below is measurement, not product.
+              wall = performance.now() - t0
+              if (options.explain) {
+                const explainMs = await explainMeasures(handle.sql, measures)
+                console.log(
+                  `explain pass: ${(explainMs / 1000).toFixed(0)}s (not part of the wall budget)`,
+                )
+              }
+            },
+            { isolationLevel: "repeatable read", accessMode: "read only" },
+          )
+
+          const byName = new Map<string, QueryMeasure & { queries: number }>()
+          for (const m of measures) {
+            const agg = byName.get(m.name) ?? { ...m, queries: 0, ms: 0, hit: 0, read: 0 }
+            agg.queries += 1
+            agg.ms += m.ms
+            agg.hit += m.hit
+            agg.read += m.read
+            byName.set(m.name, agg)
+          }
+          console.log("\nquery                    | queries | ms     | shared hit | shared read")
+          for (const [name2, m] of [...byName.entries()].sort((a, b) => b[1].ms - a[1].ms))
+            console.log(
+              `${name2.padEnd(24)} | ${String(m.queries).padStart(7)} | ${m.ms.toFixed(0).padStart(6)} | ` +
+                `${String(m.hit).padStart(10)} | ${String(m.read).padStart(11)}`,
+            )
+          const buffers = measures.reduce((sum, m) => sum + m.hit + m.read, 0)
+          const failures: string[] = []
+          if (wall > options.budgetMs)
+            failures.push(`summary wall ${wall.toFixed(0)}ms over budget ${options.budgetMs}ms`)
+          if (buffers > options.buffersBudget)
+            failures.push(`shared buffers ${buffers} over budget ${options.buffersBudget}`)
+          console.log(
+            `\nsummary: ${wall.toFixed(0)}ms (budget ${options.budgetMs}ms) ` +
+              `${wall > options.budgetMs ? "FAIL" : "ok"}; ` +
+              `buffers: ${buffers} (budget ${options.buffersBudget}) ` +
+              `${buffers > options.buffersBudget ? "FAIL" : "ok"}`,
+          )
+          if (failures.length > 0) {
+            console.error(`bench-usage: FAIL — ${failures.join("; ")}`)
+            process.exitCode = 1
+          }
+          if (options.keepDb)
+            console.log(`kept database: ${fixtureUrl.toString().replace(/:\/\/.*@/, "://***@")}`)
+        } finally {
+          // Closed before the lifecycle's exit drop so no connection of this run is
+          // inside the database when it goes.
+          await handle.close()
         }
       },
-      { isolationLevel: "repeatable read", accessMode: "read only" },
-    )
-
-    const byName = new Map<string, QueryMeasure & { queries: number }>()
-    for (const m of measures) {
-      const agg = byName.get(m.name) ?? { ...m, queries: 0, ms: 0, hit: 0, read: 0 }
-      agg.queries += 1
-      agg.ms += m.ms
-      agg.hit += m.hit
-      agg.read += m.read
-      byName.set(m.name, agg)
-    }
-    console.log("\nquery                    | queries | ms     | shared hit | shared read")
-    for (const [name2, m] of [...byName.entries()].sort((a, b) => b[1].ms - a[1].ms))
-      console.log(
-        `${name2.padEnd(24)} | ${String(m.queries).padStart(7)} | ${m.ms.toFixed(0).padStart(6)} | ` +
-          `${String(m.hit).padStart(10)} | ${String(m.read).padStart(11)}`,
-      )
-    const buffers = measures.reduce((sum, m) => sum + m.hit + m.read, 0)
-    const failures: string[] = []
-    if (wall > options.budgetMs)
-      failures.push(`summary wall ${wall.toFixed(0)}ms over budget ${options.budgetMs}ms`)
-    if (buffers > options.buffersBudget)
-      failures.push(`shared buffers ${buffers} over budget ${options.buffersBudget}`)
-    console.log(
-      `\nsummary: ${wall.toFixed(0)}ms (budget ${options.budgetMs}ms) ` +
-        `${wall > options.budgetMs ? "FAIL" : "ok"}; ` +
-        `buffers: ${buffers} (budget ${options.buffersBudget}) ` +
-        `${buffers > options.buffersBudget ? "FAIL" : "ok"}`,
-    )
-    if (failures.length > 0) {
-      console.error(`bench-usage: FAIL — ${failures.join("; ")}`)
-      process.exitCode = 1
-    }
-    if (options.keepDb)
-      console.log(`kept database: ${fixtureUrl.toString().replace(/:\/\/.*@/, "://***@")}`)
+    })
   } finally {
-    await handle?.close()
-    if (dropsOnExit({ fresh, dropExisting: options.dropExisting, keepDb: options.keepDb })) {
-      try {
-        await admin.sql.unsafe(`drop database if exists "${name}" with (force)`)
-      } catch {
-        // The drop is best-effort cleanup; the verdict above is what matters.
-      }
-    }
     await admin.close()
   }
 }
