@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.39.9] — 2026-10-17
+
+### Changed
+
+- Usage-summary review follow-ups (#284). The dimension-to-id-type mapping (`text` for the model column and the owner/tool buckets, `uuid` for the column dimensions) lives once in `dimensionIdType` in `packages/db/src/repositories/usage-filter.ts`, read by both id-probe call sites — the raw breakdown's `idsMatch` and the history `seriesQuery`. Spelled as an inline ternary at each site, a future text dimension added to one and not the other would bind text ids to `::uuid[]` and fail every read of it with 22P02; a new parity test walks every `UsageDimension`, renders both call sites' statements and fails the moment either disagrees (`packages/db/test/unit/repositories/usage-filter.test.ts`).
+- `bin/bench-usage`'s default wall budget is the operator bound itself: `--budget-ms` now defaults to 60 s (was 240 s), the same bound `SERVER_IDLE_TIMEOUT_SECONDS` puts on a live summary, so a run the bench passes also survives the idle timeout. A loaded host inflates the wall leg and not the buffers, so raise `--budget-ms` there and read the buffers leg as the load-insensitive gate; the help text, the runner docstring and the spec say so.
+
+### Fixed
+
+- `bin/bench-usage` no longer counts spills as shared-buffer traffic. The EXPLAIN (ANALYZE, BUFFERS) parser matched `\bread=` anywhere in a plan line, so a spilled node's `temp read=` inflated the shared-buffer budget total — the load-insensitive leg overcounted exactly when a sort spilled. The read count is anchored on `shared`, the way the hit count already was (`apps/api/test/unit/bench/usage-summary-instrument.test.ts`).
+- The observability spec now names what an operator sees past the 60 s idle bound — the listener closes the HTTP connection and the snapshot is aborted mid-flight, so the summary surfaces as a failed admin read, not a slow one — and this changelog's 2.39.6 entry and the spec state where the typed id probe actually rides: the outer `select` over the `facts` / `folded` / `labelled` CTE for history reads and the grouped select's `where` for raw current-period reads, never inside each facts-union arm (that is where the window/filter predicate rides).
+
 ## [2.39.8] — 2026-10-17
 
 ### Fixed
@@ -1570,3 +1582,5 @@ your tooling config.
 [2.39.7]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.39.7
 
 [2.39.8]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.39.8
+
+[2.39.9]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.39.9
