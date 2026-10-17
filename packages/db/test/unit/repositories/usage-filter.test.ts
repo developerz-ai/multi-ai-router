@@ -80,7 +80,14 @@ async function rawProbeCast(dimension: UsageDimension): Promise<"text" | "uuid">
     then: (onFulfilled: (rows: unknown[]) => unknown) => Promise.resolve(onFulfilled([])),
   } as unknown as Chain
   const db = { select: () => builder } as unknown as Database
-  await createUsageReadRepository(db).breakdown(window, dimension, IDS[dimension], 100, {}, attribution)
+  await createUsageReadRepository(db).breakdown(
+    window,
+    dimension,
+    IDS[dimension],
+    100,
+    {},
+    attribution,
+  )
   expect(captured).toBeDefined()
   return probeCast(dialect.sqlToQuery(captured as SQL).sql)
 }
@@ -109,14 +116,20 @@ async function historyProbeCast(dimension: UsageDimension): Promise<"text" | "uu
 }
 
 describe("dimensionIdType", () => {
-  for (const [dimension, expected] of Object.entries(EXPECTED) as [UsageDimension, "text" | "uuid"][])
+  for (const [dimension, expected] of Object.entries(EXPECTED) as [
+    UsageDimension,
+    "text" | "uuid",
+  ][])
     test(`${dimension} maps to ${expected}`, () => {
       expect(dimensionIdType(dimension)).toBe(expected)
     })
 })
 
 describe("both id-probe call sites bind the same array type per dimension", () => {
-  for (const [dimension, expected] of Object.entries(EXPECTED) as [UsageDimension, "text" | "uuid"][])
+  for (const [dimension, expected] of Object.entries(EXPECTED) as [
+    UsageDimension,
+    "text" | "uuid",
+  ][])
     test(`${dimension}: raw breakdown and history series agree on ::${expected}[]`, async () => {
       const raw = await rawProbeCast(dimension)
       const history = await historyProbeCast(dimension)

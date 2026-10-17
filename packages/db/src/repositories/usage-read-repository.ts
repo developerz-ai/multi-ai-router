@@ -4,7 +4,7 @@ import { USAGE_OUTCOME_SUCCESS } from "../schema/enums"
 import { usageRecords } from "../schema/usage-records"
 
 import { attributedRaw, isAttributionDimension } from "./usage-attribution"
-import { filterConditions, groupIdsMatch } from "./usage-filter"
+import { dimensionIdType, filterConditions, groupIdsMatch } from "./usage-filter"
 import type {
   UsageDimension,
   UsageFilter,
@@ -225,7 +225,8 @@ export function createUsageReadRepository(db: Database): UsageReadRepository {
 /**
  * Narrows a grouped read to the selected group ids — one typed array probe plus an `is null` term
  * for the null group (`usage-filter.ts`, #250); `undefined` when the read is not id-narrowed.
- * `model` and the owner/tool bucket are text; the remaining column dimensions are uuid.
+ * The probe's array type is the shared `dimensionIdType` mapping, the same one the history
+ * `seriesQuery` reads, so the two call sites cannot disagree (#284).
  */
 function idsMatch(
   group: SQL,
@@ -233,11 +234,7 @@ function idsMatch(
   ids: readonly (string | null)[] | undefined,
 ): SQL | undefined {
   if (ids === undefined) return undefined
-  return groupIdsMatch(
-    group,
-    dimension === "model" || isAttributionDimension(dimension) ? "text" : "uuid",
-    ids,
-  )
+  return groupIdsMatch(group, dimensionIdType(dimension), ids)
 }
 
 const EMPTY_TOTALS: UsageRawTotals = {

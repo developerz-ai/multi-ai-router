@@ -6,7 +6,7 @@ import { usageHistoryState } from "../schema/usage-history-state"
 import { usageRecords } from "../schema/usage-records"
 import { attributionRelation, bucketSql, isAttributionDimension } from "./usage-attribution"
 import { readUsageExportRows } from "./usage-export-repository"
-import { groupIdsMatch } from "./usage-filter"
+import { dimensionIdType, groupIdsMatch } from "./usage-filter"
 import { createUsageHistoryMaintenance } from "./usage-history-maintenance"
 import {
   historyDimensions,
@@ -190,7 +190,7 @@ export function createUsageHistoryRepository(
           : sql`where ${groupIdsMatch(
               // sql.identifier is a Name chunk, not a SQL — the template wraps it into one.
               attributed ? sql`grp` : sql`${sql.identifier(historyDimensions[dimension])}`,
-              dimension === "model" || attributed ? "text" : "uuid",
+              dimensionIdType(dimension),
               ids,
             )}`
       } group by 1 ${dimension === undefined ? sql`` : sql`, 2`} order by 1`
