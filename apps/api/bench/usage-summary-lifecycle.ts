@@ -10,6 +10,12 @@
  * itself (`fresh`); a pre-existing one needs an explicit flag — `--reuse-db` to
  * benchmark its seed as-is, `--drop-existing` to authorize reseeding and dropping it.
  * Deliberately a flag, not a prompt: `bin/bench-usage` runs unattended in scripts.
+ *
+ * Issue #286: `withFixtureDatabase` sequences probe → gate → create → body → exit
+ * drop against an injected executor, and ownership begins at a *successful* create,
+ * never at the probe. Both flags together are not a conflict but a composition:
+ * `--reuse-db` wins the seed decision, `--drop-existing` still authorizes the exit
+ * drop — documented in `USAGE` and pinned in the truth table.
  */
 
 export interface Options {
@@ -65,8 +71,11 @@ export const USAGE = `Usage: bin/bench-usage [options]
 
   --url URL              admin database URL; a throwaway database is created beside it
   --db NAME              name the throwaway database (default: a random usage_bench_*)
-  --reuse-db             keep an existing --db database's seed; only re-run migrations
-  --drop-existing        on a pre-existing --db database: reseed it, and drop it at the end
+  --reuse-db             keep an existing --db database's seed; only re-run migrations;
+                         together with --drop-existing this wins the seed decision
+  --drop-existing        on a pre-existing --db database: reseed it, and drop it at the end;
+                         together with --reuse-db the seed is kept and the database is
+                         still dropped at exit
   --budget-ms N          wall budget for one summary      (default ${DEFAULTS.budgetMs})
   --buffers-budget N     shared-buffer budget, all queries (default ${DEFAULTS.buffersBudget})
   --no-explain           skip the EXPLAIN pass, buffers, and the per-query table
@@ -80,7 +89,10 @@ export type FixtureMode = "seed" | "reuse" | "refuse"
  * `fresh` seeds by definition — the run is about to create it. A pre-existing
  * database seeds only under `--drop-existing`, is benchmarked as-is under
  * `--reuse-db`, and is refused with no flag at all: an unnamed authorization is
- * exactly what destroyed the database in #283.
+ * exactly what destroyed the database in #283. Both flags together: `--reuse-db`
+ * wins the seed decision, `--drop-existing` still authorizes the exit drop
+ * (`dropsOnExit`) — the precedence is documented in `USAGE` and pinned in the
+ * truth table (#286).
  */
 export function fixtureMode(gates: {
   fresh: boolean
@@ -113,4 +125,60 @@ export function existingDbRefusal(name: string): string {
     "pass --reuse-db to benchmark its existing seed as-is, " +
     "or --drop-existing to reseed it and drop it at the end"
   )
+}
+
+/**
+ * The admin-executor face the lifecycle uses: probe, create, drop — nothing else.
+ * Injected so the whole destroy-decision sequence is testable without a database,
+ * the same way the gates above are (#286).
+ */
+export interface LifecycleSql {
+  unsafe(query: string, params?: string[]): Promise<unknown[]>
+}
+
+/**
+ * The full database lifecycle around a bench body: probe the name, gate
+ * (refuse / reuse / seed), create when the probe found nothing, run the body,
+ * and drop in the `finally` only what the exit gate still owns. The refusal
+ * fires before create and before migrations — a refused database is not
+ * touched at all.
+ *
+ * #286: the drop gate's `fresh` becomes true only after `create database`
+ * succeeded. A name another actor creates between the probe and the create
+ * fails the create; that database belongs to whoever created it, and the
+ * `finally` must read it as "not ours". The probe result feeds `fixtureMode`
+ * alone.
+ */
+export async function withFixtureDatabase<T>(deps: {
+  sql: LifecycleSql
+  name: string
+  reuseDb: boolean
+  dropExisting: boolean
+  keepDb: boolean
+  body: (mode: FixtureMode) => Promise<T>
+}): Promise<T> {
+  const rows = await deps.sql.unsafe("select 1 from pg_database where datname = $1", [deps.name])
+  const absentAtProbe = rows.length === 0
+  const mode = fixtureMode({
+    fresh: absentAtProbe,
+    reuseDb: deps.reuseDb,
+    dropExisting: deps.dropExisting,
+  })
+  if (mode === "refuse") throw new Error(existingDbRefusal(deps.name))
+  let fresh = false
+  try {
+    if (absentAtProbe) {
+      await deps.sql.unsafe(`create database "${deps.name}"`)
+      fresh = true
+    }
+    return await deps.body(mode)
+  } finally {
+    if (dropsOnExit({ fresh, dropExisting: deps.dropExisting, keepDb: deps.keepDb })) {
+      try {
+        await deps.sql.unsafe(`drop database if exists "${deps.name}" with (force)`)
+      } catch {
+        // The drop is best-effort cleanup; the body's verdict is what matters.
+      }
+    }
+  }
 }

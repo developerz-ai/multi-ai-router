@@ -24,7 +24,12 @@ import {
  * tests ever name. The flagged-drop leg rides `--reuse-db` past the fixture seed (which
  * is minutes of rows at issue-#250 scale): the drop under test happens in the `finally`
  * block either way, and a fresh run reaches that same block through the same
- * `dropsOnExit` gate the truth table pins.
+ * `dropsOnExit` gate the truth table pins. Since #286 that combination is documented
+ * behavior, not a shortcut: `--reuse-db` wins the seed decision and `--drop-existing`
+ * still authorizes the exit drop, and this leg now asserts the reuse fingerprint too.
+ * The ordering of the whole sequence — probe, gate, create, body, exit drop — including
+ * the #286 race (a create that fails after a clean probe is never claimed), is pinned
+ * without a database in `apps/api/test/unit/bench/usage-summary-lifecycle.test.ts`.
  */
 
 describe("bin/bench-usage fixture gate", () => {
@@ -45,6 +50,10 @@ describe("bin/bench-usage fixture gate", () => {
     expect(fixtureMode({ fresh: false, reuseDb: false, dropExisting: true })).toBe("seed")
   })
 
+  test("--reuse-db --drop-existing: reuse wins the seed decision (#286)", () => {
+    expect(fixtureMode({ fresh: false, reuseDb: true, dropExisting: true })).toBe("reuse")
+  })
+
   test("the refusal names the database and both ways forward", () => {
     const message = existingDbRefusal("realdb")
     expect(message).toContain("realdb")
@@ -60,6 +69,8 @@ describe("bin/bench-usage exit-drop gate", () => {
 
   test("a pre-existing database survives the run unless --drop-existing authorized it", () => {
     expect(dropsOnExit({ fresh: false, dropExisting: false, keepDb: false })).toBe(false)
+    // The same row covers --reuse-db --drop-existing (#286): the drop gate never
+    // sees reuseDb — the authorization owns the exit whatever kept the seed.
     expect(dropsOnExit({ fresh: false, dropExisting: true, keepDb: false })).toBe(true)
   })
 
@@ -81,6 +92,16 @@ describe("bin/bench-usage arguments", () => {
 
   test("USAGE documents the flag, or the authorization is undiscoverable", () => {
     expect(USAGE).toContain("--drop-existing")
+  })
+
+  test("both lifecycle flags together parse — the precedence is documented, not rejected (#286)", () => {
+    const options = parseArgs(["--reuse-db", "--drop-existing"])
+    expect(options.reuseDb).toBe(true)
+    expect(options.dropExisting).toBe(true)
+  })
+
+  test("USAGE documents the combined precedence, or the exit drop is a surprise (#286)", () => {
+    expect(USAGE).toContain("wins the seed decision")
   })
 })
 
@@ -131,8 +152,12 @@ describe.skipIf(databaseUrl === "")("bin/bench-usage against a real pre-existing
     dbName: string,
     flags: string[],
   ): Promise<{ stdout: string; stderr: string; exitCode: number }> => {
-    const child = Bun.spawn(["bun", HARNESS, "--url", databaseUrl, "--db", dbName, ...flags], {
+    // The URL rides in the child's environment, never in argv: a --url on the command
+    // line can carry the password into the process list (#286). The harness reads
+    // DATABASE_URL through parseArgs' DEFAULTS.
+    const child = Bun.spawn(["bun", HARNESS, "--db", dbName, ...flags], {
       cwd: REPO_ROOT,
+      env: { ...process.env, DATABASE_URL: databaseUrl },
       stdout: "pipe",
       stderr: "pipe",
     })
@@ -168,11 +193,14 @@ describe.skipIf(databaseUrl === "")("bin/bench-usage against a real pre-existing
     const name = uniqueName()
     await admin().sql.unsafe(`create database "${name}"`)
 
-    // --reuse-db skips the issue-#250-scale seed; the drop under test is the `finally`
-    // block's, and it does not care how the run spent its middle.
+    // --reuse-db skips the issue-#250-scale seed and, since #286, is the documented
+    // precedence for the pair: reuse keeps the seed, --drop-existing still owns the
+    // exit. The stdout fingerprint pins that no reseed happened; the drop under test
+    // is the `finally` block's, and it does not care how the run spent its middle.
     const ran = await runHarness(name, ["--drop-existing", "--reuse-db", "--no-explain"])
 
     expect(ran.exitCode).toBe(0)
+    expect(ran.stdout).toContain("reusing seeded database")
     expect(await databaseExists(name)).toBe(false)
   }, 240_000)
 })
