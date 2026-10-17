@@ -78,7 +78,7 @@ describe("chat completions → Codex: the caller's prompt cache key reaches the 
     expect(upstream.calls[0]?.headers.get("session-id")).toBe("turn-0193f2")
   })
 
-  test("without a key: no prompt_cache_key and no session-id — the router never invents one", async () => {
+  test("without a body key, the router's session key is sent in its place", async () => {
     const { app, upstream } = harness({ accounts: [codexAccount("a")], responses: [codexStream] })
     const res = await app.request(
       "/v1/chat/completions",
@@ -86,8 +86,11 @@ describe("chat completions → Codex: the caller's prompt cache key reaches the 
     )
     expect(res.status).toBe(200)
     await res.text()
-    expect("prompt_cache_key" in sentBody(upstream.calls[0])).toBe(false)
-    expect(upstream.calls[0]?.headers.has("session-id")).toBe(false)
+    const key = sentBody(upstream.calls[0]).prompt_cache_key
+    expect(typeof key).toBe("string")
+    // Derived, never the client's header verbatim: the router names no client value upstream.
+    expect(key).not.toBe("turn-0193f2")
+    expect(upstream.calls[0]?.headers.get("session-id")).toBe(key as string)
   })
 
   test("a key that is not a legal header value still travels in the body, and no header is sent", async () => {
@@ -100,6 +103,56 @@ describe("chat completions → Codex: the caller's prompt cache key reaches the 
     await res.text()
     expect(sentBody(upstream.calls[0]).prompt_cache_key).toBe("line\nbreak")
     expect(upstream.calls[0]?.headers.has("session-id")).toBe(false)
+  })
+})
+
+/**
+ * Production, 2026-10-17: Claude Code and developerz.ai turns on `/v1/messages` routed to a ChatGPT
+ * (Codex) account read 17.4% of input from cache over 7d (7.0% on the tesote router) against 91–96%
+ * via passthrough vendors; 43% of a growing conversation's later turns read 0. An Anthropic body
+ * has no `prompt_cache_key`, so the upstream was sent neither the field nor `session-id`.
+ */
+function messages(turns: readonly string[], system = "you are a coding agent"): string {
+  return JSON.stringify({
+    model: "gpt-5.5",
+    max_tokens: 1024,
+    system,
+    messages: turns.map((text, i) => ({ role: i % 2 === 0 ? "user" : "assistant", content: text })),
+  })
+}
+
+describe("anthropic messages → Codex: one conversation, one prompt cache key", () => {
+  async function send(body: string, headers: Record<string, string> = {}) {
+    const { app, upstream } = harness({ accounts: [codexAccount("a")], responses: [codexStream] })
+    const res = await app.request("/v1/messages", post(body, { ...bearer(), ...headers }))
+    expect(res.status).toBe(200)
+    await res.text()
+    const call = upstream.calls[0]
+    const key = sentBody(call).prompt_cache_key
+    expect(typeof key).toBe("string")
+    expect(call?.headers.get("session-id")).toBe(key as string)
+    return key as string
+  }
+
+  test("later turns of a growing conversation carry the first turn's key", async () => {
+    const first = await send(messages(["fix the bug"]))
+    const later = await send(messages(["fix the bug", "reading files", "now run the tests"]))
+    expect(later).toBe(first)
+  })
+
+  test("a different conversation gets a different key", async () => {
+    const one = await send(messages(["fix the bug"]))
+    const other = await send(messages(["write the docs"]))
+    expect(other).not.toBe(one)
+  })
+
+  test("a client session header keys the conversation even when the openings differ", async () => {
+    const headers = { "x-session-id": "conversation-42" }
+    const one = await send(messages(["fix the bug"]), headers)
+    const two = await send(messages(["unrelated opening"]), headers)
+    const control = await send(messages(["unrelated opening"]), { "x-session-id": "conv-43" })
+    expect(two).toBe(one)
+    expect(control).not.toBe(one)
   })
 })
 

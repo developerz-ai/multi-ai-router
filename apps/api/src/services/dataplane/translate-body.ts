@@ -4,6 +4,7 @@ import { disableThinkingDefaultForForcedTool } from "../translate"
 import type { TranslationContext, TranslationPair } from "../translate/registry"
 import type { TranslationDrop } from "../translate/shared/drops"
 import type { ResponsesEgressRules } from "../translate/shared/responses-egress"
+import { effectiveCacheKey } from "./egress/cache-key-header"
 
 /**
  * The upstream body a translate candidate sends — built lazily, and at most once per target shape.
@@ -38,6 +39,8 @@ export interface TranslatedRequestBody {
     chatCeiling: OpenAiChatCeiling,
     defaultMaxTokens?: number,
     responsesEgress?: ResponsesEgressRules,
+    /** Sent as `prompt_cache_key` when the body states none (`egress/cache-key-header.ts`). */
+    fallbackCacheKey?: string,
   ): Uint8Array
   /** Whether the client asked for a stream — read from the cached parse; false before one. */
   clientStreams(): boolean
@@ -108,7 +111,7 @@ export function createTranslatedRequestBody(
       const key = "prompt_cache_key" in source ? source.prompt_cache_key : undefined
       return typeof key === "string" ? key : undefined
     },
-    bodyFor(pair, upstreamModel, chatCeiling, defaultMaxTokens, responsesEgress) {
+    bodyFor(pair, upstreamModel, chatCeiling, defaultMaxTokens, responsesEgress, fallbackCacheKey) {
       const effectiveDefault = defaultMaxTokens ?? context.defaultMaxTokens
       const shape = `${pair.egress}|${chatCeiling}|${effectiveDefault ?? "fallback"}|${egressKey(responsesEgress)}`
       let translated = converted.get(shape)
@@ -135,7 +138,10 @@ export function createTranslatedRequestBody(
       }
       // Last, and unconditionally: the account's alias map is the operator saying which name this
       // upstream bills, and it must survive whatever the conversion put there.
-      const withModel = { ...translated, model: upstreamModel }
+      const withModel: Record<string, unknown> = { ...translated, model: upstreamModel }
+      // Per request, not per shape: the cached conversion is shared by every account in the chain.
+      const cacheKey = effectiveCacheKey(withModel.prompt_cache_key, fallbackCacheKey)
+      if (cacheKey !== undefined) withModel.prompt_cache_key = cacheKey
       // The one vendor dial decided by the *upstream* model (post-alias, the billed name) rather
       // than the conversion shape, so it is applied here and not baked into the cached body: a
       // forced tool to a think-by-default openai-chat vendor is sent `enable_thinking: false`

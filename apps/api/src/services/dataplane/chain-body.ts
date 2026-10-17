@@ -1,6 +1,7 @@
 import { disableThinkingForForcedTool } from "./body/forced-tool-thinking"
 import { rewriteModel } from "./body/read"
 import type { ChainContext } from "./chain"
+import { sessionCacheKey } from "./egress/cache-key-header"
 import { modelOutputCeiling } from "./model-output-ceiling"
 import type { ServableCandidate } from "./plan"
 
@@ -29,6 +30,7 @@ export function bodyFor(ctx: ChainContext, servable: ServableCandidate): Uint8Ar
           )
         : undefined,
       servable.responsesEgress,
+      routerCacheKey(ctx, servable),
     )
   }
   if (ctx.bodyBytes.length === 0) return null
@@ -42,4 +44,17 @@ export function bodyFor(ctx: ChainContext, servable: ServableCandidate): Uint8Ar
     return disableThinkingForForcedTool(named)
   }
   return named
+}
+
+/**
+ * The session-derived `prompt_cache_key` for a surface that keys its prompt cache per conversation
+ * (`ResponsesEgressRules.cacheKeyHeader`); undefined for every other upstream, whose body is
+ * left as the translator wrote it.
+ */
+export function routerCacheKey(ctx: ChainContext, servable: ServableCandidate): string | undefined {
+  if (servable.translation === null || servable.responsesEgress.cacheKeyHeader === undefined) {
+    return undefined
+  }
+  const { apiKeyId, sessionKey, sessionKeySource } = ctx.runtime
+  return sessionCacheKey(apiKeyId, sessionKey, sessionKeySource)
 }
