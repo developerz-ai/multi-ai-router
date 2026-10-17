@@ -2,7 +2,8 @@ import type { UpstreamStartGuard } from "../../providers/upstream-admission"
 import { type AttemptOutcome, runAttempt } from "./attempt"
 import type { attemptQuota } from "./attempt-quota"
 import type { ChainContext } from "./chain"
-import { cacheKeyHeader } from "./egress/cache-key-header"
+import { routerCacheKey } from "./chain-body"
+import { cacheKeyHeader, effectiveCacheKey } from "./egress/cache-key-header"
 import { forcesUpstreamStream, type ServableCandidate } from "./plan"
 import { runSdkAttempt } from "./sdk-attempt"
 
@@ -49,7 +50,10 @@ export function dispatch(
     servable.responsesEgress.cacheKeyHeader,
     servable.translation === null
       ? { kind: "relay", client: ctx.request.headers }
-      : { kind: "translated", key: ctx.translated.promptCacheKey() },
+      : {
+          kind: "translated",
+          key: effectiveCacheKey(ctx.translated.promptCacheKey(), routerCacheKey(ctx, servable)),
+        },
   )
   return runAttempt({
     plan: servable,

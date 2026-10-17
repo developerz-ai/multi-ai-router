@@ -238,6 +238,13 @@ openings under one router key can collide, and reformatted openings can differ; 
 unique conversation boundaries or a remote working directory. Send an explicit session header
 when those boundaries matter. An explicit header remains authoritative even without a user opening.
 
+The same key also names the conversation's **prompt cache** on a surface that keys it per
+conversation (Codex: `prompt_cache_key` + `session-id`, [06](06-protocol-translation.md)): a
+translated request with no caller key is sent `sessionCacheKey(router key, session key)`, so the
+fingerprint's collisions carry over — concurrent conversations sharing one opening share one cache
+key, as they already share one account. developerz.ai sends `x-session-id` per conversation for
+exactly this reason; any client that runs many conversations from one opening should too.
+
 Claude Code's `x-claude-code-session-id` is not a session header in the table above — the CLI
 reuses it on auxiliary one-shots and subagents, so it cannot name one conversation by itself. When
 present it is mixed into the fingerprint (two CLI sessions with the same opening stop sharing a

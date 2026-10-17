@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.39.12] — 2026-10-17
+
+### Fixed
+
+- Anthropic-ingress turns routed to a ChatGPT (Codex) account now carry a per-conversation prompt cache key. An Anthropic body has no `prompt_cache_key`, so `/v1/messages` traffic (Claude Code, developerz.ai) reached Codex with neither the field nor the `session-id` header: 17.4% of input read from cache over 7d on the developerz-ai router and 7.0% on tesote, against 91–96% via minimax/qwen/kimi passthrough, with 43% of a growing conversation's later turns reading 0 on one account (prod, 2026-10-17). A translated request to a cache-keyed surface (`cacheKeyHeader`) with no caller key is now sent `sessionCacheKey` — a UUID-shaped SHA-256 of the router key id and the session key `body/session.ts` resolves, so it is as stable as sticky routing — in the body and as `session-id`. A caller's own key still wins; an unbound session sends none; no client value is sent verbatim. Without a client session header the key is the opening fingerprint's, shared by concurrent conversations with one opening; clients should send `x-session-id` (developerz.ai will).
+
+### Documentation
+
+- `05-routing-and-failover.md`, `06-protocol-translation.md` and `03-providers.md` describe the session-derived cache key and replace the "router never mints a key" rule.
+
+
 ## [2.39.11] — 2026-10-17
 
 ### Fixed
@@ -1605,3 +1616,4 @@ your tooling config.
 [2.39.10]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.39.10
 
 [2.39.11]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.39.11
+[2.39.12]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.39.12
