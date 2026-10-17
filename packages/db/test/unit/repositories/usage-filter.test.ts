@@ -4,6 +4,7 @@ import { PgDialect } from "drizzle-orm/pg-core"
 import type { Database } from "../../../src/client"
 import { dimensionIdType } from "../../../src/repositories/usage-filter"
 import { createUsageHistoryRepository } from "../../../src/repositories/usage-history-repository"
+import { historyDimensions } from "../../../src/repositories/usage-history-source"
 import { createUsageReadRepository } from "../../../src/repositories/usage-read-repository"
 import type {
   UsageDimension,
@@ -21,8 +22,10 @@ import type {
  * either site disagrees with the helper or with the other. Shape, not timing; no database.
  */
 
-// A Record over the union, so a dimension added to `UsageDimension` without a case here is a
-// compile error: the walk cannot silently skip a member.
+// The id type each dimension must bind at both call sites. The Record annotation reads as an
+// exhaustiveness guarantee but is not one: tests are excluded from the package typecheck
+// (`packages/db/tsconfig.json` includes only `src`), so nothing here is ever compiled. The
+// parity test below is what fails when a dimension joins `UsageDimension` without a case here.
 const EXPECTED: Record<UsageDimension, "text" | "uuid"> = {
   apiKeyId: "uuid",
   accountId: "uuid",
@@ -114,6 +117,13 @@ async function historyProbeCast(dimension: UsageDimension): Promise<"text" | "uu
   expect(first).toBeDefined()
   return probeCast(dialect.sqlToQuery(first as SQL).sql)
 }
+
+// `historyDimensions` is indexed by `UsageDimension` in source that IS typechecked
+// (`usage-history-repository.ts`), so its keys track the union; pinning EXPECTED to them at
+// runtime catches the drift the annotation alone cannot.
+test("EXPECTED covers every usage dimension", () => {
+  expect(Object.keys(EXPECTED).sort()).toEqual(Object.keys(historyDimensions).sort())
+})
 
 describe("dimensionIdType", () => {
   for (const [dimension, expected] of Object.entries(EXPECTED) as [

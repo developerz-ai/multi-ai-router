@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.39.10] — 2026-10-17
+
+### Fixed
+
+- The id-type parity test covers every usage dimension at runtime (#289, review follow-up to #288). `packages/db/test/unit/repositories/usage-filter.test.ts` claimed a new `UsageDimension` member without an `EXPECTED` case "is a compile error" — but tests are excluded from the typecheck (`packages/db/tsconfig.json` includes only `src`), so the `Object.entries` walk would have skipped a future dimension silently. The test now pins `EXPECTED`'s keys to `historyDimensions`' keys at runtime (`packages/db/src/repositories/usage-history-source.ts`, indexed by `UsageDimension` in typechecked source, so its keys track the union), and the comment states the actual guarantee instead of the compile-time fiction.
+
 ## [2.39.9] — 2026-10-17
 
 ### Changed
@@ -1584,3 +1590,5 @@ your tooling config.
 [2.39.8]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.39.8
 
 [2.39.9]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.39.9
+
+[2.39.10]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.39.10
