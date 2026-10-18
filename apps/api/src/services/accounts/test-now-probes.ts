@@ -132,7 +132,9 @@ export async function runHttpProbe(
   const outcome = await runAttempt({
     plan: { account: routable, driver, dialect, url, upstreamModel },
     method: "POST",
-    clientHeaders: new Headers(),
+    // There is no client to inherit a `content-type` from, and a strict upstream will not guess:
+    // z.ai refused every probe with `400 Input should be a valid dictionary` (prod, 2026-10-18).
+    clientHeaders: new Headers({ "content-type": "application/json" }),
     body: probeBody(
       dialect,
       upstreamModel,

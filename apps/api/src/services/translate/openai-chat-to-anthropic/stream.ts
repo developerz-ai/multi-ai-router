@@ -1,5 +1,6 @@
 import { z } from "zod"
 import { createAnthropicStreamEmitter } from "../shared/anthropic-stream"
+import { openAiChatReasoningSchema, readOpenAiChatReasoning } from "../shared/openai-chat-reasoning"
 import { createOpenAiChatToolCallReader } from "../shared/openai-chat-tool-calls"
 import type { ResponsesRecoveryOptions } from "../shared/responses-snapshot-recovery"
 import { CONSERVATIVE_STOP_REASON, toAnthropicStopReason } from "../shared/stop-reason"
@@ -24,11 +25,13 @@ import { frameJson } from "../sse/parse"
  * finish reason lands without reporting a completion with no tokens. Content deltas are never held:
  * every one leaves as it arrives.
  *
- * **A reasoning model's thinking is dropped here, and carried toward openai-responses.** DeepSeek-R1,
- * QwQ and GLM stream it beside the answer under names `shared/openai-chat-reasoning.ts` lists, and
- * Anthropic states a `thinking` block that would hold the text — but a client is entitled to replay
- * an assistant turn verbatim, and Anthropic refuses a `thinking` block whose `signature` this router
- * cannot produce. Synthesizing one would answer this turn and break the next
+ * **A reasoning model's thinking becomes a router-signed `thinking` block.** DeepSeek-R1, QwQ, GLM
+ * and Qwen stream it beside the answer under the names `shared/openai-chat-reasoning.ts` lists, and
+ * Anthropic states a `thinking` block that holds the text. Its `signature` is the router's tag
+ * (`shared/router-thinking.ts`), the same one a Responses reasoning summary carries, and every
+ * `anthropic → X` request translator drops the block again on replay. Dropping it instead left a
+ * thinking model's stream with no client event for as long as it thought — 341 s measured for
+ * `qwen3.8-max`, 2026-10-18 — which a client's silence policy reads as a dead upstream
  * (`06-protocol-translation.md#known-lossy-edges`).
  */
 
@@ -64,6 +67,7 @@ const chunkSchema = z.looseObject({
         delta: z
           .looseObject({
             content: z.string().nullish().catch(null),
+            ...openAiChatReasoningSchema,
             tool_calls: z.array(toolCallSchema).nullish().catch(null),
           })
           .nullish()
@@ -133,6 +137,7 @@ export function openAiChatToAnthropicStream(
       if (choice === undefined) return out
 
       emitter.start(out)
+      emitter.text(out, readOpenAiChatReasoning(choice.delta), false, "reasoning")
       emitter.text(out, choice.delta?.content ?? "")
       for (const call of choice.delta?.tool_calls ?? []) {
         hasToolCalls = true

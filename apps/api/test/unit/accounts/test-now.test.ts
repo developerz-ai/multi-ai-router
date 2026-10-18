@@ -139,6 +139,24 @@ describe("createTestNowService — HTTP accounts", () => {
     expect(sent[1]).not.toHaveProperty("max_completion_tokens")
   })
 
+  // Prod 2026-10-18: z.ai answered every test-now probe `400 Invalid request body: body: Input
+  // should be a valid dictionary or object to extract fields from` — the probe sent a JSON body with
+  // no `content-type`, because it has no client to inherit one from. A healthy account read as
+  // broken, in the console and in every background probe the scheduler runs through this path.
+  test("every probe body is sent as application/json, whatever the dialect", async () => {
+    const types: (string | null)[] = []
+    const capture = async (request: Request) => {
+      types.push(request.headers.get("content-type"))
+      return jsonResponse(200, { id: "msg_1", content: [], choices: [] })
+    }
+    await harness({ fetch: capture }).service.test("acc-1", { model: "glm-5.3" })
+    await harness({
+      row: accountRow({ provider: "openrouter" }),
+      fetch: capture,
+    }).service.test("acc-1", { model: "gpt-4o" })
+    expect(types).toEqual(["application/json", "application/json"])
+  })
+
   test("an anthropic-dialect probe keeps max_tokens: the dialect requires that field", async () => {
     let sent: Record<string, unknown> = {}
     const { service } = harness({

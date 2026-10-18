@@ -17,6 +17,7 @@
 
 import { describe, expect, test } from "bun:test"
 import {
+  anthropicToOpenAiChatRequest,
   openAiChatToAnthropicRequest,
   openAiChatToAnthropicResponse,
   openAiChatToAnthropicStream,
@@ -26,6 +27,7 @@ import {
   openAiResponsesToAnthropicRequest,
   openAiResponsesToOpenAiChatRequest,
 } from "../../../src/services/translate"
+import { ROUTER_THINKING_SIGNATURE } from "../../../src/services/translate/shared/router-thinking"
 import { openAiChatChunk, openAiChatRequest, openAiResponsesRequest, payloads } from "./fixtures"
 
 const CREATED = 1_700_000_000
@@ -251,33 +253,116 @@ describe("openai-chat reasoning text -> an openai-responses reasoning item", () 
 })
 
 /**
- * Anthropic states a `thinking` block that would hold this text, and it is still dropped.
- *
- * A client is entitled to replay an assistant turn verbatim on its next request, and Anthropic
- * refuses a `thinking` block whose `signature` this router cannot produce. An unsigned block would
- * answer this turn and break the next one — the same reason a Responses `reasoning` item is dropped
- * toward `anthropic` (`06-protocol-translation.md#known-lossy-edges`).
+ * Toward `anthropic` the text becomes a `thinking` block signed with the router's tag, the same
+ * treatment a Responses reasoning summary gets (`router-thinking.ts`,
+ * `06-protocol-translation.md#known-lossy-edges`). It used to be dropped, and the drop was the bug:
+ * prod 2026-10-18, `qwen3.8-max` over `/v1/messages` thought for 341 s, and the translated stream
+ * carried `message_start`, then nothing but SSE comments until the answer. A comment is no event in
+ * any client, so an Anthropic SDK reader saw no stream part for minutes and its caller's silence
+ * policy abandoned the request — 20 such streams on one account in three days, each billed and
+ * thrown away. Replayed on the next turn, every `anthropic -> X` translator drops the block again,
+ * so the tag never reaches a non-Anthropic upstream.
  */
-describe("openai-chat reasoning text -> anthropic: a documented drop", () => {
-  test("a non-streaming reasoning_content emits no thinking block", () => {
+describe("openai-chat reasoning text -> anthropic: a router-signed thinking block", () => {
+  test("a non-streaming reasoning_content becomes a signed thinking block ahead of the answer", () => {
     const out = openAiChatToAnthropicResponse(
       completion({ content: "42", reasoning_content: "the user wants a number" }),
     )
-    const blocks = (out.body as { content: { type: string }[] }).content
-    expect(blocks.map((block) => block.type)).toEqual(["text"])
-    expect(JSON.stringify(out.body)).not.toContain("the user wants a number")
+    const blocks = (out.body as { content: Record<string, unknown>[] }).content
+    expect(blocks).toEqual([
+      {
+        type: "thinking",
+        thinking: "the user wants a number",
+        signature: ROUTER_THINKING_SIGNATURE,
+      },
+      { type: "text", text: "42" },
+    ])
   })
 
-  test("a streamed reasoning delta emits no block and no delta", () => {
+  test("the non-streaming `reasoning` spelling is read too, and an empty one opens no block", () => {
+    const spelled = openAiChatToAnthropicResponse(completion({ content: "42", reasoning: "hmm" }))
+    expect((spelled.body as { content: { type: string }[] }).content.map((b) => b.type)).toEqual([
+      "thinking",
+      "text",
+    ])
+    const none = openAiChatToAnthropicResponse(completion({ content: "42", reasoning_content: "" }))
+    expect((none.body as { content: { type: string }[] }).content.map((b) => b.type)).toEqual([
+      "text",
+    ])
+  })
+
+  test("a thinking phase is visible to the client: each reasoning delta is a thinking_delta", () => {
+    // The prod fingerprint: a long run of reasoning-only chunks before any answer.
+    const stream = openAiChatToAnthropicStream({ id: "fallback" })
+    const thinking = [
+      ...stream.push(openAiChatChunk({ reasoning_content: "step one" })),
+      ...stream.push(openAiChatChunk({ reasoning_content: ", step two" })),
+    ]
+    const deltas = payloads(thinking).filter(
+      (event) => (event as { type: string }).type === "content_block_delta",
+    ) as { delta: { type: string; thinking?: string } }[]
+    expect(deltas.map((event) => event.delta)).toEqual([
+      { type: "thinking_delta", thinking: "step one" },
+      { type: "thinking_delta", thinking: ", step two" },
+    ])
+    const starts = payloads(thinking).filter(
+      (event) => (event as { type: string }).type === "content_block_start",
+    ) as { content_block: { type: string } }[]
+    expect(starts.map((event) => event.content_block.type)).toEqual(["thinking"])
+  })
+
+  test("the thinking block is signed and closed before the answer's text block opens", () => {
     const stream = openAiChatToAnthropicStream({ id: "fallback" })
     const events = [
-      ...stream.push(openAiChatChunk({ reasoning_content: "hmm" })),
+      ...stream.push(openAiChatChunk({ reasoning: "hmm" })),
       ...stream.push(openAiChatChunk({ content: "42" })),
     ]
-    const serialized = JSON.stringify(payloads(events))
-    expect(serialized).not.toContain("thinking")
-    expect(serialized).not.toContain("hmm")
-    // The answer itself is untouched: exactly one text block opened for it.
-    expect(events.filter((event) => event.event === "content_block_start")).toHaveLength(1)
+    const shapes = payloads(events).map((event) => {
+      const e = event as {
+        type: string
+        delta?: { type: string }
+        content_block?: { type: string }
+      }
+      return [e.type, e.delta?.type ?? e.content_block?.type ?? null]
+    })
+    expect(shapes).toEqual([
+      ["message_start", null],
+      ["content_block_start", "thinking"],
+      ["content_block_delta", "thinking_delta"],
+      ["content_block_delta", "signature_delta"],
+      ["content_block_stop", null],
+      ["content_block_start", "text"],
+      ["content_block_delta", "text_delta"],
+    ])
+    const signature = payloads(events).find(
+      (event) => (event as { delta?: { type: string } }).delta?.type === "signature_delta",
+    ) as { delta: { signature: string } }
+    expect(signature.delta.signature).toBe(ROUTER_THINKING_SIGNATURE)
+  })
+
+  test("an upstream stating both names is carried once, not twice", () => {
+    const stream = openAiChatToAnthropicStream({ id: "fallback" })
+    const events = stream.push(openAiChatChunk({ reasoning_content: "once", reasoning: "once" }))
+    expect(JSON.stringify(payloads(events)).match(/once/g)).toHaveLength(1)
+  })
+
+  test("the signed block replayed toward openai-chat is dropped again", () => {
+    const out = anthropicToOpenAiChatRequest({
+      model: "qwen3.8-max",
+      max_tokens: 64,
+      messages: [
+        { role: "user", content: "q" },
+        {
+          role: "assistant",
+          content: [
+            { type: "thinking", thinking: "private chain", signature: ROUTER_THINKING_SIGNATURE },
+            { type: "text", text: "42" },
+          ],
+        },
+        { role: "user", content: "and?" },
+      ],
+    })
+    expect(JSON.stringify(out)).not.toContain("private chain")
+    expect(JSON.stringify(out)).not.toContain(ROUTER_THINKING_SIGNATURE)
   })
 })

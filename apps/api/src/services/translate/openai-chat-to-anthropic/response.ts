@@ -1,6 +1,12 @@
 import { z } from "zod"
-import type { AnthropicTextBlock, AnthropicToolUseBlock } from "../shared/anthropic"
+import type {
+  AnthropicTextBlock,
+  AnthropicThinkingBlock,
+  AnthropicToolUseBlock,
+} from "../shared/anthropic"
+import { openAiChatReasoningSchema, readOpenAiChatReasoning } from "../shared/openai-chat-reasoning"
 import type { TranslatedResponse } from "../shared/response"
+import { ROUTER_THINKING_SIGNATURE } from "../shared/router-thinking"
 import { toAnthropicStopReason } from "../shared/stop-reason"
 import { anthropicUsageCounts, parseOpenAiChatUsage } from "../shared/usage"
 
@@ -9,12 +15,11 @@ import { anthropicUsageCounts, parseOpenAiChatUsage } from "../shared/usage"
  *
  * The mirror of `stream.ts` for the request that did not ask to stream, and — like it — this is the
  * direction that has to **invent structure**: openai-chat states one flat `content` string and a
- * separate `tool_calls[]`, while Anthropic states an ordered array of blocks. Text is emitted
- * first, then one `tool_use` block per call, which is the order the two arrived in on the wire.
- *
- * A reasoning model's thinking is **dropped**, the same row as its streaming half: Anthropic refuses
- * a replayed `thinking` block whose `signature` this router cannot produce, so synthesizing one would
- * answer this turn and break the next (`06-protocol-translation.md#known-lossy-edges`).
+ * separate `tool_calls[]`, while Anthropic states an ordered array of blocks. A reasoning model's
+ * thinking is emitted first, as a `thinking` block signed with the router's tag — the same row as
+ * its streaming half — then text, then one `tool_use` block per call, which is the order they
+ * arrive in on the wire. Replayed, the tagged block is dropped by every `anthropic → X` request
+ * translator (`06-protocol-translation.md#known-lossy-edges`).
  *
  * **Nothing here throws.** The upstream already answered, so a malformed field is reported as
  * absent rather than turned into a failure on a request that cannot be retried
@@ -44,6 +49,7 @@ const completionSchema = z.looseObject({
         message: z
           .looseObject({
             content: z.string().nullish().catch(null),
+            ...openAiChatReasoningSchema,
             tool_calls: z.array(toolCallSchema).nullish().catch(null),
           })
           .nullish()
@@ -74,7 +80,11 @@ export function openAiChatToAnthropicResponse(
   // first; an upstream that answered with more anyway has its extras dropped, never interleaved.
   const choice = (completion?.choices ?? []).find((entry) => (entry.index ?? 0) === 0)
 
-  const content: (AnthropicTextBlock | AnthropicToolUseBlock)[] = []
+  const content: (AnthropicTextBlock | AnthropicThinkingBlock | AnthropicToolUseBlock)[] = []
+  // Router-signed, as the stream half is (`stream.ts`); an empty one is no block, which Anthropic rejects.
+  const thinking = readOpenAiChatReasoning(choice?.message)
+  if (thinking.length > 0)
+    content.push({ type: "thinking", thinking, signature: ROUTER_THINKING_SIGNATURE })
   const text = choice?.message?.content ?? ""
   // Anthropic rejects an empty text block, and a completion that was only a tool call said nothing.
   if (text.length > 0) content.push({ type: "text", text })
