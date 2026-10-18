@@ -16,9 +16,9 @@ import { z } from "zod"
  * **Read on the way in, never written on the way out.** A dialect this router *emits* is the one its
  * vendor published, and inventing an extension field into an answer is not translation. So a
  * reasoning-model upstream reached over openai-chat has its thinking carried into openai-responses,
- * where the dialect states a reasoning item of its own — and toward `anthropic` and toward an
- * openai-chat client it is a documented drop
- * (`docs/idea/06-protocol-translation.md#known-lossy-edges`).
+ * where the dialect states a reasoning item of its own, and into `anthropic` as a `thinking` block
+ * signed with the router's tag (`router-thinking.ts`); toward an openai-chat client it is a
+ * documented drop (`docs/idea/06-protocol-translation.md#known-lossy-edges`).
  *
  * Two shapes are deliberately **not** read here, and both are named in
  * `06-protocol-translation.md#known-lossy-edges` rather than left to be discovered: OpenRouter's

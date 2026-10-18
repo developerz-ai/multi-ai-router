@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.39.13] — 2026-10-18
+
+### Fixed
+
+- A reasoning model reached over openai-chat now shows its thinking to an Anthropic-dialect client. `delta.reasoning_content` / `delta.reasoning` (Qwen, DeepSeek, GLM, QwQ) was dropped toward `anthropic`, so a translated `/v1/messages` stream carried `message_start` and then only SSE keepalive comments for as long as the model thought. A comment is no event to an SDK reader, so a caller's silence policy read a healthy stream as dead: `qwen3.8-max` thought for 341 s before its first text delta (in-pod probe, 2026-10-18), and the developerz-ai router recorded 20 such `client_cancelled` streams on one account in three days (200–308 s, 0 output tokens), which the client surfaced as `provider stream idle` and `Failed to process successful response`. The text now becomes a `thinking` block signed with the router's `mar1:` tag, stream and non-stream, the same treatment a Responses reasoning summary already gets; every `anthropic → X` request translator drops it again on replay.
+
+### Documentation
+
+- `06-protocol-translation.md` moves openai-chat reasoning toward `anthropic` from "dropped" to "router-signed thinking block", with the measurement.
+
 ## [2.39.12] — 2026-10-17
 
 ### Fixed
@@ -1617,3 +1627,4 @@ your tooling config.
 
 [2.39.11]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.39.11
 [2.39.12]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.39.12
+[2.39.13]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.39.13

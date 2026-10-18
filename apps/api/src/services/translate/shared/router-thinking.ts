@@ -1,6 +1,7 @@
 /**
  * The `signature` this router stamps on an Anthropic `thinking` block it **synthesized** from
- * another dialect's reasoning summary (openai-responses → anthropic).
+ * another dialect's reasoning: a Responses reasoning summary, or openai-chat's `reasoning_content` /
+ * `reasoning` text (openai-responses → anthropic, openai-chat → anthropic).
  *
  * Anthropic's own signatures are minted by Anthropic and this router cannot produce one. The block
  * still needs *a* signature to be a well-formed `thinking` block, so it carries a versioned tag that
@@ -11,7 +12,7 @@
  * upstream, so a tagged block never travels onward through a translation. The one route it can
  * still take is same-dialect passthrough to a real Anthropic upstream — the body is not parsed there
  * (non-negotiable 10), and Anthropic refuses a signature it did not mint. That is a client switching
- * a conversation from an OpenAI-backed model to an Anthropic one mid-transcript, and is stated in
+ * a conversation from an OpenAI-compatible model to an Anthropic one mid-transcript, and is stated in
  * `docs/idea/06-protocol-translation.md#known-lossy-edges`.
  */
 export const ROUTER_THINKING_SIGNATURE = "mar1:"

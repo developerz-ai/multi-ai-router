@@ -390,7 +390,7 @@ message_start → content_block_start → content_block_delta* → content_block
 | `content_block_delta` / `text_delta` | `chunk.choices[].delta.content` | `response.output_text.delta` |
 | `content_block_start` (`tool_use`) | `delta.tool_calls[].{index,id,function.name}` | `response.output_item.added` (function call) |
 | `content_block_delta` / `input_json_delta` | `delta.tool_calls[].function.arguments` | `response.function_call_arguments.delta` |
-| `content_block_delta` / `thinking_delta` | `delta.reasoning_content` / `delta.reasoning` — **read, never written**; see below | `response.reasoning_summary_text.delta` |
+| `content_block_delta` / `thinking_delta` (router-signed block, see below) | `delta.reasoning_content` / `delta.reasoning` — **read, never written**; see below | `response.reasoning_summary_text.delta` |
 | `content_block_stop` | — (implied) | `response.content_part.done` / `response.output_item.done` |
 | `message_delta` (stop reason, usage) | final chunk `finish_reason` + optional usage chunk | `response.completed` (carries usage) |
 | `message_stop` | `data: [DONE]` | `response.completed` |
@@ -400,7 +400,7 @@ message_start → content_block_start → content_block_delta* → content_block
 | | |
 |---|---|
 | Clean | Text deltas, tool-call argument deltas, terminal usage, stream termination. |
-| Lossy | Block indices and boundaries are reconstructed, not preserved; a dialect with no "block" concept loses which block a delta belonged to. Reasoning text is dropped toward `openai-chat`, and toward `anthropic` from `openai-chat`; a Responses reasoning *summary* becomes an Anthropic `thinking` block signed with the router's tag (below). Toward `anthropic`, `message_start` states a zeroed `usage`. Toward `openai-responses`, item ids (`msg_…`, `fc_…`, `rs_…`) are minted from the response id and the item's position, and a thinking or reasoning delta becomes a reasoning *summary* delta — the encrypted reasoning handle a native Responses upstream also emits cannot be synthesized and is not. |
+| Lossy | Block indices and boundaries are reconstructed, not preserved; a dialect with no "block" concept loses which block a delta belonged to. Reasoning text is dropped toward `openai-chat`; toward `anthropic`, openai-chat reasoning text and a Responses reasoning *summary* both become a `thinking` block signed with the router's tag (below). Toward `anthropic`, `message_start` states a zeroed `usage`. Toward `openai-responses`, item ids (`msg_…`, `fc_…`, `rs_…`) are minted from the response id and the item's position, and a thinking or reasoning delta becomes a reasoning *summary* delta — the encrypted reasoning handle a native Responses upstream also emits cannot be synthesized and is not. |
 | Rejected | Nothing at stream time — once bytes are on the wire the request fails honestly, it is never retranslated. |
 
 **Reasoning text on `openai-chat` is read on the way in and never written on the way out.** OpenAI
@@ -428,13 +428,19 @@ Two reasoning shapes are **not read**, and are stated here rather than left to b
   text is dropped too, not merely the thinking. Reading it is a change to how `content` is parsed in
   every direction, not a field to add.
 
-Toward `anthropic` the same text is dropped rather than turned into a `thinking` block, for a
-harder reason than vocabulary: a client is entitled to replay an assistant turn verbatim on its next
-request, and Anthropic refuses a `thinking` block whose `signature` this router cannot produce. An
-unsigned block would answer this turn and break the next one.
+Toward `anthropic` the same text becomes a `thinking` block, exactly as a Responses reasoning
+summary does (next paragraph). It used to be dropped, on the reasoning that a client replays an
+assistant turn verbatim and Anthropic refuses a signature this router cannot mint. The drop had a
+cost that reasoning missed: a thinking model's translated stream carried `message_start` and then
+nothing but keepalive comments for as long as it thought, and a comment is no event to any SDK
+reader. Measured 2026-10-18, in-pod, one `/v1/messages` request to `qwen3.8-max`: 341 s of comments
+before the first `text_delta`; the developerz-ai router recorded 20 streams on that account in
+three days cancelled by the client's silence policy at 200–308 s with zero output tokens. The
+replay hazard is the one the signed summary already carries, and is bounded the same way.
 
-A **Responses reasoning summary** is the exception: it becomes a `thinking` block (stream:
-`thinking_delta`s, then a `signature_delta`) whose `signature` is the router's tag `mar1:` —
+A **Responses reasoning summary**, and **openai-chat reasoning text**, become a `thinking` block
+(stream: `thinking_delta`s, then a `signature_delta`; non-stream: one block ahead of the text) whose
+`signature` is the router's tag `mar1:` —
 versioned, naming its origin, carrying no key, account id or upstream handle. Replayed on the next
 turn, every `anthropic → X` translator drops it with all other thinking blocks, and the Agent SDK
 path never replays thinking. The residual edge: a client that moves that transcript to a **real
@@ -697,7 +703,7 @@ Be suspicious of any cell not listed here — if it is not documented, it is not
 | Responses `reasoning` **output** summary | → `anthropic` | **carried** as a `thinking` block signed `mar1:` (router tag, no secret); see [above](#streaming-sse-event-mapping). Toward `openai-chat` dropped — no *published* field; the extension names are read from an upstream, never written toward a client |
 | Anthropic `thinking` blocks | → `openai-responses` | carried as a reasoning **summary** item; the encrypted reasoning handle is not synthesized |
 | openai-chat `reasoning_content` / `reasoning` | → `openai-responses` | **carried** as a reasoning **summary** item. Both spellings are read — DeepSeek's and OpenRouter's — and `reasoning_content` wins if an upstream states both. See [above](#streaming-sse-event-mapping) |
-| openai-chat `reasoning_content` / `reasoning` | → `anthropic` | dropped. A synthesized `thinking` block carries no `signature`, and Anthropic refuses a replayed one that lacks it — the block would answer this turn and break the next |
+| openai-chat `reasoning_content` / `reasoning` | → `anthropic` | **carried** as a `thinking` block signed `mar1:`, stream and non-stream, the same as a Responses summary; dropped again by every `anthropic → X` request translator on replay. Residual: a transcript moved to a real Anthropic upstream through passthrough is refused `400` on the foreign signature. See [above](#streaming-sse-event-mapping) |
 | Anthropic `output_config.effort` | → any OpenAI dialect | **carried** as `reasoning_effort` / `reasoning.effort`, verbatim: `low`, `medium`, `high`, `xhigh`, `max` are words of both vocabularies |
 | Anthropic `thinking` request parameter | → any OpenAI dialect | with no `output_config.effort`, an `enabled` budget lands in a bucket — `budget_tokens` ≤ 4 096 → `low`, ≤ 16 384 → `medium`, above → `high` (Claude Code's `think` / `megathink` / `ultrathink` presets land one per bucket). `adaptive` and `disabled` name no level and send none (`none` is not sent: several OpenAI reasoning models refuse it). Toward `openai-chat`, an `enabled` / `adaptive` `thinking` beside a `tool_choice` that still forces a tool after translation (`any` / `tool`) is **dropped and reported** (`thinking`) and sends no bucket: Anthropic refuses that pair, and so do compatible chat vendors (Qwen: `400` "The tool_choice parameter does not support being set to required or object in thinking mode", ~200 a week from the AI SDK's forced `json` tool, prod 2026-10-16). The force wins, as it does on `openai-chat-to-anthropic`; an explicit `output_config.effort` is not thinking and still travels. Toward `openai-responses` the pair is carried (OpenAI and Codex serve it). Toward `openai-responses`, `enabled`/`adaptive` or a stated effort also sets `reasoning.summary: "auto"`, so the summary can travel back as a `thinking` block |
 | Forced `tool_choice` to a think-by-default openai-chat vendor | anthropic / openai-chat → `openai-chat` | **`enable_thinking: false` emitted** (`shared/thinking-default.ts`, applied at the per-attempt model reapply in `dataplane/translate-body.ts`) when the surviving `tool_choice` forces a tool **and** the upstream (post-alias) model id matches `OPENAI_CHAT_THINKING_DEFAULT_MODELS`. Dropping a client-sent `thinking` is not enough for these vendors: Qwen's "3.8" hybrid series (`qwen3.8-max`, `qwen3.8-flash`) reasons unless the body states this dial, and its OpenAI-compatible endpoint `400`s a forced tool in thinking mode (~284/week, prod; `docs/research/thinking-and-tool-choice.md`). The dial is a plain top-level body field DashScope reads, **not** OpenAI-standard — a vanilla OpenAI / Codex endpoint `400`s on an unknown field — so it is emitted **only** for a matched model, **only** on openai-chat egress, **only** beside a forced tool, and never toward `openai-responses`. The set is **config** (non-negotiable 11), empty by default; the suggested deployment value is `qwen3.8-max,qwen3.8-flash` (exact ids, or a trailing-`*` prefix glob such as `qwen3.8-*`). It is a vendor dial, never a model change (non-negotiable 4) |
