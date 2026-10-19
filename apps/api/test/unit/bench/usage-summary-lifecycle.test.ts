@@ -205,3 +205,19 @@ describe("the wall budget defaults to the operator bound (#284 item 3)", () => {
     expect(USAGE).toContain(String(DEFAULTS.budgetMs))
   })
 })
+
+describe("the lifetime pending-check buffer budget (#275)", () => {
+  test("lifetimeBuffersBudget defaults to 50,000", () => {
+    expect(DEFAULTS.lifetimeBuffersBudget).toBe(50_000)
+    expect(parseArgs([]).lifetimeBuffersBudget).toBe(50_000)
+  })
+
+  test("--lifetime-buffers-budget overrides the default", () => {
+    expect(parseArgs(["--lifetime-buffers-budget", "777"]).lifetimeBuffersBudget).toBe(777)
+  })
+
+  test("USAGE names the flag and its default", () => {
+    expect(USAGE).toContain("--lifetime-buffers-budget")
+    expect(USAGE).toContain(String(DEFAULTS.lifetimeBuffersBudget))
+  })
+})

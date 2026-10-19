@@ -4,6 +4,7 @@ import {
   createUsageHistoryRepository,
   createUsageReadRepository,
   type Database,
+  type DatabaseHandle,
   defaultMigrationsFolder,
   runMigrations,
 } from "@multi-ai-router/db"
@@ -51,6 +52,11 @@ import { measureLifetimeCoverage } from "./usage-summary-lifetime"
  * gates and their ordering live, pure and injected-executor tested, in
  * `usage-summary-lifecycle.ts`.
  */
+
+async function hasRawRows(sql: DatabaseHandle["sql"]): Promise<boolean> {
+  const [row] = await sql`select exists (select 1 from usage_records) as present`
+  return row?.present === true
+}
 
 function buildLabels(keys: number): UsageLabelSets {
   const keyLabels = new Map<string, KeyLabel>()
@@ -179,16 +185,22 @@ async function main() {
           )
           // The lifetime leg (#275): bank the fixture through the real backfill so W is set, then
           // measure the lifetime coverage. Rolled back, so the seed is untouched.
-          const lifetime = await measureLifetimeCoverage(handle, options.explain)
-          console.log(
-            `lifetime coverage: banked ${lifetime.banked.toLocaleString()} rows (rolled back); ` +
-              `pending-check buffers: ${lifetime.buffers} (budget ${options.lifetimeBuffersBudget}) ` +
-              `${lifetime.buffers > options.lifetimeBuffersBudget ? "FAIL" : "ok"}`,
-          )
-          if (lifetime.buffers > options.lifetimeBuffersBudget)
-            failures.push(
-              `lifetime pending-check buffers ${lifetime.buffers} over budget ${options.lifetimeBuffersBudget}`,
+          if (!options.explain) {
+            console.log("lifetime leg skipped (--no-explain)")
+          } else if (!(await hasRawRows(handle.sql))) {
+            console.log("lifetime leg skipped: no raw rows")
+          } else {
+            const lifetime = await measureLifetimeCoverage(handle, true)
+            console.log(
+              `lifetime coverage: banked ${lifetime.banked.toLocaleString()} rows (rolled back); ` +
+                `pending-check buffers: ${lifetime.buffers} (budget ${options.lifetimeBuffersBudget}) ` +
+                `${lifetime.buffers > options.lifetimeBuffersBudget ? "FAIL" : "ok"}`,
             )
+            if (lifetime.buffers > options.lifetimeBuffersBudget)
+              failures.push(
+                `lifetime pending-check buffers ${lifetime.buffers} over budget ${options.lifetimeBuffersBudget}`,
+              )
+          }
           if (failures.length > 0) {
             console.error(`bench-usage: FAIL — ${failures.join("; ")}`)
             process.exitCode = 1

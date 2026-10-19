@@ -36,8 +36,8 @@ function pendingScanBuffers(node: PlanNode): number {
  *
  * The fixture's raw rows have no contributions, so this leg banks them through the real
  * `backfill` (which sets W) and then measures the lifetime `coverage()`. Everything runs inside
- * one transaction that is rolled back, so the seeded database is left exactly as it was and
- * `--reuse-db` stays valid. EXPLAIN runs on the same connection to see the uncommitted W.
+ * one transaction that is rolled back, so the seeded database is logically unchanged (dead row
+ * versions remain until autovacuum) and `--reuse-db` stays valid. EXPLAIN runs on the same connection to see the uncommitted W.
  * The result is judged on the shared buffers of the `pending` check, which host load does not distort.
  */
 const ROLLBACK = Symbol("bench-usage: roll back the lifetime leg")
@@ -45,7 +45,7 @@ const ROLLBACK = Symbol("bench-usage: roll back the lifetime leg")
 export async function measureLifetimeCoverage(
   handle: DatabaseHandle,
   explain: boolean,
-): Promise<{ buffers: number; measures: QueryMeasure[]; banked: number }> {
+): Promise<{ buffers: number; banked: number }> {
   const measures: QueryMeasure[] = []
   let banked = 0
   let pendingBuffers = 0
@@ -70,6 +70,9 @@ export async function measureLifetimeCoverage(
       const timed = labelCalls(createUsageHistoryRepository(instrument(db, measures)), "lifetime")
       await timed.coverage()
       if (explain) {
+        // The bulk UPDATE and the backfill INSERT above leave these tables without fresh
+        // statistics; refresh them so the plan is the one production runs.
+        await tx.execute(sql`analyze usage_records, usage_contributions`)
         const coverage = measures.find((m) => m.sql.includes("as pending"))
         if (coverage === undefined) throw new Error("bench-usage: lifetime coverage not captured")
         // Inline the bound values: this leg's own connection is the only one that sees W.
@@ -90,5 +93,5 @@ export async function measureLifetimeCoverage(
   } catch (error) {
     if (error !== ROLLBACK) throw error
   }
-  return { buffers: pendingBuffers, measures, banked }
+  return { buffers: pendingBuffers, banked }
 }
