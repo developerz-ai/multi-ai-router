@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.40.0] — 2026-10-19
+
+### Changed
+
+- `coverage(lifetime)` no longer walks every retained `usage_records` row. Its `pending` check is an anti-join against `usage_contributions`, whose predicate cannot stop early, so the lifetime window paid for the whole table on every summary (about 1.8 s at prod's 334k rows after #277 removed the other two scans; #275, part of #250). `usage_history_state` gains `banked_through_at` / `banked_through_id` (migration 0038, two nullable columns, additive): the `(created_at, id)` through which every raw row has a non-pending contribution. The backfill advances it, and only from a sweep that started at the top of the table and ended short of its limit, which proves the whole table banked in one transaction; the check then scans only rows after it. NULL scans everything, as before, so an image rolled back across 0038 reads the same answers. Rows written through admission carry their contribution in the same transaction, so a backdated row below the watermark is never pending; `coverage` output is unchanged for every window (tested with and without the watermark over backdated rows).
+
+### Documentation
+
+- `08-observability.md` replaces the "deferred to its own migration" note with the watermark and the argument for why it is output-safe.
+
 ## [2.39.15] — 2026-10-19
 
 ### Fixed
@@ -1646,4 +1656,5 @@ your tooling config.
 [2.39.12]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.39.12
 [2.39.13]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.39.13
 [2.39.14]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.39.14
+[2.40.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.40.0
 [2.39.15]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.39.15
