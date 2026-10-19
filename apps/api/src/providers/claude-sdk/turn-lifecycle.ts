@@ -36,8 +36,8 @@ export interface HeldPrompt {
 /**
  * The prompt, as the SDK's streaming input: one user message, then a hold.
  *
- * The structured form is used rather than a plain string because a string cannot carry an image,
- * and dropping the client's images would be a fidelity loss nothing forces on us (§6).
+ * The structured form is used rather than a plain string because a string cannot carry an image or
+ * a document, and dropping either would be a fidelity loss nothing forces on us (§6).
  */
 export function holdPrompt(content: readonly PromptBlock[]): HeldPrompt {
   let release: () => void = () => {}

@@ -139,6 +139,33 @@ describe("one turn, end to end, with the subprocess stubbed", () => {
       },
     ])
   })
+
+  test("a base64 PDF reaches the SDK boundary as a document block, never as a bare mention", async () => {
+    const spy = spyQuery()
+    const pdf = {
+      type: "document",
+      source: { type: "base64", media_type: "application/pdf", data: "JVBERi0xLjQK" },
+    }
+    await (
+      await invoker(spy).invoke(
+        invocation({
+          body: body({
+            messages: [
+              {
+                role: "user",
+                content: [{ type: "text", text: "PDF file read: note.pdf (614 bytes)" }, pdf],
+              },
+            ],
+          }),
+        }),
+      )
+    ).text()
+
+    // Issue #298: the model got only the "file read" line and could not quote the PDF. The
+    // document itself must cross the query() boundary as real content.
+    const sent = spy.prompts[0] as { message: { content: unknown[] } }
+    expect(sent.message.content).toContainEqual(pdf)
+  })
 })
 
 describe("the launch every turn is given", () => {

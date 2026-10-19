@@ -140,7 +140,7 @@ walkthrough:
 | Decision | Why |
 |---|---|
 | The body is decoded **once**, into the four things a launch needs — prompt, tools, system prompt, response shape (`request.ts`) | This path is the labeled exception to "never parse a passthrough body" (CLAUDE.md non-negotiable 8), and an exception that costs four parses of the same megabyte is a different exception than the one that was granted |
-| The prompt is one **user** message, sent as streaming input rather than a string | A string prompt cannot carry an image, and degrading a client's images to a text note is a fidelity loss nothing forces on us. The SDK closes the subprocess's stdin once the iterable is exhausted, which is what makes a single-turn endpoint out of a bidirectional protocol |
+| The prompt is one **user** message, sent as streaming input rather than a string | A string prompt cannot carry an image or a document, and degrading either to a text note is a fidelity loss nothing forces on us — the SDK's `SDKUserMessage.message` is a Messages API `MessageParam`, so `image` and `document` blocks cross as real content. The SDK closes the subprocess's stdin once the iterable is exhausted, which is what makes a single-turn endpoint out of a bidirectional protocol |
 | A conversation the SDK has never held is replayed **framed**, and a single user turn is not (`prompt.ts`) | The framing is the anti-imitation guard §4 and §10 both name; applying it to a turn that needs no replay would put a transcript preamble in front of every first message |
 | The executable ladder is walked **once** per process, and only a *successful* resolution is cached | A binary does not move under a live container, so re-walking it per request is a filesystem walk on every subscription turn. A failed resolution is not cached, so an operator who fixes a mount recovers without a restart |
 | The concurrency slot, the abort bridge, and the session report are all tied to the end of the **message stream**, not to `query()` returning | `query()` returns immediately; the answer arrives over the following seconds. Releasing on return would make the semaphore count calls rather than subprocesses, leak an abort listener per request, and write a session binding before the SDK had named one |
@@ -883,13 +883,23 @@ re-synthesis, not a passthrough.**
   delta kind this build has never seen; the non-streaming fold used to drop it, so the two response
   shapes diverged for every future block type. The fold now carries the delta's own fields onto the
   block verbatim, newest value winning (`render/message.ts`).
-- **A `tool_result`'s nested images are hoisted to sibling image blocks** when a conversation is
-  rendered into the prompt (`prompt.ts`): the SDK's user message has no `tool_result` block to
-  carry them in place, and folding them into the bracketed transcript line erased them — a
-  screenshot/PDF/chart tool's output, every turn. The transcript line names how many images follow;
-  the `image/jpg` misspelling is normalized to `image/jpeg`, and an image that still fails the
-  source schema is omitted **by name** (`[image omitted: unsupported source type …]`), never as a
-  bare `[image block]`.
+- **A `tool_result`'s nested images and documents are hoisted to sibling blocks** when a
+  conversation is rendered into the prompt (`prompt.ts`): the SDK's user message has no
+  `tool_result` block to carry them in place, and folding them into the bracketed transcript line
+  erased them — a screenshot/PDF/chart tool's output, every turn. The transcript line names how
+  many of each follow; the `image/jpg` misspelling is normalized to `image/jpeg`, and an image
+  that still fails the source schema is omitted **by name** (`[image omitted: unsupported source
+  type …]`), never as a bare `[image block]`.
+- **A `document` block is delivered to the model, or the model is told it was not** (issue #298).
+  A base64 `application/pdf`, a `text/plain`, or a `url` source crosses the `query()` boundary as a
+  real `document` block — the SDK's input message is a Messages API `MessageParam`, which carries
+  documents exactly like images. Before this, every document was flattened to a transcript line,
+  so Claude Code's Read-tool output reached the model as a bare "PDF file read: note.pdf (614
+  bytes)" mention with no content, and the model could not quote the file it was told about. A
+  source this transport cannot forward — a `file` id, which names a file uploaded to the
+  *client's* API account that the subscription's CLI cannot see, or a nested-`content` source — is
+  omitted **by name** (`[document omitted: unsupported source type …]`), so the model can ask the
+  client to extract the text instead of guessing from a mention.
 - **Message ids are CSPRNG-backed** (`crypto.randomUUID`), never clock-derived — see the fidelity
   table below.
 - **One renderer, both response shapes.** `includePartialMessages: true` is unconditional, so
