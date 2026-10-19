@@ -49,8 +49,9 @@ export function createUsageHistoryRepository(
   // Shared by `clock` and `coverage` so the earliest retained instant is computed byte-identically
   // either way: the window-resolution step reads only these two, never the heavier checks below.
   const boundsCte = sql`bounds as (select coalesce((select retention_before_day from ${usageHistoryState} where id='v2'),'-infinity'::date) as horizon)`
-  // Always one row (scalar subselects), so a missing state row reads as "no watermark", not "no rows".
-  const bankedCte = sql`banked as (select (select banked_through_at from ${usageHistoryState} where id='v2') as at, (select banked_through_id from ${usageHistoryState} where id='v2') as id)`
+  // Always one row (left join), so a missing state row reads as "no watermark", not "no rows"; a
+  // half-set pair (the CHECK forbids one) reads as no watermark too.
+  const bankedCte = sql`banked as (select case when s.banked_through_id is null then null else s.banked_through_at end as at, case when s.banked_through_at is null then null else s.banked_through_id end as id from (select 1) one left join ${usageHistoryState} s on s.id='v2')`
   const firstReceiptCte = sql`first_receipt_day as (select day from ${usageContributions},bounds where day >= horizon order by day limit 1)`
   const earliestExpr = sql`least(
           (select day::timestamp at time zone 'UTC' from ${usageDaily},bounds where day >= horizon order by day limit 1),

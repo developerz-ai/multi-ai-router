@@ -88,7 +88,11 @@ export function createUsageHistoryMaintenance(db: Database) {
       // A sweep that began at the start of the table and ended short of its limit has just
       // banked every unbanked row there is, inside this transaction. That is the only moment the
       // watermark is provable (#275); a resumed sweep says nothing about rows before its cursor.
-      if (after === undefined && rows.length < limit) await advanceBankedWatermark(tx)
+      // A `legacy_overlap` adoption is evidence a lock-free pre-2.16 writer was active, whose rows
+      // can land below any watermark; do not certify a sweep that saw one.
+      const sawLockFreeWriter = inputs.some((input) => input.source === "legacy_overlap")
+      if (after === undefined && rows.length < limit && !sawLockFreeWriter)
+        await advanceBankedWatermark(tx)
       return { processed: rows.length, remaining: rows.length === limit, last: rows.at(-1) }
     })
     cursor =
