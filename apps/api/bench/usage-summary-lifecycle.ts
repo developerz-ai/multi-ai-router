@@ -92,7 +92,7 @@ export const USAGE = `Usage: bin/bench-usage [options]
   --lifetime-buffers-budget N
                          shared-buffer budget for the banked lifetime pending check (#275;
                          default ${DEFAULTS.lifetimeBuffersBudget})
-  --no-explain           skip the EXPLAIN pass, buffers, and the per-query table
+  --no-explain           skip the EXPLAIN pass, buffers, the per-query table, and the lifetime leg
   --keep-db              keep the throwaway database (prints its URL)
 `
 

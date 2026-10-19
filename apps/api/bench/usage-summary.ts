@@ -30,8 +30,9 @@ import { measureLifetimeCoverage } from "./usage-summary-lifetime"
  * loaded host (load ~7) — at the default `SERVER_IDLE_TIMEOUT_SECONDS` of 60 the
  * page simply dies. This leg seeds that fixture into a throwaway database, runs
  * the real `readSummary` the way the service runs it, and exits non-zero when
- * either the wall clock or the total buffer traffic crosses its budget. Timings
- * on a shared host are noisy, so the two budgets catch different regressions: the
+ * the wall clock, the total buffer traffic, or the lifetime pending-check buffers (#275) cross
+ * their budget. Timings on a shared host are noisy, so the wall and buffer budgets catch
+ * different regressions: the
  * wall budget catches per-row-cost blowups (an id filter regressing to a per-id
  * OR-chain quintupled the dominant statement), and the buffer budget — what
  * EXPLAIN (ANALYZE, BUFFERS) reports, which load does not distort — catches
@@ -190,7 +191,7 @@ async function main() {
           } else if (!(await hasRawRows(handle.sql))) {
             console.log("lifetime leg skipped: no raw rows")
           } else {
-            const lifetime = await measureLifetimeCoverage(handle, true)
+            const lifetime = await measureLifetimeCoverage(handle)
             console.log(
               `lifetime coverage: banked ${lifetime.banked.toLocaleString()} rows (rolled back); ` +
                 `pending-check buffers: ${lifetime.buffers} (budget ${options.lifetimeBuffersBudget}) ` +

@@ -21,12 +21,26 @@ interface PlanNode {
  * Scan nodes are leaves, so each node's own blocks are not double counted.
  */
 function pendingScanBuffers(node: PlanNode): number {
+  if (!hasPendingScan(node))
+    throw new Error(
+      "bench-usage: no plan node with Alias r; the coverage SQL aliases changed, so 0 buffers would be a false pass",
+    )
+  return sumPendingBuffers(node)
+}
+
+function hasPendingScan(node: PlanNode): boolean {
+  return node.Alias === "r" || (node.Plans ?? []).some(hasPendingScan)
+}
+
+function sumPendingBuffers(node: PlanNode): number {
   const own =
     node.Alias === "r" || node.Alias === "c"
       ? (node["Shared Hit Blocks"] ?? 0) + (node["Shared Read Blocks"] ?? 0)
       : 0
-  return own + (node.Plans ?? []).reduce((sum, child) => sum + pendingScanBuffers(child), 0)
+  return own + (node.Plans ?? []).reduce((sum, child) => sum + sumPendingBuffers(child), 0)
 }
+
+const ROLLBACK = Symbol("bench-usage: roll back the lifetime leg")
 
 /**
  * The lifetime-coverage leg of `bin/bench-usage` (#275). The 30-day summary never exercises the
@@ -37,14 +51,16 @@ function pendingScanBuffers(node: PlanNode): number {
  * The fixture's raw rows have no contributions, so this leg banks them through the real
  * `backfill` (which sets W) and then measures the lifetime `coverage()`. Everything runs inside
  * one transaction that is rolled back, so the seeded database is logically unchanged (dead row
- * versions remain until autovacuum) and `--reuse-db` stays valid. EXPLAIN runs on the same connection to see the uncommitted W.
- * The result is judged on the shared buffers of the `pending` check, which host load does not distort.
+ * versions remain until autovacuum) and `--reuse-db` stays valid. EXPLAIN runs on the same
+ * connection to see the uncommitted W. The result is judged on the shared buffers of the
+ * `pending` check, which host load does not distort.
+ *
+ * Caveat: the `ANALYZE` inside the transaction rolls back its `pg_statistic` rows, but
+ * `pg_class.relpages` / `reltuples` are written in place and stay changed. Run
+ * `vacuum analyze usage_records, usage_contributions` before an immediate `--reuse-db` rerun.
  */
-const ROLLBACK = Symbol("bench-usage: roll back the lifetime leg")
-
 export async function measureLifetimeCoverage(
   handle: DatabaseHandle,
-  explain: boolean,
 ): Promise<{ buffers: number; banked: number }> {
   const measures: QueryMeasure[] = []
   let banked = 0
@@ -69,25 +85,23 @@ export async function measureLifetimeCoverage(
         )
       const timed = labelCalls(createUsageHistoryRepository(instrument(db, measures)), "lifetime")
       await timed.coverage()
-      if (explain) {
-        // The bulk UPDATE and the backfill INSERT above leave these tables without fresh
-        // statistics; refresh them so the plan is the one production runs.
-        await tx.execute(sql`analyze usage_records, usage_contributions`)
-        const coverage = measures.find((m) => m.sql.includes("as pending"))
-        if (coverage === undefined) throw new Error("bench-usage: lifetime coverage not captured")
-        // Inline the bound values: this leg's own connection is the only one that sees W.
-        const literal = (v: unknown) =>
-          v === null || v === undefined ? "NULL" : `'${String(v).replaceAll("'", "''")}'`
-        const inlined = coverage.sql.replace(/\$(\d+)/g, (_, n) =>
-          literal(coverage.params[Number(n) - 1]),
-        )
-        const rows = await tx.execute(
-          sql.raw(`explain (analyze, buffers, timing off, format json) ${inlined}`),
-        )
-        const root = (rows[0]?.["QUERY PLAN"] as { Plan: PlanNode }[] | undefined)?.[0]?.Plan
-        if (root === undefined) throw new Error("bench-usage: no plan for lifetime coverage")
-        pendingBuffers = pendingScanBuffers(root)
-      }
+      // The bulk UPDATE and the backfill INSERT above leave these tables without fresh
+      // statistics; refresh them so the plan is the one production runs.
+      await tx.execute(sql`analyze usage_records, usage_contributions`)
+      const coverage = measures.find((m) => m.sql.includes("as pending"))
+      if (coverage === undefined) throw new Error("bench-usage: lifetime coverage not captured")
+      // Inline the bound values: this leg's own connection is the only one that sees W.
+      const literal = (v: unknown) =>
+        v === null || v === undefined ? "NULL" : `'${String(v).replaceAll("'", "''")}'`
+      const inlined = coverage.sql.replace(/\$(\d+)/g, (_, n) =>
+        literal(coverage.params[Number(n) - 1]),
+      )
+      const rows = await tx.execute(
+        sql.raw(`explain (analyze, buffers, timing off, format json) ${inlined}`),
+      )
+      const root = (rows[0]?.["QUERY PLAN"] as { Plan: PlanNode }[] | undefined)?.[0]?.Plan
+      if (root === undefined) throw new Error("bench-usage: no plan for lifetime coverage")
+      pendingBuffers = pendingScanBuffers(root)
       throw ROLLBACK
     })
   } catch (error) {
