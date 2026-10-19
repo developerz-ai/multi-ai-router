@@ -674,7 +674,7 @@ Be suspicious of any cell not listed here — if it is not documented, it is not
 | Feature | Direction | What happens |
 |---|---|---|
 | Anthropic `thinking` / `redacted_thinking` blocks | → `openai-chat` | dropped from the response; not re-sent on the next turn |
-| `cache_control` hints | → any non-Anthropic | the mark is dropped; prompt caching is per-account, which is why routing is sticky. Toward `openai-responses` its **position** is kept: a marked text block that is not its turn's last ends that `message` item, and the rest of the turn starts a new one, because Codex reads a cached prefix back only to an item boundary (prod 2026-10-19: 148 developerz.ai review calls sharing a marked ~80k-token head read 16.4% of input from cache, 105 of 109 hits ending exactly at `instructions`). Toward `openai-chat` nothing is split: Chat has no items and its upstreams cache by token prefix |
+| `cache_control` hints | → any non-Anthropic | dropped; the upstream simply does not cache. Prompt caching is per-account, which is why routing is sticky |
 | OpenAI `logprobs` / `top_logprobs` | → `anthropic` | no counterpart; rejected with `400` rather than silently ignored |
 | OpenAI `n > 1` | → `anthropic` | no counterpart; rejected with `400` |
 | `seed`, `frequency_penalty`, `presence_penalty`, `logit_bias` | → `anthropic` | dropped (documented, not rejected — they are hints, not contracts) |
