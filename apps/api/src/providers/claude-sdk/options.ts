@@ -1,3 +1,4 @@
+import { dirname } from "node:path"
 import type {
   EffortLevel,
   Options,
@@ -5,6 +6,7 @@ import type {
   ThinkingConfig,
 } from "@anthropic-ai/claude-agent-sdk"
 import { isPermittedTool, PERMITTED_TOOLS, toolDenial } from "./allowlist"
+import { workspaceDir } from "./config-dir"
 import { QUERY_ENV_OVERRIDES, subprocessEnv } from "./env"
 import { scrubSystemPrompt } from "./scrub"
 import type { SessionPlan } from "./session"
@@ -25,7 +27,7 @@ import type { Passthrough } from "./tools"
  * | `tools: []` | Not `disallowedTools`: a blocklist blocks *invocation* while leaving the ~25 k-token built-in catalog in every upstream payload. Only an empty base set elides it. It is also the second lock behind `allowlist.ts`, never the first |
  * | `allowedTools` + `canUseTool` | The allowlist, applied twice: as the auto-approval set, and as a deny-by-default gate on every call. `permissionMode: "dontAsk"` is the third, independent lock — a call that reaches neither is denied rather than parked on a prompt nobody is there to answer. Never `bypassPermissions`, which auto-approves *before* the callback and would make the gate decorative |
  * | `maxTurns` | The SDK is an autonomous agent with a 200-turn internal budget; we are a single-turn endpoint. After a denied tool call it still runs a fully billed "digest" turn, so the budget is what bounds the loop (§7) |
- * | `cwd` | Server-controlled. The client's own working directory does not exist on this host, and passing it fails the spawn with an error that reads like anything but the cause (§8) |
+ * | `cwd` | Server-controlled, and **neutral**: the shared `workspace/` beside the Account directories, never an Account's config directory. The client's own working directory does not exist on this host, and passing it fails the spawn with an error that reads like anything but the cause (§8); the config directory is worse than useless — the CLI stamps the cwd into the model's environment context, so it would advertise a router-side credential path and the Account's internal id to the client's model (#296, docs/idea/07-security.md#subprocess-isolation) |
  * | `mcpServers` + `hooks` | Present only when the client sent tools. The server declares them so the model emits well-formed calls; the hook denies every one and hands it to the client (`tools/`). Neither grants execution — the allowlist above is still the only thing that can (§7) |
  * | `systemPrompt` | The **client's**, or nothing. Omitted, the SDK runs with no system prompt at all, which is what a client that sent none asked for; the Claude Code preset is a per-Account setting, never a substituted default (§8). The one edit it receives is `scrub.ts`, and it is not editorial: a competing harness's identity lines make Anthropic meter the turn as a third-party app and refuse it on every account in the pool |
  * | `resume` / `forkSession` / `resumeSessionAt` | The lineage plan, applied verbatim. `fresh` is the absence of all three, not a value of one (§4) |
@@ -49,7 +51,11 @@ import type { Passthrough } from "./tools"
 export const MAX_TURNS = 4
 
 export interface QueryLaunchInput {
-  /** The isolated `CLAUDE_CONFIG_DIR`. Also the subprocess's working directory. */
+  /**
+   * The isolated `CLAUDE_CONFIG_DIR` — the isolation mechanism, and only that. The subprocess's
+   * working directory is the neutral `workspace/` beside it ({@link workspaceDir}), never this
+   * directory: the CLI advertises the cwd to the model (#296).
+   */
   readonly configDir: string
   /** The model after the Account's alias map. Passed through, never substituted. */
   readonly model: string
@@ -197,8 +203,10 @@ export function isolatedOptions(input: {
     allowedTools: [...PERMITTED_TOOLS],
     permissionMode: "dontAsk",
     canUseTool: permitOnlyAllowlisted,
-    // Transport.
-    cwd: input.configDir,
+    // Transport. The neutral workspace, never the config directory: the CLI advertises the cwd to
+    // the model, whose tools run on the client (#296). `configDir` is minted as `<root>/<account
+    // id>` (`config-dir.ts` `pathFor`, re-checked by every spawn fence), so its parent is the root.
+    cwd: workspaceDir(dirname(input.configDir)),
     // `QUERY_ENV_OVERRIDES` after the inherited environment, so no inherited value can win — the
     // claude.ai-connector door and the scratchpad block are isolation decisions (`env.ts`).
     env: {

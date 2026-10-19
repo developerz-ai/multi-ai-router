@@ -242,9 +242,12 @@ describe("the Agent-SDK test probe", () => {
     expect(launched.permissionMode).toBe("dontAsk")
     // The model the operator asked about, never a substitute.
     expect(launched.model).toBe("claude-sonnet-4-5")
-    expect(launched.cwd).toBe("/data/claude/acc-1")
+    // The shared neutral workspace, never the Account's directory — the CLI advertises the cwd
+    // to the model (#296). The Account's directory rides in CLAUDE_CONFIG_DIR (asserted below).
+    expect(launched.cwd).toBe("/data/claude/workspace")
     // The forced query overrides ride the probe too — same doors, same request class (`env.ts`).
     const env = launched.env as Record<string, string>
+    expect(env.CLAUDE_CONFIG_DIR).toBe("/data/claude/acc-1")
     expect(env.ENABLE_CLAUDEAI_MCP_SERVERS).toBe("false")
     expect(env.CLAUDE_CODE_SESSION_KIND).toBe("bg")
   })

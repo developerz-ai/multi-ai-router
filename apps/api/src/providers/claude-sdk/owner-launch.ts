@@ -1,8 +1,10 @@
 import { type ChildProcess, spawn } from "node:child_process"
 import { randomUUID } from "node:crypto"
+import { mkdirSync } from "node:fs"
 import { join } from "node:path"
 import type { Readable, Writable } from "node:stream"
 import type { SpawnedProcess, SpawnOptions } from "@anthropic-ai/claude-agent-sdk"
+import { WORKSPACE_DIR } from "./config-dir"
 
 export interface OwnerLaunchConfig {
   readonly helperPath: string
@@ -138,10 +140,23 @@ export function createOwnerLaunch(
     },
     spawn(input) {
       const directory = join(config.root, accountId)
-      if (input.cwd !== directory || input.env.CLAUDE_CONFIG_DIR !== directory)
+      const workspace = join(config.root, WORKSPACE_DIR)
+      // Inference subprocesses run in the shared neutral workspace (`options.ts`, #296); login and
+      // metadata holders run in the Account's own directory. Either router-managed directory is
+      // admissible; the credential authority is the env — `CLAUDE_CONFIG_DIR` must be this
+      // Account's directory, which the helper re-verifies from its own anchored root fd.
+      if (
+        (input.cwd !== directory && input.cwd !== workspace) ||
+        input.env.CLAUDE_CONFIG_DIR !== directory
+      )
         throw new Error("credential directory authority mismatch")
       if (cancelled) throw new Error("credential owner cancelled")
       if (child) throw new Error("credential owner launch scope was reused")
+      // The guardian hands this cwd to the CLI (config-owner.c no longer chdirs), and node refuses
+      // to spawn into a missing directory — an idempotent self-heal for a volume provisioned
+      // before the workspace existed. Provisioning creates it anchored; a file or symlink in its
+      // place fails the spawn loudly instead of running somewhere unexamined.
+      if (input.cwd === workspace) mkdirSync(workspace, { recursive: true, mode: 0o700 })
       child = spawn(
         config.helperPath,
         [

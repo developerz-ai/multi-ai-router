@@ -34,6 +34,25 @@ export const CONFIG_DIR_MODE = 0o700
 /** The `claude` CLI's own config directory, relative to a home directory. */
 const CLI_DEFAULT_DIR = ".claude"
 
+/**
+ * The neutral working directory every SDK inference subprocess runs in: `<root>/workspace`.
+ *
+ * The CLI stamps the subprocess cwd into the environment context of every turn ("Working
+ * directory: …"), and the model's tools execute on the *client* — so running the subprocess in
+ * the Account's config directory told any key holder's model a router-side credential path and
+ * the Account's internal id, and misled it about where its tools run (issue #296,
+ * docs/idea/07-security.md#subprocess-isolation). One shared directory that holds nothing says
+ * nothing: not whose turn it is, not where the credentials live, not what the client's own
+ * working directory is. Isolation stays exactly where it always was — the per-Account
+ * `CLAUDE_CONFIG_DIR` environment variable (`env.ts`), never the cwd.
+ */
+export const WORKSPACE_DIR = "workspace"
+
+/** The absolute neutral inference working directory under a config root. */
+export function workspaceDir(root: string): string {
+  return join(root, WORKSPACE_DIR)
+}
+
 /** Directories are named `<root>/<uuid>`; anything else is not an account id and not ours. */
 const ACCOUNT_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 

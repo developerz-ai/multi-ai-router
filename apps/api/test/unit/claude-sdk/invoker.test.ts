@@ -27,6 +27,8 @@ import { sdkQueryStream, sdkTurn, wireEvent } from "./fixtures"
  */
 
 const CONFIG_DIR = "/data/claude/3f1c0a6e-2b7d-4a51-9c88-0d21e5b7a410"
+/** The neutral workspace every launch runs in — never the config directory (#296). */
+const WORKSPACE = "/data/claude/workspace"
 const CLI: CliResolution = {
   ok: true,
   source: "platform_package",
@@ -139,15 +141,44 @@ describe("one turn, end to end, with the subprocess stubbed", () => {
       },
     ])
   })
+
+  test("a base64 PDF reaches the SDK boundary as a document block, never as a bare mention", async () => {
+    const spy = spyQuery()
+    const pdf = {
+      type: "document",
+      source: { type: "base64", media_type: "application/pdf", data: "JVBERi0xLjQK" },
+    }
+    await (
+      await invoker(spy).invoke(
+        invocation({
+          body: body({
+            messages: [
+              {
+                role: "user",
+                content: [{ type: "text", text: "PDF file read: note.pdf (614 bytes)" }, pdf],
+              },
+            ],
+          }),
+        }),
+      )
+    ).text()
+
+    // Issue #298: the model got only the "file read" line and could not quote the PDF. The
+    // document itself must cross the query() boundary as real content.
+    const sent = spy.prompts[0] as { message: { content: unknown[] } }
+    expect(sent.message.content).toContainEqual(pdf)
+  })
 })
 
 describe("the launch every turn is given", () => {
-  test("carries this account's directory, the client's model, and the resolved binary", async () => {
+  test("carries the neutral workspace, this account's config dir, the client's model, and the resolved binary", async () => {
     const spy = spyQuery()
     await (await invoker(spy).invoke(invocation())).text()
     const options = spy.options[0]
 
-    expect(options?.cwd).toBe(CONFIG_DIR)
+    // The cwd is the shared neutral workspace: the CLI advertises it to the model, so it must
+    // name neither this Account nor its credential directory (#296).
+    expect(options?.cwd).toBe(WORKSPACE)
     expect(options?.model).toBe("claude-opus-5")
     expect(options?.pathToClaudeCodeExecutable).toBe("/opt/claude/claude")
     expect((options?.env ?? {}) as Record<string, string>).toMatchObject({
@@ -494,7 +525,8 @@ describe("the subprocess slot", () => {
 
   test("two accounts invoked concurrently never share a directory or a slot", async () => {
     const concurrency = createSdkConcurrency({ global: 4, perAccount: 2 })
-    const launchedCwd: Record<string, string> = {}
+    const launchedConfigDir: Record<string, string> = {}
+    const launchedCwds: string[] = []
     let releaseA: (() => void) | undefined
     let releaseB: (() => void) | undefined
 
@@ -502,9 +534,12 @@ describe("the subprocess slot", () => {
       concurrency,
       resolveCli: () => CLI,
       runQuery: ({ options }) => {
-        const cwd = options.cwd as string
-        const accountId = cwd.endsWith("/acct-a") ? "acct-a" : "acct-b"
-        launchedCwd[accountId] = cwd
+        // The Account is identified by CLAUDE_CONFIG_DIR, not by cwd: the cwd is now one shared
+        // neutral workspace and carries no account identity at all (#296).
+        const configDir = (options.env as Record<string, string>).CLAUDE_CONFIG_DIR
+        const accountId = configDir.endsWith("/acct-a") ? "acct-a" : "acct-b"
+        launchedConfigDir[accountId] = configDir
+        launchedCwds.push(options.cwd as string)
         return {
           async *[Symbol.asyncIterator]() {
             // Stalls until the test releases it, so both calls are provably in flight together —
@@ -528,13 +563,16 @@ describe("the subprocess slot", () => {
       await Promise.resolve()
     }
 
-    // Overlap is real: both accounts hold their own slot and were launched in their own directory
-    // at the same time, not one after the other.
+    // Overlap is real: both accounts hold their own slot and were launched against their own
+    // config directory at the same time, not one after the other.
     expect(concurrency.inFlightFor("acct-a")).toBe(1)
     expect(concurrency.inFlightFor("acct-b")).toBe(1)
     expect(concurrency.inFlight).toBe(2)
-    expect(launchedCwd["acct-a"]).toBe("/data/accounts/acct-a")
-    expect(launchedCwd["acct-b"]).toBe("/data/accounts/acct-b")
+    expect(launchedConfigDir["acct-a"]).toBe("/data/accounts/acct-a")
+    expect(launchedConfigDir["acct-b"]).toBe("/data/accounts/acct-b")
+    // Isolation lives in CLAUDE_CONFIG_DIR, never in the cwd: both launched in the same neutral
+    // workspace, naming neither Account (#296).
+    expect(new Set(launchedCwds)).toEqual(new Set(["/data/accounts/workspace"]))
 
     releaseA?.()
     releaseB?.()

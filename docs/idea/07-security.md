@@ -64,6 +64,17 @@ attachments such as MCP resource mentions, nested `CLAUDE.md` files, and skill l
 requires Claude Code 2.1.248 or newer, including custom CLI overrides; the pinned SDK ships 2.1.301.
 It does not disable attachments between tool calls, so the independent tool-denial and
 environment-isolation gates remain required.
+The subprocess `cwd` is one **neutral workspace** — `<CLAUDE_CONFIG_ROOT>/workspace`, shared by
+every inference launch — and never an Account's `CLAUDE_CONFIG_DIR`. The CLI stamps its working
+directory into the environment context it advertises to the model, so running in the config
+directory disclosed a router path and the Account's internal id to the client's model, and
+misdescribed where the client's tools run. Isolation lives in the `CLAUDE_CONFIG_DIR` *environment
+variable*, which stays per-Account and which every spawn fence enforces (`owner-launch.ts`; the
+guardian child no longer `fchdir`s into it either — `native/config-owner.c`). Login spawns still run
+in the Account's own directory: no model sees their output. A regression test asserts the
+advertised context contains neither the Account id nor the config-dir path
+(`test/unit/claude-sdk/advertised-workdir.test.ts`, issue #296).
+
 Dispatch, idle queries, and account test probes share these options and assert them in regression
 tests.
 

@@ -315,7 +315,7 @@ describe("the probe's query() launch — one of three call sites", () => {
     }
   })
 
-  test("runs in the account's own directory with ANTHROPIC_* and router secrets stripped", async () => {
+  test("runs in the neutral workspace, under the account's config dir, with ANTHROPIC_* and router secrets stripped", async () => {
     const options = await probedOptions({
       ANTHROPIC_API_KEY: "sk-ant-leaked",
       ANTHROPIC_BASE_URL: "https://router.internal",
@@ -325,7 +325,10 @@ describe("the probe's query() launch — one of three call sites", () => {
     })
     const env = options.env as Record<string, string>
 
-    expect(options.cwd).toBe("/data/accounts/sub-1")
+    // The CLI advertises its cwd to the model, so the cwd is the shared neutral workspace and
+    // names no Account; the Account's own directory rides only in CLAUDE_CONFIG_DIR (#296).
+    expect(options.cwd).toBe("/data/accounts/workspace")
+    expect(options.cwd as string).not.toContain("sub-1")
     expect(env.CLAUDE_CONFIG_DIR).toBe("/data/accounts/sub-1")
     expect(Object.keys(env).some((key) => key.toUpperCase().startsWith("ANTHROPIC_"))).toBe(false)
     expect(env.CLAUDE_CODE_OAUTH_TOKEN).toBeUndefined()
@@ -355,9 +358,13 @@ describe("two Accounts never share a CLAUDE_CONFIG_DIR", () => {
     const launchOne = launchFor(dirOne)
     const launchTwo = launchFor(dirTwo)
 
-    expect(launchOne.options.cwd).toBe(dirOne)
-    expect(launchTwo.options.cwd).toBe(dirTwo)
-    expect(launchOne.options.cwd).not.toBe(launchTwo.options.cwd)
+    // The cwd is no longer what separates two Accounts: it is one shared neutral workspace that
+    // names neither of them — the CLI advertises it to the model (#296). CLAUDE_CONFIG_DIR, below,
+    // is the separation, and it stays per-Account.
+    expect(launchOne.options.cwd).toBe(launchTwo.options.cwd)
+    expect(launchOne.options.cwd).toBe("/data/claude/workspace")
+    expect(launchOne.options.cwd as string).not.toContain(ONE)
+    expect(launchTwo.options.cwd as string).not.toContain(TWO)
 
     const envOne = launchOne.options.env as Record<string, string>
     const envTwo = launchTwo.options.env as Record<string, string>
@@ -506,7 +513,7 @@ describe("the launch the production invoker actually builds", () => {
     }
   })
 
-  test("runs in this account's own directory, with the router's ANTHROPIC_* stripped for real", async () => {
+  test("runs in the neutral workspace, under this account's config dir, with the router's ANTHROPIC_* stripped for real", async () => {
     const options = await launchedOptions({
       ANTHROPIC_API_KEY: "sk-ant-leaked",
       ANTHROPIC_BASE_URL: "https://router.internal",
@@ -516,7 +523,10 @@ describe("the launch the production invoker actually builds", () => {
     })
     const env = options.env as Record<string, string>
 
-    expect(options.cwd).toBe("/data/accounts/sub-1")
+    // The CLI advertises its cwd to the model, so the cwd is the shared neutral workspace and
+    // names no Account; the Account's own directory rides only in CLAUDE_CONFIG_DIR (#296).
+    expect(options.cwd).toBe("/data/accounts/workspace")
+    expect(options.cwd as string).not.toContain("sub-1")
     expect(env.CLAUDE_CONFIG_DIR).toBe("/data/accounts/sub-1")
     expect(Object.keys(env).some((key) => key.toUpperCase().startsWith("ANTHROPIC_"))).toBe(false)
     expect(env.CLAUDE_CODE_OAUTH_TOKEN).toBeUndefined()

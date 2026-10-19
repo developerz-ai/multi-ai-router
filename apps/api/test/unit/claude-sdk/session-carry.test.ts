@@ -189,6 +189,34 @@ describe("carrying a transcript to another account", () => {
     expect(await carrier.carry(input)).toEqual({ carried: false, reason: "not-found" })
   })
 
+  test("a transcript under the neutral workspace slug carries verbatim, to the same slug", async () => {
+    // #296: every inference subprocess runs in `<root>/workspace`, so new transcripts live under
+    // one shared workspace slug instead of a slug naming the Account. That slug — and the cwd it
+    // stamps into every line — is identical on both Accounts, so the carry is a byte-identical
+    // copy: no account id exists to rewrite, and none must leak into the target.
+    const workspaceSlug = "-data-claude-workspace"
+    const disk = seeded({
+      [`${ROOT}/${FROM}/projects/${workspaceSlug}`]: { kind: "dir" },
+      [`${ROOT}/${FROM}/projects/${workspaceSlug}/${SESSION}.jsonl`]: {
+        kind: "file",
+        text: [
+          JSON.stringify({ type: "user", cwd: `${ROOT}/workspace`, sessionId: SESSION }),
+          JSON.stringify({ type: "assistant", message: { content: "hi" }, sessionId: SESSION }),
+        ].join("\n"),
+      },
+    })
+    disk.nodes.delete(`${fromProject}/${SESSION}.jsonl`)
+    const carrier = createSessionCarrier({ root: ROOT, maxBytes: 1_000_000, fs: disk.fs })
+
+    expect(await carrier.carry(input)).toMatchObject({ carried: true })
+    const written = disk.nodes.get(`${ROOT}/${TO}/projects/${workspaceSlug}/${SESSION}.jsonl`)
+    expect(written?.kind).toBe("file")
+    const text = written?.kind === "file" ? written.text : ""
+    expect(text).toContain(`"cwd":"${ROOT}/workspace"`)
+    expect(text).not.toContain(FROM)
+    expect(text).not.toContain(TO)
+  })
+
   test("a transcript over the size cap is left where it is", async () => {
     const disk = seeded()
     const carrier = createSessionCarrier({ root: ROOT, maxBytes: 10, fs: disk.fs })

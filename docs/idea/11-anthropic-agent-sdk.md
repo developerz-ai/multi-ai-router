@@ -16,8 +16,10 @@ transports.
 
 The **launch** half: `providers/claude-sdk/options.ts` builds the `Options` for one
 `query()` — `settingSources: []`, `strictMcpConfig: true`, `skills: []`, `tools: []`, a bounded
-`maxTurns`, `includePartialMessages: true`, a server-controlled `cwd`, and one `AbortController` per
-request bridged to the attempt deadline (with a `detach()` so a finished query stops retaining the
+`maxTurns`, `includePartialMessages: true`, a server-controlled `cwd` — the shared neutral
+`workspace/` under `CLAUDE_CONFIG_ROOT`, never the Account's config directory, because the CLI
+advertises its cwd to the model (#296, [07-security.md](07-security.md)) — and one `AbortController`
+per request bridged to the attempt deadline (with a `detach()` so a finished query stops retaining the
 signal). `allowlist.ts` is the reviewed constant naming the tools permitted to execute on this host
 — empty, because passthrough is the only supported mode — applied both as `allowedTools` and as a
 deny-by-default `canUseTool` gate under `permissionMode: "dontAsk"`. `env.ts` strips the
@@ -140,7 +142,7 @@ walkthrough:
 | Decision | Why |
 |---|---|
 | The body is decoded **once**, into the four things a launch needs — prompt, tools, system prompt, response shape (`request.ts`) | This path is the labeled exception to "never parse a passthrough body" (CLAUDE.md non-negotiable 8), and an exception that costs four parses of the same megabyte is a different exception than the one that was granted |
-| The prompt is one **user** message, sent as streaming input rather than a string | A string prompt cannot carry an image, and degrading a client's images to a text note is a fidelity loss nothing forces on us. The SDK closes the subprocess's stdin once the iterable is exhausted, which is what makes a single-turn endpoint out of a bidirectional protocol |
+| The prompt is one **user** message, sent as streaming input rather than a string | A string prompt cannot carry an image or a document, and degrading either to a text note is a fidelity loss nothing forces on us — the SDK's `SDKUserMessage.message` is a Messages API `MessageParam`, so `image` and `document` blocks cross as real content. The SDK closes the subprocess's stdin once the iterable is exhausted, which is what makes a single-turn endpoint out of a bidirectional protocol |
 | A conversation the SDK has never held is replayed **framed**, and a single user turn is not (`prompt.ts`) | The framing is the anti-imitation guard §4 and §10 both name; applying it to a turn that needs no replay would put a transcript preamble in front of every first message |
 | The executable ladder is walked **once** per process, and only a *successful* resolution is cached | A binary does not move under a live container, so re-walking it per request is a filesystem walk on every subscription turn. A failed resolution is not cached, so an operator who fixes a mount recovers without a restart |
 | The concurrency slot, the abort bridge, and the session report are all tied to the end of the **message stream**, not to `query()` returning | `query()` returns immediately; the answer arrives over the following seconds. Releasing on return would make the semaphore count calls rather than subprocesses, leak an abort listener per request, and write a session binding before the SDK had named one |
@@ -190,7 +192,7 @@ neither write body has a field for one; `CLAUDE_CONFIG_ROOT` is the only knob, a
 | **`settingSources` must be explicitly `[]`** | Omitting it makes the CLI load user + project + local settings and slurp the **router host's** `CLAUDE.md` into the system prompt (`query.ts:296-302`) — a **cross-tenant context leak** for us |
 | **Env leakage** | Strip `ANTHROPIC_API_KEY` / `ANTHROPIC_BASE_URL` / `ANTHROPIC_AUTH_TOKEN` before spawning, or the subprocess can loop back through our own router |
 | **claude.ai org connectors are a separate door from `strictMcpConfig`** | The CLI fetches the subscription's claude.ai-hosted MCP connectors over HTTP whenever the OAuth token carries `user:mcp_servers` — its eligibility check (CLI 0.3.220) reads env, safe mode, auth precedence, and scopes, **not** `strictMcpConfig`, which only governs filesystem config. Every `query()` launch forces `ENABLE_CLAUDEAI_MCP_SERVERS=false` (`env.ts` `QUERY_ENV_OVERRIDES`), or one Account's connector catalog is injected into another key holder's request |
-| **The CLI's scratchpad block advertises a router-host path** | The injected "# Scratchpad Directory" context block names the subprocess cwd — the Account's `CLAUDE_CONFIG_DIR`, a **router** path — to a model whose tools execute on the *client*. `CLAUDE_CODE_SESSION_KIND=bg` (forced with the override above) suppresses it; the CLI's other `bg` effects are TUI rendering or `CLAUDE_JOB_DIR`-gated (Meridian #627/#628, audited against the bundled CLI). Known cost: a `bg` session registers as a running background agent, so a concurrent resume is refused — recovered by the busy-session fork retry (§9) |
+| **The CLI's scratchpad block advertises a router-host path** | The injected "# Scratchpad Directory" context block names the subprocess cwd — a **router** path (since #296 the shared neutral `workspace/`, before it the Account's `CLAUDE_CONFIG_DIR`, which also leaked the Account id) — to a model whose tools execute on the *client*. `CLAUDE_CODE_SESSION_KIND=bg` (forced with the override above) suppresses it; the CLI's other `bg` effects are TUI rendering or `CLAUDE_JOB_DIR`-gated (Meridian #627/#628, audited against the bundled CLI). Known cost: a `bg` session registers as a running background agent, so a concurrent resume is refused — recovered by the busy-session fork retry (§9) |
 | **Root** | The SDK refuses permission-skipping as root unless `IS_SANDBOX=1` (`query.ts:335`). Prefer a real UID |
 
 ### Credential lifecycle per Account
@@ -423,9 +425,15 @@ Account id (stable; a label is not):
   `authMaterial` in [07-security.md](07-security.md), though the CLI owns their format. They are
   the one piece of Account state that does *not* live in Postgres, which makes the volume a backup
   and restore concern in its own right.
+- The root also holds one shared **`workspace/`** directory — the cwd every inference subprocess
+  runs in (#296, [07-security.md](07-security.md)), because the CLI advertises its cwd to the
+  model. It is not per-Account state, holds no secrets, is created at provisioning and self-healed
+  at spawn, and is excluded from the reaper's foreign-entry sweep.
 - They grow (transcripts). The `claude` CLI writes `projects/<cwd-slug>/<session>.jsonl` (and a
   `<session>/` directory of tool results and subagent transcripts) per SDK session and never removes
-  them — production measured a quarter of a gigabyte per Account. The `sdk_transcript_sweep` task
+  them — production measured a quarter of a gigabyte per Account. The slug encodes the subprocess
+  cwd: one shared workspace slug per Account since #296, legacy account-id slugs before it (both
+  are carried; the legacy shape ages out with the sweep). The `sdk_transcript_sweep` task
   (`scheduler/tasks/sdk-transcript-sweep.ts`, `providers/claude-sdk/transcripts.ts`) removes those
   two artifact shapes, and only those, once older than `RETENTION_SDK_TRANSCRIPT_HOURS` (default
   24 h, the same window as the `sessions` row that could resume them). It never looks at anything
@@ -664,7 +672,7 @@ is the router's `/login`.
 | Step | What happens |
 |---|---|
 | Plan | `store.resolve` for Account B finds the key's binding on Account A. It classifies lineage exactly as it would on A and returns the resume/fork plan with `carryFrom: A` |
-| Carry | `SessionTurn.prepare()`, before the slot and the subprocess: under A's owner hold, find `projects/<slug containing A>/<session>.jsonl` (≤ `CLAUDE_SDK_SESSION_CARRY_MAX_BYTES`); under B's, write it to `projects/<same slug, A→B>/` with A's config-dir path rewritten to B's (the CLI stamps its cwd into every line), via a sibling temp file and `rename` |
+| Carry | `SessionTurn.prepare()`, before the slot and the subprocess: under A's owner hold, find `projects/<slug>/<session>.jsonl` (≤ `CLAUDE_SDK_SESSION_CARRY_MAX_BYTES`) where the slug is the shared workspace one (#296) or — until the sweep retires them — a legacy slug containing A; under B's, write it to `projects/<same slug, A→B>/` with A's config-dir path rewritten to B's (the CLI stamps its cwd into every line — a workspace-slug transcript stamps the identical shared path on both Accounts, so both rewrites are no-ops), via a sibling temp file and `rename` |
 | Launch | The unchanged plan: `resume` (or `forkSession` + `resumeSessionAt`) on B, sending only the delta — the same warm-transcript turn A would have run. The session id stays the same; the carried uuids still name the same messages, so a later undo still forks |
 | Record | `remember` on B re-points the row to B. Failure on B records nothing; the row still names A and the next turn carries again |
 | Failed turn | A turn that fails before any byte reaches the client is not part of the lineage. The CLI names its session at `init` before it learns the window is spent, and the invoker reports it on its failure path, so the attempt releases its turn `failed` (`SessionTurn.release("failed")`, `sdk-attempt.ts`) and the report is **withdrawn**: the binding is restored to what the turn found, or cleared if it found none. Recording it moved the binding onto the refusing Account and marked the unanswered message as seen, so the client's retry classified as a `replay` and started fresh instead of carrying (prod, 2026-10-06 23:15–23:17) |
@@ -883,13 +891,23 @@ re-synthesis, not a passthrough.**
   delta kind this build has never seen; the non-streaming fold used to drop it, so the two response
   shapes diverged for every future block type. The fold now carries the delta's own fields onto the
   block verbatim, newest value winning (`render/message.ts`).
-- **A `tool_result`'s nested images are hoisted to sibling image blocks** when a conversation is
-  rendered into the prompt (`prompt.ts`): the SDK's user message has no `tool_result` block to
-  carry them in place, and folding them into the bracketed transcript line erased them — a
-  screenshot/PDF/chart tool's output, every turn. The transcript line names how many images follow;
-  the `image/jpg` misspelling is normalized to `image/jpeg`, and an image that still fails the
-  source schema is omitted **by name** (`[image omitted: unsupported source type …]`), never as a
-  bare `[image block]`.
+- **A `tool_result`'s nested images and documents are hoisted to sibling blocks** when a
+  conversation is rendered into the prompt (`prompt.ts`): the SDK's user message has no
+  `tool_result` block to carry them in place, and folding them into the bracketed transcript line
+  erased them — a screenshot/PDF/chart tool's output, every turn. The transcript line names how
+  many of each follow; the `image/jpg` misspelling is normalized to `image/jpeg`, and an image
+  that still fails the source schema is omitted **by name** (`[image omitted: unsupported source
+  type …]`), never as a bare `[image block]`.
+- **A `document` block is delivered to the model, or the model is told it was not** (issue #298).
+  A base64 `application/pdf`, a `text/plain`, or a `url` source crosses the `query()` boundary as a
+  real `document` block — the SDK's input message is a Messages API `MessageParam`, which carries
+  documents exactly like images. Before this, every document was flattened to a transcript line,
+  so Claude Code's Read-tool output reached the model as a bare "PDF file read: note.pdf (614
+  bytes)" mention with no content, and the model could not quote the file it was told about. A
+  source this transport cannot forward — a `file` id, which names a file uploaded to the
+  *client's* API account that the subscription's CLI cannot see, or a nested-`content` source — is
+  omitted **by name** (`[document omitted: unsupported source type …]`), so the model can ask the
+  client to extract the text instead of guessing from a mention.
 - **Message ids are CSPRNG-backed** (`crypto.randomUUID`), never clock-derived — see the fidelity
   table below.
 - **One renderer, both response shapes.** `includePartialMessages: true` is unconditional, so
@@ -1161,7 +1179,7 @@ ships Bun as the runtime, so `bun` is the decision; the point is that it is writ
 | Concern | Design |
 |---|---|
 | Concurrency | A semaphore over `query()`, sized to memory not CPU. Ours is **global and per-Account** (`CLAUDE_SDK_MAX_CONCURRENCY`, `…_PER_ACCOUNT`) — `concurrency.ts`. The per-Account gate is taken **first**: reversed, a bursting Account would hold global capacity while it waited and starve the Pool, which is the failure the per-Account limit exists to prevent. Excess callers queue FIFO; a caller aborted while queued throws the signal's own reason, so a deadline stays a `TimeoutError` and a disconnect stays an `AbortError`. **One instance per replica, shared by every path that spawns** — the dispatcher's invoker and the console's "Test now" probe (`test-probe.ts`) both take slots from it, because the ceiling bounds this container's memory and a bound only one caller honours is not a bound. "Test now" has its own cooldown but that cooldown is per Account, so it would not stop ten Accounts being tested at once. Occupancy and queue depth are exported — `router_sdk_subprocesses`, `router_sdk_subprocess_queue_depth` ([08-observability.md](08-observability.md#metrics)) |
-| Cancellation | One `AbortController` per request, wired to the HTTP signal and the SDK; aborting terminates the subprocess. No separate `interrupt()`/`kill()` in Meridian. Ours is bridged in `options.ts`: the data plane's composed signal (deadline ∪ client) drives a controller the SDK owns |
+| Cancellation | One `AbortController` per request, wired to the HTTP signal and the SDK; aborting terminates the subprocess. No separate `interrupt()`/`kill()` in Meridian. Ours is bridged in `options.ts`: the data plane's composed signal (deadline ∪ client) drives a controller the SDK owns. The SDK answers that abort with **its own echo, not the signal's reason** — a plain `Error("Operation aborted")` from its transport's `write()`, stamped `errorClass: "aborted"` — which is neither an `AbortError` nor identifiable by reason, so `dataplane/sdk-cancellation.ts` recognizes the echo (`providers/claude-sdk/errors.ts`: `isSdkAbortEcho`) **only while the composed signal is actually aborted**, and attributes it to the first cause like any wrapped abort: a client disconnect records the `499` `client_cancelled` row the HTTP relay writes for a hang-up (`chain-cancellation.ts`) and never touches account health; a deadline records a timeout. Before that rule, a Claude Code client cancelling in flight — which it routinely does around `/context` and other background requests — read as `claude-sdk:unclassified`: a `502`, `outcome: upstream_error`, and a breaker strike against an account that had done nothing wrong (production, 2.25.8, #297). The same wording on a **live** signal is the SDK aborting on its own and stays an upstream error |
 | Client disconnect | Detect closed-stream writes, stop the loop, abort, detach. Never orphan a subprocess — and never retain the signal either, which is why `QueryLaunch` exposes `detach()` alongside `abort()` |
 | Orphan reaping | A subprocess per request makes PID 1's other job load-bearing: anything the `claude` process spawns is re-parented to PID 1 when it outlives its parent, and a PID 1 that never calls `wait()` leaves a zombie entry behind each one. `bun` is not an init, so the image's `ENTRYPOINT` runs it under `tini -s`, which reaps and still forwards `SIGTERM` to the router's own drain ([09-deployment.md](09-deployment.md#pid-1-and-the-claude-subprocess)) |
 | Timeouts | Client keep-alive ≈ 15 s; **upstream** idle guard ≈ 90 s → 504. Independent, both needed |

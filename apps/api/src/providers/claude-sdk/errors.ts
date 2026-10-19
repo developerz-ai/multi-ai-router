@@ -156,6 +156,27 @@ export function classifySdkFailure(error: unknown): SdkFailure {
   }
 }
 
+/**
+ * The SDK's own echo of an abort of its launch controller: a plain `Error("Operation aborted")` —
+ * not an `AbortError`, and not the aborted signal's reason — thrown by the stdio transport's
+ * `write()` once the controller is aborted (`core.mjs`'s `Kr()`; the DirectConnect transport throws
+ * the same sentence bare). The wrapper stamps `errorClass: "aborted"` beside the sentence; either
+ * fact identifies the echo, because `withStderr` re-wraps the throw and keeps the message but not
+ * the stamp.
+ *
+ * Provenance: the 0.3.301 bundle, and the production row this predicate exists for (#297) —
+ * `502`, `outcome: upstream_error`, `signal: claude-sdk:unclassified`, upstreamMessage "Operation
+ * aborted", recorded at the instant a Claude Code client cancelled in flight. Blast radius: a
+ * reworded echo stops matching and degrades to whatever the table below makes of it — exactly the
+ * pre-#297 behavior, never a silent mislabel of a real failure, because the one caller
+ * (`dataplane/sdk-cancellation.ts`) trusts it only while its own composed signal is aborted.
+ */
+export function isSdkAbortEcho(error: unknown): boolean {
+  if (typeof error !== "object" || error === null) return false
+  if (Reflect.get(error, "errorClass") === "aborted") return true
+  return error instanceof Error && error.message.trim().toLowerCase() === "operation aborted"
+}
+
 /** Everything a throw out of `query()` can be matched against, in one bounded shape. */
 export function readSdkFailure(error: unknown): SdkFailureText {
   if (typeof error === "string") {

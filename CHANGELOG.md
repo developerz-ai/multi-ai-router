@@ -13,7 +13,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `coverage(lifetime)` no longer walks every retained `usage_records` row. Its `pending` check is an anti-join against `usage_contributions`, whose predicate cannot stop early, so the lifetime window paid for the whole table on every summary (about 1.8 s at prod's 334k rows after #277 removed the other two scans; #275, part of #250). `usage_history_state` gains `banked_through_at` / `banked_through_id` (migration 0038, two nullable columns plus a CHECK that they are both NULL or both set): the `(created_at, id)` W through which every raw row at or above the retention horizon has a non-pending contribution. The backfill advances it, and only from a sweep that started at the top of the table, ended short of its limit and adopted no `legacy_overlap` row, which proves the whole table banked in one transaction; the check then scans only rows after W. NULL scans everything, as before, so an image rolled back across 0038 reads the same answers. In-contract `coverage` output is unchanged for lifetime and the named windows tested (with and without W), because every writer that takes the history lock admits a row's contribution in the same transaction, so a backdated row below W is never pending.
 - **Out of contract:** a write that bypasses the history lock can land an unbanked row at or below W, and `pending` for any window reaching at or below W under-reports it until the next full sweep. That covers hand SQL or a restore, and a rolling upgrade from 2.15.x or older, whose writers take no lock; the raw-vs-history count compares a whole window on both sides, so nothing flags such a row for a window reaching at or below W on an install older than `RETENTION_USAGE_DAYS` until a cursorless sweep adopts it (then `legacy` does; restored pre-2.16 rows adopt as `legacy_unbanked` or `legacy_baseline`). The single bound is roughly two rollup intervals plus jitter, because a resumed sweep only scans rows after its cursor. Remedy: `update usage_history_state set banked_through_at = null, banked_through_id = null`.
-
 - `bin/bench-usage` gains a lifetime leg and `--lifetime-buffers-budget` (default 50,000): it banks the fixture's raw rows through the real backfill, rolls back, and judges the `r` and `c` buffers of the lifetime `pending` check. Measured on the 200k fixture: 5 buffers with the watermark floor, 401,095 with the floor removed. Skipped under `--no-explain` and on an empty table.
 
 ### Upgrade notes
@@ -23,6 +22,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Documentation
 
 - `08-observability.md` replaces the "deferred to its own migration" note with the watermark, its invariant, and the exact out-of-contract writers.
+
+## [2.39.19] — 2026-10-19
+
+### Fixed
+
+- The Agent SDK subprocess for a Claude subscription no longer advertises the router-side working directory — and with it the Account's internal id — to the client's model. Every inference `query()` ran with `cwd` set to the Account's `CLAUDE_CONFIG_DIR` (`<CLAUDE_CONFIG_ROOT>/<account id>`), and the CLI stamps its cwd into the environment context it sends the model ("Working directory: …"), disclosing a router path and the Account id into whichever key holder's request landed on it, and misdescribing where the tools run — they execute on the *client* (issue #296). All inference launches (dispatch, idle/keepalive, the account test probe, the usage-gauge probe, model listing) now run in one shared neutral `<CLAUDE_CONFIG_ROOT>/workspace`, created at provisioning, baked into the image, and self-healed at spawn. Per-Account credential isolation is unchanged: it always lived in the `CLAUDE_CONFIG_DIR` environment variable, which the spawn fence still enforces (`env.CLAUDE_CONFIG_DIR` must be the Account's own directory; the fence's cwd rule now admits the neutral workspace beside it), and the guardian helper's child no longer `fchdir`s into the config directory. Login spawns still run in the Account's own directory — no model sees their output. A regression test asserts the advertised context contains neither the Account id nor the config-dir path, and that two Accounts launch into the identical workspace while keeping distinct config dirs. Upgrade note: the CLI names its transcript project directory after the cwd, so a session bound before this release resumes fresh once (its legacy transcript sits under the old account-id slug); failover still carries legacy transcripts until the retention sweep retires them, and new transcripts carry verbatim under the workspace slug — its path is identical on both Accounts, so the rewrite is a no-op.
+
+### Documentation
+
+- `07-security.md`: subprocess isolation — the neutral workspace cwd rule, the fence, and the regression gate.
+- `11-anthropic-agent-sdk.md`: launch options, the scratchpad trap, the config-root `workspace/` bullet, and the session-carry row updated for the shared slug.
+- `09-deployment.md`: `CLAUDE_CONFIG_ROOT` names the `workspace/` subdirectory.
+
+## [2.39.18] — 2026-10-19
+
+### Fixed
+
+- Claude-subscription turns now deliver PDF (`document`) content blocks to the model instead of flattening them to transcript text. The SDK's input message is a Messages API `MessageParam`, which carries a `document` block exactly like an `image` one, so a base64 `application/pdf`, a `text/plain`, or a `url` source crosses the `query()` boundary as real content — live, Claude Code's Read tool reached the model as only "PDF file read: note.pdf (614 bytes)" and the model could not quote the file it was told about (#212). A `tool_result`'s nested documents hoist to sibling blocks like its nested images do, and the transcript line names how many of each follow. A source this transport cannot forward — a Files-API `file` id, which names a file uploaded to the client's own API account that the subscription's CLI cannot see, or a nested-`content` source — is omitted **by name** (`[document omitted: unsupported source type …]`), never silently, so the model can ask the client to extract the text.
+
+### Documentation
+
+- `11-anthropic-agent-sdk.md`: the prompt-fidelity rules now state that `document` blocks cross as real content, with the named-omission floor.
+
+## [2.39.17] — 2026-10-19
+
+### Fixed
+
+- A client-cancelled Agent-SDK turn is recorded as a client cancel, not an upstream `502`. When Claude Code cancels an in-flight `/v1/messages` request itself — which it does around `/context` and other background requests — the SDK's transport answers the aborted launch with its own plain `Error("Operation aborted")` (stamped `errorClass: "aborted"`), which is neither an `AbortError` nor the signal's reason, so the cancellation attribution missed it and the throw fell to `claude-sdk:unclassified`: a `502` row under `outcome: upstream_error` and a circuit-breaker strike against an account that had done nothing wrong (seen live on 2.25.8, one such row 3.8 s into a request at the moment `/context` fired). The echo is now recognized as abort-shaped — only while the router's own composed attempt signal is actually aborted — and attributes to the first cause like every other wrapped abort: a client disconnect records the `499` `client_cancelled` row the HTTP relay already writes for a hang-up, leaving account health untouched; a deadline records a timeout. The same wording on a live signal is the SDK aborting on its own and stays an upstream error.
+
+### Documentation
+
+- `11-anthropic-agent-sdk.md` §9: the SDK's abort echo and its attribution rule, beside the classification table.
 
 ## [2.39.15] — 2026-10-19
 
@@ -1664,4 +1695,7 @@ your tooling config.
 [2.39.13]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.39.13
 [2.39.14]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.39.14
 [2.39.15]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.39.15
+[2.39.17]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.39.17
+[2.39.18]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.39.18
+[2.39.19]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.39.19
 [2.40.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.40.0
