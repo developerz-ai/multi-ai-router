@@ -1656,5 +1656,5 @@ your tooling config.
 [2.39.12]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.39.12
 [2.39.13]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.39.13
 [2.39.14]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.39.14
-[2.40.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.40.0
 [2.39.15]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.39.15
+[2.40.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.40.0
