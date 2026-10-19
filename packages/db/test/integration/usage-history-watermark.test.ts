@@ -1,5 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import { eq } from "drizzle-orm"
+import { PgDialect } from "drizzle-orm/pg-core"
+import { createUsageHistoryRepository } from "../../src/repositories/usage-history-repository"
 import { usageHistoryState } from "../../src/schema/usage-history-state"
 import { usageRecords } from "../../src/schema/usage-records"
 import { historyAttempt, historyUrl, usageHistoryFixture } from "./usage-history-fixture"
@@ -198,11 +200,75 @@ describe.skipIf(!historyUrl)("banked-through watermark (#275)", () => {
     expect(await coverageBothWays(undefined)).toMatchObject({ incomplete: false })
   })
 
-  test("the table refuses a half-set pair", async () => {
+  test("the table refuses a half-set pair, by the named CHECK", async () => {
     await reset()
-    await expect(
-      (async () => await setWatermark(at("1984-01-01T00:00:00Z"), null))(),
-    ).rejects.toThrow()
-    await expect((async () => await setWatermark(null, LOW))()).rejects.toThrow()
+    for (const [when, id] of [
+      [at("1984-01-01T00:00:00Z"), null],
+      [null, LOW],
+    ] as const) {
+      // Drizzle wraps the driver error; the constraint violation is on `.cause`.
+      const error = await setWatermark(when, id).then(
+        () => undefined,
+        (e: unknown) => e,
+      )
+      const cause = (error as { cause?: { code?: string; constraint_name?: string } } | undefined)
+        ?.cause
+      expect(cause?.code).toBe("23514")
+      expect(cause?.constraint_name).toBe("usage_history_state_watermark_paired")
+    }
+  })
+
+  test("the pending check scans only rows after W (the perf property, not just the answer)", async () => {
+    await reset()
+    const rows = 300
+    await fixture.usage().insertBatch({
+      attempts: Array.from({ length: rows }, (_, i) =>
+        historyAttempt({ createdAt: new Date(Date.UTC(1984, 0, 2, 0, i)) }),
+      ),
+      terminals: [],
+    })
+    await sweep()
+    expect((await state())?.bankedThroughAt).not.toBeNull()
+    // Capture the real statement `coverage` issues for `pending`, instead of restating it here.
+    const captured: { sql: string; params: unknown[] }[] = []
+    const real = fixture.db()
+    const recording = new Proxy(real, {
+      get(target, prop, receiver) {
+        if (prop !== "execute") return Reflect.get(target, prop, receiver)
+        return (query: Parameters<typeof real.execute>[0]) => {
+          captured.push(new PgDialect().sqlToQuery(query))
+          return real.execute(query)
+        }
+      },
+    })
+    await createUsageHistoryRepository(recording).coverage()
+    const pending = captured.find((q) => q.sql.includes("as pending"))
+    expect(pending).toBeDefined()
+    const scanned = await fixture.get().sql.begin(async (tx) => {
+      // A tiny fixture would otherwise pick a seq scan whatever the predicate allows.
+      await tx.unsafe("set local enable_seqscan = off")
+      const plan = await tx.unsafe(
+        `explain (analyze, format json) ${pending?.sql}`,
+        (pending?.params ?? []) as never[],
+      )
+      const nodes: Record<string, unknown>[] = []
+      const walk = (node: Record<string, unknown>) => {
+        nodes.push(node)
+        for (const child of (node.Plans as Record<string, unknown>[] | undefined) ?? []) walk(child)
+      }
+      walk(
+        (plan[0]?.["QUERY PLAN"] as { Plan: Record<string, unknown> }[] | undefined)?.[0]?.Plan ??
+          {},
+      )
+      // Every node reading `usage_records` under the `pending` alias, rows it actually produced.
+      const reads = nodes.filter((n) => n["Relation Name"] === "usage_records" && n.Alias === "r")
+      expect(reads.length).toBeGreaterThan(0)
+      return reads.reduce(
+        (sum, n) => sum + Number(n["Actual Rows"]) * Number(n["Actual Loops"] ?? 1),
+        0,
+      )
+    })
+    // Floor in place: only the row(s) at W are read. Without it the scan walks all 300.
+    expect(scanned).toBeLessThan(10)
   })
 })

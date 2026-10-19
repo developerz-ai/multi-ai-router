@@ -17,6 +17,7 @@ import {
   type QueryMeasure,
 } from "./usage-summary-instrument"
 import { parseArgs, USAGE, withFixtureDatabase } from "./usage-summary-lifecycle"
+import { measureLifetimeCoverage } from "./usage-summary-lifetime"
 
 /**
  * `bin/bench-usage` — the admin usage summary at issue #250's seeded size, measured
@@ -176,6 +177,18 @@ async function main() {
               `buffers: ${buffers} (budget ${options.buffersBudget}) ` +
               `${buffers > options.buffersBudget ? "FAIL" : "ok"}`,
           )
+          // The lifetime leg (#275): bank the fixture through the real backfill so W is set, then
+          // measure the lifetime coverage. Rolled back, so the seed is untouched.
+          const lifetime = await measureLifetimeCoverage(handle, options.explain)
+          console.log(
+            `lifetime coverage: banked ${lifetime.banked.toLocaleString()} rows (rolled back); ` +
+              `pending-check buffers: ${lifetime.buffers} (budget ${options.lifetimeBuffersBudget}) ` +
+              `${lifetime.buffers > options.lifetimeBuffersBudget ? "FAIL" : "ok"}`,
+          )
+          if (lifetime.buffers > options.lifetimeBuffersBudget)
+            failures.push(
+              `lifetime pending-check buffers ${lifetime.buffers} over budget ${options.lifetimeBuffersBudget}`,
+            )
           if (failures.length > 0) {
             console.error(`bench-usage: FAIL — ${failures.join("; ")}`)
             process.exitCode = 1
