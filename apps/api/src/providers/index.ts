@@ -34,7 +34,12 @@ export {
   subprocessEnv,
 } from "./claude-sdk/env"
 export type { SdkFailure, SdkFailureText } from "./claude-sdk/errors"
-export { classifySdkFailure, readSdkFailure, STDERR_TAIL_LIMIT } from "./claude-sdk/errors"
+export {
+  classifySdkFailure,
+  isSdkAbortEcho,
+  readSdkFailure,
+  STDERR_TAIL_LIMIT,
+} from "./claude-sdk/errors"
 export type {
   IdleQuery,
   IdleQueryFn,

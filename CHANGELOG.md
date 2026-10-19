@@ -17,6 +17,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `11-anthropic-agent-sdk.md`: the prompt-fidelity rules now state that `document` blocks cross as real content, with the named-omission floor.
 
+## [2.39.17] — 2026-10-19
+
+### Fixed
+
+- A client-cancelled Agent-SDK turn is recorded as a client cancel, not an upstream `502`. When Claude Code cancels an in-flight `/v1/messages` request itself — which it does around `/context` and other background requests — the SDK's transport answers the aborted launch with its own plain `Error("Operation aborted")` (stamped `errorClass: "aborted"`), which is neither an `AbortError` nor the signal's reason, so the cancellation attribution missed it and the throw fell to `claude-sdk:unclassified`: a `502` row under `outcome: upstream_error` and a circuit-breaker strike against an account that had done nothing wrong (seen live on 2.25.8, one such row 3.8 s into a request at the moment `/context` fired). The echo is now recognized as abort-shaped — only while the router's own composed attempt signal is actually aborted — and attributes to the first cause like every other wrapped abort: a client disconnect records the `499` `client_cancelled` row the HTTP relay already writes for a hang-up, leaving account health untouched; a deadline records a timeout. The same wording on a live signal is the SDK aborting on its own and stays an upstream error.
+
+### Documentation
+
+- `11-anthropic-agent-sdk.md` §9: the SDK's abort echo and its attribution rule, beside the classification table.
+
 ## [2.39.15] — 2026-10-19
 
 ### Fixed
@@ -1657,4 +1667,5 @@ your tooling config.
 [2.39.13]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.39.13
 [2.39.14]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.39.14
 [2.39.15]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.39.15
+[2.39.17]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.39.17
 [2.39.18]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.39.18
