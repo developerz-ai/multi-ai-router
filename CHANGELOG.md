@@ -11,11 +11,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- `coverage(lifetime)` no longer walks every retained `usage_records` row. Its `pending` check is an anti-join against `usage_contributions`, whose predicate cannot stop early, so the lifetime window paid for the whole table on every summary (about 1.8 s at prod's 334k rows after #277 removed the other two scans; #275, part of #250). `usage_history_state` gains `banked_through_at` / `banked_through_id` (migration 0038, two nullable columns, additive): the `(created_at, id)` through which every raw row has a non-pending contribution. The backfill advances it, and only from a sweep that started at the top of the table and ended short of its limit, which proves the whole table banked in one transaction; the check then scans only rows after it. NULL scans everything, as before, so an image rolled back across 0038 reads the same answers. Rows written through admission carry their contribution in the same transaction, so a backdated row below the watermark is never pending; `coverage` output is unchanged for every window (tested with and without the watermark over backdated rows).
+- `coverage(lifetime)` no longer walks every retained `usage_records` row. Its `pending` check is an anti-join against `usage_contributions`, whose predicate cannot stop early, so the lifetime window paid for the whole table on every summary (about 1.8 s at prod's 334k rows after #277 removed the other two scans; #275, part of #250). `usage_history_state` gains `banked_through_at` / `banked_through_id` (migration 0038, two nullable columns plus a CHECK that they are both NULL or both set): the `(created_at, id)` W through which every raw row at or above the retention horizon has a non-pending contribution. The backfill advances it, and only from a sweep that started at the top of the table, ended short of its limit and adopted no `legacy_overlap` row, which proves the whole table banked in one transaction; the check then scans only rows after W. NULL scans everything, as before, so an image rolled back across 0038 reads the same answers. In-contract `coverage` output is unchanged for every window (tested with and without W), because every writer that takes the history lock admits a row's contribution in the same transaction, so a backdated row below W is never pending.
+- **Out of contract:** a write that bypasses the history lock can land an unbanked row at or below W, and lifetime `pending` under-reports it until the next full sweep. That covers hand SQL or a restore, and a rolling upgrade from 2.15.x or older, whose writers take no lock; there it can last up to one `USAGE_ROLLUP_INTERVAL_MINUTES`, masked in the admin summary by the raw-vs-history count and `legacy`. Remedy: `update usage_history_state set banked_through_at = null, banked_through_id = null`.
+
+### Upgrade
+
+- Migration 0038 `ADD COLUMN`s on `usage_history_state`, which takes an ACCESS EXCLUSIVE lock on that one-row table and may wait behind a long-running query at boot (as the 0025–0030 entries did).
 
 ### Documentation
 
-- `08-observability.md` replaces the "deferred to its own migration" note with the watermark and the argument for why it is output-safe.
+- `08-observability.md` replaces the "deferred to its own migration" note with the watermark, its invariant, and the exact out-of-contract writers.
 
 ## [2.39.15] — 2026-10-19
 

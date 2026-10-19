@@ -687,36 +687,47 @@ summary over a long window on a large install (prod: ~334k `usage_records`, ~360
 *The banked-through watermark* (#275). The per-window `pending` anti-join in `coverage(window)` is
 cheap for a named window but, for `lifetime`, used to visit every retained row, because its
 predicate references `usage_contributions` and cannot stop early. `usage_history_state` now carries
-`banked_through_at` / `banked_through_id` (migration 0038): the `(created_at, id)` through which
-every `usage_records` row has a non-pending contribution. `coverage` scans only the rows after that
-pair (`(created_at, id) > (banked_through_at, banked_through_id)`, with `created_at >=` the pair's
-time so the `created_at` index bounds the scan). Either column NULL means no proof yet, and the
-check scans everything, exactly as before.
+`banked_through_at` / `banked_through_id` (migration 0038; a CHECK forbids exactly one being NULL, and
+`coverage` reads a half-set pair as NULL anyway). Call the pair W. The invariant: **every
+`usage_records` row at or before W in `(created_at, id)` order and at or above the retention horizon
+has a non-pending contribution.** `coverage` scans only the rows after W
+(`(created_at, id) > W`, with `created_at >=` W's time so the `created_at` index bounds the scan).
+Either column NULL means no proof yet, and the check scans everything, exactly as before.
+Retention is safe because the scan is floored at the horizon regardless of W: rows below the
+horizon are never examined, and deleting rows or contributions cannot falsify "these rows are
+banked".
 
 Why it is output-safe, and not a heuristic:
 
-- **Who advances it.** Only `backfill`, and only inside a sweep that began with no resume cursor and
-  ended short of its limit. That sweep has just banked every unbanked row in the table, in one
-  transaction holding the history lock, so "everything at or before the newest retained
-  `(created_at, id)` is banked" is proven, not inferred. A resumed sweep that ends short proves
-  nothing about rows before its cursor (older legacy rows can arrive late, which is why exhaustion
-  resets the cursor), so it does not advance; the next sweep starts from the top and does.
-- **Backdated rows.** The watermark is a position in `(created_at, id)` order, so a row inserted
-  later with an older `created_at` sits below it. That is safe because every row written through
-  admission gets its non-pending contribution (`live`, or `legacy_overlap` for an existing id) in
-  the same transaction as the insert, under the same history lock `backfill` takes: such a row is
-  never pending, whether it sorts above or below the watermark. The one way to put an unbanked row
-  below the watermark is a write that bypasses admission (hand SQL, a restore with
-  `ingested_at` NULL). That is outside the contract; the row is adopted by the next full sweep
-  (the cursor resets on exhaustion), and until then `lifetime` coverage can under-report `pending`
-  for it. Rows after the watermark are always checked, so the ordinary legacy/overlap cases are
-  unchanged.
-- **Never backward.** The update is guarded by a tuple comparison, so a sweep after retention shrank
-  the table cannot lower it. Retention deleting raw rows or contributions cannot make it wrong: it
-  claims only that rows at or below it are banked, and fewer rows cannot falsify that. The
-  retention horizon still bounds the scan from below, as before.
-- **Same answers.** A test compares `coverage` for every window with the watermark set against the
-  same data with it cleared, over a fixture with backdated and future-dated rows.
+- **Who advances it.** Only `backfill`, and only inside a sweep that began with no resume cursor,
+  ended short of its limit, and adopted no input as `legacy_overlap`. That sweep has just banked
+  every unbanked row in the table, in one transaction holding the history lock, so the invariant at
+  the newest retained `(created_at, id)` is proven, not inferred. A resumed sweep that ends short
+  proves nothing about rows before its cursor (older legacy rows can arrive late, which is why
+  exhaustion resets the cursor), so it does not advance; the next sweep starts from the top and
+  does. A `legacy_overlap` adoption is evidence that a lock-free pre-2.16 writer was active, so that
+  sweep does not certify. The update is guarded by a tuple comparison and never moves W backward.
+- **Backdated rows.** W is a position in `(created_at, id)` order, so a row inserted later with an
+  older `created_at` sits below it. That is safe because every writer that takes the history lock
+  (everything since 2.16) gives a new row its contribution in the same transaction as the insert:
+  `live` for a new id, `legacy_overlap` for an existing id that already has `ingested_at`. A
+  `legacy_pending` contribution, the only non-banked kind, arises only for an existing row with
+  `ingested_at` NULL, and no in-contract writer creates one after the sweep that set W (the column
+  is stamped at insert), so it cannot appear at or below W. Such a row is never pending, whether
+  it sorts above or below W.
+- **Out of contract: writes that bypass the lock.** (1) Hand SQL, or a restore that inserts raw
+  rows. (2) A **rolling upgrade from 2.15.x or older**: the old writer inserts without the history
+  lock, so its rows can land at or below W, including in the READ COMMITTED window between the
+  sweep's select and its advance. In both cases `pending` can under-report for those rows, in the
+  worst case for up to one `USAGE_ROLLUP_INTERVAL_MINUTES` until the next full sweep adopts them
+  (the cursor resets on exhaustion). The admin summary masks it twice: a raw-vs-history count
+  mismatch and the `legacy` flag, since an adopted row is `legacy_overlap`. Remedy: set both
+  columns NULL (`update usage_history_state set banked_through_at = null, banked_through_id = null`),
+  which restores the full scan until the next certifying sweep.
+- **Same answers.** In-contract, `coverage` is identical with and without W. The integration suite
+  asserts it for a lifetime and named windows in a legacy-free fixture with an unbanked row strictly
+  after W, one at W's `created_at` with a later id, and a backdated admitted row below W, and pins
+  the out-of-contract under-report so it stays documented rather than accidental.
 
 These reads run inside one repeatable-read snapshot on a single pooled connection and send no byte
 until they complete, so the whole summary must finish within `Bun.serve`'s response idle timeout,
