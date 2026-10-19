@@ -34,7 +34,12 @@ export {
   subprocessEnv,
 } from "./claude-sdk/env"
 export type { SdkFailure, SdkFailureText } from "./claude-sdk/errors"
-export { classifySdkFailure, readSdkFailure, STDERR_TAIL_LIMIT } from "./claude-sdk/errors"
+export {
+  classifySdkFailure,
+  isSdkAbortEcho,
+  readSdkFailure,
+  STDERR_TAIL_LIMIT,
+} from "./claude-sdk/errors"
 export type {
   IdleQuery,
   IdleQueryFn,
@@ -66,7 +71,12 @@ export type {
 export { createSdkModelLister } from "./claude-sdk/model-list"
 export type { QueryLaunch, QueryLaunchInput } from "./claude-sdk/options"
 export { createQueryLaunch, MAX_TURNS } from "./claude-sdk/options"
-export type { PromptBlock, PromptImageSource, PromptInput } from "./claude-sdk/prompt"
+export type {
+  PromptBlock,
+  PromptDocumentSource,
+  PromptImageSource,
+  PromptInput,
+} from "./claude-sdk/prompt"
 export { buildSdkPrompt } from "./claude-sdk/prompt"
 export type {
   SdkGaugeWindow,

@@ -205,7 +205,7 @@ LABEL org.opencontainers.image.title="multi-ai-router" \
       org.opencontainers.image.url="https://github.com/developerz-ai/multi-ai-router" \
       org.opencontainers.image.documentation="https://github.com/developerz-ai/multi-ai-router/blob/main/README.md" \
       org.opencontainers.image.licenses="MIT" \
-      org.opencontainers.image.version="2.39.16" \
+      org.opencontainers.image.version="2.39.19" \
       org.opencontainers.image.revision="${ROUTER_REVISION}"
 
 # ---- PID 1 ----
@@ -261,11 +261,7 @@ RUN claude --version
 # want Claude subscription accounts at all (in which case the volume is never
 # written to and can be safely ignored).
 ENV CLAUDE_CONFIG_ROOT=/data/claude
-# `workspace/` is the neutral cwd every SDK inference subprocess runs in — the CLI advertises its
-# cwd to the model, so it must never be an Account's credential directory (issue #296,
-# docs/idea/07-security.md). A first-mounted named volume inherits it from the image; a volume
-# that predates it is self-healed at provisioning and at spawn.
-RUN mkdir -p /data/claude/workspace && chown -R bun:bun /data && chmod 700 /data/claude /data/claude/workspace
+RUN mkdir -p /data/claude && chown -R bun:bun /data && chmod 700 /data/claude
 VOLUME ["/data/claude"]
 
 # Ownership matters even for read-only files: the process runs as `bun`, and a

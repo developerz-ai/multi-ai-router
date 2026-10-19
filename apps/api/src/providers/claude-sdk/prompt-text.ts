@@ -2,9 +2,15 @@
  * A content block with no user-message equivalent, rendered as one line of transcript text.
  *
  * Split from `prompt.ts`, which decides *which* messages are sent and in what frame; this decides
- * what a single block *says* once it can only be text. `nestedImages` is how many images
+ * what a single block *says* once it can only be text. `nested` is how many images and documents
  * `prompt.ts` hoisted out of a `tool_result` to sibling blocks, so the line can name them.
  */
+
+/** What `prompt.ts` hoisted out of a `tool_result` to sibling blocks, counted for the line. */
+export interface NestedAttachments {
+  readonly images: number
+  readonly documents: number
+}
 
 /**
  * A block with no user-message equivalent, rendered into the transcript.
@@ -13,7 +19,7 @@
  */
 export function renderBlock(
   block: Readonly<Record<string, unknown>>,
-  nestedImages: number,
+  nested: NestedAttachments,
 ): string | null {
   switch (block.type) {
     case "text":
@@ -26,11 +32,15 @@ export function renderBlock(
     case "tool_use":
       return renderToolUse(block)
     case "tool_result":
-      return renderToolResult(block, nestedImages)
+      return renderToolResult(block, nested)
     // Only reached when `readImage` refused the source. Named rather than the generic label below,
     // so the model can tell the user *why* the image it was told about is not there.
     case "image":
       return `[image omitted: unsupported source type ${sourceTypeOf(block.source)}]`
+    // Only reached when `readDocument` refused the source. Same rule as the image above: the model
+    // must be able to say the PDF did not arrive, not guess from a bare "file read" mention.
+    case "document":
+      return `[document omitted: unsupported source type ${sourceTypeOf(block.source)}]`
     // Only valid inside a `system` message. Named as what happened: this transport registers tools
     // from `tools` alone, so an addition is news to the model, not a callable tool.
     case "tool_addition":
@@ -49,17 +59,20 @@ function renderToolUse(block: Readonly<Record<string, unknown>>): string {
   return `[the assistant called ${name} with ${json(block.input)}]`
 }
 
-function renderToolResult(block: Readonly<Record<string, unknown>>, images: number): string {
+function renderToolResult(
+  block: Readonly<Record<string, unknown>>,
+  nested: NestedAttachments,
+): string {
   const failed = block.is_error === true ? " (it failed)" : ""
-  return `[the client ran the requested tool${failed} and it returned: ${resultText(block.content, images)}]`
+  return `[the client ran the requested tool${failed} and it returned: ${resultText(block.content, nested)}]`
 }
 
 /**
  * A `tool_result`'s content is a string or blocks; its text goes into the transcript line, and its
- * images — hoisted to sibling blocks by `blocksOf` — are *named* here so an image-only result does
- * not read as a tool that returned nothing.
+ * hoisted attachments — images and documents, siblings by the time the model reads this — are
+ * *named* here so an attachment-only result does not read as a tool that returned nothing.
  */
-function resultText(content: unknown, images: number): string {
+function resultText(content: unknown, nested: NestedAttachments): string {
   if (typeof content === "string") return content
   if (!Array.isArray(content)) return json(content)
 
@@ -70,10 +83,18 @@ function resultText(content: unknown, images: number): string {
     if (typeof value === "string") parts.push(value)
   }
 
-  const note =
-    images === 0 ? null : `${images} image${images === 1 ? "" : "s"}, forwarded below this line`
+  const note = attachmentsNote(nested)
   if (parts.length === 0) return note ?? "no textual output"
   return note === null ? parts.join("\n") : `${parts.join("\n")}\n(and ${note})`
+}
+
+function attachmentsNote(nested: NestedAttachments): string | null {
+  const counted: string[] = []
+  if (nested.images > 0) counted.push(`${nested.images} image${nested.images === 1 ? "" : "s"}`)
+  if (nested.documents > 0)
+    counted.push(`${nested.documents} document${nested.documents === 1 ? "" : "s"}`)
+  if (counted.length === 0) return null
+  return `${counted.join(" and ")}, forwarded below this line`
 }
 
 /** A tool reference, an MCP reference, or an inline definition — each names its tool differently. */
