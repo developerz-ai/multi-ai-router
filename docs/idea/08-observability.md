@@ -684,10 +684,39 @@ summary over a long window on a large install (prod: ~334k `usage_records`, ~360
   event-time filter discards the rows. The bound drops no row: every admitted receipt's event-time
   already lies in `[from, to)`, so its `day` already lies in the range.
 
-One scan is still history-bounded: the per-window `pending` anti-join in `coverage(window)` is cheap
-for a named window but, for `lifetime`, still visits every retained row. Making it stop early needs a
-durable "banked through" watermark (or a marker column on `usage_records` with a partial index) that
-the backfill advances — a schema change, deferred to its own migration.
+*The banked-through watermark* (#275). The per-window `pending` anti-join in `coverage(window)` is
+cheap for a named window but, for `lifetime`, used to visit every retained row, because its
+predicate references `usage_contributions` and cannot stop early. `usage_history_state` now carries
+`banked_through_at` / `banked_through_id` (migration 0038): the `(created_at, id)` through which
+every `usage_records` row has a non-pending contribution. `coverage` scans only the rows after that
+pair (`(created_at, id) > (banked_through_at, banked_through_id)`, with `created_at >=` the pair's
+time so the `created_at` index bounds the scan). Either column NULL means no proof yet, and the
+check scans everything, exactly as before.
+
+Why it is output-safe, and not a heuristic:
+
+- **Who advances it.** Only `backfill`, and only inside a sweep that began with no resume cursor and
+  ended short of its limit. That sweep has just banked every unbanked row in the table, in one
+  transaction holding the history lock, so "everything at or before the newest retained
+  `(created_at, id)` is banked" is proven, not inferred. A resumed sweep that ends short proves
+  nothing about rows before its cursor (older legacy rows can arrive late, which is why exhaustion
+  resets the cursor), so it does not advance; the next sweep starts from the top and does.
+- **Backdated rows.** The watermark is a position in `(created_at, id)` order, so a row inserted
+  later with an older `created_at` sits below it. That is safe because every row written through
+  admission gets its non-pending contribution (`live`, or `legacy_overlap` for an existing id) in
+  the same transaction as the insert, under the same history lock `backfill` takes: such a row is
+  never pending, whether it sorts above or below the watermark. The one way to put an unbanked row
+  below the watermark is a write that bypasses admission (hand SQL, a restore with
+  `ingested_at` NULL). That is outside the contract; the row is adopted by the next full sweep
+  (the cursor resets on exhaustion), and until then `lifetime` coverage can under-report `pending`
+  for it. Rows after the watermark are always checked, so the ordinary legacy/overlap cases are
+  unchanged.
+- **Never backward.** The update is guarded by a tuple comparison, so a sweep after retention shrank
+  the table cannot lower it. Retention deleting raw rows or contributions cannot make it wrong: it
+  claims only that rows at or below it are banked, and fewer rows cannot falsify that. The
+  retention horizon still bounds the scan from below, as before.
+- **Same answers.** A test compares `coverage` for every window with the watermark set against the
+  same data with it cleared, over a fixture with backdated and future-dated rows.
 
 These reads run inside one repeatable-read snapshot on a single pooled connection and send no byte
 until they complete, so the whole summary must finish within `Bun.serve`'s response idle timeout,
