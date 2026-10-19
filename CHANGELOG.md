@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.39.19] — 2026-10-19
+
+### Fixed
+
+- The Agent SDK subprocess for a Claude subscription no longer advertises the router-side working directory — and with it the Account's internal id — to the client's model. Every inference `query()` ran with `cwd` set to the Account's `CLAUDE_CONFIG_DIR` (`<CLAUDE_CONFIG_ROOT>/<account id>`), and the CLI stamps its cwd into the environment context it sends the model ("Working directory: …"), disclosing a router path and the Account id into whichever key holder's request landed on it, and misdescribing where the tools run — they execute on the *client* (issue #296). All inference launches (dispatch, idle/keepalive, the account test probe, the usage-gauge probe, model listing) now run in one shared neutral `<CLAUDE_CONFIG_ROOT>/workspace`, created at provisioning, baked into the image, and self-healed at spawn. Per-Account credential isolation is unchanged: it always lived in the `CLAUDE_CONFIG_DIR` environment variable, which the spawn fence still enforces (`env.CLAUDE_CONFIG_DIR` must be the Account's own directory; the fence's cwd rule now admits the neutral workspace beside it), and the guardian helper's child no longer `fchdir`s into the config directory. Login spawns still run in the Account's own directory — no model sees their output. A regression test asserts the advertised context contains neither the Account id nor the config-dir path, and that two Accounts launch into the identical workspace while keeping distinct config dirs. Upgrade note: the CLI names its transcript project directory after the cwd, so a session bound before this release resumes fresh once (its legacy transcript sits under the old account-id slug); failover still carries legacy transcripts until the retention sweep retires them, and new transcripts carry verbatim under the workspace slug — its path is identical on both Accounts, so the rewrite is a no-op.
+
+### Documentation
+
+- `07-security.md`: subprocess isolation — the neutral workspace cwd rule, the fence, and the regression gate.
+- `11-anthropic-agent-sdk.md`: launch options, the scratchpad trap, the config-root `workspace/` bullet, and the session-carry row updated for the shared slug.
+- `09-deployment.md`: `CLAUDE_CONFIG_ROOT` names the `workspace/` subdirectory.
+
 ## [2.39.18] — 2026-10-19
 
 ### Fixed
@@ -1669,3 +1681,4 @@ your tooling config.
 [2.39.15]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.39.15
 [2.39.17]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.39.17
 [2.39.18]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.39.18
+[2.39.19]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.39.19

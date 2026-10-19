@@ -6,10 +6,11 @@ import { UpstreamAdmissionRefused } from "../upstream-admission"
  * The session transcripts the `claude` CLI leaves under every Account's `CLAUDE_CONFIG_DIR`, and
  * the one bounded way this router is allowed to remove them.
  *
- * **What the CLI writes per session, and where.** Every `query()` runs the subprocess with the
- * Account's config directory as its cwd (`options.ts`), and the CLI names its projects directory
- * after that (`claude auth status --json` reports it as `projectsDirectory`, 2.1.261). So one
- * SDK session leaves, under `<CLAUDE_CONFIG_DIR>/projects/<cwd-slug>/`:
+ * **What the CLI writes per session, and where.** The CLI names its projects directory after the
+ * subprocess cwd (`claude auth status --json` reports it as `projectsDirectory`, 2.1.261) — the
+ * shared neutral workspace every `query()` runs in (`options.ts`, #296), historically the
+ * Account's config directory. So one SDK session leaves, under
+ * `<CLAUDE_CONFIG_DIR>/projects/<cwd-slug>/`:
  *
  * - `<session-uuid>.jsonl` — the transcript itself, appended to on every turn, and the file
  *   `--resume` reads back;

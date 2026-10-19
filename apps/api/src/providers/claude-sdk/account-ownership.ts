@@ -1,7 +1,8 @@
 import type { ChildProcess } from "node:child_process"
 import { join } from "node:path"
 import { UpstreamAdmissionRefused } from "../upstream-admission"
-import { makeAnchoredRoot } from "./config-dir-fs"
+import { WORKSPACE_DIR } from "./config-dir"
+import { makeAnchoredDirectory, makeAnchoredRoot } from "./config-dir-fs"
 import type { OwnerLaunchFactory } from "./owned-query"
 import { createOwnerLaunch, type OwnerLaunch, type OwnerLaunchConfig } from "./owner-launch"
 
@@ -74,6 +75,9 @@ export function createAccountCliOwnership(
       if (closed) throw new Error("credential owner admission is closed")
       validate(id, configDir)
       await makeAnchoredRoot(config.root, 0o700)
+      // The neutral inference workspace, beside the account directories (`options.ts`, #296):
+      // anchored, before any subprocess needs it as its working directory.
+      await makeAnchoredDirectory(join(config.root, WORKSPACE_DIR), 0o700)
       if (closed) throw new Error("credential owner admission is closed")
       if ((await operation(config, "provision", id, [])) !== 0)
         throw new Error("credential directory provision unavailable or retired")

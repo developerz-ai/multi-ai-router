@@ -3,6 +3,7 @@ import { constants } from "node:fs"
 import { lstat, mkdir, open, rename, unlink } from "node:fs/promises"
 import { basename, dirname, join, resolve } from "node:path"
 import { UpstreamAdmissionRefused } from "../upstream-admission"
+import { WORKSPACE_DIR } from "./config-dir"
 import {
   isMissing,
   nodeTranscriptFs,
@@ -24,9 +25,12 @@ import {
  * `resume` reads it exactly as the original Account would have. Nothing about a credential is read,
  * moved, or written: the transcript holds the conversation, never the login (non-negotiable 1).
  *
- * **What is rewritten.** The CLI stamps its working directory — the Account's config directory —
- * into every transcript line (`"cwd"`) and into the environment block of the system prompt. That
- * absolute path is replaced with the target Account's; nothing else is touched.
+ * **What is rewritten.** The CLI stamps its working directory into every transcript line (`"cwd"`)
+ * and into the environment block of the system prompt. A legacy transcript (from when the
+ * subprocess ran in the Account's config directory) carries that absolute path, and it is replaced
+ * with the target Account's; a transcript written under the shared neutral workspace (`options.ts`,
+ * #296) stamps a path that is the same on both Accounts, so the rewrite is a no-op. Nothing else
+ * is touched.
  *
  * **What is not copied.** The `<session-uuid>/` directory beside the transcript (tool-results,
  * subagent transcripts). The router never executes a tool on this host (non-negotiable 2), so
@@ -100,10 +104,12 @@ export function createSessionCarrier(options: SessionCarrierOptions): SessionCar
   const locate = async (accountId: string, sessionId: string): Promise<Located> => {
     const projects = join(root, accountId, PROJECTS_DIR)
     for (const project of await fs.list(projects)) {
-      // The config directory's own slug names the Account; a `-tmp` or other cwd's project is a
-      // different conversation space and never a source.
+      // Two slug shapes are this Account's conversation space: the neutral workspace every
+      // inference subprocess now runs in (`options.ts`, #296), and — until the sweep retires them
+      // — the legacy slugs naming the Account, from when the subprocess ran in the config
+      // directory. A `-tmp` or other cwd's project is a different space and never a source.
       if (project.kind !== "dir" || !PROJECT_SLUG.test(project.name)) continue
-      if (!project.name.includes(accountId)) continue
+      if (!project.name.includes(accountId) && !project.name.endsWith(WORKSPACE_DIR)) continue
       const path = join(projects, project.name, `${sessionId}${TRANSCRIPT_SUFFIX}`)
       const stat = await fs.stat(path)
       if (stat?.kind !== "file") continue
