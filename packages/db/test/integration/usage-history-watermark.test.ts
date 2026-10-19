@@ -260,11 +260,17 @@ describe.skipIf(!historyUrl)("banked-through watermark (#275)", () => {
         (plan[0]?.["QUERY PLAN"] as { Plan: Record<string, unknown> }[] | undefined)?.[0]?.Plan ??
           {},
       )
-      // Every node reading `usage_records` under the `pending` alias, rows it actually produced.
+      // Every node reading `usage_records` under the `pending` alias: rows it produced plus rows
+      // it read and discarded, since a filter would otherwise hide a full scan behind a low count.
       const reads = nodes.filter((n) => n["Relation Name"] === "usage_records" && n.Alias === "r")
       expect(reads.length).toBeGreaterThan(0)
       return reads.reduce(
-        (sum, n) => sum + Number(n["Actual Rows"]) * Number(n["Actual Loops"] ?? 1),
+        (sum, n) =>
+          sum +
+          (Number(n["Actual Rows"] ?? 0) +
+            Number(n["Rows Removed by Filter"] ?? 0) +
+            Number(n["Rows Removed by Index Recheck"] ?? 0)) *
+            Number(n["Actual Loops"] ?? 1),
         0,
       )
     })
