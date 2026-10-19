@@ -720,8 +720,14 @@ Why it is output-safe, and not a heuristic:
   lock, so its rows can land at or below W, including in the READ COMMITTED window between the
   sweep's select and its advance. In both cases `pending` can under-report for those rows, in the
   worst case for up to one `USAGE_ROLLUP_INTERVAL_MINUTES` until the next full sweep adopts them
-  (the cursor resets on exhaustion). The admin summary masks it twice: a raw-vs-history count
-  mismatch and the `legacy` flag, since an adopted row is `legacy_overlap`. Remedy: set both
+  (the cursor resets on exhaustion). The admin summary's raw-vs-history count
+  (`retainedAttempts > totals.attempts`, summary.ts) only flags windows inside raw retention. For a
+  window reaching at or below W on an install older than `RETENTION_USAGE_DAYS`, nothing flags a
+  hand-SQL or partial-restore row until the next full (cursorless) sweep adopts it as
+  `legacy_overlap`, after which `legacy` does. That gap is bounded by roughly two rollup intervals
+  plus jitter: a sweep aborted by advisory-lock session loss leaves a resume cursor, and a resumed
+  sweep cannot certify. The rolling upgrade from 2.15.x is still covered, since its rows fall
+  inside raw retention. Remedy: set both
   columns NULL (`update usage_history_state set banked_through_at = null, banked_through_id = null`),
   which restores the full scan until the next certifying sweep.
 - **Same answers.** In-contract, `coverage` is identical with and without W. The integration suite
