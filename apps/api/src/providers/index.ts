@@ -66,7 +66,12 @@ export type {
 export { createSdkModelLister } from "./claude-sdk/model-list"
 export type { QueryLaunch, QueryLaunchInput } from "./claude-sdk/options"
 export { createQueryLaunch, MAX_TURNS } from "./claude-sdk/options"
-export type { PromptBlock, PromptImageSource, PromptInput } from "./claude-sdk/prompt"
+export type {
+  PromptBlock,
+  PromptDocumentSource,
+  PromptImageSource,
+  PromptInput,
+} from "./claude-sdk/prompt"
 export { buildSdkPrompt } from "./claude-sdk/prompt"
 export type {
   SdkGaugeWindow,

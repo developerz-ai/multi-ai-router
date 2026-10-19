@@ -27,10 +27,13 @@ import type { SessionPlan } from "./session"
  * unavoidable — one user turn with nothing before it is sent as itself, which is both the common
  * case and the honest one.
  *
- * **Structured content survives wherever it can.** Text and images pass through as real content
- * blocks, in place, including inside a replay; only blocks with no user-message equivalent —
- * `tool_use`, `tool_result`, a document, an unknown type — are rendered into the transcript as
- * text. Thinking is dropped rather than replayed: a thinking block re-sent as text is unsigned and
+ * **Structured content survives wherever it can.** Text, images, and documents pass through as
+ * real content blocks, in place, including inside a replay; only blocks with no user-message
+ * equivalent — `tool_use`, `tool_result`, an unknown type — are rendered into the transcript as
+ * text. A document whose source this transport cannot forward is omitted **by name**, never
+ * silently: the model has to be able to tell the client the PDF did not arrive (issue #298 —
+ * a bare "PDF file read" line left the model unable to quote the file it was told about).
+ * Thinking is dropped rather than replayed: a thinking block re-sent as text is unsigned and
  * would teach the model to fabricate its own (§6, "thinking signatures").
  */
 
@@ -65,10 +68,30 @@ const imageSourceSchema = z.union([
 
 export type PromptImageSource = z.infer<typeof imageSourceSchema>
 
+/**
+ * The document sources the Messages API defines that this transport can forward: a base64 PDF,
+ * plain text, or a URL. A `file` source is deliberately absent — its `file_id` names a file
+ * uploaded to the *client's* API account, which the subscription's CLI cannot see — and a
+ * `content` source would forward nested blocks this module never validated. Either is described in
+ * the transcript instead, because a document block the SDK rejects fails the whole turn.
+ */
+const documentSourceSchema = z.union([
+  z.object({
+    type: z.literal("base64"),
+    media_type: z.literal("application/pdf"),
+    data: z.string(),
+  }),
+  z.object({ type: z.literal("text"), media_type: z.literal("text/plain"), data: z.string() }),
+  z.object({ type: z.literal("url"), url: z.string() }),
+])
+
+export type PromptDocumentSource = z.infer<typeof documentSourceSchema>
+
 /** One block of the user message handed to `query()`. Assignable to the SDK's own content shape. */
 export type PromptBlock =
   | { readonly type: "text"; readonly text: string }
   | { readonly type: "image"; readonly source: PromptImageSource }
+  | { readonly type: "document"; readonly source: PromptDocumentSource }
 
 export interface PromptInput {
   /** The conversation as the client sent it, in order. */
@@ -164,20 +187,24 @@ function blocksOf(message: SdkRequestMessage | undefined): readonly PromptBlock[
   }
 
   for (const block of message.content) {
-    const image = readImage(block)
-    if (image !== null) {
+    const forwarded = readImage(block) ?? readDocument(block)
+    if (forwarded !== null) {
       flush()
-      out.push(image)
+      out.push(forwarded)
       continue
     }
-    const rendered = renderBlock(block, toolResultImages(block).length)
+    const attachments = toolResultAttachments(block)
+    const rendered = renderBlock(block, {
+      images: attachments.filter((nested) => nested.type === "image").length,
+      documents: attachments.filter((nested) => nested.type === "document").length,
+    })
     if (rendered !== null) pending.push(rendered)
-    // A `tool_result`'s nested images are hoisted to sibling top-level blocks, after the
-    // transcript line that names them: the SDK's user message has no `tool_result` block to carry
-    // them in place, and folding them into the bracketed text erased them entirely — a client
-    // whose screenshot/PDF/chart tool returns an image lost it every turn (Meridian hoists the
+    // A `tool_result`'s nested images and documents are hoisted to sibling top-level blocks, after
+    // the transcript line that names them: the SDK's user message has no `tool_result` block to
+    // carry them in place, and folding them into the bracketed text erased them entirely — a
+    // client whose screenshot/PDF/chart tool returns one lost it every turn (Meridian hoists the
     // same way). The transcript line above states how many follow, so the model can tie them back.
-    for (const nested of toolResultImages(block)) {
+    for (const nested of attachments) {
       flush()
       out.push(nested)
     }
@@ -196,6 +223,13 @@ function readImage(block: Readonly<Record<string, unknown>>): PromptBlock | null
   return source.success ? { type: "image", source: source.data } : null
 }
 
+/** @returns the document block, or null when this is not one this transport can forward. */
+function readDocument(block: Readonly<Record<string, unknown>>): PromptBlock | null {
+  if (block.type !== "document") return null
+  const source = documentSourceSchema.safeParse(block.source)
+  return source.success ? { type: "document", source: source.data } : null
+}
+
 /**
  * `image/jpg` → `image/jpeg` before validation: a real-world misspelling (Meridian normalizes the
  * same one) that is unambiguous, and without this it demoted a perfectly forwardable image to an
@@ -207,14 +241,18 @@ function normalizeImageSource(source: unknown): unknown {
   return { ...source, media_type: "image/jpeg" }
 }
 
-/** Every nested image a `tool_result` carries, in order. Empty for every other block type. */
-function toolResultImages(block: Readonly<Record<string, unknown>>): readonly PromptBlock[] {
+/**
+ * Every nested image and document a `tool_result` carries, in order. Empty for every other block
+ * type. A nested block whose source this transport cannot forward stays out — `renderBlock` names
+ * the omission on the transcript line.
+ */
+function toolResultAttachments(block: Readonly<Record<string, unknown>>): readonly PromptBlock[] {
   if (block.type !== "tool_result" || !Array.isArray(block.content)) return []
   const out: PromptBlock[] = []
   for (const nested of block.content) {
     if (!isRecord(nested)) continue
-    const image = readImage(nested)
-    if (image !== null) out.push(image)
+    const attachment = readImage(nested) ?? readDocument(nested)
+    if (attachment !== null) out.push(attachment)
   }
   return out
 }

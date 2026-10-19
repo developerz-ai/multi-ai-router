@@ -113,6 +113,107 @@ describe("a single user turn", () => {
   })
 })
 
+describe("a document the client asked the model to read", () => {
+  const pdf = {
+    type: "document",
+    source: { type: "base64", media_type: "application/pdf", data: "JVBERi0xLjQK" },
+  } as const
+
+  test("reaches the prompt as a real document block, never as a bare mention", () => {
+    const blocks = buildSdkPrompt({ messages: [user([pdf])], plan: FRESH })
+    expect(blocks).toEqual([pdf])
+  })
+
+  test("Claude Code's Read-tool shape: the tool_result line names the document, which follows it", () => {
+    const blocks = buildSdkPrompt({
+      messages: [
+        user([
+          {
+            type: "tool_result",
+            tool_use_id: "toolu_1",
+            content: [{ type: "text", text: "PDF file read: note.pdf (614 bytes)" }, pdf],
+          },
+        ]),
+      ],
+      plan: FRESH,
+    })
+
+    // The #212 fingerprint: the model received only the "file read" line and could not quote the
+    // PDF. The document itself must follow the line that names it.
+    expect(blocks).toEqual([
+      {
+        type: "text",
+        text: "[the client ran the requested tool and it returned: PDF file read: note.pdf (614 bytes)\n(and 1 document, forwarded below this line)]",
+      },
+      pdf,
+    ])
+  })
+
+  test("a tool_result carrying both an image and a document forwards both, named", () => {
+    const blocks = buildSdkPrompt({
+      messages: [
+        user([
+          {
+            type: "tool_result",
+            tool_use_id: "toolu_1",
+            content: [
+              { type: "image", source: { type: "base64", media_type: "image/png", data: "S" } },
+              pdf,
+            ],
+          },
+        ]),
+      ],
+      plan: FRESH,
+    })
+
+    expect(blocks).toEqual([
+      {
+        type: "text",
+        text: "[the client ran the requested tool and it returned: 1 image and 1 document, forwarded below this line]",
+      },
+      { type: "image", source: { type: "base64", media_type: "image/png", data: "S" } },
+      pdf,
+    ])
+  })
+
+  test("plain-text and url document sources are forwarded too", () => {
+    const plain = buildSdkPrompt({
+      messages: [
+        user([
+          {
+            type: "document",
+            source: { type: "text", media_type: "text/plain", data: "notes" },
+          },
+        ]),
+      ],
+      plan: FRESH,
+    })
+    expect(plain).toEqual([
+      { type: "document", source: { type: "text", media_type: "text/plain", data: "notes" } },
+    ])
+
+    const remote = buildSdkPrompt({
+      messages: [user([{ type: "document", source: { type: "url", url: "https://x/y.pdf" } }])],
+      plan: FRESH,
+    })
+    expect(remote).toEqual([{ type: "document", source: { type: "url", url: "https://x/y.pdf" } }])
+  })
+
+  test("a document source this transport cannot carry says so, by name, instead of vanishing", () => {
+    const fileSource = buildSdkPrompt({
+      messages: [user([{ type: "document", source: { type: "file", file_id: "file_1" } }])],
+      plan: FRESH,
+    })
+    expect(textOf(fileSource)).toBe("[document omitted: unsupported source type file]")
+
+    const contentSource = buildSdkPrompt({
+      messages: [user([{ type: "document", source: { type: "content", content: "hi" } }])],
+      plan: FRESH,
+    })
+    expect(textOf(contentSource)).toBe("[document omitted: unsupported source type content]")
+  })
+})
+
 describe("a conversation the SDK has never held", () => {
   const conversation = [
     user("who wrote Dune?"),
@@ -152,6 +253,27 @@ describe("a conversation the SDK has never held", () => {
     expect(blocks).toContainEqual({
       type: "image",
       source: { type: "url", url: "https://x/y.png" },
+    })
+  })
+
+  test("a document in an earlier turn stays a document inside the frame", () => {
+    const blocks = buildSdkPrompt({
+      messages: [
+        user([
+          {
+            type: "document",
+            source: { type: "base64", media_type: "application/pdf", data: "JVBERi0xLjQK" },
+          },
+        ]),
+        assistant("a form"),
+        user("what does it say?"),
+      ],
+      plan: FRESH,
+    })
+
+    expect(blocks).toContainEqual({
+      type: "document",
+      source: { type: "base64", media_type: "application/pdf", data: "JVBERi0xLjQK" },
     })
   })
 

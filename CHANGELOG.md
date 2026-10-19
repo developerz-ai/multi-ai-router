@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.39.18] — 2026-10-19
+
+### Fixed
+
+- Claude-subscription turns now deliver PDF (`document`) content blocks to the model instead of flattening them to transcript text. The SDK's input message is a Messages API `MessageParam`, which carries a `document` block exactly like an `image` one, so a base64 `application/pdf`, a `text/plain`, or a `url` source crosses the `query()` boundary as real content — live, Claude Code's Read tool reached the model as only "PDF file read: note.pdf (614 bytes)" and the model could not quote the file it was told about (#212). A `tool_result`'s nested documents hoist to sibling blocks like its nested images do, and the transcript line names how many of each follow. A source this transport cannot forward — a Files-API `file` id, which names a file uploaded to the client's own API account that the subscription's CLI cannot see, or a nested-`content` source — is omitted **by name** (`[document omitted: unsupported source type …]`), never silently, so the model can ask the client to extract the text.
+
+### Documentation
+
+- `11-anthropic-agent-sdk.md`: the prompt-fidelity rules now state that `document` blocks cross as real content, with the named-omission floor.
+
 ## [2.39.15] — 2026-10-19
 
 ### Fixed
@@ -1647,3 +1657,4 @@ your tooling config.
 [2.39.13]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.39.13
 [2.39.14]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.39.14
 [2.39.15]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.39.15
+[2.39.18]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.39.18
