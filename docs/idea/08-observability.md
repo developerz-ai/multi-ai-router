@@ -344,7 +344,13 @@ so raise `--budget-ms` there and read the buffers leg as the load-insensitive ga
 shared-buffer traffic crosses
 `--buffers-budget` (default 1.2 M, ~0.95 M measured; a scan-volume regression — the day bound on
 the receipts arm, say — moves buffers before it moves timings, and buffers do not skew with host
-load). The two budgets catch different regressions, and neither is a before/after discriminator:
+load). A third leg, the lifetime leg (#275), banks the seeded raw rows through the real
+`backfill` (which sets W) inside a transaction that is rolled back, runs `ANALYZE`, and EXPLAINs
+the lifetime `coverage()`; it judges only the shared buffers of the `pending` check (the `r` and
+`c` scans) against `--lifetime-buffers-budget` (default 50,000). Measured on the 200k fixture:
+5 buffers with the watermark floor, 401,095 with the floor removed from the `greatest()` bound.
+It is skipped under `--no-explain` and on an empty `usage_records`. The wall and total-buffer
+budgets catch different regressions, and neither is a before/after discriminator:
 on the same harness against the same warm fixture minutes apart the pre-fix build measured
 149.7 s wall and the post-fix build 43.9 s (3.4×; the per-label history client times fell
 3.7–7.7× at identical buffer traffic, ~931k vs ~946k — the win is per-row CPU, which is exactly
@@ -719,15 +725,16 @@ Why it is output-safe, and not a heuristic:
   rows. (2) A **rolling upgrade from 2.15.x or older**: the old writer inserts without the history
   lock, so its rows can land at or below W, including in the READ COMMITTED window between the
   sweep's select and its advance. In both cases `pending` can under-report for those rows, in the
-  worst case for up to one `USAGE_ROLLUP_INTERVAL_MINUTES` until the next full sweep adopts them
-  (the cursor resets on exhaustion). The admin summary's raw-vs-history count
-  (`retainedAttempts > totals.attempts`, summary.ts) only flags windows inside raw retention. For a
-  window reaching at or below W on an install older than `RETENTION_USAGE_DAYS`, nothing flags a
-  hand-SQL or partial-restore row until the next full (cursorless) sweep adopts it as
-  `legacy_overlap`, after which `legacy` does. That gap is bounded by roughly two rollup intervals
-  plus jitter: a sweep aborted by advisory-lock session loss leaves a resume cursor, and a resumed
-  sweep cannot certify. The rolling upgrade from 2.15.x is still covered, since its rows fall
-  inside raw retention. Remedy: set both
+  worst case until a cursorless sweep adopts them (the cursor resets on exhaustion). The admin
+  summary's raw-vs-history count (`retainedAttempts > totals.attempts`) compares a whole window on
+  both sides (summary.ts:58-59). For any window reaching at or below W on an install older than
+  `RETENTION_USAGE_DAYS`, lifetime included, nothing flags an out-of-contract unbanked row until a
+  cursorless sweep adopts it. That holds for every out-of-contract writer: hand SQL, a restore, or
+  a 2.15.x replica during a rolling upgrade. The single bound is roughly two rollup intervals plus
+  jitter: a resumed sweep (one aborted by advisory-lock session loss leaves a cursor) only scans
+  rows after its cursor, so a stray row below it waits for the next cursorless sweep. Restored
+  pre-2.16 rows (`ingested_at` NULL) are adopted as `legacy_unbanked` or `legacy_baseline`, not
+  `legacy_overlap`; either way `legacy` flags them once adopted. Remedy: set both
   columns NULL (`update usage_history_state set banked_through_at = null, banked_through_id = null`),
   which restores the full scan until the next certifying sweep.
 - **Same answers.** In-contract, `coverage` is identical with and without W. The integration suite
