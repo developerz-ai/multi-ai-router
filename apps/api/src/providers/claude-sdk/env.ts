@@ -75,8 +75,9 @@ export const STRIPPED_ENV_NAMES: readonly string[] = Object.freeze([
  *   surprise egress to servers this router never configured. Provenance: Meridian `query.ts` sets
  *   the same guard for the same reason.
  * - `CLAUDE_CODE_SESSION_KIND: "bg"` — suppresses the CLI's injected "# Scratchpad Directory"
- *   context block, which otherwise advertises a **router-host** path (the subprocess cwd is the
- *   Account's `CLAUDE_CONFIG_DIR`) to the client's model, whose tools execute on the *client*.
+ *   context block, which otherwise advertises a **router-host** path (derived from the subprocess
+ *   cwd — the neutral workspace, `options.ts`, #296) to the client's model, whose tools execute
+ *   on the *client*.
  *   `bg` is the CLI's own headless-background mode, which is semantically what this subprocess is;
  *   its other effects are TUI rendering (none here) or `CLAUDE_JOB_DIR`-gated bookkeeping (unset
  *   here) — Meridian #627/#628 audited the same CLI. The known cost: a `bg` session registers as a

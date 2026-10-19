@@ -16,8 +16,10 @@ transports.
 
 The **launch** half: `providers/claude-sdk/options.ts` builds the `Options` for one
 `query()` — `settingSources: []`, `strictMcpConfig: true`, `skills: []`, `tools: []`, a bounded
-`maxTurns`, `includePartialMessages: true`, a server-controlled `cwd`, and one `AbortController` per
-request bridged to the attempt deadline (with a `detach()` so a finished query stops retaining the
+`maxTurns`, `includePartialMessages: true`, a server-controlled `cwd` — the shared neutral
+`workspace/` under `CLAUDE_CONFIG_ROOT`, never the Account's config directory, because the CLI
+advertises its cwd to the model (#296, [07-security.md](07-security.md)) — and one `AbortController`
+per request bridged to the attempt deadline (with a `detach()` so a finished query stops retaining the
 signal). `allowlist.ts` is the reviewed constant naming the tools permitted to execute on this host
 — empty, because passthrough is the only supported mode — applied both as `allowedTools` and as a
 deny-by-default `canUseTool` gate under `permissionMode: "dontAsk"`. `env.ts` strips the
@@ -190,7 +192,7 @@ neither write body has a field for one; `CLAUDE_CONFIG_ROOT` is the only knob, a
 | **`settingSources` must be explicitly `[]`** | Omitting it makes the CLI load user + project + local settings and slurp the **router host's** `CLAUDE.md` into the system prompt (`query.ts:296-302`) — a **cross-tenant context leak** for us |
 | **Env leakage** | Strip `ANTHROPIC_API_KEY` / `ANTHROPIC_BASE_URL` / `ANTHROPIC_AUTH_TOKEN` before spawning, or the subprocess can loop back through our own router |
 | **claude.ai org connectors are a separate door from `strictMcpConfig`** | The CLI fetches the subscription's claude.ai-hosted MCP connectors over HTTP whenever the OAuth token carries `user:mcp_servers` — its eligibility check (CLI 0.3.220) reads env, safe mode, auth precedence, and scopes, **not** `strictMcpConfig`, which only governs filesystem config. Every `query()` launch forces `ENABLE_CLAUDEAI_MCP_SERVERS=false` (`env.ts` `QUERY_ENV_OVERRIDES`), or one Account's connector catalog is injected into another key holder's request |
-| **The CLI's scratchpad block advertises a router-host path** | The injected "# Scratchpad Directory" context block names the subprocess cwd — the Account's `CLAUDE_CONFIG_DIR`, a **router** path — to a model whose tools execute on the *client*. `CLAUDE_CODE_SESSION_KIND=bg` (forced with the override above) suppresses it; the CLI's other `bg` effects are TUI rendering or `CLAUDE_JOB_DIR`-gated (Meridian #627/#628, audited against the bundled CLI). Known cost: a `bg` session registers as a running background agent, so a concurrent resume is refused — recovered by the busy-session fork retry (§9) |
+| **The CLI's scratchpad block advertises a router-host path** | The injected "# Scratchpad Directory" context block names the subprocess cwd — a **router** path (since #296 the shared neutral `workspace/`, before it the Account's `CLAUDE_CONFIG_DIR`, which also leaked the Account id) — to a model whose tools execute on the *client*. `CLAUDE_CODE_SESSION_KIND=bg` (forced with the override above) suppresses it; the CLI's other `bg` effects are TUI rendering or `CLAUDE_JOB_DIR`-gated (Meridian #627/#628, audited against the bundled CLI). Known cost: a `bg` session registers as a running background agent, so a concurrent resume is refused — recovered by the busy-session fork retry (§9) |
 | **Root** | The SDK refuses permission-skipping as root unless `IS_SANDBOX=1` (`query.ts:335`). Prefer a real UID |
 
 ### Credential lifecycle per Account
@@ -423,9 +425,15 @@ Account id (stable; a label is not):
   `authMaterial` in [07-security.md](07-security.md), though the CLI owns their format. They are
   the one piece of Account state that does *not* live in Postgres, which makes the volume a backup
   and restore concern in its own right.
+- The root also holds one shared **`workspace/`** directory — the cwd every inference subprocess
+  runs in (#296, [07-security.md](07-security.md)), because the CLI advertises its cwd to the
+  model. It is not per-Account state, holds no secrets, is created at provisioning and self-healed
+  at spawn, and is excluded from the reaper's foreign-entry sweep.
 - They grow (transcripts). The `claude` CLI writes `projects/<cwd-slug>/<session>.jsonl` (and a
   `<session>/` directory of tool results and subagent transcripts) per SDK session and never removes
-  them — production measured a quarter of a gigabyte per Account. The `sdk_transcript_sweep` task
+  them — production measured a quarter of a gigabyte per Account. The slug encodes the subprocess
+  cwd: one shared workspace slug per Account since #296, legacy account-id slugs before it (both
+  are carried; the legacy shape ages out with the sweep). The `sdk_transcript_sweep` task
   (`scheduler/tasks/sdk-transcript-sweep.ts`, `providers/claude-sdk/transcripts.ts`) removes those
   two artifact shapes, and only those, once older than `RETENTION_SDK_TRANSCRIPT_HOURS` (default
   24 h, the same window as the `sessions` row that could resume them). It never looks at anything
@@ -664,7 +672,7 @@ is the router's `/login`.
 | Step | What happens |
 |---|---|
 | Plan | `store.resolve` for Account B finds the key's binding on Account A. It classifies lineage exactly as it would on A and returns the resume/fork plan with `carryFrom: A` |
-| Carry | `SessionTurn.prepare()`, before the slot and the subprocess: under A's owner hold, find `projects/<slug containing A>/<session>.jsonl` (≤ `CLAUDE_SDK_SESSION_CARRY_MAX_BYTES`); under B's, write it to `projects/<same slug, A→B>/` with A's config-dir path rewritten to B's (the CLI stamps its cwd into every line), via a sibling temp file and `rename` |
+| Carry | `SessionTurn.prepare()`, before the slot and the subprocess: under A's owner hold, find `projects/<slug>/<session>.jsonl` (≤ `CLAUDE_SDK_SESSION_CARRY_MAX_BYTES`) where the slug is the shared workspace one (#296) or — until the sweep retires them — a legacy slug containing A; under B's, write it to `projects/<same slug, A→B>/` with A's config-dir path rewritten to B's (the CLI stamps its cwd into every line — a workspace-slug transcript stamps the identical shared path on both Accounts, so both rewrites are no-ops), via a sibling temp file and `rename` |
 | Launch | The unchanged plan: `resume` (or `forkSession` + `resumeSessionAt`) on B, sending only the delta — the same warm-transcript turn A would have run. The session id stays the same; the carried uuids still name the same messages, so a later undo still forks |
 | Record | `remember` on B re-points the row to B. Failure on B records nothing; the row still names A and the next turn carries again |
 | Failed turn | A turn that fails before any byte reaches the client is not part of the lineage. The CLI names its session at `init` before it learns the window is spent, and the invoker reports it on its failure path, so the attempt releases its turn `failed` (`SessionTurn.release("failed")`, `sdk-attempt.ts`) and the report is **withdrawn**: the binding is restored to what the turn found, or cleared if it found none. Recording it moved the binding onto the refusing Account and marked the unanswered message as seen, so the client's retry classified as a `replay` and started fresh instead of carrying (prod, 2026-10-06 23:15–23:17) |

@@ -88,8 +88,13 @@ describe("the idle usage probe", () => {
     expect(state.returned).toBe(1)
     expect(concurrency.inFlight).toBe(0)
     // The same gates every other launcher carries.
-    expect(state.launched[0]?.settingSources).toEqual([])
-    expect(state.launched[0]?.cwd).toBe("/data/claude/sub-1")
+    const launched = state.launched[0]
+    expect(launched?.settingSources).toEqual([])
+    // cwd is the shared neutral workspace — the CLI advertises it to the model (#296) — while the
+    // Account's own directory rides in CLAUDE_CONFIG_DIR exactly as before.
+    expect(launched?.cwd).toBe("/data/claude/workspace")
+    const env = launched?.env as Record<string, string> | undefined
+    expect(env?.CLAUDE_CONFIG_DIR).toBe("/data/claude/sub-1")
   })
 
   test("no usable binary means no query and a no_cli answer, never a throw", async () => {

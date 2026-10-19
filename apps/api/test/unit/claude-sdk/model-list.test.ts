@@ -263,7 +263,9 @@ describe("listing a subscription's models through the Agent SDK", () => {
     // The shared reviewed constant, not a second literal that could drift from the dispatch path.
     expect(launched.allowedTools).toEqual([...PERMITTED_TOOLS])
     expect(launched.permissionMode).toBe("dontAsk")
-    expect(launched.cwd).toBe("/data/claude/acc-1")
+    // The shared neutral workspace, never the Account's directory — the CLI advertises the cwd
+    // to the model (#296). The Account's directory rides in CLAUDE_CONFIG_DIR (asserted below).
+    expect(launched.cwd).toBe("/data/claude/workspace")
     expect(launched.pathToClaudeCodeExecutable).toBe("/opt/claude/claude")
     // Deny-all: a handshake grants nothing, and the gate says so rather than leaving it to a default.
     const canUseTool = launched.canUseTool

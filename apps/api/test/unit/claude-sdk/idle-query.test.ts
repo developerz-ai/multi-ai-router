@@ -303,7 +303,9 @@ describe("an idle Agent SDK query", () => {
     expect(launched.tools).toEqual([])
     expect(launched.allowedTools).toEqual([...PERMITTED_TOOLS])
     expect(launched.permissionMode).toBe("dontAsk")
-    expect(launched.cwd).toBe("/data/claude/acc-1")
+    // The shared neutral workspace, never the Account's directory — the CLI advertises the cwd
+    // to the model (#296). The Account's directory rides in CLAUDE_CONFIG_DIR (asserted below).
+    expect(launched.cwd).toBe("/data/claude/workspace")
     expect(launched.pathToClaudeCodeExecutable).toBe("/opt/claude/claude")
     expect(launched.maxTurns).toBe(1)
     // No model: nothing is ever asked of one, so none is named — and none is ever substituted.

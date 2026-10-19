@@ -144,8 +144,10 @@ int main(int argc, char **argv) {
     close(state);
     close(namespace);
     close(root);
-    if (fchdir(config) < 0) _exit(70);
     close(config);
+    /* The child keeps the guardian's cwd — the Account's own directory (login) or the shared
+       neutral workspace (inference) — never the config directory: the CLI advertises its cwd to
+       the model, whose tools run on the client. The TS fence admits exactly those two. */
     execvp(argv[10], argv + 10);
     _exit(127);
   }

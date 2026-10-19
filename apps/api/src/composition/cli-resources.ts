@@ -5,7 +5,7 @@ import {
   createSdkConcurrency,
 } from "../providers"
 import { createAccountCliOwnership } from "../providers/claude-sdk/account-ownership"
-import { createAccountConfigDirs } from "../providers/claude-sdk/config-dir"
+import { createAccountConfigDirs, WORKSPACE_DIR } from "../providers/claude-sdk/config-dir"
 import { createSessionCarrier } from "../providers/claude-sdk/session-carry"
 import { createSdkTranscripts } from "../providers/claude-sdk/transcripts"
 import { ownedCredentialMetadataReader } from "./credential-ownership"
@@ -39,7 +39,13 @@ export function createCliResources(deps: RuntimeDeps, now: () => Date) {
     ...rawConfigDirs,
     provision: (id: string) =>
       ownership.provisionAccount({ id, configDir: rawConfigDirs.pathFor(id) }),
-    list: async () => (await rawConfigDirs.list()).filter((entry) => entry.name !== ".ownership"),
+    // The router's own infrastructure on the volume — the ownership state and the neutral
+    // inference workspace (`options.ts`, #296) — is not an account entry and never a "foreign"
+    // one: neither the reaper nor an operator survey has anything to make of them.
+    list: async () =>
+      (await rawConfigDirs.list()).filter(
+        (entry) => entry.name !== ".ownership" && entry.name !== WORKSPACE_DIR,
+      ),
     remove: async (id: string) => {
       const account = { id, configDir: rawConfigDirs.pathFor(id) }
       await ownership.revokeDeletedAccount(account)
