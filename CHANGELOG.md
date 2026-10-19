@@ -7,15 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.39.15] — 2026-10-19
+
+### Fixed
+
+- Reverts 2.39.14: a `cache_control`-marked text block no longer ends its turn's openai-responses `message` item. The split rested on the claim that Codex reads a cached prefix back only to an item boundary, and that claim is false: a byte-level repro showed Codex reads back only up to where an earlier request ended, wherever the item boundaries fall, and after the 2.39.14 deploy 41 developerz.ai review calls read 16.4% of input from cache, the same share as before (developerz-ai router `usage_records`, 2026-10-19). Every text block of a turn again merges into one item; the mark is still dropped, and the text-block schema strips it again. A test pins that a marked block does not split the item.
+
+### Documentation
+
+- `06-protocol-translation.md`: the lossy `cache_control` row no longer states an item-boundary rule.
+
 ## [2.39.14] — 2026-10-19
 
 ### Fixed
 
-- Anthropic-ingress turns routed to a ChatGPT (Codex) account now end a message item at a text block's `cache_control` mark, so Codex can read the client's shared prefix back from cache. The anthropic → openai-responses translator merged every text block of a turn into one `message` item and the schema stripped the mark, and Codex reads a cached prefix back only to an item boundary: over 12 h of developerz.ai review calls (148, sibling reviewers sharing ~80k tokens of PR context and diff in a marked head block) 16.4% of input was read from cache, and 105 of 109 hits stopped at exactly the end of `instructions`, 10,880 tokens (developerz-ai router `usage_records`, 2026-10-19). A marked text block that is not the turn's last now closes the item, and the rest of the turn starts a new one; an unmarked turn, or a mark on the last block, translates as before. The mark itself is still not carried, and the openai-chat translator is unchanged: Chat has no items, and its upstreams cache by token prefix.
-
-### Documentation
-
-- `06-protocol-translation.md` states the item boundary in the lossy `cache_control` rows.
+- Anthropic-ingress turns routed to a ChatGPT (Codex) account ended a message item at a text block's `cache_control` mark, on the premise that Codex reads a cached prefix back only to an item boundary. The premise was wrong and the change had no effect on cache reads; reverted in 2.39.15.
 
 ## [2.39.13] — 2026-10-18
 
@@ -1640,3 +1646,4 @@ your tooling config.
 [2.39.12]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.39.12
 [2.39.13]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.39.13
 [2.39.14]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.39.14
+[2.39.15]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.39.15

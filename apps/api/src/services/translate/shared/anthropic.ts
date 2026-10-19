@@ -47,16 +47,8 @@ const KNOWN_BLOCK_TYPES: ReadonlySet<string> = new Set([
   "tool_removal",
 ])
 
-/**
- * `cache_control` is read, never carried: no non-Anthropic target has an equivalent hint, but its
- * position is where the client's shared prefix ends, which the openai-responses translator turns
- * into an item boundary (`anthropic-to-openai-responses/request.ts`).
- */
-const textBlock = z.object({
-  type: z.literal("text"),
-  text: z.string(),
-  cache_control: z.unknown().optional(),
-})
+/** `cache_control` is stripped here: no non-Anthropic target has an equivalent hint. */
+const textBlock = z.object({ type: z.literal("text"), text: z.string() })
 
 const imageSource = z.discriminatedUnion("type", [
   z.object({ type: z.literal("base64"), media_type: z.string(), data: z.string() }),

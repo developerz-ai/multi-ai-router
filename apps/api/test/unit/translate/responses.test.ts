@@ -115,7 +115,9 @@ describe("anthropic -> openai-responses request", () => {
     expect(out.input).toHaveLength(2)
   })
 
-  test("a cache_control mark ends the message item, so Codex can read the shared head back from cache", () => {
+  test("a cache_control mark does not split the message item, and is not carried", () => {
+    // Codex reads a cached prefix back to where an earlier request ended, not to an item boundary:
+    // splitting at the mark bought no cache reads in prod (2.39.14, reverted in 2.39.15).
     const out = anthropicToOpenAiResponsesRequest(
       anthropicRequest({
         messages: [
@@ -130,58 +132,12 @@ describe("anthropic -> openai-responses request", () => {
       }),
     )
     expect(out.input).toEqual([
-      { type: "message", role: "user", content: [{ type: "input_text", text: "shared head" }] },
-      { type: "message", role: "user", content: [{ type: "input_text", text: "member tail" }] },
-    ])
-  })
-
-  test("unmarked text blocks of one turn stay one message item", () => {
-    const out = anthropicToOpenAiResponsesRequest(
-      anthropicRequest({
-        messages: [
-          {
-            role: "user",
-            content: [
-              { type: "text", text: "a" },
-              { type: "text", text: "b" },
-            ],
-          },
-        ],
-      }),
-    )
-    expect(out.input).toEqual([
       {
         type: "message",
         role: "user",
         content: [
-          { type: "input_text", text: "a" },
-          { type: "input_text", text: "b" },
-        ],
-      },
-    ])
-  })
-
-  test("a cache_control mark on the last block adds no split and is not carried", () => {
-    const out = anthropicToOpenAiResponsesRequest(
-      anthropicRequest({
-        messages: [
-          {
-            role: "user",
-            content: [
-              { type: "text", text: "a" },
-              { type: "text", text: "b", cache_control: { type: "ephemeral" } },
-            ],
-          },
-        ],
-      }),
-    )
-    expect(out.input).toEqual([
-      {
-        type: "message",
-        role: "user",
-        content: [
-          { type: "input_text", text: "a" },
-          { type: "input_text", text: "b" },
+          { type: "input_text", text: "shared head" },
+          { type: "input_text", text: "member tail" },
         ],
       },
     ])
