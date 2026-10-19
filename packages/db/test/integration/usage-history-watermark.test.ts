@@ -60,9 +60,13 @@ describe.skipIf(!historyUrl)("banked-through watermark (#275)", () => {
     expect(await sweeper.backfill({ limit: 2 })).toEqual({ processed: 0, remaining: false })
     const [max] = await fixture
       .get()
-      .sql.unsafe(`select created_at, id from usage_records order by created_at desc, id desc limit 1`)
+      .sql.unsafe(
+        `select created_at, id from usage_records order by created_at desc, id desc limit 1`,
+      )
     const s = await state()
-    expect(s?.bankedThroughAt?.toISOString()).toBe(new Date(max?.createdAt ?? max?.created_at).toISOString())
+    expect(s?.bankedThroughAt?.toISOString()).toBe(
+      new Date(max?.createdAt ?? max?.created_at).toISOString(),
+    )
     expect(s?.bankedThroughId).toBe(max?.id)
     expect(await rawPending(undefined)).toBe(false)
   })
@@ -111,13 +115,17 @@ describe.skipIf(!historyUrl)("banked-through watermark (#275)", () => {
     await fixture.history().backfill({ limit: 1000 })
     const before = await state()
     await fixture.usage().deleteOlderThan(new Date("1984-01-04"), 100)
-    expect((await state())?.bankedThroughAt?.toISOString()).toBe(before?.bankedThroughAt?.toISOString())
+    expect((await state())?.bankedThroughAt?.toISOString()).toBe(
+      before?.bankedThroughAt?.toISOString(),
+    )
     expect(await rawPending(undefined)).toBe(false)
     expect((await coverageOf(undefined)).requestsBasis).toBe(
-      (await (async () => {
-        await clearWatermark()
-        return coverageOf(undefined)
-      })()).requestsBasis,
+      (
+        await (async () => {
+          await clearWatermark()
+          return coverageOf(undefined)
+        })()
+      ).requestsBasis,
     )
   })
   test("the watermark never moves backward", async () => {
