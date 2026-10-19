@@ -1,5 +1,5 @@
 {
-  "id": "efffd211-a013-447a-a0d0-eaf1e4cea7f4",
+  "id": "4a00202c-0ae9-4a2f-83cc-d1fbd14b5e10",
   "prevId": "27b2e02d-59ac-4334-ae00-e4d405917b1d",
   "version": "7",
   "dialect": "postgresql",
@@ -2664,7 +2664,12 @@
       "compositePrimaryKeys": {},
       "uniqueConstraints": {},
       "policies": {},
-      "checkConstraints": {},
+      "checkConstraints": {
+        "usage_history_state_watermark_paired": {
+          "name": "usage_history_state_watermark_paired",
+          "value": "(\"usage_history_state\".\"banked_through_at\" is null) = (\"usage_history_state\".\"banked_through_id\" is null)"
+        }
+      },
       "isRLSEnabled": false
     },
     "public.usage_records": {
