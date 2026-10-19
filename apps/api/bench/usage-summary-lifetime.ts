@@ -18,18 +18,18 @@ interface PlanNode {
  * per-row probes into `usage_contributions` (alias `c`). The other branches of `coverage`
  * (`legacy`, `earliest`) have their own cost that W does not move, and on this fixture they
  * dominate the statement total, so a budget on the total could not see the floor go missing.
- * Scan nodes are leaves, so each node's own blocks are not double counted.
+ * Aliased nodes are relation scans; their buffer counts include any unaliased child (e.g. Bitmap Index Scan).
  */
 function pendingScanBuffers(node: PlanNode): number {
-  if (!hasPendingScan(node))
+  if (!hasAlias(node, "r") || !hasAlias(node, "c"))
     throw new Error(
-      "bench-usage: no plan node with Alias r; the coverage SQL aliases changed, so 0 buffers would be a false pass",
+      "bench-usage: no plan node with Alias r or c; the coverage SQL aliases changed, so a partial count would be a false pass",
     )
   return sumPendingBuffers(node)
 }
 
-function hasPendingScan(node: PlanNode): boolean {
-  return node.Alias === "r" || (node.Plans ?? []).some(hasPendingScan)
+function hasAlias(node: PlanNode, alias: string): boolean {
+  return node.Alias === alias || (node.Plans ?? []).some((child) => hasAlias(child, alias))
 }
 
 function sumPendingBuffers(node: PlanNode): number {

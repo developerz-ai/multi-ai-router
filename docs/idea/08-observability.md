@@ -352,8 +352,8 @@ the lifetime `coverage()`; it judges only the shared buffers of the `pending` ch
 It is skipped under `--no-explain` and on an empty `usage_records`. The rolled-back `ANALYZE` leaves
 `pg_class.relpages` / `reltuples` changed (they are written in place; only `pg_statistic` rolls
 back), so run `vacuum analyze usage_records, usage_contributions` before an immediate `--reuse-db`
-rerun. The wall and total-buffer
-budgets catch different regressions, and neither is a before/after discriminator:
+rerun. The wall and total-buffer budgets catch different regressions, and neither is a
+before/after discriminator:
 on the same harness against the same warm fixture minutes apart the pre-fix build measured
 149.7 s wall and the post-fix build 43.9 s (3.4×; the per-label history client times fell
 3.7–7.7× at identical buffer traffic, ~931k vs ~946k — the win is per-row CPU, which is exactly
@@ -728,13 +728,14 @@ Why it is output-safe, and not a heuristic:
   rows. (2) A **rolling upgrade from 2.15.x or older**: the old writer inserts without the history
   lock, so its rows can land at or below W, including in the READ COMMITTED window between the
   sweep's select and its advance. For a window that reaches back past the raw-retention horizon on
-  an install older than `RETENTION_USAGE_DAYS` (lifetime included), nothing flags an out-of-contract
-  unbanked row below W, from any out-of-contract writer (hand SQL, a restore, or a 2.15.x replica
-  during a rolling upgrade), until a cursorless sweep adopts it. That takes roughly two rollup
-  intervals plus jitter: a resumed sweep only scans rows after its cursor. Once adopted, `legacy`
-  flags it (restored pre-2.16 rows, `ingested_at` NULL, adopt as `legacy_unbanked` or
-  `legacy_baseline`, not `legacy_overlap`). A window wholly inside raw retention is still flagged by
-  the admin summary's raw-vs-history count (`retainedAttempts > totals.attempts`, summary.ts:58-59).
+  an install older than `RETENTION_USAGE_DAYS` (lifetime included), nothing reliably flags an
+  out-of-contract unbanked row at or below W, from any out-of-contract writer (hand SQL, a restore,
+  or a 2.15.x replica during a rolling upgrade), until a cursorless sweep adopts it. That is
+  normally the next rollup run; it can take up to roughly two intervals plus jitter (per replica)
+  when a previous sweep aborted and left a resume cursor, because a resumed sweep only scans rows
+  after its cursor. Once adopted, `legacy` flags it (restored pre-2.16 rows, `ingested_at` NULL,
+  adopt as `legacy_unbanked` or `legacy_baseline`, not `legacy_overlap`). A window wholly inside
+  raw retention still sets `incomplete` via the admin summary's raw-vs-history count (`retainedAttempts > totals.attempts`, summary.ts:58-59).
   Remedy: set both columns NULL (`update usage_history_state set banked_through_at = null,
   banked_through_id = null`), which restores the full scan until the next certifying sweep.
 - **Same answers.** In-contract, `coverage` is identical with and without W. The integration suite

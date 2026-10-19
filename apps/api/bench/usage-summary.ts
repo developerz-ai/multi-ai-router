@@ -32,8 +32,7 @@ import { measureLifetimeCoverage } from "./usage-summary-lifetime"
  * the real `readSummary` the way the service runs it, and exits non-zero when
  * the wall clock, the total buffer traffic, or the lifetime pending-check buffers (#275) cross
  * their budget. Timings on a shared host are noisy, so the wall and buffer budgets catch
- * different regressions: the
- * wall budget catches per-row-cost blowups (an id filter regressing to a per-id
+ * different regressions: the wall budget catches per-row-cost blowups (an id filter regressing to a per-id
  * OR-chain quintupled the dominant statement), and the buffer budget — what
  * EXPLAIN (ANALYZE, BUFFERS) reports, which load does not distort — catches
  * scan-volume blowups (a lost day bound, a dropped rollup). The default wall budget is the
