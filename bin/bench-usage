@@ -3,10 +3,10 @@
 #
 # Seeds ~180k rows per daily rollup table plus ~200k raw records into a throwaway
 # database, runs the real summary the way the service runs it (one repeatable-read
-# snapshot), and exits 1 when either the wall clock or the total shared-buffer
-# traffic crosses its budget. The buffer gate — what EXPLAIN (ANALYZE, BUFFERS)
-# reports — is the regression detector; per-query timings it prints are what a PR
-# records. Deliberately not part of bin/check, like bin/bench: a timing
+# snapshot), and exits 1 when the wall clock, the total shared-buffer traffic, or
+# the lifetime pending-check buffers (#275) cross their budget. The buffer gates
+# (what EXPLAIN (ANALYZE, BUFFERS) reports) are the regression detector; per-query
+# timings it prints are what a PR records. Deliberately not part of bin/check, like bin/bench: a timing
 # measurement on a shared runner is a flaky gate.
 #
 # Needs DATABASE_URL (any database you may create databases beside; the bench

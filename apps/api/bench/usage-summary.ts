@@ -4,6 +4,7 @@ import {
   createUsageHistoryRepository,
   createUsageReadRepository,
   type Database,
+  type DatabaseHandle,
   defaultMigrationsFolder,
   runMigrations,
 } from "@multi-ai-router/db"
@@ -17,6 +18,7 @@ import {
   type QueryMeasure,
 } from "./usage-summary-instrument"
 import { parseArgs, USAGE, withFixtureDatabase } from "./usage-summary-lifecycle"
+import { measureLifetimeCoverage } from "./usage-summary-lifetime"
 
 /**
  * `bin/bench-usage` — the admin usage summary at issue #250's seeded size, measured
@@ -28,9 +30,9 @@ import { parseArgs, USAGE, withFixtureDatabase } from "./usage-summary-lifecycle
  * loaded host (load ~7) — at the default `SERVER_IDLE_TIMEOUT_SECONDS` of 60 the
  * page simply dies. This leg seeds that fixture into a throwaway database, runs
  * the real `readSummary` the way the service runs it, and exits non-zero when
- * either the wall clock or the total buffer traffic crosses its budget. Timings
- * on a shared host are noisy, so the two budgets catch different regressions: the
- * wall budget catches per-row-cost blowups (an id filter regressing to a per-id
+ * the wall clock, the total buffer traffic, or the lifetime pending-check buffers (#275) cross
+ * their budget. Timings on a shared host are noisy, so the wall and buffer budgets catch
+ * different regressions: the wall budget catches per-row-cost blowups (an id filter regressing to a per-id
  * OR-chain quintupled the dominant statement), and the buffer budget — what
  * EXPLAIN (ANALYZE, BUFFERS) reports, which load does not distort — catches
  * scan-volume blowups (a lost day bound, a dropped rollup). The default wall budget is the
@@ -50,6 +52,11 @@ import { parseArgs, USAGE, withFixtureDatabase } from "./usage-summary-lifecycle
  * gates and their ordering live, pure and injected-executor tested, in
  * `usage-summary-lifecycle.ts`.
  */
+
+async function hasRawRows(sql: DatabaseHandle["sql"]): Promise<boolean> {
+  const [row] = await sql`select exists (select 1 from usage_records) as present`
+  return row?.present === true
+}
 
 function buildLabels(keys: number): UsageLabelSets {
   const keyLabels = new Map<string, KeyLabel>()
@@ -176,6 +183,24 @@ async function main() {
               `buffers: ${buffers} (budget ${options.buffersBudget}) ` +
               `${buffers > options.buffersBudget ? "FAIL" : "ok"}`,
           )
+          // The lifetime leg (#275): bank the fixture through the real backfill so W is set, then
+          // measure the lifetime coverage. Rolled back, so the seed is untouched.
+          if (!options.explain) {
+            console.log("lifetime leg skipped (--no-explain)")
+          } else if (!(await hasRawRows(handle.sql))) {
+            console.log("lifetime leg skipped: no raw rows")
+          } else {
+            const lifetime = await measureLifetimeCoverage(handle)
+            console.log(
+              `lifetime coverage: banked ${lifetime.banked.toLocaleString()} rows (rolled back); ` +
+                `pending-check buffers: ${lifetime.buffers} (budget ${options.lifetimeBuffersBudget}) ` +
+                `${lifetime.buffers > options.lifetimeBuffersBudget ? "FAIL" : "ok"}`,
+            )
+            if (lifetime.buffers > options.lifetimeBuffersBudget)
+              failures.push(
+                `lifetime pending-check buffers ${lifetime.buffers} over budget ${options.lifetimeBuffersBudget}`,
+              )
+          }
           if (failures.length > 0) {
             console.error(`bench-usage: FAIL — ${failures.join("; ")}`)
             process.exitCode = 1

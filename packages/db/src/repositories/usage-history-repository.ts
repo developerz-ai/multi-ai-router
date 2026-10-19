@@ -49,6 +49,9 @@ export function createUsageHistoryRepository(
   // Shared by `clock` and `coverage` so the earliest retained instant is computed byte-identically
   // either way: the window-resolution step reads only these two, never the heavier checks below.
   const boundsCte = sql`bounds as (select coalesce((select retention_before_day from ${usageHistoryState} where id='v2'),'-infinity'::date) as horizon)`
+  // Always one row (left join), so a missing state row reads as "no watermark", not "no rows"; a
+  // half-set pair (the CHECK forbids one) reads as no watermark too.
+  const bankedCte = sql`banked as (select case when s.banked_through_id is null then null else s.banked_through_at end as at, case when s.banked_through_at is null then null else s.banked_through_id end as id from (select 1) one left join ${usageHistoryState} s on s.id='v2')`
   const firstReceiptCte = sql`first_receipt_day as (select day from ${usageContributions},bounds where day >= horizon order by day limit 1)`
   const earliestExpr = sql`least(
           (select day::timestamp at time zone 'UTC' from ${usageDaily},bounds where day >= horizon order by day limit 1),
@@ -77,13 +80,14 @@ export function createUsageHistoryRepository(
       pending: boolean
     }>(sql`
       with ${boundsCte},
-      ${firstReceiptCte}
+      ${firstReceiptCte},
+      ${bankedCte}
       select clock_timestamp() as now,
         ${earliestExpr} as earliest,
         (select min(created_at) from ${usageRecords} where created_at >= ${from.toISOString()} and created_at < ${to.toISOString()}) as "rawFrom", (select max(created_at) from ${usageRecords} where created_at >= ${from.toISOString()} and created_at < ${to.toISOString()}) as "rawTo",
         (exists(select 1 from ${usageDaily},bounds where day >= ${new Date(Math.floor(from.getTime() / 86400000) * 86400000).toISOString().slice(0, 10)}::date and day < ${new Date(Math.ceil(to.getTime() / 86400000) * 86400000).toISOString().slice(0, 10)}::date and day >= horizon)
           or exists(select 1 from ${usageContributions},bounds where day >= greatest(${new Date(Math.floor(from.getTime() / 86400000) * 86400000).toISOString().slice(0, 10)}::date,horizon) and day < ${new Date(Math.ceil(to.getTime() / 86400000) * 86400000).toISOString().slice(0, 10)}::date and source <> 'live' and (payload->>'eventAt')::timestamptz >= ${from.toISOString()} and (payload->>'eventAt')::timestamptz < ${to.toISOString()})) as legacy,
-        exists(select 1 from ${usageRecords} r,bounds where r.created_at >= greatest(${from.toISOString()}::timestamptz,(horizon::timestamp at time zone 'UTC')) and r.created_at < ${to.toISOString()} and not exists(select 1 from ${usageContributions} c where c.kind='attempt' and c.id=r.id and c.source<>'legacy_pending')) as pending`)
+        exists(select 1 from ${usageRecords} r,bounds,banked where r.created_at >= greatest(${from.toISOString()}::timestamptz,(horizon::timestamp at time zone 'UTC'),coalesce(banked.at,'-infinity'::timestamptz)) and (banked.at is null or banked.id is null or (r.created_at,r.id) > (banked.at,banked.id)) and r.created_at < ${to.toISOString()} and not exists(select 1 from ${usageContributions} c where c.kind='attempt' and c.id=r.id and c.source<>'legacy_pending')) as pending`)
     if (row === undefined) throw new Error("usage coverage unavailable")
     return {
       dbNow: new Date(row.now),

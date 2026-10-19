@@ -1,5 +1,5 @@
 import { asc, eq, sql } from "drizzle-orm"
-import type { Database } from "../client"
+import type { Database, DatabaseExecutor } from "../client"
 import { usageAttemptDailyV2, usageRequestDailyV2 } from "../schema/usage-aggregate-v2"
 import { usageContributions } from "../schema/usage-contributions"
 import { usageDaily } from "../schema/usage-daily"
@@ -9,6 +9,22 @@ import { usageRequestTerminals } from "../schema/usage-request-terminals"
 import { applyUsageContributions, type ContributionRow } from "./usage-contribution-aggregate"
 import { attemptContribution, usagePayloadHash } from "./usage-contribution-values"
 import { boundUsageBatch, lockUsageHistory } from "./usage-history-lock"
+
+/**
+ * Moves the banked-through watermark to the newest retained `(created_at, id)`, never backward.
+ * Only valid inside a sweep that has just proven the whole table banked, holding the history lock
+ * that serializes every admission (each of which writes its contribution in its own transaction).
+ */
+async function advanceBankedWatermark(tx: DatabaseExecutor) {
+  await tx.execute(sql`
+    with newest as (select created_at, id from ${usageRecords} order by created_at desc, id desc limit 1)
+    update ${usageHistoryState} s
+    set banked_through_at = newest.created_at, banked_through_id = newest.id
+    from newest
+    where s.id = 'v2'
+      and (s.banked_through_at is null or s.banked_through_id is null
+        or (newest.created_at, newest.id) > (s.banked_through_at, s.banked_through_id))`)
+}
 
 export function createUsageHistoryMaintenance(db: Database) {
   // A committed sweep advances through the indexed event clock. Exhaustion resets this hint so
@@ -69,6 +85,14 @@ export function createUsageHistoryMaintenance(db: Database) {
         returning id,kind,day,source,payload_hash as "payloadHash",payload,ingested_at as "ingestedAt"`)),
             ] as unknown as ContributionRow[])
       await applyUsageContributions(tx, admitted)
+      // A sweep that began at the start of the table and ended short of its limit has just
+      // banked every unbanked row there is, inside this transaction. That is the only moment the
+      // watermark is provable (#275); a resumed sweep says nothing about rows before its cursor.
+      // A `legacy_overlap` adoption is evidence a lock-free pre-2.16 writer was active, whose rows
+      // can land below any watermark; do not certify a sweep that saw one.
+      const sawLockFreeWriter = inputs.some((input) => input.source === "legacy_overlap")
+      if (after === undefined && rows.length < limit && !sawLockFreeWriter)
+        await advanceBankedWatermark(tx)
       return { processed: rows.length, remaining: rows.length === limit, last: rows.at(-1) }
     })
     cursor =

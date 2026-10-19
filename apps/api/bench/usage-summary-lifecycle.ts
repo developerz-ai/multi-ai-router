@@ -22,6 +22,7 @@ export interface Options {
   url: string
   budgetMs: number
   buffersBudget: number
+  lifetimeBuffersBudget: number
   explain: boolean
   keepDb: boolean
   dbName: string | undefined
@@ -37,6 +38,7 @@ export const DEFAULTS: Options = {
   // raise --budget-ms there rather than reading an inflated wall as a regression.
   budgetMs: 60_000,
   buffersBudget: 1_200_000,
+  lifetimeBuffersBudget: 50_000,
   explain: true,
   keepDb: false,
   dbName: undefined,
@@ -62,6 +64,7 @@ export function parseArgs(argv: string[]): Options {
   }
   numberFlag("--budget-ms", (v) => (options.budgetMs = v))
   numberFlag("--buffers-budget", (v) => (options.buffersBudget = v))
+  numberFlag("--lifetime-buffers-budget", (v) => (options.lifetimeBuffersBudget = v))
   stringFlag("--url", (v) => (options.url = v))
   stringFlag("--db", (v) => (options.dbName = v))
   options.reuseDb = argv.includes("--reuse-db")
@@ -86,7 +89,10 @@ export const USAGE = `Usage: bin/bench-usage [options]
                          wall, not the buffers, so raise this there and read --buffers-budget
                          as the load-insensitive gate)
   --buffers-budget N     shared-buffer budget, all queries (default ${DEFAULTS.buffersBudget})
-  --no-explain           skip the EXPLAIN pass, buffers, and the per-query table
+  --lifetime-buffers-budget N
+                         shared-buffer budget for the banked lifetime pending check (#275;
+                         default ${DEFAULTS.lifetimeBuffersBudget})
+  --no-explain           skip the EXPLAIN pass, buffers, the per-query table, and the lifetime leg
   --keep-db              keep the throwaway database (prints its URL)
 `
 
