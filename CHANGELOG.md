@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.39.14] — 2026-10-19
+
+### Fixed
+
+- Anthropic-ingress turns routed to a ChatGPT (Codex) account now end a message item at a text block's `cache_control` mark, so Codex can read the client's shared prefix back from cache. The anthropic → openai-responses translator merged every text block of a turn into one `message` item and the schema stripped the mark, and Codex reads a cached prefix back only to an item boundary: over 12 h of developerz.ai review calls (148, sibling reviewers sharing ~80k tokens of PR context and diff in a marked head block) 16.4% of input was read from cache, and 105 of 109 hits stopped at exactly the end of `instructions`, 10,880 tokens (developerz-ai router `usage_records`, 2026-10-19). A marked text block that is not the turn's last now closes the item, and the rest of the turn starts a new one; an unmarked turn, or a mark on the last block, translates as before. The mark itself is still not carried, and the openai-chat translator is unchanged: Chat has no items, and its upstreams cache by token prefix.
+
+### Documentation
+
+- `06-protocol-translation.md` states the item boundary in the lossy `cache_control` rows.
+
 ## [2.39.13] — 2026-10-18
 
 ### Fixed
@@ -1629,3 +1639,4 @@ your tooling config.
 [2.39.11]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.39.11
 [2.39.12]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.39.12
 [2.39.13]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.39.13
+[2.39.14]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.39.14

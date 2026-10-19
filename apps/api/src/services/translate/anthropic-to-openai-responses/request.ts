@@ -55,6 +55,9 @@ import {
  * a replayed handle the upstream cannot verify fails that turn — so it would be fetched only to be
  * thrown away.
  *
+ * `cache_control` on a text block that is not the turn's last ends the message item there, so the
+ * client's cached prefix ends on an item boundary; the mark itself is not carried.
+ *
  * Dropped silently, as documented: `top_k`, `cache_control`, `thinking` / `redacted_thinking`
  * blocks (including router-signed ones, `shared/router-thinking.ts`), `metadata`, and any `anthropic-beta` opt-in (a header, handled by the transport). Dropped
  * and **reported** through `options.onDrop`: server-side and built-in tools, a `tool_choice` naming
@@ -166,6 +169,10 @@ function appendMessage(
     switch (block.type) {
       case "text":
         if (block.text.length > 0) parts.push({ type: textType, text: block.text })
+        // A marked block ends the client's shared prefix. Codex reads a cached prefix back only up
+        // to an item boundary, so a head merged into one item with the per-request tail is never
+        // reused (prod 2026-10-19: every hit stopped at the end of `instructions`).
+        if (block.cache_control !== undefined && index < blocks.length - 1) flush()
         break
       case "image": {
         const source = readImageSource(block.source, field, onDrop)
