@@ -331,7 +331,13 @@ describe("the full app, mounted end to end", () => {
         shuttingDown: () => false,
       },
       webRoot: root,
-      dataPlane: { verifier, dispatcher, catalog: routingCatalog, health },
+      dataPlane: {
+        verifier,
+        dispatcher,
+        catalog: routingCatalog,
+        health,
+        serverIdleTimeoutSeconds: 60,
+      },
       admin: {
         auth: createAdminAuthService({
           env: {

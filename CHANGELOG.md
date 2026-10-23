@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.40.1] — 2026-10-23
+
+### Fixed
+
+- **A non-streamed answer that took longer than `SERVER_IDLE_TIMEOUT_SECONDS` was cut by the router's own listener.** A `stream:false` request writes no byte until the upstream finishes, and `Bun.serve` closes a connection that carried no bytes for the idle timeout (default 60 s) — measured on Bun 1.4.2, the clock runs from the moment the handler's headers are out with the body still pending, which is exactly a Codex `stream:false` call (the upstream is made to stream and its SSE is folded into the one JSON body). On prod (2026-10-23) every non-streamed gpt-6.1-sol request through a ChatGPT/Codex OAuth account on a large prompt was recorded as `client_cancelled` / `client_error` with zero tokens at 59–61 s — 269 of them and zero successes all-time — while the same model's streams succeeded. Raising the global was no fix (255 s is Bun's ceiling). Every data-plane inference route now takes its request off the idle clock once the router key verifies (`server.timeout(request, 0)`, `middleware/idleClock.ts`), leaving `UPSTREAM_TIMEOUT_MS` as the bound on a slow upstream, and restores the configured value as soon as an event-stream response's headers are out (a stream that goes silent past the timeout is still cut, as before) or after the last byte of any other body (Bun keeps the per-request value on the socket, so without the restore an idle keep-alive socket whose peer vanished would never be reaped). An integration test drives a real `Bun.serve` at a 1 s idle timeout: a late upstream answer and a late body behind early headers both reach the client (the second failed before the fix), a keep-alive socket is still reaped after a held response, and a silent stream is still cut.
+
+### Documentation
+
+- `09-deployment.md`: the `SERVER_IDLE_TIMEOUT_SECONDS` row says which requests are held off the clock, why, and when it is restored.
+
 ## [2.40.0] — 2026-10-19
 
 ### Changed
@@ -1699,3 +1709,4 @@ your tooling config.
 [2.39.18]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.39.18
 [2.39.19]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.39.19
 [2.40.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.40.0
+[2.40.1]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.40.1
