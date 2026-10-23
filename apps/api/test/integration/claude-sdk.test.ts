@@ -385,7 +385,7 @@ describe("a subscription request through the real composition root, not a hand-w
         claudeCli: () => Promise.resolve("platform_package"),
         shuttingDown: () => false,
       },
-      dataPlane: { verifier, dispatcher, catalog: store, health },
+      dataPlane: { verifier, dispatcher, catalog: store, health, serverIdleTimeoutSeconds: 60 },
     })
 
     return { app, usage, health }

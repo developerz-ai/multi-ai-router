@@ -135,6 +135,7 @@ export function benchApp(options: BenchAppOptions): BenchApp {
     "/",
     dataPlaneRoutes({
       verifier,
+      serverIdleTimeoutSeconds: 60,
       catalog: store,
       health,
       dispatcher: createDispatcher({

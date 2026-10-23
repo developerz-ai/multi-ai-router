@@ -89,6 +89,8 @@ export interface HarnessOptions {
    * passes a logger that captures instead.
    */
   readonly logger?: Logger
+  /** What an inference request's idle clock is restored to; only a real `Bun.serve` reads it. */
+  readonly serverIdleTimeoutSeconds?: number
 }
 
 export function harness(options: HarnessOptions) {
@@ -135,6 +137,7 @@ export function harness(options: HarnessOptions) {
       catalog: store,
       health,
       now: testClock.now,
+      serverIdleTimeoutSeconds: options.serverIdleTimeoutSeconds ?? 60,
       ...(options.models === undefined
         ? {}
         : {

@@ -189,6 +189,7 @@ describe.skipIf(!runnable)("a pool-scoped key's listed order", () => {
       "/",
       dataPlaneRoutes({
         verifier,
+        serverIdleTimeoutSeconds: 60,
         catalog: store,
         health,
         now: testClock.now,

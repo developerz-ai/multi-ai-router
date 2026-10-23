@@ -94,6 +94,7 @@ async function main(): Promise<void> {
       // read synchronously — the listing never touches Postgres.
       models: runtime.models,
       prices: (provider, model) => runtime.prices.lookup(provider, model),
+      serverIdleTimeoutSeconds: env.serverIdleTimeoutSeconds,
     },
     trustProxy: env.trustProxy,
     sessionCookieInsecure: env.adminAuth.sessionCookieInsecure,
@@ -103,6 +104,8 @@ async function main(): Promise<void> {
 
   // The idle timeout is spelled out because Bun's default (10 s, swept every 4 s) is shorter than
   // the 15 s heartbeat a quiet SDK stream sends to stay alive — see `Env.serverIdleTimeoutSeconds`.
+  // Inference requests are held off it per request (`middleware/idleClock.ts`); `fetch` hands the
+  // server to Hono as `c.env`, which is how that middleware reaches `server.timeout`.
   const server = Bun.serve({ ...listenOptions(env), fetch: app.fetch })
   logger.info("router listening", {
     component: "transport",

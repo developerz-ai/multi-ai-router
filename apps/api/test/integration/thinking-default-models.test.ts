@@ -59,6 +59,7 @@ function wire(accounts: readonly RoutableAccount[], thinkingDefaultModels: reado
     "/",
     dataPlaneRoutes({
       verifier,
+      serverIdleTimeoutSeconds: 60,
       catalog: store,
       health,
       now: testClock.now,
@@ -219,6 +220,7 @@ describe("openai-responses egress is never touched", () => {
       "/",
       dataPlaneRoutes({
         verifier,
+        serverIdleTimeoutSeconds: 60,
         catalog: store,
         health,
         now: testClock.now,

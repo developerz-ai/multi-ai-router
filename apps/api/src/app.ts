@@ -111,6 +111,8 @@ export interface DataPlaneDeps {
    */
   readonly models?: DataPlaneRoutesDeps["models"]
   readonly prices?: DataPlaneRoutesDeps["prices"]
+  /** `Env.serverIdleTimeoutSeconds` — see `DataPlaneRoutesDeps`. */
+  readonly serverIdleTimeoutSeconds: number
 }
 
 export function createApp(deps: AppDeps): Hono<AppEnv> {

@@ -28,6 +28,10 @@ export interface Env {
    * whose arguments took 11.8 s to generate — held whole by the rewriter, so the client saw nothing
    * until the block closed — reproduced it on demand. The heartbeat has to be comfortably *inside*
    * this; `0` disables the server's clock entirely and `255` is the ceiling (Bun keeps it in a byte).
+   *
+   * A data-plane inference request is held off this clock until its answer is written, because a
+   * non-streamed answer has no heartbeat and can take longer than any value allowed here — see
+   * `middleware/idleClock.ts`, which restores it to this value afterwards.
    */
   readonly serverIdleTimeoutSeconds: number
   /**

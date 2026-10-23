@@ -1,5 +1,6 @@
 import type { Dialect } from "@multi-ai-router/core"
 import { Hono } from "hono"
+import { holdIdleClock } from "../../middleware/idleClock"
 import { type RouterKeyEnv, routerKeyAuth } from "../../middleware/routerKeyAuth"
 import type {
   CatalogListingDeps,
@@ -74,6 +75,11 @@ export interface DataPlaneRoutesDeps {
   readonly models?: Pick<ModelCatalogStore, "describe" | "modelsOf">
   readonly prices?: CatalogListingDeps["prices"]
   readonly now?: () => Date
+  /**
+   * `Env.serverIdleTimeoutSeconds`: what an inference request's idle clock is restored to once its
+   * answer no longer needs it off (`middleware/idleClock.ts`).
+   */
+  readonly serverIdleTimeoutSeconds: number
 }
 
 /** Where these routes mount. Absolute paths, so the mount point is the root. */
@@ -98,9 +104,10 @@ export function dataPlaneRoutes(deps: DataPlaneRoutesDeps): Hono<RouterKeyEnv> {
   const routes = new Hono<RouterKeyEnv>()
   const guard = routerKeyAuth(deps.verifier)
   const now = deps.now ?? (() => new Date())
+  const hold = holdIdleClock(deps.serverIdleTimeoutSeconds)
 
   for (const route of INGRESS) {
-    routes.post(route.path, guard, (c) =>
+    routes.post(route.path, guard, hold, (c) =>
       deps.dispatcher.dispatch({
         ingress: route.dialect,
         ...(route.operation === undefined ? {} : { operation: route.operation }),
