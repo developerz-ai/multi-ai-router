@@ -19,7 +19,7 @@ export function fastProfileState(
   cliOverride: string | null,
 ): "verified" | "override" | "runtime" | "cli" | "manifest" | "checksum" | "unavailable" {
   if (cliOverride !== null) return "override"
-  if (Bun.version !== "1.4.2") return "runtime"
+  if (Bun.version !== "1.4.3") return "runtime"
   try {
     const resolved = resolveClaudeCli(createCliProbe({ override: cliOverride }))
     if (!resolved.ok) return "cli"
