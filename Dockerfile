@@ -26,7 +26,7 @@
 #   held together by apps/api/test/integration/image-pins.test.ts, so this file
 #   and that workflow cannot drift apart in silence.
 #
-#   the digest — a version tag is mutable. `oven/bun:1.4.2` can be re-pushed, and
+#   the digest — a version tag is mutable. `oven/bun:1.4.3` can be re-pushed, and
 #   a rebuild of an old release tag would then produce a different image from the
 #   one that was tested and shipped. The digest is the only thing that makes a
 #   rebuild reproducible.
@@ -38,7 +38,7 @@
 # To move either pin: `docker buildx imagetools inspect oven/bun:<version>` and
 # copy the top-level `Digest:` line. Bump BUN_VERSION in ci.yml in the same
 # commit — the drift test fails until you do.
-FROM oven/bun:1.4.2@sha256:9114c058aeae42162ee16dd5084b95fe9473970bb6bcb5b232ab1630f0546895 AS builder
+FROM oven/bun:1.4.3@sha256:ec06c3b6cea04192ae6770c434f668ca41d343ad19fa6472216c7b48be39c598 AS builder
 WORKDIR /src
 
 # The digest above is what actually resolves; the tag beside it is a comment the
@@ -46,8 +46,8 @@ WORKDIR /src
 # been copied together — a digest that names a different bun than the tag claims
 # is precisely the mistake this pin exists to prevent, and it is invisible in a
 # diff.
-RUN [ "$(bun --version)" = "1.4.2" ] || { \
-      echo "base image is bun $(bun --version), not the pinned 1.4.2 — re-resolve the digest" >&2; \
+RUN [ "$(bun --version)" = "1.4.3" ] || { \
+      echo "base image is bun $(bun --version), not the pinned 1.4.3 — re-resolve the digest" >&2; \
       exit 1; \
     }
 
@@ -158,11 +158,11 @@ RUN set -eu; \
 # reasons — see the block above the builder's FROM. It matters more here, not
 # less: this is the bun that actually runs the router in production, and it is
 # the one CI's BUN_VERSION claims the test suite covers.
-FROM oven/bun:1.4.2-slim@sha256:cb3bbbb08e13a4a2ff400f24c7a2a1d5efa83f6ef8544d52d95a519631e2fc61 AS runtime
+FROM oven/bun:1.4.3-slim@sha256:14a223fa35747ec728bce300ef85888bc5f7958164d15bbba6a54b22b52a3288 AS runtime
 WORKDIR /app
 
-RUN [ "$(bun --version)" = "1.4.2" ] || { \
-      echo "runtime base is bun $(bun --version), not the pinned 1.4.2 — re-resolve the digest" >&2; \
+RUN [ "$(bun --version)" = "1.4.3" ] || { \
+      echo "runtime base is bun $(bun --version), not the pinned 1.4.3 — re-resolve the digest" >&2; \
       exit 1; \
     }
 
@@ -205,7 +205,7 @@ LABEL org.opencontainers.image.title="multi-ai-router" \
       org.opencontainers.image.url="https://github.com/developerz-ai/multi-ai-router" \
       org.opencontainers.image.documentation="https://github.com/developerz-ai/multi-ai-router/blob/main/README.md" \
       org.opencontainers.image.licenses="MIT" \
-      org.opencontainers.image.version="2.40.1" \
+      org.opencontainers.image.version="2.40.2" \
       org.opencontainers.image.revision="${ROUTER_REVISION}"
 
 # ---- PID 1 ----

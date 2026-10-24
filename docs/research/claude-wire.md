@@ -289,6 +289,10 @@ With DNS `localhost` and SNI, CLI 2.1.301 and Bun 1.4.2 matched JA3
 Leave Host, Connection, Accept-Encoding and Content-Length to Bun; explicitly replaying these
 framing headers changed their order. This local result does not prove production equivalence.
 
+Recalibrated for Bun 1.4.3 on 2026-10-24: `bin/claude-trace transport` with the same CLI 2.1.301
+binary (SHA-256 `bc1aad99…d222`) reported `sameJa3` and `sameHeaderOrder`, and the JA3 is still
+`1523504b38f0fae0d881d4b6554aac1b` — unchanged from Bun 1.4.2.
+
 The same native CLI used a different profile against the local API-key stub: no `cch` or private
 origin headers and bare ephemeral cache controls (5m). Real OAuth/canonical-endpoint requests
 included checksums, origin diagnostics and 1h TTLs. Endpoint/auth context explains this difference;

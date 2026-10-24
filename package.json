@@ -1,6 +1,6 @@
 {
   "name": "multi-ai-router",
-  "version": "2.40.1",
+  "version": "2.40.2",
   "private": true,
   "type": "module",
   "license": "MIT",
@@ -9,7 +9,7 @@
     "packages/*"
   ],
   "engines": {
-    "bun": ">=1.4.2"
+    "bun": ">=1.4.3"
   },
   "scripts": {
     "build": "bin/build",

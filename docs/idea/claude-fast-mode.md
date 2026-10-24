@@ -20,7 +20,7 @@ inference starts. SDK fallback answers that request; the following warm request 
 There is no SDK retry after direct inference begins. Normal router failover remains responsible
 for upstream failures and never retries after response bytes reach the client.
 
-The calibrated profile is CLI `2.1.301`, SDK `0.3.301`, Bun `1.4.2`. A custom CLI override,
+The calibrated profile is CLI `2.1.301`, SDK `0.3.301`, Bun `1.4.3`. A custom CLI override,
 a different Bun version or SDK manifest, or a binary SHA-256 differing from the captured Linux x64
 glibc build disables
 the direct transport at boot and emits a warning. The check accepts the image's staged PATH copy
