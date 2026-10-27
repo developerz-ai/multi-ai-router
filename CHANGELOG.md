@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.40.3] — 2026-10-27
+
+### Changed
+
+- **Bun 1.4.4** (image builder + runtime digests, CI `BUN_VERSION`, `.bun-version`, `engines`, `@types/bun`). The fast-mode calibration moves with it: `fastProfileState` now verifies Bun `1.4.4`. `bin/claude-trace transport` against the same CLI 2.1.301 binary reported identical JA3 (`1523504b38f0fae0d881d4b6554aac1b`, unchanged since 1.4.2) and header order, so `CLAUDE_FAST_MODE=true` deployments keep the direct transport.
+
 ## [2.40.2] — 2026-10-24
 
 ### Changed
@@ -1717,3 +1723,4 @@ your tooling config.
 [2.40.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.40.0
 [2.40.1]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.40.1
 [2.40.2]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.40.2
+[2.40.3]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.40.3
