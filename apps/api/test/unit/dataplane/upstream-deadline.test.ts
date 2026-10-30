@@ -185,3 +185,123 @@ describe("upstreamDeadline", () => {
     expect(time.pending()).toBe(0)
   })
 })
+
+/**
+ * Every way out of a watched attempt releases every clock and the client listener, exactly once.
+ * PR #307 review: a connection reset rejected the upstream read, the wrapper errored, and its timers,
+ * client listener and closures were retained until the total deadline fired.
+ */
+describe("every exit releases every clock and the client listener exactly once", () => {
+  function setup() {
+    const time = manualClock()
+    const client = new AbortController()
+    let removed = 0
+    const remove = client.signal.removeEventListener.bind(client.signal)
+    client.signal.removeEventListener = ((...args: Parameters<typeof remove>) => {
+      if (args[0] === "abort") removed += 1
+      remove(...args)
+    }) as typeof client.signal.removeEventListener
+    const deadline = upstreamDeadline({
+      stream: DEADLINES,
+      client: client.signal,
+      clock: time.clock,
+    })
+    return { time, client, deadline, removed: () => removed }
+  }
+
+  function watched(deadline: ReturnType<typeof upstreamDeadline>) {
+    deadline.headersArrived()
+    const upstream = controlledBody()
+    const reader = deadline.watch(new Response(upstream.body)).body?.getReader()
+    if (reader === undefined) throw new Error("no body")
+    return { upstream, reader }
+  }
+
+  function settled(promise: Promise<unknown>): Promise<unknown> {
+    return promise.then(
+      () => undefined,
+      (error: unknown) => error,
+    )
+  }
+
+  function expectReleased(env: ReturnType<typeof setup>) {
+    expect(env.time.pending()).toBe(0)
+    expect(env.removed()).toBe(1)
+    env.deadline.release()
+    expect(env.removed()).toBe(1)
+  }
+
+  test("the upstream ends cleanly", async () => {
+    const env = setup()
+    const { upstream, reader } = watched(env.deadline)
+    upstream.close()
+    expect((await reader.read()).done).toBe(true)
+    expectReleased(env)
+  })
+
+  test("the client cancels the body", async () => {
+    const env = setup()
+    const { reader } = watched(env.deadline)
+    await reader.cancel("gone")
+    expectReleased(env)
+  })
+
+  test("the upstream read rejects (connection reset), and the original error reaches the client", async () => {
+    const env = setup()
+    const { upstream, reader } = watched(env.deadline)
+    const reset = new Error("ECONNRESET")
+    const next = settled(reader.read())
+    upstream.fail(reset)
+    expect(await next).toBe(reset)
+    expectReleased(env)
+  })
+
+  test("the idle clock fires", async () => {
+    const env = setup()
+    const { reader } = watched(env.deadline)
+    const next = settled(reader.read())
+    await Promise.resolve()
+    env.time.advance(DEADLINES.idleMs)
+    expect((await next) instanceof Error).toBe(true)
+    expectReleased(env)
+  })
+
+  test("the first-byte clock fires", () => {
+    const env = setup()
+    env.time.advance(DEADLINES.firstByteMs)
+    expect(env.deadline.expired()).toBe("first-byte")
+    expectReleased(env)
+  })
+
+  test("the total clock fires", async () => {
+    const env = setup()
+    const { upstream, reader } = watched(env.deadline)
+    for (let elapsed = 0; elapsed < DEADLINES.totalMs; elapsed += 400) {
+      upstream.send("x")
+      await reader.read()
+      env.time.advance(400)
+    }
+    expect(env.deadline.expired()).toBe("total")
+    expectReleased(env)
+  })
+
+  test("the client goes away", () => {
+    const env = setup()
+    env.client.abort()
+    expectReleased(env)
+  })
+
+  test("a path that never relays a body releases explicitly", () => {
+    const env = setup()
+    env.deadline.headersArrived()
+    env.deadline.release()
+    expectReleased(env)
+  })
+
+  test("a body watched after release arms nothing", () => {
+    const env = setup()
+    env.deadline.release()
+    env.deadline.watch(new Response("late"))
+    expectReleased(env)
+  })
+})

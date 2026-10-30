@@ -72,21 +72,32 @@ export function upstreamDeadline(input: {
       ? controller.signal
       : AbortSignal.any([controller.signal, input.client])
   let fired: DeadlineKind | undefined
+  let released = false
   let cancelFirstByte = (): void => {}
   let cancelIdle = (): void => {}
   let cancelTotal = (): void => {}
   /** Errors the watched body, once there is one. */
   let failBody = (_reason: unknown): void => {}
 
+  /**
+   * The one exit. Every way out — clean end, client cancel, a rejected upstream read, any clock,
+   * the client going away, a path that relays no body — lands here, and only the first call does
+   * anything: the timers, the client listener and the body closures are dropped exactly once.
+   */
   const release = (): void => {
+    if (released) return
+    released = true
     cancelFirstByte()
     cancelIdle()
     cancelTotal()
     input.client?.removeEventListener("abort", release)
+    failBody = () => {}
   }
   const fire = (kind: DeadlineKind): void => {
-    if (fired !== undefined || signal.aborted) return
+    if (released) return
     fired = kind
+    // Taken before release drops it: the client's stream must still end with this reason.
+    const failWatched = failBody
     release()
     // `TimeoutError`, the name `AbortSignal.timeout` uses: `transportFailure` and the relay terminal
     // already read it as a timeout, so every clock lands on the same verdict path.
@@ -94,11 +105,12 @@ export function upstreamDeadline(input: {
     controller.abort(reason)
     // Not left to the fetch implementation: the client's stream ends with this reason whether or
     // not the upstream body honours the abort.
-    failBody(reason)
+    failWatched(reason)
   }
 
   // A client already gone arms nothing: the signal is aborted and the fetch never starts.
-  if (input.client?.aborted !== true) {
+  if (input.client?.aborted === true) released = true
+  else {
     input.client?.addEventListener("abort", release, { once: true })
     cancelTotal = clock.after(totalMs, () => fire("total"))
     cancelFirstByte = clock.after(firstByteMs, () => fire("first-byte"))
@@ -131,9 +143,17 @@ export function upstreamDeadline(input: {
         },
         async pull(controller) {
           waitingSince = clock.now()
-          const next = await reader.read().finally(() => {
+          let next: Awaited<ReturnType<typeof reader.read>>
+          try {
+            next = await reader.read()
+          } catch (error) {
+            // A connection reset: the stream errors with the upstream's own error, and nothing is
+            // left waiting on a clock that can no longer matter.
+            release()
+            throw error
+          } finally {
             waitingSince = undefined
-          })
+          }
           if (failed) return
           if (next.done) {
             release()
@@ -155,7 +175,7 @@ export function upstreamDeadline(input: {
       cancelFirstByte()
     },
     watch(response) {
-      if (response.body === null || signal.aborted) {
+      if (response.body === null || released || signal.aborted) {
         release()
         return response
       }
