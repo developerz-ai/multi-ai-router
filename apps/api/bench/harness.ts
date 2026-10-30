@@ -155,6 +155,9 @@ export function benchApp(options: BenchAppOptions): BenchApp {
           metrics.observeRequest(sample)
           options.onTerminal?.(sample)
         },
+        // The streamed attempt's clocks at their production defaults, so a streamed scenario pays
+        // what a deployment pays (`dataplane/upstream-deadline.ts`).
+        options: { upstreamStream: { firstByteMs: 300_000, idleMs: 55_000, totalMs: 3_600_000 } },
       }),
     }),
   )

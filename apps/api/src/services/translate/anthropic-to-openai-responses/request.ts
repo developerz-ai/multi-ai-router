@@ -1,3 +1,4 @@
+import type { ReasoningSeal } from "../../crypto/reasoning-seal"
 import type {
   ParsedAnthropicBlock,
   ParsedAnthropicMessage,
@@ -21,6 +22,7 @@ import type {
 } from "../shared/openai-responses"
 import { anthropicAskedForReasoning, openAiEffortFromAnthropic } from "../shared/reasoning-effort"
 import { assertNoStopSequence, parseRequest, rejectField } from "../shared/reject"
+import { replayedReasoningItem } from "../shared/sealed-reasoning"
 import { toolChoiceForOpenAiChat } from "../shared/tool-choice"
 import {
   argumentsFromInput,
@@ -50,13 +52,15 @@ import {
  * Reasoning: `output_config.effort` becomes `reasoning.effort` (a `thinking` budget with no effort
  * lands in a bucket, `shared/reasoning-effort.ts`), and a client that asked for thinking at all gets
  * `reasoning.summary: "auto"` so the upstream writes a summary that travels back as a `thinking`
- * block. `include: ["reasoning.encrypted_content"]` is deliberately **not** requested: the handle is
- * bound to the account that minted it, the next turn may land on another account in the pool, and
- * a replayed handle the upstream cannot verify fails that turn — so it would be fetched only to be
- * thrown away.
+ * block. `include: ["reasoning.encrypted_content"]` is requested **only under the selected account's
+ * reasoning seal**: the handle is bound to the account that minted it, so it travels back to the
+ * client sealed for that account and is replayed as a `reasoning` item only when the same account's
+ * seal opens it (`shared/sealed-reasoning.ts`) — which keeps a reasoning model's tool loop on one
+ * cacheable prefix. Without a seal nothing is requested, as before.
  *
  * Dropped silently, as documented: `top_k`, `cache_control`, `thinking` / `redacted_thinking`
- * blocks (including router-signed ones, `shared/router-thinking.ts`), `metadata`, and any `anthropic-beta` opt-in (a header, handled by the transport). Dropped
+ * blocks the seal does not open (Anthropic's own, router-tagged `mar1:` ones, another account's),
+ * `metadata`, and any `anthropic-beta` opt-in (a header, handled by the transport). Dropped
  * and **reported** through `options.onDrop`: server-side and built-in tools, a `tool_choice` naming
  * one, non-text documents, and any block type the target cannot carry; an image inside a
  * `tool_result` is hoisted into a user message item after the `function_call_output`. Refused: a
@@ -70,6 +74,8 @@ const TARGET = "an openai-responses item"
 export interface AnthropicToOpenAiResponsesOptions {
   /** Where a dropped field is reported. Absent, drops are silent (`shared/drops.ts`). */
   readonly onDrop?: DropSink | undefined
+  /** The selected account's seal; absent, reasoning state is neither requested nor replayed. */
+  readonly reasoningSeal?: ReasoningSeal | undefined
 }
 
 const USER_TOOL_USE =
@@ -94,7 +100,7 @@ export function anthropicToOpenAiResponsesRequest(
   const input: OpenAiResponsesItem[] = []
   for (const [index, message] of request.messages.entries()) {
     const at = `messages[${index}]`
-    if (message.role !== "system") appendMessage(input, message, at, onDrop)
+    if (message.role !== "system") appendMessage(input, message, at, onDrop, options.reasoningSeal)
     else if (!isClearedSystemTurn(request.messages, index)) {
       // In place, as `developer`: the top-level `system` is the only `instructions`.
       const text = systemTurnText(message, at, onDrop, TARGET)
@@ -134,6 +140,7 @@ export function anthropicToOpenAiResponsesRequest(
     // The router holds no conversation state and an Anthropic client has no way to name a stored
     // response on its next turn, so one left behind is litter nobody can reference or delete.
     store: false,
+    include: options.reasoningSeal === undefined ? undefined : ["reasoning.encrypted_content"],
   }
 }
 
@@ -142,6 +149,7 @@ function appendMessage(
   message: ParsedAnthropicMessage,
   at: string,
   onDrop: DropSink,
+  seal: ReasoningSeal | undefined,
 ): void {
   const blocks: readonly ParsedAnthropicBlock[] =
     typeof message.content === "string"
@@ -206,10 +214,19 @@ function appendMessage(
         break
       }
       case "thinking":
-      case "redacted_thinking":
-        // Documented drop. Re-sending a reasoning block as plain text would put the model's own
-        // scratchpad into the transcript as if a participant had said it.
+      case "redacted_thinking": {
+        // Never as plain text: that would put the model's own scratchpad into the transcript as if
+        // a participant had said it. Only a block this account's seal opens comes back, as itself.
+        const replay =
+          block.type === "thinking"
+            ? replayedReasoningItem(block.thinking, block.signature, seal)
+            : replayedReasoningItem("", block.data, seal)
+        if (replay !== null && role === "assistant") {
+          flush()
+          items.push(replay)
+        }
         break
+      }
       case "tool_addition":
       case "tool_removal":
         // Only meaningful inside a `system` turn (`anthropic-system-turns.ts`).

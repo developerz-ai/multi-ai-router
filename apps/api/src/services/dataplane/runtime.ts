@@ -2,6 +2,7 @@ import type { Dialect } from "@multi-ai-router/core"
 import type { SdkInvoker, SdkQuotaStore, SessionStore } from "../../providers"
 import type { RateLookup } from "../cost"
 import type { CredentialCipher } from "../crypto/cipher"
+import type { ReasoningSealer } from "../crypto/reasoning-seal"
 import type { UsageRecord } from "../usage"
 import type { ActiveRequestLease } from "./active-requests"
 import type { SessionKeySource } from "./body/session"
@@ -11,6 +12,7 @@ import type { AttemptRecordInput, AttemptTiming } from "./records"
 import type { RecoveryAccess } from "./recovery-access"
 import type { SdkSessionContext } from "./sdk-attempt"
 import type { DataPlaneClock, FetchLike, UpstreamOperation } from "./types"
+import type { StreamDeadlines } from "./upstream-deadline"
 
 /**
  * Everything one client request carries through its failover chain, bundled once.
@@ -57,6 +59,10 @@ export interface RuntimeInput {
   readonly clientToolLoop?: boolean
   readonly clock: DataPlaneClock
   readonly timeoutMs: number
+  /** A streamed HTTP attempt's clocks (`upstream-deadline.ts`). Absent: `timeoutMs` bounds it all. */
+  readonly streamDeadlines?: StreamDeadlines
+  /** Binds an upstream's encrypted reasoning to the account that issued it (`crypto/reasoning-seal.ts`). */
+  readonly reasoningSealer?: ReasoningSealer
   readonly bodyReadMs?: number
   readonly errorMaxBytes?: number
   readonly responseObservationMaxBytes?: number

@@ -32,6 +32,7 @@ function serviceAt(maxRows: number) {
     labels: async () => ({ keys: new Map() }),
     pools: async () => [],
     upstreamTimeoutMs: 600_000,
+    upstreamStreamTimeoutMs: 600_000,
     listLimit: 10,
     maxRows,
     now: () => NOW,
@@ -70,5 +71,44 @@ describe("the too-large failure", () => {
     expect(error).toBeInstanceOf(Error)
     expect((error as Error).message).toContain("code change")
     expect((error as Error).message).not.toContain("raise USAGE_REPORT_MAX_ROWS")
+  })
+})
+
+/**
+ * A streamed attempt may run `UPSTREAM_STREAM_TIMEOUT_MS` (1 h default), far past the 10 min
+ * `UPSTREAM_TIMEOUT_MS`. The settle-margin caveat compares the real gap after the week boundary with
+ * the longest an attempt can run, so a report generated 30 min after the boundary must not claim
+ * every in-flight attempt had landed.
+ */
+describe("settle margin against the longest upstream attempt", () => {
+  const thirtyMinutesPast = new Date("2026-10-12T00:30:00.000Z")
+  function service(upstreamStreamTimeoutMs: number) {
+    return createUsageReportService({
+      reports: idleReports,
+      history: { weekRows: async () => ({ rows: [], unpricedSince: "infinity" }) },
+      labels: async () => ({ keys: new Map() }),
+      pools: async () => [],
+      upstreamTimeoutMs: 600_000,
+      upstreamStreamTimeoutMs,
+      listLimit: 10,
+      maxRows: 10,
+      now: () => thirtyMinutesPast,
+    })
+  }
+
+  test("a 1 h stream deadline is not covered by a 30 min gap", async () => {
+    const preview = await service(3_600_000).preview()
+    expect(preview.ok).toBe(true)
+    if (!preview.ok) return
+    expect(preview.value.coverage.upstreamTimeoutMs).toBe(3_600_000)
+    expect(preview.value.coverage.settleCoversUpstreamTimeout).toBe(false)
+    const text = preview.value.caveats.find((c) => c.code === "settle_margin")?.text ?? ""
+    expect(text).toContain("60 minute")
+  })
+
+  test("the non-streamed deadline still decides when it is the longer one", async () => {
+    const preview = await service(60_000).preview()
+    expect(preview.ok && preview.value.coverage.upstreamTimeoutMs).toBe(600_000)
+    expect(preview.ok && preview.value.coverage.settleCoversUpstreamTimeout).toBe(true)
   })
 })

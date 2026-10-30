@@ -20,6 +20,9 @@ import {
   sanitizeErrorBody,
 } from "./error-body"
 import type { FetchLike, RoutableAccount } from "./types"
+import { attemptDeadline, type StreamDeadlines, upstreamDeadline } from "./upstream-deadline"
+
+export { attemptDeadline }
 
 /**
  * One upstream attempt: address it, authenticate it, send it, and decide what came back.
@@ -48,6 +51,11 @@ export interface AttemptInput {
   readonly fetch: FetchLike
   readonly cipher: Pick<CredentialCipher, "decrypt">
   readonly timeoutMs: number
+  /**
+   * Present when the upstream answers as a stream: first-byte, idle and total clocks replace the one
+   * `timeoutMs` deadline (`upstream-deadline.ts`). Absent keeps `timeoutMs` for the whole attempt.
+   */
+  readonly stream?: StreamDeadlines
   readonly errorMaxBytes?: number
   readonly beforeUpstreamStart?: UpstreamStartGuard
   readonly onUpstreamStarted?: () => void
@@ -105,11 +113,15 @@ export async function runAttempt(input: AttemptInput): Promise<AttemptOutcome> {
     headers.set(input.cacheKey[0], input.cacheKey[1])
   }
 
+  const deadline =
+    input.stream === undefined
+      ? undefined
+      : upstreamDeadline({ stream: input.stream, client: input.signal })
   const request = new Request(plan.url.toString(), {
     method: input.method,
     headers,
     ...(input.body === null ? {} : { body: input.body }),
-    signal: attemptDeadline(input.timeoutMs, input.signal),
+    signal: deadline?.signal ?? attemptDeadline(input.timeoutMs, input.signal),
     redirect: "manual",
   })
 
@@ -119,7 +131,9 @@ export async function runAttempt(input: AttemptInput): Promise<AttemptOutcome> {
     input.beforeUpstreamStart?.()
     input.onUpstreamStarted?.()
     response = await input.fetch(request)
+    deadline?.headersArrived()
   } catch (error) {
+    deadline?.release()
     if (error instanceof UpstreamAdmissionRefused) return { kind: "admission-refused" }
     return {
       kind: "failure",
@@ -138,6 +152,7 @@ export async function runAttempt(input: AttemptInput): Promise<AttemptOutcome> {
   })
 
   if (response.status >= 300 && response.status < 400) {
+    deadline?.release()
     void response.body?.cancel().catch(() => {})
     return {
       kind: "failure",
@@ -153,7 +168,7 @@ export async function runAttempt(input: AttemptInput): Promise<AttemptOutcome> {
   }
 
   if (response.status < 400) {
-    return { kind: "success", response, rateLimit }
+    return { kind: "success", response: deadline?.watch(response) ?? response, rateLimit }
   }
 
   const secret =
@@ -166,7 +181,9 @@ export async function runAttempt(input: AttemptInput): Promise<AttemptOutcome> {
     ...new Set([...privateHeaderValues(driverHeaders), ...(secret ? [secret] : [])]),
   ].sort((a, b) => b.length - a.length)
   const bodyText = sanitizeErrorBody(
-    await readErrorBody(response, input.errorMaxBytes ?? DEFAULT_UPSTREAM_ERROR_MAX_BYTES),
+    await readErrorBody(response, input.errorMaxBytes ?? DEFAULT_UPSTREAM_ERROR_MAX_BYTES).finally(
+      () => deadline?.release(),
+    ),
     secrets,
   )
   const classified = plan.driver.classifyFailure({
@@ -257,17 +274,6 @@ function transportFailure(error: unknown): AttemptFailure {
       ? "upstream did not answer within its deadline"
       : "upstream connection failed",
   }
-}
-
-/**
- * The upstream call is bounded, and a client that disconnects releases it immediately.
- *
- * Shared with the Agent-SDK path, where the same signal terminates the subprocess: a client that
- * goes away must never orphan one (docs/idea/11-anthropic-agent-sdk.md §9).
- */
-export function attemptDeadline(timeoutMs: number, client: AbortSignal | undefined): AbortSignal {
-  const timeout = AbortSignal.timeout(timeoutMs)
-  return client === undefined ? timeout : AbortSignal.any([timeout, client])
 }
 
 /**

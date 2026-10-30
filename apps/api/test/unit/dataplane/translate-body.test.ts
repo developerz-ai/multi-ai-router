@@ -1,5 +1,9 @@
 import { describe, expect, test } from "bun:test"
 import { TranslationError } from "@multi-ai-router/core"
+import {
+  createReasoningSealer,
+  type ReasoningSeal,
+} from "../../../src/services/crypto/reasoning-seal"
 import { createTranslatedRequestBody } from "../../../src/services/dataplane"
 import type { TranslationContext, TranslationPair } from "../../../src/services/translate"
 
@@ -128,5 +132,35 @@ describe("createTranslatedRequestBody", () => {
     const translated = createTranslatedRequestBody(new Uint8Array(), CONTEXT)
 
     expect(() => translated.bodyFor(pair, "gpt-4o", "max_tokens")).toThrow(TranslationError)
+  })
+})
+
+describe("reasoning seal: bound to the selected account", () => {
+  const sealer = createReasoningSealer(Buffer.alloc(32, 7).toString("base64"))
+  const sealFor = (accountId: string) => ({ accountId, seal: sealer.forAccount(accountId) })
+
+  test("the conversion is handed the selected account's seal", () => {
+    const { pair, calls } = recordingPair("openai-responses")
+    const translated = createTranslatedRequestBody(SOURCE, CONTEXT)
+    translated.bodyFor(pair, "gpt-5", "max_tokens", undefined, undefined, undefined, sealFor("a"))
+    const handed = (calls[0] as { reasoningSeal?: ReasoningSeal }).reasoningSeal
+    expect(handed?.open(sealer.forAccount("a").seal("blob"))).toBe("blob")
+  })
+
+  test("a sealed conversion is never shared across accounts", () => {
+    const { pair, calls } = recordingPair("openai-responses")
+    const translated = createTranslatedRequestBody(SOURCE, CONTEXT)
+    translated.bodyFor(pair, "gpt-5", "max_tokens", undefined, undefined, undefined, sealFor("a"))
+    translated.bodyFor(pair, "gpt-5", "max_tokens", undefined, undefined, undefined, sealFor("b"))
+    translated.bodyFor(pair, "gpt-5", "max_tokens", undefined, undefined, undefined, sealFor("a"))
+    expect(calls).toHaveLength(2)
+  })
+
+  test("without a seal, accounts of one shape still share one conversion", () => {
+    const { pair, calls } = recordingPair("openai-responses")
+    const translated = createTranslatedRequestBody(SOURCE, CONTEXT)
+    translated.bodyFor(pair, "gpt-5", "max_tokens")
+    translated.bodyFor(pair, "gpt-5", "max_tokens")
+    expect(calls).toHaveLength(1)
   })
 })

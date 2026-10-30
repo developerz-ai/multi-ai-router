@@ -5,6 +5,7 @@
 
 import { describe, expect, test } from "bun:test"
 import {
+  anthropicUsageCounts,
   parseAnthropicUsage,
   parseOpenAiChatUsage,
   usageToAnthropic,
@@ -117,7 +118,7 @@ describe("openai-chat -> anthropic: cache_read is subtracted back out", () => {
     expect(out.cache_read_input_tokens).toBe(20)
   })
 
-  test("cache_creation_input_tokens is always null: openai-chat never distinguishes the write", () => {
+  test("cache_creation_input_tokens is null when the upstream reports no write", () => {
     const out = usageToAnthropic({
       prompt_tokens: 130,
       completion_tokens: 50,
@@ -165,5 +166,51 @@ describe("openai-chat -> anthropic: cache_read is subtracted back out", () => {
     })
     expect(out.input_tokens).toBe(100)
     expect(out.cache_read_input_tokens).toBeNull()
+  })
+})
+
+describe("cache writes and cache hits an openai-chat upstream reports", () => {
+  test("OpenRouter's prompt_tokens_details.cache_write_tokens maps to cache_creation_input_tokens", () => {
+    const parsed = parseOpenAiChatUsage({
+      prompt_tokens: 1000,
+      completion_tokens: 5,
+      prompt_tokens_details: { cached_tokens: 600, cache_write_tokens: 300 },
+    })
+    expect(parsed).not.toBeNull()
+    if (parsed === null) return
+    expect(usageToAnthropic(parsed)).toEqual({
+      input_tokens: 100,
+      output_tokens: 5,
+      cache_creation_input_tokens: 300,
+      cache_read_input_tokens: 600,
+    })
+    expect(anthropicUsageCounts(parsed)).toEqual({
+      output_tokens: 5,
+      input_tokens: 100,
+      cache_read_input_tokens: 600,
+      cache_creation_input_tokens: 300,
+    })
+  })
+
+  test("DeepSeek's top-level prompt_cache_hit_tokens is a cache read", () => {
+    const parsed = parseOpenAiChatUsage({
+      prompt_tokens: 100,
+      completion_tokens: 5,
+      prompt_cache_hit_tokens: 64,
+      prompt_cache_miss_tokens: 36,
+    })
+    expect(parsed?.prompt_tokens_details?.cached_tokens).toBe(64)
+    expect(parsed === null ? null : usageToAnthropic(parsed).input_tokens).toBe(36)
+  })
+
+  test("an unreported write stays absent on the Anthropic wire", () => {
+    expect(
+      anthropicUsageCounts({
+        prompt_tokens: 100,
+        completion_tokens: 5,
+        total_tokens: 105,
+        prompt_tokens_details: { cached_tokens: 40 },
+      }),
+    ).toEqual({ output_tokens: 5, input_tokens: 60, cache_read_input_tokens: 40 })
   })
 })

@@ -19,12 +19,12 @@ function refused(over: Record<string, string>): EnvValidationError {
 }
 
 describe("weekly report env", () => {
-  test("defaults: Monday 00:00 UTC, 30 minute settle, hourly check, two years retained", () => {
+  test("defaults: Monday 00:00 UTC, 75 minute settle (past the 1 h stream deadline), hourly check, two years retained", () => {
     const env = parseEnv(base)
     expect(env.usageReport).toEqual({
       weekday: 1,
       hourUtc: 0,
-      settleMinutes: 30,
+      settleMinutes: 75,
       maxRows: 50_000,
       discordWebhookUrl: null,
       maxDeliveryAttempts: 6,

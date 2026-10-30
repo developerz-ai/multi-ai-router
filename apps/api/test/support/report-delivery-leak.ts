@@ -143,6 +143,7 @@ try {
     labels,
     pools: async () => [],
     upstreamTimeoutMs: 600_000,
+    upstreamStreamTimeoutMs: 600_000,
     maxRows: 1000,
     listLimit: 10,
     now,

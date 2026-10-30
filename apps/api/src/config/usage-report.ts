@@ -194,7 +194,9 @@ export function readUsageReportEnv(
   const usageReport: UsageReportConfig = {
     weekday: raw.USAGE_REPORT_WEEKDAY ?? 1,
     hourUtc: raw.USAGE_REPORT_HOUR_UTC ?? 0,
-    settleMinutes: raw.USAGE_REPORT_SETTLE_MINUTES ?? 30,
+    // Past the 1 h `UPSTREAM_STREAM_TIMEOUT_MS` default, the longest attempt, with 15 minutes for its
+    // off-path row and a late tick: at 30 the default report always carried "missed for good".
+    settleMinutes: raw.USAGE_REPORT_SETTLE_MINUTES ?? 75,
     // The CSV export's ceiling: the same rows are held in memory while the report is built.
     maxRows: raw.USAGE_REPORT_MAX_ROWS ?? 50_000,
     // Null, not "": unset means delivery is off, and every consumer branches on exactly that.

@@ -65,6 +65,11 @@ export interface RejectedCandidate {
 export type PolicyNote =
   | { readonly kind: "binding-pinned"; readonly accountId: string }
   | { readonly kind: "half-open-demoted"; readonly accountIds: readonly string[] }
+  /**
+   * `sticky` only: the session's rendezvous home is half-open and kept its rank rather than being
+   * demoted — moving the session would cost its whole prompt cache (`policies/index.ts`).
+   */
+  | { readonly kind: "affinity-kept"; readonly accountId: string }
   /** Accounts holding this replica's designated recovery permit, moved ahead to settle it. */
   | { readonly kind: "recovery-promoted"; readonly accountIds: readonly string[] }
   /**

@@ -497,7 +497,9 @@ Rows are swept by the janitor on `period_start`, strictly older than `RETENTION_
   the generated-at and coverage, the dating basis (requests by the instant they settled, attempts by
   the instant they started), and whether the real gap between the week's end and generation (the
   schedule's whole anchor offset plus tick lateness; for a preview, whenever it was asked for)
-  covers `UPSTREAM_TIMEOUT_MS` (an attempt that outlives it can land after generation and is missed
+  covers the longest an upstream attempt can run — the larger of `UPSTREAM_TIMEOUT_MS` (non-streamed,
+  Agent SDK) and `UPSTREAM_STREAM_TIMEOUT_MS` (a streamed HTTP attempt, 1 h by default; the payload
+  keeps the field name `upstreamTimeoutMs`) — (an attempt that outlives the gap can land after generation and is missed
   for good; a preview, which stores nothing, says it *would be missed in a stored report* instead).
   The unpriced share is divided by attempts on days the measure covers, so a week that
   straddles the start of the measure is not diluted by unmeasured days.

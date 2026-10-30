@@ -27,6 +27,7 @@ export function createRoutingScanner(options: ScannerOptions = {}) {
     model: string | null = null,
     modelSpan: ScanResult["modelSpan"] = null,
     modelTooLong = false,
+    stream = false,
     depthExceeded = false
   let finalized = false
   let primitive = false,
@@ -156,6 +157,8 @@ export function createRoutingScanner(options: ScannerOptions = {}) {
     }
   }
   function finishPrimitive() {
+    const p = top()
+    if (p?.kind === "object" && stack.length === 1 && p.key === "stream") stream = literal.isTrue()
     if (!literal.finish()) invalid = true
     primitive = false
     valueDone()
@@ -285,6 +288,7 @@ export function createRoutingScanner(options: ScannerOptions = {}) {
         model,
         modelSpan,
         modelTooLong,
+        stream,
         conversationPrefix: opening.snapshot(),
         invalid,
         duplicateModel,

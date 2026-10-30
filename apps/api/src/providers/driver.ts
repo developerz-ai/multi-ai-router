@@ -72,6 +72,14 @@ export interface ProviderSurface {
    * (cross-dialect). Defaults to an ordinary Responses upstream. See `ResponsesEgressRules`.
    */
   readonly responsesEgress?: ResponsesEgressRules
+  /**
+   * OpenAI-dialect surfaces only: the upstream routes its prompt cache by the body's
+   * `prompt_cache_key`, with no header. A body the router *writes* (cross-dialect) that states none
+   * is sent the conversation's session-derived key (`dataplane/egress/cache-key-header.ts`); a
+   * same-dialect body is relayed untouched and keeps whatever the client wrote. Absent means the
+   * field is never added — a vendor whose schema forbids extras would `400` on it.
+   */
+  readonly bodyCacheKey?: boolean
 }
 
 export interface HttpDriverConfig {
@@ -149,6 +157,7 @@ export function createHttpDriver(config: HttpDriverConfig): ProviderDriver {
     resolveResponsesEgress: (account) =>
       surfaceFor(account).responsesEgress ?? DEFAULT_RESPONSES_EGRESS,
     thinkingOnByDefault: (account) => surfaceFor(account).thinkingOnByDefault === true,
+    keysPromptCacheByBody: (account) => surfaceFor(account).bodyCacheKey === true,
     buildHeaders: (account, credential) => {
       requireCredential(config, account, credential)
       return surfaceHeaders(surfaceFor(account), credential)

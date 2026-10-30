@@ -34,6 +34,11 @@ export interface ReportPeriod {
   readonly start: Date
   readonly end: Date
   readonly generatedAt: Date
+  /**
+   * The longest an upstream attempt can run — the larger of `UPSTREAM_TIMEOUT_MS` and
+   * `UPSTREAM_STREAM_TIMEOUT_MS`. Named for the one setting it was before streams had their own
+   * deadline; the stored payload keeps the name.
+   */
   readonly upstreamTimeoutMs: number
   /** First fully measured day of the unpriced measure, `YYYY-MM-DD`, or `infinity`. */
   readonly unpricedSince: string

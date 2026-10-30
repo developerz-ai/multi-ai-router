@@ -38,11 +38,26 @@ const CREDIT_CODES = ["insufficient_quota", "billing_hard_limit_reached", "accou
  */
 const CHAT_CEILING = "max_completion_tokens" as const
 
+/**
+ * Provenance: OpenAI's prompt-caching guide — requests are routed to a cache machine by a hash of
+ * the prompt prefix, combined with `prompt_cache_key` when one is sent, and both Chat Completions and
+ * Responses accept the field. Concurrent conversations sharing one long system prompt otherwise land
+ * on the same few machines and overflow them into cold prefill. Blast radius: every **translated**
+ * request to an `openai-api` account carries a session-derived key; a same-dialect body is relayed
+ * untouched. If OpenAI drops the field, the request still serves — only cache reads fall.
+ */
+const BODY_CACHE_KEY = true
+
 export const openAiApiDriver = createHttpDriver({
   id: "openai-api",
   surfaces: [
-    { dialect: "openai-chat", baseUrl: BASE_URL, chatCeiling: CHAT_CEILING },
-    { dialect: "openai-responses", baseUrl: BASE_URL },
+    {
+      dialect: "openai-chat",
+      baseUrl: BASE_URL,
+      chatCeiling: CHAT_CEILING,
+      bodyCacheKey: BODY_CACHE_KEY,
+    },
+    { dialect: "openai-responses", baseUrl: BASE_URL, bodyCacheKey: BODY_CACHE_KEY },
   ],
   rules: [
     codeRule("credits-exhausted", "openai:insufficient_quota", CREDIT_CODES),

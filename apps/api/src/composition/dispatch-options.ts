@@ -41,6 +41,9 @@ export function dispatchOptionsFromEnv(env: Env): DispatchOptions {
     // answering 429 (`dataplane/recovery-wait.ts`); polled on the coordinator's own tick.
     recoveryWait: { budgetMs: env.recovery.requestWaitMs, intervalMs: env.recovery.intervalMs },
     upstreamTimeoutMs: failover.upstreamTimeoutMs,
+    // A streamed attempt's clocks: failover on a hung upstream, an honest error on a stalled stream,
+    // and a total sized for long generations rather than for hangs (`dataplane/upstream-deadline.ts`).
+    upstreamStream: env.upstreamStream,
     upstreamErrorMaxBytes: failover.upstreamErrorMaxBytes,
     responseObservationMaxBytes: failover.responseObservationMaxBytes,
     translation: {

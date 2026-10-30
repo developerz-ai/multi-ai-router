@@ -5,6 +5,7 @@ import type { TranslationContext, TranslationPair } from "../translate/registry"
 import type { TranslationDrop } from "../translate/shared/drops"
 import type { ResponsesEgressRules } from "../translate/shared/responses-egress"
 import { effectiveCacheKey } from "./egress/cache-key-header"
+import { type AccountReasoningSeal, withReasoningSeal } from "./reasoning-seal-context"
 
 /**
  * The upstream body a translate candidate sends — built lazily, and at most once per target shape.
@@ -39,8 +40,17 @@ export interface TranslatedRequestBody {
     chatCeiling: OpenAiChatCeiling,
     defaultMaxTokens?: number,
     responsesEgress?: ResponsesEgressRules,
-    /** Sent as `prompt_cache_key` when the body states none (`egress/cache-key-header.ts`). */
-    fallbackCacheKey?: string,
+    /**
+     * Present when the target surface keys its prompt cache by `prompt_cache_key`: the caller's own
+     * key is sent, else `fallback` — the router's session key (`egress/cache-key-header.ts`). Absent,
+     * the field is left exactly as the conversion wrote it.
+     */
+    cacheKey?: PromptCacheKeying,
+    /**
+     * The selected account's reasoning seal. Present, the conversion is keyed by the account too:
+     * a body carrying one account's sealed reasoning is never handed to another.
+     */
+    reasoningSeal?: AccountReasoningSeal,
   ): Uint8Array
   /** Whether the client asked for a stream — read from the cached parse; false before one. */
   clientStreams(): boolean
@@ -49,6 +59,10 @@ export interface TranslatedRequestBody {
    * dialects spell it this way and Anthropic states none, so the ingress name is the only one read.
    */
   promptCacheKey(): string | undefined
+}
+
+export interface PromptCacheKeying {
+  readonly fallback: string | undefined
 }
 
 /**
@@ -84,6 +98,12 @@ export function createTranslatedRequestBody(
     return source
   }
 
+  const callerCacheKey = (): string | undefined => {
+    if (!parsed || typeof source !== "object" || source === null) return undefined
+    const key = "prompt_cache_key" in source ? source.prompt_cache_key : undefined
+    return typeof key === "string" ? key : undefined
+  }
+
   return {
     includeUsage() {
       // Only read the cached cross-dialect parse: passthrough pays no extra decode or parse.
@@ -106,27 +126,29 @@ export function createTranslatedRequestBody(
         source.stream === true
       )
     },
-    promptCacheKey() {
-      if (!parsed || typeof source !== "object" || source === null) return undefined
-      const key = "prompt_cache_key" in source ? source.prompt_cache_key : undefined
-      return typeof key === "string" ? key : undefined
-    },
-    bodyFor(pair, upstreamModel, chatCeiling, defaultMaxTokens, responsesEgress, fallbackCacheKey) {
+    promptCacheKey: callerCacheKey,
+    bodyFor(pair, upstreamModel, chatCeiling, defaultMaxTokens, responsesEgress, keying, sealed) {
       const effectiveDefault = defaultMaxTokens ?? context.defaultMaxTokens
-      const shape = `${pair.egress}|${chatCeiling}|${effectiveDefault ?? "fallback"}|${egressKey(responsesEgress)}`
+      const shape = `${pair.egress}|${chatCeiling}|${effectiveDefault ?? "fallback"}|${egressKey(responsesEgress)}|${sealed?.accountId ?? ""}`
       let translated = converted.get(shape)
       if (translated === undefined) {
         // A translator emits an object; anything else would mean a pair returning a body no
         // upstream could read, and asserting it here beats discovering it as a 400 from the
         // provider on a body we wrote.
         const drops: TranslationDrop[] = []
-        const result = pair.request(body(), {
-          ...context,
-          chatCeiling,
-          defaultMaxTokens: effectiveDefault,
-          responsesEgress,
-          onDrop: (drop) => void drops.push(drop),
-        })
+        const result = pair.request(
+          body(),
+          withReasoningSeal(
+            {
+              ...context,
+              chatCeiling,
+              defaultMaxTokens: effectiveDefault,
+              responsesEgress,
+              onDrop: (drop) => void drops.push(drop),
+            },
+            sealed,
+          ),
+        )
         if (typeof result !== "object" || result === null || Array.isArray(result)) {
           throw new TranslationError(
             `the ${pair.ingress} to ${pair.egress} conversion produced no body`,
@@ -140,8 +162,13 @@ export function createTranslatedRequestBody(
       // upstream bills, and it must survive whatever the conversion put there.
       const withModel: Record<string, unknown> = { ...translated, model: upstreamModel }
       // Per request, not per shape: the cached conversion is shared by every account in the chain.
-      const cacheKey = effectiveCacheKey(withModel.prompt_cache_key, fallbackCacheKey)
-      if (cacheKey !== undefined) withModel.prompt_cache_key = cacheKey
+      // Only toward a surface that keys its cache, and the caller's own key first even when the
+      // conversion had no field to carry it in (Responses -> chat drops it).
+      if (keying !== undefined) {
+        const caller = effectiveCacheKey(withModel.prompt_cache_key, callerCacheKey())
+        const cacheKey = effectiveCacheKey(caller, keying.fallback)
+        if (cacheKey !== undefined) withModel.prompt_cache_key = cacheKey
+      }
       // The one vendor dial decided by the *upstream* model (post-alias, the billed name) rather
       // than the conversion shape, so it is applied here and not baked into the cached body: a
       // forced tool to a think-by-default openai-chat vendor is sent `enable_thinking: false`

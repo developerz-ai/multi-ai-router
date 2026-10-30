@@ -47,7 +47,12 @@ export const openAiChatUsageSchema = z.looseObject({
   prompt_tokens: tokenCount,
   completion_tokens: tokenCount,
   total_tokens: tokenCount,
-  prompt_tokens_details: z.looseObject({ cached_tokens: tokenCount }).nullish().catch(null),
+  /** DeepSeek states its cache hit here rather than in `prompt_tokens_details`. */
+  prompt_cache_hit_tokens: tokenCount,
+  prompt_tokens_details: z
+    .looseObject({ cached_tokens: tokenCount, cache_write_tokens: tokenCount })
+    .nullish()
+    .catch(null),
   completion_tokens_details: z.looseObject({ reasoning_tokens: tokenCount }).nullish().catch(null),
 })
 
@@ -70,7 +75,14 @@ export interface OpenAiChatUsage {
   readonly prompt_tokens: number | null
   readonly completion_tokens: number | null
   readonly total_tokens: number | null
-  readonly prompt_tokens_details?: { readonly cached_tokens: number | null } | undefined
+  readonly prompt_tokens_details?:
+    | {
+        readonly cached_tokens: number | null
+        /** OpenRouter's extension: the cache write billed inside `prompt_tokens` (an Anthropic
+         * model behind it). Absent from the wire when unreported. */
+        readonly cache_write_tokens?: number | null | undefined
+      }
+    | undefined
   readonly completion_tokens_details?: { readonly reasoning_tokens: number | null } | undefined
 }
 
@@ -99,13 +111,20 @@ export function parseOpenAiChatUsage(value: unknown): OpenAiChatUsage | null {
   const parsed = openAiChatUsageSchema.safeParse(value)
   if (!parsed.success) return null
 
-  const cached = parsed.data.prompt_tokens_details?.cached_tokens ?? null
+  const details = parsed.data.prompt_tokens_details
+  const cached = details?.cached_tokens ?? parsed.data.prompt_cache_hit_tokens ?? null
+  const written = details?.cache_write_tokens ?? null
   const reasoning = parsed.data.completion_tokens_details?.reasoning_tokens ?? null
   return {
     prompt_tokens: parsed.data.prompt_tokens ?? null,
     completion_tokens: parsed.data.completion_tokens ?? null,
     total_tokens: parsed.data.total_tokens ?? null,
-    prompt_tokens_details: cached === null ? undefined : { cached_tokens: cached },
+    prompt_tokens_details:
+      cached === null && written === null
+        ? undefined
+        : written === null
+          ? { cached_tokens: cached }
+          : { cached_tokens: cached, cache_write_tokens: written },
     completion_tokens_details: reasoning === null ? undefined : { reasoning_tokens: reasoning },
   }
 }
@@ -180,19 +199,22 @@ export function usageToOpenAiChat(usage: AnthropicUsage): OpenAiChatUsage {
 /**
  * openai-chat usage → Anthropic usage.
  *
- * `cache_creation_input_tokens` is always null: openai-chat reports cache *reads* and never
- * distinguishes the write that populated the cache, and a router that guessed at it would be
- * inventing the one number an operator reads to decide whether caching is paying for itself.
+ * `cache_creation_input_tokens` is the write only an upstream that reports one states — OpenRouter's
+ * `prompt_tokens_details.cache_write_tokens` — and null otherwise: plain openai-chat reports cache
+ * *reads* only, and a router that guessed at the write would be inventing the one number an operator
+ * reads to decide whether caching is paying for itself. A reported write is inside `prompt_tokens`,
+ * so it is subtracted out of `input_tokens` alongside the read.
  *
  * `total_tokens` and `completion_tokens_details.reasoning_tokens` are dropped — Anthropic states
  * neither, and its total is derived from the fields above by every client that wants one.
  */
 export function usageToAnthropic(usage: OpenAiChatUsage): AnthropicUsage {
   const cached = usage.prompt_tokens_details?.cached_tokens ?? null
+  const written = usage.prompt_tokens_details?.cache_write_tokens ?? null
   return {
-    input_tokens: difference(usage.prompt_tokens, cached),
+    input_tokens: difference(usage.prompt_tokens, sum([cached, written])),
     output_tokens: usage.completion_tokens,
-    cache_creation_input_tokens: null,
+    cache_creation_input_tokens: written,
     cache_read_input_tokens: cached,
   }
 }
@@ -212,6 +234,8 @@ export function anthropicUsageCounts(usage: OpenAiChatUsage | null): Record<stri
   if (input !== null) counts.input_tokens = input
   const cached = mapped?.cache_read_input_tokens ?? null
   if (cached !== null) counts.cache_read_input_tokens = cached
+  const written = mapped?.cache_creation_input_tokens ?? null
+  if (written !== null) counts.cache_creation_input_tokens = written
   return counts
 }
 

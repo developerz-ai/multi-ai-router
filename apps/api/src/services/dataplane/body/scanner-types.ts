@@ -13,6 +13,8 @@ export interface ScanResult {
   model: string | null
   modelSpan: { start: number; end: number } | null
   modelTooLong: boolean
+  /** Top-level `stream` is the literal `true` (last occurrence wins, as `JSON.parse` reads it). */
+  stream: boolean
   /** Bounded bytes of a complete usable opening; empty until that opening closes. */
   conversationPrefix: Uint8Array
   /** Observed error; false on a result() snapshot does not establish EOF validity. */

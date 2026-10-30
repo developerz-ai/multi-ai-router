@@ -90,10 +90,46 @@ export function renderErrorBody(
   code: string | null,
 ): ErrorBody {
   const message = redactValue(rawMessage)
+  if (isContextOverflow(message, code)) return renderContextOverflow(dialect, message, code)
   if (dialect === "anthropic") {
     return { type: "error", error: { type: anthropicErrorType(status), message } }
   }
   return { error: { message, type: openAiErrorType(status), param: null, code } }
+}
+
+/** OpenAI's (and Codex's) machine-readable spelling of "the prompt does not fit the window". */
+const CONTEXT_OVERFLOW_CODE = "context_length_exceeded"
+
+/** Anthropic's prose for the same fact; its SDKs and agent harnesses match on it. */
+const ANTHROPIC_OVERFLOW_PREFIX = "prompt is too long"
+
+function isContextOverflow(message: string, code: string | null): boolean {
+  return code === CONTEXT_OVERFLOW_CODE || message.toLowerCase().includes(ANTHROPIC_OVERFLOW_PREFIX)
+}
+
+/**
+ * A context overflow is the one failure a client recovers from on its own — compact the transcript
+ * and retry — and it can only do that if it recognises one. Whatever status the overflow arrived
+ * under (an in-stream `response.failed` has no status of its own and renders as 500), it is the
+ * client's request that is too big: `invalid_request_error` in both dialects. The Anthropic shape has
+ * no `code`, so the upstream's code rides in the message beside the wording Anthropic's own overflow
+ * uses; the OpenAI shape gets `context_length_exceeded` as its code, whichever upstream said it.
+ */
+function renderContextOverflow(
+  dialect: Dialect | null,
+  message: string,
+  code: string | null,
+): ErrorBody {
+  if (dialect === "anthropic") {
+    // Already Anthropic's own prose (an Anthropic upstream said it): left exactly as written.
+    const reworded = message.toLowerCase().startsWith(ANTHROPIC_OVERFLOW_PREFIX)
+      ? message
+      : `${ANTHROPIC_OVERFLOW_PREFIX}: ${message} (${code ?? CONTEXT_OVERFLOW_CODE})`
+    return { type: "error", error: { type: "invalid_request_error", message: reworded } }
+  }
+  return {
+    error: { message, type: "invalid_request_error", param: null, code: CONTEXT_OVERFLOW_CODE },
+  }
 }
 
 export function toErrorResponse(error: unknown, dialect: Dialect | null): ErrorResponse {

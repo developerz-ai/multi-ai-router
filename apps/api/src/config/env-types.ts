@@ -10,6 +10,7 @@ import type { DatabasePoolConfig, RetentionConfig } from "./env-storage-types"
 import type { readMetricInventoryEnv } from "./metric-inventory"
 import type { readRecoveryEnv } from "./recovery"
 import type { readRelayLifetimesEnv } from "./relay-lifetimes"
+import type { readUpstreamStreamEnv } from "./upstream-stream"
 import type { readUsageReadEnv } from "./usage-read"
 import type { UsageReportConfig } from "./usage-report"
 
@@ -209,6 +210,8 @@ export interface Env {
   readonly failover: FailoverConfig
   readonly metricInventory: ReturnType<typeof readMetricInventoryEnv>["metricInventory"]
   readonly relayLifetimes: ReturnType<typeof readRelayLifetimesEnv>["relayLifetimes"]
+  /** A streamed HTTP attempt's first-byte, idle and total clocks. */
+  readonly upstreamStream: ReturnType<typeof readUpstreamStreamEnv>["upstreamStream"]
   readonly usageRead: ReturnType<typeof readUsageReadEnv>["usageRead"]
   readonly background: ReturnType<typeof readBackgroundEnv>["background"]
   readonly scheduler: SchedulerConfig

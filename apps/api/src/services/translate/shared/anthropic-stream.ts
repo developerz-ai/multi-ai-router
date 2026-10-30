@@ -37,12 +37,13 @@ export interface AnthropicStreamEmitter {
   toolDone(out: SseEvent[], key: string | number): void
   closeBlock(out: SseEvent[]): void
   closeTextBlock(out: SseEvent[]): void
+  /** Signs the open thinking block, else emits `redacted_thinking`; never past a tool block. */
+  sealReasoning(out: SseEvent[], signature: string): void
   terminate(out: SseEvent[], end: AnthropicStreamEnd): void
   fail(out: SseEvent[], payload: unknown): void
 }
 
 type FragmentKind = "message" | "reasoning"
-const SIGNED = { type: "signature_delta", signature: ROUTER_THINKING_SIGNATURE }
 
 interface OpenBlock {
   readonly index: number
@@ -69,9 +70,10 @@ export function createAnthropicStreamEmitter(
     return { event: type, data: JSON.stringify({ type, ...payload }) }
   }
 
-  function closeOpen(out: SseEvent[]): void {
+  function closeOpen(out: SseEvent[], signature = ROUTER_THINKING_SIGNATURE): void {
     if (open === null) return
-    if (open.thinking) out.push(event("content_block_delta", { index: open.index, delta: SIGNED }))
+    const delta = { type: "signature_delta", signature }
+    if (open.thinking) out.push(event("content_block_delta", { index: open.index, delta }))
     out.push(event("content_block_stop", { index: open.index }))
     open = null
   }
@@ -263,6 +265,15 @@ export function createAnthropicStreamEmitter(
     closeBlock,
     closeTextBlock(out) {
       if (open?.tool === null) closeOpen(out)
+    },
+    sealReasoning(out, signature) {
+      if (terminated || (open !== null && open.tool !== null)) return
+      if (open?.thinking) return closeOpen(out, signature)
+      closeOpen(out)
+      const content_block = { type: "redacted_thinking", data: signature }
+      out.push(event("content_block_start", { index: nextBlock, content_block }))
+      out.push(event("content_block_stop", { index: nextBlock }))
+      nextBlock += 1
     },
 
     terminate(out, end) {

@@ -17,6 +17,7 @@ import type { Env } from "./env-types"
 import { readMetricInventoryEnv } from "./metric-inventory"
 import { readRecoveryEnv } from "./recovery"
 import { readRelayLifetimesEnv } from "./relay-lifetimes"
+import { readUpstreamStreamEnv } from "./upstream-stream"
 import { readUsageReadEnv } from "./usage-read"
 import { readUsageReportEnv } from "./usage-report"
 
@@ -88,6 +89,7 @@ export function readParsedEnv(raw: ParsedEnv, ctx: z.RefinementCtx): Env {
     ...readAdminBodiesEnv(raw),
     ...readBackgroundEnv(raw),
     ...readRelayLifetimesEnv(raw),
+    ...readUpstreamStreamEnv(raw, ctx),
     ...readMetricInventoryEnv(raw),
     ...readCliOwnershipEnv(raw),
     port: raw.PORT ?? 8080,

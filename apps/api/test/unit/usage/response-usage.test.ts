@@ -145,3 +145,50 @@ test("Anthropic input/cache bundle remains atomic while output-only deltas prese
   })
   expect(observer.finish().usageInvalid).toBe(true)
 })
+
+test("a message_delta restating input without cache fields keeps the cache the start reported", () => {
+  // Prod fingerprint (MiniMax / z.ai Anthropic-compatible): the final delta repeats input_tokens and
+  // omits the cache fields, which zeroed the cache read message_start had reported.
+  const observer = createResponseObserver({
+    dialect: "anthropic",
+    operation: "messages",
+    contentType: "text/event-stream",
+    maximumObservationBytes: 4096,
+  })
+  const send = (event: unknown) =>
+    observer.observe(encoder.encode(`data: ${JSON.stringify(event)}\n\n`))
+  send({
+    type: "message_start",
+    message: {
+      usage: { input_tokens: 30, cache_read_input_tokens: 900, cache_creation_input_tokens: 50 },
+    },
+  })
+  send({ type: "message_delta", usage: { input_tokens: 30, output_tokens: 12 } })
+  expect(observer.snapshot().counts).toEqual({
+    tokensIn: 30,
+    tokensOut: 12,
+    cacheReadTokens: 900,
+    cacheWriteTokens: 50,
+  })
+  // A delta that does state a cache field still replaces that field alone.
+  send({ type: "message_delta", usage: { input_tokens: 30, cache_read_input_tokens: 950 } })
+  expect(observer.finish().counts).toMatchObject({ cacheReadTokens: 950, cacheWriteTokens: 50 })
+})
+
+test("openai-chat cache writes OpenRouter reports are read and kept out of uncached input", () => {
+  expect(
+    json(
+      "openai-chat",
+      '{"usage":{"prompt_tokens":100,"completion_tokens":5,"prompt_tokens_details":{"cached_tokens":40,"cache_write_tokens":25}}}',
+    ).counts,
+  ).toEqual({ tokensIn: 35, tokensOut: 5, cacheReadTokens: 40, cacheWriteTokens: 25 })
+})
+
+test("DeepSeek's prompt_cache_hit_tokens counts as a cache read", () => {
+  expect(
+    json(
+      "openai-chat",
+      '{"usage":{"prompt_tokens":100,"completion_tokens":5,"prompt_cache_hit_tokens":64,"prompt_cache_miss_tokens":36}}',
+    ).counts,
+  ).toEqual({ tokensIn: 36, tokensOut: 5, cacheReadTokens: 64, cacheWriteTokens: 0 })
+})
