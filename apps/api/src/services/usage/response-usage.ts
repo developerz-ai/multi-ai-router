@@ -42,8 +42,16 @@ export function readResponseUsage(
     !details
   )
     return { counts: previous, invalid: true }
-  const cache = dialect === "anthropic" ? usage.cache_read_input_tokens : details?.cached_tokens
-  const write = dialect === "anthropic" ? usage.cache_creation_input_tokens : undefined
+  const cache =
+    dialect === "anthropic"
+      ? usage.cache_read_input_tokens
+      : // DeepSeek states its cache hit beside the details object rather than inside it.
+        (details?.cached_tokens ??
+        (dialect === "openai-chat" ? usage.prompt_cache_hit_tokens : undefined))
+  // Only OpenRouter states an OpenAI-shaped cache write (an Anthropic model behind it); every other
+  // OpenAI-shaped upstream bills no separate write, so its absence is a measured zero.
+  const write =
+    dialect === "anthropic" ? usage.cache_creation_input_tokens : details?.cache_write_tokens
   const values = [input, output, cache, write]
   if (values.some((value) => value !== undefined && !countSchema.safeParse(value).success))
     return { counts: previous, invalid: true }
@@ -53,28 +61,33 @@ export function readResponseUsage(
   const numericCache = typeof cache === "number" ? cache : undefined
   const numericWrite = typeof write === "number" ? write : undefined
   if (dialect !== "anthropic") {
-    // Cache belongs to this complete sample, never a maximum from an unrelated event.
-    if (numericInput === undefined || (numericCache ?? 0) > numericInput)
+    // Cache belongs to this complete sample, never a maximum from an unrelated event. The input
+    // total includes both cache components, so the uncached remainder is what is left of it.
+    const cached = (numericCache ?? 0) + (numericWrite ?? 0)
+    if (numericInput === undefined || cached > numericInput)
       return { counts: previous, invalid: true }
     return {
       counts: {
-        tokensIn: numericInput - (numericCache ?? 0),
+        tokensIn: numericInput - cached,
         tokensOut: numericOutput ?? 0,
         cacheReadTokens: numericCache ?? 0,
-        cacheWriteTokens: 0,
+        cacheWriteTokens: numericWrite ?? 0,
       },
       invalid: false,
     }
   }
   if (numericInput === undefined && (numericCache !== undefined || numericWrite !== undefined))
     return { counts: previous, invalid: true }
+  // `message_start` is a complete input bundle: a field it leaves out is zero for that message. A
+  // `message_delta` only restates what it names — several Anthropic-compatible upstreams repeat
+  // `input_tokens` there without the cache fields — so an absent field keeps the earlier reading.
+  const bundle = type === "message_start" && numericInput !== undefined
   return {
     counts: {
       tokensIn: numericInput ?? previous.tokensIn,
       tokensOut: Math.max(numericOutput ?? 0, previous.tokensOut),
-      cacheReadTokens: numericInput === undefined ? previous.cacheReadTokens : (numericCache ?? 0),
-      cacheWriteTokens:
-        numericInput === undefined ? previous.cacheWriteTokens : (numericWrite ?? 0),
+      cacheReadTokens: numericCache ?? (bundle ? 0 : previous.cacheReadTokens),
+      cacheWriteTokens: numericWrite ?? (bundle ? 0 : previous.cacheWriteTokens),
     },
     invalid: false,
   }

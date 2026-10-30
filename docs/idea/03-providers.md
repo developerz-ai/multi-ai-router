@@ -90,6 +90,12 @@ interface ProviderDriver {
   // body (06-protocol-translation.md#the-output-ceiling-one-field-two-names).
   resolveChatCeiling(account: DriverAccount): 'max_tokens' | 'max_completion_tokens';
 
+  // True where this Account's OpenAI-dialect surface routes its prompt cache by the body's
+  // `prompt_cache_key` alone (`ProviderSurface.bodyCacheKey`): a body the router *writes* that
+  // states none is sent the conversation's session-derived key. `openai-api` (both surfaces) and
+  // `openrouter` declare it. Absent means the field is never added.
+  keysPromptCacheByBody?(account: DriverAccount): boolean;
+
   // Auth + provider-mandated headers for one upstream request. Never mutates the Account.
   // `null` only where `authKind` is `none`: the mandated headers still go, the auth header
   // does not. Any other provider handed `null` is refused, never sent unauthenticated.
@@ -119,6 +125,7 @@ interface ProviderDriver {
 | `resolveBaseUrl` | Apply the Account override, else the pinned default. | Encode per-request path knowledge. |
 | `resolveDialect` | Report the Account's chosen surface. | Decide whether translation happens — it only supplies the fact. |
 | `resolveChatCeiling` | Report which name this provider states for the openai-chat output ceiling. Defaults to `max_tokens`. | Guess it from a model name — `openai/o3` through OpenRouter is addressed the way OpenRouter states. |
+| `keysPromptCacheByBody` | Say whether the surface keys its prompt cache by body `prompt_cache_key` (06-protocol-translation.md). | Touch a same-dialect body — a byte relay keeps the client's own key, or none. Declare it for a vendor whose schema forbids extras: it would `400`. |
 | `buildHeaders` | Inject the credential and every provider-mandated header (beta flags, account id). | Log or return credential material. |
 | `mapModelAlias` | Translate one name. Identity on miss. | Choose a *different* model on the client's behalf. |
 | `parseRateLimit` | Normalize provider-specific reset/utilization signals into one shape. Never estimate: a reset the provider did not report is `unknown`, not a guess. | Decide policy — that is [05-routing-and-failover.md](05-routing-and-failover.md)'s job. |

@@ -137,6 +137,7 @@ describe.skipIf(!historyUrl)("weekly usage reports over HTTP and Postgres", () =
       ],
       maxRows: 1000,
       upstreamTimeoutMs: 600_000,
+      upstreamStreamTimeoutMs: 600_000,
       listLimit: 110,
       now: () => NOW,
     })
@@ -264,6 +265,7 @@ describe.skipIf(!historyUrl)("weekly usage reports over HTTP and Postgres", () =
       labels: async () => ({ keys: new Map() }),
       pools: async () => [],
       upstreamTimeoutMs: 600_000,
+      upstreamStreamTimeoutMs: 600_000,
       listLimit: 10,
       maxRows: 1,
       now: () => NOW,
@@ -285,6 +287,7 @@ describe.skipIf(!historyUrl)("weekly usage reports over HTTP and Postgres", () =
       labels: async () => ({ keys: new Map() }),
       pools: async () => [],
       upstreamTimeoutMs: 600_000,
+      upstreamStreamTimeoutMs: 600_000,
       listLimit: 10,
       maxRows: 1,
       now: () => NOW,

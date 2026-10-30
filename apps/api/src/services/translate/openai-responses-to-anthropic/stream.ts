@@ -1,3 +1,4 @@
+import type { ReasoningSeal } from "../../crypto/reasoning-seal"
 import { createAnthropicStreamEmitter } from "../shared/anthropic-stream"
 import { responsesFinalEvents } from "../shared/responses-final-events"
 import { createResponsesItemIdentity } from "../shared/responses-item-identity"
@@ -41,7 +42,10 @@ import { frameJson } from "../sse/parse"
  * `response.reasoning_summary_text.delta` opens a `thinking` block, closed with the router's
  * `signature_delta` (`shared/router-thinking.ts`) — the same call `response.ts` makes about a
  * finished reasoning item. A second summary part of the same item continues the block after a
- * newline, the join the non-streaming reading uses.
+ * newline, the join the non-streaming reading uses. Under the serving account's reasoning seal the
+ * block is instead signed with the item's sealed handle when its `output_item.done` arrives — that
+ * event carries `encrypted_content` and closes the block anyway, so nothing waits for it — and an
+ * item that streamed no summary becomes a `redacted_thinking` block (`shared/sealed-reasoning.ts`).
  */
 
 /** Neither field is required: a compatible upstream names both on `response.created`. */
@@ -50,6 +54,8 @@ export interface OpenAiResponsesToAnthropicStreamOptions extends ResponsesRecove
   readonly id?: string | undefined
   /** Used until an event names the model. The client's requested name is the right value. */
   readonly model?: string | undefined
+  /** The serving account's seal; a reasoning item's handle closes its block (`sealed-reasoning.ts`). */
+  readonly reasoningSeal?: ReasoningSeal | undefined
 }
 
 export function openAiResponsesToAnthropicStream(
@@ -167,12 +173,17 @@ export function openAiResponsesToAnthropicStream(
         break
       }
 
-      case "response.output_item.done":
-        if (event.item?.type === "function_call") {
+      case "response.output_item.done": {
+        const sealed = sealedReasoning(event.item, options.reasoningSeal)
+        if (sealed !== null) {
+          emitter.start(out)
+          emitter.sealReasoning(out, sealed)
+        } else if (event.item?.type === "function_call") {
           const key = event.item.id ?? event.output_index ?? `item#${unkeyed}`
           emitter.toolDone(out, key)
         } else emitter.closeTextBlock(out)
         break
+      }
 
       case "response.completed":
       case "response.incomplete": {
@@ -228,6 +239,13 @@ export function openAiResponsesToAnthropicStream(
     unrecognizedStopReason: () => unrecognized,
     translationFailure: () => failure ?? emitter.translationFailure(),
   }
+}
+
+/** The sealed handle of a finished reasoning item, or null — no seal, no blob, another item. */
+function sealedReasoning(item: ParsedResponsesEvent["item"], seal: ReasoningSeal | undefined) {
+  if (seal === undefined || item?.type !== "reasoning") return null
+  const encrypted = item.encrypted_content ?? null
+  return encrypted === null ? null : seal.seal(encrypted)
 }
 
 /** Where a summary delta sits: a new reasoning item opens a block, a new part adds a newline. */

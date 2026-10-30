@@ -67,6 +67,8 @@ export interface ChainContext {
   readonly request: Request
   readonly bodyBytes: Uint8Array
   readonly modelSpan: ByteSpan | null
+  /** The client's top-level `stream: true`, from the routing scan (`body/scanner.ts`). */
+  readonly streamRequested?: boolean
   /** The clock stamp, fallback ids, and configured ceiling every conversion of this request reads. */
   readonly translation: TranslationContext
   /** The converted upstream body, built lazily and only for a candidate that needs one. */

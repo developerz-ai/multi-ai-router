@@ -86,7 +86,12 @@ const toolResultBlock = z.object({
   is_error: z.boolean().optional(),
 })
 
-const thinkingBlock = z.object({ type: z.literal("thinking"), thinking: z.string() })
+const thinkingBlock = z.object({
+  type: z.literal("thinking"),
+  thinking: z.string(),
+  // Read only to open a router seal (`sealed-reasoning.ts`); Anthropic's own are never parsed.
+  signature: z.string().optional(),
+})
 const redactedThinkingBlock = z.object({ type: z.literal("redacted_thinking"), data: z.string() })
 
 /** Beta, inside a mid-conversation `system` turn only. `tool` is read for its name and nothing else. */
@@ -227,6 +232,12 @@ export interface AnthropicThinkingBlock {
   readonly type: "thinking"
   readonly thinking: string
   readonly signature: string
+}
+
+/** A reasoning item with no summary, carried as its sealed blob (`sealed-reasoning.ts`). */
+export interface AnthropicRedactedThinkingBlock {
+  readonly type: "redacted_thinking"
+  readonly data: string
 }
 
 export type AnthropicBlock =

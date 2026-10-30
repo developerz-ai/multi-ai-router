@@ -71,8 +71,8 @@ export function reportCaveats(input: {
     {
       code: "settle_margin",
       text: coverage.settleCoversUpstreamTimeout
-        ? `Generated ${coverage.generatedAfterPeriodEndMinutes} minutes after the week boundary, past the ${timeoutMinutes} minute upstream timeout, so attempts in flight at the boundary had landed.`
-        : `Generated ${coverage.generatedAfterPeriodEndMinutes} minutes after the week boundary, within the ${timeoutMinutes} minute upstream timeout: an attempt still in flight at the boundary can land after generation and ${
+        ? `Generated ${coverage.generatedAfterPeriodEndMinutes} minutes after the week boundary, past the ${timeoutMinutes} minute longest upstream attempt, so attempts in flight at the boundary had landed.`
+        : `Generated ${coverage.generatedAfterPeriodEndMinutes} minutes after the week boundary, within the ${timeoutMinutes} minute longest upstream attempt: an attempt still in flight at the boundary can land after generation and ${
             // A preview stores nothing, so nothing is lost yet — the loss is the stored report's.
             period.preview ? "would be missed in a stored report" : "is missed for good"
           }.`,

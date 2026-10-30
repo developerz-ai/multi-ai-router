@@ -42,9 +42,21 @@ const KEY_LIMIT = /key limit exceeded/i
  */
 const KEY_LIMIT_RETEST_SECONDS = 60 * 60
 
+/**
+ * Provenance: openrouter.ai/docs/features/prompt-caching (read 2026-10-30) — "If neither is set,
+ * OpenRouter falls back to the OpenAI-style `prompt_cache_key` request field as the sticky routing
+ * key"; "Clients that already send `prompt_cache_key` get session-pinned routing without any
+ * changes", and its OpenAI caching examples send the field. So it pins a conversation to one
+ * provider endpoint (whose cache is warm) as well as reaching OpenAI's own cache routing. Blast
+ * radius: every **translated** request to an `openrouter` account (an Anthropic-wire client)
+ * carries a session-derived key; a same-dialect body is relayed untouched. If OpenRouter drops the
+ * field, cache reads fall; nothing fails.
+ */
+const BODY_CACHE_KEY = true
+
 export const openRouterDriver = createHttpDriver({
   id: "openrouter",
-  surfaces: [{ dialect: "openai-chat", baseUrl: BASE_URL }],
+  surfaces: [{ dialect: "openai-chat", baseUrl: BASE_URL, bodyCacheKey: BODY_CACHE_KEY }],
   rules: [
     withResetEstimate(
       messageRule("rate-limited", "openrouter:key-limit-window", KEY_LIMIT_WINDOW),

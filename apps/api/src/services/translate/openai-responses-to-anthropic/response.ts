@@ -1,11 +1,13 @@
+import type { ReasoningSeal } from "../../crypto/reasoning-seal"
 import type {
+  AnthropicRedactedThinkingBlock,
   AnthropicTextBlock,
   AnthropicThinkingBlock,
   AnthropicToolUseBlock,
 } from "../shared/anthropic"
 import type { TranslatedResponse } from "../shared/response"
 import { readResponsesBody } from "../shared/responses-read"
-import { ROUTER_THINKING_SIGNATURE } from "../shared/router-thinking"
+import { reasoningBlock } from "../shared/sealed-reasoning"
 import { fromResponsesCompletion, toAnthropicStopReason } from "../shared/stop-reason"
 import { anthropicUsageCounts, responsesUsageToOpenAiChat } from "../shared/usage"
 
@@ -23,11 +25,11 @@ import { anthropicUsageCounts, responsesUsageToOpenAiChat } from "../shared/usag
  * this module differs from `request.ts`, where the same undecodable `arguments` string is a `400`
  * naming the call: there, nothing has happened yet and refusing costs the caller nothing.
  *
- * **A `reasoning` item's summary becomes a `thinking` block**, in place, signed with the router's
- * tag (`shared/router-thinking.ts`) because only Anthropic can mint a real signature. The tag is
- * not a secret and carries no state; the item's encrypted handle is never copied anywhere. Replayed
- * on the next turn, the block is dropped by every `anthropic → X` translator. A reasoning item with
- * no summary text — an upstream not asked for one — yields no block at all.
+ * **A `reasoning` item becomes a `thinking` block**, in place. Under the serving account's reasoning
+ * seal, its encrypted handle is the block's signature (`redacted_thinking` when there is no summary),
+ * and the next turn replays it to the same account only (`shared/sealed-reasoning.ts`). Without a
+ * seal, the summary is signed with the router's stateless tag (`shared/router-thinking.ts`), the
+ * handle is never copied anywhere, and a reasoning item with no summary yields no block at all.
  */
 
 export interface OpenAiResponsesToAnthropicResponseOptions {
@@ -35,6 +37,8 @@ export interface OpenAiResponsesToAnthropicResponseOptions {
   readonly id?: string | undefined
   /** Used when the upstream body names no model. The client's requested name is the right value. */
   readonly model?: string | undefined
+  /** The serving account's seal; absent, a reasoning item's encrypted handle is never carried. */
+  readonly reasoningSeal?: ReasoningSeal | undefined
 }
 
 export function openAiResponsesToAnthropicResponse(
@@ -43,16 +47,18 @@ export function openAiResponsesToAnthropicResponse(
 ): TranslatedResponse {
   const read = readResponsesBody(body)
 
-  const content: (AnthropicTextBlock | AnthropicThinkingBlock | AnthropicToolUseBlock)[] = []
+  const content: (
+    | AnthropicTextBlock
+    | AnthropicThinkingBlock
+    | AnthropicRedactedThinkingBlock
+    | AnthropicToolUseBlock
+  )[] = []
   for (const item of read.items) {
     // An item that flattened to no text is already absent, so no empty text or thinking block can
     // be built here — Anthropic rejects one.
     if (item.kind === "reasoning") {
-      content.push({
-        type: "thinking",
-        thinking: item.summary,
-        signature: ROUTER_THINKING_SIGNATURE,
-      })
+      const block = reasoningBlock(item.summary, item.encrypted, options.reasoningSeal)
+      if (block !== null) content.push(block)
     }
     if (item.kind === "text") content.push({ type: "text", text: item.text })
     if (item.kind === "function_call") {

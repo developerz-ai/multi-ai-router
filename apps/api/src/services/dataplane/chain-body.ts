@@ -4,6 +4,7 @@ import type { ChainContext } from "./chain"
 import { sessionCacheKey } from "./egress/cache-key-header"
 import { modelOutputCeiling } from "./model-output-ceiling"
 import type { ServableCandidate } from "./plan"
+import type { AccountReasoningSeal } from "./reasoning-seal-context"
 
 /**
  * The body this account gets. Passthrough: identical bytes, unless routing renamed the model — the
@@ -30,7 +31,8 @@ export function bodyFor(ctx: ChainContext, servable: ServableCandidate): Uint8Ar
           )
         : undefined,
       servable.responsesEgress,
-      routerCacheKey(ctx, servable),
+      keysPromptCache(servable) ? { fallback: routerCacheKey(ctx, servable) } : undefined,
+      reasoningSealFor(ctx, servable),
     )
   }
   if (ctx.bodyBytes.length === 0) return null
@@ -47,14 +49,33 @@ export function bodyFor(ctx: ChainContext, servable: ServableCandidate): Uint8Ar
 }
 
 /**
- * The session-derived `prompt_cache_key` for a surface that keys its prompt cache per conversation
- * (`ResponsesEgressRules.cacheKeyHeader`); undefined for every other upstream, whose body is
- * left as the translator wrote it.
+ * The session-derived `prompt_cache_key` for a surface that keys its prompt cache per conversation —
+ * by a header (`ResponsesEgressRules.cacheKeyHeader`, Codex) or by the body alone
+ * (`ProviderSurface.bodyCacheKey`, OpenAI's platform, OpenRouter); undefined for every other
+ * upstream, whose body is left as the translator wrote it. Translated bodies only: a same-dialect
+ * body is the client's bytes and keeps whatever key the client wrote (non-negotiable 10).
  */
 export function routerCacheKey(ctx: ChainContext, servable: ServableCandidate): string | undefined {
-  if (servable.translation === null || servable.responsesEgress.cacheKeyHeader === undefined) {
-    return undefined
-  }
+  if (servable.translation === null || !keysPromptCache(servable)) return undefined
   const { apiKeyId, sessionKey, sessionKeySource } = ctx.runtime
   return sessionCacheKey(apiKeyId, sessionKey, sessionKeySource)
+}
+
+function keysPromptCache(servable: ServableCandidate): boolean {
+  if (servable.responsesEgress.cacheKeyHeader !== undefined) return true
+  return (
+    servable.kind === "http" &&
+    servable.driver.keysPromptCacheByBody?.(servable.account.driver) === true
+  )
+}
+
+/** The selected account's reasoning seal, for a translated attempt; undefined without a sealer. */
+export function reasoningSealFor(
+  ctx: Pick<ChainContext, "runtime">,
+  servable: ServableCandidate,
+): AccountReasoningSeal | undefined {
+  const sealer = ctx.runtime.reasoningSealer
+  if (sealer === undefined || servable.translation === null) return undefined
+  const accountId = servable.account.id
+  return { accountId, seal: sealer.forAccount(accountId) }
 }

@@ -30,6 +30,7 @@ const itemSchema = z.looseObject({
   arguments: z.string().nullish().catch(null),
   content: z.array(partSchema).nullish().catch(null),
   summary: z.array(partSchema).nullish().catch(null),
+  encrypted_content: z.string().nullish().catch(null),
 })
 
 const responseSchema = z.looseObject({
@@ -94,6 +95,8 @@ export interface ReadCallItem {
 export interface ReadReasoningItem {
   readonly kind: "reasoning"
   readonly summary: string
+  /** The upstream's `encrypted_content`, carried only under a reasoning seal (`sealed-reasoning.ts`). */
+  readonly encrypted: string | null
 }
 
 export type ReadResponsesItem = ReadTextItem | ReadCallItem | ReadReasoningItem
@@ -162,7 +165,10 @@ export function readResponsesItem(item: ParsedResponsesItem): ReadResponsesItem 
   }
   if (type === "reasoning") {
     const summary = partsText(item.summary)
-    return summary.length === 0 ? null : { kind: "reasoning", summary }
+    const encrypted = item.encrypted_content ?? null
+    return summary.length === 0 && encrypted === null
+      ? null
+      : { kind: "reasoning", summary, encrypted }
   }
   return null
 }

@@ -55,6 +55,7 @@ export function dispatch(
           key: effectiveCacheKey(ctx.translated.promptCacheKey(), routerCacheKey(ctx, servable)),
         },
   )
+  const streamDeadlines = deadlinesFor(ctx, servable)
   return runAttempt({
     plan: servable,
     beforeUpstreamStart,
@@ -69,5 +70,15 @@ export function dispatch(
     signal: ctx.request.signal,
     ...(forcesUpstreamStream(servable) ? { accept: "text/event-stream" } : {}),
     ...(cacheKey === undefined ? {} : { cacheKey }),
+    ...(streamDeadlines === undefined ? {} : { stream: streamDeadlines }),
   })
+}
+
+/**
+ * The streaming clocks apply only where the upstream answers as a stream: the client asked for one,
+ * or the surface forces one. A non-streamed answer's headers arrive with the finished completion.
+ */
+function deadlinesFor(ctx: ChainContext, servable: ServableCandidate) {
+  const streams = ctx.streamRequested === true || forcesUpstreamStream(servable)
+  return streams ? ctx.runtime.streamDeadlines : undefined
 }

@@ -4,6 +4,7 @@ import { readFastCredential } from "../providers/claude-fast/credential"
 import { createFastInvoker } from "../providers/claude-fast/invoker"
 import { UpstreamAdmissionRefused } from "../providers/upstream-admission"
 import type { createCredentialCipherFromEnv } from "../services/crypto/fromEnv"
+import { createReasoningSealer } from "../services/crypto/reasoning-seal"
 import {
   createDispatcher,
   createRateLimiter,
@@ -190,6 +191,8 @@ export function createRequestServices(
   const activeRequests = createActiveRequestRegistry(env.relayLifetimes)
   const dispatcher = createDispatcher({
     modelMetadata: modelCatalogStore,
+    // Derived once from ENCRYPTION_KEY under its own HKDF label; never the encryption key itself.
+    reasoningSealer: createReasoningSealer(env.encryptionKey),
     activeRequests,
     recovery: recoveryComponents.access,
     catalog,

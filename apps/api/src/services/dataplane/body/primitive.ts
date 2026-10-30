@@ -69,6 +69,10 @@ export function createPrimitive() {
       }
       if (state === "expDigits" && !digit) invalid = true
     },
+    /** The value just finished was the literal `true`. */
+    isTrue() {
+      return !invalid && state === "literal" && literal === "true" && index === 4
+    },
     finish() {
       return (
         !invalid &&

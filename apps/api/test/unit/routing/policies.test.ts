@@ -356,24 +356,25 @@ describe("rules that hold for every policy", () => {
     },
   )
 
-  test.each(RoutingPolicy.options)(
-    "%s ranks a half-open probe behind a healthy account",
-    (policy) => {
-      const mixed = [
-        candidate(account("a"), 0, { halfOpen: true }),
-        candidate(account("b"), 1),
-        candidate(account("c"), 2, { halfOpen: true }),
-      ]
-      const result = runPolicy(policy, input({ candidates: mixed }))
+  // `sticky` keeps a half-open *home* and spends a permit only from its home sessions — the
+  // affinity exception, pinned in `sticky-affinity.test.ts`. Every other policy keeps this rule.
+  const AFFINITY_FREE = RoutingPolicy.options.filter((policy) => policy !== "sticky")
 
-      expect(result.ordered[0]?.halfOpen).toBe(false)
-      expect(ids(result.ordered.slice(1)).slice().sort()).toEqual(["a", "c"])
-      const note = result.notes.find((entry) => entry.kind === "half-open-demoted")
-      expect(note?.kind === "half-open-demoted" && [...note.accountIds].sort()).toEqual(["a", "c"])
-    },
-  )
+  test.each(AFFINITY_FREE)("%s ranks a half-open probe behind a healthy account", (policy) => {
+    const mixed = [
+      candidate(account("a"), 0, { halfOpen: true }),
+      candidate(account("b"), 1),
+      candidate(account("c"), 2, { halfOpen: true }),
+    ]
+    const result = runPolicy(policy, input({ candidates: mixed }))
 
-  test.each(RoutingPolicy.options)(
+    expect(result.ordered[0]?.halfOpen).toBe(false)
+    expect(ids(result.ordered.slice(1)).slice().sort()).toEqual(["a", "c"])
+    const note = result.notes.find((entry) => entry.kind === "half-open-demoted")
+    expect(note?.kind === "half-open-demoted" && [...note.accountIds].sort()).toEqual(["a", "c"])
+  })
+
+  test.each(AFFINITY_FREE)(
     "%s ranks a recovery permit holder ahead of a healthy account",
     (policy) => {
       const mixed = [

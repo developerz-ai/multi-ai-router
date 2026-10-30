@@ -15,6 +15,7 @@ import {
   type HealthStoreOptions,
   type RoutableAccount,
 } from "../../src/services/dataplane"
+import type { StreamDeadlines } from "../../src/services/dataplane/upstream-deadline"
 import type { PoolSnapshot, SelectionOptions } from "../../src/services/routing"
 import type { AppEnv } from "../../src/types"
 import {
@@ -51,6 +52,8 @@ export interface HarnessOptions {
   /** An entry may return a promise, to hold one upstream call in flight while the test drives on. */
   readonly responses: readonly (() => Response | Promise<Response>)[]
   readonly maxAttempts?: number
+  /** A streamed attempt's clocks, as the composition root passes them from `env.upstreamStream`. */
+  readonly upstreamStream?: StreamDeadlines
   /** Breaker and half-open-gate tuning, as the composition root passes it from `env.failover`. */
   readonly health?: HealthStoreOptions
   /** Overrides the default `sticky` policy, for a suite that needs a deterministic chain order. */
@@ -164,6 +167,9 @@ export function harness(options: HarnessOptions) {
             ? {}
             : { upstreamErrorMaxBytes: options.upstreamErrorMaxBytes }),
           failover: { maxAttempts: options.maxAttempts ?? 3 },
+          ...(options.upstreamStream === undefined
+            ? {}
+            : { upstreamStream: options.upstreamStream }),
           ...(options.selection === undefined ? {} : { selection: options.selection }),
           ...(options.maxBodyBytes === undefined
             ? {}

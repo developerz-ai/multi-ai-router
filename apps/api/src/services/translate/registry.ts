@@ -94,6 +94,8 @@ export interface TranslationContext {
    * id — writes the line. Absent, drops are silent.
    */
   readonly onDrop?: DropSink | undefined
+  /** The **selected Account's** seal, per candidate like `chatCeiling` (`sealed-reasoning.ts`). */
+  readonly reasoningSeal?: import("../crypto/reasoning-seal").ReasoningSeal | undefined
 }
 
 export interface TranslationPair {
@@ -172,7 +174,7 @@ const ANTHROPIC_TO_OPENAI_RESPONSES: TranslationPair = {
   // No `defaultMaxTokens` in this direction either: an anthropic request carries its own ceiling.
   request: (body, context) =>
     applyResponsesEgressRules(
-      anthropicToOpenAiResponsesRequest(body, { onDrop: context.onDrop }),
+      anthropicToOpenAiResponsesRequest(body, context),
       context.responsesEgress,
       context.onDrop,
       ANTHROPIC_CEILING,
@@ -181,12 +183,14 @@ const ANTHROPIC_TO_OPENAI_RESPONSES: TranslationPair = {
     openAiResponsesToAnthropicResponse(body, {
       id: `${ANTHROPIC_ID_PREFIX}${context.fallbackId}`,
       model: context.model,
+      reasoningSeal: context.reasoningSeal,
     }),
   stream: (context) =>
     openAiResponsesToAnthropicStream({
       maximumPendingBytes: context.maximumPendingBytes,
       id: `${ANTHROPIC_ID_PREFIX}${context.fallbackId}`,
       model: context.model,
+      reasoningSeal: context.reasoningSeal,
     }),
 }
 

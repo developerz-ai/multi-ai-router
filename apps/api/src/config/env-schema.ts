@@ -25,6 +25,7 @@ import { METRIC_INVENTORY_ENV_FIELDS } from "./metric-inventory"
 import { validateNumericBounds } from "./numeric-bounds"
 import { RECOVERY_ENV_FIELDS } from "./recovery"
 import { RELAY_LIFETIME_ENV_FIELDS } from "./relay-lifetimes"
+import { UPSTREAM_STREAM_ENV_FIELDS } from "./upstream-stream"
 import { USAGE_READ_ENV_FIELDS } from "./usage-read"
 import { USAGE_REPORT_ENV_FIELDS } from "./usage-report"
 
@@ -47,6 +48,7 @@ export const ENV_FIELDS = {
   ...USAGE_REPORT_ENV_FIELDS,
   ...BACKGROUND_ENV_FIELDS,
   ...RELAY_LIFETIME_ENV_FIELDS,
+  ...UPSTREAM_STREAM_ENV_FIELDS,
   ...METRIC_INVENTORY_ENV_FIELDS,
   ...CLI_OWNERSHIP_ENV_FIELDS,
   ...RECOVERY_ENV_FIELDS,

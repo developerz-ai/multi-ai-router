@@ -5,12 +5,14 @@ import { createResponseObserver, type UsageRecord } from "../usage"
 import { RouterShutdownError } from "./active-requests"
 import type { UpstreamError } from "./attempt"
 import { logStreamFailure } from "./attempt-log"
+import { reasoningSealFor } from "./chain-body"
 import { DEFAULT_LOG_REASON_MAX_CHARS } from "./dispatcher-config"
 import { coerceForcedToolResponse } from "./forced-tool-coercion"
 import { breakerOptionsFor } from "./health"
 import type { HealthObservation } from "./health-observation"
 import { observingModelOutput } from "./model-output"
 import { forcesUpstreamStream, type ServableCandidate } from "./plan"
+import { withReasoningSeal } from "./reasoning-seal-context"
 import { attemptRecord, failureOutcome } from "./records"
 import type { RecoveryAttempt } from "./recovery-access"
 import { relayResponse } from "./relay"
@@ -201,7 +203,12 @@ export function relaySuccess(
   return relayTranslatedResponse({
     upstream: response,
     pair: servable.translation,
-    context: { ...ctx.translation, includeUsage: ctx.translated?.includeUsage() === true },
+    // The same account's seal the request was converted under, so reasoning this upstream issues
+    // is sealed to it and only it.
+    context: withReasoningSeal(
+      { ...ctx.translation, includeUsage: ctx.translated?.includeUsage() === true },
+      reasoningSealFor(ctx, servable),
+    ),
     // Only for a client that did not ask to stream; one that did is forwarded event by event.
     collectStream: upstreamStreams && ctx.translated?.clientStreams() !== true,
     upstreamStreams,

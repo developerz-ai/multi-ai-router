@@ -303,6 +303,12 @@ export interface ProviderDriver {
   thinkingOnByDefault?(account: DriverAccount): boolean
 
   /**
+   * Whether this Account's surface keys its prompt cache by the body's `prompt_cache_key`
+   * (`ProviderSurface.bodyCacheKey`), so a translated body is sent one. Absent means no.
+   */
+  keysPromptCacheByBody?(account: DriverAccount): boolean
+
+  /**
    * Auth plus every provider-mandated header. Never mutates the Account, never logs.
    *
    * `null` is an Account of a provider whose `authKind` is `none` holding no credential — a local

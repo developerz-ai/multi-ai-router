@@ -12,6 +12,14 @@
  *    attempt for it, nothing but a request settles it, and ranked last it expired unused every
  *    cycle while the account sat out of rotation (prod, 2026-10-07: 38 permits, zero attempts).
  *    A failed permit attempt fails over before any byte reaches the client.
+ *
+ *    **Under `sticky` the session's home is the exception to both halves.** Its rendezvous top
+ *    keeps rank 0 while merely half-open (not a rejected credential), so a transient `429` does not
+ *    cost the conversation its prompt cache; and a permit is spent only by a session homed on the
+ *    permit's account, never by one dragged off its own warm home. Every account is some sessions'
+ *    home, so the permit still has requests to settle it; the ones it no longer takes would never
+ *    have been placed there by `sticky` at all. The other policies place without affinity and keep
+ *    the general rule.
  * 3. **An alias rename ranks behind the real thing.** When some candidates serve the requested
  *    name natively and others only reach it through their alias map (`claude-opus-5 -> glm-5.2`),
  *    the aliased ones are failover after every native one — healthy or probe. A key whose scope
@@ -47,8 +55,10 @@ export function runPolicy(
 ): PolicyOutput {
   const chosen = POLICIES[policy]
   const raw = chosen(input)
-  const demoted = demoteHalfOpen(raw.ordered)
-  const promoted = promoteRecoveryPermit(demoted.ordered)
+  // `sticky` alone places by affinity, so only it has a home worth protecting.
+  const home = policy === "sticky" ? raw.ordered[0] : undefined
+  const demoted = demoteHalfOpen(raw.ordered, home)
+  const promoted = promoteRecoveryPermit(demoted.ordered, home)
   const deferred = deferAliased(promoted.ordered)
   const pinned = pinBinding(deferred.ordered, binding)
 
@@ -63,24 +73,47 @@ interface Adjustment {
   readonly notes: readonly PolicyNote[]
 }
 
-/** Healthy accounts first, probes after, each keeping the policy's relative order. */
-function demoteHalfOpen(ordered: readonly Candidate[]): Adjustment {
-  const healthy = ordered.filter((candidate) => !candidate.halfOpen)
-  if (healthy.length === ordered.length) return { ordered, notes: [] }
+/**
+ * Healthy accounts first, probes after, each keeping the policy's relative order. A sticky home that
+ * is merely half-open stays where the hash put it: it is the account holding this session's cache.
+ */
+function demoteHalfOpen(ordered: readonly Candidate[], home: Candidate | undefined): Adjustment {
+  const kept = home !== undefined && keepsAffinity(home) ? home : undefined
+  const probe = (candidate: Candidate) => candidate.halfOpen && candidate !== kept
+  const healthy = ordered.filter((candidate) => !probe(candidate))
+  const notes: PolicyNote[] =
+    kept === undefined ? [] : [{ kind: "affinity-kept", accountId: kept.account.id }]
+  if (healthy.length === ordered.length) return { ordered, notes }
 
-  const probes = ordered.filter((candidate) => candidate.halfOpen)
+  const probes = ordered.filter(probe)
   return {
     ordered: [...healthy, ...probes],
-    notes: [{ kind: "half-open-demoted", accountIds: accountIds(probes) }],
+    notes: [...notes, { kind: "half-open-demoted", accountIds: accountIds(probes) }],
   }
 }
 
-/** Permit holders first, everyone else after, each keeping the order it already had. */
-function promoteRecoveryPermit(ordered: readonly Candidate[]): Adjustment {
-  const holders = ordered.filter((candidate) => candidate.recoveryPermit === true)
+/**
+ * Half-open with nothing against it but an expired cooldown. A rejected credential is a re-test of a
+ * key the provider refused, not a transient limit, so it is demoted like any other probe.
+ */
+function keepsAffinity(home: Candidate): boolean {
+  return home.halfOpen && home.account.health.cooldownReason !== "credential-rejected"
+}
+
+/**
+ * Permit holders first, everyone else after, each keeping the order it already had. Under `sticky`
+ * only the session's own home may be a holder here; it is already first, so nothing moves.
+ */
+function promoteRecoveryPermit(
+  ordered: readonly Candidate[],
+  home: Candidate | undefined,
+): Adjustment {
+  const holds = (candidate: Candidate) =>
+    candidate.recoveryPermit === true && (home === undefined || candidate === home)
+  const holders = ordered.filter(holds)
   if (holders.length === 0) return { ordered, notes: [] }
 
-  const rest = ordered.filter((candidate) => candidate.recoveryPermit !== true)
+  const rest = ordered.filter((candidate) => !holds(candidate))
   return {
     ordered: [...holders, ...rest],
     notes: [{ kind: "recovery-promoted", accountIds: accountIds(holders) }],

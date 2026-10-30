@@ -22,8 +22,10 @@ export interface UsageReportServiceDeps {
   readonly labels: () => Promise<{ readonly keys: ReadonlyMap<string, ReportKeyLabel> }>
   /** Pools as they stand now, for the overflow designation. */
   readonly pools: () => Promise<readonly ReportPool[]>
-  /** `UPSTREAM_TIMEOUT_MS`, compared with the real gap after the week boundary in the coverage. */
+  /** `UPSTREAM_TIMEOUT_MS`: a non-streamed (or Agent-SDK) attempt's whole deadline. */
   readonly upstreamTimeoutMs: number
+  /** `UPSTREAM_STREAM_TIMEOUT_MS`: a streamed HTTP attempt's whole deadline. */
+  readonly upstreamStreamTimeoutMs: number
   /** `USAGE_REPORT_MAX_ROWS`: the week read's ceiling. Over it, building fails loudly. */
   readonly maxRows: number
   /** The most reports the list returns: enough weeks to cover the retention window. */
@@ -88,7 +90,9 @@ export function createUsageReportService(deps: UsageReportServiceDeps): UsageRep
       start: week.start,
       end: week.end,
       generatedAt: now,
-      upstreamTimeoutMs: deps.upstreamTimeoutMs,
+      // The longer of the two is how late an attempt in flight at the boundary can still land; it is
+      // what the coverage compares the real gap with. Stored under the field's original name.
+      upstreamTimeoutMs: Math.max(deps.upstreamTimeoutMs, deps.upstreamStreamTimeoutMs),
       unpricedSince: read.unpricedSince,
       preview,
     })

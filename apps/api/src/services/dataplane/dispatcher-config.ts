@@ -3,6 +3,7 @@ import type { Logger } from "../../logging/logger"
 import type { SdkInvoker, SdkQuotaStore, SessionStore } from "../../providers"
 import type { RateLookup } from "../cost"
 import type { CredentialCipher } from "../crypto/cipher"
+import type { ReasoningSealer } from "../crypto/reasoning-seal"
 import type { ModelCatalogStore } from "../models/store"
 import type { FailoverOptions, SelectionOptions } from "../routing"
 import type { ThinkingDefaultMatcher } from "../translate"
@@ -21,6 +22,7 @@ import type {
   RoutingCatalog,
   UpstreamOperation,
 } from "./types"
+import type { StreamDeadlines } from "./upstream-deadline"
 
 /**
  * The dispatcher's configuration surface — everything `createDispatcher` is built *with*, split
@@ -34,7 +36,13 @@ export interface DispatchOptions {
   readonly body?: BodyReadOptions
   /** Headers a client may name its conversation with. See `body/session.ts`. */
   readonly sessionHeaders?: readonly string[]
+  /** `UPSTREAM_TIMEOUT_MS`: a non-streamed HTTP attempt's whole deadline, and an SDK attempt's. */
   readonly upstreamTimeoutMs?: number
+  /**
+   * A streamed HTTP attempt's first-byte, idle and total clocks (`upstream-deadline.ts`). Absent, a
+   * stream is bounded by `upstreamTimeoutMs` alone, as before these clocks existed.
+   */
+  readonly upstreamStream?: StreamDeadlines
   readonly upstreamErrorMaxBytes?: number
   readonly responseObservationMaxBytes?: number
   readonly translation?: TranslationOptions
@@ -90,6 +98,11 @@ export const DEFAULT_UPSTREAM_TIMEOUT_MS = 600_000
 export const DEFAULT_RESPONSE_OBSERVATION_MAX_BYTES = 65_536
 
 export interface DispatcherDeps {
+  /**
+   * Seals encrypted reasoning a translated response hands the client, per selected account.
+   * Omitted, no seal is offered and a translator carries no reasoning across turns.
+   */
+  readonly reasoningSealer?: ReasoningSealer
   /** Warm upstream-side metadata; no database lookup during dispatch. */
   readonly modelMetadata?: Pick<ModelCatalogStore, "describe">
 

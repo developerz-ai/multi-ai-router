@@ -176,6 +176,13 @@ export type OpenAiResponsesPart = OpenAiResponsesTextPart | OpenAiResponsesImage
 
 export type OpenAiResponsesRole = "user" | "assistant" | "system" | "developer"
 
+/** Replayed only when the selected account's seal opens it (`sealed-reasoning.ts`). */
+export interface OpenAiResponsesReasoningItem {
+  readonly type: "reasoning"
+  readonly summary: readonly { readonly type: "summary_text"; readonly text: string }[]
+  readonly encrypted_content: string
+}
+
 export interface OpenAiResponsesMessageItem {
   readonly type: "message"
   readonly role: OpenAiResponsesRole
@@ -196,6 +203,7 @@ export interface OpenAiResponsesFunctionCallOutputItem {
 }
 
 export type OpenAiResponsesItem =
+  | OpenAiResponsesReasoningItem
   | OpenAiResponsesMessageItem
   | OpenAiResponsesFunctionCallItem
   | OpenAiResponsesFunctionCallOutputItem
@@ -257,4 +265,6 @@ export interface OpenAiResponsesRequest {
    * stand would leave a transcript on the provider that nobody can reference or delete.
    */
   readonly store: false
+  /** Only `reasoning.encrypted_content`, and only under a reasoning seal (`sealed-reasoning.ts`). */
+  readonly include?: readonly "reasoning.encrypted_content"[] | undefined
 }

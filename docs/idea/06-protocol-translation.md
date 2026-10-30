@@ -445,10 +445,26 @@ versioned, naming its origin, carrying no key, account id or upstream handle. Re
 turn, every `anthropic → X` translator drops it with all other thinking blocks, and the Agent SDK
 path never replays thinking. The residual edge: a client that moves that transcript to a **real
 Anthropic** upstream mid-conversation goes through same-dialect passthrough, which never parses the
-body, and Anthropic refuses the foreign signature with a `400`. Encrypted reasoning
-(`include: ["reasoning.encrypted_content"]`) is not requested toward Responses for the same pooling
-reason it is dropped on the way in: the handle is bound to one account, the next turn may land on
-another, and a handle that account cannot verify fails the turn.
+body, and Anthropic refuses the foreign signature with a `400`.
+
+**Encrypted reasoning on anthropic ⇄ openai-responses is carried, sealed to one account.** A
+reasoning model's encrypted reasoning item is part of the prompt prefix the upstream caches; dropping
+it on step N+1 of a tool loop broke the cache at step N's output every step (prod: router
+`gpt-6.1-sol` cache hit 0.07 / 0.64 / 0.89 by step). So when the dataplane hands the translator the
+selected account's reasoning seal (`crypto/reasoning-seal.ts`, HKDF-derived from `ENCRYPTION_KEY`,
+per account, deterministic `mrs1.<blob>.<mac>`), the request asks for
+`include: ["reasoning.encrypted_content"]`, and each finished reasoning item goes back to the client as
+a `thinking` block whose `signature` is the sealed handle — or a `redacted_thinking` block whose
+`data` is, when the upstream wrote no summary. Streaming, the signature is emitted on the item's own
+`response.output_item.done`, the event that closes the block anyway, so nothing is held back. On the
+next turn a `thinking` / `redacted_thinking` block on an assistant turn is replayed, in place, as a
+`reasoning` input item (`summary` + `encrypted_content`) **only when the seal of the account the turn
+lands on opens it**; another account's handle (a failover or pool move), a tampered one, Anthropic's
+own signature and the stateless `mar1:` tag are all dropped exactly as before, so a handle never
+reaches an upstream that did not issue it. The seal is deterministic, so the replayed item is
+byte-identical every turn and the prefix stays cacheable. `mrs1` replaces `mar1:` only on blocks that
+carry a sealed handle; every other synthesized block (no seal, no handle, openai-chat reasoning) keeps
+`mar1:`. The passthrough residual above applies to an `mrs1` signature too.
 
 **Toward `anthropic`, `message_start.usage` is zeroed and the real counts land on `message_delta`.**
 `openai-chat` reports its token counts *last* — on a trailing chunk carrying no choices at all — so
@@ -584,8 +600,8 @@ Anthropic reports exactly four fields: `input_tokens`, `output_tokens`, `cache_c
 | `input_tokens` + `cache_creation_input_tokens` + `cache_read_input_tokens` | `prompt_tokens` | `input_tokens` |
 | `output_tokens` | `completion_tokens` | `output_tokens` |
 | (sum) | `total_tokens` | `total_tokens` |
-| `cache_read_input_tokens` | `prompt_tokens_details.cached_tokens` | `input_tokens_details.cached_tokens` |
-| `cache_creation_input_tokens` | no field of its own — folded into `prompt_tokens` | same |
+| `cache_read_input_tokens` | `prompt_tokens_details.cached_tokens` (DeepSeek: top-level `prompt_cache_hit_tokens`) | `input_tokens_details.cached_tokens` |
+| `cache_creation_input_tokens` | folded into `prompt_tokens`; read back from OpenRouter's `prompt_tokens_details.cache_write_tokens` | folded into `input_tokens` |
 | no counterpart | `completion_tokens_details.reasoning_tokens` | `output_tokens_details.reasoning_tokens` |
 
 > **Total prompt size is the sum of all three input fields** — `input_tokens` +
@@ -598,9 +614,12 @@ Anthropic reports exactly four fields: `input_tokens`, `output_tokens`, `cache_c
 `cached_tokens` a subset of it. So the crossing sums the three input fields toward `openai-chat`, and
 subtracts `cached_tokens` back out toward `anthropic`. Mapping the two field names onto each other
 verbatim would report a cache-heavy request as a handful of tokens and break every client-side cost
-estimate built on it. `cache_creation_input_tokens` is never invented in the other direction:
+estimate built on it. `cache_creation_input_tokens` is never invented in the other direction: plain
 `openai-chat` reports cache reads only, and guessing the write is the one number an operator reads to
-decide whether caching is paying for itself.
+decide whether caching is paying for itself. An upstream that **does** report a write — OpenRouter's
+`prompt_tokens_details.cache_write_tokens`, inside `prompt_tokens` — has it mapped through to
+`cache_creation_input_tokens` and subtracted out of `input_tokens` beside the read; unreported, the
+field stays absent.
 
 The **`UsageRecord` stores the upstream's own numbers**, not the translated ones. OpenAI streams omit
 usage unless `stream_options.include_usage` is set; translating an Anthropic stream toward
@@ -608,6 +627,13 @@ usage unless `stream_options.include_usage` is set; translating an Anthropic str
 `stream_options.include_usage: true`. Accounting still observes upstream usage when the client frame
 is omitted. A missing field is recorded as null, never as zero — zero is a
 measurement, and reporting it for a field the upstream never sent invents data.
+
+Reading an Anthropic stream for the `UsageRecord`, `message_start` is a complete input bundle (a
+cache field it omits is zero for that message), while a `message_delta` restates only the fields it
+names: several Anthropic-compatible upstreams (MiniMax, z.ai) repeat `input_tokens` on the final
+delta without the cache fields, and that keeps the cache counts `message_start` reported rather than
+zeroing them. An OpenAI-shaped upstream's cache write is recorded when it states one (OpenRouter's
+`cache_write_tokens`) and is otherwise zero — those upstreams bill no separate write.
 
 ### Error shapes
 
@@ -621,6 +647,16 @@ receives an Anthropic-shaped error even when the account that failed was an Open
 Agent-SDK one. Router-origin errors (`NoHealthyAccountError`, `QuotaExhaustedError`, …) use the same
 shape with a stable HTTP status. `param` and `code` are best-effort and may be null. No error body
 ever carries credential material or the identity of the account that failed.
+
+**A context overflow is always recognisable**, because it is the one failure a client recovers from
+on its own (compact the transcript, retry). An upstream code `context_length_exceeded` or a message
+containing `prompt is too long`, whatever status it arrived under — an in-stream `response.failed`
+has none and would otherwise render as a `500` `api_error` — renders as `invalid_request_error` in both
+dialects. The OpenAI shape carries `code: "context_length_exceeded"`; the Anthropic shape has no
+`code`, so the message is reworded in Anthropic's own prose with the upstream code in parentheses
+(`prompt is too long: <upstream message> (context_length_exceeded)`), and an Anthropic upstream's own
+`prompt is too long: …` message is left exactly as written. One choke point (`errors/render.ts`),
+so the streamed and non-streamed paths cannot disagree.
 
 A recognized nonstreaming error envelope remains an ingress-shaped error even when the upstream
 returns HTTP 200. Chat requires an object `error`; Anthropic requires `type: "error"` with an object
@@ -700,8 +736,9 @@ Be suspicious of any cell not listed here — if it is not documented, it is not
 | Tool calls against GPT-6 | `openai-chat` ↔ GPT-6 | The GPT-6 family accepts tool calls on the **Chat Completions** surface only when the client sent `reasoning_effort: "none"`. The router never produces that level itself: `openAiEffortFromAnthropic` passes a client's explicit `output_config.effort` through, buckets an `enabled` thinking budget into `low` / `medium` / `high`, and produces no level for `adaptive` or `disabled`. So an OpenAI account that must serve tools against a GPT-6 model speaks Responses. The Responses surface accepts tools with any reasoning effort, including none |
 | `conversation`, `prompt`, `background: true` | `openai-responses` → any | **rejected** `400`, the same class as `previous_response_id` under three later names: turns the provider would prepend, instruction text stored provider-side, and a queued response to poll by id. `background: false` passes |
 | Responses `reasoning` **input** items | → `anthropic`, `openai-chat` | dropped; a replayed summary is not visible assistant text. A nonempty `encrypted_content` is dropped and **reported** (`input[n].encrypted_content`), and `include: ["reasoning.encrypted_content"]` with it; any other `include` entry and every `item_reference` remain rejected `400` |
-| Responses `reasoning` **output** summary | → `anthropic` | **carried** as a `thinking` block signed `mar1:` (router tag, no secret); see [above](#streaming-sse-event-mapping). Toward `openai-chat` dropped — no *published* field; the extension names are read from an upstream, never written toward a client |
+| Responses `reasoning` **output** summary | → `anthropic` | **carried** as a `thinking` block signed `mar1:` (router tag, no secret), or — under the serving account's reasoning seal — signed with the sealed encrypted handle (`redacted_thinking` when there is no summary) and replayed to that account only; see [above](#streaming-sse-event-mapping). Toward `openai-chat` dropped — no *published* field; the extension names are read from an upstream, never written toward a client |
 | Anthropic `thinking` blocks | → `openai-responses` | carried as a reasoning **summary** item; the encrypted reasoning handle is not synthesized |
+| Replayed `thinking` / `redacted_thinking` blocks (request) | anthropic → `openai-responses` | replayed in place as a `reasoning` input item only when the selected account's seal opens the signature (a handle that account issued); every other block is dropped |
 | openai-chat `reasoning_content` / `reasoning` | → `openai-responses` | **carried** as a reasoning **summary** item. Both spellings are read — DeepSeek's and OpenRouter's — and `reasoning_content` wins if an upstream states both. See [above](#streaming-sse-event-mapping) |
 | openai-chat `reasoning_content` / `reasoning` | → `anthropic` | **carried** as a `thinking` block signed `mar1:`, stream and non-stream, the same as a Responses summary; dropped again by every `anthropic → X` request translator on replay. Residual: a transcript moved to a real Anthropic upstream through passthrough is refused `400` on the foreign signature. See [above](#streaming-sse-event-mapping) |
 | Anthropic `output_config.effort` | → any OpenAI dialect | **carried** as `reasoning_effort` / `reasoning.effort`, verbatim: `low`, `medium`, `high`, `xhigh`, `max` are words of both vocabularies |
@@ -709,7 +746,7 @@ Be suspicious of any cell not listed here — if it is not documented, it is not
 | Forced `tool_choice` to a think-by-default openai-chat vendor | anthropic / openai-chat → `openai-chat` | **`enable_thinking: false` emitted** (`shared/thinking-default.ts`, applied at the per-attempt model reapply in `dataplane/translate-body.ts`) when the surviving `tool_choice` forces a tool **and** the upstream (post-alias) model id matches `OPENAI_CHAT_THINKING_DEFAULT_MODELS`. Dropping a client-sent `thinking` is not enough for these vendors: Qwen's "3.8" hybrid series (`qwen3.8-max`, `qwen3.8-flash`) reasons unless the body states this dial, and its OpenAI-compatible endpoint `400`s a forced tool in thinking mode (~284/week, prod; `docs/research/thinking-and-tool-choice.md`). The dial is a plain top-level body field DashScope reads, **not** OpenAI-standard — a vanilla OpenAI / Codex endpoint `400`s on an unknown field — so it is emitted **only** for a matched model, **only** on openai-chat egress, **only** beside a forced tool, and never toward `openai-responses`. The set is **config** (non-negotiable 11), empty by default; the suggested deployment value is `qwen3.8-max,qwen3.8-flash` (exact ids, or a trailing-`*` prefix glob such as `qwen3.8-*`). It is a vendor dial, never a model change (non-negotiable 4) |
 | `reasoning_effort` ⇄ `reasoning.effort` | `openai-chat` ⇄ `openai-responses` | **carried**, verbatim and both ways: OpenAI's own spec points both fields at one shared `ReasoningEffort` schema, so they are the same dial one level of nesting apart. The word is never validated against a list of ours — that set is `none \| minimal \| low \| medium \| high \| xhigh \| max` today, has grown twice past the four everyone remembers, and `none` means "do not think" rather than "invalid". Refusing a word the upstream accepts would be the router deciding how the model behaves |
 | `reasoning.effort` / `reasoning_effort` | `openai-responses` / `openai-chat` → `anthropic` | **carried** as `output_config.effort` — the same dial under Anthropic's name. Clamped only where Anthropic has no such word: `minimal` → `low`; `none` → `thinking: {type: "disabled"}`. A word in neither table is dropped and **reported**; the upstream default applies. A clamp moves a dial, never the model (non-negotiable 4) |
-| `prompt_cache_key` | `openai-chat` → `openai-responses` | **carried**, verbatim — both OpenAI dialects spell the field identically, and the first-party Codex CLI sends it on every request. Absent, `null` or `""` states none: toward a cache-keyed surface (`cacheKeyHeader`, Codex) the router then sends a key derived from the session key (`sessionCacheKey`, `dataplane/egress/cache-key-header.ts`), which every Anthropic-ingress request needs since that dialect has no such field (prod 2026-10-17: 17.4% cache-read share on Codex vs 91–96% on passthrough vendors); toward any other upstream none is sent. Toward `anthropic` dropped: Anthropic caches by `cache_control` breakpoints and states no key. Dropping it made every step of a conversation a cold prefill on Codex (prod 2026-10-16: 16–22% of input read from cache against 98.5% for the same turns via OpenRouter) |
+| `prompt_cache_key` | `openai-chat` → `openai-responses` | **carried**, verbatim — both OpenAI dialects spell the field identically, and the first-party Codex CLI sends it on every request. Absent, `null` or `""` states none: toward a cache-keyed surface (`cacheKeyHeader`, Codex; or `bodyCacheKey`, `openai-api` and `openrouter`) the router then sends a key derived from the session key (`sessionCacheKey`, `dataplane/egress/cache-key-header.ts`), which every Anthropic-ingress request needs since that dialect has no such field (prod 2026-10-17: 17.4% cache-read share on Codex vs 91–96% on passthrough vendors); toward any other upstream none is sent. Toward a keyed surface the caller's own key wins even from a conversion that has no field to carry it (`openai-responses` → `openai-chat`, `translate-body.ts`). A same-dialect body is never touched: it keeps whatever key the client wrote. Toward `anthropic` dropped: Anthropic caches by `cache_control` breakpoints and states no key. Dropping it made every step of a conversation a cold prefill on Codex (prod 2026-10-16: 16–22% of input read from cache against 98.5% for the same turns via OpenRouter) |
 | `reasoning.summary` | `openai-responses` → any | dropped. It asks the *provider* to write a summary of its own reasoning, and no other dialect states the request |
 | `parallel_tool_calls` / `tool_choice.disable_parallel_tool_use` | all dialect pairs | **carried** between OpenAI dialects; inverse boolean toward/from Anthropic. An absent field stays absent; with nonempty tools, an explicit OpenAI policy without a tool choice maps to Anthropic `type: "auto"`. When tools are absent or empty, the policy alone does not synthesize a choice; an explicit caller choice is preserved |
 | `input_image` naming only a `file_id` | `openai-responses` → any | rejected `400`: a stored file is provider-side state this router cannot resolve into bytes |

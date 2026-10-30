@@ -118,6 +118,8 @@ export function createDispatcher(deps: DispatcherDeps): Dispatcher {
       clientToolLoop: session.clientToolLoop,
       clock,
       timeoutMs: options.upstreamTimeoutMs ?? DEFAULT_UPSTREAM_TIMEOUT_MS,
+      ...(options.upstreamStream === undefined ? {} : { streamDeadlines: options.upstreamStream }),
+      ...(deps.reasoningSealer === undefined ? {} : { reasoningSealer: deps.reasoningSealer }),
       ...(options.upstreamErrorMaxBytes === undefined
         ? {}
         : { errorMaxBytes: options.upstreamErrorMaxBytes }),
@@ -246,6 +248,7 @@ export function createDispatcher(deps: DispatcherDeps): Dispatcher {
             request: input.request,
             bodyBytes: body.bytes,
             modelSpan: body.fields.modelSpan,
+            streamRequested: body.fields.stream,
             translation,
             translated,
             failover,

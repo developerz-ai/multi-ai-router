@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.41.0] — 2026-10-30
+
+### Added
+
+- **Reasoning replay on Anthropic-wire tool loops against Responses reasoning models.** Each step's encrypted reasoning item was dropped on the next step, so the upstream prompt cache broke at the previous step's output every step (prod: router `gpt-6.1-sol` cache hit 0.07 / 0.64 / 0.89 by step; `gpt-6-luna` 0.59, the weakest route). Translated anthropic → openai-responses requests now ask for `include: ["reasoning.encrypted_content"]` under the selected account's **reasoning seal** (`crypto/reasoning-seal.ts`: HKDF-derived from `ENCRYPTION_KEY`, per account, deterministic `mrs1.<blob>.<mac>`). Each reasoning item goes back to the client as a `thinking` block whose signature is the sealed handle, or as `redacted_thinking` when there is no summary. The stream emits it on the item's own `output_item.done`, so nothing is buffered. On the next turn the block is replayed in place as a `reasoning` input item only when the seal of the account the turn lands on opens it; another account's handle, a tampered one, Anthropic's own and the stateless `mar1:` tag are dropped as before. The seal is deterministic, so the replayed prefix is byte-identical across turns. `mar1:` stays on every block that carries no sealed handle.
+- **First-byte, idle and total deadlines for streamed upstream attempts**: `UPSTREAM_FIRST_BYTE_TIMEOUT_MS` (5 min, fails over), `UPSTREAM_IDLE_TIMEOUT_MS` (55 s) and `UPSTREAM_STREAM_TIMEOUT_MS` (1 h). The total was the shared 600 s `UPSTREAM_TIMEOUT_MS`, which cut healthy long generations mid-stream; non-streamed attempts keep `UPSTREAM_TIMEOUT_MS` ([05](docs/idea/05-routing-and-failover.md#upstream-deadlines)).
+- Body `prompt_cache_key` on translated requests to `openai-api` and `openrouter` (`bodyCacheKey`): the caller's key, otherwise one derived from the router session, so a conversation keeps one cache prefix on those surfaces too.
+
+### Changed
+
+- **Sticky half-open affinity.** Under `sticky`, a session's home keeps rank 0 while it is only half-open (a rejected credential is still demoted), and a recovering account's permit is spent only by a session homed on that account. Before, every policy promoted the permit holder for every request and demoted a half-open home behind healthy accounts, so a transient `429` cost a conversation two cold prefills. The other policies keep the general rule.
+- **`USAGE_REPORT_SETTLE_MINUTES` defaults to `75`** (was `30`). The weekly report compares its settle gap with the longest upstream attempt, now the 1 h stream deadline, so every default report carried a "missed for good" coverage caveat. 75 is that hour plus 15 minutes for the attempt's off-path row and a late tick.
+
+### Fixed
+
+- **Context overflow is recognisable on every wire.** A Codex in-stream `response.failed` with `context_length_exceeded` reached an Anthropic client as a 500 `api_error` with the code dropped, so the client's compact-and-retry never ran. An upstream `context_length_exceeded`, or a message saying `prompt is too long`, now renders as `invalid_request_error` in both dialects, streamed and not. The OpenAI shape carries `code: "context_length_exceeded"`. The Anthropic message reads `prompt is too long: <upstream message> (<code>)`, and an Anthropic upstream's own wording is left as written.
+- **Usage cache counts.** A `message_delta` that repeats `input_tokens` without the cache fields (MiniMax, z.ai) no longer zeroes the cache read and write `message_start` reported; a delta restates only the fields it names. OpenRouter's `prompt_tokens_details.cache_write_tokens` and DeepSeek's `prompt_cache_hit_tokens` are now read, both for the `UsageRecord` and on the Anthropic wire (`cache_creation_input_tokens` is carried through when reported and stays absent when not).
+
 ## [2.40.3] — 2026-10-27
 
 ### Changed
@@ -1724,3 +1742,4 @@ your tooling config.
 [2.40.1]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.40.1
 [2.40.2]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.40.2
 [2.40.3]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.40.3
+[2.41.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.41.0

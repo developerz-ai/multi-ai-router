@@ -184,6 +184,17 @@ reissued, and expired again, and the account never came back into rotation (prod
 reaches the client, so the cost is at most one extra upstream attempt per generation. An honored
 binding still outranks it. Recorded as a `recovery-promoted` policy note.
 
+**Under `sticky` the permit is spent only by a session homed on the permit's account** — one whose
+rendezvous top among the eligible candidates it already is (it is first by the hash, so nothing
+moves). A session homed elsewhere is never dragged onto the recovering account: each such hop cost
+the dragged conversation its whole prompt cache, and it hopped back on its next turn. The gate
+still has an exit: every account is some sessions' home, and new conversations hash onto it at
+`1/N` of traffic; the sessions the permit no longer takes are exactly the ones `sticky` would never
+place there. The other policies place without affinity and keep promoting the holder for every
+request. Through v2.40.3 every policy promoted the holder for every request, and
+the half-open demotion kept a session's own home away until someone else probed it — a transient
+`429` cost a conversation two cold prefills (`policies/index.ts`).
+
 ### Native before alias
 
 An alias map renames a client's name onto a different model (`claude-opus-5 -> glm-5.2`). When the
@@ -239,7 +250,8 @@ unique conversation boundaries or a remote working directory. Send an explicit s
 when those boundaries matter. An explicit header remains authoritative even without a user opening.
 
 The same key also names the conversation's **prompt cache** on a surface that keys it per
-conversation (Codex: `prompt_cache_key` + `session-id`, [06](06-protocol-translation.md)): a
+conversation — by header and body (Codex: `prompt_cache_key` + `session-id`) or by the body alone
+(`bodyCacheKey`: `openai-api` on both surfaces, `openrouter`; [06](06-protocol-translation.md)): a
 translated request with no caller key is sent `sessionCacheKey(router key, session key)`, so the
 fingerprint's collisions carry over — concurrent conversations sharing one opening share one cache
 key, as they already share one account. developerz.ai sends `x-session-id` per conversation for
@@ -269,6 +281,7 @@ is unchanged.
 | **Restart-safe with no stored map** | Stickiness is recomputed, not remembered — for *placement*. Nothing to persist, lose, or corrupt across restarts. On the SDK path this covers only where a new Session lands: the binding of an existing Session is persisted, because a recomputed guess cannot resume an id another Account owns. |
 | Minimal disruption | Adding an account only moves the sessions that hash to it; removing one only reassigns *that* account's sessions. Everything else stays put. On the SDK path, bound Sessions do not move at all — they stay put until their binding is invalidated. |
 | Self-healing | If an account is filtered out (cooling down, exhausted), a new session lands on the next-highest scorer and returns when the account recovers. For a *bound* SDK session this is not free: landing elsewhere means the binding was invalidated and the conversation restarts. |
+| **A half-open home keeps its sessions** | The moment a session's home account is eligible again (cooldown expired, half-open), the home keeps rank 0 for that session instead of being demoted behind healthy accounts — the request *is* the probe, and a failed probe fails over before any byte reaches the client. Other half-open accounts still rank behind every healthy one. A `credential-rejected` home is a re-test of a refused key, not a transient limit, and is demoted like any probe. Recorded as an `affinity-kept` policy note. |
 
 **Why it is the default — the primary reason is correctness, not economics.**
 
@@ -460,7 +473,7 @@ that pool — the policy never runs across the union.
 | `429` | Retry the next candidate. Mark the account `cooling_down` until its reset. |
 | `402`, or an out-of-credits / billing error body | Retry the next candidate. Mark the account **`exhausted`** — no timer, no automatic retry. See below. |
 | `5xx` | Retry the next candidate. Count toward the breaker's failure streak. |
-| Connection failure / timeout | Retry the next candidate. Count toward the failure streak. |
+| Connection failure / timeout | Retry the next candidate. Count toward the failure streak. A **streamed** HTTP attempt's timeout before response headers is the first-byte clock (see *Upstream deadlines* below). |
 | `4xx` other than `429` | **Do not retry.** A bad request is bad at every account; returning the upstream's error is the honest answer. |
 | The upstream refuses the **model name** (`model-unsupported`, driver-classified: the `claude` CLI's "There's an issue with the selected model … may not exist or you may not have access to it", Codex's "`<model>` model is not supported when using Codex with a ChatGPT account") | **Retry the next candidate**, before any byte reaches the client. **No breaker strike, no cooldown, no recovery probe** — the account answered correctly about a name it never served, and the next account may serve that vendor. Recorded as `client_error`. When every candidate refused it, the client hears the first refusal itself: Codex's own `400`, or for a subscription a router-authored `404` "the Claude subscription does not serve the requested model". Routing's [model family](#candidate-filtering) keeps most of these from being attempted at all; this row is for what the family admits and the upstream still refuses. Until 2026-10-04 the first read `unknown` (a `502` that struck the breaker) and the second `invalid-request` (no failover). |
 | **In-stream refusal on a 200 stream** (Codex `response.failed` or bare `error` event; classified by the `openai-oauth` driver hook, not the HTTP `rules` array) | Codes `invalid_prompt`, `invalid_request_error`, `context_length_exceeded`, `unsupported_parameter`, `unsupported_value`, `invalid_json_schema` → `invalid-request` (failover reads `client-error`; the breaker is **not** struck — a request-shaped refusal is bad at every account, but the account is not unwell). Codes `usage_limit_reached`, `rate_limit_exceeded` → `rate-limited`; the observer forces `rateLimit: null` so the verdict carries no estimated reset, and the breaker trips on the **first** hit (a stream-only rate limit is a fact about the account, not about the request). Code `account_deactivated`, and only from `response.error.code` of a frame whose own JSON `type` is `response.failed` (the one place the Codex CLI reads them; every other shape is retried or skipped there) `insufficient_quota`, `credit_balance_exhausted`, `organization_spend_limit_exceeded`, `project_spend_limit_exceeded` → `credits-exhausted`; the account moves to `exhausted` on the first hit (no clock, human action only). Any other code, or no code, → `server-error` (fail-closed; three in a row cool the account). The verdict's `errorClass` is the closed `codex:stream-error:<code>` signal (or `codex:stream-error:other`); the usage row carries the signal, never the upstream message. The code decides when there is one (top level, then the nested error object's `code`): a listed code maps as above, any other code is `server-error`. Exception: a quota code at `response.error.code` of a frame whose own JSON `type` is `response.failed` decides even beside a root `code` or `error`, which the Codex CLI ignores on that frame. Only when there is no code is the nested error object's `type` read, and only for the limit and deactivated codes above, never a quota code, which the Codex CLI's stream parser reads only as a code (the same lists the HTTP rules use, which read `type` even beside a code; in-stream, a code always decides): `invalid_request_error` is OpenAI's catch-all *type*, carried by account-level refusals such as `invalid_api_key` too, so a type never marks a refusal request-shaped. The flat event's own `type` is the event name `error` and is never read as a code. A frame too large for the observation cap is salvaged with its `error` and `code` kept (and MiniMax's `base_resp.status_code`, so an oversized in-body MiniMax failure still reads as one), so a large echoed prompt does not hide the code; an error object too large to keep is dropped and the failure classifies `server-error`, never success. |
@@ -507,6 +520,25 @@ three consequences are spelled out:
 - A classified SDK failure with no upstream body (subprocess crash, busy session, unclassifiable
   throw) keeps its classified status and router-authored message all the way to the client rather
   than collapsing into a generic "no healthy account" `503`.
+
+### Upstream deadlines
+
+A **streamed** HTTP attempt — the client sent `stream: true` (read by the same routing scan that
+finds `model`, never a second parse), or the surface forces a stream — runs on three clocks
+(`dataplane/upstream-deadline.ts`), each config:
+
+| Clock | Default | On expiry |
+|---|---|---|
+| `UPSTREAM_FIRST_BYTE_TIMEOUT_MS` — response headers | 5 min | Nothing reached the client: a `timeout` failure, the breaker struck, and the chain fails over. A hung upstream costs this window, not the total. |
+| `UPSTREAM_IDLE_TIMEOUT_MS` — silence between body chunks | 55 s | Failover is over (bytes may be out): the upstream is aborted and the client's stream ends with an error, recorded `upstream_timeout`, breaker struck. Measured only while the router is waiting on the upstream — a client that stops reading is backpressure, never an upstream stall. |
+| `UPSTREAM_STREAM_TIMEOUT_MS` — the whole attempt | 1 h | As idle. Separate so a long healthy generation is not cut by a clock sized for hangs. |
+
+A **non-streamed** HTTP attempt keeps the one `UPSTREAM_TIMEOUT_MS` deadline (10 min): its headers
+arrive with the finished completion, so a first-byte or idle clock would cut a healthy answer. The
+Agent-SDK path has its own idle guard ([11 §6](11-anthropic-agent-sdk.md)). Before these clocks a
+single 600 s deadline bounded every HTTP stream: a hung upstream held the request ten minutes
+before failover, and a healthy generation longer than that was cut mid-stream. The clocks are timers,
+not per-chunk work: a chunk costs one clock read, and `bin/bench` shows no added overhead or TTFT.
 
 ### Failover mid-conversation — the two paths are not the same operation
 
@@ -627,7 +659,7 @@ limits it again before it has answered any of them.
 
 | Rule | Statement |
 |---|---|
-| **Taken at attempt time** | Not when the candidate is merely *ordered*. A breaker probe ranks behind every healthy account (a recovery-permit holder ranks ahead; see *A recovery permit ranks first*) and is usually never reached; holding it for a request that walks past would park a recovering account for nothing. |
+| **Taken at attempt time** | Not when the candidate is merely *ordered*. A breaker probe ranks behind every healthy account (a recovery-permit holder ranks ahead, and under `sticky` a session's own half-open home keeps its rank; see *A recovery permit ranks first*) and is usually never reached; holding it for a request that walks past would park a recovering account for nothing. |
 | **A refusal costs nothing** | The chain drops that candidate and walks on — no attempt spent, no `UsageRecord`, no upstream contacted. Nothing happened to that account. |
 | **The hold is a routing state** | It rides in the health snapshot, so every request selecting *after* it was taken is filtered out as `probe-in-flight` — a `429` carrying the hold's expiry, because a clock fixes this in milliseconds. Never a `500`, and never a queue. |
 | **Released on the verdict** | The moment the attempt is classified, not when its stream settles: the probe's question was "is this account back?", and it has been answered. `ROUTING_HALF_OPEN_HOLD_MS` is the backstop for a probe that never reports at all. |

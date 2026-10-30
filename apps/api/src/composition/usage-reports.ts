@@ -27,7 +27,7 @@ import {
  */
 export function createUsageReports(deps: {
   readonly database: Database
-  readonly env: Pick<Env, "usageReport" | "retention" | "failover">
+  readonly env: Pick<Env, "usageReport" | "retention" | "failover" | "upstreamStream">
   readonly keys: Pick<ApiKeyRepository, "list">
   readonly keyTombstones: Pick<ApiKeyTombstoneRepository, "listAll">
   readonly pools: Pick<PoolRepository, "list">
@@ -61,6 +61,7 @@ export function createUsageReports(deps: {
     },
     maxRows: env.usageReport.maxRows,
     upstreamTimeoutMs: env.failover.upstreamTimeoutMs,
+    upstreamStreamTimeoutMs: env.upstreamStream.totalMs,
     // One row a week, plus two for a week in flight and a clock edge.
     listLimit: Math.ceil(env.retention.usageReportsDays / 7) + 2,
     now: deps.now,
