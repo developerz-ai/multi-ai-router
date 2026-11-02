@@ -504,7 +504,13 @@ stand, so invalid JSON cannot become valid. Serialization is iterative, includin
 nested values. Every canonical output byte, including end-of-value output, passes the capture's
 budget and priority checks before storage; source bytes that emit nothing spend no room. Deferred
 fraction zeros are counted, not buffered, and emission stops immediately if the sink rejects a byte.
-Each numeric token resets its fraction/exponent state; exponent digits bypass fraction-zero handling.
+Each numeric token resets its fraction/exponent state. A complete all-zero exponent (`e0`,
+`E+0`, `e-00`) disappears before budget checks, so an escaped `usage:1e0` repeat fits the
+single byte freed by `usage:1`, even beside a 63-byte status at cap 64. Deferred exponent
+zeros are counted, not buffered; nonzero and incomplete exponents retain their grammar.
+A repeated decimal point flushes the preceding fraction or exponent before ending the token,
+so malformed `base_resp.status_code:1008.0.0` stays malformed and is dropped, never classified
+as credit exhaustion.
 At a 64-byte cap, a 53-byte literal usage object, its equivalent escaped copy with twelve extra
 spaces or one padding character spelled `\u0070`, and the 11-byte `"completed"` status still fit —
 and so does a `1` repeated as `1.` followed by sixty-four zeros, including when the repeat

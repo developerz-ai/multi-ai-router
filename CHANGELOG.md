@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Salvage numeric canonicalization preserves repeated decimal points: malformed MiniMax `base_resp.status_code:1008.0.0` is dropped instead of rewritten into a credit-exhaustion code. Complete zero exponents are normalized before capture budget checks, so equivalent escaped `usage:1e0`, `1E+0`, and `1e-00` repeats keep usage beside a 63-byte status at cap 64. Numeric state lives in a bounded streaming helper; scanner regressions pin malformed ceilings and parity with frozen 2.41.0 and `JSON.parse`.
 - Salvage canonicalization checks each output byte against the capture budget, including end-of-value output, rather than charging source bytes. Deferred fraction zeros stream directly to the budgeted sink and stop on rejection, avoiding unbounded temporary arrays; equivalent escaped `usage:1.0` still fits beside a 63-byte status at cap 64. Numeric tokens reset their own state, preserve interior fraction zeros, and handle exponent digits separately. Regression tests cover multi-number usage, million-zero fractions, sink rejection, and end-only output under required, escaped, optional, and ceiling-slot budgets.
 
 ## [2.42.1] — 2026-11-02

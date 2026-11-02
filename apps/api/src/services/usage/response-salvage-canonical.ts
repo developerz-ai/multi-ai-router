@@ -1,3 +1,5 @@
+import { createNumberCanonicalizer } from "./response-salvage-number"
+
 /**
  * The canonical form of a JSON value, built as its bytes arrive.
  *
@@ -10,11 +12,7 @@
 const QUOTE = 34
 const BACKSLASH = 92
 const SLASH = 47
-const DOT = 46
 const MINUS = 45
-const PLUS = 43
-const LOWER_E = 101
-const UPPER_E = 69
 const ZERO = 48
 const NINE = 57
 const SPACE = 32
@@ -80,12 +78,6 @@ export function createSlotCanonicalizer(emit: (byte: number) => boolean): SlotCa
   let hexDigits = 0
   let hexText = ""
   let codePoint = 0
-  // Fraction zeros wait for a significant digit; exponent digits never share that state.
-  let inFraction = false
-  let inExponent = false
-  let fractionDigits = 0
-  let droppedZeros = 0
-  let pointWritten = false
   // The whitespace after a primitive: it stays a separator while the next token may continue
   // it, so an invalid `1 2` never becomes a valid `12`.
   let spacePending = false
@@ -100,22 +92,12 @@ export function createSlotCanonicalizer(emit: (byte: number) => boolean): SlotCa
     }
   }
 
-  /** The fraction's point and the zeros dropped after it, written when a digit survives them. */
-  const writePoint = (): void => {
-    if (!inFraction) return
-    if (!pointWritten) write(DOT)
-    pointWritten = true
-    for (let at = 0; active && at < droppedZeros; at++) write(ZERO)
-    droppedZeros = 0
-  }
-
-  /** The number ends: a fraction of nothing but zeros loses its point with them. */
+  const number = createNumberCanonicalizer((byte) => {
+    write(byte)
+    return active
+  })
   const endNumber = (): void => {
-    if (inFraction && !pointWritten) {
-      pointWritten = true
-      // `1.` is not a number: its point stays, so the frame stays malformed.
-      if (fractionDigits === 0) write(DOT)
-    }
+    number.end()
     afterPrimitive = true
   }
 
@@ -158,8 +140,7 @@ export function createSlotCanonicalizer(emit: (byte: number) => boolean): SlotCa
     if (byte === MINUS || (byte >= ZERO && byte <= NINE)) {
       write(byte)
       mode = "number"
-      inFraction = inExponent = pointWritten = false
-      fractionDigits = droppedZeros = 0
+      number.start()
       afterPrimitive = false
       return
     }
@@ -228,38 +209,7 @@ export function createSlotCanonicalizer(emit: (byte: number) => boolean): SlotCa
         return
       }
       case "number": {
-        if (byte >= ZERO && byte <= NINE) {
-          if (!inFraction || inExponent) {
-            write(byte)
-            return
-          }
-          fractionDigits++
-          // A zero at the fraction's tail says nothing until a digit that does follow it.
-          if (byte === ZERO) {
-            droppedZeros++
-            return
-          }
-          writePoint()
-          write(byte)
-          return
-        }
-        if (byte === DOT && !inFraction && !inExponent) {
-          inFraction = true
-          fractionDigits = 0
-          droppedZeros = 0
-          return
-        }
-        if ((byte === LOWER_E || byte === UPPER_E) && !inExponent) {
-          inExponent = true
-          // The fraction is settled: its zeros come back, and its point with them.
-          writePoint()
-          write(byte)
-          return
-        }
-        if ((byte === PLUS || byte === MINUS) && inExponent) {
-          write(byte)
-          return
-        }
+        if (number.push(byte)) return
         endNumber()
         mode = "value"
         pushValue(byte)

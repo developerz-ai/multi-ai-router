@@ -110,6 +110,16 @@ test.each(["usage", "\\u0075sage", "code", "base_resp.status_code"])(
   },
 )
 
+test.each(["1008.0.0", "1008.00.0", "1008.1.0", "1008e0.0", "1008.e0"])(
+  "malformed numeric ceiling codes stay malformed: %s",
+  (number) => {
+    expect(() => JSON.parse(canonicalize(number))).toThrow()
+    expect(
+      run(createResponseSalvage, `{"base_resp":{"status_code":${number}}}`, 64).rebuilt,
+    ).toEqual({})
+  },
+)
+
 test("a full budget charges canonical bytes, not redundant fraction digits", () => {
   const text = `{"usage":1,"status":"${"s".repeat(61)}","\\u0075sage":1.0}`
   const frozen = run(createFrozenSalvage, text, 64)
@@ -619,6 +629,10 @@ test.each([
   `{"usage":{"pad":"${"p".repeat(43)}"},"status":"completed","\\u0075sage":{"pad":"\\u0070${"p".repeat(42)}"}}`,
   // The same value, an expanded number: sixty-five bytes longer.
   `{"usage":1,"\\u0075sage":1.${"0".repeat(64)},"status":"completed"}`,
+  // Zero exponents must fit the single byte freed by the literal usage at a full budget.
+  ...["1e0", "1E+0", "1e-00", "1.000e000"].map(
+    (number) => `{"usage":1,"status":"${"s".repeat(61)}","\\u0075sage":${number}}`,
+  ),
   // The same expanded number, behind the status that fills the budget.
   `{"usage":1,"status":"completed","\\u0075sage":1.${"0".repeat(64)}}`,
 ])("an equivalent escaped repeat keeps the slot the frozen scanner kept: %.60s", (text) => {
