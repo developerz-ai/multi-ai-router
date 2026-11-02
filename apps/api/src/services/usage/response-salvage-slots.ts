@@ -112,6 +112,35 @@ export function compactSlotEncoding(bytes: readonly number[]): number[] {
   return compact.length <= bytes.length ? compact : [...bytes]
 }
 
+/** Compact complete string tokens and insignificant spacing even before a container closes. */
+export function compactSlotPrefix(bytes: readonly number[]): number[] {
+  const compact: number[] = []
+  for (let at = 0; at < bytes.length; at++) {
+    const byte = bytes[at]
+    if (byte === undefined) break
+    if (byte === QUOTE) {
+      const start = at++
+      for (; at < bytes.length; at++) {
+        if (bytes[at] === BACKSLASH) at++
+        else if (bytes[at] === QUOTE) break
+      }
+      const token = bytes.slice(start, Math.min(at + 1, bytes.length))
+      try {
+        for (const part of compactSlotEncoding(token)) compact.push(part)
+      } catch {
+        // An unfinished or malformed string stays verbatim; final rebuilding still validates it.
+        for (const part of token) compact.push(part)
+      }
+    } else if (isWhitespace(byte)) {
+      // Keep a separator between primitives: malformed `1 2` must never become valid `12`.
+      const previous = compact.at(-1)
+      if (previous !== undefined && ![OPEN_OBJECT, OPEN_ARRAY, COLON, COMMA, 32].includes(previous))
+        compact.push(32)
+    } else compact.push(byte)
+  }
+  return compact
+}
+
 /** Fixed-size comparison metadata; never retain a historical capture or its parsed value. */
 export function semanticFingerprint(bytes: readonly number[], decoder: TextDecoder): string | null {
   try {

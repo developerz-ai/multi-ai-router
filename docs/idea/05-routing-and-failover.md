@@ -497,7 +497,10 @@ object. Parsing and canonical traversal are temporary and bounded by the capture
 Before an equivalent escaped capture gains non-evictable priority, its JSON encoding is normalized:
 whitespace, string/key escapes and number spellings are compacted without changing decoded values
 or increasing retained bytes. Serialization is iterative, including for deeply nested values.
-At a 64-byte cap, a 53-byte literal usage object, its equivalent escaped copy with four extra
+At budget pressure, an escaped capture compacts complete string tokens and insignificant spacing
+before the overflow drop, even if its container is still open. Unfinished or malformed strings stay
+verbatim, and whitespace between primitives remains a separator so invalid JSON cannot become valid.
+At a 64-byte cap, a 53-byte literal usage object, its equivalent escaped copy with twelve extra
 spaces or one padding character spelled `\u0070`, and the 11-byte `"completed"` status still fit.
 A repeated parent transfers only the prior children's priority eligibility, never their bytes:
 a child actually present in the new parent can inherit that priority (and becomes non-evictable

@@ -6,6 +6,7 @@ import {
   COLON,
   COMMA,
   compactSlotEncoding,
+  compactSlotPrefix,
   decodeSlotKey,
   isWhitespace,
   KEY_MAX_BYTES,
@@ -124,6 +125,13 @@ export function createResponseSalvage(maximumBytes: number): ResponseSalvage {
     // rather than failing the frame. A literal capture takes the room an escaped one holds
     // instead, so newly decoded slots never crowd out evidence the literal-only scanner kept.
     if (retained >= maximumBytes && !capture.escaped) release(evictable)
+    if (retained >= maximumBytes && capture.escaped) {
+      // Equivalent repeats may exceed the raw budget before the container closes. Reclaim
+      // encoding overhead now, before dropping evidence that the literal-only scanner kept.
+      const compact = compactSlotPrefix(capture.bytes)
+      retained -= capture.bytes.length - compact.length
+      capture.bytes = compact
+    }
     if (retained >= maximumBytes && capture.escaped) {
       retained -= capture.bytes.length
       capture.bytes = []

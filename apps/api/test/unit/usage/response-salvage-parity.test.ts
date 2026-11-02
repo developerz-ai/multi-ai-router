@@ -2,6 +2,7 @@ import { expect, test } from "bun:test"
 import { createResponseSalvage } from "../../../src/services/usage/response-salvage"
 import {
   compactSlotEncoding,
+  compactSlotPrefix,
   semanticFingerprint,
 } from "../../../src/services/usage/response-salvage-slots"
 import { createResponseSalvage as createFrozenSalvage } from "../../fixtures/response-salvage-v2.41.0"
@@ -309,6 +310,20 @@ test.each([
   expect(semanticFingerprint(compact, decoder)).toBe(semanticFingerprint(bytes, decoder))
 })
 
+test.each([
+  ['{"pad":            "p"', '{"pad":"p"'],
+  ['{"pad":"\\u0070"', '{"pad":"p"'],
+  ['{"pad":"p p"', '{"pad":"p p"'],
+  ['{"pad":"unfinished\\u00', '{"pad":"unfinished\\u00'],
+  ['{"pad":1  2', '{"pad":1 2'],
+  ['{"pad":"\\q"', '{"pad":"\\q"'],
+])("pressure compaction preserves string and primitive boundaries: %s", (text, expected) => {
+  const bytes = [...encoder.encode(text)]
+  const compact = compactSlotPrefix(bytes)
+  expect(new TextDecoder().decode(Uint8Array.from(compact))).toBe(expected)
+  expect(compact.length).toBeLessThanOrEqual(bytes.length)
+})
+
 test("the current scanner reads a document as JSON.parse does, over the whole slot surface", () => {
   for (let index = 0; index < ITERATIONS; index++) {
     const seed = (BASE_SEED + index) >>> 0
@@ -481,7 +496,7 @@ test.each(["", " ", "\t", "\r\n"])(
   },
 )
 
-test.each(["    ", "\t\r\n "])(
+test.each(["    ", "\t\r\n ", " ".repeat(12)])(
   "an equivalent expanded repeat leaves room for required status: %j",
   (whitespace) => {
     const usage = { pad: "p".repeat(43) }
