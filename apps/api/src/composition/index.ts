@@ -147,7 +147,10 @@ export function createRuntime(deps: RuntimeDeps): Runtime {
     scheduler,
     metrics,
     start: lifecycle.start,
-    closeAdmission: () => activeRequests.closeAdmission(),
+    closeAdmission: () => {
+      activeRequests.closeAdmission()
+      recoveryComponents.coordinator.closeIssuance()
+    },
     stop: lifecycle.stop,
   }
 }

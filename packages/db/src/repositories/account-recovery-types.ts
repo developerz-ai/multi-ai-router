@@ -110,6 +110,12 @@ export interface RecoveryRepository {
     permitId: string
     maximumOutcomeAgeMs: number
   }): Promise<RecoveryRow | undefined>
+  /** Graceful shutdown only: this boot's own permits with no verdict become `uncertain`. */
+  settleIssuedForOwner(input: {
+    limit: number
+    ownerBootId: string
+    cooldownMs: number
+  }): Promise<RecoveryRow[]>
   cancel(input: { accountId: string; generation: string }): Promise<RecoveryRow | undefined>
   listPending(input: { limit: number; accountIds: readonly string[] }): Promise<RecoveryRow[]>
   listIssuedForOwner(input: {
