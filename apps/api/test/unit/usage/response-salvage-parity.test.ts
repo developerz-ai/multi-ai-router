@@ -389,6 +389,26 @@ test.each(["q", "12345678"])(
   },
 )
 
+test.each(["code", "error", "response.error"])(
+  "an oversized optional %s restores borrowed inherited usage",
+  (path) => {
+    const usage = { pad: "p".repeat(45) }
+    const value = JSON.stringify(usage)
+    const optional =
+      path === "response.error"
+        ? '"response":{"error":"12345678901234567"}'
+        : `"${path}":"12345678901234567"`
+    const text = `{"usage":${value},"\\u0075sage":${value},${optional}}`
+    const frozen = run(createFrozenSalvage, text, TIGHT_CAP)
+    const current = run(createResponseSalvage, text, TIGHT_CAP)
+    expect(frozen.rebuilt).toEqual({ usage })
+    expect(project(JSON.parse(text) as Record<string, unknown>)).toMatchObject({ usage })
+    expect(current.rebuilt).toEqual(frozen.rebuilt)
+    expect(current.retained).toBe(value.length)
+    expect(current.peak).toBeLessThanOrEqual(TIGHT_CAP)
+  },
+)
+
 test("the frozen 2.41.0 scanner still shows the two divergences the current one no longer has", () => {
   // A repeated parent: 2.41.0 kept the child of the copy the later one replaced.
   const repeated = `{"response":{"usage":{"input_tokens":1}},"response":{"status":"x"}}`

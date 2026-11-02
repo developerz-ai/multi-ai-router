@@ -77,11 +77,10 @@ export function createResponseSalvage(maximumBytes: number): ResponseSalvage {
       inherited.delete(path)
     }
   }
-  // Ceiling slots lent to the error capture in progress: given back if it drops (it frees at least
-  // what it borrowed, so they fit), forgotten once it is kept.
+  // Completed slots lent to optional evidence: restored if it drops, forgotten if it is kept.
   let lent: [string, number[]][] = []
-  const lend = () => {
-    for (const path of SLOT_MAX_BYTES.keys()) {
+  const lend = (paths: Iterable<string>) => {
+    for (const path of paths) {
       const bytes = captured.get(path)
       if (bytes === undefined) continue
       lent.push([path, bytes])
@@ -99,7 +98,7 @@ export function createResponseSalvage(maximumBytes: number): ResponseSalvage {
   const blockCeiling = () => {
     ceilingBlocked = true
     release(SLOT_MAX_BYTES.keys())
-    lent = []
+    lent = lent.filter(([path]) => !SLOT_MAX_BYTES.has(path))
     if (capture === null || !SLOT_MAX_BYTES.has(capture.path) || capture.dropped) return
     retained -= capture.bytes.length
     capture.bytes = []
@@ -125,9 +124,9 @@ export function createResponseSalvage(maximumBytes: number): ResponseSalvage {
     // An escaped replacement — which the frozen scanner never spent room on, since it read the
     // key as raw bytes — yields before a full-budget optional capture drops itself: the evidence
     // the frozen scanner kept must survive (#209: no lost non-stale key).
-    if (retained >= maximumBytes && OPTIONAL.has(capture.path)) release(inherited)
+    if (retained >= maximumBytes && OPTIONAL.has(capture.path)) lend(inherited)
     // Error evidence outranks a ceiling slot: borrow its room before giving way.
-    if (OPTIONAL.has(capture.path) && retained >= maximumBytes && lent.length === 0) lend()
+    if (OPTIONAL.has(capture.path) && retained >= maximumBytes) lend(SLOT_MAX_BYTES.keys())
     if (
       (ceiling !== undefined && capture.bytes.length >= ceiling) ||
       (OPTIONAL.has(capture.path) &&
@@ -169,7 +168,13 @@ export function createResponseSalvage(maximumBytes: number): ResponseSalvage {
       if (capture.evictable) evictable.add(capture.path)
       else if (capture.escaped) inherited.add(capture.path)
     } else captured.delete(capture.path)
-    if (!capture.dropped) lent = []
+    if (!capture.dropped) {
+      for (const [path] of lent) {
+        evictable.delete(path)
+        inherited.delete(path)
+      }
+      lent = []
+    }
     capture = null
   }
   const beginValue = (byte: number, fresh: boolean) => {

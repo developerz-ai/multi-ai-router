@@ -483,8 +483,10 @@ Escaped-key salvage is additive under the observation budget: captures recognize
 an escaped key are dropped when full and released before literal-key evidence needs room. A repeat
 of an already retained literal slot inherits its priority until the budget fills, but gives way
 before retained literal error/code evidence is evicted, before a full-budget optional capture
-drops itself, or the frame fails. Thus an escaped repeat cannot lose non-stale literal evidence
-that the previous scanner kept.
+drops itself, or the frame fails. Optional evidence borrows an inherited capture's bytes rather
+than discarding it immediately: if that evidence exceeds its own share and drops, the borrowed
+capture is restored; only a kept optional capture consumes the loan. Thus an escaped repeat cannot
+lose non-stale literal evidence that the previous scanner kept.
 Every repeated slot releases the earlier value's bytes before capturing its replacement, so
 duplicate copies cannot crowd out the last one.
 
