@@ -16,7 +16,7 @@
     "solid-js": "^1.9.17"
   },
   "devDependencies": {
-    "@babel/core": "^7.29.7",
+    "@babel/core": "^8.0.7",
     "@babel/preset-typescript": "^7.29.7",
     "@happy-dom/global-registrator": "^21.0.3",
     "babel-preset-solid": "^1.9.16",
