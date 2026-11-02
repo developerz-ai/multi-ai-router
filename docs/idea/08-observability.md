@@ -107,7 +107,7 @@ request fact; it never invents an upstream account or a token charge.
 | Coverage | Twelve vendor tables answer for fourteen providers. `anthropic-api` and `anthropic-oauth` share the Anthropic table; `openai-api` and `openai-oauth` share the OpenAI one; `gemini`, `zai`, `kimi`, `minimax`, `groq`, `deepseek`, `xai`, `mistral`, `together` and `cerebras` each have their own. **Four providers ship no price on purpose** — [below](#the-four-providers-that-ship-no-price) |
 | Override | Operator rates are scoped to an Account or apply to a provider globally. Account exact/family overrides precede provider exact/family overrides, then eligible shipped rates. Account-scoped rows cascade on deletion and never become global. The warm book refresh after a successful settings edit includes a post-commit snapshot before returning. Settings shows unpriced configured upstream models and unknown model catalogs. |
 | Which model | The **upstream** model, after the Account's alias map — that is the name the upstream billed. A dated snapshot (`…-20251001`, `…-2025-04-14`) prices as its family, which is how the provider prices the pin. A snapshot the vendor prices apart from its family is named in full in its table, and the exact name is tried first |
-| Long-context tiers | A model whose vendor publishes a long-context rate carries a second card that **replaces** the standard one once the prompt reaches its threshold — OpenAI above 272k, Google and xAI above 200k. Replaces, not tops up: those vendors bill the *entire* request at the higher rate once the prompt crosses the line, and charging only the excess would understate a long-context request by roughly half. The prompt measured is `tokensIn + cacheReadTokens + cacheWriteTokens` — how much context the request carried, not how much of it missed the cache. An **override is deliberately flat**: one written for a tiered model replaces both tiers, which is the operator saying "this is the rate, whatever the prompt" |
+| Long-context tiers | A tiered model carries a second card that **replaces** the standard card for the *whole request*, not just tokens beyond the threshold. The router selects it at total prompt **>=272_000** for the tiered OpenAI rows, and at total prompt >=200_000 for Google and xAI. Total prompt is `tokensIn + cacheReadTokens + cacheWriteTokens`, including both cache reads and writes, not just cache misses. This inclusive threshold and whole-request replacement describe the router's implementation convention, not a verbatim vendor-page rule. An **override is deliberately flat**: one written for a tiered model replaces both tiers, which is the operator saying "this is the rate, whatever the prompt" |
 | Unknown model | `costEstimate` is null and `costBasis` is `unknown` — never silently zero, never guessed. A family released after the image was built, or an older snapshot the vendor no longer lists, prices as unknown rather than as the nearest thing to it |
 | Priced, no tokens | `0` with a real basis. Zero tokens against a known rate is a measurement, not an admission |
 | Cache rates | A model whose vendor publishes no cached-input price bills cached tokens at the **full input rate** — a discount nobody published is not assumed. A missing cache-*write* price is zero, because every vendor here except Anthropic bills the write as ordinary input on the call that created it, and charging again would double-count it. Anthropic's two are derived from its published multiples of input (1.25× write; 0.1× read, except where the pricing page footnotes a model — 0.025× on Fable 5.1, 0.05× on Opus 5.5) rather than restated per row; a response never says which cache TTL was written, so the 5-minute default is assumed and writes read low, never high |
@@ -127,13 +127,17 @@ resellers' and aggregators', not the vendor's price. The model is pinned in
 models whose entries must keep looking up null, so the documentation cannot drift from the table.
 An operator override is the way to price it.
 
-The GPT-6 family (`gpt-6-luna`, `gpt-6-sol`, `gpt-6.1-sol`, `gpt-6-astra`) ships its own four-card
-rows in `services/cost/tables/openai.ts`, one per model, with the same long-context tier
-(272k input tokens) the GPT-5.6 rows use. Provenance: the model pages under
-`https://developers.openai.com/api/docs/models/`, read 2026-10-10. The page-published long-context
-rule is 2× input and cache, 1.5× output, for the whole request; the code applies the long card
-once the prompt (`tokensIn + cacheReadTokens + cacheWriteTokens`) reaches 272,000, the same threshold the GPT-5.6 rows already use. `gpt-reserve` and
-`codex-auto-review` stay unpriced — no published price was found for either.
+The GPT-6 family (`gpt-6-luna`, `gpt-6-sol`, `gpt-6.1-sol`, `gpt-6-astra`) has one standard
+and one long-context card per model in `services/cost/tables/openai.ts`, shared by `openai-api`
+and `openai-oauth`. Recorded source evidence names the model pages under
+`https://developers.openai.com/api/docs/models/`, read 2026-10-10; this is not a fresh external
+verification. The shipped long cards use 2× input, cache-read and cache-write rates and 1.5× output.
+Separately, the router's implementation convention replaces the standard card for the **whole
+request** when total prompt (`tokensIn + cacheReadTokens + cacheWriteTokens`) is **>=272_000**,
+including reads and writes, as for the GPT-5.6 rows. This convention is not a claim of verbatim
+agreement with the recorded vendor pages. Older OpenAI evidence remains inherited:
+`PRICE_SOURCES` keeps `verifiedAt: null`. `gpt-reserve` and `codex-auto-review` stay unpriced —
+no published price was found for either.
 
 ### The four providers that ship no price
 

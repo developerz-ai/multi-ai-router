@@ -293,16 +293,18 @@ describe("a long-context tier replaces the standard card, it does not top it up"
 
 describe("pricing the GPT-6 family (#181)", () => {
   test("gpt-6.1-sol on a Codex subscription reports notional with a real cost", () => {
-    // Per the AC: red at f3e4e01 (lookupRates returned null), green here.
     const cost = estimateCost({
       provider: "openai-oauth",
       model: "gpt-6.1-sol",
-      tokens: tokens({ tokensIn: 200_000, tokensOut: 50_000 }),
+      tokens: tokens({
+        tokensIn: 200_000,
+        tokensOut: 50_000,
+        cacheReadTokens: 50_000,
+        cacheWriteTokens: 0,
+      }),
       billing: "subscription",
     })
-    expect(cost.costBasis).toBe("notional")
-    expect(cost.costEstimate).not.toBeNull()
-    expect(Number(cost.costEstimate)).toBeGreaterThan(0)
+    expect(cost).toEqual({ costEstimate: "0.905000", costBasis: "notional" })
   })
 
   test("gpt-6-luna: 200k in + 200k out prices 0.120000 USD on both openai-api (metered) and openai-oauth (notional)", () => {
