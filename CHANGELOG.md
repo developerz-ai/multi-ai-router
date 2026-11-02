@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- The committed-migration drift guard now sweeps columns as well as enum values. Every table the schema barrel exports is compared against the same table in the latest committed migration snapshot, and a schema column the snapshot does not carry fails the suite naming the table and the column; a table the snapshot never created is reported with all of its columns missing. The tables are discovered from the schema barrel, and a fixture proves the comparison reports a missing column rather than passing quietly. Test-only: no runtime behaviour change.
+
 ### Fixed
 
 - Salvage numeric canonicalization preserves repeated decimal points: malformed MiniMax `base_resp.status_code:1008.0.0` is dropped instead of rewritten into a credit-exhaustion code. Complete zero exponents are normalized before capture budget checks, so equivalent escaped `usage:1e0`, `1E+0`, and `1e-00` repeats keep usage beside a 63-byte status at cap 64. Numeric state lives in a bounded streaming helper; scanner regressions pin malformed ceilings and parity with frozen 2.41.0 and `JSON.parse`.
