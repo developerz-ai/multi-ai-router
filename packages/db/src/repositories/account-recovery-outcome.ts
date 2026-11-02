@@ -1,7 +1,7 @@
 import type { QuotaWindowKind } from "@multi-ai-router/core"
 import { and, eq, gte, isNull, sql } from "drizzle-orm"
 import type { DatabaseExecutor } from "../client"
-import { accountRecoveries } from "../schema/account-recoveries"
+import { accountRecoveries, type RecoveryRow } from "../schema/account-recoveries"
 import { quotaWindows } from "../schema/quota-windows"
 import {
   credentialFingerprint,
@@ -14,7 +14,10 @@ import type { RecoveryRepository } from "./account-recovery-types"
 
 export function createRecoveryOutcomes(
   db: DatabaseExecutor,
-): Pick<RecoveryRepository, "hydrateIssued" | "outcome" | "markUncertain" | "cancel"> {
+): Pick<
+  RecoveryRepository,
+  "hydrateIssued" | "outcome" | "markUncertain" | "settleIssuedForOwner" | "cancel"
+> {
   return {
     hydrateIssued: (input) => {
       duration(input.maximumOutcomeAgeMs)
@@ -144,6 +147,49 @@ export function createRecoveryOutcomes(
           .returning()
         return row
       })
+    },
+    settleIssuedForOwner: async (input) => {
+      duration(input.cooldownMs)
+      duration(input.limit)
+      const owned = await db
+        .select({ accountId: accountRecoveries.accountId, permitId: accountRecoveries.permitId })
+        .from(accountRecoveries)
+        .where(
+          and(
+            eq(accountRecoveries.state, "issued"),
+            eq(accountRecoveries.ownerBootId, input.ownerBootId),
+          ),
+        )
+        .limit(input.limit)
+      const settled: RecoveryRow[] = []
+      for (const { accountId, permitId } of owned) {
+        const row = await db.transaction(async (tx) => {
+          if ((await lockAccount(tx, accountId)) === undefined) return undefined
+          const held = await lockRecovery(tx, accountId)
+          if (
+            held === undefined ||
+            held.state !== "issued" ||
+            held.ownerBootId !== input.ownerBootId ||
+            held.permitId !== permitId
+          )
+            return undefined
+          const now = await recoveryClock(tx)
+          const [updated] = await tx
+            .update(accountRecoveries)
+            .set({
+              state: "uncertain",
+              outcomeAt: now,
+              revision: sql`${accountRecoveries.revision}+1`,
+              // Same as an owner-recorded outcome: this boot aborted its call before exiting.
+              nextAllowedAt: new Date(now.getTime() + input.cooldownMs),
+            })
+            .where(eq(accountRecoveries.accountId, accountId))
+            .returning()
+          return updated
+        })
+        if (row !== undefined) settled.push(row)
+      }
+      return settled
     },
     cancel: (input) =>
       db.transaction(async (tx) => {

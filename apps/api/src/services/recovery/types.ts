@@ -61,6 +61,8 @@ export interface RecoveryCoordinator {
   demand(accountId: string): void
   /** False leaves caller's consumed local permit gated; never means retry a provider call. */
   recordOutcome(outcome: RecoveryOutcome): boolean
+  /** Shutdown began: no new permit from here on; issued permits and outcomes keep flowing. */
+  closeIssuance(): void
   tick(): Promise<void>
   start(): void
   stop(): Promise<void>

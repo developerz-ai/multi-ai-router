@@ -121,6 +121,11 @@ export function fixture() {
         return row
       },
       markUncertain: async () => undefined,
+      settleIssuedForOwner: async ({ ownerBootId }) => {
+        if (row.state !== "issued" || row.ownerBootId !== ownerBootId) return []
+        row = { ...row, state: "uncertain" }
+        return [row]
+      },
     },
   }
   const coordinator = createRecoveryCoordinator(deps)
