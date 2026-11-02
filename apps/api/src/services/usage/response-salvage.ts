@@ -1,3 +1,4 @@
+import { createSlotCanonicalizer } from "./response-salvage-canonical"
 import {
   BACKSLASH,
   type Capture,
@@ -6,7 +7,6 @@ import {
   COLON,
   COMMA,
   compactSlotEncoding,
-  compactSlotPrefix,
   decodeSlotKey,
   isWhitespace,
   KEY_MAX_BYTES,
@@ -126,13 +126,9 @@ export function createResponseSalvage(maximumBytes: number): ResponseSalvage {
     // instead, so newly decoded slots never crowd out evidence the literal-only scanner kept.
     if (retained >= maximumBytes && !capture.escaped) release(evictable)
     if (retained >= maximumBytes && capture.escaped) {
-      // Equivalent repeats may exceed the raw budget before the container closes. Reclaim
-      // encoding overhead now, before dropping evidence that the literal-only scanner kept.
-      const compact = compactSlotPrefix(capture.bytes)
-      retained -= capture.bytes.length - compact.length
-      capture.bytes = compact
-    }
-    if (retained >= maximumBytes && capture.escaped) {
+      // An escaped capture gives way at a full budget: it drops itself rather than failing the
+      // frame. Its bytes are canonical already, so there is no encoding overhead to reclaim
+      // first: the room it holds is what its value costs.
       retained -= capture.bytes.length
       capture.bytes = []
       capture.dropped = true
@@ -172,8 +168,13 @@ export function createResponseSalvage(maximumBytes: number): ResponseSalvage {
       capture = null
       return
     }
-    capture.bytes.push(byte)
-    retained++
+    // The captured bytes are canonical: an escaped repeat spends the room its value costs, not
+    // the room its spelling spent.
+    capture.canonical.push(byte)
+    for (const part of capture.canonical.written) {
+      capture.bytes.push(part)
+      retained++
+    }
   }
   const endCapture = () => {
     if (capture === null) return
@@ -182,6 +183,13 @@ export function createResponseSalvage(maximumBytes: number): ResponseSalvage {
     evictable.delete(capture.path)
     inherited.delete(capture.path)
     if (!capture.dropped) {
+      // The last bytes of a value are known only at its end: a number's stray point, a fraction
+      // of nothing but zeros.
+      capture.canonical.end()
+      for (const part of capture.canonical.written) {
+        capture.bytes.push(part)
+        retained++
+      }
       const fingerprint = semanticFingerprint(capture.bytes, decoder)
       if (
         capture.escaped &&
@@ -261,6 +269,7 @@ export function createResponseSalvage(maximumBytes: number): ResponseSalvage {
           : byte === OPEN_OBJECT || byte === OPEN_ARRAY
             ? "container"
             : "primitive",
+      canonical: createSlotCanonicalizer(),
       bytes: [],
       dropped: false,
     }

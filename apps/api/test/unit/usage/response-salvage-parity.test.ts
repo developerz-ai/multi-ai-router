@@ -1,8 +1,8 @@
 import { expect, test } from "bun:test"
 import { createResponseSalvage } from "../../../src/services/usage/response-salvage"
+import { createSlotCanonicalizer } from "../../../src/services/usage/response-salvage-canonical"
 import {
   compactSlotEncoding,
-  compactSlotPrefix,
   semanticFingerprint,
 } from "../../../src/services/usage/response-salvage-slots"
 import { createResponseSalvage as createFrozenSalvage } from "../../fixtures/response-salvage-v2.41.0"
@@ -104,6 +104,19 @@ function prng(seed: number): () => number {
 
 function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value)
+}
+
+/** The canonical form of a value, as the scanner writes it while the value is read. */
+function canonicalize(text: string): string {
+  const canonical = createSlotCanonicalizer()
+  const out: number[] = []
+  for (const byte of encoder.encode(text)) {
+    canonical.push(byte)
+    for (const part of canonical.written) out.push(part)
+  }
+  canonical.end()
+  for (const part of canonical.written) out.push(part)
+  return new TextDecoder().decode(Uint8Array.from(out))
 }
 
 function sameValue(left: unknown, right: unknown): boolean {
@@ -311,17 +324,31 @@ test.each([
 })
 
 test.each([
+  '{"pad":"\\u0070","\\u006e":1.0}',
+  '[1e20,1e-6,-0,1e400,-1e400,true,null,"é"]',
+  '{"a":1,"a":2,"b":[{},[]]}',
+  `${"[".repeat(10_000)}0${"]".repeat(10_000)}`,
+  `{"pad":"\\u0070${"p".repeat(42)}"}`,
+  `1.${"0".repeat(64)}`,
+])("the canonical form preserves the value without expanding the byte budget: %.40s", (text) => {
+  const bytes = [...encoder.encode(text)]
+  const canonical = [...encoder.encode(canonicalize(text))]
+  expect(canonical.length).toBeLessThanOrEqual(bytes.length)
+  const decoder = new TextDecoder()
+  expect(semanticFingerprint(canonical, decoder)).toBe(semanticFingerprint(bytes, decoder))
+})
+
+test.each([
   ['{"pad":            "p"', '{"pad":"p"'],
   ['{"pad":"\\u0070"', '{"pad":"p"'],
   ['{"pad":"p p"', '{"pad":"p p"'],
   ['{"pad":"unfinished\\u00', '{"pad":"unfinished\\u00'],
   ['{"pad":1  2', '{"pad":1 2'],
   ['{"pad":"\\q"', '{"pad":"\\q"'],
-])("pressure compaction preserves string and primitive boundaries: %s", (text, expected) => {
-  const bytes = [...encoder.encode(text)]
-  const compact = compactSlotPrefix(bytes)
-  expect(new TextDecoder().decode(Uint8Array.from(compact))).toBe(expected)
-  expect(compact.length).toBeLessThanOrEqual(bytes.length)
+])("the canonical form preserves string and primitive boundaries: %s", (text, expected) => {
+  const canonical = canonicalize(text)
+  expect(canonical).toBe(expected)
+  expect(encoder.encode(canonical).length).toBeLessThanOrEqual(encoder.encode(text).length)
 })
 
 test("the current scanner reads a document as JSON.parse does, over the whole slot surface", () => {
@@ -530,6 +557,30 @@ test("an equivalent string escape leaves room for required status", () => {
   const current = run(createResponseSalvage, text, TIGHT_CAP)
   expect(frozen.rebuilt).toEqual({ usage, status: "completed" })
   expect(current.rebuilt).toEqual(frozen.rebuilt)
+  expect(current.peak).toBeLessThanOrEqual(TIGHT_CAP)
+})
+
+/**
+ * The escaped repeats that lost their slot: the repeat spelled the same value longer, so it
+ * spent more room than the slot was worth and was dropped where the frozen scanner kept the
+ * slot (#209: no lost non-stale key). The canonical form of a value is what it costs, so the
+ * repeat fits the room the literal slot freed.
+ */
+test.each([
+  // The same 43-character value, one padding character spelled `\u0070`: five bytes longer.
+  `{"usage":{"pad":"${"p".repeat(43)}"},"status":"completed","\\u0075sage":{"pad":"\\u0070${"p".repeat(42)}"}}`,
+  // The same value, an expanded number: sixty-five bytes longer.
+  `{"usage":1,"\\u0075sage":1.${"0".repeat(64)},"status":"completed"}`,
+  // The same expanded number, behind the status that fills the budget.
+  `{"usage":1,"status":"completed","\\u0075sage":1.${"0".repeat(64)}}`,
+])("an equivalent escaped repeat keeps the slot the frozen scanner kept: %.60s", (text) => {
+  const frozen = run(createFrozenSalvage, text, TIGHT_CAP)
+  const current = run(createResponseSalvage, text, TIGHT_CAP)
+  const projection = project(JSON.parse(text) as Record<string, unknown>)
+  // The frozen scanner read the literal slot and the status; `JSON.parse` reads the same
+  // values, so the current scanner may lose neither of them.
+  expect(frozen.rebuilt).toEqual(projection)
+  expect(current.rebuilt).toEqual(projection)
   expect(current.peak).toBeLessThanOrEqual(TIGHT_CAP)
 })
 

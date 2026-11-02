@@ -494,14 +494,19 @@ Equality compares decoded JSON values, not source bytes: whitespace, string esca
 order and equivalent number spellings do not change a value. Each literal slot retains only a
 SHA-256 semantic fingerprint (64 hex characters), never its historical payload array or parsed
 object. Parsing and canonical traversal are temporary and bounded by the captured slot size.
-Before an equivalent escaped capture gains non-evictable priority, its JSON encoding is normalized:
-whitespace, string/key escapes and number spellings are compacted without changing decoded values
-or increasing retained bytes. Serialization is iterative, including for deeply nested values.
-At budget pressure, an escaped capture compacts complete string tokens and insignificant spacing
-before the overflow drop, even if its container is still open. Unfinished or malformed strings stay
-verbatim, and whitespace between primitives remains a separator so invalid JSON cannot become valid.
+A captured value is kept in its canonical form, written while the value is read: whitespace
+dropped, string and key escapes resolved, a number's redundant digits removed. The room a slot
+holds is therefore what its value costs, not what its spelling spent, so an escaped repeat of a
+literal slot fits the room that slot freed and cannot crowd out another member. The rewrite
+changes no decoded value and never grows a capture; malformed input stays malformed — an invalid
+escape, a number's stray point and the whitespace between two primitives are written as they
+stand, so invalid JSON cannot become valid. Serialization is iterative, including for deeply
+nested values.
 At a 64-byte cap, a 53-byte literal usage object, its equivalent escaped copy with twelve extra
-spaces or one padding character spelled `\u0070`, and the 11-byte `"completed"` status still fit.
+spaces or one padding character spelled `\u0070`, and the 11-byte `"completed"` status still fit —
+and so does a `1` repeated as `1.` followed by sixty-four zeros, including when the repeat
+arrives after the literal slot and the status have already filled the budget, where the repeat
+used to be dropped and the slot lost with it.
 A repeated parent transfers only the prior children's priority eligibility, never their bytes:
 a child actually present in the new parent can inherit that priority (and becomes non-evictable
 only if its value equals the literal fingerprint); absent children remain absent. Thus an identical

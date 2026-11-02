@@ -594,3 +594,27 @@ test("an identical escaped repeat of a literal slot keeps that slot at the cap (
   expect(scanner.retainedBytes).toBeLessThanOrEqual(64)
   expect(scanner.finish()).toEqual({ usage })
 })
+
+test("an equivalent escaped repeat keeps the slot the literal spellings filled (2.42.0)", () => {
+  const scanner = createResponseSalvage(64)
+  const usage = { pad: "p".repeat(43) }
+  const value = JSON.stringify(usage)
+  // The escaped copy spells the same value longer — five bytes for one padding character — and
+  // arrives once the literal slot and the status have filled the budget. Its canonical form is
+  // what the value costs, so it fits the room the literal slot freed and the slot survives.
+  const expanded = value.replace("p".repeat(43), `\\u0070${"p".repeat(42)}`)
+  const text = `{"usage":${value},"status":"completed","\\u0075sage":${expanded}}`
+  for (const byte of encoder.encode(text)) scanner.push(byte)
+  expect(scanner.retainedBytes).toBeLessThanOrEqual(64)
+  expect(scanner.finish()).toEqual({ usage, status: "completed" })
+})
+
+test("an expanded numeric repeat keeps the slot the literal spellings filled (2.42.0)", () => {
+  const scanner = createResponseSalvage(64)
+  // `1.000…0` is the same value as `1`, spelled sixty-five bytes longer: the repeat's canonical
+  // form is one byte, so the slot the frozen scanner kept survives.
+  const text = `{"usage":1,"\\u0075sage":1.${"0".repeat(64)},"status":"completed"}`
+  for (const byte of encoder.encode(text)) scanner.push(byte)
+  expect(scanner.retainedBytes).toBeLessThanOrEqual(64)
+  expect(scanner.finish()).toEqual({ usage: 1, status: "completed" })
+})
