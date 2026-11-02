@@ -281,6 +281,59 @@ describe("redact — self-identifying credential shapes", () => {
   })
 })
 
+describe("redact — a credential in a query string", () => {
+  /**
+   * The rule, stated once: the query-string rule runs BEFORE the URL-userinfo rule, and the
+   * userinfo rule does not cross `?` at all — so a query value is read as a query value and never
+   * as a URL password. With the userinfo rule crossing `?` it read `?user=app&password=p@ssw0rd`
+   * as the password of `db.internal:5432` — and the secret after the `@` reached the log line in
+   * the clear.
+   *
+   * Each case asserts the tail marker is GONE, not that a marker appears somewhere: the old
+   * output was `postgresql://[REDACTED]@ssw0rd`, which is redacted and still carrying the secret.
+   */
+  const cases = [
+    {
+      name: "a DSN with a port and a query string",
+      input: "postgresql://db.internal:5432?user=app&password=p@ssw0rd",
+      tail: "ssw0rd",
+      expected: `postgresql://db.internal:5432?user=app&password=${REDACTED}`,
+    },
+    {
+      name: "a Redis URL with a query string",
+      input: "redis://cache:6379?password=hunter@2secret",
+      tail: "2secret",
+      expected: `redis://cache:6379?password=${REDACTED}`,
+    },
+    {
+      name: "an error text quoting a callback URL",
+      input: "connect https://h:8443?token=tok@en_SECRET_TAIL failed",
+      tail: "en_SECRET_TAIL",
+      expected: `connect https://h:8443?token=${REDACTED} failed`,
+    },
+  ] as const
+
+  for (const { name, input, tail, expected } of cases) {
+    test(`${name} keeps no tail after the @`, () => {
+      const safe = redactValue(input)
+
+      expect(safe).not.toContain(tail)
+      expect(safe).toBe(expected)
+    })
+  }
+
+  test("a userinfo password in front of a credential-named query value is gone", () => {
+    // The query rule consumes the value whole — the `@` included — so the userinfo rule has no
+    // `@` left to end on, and the password in the authority used to survive the whole scrub. The
+    // authority rule reads the authority itself as the password; the query value is still
+    // redacted whole.
+    const safe = redactValue("postgres://user:pw?key=1@host")
+
+    expect(safe).not.toContain("pw")
+    expect(safe).toBe(`postgres://${REDACTED}?key=${REDACTED}`)
+  })
+})
+
 describe("redact — Discord incoming webhook URLs", () => {
   /**
    * The webhook URL is the credential: anyone holding `/webhooks/<id>/<token>` can post to the

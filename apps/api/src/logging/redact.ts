@@ -110,30 +110,56 @@ const SECRET_VALUE_PATTERNS: readonly ValuePattern[] = [
     pattern: /(?<![A-Za-z0-9_-])eyJ[A-Za-z0-9_-]{513,}\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]*/g,
     replacement: REDACTED,
   },
+  // A credential passed in a query string, keeping the endpoint and the parameter that carried it.
+  // This rule runs BEFORE the URL-userinfo rule below, and it consumes the value whole — the `@`
+  // tail included. A query value is a query value, never a URL password: the userinfo rule below
+  // does not cross `?` at all, so the two rules claim disjoint text. With the userinfo rule first
+  // it read `?user=app&password=p@ssw0rd` as the password of `db.internal:5432` and left the
+  // secret after the `@` in the clear. Consuming the query value first is what stops that, and it
+  // is what keeps the host and the non-secret parameters of the same URL.
+  // The names are the ones the boot-path scrubber takes as well
+  // (`packages/core/src/scrub-credentials.ts`): a name ending in `key`/`token`/`secret`/`password`
+  // (any prefix — `api_key`, `access_token`), plus `passwd`, `pwd`, `code`, `code_verifier` and
+  // `state`. `code`/`code_verifier`/`state` are here because a whole OAuth callback URL logged as
+  // one string is not covered by the field-name list — nothing in this router reads a query
+  // parameter by those names except that callback, so scrubbing them costs no diagnostic.
+  {
+    pattern:
+      /([?&](?:[a-z0-9_-]*(?:key|token|secret|password|passwd|pwd)|code(?:[-_]?verifier)?|state)=)[^&\s#"']+/gi,
+    replacement: `$1${REDACTED}`,
+  },
   // URL userinfo — `postgres://user:pass@host/db` is how `DATABASE_URL` reaches a boot error.
   // The scheme is left out of the match (it stays in the text untouched): matching it made a long
   // `a-a-a-…` run backtrack quadratically, and bounding it let a scheme over the bound through.
   // The username may be empty: `redis://:password@cache` carries only a password.
   // A password may hold an unencoded `/` (`postgres://u:p/ss@h`). The first branch allows it, bounded
   // to 256 characters and stopping at `:` so a scan from each `://` stays short and the cost linear.
-  // Neither its username nor its password crosses `?`, `#`, `&`, `=` or `"`: it can never cover a
-  // `key=` of a query string (whose secret the query-string pattern below must still see) or run
-  // across a JSON field into an unrelated `@`. So it misses a slash password holding one of those,
-  // except base64 `=` padding just before the `@` (`Zk3/q+Vb9xQ==@`).
-  // The second branch is the original pattern unchanged, so this one only ever adds matches.
+  // The query-string rule above runs first, so a credential carried in a query value is consumed
+  // whole — `@`-tail included — before this rule can read it as a password. Neither branch of this
+  // rule crosses `?` any more: a userinfo rule that did would read the query text as the password
+  // of the authority, which is how `?user=app&password=p@ssw0rd` used to be taken for the password
+  // of `db.internal:5432` — with the secret after the `@` left in the clear. It still misses a
+  // slash password holding `?`, `#`, `&`, `=` or `"` (except base64 `=` padding just before the
+  // `@`, `Zk3/q+Vb9xQ==@`), and it can still run across a JSON field into an unrelated `@`.
   // Price: `https://host:8080/a@b` loses its host.
   {
-    pattern: /:\/\/(?:[^\s/:@?#&="]*:[^\s@"?#:&=]{1,256}={0,2}|[^\s/:@]*:[^\s/@]+)@/g,
+    pattern: /:\/\/(?:[^\s/:@?#&="]*:[^\s@"?#:&=]{1,256}={0,2}|[^\s/:@]*:[^\s/@?]+)@/g,
     replacement: `://${REDACTED}@`,
   },
-  // A credential passed in a query string, keeping the endpoint and the parameter that carried it.
-  // `code`/`code_verifier`/`state` are here because a whole OAuth callback URL logged as one string
-  // is not covered by the field-name list — nothing in this router reads a query parameter by those
-  // names except that callback, so scrubbing them costs no diagnostic.
+  // A URL whose authority carries a userinfo password the query rule above has already taken the
+  // `@` from: `postgres://user:pw?key=1@host` — the query value consumed the `@` that terminated
+  // the userinfo, so the rule above has nothing left to end on and the password survives. This
+  // rule reads the authority itself as the password — never query text — and it fires only when
+  // the authority's second component cannot be a port: RFC 3986 ends an authority at the first
+  // `?`, so `db.internal:5432?query` is a host and a port and carries no credential, while
+  // `user:pw?query` cannot be a port and is a userinfo password.
+  // It runs after the userinfo rule above, which keeps the first word on a normal userinfo — and
+  // on the slash-password shape, where `postgres://u:p/ss@h` is one password whole.
+  // Price: the authority is replaced whole, so that shape loses its host and its username; and a
+  // password that is all digits (`user:1234?key=1@host`) reads as a port and survives.
   {
-    pattern:
-      /([?&](?:[a-z0-9_-]*(?:key|token|secret|password)|code(?:[-_]?verifier)?|state)=)[^&\s#"']+/gi,
-    replacement: `$1${REDACTED}`,
+    pattern: /:\/\/[^\s:/?#@]*:(?=[^\s/?#@]*[^\s/?#@0-9])[^\s/?#@]*/g,
+    replacement: `://${REDACTED}`,
   },
   // Google API keys: `AIza` + 35 base64url characters.
   { pattern: /\bAIza[0-9A-Za-z_-]{35}/g, replacement: REDACTED },
