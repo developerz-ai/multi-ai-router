@@ -1,5 +1,6 @@
 import { afterEach, beforeAll, describe, expect, test } from "bun:test"
 import {
+  createAdminMutationRepository,
   createCatalogSnapshotRepository,
   type Database,
   defaultMigrationsFolder,
@@ -13,6 +14,12 @@ function fixture(maxConnections = 2) {
   const db = adminMutationDatabase(url, maxConnections)
   fixtures.push(db)
   return db
+}
+/** The SQLSTATE of a failed transaction, read the way the runner reads it. */
+function sqlState(error: unknown): string | undefined {
+  if (typeof error !== "object" || error === null) return undefined
+  if ("code" in error && typeof error.code === "string") return error.code
+  return "cause" in error ? sqlState(error.cause) : undefined
 }
 beforeAll(async () => {
   if (url !== "") await runMigrations({ url, migrationsFolder: defaultMigrationsFolder() })
@@ -233,10 +240,26 @@ describe.skipIf(url === "")("serialized admin mutations against PostgreSQL", () 
     const first = await db.poolService.create({ name: db.name("lock-first") })
     const second = await db.poolService.create({ name: db.name("lock-second") })
     if (!first.ok || !second.ok) throw new Error("seed failed")
+    // The runner reads every rolled-back transaction to decide whether to retry it; this reads
+    // the same failures the same way, so the number of retries follows from the failures rather
+    // than from a fixed number of attempts. A retry that meets the same cycle again is retried
+    // again, and the accounting still holds.
+    const failures: string[] = []
+    const transaction: Database["transaction"] = (work, config) =>
+      db.handle.db.transaction(work, config).catch((error: unknown) => {
+        failures.push(sqlState(error) ?? "unknown")
+        throw error
+      })
+    const repository = createAdminMutationRepository(
+      new Proxy(db.handle.db, {
+        get: (target, property, receiver) =>
+          property === "transaction" ? transaction : Reflect.get(target, property, receiver),
+      }),
+    )
     const bothLocked = deferred()
     let attempts = 0
     const edit = (id: string, other: string) =>
-      db.repository.run({ kind: "pool", id }, async (scope) => {
+      repository.run({ kind: "pool", id }, async (scope) => {
         attempts++
         // The runner holds this pool; first attempts now request the other in reverse order.
         if (attempts === 2) bothLocked.release()
@@ -250,7 +273,12 @@ describe.skipIf(url === "")("serialized admin mutations against PostgreSQL", () 
         edit(second.value.id, first.value.id),
       ]),
     ).toEqual(["committed", "committed"])
-    expect(attempts).toBe(3)
+    // A deadlock really happened, it was a deadlock and not some other failure, and each one
+    // cost exactly one retry of the whole mutation: two attempts to begin with, one more for
+    // every rollback.
+    expect(failures.length).toBeGreaterThanOrEqual(1)
+    expect([...new Set(failures)]).toEqual(["40P01"])
+    expect(attempts).toBe(2 + failures.length)
     expect((await db.pools.findById(first.value.id))?.policy).toBe("weighted")
     expect((await db.pools.findById(second.value.id))?.policy).toBe("weighted")
   })
