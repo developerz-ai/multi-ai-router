@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- The `bin/smoke` informational `responses.function_call` leg explicitly sends the boolean `store: false` in its outgoing `/v1/responses` request. An outgoing-request regression drives `runLegs` and inspects the captured JSON, rather than relying on translation coverage. This corrects the diagnostic client only: other smoke legs, required/informational exit-code semantics, router same-dialect byte-passthrough, and runtime versions are unchanged.
+
 ### Changed
 
 - The required typecheck gate retains the production solution build and additionally checks API smoke sources and all recursive API tests, support helpers and TypeScript fixtures through a strict, non-composite no-emit project. Imported benchmark and database-test helpers are included without changing production output paths or inherited strictness. A coverage regression enumerates sources, checks representative compiler errors in smoke, unit, integration and support, and pins the `bin/check` → `bin/lint` → typecheck wiring. Runtime versions are unchanged.

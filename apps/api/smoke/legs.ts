@@ -227,6 +227,7 @@ function buildResponsesBody(expectation: OpenAiExpectation, model: string): unkn
   }
   return {
     model,
+    store: false,
     tools: [
       {
         type: "function",
