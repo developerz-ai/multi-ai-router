@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto"
 import { responseObject } from "./response-usage"
 
 /**
@@ -68,15 +69,35 @@ export function isWhitespace(byte: number): boolean {
   return byte === 32 || byte === 9 || byte === 10 || byte === 13
 }
 
-/**
- * Whether two captures hold the same bytes. An escaped copy of a slot that holds the same value is
- * that slot, not a replacement of it: the value the frozen scanner kept is the value `JSON.parse`
- * reads, so the copy stands in for the slot instead of giving its room away.
- */
-export function sameBytes(left: readonly number[], right: readonly number[] | undefined): boolean {
-  if (right === undefined || left.length !== right.length) return false
-  for (let at = 0; at < left.length; at++) if (left[at] !== right[at]) return false
-  return true
+/** Fixed-size comparison metadata; never retain a historical capture or its parsed value. */
+export function semanticFingerprint(bytes: readonly number[], decoder: TextDecoder): string | null {
+  try {
+    const value: unknown = JSON.parse(decoder.decode(Uint8Array.from(bytes)))
+    const hash = createHash("sha256")
+    // Iterative traversal avoids a call-stack limit on deeply nested, but bounded, captures.
+    const pending: unknown[] = [value]
+    while (pending.length > 0) {
+      const item = pending.pop()
+      if (Array.isArray(item)) {
+        hash.update(`array:${item.length}:`)
+        for (let at = item.length - 1; at >= 0; at--) pending.push(item[at])
+      } else if (item !== null && typeof item === "object") {
+        const object = item as Record<string, unknown>
+        const keys = Object.keys(object).sort()
+        hash.update(`object:${keys.length}:`)
+        for (let at = keys.length - 1; at >= 0; at--) {
+          const key = keys[at]
+          if (key !== undefined) pending.push(object[key], key)
+        }
+      } else
+        hash.update(
+          `${typeof item}:${typeof item === "number" ? String(item) : JSON.stringify(item)};`,
+        )
+    }
+    return hash.digest("hex")
+  } catch {
+    return null
+  }
 }
 
 /** A parent key's slot list; own keys only, so a key named `constructor` is no slot at all. */

@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test"
 import { createResponseSalvage } from "../../../src/services/usage/response-salvage"
+import { semanticFingerprint } from "../../../src/services/usage/response-salvage-slots"
 import { createResponseSalvage as createFrozenSalvage } from "../../fixtures/response-salvage-v2.41.0"
 
 /**
@@ -435,18 +436,47 @@ test.each(["code", "error", "response.error"])(
   },
 )
 
-test("an identical escaped repeat of a literal slot keeps the slot the frozen scanner kept", () => {
-  const usage = { pad: "p".repeat(45) }
-  const value = JSON.stringify(usage)
-  const text = `{"usage":${value},"\\u0075sage":${value},"code":"12345678"}`
-  const frozen = run(createFrozenSalvage, text, TIGHT_CAP)
-  const current = run(createResponseSalvage, text, TIGHT_CAP)
-  // 2.41.0 read the literal `usage` and dropped the `code`: the optional evidence did not fit
-  // beside it. The current scanner reads both spellings as the one slot, and the escaped copy
-  // holds the same value — so it is that slot, and the optional evidence yields instead.
-  expect(frozen.rebuilt).toEqual({ usage })
-  expect(current.rebuilt).toEqual({ usage })
-  expect(current.peak).toBeLessThanOrEqual(TIGHT_CAP)
+test.each(["", " ", "\t", "\r\n"])(
+  "a semantically identical escaped repeat keeps the frozen slot: %j",
+  (whitespace) => {
+    const usage = { pad: "p".repeat(45) }
+    const value = JSON.stringify(usage)
+    const escapedValue = value.replace(":", `:${whitespace}`)
+    const text = `{"usage":${value},"\\u0075sage":${escapedValue},"code":"12345678"}`
+    const frozen = run(createFrozenSalvage, text, TIGHT_CAP)
+    const current = run(createResponseSalvage, text, TIGHT_CAP)
+    // 2.41.0 read the literal `usage` and dropped the `code`: the optional evidence did not fit
+    // beside it. The current scanner reads both spellings as the one slot, and the escaped copy
+    // holds the same value — so it is that slot, and the optional evidence yields instead.
+    expect(frozen.rebuilt).toEqual({ usage })
+    expect(current.rebuilt).toEqual({ usage })
+    expect(current.peak).toBeLessThanOrEqual(TIGHT_CAP)
+  },
+)
+
+test("historical comparison metadata stays fixed-size for a 60,000-byte replacement", () => {
+  const value = JSON.stringify({ pad: "p".repeat(59_990) })
+  expect(value.length).toBe(60_000)
+  const fingerprint = semanticFingerprint([...encoder.encode(value)], new TextDecoder())
+  expect(typeof fingerprint).toBe("string")
+  expect(fingerprint?.length).toBe(64)
+  const text = `{"usage":${value},"\\u0075sage":${value}}`
+  const current = run(createResponseSalvage, text, 65_536)
+  expect(current.rebuilt).toEqual({ usage: JSON.parse(value) })
+  expect(current.retained).toBe(60_000)
+  expect(current.peak).toBeLessThanOrEqual(65_536)
+})
+
+test.each([
+  ['{"a":1,"b":[true,null]}', '{"b":[true,null],"a":1.0}'],
+  ['"p"', '"\\u0070"'],
+  ["-0", "0"],
+])("semantic metadata ignores JSON spelling: %s / %s", (left, right) => {
+  const fingerprint = (text: string) =>
+    semanticFingerprint([...encoder.encode(text)], new TextDecoder())
+  expect(fingerprint(left)).not.toBeNull()
+  expect(fingerprint(left)).toBe(fingerprint(right))
+  expect(fingerprint(left)).not.toBe(fingerprint('"different"'))
 })
 
 test("the frozen 2.41.0 scanner still shows the two divergences the current one no longer has", () => {

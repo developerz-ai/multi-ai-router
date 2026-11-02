@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Salvage compares repeated literal/escaped slots by semantic JSON fingerprints rather than source bytes. Whitespace-only changes no longer lose non-stale usage to optional code evidence at the cap. Historical captures now retain only fixed-size SHA-256 metadata instead of unaccounted payload arrays; regressions cover the 60,000-byte replacement and whitespace variants against frozen 2.41.0.
+
 ## [2.42.0] — 2026-11-02
 
 ### Changed

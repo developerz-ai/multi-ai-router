@@ -490,6 +490,10 @@ lose non-stale literal evidence that the previous scanner kept. An escaped repea
 *same* value the literal slot held is that slot, not a replacement of it: its room is never lent
 and never released, so the optional evidence yields instead and the key the previous scanner kept
 survives; an escaped repeat of a different value gives its room up as the rules above say.
+Equality compares decoded JSON values, not source bytes: whitespace, string escapes, object key
+order and equivalent number spellings do not change a value. Each literal slot retains only a
+SHA-256 semantic fingerprint (64 hex characters), never its historical payload array or parsed
+object. Parsing and canonical traversal are temporary and bounded by the captured slot size.
 Every repeated slot releases the earlier value's bytes before capturing its replacement, so
 duplicate copies cannot crowd out the last one.
 

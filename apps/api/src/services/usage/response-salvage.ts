@@ -15,7 +15,7 @@ import {
   QUOTE,
   rebuildSalvage,
   SLOT_MAX_BYTES,
-  sameBytes,
+  semanticFingerprint,
   slotKeys,
 } from "./response-salvage-slots"
 
@@ -35,9 +35,9 @@ export function createResponseSalvage(maximumBytes: number): ResponseSalvage {
   // set, so no capture takes its room.
   const evictable = new Set<string>()
   const inherited = new Set<string>()
-  // The bytes each literal slot held: the value the frozen scanner kept there. An escaped copy of
-  // that same value stands in for the slot instead of replacing it (#209: no lost non-stale key).
-  const literalBytes = new Map<string, number[]>()
+  // One fixed-size semantic digest per literal slot; historical payload arrays must not survive
+  // release. Equivalent JSON spellings stand in for the slot the frozen scanner kept (#209).
+  const literalValues = new Map<string, string | null>()
   const escapedKeys = [false, false, false]
   // Only depths 1 and 2 carry keys we care about; deeper structure is counted, never stored.
   const keys: (string | null)[] = [null, null, null]
@@ -172,12 +172,16 @@ export function createResponseSalvage(maximumBytes: number): ResponseSalvage {
     inherited.delete(capture.path)
     if (!capture.dropped) {
       captured.set(capture.path, capture.bytes)
-      if (!capture.escaped) literalBytes.set(capture.path, capture.bytes)
+      const fingerprint = semanticFingerprint(capture.bytes, decoder)
+      if (!capture.escaped) literalValues.set(capture.path, fingerprint)
       if (capture.evictable) evictable.add(capture.path)
       // An escaped copy of the same value the literal slot held is that slot, not a replacement:
       // its room is never lent to optional evidence and never released for room, so the key the
       // frozen scanner kept cannot be lost (#209: no lost non-stale key).
-      else if (capture.escaped && !sameBytes(capture.bytes, literalBytes.get(capture.path)))
+      else if (
+        capture.escaped &&
+        (fingerprint === null || fingerprint !== literalValues.get(capture.path))
+      )
         inherited.add(capture.path)
     } else captured.delete(capture.path)
     if (!capture.dropped) {
