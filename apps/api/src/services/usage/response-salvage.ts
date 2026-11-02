@@ -142,10 +142,10 @@ export function createResponseSalvage(maximumBytes: number): ResponseSalvage {
       capture.dropped = true
       return
     }
-    if (retained >= maximumBytes) evictOptional()
-    // Last resort: the frame would fail, so a repeat of a literal slot gives way instead of the
-    // frame. The member is lost, the rest of the frame survives (#209: no new failure).
+    // An escaped replacement must yield before literal error evidence is evicted: the frozen
+    // scanner never spent room on that replacement (#209: no lost non-stale key).
     if (retained >= maximumBytes) release(inherited)
+    if (retained >= maximumBytes) evictOptional()
     if (retained >= maximumBytes) {
       failed = true
       capture = null

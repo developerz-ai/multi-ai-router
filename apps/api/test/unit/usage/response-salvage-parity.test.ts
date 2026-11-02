@@ -335,6 +335,17 @@ test.each([
   expect(current).toEqual({ status: "completed" })
 })
 
+test("an inherited escaped capture yields before non-stale literal code evidence", () => {
+  const text = `{"usage":0,"\\u0075sage":{"pad":"${"p".repeat(45)}"},"code":"q","status":"completed"}`
+  const projection = project(JSON.parse(text) as Record<string, unknown>)
+  const frozen = run(createFrozenSalvage, text, TIGHT_CAP)
+  const current = run(createResponseSalvage, text, TIGHT_CAP)
+  expect(frozen.rebuilt).toEqual({ usage: 0, code: "q", status: "completed" })
+  expect(projection).toMatchObject({ code: "q", status: "completed" })
+  expect(current.rebuilt).toEqual({ code: "q", status: "completed" })
+  expect(current.peak).toBeLessThanOrEqual(TIGHT_CAP)
+})
+
 test("the frozen 2.41.0 scanner still shows the two divergences the current one no longer has", () => {
   // A repeated parent: 2.41.0 kept the child of the copy the later one replaced.
   const repeated = `{"response":{"usage":{"input_tokens":1}},"response":{"status":"x"}}`
